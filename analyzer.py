@@ -112,28 +112,28 @@ class Analyzer:
             
         # Подключаем математику (TA), так как уже есть история торгов
         if pair_address:
-                print(f"📈 Монета достаточно взрослая. Загружаем свечи (OHLCV) и считаем RSI для {symbol}...")
-                ohlcv = await TATools.fetch_ohlcv(pair_address, limit=20)
+            print(f"📈 Монета достаточно взрослая. Загружаем свечи (OHLCV) и считаем RSI для {symbol}...")
+            ohlcv = await TATools.fetch_ohlcv(pair_address, limit=20)
+            
+            if ohlcv:
+                rsi = TATools.calculate_rsi(ohlcv, periods=14)
+                print(f"📊 Технический анализ: Индикатор RSI = {rsi:.2f}")
                 
-                if ohlcv:
-                    rsi = TATools.calculate_rsi(ohlcv, periods=14)
-                    print(f"📊 Технический анализ: Индикатор RSI = {rsi:.2f}")
+                if math.isnan(rsi):
+                    print("⚠️ Недостаточно данных для ТА. Отказ.")
+                    return False
                     
-                    if math.isnan(rsi):
-                        print("⚠️ Недостаточно данных для ТА. Отказ.")
-                        return False
-                        
-                    # Стратегия: Покупаем только если есть живой интерес (RSI 45-70)
-                    # Если < 45, значит монета медленно умирает (падающий нож)
-                    # Если > 70, значит мы запрыгиваем на самых хаях
-                    if 45 <= rsi <= 70:
-                        print(f"🟢 Сигнал: Здоровый растущий тренд (RSI {rsi:.2f}). Входим!")
-                        return True
-                    else:
-                        print(f"🚫 Отказ: Неподходящий RSI ({rsi:.2f}). Ищем тренд 45-70.")
-                        return False
+                # Стратегия: Покупаем только если есть живой интерес (RSI 45-70)
+                # Если < 45, значит монета медленно умирает (падающий нож)
+                # Если > 70, значит мы запрыгиваем на самых хаях
+                if 45 <= rsi <= 70:
+                    print(f"🟢 Сигнал: Здоровый растущий тренд (RSI {rsi:.2f}). Входим!")
+                    return True
                 else:
-                    print("⚠️ Не удалось получить минутные свечи. Отказ.")
+                    print(f"🚫 Отказ: Неподходящий RSI ({rsi:.2f}). Ищем тренд 45-70.")
                     return False
             else:
+                print("⚠️ Не удалось получить минутные свечи. Отказ.")
                 return False
+        else:
+            return False
