@@ -17,12 +17,12 @@ MAX_CONCURRENT_POSITIONS = 5
 
 # Risk Management
 STOP_LOSS_PCT = -0.50   # Изначальный стоп-лосс -50%
-TIME_EXIT_MINUTES = 45
-TIME_EXIT_PROFIT_REQ = 0.05 # +5%
+TIME_EXIT_MINUTES = 120 # Увеличили время жизни до 2 часов
+TIME_EXIT_PROFIT_REQ = 0.0 # Выходим по времени, только если позиция вообще не в плюсе
 
 # Trailing Stop Config
-TRAILING_ACTIVATION_PCT = 0.40 # Включаем трейлинг, когда прибыль достигает +40%
-TRAILING_DISTANCE_PCT = 0.15   # Откатываемся не более чем на 15% от максимальной цены
+TRAILING_ACTIVATION_PCT = 0.60 # Включаем трейлинг только после достижения +60% прибыли
+TRAILING_DISTANCE_PCT = 0.30   # Даем монете пространство для коррекции до 30% от максимума
 
 # Filtering
 MIN_LIQUIDITY = 1000
