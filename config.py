@@ -4,7 +4,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Dexscreener API
-DEXSCREENER_LATEST = "https://api.dexscreener.com/token-profiles/latest/v1"
+DEXSCREENER_LATEST = "https://api.dexscreener.com/token-boosts/top/v1" # Сканируем топ активных (Trending) монет, а не просто новинки
 DEXSCREENER_SEARCH = "https://api.dexscreener.com/latest/dex/tokens/"
 
 # RugCheck API
