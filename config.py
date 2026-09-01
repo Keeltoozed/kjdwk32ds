@@ -16,7 +16,7 @@ VIRTUAL_POSITION_SIZE_USD = 4.0
 MAX_CONCURRENT_POSITIONS = 5
 
 # Risk Management
-STOP_LOSS_PCT = -0.50   # Изначальный стоп-лосс -50%
+STOP_LOSS_PCT = -0.20   # Жесткий стоп-лосс -20% (раньше было -50%)
 TIME_EXIT_MINUTES = 120 # Увеличили время жизни до 2 часов
 TIME_EXIT_PROFIT_REQ = 0.0 # Выходим по времени, только если позиция вообще не в плюсе
 

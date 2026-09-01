@@ -115,7 +115,8 @@ class Analyzer:
             print(f"📈 Монета достаточно взрослая. Загружаем свечи (OHLCV) и считаем RSI для {symbol}...")
             ohlcv = await TATools.fetch_ohlcv(pair_address, limit=20)
             
-            if ohlcv:
+            if ohlcv and len(ohlcv) >= 6:
+                # Базовая проверка RSI
                 rsi = TATools.calculate_rsi(ohlcv, periods=14)
                 print(f"📊 Технический анализ: Индикатор RSI = {rsi:.2f}")
                 
@@ -123,17 +124,23 @@ class Analyzer:
                     print("⚠️ Недостаточно данных для ТА. Отказ.")
                     return False
                     
-                # Стратегия: Покупаем только если есть живой интерес (RSI 45-70)
-                # Если < 45, значит монета медленно умирает (падающий нож)
-                # Если > 70, значит мы запрыгиваем на самых хаях
-                if 45 <= rsi <= 70:
-                    print(f"🟢 Сигнал: Здоровый растущий тренд (RSI {rsi:.2f}). Входим!")
-                    return True
-                else:
+                # 1. Проверка RSI (живой интерес)
+                if not (45 <= rsi <= 70):
                     print(f"🚫 Отказ: Неподходящий RSI ({rsi:.2f}). Ищем тренд 45-70.")
                     return False
+
+                # 2. Проверка локального тренда (Price Action за последние 5 минут)
+                current_close = float(ohlcv[-1][4])
+                close_5m_ago = float(ohlcv[-6][4])
+                
+                if current_close < close_5m_ago:
+                    print(f"🚫 Отказ: Локальный даунтред. Текущая цена ({current_close}) ниже, чем 5 минут назад ({close_5m_ago}).")
+                    return False
+                    
+                print(f"🟢 Сигнал: Здоровый растущий тренд (RSI {rsi:.2f}) и локальный рост. Входим!")
+                return True
             else:
-                print("⚠️ Не удалось получить минутные свечи. Отказ.")
+                print("⚠️ Не удалось получить минутные свечи (или их меньше 6). Отказ.")
                 return False
         else:
             return False
