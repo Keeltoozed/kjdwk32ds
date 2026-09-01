@@ -124,21 +124,26 @@ class Analyzer:
                     print("⚠️ Недостаточно данных для ТА. Отказ.")
                     return False
                     
-                # 1. Проверка RSI (живой интерес)
-                if not (45 <= rsi <= 70):
-                    print(f"🚫 Отказ: Неподходящий RSI ({rsi:.2f}). Ищем тренд 45-70.")
+                # 1. Проверка RSI (Зона накопления или начало тренда)
+                if not (40 <= rsi <= 65):
+                    print(f"🚫 Отказ: RSI ({rsi:.2f}) не в зоне консолидации (40-65).")
                     return False
 
-                # 2. Проверка локального тренда (Price Action за последние 5 минут)
-                current_close = float(ohlcv[-1][4])
-                close_5m_ago = float(ohlcv[-6][4])
+                # 2. Ищем ВСПЛЕСК ОБЪЕМА (Volume Anomaly) - главный признак скорого пампа
+                # Сравниваем объем последней свечи со средним объемом предыдущих 5 свечей
+                vol_last = float(ohlcv[-1][5])
+                avg_vol_previous = sum(float(c[5]) for c in ohlcv[-6:-1]) / 5
                 
-                if current_close < close_5m_ago:
-                    print(f"🚫 Отказ: Локальный даунтред. Текущая цена ({current_close}) ниже, чем 5 минут назад ({close_5m_ago}).")
-                    return False
+                # Защита от деления на 0
+                if avg_vol_previous == 0:
+                    avg_vol_previous = 1
                     
-                print(f"🟢 Сигнал: Здоровый растущий тренд (RSI {rsi:.2f}) и локальный рост. Входим!")
-                return True
+                if vol_last >= avg_vol_previous * 2.5:
+                    print(f"🔥 Сигнал: Аномальный объем торгов (х{vol_last/avg_vol_previous:.1f})! Инсайдеры загружаются перед пампом.")
+                    return True
+                else:
+                    print(f"🚫 Отказ: Нет всплеска объема (ждем, пока киты начнут скупать).")
+                    return False
             else:
                 print("⚠️ Не удалось получить минутные свечи (или их меньше 6). Отказ.")
                 return False
