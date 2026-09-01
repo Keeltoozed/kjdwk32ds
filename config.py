@@ -25,7 +25,7 @@ TRAILING_ACTIVATION_PCT = 0.60 # Включаем трейлинг только 
 TRAILING_DISTANCE_PCT = 0.30   # Даем монете пространство для коррекции до 30% от максимума
 
 # Filtering
-MIN_LIQUIDITY = 1000
-MAX_LIQUIDITY = 150000
-MIN_AGE_MINUTES = 0
+MIN_LIQUIDITY = 10000  # Подняли с 1000 до 10к, чтобы избежать микрокап-скамов
+MAX_LIQUIDITY = 500000 # Увеличили верхнюю границу
+MIN_AGE_MINUTES = 10   # Не покупаем монеты младше 10 минут (самые опасные)
 MAX_AGE_MINUTES = 1440

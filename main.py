@@ -101,7 +101,11 @@ if st.button("🔄 Обновить данные"):
 
 try:
     with open(config.PAPER_PORTFOLIO_FILE, 'r') as f:
-        data = json.load(f)
+        try:
+            data = json.load(f)
+        except json.JSONDecodeError:
+            # Файл может быть пуст или перезаписываться фоновым потоком в этот момент
+            data = {}
         
     if data:
         df = pd.DataFrame.from_dict(data, orient='index')
@@ -118,9 +122,9 @@ try:
                 # Добавляем % PnL для наглядности
                 open_df['pnl_%'] = (open_df['current_pnl_usd'] / open_df['amount_usd']) * 100
                 st.dataframe(open_df[['symbol', 'entry_price_usd', 'current_price_usd', 'max_price_usd', 'current_pnl_usd', 'pnl_%']].style.format({
-                    'entry_price_usd': '${:.6f}',
-                    'current_price_usd': '${:.6f}',
-                    'max_price_usd': '${:.6f}',
+                    'entry_price_usd': '${:.10f}',
+                    'current_price_usd': '${:.10f}',
+                    'max_price_usd': '${:.10f}',
                     'current_pnl_usd': '${:.2f}',
                     'pnl_%': '{:.2f}%'
                 }).applymap(lambda x: 'color: green' if x > 0 else 'color: red' if x < 0 else '', subset=['current_pnl_usd', 'pnl_%']))
@@ -138,8 +142,8 @@ try:
                 
                 closed_df['pnl_%'] = (closed_df['pnl_usd'] / closed_df['amount_usd']) * 100
                 st.dataframe(closed_df[['symbol', 'entry_price_usd', 'exit_price_usd', 'pnl_usd', 'pnl_%']].style.format({
-                    'entry_price_usd': '${:.6f}',
-                    'exit_price_usd': '${:.6f}',
+                    'entry_price_usd': '${:.10f}',
+                    'exit_price_usd': '${:.10f}',
                     'pnl_usd': '${:.2f}',
                     'pnl_%': '{:.2f}%'
                 }).applymap(lambda x: 'color: green' if x > 0 else 'color: red' if x < 0 else '', subset=['pnl_usd', 'pnl_%']))

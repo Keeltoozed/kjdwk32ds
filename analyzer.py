@@ -105,26 +105,13 @@ class Analyzer:
         
         print(f"🗣 Настроение толпы: {sentiment['decision'].upper()} (Позитив: {sentiment['positive']} | Негатив: {sentiment['negative']} | Прочитано постов: {sentiment['texts']})")
         
-        is_new_coin = age_mins < 15
-        
         # Разделяем логику в зависимости от возраста монеты
-        if is_new_coin:
-            # ДЛЯ НОВЫХ МОНЕТ (<15 минут)
-            # В начале жизни верим только негативу (позитив на старте — это спам создателей)
-            if sentiment['negative'] > 0 or sentiment['decision'] == "bearish":
-                print(f"🚫 Отказ (Новая монета): В соцсетях уже кричат о Scam/Rug. Отменяем вход.")
-                return False
-            print(f"✅ Инфополе чистое. Технический анализ свечей (RSI) пропускаем из-за малого возраста монеты.")
-            return True
+        if sentiment['decision'] == "bearish":
+            print(f"🚫 Отказ: Найдены предупреждения о скаме (Rug / Dump).")
+            return False
             
-        else:
-            # ДЛЯ УСТАЯВШИХСЯ МОНЕТ (>15 минут)
-            if sentiment['decision'] == "bearish":
-                print(f"🚫 Отказ: Найдены предупреждения о скаме (Rug / Dump).")
-                return False
-                
-            # Подключаем математику (TA), так как уже есть история торгов
-            if pair_address:
+        # Подключаем математику (TA), так как уже есть история торгов
+        if pair_address:
                 print(f"📈 Монета достаточно взрослая. Загружаем свечи (OHLCV) и считаем RSI для {symbol}...")
                 ohlcv = await TATools.fetch_ohlcv(pair_address, limit=20)
                 
@@ -133,13 +120,20 @@ class Analyzer:
                     print(f"📊 Технический анализ: Индикатор RSI = {rsi:.2f}")
                     
                     if math.isnan(rsi):
-                        print("⚠️ Недостаточно данных для ТА.")
-                    elif rsi > 75:
-                        print(f"🚫 Отказ: Монета сильно перегрета (RSI {rsi:.2f} > 75). Покупать на хаях опасно.")
+                        print("⚠️ Недостаточно данных для ТА. Отказ.")
                         return False
-                    elif rsi < 40:
-                        print(f"🟢 Сигнал: Цена на дне (RSI {rsi:.2f} < 40), хорошая точка входа!")
+                        
+                    # Стратегия: Покупаем только если есть живой интерес (RSI 45-70)
+                    # Если < 45, значит монета медленно умирает (падающий нож)
+                    # Если > 70, значит мы запрыгиваем на самых хаях
+                    if 45 <= rsi <= 70:
+                        print(f"🟢 Сигнал: Здоровый растущий тренд (RSI {rsi:.2f}). Входим!")
+                        return True
+                    else:
+                        print(f"🚫 Отказ: Неподходящий RSI ({rsi:.2f}). Ищем тренд 45-70.")
+                        return False
                 else:
-                    print("⚠️ Не удалось получить минутные свечи, пропускаем ТА.")
-            
-        return True
+                    print("⚠️ Не удалось получить минутные свечи. Отказ.")
+                    return False
+            else:
+                return False
