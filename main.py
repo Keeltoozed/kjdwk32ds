@@ -19,18 +19,23 @@ async def bot_loop():
             # Управление открытыми сделками
             open_positions = tracker.get_open_positions()
             for mint, position in list(open_positions.items()):
-                from jupiter import JupiterAPI
-                current_price = await JupiterAPI.get_price(mint)
+                pair_data = await analyzer.fetch_token_data(mint)
+                current_price = float(pair_data.get("priceUsd", 0)) if pair_data else 0.0
                 if current_price == 0.0:
                     continue
                     
                 if current_price > position.max_price_usd:
                     position.max_price_usd = current_price
-                    tracker.save_portfolio()
                     
                 pnl_pct = (current_price - position.entry_price_usd) / position.entry_price_usd
                 max_pnl_pct = (position.max_price_usd - position.entry_price_usd) / position.entry_price_usd
                 minutes_held = (time.time() - position.entry_time) / 60
+                
+                # Обновляем текущие значения для отображения в интерфейсе
+                position.current_price_usd = current_price
+                position.current_pnl_usd = position.amount_usd * pnl_pct
+                tracker.save_portfolio()
+                
                 
                 # Логика выхода
                 if pnl_pct <= config.STOP_LOSS_PCT:
@@ -110,7 +115,15 @@ try:
         with col1:
             st.subheader("🟢 Открытые позиции")
             if not open_df.empty:
-                st.dataframe(open_df[['symbol', 'entry_price_usd', 'amount_usd', 'max_price_usd']])
+                # Добавляем % PnL для наглядности
+                open_df['pnl_%'] = (open_df['current_pnl_usd'] / open_df['amount_usd']) * 100
+                st.dataframe(open_df[['symbol', 'entry_price_usd', 'current_price_usd', 'max_price_usd', 'current_pnl_usd', 'pnl_%']].style.format({
+                    'entry_price_usd': '${:.6f}',
+                    'current_price_usd': '${:.6f}',
+                    'max_price_usd': '${:.6f}',
+                    'current_pnl_usd': '${:.2f}',
+                    'pnl_%': '{:.2f}%'
+                }).applymap(lambda x: 'color: green' if x > 0 else 'color: red' if x < 0 else '', subset=['current_pnl_usd', 'pnl_%']))
             else:
                 st.info("Нет активных сделок. Бот сканирует рынок...")
                 
@@ -122,7 +135,14 @@ try:
                 # Красим в зеленый/красный в зависимости от профита
                 color = "normal" if total_pnl >= 0 else "inverse"
                 st.metric(label="Общая прибыль (PnL)", value=f"${total_pnl:.2f}", delta=f"{total_pnl:.2f}", delta_color=color)
-                st.dataframe(closed_df[['symbol', 'entry_price_usd', 'exit_price_usd', 'pnl_usd']])
+                
+                closed_df['pnl_%'] = (closed_df['pnl_usd'] / closed_df['amount_usd']) * 100
+                st.dataframe(closed_df[['symbol', 'entry_price_usd', 'exit_price_usd', 'pnl_usd', 'pnl_%']].style.format({
+                    'entry_price_usd': '${:.6f}',
+                    'exit_price_usd': '${:.6f}',
+                    'pnl_usd': '${:.2f}',
+                    'pnl_%': '{:.2f}%'
+                }).applymap(lambda x: 'color: green' if x > 0 else 'color: red' if x < 0 else '', subset=['pnl_usd', 'pnl_%']))
             else:
                 st.info("История пуста.")
             
@@ -131,3 +151,9 @@ try:
         
 except FileNotFoundError:
     st.info("Бот еще не совершил первую сделку (файл портфеля будет создан автоматически).")
+
+# Автообновление (если включено)
+if st.checkbox("Включить автообновление (каждые 5 сек)", value=False):
+    time.sleep(5)
+    st.rerun()
+

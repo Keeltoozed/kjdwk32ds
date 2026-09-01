@@ -83,7 +83,7 @@ class Analyzer:
         vol_24h = pair_data.get("volume", {}).get("h24", 0)
         vol_1h = pair_data.get("volume", {}).get("h1", 0)
         max_vol = max(vol_24h, vol_1h)
-        if max_vol < liq * 1.5:
+        if max_vol < liq * 0.5:
             return False
             
         info = pair_data.get("info", {})

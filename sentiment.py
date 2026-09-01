@@ -1,5 +1,5 @@
 import asyncio
-from duckduckgo_search import DDGS
+from ddgs import DDGS
 import re
 
 # Словари для анализа текста

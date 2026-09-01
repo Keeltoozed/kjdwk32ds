@@ -15,6 +15,8 @@ class VirtualPosition(BaseModel):
     exit_price_usd: float = 0.0
     pnl_usd: float = 0.0
     max_price_usd: float = 0.0  # Отслеживаем максимальную цену для трейлинга
+    current_price_usd: float = 0.0 # Для отображения в интерфейсе
+    current_pnl_usd: float = 0.0 # Для отображения в интерфейсе
 
 class PaperTracker:
     def __init__(self):
