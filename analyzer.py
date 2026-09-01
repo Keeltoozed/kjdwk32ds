@@ -7,15 +7,33 @@ import math
 
 class Analyzer:
     async def fetch_latest_tokens(self) -> list:
+        tokens = []
         async with aiohttp.ClientSession() as session:
+            # 1. Сканируем топовые (Boosted) монеты
             try:
-                async with session.get(config.DEXSCREENER_LATEST, timeout=10) as response:
+                async with session.get(config.DEXSCREENER_LATEST, timeout=5) as response:
                     if response.status == 200:
-                        return await response.json()
-                    return []
+                        tokens.extend(await response.json())
             except Exception as e:
-                print(f"Dexscreener fetch error: {e}")
-                return []
+                print(f"Dexscreener boosts fetch error: {e}")
+                
+            # 2. Сканируем новые профили, чтобы не пропускать свежие ракеты
+            try:
+                async with session.get(config.DEXSCREENER_PROFILES, timeout=5) as response:
+                    if response.status == 200:
+                        tokens.extend(await response.json())
+            except Exception as e:
+                print(f"Dexscreener profiles fetch error: {e}")
+                
+        # Возвращаем уникальные токены (по tokenAddress)
+        seen = set()
+        unique_tokens = []
+        for t in tokens:
+            addr = t.get("tokenAddress")
+            if addr and addr not in seen:
+                seen.add(addr)
+                unique_tokens.append(t)
+        return unique_tokens
                 
     async def fetch_token_data(self, mint: str) -> dict:
         url = f"{config.DEXSCREENER_SEARCH}{mint}"
