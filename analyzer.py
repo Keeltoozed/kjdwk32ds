@@ -156,9 +156,18 @@ class Analyzer:
                 if avg_vol_previous == 0:
                     avg_vol_previous = 1
                     
-                if vol_last >= avg_vol_previous * 2.5:
-                    print(f"🔥 Сигнал: Аномальный объем торгов (х{vol_last/avg_vol_previous:.1f})! Инсайдеры загружаются перед пампом.")
+                # Проверяем, зеленая ли свеча (цена закрытия выше цены открытия)
+                # Если свеча красная и объем огромный — это ДАМП (крупная продажа), нам туда не надо!
+                open_last = float(ohlcv[-1][1])
+                close_last = float(ohlcv[-1][4])
+                is_green_candle = close_last > open_last
+                    
+                if vol_last >= avg_vol_previous * 2.5 and is_green_candle:
+                    print(f"🔥 Сигнал: Аномальный объем ПОКУПОК (х{vol_last/avg_vol_previous:.1f})! Инсайдеры загружаются.")
                     return True
+                elif vol_last >= avg_vol_previous * 2.5 and not is_green_candle:
+                    print(f"🚫 Отказ: Аномальный объем ПРОДАЖ (Дамп). Кто-то сливает монету.")
+                    return False
                 else:
                     print(f"🚫 Отказ: Нет всплеска объема (ждем, пока киты начнут скупать).")
                     return False
