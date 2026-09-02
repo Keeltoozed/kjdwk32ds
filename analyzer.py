@@ -274,22 +274,31 @@ class Analyzer:
         symbol = ws_data.get("symbol", "UNKNOWN")
         name = ws_data.get("name", "Unknown")
         
+        # Читаем соцсети прямо из смарт-контракта (создатель обязан их указать при деплое на Pump.fun)
+        has_twitter = bool(ws_data.get("twitter"))
+        has_telegram = bool(ws_data.get("telegram"))
+        has_website = bool(ws_data.get("website"))
+        socials_count = sum([has_twitter, has_telegram, has_website])
+        
         # Расчет стартовой ликвидности из кривой Bonding Curve
-        # Pump.fun всегда начинает примерно с 30 виртуальных SOL
         v_sol = ws_data.get("vSolInBondingCurve", 30.0)
-        sol_price = 150.0 # Примерная цена SOL в USD
+        sol_price = 150.0 
         liq_usd = v_sol * sol_price
         
-        # Снайперские токены (0 секунд возраста) еще не имеют 5-минутных объемов, 
-        # поэтому Momentum мы судим по стартовому buy (если он есть)
         initial_buy = ws_data.get("initialBuy", 0)
         
         safety_score = 40
         momentum_score = 40 if initial_buy > 0 else 20
+        
+        # Social Score теперь зависит от того, сколько ссылок создатель прикрепил к контракту
         social_score = 10
+        if has_twitter: social_score += 30
+        if has_telegram: social_score += 30
+        if has_website: social_score += 30
+        social_score = min(100, social_score)
+        
         alpha_score = int((safety_score * 0.35) + (momentum_score * 0.40) + (social_score * 0.25))
         
-        # Сохраняем в UI для радара
         self._save_scanned_token({
             "symbol": symbol,
             "mint": mint,
@@ -306,20 +315,73 @@ class Analyzer:
             "time": time.time()
         })
         
-        print(f"📡 [WSS SNIPER] Пойман токен: {name} (${symbol}) | Liq: ${liq_usd:.0f}")
+        print(f"📡 [WSS SNIPER] Пойман токен: {name} (${symbol}) | Liq: ${liq_usd:.0f} | Socials: {socials_count}")
         
-        # Фильтры
+        # СТРОГИЕ ФИЛЬТРЫ ДЛЯ 0-СЕКУНДНЫХ МОНЕТ
+        
+        # 1. Защита от ленивых скаммеров (мусор без соцсетей)
+        if socials_count == 0:
+            print(f"🚫 [WSS] Отказ: Создатель {symbol} даже не прикрепил соцсети. 100% мусор.")
+            return False
+            
+        # 2. Skin in the game & Анти-монополия (Initial Buy)
+        # PumpPortal отдает initialBuy в SOL. Требуем от 0.1 до 5 SOL.
+        if initial_buy < 0.1:
+            print(f"🚫 [WSS] Отказ: Создатель вкинул слишком мало ({initial_buy} SOL). У него нет 'шкуры на кону'.")
+            return False
+        if initial_buy > 5.0:
+            print(f"🚫 [WSS] Отказ: Создатель выкупил слишком много токенов ({initial_buy} SOL). Высокий риск монопольного дампа.")
+            return False
+            
+        # 3. Проверка кода (RugCheck)
         if not await self.check_rugcheck(mint):
             print(f"🚫 [WSS] Отказ: {symbol} не прошел стартовый RugCheck.")
             return False
             
-        if initial_buy == 0:
-            print(f"🚫 [WSS] Отказ: {symbol} создан без стартового закупа (Initial Buy = 0). Скорее всего мертв.")
+        # 4. Проверка кошелька разработчика (Helius RPC) и метаданных IPFS
+        trader_pubkey = ws_data.get("traderPublicKey")
+        uri = ws_data.get("uri")
+        
+        dev_balance_sol = 0
+        description = ""
+        
+        import aiohttp
+        async with aiohttp.ClientSession() as session:
+            # Запрос баланса к Helius
+            if trader_pubkey:
+                payload = {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "getAccountInfo",
+                    "params": [trader_pubkey, {"encoding": "jsonParsed"}]
+                }
+                try:
+                    async with session.post(config.HELIUS_RPC_URL, json=payload, timeout=2) as resp:
+                        data = await resp.json()
+                        lamports = data.get("result", {}).get("value", {}).get("lamports", 0) if data.get("result", {}).get("value") else 0
+                        dev_balance_sol = lamports / 1e9
+                except Exception as e:
+                    print(f"⚠️ Ошибка RPC баланса: {e}")
+                    
+            # Загрузка метаданных IPFS
+            if uri:
+                try:
+                    async with session.get(uri, timeout=2) as resp:
+                        meta = await resp.json()
+                        description = meta.get("description", "").lower()
+                except Exception:
+                    pass
+                    
+        if dev_balance_sol < 0.1:
+            print(f"🚫 [WSS] Отказ: Кошелек разработчика пуст ({dev_balance_sol:.2f} SOL). Скаммер-однодневка.")
             return False
             
-        # Для снайпинга важна скорость. Мы не делаем долгий анализ Sentiment
-        # Если монета прошла базовый RugCheck и кто-то влил в нее начальный объем — заходим!
-        print(f"🚀 [WSS СИГНАЛ] Входим в токен {symbol} на нулевой секунде!")
+        bad_words = ["test", "scam", "fuck", "shit", "nigger", "pump and dump", "rug"]
+        if any(word in description for word in bad_words) or len(description) < 5:
+            print(f"🚫 [WSS] Отказ: Мусорное описание на IPFS (спам/короткое).")
+            return False
+            
+        print(f"🚀 [WSS СИГНАЛ] Входим в токен {symbol} на нулевой секунде! (Dev Wallet: {dev_balance_sol:.2f} SOL, Socials: {socials_count})")
         
         # Эмуляция цены (записываем цену в usd в словарь, чтобы main.py мог ее взять)
         v_tok = ws_data.get("vTokensInBondingCurve", 1073000000.0)

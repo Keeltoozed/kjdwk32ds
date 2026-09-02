@@ -155,7 +155,7 @@ with tab1:
                     </div>
                     """, unsafe_allow_html=True)
                     
-                    closed_df = closed_df.sort_values(by='exit_time', ascending=False).head(15) # Показываем 15 последних
+                    closed_df = closed_df.tail(15).iloc[::-1] # Показываем 15 последних в обратном порядке
                     closed_df['pnl_%'] = (closed_df['pnl_usd'] / closed_df['amount_usd']) * 100
                     
                     for index, row in closed_df.iterrows():
