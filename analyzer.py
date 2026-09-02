@@ -171,17 +171,18 @@ class Analyzer:
             
         vol_1h = pair_data.get("volume", {}).get("h1", 0)
         max_vol = max(vol_24h, vol_1h)
-        # Требуем, чтобы объем был как минимум равен ликвидности (отсев дохлых монет)
-        if max_vol < liq * 1.0:
+        # Для устоявшихся монет, которые "спали", объем может быть небольшим. 
+        # Требуем хотя бы 30% от ликвидности, а не 100%.
+        if max_vol < liq * 0.3:
             return False
             
         # СПЕЦИАЛЬНАЯ ЗАЩИТА ДЛЯ НОВЫХ И МАЛЕНЬКИХ МОНЕТ (Microcaps < 10k или младше часа)
         if liq < 10000 or age_mins < 60:
-            if buy_sell_ratio < 1.4:
-                print(f"🚫 Отказ (Microcap): Для молодых/мелких монет нужен мощный перевес покупок (Ratio {buy_sell_ratio:.2f} < 1.4)")
+            if buy_sell_ratio < 1.2:
+                print(f"🚫 Отказ (Microcap): Нужен перевес покупок (Ratio {buy_sell_ratio:.2f} < 1.2)")
                 return False
-            if buys_m5 < 20:
-                print(f"🚫 Отказ (Microcap): Слишком мало покупок за 5 минут ({buys_m5} < 20). Скорее всего скам без активности.")
+            if buys_m5 < 10:
+                print(f"🚫 Отказ (Microcap): Слишком мало покупок за 5 минут ({buys_m5} < 10).")
                 return False
 
         info = pair_data.get("info", {})
@@ -199,52 +200,47 @@ class Analyzer:
             
         pair_address = pair_data.get("pairAddress")
         
-        # 3. Поиск упоминаний в Twitter/Reddit
+        # 3. Поиск упоминаний в инфополе
         print(f"🔎 Сканируем инфополе для {symbol} ({mint}) (Возраст: {age_mins:.1f} мин)...")
         sentiment = await analyze_sentiment(mint, symbol)
-        
-        print(f"🗣 Настроение толпы: {sentiment['decision'].upper()} (Позитив: {sentiment['positive']} | Негатив: {sentiment['negative']} | Прочитано постов: {sentiment['texts']})")
         
         if sentiment['decision'] == "bearish":
             print(f"🚫 Отказ: Найдены предупреждения о скаме (Rug / Dump).")
             return False
             
-        # 4. Подключаем математику (TA)
+        # 4. Подключаем математику (TA) - ДЕЛАЕМ ОПЦИОНАЛЬНЫМ!
         if pair_address:
-            print(f"📈 Загружаем свечи (OHLCV) и считаем RSI для {symbol}...")
+            print(f"📈 Загружаем свечи (OHLCV) для {symbol}...")
             ohlcv = await TATools.fetch_ohlcv(pair_address, limit=20)
             
+            # Если свечи есть (монета на Raydium), считаем RSI
             if ohlcv and len(ohlcv) >= 6:
                 rsi = TATools.calculate_rsi(ohlcv, periods=14)
                 print(f"📊 Технический анализ: Индикатор RSI = {rsi:.2f}")
                 
-                if math.isnan(rsi):
-                    print("⚠️ Недостаточно данных для ТА. Отказ.")
-                    return False
-                    
-                # Защита от покупки на самом пике ("на хаях") или на жестком дампе
-                if rsi > 85:
-                    print(f"🚫 Отказ: Монета экстремально перегрета (RSI {rsi:.2f} > 85). Ждем откат.")
-                    return False
-                if rsi < 45:
-                    print(f"🚫 Отказ: Монета в даунтренде (RSI {rsi:.2f} < 45). Слишком рано.")
-                    return False
-                    
-                print(f"📊 Анализ транзакций (5м): Покупок {buys_m5}, Продаж {sells_m5} | Коэффициент: {buy_sell_ratio:.2f}")
-                print(f"🧠 Alpha Agent Score: {alpha_score}/100 [Momentum: {momentum_score}, Safety: {safety_score}]")
-                
-                if buy_sell_ratio < 1.1:
-                    print(f"🚫 Отказ: Слабый Momentum (Ratio {buy_sell_ratio:.2f} < 1.1). Тренд затухает.")
-                    return False
-                
-                if alpha_score >= 60:
-                    print(f"🚀 СИГНАЛ (Score {alpha_score})! Заходим в перспективную ракету!")
-                    return True
-                else:
-                    print(f"🚫 Отказ: Alpha Score ({alpha_score}) ниже 60. Ждем более уверенный тренд.")
-                    return False
+                if not math.isnan(rsi):
+                    if rsi > 85:
+                        print(f"🚫 Отказ: Монета экстремально перегрета (RSI {rsi:.2f} > 85). Ждем откат.")
+                        return False
+                    if rsi < 45:
+                        print(f"🚫 Отказ: Монета в даунтренде (RSI {rsi:.2f} < 45). Слишком рано.")
+                        return False
             else:
-                print("⚠️ Не удалось получить минутные свечи (или их меньше 6). Отказ.")
+                print("⚠️ Свечи недоступны (Pump.fun кривая). Пропускаем фильтр RSI, смотрим только на Momentum.")
+                
+            print(f"📊 Анализ транзакций (5м): Покупок {buys_m5}, Продаж {sells_m5} | Коэффициент: {buy_sell_ratio:.2f}")
+            print(f"🧠 Alpha Agent Score: {alpha_score}/100 [Momentum: {momentum_score}, Safety: {safety_score}]")
+            
+            if buy_sell_ratio < 1.1:
+                print(f"🚫 Отказ: Слабый Momentum (Ratio {buy_sell_ratio:.2f} < 1.1). Тренд затухает.")
+                return False
+            
+            # СНИЗИЛИ ПОРОГ ДО 50! Для монет выходящих из флэта 60 было слишком жестко.
+            if alpha_score >= 50:
+                print(f"🚀 СИГНАЛ (Score {alpha_score})! Заходим в перспективную ракету!")
+                return True
+            else:
+                print(f"🚫 Отказ: Alpha Score ({alpha_score}) ниже 50. Ждем более уверенный тренд.")
                 return False
         else:
             return False
