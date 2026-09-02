@@ -7,14 +7,12 @@ import pandas as pd
 import config
 from analyzer import Analyzer
 from tracker import PaperTracker
-from helius_ws import wss_sniper
 
 # === 1. ФОНОВЫЙ ТОРГОВЫЙ БОТ ===
 async def bot_loop():
-    print("Starting Background Trading Loop...")
+    print("🚀 Запуск PhantBot Trading Engine (Mature Token Scanner)...")
     analyzer = Analyzer()
     tracker = PaperTracker()
-    asyncio.create_task(wss_sniper.connect_and_listen())
 
     while True:
         try:
@@ -38,7 +36,6 @@ async def bot_loop():
                 position.current_pnl_usd = position.amount_usd * pnl_pct
                 tracker.save_portfolio()
                 
-                
                 # Логика выхода
                 if pnl_pct <= config.STOP_LOSS_PCT:
                     tracker.close_position(mint, current_price, "Stop Loss")
@@ -49,29 +46,34 @@ async def bot_loop():
                     if drop_from_max >= config.TRAILING_DISTANCE_PCT:
                         tracker.close_position(mint, current_price, f"Trailing Stop (-{config.TRAILING_DISTANCE_PCT*100}%)")
             
-            # Поиск новых позиций из очереди WSS
-            while not wss_sniper.token_queue.empty():
-                if not tracker.can_open_new_position(config.MAX_CONCURRENT_POSITIONS):
-                    break
-                    
-                token_data = await wss_sniper.token_queue.get()
-                mint = token_data.get("mint")
-                symbol = token_data.get("symbol", "UNKNOWN")
+            # Поиск новых позиций из DexScreener API (Mature tokens)
+            open_count = len([m for m, d in tracker.portfolio.items() if d['status'] == 'open'])
+            if open_count < config.MAX_CONCURRENT_POSITIONS:
+                print(f"🔎 Сканируем Dexscreener на устоявшиеся монеты... (Открыто: {open_count}/{config.MAX_CONCURRENT_POSITIONS})")
+                tokens = await analyzer.fetch_latest_tokens()
                 
-                if not mint or mint in tracker.positions:
-                    continue
+                for pair in tokens:
+                    mint = pair.get("baseToken", {}).get("address")
+                    symbol = pair.get("baseToken", {}).get("symbol", "UNKNOWN")
+                    
+                    if not mint or mint in tracker.positions:
+                        continue
                         
-                is_good = await analyzer.analyze_token_ws(token_data)
-                if is_good:
-                    # Используем цену из WSS уведомления (или рассчитываем из bonding curve)
-                    entry_price = float(token_data.get("priceUsd", 0))
-                    if entry_price > 0:
-                        tracker.add_position(symbol, mint, entry_price, config.VIRTUAL_POSITION_SIZE_USD)
+                    is_good = await analyzer.analyze_token(mint)
+                    if is_good:
+                        pair_data = await analyzer.fetch_token_data(mint)
+                        entry_price = float(pair_data.get("priceUsd", 0)) if pair_data else 0
+                        if entry_price > 0:
+                            tracker.add_position(symbol, mint, entry_price, config.VIRTUAL_POSITION_SIZE_USD)
+                            break
+                    
+                    # Пауза между монетами
+                    await asyncio.sleep(1.5)
                             
         except Exception as e:
             print(f"Ошибка в цикле бота: {e}")
             
-        await asyncio.sleep(1)
+        await asyncio.sleep(10)
 
 def run_background_bot():
     """Запускает асинхронный цикл в отдельном потоке"""
