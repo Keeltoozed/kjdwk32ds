@@ -245,8 +245,8 @@ class Analyzer:
             is_global_dump = (age_mins > 360 and h6_change < -30) or (age_mins > 1440 and h24_change < -40)
             is_bleeding = h1_change < -15 or is_global_dump
             
-            # 2. Истинный флэт: цена стоит (изменение < 5%), продаж мало, но есть хотя бы 1 покупатель.
-            is_flat = abs(m5_change) < 15 and sells_m5 <= 15
+            # 2. Истинный флэт (или консолидация): цена стоит (изменение < 15%), есть хотя бы 1 покупатель.
+            is_flat = abs(m5_change) < 15
             has_life = buys_m5 >= 1
             
             # 3. Возраст. Вернули до 1 недели, как ты просил. Оцениваем по графику, а не по таймеру.
