@@ -7,12 +7,14 @@ import pandas as pd
 import config
 from analyzer import Analyzer
 from tracker import PaperTracker
+from helius_ws import wss_sniper
 
 # === 1. ФОНОВЫЙ ТОРГОВЫЙ БОТ ===
 async def bot_loop():
     print("Starting Background Trading Loop...")
     analyzer = Analyzer()
     tracker = PaperTracker()
+    asyncio.create_task(wss_sniper.connect_and_listen())
 
     while True:
         try:
@@ -47,35 +49,29 @@ async def bot_loop():
                     if drop_from_max >= config.TRAILING_DISTANCE_PCT:
                         tracker.close_position(mint, current_price, f"Trailing Stop (-{config.TRAILING_DISTANCE_PCT*100}%)")
             
-            # Поиск новых позиций
-            if tracker.can_open_new_position(config.MAX_CONCURRENT_POSITIONS):
-                latest_tokens = await analyzer.fetch_latest_tokens()
-                for token_profile in latest_tokens:
-                    if token_profile.get("chainId") != "solana":
-                        continue
-                        
-                    mint = token_profile.get("tokenAddress")
-                    symbol = token_profile.get("symbol", "UNKNOWN")
+            # Поиск новых позиций из очереди WSS
+            while not wss_sniper.token_queue.empty():
+                if not tracker.can_open_new_position(config.MAX_CONCURRENT_POSITIONS):
+                    break
                     
-                    if not mint or mint in tracker.positions:
-                        continue
+                token_data = await wss_sniper.token_queue.get()
+                mint = token_data.get("mint")
+                symbol = token_data.get("symbol", "UNKNOWN")
+                
+                if not mint or mint in tracker.positions:
+                    continue
                         
-                    is_good = await analyzer.analyze_token(mint)
-                    if is_good:
-                        pair_data = await analyzer.fetch_token_data(mint)
-                        entry_price = float(pair_data.get("priceUsd", 0)) if pair_data else 0
-                        if entry_price > 0:
-                            real_symbol = pair_data.get("baseToken", {}).get("symbol", symbol)
-                            tracker.add_position(real_symbol, mint, entry_price, config.VIRTUAL_POSITION_SIZE_USD)
-                            break
-                    
-                    # Пауза между монетами, чтобы GeckoTerminal не забанил нас по IP (Rate Limit 429)
-                    await asyncio.sleep(1.5)
+                is_good = await analyzer.analyze_token_ws(token_data)
+                if is_good:
+                    # Используем цену из WSS уведомления (или рассчитываем из bonding curve)
+                    entry_price = float(token_data.get("priceUsd", 0))
+                    if entry_price > 0:
+                        tracker.add_position(symbol, mint, entry_price, config.VIRTUAL_POSITION_SIZE_USD)
                             
         except Exception as e:
             print(f"Ошибка в цикле бота: {e}")
             
-        await asyncio.sleep(15)
+        await asyncio.sleep(1)
 
 def run_background_bot():
     """Запускает асинхронный цикл в отдельном потоке"""
@@ -124,13 +120,25 @@ with tab1:
                 st.subheader("🟢 Открытые позиции")
                 if not open_df.empty:
                     open_df['pnl_%'] = (open_df['current_pnl_usd'] / open_df['amount_usd']) * 100
-                    st.dataframe(open_df[['symbol', 'entry_price_usd', 'current_price_usd', 'max_price_usd', 'current_pnl_usd', 'pnl_%']].style.format({
-                        'entry_price_usd': '${:.10f}',
-                        'current_price_usd': '${:.10f}',
-                        'max_price_usd': '${:.10f}',
-                        'current_pnl_usd': '${:.2f}',
-                        'pnl_%': '{:.2f}%'
-                    }).applymap(lambda x: 'color: green' if x > 0 else 'color: red' if x < 0 else '', subset=['current_pnl_usd', 'pnl_%']))
+                    for index, row in open_df.iterrows():
+                        pnl_usd = row['current_pnl_usd']
+                        pnl_pct = row['pnl_%']
+                        color = "#00C851" if pnl_usd >= 0 else "#FF4444"
+                        sign = "+" if pnl_usd > 0 else ""
+                        
+                        st.markdown(f"""
+                        <div style='background-color: #1E1E1E; padding: 15px; border-radius: 8px; border-left: 5px solid {color}; margin-bottom: 10px; font-family: sans-serif;'>
+                            <div style='display: flex; justify-content: space-between; align-items: center;'>
+                                <h3 style='margin:0; color: #FFF;'>{row['symbol']}</h3>
+                                <h3 style='margin:0; color: {color};'>{sign}${pnl_usd:.2f} ({sign}{pnl_pct:.2f}%)</h3>
+                            </div>
+                            <div style='display: flex; justify-content: space-between; margin-top: 10px; font-size: 0.85em; color: #BBB;'>
+                                <div><span style='color:#888;'>Вход:</span><br>${row['entry_price_usd']:.8f}</div>
+                                <div><span style='color:#888;'>Сейчас:</span><br>${row['current_price_usd']:.8f}</div>
+                                <div><span style='color:#888;'>Пик:</span><br>${row['max_price_usd']:.8f}</div>
+                            </div>
+                        </div>
+                        """, unsafe_allow_html=True)
                 else:
                     st.info("Нет активных сделок.")
                     
@@ -138,16 +146,35 @@ with tab1:
                 st.subheader("📓 История сделок")
                 if not closed_df.empty:
                     total_pnl = closed_df['pnl_usd'].sum()
-                    color = "normal" if total_pnl >= 0 else "inverse"
-                    st.metric(label="Общая прибыль (PnL)", value=f"${total_pnl:.2f}", delta=f"{total_pnl:.2f}", delta_color=color)
+                    st.markdown(f"""
+                    <div style='background-color: #2D2D2D; padding: 20px; border-radius: 10px; text-align: center; margin-bottom: 15px;'>
+                        <div style='color: #888; font-size: 1.1em; text-transform: uppercase;'>Общий PnL</div>
+                        <h1 style='margin: 0; color: {"#00C851" if total_pnl >= 0 else "#FF4444"};'>
+                            {"+" if total_pnl >= 0 else ""}${total_pnl:.2f}
+                        </h1>
+                    </div>
+                    """, unsafe_allow_html=True)
                     
+                    closed_df = closed_df.sort_values(by='exit_time', ascending=False).head(15) # Показываем 15 последних
                     closed_df['pnl_%'] = (closed_df['pnl_usd'] / closed_df['amount_usd']) * 100
-                    st.dataframe(closed_df[['symbol', 'entry_price_usd', 'exit_price_usd', 'pnl_usd', 'pnl_%']].style.format({
-                        'entry_price_usd': '${:.10f}',
-                        'exit_price_usd': '${:.10f}',
-                        'pnl_usd': '${:.2f}',
-                        'pnl_%': '{:.2f}%'
-                    }).applymap(lambda x: 'color: green' if x > 0 else 'color: red' if x < 0 else '', subset=['pnl_usd', 'pnl_%']))
+                    
+                    for index, row in closed_df.iterrows():
+                        p_usd = row['pnl_usd']
+                        p_pct = row['pnl_%']
+                        c_color = "#00C851" if p_usd >= 0 else "#FF4444"
+                        c_sign = "+" if p_usd > 0 else ""
+                        
+                        st.markdown(f"""
+                        <div style='background-color: #1A1A1A; padding: 10px 15px; border-radius: 6px; border-right: 4px solid {c_color}; margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center;'>
+                            <div>
+                                <div style='color: #FFF; font-weight: bold;'>{row['symbol']}</div>
+                                <div style='color: #666; font-size: 0.75em;'>{row.get('exit_reason', 'Closed')}</div>
+                            </div>
+                            <div style='text-align: right; color: {c_color}; font-weight: bold;'>
+                                {c_sign}${p_usd:.2f} <br> <span style='font-size: 0.8em;'>({c_sign}{p_pct:.2f}%)</span>
+                            </div>
+                        </div>
+                        """, unsafe_allow_html=True)
                 else:
                     st.info("История пуста.")
         else:
@@ -171,20 +198,31 @@ with tab2:
                 with st.container():
                     st.markdown(f"""
                     <div style='background-color: #1E1E1E; padding: 15px; border-radius: 10px; border-left: 5px solid {"#00C851" if score >= 70 else "#FF8800"}; margin-bottom: 10px;'>
-                        <h3 style='margin:0; color: #FFF;'>{color} {t['symbol']} <span style='font-size: 0.6em; color: #888;'>{t['mint'][:8]}...</span></h3>
-                        <div style='display: flex; justify-content: space-between; margin-top: 10px;'>
-                            <div style='color: #BBB;'>
-                                <div>💧 Liq: <b>${t.get('liquidity', 0):,.0f}</b></div>
-                                <div>📊 Vol 24h: <b>${t.get('vol_24h', 0):,.0f}</b></div>
+                        <div style='display: flex; justify-content: space-between;'>
+                            <h3 style='margin:0; color: #FFF;'>{t['symbol']} <span style='font-size: 0.6em; color: #888;'>{t['mint'][:8]}...pump {t.get('age_mins', 'New')}</span></h3>
+                            <h3 style='margin:0; color: {"#00C851" if t.get("m5_change",0) > 0 else "#FF4444"};'>
+                                {'+' if t.get("m5_change",0) > 0 else ''}{t.get('m5_change', 0):.1f}%
+                            </h3>
+                        </div>
+                        <div style='display: flex; justify-content: space-between; margin-top: 10px; font-size: 0.9em;'>
+                            <div style='color: #888;'>
+                                <div style='font-size: 0.7em; text-transform: uppercase;'>Liquidity</div>
+                                <div style='color: #DDD;'>${t.get('liquidity', 0):,.0f}</div>
                             </div>
-                            <div style='color: #BBB;'>
-                                <div>🟩 Buys (5m): <b style='color:#00C851;'>{t.get('buys', 0)}</b></div>
-                                <div>🟥 Sells (5m): <b style='color:#FF4444;'>{t.get('sells', 0)}</b></div>
+                            <div style='color: #888;'>
+                                <div style='font-size: 0.7em; text-transform: uppercase;'>24H Vol</div>
+                                <div style='color: #DDD;'>${t.get('vol_24h', 0):,.0f}</div>
                             </div>
-                            <div style='text-align: right;'>
-                                <div style='font-size: 0.8em; color: #888;'>Alpha Score</div>
-                                <h2 style='margin: 0; color: {"#00C851" if score >= 70 else "#FF8800"};'>{score}/100</h2>
+                            <div style='color: #888;'>
+                                <div style='font-size: 0.7em; text-transform: uppercase;'>Buys/Sells (5m)</div>
+                                <div><span style='color:#00C851;'>{t.get('buys', 0)}</span> / <span style='color:#FF4444;'>{t.get('sells', 0)}</span></div>
                             </div>
+                        </div>
+                        <div style='margin-top: 15px; border-top: 1px solid #333; padding-top: 10px; display: flex; gap: 15px; font-weight: bold; font-size: 0.9em;'>
+                            <div style='color: {"#00C851" if score >= 70 else "#FF8800"};'>🧠 {score}</div>
+                            <div style='color: {"#00C851" if t.get("safety",0) >= 70 else "#FF8800"};'>🛡️ {t.get('safety', 0)}</div>
+                            <div style='color: {"#00C851" if t.get("momentum",0) >= 70 else "#FF8800"};'>⚡ {t.get('momentum', 0)}</div>
+                            <div style='color: {"#00C851" if t.get("social",0) >= 70 else "#FF8800"};'>📣 {t.get('social', 0)}</div>
                         </div>
                     </div>
                     """, unsafe_allow_html=True)

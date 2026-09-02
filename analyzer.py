@@ -93,25 +93,57 @@ class Analyzer:
         vol_24h = pair_data.get("volume", {}).get("h24", 0)
         
         # 0. Заранее парсим транзакции для UI радара (чтобы он был живым и показывал всё)
+        # 0. Имитация алгоритма GMGNAI (Alpha Agent Composite Score)
+        # Weighted: safety (35%), momentum (40%), social (25%)
+        
+        # --- 1. MOMENTUM SCORE (0-100) ---
         txns_m5 = pair_data.get("txns", {}).get("m5", {})
         buys_m5 = txns_m5.get("buys", 0)
         sells_m5 = txns_m5.get("sells", 0)
-        
-        # Получаем скачки цены, чтобы не покупать на хаях
         m5_change = pair_data.get("priceChange", {}).get("m5", 0)
         
         safe_sells = sells_m5 if sells_m5 > 0 else 1
         buy_sell_ratio = buys_m5 / safe_sells
         
-        momentum_score = min(40, int((buy_sell_ratio - 1) * 20))
-        safety_score = min(35, int((liq / 10000) * 5)) 
-        alpha_score = min(100, max(0, 50 + momentum_score + safety_score))
+        momentum_score = 20 # базовая оценка
+        if buy_sell_ratio > 1.2: momentum_score += 30
+        if buy_sell_ratio > 2.0: momentum_score += 20
+        if buys_m5 > 50: momentum_score += 15
+        if m5_change > 5: momentum_score += 15
+        momentum_score = min(100, momentum_score)
         
-        # Сохраняем в UI ВООБЩЕ ВСЕ найденные токены
+        # --- 2. SAFETY SCORE (0-100) ---
+        safety_score = 40 # базовая оценка
+        if liq > 5000: safety_score += 20
+        if liq > 20000: safety_score += 20
+        if liq > 50000: safety_score += 20
+        safety_score = min(100, safety_score)
+        
+        # --- 3. SOCIAL SCORE (0-100) ---
+        social_score = 10 # базовая оценка
+        info = pair_data.get("info", {})
+        socials = info.get("socials", [])
+        websites = info.get("websites", [])
+        
+        if len(socials) > 0: social_score += 40
+        if len(websites) > 0: social_score += 30
+        # Если монета старая, комьюнити крепче
+        age_ms = datetime.now(timezone.utc).timestamp() * 1000 - pair_data.get("pairCreatedAt", datetime.now(timezone.utc).timestamp() * 1000)
+        age_mins = age_ms / 60000
+        if age_mins > 60: social_score += 20
+        social_score = min(100, social_score)
+        
+        # --- COMPOSITE ALPHA SCORE ---
+        alpha_score = int((safety_score * 0.35) + (momentum_score * 0.40) + (social_score * 0.25))
+        
+        # Сохраняем в UI ВСЕ найденные токены с детальной разбивкой (как в GMGNAI)
         self._save_scanned_token({
             "symbol": symbol,
             "mint": mint,
             "score": alpha_score,
+            "safety": safety_score,
+            "momentum": momentum_score,
+            "social": social_score,
             "liquidity": liq,
             "vol_24h": vol_24h,
             "buys": buys_m5,
@@ -236,3 +268,60 @@ class Analyzer:
                 json.dump(tokens, f)
         except Exception as e:
             pass
+
+    async def analyze_token_ws(self, ws_data: dict) -> bool:
+        mint = ws_data.get("mint")
+        symbol = ws_data.get("symbol", "UNKNOWN")
+        name = ws_data.get("name", "Unknown")
+        
+        # Расчет стартовой ликвидности из кривой Bonding Curve
+        # Pump.fun всегда начинает примерно с 30 виртуальных SOL
+        v_sol = ws_data.get("vSolInBondingCurve", 30.0)
+        sol_price = 150.0 # Примерная цена SOL в USD
+        liq_usd = v_sol * sol_price
+        
+        # Снайперские токены (0 секунд возраста) еще не имеют 5-минутных объемов, 
+        # поэтому Momentum мы судим по стартовому buy (если он есть)
+        initial_buy = ws_data.get("initialBuy", 0)
+        
+        safety_score = 40
+        momentum_score = 40 if initial_buy > 0 else 20
+        social_score = 10
+        alpha_score = int((safety_score * 0.35) + (momentum_score * 0.40) + (social_score * 0.25))
+        
+        # Сохраняем в UI для радара
+        self._save_scanned_token({
+            "symbol": symbol,
+            "mint": mint,
+            "score": alpha_score,
+            "safety": safety_score,
+            "momentum": momentum_score,
+            "social": social_score,
+            "liquidity": liq_usd,
+            "vol_24h": 0,
+            "buys": 1 if initial_buy > 0 else 0,
+            "sells": 0,
+            "m5_change": 0,
+            "age_mins": "0m (WSS)",
+            "time": time.time()
+        })
+        
+        print(f"📡 [WSS SNIPER] Пойман токен: {name} (${symbol}) | Liq: ${liq_usd:.0f}")
+        
+        # Фильтры
+        if not await self.check_rugcheck(mint):
+            print(f"🚫 [WSS] Отказ: {symbol} не прошел стартовый RugCheck.")
+            return False
+            
+        if initial_buy == 0:
+            print(f"🚫 [WSS] Отказ: {symbol} создан без стартового закупа (Initial Buy = 0). Скорее всего мертв.")
+            return False
+            
+        # Для снайпинга важна скорость. Мы не делаем долгий анализ Sentiment
+        # Если монета прошла базовый RugCheck и кто-то влил в нее начальный объем — заходим!
+        print(f"🚀 [WSS СИГНАЛ] Входим в токен {symbol} на нулевой секунде!")
+        
+        # Эмуляция цены (записываем цену в usd в словарь, чтобы main.py мог ее взять)
+        v_tok = ws_data.get("vTokensInBondingCurve", 1073000000.0)
+        ws_data["priceUsd"] = (v_sol / v_tok) * sol_price
+        return True

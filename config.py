@@ -3,10 +3,15 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Dexscreener API
-DEXSCREENER_LATEST = "https://api.dexscreener.com/token-boosts/top/v1" # Сканируем топ активных (Trending) монет, а не просто новинки
-DEXSCREENER_PROFILES = "https://api.dexscreener.com/token-profiles/latest/v1" # Сканируем свежие обновления профилей
+# Dexscreener API (Оставляем для фоновых проверок портфеля, если нужно)
+DEXSCREENER_LATEST = "https://api.dexscreener.com/token-boosts/top/v1" 
+DEXSCREENER_PROFILES = "https://api.dexscreener.com/token-profiles/latest/v1" 
 DEXSCREENER_SEARCH = "https://api.dexscreener.com/latest/dex/tokens/"
+
+# Helius / PumpPortal WSS API
+HELIUS_API_KEY = "9efda6f4-fddb-42d3-a2b1-098bbbecd299"
+HELIUS_RPC_URL = f"https://mainnet.helius-rpc.com/?api-key={HELIUS_API_KEY}"
+PUMPPORTAL_WSS = "wss://pumpportal.fun/api/data"
 
 # RugCheck API
 RUGCHECK_API = "https://api.rugcheck.xyz/v1/tokens/{mint}/report/summary"
@@ -22,8 +27,8 @@ TIME_EXIT_MINUTES = 120 # Увеличили время жизни до 2 час
 TIME_EXIT_PROFIT_REQ = 0.0 # Выходим по времени, только если позиция вообще не в плюсе
 
 # Trailing Stop Config
-TRAILING_ACTIVATION_PCT = 0.10 # Включаем трейлинг уже при +10% профита!
-TRAILING_DISTANCE_PCT = 0.08   # Подтягиваем стоп на 8% от пика.
+TRAILING_ACTIVATION_PCT = 0.20 # Включаем трейлинг при +20% профита
+TRAILING_DISTANCE_PCT = 0.20   # Даем монете "подышать". Ракеты часто падают на 15-20% перед новым рывком на 500%.
 
 # Filtering
 MIN_LIQUIDITY = 2000  # Снизили до $2k, чтобы ловить микрокапы (<10k), которые дают 1000x
