@@ -62,7 +62,8 @@ class Analyzer:
                         data = await response.json()
                         
                         score = data.get("score", 1000)
-                        if score >= 500:
+                        # Ужесточили проверку на скам для микрокапов
+                        if score >= 400:
                             return False
                             
                         token_info = data.get("token", {})
@@ -96,6 +97,9 @@ class Analyzer:
         buys_m5 = txns_m5.get("buys", 0)
         sells_m5 = txns_m5.get("sells", 0)
         
+        # Получаем скачки цены, чтобы не покупать на хаях
+        m5_change = pair_data.get("priceChange", {}).get("m5", 0)
+        
         safe_sells = sells_m5 if sells_m5 > 0 else 1
         buy_sell_ratio = buys_m5 / safe_sells
         
@@ -103,7 +107,7 @@ class Analyzer:
         safety_score = min(35, int((liq / 10000) * 5)) 
         alpha_score = min(100, max(0, 50 + momentum_score + safety_score))
         
-        # Сохраняем в UI ВООБЩЕ ВСЕ найденные токены, чтобы радар безостановочно мерцал новыми щитками!
+        # Сохраняем в UI ВООБЩЕ ВСЕ найденные токены
         self._save_scanned_token({
             "symbol": symbol,
             "mint": mint,
@@ -112,10 +116,16 @@ class Analyzer:
             "vol_24h": vol_24h,
             "buys": buys_m5,
             "sells": sells_m5,
+            "m5_change": m5_change,
             "time": time.time()
         })
             
         # 1. Базовые фильтры для ПОКУПКИ
+        # Защита от FOMO (покупки отвесной вертикальной свечи)
+        if m5_change > 100:
+            print(f"🚫 Отказ: Монета сделала х2 (+{m5_change}%) за 5 минут. Это уже казино, пропускаем.")
+            return False
+            
         if not (config.MIN_LIQUIDITY <= liq <= config.MAX_LIQUIDITY):
             return False
             
@@ -133,6 +143,15 @@ class Analyzer:
         if max_vol < liq * 1.0:
             return False
             
+        # СПЕЦИАЛЬНАЯ ЗАЩИТА ДЛЯ НОВЫХ И МАЛЕНЬКИХ МОНЕТ (Microcaps < 10k или младше часа)
+        if liq < 10000 or age_mins < 60:
+            if buy_sell_ratio < 1.4:
+                print(f"🚫 Отказ (Microcap): Для молодых/мелких монет нужен мощный перевес покупок (Ratio {buy_sell_ratio:.2f} < 1.4)")
+                return False
+            if buys_m5 < 20:
+                print(f"🚫 Отказ (Microcap): Слишком мало покупок за 5 минут ({buys_m5} < 20). Скорее всего скам без активности.")
+                return False
+
         info = pair_data.get("info", {})
         socials = info.get("socials", [])
         websites = info.get("websites", [])
@@ -172,8 +191,8 @@ class Analyzer:
                     return False
                     
                 # Защита от покупки на самом пике ("на хаях") или на жестком дампе
-                if rsi > 72:
-                    print(f"🚫 Отказ: Монета перегрета (RSI {rsi:.2f} > 72). Риск купить на самом пике перед дампом.")
+                if rsi > 85:
+                    print(f"🚫 Отказ: Монета экстремально перегрета (RSI {rsi:.2f} > 85). Ждем откат.")
                     return False
                 if rsi < 45:
                     print(f"🚫 Отказ: Монета в даунтренде (RSI {rsi:.2f} < 45). Слишком рано.")
