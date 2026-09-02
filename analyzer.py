@@ -1,5 +1,6 @@
 import aiohttp
 from datetime import datetime, timezone
+import time
 import config
 from sentiment import analyze_sentiment
 from ta_tools import TATools

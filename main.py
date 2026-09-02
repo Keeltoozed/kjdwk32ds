@@ -68,6 +68,9 @@ async def bot_loop():
                             real_symbol = pair_data.get("baseToken", {}).get("symbol", symbol)
                             tracker.add_position(real_symbol, mint, entry_price, config.VIRTUAL_POSITION_SIZE_USD)
                             break
+                    
+                    # Пауза между монетами, чтобы GeckoTerminal не забанил нас по IP (Rate Limit 429)
+                    await asyncio.sleep(1.5)
                             
         except Exception as e:
             print(f"Ошибка в цикле бота: {e}")
