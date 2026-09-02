@@ -155,12 +155,12 @@ class Analyzer:
             
         # 1. Базовые фильтры для ПОКУПКИ
         # Защита от FOMO (покупки отвесной вертикальной свечи)
-        if m5_change > 25:
+        if m5_change > 50:
             print(f"🚫 Отказ (FOMO Защита): Монета улетела на +{m5_change}% за 5 минут. Покупать на хаях опасно.")
             return False
             
         h1_change = pair_data.get("priceChange", {}).get("h1", 0)
-        if h1_change > 100:
+        if h1_change > 300:
             print(f"🚫 Отказ (FOMO Защита): Монета уже сделала +{h1_change}% за час. Мы опоздали.")
             return False
             
@@ -246,7 +246,7 @@ class Analyzer:
             is_bleeding = h1_change < -15 or is_global_dump
             
             # 2. Истинный флэт: цена стоит (изменение < 5%), продаж мало, но есть хотя бы 1 покупатель.
-            is_flat = abs(m5_change) < 5 and sells_m5 <= 5
+            is_flat = abs(m5_change) < 15 and sells_m5 <= 15
             has_life = buys_m5 >= 1
             
             # 3. Возраст. Вернули до 1 недели, как ты просил. Оцениваем по графику, а не по таймеру.
