@@ -201,13 +201,12 @@ class Analyzer:
             
         pair_address = pair_data.get("pairAddress")
         
-        # 3. Поиск упоминаний в инфополе
-        print(f"🔎 Сканируем инфополе для {symbol} ({mint}) (Возраст: {age_mins:.1f} мин)...")
-        sentiment = await analyze_sentiment(mint, symbol)
-        
-        if sentiment['decision'] == "bearish":
-            print(f"🚫 Отказ: Найдены предупреждения о скаме (Rug / Dump).")
-            return False
+        # 3. Поиск упоминаний в инфополе - ОТКЛЮЧЕНО (тормозит и часто падает)
+        # print(f"🔎 Сканируем инфополе для {symbol} ({mint}) (Возраст: {age_mins:.1f} мин)...")
+        # sentiment = await analyze_sentiment(mint, symbol)
+        # if sentiment['decision'] == "bearish":
+        #     print(f"🚫 Отказ: Найдены предупреждения о скаме (Rug / Dump).")
+        #     return False
             
         # 4. Подключаем математику (TA) - ДЕЛАЕМ ОПЦИОНАЛЬНЫМ!
         if pair_address:
@@ -223,8 +222,8 @@ class Analyzer:
                     if rsi > 85:
                         print(f"🚫 Отказ: Монета экстремально перегрета (RSI {rsi:.2f} > 85). Ждем откат.")
                         return False
-                    if rsi < 45:
-                        print(f"🚫 Отказ: Монета в даунтренде (RSI {rsi:.2f} < 45). Слишком рано.")
+                    if rsi < 30:
+                        print(f"🚫 Отказ: Монета в жестком даунтренде (RSI {rsi:.2f} < 30).")
                         return False
             else:
                 print("⚠️ Свечи недоступны (Pump.fun кривая). Пропускаем фильтр RSI, смотрим только на Momentum.")
@@ -232,8 +231,8 @@ class Analyzer:
             print(f"📊 Анализ транзакций (5м): Покупок {buys_m5}, Продаж {sells_m5} | Коэффициент: {buy_sell_ratio:.2f}")
             print(f"🧠 Alpha Agent Score: {alpha_score}/100 [Momentum: {momentum_score}, Safety: {safety_score}]")
             
-            if buy_sell_ratio < 1.1:
-                print(f"🚫 Отказ: Слабый Momentum (Ratio {buy_sell_ratio:.2f} < 1.1). Тренд затухает.")
+            if buy_sell_ratio < 1.0:
+                print(f"🚫 Отказ: Слабый Momentum (Ratio {buy_sell_ratio:.2f} < 1.0). Тренд падающий.")
                 return False
             
             # СНИЗИЛИ ПОРОГ ДО 50! Для монет выходящих из флэта 60 было слишком жестко.
