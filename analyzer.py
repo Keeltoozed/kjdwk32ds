@@ -231,19 +231,19 @@ class Analyzer:
             print(f"📊 Анализ транзакций (5м): Покупок {buys_m5}, Продаж {sells_m5} | Коэффициент: {buy_sell_ratio:.2f}")
             print(f"🧠 Alpha Agent Score: {alpha_score}/100 [Momentum: {momentum_score}, Safety: {safety_score}]")
             
-            if buy_sell_ratio < 1.0:
-                print(f"🚫 Отказ: Слабый Momentum (Ratio {buy_sell_ratio:.2f} < 1.0). Тренд падающий.")
-                return False
-                
             # ЛОГИКА ОЖИДАНИЯ ВЫСТРЕЛА (ФЛЭТ) ПО ЗАПРОСУ
             # "если график ровный монете меньше недели и ничего не указывает на то что пойдет в минус"
             is_flat = abs(m5_change) < 10 and sells_m5 <= 10
             is_young = age_mins < 10080 # Меньше недели
-            is_safe = safety_score >= 60 and len(socials) > 0 # Не скамится, есть ликвидность и соцсети
+            is_safe = safety_score >= 40 and len(socials) > 0 # Не скамится, есть минимальная ликвидность и соцсети
             
             if is_flat and is_young and is_safe:
                 print(f"🚀 СИГНАЛ (FLAT ACCUMULATION)! Монета спит, ждем выстрела. Заходим!")
                 return True
+                
+            if buy_sell_ratio < 1.0:
+                print(f"🚫 Отказ: Слабый Momentum (Ratio {buy_sell_ratio:.2f} < 1.0). Тренд падающий.")
+                return False
             
             # СНИЗИЛИ ПОРОГ ДО 50! Для активных монет.
             if alpha_score >= 50:
