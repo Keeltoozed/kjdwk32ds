@@ -262,13 +262,9 @@ class Analyzer:
                 print(f"🚫 Отказ: Слабый Momentum (Ratio {buy_sell_ratio:.2f} < 1.0). Тренд падающий.")
                 return False
             
-            # СНИЗИЛИ ПОРОГ ДО 50! Для активных монет.
-            if alpha_score >= 50:
-                print(f"🚀 СИГНАЛ (Score {alpha_score})! Заходим в активную ракету!")
-                return True
-            else:
-                print(f"🚫 Отказ: Alpha Score ({alpha_score}) ниже 50, и график не во флэте. Пропускаем.")
-                return False
+            # Отключаем покупку "активных ракет" по моментуму, чтобы не покупать на взлете!
+            print(f"🚫 Отказ: Монета не во флэте. Мы ищем только засады до пампа. Пропускаем.")
+            return False
         else:
             return False
 
