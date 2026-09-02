@@ -107,14 +107,43 @@ class Analyzer:
         info = pair_data.get("info", {})
         socials = info.get("socials", [])
         websites = info.get("websites", [])
+        
+        # Заранее парсим транзакции для красивого вывода в UI
+        txns_m5 = pair_data.get("txns", {}).get("m5", {})
+        buys_m5 = txns_m5.get("buys", 0)
+        sells_m5 = txns_m5.get("sells", 0)
+        
+        if sells_m5 == 0: sells_m5 = 1 # Защита от деления на 0
+        buy_sell_ratio = buys_m5 / sells_m5
+        
+        # Считаем примерный Alpha Score сразу для радара
+        momentum_score = min(40, int((buy_sell_ratio - 1) * 20))
+        safety_score = min(35, int((liq / 10000) * 5)) 
+        alpha_score = min(100, max(0, 50 + momentum_score + safety_score))
+        
+        symbol = pair_data.get("baseToken", {}).get("symbol", "UNKNOWN")
+        
+        # Сохраняем в UI ВСЕ токены, которые прошли фильтр возраста и ликвидности (чтобы радар "жил")
+        self._save_scanned_token({
+            "symbol": symbol,
+            "mint": mint,
+            "score": alpha_score,
+            "liquidity": liq,
+            "vol_24h": vol_24h,
+            "buys": buys_m5,
+            "sells": sells_m5,
+            "time": time.time()
+        })
+        
         if len(socials) + len(websites) < 2:
+            print(f"🚫 Отказ: У {symbol} нет соцсетей.")
             return False
             
         # 1. Базовая проверка безопасности кода
         if not await self.check_rugcheck(mint):
+            print(f"🚫 Отказ: {symbol} не прошел RugCheck (скам/монополия).")
             return False
             
-        symbol = pair_data.get("baseToken", {}).get("symbol", "UNKNOWN")
         pair_address = pair_data.get("pairAddress")
         
         # 2. Поиск упоминаний в Twitter/Reddit
@@ -130,7 +159,7 @@ class Analyzer:
             
         # Подключаем математику (TA), так как уже есть история торгов
         if pair_address:
-            print(f"📈 Монета достаточно взрослая. Загружаем свечи (OHLCV) и считаем RSI для {symbol}...")
+            print(f"📈 Загружаем свечи (OHLCV) и считаем RSI для {symbol}...")
             ohlcv = await TATools.fetch_ohlcv(pair_address, limit=20)
             
             if ohlcv and len(ohlcv) >= 6:
@@ -142,43 +171,14 @@ class Analyzer:
                     print("⚠️ Недостаточно данных для ТА. Отказ.")
                     return False
                     
-                # 1. Проверяем Momentum через реальные транзакции (Buy/Sell Ratio)
-                txns_m5 = pair_data.get("txns", {}).get("m5", {})
-                buys_m5 = txns_m5.get("buys", 0)
-                sells_m5 = txns_m5.get("sells", 0)
-                
-                if sells_m5 == 0: sells_m5 = 1 # Защита от деления на 0
-                buy_sell_ratio = buys_m5 / sells_m5
-                
                 print(f"📊 Анализ транзакций (5м): Покупок {buys_m5}, Продаж {sells_m5} | Коэффициент: {buy_sell_ratio:.2f}")
-                
-                if buy_sell_ratio < 1.5:
-                    print(f"🚫 Отказ: Слабый Momentum. Покупок должно быть минимум в 1.5 раза больше, чем продаж.")
-                    return False
-                    
-                # 2. Имитируем Alpha Score (как на скрине GMGNAI)
-                # Базовый скор: 50
-                # Добавляем за соотношение покупок к продажам (Momentum)
-                momentum_score = min(40, int((buy_sell_ratio - 1) * 20))
-                # Добавляем за ликвидность (Safety)
-                safety_score = min(35, int((liq / 10000) * 5)) 
-                
-                alpha_score = 50 + momentum_score + safety_score
-                alpha_score = min(100, alpha_score) # Максимум 100
                 
                 print(f"🧠 Alpha Agent Score: {alpha_score}/100 [Momentum: {momentum_score}, Safety: {safety_score}]")
                 
-                # Сохраняем для дашборда
-                self._save_scanned_token({
-                    "symbol": symbol,
-                    "mint": mint,
-                    "score": alpha_score,
-                    "liquidity": liq,
-                    "vol_24h": vol_24h,
-                    "buys": buys_m5,
-                    "sells": sells_m5,
-                    "time": time.time()
-                })
+                # Смягчили требование Momentum с 1.5 до 1.2 (чтобы ловить стабильно растущие тренды, а не только резкие пампы)
+                if buy_sell_ratio < 1.2:
+                    print(f"🚫 Отказ: Слабый Momentum (Ratio {buy_sell_ratio:.2f} < 1.2).")
+                    return False
                 
                 if alpha_score >= 70:
                     print(f"🚀 СУПЕР СИГНАЛ (Score {alpha_score})! Покупателей сильно больше продавцов. Входим!")
