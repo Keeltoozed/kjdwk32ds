@@ -142,37 +142,72 @@ class Analyzer:
                     print("⚠️ Недостаточно данных для ТА. Отказ.")
                     return False
                     
-                # 1. Проверка RSI (Зона накопления или начало тренда)
-                if not (40 <= rsi <= 65):
-                    print(f"🚫 Отказ: RSI ({rsi:.2f}) не в зоне консолидации (40-65).")
-                    return False
-
-                # 2. Ищем ВСПЛЕСК ОБЪЕМА (Volume Anomaly) - главный признак скорого пампа
-                # Сравниваем объем последней свечи со средним объемом предыдущих 5 свечей
-                vol_last = float(ohlcv[-1][5])
-                avg_vol_previous = sum(float(c[5]) for c in ohlcv[-6:-1]) / 5
+                # 1. Проверяем Momentum через реальные транзакции (Buy/Sell Ratio)
+                txns_m5 = pair_data.get("txns", {}).get("m5", {})
+                buys_m5 = txns_m5.get("buys", 0)
+                sells_m5 = txns_m5.get("sells", 0)
                 
-                # Защита от деления на 0
-                if avg_vol_previous == 0:
-                    avg_vol_previous = 1
-                    
-                # Проверяем, зеленая ли свеча (цена закрытия выше цены открытия)
-                # Если свеча красная и объем огромный — это ДАМП (крупная продажа), нам туда не надо!
-                open_last = float(ohlcv[-1][1])
-                close_last = float(ohlcv[-1][4])
-                is_green_candle = close_last > open_last
-                    
-                if vol_last >= avg_vol_previous * 2.5 and is_green_candle:
-                    print(f"🔥 Сигнал: Аномальный объем ПОКУПОК (х{vol_last/avg_vol_previous:.1f})! Инсайдеры загружаются.")
-                    return True
-                elif vol_last >= avg_vol_previous * 2.5 and not is_green_candle:
-                    print(f"🚫 Отказ: Аномальный объем ПРОДАЖ (Дамп). Кто-то сливает монету.")
+                if sells_m5 == 0: sells_m5 = 1 # Защита от деления на 0
+                buy_sell_ratio = buys_m5 / sells_m5
+                
+                print(f"📊 Анализ транзакций (5м): Покупок {buys_m5}, Продаж {sells_m5} | Коэффициент: {buy_sell_ratio:.2f}")
+                
+                if buy_sell_ratio < 1.5:
+                    print(f"🚫 Отказ: Слабый Momentum. Покупок должно быть минимум в 1.5 раза больше, чем продаж.")
                     return False
+                    
+                # 2. Имитируем Alpha Score (как на скрине GMGNAI)
+                # Базовый скор: 50
+                # Добавляем за соотношение покупок к продажам (Momentum)
+                momentum_score = min(40, int((buy_sell_ratio - 1) * 20))
+                # Добавляем за ликвидность (Safety)
+                safety_score = min(35, int((liq / 10000) * 5)) 
+                
+                alpha_score = 50 + momentum_score + safety_score
+                alpha_score = min(100, alpha_score) # Максимум 100
+                
+                print(f"🧠 Alpha Agent Score: {alpha_score}/100 [Momentum: {momentum_score}, Safety: {safety_score}]")
+                
+                # Сохраняем для дашборда
+                self._save_scanned_token({
+                    "symbol": symbol,
+                    "mint": mint,
+                    "score": alpha_score,
+                    "liquidity": liq,
+                    "vol_24h": vol_24h,
+                    "buys": buys_m5,
+                    "sells": sells_m5,
+                    "time": time.time()
+                })
+                
+                if alpha_score >= 70:
+                    print(f"🚀 СУПЕР СИГНАЛ (Score {alpha_score})! Покупателей сильно больше продавцов. Входим!")
+                    return True
                 else:
-                    print(f"🚫 Отказ: Нет всплеска объема (ждем, пока киты начнут скупать).")
+                    print(f"🚫 Отказ: Alpha Score ({alpha_score}) ниже 70. Пропускаем.")
                     return False
             else:
                 print("⚠️ Не удалось получить минутные свечи (или их меньше 6). Отказ.")
                 return False
         else:
             return False
+
+    def _save_scanned_token(self, token_data):
+        try:
+            import json, os
+            filename = "scanned_tokens.json"
+            tokens = []
+            if os.path.exists(filename):
+                try:
+                    with open(filename, 'r') as f:
+                        tokens = json.load(f)
+                except json.JSONDecodeError:
+                    pass
+            # Оставляем только последние 20 токенов
+            tokens = [t for t in tokens if t['mint'] != token_data['mint']]
+            tokens.insert(0, token_data)
+            tokens = tokens[:20]
+            with open(filename, 'w') as f:
+                json.dump(tokens, f)
+        except Exception as e:
+            pass
