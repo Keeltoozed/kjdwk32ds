@@ -135,8 +135,8 @@ class Analyzer:
         socials = info.get("socials", [])
         websites = info.get("websites", [])
         
-        if len(socials) + len(websites) < 2:
-            print(f"🚫 Отказ: У {symbol} нет соцсетей.")
+        if len(socials) + len(websites) < 1:
+            print(f"🚫 Отказ: У {symbol} вообще нет соцсетей (полный мусор).")
             return False
             
         # 2. Базовая проверка безопасности кода
@@ -172,15 +172,15 @@ class Analyzer:
                 print(f"📊 Анализ транзакций (5м): Покупок {buys_m5}, Продаж {sells_m5} | Коэффициент: {buy_sell_ratio:.2f}")
                 print(f"🧠 Alpha Agent Score: {alpha_score}/100 [Momentum: {momentum_score}, Safety: {safety_score}]")
                 
-                if buy_sell_ratio < 1.2:
-                    print(f"🚫 Отказ: Слабый Momentum (Ratio {buy_sell_ratio:.2f} < 1.2).")
+                if buy_sell_ratio < 1.1:
+                    print(f"🚫 Отказ: Слабый Momentum (Ratio {buy_sell_ratio:.2f} < 1.1). Тренд затухает.")
                     return False
                 
-                if alpha_score >= 70:
-                    print(f"🚀 СУПЕР СИГНАЛ (Score {alpha_score})! Покупателей сильно больше продавцов. Входим!")
+                if alpha_score >= 60:
+                    print(f"🚀 СИГНАЛ (Score {alpha_score})! Заходим в перспективную ракету!")
                     return True
                 else:
-                    print(f"🚫 Отказ: Alpha Score ({alpha_score}) ниже 70. Пропускаем.")
+                    print(f"🚫 Отказ: Alpha Score ({alpha_score}) ниже 60. Ждем более уверенный тренд.")
                     return False
             else:
                 print("⚠️ Не удалось получить минутные свечи (или их меньше 6). Отказ.")
