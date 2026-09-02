@@ -22,13 +22,13 @@ VIRTUAL_POSITION_SIZE_USD = 4.0
 MAX_CONCURRENT_POSITIONS = 5
 
 # Risk Management
-STOP_LOSS_PCT = -0.20   # Жесткий стоп-лосс -20% (раньше было -50%)
-TIME_EXIT_MINUTES = 120 # Увеличили время жизни до 2 часов
-TIME_EXIT_PROFIT_REQ = 0.0 # Выходим по времени, только если позиция вообще не в плюсе
+STOP_LOSS_PCT = -0.12   # Затянули стоп-лосс до 12%, чтобы жестко резать минуса
+TIME_EXIT_MINUTES = 60  # Снизили до 1 часа. Если не выстрелила - выходим.
+TIME_EXIT_PROFIT_REQ = 0.0
 
 # Trailing Stop Config
-TRAILING_ACTIVATION_PCT = 0.20 # Включаем трейлинг при +20% профита
-TRAILING_DISTANCE_PCT = 0.20   # Даем монете "подышать". Ракеты часто падают на 15-20% перед новым рывком на 500%.
+TRAILING_ACTIVATION_PCT = 0.12 # Включаем трейлинг уже при +12% профита
+TRAILING_DISTANCE_PCT = 0.08   # Трейлим близко (8%), чтобы не отдавать прибыль обратно рынку.
 
 # Filtering
 MIN_LIQUIDITY = 2000  # Снизили до $2k, чтобы ловить микрокапы (<10k), которые дают 1000x
