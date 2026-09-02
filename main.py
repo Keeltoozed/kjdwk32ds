@@ -113,13 +113,18 @@ async def scanner_loop(analyzer, tracker):
             print(f"Ошибка в цикле сканера: {e}")
         await asyncio.sleep(30)
 
+from copytrader import CopyTrader
+
 async def async_main():
     analyzer = Analyzer()
     tracker = PaperTracker()
+    copy_trader = CopyTrader(tracker)
+    
     await asyncio.gather(
         position_manager_loop(analyzer, tracker),
         scanner_loop(analyzer, tracker),
-        birth_wss_loop()
+        birth_wss_loop(),
+        copy_trader.listen()
     )
 
 def run_background_bot():
