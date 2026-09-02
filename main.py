@@ -9,14 +9,10 @@ from analyzer import Analyzer
 from tracker import PaperTracker
 
 # === 1. ФОНОВЫЙ ТОРГОВЫЙ БОТ ===
-async def bot_loop():
-    print("🚀 Запуск PhantBot Trading Engine (Mature Token Scanner)...")
-    analyzer = Analyzer()
-    tracker = PaperTracker()
-
+async def position_manager_loop(analyzer, tracker):
+    print("🛡️ Запуск менеджера позиций (быстрый трекинг Stop-Loss)...")
     while True:
         try:
-            # Управление открытыми сделками
             open_positions = tracker.get_open_positions()
             for mint, position in list(open_positions.items()):
                 pair_data = await analyzer.fetch_token_data(mint)
@@ -45,8 +41,14 @@ async def bot_loop():
                     drop_from_max = (position.max_price_usd - current_price) / position.max_price_usd
                     if drop_from_max >= config.TRAILING_DISTANCE_PCT:
                         tracker.close_position(mint, current_price, f"Trailing Stop (-{config.TRAILING_DISTANCE_PCT*100}%)")
-            
-            # Поиск новых позиций из DexScreener API (Mature tokens)
+        except Exception as e:
+            print(f"Ошибка в менеджере позиций: {e}")
+        await asyncio.sleep(10) # Проверяем стопы каждые 10 секунд!
+
+async def scanner_loop(analyzer, tracker):
+    print("🚀 Запуск PhantBot Scanner (Поиск новых монет)...")
+    while True:
+        try:
             open_count = len(tracker.get_open_positions())
             if open_count < config.MAX_CONCURRENT_POSITIONS:
                 print(f"🔎 Сканируем Dexscreener на устоявшиеся монеты... (Открыто: {open_count}/{config.MAX_CONCURRENT_POSITIONS})")
@@ -63,23 +65,30 @@ async def bot_loop():
                     if is_good:
                         pair_data = await analyzer.fetch_token_data(mint)
                         entry_price = float(pair_data.get("priceUsd", 0)) if pair_data else 0
+                        actual_symbol = pair_data.get("baseToken", {}).get("symbol", "UNKNOWN") if pair_data else "UNKNOWN"
                         if entry_price > 0:
-                            tracker.add_position(symbol, mint, entry_price, config.VIRTUAL_POSITION_SIZE_USD)
-                            break
+                            tracker.add_position(actual_symbol, mint, entry_price, config.VIRTUAL_POSITION_SIZE_USD)
+                            break # Ждем следующего цикла после покупки
                     
                     # Пауза между монетами
                     await asyncio.sleep(1.5)
-                            
         except Exception as e:
-            print(f"Ошибка в цикле бота: {e}")
-            
-        await asyncio.sleep(10)
+            print(f"Ошибка в цикле сканера: {e}")
+        await asyncio.sleep(30)
+
+async def async_main():
+    analyzer = Analyzer()
+    tracker = PaperTracker()
+    await asyncio.gather(
+        position_manager_loop(analyzer, tracker),
+        scanner_loop(analyzer, tracker)
+    )
 
 def run_background_bot():
     """Запускает асинхронный цикл в отдельном потоке"""
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    loop.run_until_complete(bot_loop())
+    loop.run_until_complete(async_main())
 
 # === 2. ВЕБ-ИНТЕРФЕЙС STREAMLIT ===
 st.set_page_config(page_title="PhantBot Dashboard", layout="wide")

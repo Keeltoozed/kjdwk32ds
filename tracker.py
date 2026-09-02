@@ -52,7 +52,8 @@ class PaperTracker:
                 entry_price_usd=entry_price,
                 amount_usd=amount_usd,
                 entry_time=time.time(),
-                max_price_usd=entry_price
+                max_price_usd=entry_price,
+                current_price_usd=entry_price
             )
             self.save_portfolio()
             print(f"📝 PAPER BUY: {symbol} ({mint}) | Amount: ${amount_usd} | Price: ${entry_price}")
