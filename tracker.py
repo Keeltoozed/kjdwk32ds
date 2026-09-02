@@ -53,16 +53,16 @@ class PaperTracker:
 
         print(f"✅ Открыта PAPER сделка: {symbol} по цене ${entry_price}")
         self.positions[mint] = VirtualPosition(
-                symbol=symbol,
-                mint=mint,
-                entry_price_usd=entry_price,
-                amount_usd=amount_usd,
-                entry_time=time.time(),
-                max_price_usd=entry_price,
-                current_price_usd=entry_price
-            )
-            self.save_portfolio()
-            print(f"📝 PAPER BUY: {symbol} ({mint}) | Amount: ${amount_usd} | Price: ${entry_price}")
+            symbol=symbol,
+            mint=mint,
+            entry_price_usd=entry_price,
+            amount_usd=amount_usd,
+            entry_time=time.time(),
+            max_price_usd=entry_price,
+            current_price_usd=entry_price
+        )
+        self.save_portfolio()
+        print(f"📝 PAPER BUY: {symbol} ({mint}) | Amount: ${amount_usd} | Price: ${entry_price}")
 
     def close_position(self, mint: str, exit_price: float, reason: str):
         pos = self.positions.get(mint)
