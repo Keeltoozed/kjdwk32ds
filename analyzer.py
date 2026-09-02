@@ -31,7 +31,8 @@ class Analyzer:
         unique_tokens = []
         for t in tokens:
             addr = t.get("tokenAddress")
-            if addr and addr not in seen:
+            chain = t.get("chainId")
+            if addr and addr not in seen and chain == "solana":
                 seen.add(addr)
                 unique_tokens.append(t)
         return unique_tokens
