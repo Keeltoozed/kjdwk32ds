@@ -47,7 +47,7 @@ async def bot_loop():
                         tracker.close_position(mint, current_price, f"Trailing Stop (-{config.TRAILING_DISTANCE_PCT*100}%)")
             
             # Поиск новых позиций из DexScreener API (Mature tokens)
-            open_count = len([m for m, d in tracker.portfolio.items() if d['status'] == 'open'])
+            open_count = len(tracker.get_open_positions())
             if open_count < config.MAX_CONCURRENT_POSITIONS:
                 print(f"🔎 Сканируем Dexscreener на устоявшиеся монеты... (Открыто: {open_count}/{config.MAX_CONCURRENT_POSITIONS})")
                 tokens = await analyzer.fetch_latest_tokens()
