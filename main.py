@@ -53,8 +53,8 @@ async def bot_loop():
                 tokens = await analyzer.fetch_latest_tokens()
                 
                 for pair in tokens:
-                    mint = pair.get("baseToken", {}).get("address")
-                    symbol = pair.get("baseToken", {}).get("symbol", "UNKNOWN")
+                    mint = pair.get("tokenAddress")
+                    symbol = "UNKNOWN"
                     
                     if not mint or mint in tracker.positions:
                         continue
