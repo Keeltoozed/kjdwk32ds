@@ -155,13 +155,17 @@ class Analyzer:
             
         # 1. Базовые фильтры для ПОКУПКИ
         # Защита от FOMO (покупки отвесной вертикальной свечи)
-        if m5_change > 100:
-            print(f"🚫 Отказ: Монета сделала х2 (+{m5_change}%) за 5 минут. Это уже казино, пропускаем.")
+        if m5_change > 25:
+            print(f"🚫 Отказ (FOMO Защита): Монета улетела на +{m5_change}% за 5 минут. Покупать на хаях опасно.")
+            return False
+            
+        h1_change = pair_data.get("priceChange", {}).get("h1", 0)
+        if h1_change > 100:
+            print(f"🚫 Отказ (FOMO Защита): Монета уже сделала +{h1_change}% за час. Мы опоздали.")
             return False
             
         if not (config.MIN_LIQUIDITY <= liq <= config.MAX_LIQUIDITY):
             return False
-            
         created_at = pair_data.get("pairCreatedAt")
         if not created_at:
             return False
@@ -232,13 +236,26 @@ class Analyzer:
             print(f"🧠 Alpha Agent Score: {alpha_score}/100 [Momentum: {momentum_score}, Safety: {safety_score}]")
             
             # ЛОГИКА ОЖИДАНИЯ ВЫСТРЕЛА (ФЛЭТ) ПО ЗАПРОСУ
-            # "если график ровный монете меньше недели и ничего не указывает на то что пойдет в минус"
-            is_flat = abs(m5_change) < 10 and sells_m5 <= 10
-            is_young = age_mins < 10080 # Меньше недели
+            h1_change = pair_data.get("priceChange", {}).get("h1", 0)
+            h6_change = pair_data.get("priceChange", {}).get("h6", 0)
+            h24_change = pair_data.get("priceChange", {}).get("h24", 0)
+            
+            # 1. Анализ глобального графика (вместо жесткого среза по возрасту).
+            # Защита от покупки "на дне после дампа".
+            is_global_dump = (age_mins > 360 and h6_change < -30) or (age_mins > 1440 and h24_change < -40)
+            is_bleeding = h1_change < -15 or is_global_dump
+            
+            # 2. Истинный флэт: цена стоит (изменение < 5%), продаж мало, но есть хотя бы 1 покупатель.
+            is_flat = abs(m5_change) < 5 and sells_m5 <= 5
+            has_life = buys_m5 >= 1
+            
+            # 3. Возраст. Вернули до 1 недели, как ты просил. Оцениваем по графику, а не по таймеру.
+            is_young = age_mins < 10080 
+            
             is_safe = safety_score >= 40 and len(socials) > 0 # Не скамится, есть минимальная ликвидность и соцсети
             
-            if is_flat and is_young and is_safe:
-                print(f"🚀 СИГНАЛ (FLAT ACCUMULATION)! Монета спит, ждем выстрела. Заходим!")
+            if is_flat and is_young and is_safe and has_life and not is_bleeding:
+                print(f"🚀 СИГНАЛ (FLAT ACCUMULATION)! Монета в накоплении (Флэт). Ждем первый выстрел!")
                 return True
                 
             if buy_sell_ratio < 1.0:

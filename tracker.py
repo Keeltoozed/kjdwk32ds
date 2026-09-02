@@ -44,9 +44,15 @@ class PaperTracker:
     def get_open_positions(self) -> Dict[str, VirtualPosition]:
         return {k: v for k, v in self.positions.items() if v.status == "open"}
 
-    def add_position(self, symbol: str, mint: str, entry_price: float, amount_usd: float):
-        if mint not in self.positions or self.positions[mint].status == "closed":
-            self.positions[mint] = VirtualPosition(
+    def add_position(self, symbol, mint, entry_price, amount_usd=5.0):
+        # БЛОКИРОВКА ПОВТОРНОГО ВХОДА:
+        # Если мы уже торговали этой монетой (даже если она closed), мы в нее больше не лезем!
+        if mint in self.positions:
+            print(f"⚠️ Попытка повторного входа в {symbol} заблокирована. Мы торгуем щитком только 1 раз.")
+            return
+
+        print(f"✅ Открыта PAPER сделка: {symbol} по цене ${entry_price}")
+        self.positions[mint] = VirtualPosition(
                 symbol=symbol,
                 mint=mint,
                 entry_price_usd=entry_price,

@@ -51,19 +51,50 @@ async def position_manager_loop(analyzer, tracker):
             print(f"Ошибка в менеджере позиций: {e}")
         await asyncio.sleep(10) # Проверяем стопы каждые 10 секунд!
 
+from birth_tracker import BirthTracker
+birth_tracker = BirthTracker()
+
+async def birth_wss_loop():
+    import websockets
+    import json
+    print("👶 Запуск Службы Роддома (Слушаем создание ВСЕХ новых токенов)...")
+    uri = config.PUMPPORTAL_WSS
+    while True:
+        try:
+            async with websockets.connect(uri) as ws:
+                payload = {"method": "subscribeNewToken"}
+                await ws.send(json.dumps(payload))
+                async for message in ws:
+                    data = json.loads(message)
+                    mint = data.get("mint")
+                    if mint:
+                        birth_tracker.add_token(mint)
+        except Exception as e:
+            print(f"Ошибка WSS Роддома: {e}. Переподключение через 5 секунд...")
+            await asyncio.sleep(5)
+
 async def scanner_loop(analyzer, tracker):
     print("🚀 Запуск PhantBot Scanner (Поиск новых монет)...")
     while True:
         try:
             open_count = len(tracker.get_open_positions())
             if open_count < config.MAX_CONCURRENT_POSITIONS:
-                print(f"🔎 Сканируем Dexscreener на устоявшиеся монеты... (Открыто: {open_count}/{config.MAX_CONCURRENT_POSITIONS})")
-                tokens = await analyzer.fetch_latest_tokens()
+                print(f"🔎 Сканируем монеты... (Открыто: {open_count}/{config.MAX_CONCURRENT_POSITIONS})")
                 
-                for pair in tokens:
-                    mint = pair.get("tokenAddress")
-                    symbol = "UNKNOWN"
-                    
+                # 1. VIP Токены (DexScreener API)
+                tokens = await analyzer.fetch_latest_tokens()
+                mints_to_scan = [p.get("tokenAddress") for p in tokens if p.get("tokenAddress")]
+                
+                # 2. Уличные Токены (Проверенные временем 40-45 минут)
+                mature_mints = birth_tracker.get_mature_tokens(40, 45)
+                if mature_mints:
+                    print(f"🎂 Найдено {len(mature_mints)} 'уличных' монет, которым только что исполнилось 40 минут!")
+                    mints_to_scan.extend(mature_mints)
+                
+                # Удаляем дубликаты
+                mints_to_scan = list(set(mints_to_scan))
+                
+                for mint in mints_to_scan:
                     if not mint or mint in tracker.positions:
                         continue
                         
@@ -87,7 +118,8 @@ async def async_main():
     tracker = PaperTracker()
     await asyncio.gather(
         position_manager_loop(analyzer, tracker),
-        scanner_loop(analyzer, tracker)
+        scanner_loop(analyzer, tracker),
+        birth_wss_loop()
     )
 
 def run_background_bot():
