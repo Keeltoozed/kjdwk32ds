@@ -22,8 +22,8 @@ TIME_EXIT_MINUTES = 120 # Увеличили время жизни до 2 час
 TIME_EXIT_PROFIT_REQ = 0.0 # Выходим по времени, только если позиция вообще не в плюсе
 
 # Trailing Stop Config
-TRAILING_ACTIVATION_PCT = 0.15 # Жадность фраера сгубила. Включаем трейлинг уже при +15% профита!
-TRAILING_DISTANCE_PCT = 0.10   # Подтягиваем стоп на 10% от пика.
+TRAILING_ACTIVATION_PCT = 0.10 # Включаем трейлинг уже при +10% профита!
+TRAILING_DISTANCE_PCT = 0.08   # Подтягиваем стоп на 8% от пика.
 
 # Filtering
 MIN_LIQUIDITY = 10000  # Нижний порог ликвидности

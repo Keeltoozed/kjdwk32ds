@@ -129,7 +129,8 @@ class Analyzer:
             
         vol_1h = pair_data.get("volume", {}).get("h1", 0)
         max_vol = max(vol_24h, vol_1h)
-        if max_vol < liq * 0.5:
+        # Требуем, чтобы объем был как минимум равен ликвидности (отсев дохлых монет)
+        if max_vol < liq * 1.0:
             return False
             
         info = pair_data.get("info", {})
@@ -168,6 +169,14 @@ class Analyzer:
                 
                 if math.isnan(rsi):
                     print("⚠️ Недостаточно данных для ТА. Отказ.")
+                    return False
+                    
+                # Защита от покупки на самом пике ("на хаях") или на жестком дампе
+                if rsi > 72:
+                    print(f"🚫 Отказ: Монета перегрета (RSI {rsi:.2f} > 72). Риск купить на самом пике перед дампом.")
+                    return False
+                if rsi < 45:
+                    print(f"🚫 Отказ: Монета в даунтренде (RSI {rsi:.2f} < 45). Слишком рано.")
                     return False
                     
                 print(f"📊 Анализ транзакций (5м): Покупок {buys_m5}, Продаж {sells_m5} | Коэффициент: {buy_sell_ratio:.2f}")
