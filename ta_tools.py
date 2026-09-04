@@ -53,3 +53,52 @@ class TATools:
         
         latest_rsi = float(rsi.iloc[-1])
         return latest_rsi
+
+    @staticmethod
+    def calculate_macd(ohlcv_list: list, fast=12, slow=26, signal=9) -> dict:
+        """
+        Расчет MACD (Moving Average Convergence Divergence).
+        Показывает направление и силу тренда.
+        """
+        if len(ohlcv_list) < slow + signal:
+            return {"macd": 0.0, "signal": 0.0, "hist": 0.0}
+            
+        ohlcv_list = ohlcv_list[::-1]
+        df = pd.DataFrame(ohlcv_list, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+        df['close'] = df['close'].astype(float)
+        
+        ema_fast = df['close'].ewm(span=fast, adjust=False).mean()
+        ema_slow = df['close'].ewm(span=slow, adjust=False).mean()
+        macd_line = ema_fast - ema_slow
+        signal_line = macd_line.ewm(span=signal, adjust=False).mean()
+        macd_hist = macd_line - signal_line
+        
+        return {
+            "macd": float(macd_line.iloc[-1]),
+            "signal": float(signal_line.iloc[-1]),
+            "hist": float(macd_hist.iloc[-1])
+        }
+
+    @staticmethod
+    def calculate_bollinger_bands(ohlcv_list: list, periods=20, std_dev=2.0) -> dict:
+        """
+        Расчет Линий Боллинджера (Bollinger Bands).
+        Помогает определить перекупленность/перепроданность и волатильность.
+        """
+        if len(ohlcv_list) < periods:
+            return {"upper": 0.0, "middle": 0.0, "lower": 0.0}
+            
+        ohlcv_list = ohlcv_list[::-1]
+        df = pd.DataFrame(ohlcv_list, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+        df['close'] = df['close'].astype(float)
+        
+        middle_band = df['close'].rolling(window=periods).mean()
+        std = df['close'].rolling(window=periods).std()
+        upper_band = middle_band + (std * std_dev)
+        lower_band = middle_band - (std * std_dev)
+        
+        return {
+            "upper": float(upper_band.iloc[-1]),
+            "middle": float(middle_band.iloc[-1]),
+            "lower": float(lower_band.iloc[-1])
+        }

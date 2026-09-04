@@ -33,11 +33,21 @@ async def position_manager_loop(analyzer, tracker):
                 tracker.save_portfolio()
                 
                 # Логика выхода
-                # 1. Break-even Stop (БЕЗУБЫТОК). Если монета давала +10%, не даем ей уйти в минус!
-                if max_pnl_pct >= 0.10 and pnl_pct <= 0.02:
-                    tracker.close_position(mint, current_price, "Break-even Stop (+2%)")
+                # 1. Break-even Stop (БЕЗУБЫТОК). 
+                if max_pnl_pct >= 0.50 and pnl_pct <= 0.10:
+                    tracker.close_position(mint, current_price, "Break-even Stop (+10%)")
                     continue
                     
+                # Динамический Трейлинг Стоп (чтобы ловить иксы и не вылетать на мелких дампах)
+                if max_pnl_pct >= 10.0: # >1000%
+                    dynamic_trailing_dist = 0.50 # 50% откат допустим
+                elif max_pnl_pct >= 3.0: # >300%
+                    dynamic_trailing_dist = 0.40 # 40% откат
+                elif max_pnl_pct >= 1.0: # >100%
+                    dynamic_trailing_dist = 0.30 # 30% откат
+                else:
+                    dynamic_trailing_dist = config.TRAILING_DISTANCE_PCT
+                
                 # 2. Обычные стопы и тейк-профиты
                 if pnl_pct <= config.STOP_LOSS_PCT:
                     tracker.close_position(mint, current_price, "Stop Loss")
@@ -45,8 +55,8 @@ async def position_manager_loop(analyzer, tracker):
                     tracker.close_position(mint, current_price, "Time-based Exit")
                 elif max_pnl_pct >= config.TRAILING_ACTIVATION_PCT:
                     drop_from_max = (position.max_price_usd - current_price) / position.max_price_usd
-                    if drop_from_max >= config.TRAILING_DISTANCE_PCT:
-                        tracker.close_position(mint, current_price, f"Trailing Stop (-{config.TRAILING_DISTANCE_PCT*100}%)")
+                    if drop_from_max >= dynamic_trailing_dist:
+                        tracker.close_position(mint, current_price, f"Trailing Stop (-{dynamic_trailing_dist*100:.0f}%)")
         except Exception as e:
             print(f"Ошибка в менеджере позиций: {e}")
         await asyncio.sleep(10) # Проверяем стопы каждые 10 секунд!
@@ -85,10 +95,10 @@ async def scanner_loop(analyzer, tracker):
                 tokens = await analyzer.fetch_latest_tokens()
                 mints_to_scan = [p.get("tokenAddress") for p in tokens if p.get("tokenAddress")]
                 
-                # 2. Уличные Токены (Проверенные временем 40-45 минут)
-                mature_mints = birth_tracker.get_mature_tokens(40, 45)
+                # 2. Уличные Токены (Берем молодые ракеты от 5 до 20 минут)
+                mature_mints = birth_tracker.get_mature_tokens(5, 20)
                 if mature_mints:
-                    print(f"🎂 Найдено {len(mature_mints)} 'уличных' монет, которым только что исполнилось 40 минут!")
+                    print(f"🎂 Найдено {len(mature_mints)} перспективных монет (возраст 5-20 минут)!")
                     mints_to_scan.extend(mature_mints)
                 
                 # Удаляем дубликаты
@@ -104,7 +114,10 @@ async def scanner_loop(analyzer, tracker):
                         entry_price = float(pair_data.get("priceUsd", 0)) if pair_data else 0
                         actual_symbol = pair_data.get("baseToken", {}).get("symbol", "UNKNOWN") if pair_data else "UNKNOWN"
                         if entry_price > 0:
-                            tracker.add_position(actual_symbol, mint, entry_price, config.VIRTUAL_POSITION_SIZE_USD)
+                            # Реинвестирование (10% от текущего капитала, мин $4, макс $100)
+                            capital = tracker.get_total_capital()
+                            position_size = max(4.0, min(100.0, capital * (config.REINVEST_PERCENT / 100.0)))
+                            tracker.add_position(actual_symbol, mint, entry_price, position_size)
                             break # Ждем следующего цикла после покупки
                     
                     # Пауза между монетами
@@ -114,6 +127,40 @@ async def scanner_loop(analyzer, tracker):
         await asyncio.sleep(30)
 
 from copytrader import CopyTrader
+import os
+
+async def fomo_signal_loop(analyzer, tracker):
+    print("📲 Запуск обработчика сигналов FOMO...")
+    while True:
+        try:
+            if os.path.exists('fomo_signals.txt'):
+                with open('fomo_signals.txt', 'r') as f:
+                    mints = f.read().splitlines()
+                
+                if mints:
+                    # Очищаем файл после прочтения
+                    with open('fomo_signals.txt', 'w') as f:
+                        f.write('')
+                        
+                    for mint in mints:
+                        mint = mint.strip()
+                        if mint and mint not in tracker.positions:
+                            print(f"🚨 ПРИНЯТ ВНЕШНИЙ СИГНАЛ (FOMO): {mint}")
+                            # Проверяем скам-фильтрами перед покупкой
+                            is_good = await analyzer.analyze_token(mint)
+                            
+                            if is_good:
+                                pair_data = await analyzer.fetch_token_data(mint)
+                                entry_price = float(pair_data.get("priceUsd", 0)) if pair_data else 0
+                                actual_symbol = pair_data.get("baseToken", {}).get("symbol", "FOMO") if pair_data else "FOMO"
+                                
+                                if entry_price > 0:
+                                    capital = tracker.get_total_capital()
+                                    position_size = max(4.0, min(100.0, capital * (config.REINVEST_PERCENT / 100.0)))
+                                    tracker.add_position(actual_symbol, mint, entry_price, position_size)
+        except Exception as e:
+            print(f"Ошибка в fomo_signal_loop: {e}")
+        await asyncio.sleep(1) # Проверяем файл каждую секунду для мгновенной реакции
 
 async def async_main():
     analyzer = Analyzer()
@@ -124,7 +171,8 @@ async def async_main():
         position_manager_loop(analyzer, tracker),
         scanner_loop(analyzer, tracker),
         birth_wss_loop(),
-        copy_trader.listen()
+        copy_trader.listen(),
+        fomo_signal_loop(analyzer, tracker)
     )
 
 def run_background_bot():

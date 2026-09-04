@@ -44,6 +44,11 @@ class PaperTracker:
     def get_open_positions(self) -> Dict[str, VirtualPosition]:
         return {k: v for k, v in self.positions.items() if v.status == "open"}
 
+    def get_total_capital(self) -> float:
+        # Считаем изначальный капитал + сумма PnL всех закрытых и открытых позиций
+        total_pnl = sum(pos.pnl_usd for pos in self.positions.values() if pos.status == "closed")
+        return max(config.INITIAL_BALANCE_USD + total_pnl, 10.0)
+
     def add_position(self, symbol, mint, entry_price, amount_usd=5.0):
         # БЛОКИРОВКА ПОВТОРНОГО ВХОДА:
         # Если мы уже торговали этой монетой (даже если она closed), мы в нее больше не лезем!

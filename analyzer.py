@@ -64,7 +64,7 @@ class Analyzer:
                         
                         score = data.get("score", 1000)
                         # Ужесточили проверку на скам для микрокапов
-                        if score >= 400:
+                        if score >= 300: # было 400, сделали строже
                             return False
                             
                         token_info = data.get("token", {})
@@ -72,10 +72,22 @@ class Analyzer:
                             return False
                         if token_info.get("freezeAuthority") is not None:
                             return False
+                        
+                        # Фильтр по названию токена
+                        name = token_info.get("name", "").lower()
+                        symbol = token_info.get("symbol", "").lower()
+                        bad_words = ["test", "scam", "fuck", "nigger", "pump and dump", "rug"]
+                        if any(w in name for w in bad_words) or any(w in symbol for w in bad_words):
+                            return False
                             
+                        # Индекс Херфиндаля-Хиршмана (HHI) для выявления скрытых монополий (как Bubble Map)
                         top_holders = data.get("topHolders", [])
+                        hhi_index = sum([(h.get("pct", 0) * 100) ** 2 for h in top_holders[:15] if not h.get("isContract", False)])
+                        
                         top_10_pct = sum([h.get("pct", 0) for h in top_holders[:10] if not h.get("isContract", False)])
-                        if top_10_pct >= 30:
+                        
+                        # Если HHI высокий (>2000), значит кошельки сильно сконцентрированы (пузыри)
+                        if top_10_pct >= 30 or hhi_index > 2500:
                             return False
                             
                         return True
@@ -93,9 +105,7 @@ class Analyzer:
         liq = pair_data.get("liquidity", {}).get("usd", 0)
         vol_24h = pair_data.get("volume", {}).get("h24", 0)
         
-        # 0. Заранее парсим транзакции для UI радара (чтобы он был живым и показывал всё)
-        # 0. Имитация алгоритма GMGNAI (Alpha Agent Composite Score)
-        # Weighted: safety (35%), momentum (40%), social (25%)
+        # 0. Заранее парсим транзакции для UI радара
         
         # --- 1. MOMENTUM SCORE (0-100) ---
         txns_m5 = pair_data.get("txns", {}).get("m5", {})
@@ -128,7 +138,7 @@ class Analyzer:
         
         if len(socials) > 0: social_score += 40
         if len(websites) > 0: social_score += 30
-        # Если монета старая, комьюнити крепче
+        
         age_ms = datetime.now(timezone.utc).timestamp() * 1000 - pair_data.get("pairCreatedAt", datetime.now(timezone.utc).timestamp() * 1000)
         age_mins = age_ms / 60000
         if age_mins > 60: social_score += 20
@@ -137,7 +147,6 @@ class Analyzer:
         # --- COMPOSITE ALPHA SCORE ---
         alpha_score = int((safety_score * 0.35) + (momentum_score * 0.40) + (social_score * 0.25))
         
-        # Сохраняем в UI ВСЕ найденные токены с детальной разбивкой (как в GMGNAI)
         self._save_scanned_token({
             "symbol": symbol,
             "mint": mint,
@@ -153,15 +162,14 @@ class Analyzer:
             "time": time.time()
         })
             
-        # 1. Базовые фильтры для ПОКУПКИ
         # Защита от FOMO (покупки отвесной вертикальной свечи)
-        if m5_change > 50:
-            print(f"🚫 Отказ (FOMO Защита): Монета улетела на +{m5_change}% за 5 минут. Покупать на хаях опасно.")
+        if m5_change > 70:
+            print(f"🚫 Отказ (FOMO Защита): Монета улетела на +{m5_change}% за 5 минут.")
             return False
             
         h1_change = pair_data.get("priceChange", {}).get("h1", 0)
-        if h1_change > 300:
-            print(f"🚫 Отказ (FOMO Защита): Монета уже сделала +{h1_change}% за час. Мы опоздали.")
+        if h1_change > 1000: # Повысили порог с 300 до 1000, чтобы ловить сильные ракеты, но отсекать совсем улетевшие
+            print(f"🚫 Отказ (FOMO Защита): Монета уже сделала +{h1_change}% за час.")
             return False
             
         if not (config.MIN_LIQUIDITY <= liq <= config.MAX_LIQUIDITY):
@@ -169,68 +177,83 @@ class Analyzer:
         created_at = pair_data.get("pairCreatedAt")
         if not created_at:
             return False
-        age_ms = datetime.now(timezone.utc).timestamp() * 1000 - created_at
-        age_mins = age_ms / 60000
+            
         if not (config.MIN_AGE_MINUTES <= age_mins <= config.MAX_AGE_MINUTES):
             return False
             
         vol_1h = pair_data.get("volume", {}).get("h1", 0)
         max_vol = max(vol_24h, vol_1h)
-        # Для устоявшихся монет, которые "спали", объем может быть небольшим. 
-        # Требуем хотя бы 30% от ликвидности, а не 100%.
+        # Оборот (Turnover). Проверяем, чтобы монета была живой.
         if max_vol < liq * 0.3:
             return False
             
-        # СПЕЦИАЛЬНАЯ ЗАЩИТА ДЛЯ НОВЫХ И МАЛЕНЬКИХ МОНЕТ (Microcaps < 10k или младше часа)
         if liq < 10000 or age_mins < 60:
             if buy_sell_ratio < 1.2:
-                print(f"🚫 Отказ (Microcap): Нужен перевес покупок (Ratio {buy_sell_ratio:.2f} < 1.2)")
                 return False
             if buys_m5 < 10:
-                print(f"🚫 Отказ (Microcap): Слишком мало покупок за 5 минут ({buys_m5} < 10).")
                 return False
 
-        info = pair_data.get("info", {})
-        socials = info.get("socials", [])
-        websites = info.get("websites", [])
-        
         if len(socials) + len(websites) < 1:
-            print(f"🚫 Отказ: У {symbol} вообще нет соцсетей (полный мусор).")
+            print(f"🚫 Отказ: У {symbol} вообще нет соцсетей.")
             return False
             
-        # 2. Базовая проверка безопасности кода
+        # 2. Базовая проверка безопасности кода и HHI Bubble Map
         if not await self.check_rugcheck(mint):
-            print(f"🚫 Отказ: {symbol} не прошел RugCheck (скам/монополия).")
+            print(f"🚫 Отказ: {symbol} не прошел RugCheck (скам/пузыри кошельков).")
             return False
             
         pair_address = pair_data.get("pairAddress")
         
-        # 3. Поиск упоминаний в инфополе - ОТКЛЮЧЕНО (тормозит и часто падает)
-        # print(f"🔎 Сканируем инфополе для {symbol} ({mint}) (Возраст: {age_mins:.1f} мин)...")
-        # sentiment = await analyze_sentiment(mint, symbol)
-        # if sentiment['decision'] == "bearish":
-        #     print(f"🚫 Отказ: Найдены предупреждения о скаме (Rug / Dump).")
-        #     return False
+        # 3. Анализ сентимента (Инфополе) с таймаутом
+        try:
+            import asyncio
+            print(f"🔎 Сканируем инфополе (Twitter/Web) для {symbol}...")
+            # Ставим жесткий таймаут 3 секунды, чтобы не тормозить снайпера
+            sentiment = await asyncio.wait_for(analyze_sentiment(mint, symbol), timeout=3.0)
+            if sentiment.get('decision') == "bearish":
+                print(f"🚫 Отказ: Найдены предупреждения о скаме в интернете (FUD/Rugpull).")
+                return False
+        except asyncio.TimeoutError:
+            print("⚠️ Таймаут сканирования инфополя. Пропускаем сентимент.")
+        except Exception:
+            pass
             
-        # 4. Подключаем математику (TA) - ДЕЛАЕМ ОПЦИОНАЛЬНЫМ!
+        # 4. Расширенный технический анализ (TA)
         if pair_address:
-            print(f"📈 Загружаем свечи (OHLCV) для {symbol}...")
-            ohlcv = await TATools.fetch_ohlcv(pair_address, limit=20)
+            print(f"📈 Загружаем свечи (OHLCV) для TA...")
+            ohlcv = await TATools.fetch_ohlcv(pair_address, limit=40)
             
-            # Если свечи есть (монета на Raydium), считаем RSI
-            if ohlcv and len(ohlcv) >= 6:
+            if ohlcv and len(ohlcv) >= 20:
                 rsi = TATools.calculate_rsi(ohlcv, periods=14)
-                print(f"📊 Технический анализ: Индикатор RSI = {rsi:.2f}")
+                macd_data = TATools.calculate_macd(ohlcv)
+                bb_data = TATools.calculate_bollinger_bands(ohlcv)
+                
+                current_price = float(pair_data.get("priceUsd", 0))
+                
+                print(f"📊 TA: RSI={rsi:.1f} | MACD Hist={macd_data['hist']:.6f}")
                 
                 if not math.isnan(rsi):
                     if rsi > 85:
-                        print(f"🚫 Отказ: Монета экстремально перегрета (RSI {rsi:.2f} > 85). Ждем откат.")
+                        print(f"🚫 Отказ: Монета экстремально перегрета (RSI {rsi:.2f} > 85).")
                         return False
                     if rsi < 30:
                         print(f"🚫 Отказ: Монета в жестком даунтренде (RSI {rsi:.2f} < 30).")
                         return False
+                
+                # Фильтр по Боллинджеру: не покупаем, если цена сильно пробила верхнюю полосу (откат неизбежен)
+                if bb_data['upper'] > 0 and current_price > (bb_data['upper'] * 1.05):
+                    print(f"🚫 Отказ: Цена пробила верхнюю полосу Боллинджера. Ожидается коррекция.")
+                    return False
+                    
+                # Фильтр по MACD: ищем зарождающийся бычий тренд
+                if macd_data['hist'] < 0 and macd_data['macd'] < macd_data['signal']:
+                    # Тренд направлен вниз, но если MACD гистограмма начала расти (сужаться), это нормально.
+                    # Для надежности требуем, чтобы RSI был не ниже 40.
+                    if not math.isnan(rsi) and rsi < 40:
+                        print(f"🚫 Отказ: Медвежий тренд по MACD. Покупать рано.")
+                        return False
             else:
-                print("⚠️ Свечи недоступны (Pump.fun кривая). Пропускаем фильтр RSI, смотрим только на Momentum.")
+                print("⚠️ Свечи недоступны. Пропускаем фильтр TA (RSI/MACD/BB).")
                 
             print(f"📊 Анализ транзакций (5м): Покупок {buys_m5}, Продаж {sells_m5} | Коэффициент: {buy_sell_ratio:.2f}")
             print(f"🧠 Alpha Agent Score: {alpha_score}/100 [Momentum: {momentum_score}, Safety: {safety_score}]")

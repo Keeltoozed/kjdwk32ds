@@ -18,20 +18,22 @@ RUGCHECK_API = "https://api.rugcheck.xyz/v1/tokens/{mint}/report/summary"
 
 # Paper Trading Config
 PAPER_PORTFOLIO_FILE = "portfolio.json"
-VIRTUAL_POSITION_SIZE_USD = 4.0
-MAX_CONCURRENT_POSITIONS = 5
+INITIAL_BALANCE_USD = 20.0    # Стартовый капитал
+REINVEST_PERCENT = 10.0       # Процент от капитала на одну сделку
+VIRTUAL_POSITION_SIZE_USD = 4.0 # (Устарело) базовый размер сделки
+MAX_CONCURRENT_POSITIONS = 15 # Увеличили макс. количество одновременных сделок (было 5)
 
 # Risk Management
-STOP_LOSS_PCT = -0.12   # Затянули стоп-лосс до 12%, чтобы жестко резать минуса
-TIME_EXIT_MINUTES = 60  # Снизили до 1 часа. Если не выстрелила - выходим.
+STOP_LOSS_PCT = -0.15   # Чуть расширили стоп-лосс до 15% (было 12%), чтобы давать цене "дышать"
+TIME_EXIT_MINUTES = 60
 TIME_EXIT_PROFIT_REQ = 0.0
 
 # Trailing Stop Config
-TRAILING_ACTIVATION_PCT = 0.12 # Включаем трейлинг уже при +12% профита
-TRAILING_DISTANCE_PCT = 0.08   # Трейлим близко (8%), чтобы не отдавать прибыль обратно рынку.
+TRAILING_ACTIVATION_PCT = 0.40 # Включаем трейлинг только при +40% (раньше было 12%, из-за чего он продавал слишком рано)
+TRAILING_DISTANCE_PCT = 0.25   # Базовый трейлинг 25% (было 8% - это мгновенно выбивало по стопу)
 
 # Filtering
-MIN_LIQUIDITY = 2000  # Снизили до $2k, чтобы ловить микрокапы (<10k), которые дают 1000x
+MIN_LIQUIDITY = 3000  # Снизили до 3k, чтобы бот находил больше сделок
 MAX_LIQUIDITY = 50000000 
-MIN_AGE_MINUTES = 40  # Ищем только зрелые монеты, которые пережили первый дамп
-MAX_AGE_MINUTES = 129600 # До 90 дней (129600 минут).
+MIN_AGE_MINUTES = 5   # Ищем монеты от 5 минут (раньше было 40 минут, бот пропускал весь рост!)
+MAX_AGE_MINUTES = 129600
