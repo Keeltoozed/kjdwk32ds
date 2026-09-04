@@ -64,10 +64,10 @@ async def position_manager_loop(analyzer, tracker):
 from birth_tracker import BirthTracker
 birth_tracker = BirthTracker()
 
-async def birth_wss_loop():
+async def birth_wss_loop(analyzer, tracker):
     import websockets
     import json
-    print("👶 Запуск Службы Роддома (Слушаем создание ВСЕХ новых токенов)...")
+    print("👶 Запуск Службы Роддома (Слушаем создание ВСЕХ новых токенов на 0-секунде)...")
     uri = config.PUMPPORTAL_WSS
     while True:
         try:
@@ -79,6 +79,19 @@ async def birth_wss_loop():
                     mint = data.get("mint")
                     if mint:
                         birth_tracker.add_token(mint)
+                        
+                        # ⚡ ZERO-SECOND SNIPER (Как у ТОП-игроков) ⚡
+                        # Мгновенно проверяем монету в ту же миллисекунду, как она создана!
+                        if len(tracker.get_open_positions()) < config.MAX_CONCURRENT_POSITIONS:
+                            is_instant_buy = await analyzer.analyze_token_ws(data)
+                            if is_instant_buy:
+                                symbol = data.get("symbol", "SNIPE")
+                                # Цена рассчитывается внутри analyze_token_ws
+                                entry_price = data.get("priceUsd", 0.00003) 
+                                capital = tracker.get_total_capital()
+                                position_size = max(4.0, min(100.0, capital * (config.REINVEST_PERCENT / 100.0)))
+                                print(f"🔫 СНАЙПЕРСКИЙ ВЫСТРЕЛ В {symbol}! Заходим на {position_size}$")
+                                tracker.add_position(symbol, mint, entry_price, position_size)
         except Exception as e:
             print(f"Ошибка WSS Роддома: {e}. Переподключение через 5 секунд...")
             await asyncio.sleep(5)
@@ -170,7 +183,7 @@ async def async_main():
     await asyncio.gather(
         position_manager_loop(analyzer, tracker),
         scanner_loop(analyzer, tracker),
-        birth_wss_loop(),
+        birth_wss_loop(analyzer, tracker),
         copy_trader.listen(),
         fomo_signal_loop(analyzer, tracker)
     )

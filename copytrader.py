@@ -7,13 +7,27 @@ import aiohttp
 class CopyTrader:
     def __init__(self, tracker):
         self.tracker = tracker
-        self.wallets = {
-            "5FGoPPj1nL8LCnfVnpTmreqQtqLuMXXAwuS1uahMrp8V": "@DumbCrayonEater",
-            "2yXwy5Dsa1XtEXcsrkFVRJeyuWD3qKkMN3pP3p5VTW3V": "@Salem1299534",
-            "DCeH3aCsstGUSxQqS72VBZwTydoor1nQ6dWaxrgGQk39": "@Natan_benish",
-            "GFRjGNXY8JrGSPC46inqrH4XPdUFMDLkE1oNm1nXiPsJ": "@brrrgrrrz",
-            "7iPPqPyrqcmfenRs4xZ72ab4pyuUofXB5YaQB83WJmT9": "@notanicecat69"
-        }
+        self.wallets = self._load_wallets()
+        
+    def _load_wallets(self):
+        import os
+        wallets = {}
+        if os.path.exists("smart_wallets.txt"):
+            with open("smart_wallets.txt", "r") as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith("#"):
+                        # Генерируем короткое имя для логов
+                        short_name = f"@Smart_{line[:4]}"
+                        wallets[line] = short_name
+        
+        # Если файл пуст, загружаем парочку дефолтных
+        if not wallets:
+            wallets = {
+                "5FGoPPj1nL8LCnfVnpTmreqQtqLuMXXAwuS1uahMrp8V": "@DumbCrayon",
+                "2yXwy5Dsa1XtEXcsrkFVRJeyuWD3qKkMN3pP3p5VTW3V": "@Salem1299"
+            }
+        return wallets
         self.HELIUS_API_KEY = "9efda6f4-fddb-42d3-a2b1-098bbbecd299"
         self.rpc_url = f"https://mainnet.helius-rpc.com/?api-key={self.HELIUS_API_KEY}"
         self.wss_url = f"wss://mainnet.helius-rpc.com/?api-key={self.HELIUS_API_KEY}"
@@ -80,15 +94,19 @@ class CopyTrader:
                 if post_amt > pre_amt: # Баланс вырос = ПОКУПКА
                     print(f"🚨 COPYTRADE СИГНАЛ: {trader_name} только что купил {mint}!")
                     
-                    if len(self.tracker.get_open_positions()) >= 5:
+                    import config
+                    if len(self.tracker.get_open_positions()) >= config.MAX_CONCURRENT_POSITIONS:
                         print("🚫 Лимит позиций. Пропускаем копитрейд.")
                         return
                         
                     price_usd = await self.get_token_price(mint)
                     symbol = f"COPY_{trader_name[1:5].upper()}"
                     
-                    self.tracker.add_position(symbol, mint, price_usd, amount_usd=5.0)
-                    print(f"✅ Успешно скопировали сделку {trader_name} через Helius!")
+                    capital = self.tracker.get_total_capital()
+                    position_size = max(4.0, min(100.0, capital * (config.REINVEST_PERCENT / 100.0)))
+                    
+                    self.tracker.add_position(symbol, mint, price_usd, amount_usd=position_size)
+                    print(f"✅ Успешно скопировали сделку {trader_name} на {position_size}$!")
 
     async def listen(self):
         while True:
