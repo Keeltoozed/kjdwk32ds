@@ -59,7 +59,7 @@ async def position_manager_loop(analyzer, tracker):
                         tracker.close_position(mint, current_price, f"Trailing Stop (-{dynamic_trailing_dist*100:.0f}%)")
         except Exception as e:
             print(f"Ошибка в менеджере позиций: {e}")
-        await asyncio.sleep(10) # Проверяем стопы каждые 10 секунд!
+        await asyncio.sleep(3) # ПРОБЛЕМА РЕШЕНА: Проверяем стопы каждые 3 секунды вместо 10, чтобы избежать сильных проскальзываний на дампах!
 
 from birth_tracker import BirthTracker
 birth_tracker = BirthTracker()
@@ -67,7 +67,7 @@ birth_tracker = BirthTracker()
 async def birth_wss_loop(analyzer, tracker):
     import websockets
     import json
-    print("👶 Запуск Службы Роддома (Слушаем создание ВСЕХ новых токенов на 0-секунде)...")
+    print("👶 Запуск Роддома: сбор базы данных новых токенов для сканера (без авто-покупки на 0-секунде)...")
     uri = config.PUMPPORTAL_WSS
     while True:
         try:
@@ -78,20 +78,8 @@ async def birth_wss_loop(analyzer, tracker):
                     data = json.loads(message)
                     mint = data.get("mint")
                     if mint:
+                        # Просто сохраняем монету в базу для scanner_loop (чтобы она "настоялась" 5-20 мин)
                         birth_tracker.add_token(mint)
-                        
-                        # ⚡ ZERO-SECOND SNIPER (Как у ТОП-игроков) ⚡
-                        # Мгновенно проверяем монету в ту же миллисекунду, как она создана!
-                        if len(tracker.get_open_positions()) < config.MAX_CONCURRENT_POSITIONS:
-                            is_instant_buy = await analyzer.analyze_token_ws(data)
-                            if is_instant_buy:
-                                symbol = data.get("symbol", "SNIPE")
-                                # Цена рассчитывается внутри analyze_token_ws
-                                entry_price = data.get("priceUsd", 0.00003) 
-                                capital = tracker.get_total_capital()
-                                position_size = max(4.0, min(100.0, capital * (config.REINVEST_PERCENT / 100.0)))
-                                print(f"🔫 СНАЙПЕРСКИЙ ВЫСТРЕЛ В {symbol}! Заходим на {position_size}$")
-                                tracker.add_position(symbol, mint, entry_price, position_size)
         except Exception as e:
             print(f"Ошибка WSS Роддома: {e}. Переподключение через 5 секунд...")
             await asyncio.sleep(5)
