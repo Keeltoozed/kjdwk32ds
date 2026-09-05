@@ -37,3 +37,6 @@ MIN_LIQUIDITY = 3000  # Снизили до 3k, чтобы бот находил
 MAX_LIQUIDITY = 50000000 
 MIN_AGE_MINUTES = 5   # Ищем монеты от 5 минут (раньше было 40 минут, бот пропускал весь рост!)
 MAX_AGE_MINUTES = 129600
+
+# AI Аналитика
+GEMINI_API_KEY = "AQ.Ab8RN6Ju77t6DI8AYru7TGxuPuG_0WOcqHZqq1OBsDAwHtoJxg" # Получить бесплатно на https://aistudio.google.com/

@@ -278,8 +278,33 @@ class Analyzer:
             is_safe = safety_score >= 40 and len(socials) > 0 # Не скамится, есть минимальная ликвидность и соцсети
             
             if is_flat and is_young and is_safe and has_life and not is_bleeding:
-                print(f"🚀 СИГНАЛ (FLAT ACCUMULATION)! Монета в накоплении (Флэт). Ждем первый выстрел!")
-                return True
+                print(f"🚀 СИГНАЛ (FLAT ACCUMULATION)! Монета прошла базовые фильтры. Передаем ИИ...")
+                
+                # Собираем контекст для ИИ
+                token_context = {
+                    "symbol": symbol,
+                    "age_minutes": round(age_mins, 1),
+                    "liquidity_usd": liq,
+                    "volume_24h_usd": vol_24h,
+                    "m5_buys": buys_m5,
+                    "m5_sells": sells_m5,
+                    "price_change_m5_pct": m5_change,
+                    "price_change_h1_pct": h1_change,
+                    "social_networks_count": len(socials) + len(websites),
+                    "rsi_14": rsi if 'rsi' in locals() and not math.isnan(rsi) else None,
+                    "macd_histogram": macd_data['hist'] if 'macd_data' in locals() else None,
+                    "safety_score": safety_score
+                }
+                
+                from ai_brain import ask_ai_oracle
+                ai_decision = await ask_ai_oracle(token_context)
+                
+                print(f"🤖 ВЕРДИКТ ИИ: {ai_decision.get('decision')} (Уверенность: {ai_decision.get('confidence')}%) | Причина: {ai_decision.get('reason')}")
+                
+                if ai_decision.get("decision") == "BUY":
+                    return True
+                else:
+                    return False
                 
             if buy_sell_ratio < 1.0:
                 print(f"🚫 Отказ: Слабый Momentum (Ratio {buy_sell_ratio:.2f} < 1.0). Тренд падающий.")
