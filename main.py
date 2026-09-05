@@ -173,7 +173,8 @@ async def async_main():
         scanner_loop(analyzer, tracker),
         birth_wss_loop(analyzer, tracker),
         copy_trader.listen(),
-        fomo_signal_loop(analyzer, tracker)
+        fomo_signal_loop(analyzer, tracker),
+        fomo_loop(analyzer, tracker)
     )
 
 def run_background_bot():
