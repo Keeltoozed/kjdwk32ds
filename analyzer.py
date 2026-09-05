@@ -268,17 +268,18 @@ class Analyzer:
             is_global_dump = (age_mins > 360 and h6_change < -30) or (age_mins > 1440 and h24_change < -40)
             is_bleeding = h1_change < -15 or is_global_dump
             
-            # 2. Истинный флэт (или консолидация): цена стоит (изменение < 15%), есть хотя бы 1 покупатель.
+            # 2. Флэт или Моментум (Тренды)
             is_flat = abs(m5_change) < 15
+            is_momentum = m5_change >= 15 and buy_sell_ratio >= 1.0 # Ловим и ракеты, которые уже начали рост!
             has_life = buys_m5 >= 1
             
-            # 3. Возраст. Вернули до 1 недели, как ты просил. Оцениваем по графику, а не по таймеру.
+            # 3. Возраст. Оцениваем по графику, а не по таймеру.
             is_young = age_mins < 10080 
             
             is_safe = safety_score >= 40 and len(socials) > 0 # Не скамится, есть минимальная ликвидность и соцсети
             
-            if is_flat and is_young and is_safe and has_life and not is_bleeding:
-                print(f"🚀 СИГНАЛ (FLAT ACCUMULATION)! Монета прошла базовые фильтры. Передаем ИИ...")
+            if (is_flat or is_momentum) and is_young and is_safe and has_life and not is_bleeding:
+                print(f"🚀 СИГНАЛ (КАНДИДАТ)! Монета прошла базовые фильтры. Передаем ИИ...")
                 
                 # Собираем контекст для ИИ
                 token_context = {

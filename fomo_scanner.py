@@ -7,9 +7,9 @@ async def fetch_dexscreener_trending():
     """Получает топ трендовых и забущенных токенов с DexScreener"""
     tokens = []
     # Эндпоинты DexScreener для поиска самого горячего (FOMO)
+    # Убрал эндпоинт token-boosts/top/v1, так как бусты часто покупают скаммеры для дампа об ботов.
     urls = [
-        "https://api.dexscreener.com/token-profiles/latest/v1",
-        "https://api.dexscreener.com/token-boosts/top/v1"
+        "https://api.dexscreener.com/token-profiles/latest/v1"
     ]
     
     async with aiohttp.ClientSession() as session:
