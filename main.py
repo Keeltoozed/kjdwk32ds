@@ -7,6 +7,7 @@ import pandas as pd
 import config
 from analyzer import Analyzer
 from tracker import PaperTracker
+from fomo_scanner import fomo_loop
 
 # === 1. ФОНОВЫЙ ТОРГОВЫЙ БОТ ===
 async def position_manager_loop(analyzer, tracker):
