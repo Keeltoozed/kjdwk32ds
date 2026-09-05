@@ -58,11 +58,19 @@ async def fomo_loop(analyzer: Analyzer, tracker):
                 # Запускаем полный анализ через наш ИИ
                 is_buy = await analyzer.analyze_token(mint)
                 if is_buy:
-                    capital = tracker.get_total_capital()
-                    position_size = max(4.0, min(100.0, capital * (config.REINVEST_PERCENT / 100.0)))
-                    print(f"🚀 СНАЙП FOMO-РАКЕТЫ {mint}! Входим на {position_size}$")
-                    # Эмуляция входа по текущей рыночной цене (в реальном боте здесь вызов Jupiter)
-                    tracker.add_position("FOMO-RKT", mint, 0.0001, position_size) # Цена обновится при следующем тике
+                    # Получаем РЕАЛЬНОЕ имя и цену монеты перед "покупкой"
+                    pair_data = await analyzer.fetch_token_data(mint)
+                    if pair_data:
+                        actual_price = float(pair_data.get("priceUsd", 0))
+                        actual_symbol = pair_data.get("baseToken", {}).get("symbol", "FOMO")
+                        
+                        if actual_price > 0:
+                            capital = tracker.get_total_capital()
+                            position_size = max(4.0, min(100.0, capital * (config.REINVEST_PERCENT / 100.0)))
+                            print(f"🚀 СНАЙП FOMO-РАКЕТЫ {actual_symbol} ({mint})! Входим на {position_size}$ по цене {actual_price}$")
+                            
+                            # Добавляем реальную сделку в трекер
+                            tracker.add_position(actual_symbol, mint, actual_price, position_size)
                     
             # Держим память в чистоте
             if len(processed_mints) > 1000:
