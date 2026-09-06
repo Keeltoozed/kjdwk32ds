@@ -43,13 +43,14 @@ class BondingCurveTracker:
                         tx_type = data.get("txType") # 'buy' или 'sell'
                         trader = data.get("traderPublicKey")
                         sol_amount = data.get("vSolInBondingCurve", 0) # Показывает текущий баланс пула
-                        trade_sol = data.get("solAmount", 0) # Если API отдает сумму сделки
+                        trade_tokens = data.get("tokenAmount", 0) # API отдает кол-во токенов
                         
                         self.trades.append({
                             "type": tx_type,
                             "time": time.time(),
                             "trader": trader,
-                            "curve_sol": sol_amount
+                            "curve_sol": sol_amount,
+                            "tokens": trade_tokens
                         })
                         
                         if tx_type == "buy":
@@ -63,53 +64,74 @@ class BondingCurveTracker:
                         if elapsed_minutes > 0:
                             tx_per_min = (self.buys + self.sells) / elapsed_minutes
                             
-                            # Проверяем прогресс Bonding Curve.
-                            # Базовая кривая на Pump.fun стартует с ~30 SOL и заканчивается на ~85 SOL.
-                            # Прогресс можно считать от 30 до 85.
+                            # Проверяем прогресс Bonding Curve
                             curve_progress_pct = max(0, min(100, ((sol_amount - 30) / 55) * 100))
                             
                             print(f"[{self.symbol}] 📊 Прогресс: {curve_progress_pct:.1f}% | Tx/Min: {tx_per_min:.1f} | Уникальных кошельков: {len(self.unique_buyers)} | Покупки/Продажи: {self.buys}/{self.sells}")
                             
-                            # Пример триггера для ИИ-модели:
-                            # Если кривая набрала > 30% за 2 минуты, и уникальных покупателей > 20, 
-                            # это органик FOMO, передаем в ML.
-                            if curve_progress_pct > 30 and len(self.unique_buyers) > 20 and tx_per_min > 10:
-                                print(f"🚀 [ML СИГНАЛ] {self.symbol} пробил Velocity-фильтр! Формируем фичи для покупки.")
+                            # Условия для запуска ML-анализа (один раз)
+                            if curve_progress_pct >= 20.0 and curve_progress_pct <= 40.0 and len(self.unique_buyers) > 5 and not getattr(self, "ml_evaluated", False):
+                                self.ml_evaluated = True
+                                print(f"🚀 [ML СИГНАЛ] {self.symbol} достиг нужного объема! Формируем фичи...")
                                 
-                                from tracker import PaperTracker
-                                from jupiter import JupiterAPI
-                                
-                                tracker = PaperTracker()
-                                
-                                # Защита от FOMO: проверяем маршрут перед покупкой
-                                sim_result = await JupiterAPI.check_taxes_and_simulate_swap(self.mint, input_amount_sol=0.1)
-                                if not sim_result.get("is_safe", False):
-                                    print(f"🚫 Отказ (Симуляция): {self.symbol} провалил проверку маршрута ({sim_result.get('reason')}).")
-                                else:
-                                    # Рассчитываем актуальную цену в USD
-                                    # Цена в SOL = 30 SOL (виртуальных) / 1073000000 vTokens. 
-                                    # Но лучше использовать цену роутера или примерную:
-                                    actual_price = await JupiterAPI.get_price(self.mint)
-                                    if actual_price == 0:
-                                        # Резервный расчет по Bonding Curve, предполагая SOL=$150
-                                        actual_price = (sol_amount / 1073000000.0) * 150.0
+                                # Считаем балансы
+                                balances = {}
+                                for t in self.trades:
+                                    w = t["trader"]
+                                    amt = t.get("tokens", 0)
+                                    if t["type"] == "buy":
+                                        balances[w] = balances.get(w, 0) + amt
+                                    else:
+                                        balances[w] = max(0, balances.get(w, 0) - amt)
                                         
+                                total_supply = 1_000_000_000
+                                
+                                # Предполагаем, что разраб - это создатель первого трейда
+                                dev_wallet = self.trades[0]["trader"] if self.trades else ""
+                                dev_holding_pct = (balances.get(dev_wallet, 0) / total_supply) * 100
+                                
+                                sorted_bals = sorted(balances.values(), reverse=True)
+                                top_10_holding_pct = (sum(sorted_bals[:10]) / total_supply) * 100
+                                
+                                token_context = {
+                                    "mint": self.mint,
+                                    "dev_holding_pct": min(100.0, dev_holding_pct),
+                                    "top_10_holding_pct": min(100.0, top_10_holding_pct),
+                                    "tx_velocity_1m": tx_per_min,
+                                    "has_socials": 1, 
+                                    "funded_from_cex": 0
+                                }
+                                
+                                from ai_brain import ask_ai_oracle
+                                decision_res = await ask_ai_oracle(token_context)
+                                
+                                conf = decision_res.get("confidence", 0)
+                                if decision_res.get("decision") == "BUY" or conf > 75:
+                                    print(f"✅ [AI ОДОБРЕНО] {self.symbol} прошел XGBoost (Уверенность: {conf}%)!")
+                                    
+                                    from tracker import PaperTracker
+                                    tracker = PaperTracker()
+                                    
+                                    actual_price = (sol_amount / 1_000_000_000.0) * 150.0 # примерный расчет
+                                    
                                     capital = tracker.get_total_capital()
                                     base_position = capital * (config.REINVEST_PERCENT / 100.0)
                                     
-                                    # Оцениваем ликвидность по количеству SOL в кривой (sol_amount * price_sol)
                                     liq_usd = sol_amount * 150.0 
-                                    max_allowed_by_pool = liq_usd * 0.01  # Максимум 1% от пула
+                                    max_allowed_by_pool = liq_usd * 0.05
                                     
                                     position_size = max(4.0, min(base_position, max_allowed_by_pool, 100.0))
                                     
                                     if position_size >= 4.0:
-                                        print(f"🚀 СНАЙП PUMP.FUN РАКЕТЫ {self.symbol} ({self.mint})! Входим на {position_size}$ по цене {actual_price}$")
+                                        print(f"🚀 СНАЙП PUMP.FUN РАКЕТЫ {self.symbol} ({self.mint})! Входим на {position_size}$")
                                         tracker.add_position(self.symbol, self.mint, actual_price, position_size)
                                     else:
-                                        print(f"🚫 Отказ (Ликвидность): Недостаточно ликвидности (${liq_usd}) для безопасного входа.")
-                                
-                                self.running = False
+                                        print(f"🚫 Отказ (Ликвидность): Недостаточно ликвидности для входа.")
+                                        
+                                    self.running = False
+                                else:
+                                    print(f"🚫 [AI ОТКАЗ] {self.symbol} забракован (Уверенность: {conf}%). Отменяем мониторинг.")
+                                    self.running = False
                                 
                 except asyncio.TimeoutError:
                     # Раз в 5 секунд, если нет сделок, проверяем не сдох ли токен
