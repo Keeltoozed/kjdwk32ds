@@ -160,8 +160,22 @@ class Analyzer:
 
     async def analyze_token(self, mint: str) -> bool:
         # Smart Router
+        
+        # 1. Сначала жесткий фильтр скама (RugCheck). Если это скам - даже не тратим лимиты.
+        is_safe = await self.check_rugcheck(mint)
+        if not is_safe:
+            print(f"🚫 Скам-фильтр: {mint} не прошел проверку RugCheck (Риск дампа/MintAuthority).")
+            return False
+            
         pair_data = await self.fetch_token_data(mint)
         if not pair_data:
+            return False
+            
+        # 2. Обязательное наличие соцсетей (без соцсетей 99% токенов мертвы)
+        info = pair_data.get("info", {})
+        has_socials = (info.get("socials") or info.get("websites"))
+        if not has_socials:
+            print(f"🚫 Мусор: У {mint} нет сайтов/соцсетей.")
             return False
             
         dex_id = pair_data.get("dexId")
@@ -245,7 +259,7 @@ class Analyzer:
         prob = model.predict_proba(features)[0][1]
         conf = prob * 100
         print(f"🤖 XGBoost [DEX Poller]: {mint} | Score: {conf:.1f}%")
-        return conf >= 90.0
+        import config; threshold = 90.0 if getattr(config, "AI_MODE", "sniper") == "sniper" else 60.0; return conf >= threshold
 
     async def analyze_token_raydium(self, mint: str) -> bool:
         # Безлимитный режим: используем ТОЛЬКО данные DexScreener
@@ -290,7 +304,7 @@ class Analyzer:
             prob = model.predict_proba(df)[0][1]
             conf = prob * 100
             print(f"🧠 Raydium XGBoost (Безлимит): {mint} | Score: {conf:.1f}%")
-            return conf >= 90.0
+            import config; threshold = 90.0 if getattr(config, "AI_MODE", "sniper") == "sniper" else 60.0; return conf >= threshold
         except Exception as e:
             return False
 

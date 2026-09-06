@@ -1,16 +1,1 @@
-{
-    "mint123": {
-        "symbol": "TEST",
-        "mint": "mint123",
-        "entry_price_usd": 1.0,
-        "amount_usd": 10.0,
-        "entry_time": 1788720633.2707999,
-        "status": "closed",
-        "exit_price_usd": 0.5,
-        "pnl_usd": -5.0,
-        "max_price_usd": 1.0,
-        "current_price_usd": 0.5,
-        "current_pnl_usd": -5.0,
-        "exit_reason": "Stop Loss"
-    }
-}
+{}
