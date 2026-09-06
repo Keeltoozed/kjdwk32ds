@@ -17,9 +17,15 @@ async def position_manager_loop(analyzer, tracker):
         try:
             open_positions = tracker.get_open_positions()
             for mint, position in list(open_positions.items()):
-                # ИСПОЛЬЗУЕМ МГНОВЕННЫЙ PRICE FETCH
+                # ИСПОЛЬЗУЕМ МГНОВЕННЫЙ PRICE FETCH ОТ JUPITER (Для токенов на Raydium)
                 current_price = await JupiterAPI.get_price(mint)
                 
+                # Если Юпитер не знает токен (это Pump.fun до миграции), используем DexScreener
+                if current_price == 0.0:
+                    pair_data = await analyzer.fetch_token_data(mint)
+                    if pair_data:
+                        current_price = float(pair_data.get("priceUsd", 0))
+                        
                 if current_price == 0.0:
                     continue
                     
@@ -184,9 +190,12 @@ async def fomo_signal_loop(analyzer, tracker):
         await asyncio.sleep(1) # Проверяем файл каждую секунду для мгновенной реакции
 
 async def async_main():
+    from pump_fun_sniper import PumpFunSniper
+    
     analyzer = Analyzer()
     tracker = PaperTracker()
     copy_trader = CopyTrader(tracker)
+    sniper = PumpFunSniper()
     
     await asyncio.gather(
         position_manager_loop(analyzer, tracker),
@@ -194,7 +203,8 @@ async def async_main():
         birth_wss_loop(analyzer, tracker),
         copy_trader.listen(),
         fomo_signal_loop(analyzer, tracker),
-        fomo_loop(analyzer, tracker)
+        fomo_loop(analyzer, tracker),
+        sniper.connect_and_listen()
     )
 
 def run_background_bot():
