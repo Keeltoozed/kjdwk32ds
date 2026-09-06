@@ -24,7 +24,12 @@ class BondingCurveTracker:
         self.running = True
         uri = config.PUMPPORTAL_WSS
         
-        async with websockets.connect(uri) as ws:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Origin": "https://pumpportal.fun"
+        }
+        
+        async with websockets.connect(uri, extra_headers=headers) as ws:
             # Подписываемся на сделки конкретного токена
             payload = {
                 "method": "subscribeTokenTrade",
@@ -226,7 +231,11 @@ class PumpFunSniper:
         while self.running:
             try:
                 print("🟢 Подключение к PumpPortal WSS (Слушаем новые токены)...")
-                async with websockets.connect(uri) as websocket:
+                headers = {
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                    "Origin": "https://pumpportal.fun"
+                }
+                async with websockets.connect(uri, extra_headers=headers) as websocket:
                     payload = {"method": "subscribeNewToken"}
                     await websocket.send(json.dumps(payload))
                     print("🚀 Успешная подписка на поток InitializeMint (Pump.fun)!")

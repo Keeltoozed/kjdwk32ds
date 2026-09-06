@@ -78,9 +78,13 @@ async def birth_wss_loop(analyzer, tracker):
     import json
     print("👶 Запуск Роддома: сбор базы данных новых токенов для сканера (без авто-покупки на 0-секунде)...")
     uri = config.PUMPPORTAL_WSS
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+        "Origin": "https://pumpportal.fun"
+    }
     while True:
         try:
-            async with websockets.connect(uri) as ws:
+            async with websockets.connect(uri, extra_headers=headers) as ws:
                 payload = {"method": "subscribeNewToken"}
                 await ws.send(json.dumps(payload))
                 async for message in ws:
@@ -199,8 +203,8 @@ async def async_main():
     
     await asyncio.gather(
         position_manager_loop(analyzer, tracker),
-        scanner_loop(analyzer, tracker),
-        birth_wss_loop(analyzer, tracker),
+        # scanner_loop(analyzer, tracker), # ОТКЛЮЧЕНО: старый сканер покупает поздно и без XGBoost
+        # birth_wss_loop(analyzer, tracker),
         copy_trader.listen(),
         fomo_signal_loop(analyzer, tracker),
         fomo_loop(analyzer, tracker),
@@ -245,8 +249,8 @@ with tab1:
             
         if data:
             df = pd.DataFrame.from_dict(data, orient='index')
-            open_df = df[df['status'] == 'open']
-            closed_df = df[df['status'] == 'closed']
+            open_df = df[df['status'] == 'open'].copy()
+            closed_df = df[df['status'] == 'closed'].copy()
             
             col1, col2 = st.columns(2)
             
