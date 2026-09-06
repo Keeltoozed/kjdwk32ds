@@ -17,6 +17,7 @@ class VirtualPosition(BaseModel):
     max_price_usd: float = 0.0  # Отслеживаем максимальную цену для трейлинга
     current_price_usd: float = 0.0 # Для отображения в интерфейсе
     current_pnl_usd: float = 0.0 # Для отображения в интерфейсе
+    exit_reason: str = "" # Причина выхода
 
 class PaperTracker:
     def __init__(self):
@@ -74,6 +75,7 @@ class PaperTracker:
         if pos and pos.status == "open":
             pos.status = "closed"
             pos.exit_price_usd = exit_price
+            pos.exit_reason = reason
             pnl_pct = (exit_price - pos.entry_price_usd) / pos.entry_price_usd
             pos.pnl_usd = pos.amount_usd * pnl_pct
             self.save_portfolio()

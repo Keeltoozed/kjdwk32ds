@@ -26,7 +26,9 @@ async def position_manager_loop(analyzer, tracker):
                     if pair_data:
                         current_price = float(pair_data.get("priceUsd", 0))
                         
-                if current_price == 0.0:
+                if current_price <= 0.0:
+                    # Если цена 0.0, значит пул удален или токен соскамился
+                    tracker.close_position(mint, 0.0, "Rug Pull / No Liquidity")
                     continue
                     
                 if current_price > position.max_price_usd:

@@ -239,11 +239,13 @@ class Analyzer:
             "funded_from_cex": funded_from_cex
         }])
         
-        model = joblib.load("pump_model.pkl")
+        import xgboost as xgb
+        model = xgb.XGBClassifier()
+        model.load_model("pump_model.json")
         prob = model.predict_proba(features)[0][1]
         conf = prob * 100
         print(f"🤖 XGBoost [DEX Poller]: {mint} | Score: {conf:.1f}%")
-        return conf > 75.0
+        return conf >= 90.0
 
     async def analyze_token_raydium(self, mint: str) -> bool:
         # Безлимитный режим: используем ТОЛЬКО данные DexScreener
@@ -282,11 +284,13 @@ class Analyzer:
         }])
         
         try:
-            model = joblib.load("raydium_model_dex.pkl")
+            import xgboost as xgb
+            model = xgb.XGBClassifier()
+            model.load_model("raydium_model_dex.json")
             prob = model.predict_proba(df)[0][1]
             conf = prob * 100
             print(f"🧠 Raydium XGBoost (Безлимит): {mint} | Score: {conf:.1f}%")
-            return conf > 75.0
+            return conf >= 90.0
         except Exception as e:
             return False
 

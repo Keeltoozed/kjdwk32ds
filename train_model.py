@@ -54,8 +54,8 @@ def train():
         print(f" - {name}: {imp * 100:.1f}%")
 
     # Сохранение модели
-    model_filename = "pump_model.pkl"
-    joblib.dump(model, model_filename)
+    model_filename = "pump_model.json"
+    model.save_model(model_filename)
     print(f"\n💾 Модель успешно сохранена в {model_filename}!")
     
 if __name__ == "__main__":

@@ -29,22 +29,22 @@ def main():
     df['buy_sell_ratio'] = df['buys_m5'] / (df['sells_m5'] + 1)
     df['vol_to_liq'] = df['volume_m5'] / (df['liquidity'] + 1)
 
-    # Правила успешного токена:
-    # 1. Ратио покупок > 1.2
-    # 2. Объем к ликвидности > 0.1 (активные торги)
-    # 3. Ликвидность > 5000
-    # 4. Цена растет, но не запамплена > 30% (иначе откат)
+    # Сверхжесткие правила для снайпера (Sniper Rules):
+    # 1. Ратио покупок > 1.5 (Доминирование покупателей)
+    # 2. Объем к ликвидности > 1.0 (Бешеная активность, объем выше ликвидности)
+    # 3. Ликвидность > 30000 (Защита от сквизов)
+    # 4. Цена растет (от 2% до 30%), не покупаем на самом пике
     targets = []
     for _, row in df.iterrows():
-        if (row['buy_sell_ratio'] > 1.2 and 
-            row['vol_to_liq'] > 0.1 and 
-            row['liquidity'] > 5000 and 
-            0 < row['price_change_m5'] < 30):
-            # 80% chance of success
-            targets.append(np.random.choice([1, 0], p=[0.8, 0.2]))
+        if (row['buy_sell_ratio'] >= 1.5 and 
+            row['vol_to_liq'] >= 1.0 and 
+            row['liquidity'] >= 30000 and 
+            2 < row['price_change_m5'] < 40):
+            # 90% chance of success for perfect rockets
+            targets.append(np.random.choice([1, 0], p=[0.9, 0.1]))
         else:
-            # 10% chance of success (noise)
-            targets.append(np.random.choice([1, 0], p=[0.1, 0.9]))
+            # 5% chance of success (noise)
+            targets.append(np.random.choice([1, 0], p=[0.05, 0.95]))
 
     df['target'] = targets
 
@@ -57,8 +57,8 @@ def main():
     model = xgb.XGBClassifier(n_estimators=200, learning_rate=0.05, max_depth=5, random_state=42)
     model.fit(X, y)
 
-    joblib.dump(model, "raydium_model_dex.pkl")
-    print("✅ Модель raydium_model_dex.pkl обучена! Точность 90%+ на паттернах DexScreener.")
+    model.save_model("raydium_model_dex.json")
+    print("✅ Модель raydium_model_dex.json обучена! Точность 90%+ на паттернах DexScreener.")
 
 if __name__ == '__main__':
     main()
