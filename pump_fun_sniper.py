@@ -248,10 +248,10 @@ class PumpFunSniper:
                             print(f"🔍 [Dev Profile] Balance: {dev_profile['balance_sol']:.2f} SOL | Fresh: {dev_profile['is_fresh_wallet']} | CEX Funded: {dev_profile['funded_from_cex']}")
                             
                             if initial_buy == 0:
-                                print("🚫 Отказ: Dev не купил ни одного токена (0 SOL). Нет 'шкуры на кону'.")
+                                print("🚫 Отказ: Dev не купил ни одного токена (0 Tokens). Нет 'шкуры на кону'.")
                                 continue
-                            if initial_buy > 5.0:
-                                print(f"🚫 Отказ: Dev выкупил слишком много ({initial_buy} SOL). Риск моментального дампа.")
+                            if initial_buy > 200_000_000: # Максимум 20% саплая
+                                print(f"🚫 Отказ: Dev выкупил слишком много ({initial_buy:,.0f} Tokens). Риск моментального дампа.")
                                 continue
                                 
                             # Если токен прошел первичный фильтр, запускаем трекер кривой связывания

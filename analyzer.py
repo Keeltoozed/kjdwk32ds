@@ -316,7 +316,7 @@ class Analyzer:
                         return False
                         
                 # Проверка валидности тренда через Volume Analysis (от ложных сквизов)
-                volumes = [candle['volume'] for candle in ohlcv[-10:] if candle['volume'] > 0]
+                volumes = [candle[5] for candle in ohlcv[-10:] if candle[5] > 0]
                 if len(volumes) >= 5:
                     avg_volume = sum(volumes[:-1]) / len(volumes[:-1])
                     current_volume = volumes[-1]

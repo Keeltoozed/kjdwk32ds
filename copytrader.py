@@ -8,6 +8,10 @@ class CopyTrader:
     def __init__(self, tracker):
         self.tracker = tracker
         self.wallets = self._load_wallets()
+        self.HELIUS_API_KEY = "9efda6f4-fddb-42d3-a2b1-098bbbecd299"
+        self.rpc_url = f"https://mainnet.helius-rpc.com/?api-key={self.HELIUS_API_KEY}"
+        self.wss_url = f"wss://mainnet.helius-rpc.com/?api-key={self.HELIUS_API_KEY}"
+        self.processed_sigs = set()
         
     def _load_wallets(self):
         import os
@@ -17,21 +21,15 @@ class CopyTrader:
                 for line in f:
                     line = line.strip()
                     if line and not line.startswith("#"):
-                        # Генерируем короткое имя для логов
                         short_name = f"@Smart_{line[:4]}"
                         wallets[line] = short_name
         
-        # Если файл пуст, загружаем парочку дефолтных
         if not wallets:
             wallets = {
                 "5FGoPPj1nL8LCnfVnpTmreqQtqLuMXXAwuS1uahMrp8V": "@DumbCrayon",
                 "2yXwy5Dsa1XtEXcsrkFVRJeyuWD3qKkMN3pP3p5VTW3V": "@Salem1299"
             }
         return wallets
-        self.HELIUS_API_KEY = "9efda6f4-fddb-42d3-a2b1-098bbbecd299"
-        self.rpc_url = f"https://mainnet.helius-rpc.com/?api-key={self.HELIUS_API_KEY}"
-        self.wss_url = f"wss://mainnet.helius-rpc.com/?api-key={self.HELIUS_API_KEY}"
-        self.processed_sigs = set()
         
     async def get_token_price(self, mint):
         try:
