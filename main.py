@@ -122,19 +122,24 @@ async def scanner_loop(analyzer, tracker):
                     if not mint or mint in tracker.positions:
                         continue
                         
-                    is_good = await analyzer.analyze_token(mint)
+                    # Маршрутизатор моделей
+                    is_good = False
+                    pair_data = await analyzer.fetch_token_data(mint)
+                    if pair_data:
+                        dex_id = pair_data.get("dexId")
+                        import time
+                        created_at = pair_data.get("pairCreatedAt", 0)
+                        age_minutes = (time.time() * 1000 - created_at) / (1000 * 60) if created_at else 999
+                        
+                        if dex_id == "pump" and age_minutes <= 15:
+                            is_good = await analyzer.analyze_token_xgboost(mint)
+                        else:
+                            is_good = await analyzer.analyze_token_raydium(mint)
+                            
                     if is_good:
-                        pair_data = await analyzer.fetch_token_data(mint)
                         entry_price = float(pair_data.get("priceUsd", 0)) if pair_data else 0
                         actual_symbol = pair_data.get("baseToken", {}).get("symbol", "UNKNOWN") if pair_data else "UNKNOWN"
                         if entry_price > 0:
-                            from jupiter import JupiterAPI
-                            # Проверяем Honeypot / Taxes через Jupiter Quote
-                            sim_result = await JupiterAPI.check_taxes_and_simulate_swap(mint, input_amount_sol=0.1)
-                            if not sim_result.get("is_safe", False):
-                                print(f"🚫 Отказ (Симуляция): {actual_symbol} провалил проверку маршрута ({sim_result.get('reason')}).")
-                                continue
-                            
                             # Динамический сайзинг
                             capital = tracker.get_total_capital()
                             base_position = capital * (config.REINVEST_PERCENT / 100.0)
@@ -203,12 +208,11 @@ async def async_main():
     
     await asyncio.gather(
         position_manager_loop(analyzer, tracker),
-        # scanner_loop(analyzer, tracker), # ОТКЛЮЧЕНО: старый сканер покупает поздно и без XGBoost
-        # birth_wss_loop(analyzer, tracker),
+        scanner_loop(analyzer, tracker),
+        # birth_wss_loop(analyzer, tracker), # Disabled due to 403
         copy_trader.listen(),
         fomo_signal_loop(analyzer, tracker),
-        fomo_loop(analyzer, tracker),
-        sniper.connect_and_listen()
+        fomo_loop(analyzer, tracker)
     )
 
 def run_background_bot():

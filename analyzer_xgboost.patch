@@ -1,0 +1,43 @@
+--- analyzer.py
++++ analyzer.py
+@@ -193,6 +193,42 @@
+         socials = info.get("socials", [])
+         websites = info.get("websites", [])
+         
++    async def analyze_token_xgboost(self, mint: str) -> bool:
++        pair_data = await self.fetch_token_data(mint)
++        if not pair_data:
++            return False
++            
++        import pandas as pd
++        import joblib
++        from pump_fun_sniper import PumpFunSniper
++        
++        txns_m5 = pair_data.get("txns", {}).get("m5", {})
++        tx_velocity_1m = (txns_m5.get("buys", 0) + txns_m5.get("sells", 0)) / 5.0
++        
++        info = pair_data.get("info", {})
++        has_socials = 1 if (info.get("socials") or info.get("websites")) else 0
++        
++        # Get holders
++        sniper = PumpFunSniper()
++        dev_holding_pct, top_10_holding_pct = await sniper.get_holders_info(mint)
++        
++        # Funded from CEX (simplified)
++        funded_from_cex = 0
++        
++        features = pd.DataFrame([{
++            "dev_holding_pct": dev_holding_pct,
++            "top_10_holding_pct": top_10_holding_pct,
++            "tx_velocity_1m": tx_velocity_1m,
++            "has_socials": has_socials,
++            "funded_from_cex": funded_from_cex
++        }])
++        
++        model = joblib.load("pump_model.pkl")
++        prob = model.predict_proba(features)[0][1]
++        conf = prob * 100
++        print(f"🤖 XGBoost [DEX Poller]: {mint} | Score: {conf:.1f}%")
++        return conf > 75.0
++
+         # 0. Заранее парсим транзакции для UI радара

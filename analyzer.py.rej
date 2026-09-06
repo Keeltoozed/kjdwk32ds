@@ -1,0 +1,53 @@
+@@ -193,6 +193,52 @@
+         model = joblib.load("pump_model.pkl")
+         prob = model.predict_proba(features)[0][1]
+         conf = prob * 100
+         print(f"🤖 XGBoost [DEX Poller]: {mint} | Score: {conf:.1f}%")
+         return conf > 75.0
+ 
++    async def analyze_token_raydium(self, mint: str) -> bool:
++        # Fetch OHLCV
++        ohlcv = await TATools.fetch_ohlcv(mint, limit=50)
++        if not ohlcv or len(ohlcv) < 30:
++            return False
++            
++        import pandas as pd
++        import joblib
++        
++        # Reverse to chronological
++        ohlcv.reverse()
++        df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
++        
++        # Calc indicators
++        from ta_tools import TATools
++        
++        # Need a local func for indicators
++        def calc_rsi(s, p=14):
++            d = s.diff()
++            g = d.where(d > 0, 0).rolling(p).mean()
++            l = (-d.where(d < 0, 0)).rolling(p).mean()
++            return 100 - (100 / (1 + (g / l)))
++            
++        def calc_macd(s):
++            e1 = s.ewm(span=12, adjust=False).mean()
++            e2 = s.ewm(span=26, adjust=False).mean()
++            m = e1 - e2
++            sig = m.ewm(span=9, adjust=False).mean()
++            return m, sig, m - sig
++            
++        df['rsi'] = calc_rsi(df['close'])
++        df['macd'], df['macd_signal'], df['macd_hist'] = calc_macd(df['close'])
++        df['bb_upper'] = df['close'].rolling(20).mean() + (df['close'].rolling(20).std() * 2)
++        df['bb_lower'] = df['close'].rolling(20).mean() - (df['close'].rolling(20).std() * 2)
++        
++        df['bb_width_pct'] = (df['bb_upper'] - df['bb_lower']) / df['close']
++        df['dist_to_bb_lower'] = (df['close'] - df['bb_lower']) / df['close']
++        df['vol_sma_10'] = df['volume'].rolling(10).mean()
++        df['vol_spike'] = df['volume'] / df['vol_sma_10']
++        
++        latest = df.iloc[-1:]
++        features = ['rsi', 'macd', 'macd_signal', 'macd_hist', 'bb_upper', 'bb_lower', 'bb_width_pct', 'dist_to_bb_lower', 'vol_sma_10', 'vol_spike']
++        X = latest[features]
++        
++        try:
++            model = joblib.load("raydium_model.pkl")
