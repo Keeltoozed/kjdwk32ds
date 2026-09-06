@@ -20,7 +20,8 @@ class TATools:
                         # GeckoTerminal возвращает новые свечи первыми
                         return data.get('data', {}).get('attributes', {}).get('ohlcv_list', [])
                     else:
-                        print(f"GeckoTerminal API Error: {response.status}")
+                        if response.status not in (404, 429):
+                            print(f"GeckoTerminal API Error: {response.status}")
                         return []
             except Exception as e:
                 print(f"Error fetching OHLCV: {e}")

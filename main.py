@@ -99,6 +99,7 @@ async def birth_wss_loop(analyzer, tracker):
 
 async def scanner_loop(analyzer, tracker):
     print("🚀 Запуск PhantBot Scanner (Поиск новых монет)...")
+    processed_mints = set()
     while True:
         try:
             open_count = len(tracker.get_open_positions())
@@ -119,24 +120,20 @@ async def scanner_loop(analyzer, tracker):
                 mints_to_scan = list(set(mints_to_scan))
                 
                 for mint in mints_to_scan:
-                    if not mint or mint in tracker.positions:
+                    if not mint or mint in tracker.positions or mint in processed_mints:
                         continue
                         
-                    # Маршрутизатор моделей
-                    is_good = False
-                    pair_data = await analyzer.fetch_token_data(mint)
-                    if pair_data:
-                        dex_id = pair_data.get("dexId")
-                        import time
-                        created_at = pair_data.get("pairCreatedAt", 0)
-                        age_minutes = (time.time() * 1000 - created_at) / (1000 * 60) if created_at else 999
+                    processed_mints.add(mint)
+                    
+                    # Держим память в чистоте
+                    if len(processed_mints) > 1000:
+                        processed_mints.clear()
                         
-                        if dex_id == "pump" and age_minutes <= 15:
-                            is_good = await analyzer.analyze_token_xgboost(mint)
-                        else:
-                            is_good = await analyzer.analyze_token_raydium(mint)
+                    # Используем умный маршрутизатор (сам выберет XGBoost или Raydium модель)
+                    is_good = await analyzer.analyze_token(mint)
                             
                     if is_good:
+                        pair_data = await analyzer.fetch_token_data(mint)
                         entry_price = float(pair_data.get("priceUsd", 0)) if pair_data else 0
                         actual_symbol = pair_data.get("baseToken", {}).get("symbol", "UNKNOWN") if pair_data else "UNKNOWN"
                         if entry_price > 0:

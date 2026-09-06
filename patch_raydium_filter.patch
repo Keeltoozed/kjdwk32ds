@@ -1,0 +1,21 @@
+--- analyzer.py
++++ analyzer.py
+@@ -239,6 +239,18 @@
+         return conf > 75.0
+ 
+     async def analyze_token_raydium(self, mint: str) -> bool:
++        # 1. ПРЕ-ФИЛЬТР (Бесплатный API DexScreener)
++        pair_data = await self.fetch_token_data(mint)
++        if not pair_data:
++            return False
++            
++        txns_m5 = pair_data.get("txns", {}).get("m5", {})
++        volume_m5 = pair_data.get("volume", {}).get("m5", 0)
++        
++        # Если монета мертвая (нет объемов и покупок за последние 5 минут), не тратим лимит GeckoTerminal
++        if txns_m5.get("buys", 0) < 5 or volume_m5 < 1000:
++            return False
++            
+         from ta_tools import TATools
+         ohlcv = await TATools.fetch_ohlcv(mint, limit=50)
+         if not ohlcv or len(ohlcv) < 30:

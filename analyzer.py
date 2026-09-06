@@ -159,13 +159,20 @@ class Analyzer:
         return unique_buyers, smart_money_inflow
 
     async def analyze_token(self, mint: str) -> bool:
+        # Smart Router
         pair_data = await self.fetch_token_data(mint)
         if not pair_data:
             return False
             
-        symbol = pair_data.get("baseToken", {}).get("symbol", "UNKNOWN")
-        liq = pair_data.get("liquidity", {}).get("usd", 0)
-        vol_24h = pair_data.get("volume", {}).get("h24", 0)
+        dex_id = pair_data.get("dexId")
+        import time
+        created_at = pair_data.get("pairCreatedAt", 0)
+        age_minutes = (time.time() * 1000 - created_at) / (1000 * 60) if created_at else 999
+        
+        if dex_id == "pump" and age_minutes <= 15:
+            return await self.analyze_token_xgboost(mint)
+        else:
+            return await self.analyze_token_raydium(mint)
         
     async def analyze_token_xgboost(self, mint: str) -> bool:
         pair_data = await self.fetch_token_data(mint)
@@ -239,299 +246,49 @@ class Analyzer:
         return conf > 75.0
 
     async def analyze_token_raydium(self, mint: str) -> bool:
-        from ta_tools import TATools
-        ohlcv = await TATools.fetch_ohlcv(mint, limit=50)
-        if not ohlcv or len(ohlcv) < 30:
+        # Безлимитный режим: используем ТОЛЬКО данные DexScreener
+        pair_data = await self.fetch_token_data(mint)
+        if not pair_data:
             return False
             
         import pandas as pd
         import joblib
         
-        ohlcv.reverse()
-        df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-        
-        def calc_rsi(s, p=14):
-            d = s.diff()
-            g = d.where(d > 0, 0).rolling(p).mean()
-            l = (-d.where(d < 0, 0)).rolling(p).mean()
-            return 100 - (100 / (1 + (g / l)))
-            
-        def calc_macd(s):
-            e1 = s.ewm(span=12, adjust=False).mean()
-            e2 = s.ewm(span=26, adjust=False).mean()
-            m = e1 - e2
-            sig = m.ewm(span=9, adjust=False).mean()
-            return m, sig, m - sig
-            
-        df['rsi'] = calc_rsi(df['close'])
-        df['macd'], df['macd_signal'], df['macd_hist'] = calc_macd(df['close'])
-        df['bb_upper'] = df['close'].rolling(20).mean() + (df['close'].rolling(20).std() * 2)
-        df['bb_lower'] = df['close'].rolling(20).mean() - (df['close'].rolling(20).std() * 2)
-        
-        df['bb_width_pct'] = (df['bb_upper'] - df['bb_lower']) / df['close']
-        df['dist_to_bb_lower'] = (df['close'] - df['bb_lower']) / df['close']
-        df['vol_sma_10'] = df['volume'].rolling(10).mean()
-        df['vol_spike'] = df['volume'] / df['vol_sma_10']
-        
-        latest = df.iloc[-1:]
-        features = ['rsi', 'macd', 'macd_signal', 'macd_hist', 'bb_upper', 'bb_lower', 'bb_width_pct', 'dist_to_bb_lower', 'vol_sma_10', 'vol_spike']
-        X = latest[features]
-        
-        try:
-            model = joblib.load("raydium_model.pkl")
-            prob = model.predict_proba(X)[0][1]
-            conf = prob * 100
-            print(f"🧠 Raydium XGBoost: {mint} | Score: {conf:.1f}%")
-            return conf > 75.0
-        except Exception as e:
-            return False
-
-        # 0. Заранее парсим транзакции для UI радара
-        
-        # --- 1. MOMENTUM SCORE (0-100) ---
+        # Извлекаем признаки
         txns_m5 = pair_data.get("txns", {}).get("m5", {})
         buys_m5 = txns_m5.get("buys", 0)
         sells_m5 = txns_m5.get("sells", 0)
-        m5_change = pair_data.get("priceChange", {}).get("m5", 0)
         
-        safe_sells = sells_m5 if sells_m5 > 0 else 1
-        buy_sell_ratio = buys_m5 / safe_sells
+        volume_m5 = pair_data.get("volume", {}).get("m5", 0)
+        price_change_m5 = pair_data.get("priceChange", {}).get("m5", 0)
         
-        momentum_score = 20 # базовая оценка
-        if buy_sell_ratio > 1.2: momentum_score += 30
-        if buy_sell_ratio > 2.0: momentum_score += 20
-        if buys_m5 > 50: momentum_score += 15
-        if m5_change > 5: momentum_score += 15
-        momentum_score = min(100, momentum_score)
+        liquidity = pair_data.get("liquidity", {}).get("usd", 0)
+        fdv = pair_data.get("fdv", 0)
         
-        # --- 2. SAFETY SCORE (0-100) ---
-        safety_score = 40 # базовая оценка
-        if liq > 5000: safety_score += 20
-        if liq > 20000: safety_score += 20
-        if liq > 50000: safety_score += 20
-        safety_score = min(100, safety_score)
+        buy_sell_ratio = buys_m5 / (sells_m5 + 1)
+        vol_to_liq = volume_m5 / (liquidity + 1)
         
-        # --- 3. SOCIAL SCORE (0-100) ---
-        social_score = 10 # базовая оценка
-        info = pair_data.get("info", {})
-        socials = info.get("socials", [])
-        websites = info.get("websites", [])
+        # Формируем DataFrame для XGBoost
+        features = ['price_change_m5', 'volume_m5', 'buys_m5', 'sells_m5', 'liquidity', 'fdv', 'buy_sell_ratio', 'vol_to_liq']
+        df = pd.DataFrame([{
+            'price_change_m5': price_change_m5,
+            'volume_m5': volume_m5,
+            'buys_m5': buys_m5,
+            'sells_m5': sells_m5,
+            'liquidity': liquidity,
+            'fdv': fdv,
+            'buy_sell_ratio': buy_sell_ratio,
+            'vol_to_liq': vol_to_liq
+        }])
         
-        if len(socials) > 0: social_score += 40
-        if len(websites) > 0: social_score += 30
-        
-        age_ms = datetime.now(timezone.utc).timestamp() * 1000 - pair_data.get("pairCreatedAt", datetime.now(timezone.utc).timestamp() * 1000)
-        age_mins = age_ms / 60000
-        if age_mins > 60: social_score += 20
-        social_score = min(100, social_score)
-        
-        # --- COMPOSITE ALPHA SCORE ---
-        alpha_score = int((safety_score * 0.35) + (momentum_score * 0.40) + (social_score * 0.25))
-        
-        self._save_scanned_token({
-            "symbol": symbol,
-            "mint": mint,
-            "score": alpha_score,
-            "safety": safety_score,
-            "momentum": momentum_score,
-            "social": social_score,
-            "liquidity": liq,
-            "vol_24h": vol_24h,
-            "buys": buys_m5,
-            "sells": sells_m5,
-            "m5_change": m5_change,
-            "time": time.time()
-        })
-            
-        # Защита от FOMO (покупки отвесной вертикальной свечи)
-        if m5_change > 70:
-            print(f"🚫 Отказ (FOMO Защита): Монета улетела на +{m5_change}% за 5 минут.")
-            return False
-            
-        h1_change = pair_data.get("priceChange", {}).get("h1", 0)
-        if h1_change > 1000: # Повысили порог с 300 до 1000, чтобы ловить сильные ракеты, но отсекать совсем улетевшие
-            print(f"🚫 Отказ (FOMO Защита): Монета уже сделала +{h1_change}% за час.")
-            return False
-            
-        if not (config.MIN_LIQUIDITY <= liq <= config.MAX_LIQUIDITY):
-            return False
-        created_at = pair_data.get("pairCreatedAt")
-        if not created_at:
-            return False
-            
-        if not (config.MIN_AGE_MINUTES <= age_mins <= config.MAX_AGE_MINUTES):
-            return False
-            
-        vol_1h = pair_data.get("volume", {}).get("h1", 0)
-        max_vol = max(vol_24h, vol_1h)
-        # Оборот (Turnover). Проверяем, чтобы монета была живой.
-        if max_vol < liq * 0.3:
-            return False
-            
-        if liq < 10000 or age_mins < 60:
-            if buy_sell_ratio < 1.2:
-                return False
-            if buys_m5 < 10:
-                return False
-
-        if len(socials) + len(websites) < 1:
-            print(f"🚫 Отказ: У {symbol} вообще нет соцсетей.")
-            return False
-            
-        # 2. Базовая проверка безопасности кода и HHI Bubble Map
-        if not await self.check_rugcheck(mint):
-            print(f"🚫 Отказ: {symbol} не прошел RugCheck (скам/пузыри кошельков).")
-            return False
-            
-        pair_address = pair_data.get("pairAddress")
-        
-        # 3. Анализ сентимента (Инфополе) с таймаутом
         try:
-            import asyncio
-            print(f"🔎 Сканируем инфополе (Twitter/Web) для {symbol}...")
-            # Ставим жесткий таймаут 3 секунды, чтобы не тормозить снайпера
-            sentiment = await asyncio.wait_for(analyze_sentiment(mint, symbol), timeout=3.0)
-            if sentiment.get('decision') == "bearish":
-                print(f"🚫 Отказ: Найдены предупреждения о скаме в интернете (FUD/Rugpull).")
-                return False
-        except asyncio.TimeoutError:
-            print("⚠️ Таймаут сканирования инфополя. Пропускаем сентимент.")
-        except Exception:
-            pass
-            
-        # 4. Расширенный технический анализ (TA)
-        if pair_address:
-            print(f"📈 Загружаем свечи (OHLCV) для TA...")
-            ohlcv = await TATools.fetch_ohlcv(pair_address, limit=40)
-            
-            if ohlcv and len(ohlcv) >= 20:
-                rsi = TATools.calculate_rsi(ohlcv, periods=14)
-                macd_data = TATools.calculate_macd(ohlcv)
-                bb_data = TATools.calculate_bollinger_bands(ohlcv)
-                
-                current_price = float(pair_data.get("priceUsd", 0))
-                
-                print(f"📊 TA: RSI={rsi:.1f} | MACD Hist={macd_data['hist']:.6f}")
-                
-                if not math.isnan(rsi):
-                    if rsi > 85:
-                        print(f"🚫 Отказ: Монета экстремально перегрета (RSI {rsi:.2f} > 85).")
-                        return False
-                    if rsi < 30:
-                        print(f"🚫 Отказ: Монета в жестком даунтренде (RSI {rsi:.2f} < 30).")
-                        return False
-                
-                # Фильтр по Боллинджеру: не покупаем, если цена сильно пробила верхнюю полосу (откат неизбежен)
-                if bb_data['upper'] > 0 and current_price > (bb_data['upper'] * 1.05):
-                    print(f"🚫 Отказ: Цена пробила верхнюю полосу Боллинджера. Ожидается коррекция.")
-                    return False
-                    
-                # Фильтр по MACD: ищем зарождающийся бычий тренд
-                if macd_data['hist'] < 0 and macd_data['macd'] < macd_data['signal']:
-                    # Тренд направлен вниз, но если MACD гистограмма начала расти (сужаться), это нормально.
-                    # Для надежности требуем, чтобы RSI был не ниже 40.
-                    if not math.isnan(rsi) and rsi < 40:
-                        print(f"🚫 Отказ: Медвежий тренд по MACD. Покупать рано.")
-                        return False
-                        
-                # Проверка валидности тренда через Volume Analysis (от ложных сквизов)
-                volumes = [candle[5] for candle in ohlcv[-10:] if candle[5] > 0]
-                if len(volumes) >= 5:
-                    avg_volume = sum(volumes[:-1]) / len(volumes[:-1])
-                    current_volume = volumes[-1]
-                    
-                    # Свеча прорыва (BOS) должна превышать средний объем минимум на 150%
-                    if current_volume < avg_volume * 1.5:
-                        print(f"🚫 Отказ: Рост не подтвержден объемом (Текущий: {current_volume:.0f} vs Средний: {avg_volume:.0f}). Ложный сигнал.")
-                        return False
-            else:
-                print("⚠️ Свечи недоступны. Пропускаем фильтр TA (RSI/MACD/BB/Volume).")
-                
-            print(f"📊 Анализ транзакций (5м): Покупок {buys_m5}, Продаж {sells_m5} | Коэффициент: {buy_sell_ratio:.2f}")
-            print(f"🧠 Alpha Agent Score: {alpha_score}/100 [Momentum: {momentum_score}, Safety: {safety_score}]")
-            
-            # ЛОГИКА ОЖИДАНИЯ ВЫСТРЕЛА (ФЛЭТ) ПО ЗАПРОСУ
-            h1_change = pair_data.get("priceChange", {}).get("h1", 0)
-            h6_change = pair_data.get("priceChange", {}).get("h6", 0)
-            h24_change = pair_data.get("priceChange", {}).get("h24", 0)
-            
-            # 1. Анализ глобального графика (вместо жесткого среза по возрасту).
-            # Защита от покупки "на дне после дампа".
-            is_global_dump = (age_mins > 360 and h6_change < -30) or (age_mins > 1440 and h24_change < -40)
-            is_bleeding = h1_change < -15 or is_global_dump
-            
-            # 2. Флэт или Моментум (Тренды)
-            is_flat = abs(m5_change) < 15
-            is_momentum = m5_change >= 15 and buy_sell_ratio >= 1.0 # Ловим и ракеты, которые уже начали рост!
-            has_life = buys_m5 >= 1
-            
-            # 3. Возраст. Оцениваем по графику, а не по таймеру.
-            is_young = age_mins < 10080 
-            
-            is_safe = safety_score >= 40 and len(socials) > 0 # Не скамится, есть минимальная ликвидность и соцсети
-            
-            if (is_flat or is_momentum) and is_young and is_safe and has_life and not is_bleeding:
-                print(f"🚀 СИГНАЛ (КАНДИДАТ)! Монета прошла базовые фильтры. Собираем ончейн метрики...")
-                
-                unique_buyers_m5, smart_money_inflow = await self.get_helius_transaction_metrics(mint)
-                
-                # Собираем контекст для ИИ
-                token_context = {
-                    "symbol": symbol,
-                    "age_minutes": round(age_mins, 1),
-                    "liquidity_usd": liq,
-                    "volume_24h_usd": vol_24h,
-                    "m5_buys": buys_m5,
-                    "m5_sells": sells_m5,
-                    "price_change_m5_pct": m5_change,
-                    "price_change_h1_pct": h1_change,
-                    "social_networks_count": len(socials) + len(websites),
-                    "rsi_14": rsi if 'rsi' in locals() and not math.isnan(rsi) else None,
-                    "macd_histogram": macd_data['hist'] if 'macd_data' in locals() else None,
-                    "safety_score": safety_score,
-                    "unique_buyers_m5": unique_buyers_m5,
-                    "smart_money_inflow": smart_money_inflow
-                }
-                
-                from ai_brain import ask_ai_oracle
-                ai_decision = await ask_ai_oracle(token_context)
-                
-                print(f"🤖 ВЕРДИКТ ИИ: {ai_decision.get('decision')} (Уверенность: {ai_decision.get('confidence')}%) | Причина: {ai_decision.get('reason')}")
-                
-                if ai_decision.get("decision") == "BUY":
-                    return True
-                else:
-                    return False
-                
-            if buy_sell_ratio < 1.0:
-                print(f"🚫 Отказ: Слабый Momentum (Ratio {buy_sell_ratio:.2f} < 1.0). Тренд падающий.")
-                return False
-            
-            # Отключаем покупку "активных ракет" по моментуму, чтобы не покупать на взлете!
-            print(f"🚫 Отказ: Монета не во флэте. Мы ищем только засады до пампа. Пропускаем.")
-            return False
-        else:
-            return False
-
-    def _save_scanned_token(self, token_data):
-        try:
-            import json, os
-            filename = "scanned_tokens.json"
-            tokens = []
-            if os.path.exists(filename):
-                try:
-                    with open(filename, 'r') as f:
-                        tokens = json.load(f)
-                except json.JSONDecodeError:
-                    pass
-            # Оставляем только последние 20 токенов
-            tokens = [t for t in tokens if t['mint'] != token_data['mint']]
-            tokens.insert(0, token_data)
-            tokens = tokens[:20]
-            with open(filename, 'w') as f:
-                json.dump(tokens, f)
+            model = joblib.load("raydium_model_dex.pkl")
+            prob = model.predict_proba(df)[0][1]
+            conf = prob * 100
+            print(f"🧠 Raydium XGBoost (Безлимит): {mint} | Score: {conf:.1f}%")
+            return conf > 75.0
         except Exception as e:
-            pass
+            return False
 
     async def analyze_token_ws(self, ws_data: dict) -> bool:
         mint = ws_data.get("mint")
