@@ -29,22 +29,20 @@ def main():
     df['buy_sell_ratio'] = df['buys_m5'] / (df['sells_m5'] + 1)
     df['vol_to_liq'] = df['volume_m5'] / (df['liquidity'] + 1)
 
-    # Сверхжесткие правила для снайпера (Sniper Rules):
-    # 1. Ратио покупок > 1.5 (Доминирование покупателей)
-    # 2. Объем к ликвидности > 1.0 (Бешеная активность, объем выше ликвидности)
-    # 3. Ликвидность > 30000 (Защита от сквизов)
-    # 4. Цена растет (от 2% до 30%), не покупаем на самом пике
+    # Реалистичные правила для генерации паттернов
+    # 1. Покупок чуть больше, чем продаж
+    # 2. Объем за 5 минут составляет хотя бы 5% от пула (для $20k пула это $1k объема)
+    # 3. Ликвидность от 10000
+    # 4. Цена в зеленой зоне
     targets = []
     for _, row in df.iterrows():
-        if (row['buy_sell_ratio'] >= 1.5 and 
-            row['vol_to_liq'] >= 1.0 and 
-            row['liquidity'] >= 30000 and 
-            2 < row['price_change_m5'] < 40):
-            # 90% chance of success for perfect rockets
-            targets.append(np.random.choice([1, 0], p=[0.9, 0.1]))
+        if (row['buy_sell_ratio'] >= 1.05 and 
+            row['vol_to_liq'] >= 0.05 and 
+            row['liquidity'] >= 10000 and 
+            row['price_change_m5'] > 0):
+            targets.append(np.random.choice([1, 0], p=[0.7, 0.3]))
         else:
-            # 5% chance of success (noise)
-            targets.append(np.random.choice([1, 0], p=[0.05, 0.95]))
+            targets.append(np.random.choice([1, 0], p=[0.1, 0.9]))
 
     df['target'] = targets
 

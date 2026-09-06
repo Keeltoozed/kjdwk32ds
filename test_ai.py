@@ -1,24 +1,14 @@
 import asyncio
-from ai_brain import ask_ai_oracle
+from analyzer import Analyzer
 
-async def main():
-    mock_token = {
-        "symbol": "DOGE",
-        "age_minutes": 15.5,
-        "liquidity_usd": 15000,
-        "volume_24h_usd": 50000,
-        "m5_buys": 45,
-        "m5_sells": 10,
-        "price_change_m5_pct": 5.2,
-        "price_change_h1_pct": 20.0,
-        "social_networks_count": 2,
-        "rsi_14": 45.0,
-        "macd_histogram": 0.0001,
-        "safety_score": 80
-    }
-    print("Отправляю тестовый запрос к ИИ...")
-    result = await ask_ai_oracle(mock_token)
-    print("Результат:", result)
+async def run():
+    analyzer = Analyzer()
+    tokens = await analyzer.fetch_latest_tokens()
+    print(f"Found {len(tokens)} tokens.")
+    for t in tokens[:15]:
+        mint = t.get('tokenAddress')
+        if not mint: continue
+        res = await analyzer.analyze_token(mint)
+        print(f"Token {mint} -> {res}")
 
-if __name__ == "__main__":
-    asyncio.run(main())
+asyncio.run(run())
