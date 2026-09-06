@@ -162,6 +162,25 @@ def ask_ai_oracle_sync(token_context: dict) -> dict:
         reasons.append("Монета старше 3 дней — хайп мог пройти")
 
     # ============================
+    # 8. МИКРОСТРУКТУРА КНИГИ И SMART MONEY
+    # ============================
+    unique_buyers = token_context.get("unique_buyers_m5", 0)
+    smart_money_score = token_context.get("smart_money_inflow", 0)
+    
+    # Защита от Wash Trading (когда 1-2 кошелька накручивают объем и метрику buys)
+    if buys > 20 and unique_buyers > 0 and unique_buyers < buys * 0.3:
+        score -= 30
+        reasons.append("🚨 Wash Trading: объем искусственно накручивается ботами создателя.")
+        
+    if unique_buyers > 50:
+        score += 15
+        reasons.append(f"🔥 Органик-спрос: {unique_buyers} уникальных холдеров за 5 мин.")
+        
+    if smart_money_score > 0:
+        score += 25
+        reasons.append("⚡ Зафиксированы покупки от кошельков из Smart Money.")
+
+    # ============================
     # ВЕРДИКТ
     # ============================
     score = max(0, min(100, score))  # Ограничиваем 0-100
@@ -183,7 +202,78 @@ def _skip(score: int, reason: str) -> dict:
     return {"decision": "SKIP", "confidence": score, "reason": reason}
 
 
+import os
+
+class AIBrainML:
+    def __init__(self, model_path="pump_model.pkl"):
+        self.model_path = model_path
+        self.model = None
+        
+        if os.path.exists(self.model_path):
+            try:
+                import joblib
+                self.model = joblib.load(self.model_path)
+                print("🧠 [AI Brain] ML Модель успешно загружена!")
+            except Exception as e:
+                print(f"⚠️ [AI Brain] Ошибка загрузки ML модели: {e}")
+                
+    def evaluate_pump_token(self, token_data: dict) -> dict:
+        """
+        Оценивает токен через ML-модель XGBoost
+        """
+        if not self.model:
+            return {"score": 0, "is_approved": False, "reasons": ["Модель не загружена"]}
+            
+        import pandas as pd
+        
+        # Подготовка фичей в том же порядке, что и при обучении
+        features = {
+            "dev_holding_pct": token_data.get("dev_holding_pct", 0),
+            "top_10_holding_pct": token_data.get("top_10_holding_pct", 0),
+            "tx_velocity_1m": token_data.get("tx_velocity_1m", 0),
+            "has_socials": token_data.get("has_socials", 0),
+            "funded_from_cex": token_data.get("funded_from_cex", 0)
+        }
+        
+        df_features = pd.DataFrame([features])
+        
+        try:
+            # predict_proba возвращает [prob_0, prob_1]
+            success_probability = self.model.predict_proba(df_features)[0][1]
+            score = int(success_probability * 100)
+        except Exception as e:
+            print(f"⚠️ ML Predict Error: {e}")
+            score = 0
+            
+        reasons = []
+        is_approved = False
+        
+        if score > 75:  # Порог уверенности
+            is_approved = True
+            reasons.append(f"✅ XGBoost уверен на {score}% в успехе (Pump -> Raydium).")
+        else:
+            reasons.append(f"❌ Низкая вероятность успеха: {score}%. Пропускаем.")
+            
+        return {
+            "score": score,
+            "is_approved": is_approved,
+            "reasons": reasons
+        }
+
+# Инициализируем ML-мозг как синглтон
+ml_brain = AIBrainML()
+
 # Обёртка для совместимости с async кодом в analyzer.py
 async def ask_ai_oracle(token_context: dict) -> dict:
     """Async обёртка. ИИ работает локально, задержка = 0 мс."""
+    
+    # Если мы собираем данные для ML (есть нужные фичи), используем новую модель
+    if "tx_velocity_1m" in token_context and ml_brain.model is not None:
+        result = ml_brain.evaluate_pump_token(token_context)
+        decision = "BUY" if result["is_approved"] else "SKIP"
+        reason_str = " | ".join(result["reasons"])
+        print(f"🤖 [ML XGBoost] Вердикт: {decision} (Score: {result['score']}%) | {reason_str}")
+        return {"decision": decision, "confidence": result["score"], "reason": reason_str}
+        
+    # Иначе используем старую rule-based систему
     return ask_ai_oracle_sync(token_context)

@@ -11,13 +11,15 @@ from fomo_scanner import fomo_loop
 
 # === 1. ФОНОВЫЙ ТОРГОВЫЙ БОТ ===
 async def position_manager_loop(analyzer, tracker):
+    from jupiter import JupiterAPI
     print("🛡️ Запуск менеджера позиций (быстрый трекинг Stop-Loss)...")
     while True:
         try:
             open_positions = tracker.get_open_positions()
             for mint, position in list(open_positions.items()):
-                pair_data = await analyzer.fetch_token_data(mint)
-                current_price = float(pair_data.get("priceUsd", 0)) if pair_data else 0.0
+                # ИСПОЛЬЗУЕМ МГНОВЕННЫЙ PRICE FETCH
+                current_price = await JupiterAPI.get_price(mint)
+                
                 if current_price == 0.0:
                     continue
                     
@@ -116,9 +118,26 @@ async def scanner_loop(analyzer, tracker):
                         entry_price = float(pair_data.get("priceUsd", 0)) if pair_data else 0
                         actual_symbol = pair_data.get("baseToken", {}).get("symbol", "UNKNOWN") if pair_data else "UNKNOWN"
                         if entry_price > 0:
-                            # Реинвестирование (10% от текущего капитала, мин $4, макс $100)
+                            from jupiter import JupiterAPI
+                            # Проверяем Honeypot / Taxes через Jupiter Quote
+                            sim_result = await JupiterAPI.check_taxes_and_simulate_swap(mint, input_amount_sol=0.1)
+                            if not sim_result.get("is_safe", False):
+                                print(f"🚫 Отказ (Симуляция): {actual_symbol} провалил проверку маршрута ({sim_result.get('reason')}).")
+                                continue
+                            
+                            # Динамический сайзинг
                             capital = tracker.get_total_capital()
-                            position_size = max(4.0, min(100.0, capital * (config.REINVEST_PERCENT / 100.0)))
+                            base_position = capital * (config.REINVEST_PERCENT / 100.0)
+                            
+                            liq_usd = pair_data.get("liquidity", {}).get("usd", 0) if pair_data else 0
+                            max_allowed_by_pool = liq_usd * 0.01  # Максимум 1% от ликвидности
+                            
+                            position_size = max(4.0, min(base_position, max_allowed_by_pool, 100.0))
+                            
+                            if position_size < 4.0:
+                                print(f"🚫 Отказ (Ликвидность): Недостаточно ликвидности (${liq_usd}) для безопасного входа.")
+                                continue
+                                
                             tracker.add_position(actual_symbol, mint, entry_price, position_size)
                             break # Ждем следующего цикла после покупки
                     

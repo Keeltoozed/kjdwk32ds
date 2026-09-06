@@ -96,6 +96,68 @@ class Analyzer:
                 print(f"RugCheck fetch error: {e}")
                 return False
 
+    async def get_helius_transaction_metrics(self, mint: str) -> tuple:
+        """ Возвращает (unique_buyers_m5, smart_money_inflow) """
+        unique_buyers = 0
+        smart_money_inflow = 0
+        
+        # Читаем smart wallets
+        smart_wallets = set()
+        import os
+        if os.path.exists("smart_wallets.txt"):
+            with open("smart_wallets.txt", "r") as f:
+                smart_wallets = {line.strip() for line in f if line.strip()}
+                
+        payload_sigs = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "getSignaturesForAddress",
+            "params": [mint, {"limit": 30}]
+        }
+        
+        import aiohttp
+        async with aiohttp.ClientSession() as session:
+            try:
+                # 1. Получаем сигнатуры
+                async with session.post(config.HELIUS_RPC_URL, json=payload_sigs, timeout=3) as resp:
+                    data = await resp.json()
+                    signatures = [item["signature"] for item in data.get("result", [])]
+                
+                if not signatures:
+                    return 0, 0
+                    
+                # 2. Получаем детали транзакций
+                payload_txs = {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "getTransactions",
+                    "params": [signatures, {"encoding": "jsonParsed", "maxSupportedTransactionVersion": 0}]
+                }
+                async with session.post(config.HELIUS_RPC_URL, json=payload_txs, timeout=5) as resp:
+                    tx_data = await resp.json()
+                    transactions = tx_data.get("result", [])
+                    
+                    buyers = set()
+                    for tx in transactions:
+                        if not tx or not tx.get("transaction"):
+                            continue
+                            
+                        account_keys = tx["transaction"]["message"]["accountKeys"]
+                        for acc in account_keys:
+                            if acc.get("signer"):
+                                pubkey = acc.get("pubkey")
+                                buyers.add(pubkey)
+                                if pubkey in smart_wallets:
+                                    smart_money_inflow += 1
+                                break 
+                                
+                    unique_buyers = len(buyers)
+                    
+            except Exception as e:
+                print(f"⚠️ Ошибка Helius RPC при парсинге транзакций: {e}")
+                
+        return unique_buyers, smart_money_inflow
+
     async def analyze_token(self, mint: str) -> bool:
         pair_data = await self.fetch_token_data(mint)
         if not pair_data:
@@ -252,8 +314,19 @@ class Analyzer:
                     if not math.isnan(rsi) and rsi < 40:
                         print(f"🚫 Отказ: Медвежий тренд по MACD. Покупать рано.")
                         return False
+                        
+                # Проверка валидности тренда через Volume Analysis (от ложных сквизов)
+                volumes = [candle['volume'] for candle in ohlcv[-10:] if candle['volume'] > 0]
+                if len(volumes) >= 5:
+                    avg_volume = sum(volumes[:-1]) / len(volumes[:-1])
+                    current_volume = volumes[-1]
+                    
+                    # Свеча прорыва (BOS) должна превышать средний объем минимум на 150%
+                    if current_volume < avg_volume * 1.5:
+                        print(f"🚫 Отказ: Рост не подтвержден объемом (Текущий: {current_volume:.0f} vs Средний: {avg_volume:.0f}). Ложный сигнал.")
+                        return False
             else:
-                print("⚠️ Свечи недоступны. Пропускаем фильтр TA (RSI/MACD/BB).")
+                print("⚠️ Свечи недоступны. Пропускаем фильтр TA (RSI/MACD/BB/Volume).")
                 
             print(f"📊 Анализ транзакций (5м): Покупок {buys_m5}, Продаж {sells_m5} | Коэффициент: {buy_sell_ratio:.2f}")
             print(f"🧠 Alpha Agent Score: {alpha_score}/100 [Momentum: {momentum_score}, Safety: {safety_score}]")
@@ -279,7 +352,9 @@ class Analyzer:
             is_safe = safety_score >= 40 and len(socials) > 0 # Не скамится, есть минимальная ликвидность и соцсети
             
             if (is_flat or is_momentum) and is_young and is_safe and has_life and not is_bleeding:
-                print(f"🚀 СИГНАЛ (КАНДИДАТ)! Монета прошла базовые фильтры. Передаем ИИ...")
+                print(f"🚀 СИГНАЛ (КАНДИДАТ)! Монета прошла базовые фильтры. Собираем ончейн метрики...")
+                
+                unique_buyers_m5, smart_money_inflow = await self.get_helius_transaction_metrics(mint)
                 
                 # Собираем контекст для ИИ
                 token_context = {
@@ -294,7 +369,9 @@ class Analyzer:
                     "social_networks_count": len(socials) + len(websites),
                     "rsi_14": rsi if 'rsi' in locals() and not math.isnan(rsi) else None,
                     "macd_histogram": macd_data['hist'] if 'macd_data' in locals() else None,
-                    "safety_score": safety_score
+                    "safety_score": safety_score,
+                    "unique_buyers_m5": unique_buyers_m5,
+                    "smart_money_inflow": smart_money_inflow
                 }
                 
                 from ai_brain import ask_ai_oracle

@@ -8,3 +8,6 @@ ddgs
 pandas==2.2.2
 streamlit==1.36.0
 websockets==11.0.3
+xgboost
+scikit-learn
+joblib
