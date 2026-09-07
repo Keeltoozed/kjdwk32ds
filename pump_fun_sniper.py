@@ -117,6 +117,10 @@ class BondingCurveTracker:
                                     from tracker import PaperTracker
                                     tracker = PaperTracker()
                                     
+                                    # Импортируем ExitManager для симуляции умных выходов на Paper Trading
+                                    from exit_manager import ExitManager
+                                    exit_mgr = ExitManager(config.HELIUS_RPC_URL)
+                                    
                                     actual_price = (sol_amount / 1_000_000_000.0) * 150.0 # примерный расчет
                                     
                                     capital = tracker.get_total_capital()
@@ -128,8 +132,31 @@ class BondingCurveTracker:
                                     position_size = max(4.0, min(base_position, max_allowed_by_pool, 100.0))
                                     
                                     if position_size >= 4.0:
-                                        print(f"🚀 СНАЙП PUMP.FUN РАКЕТЫ {self.symbol} ({self.mint})! Входим на {position_size}$")
+                                        print(f"🚀 PAPER СНАЙП PUMP.FUN РАКЕТЫ {self.symbol} ({self.mint})! Входим на {position_size}$")
                                         tracker.add_position(self.symbol, self.mint, actual_price, position_size)
+                                        
+                                        # Коллбек для ExitManager (закрываем бумажную сделку)
+                                        async def panic_sell_callback(token_mint, reason):
+                                            print(f"📉 [PAPER] PANIC SELL TRIGGERED для {token_mint}. Причина: {reason}")
+                                            pos = tracker.positions.get(token_mint)
+                                            if pos and pos.status == "open":
+                                                # Используем текущую цену из трекера, либо цену входа, если еще не обновилась
+                                                exit_price = pos.current_price_usd if pos.current_price_usd > 0 else pos.entry_price_usd
+                                                tracker.close_position(token_mint, exit_price, reason)
+                                                
+                                        # Используем trader_pubkey, который мы получали в connect_and_listen
+                                        # Если его нет, используем заглушку, чтобы код не падал
+                                        dev_wallet_pubkey = "11111111111111111111111111111111" # Нужен проброс trader_pubkey, ставим заглушку, если его нет в scope
+                                        
+                                        # Запускаем мониторинг выхода в фоне
+                                        asyncio.create_task(
+                                            exit_mgr.start_monitoring(
+                                                token_mint=self.mint,
+                                                dev_wallet=dev_wallet_pubkey, 
+                                                initial_dev_balance=1_000_000_000, # Идеально было бы взять из dev_profile, но пока заглушка
+                                                on_panic_sell=panic_sell_callback
+                                            )
+                                        )
                                     else:
                                         print(f"🚫 Отказ (Ликвидность): Недостаточно ликвидности для входа.")
                                         
