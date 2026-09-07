@@ -107,12 +107,50 @@ class BondingCurveTracker:
                                     "funded_from_cex": 0
                                 }
                                 
-                                from ai_brain import ask_ai_oracle
-                                decision_res = await ask_ai_oracle(token_context)
+                                from ai_brain import ask_ai_oracle, ask_pro_oracle
+                                import pandas as pd
+                                import numpy as np
                                 
-                                conf = decision_res.get("confidence", 0)
-                                if decision_res.get("decision") == "BUY" or conf > 75:
-                                    print(f"✅ [AI ОДОБРЕНО] {self.symbol} прошел XGBoost (Уверенность: {conf}%)!")
+                                # 1. Сначала прогоняем Hard Filters
+                                decision_res = await ask_ai_oracle(token_context)
+                                if decision_res.get("decision") == "SKIP" or not decision_res.get("is_approved", True):
+                                    print(f"⚠️ {decision_res.get('reason', 'Отклонено Hard-фильтром')}")
+                                    self.running = False
+                                    break
+                                    
+                                # 2. Если фильтры пройдены, генерируем тиковые признаки для PRO-модели
+                                try:
+                                    df = pd.DataFrame(self.trades)
+                                    df['curve_sol_diff'] = df['curve_sol'].diff().fillna(0)
+                                    df['volume_buy'] = np.where(df['type'] == 'buy', df['curve_sol_diff'].abs(), 0)
+                                    df['volume_sell'] = np.where(df['type'] == 'sell', df['curve_sol_diff'].abs(), 0)
+                                    df['price'] = df['curve_sol'] / 1_000_000_000 # Упрощенная цена (прокси)
+                                    
+                                    total_vol = df['volume_buy'] + df['volume_sell']
+                                    df['ofi'] = np.where(total_vol > 0, (df['volume_buy'] - df['volume_sell']) / total_vol, 0)
+                                    df['ofi_ema_5'] = df['ofi'].ewm(span=5, adjust=False).mean()
+                                    df['total_vol'] = total_vol
+                                    df['vol_change'] = df['total_vol'].diff().fillna(0)
+                                    df['vol_acceleration'] = df['vol_change'].diff().fillna(0)
+                                    
+                                    df['log_return'] = np.log(df['price'] / df['price'].shift(1).replace(0, np.nan)).fillna(0)
+                                    df['volatility_15m'] = df['log_return'].rolling(window=min(15, len(df))).std() * np.sqrt(15)
+                                    df['volatility_15m'] = df['volatility_15m'].fillna(0)
+                                    
+                                    df['momentum_5m'] = df['price'].pct_change(min(5, len(df)-1)).fillna(0)
+                                    df['momentum_15m'] = df['price'].pct_change(min(15, len(df)-1)).fillna(0)
+                                    df['tx_count'] = 1
+                                    
+                                    pro_res = await ask_pro_oracle(df)
+                                    conf = pro_res.get("score", 0)
+                                    is_pro_approved = pro_res.get("is_approved", False)
+                                except Exception as e:
+                                    print(f"⚠️ Ошибка подготовки PRO фичей: {e}")
+                                    is_pro_approved = False
+                                    conf = 0
+
+                                if is_pro_approved:
+                                    print(f"✅ [PRO AI ОДОБРЕНО] {self.symbol} прошел микроструктурный анализ (Уверенность: {conf}%)!")
                                     
                                     from tracker import PaperTracker
                                     tracker = PaperTracker()

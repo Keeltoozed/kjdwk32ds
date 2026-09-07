@@ -219,17 +219,28 @@ class AIBrainML:
                 
     def evaluate_pump_token(self, token_data: dict) -> dict:
         """
-        Оценивает токен через ML-модель XGBoost
+        Оценивает токен через ML-модель XGBoost с Hard-фильтрами.
         """
         if not self.model:
             return {"score": 0, "is_approved": False, "reasons": ["Модель не загружена"]}
             
         import pandas as pd
         
+        # ================= HARD FILTERS =================
+        dev_holding = token_data.get("dev_holding_pct", 0)
+        top_10_holding = token_data.get("top_10_holding_pct", 0)
+        
+        if top_10_holding > 30.0:
+            return {"score": 0, "is_approved": False, "reasons": [f"🚫 [HARD FILTER] Топ-10 держат {top_10_holding}%. Слишком высокий риск раг-пула."]}
+            
+        if dev_holding > 10.0:
+            return {"score": 0, "is_approved": False, "reasons": [f"🚫 [HARD FILTER] Dev держит {dev_holding}%. Риск дампа."]}
+        # ================================================
+        
         # Подготовка фичей в том же порядке, что и при обучении
         features = {
-            "dev_holding_pct": token_data.get("dev_holding_pct", 0),
-            "top_10_holding_pct": token_data.get("top_10_holding_pct", 0),
+            "dev_holding_pct": dev_holding,
+            "top_10_holding_pct": top_10_holding,
             "tx_velocity_1m": token_data.get("tx_velocity_1m", 0),
             "has_socials": token_data.get("has_socials", 0),
             "funded_from_cex": token_data.get("funded_from_cex", 0)
@@ -277,3 +288,35 @@ async def ask_ai_oracle(token_context: dict) -> dict:
         
     # Иначе используем старую rule-based систему
     return ask_ai_oracle_sync(token_context)
+
+    def evaluate_pro_model(self, df_features) -> dict:
+        """
+        Оценивает тиковые данные (micro-structure) через pro_model.pkl
+        """
+        import joblib
+        import os
+        
+        pro_path = "pro_model.pkl"
+        if not os.path.exists(pro_path):
+            return {"score": 0, "is_approved": False, "reasons": ["pro_model.pkl не найдена"]}
+            
+        try:
+            model = joblib.load(pro_path)
+            # В датафрейме берем последнюю строку (самый свежий тик)
+            X = df_features[['ofi', 'ofi_ema_5', 'total_vol', 'vol_change', 'vol_acceleration', 'volatility_15m', 'momentum_5m', 'momentum_15m', 'volume_buy', 'volume_sell', 'tx_count']]
+            last_row = X.iloc[-1:]
+            
+            prob = model.predict_proba(last_row)[0][1]
+            score = int(prob * 100)
+            
+            if score >= 50:
+                return {"score": score, "is_approved": True, "reasons": [f"✅ [PRO ИИ] Микроструктура одобрена (Уверенность: {score}%)!"]}
+            else:
+                return {"score": score, "is_approved": False, "reasons": [f"❌ [PRO ИИ] Низкий потенциал (Уверенность: {score}%)"]}
+                
+        except Exception as e:
+            print(f"⚠️ Pro ML Predict Error: {e}")
+            return {"score": 0, "is_approved": False, "reasons": [f"Ошибка Pro ML: {e}"]}
+
+async def ask_pro_oracle(df_features) -> dict:
+    return ml_brain.evaluate_pro_model(df_features)
