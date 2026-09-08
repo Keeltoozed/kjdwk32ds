@@ -165,7 +165,7 @@ class PumpFunSniper:
                     "User-Agent": "Mozilla/5.0",
                     "Origin": "https://pumpportal.fun"
                 }
-                async with websockets.connect(uri, additional_headers=headers) as ws:
+                async with websockets.connect(uri, extra_headers=headers) as ws:
                     # 1. Подписка на новые токены
                     await ws.send(json.dumps({"method": "subscribeNewToken"}))
                     print("🚀 Подписка на InitializeMint оформлена!")
