@@ -97,8 +97,6 @@ class TradeLogger:
         await asyncio.to_thread(_update)
         print(f"🧠 [TradeLogger] Опыт закрыт для {mint}. PnL: {pnl_pct}% | {table_name}")
 
-# Глобальный инстанс для использования в проекте
-trade_logger = TradeLogger()
 
     async def _fetch_dexscreener_prices(self, mints: list) -> dict:
         """Батч-запрос к DexScreener API"""
@@ -236,3 +234,6 @@ trade_logger = TradeLogger()
                 
             await asyncio.sleep(300)
 
+
+# Глобальный инстанс для использования в проекте
+trade_logger = TradeLogger()
