@@ -60,6 +60,9 @@ class PaperTracker:
             return
 
         print(f"✅ Открыта PAPER сделка: {symbol} по цене ${entry_price}")
+        
+        ml_features_dict = ml_features if ml_features is not None else {}
+        
         self.positions[mint] = VirtualPosition(
             symbol=symbol,
             mint=mint,
@@ -67,10 +70,21 @@ class PaperTracker:
             amount_usd=amount_usd,
             entry_time=time.time(),
             max_price_usd=entry_price,
-            current_price_usd=entry_price
+            current_price_usd=entry_price,
+            ml_features=ml_features_dict,
+            ml_confidence=ml_confidence
         )
         self.save_portfolio()
         print(f"📝 PAPER BUY: {symbol} ({mint}) | Amount: ${amount_usd} | Price: ${entry_price}")
+        
+        # === СОХРАНЕНИЕ В SUPABASE (ENTRY) ===
+        try:
+            from trade_logger import TradeLogger
+            import asyncio
+            logger = TradeLogger()
+            asyncio.create_task(logger.log_entry(mint, ml_features_dict, ml_confidence))
+        except Exception as e:
+            print(f"⚠️ Ошибка логирования входа: {e}")
 
     def close_position(self, mint: str, exit_price: float, reason: str):
         pos = self.positions.get(mint)
@@ -78,34 +92,49 @@ class PaperTracker:
             pos.status = "closed"
             pos.exit_price_usd = exit_price
             pos.exit_reason = reason
-            pnl_pct = (exit_price - pos.entry_price_usd) / pos.entry_price_usd if pos.entry_price_usd > 0 else 0
+            
+            # РЕАЛЬНЫЙ РАСЧЕТ PnL С УЧЕТОМ КОМИССИЙ (1% вход, 1% выход + 0.003 SOL сеть)
+            # В usd-эквиваленте сеть ~ $0.45
+            real_entry = pos.entry_price_usd * 1.01
+            real_exit = exit_price * 0.99
+            priority_fee_usd = 0.45
+            
+            pnl_pct = (real_exit - real_entry - priority_fee_usd) / real_entry if real_entry > 0 else 0
+            
             pos.pnl_usd = pos.amount_usd * pnl_pct
             self.save_portfolio()
             print(f"🔒 PAPER SELL: {pos.symbol} ({mint}) | Reason: {reason} | PnL: {pnl_pct*100:.2f}% (${pos.pnl_usd:.2f})")
             
             # === СОХРАНЕНИЕ ОПЫТА ДЛЯ ИИ (Continuous Learning) ===
             try:
-                import sqlite3
-                import json
-                with sqlite3.connect("trade_journal.db") as conn:
-                    conn.execute("""
-                        CREATE TABLE IF NOT EXISTS trades (
-                            mint TEXT PRIMARY KEY,
-                            entry_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                            features TEXT,
-                            confidence REAL,
-                            pnl REAL DEFAULT NULL,
-                            exit_reason TEXT DEFAULT NULL,
-                            status TEXT DEFAULT 'OPEN'
-                        )
-                    """)
-                    conn.execute(
-                        "INSERT OR REPLACE INTO trades (mint, features, confidence, pnl, exit_reason, status) VALUES (?, ?, ?, ?, ?, 'CLOSED')",
-                        (pos.mint, json.dumps(pos.ml_features), pos.ml_confidence, pnl_pct, pos.exit_reason)
-                    )
-                print(f"🧠 Сделка {pos.symbol} сохранена в БД опыта (PnL: {pnl_pct*100:.2f}%)")
+                from trade_logger import TradeLogger
+                import asyncio
+                logger = TradeLogger()
+                asyncio.create_task(logger.log_exit(pos.mint, pnl_pct * 100, pos.exit_reason))
             except Exception as e:
                 print(f"⚠️ Ошибка сохранения опыта: {e}")
 
+    def is_trading_allowed(self) -> bool:
+        """Проверка глобального Kill-Switch"""
+        if not hasattr(config, "MAX_DAILY_LOSS_USD"):
+            return True
+            
+        import datetime
+        today = datetime.datetime.utcnow().date()
+        daily_pnl = 0.0
+        
+        for pos in self.positions.values():
+            if pos.status == "closed":
+                pos_date = datetime.datetime.fromtimestamp(pos.entry_time).date()
+                if pos_date == today:
+                    daily_pnl += pos.pnl_usd
+                    
+        if daily_pnl <= -config.MAX_DAILY_LOSS_USD:
+            print(f"🛑 [KILL SWITCH] Превышен дневной лимит потерь: ${daily_pnl:.2f}. Торговля остановлена!")
+            return False
+        return True
+
     def can_open_new_position(self, max_concurrent: int) -> bool:
+        if not self.is_trading_allowed():
+            return False
         return len(self.get_open_positions()) < max_concurrent

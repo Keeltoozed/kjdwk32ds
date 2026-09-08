@@ -1,299 +1,158 @@
 import asyncio
-import websockets
 import json
-import config
-import aiohttp
 import time
-from collections import defaultdict
+import websockets
+import aiohttp
+import pandas as pd
+import numpy as np
+import config
+from ai_brain import ask_pro_oracle
 
-class BondingCurveTracker:
-    def __init__(self, mint: str, symbol: str):
+class TokenTrackerState:
+    def __init__(self, mint: str, symbol: str, trader_pubkey: str):
         self.mint = mint
         self.symbol = symbol
-        self.running = False
-        self.start_time = time.time()
+        self.trader_pubkey = trader_pubkey
         
-        # Метрики кривой
         self.trades = []
         self.unique_buyers = set()
         self.total_volume_sol = 0
-        self.buys = 0
-        self.sells = 0
+        self.start_time = time.time()
         
-    async def monitor(self):
-        self.running = True
-        uri = config.PUMPPORTAL_WSS
+        self.is_ai_evaluated = False
+        self.is_entered = False
+        self.ai_confidence = 0
+        self.ml_features_dict = {}
         
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "Origin": "https://pumpportal.fun"
-        }
-        
-        async with websockets.connect(uri, extra_headers=headers) as ws:
-            # Подписываемся на сделки конкретного токена
-            payload = {
-                "method": "subscribeTokenTrade",
-                "keys": [self.mint]
-            }
-            await ws.send(json.dumps(payload))
-            print(f"📈 [Curve Tracker] Начало мониторинга кривой для {self.symbol} ({self.mint})")
-            
-            while self.running:
-                try:
-                    # Ожидание сделки с таймаутом, чтобы периодически выводить метрики
-                    message = await asyncio.wait_for(ws.recv(), timeout=5.0)
-                    data = json.loads(message)
-                    
-                    if data.get("mint") == self.mint:
-                        tx_type = data.get("txType") # 'buy' или 'sell'
-                        trader = data.get("traderPublicKey")
-                        sol_amount = data.get("vSolInBondingCurve", 0) # Показывает текущий баланс пула
-                        trade_tokens = data.get("tokenAmount", 0) # API отдает кол-во токенов
-                        
-                        self.trades.append({
-                            "type": tx_type,
-                            "time": time.time(),
-                            "trader": trader,
-                            "curve_sol": sol_amount,
-                            "tokens": trade_tokens
-                        })
-                        
-                        if tx_type == "buy":
-                            self.buys += 1
-                            self.unique_buyers.add(trader)
-                        elif tx_type == "sell":
-                            self.sells += 1
-                            
-                        # Считаем скорость (Velocity)
-                        elapsed_minutes = (time.time() - self.start_time) / 60
-                        if elapsed_minutes > 0:
-                            tx_per_min = (self.buys + self.sells) / elapsed_minutes
-                            
-                            # Проверяем прогресс Bonding Curve
-                            curve_progress_pct = max(0, min(100, ((sol_amount - 30) / 55) * 100))
-                            
-                            print(f"[{self.symbol}] 📊 Прогресс: {curve_progress_pct:.1f}% | Tx/Min: {tx_per_min:.1f} | Уникальных кошельков: {len(self.unique_buyers)} | Покупки/Продажи: {self.buys}/{self.sells}")
-                            
-                            # Условия для запуска ML-анализа (один раз)
-                            if curve_progress_pct >= 20.0 and curve_progress_pct <= 40.0 and len(self.unique_buyers) > 5 and not getattr(self, "ml_evaluated", False):
-                                self.ml_evaluated = True
-                                print(f"🚀 [ML СИГНАЛ] {self.symbol} достиг нужного объема! Формируем фичи...")
-                                
-                                # Считаем балансы
-                                balances = {}
-                                for t in self.trades:
-                                    w = t["trader"]
-                                    amt = t.get("tokens", 0)
-                                    if t["type"] == "buy":
-                                        balances[w] = balances.get(w, 0) + amt
-                                    else:
-                                        balances[w] = max(0, balances.get(w, 0) - amt)
-                                        
-                                total_supply = 1_000_000_000
-                                
-                                # Предполагаем, что разраб - это создатель первого трейда
-                                dev_wallet = self.trades[0]["trader"] if self.trades else ""
-                                dev_holding_pct = (balances.get(dev_wallet, 0) / total_supply) * 100
-                                
-                                sorted_bals = sorted(balances.values(), reverse=True)
-                                top_10_holding_pct = (sum(sorted_bals[:10]) / total_supply) * 100
-                                
-                                token_context = {
-                                    "mint": self.mint,
-                                    "dev_holding_pct": min(100.0, dev_holding_pct),
-                                    "top_10_holding_pct": min(100.0, top_10_holding_pct),
-                                    "tx_velocity_1m": tx_per_min,
-                                    "has_socials": 1, 
-                                    "funded_from_cex": 0
-                                }
-                                
-                                from ai_brain import ask_ai_oracle, ask_pro_oracle
-                                import pandas as pd
-                                import numpy as np
-                                
-                                # 1. Сначала прогоняем Hard Filters
-                                decision_res = await ask_ai_oracle(token_context)
-                                if decision_res.get("decision") == "SKIP" or not decision_res.get("is_approved", True):
-                                    print(f"⚠️ {decision_res.get('reason', 'Отклонено Hard-фильтром')}")
-                                    self.running = False
-                                    break
-                                    
-                                # 2. Если фильтры пройдены, генерируем тиковые признаки для PRO-модели
-                                try:
-                                    df = pd.DataFrame(self.trades)
-                                    df['curve_sol_diff'] = df['curve_sol'].diff().fillna(0)
-                                    df['volume_buy'] = np.where(df['type'] == 'buy', df['curve_sol_diff'].abs(), 0)
-                                    df['volume_sell'] = np.where(df['type'] == 'sell', df['curve_sol_diff'].abs(), 0)
-                                    df['price'] = df['curve_sol'] / 1_000_000_000 # Упрощенная цена (прокси)
-                                    
-                                    total_vol = df['volume_buy'] + df['volume_sell']
-                                    df['ofi'] = np.where(total_vol > 0, (df['volume_buy'] - df['volume_sell']) / total_vol, 0)
-                                    df['ofi_ema_5'] = df['ofi'].ewm(span=5, adjust=False).mean()
-                                    df['total_vol'] = total_vol
-                                    df['vol_change'] = df['total_vol'].diff().fillna(0)
-                                    df['vol_acceleration'] = df['vol_change'].diff().fillna(0)
-                                    
-                                    df['log_return'] = np.log(df['price'] / df['price'].shift(1).replace(0, np.nan)).fillna(0)
-                                    df['volatility_15m'] = df['log_return'].rolling(window=min(15, len(df))).std() * np.sqrt(15)
-                                    df['volatility_15m'] = df['volatility_15m'].fillna(0)
-                                    
-                                    df['momentum_5m'] = df['price'].pct_change(min(5, len(df)-1)).fillna(0)
-                                    df['momentum_15m'] = df['price'].pct_change(min(15, len(df)-1)).fillna(0)
-                                    df['tx_count'] = 1
-                                    
-                                    pro_res = await ask_pro_oracle(df)
-                                    conf = pro_res.get("score", 0)
-                                    is_pro_approved = pro_res.get("is_approved", False)
-                                except Exception as e:
-                                    print(f"⚠️ Ошибка подготовки PRO фичей: {e}")
-                                    is_pro_approved = False
-                                    conf = 0
-
-                                if is_pro_approved:
-                                    print(f"✅ [PRO AI ОДОБРЕНО] {self.symbol} прошел микроструктурный анализ (Уверенность: {conf}%)!")
-                                    
-                                    from tracker import PaperTracker
-                                    tracker = PaperTracker()
-                                    
-                                    # Импортируем ExitManager для симуляции умных выходов на Paper Trading
-                                    from exit_manager import ExitManager
-                                    exit_mgr = ExitManager(config.HELIUS_RPC_URL)
-                                    
-                                    actual_price = (sol_amount / 1_000_000_000.0) * 150.0 # примерный расчет
-                                    
-                                    capital = tracker.get_total_capital()
-                                    base_position = capital * (config.REINVEST_PERCENT / 100.0)
-                                    
-                                    liq_usd = sol_amount * 150.0 
-                                    max_allowed_by_pool = liq_usd * 0.05
-                                    
-                                    position_size = max(4.0, min(base_position, max_allowed_by_pool, 100.0))
-                                    
-                                    if position_size >= 4.0:
-                                        print(f"🚀 PAPER СНАЙП PUMP.FUN РАКЕТЫ {self.symbol} ({self.mint})! Входим на {position_size}$")
-                                        ml_features_dict = {}
-                                        if 'df' in locals():
-                                            for k, v in df.iloc[-1].to_dict().items():
-                                                if isinstance(v, pd.Timestamp): ml_features_dict[k] = str(v)
-                                                elif hasattr(v, 'item'): ml_features_dict[k] = v.item() # numpy to python type
-                                                else: ml_features_dict[k] = v
-                                        tracker.add_position(self.symbol, self.mint, actual_price, position_size, ml_features=ml_features_dict, ml_confidence=conf)
-                                        
-                                        # Коллбек для ExitManager (закрываем бумажную сделку)
-                                        async def panic_sell_callback(token_mint, reason):
-                                            print(f"📉 [PAPER] PANIC SELL TRIGGERED для {token_mint}. Причина: {reason}")
-                                            pos = tracker.positions.get(token_mint)
-                                            if pos and pos.status == "open":
-                                                # Используем текущую цену из трекера, либо цену входа, если еще не обновилась
-                                                exit_price = pos.current_price_usd if pos.current_price_usd > 0 else pos.entry_price_usd
-                                                tracker.close_position(token_mint, exit_price, reason)
-                                                
-                                        # Используем trader_pubkey, который мы получали в connect_and_listen
-                                        # Если его нет, используем заглушку, чтобы код не падал
-                                        dev_wallet_pubkey = "11111111111111111111111111111111" # Нужен проброс trader_pubkey, ставим заглушку, если его нет в scope
-                                        
-                                        # Запускаем мониторинг выхода в фоне
-                                        asyncio.create_task(
-                                            exit_mgr.start_monitoring(
-                                                token_mint=self.mint,
-                                                dev_wallet=dev_wallet_pubkey, 
-                                                initial_dev_balance=1_000_000_000, # Идеально было бы взять из dev_profile, но пока заглушка
-                                                on_panic_sell=panic_sell_callback
-                                            )
-                                        )
-                                    else:
-                                        print(f"🚫 Отказ (Ликвидность): Недостаточно ликвидности для входа.")
-                                        
-                                    self.running = False
-                                else:
-                                    print(f"🚫 [AI ОТКАЗ] {self.symbol} забракован (Уверенность: {conf}%). Отменяем мониторинг.")
-                                    self.running = False
-                                
-                except asyncio.TimeoutError:
-                    # Раз в 5 секунд, если нет сделок, проверяем не сдох ли токен
-                    elapsed_minutes = (time.time() - self.start_time) / 60
-                    if elapsed_minutes > 5 and len(self.trades) < 10:
-                        print(f"💀 [Curve Tracker] {self.symbol} мертв (нет активности за 5 минут). Снимаем мониторинг.")
-                        self.running = False
-                except websockets.exceptions.ConnectionClosed:
-                    break
-                except Exception as e:
-                    print(f"Curve Tracker Error: {e}")
-                    break
+        self.max_curve_progress = 0.0
+        self.is_migrated = False # Попала на Raydium (ракета)
+        self.is_dead = False # Прошло 30 мин, не мигрировала (скам)
+        self.entry_price_sol = 0.0
 
 class PumpFunSniper:
     def __init__(self):
         self.running = False
-        self.active_trackers = {} # mint -> tracker_task
+        self.trackers = {} # mint -> TokenTrackerState
 
-    async def get_dev_profile(self, trader_pubkey: str) -> dict:
-        profile = {
-            "balance_sol": 0,
-            "funded_from_cex": False,
-            "is_fresh_wallet": True,
-            "tx_count": 0,
-            "risk_score": 50
-        }
-        if not trader_pubkey:
-            return profile
+    async def evaluate_and_enter(self, state: TokenTrackerState):
+        try:
+            df = pd.DataFrame(state.trades)
+            df['curve_sol_diff'] = df['curve_sol'].diff().fillna(0)
+            df['volume_buy'] = np.where(df['type'] == 'buy', df['curve_sol_diff'].abs(), 0)
+            df['volume_sell'] = np.where(df['type'] == 'sell', df['curve_sol_diff'].abs(), 0)
+            df['price'] = df['curve_sol'] / 1_000_000_000 
+            
+            total_vol = df['volume_buy'] + df['volume_sell']
+            df['ofi'] = np.where(total_vol > 0, (df['volume_buy'] - df['volume_sell']) / total_vol, 0)
+            df['ofi_ema_5'] = df['ofi'].ewm(span=5, adjust=False).mean()
+            df['total_vol'] = total_vol
+            df['vol_change'] = df['total_vol'].diff().fillna(0)
+            df['vol_acceleration'] = df['vol_change'].diff().fillna(0)
+            
+            df['log_return'] = np.log(df['price'] / df['price'].shift(1).replace(0, np.nan)).fillna(0)
+            df['volatility_15m'] = df['log_return'].rolling(window=min(15, len(df))).std() * np.sqrt(15)
+            df['volatility_15m'] = df['volatility_15m'].fillna(0)
+            
+            df['momentum_5m'] = df['price'].pct_change(min(5, len(df)-1)).fillna(0)
+            df['momentum_15m'] = df['price'].pct_change(min(15, len(df)-1)).fillna(0)
+            df['tx_count'] = 1
+            
+            pro_res = await ask_pro_oracle(df)
+            state.ai_confidence = pro_res.get("score", 0)
+            is_pro_approved = pro_res.get("is_approved", False)
+            
+            for k, v in df.iloc[-1].to_dict().items():
+                if isinstance(v, pd.Timestamp): state.ml_features_dict[k] = str(v)
+                elif hasattr(v, 'item'): state.ml_features_dict[k] = v.item()
+                else: state.ml_features_dict[k] = v
+                
+        except Exception as e:
+            print(f"⚠️ Ошибка подготовки PRO фичей: {e}")
+            is_pro_approved = False
+            state.ai_confidence = 0
 
-        payload_balance = {
-            "jsonrpc": "2.0", "id": 1, "method": "getAccountInfo",
-            "params": [trader_pubkey, {"encoding": "jsonParsed"}]
-        }
-        
-        payload_sigs = {
-            "jsonrpc": "2.0", "id": 1, "method": "getSignaturesForAddress",
-            "params": [trader_pubkey, {"limit": 10}]
-        }
+        state.is_ai_evaluated = True
 
-        async with aiohttp.ClientSession() as session:
-            try:
-                # 1. Баланс
-                async with session.post(config.HELIUS_RPC_URL, json=payload_balance, timeout=2) as resp:
-                    data = await resp.json()
-                    lamports = data.get("result", {}).get("value", {}).get("lamports", 0) if data.get("result", {}).get("value") else 0
-                    profile["balance_sol"] = lamports / 1e9
-
-                # 2. История (Свежерег и поиск Funding Source)
-                async with session.post(config.HELIUS_RPC_URL, json=payload_sigs, timeout=3) as resp:
-                    data = await resp.json()
-                    sigs = data.get("result", [])
-                    profile["tx_count"] = len(sigs)
-                    
-                    if len(sigs) > 5:
-                        profile["is_fresh_wallet"] = False
+        if is_pro_approved:
+            print(f"✅ [PRO AI ОДОБРЕНО] {state.symbol} прошел анализ! Уверенность: {state.ai_confidence}%")
+            state.is_entered = True
+            
+            from tracker import PaperTracker
+            from exit_manager import ExitManager
+            tracker = PaperTracker()
+            exit_mgr = ExitManager(config.HELIUS_RPC_URL)
+            
+            sol_amount = state.trades[-1]["curve_sol"] if state.trades else 0
+            actual_price = (sol_amount / 1_000_000_000.0) * 150.0 
+            
+            capital = tracker.get_total_capital()
+            base_position = capital * (config.REINVEST_PERCENT / 100.0)
+            liq_usd = sol_amount * 150.0 
+            max_allowed = liq_usd * 0.05
+            position_size = max(4.0, min(base_position, max_allowed, 100.0))
+            
+            if position_size >= 4.0:
+                print(f"🚀 PAPER СНАЙП {state.symbol}! Входим на {position_size}$")
+                tracker.add_position(state.symbol, state.mint, actual_price, position_size, ml_features=state.ml_features_dict, ml_confidence=state.ai_confidence)
+                
+                async def panic_sell_callback(token_mint, reason):
+                    pos = tracker.positions.get(token_mint)
+                    if pos and pos.status == "open":
+                        exit_price = pos.current_price_usd if pos.current_price_usd > 0 else pos.entry_price_usd
+                        tracker.close_position(token_mint, exit_price, reason)
                         
-                    # 3. Эвристика Funding Source
-                    # Если кошелек совершил < 10 транзакций, вытягиваем самую первую транзакцию
-                    # чтобы проверить, откуда он получил свои первые SOL
-                    if 0 < len(sigs) <= 10:
-                        oldest_sig = sigs[-1]["signature"]
-                        payload_tx = {
-                            "jsonrpc": "2.0", "id": 1, "method": "getTransactions",
-                            "params": [[oldest_sig], {"encoding": "jsonParsed", "maxSupportedTransactionVersion": 0}]
-                        }
-                        async with session.post(config.HELIUS_RPC_URL, json=payload_tx, timeout=3) as tx_resp:
-                            tx_data = await tx_resp.json()
-                            try:
-                                # Ищем трансфер в инструкциях
-                                first_tx = tx_data.get("result", [])[0]
-                                instrs = first_tx["transaction"]["message"]["instructions"]
-                                for inst in instrs:
-                                    if inst.get("program") == "system" and inst.get("parsed", {}).get("type") == "transfer":
-                                        source = inst["parsed"]["info"]["source"]
-                                        # Список известных горячих кошельков CEX (Binance, Coinbase, Kraken и т.д.)
-                                        # Пример адреса Binance: 5Q544fKrFoe6tsEbD7S8EmxGTJYAKtTVhAW5Q5pge4j1
-                                        cex_hot_wallets = ["5Q544fKrFoe6tsEbD7S8EmxGTJYAKtTVhAW5Q5pge4j1"]
-                                        if source in cex_hot_wallets:
-                                            profile["funded_from_cex"] = True
-                            except:
-                                pass
-                    
+                dev_wallet_pubkey = state.trader_pubkey if state.trader_pubkey else "11111111111111111111111111111111"
+                asyncio.create_task(
+                    exit_mgr.start_monitoring(
+                        token_mint=state.mint,
+                        dev_wallet=dev_wallet_pubkey, 
+                        initial_dev_balance=1_000_000_000, 
+                        on_panic_sell=panic_sell_callback
+                    )
+                )
+        else:
+            print(f"🚫 [AI ОТКАЗ] {state.symbol} (Уверенность: {state.ai_confidence}%). Следим для сбора метрик.")
+            # === SHADOW TRADING HOOK ===
+            try:
+                from shadow_tracker import ShadowTracker
+                shadow = ShadowTracker()
+                current_price = (state.trades[-1]["curve_sol"] / 1_000_000_000.0) * 150.0 if state.trades else 0
+                shadow.log_rejection(
+                    mint=state.mint,
+                    reason=f"AI Score too low: {state.ai_confidence:.1f}%",
+                    score=state.ai_confidence,
+                    price=current_price,
+                    features=state.ml_features_dict
+                )
             except Exception as e:
-                pass
+                print(f"Ошибка вызова ShadowTracker: {e}")
 
-        return profile
+
+    async def garbage_collector(self, ws):
+        """Очищает мертвые трекеры и отписывается от WSS"""
+        while self.running:
+            await asyncio.sleep(60)
+            now = time.time()
+            to_remove = []
+            
+            for mint, state in list(self.trackers.items()):
+                # Если прошло 30 минут, считаем что токен умер
+                if now - state.start_time > 1800:
+                    state.is_dead = True
+                    print(f"💀 [Очистка] Токен {state.symbol} мертв (30 мин без миграции).")
+                    
+                    # Если был отвергнут ИИ, логируем неудачу (True Negative)
+                    if state.is_ai_evaluated and not state.is_entered:
+                        pass
+                        
+                    to_remove.append(mint)
+                    
+            for mint in to_remove:
+                del self.trackers[mint]
+                try:
+                    await ws.send(json.dumps({"method": "unsubscribeTokenTrade", "keys": [mint]}))
+                except:
+                    pass
 
     async def connect_and_listen(self):
         self.running = True
@@ -301,42 +160,87 @@ class PumpFunSniper:
         
         while self.running:
             try:
-                print("🟢 Подключение к PumpPortal WSS (Слушаем новые токены)...")
+                print("🟢 Подключение к ЕДИНОМУ PumpPortal WSS...")
                 headers = {
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                    "User-Agent": "Mozilla/5.0",
                     "Origin": "https://pumpportal.fun"
                 }
-                async with websockets.connect(uri, extra_headers=headers) as websocket:
-                    payload = {"method": "subscribeNewToken"}
-                    await websocket.send(json.dumps(payload))
-                    print("🚀 Успешная подписка на поток InitializeMint (Pump.fun)!")
+                async with websockets.connect(uri, additional_headers=headers) as ws:
+                    # 1. Подписка на новые токены
+                    await ws.send(json.dumps({"method": "subscribeNewToken"}))
+                    print("🚀 Подписка на InitializeMint оформлена!")
+                    
+                    # 2. Запуск сборщика мусора и Shadow Watcher
+                    asyncio.create_task(self.garbage_collector(ws))
+                    try:
+                        from shadow_tracker import ShadowTracker
+                        shadow = ShadowTracker()
+                        asyncio.create_task(shadow.price_watcher_loop())
+                    except Exception as e:
+                        print(f"Ошибка запуска Shadow Watcher: {e}")
                     
                     while self.running:
-                        message = await websocket.recv()
+                        message = await ws.recv()
                         data = json.loads(message)
                         
-                        if "mint" in data and data.get("txType") == "create":
+                        tx_type = data.get("txType")
+                        
+                        # --- НОВЫЙ ТОКЕН ---
+                        if "mint" in data and tx_type == "create":
                             mint = data["mint"]
                             symbol = data.get("symbol", "UNKNOWN")
-                            trader_pubkey = data.get("traderPublicKey")
+                            trader_pubkey = data.get("traderPublicKey", "")
                             initial_buy = data.get("initialBuy", 0)
                             
+                            if initial_buy > 200_000_000:
+                                continue # Пропускаем мега-дампы
+                                
                             print(f"\n🔔 [НОВЫЙ ТОКЕН] {symbol} | Mint: {mint}")
                             
-                            dev_profile = await self.get_dev_profile(trader_pubkey)
+                            self.trackers[mint] = TokenTrackerState(mint, symbol, trader_pubkey)
+                            # Динамически добавляем подписку на торги этого токена в ЭТОТ ЖЕ сокет
+                            await ws.send(json.dumps({"method": "subscribeTokenTrade", "keys": [mint]}))
                             
-                            print(f"🔍 [Dev Profile] Balance: {dev_profile['balance_sol']:.2f} SOL | Fresh: {dev_profile['is_fresh_wallet']} | CEX Funded: {dev_profile['funded_from_cex']}")
-                            
-                            if initial_buy == 0:
-                                print("🚫 Отказ: Dev не купил ни одного токена (0 Tokens). Нет 'шкуры на кону'.")
-                                continue
-                            if initial_buy > 200_000_000: # Максимум 20% саплая
-                                print(f"🚫 Отказ: Dev выкупил слишком много ({initial_buy:,.0f} Tokens). Риск моментального дампа.")
+                        # --- СДЕЛКА ПО ТОКЕНУ ---
+                        elif tx_type in ["buy", "sell"]:
+                            mint = data.get("mint")
+                            state = self.trackers.get(mint)
+                            if not state:
                                 continue
                                 
-                            # Если токен прошел первичный фильтр, запускаем трекер кривой связывания
-                            tracker = BondingCurveTracker(mint, symbol)
-                            self.active_trackers[mint] = asyncio.create_task(tracker.monitor())
+                            sol_amount = data.get("vSolInBondingCurve", 0)
+                            if sol_amount == 0:
+                                continue
+                                
+                            # Фиксация трейда
+                            state.trades.append({
+                                'timestamp': time.time(),
+                                'type': tx_type,
+                                'curve_sol': sol_amount,
+                                'wallet': data.get('traderPublicKey')
+                            })
+                            state.unique_buyers.add(data.get('traderPublicKey'))
+                            
+                            progress = (sol_amount / 85.0) * 100
+                            if progress > state.max_curve_progress:
+                                state.max_curve_progress = progress
+                            
+                            # Проверка на миграцию (Ракета)
+                            if progress >= 100.0 and not state.is_migrated:
+                                state.is_migrated = True
+                                print(f"🚀🚀🚀 [РАКЕТА] Токен {state.symbol} мигрировал на Raydium!")
+                                if state.is_ai_evaluated and not state.is_entered:
+                                    # ИИ отверг, а она взлетела! Логируем (False Negative)
+                                    pass
+                                    
+                                # Отписываемся, чтобы не засорять сокет Raydium торгами
+                                del self.trackers[mint]
+                                await ws.send(json.dumps({"method": "unsubscribeTokenTrade", "keys": [mint]}))
+                                continue
+
+                            # Если достигли 20%, оцениваем ИИ
+                            if not state.is_ai_evaluated and progress >= 20.0 and len(state.trades) > 5:
+                                await self.evaluate_and_enter(state)
                                 
             except websockets.exceptions.ConnectionClosed:
                 print("⚠️ WSS соединение закрыто. Переподключение через 2 секунды...")
@@ -345,6 +249,30 @@ class PumpFunSniper:
                 print(f"❌ WSS Ошибка: {e}")
                 await asyncio.sleep(2)
 
-if __name__ == "__main__":
+# === DUMMY HTTP SERVER FOR RENDER ===
+from aiohttp import web
+import os
+
+async def health_check(request):
+    return web.Response(text="Sniper Bot is running securely!")
+
+async def start_web_server():
+    app = web.Application()
+    app.add_routes([web.get('/', health_check)])
+    runner = web.AppRunner(app)
+    await runner.setup()
+    port = int(os.environ.get("PORT", 8080))
+    site = web.TCPSite(runner, '0.0.0.0', port)
+    print(f"🌐 [Render Server] Запуск HTTP сервера на порту {port} (Health-check)")
+    await site.start()
+
+async def main():
+    # Запускаем dummy-сервер для Render в фоне
+    await start_web_server()
+    
+    # Запускаем основной луп снайпера
     sniper = PumpFunSniper()
-    asyncio.run(sniper.connect_and_listen())
+    await sniper.connect_and_listen()
+
+if __name__ == "__main__":
+    asyncio.run(main())

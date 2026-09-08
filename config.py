@@ -16,6 +16,10 @@ PUMPPORTAL_WSS = "wss://pumpportal.fun/api/data"
 # RugCheck API
 RUGCHECK_API = "https://api.rugcheck.xyz/v1/tokens/{mint}/report/summary"
 
+# Supabase DB Config
+SUPABASE_URL = os.getenv("SUPABASE_URL", "https://kpyiiwouhsuaohqtcrfy.supabase.co")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY", "sb_secret_LUJbgls7ovWtFthfL0GYkA_QqrpCn5N")
+
 # Paper Trading Config
 PAPER_PORTFOLIO_FILE = "portfolio.json"
 INITIAL_BALANCE_USD = 20.0    # Стартовый капитал
@@ -24,6 +28,7 @@ VIRTUAL_POSITION_SIZE_USD = 4.0 # (Устарело) базовый размер
 MAX_CONCURRENT_POSITIONS = 15 # Увеличили макс. количество одновременных сделок (было 5)
 
 # Risk Management
+MAX_DAILY_LOSS_USD = 10.0 # Глобальный Kill-Switch. Если убыток за сегодня > 10$, бот останавливается
 STOP_LOSS_PCT = -0.15   # Жесткий стоп на -15% (чтобы с учетом проскальзывания было не больше -20%)
 TIME_EXIT_MINUTES = 30  # Если за 30 минут нет пампа - выходим
 TIME_EXIT_PROFIT_REQ = 0.0

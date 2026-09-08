@@ -205,17 +205,26 @@ def _skip(score: int, reason: str) -> dict:
 import os
 
 class AIBrainML:
-    def __init__(self, model_path="pump_model.pkl"):
+    def __init__(self, model_path="pump_model.pkl", pro_model_path="pro_model.pkl"):
         self.model_path = model_path
+        self.pro_model_path = pro_model_path
         self.model = None
+        self.pro_model = None
         
+        import joblib
         if os.path.exists(self.model_path):
             try:
-                import joblib
                 self.model = joblib.load(self.model_path)
-                print("🧠 [AI Brain] ML Модель успешно загружена!")
+                print("🧠 [AI Brain] ML Модель (pump_model) успешно загружена!")
             except Exception as e:
                 print(f"⚠️ [AI Brain] Ошибка загрузки ML модели: {e}")
+                
+        if os.path.exists(self.pro_model_path):
+            try:
+                self.pro_model = joblib.load(self.pro_model_path)
+                print("🧠 [AI Brain] PRO ML Модель (pro_model) успешно загружена!")
+            except Exception as e:
+                print(f"⚠️ [AI Brain] Ошибка загрузки PRO ML модели: {e}")
                 
     def evaluate_pump_token(self, token_data: dict) -> dict:
         """
@@ -271,6 +280,37 @@ class AIBrainML:
             "reasons": reasons
         }
 
+    def evaluate_pro_model(self, df_features) -> dict:
+        """
+        Оценивает тиковые данные (micro-structure) через pro_model.pkl
+        """
+        if not self.pro_model:
+            return {"score": 0, "is_approved": False, "reasons": ["pro_model.pkl не найдена или не загружена"]}
+            
+        try:
+            # В датафрейме берем последнюю строку (самый свежий тик)
+            expected_cols = ['volume_buy', 'volume_sell', 'tx_count', 'ofi', 'ofi_ema_5', 'total_vol', 'vol_change', 'vol_acceleration', 'volatility_15m', 'momentum_5m', 'momentum_15m']
+            
+            # ЗАЩИТА ОТ СДВИГА ДАННЫХ (Data Leakage)
+            for col in expected_cols:
+                if col not in df_features.columns:
+                    df_features[col] = 0.0
+                    
+            X = df_features[expected_cols]
+            last_row = X.iloc[-1:]
+            
+            prob = self.pro_model.predict_proba(last_row)[0][1]
+            score = int(prob * 100)
+            
+            if score >= 50:
+                return {"score": score, "is_approved": True, "reasons": [f"✅ [PRO ИИ] Микроструктура одобрена (Уверенность: {score}%)!"]}
+            else:
+                return {"score": score, "is_approved": False, "reasons": [f"❌ [PRO ИИ] Низкий потенциал (Уверенность: {score}%)"]}
+                
+        except Exception as e:
+            print(f"⚠️ Pro ML Predict Error: {e}")
+            return {"score": 0, "is_approved": False, "reasons": [f"Ошибка Pro ML: {e}"]}
+
 # Инициализируем ML-мозг как синглтон
 ml_brain = AIBrainML()
 
@@ -284,39 +324,10 @@ async def ask_ai_oracle(token_context: dict) -> dict:
         decision = "BUY" if result["is_approved"] else "SKIP"
         reason_str = " | ".join(result["reasons"])
         print(f"🤖 [ML XGBoost] Вердикт: {decision} (Score: {result['score']}%) | {reason_str}")
-        return {"decision": decision, "confidence": result["score"], "reason": reason_str}
+        return {"decision": decision, "confidence": result["score"], "reason": reason_str, "is_approved": result["is_approved"]}
         
     # Иначе используем старую rule-based систему
     return ask_ai_oracle_sync(token_context)
-
-    def evaluate_pro_model(self, df_features) -> dict:
-        """
-        Оценивает тиковые данные (micro-structure) через pro_model.pkl
-        """
-        import joblib
-        import os
-        
-        pro_path = "pro_model.pkl"
-        if not os.path.exists(pro_path):
-            return {"score": 0, "is_approved": False, "reasons": ["pro_model.pkl не найдена"]}
-            
-        try:
-            model = joblib.load(pro_path)
-            # В датафрейме берем последнюю строку (самый свежий тик)
-            X = df_features[['ofi', 'ofi_ema_5', 'total_vol', 'vol_change', 'vol_acceleration', 'volatility_15m', 'momentum_5m', 'momentum_15m', 'volume_buy', 'volume_sell', 'tx_count']]
-            last_row = X.iloc[-1:]
-            
-            prob = model.predict_proba(last_row)[0][1]
-            score = int(prob * 100)
-            
-            if score >= 50:
-                return {"score": score, "is_approved": True, "reasons": [f"✅ [PRO ИИ] Микроструктура одобрена (Уверенность: {score}%)!"]}
-            else:
-                return {"score": score, "is_approved": False, "reasons": [f"❌ [PRO ИИ] Низкий потенциал (Уверенность: {score}%)"]}
-                
-        except Exception as e:
-            print(f"⚠️ Pro ML Predict Error: {e}")
-            return {"score": 0, "is_approved": False, "reasons": [f"Ошибка Pro ML: {e}"]}
 
 async def ask_pro_oracle(df_features) -> dict:
     return ml_brain.evaluate_pro_model(df_features)

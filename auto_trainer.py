@@ -1,4 +1,3 @@
-import sqlite3
 import pandas as pd
 import json
 import os
@@ -8,50 +7,61 @@ from sklearn.metrics import precision_score, accuracy_score
 from sklearn.model_selection import train_test_split
 import requests
 import warnings
+import config
 warnings.filterwarnings('ignore')
+
+try:
+    from supabase import create_client, Client
+except ImportError:
+    pass
 
 class ContinuousLearningPipeline:
     def __init__(self, db_path="trade_journal.db", base_dataset="pump_dataset.csv", model_path="pump_model.pkl"):
         self.db_path = db_path
         self.base_dataset = base_dataset
         self.model_path = model_path
-        self.tg_bot_token = os.getenv("TG_BOT_TOKEN", "") # Задай в .env
+        self.tg_bot_token = os.getenv("TG_BOT_TOKEN", "")
         self.tg_chat_id = os.getenv("TG_CHAT_ID", "")
+        self.use_supabase = bool(getattr(config, 'SUPABASE_URL', None) and getattr(config, 'SUPABASE_KEY', None))
+        if self.use_supabase:
+            self.supabase: Client = create_client(config.SUPABASE_URL, config.SUPABASE_KEY)
 
     def extract_and_label_new_data(self) -> pd.DataFrame:
-        """
-        Извлекает закрытые сделки из SQLite и применяет Auto-Labeling.
-        """
-        if not os.path.exists(self.db_path):
-            print("База данных пуста, нет нового опыта.")
-            return pd.DataFrame()
-
-        with sqlite3.connect(self.db_path) as conn:
-            df = pd.read_sql_query("SELECT * FROM trades WHERE status = 'CLOSED'", conn)
+        """Извлекает закрытые сделки из БД и применяет Auto-Labeling."""
+        if self.use_supabase:
+            res = self.supabase.table("trades").select("*").eq("status", "CLOSED").execute()
+            df = pd.DataFrame(res.data)
+        else:
+            import sqlite3
+            if not os.path.exists(self.db_path):
+                return pd.DataFrame()
+            with sqlite3.connect(self.db_path) as conn:
+                df = pd.read_sql_query("SELECT * FROM trades WHERE status = 'CLOSED'", conn)
             
         if df.empty:
             return pd.DataFrame()
 
-        # Парсим JSON фичи в отдельные колонки
         features_df = df['features'].apply(json.loads).apply(pd.Series)
         df = pd.concat([df, features_df], axis=1)
 
         # ---------------- AUTO-LABELING ----------------
-        # 1 - успех (ракета, PnL > 50%), 0 - провал (PnL < 0)
-        # Сделки от 0 до 50% мы можем игнорировать (неоднозначные), либо настроить свой трешхолд
+        # Жесткая разметка!
         def assign_label(pnl):
             if pnl > 50: return 1
-            if pnl < 0: return 0
+            if pnl < -10: return 0 # Строго маркируем убытки
             return None 
 
         df['is_success'] = df['pnl'].apply(assign_label)
         df = df.dropna(subset=['is_success'])
 
         # Назначаем sample_weight
-        # False Positives: Бот был уверен (>80%), но сделка ушла в минус. Штрафуем модель жестко (вес 2.0).
         def assign_weight(row):
-            if row['confidence'] > 80 and row['is_success'] == 0:
-                return 2.0
+            # Жесткий штраф за ложные срабатывания (False Positives)
+            if row['confidence'] > 75 and row['is_success'] == 0:
+                # Если PnL хуже -30%, штрафуем максимально
+                if row['pnl'] < -30:
+                    return 10.0
+                return 5.0
             return 1.0
             
         df['sample_weight'] = df.apply(assign_weight, axis=1)
@@ -84,12 +94,16 @@ class ContinuousLearningPipeline:
         """Retraining Engine & Shadow Deployment."""
         df = self.prepare_training_data()
         
-        # Разделение на фичи и таргет
-        target_col = 'is_success'
-        exclude_cols = ['mint', 'token', 'label', 'target', 'id', target_col, 'sample_weight']
-        features = [c for c in df.columns if c not in exclude_cols and df[c].dtype in ['float64', 'int64']]
+        # Строгая фиксация признаков, чтобы избежать Data Leakage (Сдвига Данных)!
+        features = ["dev_holding_pct", "top_10_holding_pct", "tx_velocity_1m", "has_socials", "funded_from_cex"]
         
+        # Проверяем, есть ли все фичи, заполняем нулями если нет
+        for col in features:
+            if col not in df.columns:
+                df[col] = 0.0
+                
         X = df[features]
+        target_col = 'is_success'
         y = df[target_col]
         weights = df['sample_weight']
         
@@ -100,8 +114,8 @@ class ContinuousLearningPipeline:
 
         print(f"🧠 Обучение новой модели (XGBoost)... [Features: {len(features)}]")
         new_model = xgb.XGBClassifier(
-            n_estimators=200,
-            learning_rate=0.05,
+            n_estimators=300, # Увеличили деревья
+            learning_rate=0.03, # Плавное обучение
             max_depth=5,
             random_state=42
         )
@@ -122,12 +136,12 @@ class ContinuousLearningPipeline:
             print(f"Старая модель Precision: {old_precision:.4f}")
             print(f"Новая модель Precision:  {new_precision:.4f}")
             
-            if new_precision > old_precision:
-                print("✅ Новая модель лучше! Перезаписываем pump_model.pkl...")
+            if new_precision >= old_precision:
+                print("✅ Новая модель лучше (или такая же)! Перезаписываем pump_model.pkl...")
                 joblib.dump(new_model, self.model_path)
                 self.send_tg_notification(f"🚀 AI Модель успешно обновлена!\nНовый Precision: {new_precision:.2f} (было {old_precision:.2f})\nУчтено новых ошибок из Trade Journal.")
             else:
-                print("❌ Новая модель хуже или такая же. Откат (Rollback). Оставляем старую версию.")
+                print("❌ Новая модель хуже. Откат (Rollback). Оставляем старую версию.")
         else:
             print("Первое обучение! Сохраняем модель.")
             joblib.dump(new_model, self.model_path)
