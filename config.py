@@ -17,8 +17,8 @@ PUMPPORTAL_WSS = "wss://pumpportal.fun/api/data"
 RUGCHECK_API = "https://api.rugcheck.xyz/v1/tokens/{mint}/report/summary"
 
 # Supabase DB Config
-SUPABASE_URL = os.getenv("SUPABASE_URL", "https://kpyiiwouhsuaohqtcrfy.supabase.co")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY", "sb_secret_LUJbgls7ovWtFthfL0GYkA_QqrpCn5N")
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
 # Paper Trading Config
 PAPER_PORTFOLIO_FILE = "portfolio.json"
