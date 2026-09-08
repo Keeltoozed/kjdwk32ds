@@ -105,8 +105,10 @@ class PaperTracker:
             # Считаем изменение цены актива (процент)
             price_diff_pct = (real_exit_price - real_entry_price) / real_entry_price if real_entry_price > 0 else 0
             
-            # Считаем итоговый PnL в долларах с вычетом сетевой комиссии (Priority Fee ~ $0.45)
-            priority_fee_usd = 0.45
+            # 2. ДИНАМИЧЕСКИЕ МИКРО-КОМИССИИ JITO (Micro-Tips)
+            # Если позиция < $10, используем минимальный tip (0.0005 SOL ~ $0.075)
+            priority_fee_usd = 0.075 if pos.amount_usd < 10.0 else 0.45
+            
             pos.pnl_usd = (pos.amount_usd * price_diff_pct) - priority_fee_usd
             
             # Реальный итоговый процент инвестиции

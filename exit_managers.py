@@ -23,10 +23,15 @@ class MatureExitManager:
             if drop_from_max >= 0.20: # Откат 20%
                 return "Wide Trailing Stop (20% drop from ATH)"
 
+        # Расчет минимальной маржи для покрытия фиксированной сети Solana
+        priority_fee_usd = 0.075 if position.amount_usd < 10.0 else 0.45
+        min_fee_pct = (priority_fee_usd + 0.02 * position.amount_usd) / position.amount_usd
+        safe_be = min_fee_pct + 0.02 # Безубыток + 2% чистыми
+
         # 3. Swing Break-even (Безубыток на долгосрок)
         # Переводим в БУ только после мощного роста (от +40%)
-        if max_pnl_pct >= 0.40 and pnl_pct <= 0.05:
-            return "Swing Break-even (+5%)"
+        if max_pnl_pct >= 0.40 and pnl_pct <= safe_be:
+            return f"Swing Break-even (+{safe_be*100:.1f}%)"
 
         # 4. Wide Stop Loss (Пересиживаем обычный рыночный шум)
         if pnl_pct <= -0.25: # -25% вместо скальперских -15%

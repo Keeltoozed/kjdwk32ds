@@ -55,28 +55,49 @@ async def position_manager_loop(analyzer, tracker):
                 
                 # === ЖЕСТКИЙ RISK MANAGEMENT (CRO LEVEL) ===
                 
+                # Умный расчет минимального порога для покрытия комиссий
+                priority_fee_usd = 0.075 if position.amount_usd < 10.0 else 0.45
+                min_fee_pct = (priority_fee_usd + 0.02 * position.amount_usd) / position.amount_usd
+                
                 # 1. Защита от потери профита (Lock Profit - Несгораемые зоны)
-                # Если улетели выше +20%, гарантируем себе как минимум +10%
-                if max_pnl_pct >= 0.20 and pnl_pct <= 0.10:
-                    tracker.close_position(mint, current_price, "Lock Profit (+10%)")
+                safe_lock = max(0.10, min_fee_pct + 0.05) # Минимум +5% чистыми
+                if max_pnl_pct >= safe_lock + 0.15 and pnl_pct <= safe_lock:
+                    tracker.close_position(mint, current_price, f"Lock Profit (+{safe_lock*100:.1f}%)")
                     continue
                 
-                # Если улетели выше +10%, переводим в безубыток (+2%)
-                if max_pnl_pct >= 0.10 and pnl_pct <= 0.02:
-                    tracker.close_position(mint, current_price, "Break-even (+2%)")
+                # Перевод в безубыток должен покрывать ВСЕ комиссии (+1% чистыми)
+                safe_be = min_fee_pct + 0.01
+                if max_pnl_pct >= safe_be + 0.10 and pnl_pct <= safe_be:
+                    tracker.close_position(mint, current_price, f"Break-even (+{safe_be*100:.1f}%)")
                     continue
 
-                # 2. Агрессивный Trailing Stop (Зажимаем прибыль к пику)
+                # 3. СВЕРХПЛОТНЫЙ ПАРАБОЛИЧЕСКИЙ ТРЕЙЛИНГ (Micro-Trailing)
                 drop_from_max = (position.max_price_usd - current_price) / position.max_price_usd
                 
-                if max_pnl_pct >= 0.30: # Если набрали жир (>30%)
-                    if drop_from_max >= 0.10: # Ждем отката не более 10% от пика
-                        tracker.close_position(mint, current_price, "Trailing Stop (10% drop)")
-                        continue
-                elif max_pnl_pct >= 0.15: # Если только разогнались (>15%)
-                    if drop_from_max >= 0.05: # Ждем отката не более 5% от пика
-                        tracker.close_position(mint, current_price, "Trailing Stop (5% drop)")
-                        continue
+                if position.amount_usd < 15.0:
+                    # Агрессивное сужение для микро-депозитов (All in, All out)
+                    if max_pnl_pct >= 0.80:
+                        if drop_from_max >= 0.04: # Сжимаем до 4%
+                            tracker.close_position(mint, current_price, "Micro-Trailing (4% drop)")
+                            continue
+                    elif max_pnl_pct >= 0.40:
+                        if drop_from_max >= 0.07: # Сжимаем до 7%
+                            tracker.close_position(mint, current_price, "Micro-Trailing (7% drop)")
+                            continue
+                    elif max_pnl_pct >= 0.20:
+                        if drop_from_max >= 0.12: # Разрешаем откат 12%
+                            tracker.close_position(mint, current_price, "Micro-Trailing (12% drop)")
+                            continue
+                else:
+                    # Стандартный трейлинг для крупных позиций
+                    if max_pnl_pct >= 0.30: # Если набрали жир (>30%)
+                        if drop_from_max >= 0.10: # Ждем отката не более 10% от пика
+                            tracker.close_position(mint, current_price, "Trailing Stop (10% drop)")
+                            continue
+                    elif max_pnl_pct >= 0.15: # Если только разогнались (>15%)
+                        if drop_from_max >= 0.05: # Ждем отката не более 5% от пика
+                            tracker.close_position(mint, current_price, "Trailing Stop (5% drop)")
+                            continue
 
                 # 3. Жесткий Take Profit (Лечим жадность)
                 # На щиткоинах ждать +50% - это верная смерть. Забираем деньги на +35%
@@ -224,6 +245,7 @@ async def fomo_signal_loop(analyzer, tracker):
 
 async def async_main():
     from pump_fun_sniper import PumpFunSniper
+    from trade_logger import trade_logger
     
     analyzer = Analyzer()
     tracker = PaperTracker()
@@ -233,11 +255,11 @@ async def async_main():
     await asyncio.gather(
         position_manager_loop(analyzer, tracker),
         scanner_loop(analyzer, tracker),
-        # birth_wss_loop(analyzer, tracker), # Disabled due to 403
         copy_trader.listen(),
         fomo_signal_loop(analyzer, tracker),
         fomo_loop(analyzer, tracker),
-        sniper.connect_and_listen() # <-- ЗАПУСК СНАЙПЕРА
+        sniper.connect_and_listen(),
+        trade_logger.post_trade_watcher_loop()
     )
 
 def run_background_bot():
