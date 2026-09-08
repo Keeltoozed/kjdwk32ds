@@ -18,6 +18,8 @@ class VirtualPosition(BaseModel):
     current_price_usd: float = 0.0 # Для отображения в интерфейсе
     current_pnl_usd: float = 0.0 # Для отображения в интерфейсе
     exit_reason: str = "" # Причина выхода
+    ml_features: dict = {} # Фичи, по которым ИИ принял решение
+    ml_confidence: float = 0.0 # Уверенность ИИ (0-100)
 
 class PaperTracker:
     def __init__(self):
@@ -50,7 +52,7 @@ class PaperTracker:
         total_pnl = sum(pos.pnl_usd for pos in self.positions.values() if pos.status == "closed")
         return max(config.INITIAL_BALANCE_USD + total_pnl, 10.0)
 
-    def add_position(self, symbol, mint, entry_price, amount_usd=5.0):
+    def add_position(self, symbol, mint, entry_price, amount_usd=5.0, ml_features=None, ml_confidence=0.0):
         # БЛОКИРОВКА ПОВТОРНОГО ВХОДА:
         # Если мы уже торговали этой монетой (даже если она closed), мы в нее больше не лезем!
         if mint in self.positions:
@@ -76,10 +78,34 @@ class PaperTracker:
             pos.status = "closed"
             pos.exit_price_usd = exit_price
             pos.exit_reason = reason
-            pnl_pct = (exit_price - pos.entry_price_usd) / pos.entry_price_usd
+            pnl_pct = (exit_price - pos.entry_price_usd) / pos.entry_price_usd if pos.entry_price_usd > 0 else 0
             pos.pnl_usd = pos.amount_usd * pnl_pct
             self.save_portfolio()
             print(f"🔒 PAPER SELL: {pos.symbol} ({mint}) | Reason: {reason} | PnL: {pnl_pct*100:.2f}% (${pos.pnl_usd:.2f})")
+            
+            # === СОХРАНЕНИЕ ОПЫТА ДЛЯ ИИ (Continuous Learning) ===
+            try:
+                import sqlite3
+                import json
+                with sqlite3.connect("trade_journal.db") as conn:
+                    conn.execute("""
+                        CREATE TABLE IF NOT EXISTS trades (
+                            mint TEXT PRIMARY KEY,
+                            entry_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            features TEXT,
+                            confidence REAL,
+                            pnl REAL DEFAULT NULL,
+                            exit_reason TEXT DEFAULT NULL,
+                            status TEXT DEFAULT 'OPEN'
+                        )
+                    """)
+                    conn.execute(
+                        "INSERT OR REPLACE INTO trades (mint, features, confidence, pnl, exit_reason, status) VALUES (?, ?, ?, ?, ?, 'CLOSED')",
+                        (pos.mint, json.dumps(pos.ml_features), pos.ml_confidence, pnl_pct, pos.exit_reason)
+                    )
+                print(f"🧠 Сделка {pos.symbol} сохранена в БД опыта (PnL: {pnl_pct*100:.2f}%)")
+            except Exception as e:
+                print(f"⚠️ Ошибка сохранения опыта: {e}")
 
     def can_open_new_position(self, max_concurrent: int) -> bool:
         return len(self.get_open_positions()) < max_concurrent

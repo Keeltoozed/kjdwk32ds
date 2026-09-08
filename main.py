@@ -46,8 +46,14 @@ async def position_manager_loop(analyzer, tracker):
                 tracker.save_portfolio()
                 
                 # Логика выхода
-                # 1. Break-even Stop (БЕЗУБЫТОК). 
-                if max_pnl_pct >= 0.50 and pnl_pct <= 0.10:
+                # 1. Take Profit (ЗАБИРАЕМ ПРИБЫЛЬ)
+                if pnl_pct >= 0.50:
+                    tracker.close_position(mint, current_price, "Take Profit (+50%)")
+                    continue
+                    
+                # 2. Break-even Stop (БЕЗУБЫТОК)
+                # Если улетали на +40%, но сейчас упали до +10%, выходим в небольшой плюс, чтобы не уйти в минус
+                if max_pnl_pct >= 0.40 and pnl_pct <= 0.10:
                     tracker.close_position(mint, current_price, "Break-even Stop (+10%)")
                     continue
                     

@@ -171,7 +171,13 @@ class BondingCurveTracker:
                                     
                                     if position_size >= 4.0:
                                         print(f"🚀 PAPER СНАЙП PUMP.FUN РАКЕТЫ {self.symbol} ({self.mint})! Входим на {position_size}$")
-                                        tracker.add_position(self.symbol, self.mint, actual_price, position_size)
+                                        ml_features_dict = {}
+                                        if 'df' in locals():
+                                            for k, v in df.iloc[-1].to_dict().items():
+                                                if isinstance(v, pd.Timestamp): ml_features_dict[k] = str(v)
+                                                elif hasattr(v, 'item'): ml_features_dict[k] = v.item() # numpy to python type
+                                                else: ml_features_dict[k] = v
+                                        tracker.add_position(self.symbol, self.mint, actual_price, position_size, ml_features=ml_features_dict, ml_confidence=conf)
                                         
                                         # Коллбек для ExitManager (закрываем бумажную сделку)
                                         async def panic_sell_callback(token_mint, reason):
