@@ -219,7 +219,8 @@ async def async_main():
         # birth_wss_loop(analyzer, tracker), # Disabled due to 403
         copy_trader.listen(),
         fomo_signal_loop(analyzer, tracker),
-        fomo_loop(analyzer, tracker)
+        fomo_loop(analyzer, tracker),
+        sniper.connect_and_listen() # <-- ЗАПУСК СНАЙПЕРА
     )
 
 def run_background_bot():
