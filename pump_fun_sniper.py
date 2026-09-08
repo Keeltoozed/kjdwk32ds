@@ -270,7 +270,20 @@ async def main():
     # Запускаем dummy-сервер для Render в фоне
     await start_web_server()
     
-    # Запускаем основной луп снайпера
+    # === ГИБРИДНЫЙ РЕЖИМ (СНАЙПЕР + ПАРСЕР СТАРЫХ МОНЕТ) ===
+    from main import scanner_loop, position_manager_loop
+    from analyzer import Analyzer
+    from tracker import PaperTracker
+    
+    analyzer = Analyzer()
+    tracker = PaperTracker()
+    
+    # Запускаем фоновые задачи для старых монет
+    print("🧬 [HYBRID MODE] Запуск сканера DexScreener...")
+    asyncio.create_task(scanner_loop(analyzer, tracker))
+    asyncio.create_task(position_manager_loop(analyzer, tracker))
+    
+    # Запускаем основной луп снайпера (новые монеты по WSS)
     sniper = PumpFunSniper()
     await sniper.connect_and_listen()
 

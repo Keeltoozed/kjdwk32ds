@@ -41,8 +41,6 @@ TRAILING_DISTANCE_PCT = 0.05   # Держим стоп на 5% ниже пика
 AI_MODE = "degen" # "sniper" (очень редко, только 90% уверенности) или "degen" (частые сделки, от 60% уверенности)
 MIN_LIQUIDITY = 15000  # Увеличили до 15k! При ликвидности 3k любой чих обваливает цену на 30%, пробивая наш стоп-лосс.
 MAX_LIQUIDITY = 50000000 
-MIN_AGE_MINUTES = 5   # Ищем монеты от 5 минут (раньше было 40 минут, бот пропускал весь рост!)
-MAX_AGE_MINUTES = 129600
 
 # AI Аналитика
 GEMINI_API_KEY = "AQ.Ab8RN6Ju77t6DI8AYru7TGxuPuG_0WOcqHZqq1OBsDAwHtoJxg" # Получить бесплатно на https://aistudio.google.com/
