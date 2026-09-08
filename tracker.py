@@ -94,14 +94,19 @@ class PaperTracker:
             pos.exit_reason = reason
             
             # РЕАЛЬНЫЙ РАСЧЕТ PnL С УЧЕТОМ КОМИССИЙ (1% вход, 1% выход + 0.003 SOL сеть)
-            # В usd-эквиваленте сеть ~ $0.45
-            real_entry = pos.entry_price_usd * 1.01
-            real_exit = exit_price * 0.99
+            real_entry_price = pos.entry_price_usd * 1.01
+            real_exit_price = exit_price * 0.99
+            
+            # Считаем изменение цены актива (процент)
+            price_diff_pct = (real_exit_price - real_entry_price) / real_entry_price if real_entry_price > 0 else 0
+            
+            # Считаем итоговый PnL в долларах с вычетом сетевой комиссии (Priority Fee ~ $0.45)
             priority_fee_usd = 0.45
+            pos.pnl_usd = (pos.amount_usd * price_diff_pct) - priority_fee_usd
             
-            pnl_pct = (real_exit - real_entry - priority_fee_usd) / real_entry if real_entry > 0 else 0
+            # Реальный итоговый процент инвестиции
+            pnl_pct = pos.pnl_usd / pos.amount_usd if pos.amount_usd > 0 else 0
             
-            pos.pnl_usd = pos.amount_usd * pnl_pct
             self.save_portfolio()
             print(f"🔒 PAPER SELL: {pos.symbol} ({mint}) | Reason: {reason} | PnL: {pnl_pct*100:.2f}% (${pos.pnl_usd:.2f})")
             
