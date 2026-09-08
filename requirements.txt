@@ -11,3 +11,4 @@ websockets==11.0.3
 xgboost
 scikit-learn
 joblib
+supabase

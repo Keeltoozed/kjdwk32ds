@@ -20,6 +20,7 @@ class VirtualPosition(BaseModel):
     exit_reason: str = "" # Причина выхода
     ml_features: dict = {} # Фичи, по которым ИИ принял решение
     ml_confidence: float = 0.0 # Уверенность ИИ (0-100)
+    is_mature: bool = False # Флаг для разделения логики (Swing vs Scalp)
 
 class PaperTracker:
     def __init__(self):
@@ -36,6 +37,8 @@ class PaperTracker:
                         # Поддержка старых записей без max_price_usd
                         if "max_price_usd" not in v:
                             v["max_price_usd"] = v["entry_price_usd"]
+                        if "is_mature" not in v:
+                            v["is_mature"] = False
                         self.positions[k] = VirtualPosition(**v)
             except Exception as e:
                 print(f"Error loading portfolio: {e}")
@@ -52,7 +55,7 @@ class PaperTracker:
         total_pnl = sum(pos.pnl_usd for pos in self.positions.values() if pos.status == "closed")
         return max(config.INITIAL_BALANCE_USD + total_pnl, 10.0)
 
-    def add_position(self, symbol, mint, entry_price, amount_usd=5.0, ml_features=None, ml_confidence=0.0):
+    def add_position(self, symbol, mint, entry_price, amount_usd=5.0, ml_features=None, ml_confidence=0.0, is_mature=False):
         # БЛОКИРОВКА ПОВТОРНОГО ВХОДА:
         # Если мы уже торговали этой монетой (даже если она closed), мы в нее больше не лезем!
         if mint in self.positions:
@@ -72,17 +75,19 @@ class PaperTracker:
             max_price_usd=entry_price,
             current_price_usd=entry_price,
             ml_features=ml_features_dict,
-            ml_confidence=ml_confidence
+            ml_confidence=ml_confidence,
+            is_mature=is_mature
         )
         self.save_portfolio()
         print(f"📝 PAPER BUY: {symbol} ({mint}) | Amount: ${amount_usd} | Price: ${entry_price}")
         
         # === СОХРАНЕНИЕ В SUPABASE (ENTRY) ===
+        # Сохраняем опыт в базу
         try:
             from trade_logger import TradeLogger
             import asyncio
             logger = TradeLogger()
-            asyncio.create_task(logger.log_entry(mint, ml_features_dict, ml_confidence))
+            asyncio.create_task(logger.log_entry(mint, ml_features_dict, ml_confidence, is_mature))
         except Exception as e:
             print(f"⚠️ Ошибка логирования входа: {e}")
 
@@ -115,7 +120,7 @@ class PaperTracker:
                 from trade_logger import TradeLogger
                 import asyncio
                 logger = TradeLogger()
-                asyncio.create_task(logger.log_exit(pos.mint, pnl_pct * 100, pos.exit_reason))
+                asyncio.create_task(logger.log_exit(pos.mint, pnl_pct * 100, pos.exit_reason, pos.is_mature))
             except Exception as e:
                 print(f"⚠️ Ошибка сохранения опыта: {e}")
 

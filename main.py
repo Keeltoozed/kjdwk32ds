@@ -45,37 +45,54 @@ async def position_manager_loop(analyzer, tracker):
                 position.current_pnl_usd = position.amount_usd * pnl_pct
                 tracker.save_portfolio()
                 
-                # Логика выхода
-                # 1. Take Profit (ЗАБИРАЕМ ПРИБЫЛЬ)
-                if pnl_pct >= 0.50:
-                    tracker.close_position(mint, current_price, "Take Profit (+50%)")
-                    continue
-                    
-                # 2. Break-even Stop (БЕЗУБЫТОК)
-                # Если улетали на +40%, но сейчас упали до +10%, выходим в небольшой плюс, чтобы не уйти в минус
-                if max_pnl_pct >= 0.40 and pnl_pct <= 0.10:
-                    tracker.close_position(mint, current_price, "Break-even Stop (+10%)")
-                    continue
-                    
-                # Динамический Трейлинг Стоп (чтобы ловить иксы и не вылетать на мелких дампах)
-                if max_pnl_pct >= 10.0: # >1000%
-                    dynamic_trailing_dist = 0.50 # 50% откат допустим
-                elif max_pnl_pct >= 3.0: # >300%
-                    dynamic_trailing_dist = 0.40 # 40% откат
-                elif max_pnl_pct >= 1.0: # >100%
-                    dynamic_trailing_dist = 0.30 # 30% откат
-                else:
-                    dynamic_trailing_dist = config.TRAILING_DISTANCE_PCT
+                # === ИНТЕГРАЦИЯ МАТЕМАТИКИ ДЛЯ ЗРЕЛЫХ МОНЕТ (SWING TRADING) ===
+                if getattr(position, "is_mature", False):
+                    from exit_managers import MatureExitManager
+                    mature_exit_reason = MatureExitManager.evaluate_exit(position, current_price)
+                    if mature_exit_reason:
+                        tracker.close_position(mint, current_price, mature_exit_reason)
+                    continue # Если это mature монета, скальперская логика ниже к ней не применяется!
                 
-                # 2. Обычные стопы и тейк-профиты
+                # === ЖЕСТКИЙ RISK MANAGEMENT (CRO LEVEL) ===
+                
+                # 1. Защита от потери профита (Lock Profit - Несгораемые зоны)
+                # Если улетели выше +20%, гарантируем себе как минимум +10%
+                if max_pnl_pct >= 0.20 and pnl_pct <= 0.10:
+                    tracker.close_position(mint, current_price, "Lock Profit (+10%)")
+                    continue
+                
+                # Если улетели выше +10%, переводим в безубыток (+2%)
+                if max_pnl_pct >= 0.10 and pnl_pct <= 0.02:
+                    tracker.close_position(mint, current_price, "Break-even (+2%)")
+                    continue
+
+                # 2. Агрессивный Trailing Stop (Зажимаем прибыль к пику)
+                drop_from_max = (position.max_price_usd - current_price) / position.max_price_usd
+                
+                if max_pnl_pct >= 0.30: # Если набрали жир (>30%)
+                    if drop_from_max >= 0.10: # Ждем отката не более 10% от пика
+                        tracker.close_position(mint, current_price, "Trailing Stop (10% drop)")
+                        continue
+                elif max_pnl_pct >= 0.15: # Если только разогнались (>15%)
+                    if drop_from_max >= 0.05: # Ждем отката не более 5% от пика
+                        tracker.close_position(mint, current_price, "Trailing Stop (5% drop)")
+                        continue
+
+                # 3. Жесткий Take Profit (Лечим жадность)
+                # На щиткоинах ждать +50% - это верная смерть. Забираем деньги на +35%
+                if pnl_pct >= 0.35:
+                    tracker.close_position(mint, current_price, "Take Profit (+35%)")
+                    continue
+                
+                # 4. Хард Stop Loss (Не ждем чуда)
                 if pnl_pct <= config.STOP_LOSS_PCT:
-                    tracker.close_position(mint, current_price, "Stop Loss")
-                elif minutes_held >= config.TIME_EXIT_MINUTES and pnl_pct < config.TIME_EXIT_PROFIT_REQ:
-                    tracker.close_position(mint, current_price, "Time-based Exit")
-                elif max_pnl_pct >= config.TRAILING_ACTIVATION_PCT:
-                    drop_from_max = (position.max_price_usd - current_price) / position.max_price_usd
-                    if drop_from_max >= dynamic_trailing_dist:
-                        tracker.close_position(mint, current_price, f"Trailing Stop (-{dynamic_trailing_dist*100:.0f}%)")
+                    tracker.close_position(mint, current_price, "Hard Stop Loss")
+                    continue
+                    
+                # 5. Time Exit (Капитал не должен морозиться в тухлых монетах)
+                if minutes_held >= config.TIME_EXIT_MINUTES and pnl_pct < config.TIME_EXIT_PROFIT_REQ:
+                    tracker.close_position(mint, current_price, "Time-based Exit (Dead Coin)")
+                    continue
         except Exception as e:
             print(f"Ошибка в менеджере позиций: {e}")
         await asyncio.sleep(3) # ПРОБЛЕМА РЕШЕНА: Проверяем стопы каждые 3 секунды вместо 10, чтобы избежать сильных проскальзываний на дампах!
@@ -160,7 +177,7 @@ async def scanner_loop(analyzer, tracker):
                                 print(f"🚫 Отказ (Ликвидность): Недостаточно ликвидности (${liq_usd}) для безопасного входа.")
                                 continue
                                 
-                            tracker.add_position(actual_symbol, mint, entry_price, position_size)
+                            tracker.add_position(actual_symbol, mint, entry_price, position_size, is_mature=True)
                             break # Ждем следующего цикла после покупки
                     
                     # Пауза между монетами

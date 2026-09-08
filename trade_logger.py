@@ -26,24 +26,27 @@ class TradeLogger:
             self._init_db()
 
     def _init_db(self):
-        """Создает таблицу, если ее нет."""
+        """Создает таблицы, если их нет."""
         with sqlite3.connect(self.db_path) as conn:
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS trades (
-                    mint TEXT PRIMARY KEY,
-                    entry_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    features TEXT,
-                    confidence REAL,
-                    pnl REAL DEFAULT NULL,
-                    exit_reason TEXT DEFAULT NULL,
-                    status TEXT DEFAULT 'OPEN'
-                )
-            """)
+            for table in ["trades_pump", "trades_raydium"]:
+                conn.execute(f"""
+                    CREATE TABLE IF NOT EXISTS {table} (
+                        mint TEXT PRIMARY KEY,
+                        entry_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        features TEXT,
+                        confidence REAL,
+                        pnl REAL DEFAULT NULL,
+                        exit_reason TEXT DEFAULT NULL,
+                        status TEXT DEFAULT 'OPEN'
+                    )
+                """)
 
-    async def log_entry(self, mint: str, features: dict, confidence: float):
+    async def log_entry(self, mint: str, features: dict, confidence: float, is_mature: bool = False):
         """
         Асинхронная запись входа в сделку. Не блокирует event loop.
         """
+        table_name = "trades_raydium" if is_mature else "trades_pump"
+        
         def _insert():
             if self.use_supabase:
                 data = {
@@ -53,20 +56,22 @@ class TradeLogger:
                     "status": "OPEN",
                     "entry_time": datetime.utcnow().isoformat()
                 }
-                self.supabase.table("trades").upsert(data).execute()
+                self.supabase.table(table_name).upsert(data).execute()
             else:
                 with sqlite3.connect(self.db_path) as conn:
                     conn.execute(
-                        "INSERT OR REPLACE INTO trades (mint, features, confidence) VALUES (?, ?, ?)",
+                        f"INSERT OR REPLACE INTO {table_name} (mint, features, confidence) VALUES (?, ?, ?)",
                         (mint, json.dumps(features), confidence)
                     )
         await asyncio.to_thread(_insert)
-        print(f"🧠 [TradeLogger] Записан опыт входа для {mint} (Conf: {confidence}%)")
+        print(f"🧠 [TradeLogger] Записан опыт входа для {mint} (Conf: {confidence}%) в {table_name}")
 
-    async def log_exit(self, mint: str, pnl_pct: float, exit_reason: str):
+    async def log_exit(self, mint: str, pnl_pct: float, exit_reason: str, is_mature: bool = False):
         """
         Асинхронное обновление сделки после выхода.
         """
+        table_name = "trades_raydium" if is_mature else "trades_pump"
+        
         def _update():
             if self.use_supabase:
                 data = {
@@ -74,15 +79,15 @@ class TradeLogger:
                     "exit_reason": exit_reason,
                     "status": "CLOSED"
                 }
-                self.supabase.table("trades").update(data).eq("mint", mint).execute()
+                self.supabase.table(table_name).update(data).eq("mint", mint).execute()
             else:
                 with sqlite3.connect(self.db_path) as conn:
                     conn.execute(
-                        "UPDATE trades SET pnl = ?, exit_reason = ?, status = 'CLOSED' WHERE mint = ?",
+                        f"UPDATE {table_name} SET pnl = ?, exit_reason = ?, status = 'CLOSED' WHERE mint = ?",
                         (pnl_pct, exit_reason, mint)
                     )
         await asyncio.to_thread(_update)
-        print(f"🧠 [TradeLogger] Опыт закрыт для {mint}. PnL: {pnl_pct}% | Причина: {exit_reason}")
+        print(f"🧠 [TradeLogger] Опыт закрыт для {mint}. PnL: {pnl_pct}% | {table_name}")
 
 # Глобальный инстанс для использования в проекте
 trade_logger = TradeLogger()
