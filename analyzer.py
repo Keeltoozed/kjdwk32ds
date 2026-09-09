@@ -259,7 +259,7 @@ class Analyzer:
         prob = model.predict_proba(features)[0][1]
         conf = prob * 100
         print(f"🤖 XGBoost [DEX Poller]: {mint} | Score: {conf:.1f}%")
-        import config; threshold = 90.0 if getattr(config, "AI_MODE", "sniper") == "sniper" else 80.0; return conf >= threshold
+        import config; threshold = 75.0 if getattr(config, "AI_MODE", "sniper") == "sniper" else 65.0; return conf >= threshold
 
     async def analyze_token_raydium(self, mint: str) -> bool:
         # Безлимитный режим: используем ТОЛЬКО данные DexScreener
@@ -304,7 +304,7 @@ class Analyzer:
             prob = model.predict_proba(df)[0][1]
             conf = prob * 100
             print(f"🧠 Raydium XGBoost (Безлимит): {mint} | Score: {conf:.1f}%")
-            import config; threshold = 90.0 if getattr(config, "AI_MODE", "sniper") == "sniper" else 80.0
+            import config; threshold = 75.0 if getattr(config, "AI_MODE", "sniper") == "sniper" else 65.0
             
             is_buy = conf >= threshold
             
