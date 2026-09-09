@@ -259,7 +259,7 @@ class Analyzer:
         prob = model.predict_proba(features)[0][1]
         conf = prob * 100
         print(f"🤖 XGBoost [DEX Poller]: {mint} | Score: {conf:.1f}%")
-        import config; threshold = 90.0 if getattr(config, "AI_MODE", "sniper") == "sniper" else 60.0; return conf >= threshold
+        import config; threshold = 90.0 if getattr(config, "AI_MODE", "sniper") == "sniper" else 80.0; return conf >= threshold
 
     async def analyze_token_raydium(self, mint: str) -> bool:
         # Безлимитный режим: используем ТОЛЬКО данные DexScreener
@@ -304,7 +304,27 @@ class Analyzer:
             prob = model.predict_proba(df)[0][1]
             conf = prob * 100
             print(f"🧠 Raydium XGBoost (Безлимит): {mint} | Score: {conf:.1f}%")
-            import config; threshold = 90.0 if getattr(config, "AI_MODE", "sniper") == "sniper" else 60.0; return conf >= threshold
+            import config; threshold = 90.0 if getattr(config, "AI_MODE", "sniper") == "sniper" else 80.0
+            
+            is_buy = conf >= threshold
+            
+            if not is_buy:
+                try:
+                    from shadow_tracker import ShadowTracker
+                    shadow = ShadowTracker()
+                    price = float(pair_data.get("priceUsd", 0))
+                    # Пишем Raydium FOMO-монеты в ту же таблицу shadow_log для дальнейшего анализа
+                    shadow.log_rejection(
+                        mint=mint,
+                        reason=f"FOMO XGBoost low score: {conf:.1f}%",
+                        score=conf,
+                        price=price,
+                        features=df.iloc[0].to_dict()
+                    )
+                except Exception as e:
+                    print(f"Ошибка записи в ShadowTracker (Raydium): {e}")
+                    
+            return is_buy
         except Exception as e:
             return False
 

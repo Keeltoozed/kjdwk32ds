@@ -10,10 +10,7 @@ class MatureExitManager:
         max_pnl_pct = (position.max_price_usd - position.entry_price_usd) / position.entry_price_usd
         drop_from_max = (position.max_price_usd - current_price) / position.max_price_usd
 
-        # 1. Macro Take Profit (Свинг-цели)
-        # На зрелой ликвидности мы можем ждать х2-х3
-        if pnl_pct >= 2.0: # +200%
-            return "Swing Take Profit (+200%)"
+
 
         # 2. Широкий Trailing Stop (Защита иксов)
         if max_pnl_pct >= 1.0: # Если сделали >100%
@@ -33,8 +30,8 @@ class MatureExitManager:
         if max_pnl_pct >= 0.40 and pnl_pct <= safe_be:
             return f"Swing Break-even (+{safe_be*100:.1f}%)"
 
-        # 4. Wide Stop Loss (Пересиживаем обычный рыночный шум)
-        if pnl_pct <= -0.25: # -25% вместо скальперских -15%
-            return "Swing Stop Loss (-25%)"
+        # 4. Fee-Adjusted Stop Loss (Упреждающий стоп)
+        if pnl_pct <= -0.15: # Триггер на -15%, чтобы с проскальзыванием вышло около -20%
+            return "Swing Stop Loss (-15%)"
 
         return "" # Продолжаем держать

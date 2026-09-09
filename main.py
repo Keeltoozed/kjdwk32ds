@@ -84,7 +84,7 @@ async def position_manager_loop(analyzer, tracker):
                         if drop_from_max >= 0.07: # Сжимаем до 7%
                             tracker.close_position(mint, current_price, "Micro-Trailing (7% drop)")
                             continue
-                    elif max_pnl_pct >= 0.20:
+                    elif max_pnl_pct >= 0.15: # Активируем трейлинг только после +15%
                         if drop_from_max >= 0.12: # Разрешаем откат 12%
                             tracker.close_position(mint, current_price, "Micro-Trailing (12% drop)")
                             continue
@@ -98,12 +98,6 @@ async def position_manager_loop(analyzer, tracker):
                         if drop_from_max >= 0.05: # Ждем отката не более 5% от пика
                             tracker.close_position(mint, current_price, "Trailing Stop (5% drop)")
                             continue
-
-                # 3. Жесткий Take Profit (Лечим жадность)
-                # На щиткоинах ждать +50% - это верная смерть. Забираем деньги на +35%
-                if pnl_pct >= 0.35:
-                    tracker.close_position(mint, current_price, "Take Profit (+35%)")
-                    continue
                 
                 # 4. Хард Stop Loss (Не ждем чуда)
                 if pnl_pct <= config.STOP_LOSS_PCT:

@@ -25,7 +25,7 @@ PAPER_PORTFOLIO_FILE = "portfolio.json"
 INITIAL_BALANCE_USD = 20.0    # Стартовый капитал
 REINVEST_PERCENT = 10.0       # Процент от капитала на одну сделку
 VIRTUAL_POSITION_SIZE_USD = 4.0 # (Устарело) базовый размер сделки
-MAX_CONCURRENT_POSITIONS = 15 # Увеличили макс. количество одновременных сделок (было 5)
+MAX_CONCURRENT_POSITIONS = 5  # Режим Снайпера: максимум 5 сделок одновременно
 
 # Risk Management
 MAX_DAILY_LOSS_USD = 10.0 # Глобальный Kill-Switch. Если убыток за сегодня > 10$, бот останавливается
@@ -38,7 +38,7 @@ TRAILING_ACTIVATION_PCT = 0.15 # Включаем трейлинг уже при
 TRAILING_DISTANCE_PCT = 0.05   # Держим стоп на 5% ниже пика. Если выросли на 15%, стоп сдвигается в +10% (Безубыток)
 
 # Filtering
-AI_MODE = "degen" # "sniper" (очень редко, только 90% уверенности) или "degen" (частые сделки, от 60% уверенности)
+AI_MODE = "sniper" # "sniper" (строго 80-90% уверенности) или "degen"
 MIN_LIQUIDITY = 15000  # Увеличили до 15k! При ликвидности 3k любой чих обваливает цену на 30%, пробивая наш стоп-лосс.
 MAX_LIQUIDITY = 50000000 
 
