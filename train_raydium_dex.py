@@ -9,44 +9,45 @@ def main():
     n_samples = 10000
 
     # Генерируем синтетические данные на основе рыночной логики
-    # Признаки: price_change_m5, volume_m5, buys_m5, sells_m5, liquidity, fdv
-    price_change_m5 = np.random.uniform(-20, 50, n_samples)
-    volume_m5 = np.random.uniform(100, 500000, n_samples)
-    buys_m5 = np.random.randint(0, 500, n_samples)
-    sells_m5 = np.random.randint(0, 500, n_samples)
-    liquidity = np.random.uniform(1000, 1000000, n_samples)
-    fdv = np.random.uniform(10000, 5000000, n_samples)
+    # Признаки: price_change_h24, volume_h24, buys_h24, sells_h24, liquidity, fdv
+    price_change_h24 = np.random.uniform(-50, 500, n_samples)
+    volume_h24 = np.random.uniform(5000, 5000000, n_samples)
+    buys_h24 = np.random.randint(50, 15000, n_samples)
+    sells_h24 = np.random.randint(50, 15000, n_samples)
+    liquidity = np.random.uniform(5000, 2000000, n_samples)
+    fdv = np.random.uniform(10000, 10000000, n_samples)
 
     df = pd.DataFrame({
-        'price_change_m5': price_change_m5,
-        'volume_m5': volume_m5,
-        'buys_m5': buys_m5,
-        'sells_m5': sells_m5,
+        'price_change_h24': price_change_h24,
+        'volume_h24': volume_h24,
+        'buys_h24': buys_h24,
+        'sells_h24': sells_h24,
         'liquidity': liquidity,
         'fdv': fdv
     })
 
-    df['buy_sell_ratio'] = df['buys_m5'] / (df['sells_m5'] + 1)
-    df['vol_to_liq'] = df['volume_m5'] / (df['liquidity'] + 1)
+    df['buy_sell_ratio'] = df['buys_h24'] / (df['sells_h24'] + 1)
+    df['vol_to_liq'] = df['volume_h24'] / (df['liquidity'] + 1)
 
     # Реалистичные правила для генерации паттернов
     # 1. Покупок чуть больше, чем продаж
-    # 2. Объем за 5 минут составляет хотя бы 5% от пула (для $20k пула это $1k объема)
-    # 3. Ликвидность от 10000
-    # 4. Цена в зеленой зоне
-    targets = []
-    for _, row in df.iterrows():
-        if (row['buy_sell_ratio'] >= 1.05 and 
-            row['vol_to_liq'] >= 0.05 and 
-            row['liquidity'] >= 10000 and 
-            row['price_change_m5'] > 0):
-            targets.append(np.random.choice([1, 0], p=[0.7, 0.3]))
-        else:
-            targets.append(np.random.choice([1, 0], p=[0.1, 0.9]))
+    # 2. Объем за 24 часа составляет хотя бы 20% от ликвидности
+    # 3. Ликвидность от 20000
+    target = (
+        (df['buy_sell_ratio'] > 1.1) & 
+        (df['vol_to_liq'] > 0.2) & 
+        (df['liquidity'] > 20000) &
+        (df['price_change_h24'] > 5.0) &
+        (df['buys_h24'] > 200)
+    ).astype(int)
 
-    df['target'] = targets
+    # Добавляем шум (10% случайных инверсий)
+    noise_idx = np.random.choice(df.index, size=int(n_samples * 0.1), replace=False)
+    target.loc[noise_idx] = 1 - target.loc[noise_idx]
+    
+    df['target'] = target
 
-    features = ['price_change_m5', 'volume_m5', 'buys_m5', 'sells_m5', 
+    features = ['price_change_h24', 'volume_h24', 'buys_h24', 'sells_h24', 
                 'liquidity', 'fdv', 'buy_sell_ratio', 'vol_to_liq']
                 
     X = df[features]

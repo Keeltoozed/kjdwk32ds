@@ -271,26 +271,26 @@ class Analyzer:
         import joblib
         
         # Извлекаем признаки
-        txns_m5 = pair_data.get("txns", {}).get("m5", {})
-        buys_m5 = txns_m5.get("buys", 0)
-        sells_m5 = txns_m5.get("sells", 0)
+        txns_h24 = pair_data.get("txns", {}).get("h24", {})
+        buys_h24 = txns_h24.get("buys", 0)
+        sells_h24 = txns_h24.get("sells", 0)
         
-        volume_m5 = pair_data.get("volume", {}).get("m5", 0)
-        price_change_m5 = pair_data.get("priceChange", {}).get("m5", 0)
+        volume_h24 = pair_data.get("volume", {}).get("h24", 0)
+        price_change_h24 = pair_data.get("priceChange", {}).get("h24", 0)
         
         liquidity = pair_data.get("liquidity", {}).get("usd", 0)
         fdv = pair_data.get("fdv", 0)
         
-        buy_sell_ratio = buys_m5 / (sells_m5 + 1)
-        vol_to_liq = volume_m5 / (liquidity + 1)
+        buy_sell_ratio = buys_h24 / (sells_h24 + 1)
+        vol_to_liq = volume_h24 / (liquidity + 1)
         
         # Формируем DataFrame для XGBoost
-        features = ['price_change_m5', 'volume_m5', 'buys_m5', 'sells_m5', 'liquidity', 'fdv', 'buy_sell_ratio', 'vol_to_liq']
+        features = ['price_change_h24', 'volume_h24', 'buys_h24', 'sells_h24', 'liquidity', 'fdv', 'buy_sell_ratio', 'vol_to_liq']
         df = pd.DataFrame([{
-            'price_change_m5': price_change_m5,
-            'volume_m5': volume_m5,
-            'buys_m5': buys_m5,
-            'sells_m5': sells_m5,
+            'price_change_h24': price_change_h24,
+            'volume_h24': volume_h24,
+            'buys_h24': buys_h24,
+            'sells_h24': sells_h24,
             'liquidity': liquidity,
             'fdv': fdv,
             'buy_sell_ratio': buy_sell_ratio,

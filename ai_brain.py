@@ -268,7 +268,7 @@ class AIBrainML:
         reasons = []
         is_approved = False
         
-        if score > 75:  # Порог уверенности
+        if score >= 70:  # Порог уверенности снижен до 70% для микро-депозитов
             is_approved = True
             reasons.append(f"✅ XGBoost уверен на {score}% в успехе (Pump -> Raydium).")
         else:
