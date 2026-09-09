@@ -46,14 +46,24 @@ class ShadowTracker:
     def log_rejection(self, mint: str, reason: str, score: float, price: float, features: dict):
         """Хук для сохранения отбракованной монеты"""
         try:
+            import numpy as np
+            native_score = float(score)
+            native_price = float(price)
+            native_features = {}
+            for k, v in features.items():
+                if isinstance(v, np.generic):
+                    native_features[k] = v.item()
+                else:
+                    native_features[k] = v
+
             if self.use_supabase:
                 data = {
                     "mint": mint,
                     "rejected_at": datetime.utcnow().isoformat(),
                     "reason": reason,
-                    "score": score,
-                    "price_at_rejection": price,
-                    "features": json.dumps(features),
+                    "score": native_score,
+                    "price_at_rejection": native_price,
+                    "features": json.dumps(native_features),
                     "ath_price": 0.0,
                     "hypothetical_pnl": 0.0,
                     "check_1h_done": 0,
@@ -70,11 +80,11 @@ class ShadowTracker:
                         ) VALUES (?, ?, ?, ?, ?, ?)
                     ''', (
                         mint, 
-                        datetime.now().isoformat(), 
+                        datetime.utcnow().isoformat(), 
                         reason, 
-                        score, 
-                        price, 
-                        json.dumps(features)
+                        native_score, 
+                        native_price, 
+                        json.dumps(native_features)
                     ))
             print(f"👻 [Shadow Logger] Записан отказ: {mint} | Причина: {reason}")
         except Exception as e:
