@@ -237,6 +237,18 @@ async def fomo_signal_loop(analyzer, tracker):
             print(f"Ошибка в fomo_signal_loop: {e}")
         await asyncio.sleep(1) # Проверяем файл каждую секунду для мгновенной реакции
 
+async def rugpull_feeder_loop():
+    print("🧹 Запуск автоматического сборщика скам-рагпулов (раз в 6 часов)...")
+    # Ждем 10 секунд перед первым запуском, чтобы не грузить систему на старте
+    await asyncio.sleep(10)
+    while True:
+        try:
+            import rugpull_feeder
+            rugpull_feeder.feed_rugs_and_retrain()
+        except Exception as e:
+            print(f"Ошибка в rugpull_feeder: {e}")
+        await asyncio.sleep(6 * 60 * 60)  # Спим 6 часов
+
 async def async_main():
     from pump_fun_sniper import PumpFunSniper
     from trade_logger import trade_logger
@@ -253,7 +265,8 @@ async def async_main():
         fomo_signal_loop(analyzer, tracker),
         fomo_loop(analyzer, tracker),
         sniper.connect_and_listen(),
-        trade_logger.post_trade_watcher_loop()
+        trade_logger.post_trade_watcher_loop(),
+        rugpull_feeder_loop()
     )
 
 def run_background_bot():

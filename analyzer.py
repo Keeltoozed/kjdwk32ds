@@ -171,11 +171,17 @@ class Analyzer:
         if not pair_data:
             return False
             
-        # 2. Обязательное наличие соцсетей (без соцсетей 99% токенов мертвы)
+        # 2. Обязательное наличие соцсетей (Proof of Effort: Twitter + Website/TG)
         info = pair_data.get("info", {})
-        has_socials = (info.get("socials") or info.get("websites"))
-        if not has_socials:
-            print(f"🚫 Мусор: У {mint} нет сайтов/соцсетей.")
+        socials = info.get("socials", [])
+        websites = info.get("websites", [])
+        
+        has_twitter = any("twitter" in s.get("type", "").lower() or "x.com" in s.get("url", "").lower() for s in socials)
+        has_tg = any("telegram" in s.get("type", "").lower() or "t.me" in s.get("url", "").lower() for s in socials)
+        has_website = len(websites) > 0
+        
+        if not (has_twitter and (has_website or has_tg)):
+            print(f"🚫 Мусор: У {mint} нет связки (Twitter + Web/TG).")
             return False
             
         dex_id = pair_data.get("dexId")
@@ -213,7 +219,12 @@ class Analyzer:
         tx_velocity_1m = (txns_m5.get("buys", 0) + txns_m5.get("sells", 0)) / 5.0
         
         info = pair_data.get("info", {})
-        has_socials = 1 if (info.get("socials") or info.get("websites")) else 0
+        socials = info.get("socials", [])
+        websites = info.get("websites", [])
+        has_twitter = any("twitter" in s.get("type", "").lower() or "x.com" in s.get("url", "").lower() for s in socials)
+        has_tg = any("telegram" in s.get("type", "").lower() or "t.me" in s.get("url", "").lower() for s in socials)
+        has_website = len(websites) > 0
+        has_socials = 1 if (has_twitter and (has_website or has_tg)) else 0
         
         # Get holders via Helius RPC
         dev_holding_pct, top_10_holding_pct = 0.0, 0.0
@@ -239,8 +250,21 @@ class Analyzer:
                         top_10_holding_pct = (sum(top_10_amounts) / total_supply) * 100
                         if top_10_amounts:
                             dev_holding_pct = (top_10_amounts[0] / total_supply) * 100 
-        except:
-            pass
+                        
+                        # Защита от Jito-бандлов (Sybil-атаки):
+                        # Скаммеры часто раскидывают одинаковые суммы по свежим кошелькам.
+                        # Если 3 и более кошельков в топе имеют одинаковый баланс (с погрешностью) - это бандл.
+                        if len(top_10_amounts) >= 3:
+                            rounded_amounts = [round(amt, -4) for amt in top_10_amounts if amt > 1000000]
+                            if rounded_amounts:
+                                # Ищем самый частый баланс
+                                from collections import Counter
+                                counts = Counter(rounded_amounts)
+                                if counts.most_common(1)[0][1] >= 3:
+                                    print(f"🚫 Мусор: Обнаружен Jito-бандл (Sybil attack) у {mint}.")
+                                    return False
+        except Exception as e:
+            print(f"Helius RPC error: {e}")
         
         # Funded from CEX (simplified)
         funded_from_cex = 0
