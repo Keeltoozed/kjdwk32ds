@@ -56,11 +56,23 @@ class PaperTracker:
         return max(config.INITIAL_BALANCE_USD + total_pnl, 10.0)
 
     def add_position(self, symbol, mint, entry_price, amount_usd=5.0, ml_features=None, ml_confidence=0.0, is_mature=False):
-        # БЛОКИРОВКА ПОВТОРНОГО ВХОДА:
-        # Если мы уже торговали этой монетой (даже если она closed), мы в нее больше не лезем!
+        # БЛОКИРОВКА ПОВТОРНОГО ВХОДА С УМНЫМ КУЛДАУНОМ
         if mint in self.positions:
-            print(f"⚠️ Попытка повторного входа в {symbol} заблокирована. Мы торгуем щитком только 1 раз.")
-            return
+            pos = self.positions[mint]
+            if pos.status == "open":
+                print(f"⚠️ Позиция {symbol} уже открыта. Отмена повторного входа.")
+                return
+                
+            # Если позиция закрыта, проверяем кулдаун (4 часа)
+            time_since_entry = time.time() - pos.entry_time
+            if time_since_entry < (4 * 3600):
+                print(f"⏳ Кулдаун: {symbol} уже торговался недавно. Ждем еще {(4*3600 - time_since_entry)/3600:.1f}ч перед входом.")
+                return
+                
+            # Если кулдаун прошел, архивируем старую сделку, чтобы не потерять ее из истории PnL
+            archive_key = f"{mint}_old_{int(time.time())}"
+            self.positions[archive_key] = pos
+            print(f"🔄 Кулдаун прошел! Разрешен повторный вход в {symbol} (CTO/Вторая волна).")
 
         print(f"✅ Открыта PAPER сделка: {symbol} по цене ${entry_price}")
         

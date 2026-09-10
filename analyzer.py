@@ -204,6 +204,7 @@ class Analyzer:
             
         pair_data = await self.fetch_token_data(mint)
         if not pair_data:
+            print(f"⚠️ Пропуск: DexScreener не вернул данные для {mint} (Rate Limit или токен слишком новый).")
             return False
             
         # Блэклист тикеров и названий (Защита от фейковых токенов)
@@ -244,12 +245,11 @@ class Analyzer:
         age_minutes = (time.time() * 1000 - created_at) / (1000 * 60) if created_at else 999
         
         if dex_id == "pump" and age_minutes <= 15:
-            return await self.analyze_token_xgboost(mint)
+            return await self.analyze_token_xgboost(mint, pair_data)
         else:
-            return await self.analyze_token_raydium(mint)
+            return await self.analyze_token_raydium(mint, pair_data)
         
-    async def analyze_token_xgboost(self, mint: str) -> bool:
-        pair_data = await self.fetch_token_data(mint)
+    async def analyze_token_xgboost(self, mint: str, pair_data: dict) -> bool:
         if not pair_data:
             return False
             
@@ -339,9 +339,8 @@ class Analyzer:
         print(f"🤖 XGBoost [DEX Poller]: {mint} | Score: {conf:.1f}%")
         import config; threshold = 75.0 if getattr(config, "AI_MODE", "sniper") == "sniper" else 65.0; return conf >= threshold
 
-    async def analyze_token_raydium(self, mint: str) -> bool:
+    async def analyze_token_raydium(self, mint: str, pair_data: dict) -> bool:
         # Безлимитный режим: используем ТОЛЬКО данные DexScreener
-        pair_data = await self.fetch_token_data(mint)
         if not pair_data:
             return False
             
@@ -404,8 +403,8 @@ class Analyzer:
                     
             return is_buy
         except Exception as e:
+            print(f"⚠️ Ошибка XGBoost (analyze_token_raydium) для {mint}: {e}")
             return False
-
     async def analyze_token_ws(self, ws_data: dict) -> bool:
         mint = ws_data.get("mint")
         symbol = ws_data.get("symbol", "UNKNOWN")

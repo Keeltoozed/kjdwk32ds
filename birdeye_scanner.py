@@ -57,6 +57,14 @@ async def birdeye_loop(analyzer: Analyzer, tracker):
                     continue
                 
                 processed_mints.add(mint)
+                
+                # Пропускаем, только если монета уже открыта или в кулдауне (4 часа)
+                if mint in tracker.positions:
+                    pos = tracker.positions[mint]
+                    import time
+                    if pos.status == "open" or (time.time() - pos.entry_time) < (4 * 3600):
+                        continue
+                    
                 if len(tracker.get_open_positions()) >= config.MAX_CONCURRENT_POSITIONS:
                     break
                     
