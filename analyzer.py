@@ -419,7 +419,8 @@ class Analyzer:
         
         # Расчет стартовой ликвидности из кривой Bonding Curve
         v_sol = ws_data.get("vSolInBondingCurve", 30.0)
-        sol_price = 150.0 
+        from sol_price import get_sol_price_sync
+        sol_price = get_sol_price_sync()
         liq_usd = v_sol * sol_price
         
         initial_buy = ws_data.get("initialBuy", 0)

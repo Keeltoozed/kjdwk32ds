@@ -9,6 +9,7 @@ import pandas as pd
 import numpy as np
 import config
 from ai_brain import ask_pro_oracle
+from sol_price import get_sol_price_sync
 
 class TokenTrackerState:
     def __init__(self, mint: str, symbol: str, trader_pubkey: str):
@@ -85,11 +86,11 @@ class PumpFunSniper:
             exit_mgr = ExitManager(config.HELIUS_RPC_URL)
             
             sol_amount = state.trades[-1]["curve_sol"] if state.trades else 0
-            actual_price = (sol_amount / 1_000_000_000.0) * 150.0 
+            actual_price = (sol_amount / 1_000_000_000.0) * get_sol_price_sync() 
             
             capital = tracker.get_total_capital()
             base_position = capital * (config.REINVEST_PERCENT / 100.0)
-            liq_usd = sol_amount * 150.0 
+            liq_usd = sol_amount * get_sol_price_sync() 
             max_allowed = liq_usd * 0.05
             position_size = max(4.0, min(base_position, max_allowed, 100.0))
             
@@ -118,7 +119,7 @@ class PumpFunSniper:
             try:
                 from shadow_tracker import ShadowTracker
                 shadow = ShadowTracker()
-                current_price = (state.trades[-1]["curve_sol"] / 1_000_000_000.0) * 150.0 if state.trades else 0
+                current_price = (state.trades[-1]["curve_sol"] / 1_000_000_000.0) * get_sol_price_sync() if state.trades else 0
                 shadow.log_rejection(
                     mint=state.mint,
                     reason=f"AI Score too low: {state.ai_confidence:.1f}%",

@@ -253,11 +253,21 @@ async def async_main():
     from pump_fun_sniper import PumpFunSniper
     from trade_logger import trade_logger
     from birdeye_scanner import birdeye_loop
+    from sol_price import get_sol_price
+    
+    # Получаем актуальную цену SOL при старте
+    await get_sol_price()
     
     analyzer = Analyzer()
     tracker = PaperTracker()
     copy_trader = CopyTrader(tracker)
     sniper = PumpFunSniper()
+    
+    async def sol_price_updater():
+        """Обновляет цену SOL каждые 5 минут"""
+        while True:
+            await get_sol_price()
+            await asyncio.sleep(300)
     
     await asyncio.gather(
         position_manager_loop(analyzer, tracker),
@@ -268,7 +278,8 @@ async def async_main():
         birdeye_loop(analyzer, tracker),
         sniper.connect_and_listen(),
         trade_logger.post_trade_watcher_loop(),
-        rugpull_feeder_loop()
+        rugpull_feeder_loop(),
+        sol_price_updater()
     )
 
 def run_background_bot():

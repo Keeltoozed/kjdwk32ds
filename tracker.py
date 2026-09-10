@@ -51,9 +51,15 @@ class PaperTracker:
         return {k: v for k, v in self.positions.items() if v.status == "open"}
 
     def get_total_capital(self) -> float:
-        # Считаем изначальный капитал + сумма PnL всех закрытых и открытых позиций
+        # Считаем изначальный капитал + сумма PnL всех закрытых позиций
         total_pnl = sum(pos.pnl_usd for pos in self.positions.values() if pos.status == "closed")
-        return max(config.INITIAL_BALANCE_USD + total_pnl, 10.0)
+        real_capital = config.INITIAL_BALANCE_USD + total_pnl
+        
+        if real_capital < 5.0:
+            print(f"🛑 [KILL SWITCH] Капитал критически низкий: ${real_capital:.2f}. Торговля невозможна!")
+            return 0.0  # Вернуть 0 → position_size будет 0 → сделка не откроется
+        
+        return real_capital
 
     def add_position(self, symbol, mint, entry_price, amount_usd=5.0, ml_features=None, ml_confidence=0.0, is_mature=False):
         # БЛОКИРОВКА ПОВТОРНОГО ВХОДА С УМНЫМ КУЛДАУНОМ

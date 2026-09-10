@@ -52,48 +52,60 @@ async def birdeye_loop(analyzer: Analyzer, tracker):
                 
             trending_mints = await fetch_birdeye_trending()
             
+            # Фильтруем уже обработанные и в кулдауне
+            new_mints = []
             for mint in trending_mints:
                 if mint in processed_mints:
                     continue
-                
                 processed_mints.add(mint)
                 
-                # Пропускаем, только если монета уже открыта или в кулдауне (4 часа)
                 if mint in tracker.positions:
                     pos = tracker.positions[mint]
                     import time
                     if pos.status == "open" or (time.time() - pos.entry_time) < (4 * 3600):
                         continue
-                    
+                
+                new_mints.append(mint)
+            
+            # Анализируем батчами по 5 параллельно (вместо 1 за раз)
+            for i in range(0, len(new_mints), 5):
                 if len(tracker.get_open_positions()) >= config.MAX_CONCURRENT_POSITIONS:
                     break
                     
-                print(f"👀 Найдена Birdeye-ракета: {mint}. Анализируем...")
+                batch = new_mints[i:i+5]
+                print(f"🔍 Birdeye: анализируем батч из {len(batch)} токенов...")
                 
-                is_buy = await analyzer.analyze_token(mint)
+                async def analyze_one(mint):
+                    try:
+                        return mint, await analyzer.analyze_token(mint)
+                    except Exception as e:
+                        print(f"⚠️ Ошибка анализа {mint[:8]}...: {e}")
+                        return mint, False
                 
-                # Защита от Rate Limit (DexScreener API) - ждем 1 сек между токенами
-                await asyncio.sleep(1)
+                results = await asyncio.gather(*[analyze_one(m) for m in batch])
                 
-                if is_buy:
-                    from jupiter import JupiterAPI
-                    import time
-                    price = await JupiterAPI.get_price(mint)
-                    if price > 0:
-                        position_size = config.VIRTUAL_POSITION_SIZE_USD
-                        tracker.add_position(
-                            mint=mint,
-                            symbol=mint[:4],
-                            entry_price=price,
-                            amount_usd=position_size,
-                            ml_confidence=90.0,
-                            features={"source": "Birdeye Trending"},
-                            is_mature=True
-                        )
-                        print(f"✅ Успешный ВХОД (Birdeye) в {mint} по цене ${price:.6f}")
-                        break
+                # Пауза между батчами (защита от Rate Limit)
+                await asyncio.sleep(2)
+                
+                for mint, is_buy in results:
+                    if is_buy and len(tracker.get_open_positions()) < config.MAX_CONCURRENT_POSITIONS:
+                        from jupiter import JupiterAPI
+                        import time
+                        price = await JupiterAPI.get_price(mint)
+                        if price > 0:
+                            position_size = config.VIRTUAL_POSITION_SIZE_USD
+                            tracker.add_position(
+                                mint=mint,
+                                symbol=mint[:4],
+                                entry_price=price,
+                                amount_usd=position_size,
+                                ml_confidence=90.0,
+                                features={"source": "Birdeye Trending"},
+                                is_mature=True
+                            )
+                            print(f"✅ Успешный ВХОД (Birdeye) в {mint} по цене ${price:.6f}")
                         
         except Exception as e:
             print(f"Ошибка в birdeye_loop: {e}")
             
-        await asyncio.sleep(30) # Опрашиваем раз в 30 секунд
+        await asyncio.sleep(15) # Опрашиваем раз в 15 секунд (было 30)

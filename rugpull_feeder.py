@@ -94,8 +94,8 @@ def feed_rugs_and_retrain():
             weights = [10.0 if idx >= len(df_base) else 1.0 for idx in range(len(df_combined))]
                     
             model.fit(X, y, sample_weight=weights)
-            joblib.dump(model, "pump_model.pkl")
-            print("✅ pump_model.pkl обновлен жесткой стеной против рагпулов!")
+            model.save_model("pump_model.json")
+            print("✅ pump_model.json обновлен! Нейросеть стала умнее.")
 
 if __name__ == "__main__":
     feed_rugs_and_retrain()

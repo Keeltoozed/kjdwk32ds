@@ -87,14 +87,14 @@ class ExitManager:
             now = time.time()
             time_diff = now - trade["last_check_time"]
             
-            if time_diff >= 4.0:  # Оцениваем скорость каждые 4 секунды
+            if time_diff >= 15.0:  # Оцениваем скорость каждые 15 секунд (было 4)
                 new_txs = current_tx_count - trade["last_tx_count"]
                 velocity = new_txs / time_diff  # Транзакции в секунду (Tx/s)
                 
                 # Триггер: импульс пропал. 
-                # Ждем 15 сек после старта торга (чтобы не выйти сразу на микро-паузе).
-                # Если после 15 сек скорость падает ниже 0.5 tx/s - выходим.
-                if velocity < 0.5 and (now - trade["start_time"]) > 15.0:
+                # Grace period 30 секунд после входа (было 15) — мемкоины часто "замирают" на старте.
+                # Порог 0.2 tx/s (было 0.5) — даже 1 транзакция за 5 секунд это нормально для мемкоинов.
+                if velocity < 0.2 and (now - trade["start_time"]) > 30.0:
                     print(f"📉 MOMENTUM DEAD ({token_mint}). Tx Velocity dropped to {velocity:.2f} tx/s.")
                     print("💥 Micro-trailing triggered. Initiating Panic Sell!")
                     del self.active_trades[token_mint]

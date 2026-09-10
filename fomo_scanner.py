@@ -44,43 +44,55 @@ async def fomo_loop(analyzer: Analyzer, tracker):
                 
             trending_mints = await fetch_dexscreener_trending()
             
+            # Фильтруем уже обработанные и в кулдауне
+            new_mints = []
             for mint in trending_mints:
                 if mint in processed_mints:
                     continue
                 processed_mints.add(mint)
                 
-                # Пропускаем, только если монета уже открыта или в кулдауне (4 часа)
                 if mint in tracker.positions:
                     pos = tracker.positions[mint]
                     import time
                     if pos.status == "open" or (time.time() - pos.entry_time) < (4 * 3600):
                         continue
-                # Если позиций уже максимум, прерываем проверку
+                
+                new_mints.append(mint)
+            
+            # Анализируем батчами по 5 параллельно
+            for i in range(0, len(new_mints), 5):
                 if len(tracker.get_open_positions()) >= config.MAX_CONCURRENT_POSITIONS:
                     break
                     
-                print(f"👀 Найдена FOMO-монета: {mint}. Анализируем...")
+                batch = new_mints[i:i+5]
+                print(f"🔍 FOMO: анализируем батч из {len(batch)} токенов...")
                 
-                # Запускаем полный анализ через наш ИИ
-                is_buy = await analyzer.analyze_token(mint)
+                async def analyze_one(mint):
+                    try:
+                        return mint, await analyzer.analyze_token(mint)
+                    except Exception as e:
+                        print(f"⚠️ Ошибка анализа {mint[:8]}...: {e}")
+                        return mint, False
                 
-                # Защита от Rate Limit (DexScreener API)
-                await asyncio.sleep(1)
+                results = await asyncio.gather(*[analyze_one(m) for m in batch])
                 
-                if is_buy:
-                    # Получаем РЕАЛЬНОЕ имя и цену монеты перед "покупкой"
-                    pair_data = await analyzer.fetch_token_data(mint)
-                    if pair_data:
-                        actual_price = float(pair_data.get("priceUsd", 0))
-                        actual_symbol = pair_data.get("baseToken", {}).get("symbol", "FOMO")
-                        
-                        if actual_price > 0:
-                            capital = tracker.get_total_capital()
-                            position_size = max(4.0, min(100.0, capital * (config.REINVEST_PERCENT / 100.0)))
-                            print(f"🚀 СНАЙП FOMO-РАКЕТЫ {actual_symbol} ({mint})! Входим на {position_size}$ по цене {actual_price}$")
+                # Пауза между батчами
+                await asyncio.sleep(2)
+                
+                for mint, is_buy in results:
+                    if is_buy and len(tracker.get_open_positions()) < config.MAX_CONCURRENT_POSITIONS:
+                        pair_data = await analyzer.fetch_token_data(mint)
+                        if pair_data:
+                            actual_price = float(pair_data.get("priceUsd", 0))
+                            actual_symbol = pair_data.get("baseToken", {}).get("symbol", "FOMO")
                             
-                            # Добавляем реальную сделку в трекер
-                            tracker.add_position(actual_symbol, mint, actual_price, position_size)
+                            if actual_price > 0:
+                                capital = tracker.get_total_capital()
+                                if capital <= 0:
+                                    break
+                                position_size = max(4.0, min(100.0, capital * (config.REINVEST_PERCENT / 100.0)))
+                                print(f"🚀 СНАЙП FOMO-РАКЕТЫ {actual_symbol} ({mint})! Входим на {position_size}$ по цене {actual_price}$")
+                                tracker.add_position(actual_symbol, mint, actual_price, position_size)
                     
             # Держим память в чистоте
             if len(processed_mints) > 1000:
@@ -89,4 +101,4 @@ async def fomo_loop(analyzer: Analyzer, tracker):
         except Exception as e:
             print(f"Ошибка в FOMO Loop: {e}")
             
-        await asyncio.sleep(60) # Проверяем тренды каждую минуту
+        await asyncio.sleep(20) # Проверяем тренды каждые 20 секунд (было 60)
