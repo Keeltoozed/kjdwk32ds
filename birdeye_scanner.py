@@ -30,7 +30,8 @@ async def fetch_birdeye_trending():
                         if mint and mint not in tokens:
                             tokens.append(mint)
                 else:
-                    print(f"Ошибка Birdeye API: {response.status}")
+                    err_text = await response.text()
+                    print(f"Ошибка Birdeye API: {response.status} - {err_text}")
         except Exception as e:
             print(f"Ошибка подключения к Birdeye: {e}")
             

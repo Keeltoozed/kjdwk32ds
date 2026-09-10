@@ -51,7 +51,7 @@ class Analyzer:
                                 return sorted(sol_pairs, key=lambda x: x.get("liquidity", {}).get("usd", 0), reverse=True)[0]
                     return {}
             except Exception as e:
-                print(f"Dexscreener token data error: {e}")
+                print(f"Dexscreener token data error: {type(e).__name__} {e}")
                 return {}
 
     async def is_clone(self, symbol: str, current_mint: str, current_created_at: int, current_fdv: float) -> bool:
@@ -128,7 +128,7 @@ class Analyzer:
                         return True
                     return False
             except Exception as e:
-                print(f"RugCheck fetch error: {e}")
+                print(f"RugCheck fetch error: {type(e).__name__} {e}")
                 return False
 
     async def get_helius_transaction_metrics(self, mint: str) -> tuple:
