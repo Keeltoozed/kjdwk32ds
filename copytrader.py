@@ -8,7 +8,7 @@ class CopyTrader:
     def __init__(self, tracker, analyzer=None):
         self.tracker = tracker
         self.analyzer = analyzer
-        self.wallets = self._load_wallets()
+        self.wallets = self.load_wallets()
         self.HELIUS_API_KEY = "9efda6f4-fddb-42d3-a2b1-098bbbecd299"
         self.rpc_url = f"https://mainnet.helius-rpc.com/?api-key={self.HELIUS_API_KEY}"
         self.wss_url = f"wss://mainnet.helius-rpc.com/?api-key={self.HELIUS_API_KEY}"
