@@ -5,15 +5,16 @@ import time
 import aiohttp
 
 class CopyTrader:
-    def __init__(self, tracker):
+    def __init__(self, tracker, analyzer=None):
         self.tracker = tracker
+        self.analyzer = analyzer
         self.wallets = self._load_wallets()
         self.HELIUS_API_KEY = "9efda6f4-fddb-42d3-a2b1-098bbbecd299"
         self.rpc_url = f"https://mainnet.helius-rpc.com/?api-key={self.HELIUS_API_KEY}"
         self.wss_url = f"wss://mainnet.helius-rpc.com/?api-key={self.HELIUS_API_KEY}"
         self.processed_sigs = set()
         
-    def _load_wallets(self):
+    def load_wallets(self):
         import os
         wallets = {}
         if os.path.exists("smart_wallets.txt"):
@@ -96,6 +97,17 @@ class CopyTrader:
                     if len(self.tracker.get_open_positions()) >= config.MAX_CONCURRENT_POSITIONS:
                         print("🚫 Лимит позиций. Пропускаем копитрейд.")
                         return
+                        
+                    if self.analyzer:
+                        print(f"🤖 Передаем сигнал кита ИИ на проверку...")
+                        is_safe = await self.analyzer.analyze_token(mint)
+                        if not is_safe:
+                            print(f"🚫 ИИ забраковал токен кита {trader_name}. Спасли твои деньги от рагпула!")
+                            return
+                        else:
+                            print(f"✅ ИИ одобрил токен кита! Покупаем!")
+                    else:
+                        print("⚠️ ИИ не подключен к Копитрейдеру. Покупаем вслепую!")
                         
                     price_usd = await self.get_token_price(mint)
                     symbol = f"COPY_{trader_name[1:5].upper()}"

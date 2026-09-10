@@ -272,7 +272,7 @@ async def async_main():
     
     analyzer = Analyzer()
     tracker = PaperTracker()
-    copy_trader = CopyTrader(tracker)
+    copy_trader = CopyTrader(tracker, analyzer)
     sniper = PumpFunSniper()
     
     async def sol_price_updater():

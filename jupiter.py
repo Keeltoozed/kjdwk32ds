@@ -17,7 +17,7 @@ class JupiterAPI:
                         if price_str:
                             return float(price_str)
             except Exception as e:
-                print(f"Jupiter API Error: {e}")
+                print(f"Jupiter API Error: {type(e).__name__} {e}")
         return 0.0
 
     @staticmethod
