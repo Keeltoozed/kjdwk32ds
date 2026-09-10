@@ -77,8 +77,13 @@ def feed_rugs_and_retrain():
         df_base = pd.read_csv("pump_dataset.csv")
         common_cols = [c for c in df_base.columns if c in df_rugs_features.columns]
         
+        if 'target' not in common_cols:
+            common_cols.append('target')
+            
         if common_cols:
-            df_rugs_pump = df_rugs_features[common_cols + ['target']]
+            # Убираем возможные дубликаты из common_cols
+            common_cols = list(dict.fromkeys(common_cols))
+            df_rugs_pump = df_rugs_features[common_cols]
             df_combined = pd.concat([df_base, df_rugs_pump], ignore_index=True)
             df_combined.to_csv("pump_dataset.csv", index=False)
             
