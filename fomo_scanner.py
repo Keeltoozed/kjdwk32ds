@@ -63,6 +63,10 @@ async def fomo_loop(analyzer: Analyzer, tracker):
                 
                 # Запускаем полный анализ через наш ИИ
                 is_buy = await analyzer.analyze_token(mint)
+                
+                # Защита от Rate Limit (DexScreener API)
+                await asyncio.sleep(1)
+                
                 if is_buy:
                     # Получаем РЕАЛЬНОЕ имя и цену монеты перед "покупкой"
                     pair_data = await analyzer.fetch_token_data(mint)

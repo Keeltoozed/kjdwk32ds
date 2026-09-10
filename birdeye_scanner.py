@@ -71,6 +71,10 @@ async def birdeye_loop(analyzer: Analyzer, tracker):
                 print(f"👀 Найдена Birdeye-ракета: {mint}. Анализируем...")
                 
                 is_buy = await analyzer.analyze_token(mint)
+                
+                # Защита от Rate Limit (DexScreener API) - ждем 1 сек между токенами
+                await asyncio.sleep(1)
+                
                 if is_buy:
                     from jupiter import JupiterAPI
                     import time
