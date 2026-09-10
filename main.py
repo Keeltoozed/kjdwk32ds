@@ -252,6 +252,7 @@ async def rugpull_feeder_loop():
 async def async_main():
     from pump_fun_sniper import PumpFunSniper
     from trade_logger import trade_logger
+    from birdeye_scanner import birdeye_loop
     
     analyzer = Analyzer()
     tracker = PaperTracker()
@@ -264,6 +265,7 @@ async def async_main():
         copy_trader.listen(),
         fomo_signal_loop(analyzer, tracker),
         fomo_loop(analyzer, tracker),
+        birdeye_loop(analyzer, tracker),
         sniper.connect_and_listen(),
         trade_logger.post_trade_watcher_loop(),
         rugpull_feeder_loop()

@@ -44,3 +44,7 @@ MAX_LIQUIDITY = 50000000
 
 # AI Аналитика
 GEMINI_API_KEY = "AQ.Ab8RN6Ju77t6DI8AYru7TGxuPuG_0WOcqHZqq1OBsDAwHtoJxg" # Получить бесплатно на https://aistudio.google.com/
+
+# Birdeye API Key
+BIRDEYE_API_KEY = os.getenv("BIRDEYE_API_KEY", "")
+
