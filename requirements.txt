@@ -12,3 +12,4 @@ xgboost
 scikit-learn
 joblib
 supabase
+telethon==1.34.1

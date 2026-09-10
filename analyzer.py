@@ -235,8 +235,9 @@ class Analyzer:
         has_tg = any("telegram" in s.get("type", "").lower() or "t.me" in s.get("url", "").lower() for s in socials)
         has_website = len(websites) > 0
         
-        if not (has_twitter and (has_website or has_tg)):
-            print(f"🚫 Мусор: У {mint} нет связки (Twitter + Web/TG).")
+        # Смягченный фильтр: достаточно хотя бы одной соцсети или сайта
+        if not (has_twitter or has_tg or has_website):
+            print(f"🚫 Мусор: У {mint} вообще нет ни одной соцсети или сайта.")
             return False
             
         dex_id = pair_data.get("dexId")

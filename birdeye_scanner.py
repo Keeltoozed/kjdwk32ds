@@ -12,7 +12,7 @@ async def fetch_birdeye_trending():
         
     tokens = []
     # API эндпоинт Birdeye для получения трендов (сортировка по объему/популярности)
-    url = "https://public-api.birdeye.so/defi/token_trending?sort_by=rank&sort_type=asc&offset=0&limit=20"
+    url = "https://public-api.birdeye.so/defi/token_trending?sort_by=rank&sort_type=asc&offset=0&limit=50"
     
     headers = {
         "X-API-KEY": config.BIRDEYE_API_KEY,
