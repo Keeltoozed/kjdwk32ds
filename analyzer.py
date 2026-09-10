@@ -54,6 +54,41 @@ class Analyzer:
                 print(f"Dexscreener token data error: {e}")
                 return {}
 
+    async def is_clone(self, symbol: str, current_mint: str, current_created_at: int, current_fdv: float) -> bool:
+        """Проверяет, является ли этот токен дешевой копией (клоном) более старого или крупного оригинала."""
+        if not symbol or len(symbol) <= 2:
+            return False 
+            
+        url = f"https://api.dexscreener.com/latest/dex/search?q={symbol}"
+        async with aiohttp.ClientSession() as session:
+            try:
+                async with session.get(url, timeout=5) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        pairs = data.get("pairs", [])
+                        
+                        for p in pairs:
+                            if p.get("chainId") == "solana":
+                                p_symbol = p.get("baseToken", {}).get("symbol", "").upper()
+                                p_mint = p.get("baseToken", {}).get("address", "")
+                                
+                                if p_symbol == symbol.upper() and p_mint != current_mint:
+                                    p_created_at = p.get("pairCreatedAt", float('inf'))
+                                    p_fdv = p.get("fdv", 0)
+                                    
+                                    # Если мы нашли другой токен с таким же именем, который был создан РАНЬШЕ нас
+                                    # и имеет какую-то капитализацию (не мертвый с 0 fdv), то наш токен - фейк.
+                                    if p_created_at < current_created_at and p_fdv > 5000:
+                                        return True
+                                        
+                                    # Либо если другой токен имеет огромную капу (в 10 раз больше нашей),
+                                    # значит он - оригинал, а мы клон.
+                                    if p_fdv > (current_fdv * 10) and p_fdv > 50000:
+                                        return True
+            except Exception as e:
+                pass
+        return False
+
     async def check_rugcheck(self, mint: str) -> bool:
         url = config.RUGCHECK_API.format(mint=mint)
         async with aiohttp.ClientSession() as session:
@@ -169,6 +204,25 @@ class Analyzer:
             
         pair_data = await self.fetch_token_data(mint)
         if not pair_data:
+            return False
+            
+        # Блэклист тикеров и названий (Защита от фейковых токенов)
+        base_token = pair_data.get("baseToken", {})
+        name = base_token.get("name", "").upper()
+        symbol = base_token.get("symbol", "").upper()
+        
+        scam_keywords = ["AAPL", "S&P", "SP500", "MSFT", "TSLA", "NVDA", "GOOG", "AMZN", "META", "NFLX", 
+                         "PEPE", "SHIB", "DOGE", "FLOKI", "BONK", "WIF", "BOME", "POPCAT", "TRUMP", "BIDEN"]
+                         
+        if any(keyword in symbol for keyword in scam_keywords) or any(keyword in name for keyword in scam_keywords):
+            print(f"🚫 Мусор: Токен {symbol} мимикрирует под известный бренд/мем. Это 100% scam.")
+            return False
+            
+        # 1.5 Защита от вторичных клонов (Copycat Filter)
+        current_created_at = pair_data.get("pairCreatedAt", 0)
+        current_fdv = pair_data.get("fdv", 0)
+        if await self.is_clone(symbol, mint, current_created_at, current_fdv):
+            print(f"🚫 Мусор: Токен {symbol} является клоном! На DexScreener найден более старый/крупный оригинал.")
             return False
             
         # 2. Обязательное наличие соцсетей (Proof of Effort: Twitter + Website/TG)
