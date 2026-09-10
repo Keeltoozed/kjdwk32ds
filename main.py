@@ -59,6 +59,18 @@ async def position_manager_loop(analyzer, tracker):
                 priority_fee_usd = 0.075 if position.amount_usd < 10.0 else 0.45
                 min_fee_pct = (priority_fee_usd + 0.02 * position.amount_usd) / position.amount_usd
                 
+                # 🚀 MOONBAGS: Частичная фиксация на +100% (продаем 50%)
+                if pnl_pct >= 1.0 and getattr(position, "is_moonbag", False) == False:
+                    tracker.partial_close_position(mint, current_price, 0.5, "Moonbag 50% (+100%)")
+                    continue
+                
+                # Если это Moonbag (уже забрали х2), трейлинг делаем ОЧЕНЬ широким
+                if getattr(position, "is_moonbag", False):
+                    drop_from_max = (position.max_price_usd - current_price) / position.max_price_usd
+                    if drop_from_max >= 0.40: # Разрешаем падать на 40% от пика (пусть летит до луны)
+                        tracker.close_position(mint, current_price, "Moonbag Exit (40% drop)")
+                    continue
+                
                 # 1. Защита от потери профита (Lock Profit - Несгораемые зоны)
                 safe_lock = max(0.10, min_fee_pct + 0.05) # Минимум +5% чистыми
                 if max_pnl_pct >= safe_lock + 0.15 and pnl_pct <= safe_lock:
@@ -77,31 +89,31 @@ async def position_manager_loop(analyzer, tracker):
                 if position.amount_usd < 15.0:
                     # Агрессивное сужение для микро-депозитов (All in, All out)
                     if max_pnl_pct >= 0.80:
-                        if drop_from_max >= 0.04: # Сжимаем до 4%
-                            tracker.close_position(mint, current_price, "Micro-Trailing (4% drop)")
+                        if drop_from_max >= 0.15: 
+                            tracker.close_position(mint, current_price, "Micro-Trailing (15% drop)")
                             continue
                     elif max_pnl_pct >= 0.40:
-                        if drop_from_max >= 0.07: # Сжимаем до 7%
-                            tracker.close_position(mint, current_price, "Micro-Trailing (7% drop)")
+                        if drop_from_max >= 0.20: 
+                            tracker.close_position(mint, current_price, "Micro-Trailing (20% drop)")
                             continue
-                    elif max_pnl_pct >= 0.15: # Активируем трейлинг только после +15%
-                        if drop_from_max >= 0.12: # Разрешаем откат 12%
-                            tracker.close_position(mint, current_price, "Micro-Trailing (12% drop)")
+                    elif max_pnl_pct >= 0.15: 
+                        if drop_from_max >= 0.15: 
+                            tracker.close_position(mint, current_price, "Micro-Trailing (15% drop)")
                             continue
                 else:
                     # Стандартный трейлинг для крупных позиций
-                    if max_pnl_pct >= 0.30: # Если набрали жир (>30%)
-                        if drop_from_max >= 0.10: # Ждем отката не более 10% от пика
+                    if max_pnl_pct >= 0.30: 
+                        if drop_from_max >= 0.15: 
+                            tracker.close_position(mint, current_price, "Trailing Stop (15% drop)")
+                            continue
+                    elif max_pnl_pct >= 0.15: 
+                        if drop_from_max >= 0.10: 
                             tracker.close_position(mint, current_price, "Trailing Stop (10% drop)")
                             continue
-                    elif max_pnl_pct >= 0.15: # Если только разогнались (>15%)
-                        if drop_from_max >= 0.05: # Ждем отката не более 5% от пика
-                            tracker.close_position(mint, current_price, "Trailing Stop (5% drop)")
-                            continue
                 
-                # 4. Хард Stop Loss (Не ждем чуда)
-                if pnl_pct <= config.STOP_LOSS_PCT:
-                    tracker.close_position(mint, current_price, "Hard Stop Loss")
+                # 4. Хард Stop Loss (Не ждем чуда) - Динамический (до -35%)
+                if pnl_pct <= -0.35:
+                    tracker.close_position(mint, current_price, "Hard Stop Loss (-35%)")
                     continue
                     
                 # 5. Time Exit (Капитал не должен морозиться в тухлых монетах)

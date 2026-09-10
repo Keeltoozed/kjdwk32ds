@@ -21,6 +21,7 @@ class VirtualPosition(BaseModel):
     ml_features: dict = {} # Фичи, по которым ИИ принял решение
     ml_confidence: float = 0.0 # Уверенность ИИ (0-100)
     is_mature: bool = False # Флаг для разделения логики (Swing vs Scalp)
+    is_moonbag: bool = False # Флаг, что мы уже зафиксировали 50% прибыли
 
 class PaperTracker:
     def __init__(self):
@@ -34,11 +35,13 @@ class PaperTracker:
                 with open(self.filename, 'r') as f:
                     data = json.load(f)
                     for k, v in data.items():
-                        # Поддержка старых записей без max_price_usd
+                        # Поддержка старых записей
                         if "max_price_usd" not in v:
                             v["max_price_usd"] = v["entry_price_usd"]
                         if "is_mature" not in v:
                             v["is_mature"] = False
+                        if "is_moonbag" not in v:
+                            v["is_moonbag"] = False
                         self.positions[k] = VirtualPosition(**v)
             except Exception as e:
                 print(f"Error loading portfolio: {e}")
@@ -108,6 +111,27 @@ class PaperTracker:
             asyncio.create_task(logger.log_entry(mint, ml_features_dict, ml_confidence, is_mature))
         except Exception as e:
             print(f"⚠️ Ошибка логирования входа: {e}")
+
+    def partial_close_position(self, mint: str, exit_price: float, sell_pct: float, reason: str):
+        """Частичная фиксация позиции (Moonbags)"""
+        pos = self.positions.get(mint)
+        if pos and pos.status == "open":
+            amount_sold_usd = pos.amount_usd * sell_pct
+            real_entry_price = pos.entry_price_usd * 1.01
+            real_exit_price = exit_price * 0.99
+            
+            price_diff_pct = (real_exit_price - real_entry_price) / real_entry_price if real_entry_price > 0 else 0
+            priority_fee_usd = 0.075 if pos.amount_usd < 10.0 else 0.45
+            
+            # PnL от проданной части
+            realized_pnl_usd = (amount_sold_usd * price_diff_pct) - priority_fee_usd
+            
+            print(f"🚀 [Moonbag] Частичная фиксация {sell_pct*100}% {pos.symbol}: Профит +${realized_pnl_usd:.2f} ({reason})")
+            
+            # Уменьшаем позицию на проданный процент
+            pos.amount_usd -= amount_sold_usd
+            pos.is_moonbag = True
+            self.save_portfolio()
 
     def close_position(self, mint: str, exit_price: float, reason: str):
         pos = self.positions.get(mint)

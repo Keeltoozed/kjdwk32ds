@@ -48,3 +48,9 @@ GEMINI_API_KEY = "AQ.Ab8RN6Ju77t6DI8AYru7TGxuPuG_0WOcqHZqq1OBsDAwHtoJxg" # По�
 # Birdeye API Key
 BIRDEYE_API_KEY = os.getenv("BIRDEYE_API_KEY", "")
 
+
+# === JITO BLOCK ENGINE (MEV Protection) ===
+USE_JITO_EXECUTION = False # Поставь True, когда будешь готов торговать на реальные деньги
+JITO_ENGINE_URL = "https://mainnet.block-engine.jito.wtf/api/v1/bundles"
+JITO_TIP_AMOUNT_SOL = 0.0005 # Чаевые валидатору (минимум 0.0001)
+JITO_TIP_ACCOUNT = "96gYZGLnJYVFmbjzopPSU6QiCRK4rPdTuQ8hB1aP442b" # Официальный Jito Tip Account
