@@ -205,23 +205,25 @@ def _skip(score: int, reason: str) -> dict:
 import os
 
 class AIBrainML:
-    def __init__(self, model_path="pump_model.pkl", pro_model_path="pro_model.pkl"):
+    def __init__(self, model_path="pump_model.json", pro_model_path="pro_model.json"):
         self.model_path = model_path
         self.pro_model_path = pro_model_path
         self.model = None
         self.pro_model = None
         
-        import joblib
+        import xgboost as xgb
         if os.path.exists(self.model_path):
             try:
-                self.model = joblib.load(self.model_path)
+                self.model = xgb.XGBClassifier()
+                self.model.load_model(self.model_path)
                 print("🧠 [AI Brain] ML Модель (pump_model) успешно загружена!")
             except Exception as e:
                 print(f"⚠️ [AI Brain] Ошибка загрузки ML модели: {e}")
                 
         if os.path.exists(self.pro_model_path):
             try:
-                self.pro_model = joblib.load(self.pro_model_path)
+                self.pro_model = xgb.XGBClassifier()
+                self.pro_model.load_model(self.pro_model_path)
                 print("🧠 [AI Brain] PRO ML Модель (pro_model) успешно загружена!")
             except Exception as e:
                 print(f"⚠️ [AI Brain] Ошибка загрузки PRO ML модели: {e}")
