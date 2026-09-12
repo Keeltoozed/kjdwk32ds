@@ -145,5 +145,10 @@ class CopyTrader:
                             asyncio.create_task(self.process_transaction(signature))
                                 
             except Exception as e:
-                print(f"Ошибка Helius Копитрейдера: {e}. Переподключение через 5с...")
-                await asyncio.sleep(5)
+                err_msg = str(e)
+                if "429" in err_msg:
+                    print(f"⚠️ Лимит запросов Helius (HTTP 429). Копитрейдер уходит в спящий режим на 60 секунд...")
+                    await asyncio.sleep(60)
+                else:
+                    print(f"Ошибка Helius Копитрейдера: {err_msg}. Переподключение через 5с...")
+                    await asyncio.sleep(5)
