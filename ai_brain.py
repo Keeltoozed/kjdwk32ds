@@ -270,7 +270,7 @@ class AIBrainML:
         reasons = []
         is_approved = False
         
-        if score >= 70:  # Порог уверенности снижен до 70% для микро-депозитов
+        if score >= 60:  # Порог уверенности снижен до 70% для микро-депозитов
             is_approved = True
             reasons.append(f"✅ XGBoost уверен на {score}% в успехе (Pump -> Raydium).")
         else:
@@ -304,7 +304,7 @@ class AIBrainML:
             prob = self.pro_model.predict_proba(last_row)[0][1]
             score = int(prob * 100)
             
-            if score >= 50:
+            if score >= 60:
                 return {"score": score, "is_approved": True, "reasons": [f"✅ [PRO ИИ] Микроструктура одобрена (Уверенность: {score}%)!"]}
             else:
                 return {"score": score, "is_approved": False, "reasons": [f"❌ [PRO ИИ] Низкий потенциал (Уверенность: {score}%)"]}

@@ -119,8 +119,8 @@ async def position_manager_loop(analyzer, tracker):
                             continue
                 
                 # 4. Хард Stop Loss (Не ждем чуда) - Динамический (до -35%)
-                if pnl_pct <= -0.35:
-                    tracker.close_position(mint, current_price, "Hard Stop Loss (-35%)")
+                if pnl_pct <= -0.25:
+                    tracker.close_position(mint, current_price, "Hard Stop Loss (-25%)")
                     continue
                     
                 # 5. Time Exit (Капитал не должен морозиться в тухлых монетах)

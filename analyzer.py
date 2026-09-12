@@ -7,9 +7,20 @@ from ta_tools import TATools
 import math
 
 class Analyzer:
+    def __init__(self):
+        self.session = None
+        
+    async def get_session(self):
+        import aiohttp
+        if self.session is None or self.session.closed:
+            connector = aiohttp.TCPConnector(limit=100, limit_per_host=30)
+            self.session = aiohttp.ClientSession(connector=connector)
+        return self.session
+
     async def fetch_latest_tokens(self) -> list:
         tokens = []
-        async with aiohttp.ClientSession() as session:
+        session = await self.get_session()
+        if True:
             # 1. Сканируем топовые (Boosted) монеты
             try:
                 async with session.get(config.DEXSCREENER_LATEST, timeout=5) as response:
@@ -39,7 +50,8 @@ class Analyzer:
                 
     async def fetch_token_data(self, mint: str) -> dict:
         url = f"{config.DEXSCREENER_SEARCH}{mint}"
-        async with aiohttp.ClientSession() as session:
+        session = await self.get_session()
+        if True:
             try:
                 async with session.get(url, timeout=10) as response:
                     if response.status == 200:
@@ -60,7 +72,8 @@ class Analyzer:
             return False 
             
         url = f"https://api.dexscreener.com/latest/dex/search?q={symbol}"
-        async with aiohttp.ClientSession() as session:
+        session = await self.get_session()
+        if True:
             try:
                 async with session.get(url, timeout=5) as response:
                     if response.status == 200:
@@ -91,7 +104,8 @@ class Analyzer:
 
     async def check_rugcheck(self, mint: str) -> bool:
         url = config.RUGCHECK_API.format(mint=mint)
-        async with aiohttp.ClientSession() as session:
+        session = await self.get_session()
+        if True:
             try:
                 async with session.get(url, timeout=10) as response:
                     if response.status == 200:
@@ -151,7 +165,8 @@ class Analyzer:
         }
         
         import aiohttp
-        async with aiohttp.ClientSession() as session:
+        session = await self.get_session()
+        if True:
             try:
                 # 1. Получаем сигнатуры
                 async with session.post(config.HELIUS_RPC_URL, json=payload_sigs, timeout=3) as resp:
@@ -298,7 +313,8 @@ class Analyzer:
         }
         try:
             import aiohttp
-            async with aiohttp.ClientSession() as session:
+            session = await self.get_session()
+            if True:
                 async with session.post(rpc_url, json=payload, timeout=5) as resp:
                     data = await resp.json()
                     accounts = data.get("result", {}).get("value", [])
@@ -508,7 +524,8 @@ class Analyzer:
         description = ""
         
         import aiohttp
-        async with aiohttp.ClientSession() as session:
+        session = await self.get_session()
+        if True:
             # Запрос баланса к Helius
             if trader_pubkey:
                 payload = {
@@ -562,7 +579,8 @@ class Analyzer:
         url = f"https://lunarcrush.com/api4/public/coins/{symbol}/v1"
         headers = {"Authorization": f"Bearer {api_key}"}
         
-        async with aiohttp.ClientSession() as session:
+        session = await self.get_session()
+        if True:
             try:
                 async with session.get(url, headers=headers, timeout=3) as resp:
                     if resp.status == 200:
