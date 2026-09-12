@@ -387,6 +387,24 @@ class Analyzer:
             model.load_model("raydium_model_dex.json")
             prob = model.predict_proba(df)[0][1]
             conf = prob * 100
+            
+            # --- ИНТЕГРАЦИЯ LUNARCRUSH ---
+            symbol = pair_data.get("baseToken", {}).get("symbol", "")
+            if symbol:
+                lc_data = await self.fetch_lunarcrush_sentiment(symbol)
+                if lc_data:
+                    interactions = lc_data.get("interactions", 0)
+                    sentiment = lc_data.get("sentiment", 50)
+                    print(f"🌕 [LunarCrush] {symbol}: Interactions: {interactions}, Sentiment: {sentiment}%")
+                    
+                    if sentiment >= 70 and interactions > 500:
+                        conf += 15.0 # Бустим уверенность ИИ за счет сильного социального хайпа!
+                        print(f"📈 [LunarCrush] Хайп подтвержден! Буст +15% к Score.")
+                    elif sentiment < 30:
+                        conf -= 20.0
+                        print(f"📉 [LunarCrush] Негативный сентимент! Штраф -20% к Score.")
+            # -------------------------------
+            
             print(f"🧠 Raydium XGBoost (Безлимит): {mint} | Score: {conf:.1f}%")
             import config; threshold = 75.0 if getattr(config, "AI_MODE", "sniper") == "sniper" else 65.0
             
@@ -531,3 +549,31 @@ class Analyzer:
         v_tok = ws_data.get("vTokensInBondingCurve", 1073000000.0)
         ws_data["priceUsd"] = (v_sol / v_tok) * sol_price
         return True
+
+    async def fetch_lunarcrush_sentiment(self, symbol: str) -> dict:
+        """
+        Проверяет хайп (Social Sentiment) монеты в Twitter через LunarCrush.
+        """
+        import config
+        api_key = getattr(config, "LUNARCRUSH_API_KEY", "")
+        if not api_key:
+            return {}
+            
+        url = f"https://lunarcrush.com/api4/public/coins/{symbol}/v1"
+        headers = {"Authorization": f"Bearer {api_key}"}
+        
+        async with aiohttp.ClientSession() as session:
+            try:
+                async with session.get(url, headers=headers, timeout=3) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        coin_data = data.get("data", {})
+                        
+                        return {
+                            "social_volume": coin_data.get("social_volume_24h", 0),
+                            "interactions": coin_data.get("interactions_24h", 0),
+                            "sentiment": coin_data.get("sentiment", 50)
+                        }
+            except Exception as e:
+                pass
+        return {}

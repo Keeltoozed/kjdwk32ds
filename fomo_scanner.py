@@ -3,6 +3,52 @@ import aiohttp
 import config
 from analyzer import Analyzer
 
+
+async def fetch_geckoterminal_trending():
+    """Получает реальные тренды с GeckoTerminal (как в Photon)"""
+    tokens = []
+    url = "https://api.geckoterminal.com/api/v2/networks/solana/trending_pools"
+    headers = {"Accept": "application/json"}
+    
+    async with aiohttp.ClientSession() as session:
+        try:
+            async with session.get(url, headers=headers, timeout=5) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    for pool in data.get("data", []):
+                        try:
+                            # GeckoTerminal хранит адрес токена в relationships
+                            base_token_id = pool["relationships"]["base_token"]["data"]["id"]
+                            # Формат: "solana_MintAddress"
+                            mint = base_token_id.split("_")[1]
+                            if mint and mint not in tokens:
+                                tokens.append(mint)
+                        except:
+                            pass
+        except Exception as e:
+            print(f"Ошибка получения трендов GeckoTerminal: {e}")
+    return tokens
+
+
+async def fetch_pumpfun_top():
+    """Получает топ монет Pump.fun по капе (близкие к миграции на Raydium)"""
+    tokens = []
+    url = "https://frontend-api.pump.fun/coins?offset=0&limit=20&sort=market_cap&order=DESC&includeNsfw=false"
+    headers = {"User-Agent": "Mozilla/5.0"}
+    
+    async with aiohttp.ClientSession() as session:
+        try:
+            async with session.get(url, headers=headers, timeout=5) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    for coin in data:
+                        mint = coin.get("mint")
+                        if mint and mint not in tokens:
+                            tokens.append(mint)
+        except Exception as e:
+            print(f"Ошибка получения топ-монет Pump.fun: {e}")
+    return tokens
+
 async def fetch_dexscreener_trending():
     """Получает топ трендовых и забущенных токенов с DexScreener"""
     tokens = []
@@ -43,6 +89,14 @@ async def fomo_loop(analyzer: Analyzer, tracker):
                 continue
                 
             trending_mints = await fetch_dexscreener_trending()
+            gecko_mints = await fetch_geckoterminal_trending()
+            pump_mints = await fetch_pumpfun_top()
+            for m in pump_mints:
+                if m not in trending_mints:
+                    trending_mints.append(m)
+            for m in gecko_mints:
+                if m not in trending_mints:
+                    trending_mints.append(m)
             
             # Фильтруем уже обработанные и в кулдауне
             new_mints = []
