@@ -219,6 +219,12 @@ class Analyzer:
             print(f"🚫 Мусор: Токен {symbol} мимикрирует под известный бренд/мем. Это 100% scam.")
             return False
             
+        # Защита от микро-пулов (Scam сетки типа Fly)
+        liquidity = pair_data.get("liquidity", {}).get("usd", 0)
+        if liquidity < 15000:
+            print(f"📉 Изоляция: {symbol} имеет микро-пул (${liquidity:.0f} < $15k). Риск 100% проскальзывания.")
+            return False
+            
         # 1.5 Защита от вторичных клонов (Copycat Filter)
         current_created_at = pair_data.get("pairCreatedAt", 0)
         current_fdv = pair_data.get("fdv", 0)
