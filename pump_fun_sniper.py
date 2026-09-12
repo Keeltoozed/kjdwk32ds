@@ -33,7 +33,8 @@ class TokenTrackerState:
         self.entry_price_sol = 0.0
 
 class PumpFunSniper:
-    def __init__(self):
+    def __init__(self, tracker=None):
+        self.tracker = tracker
         self.running = False
         self.trackers = {} # mint -> TokenTrackerState
 
@@ -82,7 +83,7 @@ class PumpFunSniper:
             
             from tracker import PaperTracker
             from exit_manager import ExitManager
-            tracker = PaperTracker()
+            tracker = self.tracker if self.tracker else PaperTracker()
             exit_mgr = ExitManager(config.HELIUS_RPC_URL)
             
             sol_amount = state.trades[-1]["curve_sol"] if state.trades else 0
@@ -245,7 +246,7 @@ class PumpFunSniper:
                             if state.is_entered:
                                 from tracker import PaperTracker
                                 from sol_price import get_sol_price_sync
-                                p_tracker = PaperTracker()
+                                p_tracker = self.tracker if self.tracker else PaperTracker()
                                 pos = p_tracker.positions.get(mint)
                                 if pos and pos.status == "open":
                                     live_price = (sol_amount / 1_000_000_000.0) * get_sol_price_sync()
@@ -295,7 +296,7 @@ async def main():
     from tracker import PaperTracker
     
     analyzer = Analyzer()
-    tracker = PaperTracker()
+    tracker = self.tracker if self.tracker else PaperTracker()
     
     # Запускаем фоновые задачи для старых монет
     print("🧬 [HYBRID MODE] Запуск сканера DexScreener...")
