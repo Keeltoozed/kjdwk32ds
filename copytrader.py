@@ -44,7 +44,7 @@ class CopyTrader:
             pass
         return 0.0001
 
-async def fetch_transaction(self, signature):
+    async def fetch_transaction(self, signature):
         payload = {
             "jsonrpc": "2.0",
             "id": 1,
@@ -130,7 +130,7 @@ async def fetch_transaction(self, signature):
                     self.tracker.add_position(symbol, mint, price_usd, amount_usd=position_size)
                     print(f"✅ Успешно скопировали сделку {trader_name} на {position_size}$!")
 
-async def listen(self):
+    async def listen(self):
         # Список бесплатных публичных WSS
         wss_endpoints = [
             self.wss_url, # Helius
