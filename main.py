@@ -21,12 +21,12 @@ async def position_manager_loop(analyzer, tracker):
                 current_price = await JupiterAPI.get_price(mint)
                 
                 # Если Юпитер не знает токен (это Pump.fun до миграции), используем DexScreener
-                if current_price == 0.0:
+                if current_price is None or current_price == 0.0:
                     pair_data = await analyzer.fetch_token_data(mint)
                     if pair_data:
                         current_price = float(pair_data.get("priceUsd", 0))
                         
-                if current_price <= 0.0:
+                if current_price is None or current_price <= 0.0:
                     minutes_held = (time.time() - position.entry_time) / 60
                     if minutes_held > 180:
                         # Если прошло 3 часа, а цены так и нет нигде — токен точно мертв
@@ -287,7 +287,6 @@ async def async_main():
         copy_trader.listen(),
         fomo_signal_loop(analyzer, tracker),
         fomo_loop(analyzer, tracker),
-        birdeye_loop(analyzer, tracker),
         sniper.connect_and_listen(),
         trade_logger.post_trade_watcher_loop(),
         rugpull_feeder_loop(),
