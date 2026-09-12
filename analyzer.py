@@ -205,7 +205,7 @@ class Analyzer:
         pair_data = await self.fetch_token_data(mint)
         if not pair_data:
             print(f"⚠️ Пропуск: DexScreener не вернул данные для {mint} (Rate Limit или токен слишком новый).")
-            return False
+            return None
             
         # Блэклист тикеров и названий (Защита от фейковых токенов)
         base_token = pair_data.get("baseToken", {})

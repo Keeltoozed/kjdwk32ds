@@ -134,6 +134,12 @@ async def fomo_loop(analyzer: Analyzer, tracker):
                 await asyncio.sleep(2)
                 
                 for mint, is_buy in results:
+                    if is_buy is None:
+                        # Токен не прогрузился в DexScreener, убираем из истории, чтобы попробовать позже
+                        if mint in processed_mints:
+                            processed_mints.remove(mint)
+                        continue
+                        
                     if is_buy and len(tracker.get_open_positions()) < config.MAX_CONCURRENT_POSITIONS:
                         pair_data = await analyzer.fetch_token_data(mint)
                         if pair_data:
