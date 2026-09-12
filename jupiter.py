@@ -4,18 +4,20 @@ class JupiterAPI:
     @staticmethod
     async def get_price(mint: str) -> float:
         """
-        Получает кристально точную цену токена в USD через Jupiter Price API v2.
+        Получает кристально точную цену токена в USD через GeckoTerminal API.
+        (Jupiter v2 закрыл публичный бесплатный доступ).
         """
-        url = f"https://api.jup.ag/price/v2?ids={mint}"
+        url = f"https://api.geckoterminal.com/api/v2/simple/networks/solana/token_price/{mint}"
+        headers = {"Accept": "application/json"}
         async with aiohttp.ClientSession() as session:
             try:
-                async with session.get(url, timeout=5) as response:
+                async with session.get(url, headers=headers, timeout=5) as response:
                     if response.status == 200:
                         data = await response.json()
-                        price_str = data.get("data", {}).get(mint, {}).get("price")
-                        if price_str:
-                            return float(price_str)
-            except Exception as e:
+                        prices = data.get("data", {}).get("attributes", {}).get("token_prices", {})
+                        if mint in prices:
+                            return float(prices[mint])
+            except Exception:
                 pass
         return 0.0
 

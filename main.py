@@ -23,7 +23,8 @@ async def position_manager_loop(analyzer, tracker):
                 
                 # 1. Пытаемся получить цену из Юпитера
                 current_price = await JupiterAPI.get_price(mint)
-                
+                # DEBUG PRINT
+                                
                 # 2. Если Юпитер слеп, пробуем DexScreener
                 if current_price is None or current_price == 0.0:
                     pair_data = await analyzer.fetch_token_data(mint)
@@ -356,7 +357,7 @@ with tab1:
                         st.markdown(f"""
                         <div style='background-color: #1E1E1E; padding: 15px; border-radius: 8px; border-left: 5px solid {color}; margin-bottom: 10px; font-family: sans-serif;'>
                             <div style='display: flex; justify-content: space-between; align-items: center;'>
-                                <h3 style='margin:0; color: #FFF;'>{row['symbol']}</h3>
+                                <h3 style='margin:0; color: #FFF;'>{row['symbol'] if str(row['symbol']).strip() else row['mint'][:6] + '...'}</h3>
                                 <h3 style='margin:0; color: {color};'>{sign}${pnl_usd:.2f} ({sign}{pnl_pct:.2f}%)</h3>
                             </div>
                             <div style='display: flex; justify-content: space-between; margin-top: 10px; font-size: 0.85em; color: #BBB;'>
@@ -394,7 +395,7 @@ with tab1:
                         st.markdown(f"""
                         <div style='background-color: #1A1A1A; padding: 10px 15px; border-radius: 6px; border-right: 4px solid {c_color}; margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center;'>
                             <div>
-                                <div style='color: #FFF; font-weight: bold;'>{row['symbol']}</div>
+                                <div style='color: #FFF; font-weight: bold;'>{row['symbol'] if str(row['symbol']).strip() else row.name[:6] + '...'}</div>
                                 <div style='color: #666; font-size: 0.75em;'>{row.get('exit_reason', 'Closed')}</div>
                             </div>
                             <div style='text-align: right; color: {c_color}; font-weight: bold;'>

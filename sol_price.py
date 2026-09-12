@@ -17,13 +17,15 @@ async def get_sol_price() -> float:
     
     try:
         async with aiohttp.ClientSession() as session:
-            # Jupiter Price API v2 — бесплатный, без ключа
-            url = "https://api.jup.ag/price/v2?ids=So11111111111111111111111111111111111111112"
-            async with session.get(url, timeout=5) as response:
+
+            # Используем GeckoTerminal вместо закрытого Jupiter API v2
+            url = "https://api.geckoterminal.com/api/v2/simple/networks/solana/token_price/So11111111111111111111111111111111111111112"
+            headers = {"Accept": "application/json"}
+            async with session.get(url, headers=headers, timeout=5) as response:
                 if response.status == 200:
                     data = await response.json()
-                    price_data = data.get("data", {}).get("So11111111111111111111111111111111111111112", {})
-                    price = float(price_data.get("price", 0))
+                    prices = data.get("data", {}).get("attributes", {}).get("token_prices", {})
+                    price = float(prices.get("So11111111111111111111111111111111111111112", 0))
                     if price > 0:
                         _sol_price = price
                         _last_update = now
