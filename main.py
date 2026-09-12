@@ -18,20 +18,27 @@ async def position_manager_loop(analyzer, tracker):
             open_positions = tracker.get_open_positions()
             for mint, position in list(open_positions.items()):
                 # ИСПОЛЬЗУЕМ МГНОВЕННЫЙ PRICE FETCH ОТ JUPITER (Для токенов на Raydium)
+# 0. Сначала берем LIVE цену из WebSocket (если её обновил снайпер)
+                ws_price = position.current_price_usd if hasattr(position, 'current_price_usd') else 0.0
+                
+                # 1. Пытаемся получить цену из Юпитера
                 current_price = await JupiterAPI.get_price(mint)
                 
-                # Если Юпитер не знает токен (это Pump.fun до миграции), используем DexScreener
+                # 2. Если Юпитер слеп, пробуем DexScreener
                 if current_price is None or current_price == 0.0:
                     pair_data = await analyzer.fetch_token_data(mint)
                     if pair_data:
                         current_price = float(pair_data.get("priceUsd", 0))
                         
+                # 3. Если ВСЕ API слепы (токен слишком свежий), используем цену из WSS!
                 if current_price is None or current_price <= 0.0:
-                    minutes_held = (time.time() - position.entry_time) / 60
-                    if minutes_held > 180:
-                        # Если прошло 3 часа, а цены так и нет нигде — токен точно мертв
-                        tracker.close_position(mint, 0.0, "Rug Pull / No Liquidity")
-                    continue
+                    if ws_price > 0.0 and ws_price != position.entry_price_usd:
+                        current_price = ws_price
+                    else:
+                        minutes_held = (time.time() - position.entry_time) / 60
+                        if minutes_held > 180:
+                            tracker.close_position(mint, 0.0, "Rug Pull / No Liquidity")
+                        continue
                     
                 if current_price > position.max_price_usd:
                     position.max_price_usd = current_price
