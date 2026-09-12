@@ -44,7 +44,7 @@ class CopyTrader:
             pass
         return 0.0001
 
-    async def fetch_transaction(self, signature):
+async def fetch_transaction(self, signature):
         payload = {
             "jsonrpc": "2.0",
             "id": 1,
@@ -54,12 +54,24 @@ class CopyTrader:
                 {"encoding": "jsonParsed", "maxSupportedTransactionVersion": 0}
             ]
         }
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(self.rpc_url, json=payload) as resp:
-                    return await resp.json()
-        except:
-            return None
+        
+        rpc_endpoints = [
+            self.rpc_url,
+            "https://api.mainnet-beta.solana.com/",
+            "https://solana-rpc.publicnode.com/"
+        ]
+        
+        async with aiohttp.ClientSession() as session:
+            for rpc in rpc_endpoints:
+                try:
+                    async with session.post(rpc, json=payload, timeout=5) as resp:
+                        if resp.status == 200:
+                            return await resp.json()
+                        elif resp.status == 429:
+                            continue # Пробуем следующий RPC
+                except:
+                    continue
+        return None
 
     async def process_transaction(self, signature):
         if signature in self.processed_sigs: return
@@ -118,11 +130,20 @@ class CopyTrader:
                     self.tracker.add_position(symbol, mint, price_usd, amount_usd=position_size)
                     print(f"✅ Успешно скопировали сделку {trader_name} на {position_size}$!")
 
-    async def listen(self):
+async def listen(self):
+        # Список бесплатных публичных WSS
+        wss_endpoints = [
+            self.wss_url, # Helius
+            "wss://api.mainnet-beta.solana.com/",
+            "wss://solana-rpc.publicnode.com/"
+        ]
+        endpoint_idx = 0
+        
         while True:
+            current_wss = wss_endpoints[endpoint_idx % len(wss_endpoints)]
             try:
-                async with websockets.connect(self.wss_url) as ws:
-                    print(f"👥 Helius Копитрейдер запущен! Слушаем {len(self.wallets)} китов (Free API)...")
+                async with websockets.connect(current_wss) as ws:
+                    print(f"👥 Копитрейдер: Подключен к {current_wss.split('.')[0]}... Слушаем {len(self.wallets)} китов")
                     
                     req_id = 1
                     for wallet in self.wallets.keys():
@@ -140,15 +161,14 @@ class CopyTrader:
                         if "method" in data and data["method"] == "logsNotification":
                             result = data["params"]["result"]
                             signature = result["value"]["signature"]
-                            
-                            # Не блокируем сокет, отправляем на асинхронную расшифровку
                             asyncio.create_task(self.process_transaction(signature))
                                 
             except Exception as e:
                 err_msg = str(e)
                 if "429" in err_msg:
-                    print(f"⚠️ Лимит запросов Helius (HTTP 429). Копитрейдер уходит в спящий режим на 60 секунд...")
-                    await asyncio.sleep(60)
+                    print(f"⚠️ Лимит запросов 429 на {current_wss}. Переключаемся на следующий сервер...")
+                    endpoint_idx += 1
+                    await asyncio.sleep(2)
                 else:
-                    print(f"Ошибка Helius Копитрейдера: {err_msg}. Переподключение через 5с...")
+                    print(f"Ошибка Копитрейдера ({current_wss}): {err_msg}. Переподключение...")
                     await asyncio.sleep(5)
