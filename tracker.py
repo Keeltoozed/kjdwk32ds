@@ -32,21 +32,39 @@ class PaperTracker:
         self.load_portfolio()
 
     def load_portfolio(self):
+        # 1. Пытаемся загрузить из Supabase (чтобы не терять данные при перезагрузке Render)
+        try:
+            if hasattr(config, 'SUPABASE_URL') and hasattr(config, 'SUPABASE_KEY'):
+                supabase: Client = create_client(config.SUPABASE_URL, config.SUPABASE_KEY)
+                res = supabase.table("trades_pump").select("features").eq("mint", "PORTFOLIO_STATE").execute()
+                if res.data:
+                    data = json.loads(res.data[0]["features"])
+                    print("✅ Портфель успешно загружен из Supabase!")
+                    self._parse_portfolio_data(data)
+                    return
+        except Exception as e:
+            print(f"⚠️ Не удалось загрузить портфель из Supabase: {e}")
+            
+        # 2. Фолбэк на локальный файл
         if os.path.exists(self.filename):
             try:
                 with open(self.filename, 'r') as f:
                     data = json.load(f)
-                    for k, v in data.items():
-                        # Поддержка старых записей
-                        if "max_price_usd" not in v:
-                            v["max_price_usd"] = v["entry_price_usd"]
-                        if "is_mature" not in v:
-                            v["is_mature"] = False
-                        if "is_moonbag" not in v:
-                            v["is_moonbag"] = False
-                        self.positions[k] = VirtualPosition(**v)
+                    print("📁 Портфель загружен из локального файла")
+                    self._parse_portfolio_data(data)
             except Exception as e:
-                print(f"Error loading portfolio: {e}")
+                print(f"Error loading local portfolio: {e}")
+
+    def _parse_portfolio_data(self, data):
+        for k, v in data.items():
+            if isinstance(v, dict):
+                if "max_price_usd" not in v:
+                    v["max_price_usd"] = v.get("entry_price_usd", 0)
+                if "is_mature" not in v:
+                    v["is_mature"] = False
+                if "is_moonbag" not in v:
+                    v["is_moonbag"] = False
+                self.positions[k] = VirtualPosition(**v)
 
     def save_portfolio(self):
         data = {k: getattr(v, "model_dump", v.dict)() for k, v in self.positions.items()}
@@ -56,7 +74,7 @@ class PaperTracker:
             with open(self.filename, 'w') as f:
                 json.dump(data, f, indent=4)
         except Exception as e:
-            print(f"⚠️ Ошибка локального сохранения: {e}")
+            pass
             
         # 2. Сохраняем в Supabase (Render-proof)
         try:

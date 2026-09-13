@@ -294,8 +294,14 @@ if os.environ.get("RENDER"):
         await runner.setup()
         port = int(os.environ.get("PORT", 10000))
         site = web.TCPSite(runner, '0.0.0.0', port)
-        await site.start()
-        print(f"✅ Фиктивный сервер запущен на порту {port} для Render Health Check")
+        try:
+            await site.start()
+            print(f"✅ Фиктивный сервер запущен на порту {port} для Render Health Check")
+        except OSError as e:
+            if e.errno == 98:
+                print(f"⚠️ Порт {port} уже занят (вероятно, Streamlit уже запущен). Пропускаем запуск фиктивного сервера.")
+            else:
+                raise
         
         # Keep-Alive задача, чтобы Render не засыпал
         async def keep_alive():
