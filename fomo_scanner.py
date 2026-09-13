@@ -147,7 +147,6 @@ async def fomo_loop(analyzer: Analyzer, tracker):
                             
                             # ИСПРАВЛЕНИЕ: Берем LIVE цену без кэша (GeckoTerminal), а не отстающую цену DexScreener!
                             from sol_price import fetch_bulk_prices_sync
-                            import asyncio
                             # Запускаем синхронную функцию в пуле потоков, чтобы не блокировать весь event loop бота!
                             live_prices = await asyncio.to_thread(fetch_bulk_prices_sync, [mint])
                             actual_price = live_prices.get(mint, 0.0)

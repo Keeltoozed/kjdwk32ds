@@ -259,7 +259,6 @@ async def async_main():
                         print(f"💓 Keep-Alive Ping: {resp.status}")
                 except Exception as e:
                     pass
-    import asyncio
     asyncio.create_task(keep_alive())
 
     from trade_logger import trade_logger
