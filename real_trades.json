@@ -1,0 +1,1602 @@
+[
+  {
+    "mint": "BDbS4nVYqHfbc3XiWbToF39fojHfKMZBVihUscqTTd6M",
+    "pnl": -14.3679,
+    "confidence": 0,
+    "exit_reason": "Lock Profit (+10%)",
+    "entry_time": "2026-09-08T18:17:11.524374",
+    "exit_time": null,
+    "features": "{}",
+    "source": "pump"
+  },
+  {
+    "mint": "AKr8LJjnkMgR45xYMD8rq2VYo5TiDM9b611Nx29hpump",
+    "pnl": 23.2169,
+    "confidence": 0,
+    "exit_reason": "Take Profit (+35%)",
+    "entry_time": "2026-09-08T19:24:35.027172",
+    "exit_time": null,
+    "features": "{}",
+    "source": "pump"
+  },
+  {
+    "mint": "Bf7KL5Ca8W152Su4JJgjC9k4W8U7J3e2Cdn9oVdcpump",
+    "pnl": -41.7685,
+    "confidence": 0,
+    "exit_reason": "Hard Stop Loss",
+    "entry_time": "2026-09-08T19:30:37.835249",
+    "exit_time": null,
+    "features": "{}",
+    "source": "pump"
+  },
+  {
+    "mint": "7uRpCQWBrKW5sLQXxcofHDFBHSz1gmD1S97Ysg4Ppump",
+    "pnl": -23.7147,
+    "confidence": 0,
+    "exit_reason": "Break-even (+2%)",
+    "entry_time": "2026-09-08T19:38:41.031757",
+    "exit_time": null,
+    "features": "{}",
+    "source": "pump"
+  },
+  {
+    "mint": "5CwpF2UsgWvNKeDQaKZPjQCd6jM4K32yNVRVCuh1pump",
+    "pnl": 17.6296,
+    "confidence": 0,
+    "exit_reason": "Micro-Trailing (12% drop)",
+    "entry_time": "2026-09-09T22:14:34.317834",
+    "exit_time": "2026-09-09T22:34:26.423984",
+    "features": "{}",
+    "source": "pump"
+  },
+  {
+    "mint": "98bXf2PfLhCseH5RGSeYjPAQntNDGHtQNgdbj5Aqbonk",
+    "pnl": -24.7755,
+    "confidence": 0,
+    "exit_reason": "Hard Stop Loss",
+    "entry_time": "2026-09-08T20:50:06.981627",
+    "exit_time": "2026-09-08T20:52:03.59245",
+    "features": "{}",
+    "source": "pump"
+  },
+  {
+    "mint": "8gnHKCEdNrWVbUeKPkQebginvMrADnQpXUbhwg5kpump",
+    "pnl": 4.2654,
+    "confidence": 0,
+    "exit_reason": "Lock Profit (+10.0%)",
+    "entry_time": "2026-09-09T19:27:53.126143",
+    "exit_time": "2026-09-09T19:37:18.113113",
+    "features": "{}",
+    "source": "pump"
+  },
+  {
+    "mint": "B1EsntvpYGmZAjxD1DZEp7sxZR6LCdMNKzfJ9mnppump",
+    "pnl": 27.2446,
+    "confidence": 0,
+    "exit_reason": "Micro-Trailing (7% drop)",
+    "entry_time": "2026-09-09T19:31:56.016011",
+    "exit_time": "2026-09-09T19:42:20.412882",
+    "features": "{}",
+    "source": "pump"
+  },
+  {
+    "mint": "979vfT471Y2pm4WAjq5JiasLTQmgcWK46EjphDW3pump",
+    "pnl": -57.3042,
+    "confidence": 0,
+    "exit_reason": "Hard Stop Loss",
+    "entry_time": "2026-09-08T23:40:24.780016",
+    "exit_time": "2026-09-08T23:43:21.790719",
+    "features": "{}",
+    "source": "pump"
+  },
+  {
+    "mint": "DHFQCKSrypN7eevHGUtgUFkGpmZijDMTLwxrgCsuwW4q",
+    "pnl": -19.3876,
+    "confidence": 0,
+    "exit_reason": "Hard Stop Loss",
+    "entry_time": "2026-09-10T16:29:20.165147",
+    "exit_time": "2026-09-10T16:41:56.362869",
+    "features": "{}",
+    "source": "pump"
+  },
+  {
+    "mint": "6YPeWTjSXzrTUrV8K938Biu2LpdE6mYYxjZzsWqvXA4Q",
+    "pnl": 33.3976,
+    "confidence": 0,
+    "exit_reason": "Take Profit (+35%)",
+    "entry_time": "2026-09-09T00:22:28.187805",
+    "exit_time": "2026-09-09T00:23:17.384054",
+    "features": "{}",
+    "source": "pump"
+  },
+  {
+    "mint": "BbJcqkhPCZyqYG3FxrTQVLCBB1ipiW727DDtgP16pump",
+    "pnl": 10.787,
+    "confidence": 0,
+    "exit_reason": "Micro-Trailing (12% drop)",
+    "entry_time": "2026-09-09T19:12:32.919346",
+    "exit_time": "2026-09-09T19:15:24.221284",
+    "features": "{}",
+    "source": "pump"
+  },
+  {
+    "mint": "9RdsqgqtfkFkteNcWSu27wDGKcn6A9hTXoVet6TfS5H4",
+    "pnl": -0.967863,
+    "confidence": 0,
+    "exit_reason": "Break-even (+4.9%)",
+    "entry_time": "2026-09-09T20:45:09.518912",
+    "exit_time": "2026-09-09T21:14:48.921313",
+    "features": "{}",
+    "source": "pump"
+  },
+  {
+    "mint": "7paKY5zJ98AgtGsMvRxw68uo9WefQ4eryB5SNfH2pump",
+    "pnl": -4.69297,
+    "confidence": 0,
+    "exit_reason": "Time-based Exit (Dead Coin)",
+    "entry_time": "2026-09-10T16:29:15.960566",
+    "exit_time": "2026-09-10T17:07:21.262708",
+    "features": "{}",
+    "source": "pump"
+  },
+  {
+    "mint": "DhHSjZCE3X7d6M5T5BV2RrtK1X9tsxiWjfk1B41Epump",
+    "pnl": 27.7636,
+    "confidence": 0,
+    "exit_reason": "Micro-Trailing (7% drop)",
+    "entry_time": "2026-09-09T14:19:02.627879",
+    "exit_time": "2026-09-09T14:24:52.124453",
+    "features": "{}",
+    "source": "pump"
+  },
+  {
+    "mint": "5jZ7mRN1WBVT33SFAPEoAhUMFSpQaqDu21tJL1qJpump",
+    "pnl": 23.7244,
+    "confidence": 0,
+    "exit_reason": "Micro-Trailing (7% drop)",
+    "entry_time": "2026-09-10T04:30:58.727988",
+    "exit_time": "2026-09-10T04:32:10.419762",
+    "features": "{}",
+    "source": "pump"
+  },
+  {
+    "mint": "CgPua3juHhCyfSCBRMM8kuRjEvuvt4rf4UbFSE5spump",
+    "pnl": 4.25274,
+    "confidence": 0,
+    "exit_reason": "Micro-Trailing (12% drop)",
+    "entry_time": "2026-09-08T20:17:54.189191",
+    "exit_time": "2026-09-08T20:20:10.099594",
+    "features": "{}",
+    "source": "pump"
+  },
+  {
+    "mint": "H118HpvTMPGno3rSiq2Bx6GF6WMcUyyGUzWSfw24pump",
+    "pnl": 53.8815,
+    "confidence": 0,
+    "exit_reason": "Take Profit (+35%)",
+    "entry_time": "2026-09-08T20:17:59.194325",
+    "exit_time": "2026-09-08T20:21:28.688577",
+    "features": "{}",
+    "source": "pump"
+  },
+  {
+    "mint": "CsaCDAnxVNc83eNxwyi6d4rKWyEcy68Xwf1g9ys6pump",
+    "pnl": 44.4018,
+    "confidence": 0,
+    "exit_reason": "Take Profit (+35%)",
+    "entry_time": "2026-09-09T02:12:42.886509",
+    "exit_time": "2026-09-09T02:24:48.594496",
+    "features": "{}",
+    "source": "pump"
+  },
+  {
+    "mint": "GNbSFXmtcJ48RQFUn1Jan2hVLRCXAWhZM3YXCK5Fpump",
+    "pnl": 6.18814,
+    "confidence": 0,
+    "exit_reason": "Micro-Trailing (7% drop)",
+    "entry_time": "2026-09-10T18:17:55.664913",
+    "exit_time": "2026-09-10T18:23:47.769096",
+    "features": "{}",
+    "source": "pump"
+  },
+  {
+    "mint": "EBB7LUYeYg4SgYqHAQF8cLxWMkiKwyJ9PUX6HVNWpump",
+    "pnl": 24.1445,
+    "confidence": 0,
+    "exit_reason": "Micro-Trailing (7% drop)",
+    "entry_time": "2026-09-09T18:57:33.225196",
+    "exit_time": "2026-09-09T19:00:39.623728",
+    "features": "{}",
+    "source": "pump"
+  },
+  {
+    "mint": "GTUVAyrC5obw8X9gMygt4PeHop4UYCDzMVAYdnhQpump",
+    "pnl": -21.1409,
+    "confidence": 0,
+    "exit_reason": "Hard Stop Loss",
+    "entry_time": "2026-09-10T07:31:22.283823",
+    "exit_time": "2026-09-10T07:31:57.079581",
+    "features": "{}",
+    "source": "pump"
+  },
+  {
+    "mint": "8Kx4MiW5noeXwi3CLQY3m6TxiYqq5pRM9hcXj4F4pump",
+    "pnl": -18.9751,
+    "confidence": 0,
+    "exit_reason": "Hard Stop Loss",
+    "entry_time": "2026-09-08T22:35:18.992801",
+    "exit_time": "2026-09-08T22:38:49.484821",
+    "features": "{}",
+    "source": "pump"
+  },
+  {
+    "mint": "H9gp9xGBEeKcpUNqci1y9nLBALEW6gMHRDoGuyg6pump",
+    "pnl": 6.02612,
+    "confidence": 0,
+    "exit_reason": "Micro-Trailing (12% drop)",
+    "entry_time": "2026-09-08T22:39:19.791101",
+    "exit_time": "2026-09-08T22:44:08.186364",
+    "features": "{}",
+    "source": "pump"
+  },
+  {
+    "mint": "915YcCbtupYLTz3RwfKjYngzBG2Bk2RX8We4D2HSpump",
+    "pnl": -4.61631,
+    "confidence": 0,
+    "exit_reason": "Time-based Exit (Dead Coin)",
+    "entry_time": "2026-09-09T22:49:44.314654",
+    "exit_time": "2026-09-09T23:19:45.217409",
+    "features": "{}",
+    "source": "pump"
+  },
+  {
+    "mint": "A7CTX3onEBhsPuJfPf3GAS1sy92pmfdw1jiQrGScpump",
+    "pnl": -22.0789,
+    "confidence": 0,
+    "exit_reason": "Hard Stop Loss",
+    "entry_time": "2026-09-10T06:55:23.019177",
+    "exit_time": "2026-09-10T06:59:53.325217",
+    "features": "{}",
+    "source": "pump"
+  },
+  {
+    "mint": "HAdg2G82FoM4uhF2R25v4W41WXTY9KKkvDR7YZvNpump",
+    "pnl": -101.444,
+    "confidence": 0,
+    "exit_reason": "Hard Stop Loss (-35%)",
+    "entry_time": "2026-09-10T20:07:25.942736",
+    "exit_time": "2026-09-10T20:07:36.250543",
+    "features": "{}",
+    "source": "pump"
+  },
+  {
+    "mint": "4SU6CYDhHdEUZW71M5pjVABLHoCX8CoHuu8TdfbMpump",
+    "pnl": 5.36086,
+    "confidence": 0,
+    "exit_reason": "Micro-Trailing (12% drop)",
+    "entry_time": "2026-09-09T17:39:25.125964",
+    "exit_time": "2026-09-09T17:41:42.139038",
+    "features": "{}",
+    "source": "pump"
+  },
+  {
+    "mint": "A5ZnCvZDeNdBoRgV8iw5fkuQBQuqNiwseiZoFvScpump",
+    "pnl": 38.493,
+    "confidence": 0,
+    "exit_reason": "Micro-Trailing (7% drop)",
+    "entry_time": "2026-09-09T18:57:36.41734",
+    "exit_time": "2026-09-09T19:03:59.223789",
+    "features": "{}",
+    "source": "pump"
+  },
+  {
+    "mint": "GqwEctFskdnAjrG3WKE6AgUqswxYNADm7MwrHigfpump",
+    "pnl": 5.41149,
+    "confidence": 0,
+    "exit_reason": "Lock Profit (+10.0%)",
+    "entry_time": "2026-09-10T23:54:49.131097",
+    "exit_time": "2026-09-11T00:15:08.740842",
+    "features": "{}",
+    "source": "pump"
+  },
+  {
+    "mint": "88nTat2rdyYQ4ak8JjF5mjffq4m6k3X4nZmjd9nWpump",
+    "pnl": 25.7886,
+    "confidence": 0,
+    "exit_reason": "Micro-Trailing (7% drop)",
+    "entry_time": "2026-09-09T18:57:39.223104",
+    "exit_time": "2026-09-09T19:04:26.326698",
+    "features": "{}",
+    "source": "pump"
+  },
+  {
+    "mint": "2RX8rVoMSCQkDMKeDLNBRc2mXDoTevx77T8gTQ4KkdPU",
+    "pnl": -23.1705,
+    "confidence": 0,
+    "exit_reason": "Hard Stop Loss",
+    "entry_time": "2026-09-09T19:05:40.915833",
+    "exit_time": "2026-09-09T19:12:24.72357",
+    "features": "{}",
+    "source": "pump"
+  },
+  {
+    "mint": "CKgdzzmPQvGFV3MXJTKLYWuZNeaBy5cHMrSXnF9Zpump",
+    "pnl": -4.97087,
+    "confidence": 0,
+    "exit_reason": "Time-based Exit (Dead Coin)",
+    "entry_time": "2026-09-09T19:00:44.514842",
+    "exit_time": "2026-09-09T19:30:46.222547",
+    "features": "{}",
+    "source": "pump"
+  },
+  {
+    "mint": "3d2UiLwJmRUtgnH5FG7K55GYBmojZmJn5GHPyCUCpump",
+    "pnl": -4.13079,
+    "confidence": 0,
+    "exit_reason": "Time-based Exit (Dead Coin)",
+    "entry_time": "2026-09-09T19:04:39.621204",
+    "exit_time": "2026-09-09T19:37:16.21292",
+    "features": "{}",
+    "source": "pump"
+  },
+  {
+    "mint": "MukLDtJ8Cx9DxLbeyLRSWPSposTMWuwHANbuaudpump",
+    "pnl": -12.2599,
+    "confidence": 0,
+    "exit_reason": "Time-based Exit (Dead Coin)",
+    "entry_time": "2026-09-12T19:50:19.777192",
+    "exit_time": "2026-09-12T20:20:21.083073",
+    "features": "{}",
+    "source": "pump"
+  },
+  {
+    "mint": "FiHpuVdsEqsMC571m9e7C9Ct1mgUCr6x9wB3pq1Fpn56",
+    "pnl": -11.8389,
+    "confidence": 0,
+    "exit_reason": "Time-based Exit (Dead Coin)",
+    "entry_time": "2026-09-09T21:08:25.519699",
+    "exit_time": "2026-09-09T21:38:25.725932",
+    "features": "{}",
+    "source": "pump"
+  },
+  {
+    "mint": "G1iAXxMEsx6EwtPyw5mLgvWoZZVPhNKiHjimFti8pump",
+    "pnl": -3.90421,
+    "confidence": 0,
+    "exit_reason": "Time-based Exit (Dead Coin)",
+    "entry_time": "2026-09-11T06:54:05.035962",
+    "exit_time": "2026-09-11T07:25:33.532778",
+    "features": "{}",
+    "source": "pump"
+  },
+  {
+    "mint": "6wRM3pvVa3JLW4UtzVn5uvXiUtPCXrDpLPYkEffapump",
+    "pnl": 25.7011,
+    "confidence": 0,
+    "exit_reason": "Micro-Trailing (20% drop)",
+    "entry_time": "2026-09-12T11:42:59.088205",
+    "exit_time": "2026-09-12T11:49:23.495161",
+    "features": "{}",
+    "source": "pump"
+  },
+  {
+    "mint": "Ai66LHZG9MCzg1WKdawwqduVAXpNDUuV8M3uyq5ppump",
+    "pnl": -5.76801,
+    "confidence": 0,
+    "exit_reason": "Time-based Exit (Dead Coin)",
+    "entry_time": "2026-09-12T20:45:32.957734",
+    "exit_time": "2026-09-12T21:15:59.456431",
+    "features": "{}",
+    "source": "pump"
+  },
+  {
+    "mint": "HQSXsxD2BhpA8v21TwTjv6Tbkr8yYH3B8RkGS1Bspump",
+    "pnl": -8.27893,
+    "confidence": 0,
+    "exit_reason": "Time-based Exit (Dead Coin)",
+    "entry_time": "2026-09-09T20:44:58.025621",
+    "exit_time": "2026-09-09T21:14:58.916208",
+    "features": "{}",
+    "source": "pump"
+  },
+  {
+    "mint": "ChELZGaK5hbbo71QrPo4VQrSeW9BqeJ4WcEyXSw4pump",
+    "pnl": -40.9839,
+    "confidence": 0,
+    "exit_reason": "Hard Stop Loss (-35%)",
+    "entry_time": "2026-09-12T11:50:06.792146",
+    "exit_time": "2026-09-12T11:52:11.984604",
+    "features": "{}",
+    "source": "pump"
+  },
+  {
+    "mint": "25RJCenFdryR7qfLj1QXrYu8QgcuZxnWTfMM4cQypump",
+    "pnl": 60.4527,
+    "confidence": 0,
+    "exit_reason": "Micro-Trailing (15% drop)",
+    "entry_time": "2026-09-12T15:43:25.801023",
+    "exit_time": "2026-09-12T15:53:55.814118",
+    "features": "{}",
+    "source": "pump"
+  },
+  {
+    "mint": "5oYikwfp6WBso6faBoYRvLuzSQc5cpDcg3xFm7XbVTdD",
+    "pnl": 9.87056,
+    "confidence": 0,
+    "exit_reason": "Micro-Trailing (20% drop)",
+    "entry_time": "2026-09-12T02:17:44.981088",
+    "exit_time": "2026-09-12T03:17:41.077507",
+    "features": "{}",
+    "source": "pump"
+  },
+  {
+    "mint": "EEpng77ZPn9FbgbT4xsRjwuxNCcMBYq3HTwEscyTpump",
+    "pnl": -4.63024,
+    "confidence": 0,
+    "exit_reason": "Time-based Exit (Dead Coin)",
+    "entry_time": "2026-09-12T23:25:30.223207",
+    "exit_time": "2026-09-12T23:55:30.817488",
+    "features": "{}",
+    "source": "pump"
+  },
+  {
+    "mint": "8SqYfYNm3g7TQJmm7EaxYJcDV9f5G3Y7t92DzbUQKFws",
+    "pnl": -3.97022,
+    "confidence": 0,
+    "exit_reason": "Lock Profit (+10.0%)",
+    "entry_time": "2026-09-11T17:31:53.183488",
+    "exit_time": "2026-09-11T18:03:47.289202",
+    "features": "{}",
+    "source": "pump"
+  },
+  {
+    "mint": "3wRMLKQN1NXfEJWUnCq5BqdDNQhj6kADWJBfRAufpump",
+    "pnl": -7.70568,
+    "confidence": 0,
+    "exit_reason": "Time-based Exit (Dead Coin)",
+    "entry_time": "2026-09-10T21:23:07.442035",
+    "exit_time": "2026-09-10T21:54:00.433092",
+    "features": "{}",
+    "source": "pump"
+  },
+  {
+    "mint": "D6uShX4iEW8ryw3fAWwCLxw8dAuJY9r6xpk3QGZoJyG5",
+    "pnl": 8.00154,
+    "confidence": 0,
+    "exit_reason": "Micro-Trailing (20% drop)",
+    "entry_time": "2026-09-11T12:54:34.283937",
+    "exit_time": "2026-09-11T13:01:28.179923",
+    "features": "{}",
+    "source": "pump"
+  },
+  {
+    "mint": "99kxekvdDAUKHBTw7hXVmFtsLWvCnNJFtJCEyAXMpump",
+    "pnl": -55.8408,
+    "confidence": 0,
+    "exit_reason": "Hard Stop Loss (-35%)",
+    "entry_time": "2026-09-12T13:59:05.390396",
+    "exit_time": "2026-09-12T14:00:10.978646",
+    "features": "{}",
+    "source": "pump"
+  },
+  {
+    "mint": "69LjZUUzxj3Cb3Fxeo1X4QpYEQTboApkhXTysPpbpump",
+    "pnl": -4.17032,
+    "confidence": 0,
+    "exit_reason": "Time-based Exit (Dead Coin)",
+    "entry_time": "2026-09-11T09:02:16.733061",
+    "exit_time": "2026-09-11T09:33:50.535776",
+    "features": "{}",
+    "source": "pump"
+  },
+  {
+    "mint": "CmXSStKTHrVLyvCDPzPoCkjYt5aMpG6p3c88yPpbfmpx",
+    "pnl": 209.382,
+    "confidence": 0,
+    "exit_reason": "Moonbag Exit (40% drop)",
+    "entry_time": "2026-09-12T16:32:17.207388",
+    "exit_time": "2026-09-12T17:39:25.714152",
+    "features": "{}",
+    "source": "pump"
+  },
+  {
+    "mint": "6GmAFSYs4gk3FDao5FzzySQpPZaWsa4rUJHacpMpUNgx",
+    "pnl": -3.89203,
+    "confidence": 0,
+    "exit_reason": "Time-based Exit (Dead Coin)",
+    "entry_time": "2026-09-12T21:37:38.523304",
+    "exit_time": "2026-09-12T22:09:33.827061",
+    "features": "{}",
+    "source": "pump"
+  },
+  {
+    "mint": "GNSYDUo3LcspjAuRb8TuXXbeHwZduJGwaH1pAsfXvJSe",
+    "pnl": -12.9433,
+    "confidence": 0,
+    "exit_reason": "Break-even (+4.9%)",
+    "entry_time": "2026-09-12T09:08:01.893686",
+    "exit_time": "2026-09-12T09:10:55.989594",
+    "features": "{}",
+    "source": "pump"
+  },
+  {
+    "mint": "7LNfxxMAu5sNbg4uY5Kuu5Tvg6CsQGUo4ASkD79Xpump",
+    "pnl": 29.2992,
+    "confidence": 0,
+    "exit_reason": "Micro-Trailing (20% drop)",
+    "entry_time": "2026-09-10T23:55:50.735521",
+    "exit_time": "2026-09-11T00:03:57.941049",
+    "features": "{}",
+    "source": "pump"
+  },
+  {
+    "mint": "J34G9pftSfEnidz9quVXziDL6CeHjaieh35hvEYY4FHM",
+    "pnl": -6.57635,
+    "confidence": 0,
+    "exit_reason": "Time-based Exit (Dead Coin)",
+    "entry_time": "2026-09-12T15:43:49.011433",
+    "exit_time": "2026-09-12T16:13:49.205004",
+    "features": "{}",
+    "source": "pump"
+  },
+  {
+    "mint": "H8erkk9Bj5V3SouEUB4Tp1d5DX4BKQ2UkGXzGGTpump",
+    "pnl": 4.34796,
+    "confidence": 0,
+    "exit_reason": "Lock Profit (+10.0%)",
+    "entry_time": "2026-09-12T05:32:42.388098",
+    "exit_time": "2026-09-12T05:38:33.782616",
+    "features": "{}",
+    "source": "pump"
+  },
+  {
+    "mint": "33LZGLLvtRDx3uAfJ1CcBSC7pNFqdiCBAvwPsVkBpump",
+    "pnl": -14.2218,
+    "confidence": 0,
+    "exit_reason": "Time-based Exit (Dead Coin)",
+    "entry_time": "2026-09-11T12:33:48.791759",
+    "exit_time": "2026-09-11T13:05:45.083596",
+    "features": "{}",
+    "source": "pump"
+  },
+  {
+    "mint": "G4vqe8KAcRGTb7Kc55n9sz43aR4ugTPdSeUnAXZhpump",
+    "pnl": 9.60862,
+    "confidence": 0,
+    "exit_reason": "Micro-Trailing (15% drop)",
+    "entry_time": "2026-09-11T04:26:12.347187",
+    "exit_time": "2026-09-11T05:28:31.543173",
+    "features": "{}",
+    "source": "pump"
+  },
+  {
+    "mint": "AuXiroMNJbGHbsaehHrAS9rEWmCjEREaSywS3Pq2pump",
+    "pnl": -31.9821,
+    "confidence": 0,
+    "exit_reason": "Moonbag Exit (40% drop)",
+    "entry_time": "2026-09-11T09:35:13.332244",
+    "exit_time": "2026-09-11T10:21:06.133021",
+    "features": "{}",
+    "source": "pump"
+  },
+  {
+    "mint": "GKCvJmW9vgsrvQMsYBySFVcvtVuGeHN6M5B54DPCpump",
+    "pnl": -54.4019,
+    "confidence": 0,
+    "exit_reason": "Hard Stop Loss (-35%)",
+    "entry_time": "2026-09-11T00:01:01.63591",
+    "exit_time": "2026-09-11T00:13:00.334922",
+    "features": "{}",
+    "source": "pump"
+  },
+  {
+    "mint": "FuMvkfmjwYG5jsQ7wQkEaVi8dXuQo6QNvbyQqCm6pump",
+    "pnl": 0.347464,
+    "confidence": 0,
+    "exit_reason": "Lock Profit (+10.0%)",
+    "entry_time": "2026-09-11T15:31:35.477963",
+    "exit_time": "2026-09-11T15:42:08.480634",
+    "features": "{}",
+    "source": "pump"
+  },
+  {
+    "mint": "CTPoyCwkjMvoJwU4xvZZqoD8tiYk6yDchySiN5gGpump",
+    "pnl": -13.1139,
+    "confidence": 0,
+    "exit_reason": "Time-based Exit (Dead Coin)",
+    "entry_time": "2026-09-13T09:56:10.299274",
+    "exit_time": "2026-09-13T10:26:09.601678",
+    "features": "{}",
+    "source": "pump"
+  },
+  {
+    "mint": "7mC6oVTmVFzBEndWfKxwJiy6YhuR7DkcPPnFnrctpump",
+    "pnl": -71.6947,
+    "confidence": 0,
+    "exit_reason": "Hard Stop Loss (-35%)",
+    "entry_time": "2026-09-10T19:57:28.607365",
+    "exit_time": "2026-09-10T19:58:34.813114",
+    "features": "{}",
+    "source": "pump"
+  },
+  {
+    "mint": "J8PSdNP3QewKq2Z1JJJFDMaqF7KcaiJhR7gbr5KZpump",
+    "pnl": -8.71821,
+    "confidence": 0,
+    "exit_reason": "Time-based Exit (Dead Coin)",
+    "entry_time": "2026-09-10T20:05:57.356008",
+    "exit_time": "2026-09-10T20:36:52.650728",
+    "features": "{}",
+    "source": "pump"
+  },
+  {
+    "mint": "EDTmJjr4VoV9S8ftCQFt4ZBvmDy9s1tBoiWVrmDApump",
+    "pnl": -79.1246,
+    "confidence": 0,
+    "exit_reason": "Hard Stop Loss (-35%)",
+    "entry_time": "2026-09-10T20:37:48.755281",
+    "exit_time": "2026-09-10T20:38:49.857833",
+    "features": "{}",
+    "source": "pump"
+  },
+  {
+    "mint": "5aC7DM8QPhJnxWuuvxB8r6g99qHhCwBF45XQWMorpump",
+    "pnl": -91.2889,
+    "confidence": 0,
+    "exit_reason": "Hard Stop Loss (-35%)",
+    "entry_time": "2026-09-10T20:37:48.755882",
+    "exit_time": "2026-09-10T20:38:50.550202",
+    "features": "{}",
+    "source": "pump"
+  },
+  {
+    "mint": "A13oRB9FFaiUjfi6LdCg6p9ka1u8SfGkUFs4SKvPpump",
+    "pnl": -6.33124,
+    "confidence": 0,
+    "exit_reason": "Time-based Exit (Dead Coin)",
+    "entry_time": "2026-09-10T20:11:31.757166",
+    "exit_time": "2026-09-10T20:41:57.447064",
+    "features": "{}",
+    "source": "pump"
+  },
+  {
+    "mint": "9fnxwniorw1n6aoCJWjPVMXND981qdJanb2Tw5mWpump",
+    "pnl": 5.62773,
+    "confidence": 0,
+    "exit_reason": "Lock Profit (+10.0%)",
+    "entry_time": "2026-09-11T06:12:15.942604",
+    "exit_time": "2026-09-11T06:25:26.632636",
+    "features": "{}",
+    "source": "pump"
+  },
+  {
+    "mint": "6ehEcTMCc85aNF4x9CWx8HuvWGhxQtvKdhKVf2HDpump",
+    "pnl": -4.38077,
+    "confidence": 0,
+    "exit_reason": "Time-based Exit (Dead Coin)",
+    "entry_time": "2026-09-13T02:56:31.774916",
+    "exit_time": "2026-09-13T03:26:19.573318",
+    "features": "{}",
+    "source": "pump"
+  },
+  {
+    "mint": "CiqZrrsxWV9tyz6rL2AfVuibEH45FZq62Z9ZyEdFpump",
+    "pnl": -98.9767,
+    "confidence": 0,
+    "exit_reason": "Hard Stop Loss (-35%)",
+    "entry_time": "2026-09-11T12:34:09.081084",
+    "exit_time": "2026-09-11T12:38:34.391761",
+    "features": "{}",
+    "source": "pump"
+  },
+  {
+    "mint": "CdixZU5dNFGXZ2jojQjree5EyynrsJ4GjDdXvZEVSLyX",
+    "pnl": -18.5219,
+    "confidence": 0,
+    "exit_reason": "Break-even (+4.9%)",
+    "entry_time": "2026-09-11T23:32:26.681618",
+    "exit_time": "2026-09-11T23:42:08.281568",
+    "features": "{}",
+    "source": "pump"
+  },
+  {
+    "mint": "JD23tFDPhxyKX53w5dE1SaMFgYAFywGjiCsVn8CbPou6",
+    "pnl": -4.41055,
+    "confidence": 0,
+    "exit_reason": "Time-based Exit (Dead Coin)",
+    "entry_time": "2026-09-11T14:38:06.28126",
+    "exit_time": "2026-09-11T16:00:02.57971",
+    "features": "{}",
+    "source": "pump"
+  },
+  {
+    "mint": "2pRVUtGgbUpFVtY9dFhH5pLeyJZX6vhmaG89uXgcpump",
+    "pnl": 8.16278,
+    "confidence": 0,
+    "exit_reason": "Micro-Trailing (15% drop)",
+    "entry_time": "2026-09-11T17:45:18.280012",
+    "exit_time": "2026-09-11T17:51:33.577597",
+    "features": "{}",
+    "source": "pump"
+  },
+  {
+    "mint": "Gt9brNVXP7gdGtUqZLcJAhbZTjLEcKrA53F18fRSEeAp",
+    "pnl": 601.064,
+    "confidence": 0,
+    "exit_reason": "Moonbag Exit (40% drop)",
+    "entry_time": "2026-09-11T23:36:32.677921",
+    "exit_time": "2026-09-11T23:57:30.778305",
+    "features": "{}",
+    "source": "pump"
+  },
+  {
+    "mint": "2dV9NZ8WEKDX98GrvpjRLUb5DiwBtwPZ52fRLQxEpump",
+    "pnl": -0.174286,
+    "confidence": 0,
+    "exit_reason": "Break-even (+4.9%)",
+    "entry_time": "2026-09-12T15:21:05.589411",
+    "exit_time": "2026-09-12T15:22:08.099646",
+    "features": "{}",
+    "source": "pump"
+  },
+  {
+    "mint": "66aBzVKucLmWvY2JEU5CjAYcUSz7YcpoBDfXXWV9pump",
+    "pnl": -39.4975,
+    "confidence": 0,
+    "exit_reason": "Hard Stop Loss (-35%)",
+    "entry_time": "2026-09-12T19:13:55.700118",
+    "exit_time": "2026-09-12T19:22:00.413561",
+    "features": "{}",
+    "source": "pump"
+  },
+  {
+    "mint": "67v7qwNf2KkjiPPQ3D2t2rJiv6g7Gsx8N3rfAes3pump",
+    "pnl": -51.74,
+    "confidence": 0,
+    "exit_reason": "Hard Stop Loss (-35%)",
+    "entry_time": "2026-09-12T19:11:23.005312",
+    "exit_time": "2026-09-12T19:22:04.605013",
+    "features": "{}",
+    "source": "pump"
+  },
+  {
+    "mint": "6nuPmphuduxGLABDm9UMfwFgfKWTFhcNNucfotVCpump",
+    "pnl": -1.49104,
+    "confidence": 0,
+    "exit_reason": "Lock Profit (+10.0%)",
+    "entry_time": "2026-09-12T19:12:16.802256",
+    "exit_time": "2026-09-12T19:24:18.007168",
+    "features": "{}",
+    "source": "pump"
+  },
+  {
+    "mint": "CdAoD87kYKHbtRFawiSqQJMX1pbKisoG7Ha1oJ47kB26",
+    "pnl": -43.0419,
+    "confidence": 0,
+    "exit_reason": "Hard Stop Loss (-35%)",
+    "entry_time": "2026-09-12T19:50:21.276451",
+    "exit_time": "2026-09-12T20:04:04.58442",
+    "features": "{}",
+    "source": "pump"
+  },
+  {
+    "mint": "GxVwjZjhAve6J8maGbwm8krzWB3Qgo33FXR7fweZpump",
+    "pnl": 7.76196,
+    "confidence": 0,
+    "exit_reason": "Micro-Trailing (15% drop)",
+    "entry_time": "2026-09-12T20:01:48.077651",
+    "exit_time": "2026-09-12T20:06:38.175843",
+    "features": "{}",
+    "source": "pump"
+  },
+  {
+    "mint": "J8X5ygWHY5uHFch7m3MisSC7eDAWpAkgi1pyqfT5pump",
+    "pnl": -14.9259,
+    "confidence": 0,
+    "exit_reason": "Time-based Exit (Dead Coin)",
+    "entry_time": "2026-09-13T09:44:50.990412",
+    "exit_time": "2026-09-13T10:14:50.605241",
+    "features": "{}",
+    "source": "pump"
+  },
+  {
+    "mint": "Cp6AVzuSJ8pDCkYGBxAX3p9Dk77pHSsd35yHh19GJC3i",
+    "pnl": -4.77048,
+    "confidence": 0,
+    "exit_reason": "Time-based Exit (Dead Coin)",
+    "entry_time": "2026-09-13T09:43:40.192538",
+    "exit_time": "2026-09-13T10:47:01.490386",
+    "features": "{}",
+    "source": "pump"
+  },
+  {
+    "mint": "BHS8LHW11NKxzxyCtqz9NJbTkh3h94WqeMVYgTY5pump",
+    "pnl": -29.459,
+    "confidence": 0,
+    "exit_reason": "Hard Stop Loss (-25%)",
+    "entry_time": "2026-09-13T09:56:08.900056",
+    "exit_time": "2026-09-13T10:18:37.7934",
+    "features": "{}",
+    "source": "pump"
+  },
+  {
+    "mint": "pumpCmXqMfrsAkQ5r49WcJnRayYRqmXz6ae8H7H9Dfn",
+    "pnl": -3.88073,
+    "confidence": 0,
+    "exit_reason": "Time-based Exit (Dead Coin)",
+    "entry_time": "2026-09-12T19:50:20.683086",
+    "exit_time": "2026-09-12T20:28:43.176202",
+    "features": "{}",
+    "source": "pump"
+  },
+  {
+    "mint": "4aPz3rGjf8Ejky5jaCfRb7HF6VEmfku8b4uAiLyMpump",
+    "pnl": 13.001,
+    "confidence": 0,
+    "exit_reason": "Micro-Trailing (20% drop)",
+    "entry_time": "2026-09-12T20:29:30.275291",
+    "exit_time": "2026-09-12T20:35:43.082831",
+    "features": "{}",
+    "source": "pump"
+  },
+  {
+    "mint": "7McEWYQfbCc1m744nJUeJgvt78FiJTWWsgoCrUG4pump",
+    "pnl": -9.12508,
+    "confidence": 0,
+    "exit_reason": "Lock Profit (+10.0%)",
+    "entry_time": "2026-09-13T00:07:49.821896",
+    "exit_time": "2026-09-13T00:19:46.913923",
+    "features": "{}",
+    "source": "pump"
+  },
+  {
+    "mint": "EUTipzFepgT9614RaCQaKcqL2NnJFDmvpTcZTrXYpump",
+    "pnl": -37.8729,
+    "confidence": 0,
+    "exit_reason": "Hard Stop Loss (-25%)",
+    "entry_time": "2026-09-13T01:12:02.124557",
+    "exit_time": "2026-09-13T01:24:54.025391",
+    "features": "{}",
+    "source": "pump"
+  },
+  {
+    "mint": "AqoPZcUumKUBHrnfBsNtoNuneYEjoimaiWYq8GH8gpX9",
+    "pnl": -3.69936,
+    "confidence": 0,
+    "exit_reason": "Lock Profit (+10.0%)",
+    "entry_time": "2026-09-13T02:55:18.070161",
+    "exit_time": "2026-09-13T02:59:17.271052",
+    "features": "{}",
+    "source": "pump"
+  },
+  {
+    "mint": "Dz9mQ9NzkBcCsuGPFJ3r1bS4wgqKMHBPiVuniW8Mbonk",
+    "pnl": -6.28643,
+    "confidence": 0,
+    "exit_reason": "Time-based Exit (Dead Coin)",
+    "entry_time": "2026-09-13T06:42:42.482106",
+    "exit_time": "2026-09-13T07:12:40.490433",
+    "features": "{}",
+    "source": "pump"
+  },
+  {
+    "mint": "4wmm49P3dgjmRhUx7hUS7fePTn3csSQzVXGxt6DKG113",
+    "pnl": -17.3496,
+    "confidence": 0,
+    "exit_reason": "Time-based Exit (Dead Coin)",
+    "entry_time": "2026-09-12T20:57:05.359486",
+    "exit_time": "2026-09-12T21:27:07.559596",
+    "features": "{}",
+    "source": "pump"
+  },
+  {
+    "mint": "BmhfH3W7JdEe7UGkw47m1EH8F6ov3M5jDc222ffK9Eeh",
+    "pnl": -7.54536,
+    "confidence": 0,
+    "exit_reason": "Lock Profit (+10.0%)",
+    "entry_time": "2026-09-12T21:37:12.6149",
+    "exit_time": "2026-09-12T21:49:19.717423",
+    "features": "{}",
+    "source": "pump"
+  },
+  {
+    "mint": "6oGuFDbEeaSzTcvrmmd2MqfNYwHKXFoN7regcR22pump",
+    "pnl": -4.78166,
+    "confidence": 0,
+    "exit_reason": "Time-based Exit (Dead Coin)",
+    "entry_time": "2026-09-13T02:56:41.778087",
+    "exit_time": "2026-09-13T03:26:43.871847",
+    "features": "{}",
+    "source": "pump"
+  },
+  {
+    "mint": "Hy1LfQLL4zLQihmiQKZm7DQzXm5K8aVSfKtdHFYXbKMm",
+    "pnl": -7.82981,
+    "confidence": 0,
+    "exit_reason": "Break-even (+4.9%)",
+    "entry_time": "2026-09-13T03:16:58.084376",
+    "exit_time": "2026-09-13T03:36:28.270582",
+    "features": "{}",
+    "source": "pump"
+  },
+  {
+    "mint": "7oiTF3Scfg424abdCy9GEXSAa1SRhbSrXF8QVSihpump",
+    "pnl": 17.8512,
+    "confidence": 0,
+    "exit_reason": "Wide Trailing Stop (20% drop from ATH)",
+    "entry_time": "2026-09-08T18:58:57.324018",
+    "exit_time": null,
+    "features": "{}",
+    "source": "raydium"
+  },
+  {
+    "mint": "CiqZrrsxWV9tyz6rL2AfVuibEH45FZq62Z9ZyEdFpump",
+    "pnl": 40.8875,
+    "confidence": 0,
+    "exit_reason": "Wide Trailing Stop (20% drop from ATH)",
+    "entry_time": "2026-09-11T09:34:57.139453",
+    "exit_time": "2026-09-11T10:28:20.235653",
+    "features": "{}",
+    "source": "raydium"
+  },
+  {
+    "mint": "6e4hse1G7SeJKaK2dwGwD7d9c7VZVPyehKj7uNz8pump",
+    "pnl": -29.6104,
+    "confidence": 0,
+    "exit_reason": "Swing Stop Loss (-25%)",
+    "entry_time": "2026-09-08T22:46:06.480276",
+    "exit_time": "2026-09-08T22:46:26.694423",
+    "features": "{}",
+    "source": "raydium"
+  },
+  {
+    "mint": "3tAtTzQAKm4fddbGT6bB1pqTj1AzmxwakhLe39tdpump",
+    "pnl": -22.1075,
+    "confidence": 0,
+    "exit_reason": "Swing Stop Loss (-15%)",
+    "entry_time": "2026-09-10T11:20:32.354658",
+    "exit_time": "2026-09-10T11:22:11.255654",
+    "features": "{}",
+    "source": "raydium"
+  },
+  {
+    "mint": "Gx8UwSdHsswuMGd4yuC2qnB9XKN12HCQkMaKd2dCpump",
+    "pnl": -34.5718,
+    "confidence": 0,
+    "exit_reason": "Swing Stop Loss (-15%)",
+    "entry_time": "2026-09-09T22:23:55.127496",
+    "exit_time": "2026-09-09T22:24:53.118734",
+    "features": "{}",
+    "source": "raydium"
+  },
+  {
+    "mint": "FTwhPMU5j3y3JWwQ56ZFswX11xTncvJDswSRk4zxpump",
+    "pnl": -101.007,
+    "confidence": 0,
+    "exit_reason": "Swing Stop Loss (-15%)",
+    "entry_time": "2026-09-10T05:58:57.317339",
+    "exit_time": "2026-09-10T06:01:55.320512",
+    "features": "{}",
+    "source": "raydium"
+  },
+  {
+    "mint": "4tftz6zvd4MvJ2myhtwAPifF4vGEQXvUHZXtMyxPpump",
+    "pnl": -19.1105,
+    "confidence": 0,
+    "exit_reason": "Swing Stop Loss (-15%)",
+    "entry_time": "2026-09-11T10:25:13.736691",
+    "exit_time": "2026-09-11T10:27:25.2343",
+    "features": "{}",
+    "source": "raydium"
+  },
+  {
+    "mint": "6Jcr2CQkcUSyrGY1z3rMmc1oduLfXUs7Pse6zfMXpump",
+    "pnl": 50.675,
+    "confidence": 0,
+    "exit_reason": "Wide Trailing Stop (25% drop from ATH)",
+    "entry_time": "2026-09-09T18:04:22.240559",
+    "exit_time": "2026-09-09T18:06:58.53867",
+    "features": "{}",
+    "source": "raydium"
+  },
+  {
+    "mint": "ewryMP2UGtPvyZufkUxNxj1Mzf5qzX2svmmaty9pump",
+    "pnl": -99.9977,
+    "confidence": 0,
+    "exit_reason": "Wide Trailing Stop (20% drop from ATH)",
+    "entry_time": "2026-09-10T20:05:57.356583",
+    "exit_time": "2026-09-10T20:13:13.146234",
+    "features": "{}",
+    "source": "raydium"
+  },
+  {
+    "mint": "gU2Es58UTzbvHnYvoshNprnP6LVVe8UiSWTpDVvpump",
+    "pnl": -41.2524,
+    "confidence": 0,
+    "exit_reason": "Swing Stop Loss (-25%)",
+    "entry_time": "2026-09-09T01:52:23.093444",
+    "exit_time": "2026-09-09T02:02:53.995659",
+    "features": "{}",
+    "source": "raydium"
+  },
+  {
+    "mint": "AtuRhvwxayEbMm5jUGfy6xis1DzPhKLuPecKJ4A8pump",
+    "pnl": -99.9597,
+    "confidence": 0,
+    "exit_reason": "Swing Stop Loss (-15%)",
+    "entry_time": "2026-09-09T19:38:30.118854",
+    "exit_time": "2026-09-09T19:59:23.824963",
+    "features": "{}",
+    "source": "raydium"
+  },
+  {
+    "mint": "GKCvJmW9vgsrvQMsYBySFVcvtVuGeHN6M5B54DPCpump",
+    "pnl": 103.806,
+    "confidence": 0,
+    "exit_reason": "Wide Trailing Stop (25% drop from ATH)",
+    "entry_time": "2026-09-10T20:14:18.247367",
+    "exit_time": "2026-09-10T20:17:30.847322",
+    "features": "{}",
+    "source": "raydium"
+  },
+  {
+    "mint": "F8fQAJLsfpYhSPS8oZS4fBzahHkyyFRd3PtiJarVpump",
+    "pnl": -42.5891,
+    "confidence": 0,
+    "exit_reason": "Swing Stop Loss (-25%)",
+    "entry_time": "2026-09-09T02:07:07.391082",
+    "exit_time": "2026-09-09T02:09:29.189894",
+    "features": "{}",
+    "source": "raydium"
+  },
+  {
+    "mint": "HJdsfQwbSdS6KnSWwvu3qAW9JpQ5ThaLRjnSMVyjpump",
+    "pnl": -36.8007,
+    "confidence": 0,
+    "exit_reason": "Swing Stop Loss (-25%)",
+    "entry_time": "2026-09-09T02:40:21.590705",
+    "exit_time": "2026-09-09T02:44:07.482665",
+    "features": "{}",
+    "source": "raydium"
+  },
+  {
+    "mint": "4a6KKQSxkpErq8QoL9ywfUpjxptxUXt3TdTy5m8juATr",
+    "pnl": -43.5105,
+    "confidence": 0,
+    "exit_reason": "Swing Stop Loss (-25%)",
+    "entry_time": "2026-09-09T02:46:27.487427",
+    "exit_time": "2026-09-09T02:47:08.290687",
+    "features": "{}",
+    "source": "raydium"
+  },
+  {
+    "mint": "7paKY5zJ98AgtGsMvRxw68uo9WefQ4eryB5SNfH2pump",
+    "pnl": -18.9149,
+    "confidence": 0,
+    "exit_reason": "Swing Stop Loss (-15%)",
+    "entry_time": "2026-09-10T23:20:54.130817",
+    "exit_time": "2026-09-11T00:03:08.444143",
+    "features": "{}",
+    "source": "raydium"
+  },
+  {
+    "mint": "5Uh8h8fEGYCK6zifyWEWkrzBTcigWLebUnfU5Wvg6h3J",
+    "pnl": -24.4258,
+    "confidence": 0,
+    "exit_reason": "Swing Stop Loss (-15%)",
+    "entry_time": "2026-09-10T11:14:29.853402",
+    "exit_time": "2026-09-10T11:23:08.562446",
+    "features": "{}",
+    "source": "raydium"
+  },
+  {
+    "mint": "47M1d6mMosqPqcbeku4T3LosYDo5EQQsLKNcKhqupump",
+    "pnl": -21.7089,
+    "confidence": 0,
+    "exit_reason": "Swing Stop Loss (-15%)",
+    "entry_time": "2026-09-10T09:29:06.175879",
+    "exit_time": "2026-09-10T09:34:36.88382",
+    "features": "{}",
+    "source": "raydium"
+  },
+  {
+    "mint": "AyGJuAx5foDftT6gsStkB92msZ9wMmK7a6FLy96rpump",
+    "pnl": 23.2812,
+    "confidence": 0,
+    "exit_reason": "Wide Trailing Stop (20% drop from ATH)",
+    "entry_time": "2026-09-09T20:02:27.027087",
+    "exit_time": "2026-09-09T20:09:15.315663",
+    "features": "{}",
+    "source": "raydium"
+  },
+  {
+    "mint": "BnFAtjxuY6gTJyTgUtKrAa1VRGcE6GMzWv4287TRpump",
+    "pnl": 40.514,
+    "confidence": 0,
+    "exit_reason": "Wide Trailing Stop (20% drop from ATH)",
+    "entry_time": "2026-09-10T00:33:53.11529",
+    "exit_time": "2026-09-10T01:00:28.227648",
+    "features": "{}",
+    "source": "raydium"
+  },
+  {
+    "mint": "Hm5hai2nsw37My7aEVe4yjR2pc6JyaBawe1VkquQpump",
+    "pnl": -30.4618,
+    "confidence": 0,
+    "exit_reason": "Swing Stop Loss (-25%)",
+    "entry_time": "2026-09-08T22:13:03.387827",
+    "exit_time": "2026-09-08T22:15:18.989701",
+    "features": "{}",
+    "source": "raydium"
+  },
+  {
+    "mint": "AZceRv4paXFPmDntuZoASF5yfAZsYRKuw8FkqvJPpump",
+    "pnl": -22.9835,
+    "confidence": 0,
+    "exit_reason": "Swing Stop Loss (-15%)",
+    "entry_time": "2026-09-10T17:49:52.460664",
+    "exit_time": "2026-09-10T17:55:49.669328",
+    "features": "{}",
+    "source": "raydium"
+  },
+  {
+    "mint": "9i8wN676UxL4LrgzikvyaojKdXFAVEStJwiRgi9upump",
+    "pnl": -27.9926,
+    "confidence": 0,
+    "exit_reason": "Swing Stop Loss (-15%)",
+    "entry_time": "2026-09-09T20:45:01.125793",
+    "exit_time": "2026-09-09T21:08:59.026949",
+    "features": "{}",
+    "source": "raydium"
+  },
+  {
+    "mint": "C87B1Yo3eYQ6dAtFBgWAygQUeWUnv4WFHd4yapscpump",
+    "pnl": 40.5783,
+    "confidence": 0,
+    "exit_reason": "Wide Trailing Stop (25% drop from ATH)",
+    "entry_time": "2026-09-11T18:03:49.301506",
+    "exit_time": "2026-09-11T18:13:01.879783",
+    "features": "{}",
+    "source": "raydium"
+  },
+  {
+    "mint": "GYHPVwni3ucwizy9BM4TzTMw3PtSgxm5RRYvL8Ecpump",
+    "pnl": -22.6034,
+    "confidence": 0,
+    "exit_reason": "Swing Stop Loss (-15%)",
+    "entry_time": "2026-09-10T21:23:05.130024",
+    "exit_time": "2026-09-10T21:30:32.842625",
+    "features": "{}",
+    "source": "raydium"
+  },
+  {
+    "mint": "9iUVBSaRPt4TmE5CmTytg9UrqbWdSPnt2i2VEW4Fpump",
+    "pnl": -63.0172,
+    "confidence": 0,
+    "exit_reason": "Swing Stop Loss (-15%)",
+    "entry_time": "2026-09-10T01:57:51.616492",
+    "exit_time": "2026-09-10T01:57:57.823807",
+    "features": "{}",
+    "source": "raydium"
+  },
+  {
+    "mint": "pceM9amR3UJrSQHPnUraies6B1ZrynZcK51oKCEHYwM",
+    "pnl": -18.8976,
+    "confidence": 0,
+    "exit_reason": "Swing Stop Loss (-15%)",
+    "entry_time": "2026-09-11T17:10:38.989111",
+    "exit_time": "2026-09-11T17:28:39.282242",
+    "features": "{}",
+    "source": "raydium"
+  },
+  {
+    "mint": "Dh8Gg3AoR5fzRseKvFmfxBVSKqQXTnmcEBRzDngHpump",
+    "pnl": -47.2115,
+    "confidence": 0,
+    "exit_reason": "Swing Stop Loss (-15%)",
+    "entry_time": "2026-09-11T14:02:49.384927",
+    "exit_time": "2026-09-11T14:04:54.077526",
+    "features": "{}",
+    "source": "raydium"
+  },
+  {
+    "mint": "Bj6V7JTM2MZqjhTjmsom5Y9H3WHwbsGReEJLKG7Spump",
+    "pnl": 40.6127,
+    "confidence": 0,
+    "exit_reason": "Wide Trailing Stop (20% drop from ATH)",
+    "entry_time": "2026-09-11T04:13:33.63318",
+    "exit_time": "2026-09-11T04:19:59.229179",
+    "features": "{}",
+    "source": "raydium"
+  },
+  {
+    "mint": "57ZnPuXHMHhKjxtjxw5itv8VVoVUHXLKsqqVgCYnpump",
+    "pnl": -46.0768,
+    "confidence": 0,
+    "exit_reason": "Swing Stop Loss (-15%)",
+    "entry_time": "2026-09-10T11:46:29.757394",
+    "exit_time": "2026-09-10T11:47:54.476056",
+    "features": "{}",
+    "source": "raydium"
+  },
+  {
+    "mint": "5eUV19iGj3a5J92T2FGocWtFgJpUTnEwwcomWzdUpump",
+    "pnl": -36.3689,
+    "confidence": 0,
+    "exit_reason": "Swing Stop Loss (-15%)",
+    "entry_time": "2026-09-10T12:00:36.658077",
+    "exit_time": "2026-09-10T12:01:40.066448",
+    "features": "{}",
+    "source": "raydium"
+  },
+  {
+    "mint": "9efYkCp6XK1wMTBpbeQZeMvTAoZ3fYzfaqRxyN5ipump",
+    "pnl": -20.7669,
+    "confidence": 0,
+    "exit_reason": "Swing Stop Loss (-15%)",
+    "entry_time": "2026-09-10T11:42:11.864391",
+    "exit_time": "2026-09-10T11:54:46.16748",
+    "features": "{}",
+    "source": "raydium"
+  },
+  {
+    "mint": "iZyHmdNa6HxsPPttwK981mLmHEGpA6UgLrzSwucpump",
+    "pnl": -44.6854,
+    "confidence": 0,
+    "exit_reason": "Swing Stop Loss (-15%)",
+    "entry_time": "2026-09-11T14:08:14.289291",
+    "exit_time": "2026-09-11T14:10:27.189178",
+    "features": "{}",
+    "source": "raydium"
+  },
+  {
+    "mint": "yqfiLWwd3jHtVtSPvMPw6MdjxaWxRpZcvfySXCXpump",
+    "pnl": 24.5479,
+    "confidence": 0,
+    "exit_reason": "Wide Trailing Stop (20% drop from ATH)",
+    "entry_time": "2026-09-11T16:53:18.591783",
+    "exit_time": "2026-09-11T17:10:39.781189",
+    "features": "{}",
+    "source": "raydium"
+  },
+  {
+    "mint": "BqLY5iMuG8Z8S2r49bBjwkC2zfCbMSc5WqbWJarwpump",
+    "pnl": -33.0424,
+    "confidence": 0,
+    "exit_reason": "Swing Stop Loss (-15%)",
+    "entry_time": "2026-09-11T11:03:23.140047",
+    "exit_time": "2026-09-11T11:04:40.933763",
+    "features": "{}",
+    "source": "raydium"
+  },
+  {
+    "mint": "DvJQ7FSMhFoG5hvjiH6CgYTcc18TPRxJxivBWWTKpump",
+    "pnl": -24.2445,
+    "confidence": 0,
+    "exit_reason": "Swing Stop Loss (-15%)",
+    "entry_time": "2026-09-11T13:42:33.685048",
+    "exit_time": "2026-09-11T13:46:54.190344",
+    "features": "{}",
+    "source": "raydium"
+  },
+  {
+    "mint": "29KvBXvMpBrkNNeYPYTHARb6ysNSYBcWirnnwxb7pump",
+    "pnl": -36.6611,
+    "confidence": 0,
+    "exit_reason": "Swing Stop Loss (-15%)",
+    "entry_time": "2026-09-11T15:45:13.681717",
+    "exit_time": "2026-09-11T15:46:18.279998",
+    "features": "{}",
+    "source": "raydium"
+  },
+  {
+    "mint": "FLk6FKAN26m1FT4ucguwy3uHBMzLKcEu8KMTYD2Zpump",
+    "pnl": 442.119,
+    "confidence": 0,
+    "exit_reason": "Wide Trailing Stop (25% drop from ATH)",
+    "entry_time": "2026-09-11T18:32:48.487936",
+    "exit_time": "2026-09-11T19:50:20.878002",
+    "features": "{}",
+    "source": "raydium"
+  },
+  {
+    "mint": "3C8NJBaCK1uTnuquThMj12UQdzmrwkx3hk5fbT7Vpump",
+    "pnl": -27.8841,
+    "confidence": 0,
+    "exit_reason": "Swing Stop Loss (-15%)",
+    "entry_time": "2026-09-11T14:00:25.481621",
+    "exit_time": "2026-09-11T14:01:43.578337",
+    "features": "{}",
+    "source": "raydium"
+  },
+  {
+    "mint": "AaCBdbi8DiBvWiSjTG2xkkqeshDCSifsvYqZrkpDpump",
+    "pnl": -22.4425,
+    "confidence": 0,
+    "exit_reason": "Swing Stop Loss (-15%)",
+    "entry_time": "2026-09-11T14:26:30.483766",
+    "exit_time": "2026-09-11T14:27:43.480224",
+    "features": "{}",
+    "source": "raydium"
+  },
+  {
+    "mint": "E1kghBCLZGxbu154knjvtXxC7vCxMEBFHpAwwgjMpump",
+    "pnl": 17.0164,
+    "confidence": 0,
+    "exit_reason": "Wide Trailing Stop (20% drop from ATH)",
+    "entry_time": "2026-09-11T14:31:05.085801",
+    "exit_time": "2026-09-11T15:36:51.18697",
+    "features": "{}",
+    "source": "raydium"
+  },
+  {
+    "mint": "FASDVZXHYPgAcGtkm3xKVpLc1dHwQNJxXeMgHLrYpump",
+    "pnl": -29.6235,
+    "confidence": 0,
+    "exit_reason": "Swing Stop Loss (-15%)",
+    "entry_time": "2026-09-10T20:09:44.556349",
+    "exit_time": "2026-09-10T20:10:50.747931",
+    "features": "{}",
+    "source": "raydium"
+  },
+  {
+    "mint": "5EyvP6FCPLAcAUMY9xbsbGXeY3AH5KeMJg9KEx2Gpump",
+    "pnl": -18.6055,
+    "confidence": 0,
+    "exit_reason": "Swing Stop Loss (-15%)",
+    "entry_time": "2026-09-12T13:37:05.088658",
+    "exit_time": "2026-09-12T13:45:34.687632",
+    "features": "{}",
+    "source": "raydium"
+  },
+  {
+    "mint": "J1U1BWkVUDtujjkew4fCGwvUteeaJwDirEkuPcYCgALL",
+    "pnl": 57.3632,
+    "confidence": 0,
+    "exit_reason": "Wide Trailing Stop (25% drop from ATH)",
+    "entry_time": "2026-09-12T01:29:54.181858",
+    "exit_time": "2026-09-12T02:42:30.790201",
+    "features": "{}",
+    "source": "raydium"
+  },
+  {
+    "mint": "ESzj81P4mDSgGoPy9UEy9YNMxgCoFaaA7mwcyN8kpump",
+    "pnl": 0.829841,
+    "confidence": 0,
+    "exit_reason": "Swing Break-even (+5.9%)",
+    "entry_time": "2026-09-12T02:23:49.789996",
+    "exit_time": "2026-09-12T02:50:55.89625",
+    "features": "{}",
+    "source": "raydium"
+  },
+  {
+    "mint": "6V9Wt1VXwwYrAPyrzyuE1bYKuRggykaRVmpws9bipump",
+    "pnl": -51.504,
+    "confidence": 0,
+    "exit_reason": "Swing Stop Loss (-15%)",
+    "entry_time": "2026-09-13T10:19:32.290409",
+    "exit_time": "2026-09-13T10:20:49.997941",
+    "features": "{}",
+    "source": "raydium"
+  },
+  {
+    "mint": "6CfuzQ5UzyFQ3Pr2fPDr1Yu2QK4MsYgS86PFqBxWpmb9",
+    "pnl": -26.7019,
+    "confidence": 0,
+    "exit_reason": "Swing Stop Loss (-15%)",
+    "entry_time": "2026-09-12T17:22:32.906401",
+    "exit_time": "2026-09-12T17:23:28.11554",
+    "features": "{}",
+    "source": "raydium"
+  },
+  {
+    "mint": "ECRofhnyq7VzCqhLFWVx1zHXxVadRBYtT8wWCwVGpump",
+    "pnl": -26.9353,
+    "confidence": 0,
+    "exit_reason": "Swing Stop Loss (-15%)",
+    "entry_time": "2026-09-12T04:44:48.089323",
+    "exit_time": "2026-09-12T04:50:05.492625",
+    "features": "{}",
+    "source": "raydium"
+  },
+  {
+    "mint": "AEcf6qZ5tKr7R7iax96hWj7uHjsa4vq2WLRkYK1Kpump",
+    "pnl": -31.7606,
+    "confidence": 0,
+    "exit_reason": "Swing Stop Loss (-15%)",
+    "entry_time": "2026-09-12T05:58:01.185104",
+    "exit_time": "2026-09-12T06:00:21.280726",
+    "features": "{}",
+    "source": "raydium"
+  },
+  {
+    "mint": "AqoPZcUumKUBHrnfBsNtoNuneYEjoimaiWYq8GH8gpX9",
+    "pnl": 54.1688,
+    "confidence": 0,
+    "exit_reason": "Wide Trailing Stop (20% drop from ATH)",
+    "entry_time": "2026-09-13T02:35:46.626974",
+    "exit_time": "2026-09-13T02:53:23.618895",
+    "features": "{}",
+    "source": "raydium"
+  },
+  {
+    "mint": "EA4J89CHKrdfasv9rta5vb2vKngYb1JjijejeU8Apump",
+    "pnl": -28.2477,
+    "confidence": 0,
+    "exit_reason": "Swing Stop Loss (-15%)",
+    "entry_time": "2026-09-12T17:58:09.714199",
+    "exit_time": "2026-09-12T18:04:53.504127",
+    "features": "{}",
+    "source": "raydium"
+  },
+  {
+    "mint": "DEbvZt2QRA8yqNj2Lvsn8JdWjTmZS4yajwpzYL4ypump",
+    "pnl": -28.3401,
+    "confidence": 0,
+    "exit_reason": "Swing Stop Loss (-15%)",
+    "entry_time": "2026-09-13T02:56:37.673363",
+    "exit_time": "2026-09-13T03:04:23.170425",
+    "features": "{}",
+    "source": "raydium"
+  },
+  {
+    "mint": "ocxaNGGrN6QdQKA4EyPHDAJw4rxAdJLAfcRjVCtpump",
+    "pnl": -13.0348,
+    "confidence": 0,
+    "exit_reason": "Swing Break-even (+5.9%)",
+    "entry_time": "2026-09-11T22:37:25.28991",
+    "exit_time": "2026-09-11T22:41:54.078422",
+    "features": "{}",
+    "source": "raydium"
+  },
+  {
+    "mint": "GJnF3R7QXZdquYEeCFUE5YJuSkR9wdL9B3ojE5bNpump",
+    "pnl": -19.5141,
+    "confidence": 0,
+    "exit_reason": "Swing Stop Loss (-15%)",
+    "entry_time": "2026-09-12T18:56:20.220338",
+    "exit_time": "2026-09-12T19:08:05.027978",
+    "features": "{}",
+    "source": "raydium"
+  },
+  {
+    "mint": "EGt44aEqH8V14wNTEaKnHQgei88ZirTi6Hvig719pkSB",
+    "pnl": -19.3054,
+    "confidence": 0,
+    "exit_reason": "Swing Stop Loss (-15%)",
+    "entry_time": "2026-09-12T12:41:08.286953",
+    "exit_time": "2026-09-12T12:44:40.587436",
+    "features": "{}",
+    "source": "raydium"
+  },
+  {
+    "mint": "E48xVLiza8JmnE4Kszoz5tF2Ce15pAAjRbGCkeYApump",
+    "pnl": -25.0002,
+    "confidence": 0,
+    "exit_reason": "Swing Stop Loss (-15%)",
+    "entry_time": "2026-09-12T12:42:08.981479",
+    "exit_time": "2026-09-12T12:51:56.491101",
+    "features": "{}",
+    "source": "raydium"
+  },
+  {
+    "mint": "BzMvb3Sm3fyd9wKNgig6Jm2XM65YqrGVDc29eJKWNXcQ",
+    "pnl": -23.0353,
+    "confidence": 0,
+    "exit_reason": "Swing Stop Loss (-15%)",
+    "entry_time": "2026-09-12T19:13:50.20244",
+    "exit_time": "2026-09-12T19:15:37.315497",
+    "features": "{}",
+    "source": "raydium"
+  },
+  {
+    "mint": "6gPE8WJ1zsozg3yskPm6N7Xn5exBgcmLjh2DoJizpump",
+    "pnl": -23.4999,
+    "confidence": 0,
+    "exit_reason": "Swing Stop Loss (-15%)",
+    "entry_time": "2026-09-11T23:26:31.592371",
+    "exit_time": "2026-09-11T23:26:38.592044",
+    "features": "{}",
+    "source": "raydium"
+  },
+  {
+    "mint": "Adgt7dseCq71eN6GDuoUgpsNQp81ZNhq24nrF7pxpump",
+    "pnl": -21.0322,
+    "confidence": 0,
+    "exit_reason": "Swing Stop Loss (-15%)",
+    "entry_time": "2026-09-12T19:47:26.678853",
+    "exit_time": "2026-09-12T19:53:32.085664",
+    "features": "{}",
+    "source": "raydium"
+  },
+  {
+    "mint": "HM2bYaAdcLXJod1RPPa74h2cFpTD35HsMamydQVtpump",
+    "pnl": -20.4871,
+    "confidence": 0,
+    "exit_reason": "Swing Stop Loss (-15%)",
+    "entry_time": "2026-09-12T08:22:52.385168",
+    "exit_time": "2026-09-12T08:23:31.777864",
+    "features": "{}",
+    "source": "raydium"
+  },
+  {
+    "mint": "BGU4TfDLpV1JeJGXVgSbZkLSRxgAzcsQci1vEbaWJVcm",
+    "pnl": -28.9699,
+    "confidence": 0,
+    "exit_reason": "Swing Stop Loss (-15%)",
+    "entry_time": "2026-09-12T20:01:09.479302",
+    "exit_time": "2026-09-12T20:14:28.372312",
+    "features": "{}",
+    "source": "raydium"
+  },
+  {
+    "mint": "7WwnnH5YnupC7wdhFcUe7HL1BjTiM8nkbnCedteRpump",
+    "pnl": -25.297,
+    "confidence": 0,
+    "exit_reason": "Swing Stop Loss (-15%)",
+    "entry_time": "2026-09-12T00:17:37.483702",
+    "exit_time": "2026-09-12T00:18:31.179782",
+    "features": "{}",
+    "source": "raydium"
+  },
+  {
+    "mint": "7f4sYTQPRQEGPgebVLVqmThqJpzK5xNqtGFbtvgepump",
+    "pnl": -100.759,
+    "confidence": 0,
+    "exit_reason": "Swing Stop Loss (-15%)",
+    "entry_time": "2026-09-13T09:23:07.886049",
+    "exit_time": "2026-09-13T09:25:49.592877",
+    "features": "{}",
+    "source": "raydium"
+  },
+  {
+    "mint": "4aPz3rGjf8Ejky5jaCfRb7HF6VEmfku8b4uAiLyMpump",
+    "pnl": 7.94179,
+    "confidence": 0,
+    "exit_reason": "Wide Trailing Stop (20% drop from ATH)",
+    "entry_time": "2026-09-12T20:43:27.357245",
+    "exit_time": "2026-09-12T20:51:51.358571",
+    "features": "{}",
+    "source": "raydium"
+  },
+  {
+    "mint": "WX2v776Zu2yQT4LjgShsDcRJRePQPzhZG2X7kidBmag",
+    "pnl": 45.686,
+    "confidence": 0,
+    "exit_reason": "Wide Trailing Stop (25% drop from ATH)",
+    "entry_time": "2026-09-12T00:48:28.184192",
+    "exit_time": "2026-09-12T00:52:39.786773",
+    "features": "{}",
+    "source": "raydium"
+  },
+  {
+    "mint": "88gsSGZ8UNpU1ZgB61HyrFd7J2RaTs7wDNJKPXGmpump",
+    "pnl": -20.6464,
+    "confidence": 0,
+    "exit_reason": "Swing Stop Loss (-15%)",
+    "entry_time": "2026-09-12T20:46:53.359815",
+    "exit_time": "2026-09-12T21:20:46.559774",
+    "features": "{}",
+    "source": "raydium"
+  },
+  {
+    "mint": "66aBzVKucLmWvY2JEU5CjAYcUSz7YcpoBDfXXWV9pump",
+    "pnl": -27.9878,
+    "confidence": 0,
+    "exit_reason": "Swing Stop Loss (-15%)",
+    "entry_time": "2026-09-12T21:37:26.217941",
+    "exit_time": "2026-09-12T22:01:43.326762",
+    "features": "{}",
+    "source": "raydium"
+  },
+  {
+    "mint": "BbWyczXco4yEP8oz2Z8m7Ttc38yitU5XG6izuneFpump",
+    "pnl": -39.3167,
+    "confidence": 0,
+    "exit_reason": "Swing Stop Loss (-15%)",
+    "entry_time": "2026-09-13T10:10:17.495451",
+    "exit_time": "2026-09-13T10:11:01.900388",
+    "features": "{}",
+    "source": "raydium"
+  }
+]

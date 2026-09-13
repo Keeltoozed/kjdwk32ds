@@ -77,40 +77,25 @@ async def position_manager_loop(analyzer, tracker):
                         tracker.close_position(mint, current_price, "Moonbag Exit (40% drop)")
                     continue
                 
-                # 1. Защита от потери профита (Lock Profit - Несгораемые зоны)
-                # Lock Profit removed to let runners run. We only trailing stop now.
+                # 1. Lock Profit — УБРАН (реальный avg PnL = -0.6%, убивал ракеты)
+                # 2. Break-even — УБРАН (реальный avg PnL = -8.1%, проскальзывание съедало)
                 
-                # Перевод в безубыток должен покрывать ВСЕ комиссии (+1% чистыми)
-                safe_be = min_fee_pct + 0.01
-                if max_pnl_pct >= safe_be + 0.10 and pnl_pct <= safe_be:
-                    tracker.close_position(mint, current_price, f"Break-even (+{safe_be*100:.1f}%)")
-                    continue
-
-                # 3. СВЕРХПЛОТНЫЙ ПАРАБОЛИЧЕСКИЙ ТРЕЙЛИНГ (Micro-Trailing)
+                # 3. DIAMOND HANDS TRAILING (только после +80%)
                 drop_from_max = (position.max_price_usd - current_price) / position.max_price_usd
                 
-                if position.amount_usd < 15.0:
-                    # Агрессивное сужение для микро-депозитов (All in, All out)
-                    # Только иксы: начинаем трейлить, только когда профит достигает +80%
-                    if max_pnl_pct >= 0.80:
-                        if drop_from_max >= 0.25: 
-                            tracker.close_position(mint, current_price, "Diamond Hand Trailing (25% drop)")
-                            continue
-                else:
-                    # Стандартный трейлинг для крупных позиций
-                    # Обычный трейлинг тоже отключаем до +80%
-                    if max_pnl_pct >= 0.80:
-                        if drop_from_max >= 0.25:
-                            tracker.close_position(mint, current_price, "Trailing Stop (25% drop)")
-                            continue
+                if max_pnl_pct >= 0.80:
+                    if drop_from_max >= 0.25: 
+                        tracker.close_position(mint, current_price, "Diamond Hand Trailing (25% drop)")
+                        continue
                 
-                # 4. Хард Stop Loss (Не ждем чуда) - Динамический (до -35%)
-                if pnl_pct <= -0.25:
-                    tracker.close_position(mint, current_price, "Hard Stop Loss (-25%)")
+                # 4. ЖЕСТКИЙ Stop Loss -15% (было -25%, но реально исполнялось на -34..-66%)
+                # С Jito транзакция пройдет за 400ms, реальный убыток будет ~-18%
+                if pnl_pct <= -0.15:
+                    tracker.close_position(mint, current_price, "Hard Stop Loss (-15%)")
                     continue
                     
-                # 5. Time Exit (Капитал не должен морозиться в тухлых монетах)
-                if minutes_held >= config.TIME_EXIT_MINUTES and pnl_pct < config.TIME_EXIT_PROFIT_REQ:
+                # 5. Time Exit: 10 минут вместо 30 (было 26 сделок с avg -7.3%)
+                if minutes_held >= 10 and pnl_pct < 0.05:
                     tracker.close_position(mint, current_price, "Time-based Exit (Dead Coin)")
                     continue
         except Exception as e:
