@@ -36,7 +36,7 @@ class PaperTracker:
         try:
             if hasattr(config, 'SUPABASE_URL') and hasattr(config, 'SUPABASE_KEY'):
                 supabase: Client = create_client(config.SUPABASE_URL, config.SUPABASE_KEY)
-                res = supabase.table("trades_pump").select("features").eq("mint", "PORTFOLIO_STATE").execute()
+                res = supabase.table("trades_pump").select("features").eq("mint", "PORTFOLIO_STATE_V2").execute()
                 if res.data:
                     data = json.loads(res.data[0]["features"])
                     print("✅ Портфель успешно загружен из Supabase!")
@@ -81,7 +81,7 @@ class PaperTracker:
             if hasattr(config, 'SUPABASE_URL') and hasattr(config, 'SUPABASE_KEY'):
                 supabase: Client = create_client(config.SUPABASE_URL, config.SUPABASE_KEY)
                 supabase.table("trades_pump").upsert({
-                    "mint": "PORTFOLIO_STATE",
+                    "mint": "PORTFOLIO_STATE_V2",
                     "features": json.dumps(data),
                     "confidence": 0,
                     "status": "SYSTEM"
