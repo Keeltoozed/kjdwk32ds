@@ -149,7 +149,7 @@ async def fomo_loop(analyzer: Analyzer, tracker):
                             from sol_price import fetch_bulk_prices_sync
                             # Запускаем синхронную функцию в пуле потоков, чтобы не блокировать весь event loop бота!
                             live_prices = await asyncio.to_thread(fetch_bulk_prices_sync, [mint])
-                            actual_price = live_prices.get(mint, 0.0)
+                            actual_price = float(live_prices.get(mint, 0.0))
                             
                             if actual_price <= 0:
                                 actual_price = float(pair_data.get("priceUsd", 0)) # Fallback, если GeckoTerminal не знает монету
