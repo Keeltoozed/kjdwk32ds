@@ -2,24 +2,33 @@ import aiohttp
 
 class JupiterAPI:
     @staticmethod
-    async def get_price(mint: str) -> float:
+    async def get_prices(mints: list) -> dict:
         """
-        Получает кристально точную цену токена в USD через GeckoTerminal API.
-        (Jupiter v2 закрыл публичный бесплатный доступ).
+        Балк-запрос цен для нескольких токенов через GeckoTerminal.
+        Значительно ускоряет цикл трекинга позиций, избавляя от последовательных HTTP-запросов.
         """
-        url = f"https://api.geckoterminal.com/api/v2/simple/networks/solana/token_price/{mint}"
+        if not mints:
+            return {}
+            
+        addresses = ",".join(mints)
+        url = f"https://api.geckoterminal.com/api/v2/simple/networks/solana/token_price/{addresses}"
         headers = {"Accept": "application/json"}
+        
         async with aiohttp.ClientSession() as session:
             try:
                 async with session.get(url, headers=headers, timeout=5) as response:
                     if response.status == 200:
                         data = await response.json()
                         prices = data.get("data", {}).get("attributes", {}).get("token_prices", {})
-                        if mint in prices:
-                            return float(prices[mint])
+                        return {mint: float(price) for mint, price in prices.items()}
             except Exception:
                 pass
-        return 0.0
+        return {}
+
+    @staticmethod
+    async def get_price(mint: str) -> float:
+        prices = await JupiterAPI.get_prices([mint])
+        return prices.get(mint, 0.0)
 
     @staticmethod
     async def check_taxes_and_simulate_swap(mint: str, input_amount_sol: float = 0.1) -> dict:
@@ -30,7 +39,7 @@ class JupiterAPI:
         # 1 SOL = 1e9 lamports
         lamports_in = int(input_amount_sol * 1e9)
         # Input: SOL
-        url = f"https://quote-api.jup.ag/v6/quote?inputMint=So11111111111111111111111111111111111111112&outputMint={mint}&amount={lamports_in}&slippageBps=500"
+        url = f"https://quote-api.jup.ag/v6/quote?inputMint=So11111111111111111111111111111111111111112&outputMint={mint}&amount={lamports_in}&slippageBps=300"
         
         async with aiohttp.ClientSession() as session:
             try:
@@ -60,8 +69,9 @@ class JupiterAPI:
         input_mint = mint if is_sell else sol_mint
         output_mint = sol_mint if is_sell else mint
         
-        # 1. Запрашиваем роут с жестким slippage=500
-        quote_url = f"https://quote-api.jup.ag/v6/quote?inputMint={input_mint}&outputMint={output_mint}&amount={amount_lamports}&slippageBps=500"
+        # 1. Динамическое проскальзывание: Вход строгий (3%), Выход агрессивный (15%), чтобы не застрять в падающей монете!
+        slippage = 1500 if is_sell else 300
+        quote_url = f"https://quote-api.jup.ag/v6/quote?inputMint={input_mint}&outputMint={output_mint}&amount={amount_lamports}&slippageBps={slippage}"
         
         async with aiohttp.ClientSession() as session:
             try:
@@ -73,16 +83,23 @@ class JupiterAPI:
                 # 2. Формируем транзакцию с динамическими fee
                 swap_url = "https://quote-api.jup.ag/v6/swap"
                 
-                # Для экстренных продаж (Stop Loss) ставим priority fee на 'VeryHigh'
-                # Для покупок ставим 'High'
-                priority_level = "VeryHigh" if is_sell else "High"
+                # ИНТЕГРАЦИЯ JITO & PRIORITY FEES
+                # Для покупок (снайпинга) и экстренных продаж ставим Jito Tip и VeryHigh priority
+                jito_tip = 150000 if is_sell else 100000
+                priority_level = "veryHigh"
                 
                 payload = {
                     "quoteResponse": quote_response,
                     "userPublicKey": "YOUR_WALLET_PUBLIC_KEY", # Placeholder для интеграции
                     "wrapAndUnwrapSol": True,
-                    "computeUnitPriceMicroLamports": priority_level, # Автоматический динамический fee от Юпитера
-                    "dynamicComputeUnitLimit": True
+                    "dynamicComputeUnitLimit": True,
+                    "prioritizationFeeLamports": {
+                        "jitoTipLamports": jito_tip,
+                        "priorityLevelWithMaxLamports": {
+                            "maxLamports": 2000000,
+                            "priorityLevel": priority_level
+                        }
+                    }
                 }
                 
                 async with session.post(swap_url, json=payload, timeout=5) as response:
