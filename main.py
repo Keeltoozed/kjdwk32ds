@@ -78,10 +78,7 @@ async def position_manager_loop(analyzer, tracker):
                     continue
                 
                 # 1. Защита от потери профита (Lock Profit - Несгораемые зоны)
-                safe_lock = max(0.10, min_fee_pct + 0.05) # Минимум +5% чистыми
-                if max_pnl_pct >= safe_lock + 0.15 and pnl_pct <= safe_lock:
-                    tracker.close_position(mint, current_price, f"Lock Profit (+{safe_lock*100:.1f}%)")
-                    continue
+                # Lock Profit removed to let runners run. We only trailing stop now.
                 
                 # Перевод в безубыток должен покрывать ВСЕ комиссии (+1% чистыми)
                 safe_be = min_fee_pct + 0.01
@@ -94,27 +91,17 @@ async def position_manager_loop(analyzer, tracker):
                 
                 if position.amount_usd < 15.0:
                     # Агрессивное сужение для микро-депозитов (All in, All out)
+                    # Только иксы: начинаем трейлить, только когда профит достигает +80%
                     if max_pnl_pct >= 0.80:
-                        if drop_from_max >= 0.15: 
-                            tracker.close_position(mint, current_price, "Micro-Trailing (15% drop)")
-                            continue
-                    elif max_pnl_pct >= 0.40:
-                        if drop_from_max >= 0.20: 
-                            tracker.close_position(mint, current_price, "Micro-Trailing (20% drop)")
-                            continue
-                    elif max_pnl_pct >= 0.15: 
-                        if drop_from_max >= 0.15: 
-                            tracker.close_position(mint, current_price, "Micro-Trailing (15% drop)")
+                        if drop_from_max >= 0.25: 
+                            tracker.close_position(mint, current_price, "Diamond Hand Trailing (25% drop)")
                             continue
                 else:
                     # Стандартный трейлинг для крупных позиций
-                    if max_pnl_pct >= 0.30: 
-                        if drop_from_max >= 0.15: 
-                            tracker.close_position(mint, current_price, "Trailing Stop (15% drop)")
-                            continue
-                    elif max_pnl_pct >= 0.15: 
-                        if drop_from_max >= 0.10: 
-                            tracker.close_position(mint, current_price, "Trailing Stop (10% drop)")
+                    # Обычный трейлинг тоже отключаем до +80%
+                    if max_pnl_pct >= 0.80:
+                        if drop_from_max >= 0.25:
+                            tracker.close_position(mint, current_price, "Trailing Stop (25% drop)")
                             continue
                 
                 # 4. Хард Stop Loss (Не ждем чуда) - Динамический (до -35%)
