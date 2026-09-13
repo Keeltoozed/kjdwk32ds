@@ -34,9 +34,9 @@ async def position_manager_loop(analyzer, tracker):
                     
                 if current_price <= 0.0:
                     minutes_held = (time.time() - position.entry_time) / 60
-                        if minutes_held > 180:
-                            tracker.close_position(mint, 0.0, "Rug Pull / No Liquidity")
-                        continue
+                    if minutes_held > 180:
+                        tracker.close_position(mint, 0.0, "Rug Pull / No Liquidity")
+                    continue
                     
                 if current_price > position.max_price_usd:
                     position.max_price_usd = current_price
