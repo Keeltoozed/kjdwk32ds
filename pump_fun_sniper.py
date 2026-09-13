@@ -196,6 +196,27 @@ class PumpFunSniper:
                 print(f"Ошибка вызова ShadowTracker: {e}")
 
 
+
+    async def sync_fomo_positions(self, ws):
+        """Подхватывает позиции, открытые FOMO-сканером, чтобы трекать их цены в реальном времени через вебсокет"""
+        import asyncio
+        from tracker import PaperTracker
+        p_tracker = self.tracker if self.tracker else PaperTracker()
+        
+        while self.running:
+            try:
+                open_positions = p_tracker.get_open_positions()
+                for mint, pos in open_positions.items():
+                    if mint not in self.trackers:
+                        print(f"🔗 [WSS SYNC] Подключаем лайв-трекинг для {pos.symbol} (куплен сканером)")
+                        state = TokenTrackerState(mint, pos.symbol, "")
+                        state.is_entered = True
+                        self.trackers[mint] = state
+                        await ws.send(json.dumps({"method": "subscribeTokenTrade", "keys": [mint]}))
+            except Exception as e:
+                print(f"Ошибка синхронизации WSS: {e}")
+            await asyncio.sleep(3)
+
     async def garbage_collector(self, ws):
         """Очищает мертвые трекеры и отписывается от WSS"""
         while self.running:
@@ -240,6 +261,7 @@ class PumpFunSniper:
                     
                     # 2. Запуск сборщика мусора и Shadow Watcher
                     asyncio.create_task(self.garbage_collector(ws))
+                    asyncio.create_task(self.sync_fomo_positions(ws))
                     try:
                         from shadow_tracker import ShadowTracker
                         shadow = ShadowTracker()
@@ -313,8 +335,11 @@ class PumpFunSniper:
                                 p_tracker = self.tracker if self.tracker else PaperTracker()
                                 pos = p_tracker.positions.get(mint)
                                 if pos and pos.status == "open":
-                                    live_price = (sol_amount / 1_000_000_000.0) * get_sol_price_sync()
-                                    pos.current_price_usd = live_price
+                                    # ИСПРАВЛЕНИЕ: берем marketCapSol, а не vSolInBondingCurve, для правильного расчета цены!
+                                    market_cap_sol = data.get("marketCapSol", 0)
+                                    if market_cap_sol > 0:
+                                        live_price = (market_cap_sol / 1_000_000_000.0) * get_sol_price_sync()
+                                        pos.current_price_usd = live_price
                                     if live_price > pos.max_price_usd:
                                         pos.max_price_usd = live_price
                                     # Рассчитываем PNL для логов (Stop-Loss все равно сработает в главном цикле, но быстрее)

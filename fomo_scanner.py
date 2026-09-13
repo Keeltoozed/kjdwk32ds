@@ -59,10 +59,12 @@ async def fetch_dexscreener_trending():
         "https://api.dexscreener.com/token-boosts/latest/v1"
     ]
     
+    headers = {"Accept": "application/json", "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
+    
     async with aiohttp.ClientSession() as session:
         for url in urls:
             try:
-                async with session.get(url, timeout=5) as response:
+                async with session.get(url, headers=headers, timeout=5) as response:
                     if response.status == 200:
                         data = await response.json()
                         for item in data:

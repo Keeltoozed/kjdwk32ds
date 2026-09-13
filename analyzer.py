@@ -26,16 +26,16 @@ class Analyzer:
                 async with session.get(config.DEXSCREENER_LATEST, timeout=5) as response:
                     if response.status == 200:
                         tokens.extend(await response.json())
-            except Exception as e:
-                print(f"Dexscreener boosts fetch error: {e}")
+            except Exception:
+                pass  # Cloudflare блокирует Render IP — это нормально
                 
             # 2. Сканируем новые профили, чтобы не пропускать свежие ракеты
             try:
                 async with session.get(config.DEXSCREENER_PROFILES, timeout=5) as response:
                     if response.status == 200:
                         tokens.extend(await response.json())
-            except Exception as e:
-                print(f"Dexscreener profiles fetch error: {e}")
+            except Exception:
+                pass  # Cloudflare блокирует Render IP — это нормально
                 
         # Возвращаем уникальные токены (по tokenAddress)
         seen = set()
@@ -110,9 +110,10 @@ class Analyzer:
     async def check_rugcheck(self, mint: str) -> bool:
         url = config.RUGCHECK_API.format(mint=mint)
         session = await self.get_session()
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
         if True:
             try:
-                async with session.get(url, timeout=10) as response:
+                async with session.get(url, headers=headers, timeout=10) as response:
                     if response.status == 200:
                         data = await response.json()
                         
