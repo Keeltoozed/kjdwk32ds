@@ -20,7 +20,7 @@ async def get_sol_price() -> float:
 
             # Используем GeckoTerminal вместо закрытого Jupiter API v2
             url = "https://api.geckoterminal.com/api/v2/simple/networks/solana/token_price/So11111111111111111111111111111111111111112"
-            headers = {"Accept": "application/json"}
+            headers = {"Accept": "application/json", "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
             async with session.get(url, headers=headers, timeout=5) as response:
                 if response.status == 200:
                     data = await response.json()
@@ -47,7 +47,7 @@ def fetch_bulk_prices_sync(mints: list) -> dict:
     
     addresses = ",".join(mints)
     url = f"https://api.geckoterminal.com/api/v2/simple/networks/solana/token_price/{addresses}"
-    headers = {"Accept": "application/json"}
+    headers = {"Accept": "application/json", "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
     
     try:
         resp = requests.get(url, headers=headers, timeout=5)

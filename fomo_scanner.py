@@ -8,7 +8,7 @@ async def fetch_geckoterminal_trending():
     """Получает реальные тренды с GeckoTerminal (как в Photon)"""
     tokens = []
     url = "https://api.geckoterminal.com/api/v2/networks/solana/trending_pools"
-    headers = {"Accept": "application/json"}
+    headers = {"Accept": "application/json", "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
     
     async with aiohttp.ClientSession() as session:
         try:
@@ -34,7 +34,7 @@ async def fetch_pumpfun_top():
     """Получает топ монет Pump.fun по капе (близкие к миграции на Raydium)"""
     tokens = []
     url = "https://frontend-api.pump.fun/coins?offset=0&limit=20&sort=market_cap&order=DESC&includeNsfw=false"
-    headers = {"User-Agent": "Mozilla/5.0"}
+    headers = {"Accept": "application/json", "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
     
     async with aiohttp.ClientSession() as session:
         try:
