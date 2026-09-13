@@ -38,3 +38,23 @@ async def get_sol_price() -> float:
 def get_sol_price_sync() -> float:
     """Синхронная версия — возвращает последнюю кешированную цену"""
     return _sol_price
+
+import requests
+
+def fetch_bulk_prices_sync(mints: list) -> dict:
+    """Синхронно получает лайв-цены токенов с GeckoTerminal (используется для обхода отставания DexScreener)"""
+    if not mints: return {}
+    
+    addresses = ",".join(mints)
+    url = f"https://api.geckoterminal.com/api/v2/simple/networks/solana/token_price/{addresses}"
+    headers = {"Accept": "application/json"}
+    
+    try:
+        resp = requests.get(url, headers=headers, timeout=5)
+        if resp.status_code == 200:
+            data = resp.json()
+            return data.get("data", {}).get("attributes", {}).get("token_prices", {})
+    except Exception as e:
+        print(f"⚠️ Ошибка получения Live-цен из GeckoTerminal: {e}")
+        
+    return {}

@@ -28,7 +28,7 @@ VIRTUAL_POSITION_SIZE_USD = 4.0 # (Устарело) базовый размер
 MAX_CONCURRENT_POSITIONS = 15  # Режим Снайпера: максимум 5 сделок одновременно
 
 # Risk Management
-MAX_DAILY_LOSS_USD = 10.0 # Глобальный Kill-Switch. Если убыток за сегодня > 10$, бот останавливается
+MAX_DAILY_LOSS_USD = 10.0 # Минимальный порог в долларах\nMAX_DAILY_LOSS_PCT = 0.25 # Глобальный Kill-Switch: 25% от текущего депозита за день
 STOP_LOSS_PCT = -0.15   # Жесткий стоп на -15% (чтобы с учетом проскальзывания было не больше -20%)
 TIME_EXIT_MINUTES = 30  # Если за 30 минут нет пампа - выходим
 TIME_EXIT_PROFIT_REQ = 0.0

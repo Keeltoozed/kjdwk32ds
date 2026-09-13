@@ -26,7 +26,7 @@ async def fetch_geckoterminal_trending():
                         except:
                             pass
         except Exception as e:
-            print(f"Ошибка получения трендов GeckoTerminal: {e}")
+            print(f"Ошибка получения трендов GeckoTerminal: {type(e).__name__} - {e}")
     return tokens
 
 
@@ -46,7 +46,7 @@ async def fetch_pumpfun_top():
                         if mint and mint not in tokens:
                             tokens.append(mint)
         except Exception as e:
-            print(f"Ошибка получения топ-монет Pump.fun: {e}")
+            print(f"Ошибка получения топ-монет Pump.fun: {type(e).__name__} - {e}")
     return tokens
 
 async def fetch_dexscreener_trending():
@@ -72,7 +72,7 @@ async def fetch_dexscreener_trending():
                                 if mint and mint not in tokens:
                                     tokens.append(mint)
             except Exception as e:
-                print(f"Ошибка получения FOMO токенов: {e}")
+                print(f"Ошибка получения FOMO токенов: {type(e).__name__} - {e}")
     return tokens
 
 async def fomo_loop(analyzer: Analyzer, tracker):
