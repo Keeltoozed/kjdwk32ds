@@ -151,7 +151,13 @@ class PumpFunSniper:
             exit_mgr = ExitManager(config.HELIUS_RPC_URL)
             
             sol_amount = state.trades[-1]["curve_sol"] if state.trades else 0
-            actual_price = (sol_amount / 1_000_000_000.0) * get_sol_price_sync() 
+            # ИСПРАВЛЕНИЕ ВХОДНОЙ ЦЕНЫ: берем marketCapSol из последнего трейда
+            market_cap_sol = state.trades[-1].get("market_cap_sol", 0) if state.trades else 0
+            if market_cap_sol > 0:
+                actual_price = (market_cap_sol / 1_000_000_000.0) * get_sol_price_sync()
+            else:
+                # Фоллбэк (хотя marketCapSol должен быть всегда)
+                actual_price = (sol_amount / 1_000_000_000.0) * get_sol_price_sync() 
             
             capital = tracker.get_total_capital()
             base_position = capital * (config.REINVEST_PERCENT / 100.0)
@@ -307,6 +313,7 @@ class PumpFunSniper:
                                 'timestamp': time.time(),
                                 'type': tx_type,
                                 'curve_sol': sol_amount,
+                                'market_cap_sol': data.get("marketCapSol", 0),
                                 'wallet': data.get('traderPublicKey')
                             })
                             state.unique_buyers.add(data.get('traderPublicKey'))
