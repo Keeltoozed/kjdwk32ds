@@ -277,7 +277,48 @@ def run_background_bot():
     asyncio.set_event_loop(loop)
     loop.run_until_complete(async_main())
 
+import os
 # === 2. ВЕБ-ИНТЕРФЕЙС STREAMLIT ===
+if os.environ.get("RENDER"):
+    print("🚀 Запуск на сервере Render. Веб-интерфейс Streamlit отключен.")
+    
+    # Запускаем фиктивный веб-сервер, чтобы Render не убивал бота (Health Check)
+    from aiohttp import web
+    async def health_check(request):
+        return web.Response(text="Bot is running!")
+        
+    async def start_render_bot():
+        app = web.Application()
+        app.router.add_get('/', health_check)
+        runner = web.AppRunner(app)
+        await runner.setup()
+        port = int(os.environ.get("PORT", 10000))
+        site = web.TCPSite(runner, '0.0.0.0', port)
+        await site.start()
+        print(f"✅ Фиктивный сервер запущен на порту {port} для Render Health Check")
+        
+        # Keep-Alive задача, чтобы Render не засыпал
+        async def keep_alive():
+            import aiohttp
+            url = os.environ.get("RENDER_EXTERNAL_URL", f"http://127.0.0.1:{port}")
+            print(f"🔄 Keep-Alive URL установлен на: {url}")
+            async with aiohttp.ClientSession() as session:
+                while True:
+                    await asyncio.sleep(600)  # Каждые 10 минут
+                    try:
+                        async with session.get(url) as resp:
+                            print(f"💓 Keep-Alive Ping: {resp.status}")
+                    except Exception as e:
+                        print(f"⚠️ Keep-Alive Ping Error: {e}")
+                        
+        asyncio.create_task(keep_alive())
+        
+        await async_main()
+        
+    asyncio.run(start_render_bot())
+    import sys
+    sys.exit(0)
+
 st.set_page_config(page_title="PhantBot Dashboard", layout="wide")
 
 # Запускаем торгового бота ровно один раз при старте сервера

@@ -1,4 +1,6 @@
 import json
+from supabase import create_client, Client
+import logging
 import os
 import time
 from typing import Dict
@@ -47,8 +49,27 @@ class PaperTracker:
                 print(f"Error loading portfolio: {e}")
 
     def save_portfolio(self):
-        with open(self.filename, 'w') as f:
-            json.dump({k: getattr(v, "model_dump", v.dict)() for k, v in self.positions.items()}, f, indent=4)
+        data = {k: getattr(v, "model_dump", v.dict)() for k, v in self.positions.items()}
+        
+        # 1. Сохраняем локально
+        try:
+            with open(self.filename, 'w') as f:
+                json.dump(data, f, indent=4)
+        except Exception as e:
+            print(f"⚠️ Ошибка локального сохранения: {e}")
+            
+        # 2. Сохраняем в Supabase (Render-proof)
+        try:
+            if hasattr(config, 'SUPABASE_URL') and hasattr(config, 'SUPABASE_KEY'):
+                supabase: Client = create_client(config.SUPABASE_URL, config.SUPABASE_KEY)
+                supabase.table("trades_pump").upsert({
+                    "mint": "PORTFOLIO_STATE",
+                    "features": json.dumps(data),
+                    "confidence": 0,
+                    "status": "SYSTEM"
+                }).execute()
+        except Exception as e:
+            print(f"⚠️ Ошибка сохранения портфеля в Supabase: {e}")
 
     def get_open_positions(self) -> Dict[str, VirtualPosition]:
         return {k: v for k, v in self.positions.items() if v.status == "open"}
