@@ -112,15 +112,15 @@ class PumpFunSniper:
                             else:
                                 dev_holding_pct, top_10_holding_pct = 0, 0
                                 
-                                if dev_holding_pct > 7.0:
-                                    print(f"🚫 [DEV DUMP RISK] {state.symbol}: Создатель держит {dev_holding_pct:.1f}% (>7%). Пропуск!")
-                                    state.is_ai_evaluated = True
-                                    return
-                                    
-                                if top_10_holding_pct > 30.0:
-                                    print(f"🚫 [SYBIL RISK] {state.symbol}: Топ-10 холдеров держат {top_10_holding_pct:.1f}% (>30%). Пропуск!")
-                                    state.is_ai_evaluated = True
-                                    return
+                            if dev_holding_pct > 7.0:
+                                print(f"🚫 [DEV DUMP RISK] {state.symbol}: Создатель держит {dev_holding_pct:.1f}% (>7%). Пропуск!")
+                                state.is_ai_evaluated = True
+                                return
+                                
+                            if top_10_holding_pct > 30.0:
+                                print(f"🚫 [SYBIL RISK] {state.symbol}: Топ-10 холдеров держат {top_10_holding_pct:.1f}% (>30%). Пропуск!")
+                                state.is_ai_evaluated = True
+                                return
             except Exception as e:
                 print(f"⚠️ Ошибка проверки холдеров: {e}")
             # --- КОНЕЦ ФИЛЬТРОВ ---
