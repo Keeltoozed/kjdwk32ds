@@ -40,6 +40,13 @@ class PumpFunSniper:
 
     async def evaluate_and_enter(self, state: TokenTrackerState):
         try:
+            buy_count = sum(1 for t in state.trades if t['type'] == 'buy')
+            sell_count = sum(1 for t in state.trades if t['type'] == 'sell')
+            if sell_count > buy_count:
+                print(f"🚫 [TREND DEAD] {state.symbol}: Продаж ({sell_count}) больше, чем покупок ({buy_count}). Пропуск (падающий нож)!")
+                state.is_ai_evaluated = True
+                return
+                
             df = pd.DataFrame(state.trades)
             df['curve_sol_diff'] = df['curve_sol'].diff().fillna(0)
             df['volume_buy'] = np.where(df['type'] == 'buy', df['curve_sol_diff'].abs(), 0)

@@ -292,7 +292,14 @@ class Analyzer:
         from pump_fun_sniper import PumpFunSniper
         
         txns_m5 = pair_data.get("txns", {}).get("m5", {})
-        tx_velocity_1m = (txns_m5.get("buys", 0) + txns_m5.get("sells", 0)) / 5.0
+        buys_m5 = txns_m5.get("buys", 0)
+        sells_m5 = txns_m5.get("sells", 0)
+        
+        if sells_m5 > buys_m5:
+            print(f"🚫 [TREND DEAD] Токен {mint}: Продаж ({sells_m5}) больше, чем покупок ({buys_m5}) за последние 5 минут. Пропуск (падающий нож).")
+            return False
+            
+        tx_velocity_1m = (buys_m5 + sells_m5) / 5.0
         
         info = pair_data.get("info", {})
         socials = info.get("socials", [])
