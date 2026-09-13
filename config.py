@@ -22,7 +22,7 @@ SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
 # Paper Trading Config
 PAPER_PORTFOLIO_FILE = "portfolio.json"
-INITIAL_BALANCE_USD = 20.0    # Стартовый капитал
+INITIAL_BALANCE_USD = 35.0    # Стартовый капитал
 REINVEST_PERCENT = 15.0       # Процент от капитала на одну сделку
 VIRTUAL_POSITION_SIZE_USD = 4.0 # (Устарело) базовый размер сделки
 MAX_CONCURRENT_POSITIONS = 15  # Режим Снайпера: максимум 5 сделок одновременно

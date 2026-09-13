@@ -1,11 +1,8 @@
-import asyncio
-from trade_logger import trade_logger
+import config
+from supabase import create_client
 
-async def test():
-    print("Writing entry...")
-    await trade_logger.log_entry("TEST_MINT_123", {"feature": 1}, 80.0)
-    await asyncio.sleep(2)
-    print("Writing exit...")
-    await trade_logger.log_exit("TEST_MINT_123", 10.5, "Take Profit")
-
-asyncio.run(test())
+supabase = create_client(config.SUPABASE_URL, config.SUPABASE_KEY)
+resp = supabase.table("trades_pump").select("mint, status, pnl").execute()
+print("Trades in trades_pump:", len(resp.data))
+for row in resp.data[-5:]:
+    print(row)
