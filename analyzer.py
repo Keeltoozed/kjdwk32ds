@@ -208,6 +208,21 @@ class Analyzer:
                 
         return unique_buyers, smart_money_inflow
 
+    def check_hyper_rocket_momentum(self, pair_data: dict) -> bool:
+        """
+        VIP-полоса для Гипер-Ракет:
+        Ищет аномальные всплески покупок (>50 покупок) и объема (>$30,000) в первые 5 минут.
+        Позволяет пропустить стандартные жесткие фильтры.
+        """
+        txns_m5 = pair_data.get("txns", {}).get("m5", {})
+        buys_m5 = txns_m5.get("buys", 0)
+        volume_m5 = pair_data.get("volume", {}).get("m5", 0)
+        
+        # > 50 покупок И > $30k объема в 5-минутном окне
+        if buys_m5 >= 50 and volume_m5 >= 30000:
+            return True
+        return False
+        
     async def analyze_token(self, mint: str) -> bool:
         # Smart Router
         
@@ -234,16 +249,21 @@ class Analyzer:
             print(f"🚫 Мусор: Токен {symbol} мимикрирует под известный бренд/мем. Это 100% scam.")
             return False
             
+        is_vip = self.check_hyper_rocket_momentum(pair_data)
+        
         # Защита от микро-пулов (Scam сетки типа Fly)
         liquidity = pair_data.get("liquidity", {}).get("usd", 0)
-        if liquidity < 15000:
+        if liquidity < 15000 and not is_vip:
             print(f"📉 Изоляция: {symbol} имеет микро-пул (${liquidity:.0f} < $15k). Риск 100% проскальзывания.")
             return False
+            
+        if is_vip:
+            print(f"🚀 [VIP] {symbol}: Пропуск проверок клонов и соцсетей из-за гипер-моментума!")
             
         # 1.5 Защита от вторичных клонов (Copycat Filter)
         current_created_at = pair_data.get("pairCreatedAt", 0)
         current_fdv = pair_data.get("fdv", 0)
-        if await self.is_clone(symbol, mint, current_created_at, current_fdv):
+        if not is_vip and await self.is_clone(symbol, mint, current_created_at, current_fdv):
             print(f"🚫 Мусор: Токен {symbol} является клоном! На DexScreener найден более старый/крупный оригинал.")
             return False
             
@@ -279,9 +299,13 @@ class Analyzer:
         if pair_data.get("dexId") != "pump":
             return False
             
-        # 2. Проверяем возраст токена (XGBoost обучен на свежих монетах)
+        is_vip = self.check_hyper_rocket_momentum(pair_data)
+        if is_vip:
+            print(f"🚀🚀🚀 [HYPER-ROCKET BYPASS] Токен {mint} летит в космос! Игнорируем карантин возраста и соцсетей.")
+            
+        # 2. Проверяем возраст токена (только для обычных монет)
         created_at = pair_data.get("pairCreatedAt")
-        if created_at:
+        if created_at and not is_vip:
             import time
             age_minutes = (time.time() * 1000 - created_at) / (1000 * 60)
             if age_minutes > 15:  # Игнорируем токены старше 15 минут
@@ -341,8 +365,11 @@ class Analyzer:
                                 from collections import Counter
                                 counts = Counter(rounded_amounts)
                                 if counts.most_common(1)[0][1] >= 3:
-                                    print(f"🚫 Мусор: Обнаружен Jito-бандл (Sybil attack) у {mint}.")
-                                    return False
+                                    if not is_vip:
+                                        print(f"🚫 Мусор: Обнаружен Jito-бандл (Sybil attack) у {mint}.")
+                                        return False
+                                    else:
+                                        print(f"⚠️ ВНИМАНИЕ: {mint} имеет Jito-бандл, но пропускается по VIP-квоте (Hyper-Rocket)!")
         except Exception as e:
             print(f"Helius RPC error: {e}")
         
@@ -363,7 +390,13 @@ class Analyzer:
         prob = model.predict_proba(features)[0][1]
         conf = prob * 100
         print(f"🤖 XGBoost [DEX Poller]: {mint} | Score: {conf:.1f}%")
-        import config; threshold = 75.0 if getattr(config, "AI_MODE", "sniper") == "sniper" else 65.0; return conf >= threshold
+        import config
+        threshold = 75.0 if getattr(config, "AI_MODE", "sniper") == "sniper" else 65.0
+        if is_vip:
+            threshold = 70.0 # Снижаем порог уверенности для ракет
+            print(f"🔥 [VIP] Порог XGBoost снижен до {threshold}%")
+            
+        return conf >= threshold
 
     async def analyze_token_raydium(self, mint: str, pair_data: dict) -> bool:
         # Безлимитный режим: используем ТОЛЬКО данные DexScreener
