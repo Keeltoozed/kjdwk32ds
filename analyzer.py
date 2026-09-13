@@ -142,7 +142,8 @@ class Analyzer:
                         return True
                     return False
             except Exception as e:
-                print(f"RugCheck fetch error: {type(e).__name__} {e}")
+                print(f"⚠️ RugCheck fetch error ({type(e).__name__}): {e}. Переходим в Fail-Open режим (пропуск).")
+                return True
                 return False
 
     async def get_helius_transaction_metrics(self, mint: str) -> tuple:

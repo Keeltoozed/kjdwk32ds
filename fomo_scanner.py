@@ -143,9 +143,16 @@ async def fomo_loop(analyzer: Analyzer, tracker):
                     if is_buy and len(tracker.get_open_positions()) < config.MAX_CONCURRENT_POSITIONS:
                         pair_data = await analyzer.fetch_token_data(mint)
                         if pair_data:
-                            actual_price = float(pair_data.get("priceUsd", 0))
                             actual_symbol = pair_data.get("baseToken", {}).get("symbol", "FOMO")
                             
+                            # ИСПРАВЛЕНИЕ: Берем LIVE цену без кэша (GeckoTerminal), а не отстающую цену DexScreener!
+                            from sol_price import fetch_bulk_prices_sync
+                            live_prices = fetch_bulk_prices_sync([mint])
+                            actual_price = live_prices.get(mint, 0.0)
+                            
+                            if actual_price <= 0:
+                                actual_price = float(pair_data.get("priceUsd", 0)) # Fallback, если GeckoTerminal не знает монету
+                                
                             if actual_price > 0:
                                 capital = tracker.get_total_capital()
                                 if capital <= 0:

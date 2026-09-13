@@ -38,7 +38,7 @@ class PumpFunSniper:
         self.running = False
         self.trackers = {} # mint -> TokenTrackerState
 
-    async def evaluate_and_enter(self, state: TokenTrackerState, is_vip: bool = False):
+    async def evaluate_and_enter(self, state: TokenTrackerState):
         try:
             df = pd.DataFrame(state.trades)
             df['curve_sol_diff'] = df['curve_sol'].diff().fillna(0)
@@ -323,21 +323,7 @@ class PumpFunSniper:
                                     p_tracker.save_portfolio()
                                     
                             
-                            # --- HYPER-ROCKET BYPASS LOGIC ---
-                            time_alive = time.time() - state.start_time
-                            if not state.is_ai_evaluated and time_alive <= 30.0 and len(state.trades) > 5:
-                                buys = sum(1 for t in state.trades if t['type'] == 'buy')
-                                
-                                # $30,000 это примерно 200 SOL. Если за первые секунды залили > 50 SOL (скорость $30k/m) и > 25 покупок
-                                current_curve = sol_amount
-                                initial_curve = 30.0 # Базовая стартовая кривая Pump.fun
-                                injected_sol = current_curve - initial_curve
-                                
-                                if injected_sol > 40.0 and buys > 25:
-                                    print(f"🚀🚀🚀 [HYPER-ROCKET DETECTED] {state.symbol}! Влито {injected_sol:.1f} SOL, {buys} покупок за {time_alive:.1f} сек!")
-                                    await self.evaluate_and_enter(state, is_vip=True)
-                                    continue
-                            # ---------------------------------
+                            
                             
                             # Стандартный Quarantine: Если достигли 60% (Proof of Traction ~ $12k MC), оцениваем ИИ
                             if not state.is_ai_evaluated and progress >= 60.0 and len(state.trades) > 5:
@@ -345,7 +331,7 @@ class PumpFunSniper:
                                 if len(state.unique_buyers) < 15:
                                     # print(f"🚫 [LOW TRACTION] {state.symbol}: Всего {len(state.unique_buyers)} покупателей при 60% Bonding Curve. Ждем дальше...")
                                     continue
-                                await self.evaluate_and_enter(state, is_vip=False)
+                                await self.evaluate_and_enter(state)
                                 
             except websockets.exceptions.ConnectionClosed:
                 print("⚠️ WSS соединение закрыто. Переподключение через 2 секунды...")
