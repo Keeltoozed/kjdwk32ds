@@ -9,6 +9,7 @@ import math
 class Analyzer:
     def __init__(self):
         self.session = None
+        self._rug_cache = {}  # mint -> (verdict: bool, ts) — режем лимиты RugCheck
         
     async def get_session(self):
         import aiohttp
@@ -19,6 +20,12 @@ class Analyzer:
 
     async def fetch_latest_tokens(self) -> list:
         tokens = []
+        # 0. GeckoTerminal первым: работает с Render (DexScreener там режет Cloudflare)
+        try:
+            import market_data
+            tokens.extend(await market_data.get_trending())
+        except Exception:
+            pass
         session = await self.get_session()
         if True:
             # 1. Сканируем топовые (Boosted) монеты
@@ -49,34 +56,30 @@ class Analyzer:
         return unique_tokens
                 
     async def fetch_token_data(self, mint: str) -> dict:
-        url = f"{config.DEXSCREENER_SEARCH}{mint}"
-        session = await self.get_session()
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Accept": "application/json",
-            "Accept-Language": "en-US,en;q=0.9",
-        }
-        if True:
-            try:
-                async with session.get(url, headers=headers, timeout=10) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        pairs = data.get("pairs", [])
-                        if pairs:
-                            sol_pairs = [p for p in pairs if p.get("chainId") == "solana"]
-                            if sol_pairs:
-                                return sorted(sol_pairs, key=lambda x: x.get("liquidity", {}).get("usd", 0), reverse=True)[0]
-                    return {}
-            except Exception as e:
-                print(f"Dexscreener token data error: {type(e).__name__} {e}")
-                return {}
+        # Единый провайдер: GeckoTerminal -> DexScreener fallback (см. market_data.py)
+        import market_data
+        return await market_data.get_token_data(mint)
 
     async def is_clone(self, symbol: str, current_mint: str, current_created_at: int, current_fdv: float) -> bool:
         """Проверяет, является ли этот токен дешевой копией (клоном) более старого или крупного оригинала."""
         if not symbol or len(symbol) <= 2:
-            return False 
-            
-        url = f"https://api.dexscreener.com/latest/dex/search?q={symbol}"
+            return False
+
+        # 1. GeckoTerminal-поиск (работает с Render)
+        try:
+            import market_data
+            for p in await market_data.search_symbol(symbol):
+                if not p.get("mint") or p["mint"] == current_mint:
+                    continue
+                size = p.get("reserve_usd", 0)
+                if p.get("created_ms", float("inf")) < current_created_at and size > 5000:
+                    return True
+                if size > (current_fdv * 10) and size > 50000:
+                    return True
+        except Exception:
+            pass
+
+        # 2. Fallback: DexScreener-поиск
         session = await self.get_session()
         if True:
             try:
@@ -108,49 +111,64 @@ class Analyzer:
         return False
 
     async def check_rugcheck(self, mint: str) -> bool:
+        import time as _t
+        # Кэш: повторные проверки одного минта не бьют в API
+        cached = self._rug_cache.get(mint)
+        if cached and (_t.time() - cached[1]) < 600:
+            return cached[0]
+
         url = config.RUGCHECK_API.format(mint=mint)
         session = await self.get_session()
         headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
+        verdict = True  # fail-open по умолчанию: RugCheck часто 404/429 на свежих токенах
         if True:
             try:
                 async with session.get(url, headers=headers, timeout=10) as response:
                     if response.status == 200:
                         data = await response.json()
-                        
+
                         score = data.get("score", 1000)
                         # Защита от моментальных дампов (-37%). Строгий фильтр скама.
                         if score >= 150: # было 300, сделали 150 (очень строго). Отсекает монеты, где у одного кошелька >20% саплая.
-                            return False
-                            
-                        token_info = data.get("token", {})
-                        if token_info.get("mintAuthority") is not None:
-                            return False
-                        if token_info.get("freezeAuthority") is not None:
-                            return False
-                        
-                        # Фильтр по названию токена
-                        name = token_info.get("name", "").lower()
-                        symbol = token_info.get("symbol", "").lower()
-                        bad_words = ["test", "scam", "fuck", "nigger", "pump and dump", "rug"]
-                        if any(w in name for w in bad_words) or any(w in symbol for w in bad_words):
-                            return False
-                            
-                        # Индекс Херфиндаля-Хиршмана (HHI) для выявления скрытых монополий (как Bubble Map)
-                        top_holders = data.get("topHolders", [])
-                        hhi_index = sum([(h.get("pct", 0) * 100) ** 2 for h in top_holders[:15] if not h.get("isContract", False)])
-                        
-                        top_10_pct = sum([h.get("pct", 0) for h in top_holders[:10] if not h.get("isContract", False)])
-                        
-                        # Если HHI высокий (>2000), значит кошельки сильно сконцентрированы (пузыри)
-                        if top_10_pct >= 30 or hhi_index > 2500:
-                            return False
-                            
-                        return True
-                    return False
+                            verdict = False
+
+                        else:
+                            token_info = data.get("token", {})
+                            if token_info.get("mintAuthority") is not None:
+                                verdict = False
+                            elif token_info.get("freezeAuthority") is not None:
+                                verdict = False
+                            else:
+                                # Фильтр по названию токена
+                                name = token_info.get("name", "").lower()
+                                symbol = token_info.get("symbol", "").lower()
+                                bad_words = ["test", "scam", "fuck", "nigger", "pump and dump", "rug"]
+                                if any(w in name for w in bad_words) or any(w in symbol for w in bad_words):
+                                    verdict = False
+                                else:
+                                    # Индекс Херфиндаля-Хиршмана (HHI) для выявления скрытых монополий (как Bubble Map)
+                                    top_holders = data.get("topHolders", [])
+                                    hhi_index = sum([(h.get("pct", 0) * 100) ** 2 for h in top_holders[:15] if not h.get("isContract", False)])
+
+                                    top_10_pct = sum([h.get("pct", 0) for h in top_holders[:10] if not h.get("isContract", False)])
+
+                                    # Если HHI высокий (>2000), значит кошельки сильно сконцентрированы (пузыри)
+                                    if top_10_pct >= 30 or hhi_index > 2500:
+                                        verdict = False
+                    elif response.status == 404:
+                        # Токен ещё не проиндексирован RugCheck (слишком свежий) —
+                        # не блокируем: дальше страхуют Helius-холдеры и WSS-проверки
+                        print(f"ℹ️ RugCheck: {mint[:8]} ещё не проиндексирован (404), пропускаем фильтр.")
+                    else:
+                        print(f"⚠️ RugCheck HTTP {response.status} для {mint[:8]}, fail-open (пропуск).")
             except Exception as e:
                 print(f"⚠️ RugCheck fetch error ({type(e).__name__}): {e}. Переходим в Fail-Open режим (пропуск).")
-                return True
-                return False
+        self._rug_cache[mint] = (verdict, _t.time())
+        # Чистим кэш от старья
+        if len(self._rug_cache) > 2000:
+            now = _t.time()
+            self._rug_cache = {k: v for k, v in self._rug_cache.items() if now - v[1] < 600}
+        return verdict
 
     async def get_helius_transaction_metrics(self, mint: str) -> tuple:
         """ Возвращает (unique_buyers_m5, smart_money_inflow) """
@@ -283,8 +301,10 @@ class Analyzer:
         has_tg = any("telegram" in s.get("type", "").lower() or "t.me" in s.get("url", "").lower() for s in socials)
         has_website = len(websites) > 0
         
-        # Смягченный фильтр: достаточно хотя бы одной соцсети или сайта
-        if not (has_twitter or has_tg or has_website):
+        # Смягченный фильтр: достаточно хотя бы одной соцсети или сайта.
+        # GeckoTerminal соцсети не отдаёт — тогда фильтр пропускаем (fail-open),
+        # соцсети всё равно проверяются из контракта по WSS и через XGBoost-признак.
+        if not (has_twitter or has_tg or has_website) and not pair_data.get("_socials_unknown"):
             print(f"🚫 Мусор: У {mint} вообще нет ни одной соцсети или сайта.")
             return False
             

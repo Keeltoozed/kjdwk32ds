@@ -34,6 +34,13 @@ class CopyTrader:
         
     async def get_token_price(self, mint):
         try:
+            import market_data
+            p = await market_data.get_price(mint)
+            if p > 0:
+                return p
+        except:
+            pass
+        try:
             async with aiohttp.ClientSession() as session:
                 async with session.get(f"https://api.dexscreener.com/latest/dex/tokens/{mint}") as resp:
                     data = await resp.json()

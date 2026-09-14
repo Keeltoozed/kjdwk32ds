@@ -91,7 +91,14 @@ class ShadowTracker:
             print(f"Ошибка Shadow Logger: {e}")
 
     async def _fetch_dexscreener_prices(self, mints: list) -> dict:
-        """Батч-запрос к DexScreener API с Rate Limiter (макс 30 токенов)"""
+        """Батч-цены: GeckoTerminal первым, DexScreener как fallback."""
+        try:
+            import market_data
+            gt = await market_data.get_bulk_prices(mints[:30])
+            if gt:
+                return gt
+        except Exception as e:
+            print(f"GT bulk prices error (Shadow): {e}")
         prices = {}
         async with self._rate_limit_lock:
             # Ограничитель: 1 запрос в секунду для бесплатного API

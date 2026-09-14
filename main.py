@@ -55,9 +55,10 @@ async def position_manager_loop(analyzer, tracker):
                 minutes_held = (time.time() - position.entry_time) / 60
                 
                 # Обновляем текущие значения для отображения в интерфейсе
+                # (сохраняем один раз за цикл ниже, а не на каждой позиции,
+                # чтобы не делать N записей в Supabase каждые 3 секунды)
                 position.current_price_usd = current_price
                 position.current_pnl_usd = position.amount_usd * pnl_pct
-                tracker.save_portfolio()
                 
                 # === ИНТЕГРАЦИЯ МАТЕМАТИКИ ДЛЯ ЗРЕЛЫХ МОНЕТ (SWING TRADING) ===
                 if getattr(position, "is_mature", False):
@@ -103,6 +104,8 @@ async def position_manager_loop(analyzer, tracker):
                 if minutes_held >= config.TIME_EXIT_MINUTES and pnl_pct < config.TIME_EXIT_PROFIT_REQ:
                     tracker.close_position(mint, current_price, "Time-based Exit (Dead Coin)")
                     continue
+            # Сохраняем обновлённые цены одним разом за цикл (файл + Supabase)
+            tracker.save_portfolio()
         except Exception as e:
             print(f"Ошибка в менеджере позиций: {e}")
         # GeckoTerminal разрешает максимум 30 запросов в минуту. 
@@ -317,6 +320,33 @@ def start_bot():
 
 bot_thread = start_bot()
 
+def load_dashboard_portfolio():
+    """Портфель для дашборда: сначала Supabase (переживает рестарты Render),
+    потом локальный файл. Возвращает dict (возможно пустой)."""
+    # 1. Supabase — главный источник правды
+    try:
+        url = getattr(config, 'SUPABASE_URL', None)
+        key = getattr(config, 'SUPABASE_KEY', None)
+        if url and key:
+            from supabase import create_client
+            sb = create_client(url, key)
+            res = sb.table("trades_pump").select("features").eq("mint", "PORTFOLIO_STATE_V3").execute()
+            if res.data and res.data[0].get("features"):
+                data = json.loads(res.data[0]["features"])
+                if data:
+                    return data
+    except Exception as e:
+        print(f"⚠️ Дашборд: не удалось прочитать портфель из Supabase: {e}")
+    # 2. Fallback: локальный файл
+    try:
+        with open(config.PAPER_PORTFOLIO_FILE, 'r') as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+    except Exception as e:
+        print(f"⚠️ Дашборд: не удалось прочитать локальный портфель: {e}")
+        return {}
+
 # Отрисовка интерфейса
 st.title("🚀 PhantBot - Alpha Agent Dashboard")
 st.markdown("Панель управления алгоритмическим ботом.")
@@ -329,11 +359,7 @@ with tab1:
         pass
         
     try:
-        with open(config.PAPER_PORTFOLIO_FILE, 'r') as f:
-            try:
-                data = json.load(f)
-            except json.JSONDecodeError:
-                data = {}
+        data = load_dashboard_portfolio()
             
         if data:
             df = pd.DataFrame.from_dict(data, orient='index')

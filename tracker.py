@@ -27,7 +27,24 @@ class PaperTracker:
     def __init__(self):
         self.filename = config.PAPER_PORTFOLIO_FILE
         self.positions: Dict[str, VirtualPosition] = {}
+        self._sb = None  # ленивый Supabase-клиент
         self.load_portfolio()
+
+    def _supabase(self):
+        """Возвращает Supabase-клиент или None, если нет настроек."""
+        if self._sb is not None:
+            return self._sb
+        url = getattr(config, 'SUPABASE_URL', None)
+        key = getattr(config, 'SUPABASE_KEY', None)
+        if not url or not key:
+            return None
+        try:
+            from supabase import create_client
+            self._sb = create_client(url, key)
+            return self._sb
+        except Exception as e:
+            print(f"⚠️ Не удалось создать Supabase-клиент: {e}")
+            return None
 
     def _parse_portfolio_data(self, data):
         for k, v in data.items():
@@ -42,23 +59,25 @@ class PaperTracker:
 
     def load_portfolio(self):
         # 1. Пытаемся загрузить из Supabase (чтобы не терять данные при перезагрузке Render)
-        try:
-            if hasattr(config, 'SUPABASE_URL') and hasattr(config, 'SUPABASE_KEY'):
-                from supabase import create_client, Client
-                import json
-                supabase: Client = create_client(config.SUPABASE_URL, config.SUPABASE_KEY)
-                res = supabase.table("trades_pump").select("features").eq("mint", "PORTFOLIO_STATE_V3").execute()
-                if res.data:
+        sb = self._supabase()
+        if sb is not None:
+            try:
+                res = sb.table("trades_pump").select("features").eq("mint", "PORTFOLIO_STATE_V3").execute()
+                if res.data and res.data[0].get("features"):
                     data = json.loads(res.data[0]["features"])
-                    print("✅ Портфель успешно загружен из Supabase!")
-                    self._parse_portfolio_data(data)
-                    
-                    # Синхронизируем с локальным файлом для дашборда
-                    with open(self.filename, 'w') as f:
-                        json.dump(data, f, indent=4)
-                    return
-        except Exception as e:
-            print(f"⚠️ Не удалось загрузить портфель из Supabase: {e}")
+                    if data:
+                        print("✅ Портфель успешно загружен из Supabase!")
+                        self._parse_portfolio_data(data)
+                        # Синхронизируем с локальным файлом для дашборда
+                        try:
+                            with open(self.filename, 'w') as f:
+                                json.dump(data, f, indent=4)
+                        except Exception:
+                            pass
+                        return
+                    print("ℹ️ В Supabase пустой слепок портфеля, пробуем локальный файл...")
+            except Exception as e:
+                print(f"⚠️ Не удалось загрузить портфель из Supabase: {e}. Пробуем локальный файл...")
             
         # 2. Fallback: загружаем из локального файла
         try:
@@ -70,10 +89,12 @@ class PaperTracker:
                     return
         except (FileNotFoundError, json.JSONDecodeError):
             pass
+        except Exception as e:
+            print(f"⚠️ Не удалось прочитать локальный портфель: {e}")
             
-        # 3. Только если нет ни Supabase, ни локального файла - начинаем с чистого листа
-        print("🧹 Портфель пуст, начинаем с чистого листа")
-        self.save_portfolio()
+        # 3. Данных нигде нет — стартуем пустыми, но НИЧЕГО НЕ ПИШЕМ,
+        # чтобы случайно не затереть облачный слепок пустым словарём.
+        print("🧹 Локальных и облачных данных нет — начинаем с чистого листа (в памяти, без записи).")
 
     def save_portfolio(self):
         data = {k: getattr(v, "model_dump", v.dict)() for k, v in self.positions.items()}
@@ -82,21 +103,24 @@ class PaperTracker:
         try:
             with open(self.filename, 'w') as f:
                 json.dump(data, f, indent=4)
-        except Exception as e:
+        except Exception:
             pass
             
-        # 2. Сохраняем в Supabase (Render-proof)
+        # 2. Сохраняем в Supabase (Render-proof).
+        # ЗАЩИТА ОТ WIPE: пустой словарь в облако никогда не пишем —
+        # пустая память + живой слепок в облаке = не трогаем облако.
+        if not data:
+            return
+        sb = self._supabase()
+        if sb is None:
+            return
         try:
-            if hasattr(config, 'SUPABASE_URL') and hasattr(config, 'SUPABASE_KEY'):
-                from supabase import create_client, Client
-                import json
-                supabase: Client = create_client(config.SUPABASE_URL, config.SUPABASE_KEY)
-                supabase.table("trades_pump").upsert({
-                    "mint": "PORTFOLIO_STATE_V3",
-                    "features": json.dumps(data),
-                    "confidence": 0,
-                    "status": "SYSTEM"
-                }).execute()
+            sb.table("trades_pump").upsert({
+                "mint": "PORTFOLIO_STATE_V3",
+                "features": json.dumps(data),
+                "confidence": 0,
+                "status": "SYSTEM"
+            }).execute()
         except Exception as e:
             print(f"⚠️ Ошибка сохранения портфеля в Supabase: {e}")
 

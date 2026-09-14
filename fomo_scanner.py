@@ -1,5 +1,6 @@
 import asyncio
 import aiohttp
+from http_client import get_session
 import config
 from analyzer import Analyzer
 
@@ -10,23 +11,23 @@ async def fetch_geckoterminal_trending():
     url = "https://api.geckoterminal.com/api/v2/networks/solana/trending_pools"
     headers = {"Accept": "application/json", "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
     
-    async with aiohttp.ClientSession() as session:
-        try:
-            async with session.get(url, headers=headers, timeout=5) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    for pool in data.get("data", []):
-                        try:
-                            # GeckoTerminal хранит адрес токена в relationships
-                            base_token_id = pool["relationships"]["base_token"]["data"]["id"]
-                            # Формат: "solana_MintAddress"
-                            mint = base_token_id.split("_")[1]
-                            if mint and mint not in tokens:
-                                tokens.append(mint)
-                        except:
-                            pass
-        except Exception as e:
-            print(f"Ошибка получения трендов GeckoTerminal: {type(e).__name__} - {e}")
+    session = await get_session()
+    try:
+        async with session.get(url, headers=headers, timeout=15) as response:
+            if response.status == 200:
+                data = await response.json()
+                for pool in data.get("data", []):
+                    try:
+                        # GeckoTerminal хранит адрес токена в relationships
+                        base_token_id = pool["relationships"]["base_token"]["data"]["id"]
+                        # Формат: "solana_MintAddress"
+                        mint = base_token_id.split("_")[1]
+                        if mint and mint not in tokens:
+                            tokens.append(mint)
+                    except:
+                        pass
+    except Exception as e:
+        print(f"Ошибка получения трендов GeckoTerminal: {type(e).__name__} - {e}")
     return tokens
 
 
@@ -36,22 +37,31 @@ async def fetch_pumpfun_top():
     url = "https://frontend-api.pump.fun/coins?offset=0&limit=20&sort=market_cap&order=DESC&includeNsfw=false"
     headers = {"Accept": "application/json", "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
     
-    async with aiohttp.ClientSession() as session:
-        try:
-            async with session.get(url, headers=headers, timeout=5) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    for coin in data:
-                        mint = coin.get("mint")
-                        if mint and mint not in tokens:
-                            tokens.append(mint)
-        except Exception as e:
-            print(f"Ошибка получения топ-монет Pump.fun: {type(e).__name__} - {e}")
+    session = await get_session()
+    try:
+        async with session.get(url, headers=headers, timeout=15) as response:
+            if response.status == 200:
+                data = await response.json()
+                for coin in data:
+                    mint = coin.get("mint")
+                    if mint and mint not in tokens:
+                        tokens.append(mint)
+    except Exception as e:
+        print(f"Ошибка получения топ-монет Pump.fun: {type(e).__name__} - {e}")
     return tokens
 
 async def fetch_dexscreener_trending():
-    """Получает топ трендовых и забущенных токенов с DexScreener"""
+    """Трендовые токены: сначала GeckoTerminal (работает с Render),
+    потом DexScreener endpoints как fallback."""
     tokens = []
+    try:
+        import market_data
+        for t in await market_data.get_trending():
+            m = t.get("tokenAddress")
+            if m and m not in tokens:
+                tokens.append(m)
+    except Exception as e:
+        print(f"Ошибка GT-трендов: {type(e).__name__} - {e}")
     # Эндпоинты DexScreener для поиска самого горячего (FOMO)
     urls = [
         "https://api.dexscreener.com/token-profiles/latest/v1",
@@ -61,20 +71,20 @@ async def fetch_dexscreener_trending():
     
     headers = {"Accept": "application/json", "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
     
-    async with aiohttp.ClientSession() as session:
-        for url in urls:
-            try:
-                async with session.get(url, headers=headers, timeout=5) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        for item in data:
-                            # Извлекаем адрес токена на Solana
-                            if item.get('chainId') == 'solana':
-                                mint = item.get('tokenAddress')
-                                if mint and mint not in tokens:
-                                    tokens.append(mint)
-            except Exception as e:
-                print(f"Ошибка получения FOMO токенов: {type(e).__name__} - {e}")
+    session = await get_session()
+    for url in urls:
+        try:
+            async with session.get(url, headers=headers, timeout=15) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    for item in data:
+                        # Извлекаем адрес токена на Solana
+                        if item.get('chainId') == 'solana':
+                            mint = item.get('tokenAddress')
+                            if mint and mint not in tokens:
+                                tokens.append(mint)
+        except Exception as e:
+            print(f"Ошибка получения FOMO токенов: {type(e).__name__} - {e}")
     return tokens
 
 async def fomo_loop(analyzer: Analyzer, tracker):

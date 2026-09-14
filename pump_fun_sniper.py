@@ -97,9 +97,9 @@ class PumpFunSniper:
             try:
                 import aiohttp
                 rpc_url = "https://mainnet.helius-rpc.com/?api-key=9efda6f4-fddb-42d3-a2b1-098bbbecd299"
-                payload = {"jsonrpc": "2.0", "id": 1, "method": "getTokenLargestAccounts", "params": [state.mint]}
-                async with aiohttp.ClientSession() as session:
-                    async with session.post(rpc_url, json=payload, timeout=5) as resp:
+                from http_client import get_session
+                session = await get_session()
+                async with session.post(rpc_url, json=payload, timeout=10) as resp:
                         data = await resp.json()
                         accounts = data.get("result", {}).get("value", [])
                         total_supply = 1_000_000_000

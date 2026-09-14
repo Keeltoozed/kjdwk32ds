@@ -99,9 +99,17 @@ class TradeLogger:
 
 
     async def _fetch_dexscreener_prices(self, mints: list) -> dict:
-        """Батч-запрос к DexScreener API"""
+        """Батч-цены: GeckoTerminal первым, DexScreener bulk как fallback."""
         prices = {}
         if not mints: return prices
+
+        try:
+            import market_data
+            prices = await market_data.get_bulk_prices(mints)
+            if prices:
+                return prices
+        except Exception as e:
+            print(f"GT bulk prices error (Trades): {e}")
         
         chunk_size = 30
         for i in range(0, len(mints), chunk_size):
