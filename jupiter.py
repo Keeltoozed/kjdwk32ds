@@ -43,8 +43,8 @@ class JupiterAPI:
         """
         # 1 SOL = 1e9 lamports
         lamports_in = int(input_amount_sol * 1e9)
-        # Input: SOL
-        url = f"https://quote-api.jup.ag/v6/quote?inputMint=So11111111111111111111111111111111111111112&outputMint={mint}&amount={lamports_in}&slippageBps=300"
+        # Input: SOL (v6 мёртв — используем Lite API)
+        url = f"https://lite-api.jup.ag/swap/v1/quote?inputMint=So11111111111111111111111111111111111111112&outputMint={mint}&amount={lamports_in}&slippageBps=300"
         
         from http_client import get_session
         session = await get_session()
@@ -77,7 +77,7 @@ class JupiterAPI:
         
         # 1. Динамическое проскальзывание: Вход строгий (3%), Выход агрессивный (15%), чтобы не застрять в падающей монете!
         slippage = 1500 if is_sell else 300
-        quote_url = f"https://quote-api.jup.ag/v6/quote?inputMint={input_mint}&outputMint={output_mint}&amount={amount_lamports}&slippageBps={slippage}"
+        quote_url = f"https://lite-api.jup.ag/swap/v1/quote?inputMint={input_mint}&outputMint={output_mint}&amount={amount_lamports}&slippageBps={slippage}"
         
         from http_client import get_session
         session = await get_session()
@@ -87,8 +87,8 @@ class JupiterAPI:
                     return {"success": False, "reason": "No route or slippage too high"}
                 quote_response = await response.json()
 
-            # 2. Формируем транзакцию с динамическими fee
-            swap_url = "https://quote-api.jup.ag/v6/swap"
+                # 2. Формируем транзакцию с динамическими fee
+                swap_url = "https://lite-api.jup.ag/swap/v1/swap"
 
             # ИНТЕГРАЦИЯ JITO & PRIORITY FEES
             # Для покупок (снайпинга) и экстренных продаж ставим Jito Tip и VeryHigh priority

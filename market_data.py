@@ -20,7 +20,11 @@ HEADERS = {"Accept": "application/json", "User-Agent": "Mozilla/5.0"}
 
 _lock = asyncio.Lock()
 _last_call = 0.0
-MIN_INTERVAL = 2.0  # не чаще ~30/мин на весь процесс
+MIN_INTERVAL = 2.0  # не чаще ~30/мин на весь процесс для GeckoTerminal
+
+_jlock = asyncio.Lock()
+_jlast = 0.0
+J_MIN_INTERVAL = 1.2  # пауза между Token API запросами к Jupiter
 
 # Кэш данных токенов: сканер и FOMO запрашивают одни и те же минты по кругу.
 # Без кэша свежие токены съедают весь лимит 30/мин и всё падает с 429.
@@ -28,24 +32,36 @@ _TD_CACHE = {}  # mint -> (timestamp_monotonic, data)
 TD_TTL = 90.0  # секунд свежие данные считаются годными
 
 
-async def _gt_get(path: str):
-    """GET к GeckoTerminal с общим rate-limiter'ом. Возвращает dict или {}."""
+async def _gt_get(path: str, retries: int = 2):
+    """GET к GeckoTerminal с общим rate-limiter'ом.
+    Ретраи на 429/5xx/таймауты (сеть Render медленная). Возвращает dict или {}."""
     global _last_call
     from http_client import get_session
     session = await get_session()
-    async with _lock:
-        wait = MIN_INTERVAL - (time.monotonic() - _last_call)
-        if wait > 0:
-            await asyncio.sleep(wait)
-        try:
-            async with session.get(BASE + path, headers=HEADERS, timeout=10) as r:
+    last_err = "?"
+    for attempt in range(retries + 1):
+        async with _lock:
+            wait = MIN_INTERVAL - (time.monotonic() - _last_call)
+            if wait > 0:
+                await asyncio.sleep(wait)
+            try:
+                async with session.get(BASE + path, headers=HEADERS, timeout=12) as r:
+                    _last_call = time.monotonic()
+                    if r.status == 200:
+                        return await r.json()
+                    if r.status == 404:
+                        return {}  # токен/пул ещё не проиндексирован — ретраи бессмысленны
+                    last_err = f"HTTP {r.status}"
+            except asyncio.TimeoutError:
                 _last_call = time.monotonic()
-                if r.status == 200:
-                    return await r.json()
-                return {}
-        except Exception:
-            _last_call = time.monotonic()
-            return {}
+                last_err = "timeout"
+            except Exception as e:
+                _last_call = time.monotonic()
+                last_err = f"{type(e).__name__}"
+        if attempt < retries:
+            await asyncio.sleep(2 + 3 * attempt)
+    print(f"🔎 GT fail {path.split('?')[0][:60]}: {last_err}")
+    return {}
 
 
 def _parse_ms(ts) -> int:
@@ -123,13 +139,138 @@ def _normalize_pool(mint: str, name: str, symbol: str, item: dict, token_attrs: 
     }
 
 
+async def _jup_token_data(mint: str) -> dict:
+    """Токен-профиль через Jupiter Token API v2.
+    Даёт то, чего нет у GT: соцсети, холдеры, аудит, точный возраст.
+    Нормализация — в форму DexScreener-пары. {} если токен не проиндексирован."""
+    global _jlast
+    from http_client import get_session
+    session = await get_session()
+    data = None
+    async with _jlock:
+        wait = J_MIN_INTERVAL - (time.monotonic() - _jlast)
+        if wait > 0:
+            await asyncio.sleep(wait)
+        try:
+            async with session.get(
+                    f"https://lite-api.jup.ag/tokens/v2/search?query={mint}",
+                    headers=HEADERS, timeout=10) as r:
+                _jlast = time.monotonic()
+                if r.status == 200:
+                    data = await r.json()
+        except Exception as e:
+            _jlast = time.monotonic()
+            print(f"🔎 JUP token fail {mint[:8]}: {type(e).__name__}")
+            return {}
+    try:
+        items = data if isinstance(data, list) else []
+        exact = [x for x in items if isinstance(x, dict) and x.get("id") == mint]
+        if not exact:
+            return {}
+        t = exact[0]
+        s1 = t.get("stats1h", {}) or {}
+        s24 = t.get("stats24h", {}) or {}
+        try:
+            price = float(t.get("usdPrice", 0) or 0)
+        except Exception:
+            price = 0.0
+        if price <= 0:
+            return {}
+        try:
+            liq = float(t.get("liquidity", 0) or 0)
+        except Exception:
+            liq = 0.0
+        try:
+            fdv = float(t.get("fdv", 0) or 0)
+        except Exception:
+            fdv = 0.0
+        try:
+            mcap = float(t.get("mcap", 0) or fdv)
+        except Exception:
+            mcap = fdv
+        graduated = bool(t.get("graduatedAt"))
+        socials, websites = [], []
+        if t.get("twitter"):
+            socials.append({"type": "twitter", "url": t["twitter"]})
+        if t.get("telegram"):
+            socials.append({"type": "telegram", "url": t["telegram"]})
+        if t.get("website"):
+            websites.append({"url": t["website"]})
+        try:
+            bv1 = float(s1.get("buyVolume", 0) or 0) + float(s1.get("sellVolume", 0) or 0)
+        except Exception:
+            bv1 = 0.0
+        try:
+            bv24 = float(s24.get("buyVolume", 0) or 0) + float(s24.get("sellVolume", 0) or 0)
+        except Exception:
+            bv24 = 0.0
+        return {
+            "chainId": "solana",
+            "dexId": "raydium" if graduated else "pump",
+            "pairAddress": (t.get("graduatedPool") or t.get("firstPool") or {}).get("id", "")
+                          if isinstance(t.get("graduatedPool") or t.get("firstPool"), dict)
+                          else (t.get("graduatedPool") or t.get("firstPool") or ""),
+            "baseToken": {"address": mint, "name": t.get("name", ""),
+                          "symbol": t.get("symbol", "")},
+            "priceUsd": str(price),
+            "liquidity": {"usd": liq},
+            "volume": {"m5": 0.0, "h24": bv24},
+            "txns": {"m5": {"buys": 0, "sells": 0},
+                     "h24": {"buys": int(s24.get("numBuys", 0) or 0),
+                             "sells": int(s24.get("numSells", 0) or 0)}},
+            "priceChange": {"m5": 0.0,
+                            "h1": float(s1.get("priceChange", 0) or 0),
+                            "h6": 0.0,
+                            "h24": float(s24.get("priceChange", 0) or 0)},
+            "fdv": fdv,
+            "marketCap": mcap,
+            "pairCreatedAt": _parse_ms(t.get("createdAt")),
+            "info": {"socials": socials, "websites": websites},
+            "holderCount": int(t.get("holderCount", 0) or 0),
+            "organicScore": t.get("organicScore"),
+            "audit": t.get("audit", {}) or {},
+            "_source": "jupiter",
+            "_socials_unknown": False,
+            "_vol1h": bv1,
+        }
+    except Exception:
+        return {}
+
+
 async def get_token_data(mint: str) -> dict:
-    """Главная замена DexScreener fetch_token_data. GT -> DS fallback."""
+    """Jupiter Token API -> GeckoTerminal -> DexScreener fallback."""
     import time as _t
     now = _t.monotonic()
     hit = _TD_CACHE.get(mint)
     if hit and (now - hit[0]) < TD_TTL:
         return hit[1]
+    # 1. Jupiter: соцсети, холдеры, аудит, возраст, ликвидность
+    jup = await _jup_token_data(mint)
+    if jup:
+        # 2. Добираем m5-окно (txns/volume) из GeckoTerminal — нужно для
+        # VIP-фильтра и XGBoost-velocity. Не критично: при провале нули.
+        try:
+            g = await _gt_get(f"/networks/solana/tokens/{mint}?include=top_pools")
+            pools = [x for x in g.get("included", []) if x.get("type") == "pool"]
+            if pools:
+                best = max(pools, key=lambda x: float(
+                    x.get("attributes", {}).get("reserve_in_usd", 0) or 0))
+                pa = best.get("attributes", {})
+                vol = pa.get("volume_usd", {}) or {}
+                tx = pa.get("transactions", {}) or {}
+                chg = pa.get("price_change_percentage", {}) or {}
+                m5 = tx.get("m5", {}) or {}
+                jup["volume"]["m5"] = float(vol.get("m5", 0) or 0)
+                jup["txns"]["m5"] = {"buys": int(m5.get("buys", 0) or 0),
+                                     "sells": int(m5.get("sells", 0) or 0)}
+                jup["priceChange"]["m5"] = float(chg.get("m5", 0) or 0)
+        except Exception:
+            pass
+        _TD_CACHE[mint] = (now, jup)
+        if len(_TD_CACHE) > 2000:
+            _TD_CACHE.clear()
+        return jup
+    # 3. GeckoTerminal целиком (старая логика)
     d = await _gt_get(f"/networks/solana/tokens/{mint}?include=top_pools")
     try:
         data = d.get("data", {})
@@ -166,7 +307,7 @@ async def _ds_token_data(mint: str) -> dict:
         "Accept": "application/json",
     }
     try:
-        async with session.get(url, headers=headers, timeout=10) as r:
+        async with session.get(url, headers=headers, timeout=6) as r:
             if r.status == 200:
                 data = await r.json()
                 pairs = data.get("pairs", [])

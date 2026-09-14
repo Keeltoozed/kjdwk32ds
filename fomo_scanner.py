@@ -74,7 +74,8 @@ async def fetch_dexscreener_trending():
     session = await get_session()
     for url in urls:
         try:
-            async with session.get(url, headers=headers, timeout=15) as response:
+            # DS с Render часто висит до таймаута — короткий таймаут, это лишь fallback
+            async with session.get(url, headers=headers, timeout=6) as response:
                 if response.status == 200:
                     data = await response.json()
                     for item in data:
