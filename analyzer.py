@@ -9,7 +9,7 @@ import math
 try:
     import joblib, numpy as np
     class ScamFilter:
-        def __init__(self, path='scam_filter_model.pkl'):
+        def __init__(self, path='scam_filter_model.json'):
             try:
                 self.model = joblib.load(path); self.enabled = True; print('AI Scam Filter: загружен')
             except Exception as e: self.enabled = False; print(f'AI Scam Filter: пропущен ({e})')
@@ -403,6 +403,19 @@ class Analyzer:
             "funded_from_cex": funded_from_cex
         }])
         
+
+        # === VELOCITY FILTER ===
+        # Пропускаем монеты с низкой активностью (стагнация = мёртвый пул)
+        volume_24h = pair_data.get("volume_24h", 0) if pair_data else 0
+        txns_5m = pair_data.get("txns_5m", 0) if pair_data else 0
+        
+        # Минимальная активность: > 500 объёма или > 10 транзакций в минуту
+        if volume_24h < 500 and txns_5m < 10:
+            print(f"🚫 [VELOCITY FILTER] {mint}: объём {volume_24h}, транзакций {txns_5m}. Мёртвый пул.")
+            return False
+        
+        # Логируем активность для мониторинга
+        print(f"📊 [VELOCITY] {mint}: vol_24h=${volume_24h}, tx_5m={txns_5m}, ликвидность=${liq_usd}")
         import xgboost as xgb
         model = xgb.XGBClassifier()
         model.load_model("pump_model.json")
@@ -453,7 +466,20 @@ class Analyzer:
         }])
         
         try:
-            import xgboost as xgb
+    
+        # === VELOCITY FILTER ===
+        # Пропускаем монеты с низкой активностью (стагнация = мёртвый пул)
+        volume_24h = pair_data.get("volume_24h", 0) if pair_data else 0
+        txns_5m = pair_data.get("txns_5m", 0) if pair_data else 0
+        
+        # Минимальная активность: > 500 объёма или > 10 транзакций в минуту
+        if volume_24h < 500 and txns_5m < 10:
+            print(f"🚫 [VELOCITY FILTER] {mint}: объём {volume_24h}, транзакций {txns_5m}. Мёртвый пул.")
+            return False
+        
+        # Логируем активность для мониторинга
+        print(f"📊 [VELOCITY] {mint}: vol_24h=${volume_24h}, tx_5m={txns_5m}, ликвидность=${liq_usd}")
+        import xgboost as xgb
             model = xgb.XGBClassifier()
             model.load_model("raydium_model_dex.json")
             prob = model.predict_proba(df)[0][1]
