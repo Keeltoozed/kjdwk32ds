@@ -2,6 +2,10 @@ import aiohttp
 from datetime import datetime, timezone
 import time
 import config
+from sentiment import analyze_sentiment
+from ta_tools import TATools
+import math
+
 try:
     import joblib, numpy as np
     class ScamFilter:
@@ -12,16 +16,13 @@ try:
         def is_scam(self, data) -> tuple:
             if not self.enabled: return False, 0.0
             try:
-                feat = np.array([[data.get('dev_holding_pct', 0), data.get('tx_velocity_1m', 0), data.get('volume_to_liq_ratio', 0), data.get('funded_from_cex', 0)]])
+                feat = np.array([[data.get('dev_holding_pct', 0), data.get('tx_velocity_1m', 0),
+                                  data.get('volume_to_liq_ratio', 0), data.get('funded_from_cex', 0)]])
                 return bool(self.model.predict(feat)[0]), float(self.model.predict_proba(feat)[0][1])
-            except: return False, 0.0
+            except Exception as e: return False, 0.0
     SCAM_FILTER = ScamFilter()
 except Exception as e:
     SCAM_FILTER = None; print(f'AI Filter ошибка: {e}')
-
-from sentiment import analyze_sentiment
-from ta_tools import TATools
-import math
 
 class Analyzer:
     def __init__(self):
@@ -409,23 +410,6 @@ class Analyzer:
         conf = prob * 100
         print(f"🤖 XGBoost [DEX Poller]: {mint} | Score: {conf:.1f}%")
         import config
-try:
-    import joblib, numpy as np
-    class ScamFilter:
-        def __init__(self, path='scam_filter_model.pkl'):
-            try:
-                self.model = joblib.load(path); self.enabled = True; print('AI Scam Filter: загружен')
-            except Exception as e: self.enabled = False; print(f'AI Scam Filter: пропущен ({e})')
-        def is_scam(self, data) -> tuple:
-            if not self.enabled: return False, 0.0
-            try:
-                feat = np.array([[data.get('dev_holding_pct', 0), data.get('tx_velocity_1m', 0), data.get('volume_to_liq_ratio', 0), data.get('funded_from_cex', 0)]])
-                return bool(self.model.predict(feat)[0]), float(self.model.predict_proba(feat)[0][1])
-            except: return False, 0.0
-    SCAM_FILTER = ScamFilter()
-except Exception as e:
-    SCAM_FILTER = None; print(f'AI Filter ошибка: {e}')
-
         threshold = 75.0 if getattr(config, "AI_MODE", "sniper") == "sniper" else 65.0
         if is_vip:
             threshold = 70.0 # Снижаем порог уверенности для ракет
@@ -493,24 +477,7 @@ except Exception as e:
             # -------------------------------
             
             print(f"🧠 Raydium XGBoost (Безлимит): {mint} | Score: {conf:.1f}%")
-            import config
-try:
-    import joblib, numpy as np
-    class ScamFilter:
-        def __init__(self, path='scam_filter_model.pkl'):
-            try:
-                self.model = joblib.load(path); self.enabled = True; print('AI Scam Filter: загружен')
-            except Exception as e: self.enabled = False; print(f'AI Scam Filter: пропущен ({e})')
-        def is_scam(self, data) -> tuple:
-            if not self.enabled: return False, 0.0
-            try:
-                feat = np.array([[data.get('dev_holding_pct', 0), data.get('tx_velocity_1m', 0), data.get('volume_to_liq_ratio', 0), data.get('funded_from_cex', 0)]])
-                return bool(self.model.predict(feat)[0]), float(self.model.predict_proba(feat)[0][1])
-            except: return False, 0.0
-    SCAM_FILTER = ScamFilter()
-except Exception as e:
-    SCAM_FILTER = None; print(f'AI Filter ошибка: {e}')
-; threshold = 75.0 if getattr(config, "AI_MODE", "sniper") == "sniper" else 65.0
+            import config; threshold = 75.0 if getattr(config, "AI_MODE", "sniper") == "sniper" else 65.0
             
             is_buy = conf >= threshold
             
@@ -660,23 +627,6 @@ except Exception as e:
         Проверяет хайп (Social Sentiment) монеты в Twitter через LunarCrush.
         """
         import config
-try:
-    import joblib, numpy as np
-    class ScamFilter:
-        def __init__(self, path='scam_filter_model.pkl'):
-            try:
-                self.model = joblib.load(path); self.enabled = True; print('AI Scam Filter: загружен')
-            except Exception as e: self.enabled = False; print(f'AI Scam Filter: пропущен ({e})')
-        def is_scam(self, data) -> tuple:
-            if not self.enabled: return False, 0.0
-            try:
-                feat = np.array([[data.get('dev_holding_pct', 0), data.get('tx_velocity_1m', 0), data.get('volume_to_liq_ratio', 0), data.get('funded_from_cex', 0)]])
-                return bool(self.model.predict(feat)[0]), float(self.model.predict_proba(feat)[0][1])
-            except: return False, 0.0
-    SCAM_FILTER = ScamFilter()
-except Exception as e:
-    SCAM_FILTER = None; print(f'AI Filter ошибка: {e}')
-
         api_key = getattr(config, "LUNARCRUSH_API_KEY", "")
         if not api_key:
             return {}
