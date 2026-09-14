@@ -48,3 +48,36 @@ class MatureExitManager:
                 return "Mature Time Exit"
 
         return None
+
+class TrailingExitManager:
+    def __init__(self, trail_pct=0.30, min_profit=0.50):
+        self.trail_pct = trail_pct
+        self.min_profit = min_profit
+    
+    def evaluate_exit(self, position, current_price):
+        entry = position.entry_price_usd
+        pnl = (current_price - entry) / entry
+        max_pnl = (position.max_price_usd - entry) / entry
+        
+        # Hard stop -40% (MOONSHOT_CONFIG)
+        if pnl <= -0.40:
+            return "Moonshot Hard Stop (-40%)"
+        
+        # Частичный тейк после +50% минимального профита
+        if max_pnl >= self.min_profit and not getattr(position, 'tp_1_hit', False):
+            position.tp_1_hit = True
+            return "Moonshot TP +50% (30% продано)"
+        
+        # Trailing 30% после первого TP
+        if getattr(position, 'tp_1_hit', False):
+            trail_stop = position.max_price_usd * (1 - self.trail_pct)
+            if current_price <= trail_stop:
+                return "Moonshot Trailing Stop (-30% от пика)"
+        
+        # Дополнительные уровни тейка (5x/20x/100x) — симулировано в backtest
+        for pct, label in [(5.0, "5x"), (20.0, "20x"), (100.0, "100x")]:
+            if max_pnl >= pct and not getattr(position, f'tp_{label}_hit', False):
+                setattr(position, f'tp_{label}_hit', True)
+                return f"Moonshot TP +{pct*100:.0f}% ({label})"
+        
+        return None
