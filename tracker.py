@@ -60,9 +60,20 @@ class PaperTracker:
         except Exception as e:
             print(f"⚠️ Не удалось загрузить портфель из Supabase: {e}")
             
-        # 2. Игнорируем локальный файл при старте, чтобы гитхаб-кэш не ломал дашборд!
-        print("🧹 Начинаем с чистого листа (локальный файл игнорируется)")
-        self.save_portfolio() # Перезаписываем локальный файл пустим словарем, чтобы дашборд тоже очистился!
+        # 2. Fallback: загружаем из локального файла
+        try:
+            with open(self.filename, 'r') as f:
+                data = json.load(f)
+                if data:
+                    print("✅ Портфель загружен из локального файла!")
+                    self._parse_portfolio_data(data)
+                    return
+        except (FileNotFoundError, json.JSONDecodeError):
+            pass
+            
+        # 3. Только если нет ни Supabase, ни локального файла - начинаем с чистого листа
+        print("🧹 Портфель пуст, начинаем с чистого листа")
+        self.save_portfolio()
 
     def save_portfolio(self):
         data = {k: getattr(v, "model_dump", v.dict)() for k, v in self.positions.items()}
