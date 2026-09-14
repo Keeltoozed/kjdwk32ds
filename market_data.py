@@ -22,6 +22,11 @@ _lock = asyncio.Lock()
 _last_call = 0.0
 MIN_INTERVAL = 2.0  # не чаще ~30/мин на весь процесс
 
+# Кэш данных токенов: сканер и FOMO запрашивают одни и те же минты по кругу.
+# Без кэша свежие токены съедают весь лимит 30/мин и всё падает с 429.
+_TD_CACHE = {}  # mint -> (timestamp_monotonic, data)
+TD_TTL = 90.0  # секунд свежие данные считаются годными
+
 
 async def _gt_get(path: str):
     """GET к GeckoTerminal с общим rate-limiter'ом. Возвращает dict или {}."""
@@ -120,6 +125,11 @@ def _normalize_pool(mint: str, name: str, symbol: str, item: dict, token_attrs: 
 
 async def get_token_data(mint: str) -> dict:
     """Главная замена DexScreener fetch_token_data. GT -> DS fallback."""
+    import time as _t
+    now = _t.monotonic()
+    hit = _TD_CACHE.get(mint)
+    if hit and (now - hit[0]) < TD_TTL:
+        return hit[1]
     d = await _gt_get(f"/networks/solana/tokens/{mint}?include=top_pools")
     try:
         data = d.get("data", {})
@@ -132,11 +142,17 @@ async def get_token_data(mint: str) -> dict:
                 x.get("attributes", {}).get("reserve_in_usd", 0) or 0))
             norm = _normalize_pool(mint, name, symbol, best, ta)
             if float(norm["priceUsd"] or 0) > 0:
+                _TD_CACHE[mint] = (now, norm)
+                if len(_TD_CACHE) > 2000:  # чистка старья
+                    _TD_CACHE.clear()
                 return norm
     except Exception:
         pass
     # Fallback: DexScreener (старая логика из analyzer)
-    return await _ds_token_data(mint)
+    ds = await _ds_token_data(mint)
+    if ds:
+        _TD_CACHE[mint] = (now, ds)
+    return ds
 
 
 async def _ds_token_data(mint: str) -> dict:
@@ -172,13 +188,19 @@ async def get_price(mint: str) -> float:
 
 
 async def get_bulk_prices(mints: list) -> dict:
-    """Балк-цены через GeckoTerminal simple endpoint (до 30 адресов за запрос)."""
+    """Балк-цены: сначала Jupiter Lite (свой лимит, не трогает квоту GT),
+    недостающее добираем через GeckoTerminal simple endpoint (до 30 за запрос)."""
     out = {}
     if not mints:
         return out
     ms = [m for m in dict.fromkeys(mints) if m]
-    for i in range(0, len(ms), 30):
-        chunk = ms[i:i + 30]
+    try:
+        out = await _jup_lite_prices(ms)
+    except Exception as e:
+        print(f"Jupiter Lite bulk error: {type(e).__name__} {e}")
+    missing = [m for m in ms if m not in out]
+    for i in range(0, len(missing), 30):
+        chunk = missing[i:i + 30]
         d = await _gt_get("/simple/networks/solana/token_price/" + ",".join(chunk))
         try:
             px = d.get("data", {}).get("attributes", {}).get("token_prices", {})
@@ -186,6 +208,35 @@ async def get_bulk_prices(mints: list) -> dict:
                 out[m] = float(p)
         except Exception:
             pass
+    return out
+
+
+async def _jup_lite_prices(mints: list) -> dict:
+    """Цены через Jupiter Lite Price API v3 (до 50 адресов за запрос)."""
+    import json as _json
+    import urllib.request as _url
+    out = {}
+
+    def one_call(chunk):
+        url = ("https://lite-api.jup.ag/price/v3?ids=" + ",".join(chunk))
+        req = _url.Request(url, headers={"User-Agent": "Mozilla/5.0",
+                                         "Accept": "application/json"})
+        with _url.urlopen(req, timeout=15) as r:
+            return _json.load(r)
+
+    for i in range(0, len(mints), 50):
+        chunk = mints[i:i + 50]
+        try:
+            data = await asyncio.to_thread(one_call, chunk)
+        except Exception:
+            continue
+        for m in chunk:
+            try:
+                px = data.get(m, {}).get("usdPrice", 0)
+                if px and float(px) > 0:
+                    out[m] = float(px)
+            except Exception:
+                continue
     return out
 
 

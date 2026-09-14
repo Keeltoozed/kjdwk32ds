@@ -259,7 +259,7 @@ class Analyzer:
             
         pair_data = await self.fetch_token_data(mint)
         if not pair_data:
-            print(f"⚠️ Пропуск: DexScreener не вернул данные для {mint} (Rate Limit или токен слишком новый).")
+            print(f"⚠️ Пропуск: MarketData (GT+DS) не вернул данные для {mint} (лимиты API или токен слишком новый).")
             return None
             
         # Блэклист тикеров и названий (Защита от фейковых токенов)

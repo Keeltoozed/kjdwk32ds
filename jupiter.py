@@ -4,12 +4,16 @@ class JupiterAPI:
     @staticmethod
     async def get_prices(mints: list) -> dict:
         """
-        Балк-запрос цен для нескольких токенов через GeckoTerminal.
+        Балк-запрос цен: Jupiter Lite первым (своя квота), GeckoTerminal как fallback.
         Значительно ускоряет цикл трекинга позиций, избавляя от последовательных HTTP-запросов.
         """
         if not mints:
             return {}
-            
+        import market_data
+        try:
+            return await market_data.get_bulk_prices(mints)
+        except Exception:
+            pass
         addresses = ",".join(mints)
         url = f"https://api.geckoterminal.com/api/v2/simple/networks/solana/token_price/{addresses}"
         headers = {"Accept": "application/json"}
