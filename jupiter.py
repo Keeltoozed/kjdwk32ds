@@ -17,13 +17,13 @@ class JupiterAPI:
         from http_client import get_session
         session = await get_session()
         try:
-                async with session.get(url, headers=headers, timeout=5) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        prices = data.get("data", {}).get("attributes", {}).get("token_prices", {})
-                        return {mint: float(price) for mint, price in prices.items()}
-            except Exception:
-                pass
+            async with session.get(url, headers=headers, timeout=5) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    prices = data.get("data", {}).get("attributes", {}).get("token_prices", {})
+                    return {mint: float(price) for mint, price in prices.items()}
+        except Exception:
+            pass
         return {}
 
     @staticmethod
@@ -45,20 +45,20 @@ class JupiterAPI:
         from http_client import get_session
         session = await get_session()
         try:
-                async with session.get(url, timeout=5) as response:
-                    if response.status != 200:
-                        return {"is_safe": False, "reason": "Jupiter routing failed (No liquidity or rug)"}
-                    
-                    data = await response.json()
-                    price_impact = float(data.get("priceImpactPct", 100))
-                    
-                    # Если impact > 5% на микрообъеме 0.1 SOL — в пуле нет денег, либо стоит заградительный налог
-                    if price_impact > 5.0:
-                        return {"is_safe": False, "reason": f"High price impact: {price_impact}%"}
-                    
-                    return {"is_safe": True, "data": data}
-            except Exception as e:
-                 return {"is_safe": False, "reason": f"Error: {e}"}
+            async with session.get(url, timeout=5) as response:
+                if response.status != 200:
+                    return {"is_safe": False, "reason": "Jupiter routing failed (No liquidity or rug)"}
+
+                data = await response.json()
+                price_impact = float(data.get("priceImpactPct", 100))
+
+                # Если impact > 5% на микрообъеме 0.1 SOL — в пуле нет денег, либо стоит заградительный налог
+                if price_impact > 5.0:
+                    return {"is_safe": False, "reason": f"High price impact: {price_impact}%"}
+
+                return {"is_safe": True, "data": data}
+        except Exception as e:
+             return {"is_safe": False, "reason": f"Error: {e}"}
 
     @staticmethod
     async def get_swap_transaction(mint: str, is_sell: bool = False, amount_lamports: int = 0) -> dict:
@@ -78,39 +78,39 @@ class JupiterAPI:
         from http_client import get_session
         session = await get_session()
         try:
-                async with session.get(quote_url, timeout=5) as response:
-                    if response.status != 200:
-                        return {"success": False, "reason": "No route or slippage too high"}
-                    quote_response = await response.json()
-                    
-                # 2. Формируем транзакцию с динамическими fee
-                swap_url = "https://quote-api.jup.ag/v6/swap"
-                
-                # ИНТЕГРАЦИЯ JITO & PRIORITY FEES
-                # Для покупок (снайпинга) и экстренных продаж ставим Jito Tip и VeryHigh priority
-                jito_tip = 150000 if is_sell else 100000
-                priority_level = "veryHigh"
-                
-                payload = {
-                    "quoteResponse": quote_response,
-                    "userPublicKey": "YOUR_WALLET_PUBLIC_KEY", # Placeholder для интеграции
-                    "wrapAndUnwrapSol": True,
-                    "dynamicComputeUnitLimit": True,
-                    "prioritizationFeeLamports": {
-                        "jitoTipLamports": jito_tip,
-                        "priorityLevelWithMaxLamports": {
-                            "maxLamports": 2000000,
-                            "priorityLevel": priority_level
-                        }
+            async with session.get(quote_url, timeout=5) as response:
+                if response.status != 200:
+                    return {"success": False, "reason": "No route or slippage too high"}
+                quote_response = await response.json()
+
+            # 2. Формируем транзакцию с динамическими fee
+            swap_url = "https://quote-api.jup.ag/v6/swap"
+
+            # ИНТЕГРАЦИЯ JITO & PRIORITY FEES
+            # Для покупок (снайпинга) и экстренных продаж ставим Jito Tip и VeryHigh priority
+            jito_tip = 150000 if is_sell else 100000
+            priority_level = "veryHigh"
+
+            payload = {
+                "quoteResponse": quote_response,
+                "userPublicKey": "YOUR_WALLET_PUBLIC_KEY", # Placeholder для интеграции
+                "wrapAndUnwrapSol": True,
+                "dynamicComputeUnitLimit": True,
+                "prioritizationFeeLamports": {
+                    "jitoTipLamports": jito_tip,
+                    "priorityLevelWithMaxLamports": {
+                        "maxLamports": 2000000,
+                        "priorityLevel": priority_level
                     }
                 }
-                
-                async with session.post(swap_url, json=payload, timeout=5) as response:
-                    if response.status != 200:
-                        return {"success": False, "reason": "Failed to generate swap tx"}
-                    swap_data = await response.json()
-                    
-                    return {"success": True, "tx": swap_data.get("swapTransaction")}
-            except Exception as e:
-                print(f"Jupiter Swap Error: {type(e).__name__} {e}")
-                return {"success": False, "reason": f"Jupiter API error: {e}"}
+            }
+
+            async with session.post(swap_url, json=payload, timeout=5) as response:
+                if response.status != 200:
+                    return {"success": False, "reason": "Failed to generate swap tx"}
+                swap_data = await response.json()
+
+                return {"success": True, "tx": swap_data.get("swapTransaction")}
+        except Exception as e:
+            print(f"Jupiter Swap Error: {type(e).__name__} {e}")
+            return {"success": False, "reason": f"Jupiter API error: {e}"}
