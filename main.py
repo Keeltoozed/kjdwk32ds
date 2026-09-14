@@ -73,37 +73,34 @@ async def position_manager_loop(analyzer, tracker):
                 priority_fee_usd = 0.075 if position.amount_usd < 10.0 else 0.45
                 min_fee_pct = (priority_fee_usd + 0.02 * position.amount_usd) / position.amount_usd
                 
-                # 🚀 MOONBAGS: Частичная фиксация на +100% (продаем 50%)
-                if pnl_pct >= 1.0 and getattr(position, "is_moonbag", False) == False:
-                    tracker.partial_close_position(mint, current_price, 0.5, "Moonbag 50% (+100%)")
+                # 🚀 УМНЫЙ ТЕЙК-ПРОФИТ (Снижаем жадность, забираем кэш)
+                # 1. Первая фиксация на +35%: продаем 50% объема
+                if max_pnl_pct >= 0.35 and getattr(position, "is_moonbag", False) == False:
+                    tracker.partial_close_position(mint, current_price, 0.5, "Take Profit 50% (+35%)")
                     continue
                 
-                # Если это Moonbag (уже забрали х2), трейлинг делаем ОЧЕНЬ широким
-                if getattr(position, "is_moonbag", False):
-                    drop_from_max = (position.max_price_usd - current_price) / position.max_price_usd
-                    if drop_from_max >= 0.40: # Разрешаем падать на 40% от пика (пусть летит до луны)
-                        tracker.close_position(mint, current_price, "Moonbag Exit (40% drop)")
-                    continue
-                
-                # 1. Lock Profit — УБРАН (реальный avg PnL = -0.6%, убивал ракеты)
-                # 2. Break-even — УБРАН (реальный avg PnL = -8.1%, проскальзывание съедало)
-                
-                # 3. DIAMOND HANDS TRAILING (только после +80%)
+                # 2. ТРЕЙЛИНГ-СТОП (Динамическая фиксация)
                 drop_from_max = (position.max_price_usd - current_price) / position.max_price_usd
                 
-                if max_pnl_pct >= 0.80:
-                    if drop_from_max >= 0.25: 
-                        tracker.close_position(mint, current_price, "Diamond Hand Trailing (25% drop)")
+                if getattr(position, "is_moonbag", False):
+                    # Если уже забрали 50%, даем оставшейся части дышать шире (ждем ракету)
+                    if drop_from_max >= 0.20: 
+                        tracker.close_position(mint, current_price, "Moonbag Trailing (20% drop)")
                         continue
-                
-                # 4. ЖЕСТКИЙ Stop Loss -15% (было -25%, но реально исполнялось на -34..-66%)
-                # С Jito транзакция пройдет за 400ms, реальный убыток будет ~-18%
-                if pnl_pct <= -0.15:
-                    tracker.close_position(mint, current_price, "Hard Stop Loss (-15%)")
+                else:
+                    # Активируем трейлинг из config.py
+                    if max_pnl_pct >= config.TRAILING_ACTIVATION_PCT:
+                        if drop_from_max >= config.TRAILING_DISTANCE_PCT:
+                            tracker.close_position(mint, current_price, f"Smart Trailing (+{max_pnl_pct*100:.0f}% peak)")
+                            continue
+                            
+                # 3. ЖЕСТКИЙ Stop Loss из config.py
+                if pnl_pct <= config.STOP_LOSS_PCT:
+                    tracker.close_position(mint, current_price, f"Hard Stop Loss ({config.STOP_LOSS_PCT*100:.0f}%)")
                     continue
                     
-                # 5. Time Exit: 10 минут вместо 30 (было 26 сделок с avg -7.3%)
-                if minutes_held >= 10 and pnl_pct < 0.05:
+                # 4. Time Exit из config.py: если монета застыла
+                if minutes_held >= config.TIME_EXIT_MINUTES and pnl_pct < config.TIME_EXIT_PROFIT_REQ:
                     tracker.close_position(mint, current_price, "Time-based Exit (Dead Coin)")
                     continue
         except Exception as e:
