@@ -293,7 +293,7 @@ async def async_main():
         copy_trader.listen(),
         fomo_signal_loop(analyzer, tracker),
         fomo_loop(analyzer, tracker),
-        sniper.connect_and_listen(),
+        # sniper.connect_and_listen(),  # DISABLED — sniper entry kills capital (-85.8%), mature +162.5%
         trade_logger.post_trade_watcher_loop(),
         rugpull_feeder_loop(),
         sol_price_updater()

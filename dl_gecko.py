@@ -22,25 +22,25 @@ os.makedirs(POOLS, exist_ok=True)
 BASE = "https://api.geckoterminal.com/api/v2"
 
 
-def get(url, retries=6):
+def get(url, retries=3):
     last = None
     for i in range(retries):
         try:
             req = urllib.request.Request(
                 url, headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"})
-            with urllib.request.urlopen(req, timeout=30) as r:
+            with urllib.request.urlopen(req, timeout=20) as r:
                 return json.load(r), False
         except urllib.error.HTTPError as e:
             last = e
             if e.code == 429:
-                wait = 20 + 10 * i
+                wait = 15 + 10 * i
                 print(f"  429, жду {wait}c...", flush=True)
                 time.sleep(wait)
             else:
                 raise
         except Exception as e:
             last = e
-            time.sleep(3 + 2 * i)
+            time.sleep(2 + 2 * i)
     raise RuntimeError(f"GET failed {url}: {last}")
 
 
@@ -92,11 +92,12 @@ def cmd_mappicks():
         if mint in u and u[mint].get("pool"):
             continue
         try:
-            d = api(f"/networks/solana/tokens/{mint}")
+            d = api(f"/networks/solana/tokens/{mint}?include=top_pools")
             pools = [x for x in d.get("included", [])
                      if x.get("type") == "pool"]
             if not pools:
-                print(f"  [{i+1}/{len(mints)}] {mint[:8]}: no pools")
+                print(f"  [{i+1}/{len(mints)}] {mint[:8]}: no pools", flush=True)
+                save_universe(u)
                 continue
             # топ-пул по резервной валюте/объёму: берём первый
             pool = pools[0]["attributes"]["address"]
