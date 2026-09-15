@@ -22,6 +22,8 @@ class VirtualPosition(BaseModel):
     ml_confidence: float = 0.0 # Уверенность ИИ (0-100)
     is_mature: bool = False # Флаг для разделения логики (Swing vs Scalp)
     is_moonbag: bool = False # Флаг, что мы уже зафиксировали 50% прибыли
+    price_updated_at: float = 0.0 # Время свежего обновления цены из WSS
+    price_checked_at: float = 0.0 # Для Crash Guard
 
 class PaperTracker:
     def __init__(self):
