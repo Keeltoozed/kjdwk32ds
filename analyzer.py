@@ -7,22 +7,31 @@ from ta_tools import TATools
 import math
 
 try:
-    import joblib, numpy as np
+    import numpy as np
+    import xgboost as xgb
     class ScamFilter:
-        def __init__(self, path='scam_filter_model.pkl'):
+        def __init__(self, path='scam_filter_model.json'):
             try:
-                self.model = joblib.load(path); self.enabled = True; print('AI Scam Filter: загружен')
-            except Exception as e: self.enabled = False; print(f'AI Scam Filter: пропущен ({e})')
+                self.model = xgb.XGBClassifier()
+                self.model.load_model(path)
+                self.enabled = True
+                print('AI Scam Filter: загружен (XGBoost native, без sklearn-pickle)')
+            except Exception as e:
+                self.enabled = False
+                print(f'AI Scam Filter: пропущен ({e})')
         def is_scam(self, data) -> tuple:
-            if not self.enabled: return False, 0.0
+            if not self.enabled:
+                return False, 0.0
             try:
                 feat = np.array([[data.get('dev_holding_pct', 0), data.get('tx_velocity_1m', 0),
                                   data.get('volume_to_liq_ratio', 0), data.get('funded_from_cex', 0)]])
                 return bool(self.model.predict(feat)[0]), float(self.model.predict_proba(feat)[0][1])
-            except Exception: return False, 0.0
+            except Exception:
+                return False, 0.0
     SCAM_FILTER = ScamFilter()
 except Exception as e:
-    SCAM_FILTER = None; print(f'AI Filter ошибка: {e}')
+    SCAM_FILTER = None
+    print(f'AI Filter ошибка: {e}')
 
 
 class Analyzer:
@@ -270,6 +279,18 @@ class Analyzer:
             return False
             
         is_vip = self.check_hyper_rocket_momentum(pair_data)
+
+        # === VIP OVERHEAT GUARD: не покупаем вершину вертикали ===
+        if is_vip and pair_data:
+            _pc = pair_data.get("priceChange") or {}
+            _m5 = _pc.get("m5", 0) or 0
+            _m1 = _pc.get("m1", 0) or 0
+            if _m5 > 40:
+                print(f"🚫 [VIP OVERHEAT] {mint}: m5 {_m5:+.0f}% — вертикаль уже прошла, вход = вершина.")
+                return False
+            if _m1 < 0:
+                print(f"🚫 [VIP REVERSAL] {mint}: m1 {_m1:+.1f}% — всплеск откатывает, ждём pullback.")
+                return False
 
         # === MOMENTUM GATE (не-VIP): не входим в стоящие на месте пулы ===
         if not is_vip and pair_data:

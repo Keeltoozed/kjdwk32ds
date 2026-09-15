@@ -54,9 +54,14 @@ async def position_manager_loop(analyzer, tracker):
                 max_pnl_pct = (position.max_price_usd - position.entry_price_usd) / position.entry_price_usd
                 minutes_held = (time.time() - position.entry_time) / 60
                 
-                # === STAGNANT EXIT: болтается около нуля 20+ мин -> выходим, не ждём 60 мин ===
-                if minutes_held >= 20 and abs(pnl_pct) < 0.05:
+                # === STAGNANT EXIT: режем ТОЛЬКО монеты, которые ни разу не двинулись ===
+                if minutes_held >= 20 and abs(pnl_pct) < 0.05 and max_pnl_pct < 0.05:
                     tracker.close_position(mint, current_price, "Stagnant Near Zero (20 min flat)")
+                    continue
+                
+                # === PROFIT LOCK: ракета была +10% и откатывает — не отдаём профит в минус ===
+                if max_pnl_pct >= 0.10 and pnl_pct <= 0.04:
+                    tracker.close_position(mint, current_price, f"Profit Lock (peak +{max_pnl_pct*100:.0f}%)")
                     continue
                 
                 # Обновляем текущие значения для отображения в интерфейсе
