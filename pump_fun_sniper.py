@@ -19,6 +19,7 @@ class TokenTrackerState:
         
         self.trades = []
         self.unique_buyers = set()
+        self.buy_wallets = {}
         self.total_volume_sol = 0
         self.start_time = time.time()
         
@@ -317,6 +318,8 @@ class PumpFunSniper:
                                 'wallet': data.get('traderPublicKey')
                             })
                             state.unique_buyers.add(data.get('traderPublicKey'))
+                            if tx_type == "buy":
+                                state.buy_wallets[data.get('traderPublicKey')] = time.time()
                             
                             progress = (sol_amount / 85.0) * 100
                             if progress > state.max_curve_progress:
@@ -347,6 +350,7 @@ class PumpFunSniper:
                                     if market_cap_sol > 0:
                                         live_price = (market_cap_sol / 1_000_000_000.0) * get_sol_price_sync()
                                         pos.current_price_usd = live_price
+                                        pos.price_updated_at = time.time()
                                     if live_price > pos.max_price_usd:
                                         pos.max_price_usd = live_price
                                     # Рассчитываем PNL для логов (Stop-Loss все равно сработает в главном цикле, но быстрее)
@@ -359,9 +363,9 @@ class PumpFunSniper:
                             
                             # Стандартный Quarantine: Если достигли 60% (Proof of Traction ~ $12k MC), оцениваем ИИ
                             if not state.is_ai_evaluated and progress >= 60.0 and len(state.trades) > 5:
-                                # Standard filter (if you want to add unique_buyers back)
-                                if len(state.unique_buyers) < 15:
-                                    # print(f"🚫 [LOW TRACTION] {state.symbol}: Всего {len(state.unique_buyers)} покупателей при 60% Bonding Curve. Ждем дальше...")
+                                cutoff = time.time() - config.SNIPER_BUYERS_WINDOW_MIN * 60
+                                buyers_window = sum(1 for ts in state.buy_wallets.values() if ts >= cutoff)
+                                if buyers_window < config.SNIPER_MIN_UNIQUE_BUYERS:
                                     continue
                                 await self.evaluate_and_enter(state)
                                 

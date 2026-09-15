@@ -25,22 +25,21 @@ async def position_manager_loop(analyzer, tracker):
                 # 1. Берем цену из Raydium/Gecko (запросили разом для всех)
                 api_price = bulk_prices.get(mint, 0.0)
                 
-                # 2. Берем цену из WebSocket (если она свежая)
-                # В tracker.py current_price_usd изначально равна entry_price. Нам нужно понять, обновилась ли она.
-                # Если она изменилась с момента покупки, значит websocket ее обновил!
+                # 2. Берем цену из WebSocket (если она СВЕЖАЯ, а не записанная этим же циклом)
                 ws_price = position.current_price_usd if hasattr(position, 'current_price_usd') else 0.0
-                
-                # ИСПОЛЬЗУЕМ СВЕЖУЮ ЦЕНУ:
-                # Если websocket поменял цену (она не равна ровно цене входа), то верим websocket!
-                # Иначе, если Raydium/Gecko вернули цену > 0, верим им.
-                if ws_price > 0.0 and abs(ws_price - position.entry_price_usd) > 0.00000001:
+                ws_ts = getattr(position, "price_updated_at", 0.0)
+                ws_fresh = ws_price > 0.0 and (time.time() - ws_ts) < 8
+
+                if ws_fresh:
                     current_price = ws_price
                 elif api_price > 0.0:
                     current_price = api_price
-                else:
-                    # Если никто не вернул цену (Гецко еще не знает, ВСС еще не прислал сделку), оставляем ту, что была
+                elif ws_price > 0.0:
                     current_price = ws_price
-                    
+                else:
+                    current_price = 0.0
+
+                prev_price = position.current_price_usd
                 if current_price <= 0.0:
                     minutes_held = (time.time() - position.entry_time) / 60
                     if minutes_held > 180:
@@ -53,6 +52,14 @@ async def position_manager_loop(analyzer, tracker):
                 pnl_pct = (current_price - position.entry_price_usd) / position.entry_price_usd
                 max_pnl_pct = (position.max_price_usd - position.entry_price_usd) / position.entry_price_usd
                 minutes_held = (time.time() - position.entry_time) / 60
+
+                prev_ts = getattr(position, "price_checked_at", 0.0)
+                if prev_ts > 0 and (time.time() - prev_ts) < 60 and prev_price > 0 \
+                        and current_price <= prev_price * 0.90:
+                    tracker.close_position(mint, current_price,
+                                           f"Crash Guard (-{(1 - current_price/prev_price)*100:.0f}% за {(time.time()-prev_ts):.0f} сек)")
+                    continue
+                position.price_checked_at = time.time()
                 
                 # === STAGNANT EXIT: режем ТОЛЬКО монеты, которые ни разу не двинулись ===
                 if minutes_held >= 20 and abs(pnl_pct) < 0.05 and max_pnl_pct < 0.05:

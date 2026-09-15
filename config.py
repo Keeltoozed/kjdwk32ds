@@ -35,8 +35,8 @@ TIME_EXIT_MINUTES = 60  # Если за 30 минут нет пампа - вых
 TIME_EXIT_PROFIT_REQ = 0.0
 
 # Trailing Stop Config (Защита прибыли)
-TRAILING_ACTIVATION_PCT = 0.15 # Включаем трейлинг уже при +15% профита!
-TRAILING_DISTANCE_PCT = 0.05   # Держим стоп на 5% ниже пика. Если выросли на 15%, стоп сдвигается в +10% (Безубыток)
+TRAILING_ACTIVATION_PCT = 0.12
+TRAILING_DISTANCE_PCT = 0.04
 
 # Filtering
 AI_MODE = "sniper" # "sniper" (строго 80-90% уверенности) или "degen"
@@ -57,5 +57,7 @@ JITO_TIP_AMOUNT_SOL = 0.0005 # Чаевые валидатору (минимум
 JITO_TIP_ACCOUNT = "96gYZGLnJYVFmbjzopPSU6QiCRK4rPdTuQ8hB1aP442b" # Официальный Jito Tip Account
 LUNARCRUSH_API_KEY = "syvh43mkvrzrw54sor6kc5r6dmtyj5fhi4jd38ht"
 
+SNIPER_MIN_UNIQUE_BUYERS = 15
+SNIPER_BUYERS_WINDOW_MIN = 5
 WHALE_CONSENSUS = 2  # вход на 2-м ките (3-й = уже поздно)
 WHALE_MAX_RUNUP = 1.35  # цена не должна вырасти >35% с момента покупки первого кита

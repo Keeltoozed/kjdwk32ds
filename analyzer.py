@@ -168,11 +168,11 @@ class Analyzer:
                             return False
                             
                         return True
-                    return False
+                    print(f"⚠️ RugCheck HTTP {response.status} для {mint}. Fail-Open: решаю по остальным фильтрам.")
+                    return True
             except Exception as e:
-                print(f"⚠️ RugCheck fetch error ({type(e).__name__}): {e}. Переходим в Fail-Open режим (пропуск).")
+                print(f"⚠️ RugCheck fetch error ({type(e).__name__}): {e}. Fail-Open: решаю по остальным фильтрам.")
                 return True
-                return False
 
     async def get_helius_transaction_metrics(self, mint: str) -> tuple:
         """ Возвращает (unique_buyers_m5, smart_money_inflow) """
@@ -301,6 +301,13 @@ class Analyzer:
             _tx = (pair_data.get("txns") or {}).get("h1", {}) or {}
             _b, _s = _tx.get("buys", 0) or 0, _tx.get("sells", 0) or 0
             _v24 = (pair_data.get("volume") or {}).get("h24", 0) or 0
+            _txm5_pre = (pair_data.get("txns") or {}).get("m5", {}) or {}
+            _vm5_pre = (pair_data.get("volume") or {}).get("m5", 0) or 0
+            _created_pre = pair_data.get("pairCreatedAt") or 0
+            _age_min_pre = (time.time() * 1000 - _created_pre) / 60000.0 if _created_pre else 999
+            if _age_min_pre < 10 and (_txm5_pre.get("buys", 0) + _txm5_pre.get("sells", 0)) == 0 and _vm5_pre == 0:
+                print(f"⏳ [ENTRY] {mint}: возраст {_age_min_pre:.1f} мин, m5-окно API ещё пустое — повторю позже, снайпер ведёт его по WSS.")
+                return None
             if _m5 < 8.0:
                 print(f"🚫 [ENTRY] {mint}: m5 {_m5:+.1f}% < +8% — импульса не было, пропуск.")
                 return False
