@@ -55,6 +55,23 @@ class Analyzer:
             if volume_24h < 500 and txns_5m < 10:
                 print(f"🚫 [VELOCITY FILTER] {mint}: объём {volume_24h}, транзакций {txns_5m}. Мёртвый пул.")
                 return False
+
+            # === MOMENTUM GATE: вход только в движущуюся монету ===
+            pc = (pair_data.get("priceChange") or {}) if pair_data else {}
+            m5 = pc.get("m5", 0) or 0
+            tx1 = (pair_data.get("txns", {}) or {}).get("h1", {}) or (pair_data.get("txns", {}) or {}).get("m5", {}) or {}
+            buys = tx1.get("buys", 0) or 0
+            sells = tx1.get("sells", 0) or 0
+            if m5 < 2.0:
+                print(f"🚫 [MOMENTUM] {mint}: m5 {m5:+.1f}% < +2% — стоит на месте, пропуск.")
+                return False
+            if sells > 0 and buys < sells * 1.1:
+                print(f"🚫 [MOMENTUM] {mint}: buys {buys} / sells {sells} — нет давления покупателей.")
+                return False
+            if volume_24h < 20000:
+                print(f"🚫 [MOMENTUM] {mint}: vol24h ${volume_24h:,.0f} < $20k — нет органического объёма.")
+                return False
+            print(f"✅ [MOMENTUM] {mint}: m5 {m5:+.1f}%, buys/sells {buys}/{sells}, vol24h ${volume_24h:,.0f} — ракета жива.")
             
             # AI Filter (если загружен)
             if SCAM_FILTER and SCAM_FILTER.enabled:

@@ -54,6 +54,11 @@ async def position_manager_loop(analyzer, tracker):
                 max_pnl_pct = (position.max_price_usd - position.entry_price_usd) / position.entry_price_usd
                 minutes_held = (time.time() - position.entry_time) / 60
                 
+                # === STAGNANT EXIT: болтается около нуля 20+ мин -> выходим, не ждём 60 мин ===
+                if minutes_held >= 20 and abs(pnl_pct) < 0.05:
+                    tracker.close_position(mint, current_price, "Stagnant Near Zero (20 min flat)")
+                    continue
+                
                 # Обновляем текущие значения для отображения в интерфейсе
                 # (сохраняем один раз за цикл ниже, а не на каждой позиции,
                 # чтобы не делать N записей в Supabase каждые 3 секунды)
