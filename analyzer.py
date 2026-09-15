@@ -374,7 +374,6 @@ class Analyzer:
             return False
             
         dex_id = pair_data.get("dexId")
-        import time
         created_at = pair_data.get("pairCreatedAt", 0)
         age_minutes = (time.time() * 1000 - created_at) / (1000 * 60) if created_at else 999
         
@@ -398,7 +397,6 @@ class Analyzer:
         # 2. Проверяем возраст токена (только для обычных монет)
         created_at = pair_data.get("pairCreatedAt")
         if created_at and not is_vip:
-            import time
             age_minutes = (time.time() * 1000 - created_at) / (1000 * 60)
             if age_minutes > 15:  # Игнорируем токены старше 15 минут
                 return False

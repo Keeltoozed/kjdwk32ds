@@ -198,33 +198,36 @@ async def scanner_loop(analyzer, tracker):
                     if len(processed_mints) > 1000:
                         processed_mints.clear()
                         
-                    # Используем умный маршрутизатор (сам выберет XGBoost или Raydium модель)
-                    is_good = await analyzer.analyze_token(mint)
+                    try:
+                        # Используем умный маршрутизатор (сам выберет XGBoost или Raydium модель)
+                        is_good = await analyzer.analyze_token(mint)
                             
-                    if is_good:
-                        pair_data = await analyzer.fetch_token_data(mint)
-                        entry_price = float(pair_data.get("priceUsd", 0)) if pair_data else 0
-                        actual_symbol = pair_data.get("baseToken", {}).get("symbol", "UNKNOWN") if pair_data else "UNKNOWN"
-                        if entry_price > 0:
-                            # Динамический сайзинг
-                            capital = tracker.get_total_capital()
-                            base_position = capital * (config.REINVEST_PERCENT / 100.0)
-                            
-                            liq_usd = pair_data.get("liquidity", {}).get("usd", 0) if pair_data else 0
-                            max_allowed_by_pool = liq_usd * 0.01  # Максимум 1% от ликвидности
-                            
-                            fixed = getattr(config, "TRADE_AMOUNT_USD", 0)
-                            position_size = min(fixed, max_allowed_by_pool) if fixed else max(4.0, min(base_position, max_allowed_by_pool, 100.0))
-                            
-                            if position_size < 4.0:
-                                print(f"🚫 Отказ (Ликвидность): Недостаточно ликвидности (${liq_usd}) для безопасного входа.")
-                                continue
+                        if is_good:
+                            pair_data = await analyzer.fetch_token_data(mint)
+                            entry_price = float(pair_data.get("priceUsd", 0)) if pair_data else 0
+                            actual_symbol = pair_data.get("baseToken", {}).get("symbol", "UNKNOWN") if pair_data else "UNKNOWN"
+                            if entry_price > 0:
+                                # Динамический сайзинг
+                                capital = tracker.get_total_capital()
+                                base_position = capital * (config.REINVEST_PERCENT / 100.0)
                                 
-                            tracker.add_position(actual_symbol, mint, entry_price, position_size, is_mature=True)
-                            break # Ждем следующего цикла после покупки
-                    
-                    # Пауза между монетами
-                    await asyncio.sleep(1.5)
+                                liq_usd = pair_data.get("liquidity", {}).get("usd", 0) if pair_data else 0
+                                max_allowed_by_pool = liq_usd * 0.01  # Максимум 1% от ликвидности
+                                
+                                fixed = getattr(config, "TRADE_AMOUNT_USD", 0)
+                                position_size = min(fixed, max_allowed_by_pool) if fixed else max(4.0, min(base_position, max_allowed_by_pool, 100.0))
+                                
+                                if position_size < 4.0:
+                                    print(f"🚫 Отказ (Ликвидность): Недостаточно ликвидности (${liq_usd}) для безопасного входа.")
+                                    continue
+                                    
+                                tracker.add_position(actual_symbol, mint, entry_price, position_size, is_mature=True)
+                                break # Ждем следующего цикла после покупки
+                        
+                        # Пауза между монетами
+                        await asyncio.sleep(1.5)
+                    except Exception as e:
+                        print(f"⚠️ Ошибка анализа {mint[:8]}: {type(e).__name__}: {e}. Сканирую дальше.")
         except Exception as e:
             print(f"Ошибка в цикле сканера: {e}")
         await asyncio.sleep(30)
