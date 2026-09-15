@@ -99,7 +99,7 @@ def simulate_trade(times, prices, entry_idx, amount, is_mature):
 
         # 1. Частичный тейк 50% на +35% пика
         if max_pnl >= 0.35 and not pos.is_moonbag:
-            sold = pos.amount_usd * 0.5
+            sold = pos.amount_usd * 0.6
             # Выход с проскальзыванием
             exit_slippage_pct = simulate_slippage(sold, price_raw)
             price_exit = price_raw * (1 - exit_slippage_pct)
@@ -124,6 +124,11 @@ def simulate_trade(times, prices, entry_idx, amount, is_mature):
             return full_close(price_raw, f"Hard Stop Loss ({config.STOP_LOSS_PCT*100:.0f}%)", t, True)
 
         # 4. Time exit
+        # === STAGNANT ZERO EXIT ===
+        # Если сделка болтается около нуля и не растёт — выходим раньше времени
+        if minutes_held >= 20 and abs(pnl_pct) < 0.05 and pnl_pct > -0.05:
+            return full_close(price_raw, "Stagnant Near Zero (+/-5% for 20 min)", t, True)
+
         if minutes_held >= config.TIME_EXIT_MINUTES and pnl_pct < config.TIME_EXIT_PROFIT_REQ:
             return full_close(price_raw, "Time-based Exit (Dead Coin)", t, True)
 

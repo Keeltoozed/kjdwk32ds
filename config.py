@@ -22,13 +22,14 @@ SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
 # Paper Trading Config
 PAPER_PORTFOLIO_FILE = "portfolio.json"
-INITIAL_BALANCE_USD = 35.0    # Стартовый капитал
-REINVEST_PERCENT = 25.0       # Процент от капитала на одну сделку
-VIRTUAL_POSITION_SIZE_USD = 4.0 # (Устарело) базовый размер сделки
+INITIAL_BALANCE_USD = 120.0  # торговый пул ($150 депо - $30 газ)    # Стартовый капитал
+REINVEST_PERCENT = 5.0  # 5% пула = $6 на старт       # Процент от капитала на одну сделку
+VIRTUAL_POSITION_SIZE_USD = 4.0
+TRADE_AMOUNT_USD = 6.0  # жёсткий размер ордера ($6 = 5% пула) # (Устарело) базовый размер сделки
 MAX_CONCURRENT_POSITIONS = 20  # Режим Снайпера: максимум 5 сделок одновременно
 
 # Risk Management
-MAX_DAILY_LOSS_USD = 10.0 # Минимальный порог в долларах\nMAX_DAILY_LOSS_PCT = 0.25 # Глобальный Kill-Switch: 25% от текущего депозита за день
+MAX_DAILY_LOSS_USD = 18.0  # 15% пула: стоп торгов на 24ч # Минимальный порог в долларах\nMAX_DAILY_LOSS_PCT = 0.25 # Глобальный Kill-Switch: 25% от текущего депозита за день
 STOP_LOSS_PCT = -0.15   # Жесткий стоп на -15% (чтобы с учетом проскальзывания было не больше -20%)
 TIME_EXIT_MINUTES = 60  # Если за 30 минут нет пампа - выходим
 TIME_EXIT_PROFIT_REQ = 0.0

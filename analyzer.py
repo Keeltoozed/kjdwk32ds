@@ -49,8 +49,9 @@ class Analyzer:
                 return False
             
             # Velocity Filter (быстрый)
-            volume_24h = pair_data.get("volume_24h", 0) if pair_data else 0
-            txns_5m = pair_data.get("txns_5m", 0) if pair_data else 0
+            volume_24h = (pair_data.get("volume", {}) or {}).get("h24", 0) if pair_data else 0
+            _tx = (pair_data.get("txns", {}) or {}).get("h24", {}) if pair_data else {}
+            txns_5m = ((_tx.get("buys", 0) or 0) + (_tx.get("sells", 0) or 0)) / 288.0
             if volume_24h < 500 and txns_5m < 10:
                 print(f"🚫 [VELOCITY FILTER] {mint}: объём {volume_24h}, транзакций {txns_5m}. Мёртвый пул.")
                 return False

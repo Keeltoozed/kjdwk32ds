@@ -77,7 +77,7 @@ async def position_manager_loop(analyzer, tracker):
                 # 🚀 УМНЫЙ ТЕЙК-ПРОФИТ (Снижаем жадность, забираем кэш)
                 # 1. Первая фиксация на +35%: продаем 50% объема
                 if max_pnl_pct >= 0.35 and getattr(position, "is_moonbag", False) == False:
-                    tracker.partial_close_position(mint, current_price, 0.5, "Take Profit 50% (+35%)")
+                    tracker.partial_close_position(mint, current_price, 0.6, "Take Profit 60% (+35%)")
                     continue
                 
                 # 2. ТРЕЙЛИНГ-СТОП (Динамическая фиксация)
@@ -146,6 +146,15 @@ async def scanner_loop(analyzer, tracker):
     while True:
         try:
             open_count = len(tracker.get_open_positions())
+            # Дневной kill-switch: -$18 за день -> стоп входов на 24ч
+            import time as _t
+            day_start = _t.time() - (_t.time() % 86400)
+            day_pnl = sum(getattr(p, "pnl_usd", 0) or 0 for p in tracker.positions.values()
+                          if getattr(p, "status", "") == "closed" and getattr(p, "exit_time", 0) and p.exit_time >= day_start)
+            if day_pnl <= -config.MAX_DAILY_LOSS_USD:
+                print(f"🛑 KILL-SWITCH: дневной PnL ${day_pnl:.2f} <= -${config.MAX_DAILY_LOSS_USD}. Торги остановлены на 24ч.")
+                await asyncio.sleep(3600)
+                continue
             if open_count < config.MAX_CONCURRENT_POSITIONS:
                 print(f"🔎 Сканируем монеты... (Открыто: {open_count}/{config.MAX_CONCURRENT_POSITIONS})")
                 
@@ -187,7 +196,8 @@ async def scanner_loop(analyzer, tracker):
                             liq_usd = pair_data.get("liquidity", {}).get("usd", 0) if pair_data else 0
                             max_allowed_by_pool = liq_usd * 0.01  # Максимум 1% от ликвидности
                             
-                            position_size = max(4.0, min(base_position, max_allowed_by_pool, 100.0))
+                            fixed = getattr(config, "TRADE_AMOUNT_USD", 0)
+                            position_size = min(fixed, max_allowed_by_pool) if fixed else max(4.0, min(base_position, max_allowed_by_pool, 100.0))
                             
                             if position_size < 4.0:
                                 print(f"🚫 Отказ (Ликвидность): Недостаточно ликвидности (${liq_usd}) для безопасного входа.")
