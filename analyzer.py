@@ -292,23 +292,49 @@ class Analyzer:
                 print(f"🚫 [VIP REVERSAL] {mint}: m1 {_m1:+.1f}% — всплеск откатывает, ждём pullback.")
                 return False
 
-        # === MOMENTUM GATE (не-VIP): не входим в стоящие на месте пулы ===
+        # === PULLBACK ENTRY (не-VIP): входим в ОТКАТ после импульса, не в вершину ===
         if not is_vip and pair_data:
             _pc = pair_data.get("priceChange") or {}
             _m5 = _pc.get("m5", 0) or 0
+            _m1 = _pc.get("m1", 0) or 0
+            _h1 = _pc.get("h1", 0) or 0
             _tx = (pair_data.get("txns") or {}).get("h1", {}) or {}
             _b, _s = _tx.get("buys", 0) or 0, _tx.get("sells", 0) or 0
             _v24 = (pair_data.get("volume") or {}).get("h24", 0) or 0
-            if _m5 < 2.0:
-                print(f"🚫 [MOMENTUM] {mint}: m5 {_m5:+.1f}% < +2% — стоит на месте, пропуск.")
+            if _m5 < 8.0:
+                print(f"🚫 [ENTRY] {mint}: m5 {_m5:+.1f}% < +8% — импульса не было, пропуск.")
+                return False
+            if _m1 > 5.0:
+                print(f"🚫 [ENTRY] {mint}: m1 {_m1:+.1f}% — вертикаль в процессе, купим вершину. Ждём откат.")
+                return False
+            if _m1 < -10.0:
+                print(f"🚫 [ENTRY] {mint}: m1 {_m1:+.1f}% — импульс схлопнулся, это дамп, не откат.")
+                return False
+            if _h1 > 150.0:
+                print(f"🚫 [ENTRY] {mint}: h1 {_h1:+.0f}% — уже улетел, поздно.")
                 return False
             if _s > 0 and _b < _s * 1.1:
-                print(f"🚫 [MOMENTUM] {mint}: buys {_b} / sells {_s} — нет давления покупателей.")
+                print(f"🚫 [ENTRY] {mint}: buys {_b} / sells {_s} — нет давления покупателей.")
                 return False
             if _v24 < 20000:
-                print(f"🚫 [MOMENTUM] {mint}: vol24h ${_v24:,.0f} < $20k — нет объёма.")
+                print(f"🚫 [ENTRY] {mint}: vol24h ${_v24:,.0f} < $20k — нет объёма.")
                 return False
-            print(f"✅ [MOMENTUM] {mint}: m5 {_m5:+.1f}%, b/s {_b}/{_s}, vol24h ${_v24:,.0f}")
+            _txm5 = (pair_data.get("txns") or {}).get("m5", {}) or {}
+            _b5, _s5 = _txm5.get("buys", 0) or 0, _txm5.get("sells", 0) or 0
+            if (_b5 + _s5) < 50:
+                print(f"🚫 [VELOCITY] {mint}: txns m5 {_b5 + _s5} < 50 — нет скорости торгов.")
+                return False
+            if _s5 > 0 and _b5 < _s5 * 2.0:
+                print(f"🚫 [VELOCITY] {mint}: buy/sell m5 {_b5}/{_s5} < 2x — нет буфера покупателей.")
+                return False
+            _socials = (pair_data.get("info") or {}).get("socials") or []
+            _created = pair_data.get("pairCreatedAt") or 0
+            if _created:
+                _age_h = (time.time() * 1000 - _created) / 3.6e6
+                if _age_h < 6 and isinstance(_socials, list) and len(_socials) == 0:
+                    print(f"🚫 [SOCIAL] {mint}: нет соцсетей при возрасте {_age_h:.1f}ч — высокий скам-риск.")
+                    return False
+            print(f"✅ [ENTRY] {mint}: PULLBACK — импульс m5 {_m5:+.1f}%, откат m1 {_m1:+.1f}%, h1 {_h1:+.0f}%, b/s {_b}/{_s}. Вход.")
         
         # Защита от микро-пулов (Scam сетки типа Fly)
         liquidity = pair_data.get("liquidity", {}).get("usd", 0)

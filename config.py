@@ -56,3 +56,6 @@ JITO_ENGINE_URL = "https://mainnet.block-engine.jito.wtf/api/v1/bundles"
 JITO_TIP_AMOUNT_SOL = 0.0005 # Чаевые валидатору (минимум 0.0001)
 JITO_TIP_ACCOUNT = "96gYZGLnJYVFmbjzopPSU6QiCRK4rPdTuQ8hB1aP442b" # Официальный Jito Tip Account
 LUNARCRUSH_API_KEY = "syvh43mkvrzrw54sor6kc5r6dmtyj5fhi4jd38ht"
+
+WHALE_CONSENSUS = 2  # вход на 2-м ките (3-й = уже поздно)
+WHALE_MAX_RUNUP = 1.35  # цена не должна вырасти >35% с момента покупки первого кита

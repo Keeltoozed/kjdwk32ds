@@ -13,6 +13,9 @@ class CopyTrader:
         self.rpc_url = f"https://mainnet.helius-rpc.com/?api-key={self.HELIUS_API_KEY}"
         self.wss_url = f"wss://mainnet.helius-rpc.com/?api-key={self.HELIUS_API_KEY}"
         self.processed_sigs = set()
+        self.whale_buys = {}      # mint -> {wallet: ts}
+        self.consensus_done = set()
+        self.whale_first_price = {}  # mint -> цена в момент покупки ПЕРВОГО кита
         
     def load_wallets(self):
         import os
@@ -110,9 +113,27 @@ class CopyTrader:
                 
                 pre_amt = pre_dict.get(mint, 0.0)
                 if post_amt > pre_amt: # Баланс вырос = ПОКУПКА
-                    print(f"🚨 COPYTRADE СИГНАЛ: {trader_name} только что купил {mint}!")
-                    
                     import config
+                    now = time.time()
+                    self.whale_buys.setdefault(mint, {})
+                    self.whale_buys[mint][wallet] = now
+                    self.whale_buys[mint] = {w: t for w, t in self.whale_buys[mint].items() if now - t <= 600}
+                    n_whales = len(self.whale_buys[mint])
+                    if n_whales == 1:
+                        self.whale_first_price[mint] = await self.get_token_price(mint)
+                        print(f"👁️ WHALE WATCH: {trader_name} купил {mint[:12]}... слежу за ценой (вход на 2-м ките).")
+                    print(f"🚨 COPYTRADE: {trader_name} купил {mint[:12]}... (китов за 10 мин: {n_whales}/{getattr(config, 'WHALE_CONSENSUS', 2)})")
+                    if n_whales < getattr(config, 'WHALE_CONSENSUS', 2) or mint in self.consensus_done:
+                        return  # ждём раннего консенсуса
+                    self.consensus_done.add(mint)
+                    # Guard от опоздания: цена не должна улететь от точки входа первого кита
+                    cur_price = await self.get_token_price(mint)
+                    first_price = self.whale_first_price.get(mint, 0)
+                    max_runup = getattr(config, 'WHALE_MAX_RUNUP', 1.35)
+                    if first_price > 0 and cur_price > first_price * max_runup:
+                        print(f"🚫 [WHALE LATE] {mint[:12]}: цена +{(cur_price/first_price-1)*100:.0f}% с покупки 1-го кита — киты уже надули, входим в их выход.")
+                        return
+                    print(f"🐋 SMART MONEY CONSENSUS: {n_whales} кита, цена ещё не улетела (+{(cur_price/first_price-1)*100:.0f}%) — РАННИЙ вход!")
                     if len(self.tracker.get_open_positions()) >= config.MAX_CONCURRENT_POSITIONS:
                         print("🚫 Лимит позиций. Пропускаем копитрейд.")
                         return
