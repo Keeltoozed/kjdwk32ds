@@ -399,7 +399,7 @@ class Analyzer:
         
         # Защита от микро-пулов (Scam сетки типа Fly)
         liquidity = pair_data.get("liquidity", {}).get("usd", 0)
-        if liquidity < 15000 and not is_vip:
+        if liquidity < 15000 and not is_vip and pair_data.get("dexId") != "pump":
             print(f"📉 Изоляция: {symbol} имеет микро-пул (${liquidity:.0f} < $15k). Риск 100% проскальзывания.")
             return False
             
