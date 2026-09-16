@@ -42,9 +42,9 @@ TRAILING_ACTIVATION_PCT = 0.12
 TRAILING_DISTANCE_PCT = 0.04
 
 # Filtering
-AI_MODE = "sniper" # "sniper" (строго 80-90% уверенности) или "degen"
-MIN_LIQUIDITY = 15000  # Увеличили до 15k! При ликвидности 3k любой чих обваливает цену на 30%, пробивая наш стоп-лосс.
-MAX_LIQUIDITY = 50000000 
+AI_MODE = "degen" # "sniper" (строго 80-90% уверенности) или "degen"
+MIN_LIQUIDITY = 5000  # Снизили до 5k для большего количества сделок
+MAX_LIQUIDITY = 50000000
 
 # AI Аналитика
 GEMINI_API_KEY = "AQ.Ab8RN6Ju77t6DI8AYru7TGxuPuG_0WOcqHZqq1OBsDAwHtoJxg" # Получить бесплатно на https://aistudio.google.com/

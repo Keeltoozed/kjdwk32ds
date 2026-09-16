@@ -164,13 +164,13 @@ class Analyzer:
                                     p_fdv = p.get("fdv", 0)
                                     
                                     # Если мы нашли другой токен с таким же именем, который был создан РАНЬШЕ нас
-                                    # и имеет какую-то капитализацию (не мертвый с 0 fdv), то наш токен - фейк.
-                                    if p_created_at < current_created_at and p_fdv > 5000:
+                                    # и имеет какую-то ЗНАЧИТЕЛЬНУЮ капитализацию (а не просто мертвый токен)
+                                    if p_created_at < current_created_at and p_fdv > 250000:
                                         return True
                                         
                                     # Либо если другой токен имеет огромную капу (в 10 раз больше нашей),
                                     # значит он - оригинал, а мы клон.
-                                    if p_fdv > (current_fdv * 10) and p_fdv > 50000:
+                                    if p_fdv > (current_fdv * 10) and p_fdv > 500000:
                                         return True
             except Exception as e:
                 pass
@@ -293,8 +293,8 @@ class Analyzer:
         buys_m5 = txns_m5.get("buys", 0)
         volume_m5 = pair_data.get("volume", {}).get("m5", 0)
         
-        # > 50 покупок И > $30k объема в 5-минутном окне
-        if buys_m5 >= 50 and volume_m5 >= 30000:
+        # > 20 покупок И > $10k объема в 5-минутном окне
+        if buys_m5 >= 20 and volume_m5 >= 10000:
             return True
         return False
         
@@ -401,8 +401,8 @@ class Analyzer:
         
         # Защита от микро-пулов (Scam сетки типа Fly)
         liquidity = pair_data.get("liquidity", {}).get("usd", 0)
-        if liquidity < 15000 and not is_vip and pair_data.get("dexId") != "pump":
-            print(f"📉 Изоляция: {symbol} имеет микро-пул (${liquidity:.0f} < $15k). Риск 100% проскальзывания.")
+        if liquidity < 5000 and not is_vip and pair_data.get("dexId") != "pump":
+            print(f"📉 Изоляция: {symbol} имеет микро-пул (${liquidity:.0f} < $5k). Риск 100% проскальзывания.")
             return False
             
         if is_vip:
@@ -541,9 +541,9 @@ class Analyzer:
         conf = prob * 100
         print(f"🤖 XGBoost [DEX Poller]: {mint} | Score: {conf:.1f}%")
         import config
-        threshold = 30.0
+        threshold = 15.0
         if is_vip:
-            threshold = 30.0 # Максимальное снижение порога для ракет
+            threshold = 10.0 # Максимальное снижение порога для ракет
             print(f"🔥 [VIP] Порог XGBoost снижен до {threshold}%")
             
         return conf >= threshold
@@ -608,7 +608,7 @@ class Analyzer:
             # -------------------------------
             
             print(f"🧠 Raydium XGBoost (Безлимит): {mint} | Score: {conf:.1f}%")
-            import config; threshold = 30.0
+            import config; threshold = 15.0
             
             is_buy = conf >= threshold
             
