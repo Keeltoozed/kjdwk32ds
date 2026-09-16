@@ -38,8 +38,8 @@ TIME_EXIT_MINUTES = 60  # Если за 30 минут нет пампа - вых
 TIME_EXIT_PROFIT_REQ = 0.0
 
 # Trailing Stop Config (Защита прибыли)
-TRAILING_ACTIVATION_PCT = 0.25
-TRAILING_DISTANCE_PCT = 0.10
+TRAILING_ACTIVATION_PCT = 0.30
+TRAILING_DISTANCE_PCT = 0.30
 
 # Filtering
 AI_MODE = "degen" # "sniper" (строго 80-90% уверенности) или "degen"

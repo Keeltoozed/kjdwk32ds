@@ -33,10 +33,11 @@ class MatureExitManager:
 
         # Trailing stop for mature coins
         if hasattr(config, 'TRAILING_ACTIVATION_PCT') and hasattr(config, 'TRAILING_DISTANCE_PCT'):
-            if pnl_pct >= config.TRAILING_ACTIVATION_PCT:
+            max_pnl_pct = (position.max_price_usd - position.entry_price_usd) / position.entry_price_usd
+            if max_pnl_pct >= config.TRAILING_ACTIVATION_PCT:
                 drop_from_max = (position.max_price_usd - current_price) / position.max_price_usd
                 if drop_from_max >= config.TRAILING_DISTANCE_PCT:
-                    return f"Mature Trailing (+{pnl_pct*100:.0f}% peak)"
+                    return f"Mature Trailing (+{max_pnl_pct*100:.0f}% peak)"
                     
         # Scalp Trailing (для мелких профитов)
         if hasattr(config, 'TRAILING_ACTIVATION_PCT'):

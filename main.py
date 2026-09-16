@@ -109,7 +109,7 @@ async def position_manager_loop(analyzer, tracker):
                 # Активируем трейлинг из config.py
                 if max_pnl_pct >= config.TRAILING_ACTIVATION_PCT:
                     if drop_from_max >= config.TRAILING_DISTANCE_PCT:
-                        tracker.close_position(mint, current_price, f"Smart Trailing (+{max_pnl_pct*100:.0f}% peak)")
+                        tracker.close_position(mint, current_price, f"Diamond Hands Trailing (+{max_pnl_pct*100:.0f}% peak)")
                         continue
                             
                 # 3. ЖЕСТКИЙ Stop Loss из config.py

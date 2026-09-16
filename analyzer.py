@@ -210,8 +210,9 @@ class Analyzer:
                         
                         top_10_pct = sum([h.get("pct", 0) for h in top_holders[:10] if not h.get("isContract", False)])
                         
-                        # Если HHI высокий (>2000), значит кошельки сильно сконцентрированы (пузыри)
-                        if top_10_pct >= 30 or hhi_index > 2500:
+                        # По статистике: скамы имеют 6% удержания топ-10, ракеты - 34.5%.
+                        # Блокируем только очевидный снайперский скам (>75% у одного кабала)
+                        if top_10_pct >= 75 or hhi_index > 4000:
                             return False
                             
                         return True
@@ -389,8 +390,9 @@ class Analyzer:
                 return False
             _txm5 = (pair_data.get("txns") or {}).get("m5", {}) or {}
             _b5, _s5 = _txm5.get("buys", 0) or 0, _txm5.get("sells", 0) or 0
-            if (_b5 + _s5) < 30:
-                print(f"🚫 [VELOCITY] {mint}: txns m5 {_b5 + _s5} < 30 — слишком медленно.")
+            # Увеличена минимальная скорость транзакций, так как скамы в среднем имеют 14 тх/мин, а ракеты - 48 тх/мин.
+            if (_b5 + _s5) < 100:
+                print(f"🚫 [VELOCITY] {mint}: txns m5 {_b5 + _s5} < 100 — слишком медленно, нет органического FOMO.")
                 return False
             if _s5 > 0:
                 mult = 1.0
