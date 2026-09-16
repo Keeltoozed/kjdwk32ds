@@ -79,9 +79,10 @@ class Analyzer:
     async def fetch_token_data(self, mint: str) -> dict:
         url = f"{config.DEXSCREENER_SEARCH}{mint}"
         session = await self.get_session()
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0"}
         if True:
             try:
-                async with session.get(url, timeout=10) as response:
+                async with session.get(url, headers=headers, timeout=5) as response:
                     if response.status == 200:
                         data = await response.json()
                         pairs = data.get("pairs", [])
@@ -91,7 +92,6 @@ class Analyzer:
                                 return sorted(sol_pairs, key=lambda x: x.get("liquidity", {}).get("usd", 0), reverse=True)[0]
                     return await self.fetch_token_data_gecko(mint)
             except Exception as e:
-                print(f"Dexscreener token data error: {type(e).__name__} {e}")
                 return await self.fetch_token_data_gecko(mint)
 
     async def fetch_token_data_gecko(self, mint: str) -> dict:
@@ -316,7 +316,7 @@ class Analyzer:
 
         pair_data = await self.fetch_token_data(mint)
         if not pair_data:
-            print(f"⚠️ Пропуск: DexScreener не вернул данные для {mint} (Rate Limit или токен слишком новый).")
+            # Токен слишком новый (API еще не проиндексировал его)
             return None
             
         # Блэклист тикеров и названий (Защита от фейковых токенов)
@@ -384,13 +384,13 @@ class Analyzer:
             if _s > 0 and _b < _s * 1.1:
                 print(f"🚫 [ENTRY] {mint}: buys {_b} / sells {_s} — нет давления покупателей.")
                 return False
-            if _v24 < 20000:
-                print(f"🚫 [ENTRY] {mint}: vol24h ${_v24:,.0f} < $20k — нет объёма, это не ракета.")
+            if _v24 < 10000:
+                print(f"🚫 [ENTRY] {mint}: vol24h ${_v24:,.0f} < $10k — совсем нет объёма.")
                 return False
             _txm5 = (pair_data.get("txns") or {}).get("m5", {}) or {}
             _b5, _s5 = _txm5.get("buys", 0) or 0, _txm5.get("sells", 0) or 0
-            if (_b5 + _s5) < 50:
-                print(f"🚫 [VELOCITY] {mint}: txns m5 {_b5 + _s5} < 50 — слишком медленно для ракеты.")
+            if (_b5 + _s5) < 30:
+                print(f"🚫 [VELOCITY] {mint}: txns m5 {_b5 + _s5} < 30 — слишком медленно.")
                 return False
             if _s5 > 0:
                 mult = 1.0

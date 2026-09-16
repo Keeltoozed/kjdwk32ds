@@ -65,11 +65,15 @@ async def position_manager_loop(analyzer, tracker):
                 if minutes_held >= 30 and abs(pnl_pct) < 0.05 and max_pnl_pct < 0.05:
                     tracker.close_position(mint, current_price, "Stagnant Near Zero (30 min flat)")
                     continue
+                # Profit lock удален, используется трейлинг-стоп из config.py
                 
-                # === PROFIT LOCK: ракета была +10% и откатывает — не отдаём профит в минус ===
-                if max_pnl_pct >= 0.10 and pnl_pct <= 0.04:
-                    tracker.close_position(mint, current_price, f"Profit Lock (peak +{max_pnl_pct*100:.0f}%)")
-                    continue
+                # === СКАЛЬП-ТРЕЙЛИНГ (Забираем мелкие плюсы) ===
+                # Если ракета не долетела до +25%, но дала +15% и начала падать, забираем свое.
+                if max_pnl_pct >= 0.15 and max_pnl_pct < getattr(config, "TRAILING_ACTIVATION_PCT", 0.25):
+                    drop_from_max = (position.max_price_usd - current_price) / position.max_price_usd
+                    if drop_from_max >= 0.05:
+                        tracker.close_position(mint, current_price, f"Scalp Profit (peak +{max_pnl_pct*100:.0f}%)")
+                        continue
                 
                 # Обновляем текущие значения для отображения в интерфейсе
                 # (сохраняем один раз за цикл ниже, а не на каждой позиции,
@@ -222,7 +226,14 @@ async def scanner_loop(analyzer, tracker):
                                 
                                 _lot_m5 = ((pair_data.get("priceChange") or {}).get("m5", 0) or 0)
                                 _is_lot = _lot_m5 >= getattr(config, "LOTTERY_MIN_M5_PCT", 1.0) * 100
-                                if _is_lot:
+                                
+                                # Если это настоящая VIP-ракета (огромный объем), входим на полный сайз
+                                _txns_m5 = pair_data.get("txns", {}).get("m5", {})
+                                _buys = _txns_m5.get("buys", 0)
+                                _vol = pair_data.get("volume", {}).get("m5", 0)
+                                _is_vip = _buys >= 50 and _vol >= 30000
+                                
+                                if _is_lot and not _is_vip:
                                     position_size *= getattr(config, "LOTTERY_SIZE_MULT", 0.25)
                                 
                                 if position_size < (1.0 if _is_lot else 4.0):

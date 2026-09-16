@@ -43,7 +43,7 @@ TRAILING_DISTANCE_PCT = 0.10
 
 # Filtering
 AI_MODE = "degen" # "sniper" (строго 80-90% уверенности) или "degen"
-MIN_LIQUIDITY = 15000  # Возвращено к 15k для отсева слабых монет
+MIN_LIQUIDITY = 10000  # Снижено для скальпинга обычных монет
 MAX_LIQUIDITY = 50000000
 
 # AI Аналитика
