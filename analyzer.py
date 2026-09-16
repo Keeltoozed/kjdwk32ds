@@ -385,9 +385,11 @@ class Analyzer:
             if (_b5 + _s5) < 50:
                 print(f"🚫 [VELOCITY] {mint}: txns m5 {_b5 + _s5} < 50 — нет скорости торгов.")
                 return False
-            if _s5 > 0 and _b5 < _s5 * 2.0:
-                print(f"🚫 [VELOCITY] {mint}: buy/sell m5 {_b5}/{_s5} < 2x — нет буфера покупателей.")
-                return False
+            if _s5 > 0:
+                mult = 1.2 if _lottery else 1.5
+                if _b5 < _s5 * mult:
+                    print(f"🚫 [VELOCITY] {mint}: buy/sell m5 {_b5}/{_s5} < {mult}x — {'(лотерея, ослаблено)' if _lottery else 'нет буфера покупателей'}")
+                    return False
             _socials = (pair_data.get("info") or {}).get("socials") or []
             _created = pair_data.get("pairCreatedAt") or 0
             if _created:
