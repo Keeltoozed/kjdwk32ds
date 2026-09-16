@@ -293,8 +293,8 @@ class Analyzer:
         buys_m5 = txns_m5.get("buys", 0)
         volume_m5 = pair_data.get("volume", {}).get("m5", 0)
         
-        # > 20 покупок И > $10k объема в 5-минутном окне
-        if buys_m5 >= 20 and volume_m5 >= 10000:
+        # > 10 покупок И > $5k объема в 5-минутном окне
+        if buys_m5 >= 10 and volume_m5 >= 5000:
             return True
         return False
         
@@ -307,6 +307,12 @@ class Analyzer:
             print(f"🚫 Скам-фильтр: {mint} не прошел проверку RugCheck (Риск дампа/MintAuthority).")
             return False
             
+        # Игнорируем базовые монеты и стейблкоины
+        if mint in ["So11111111111111111111111111111111111111112", 
+                    "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", 
+                    "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB"]:
+            return False
+
         pair_data = await self.fetch_token_data(mint)
         if not pair_data:
             print(f"⚠️ Пропуск: DexScreener не вернул данные для {mint} (Rate Limit или токен слишком новый).")
@@ -377,13 +383,13 @@ class Analyzer:
             if _s > 0 and _b < _s * 1.1:
                 print(f"🚫 [ENTRY] {mint}: buys {_b} / sells {_s} — нет давления покупателей.")
                 return False
-            if _v24 < 10000:
-                print(f"🚫 [ENTRY] {mint}: vol24h ${_v24:,.0f} < $10k — нет объёма.")
+            if _v24 < 5000:
+                print(f"🚫 [ENTRY] {mint}: vol24h ${_v24:,.0f} < $5k — нет объёма.")
                 return False
             _txm5 = (pair_data.get("txns") or {}).get("m5", {}) or {}
             _b5, _s5 = _txm5.get("buys", 0) or 0, _txm5.get("sells", 0) or 0
-            if (_b5 + _s5) < 30:
-                print(f"🚫 [VELOCITY] {mint}: txns m5 {_b5 + _s5} < 30 — нет скорости торгов.")
+            if (_b5 + _s5) < 15:
+                print(f"🚫 [VELOCITY] {mint}: txns m5 {_b5 + _s5} < 15 — нет скорости торгов.")
                 return False
             if _s5 > 0:
                 mult = 1.0
@@ -424,8 +430,8 @@ class Analyzer:
         has_tg = any("telegram" in s.get("type", "").lower() or "t.me" in s.get("url", "").lower() for s in socials)
         has_website = len(websites) > 0
         
-        # Смягченный фильтр: достаточно хотя бы одной соцсети или сайта
-        if not (has_twitter or has_tg or has_website):
+        # Смягченный фильтр: достаточно хотя бы одной соцсети или сайта (пропускаем для VIP)
+        if not (has_twitter or has_tg or has_website) and not is_vip:
             print(f"🚫 Мусор: У {mint} вообще нет ни одной соцсети или сайта.")
             return False
             
@@ -515,11 +521,8 @@ class Analyzer:
                                 from collections import Counter
                                 counts = Counter(rounded_amounts)
                                 if counts.most_common(1)[0][1] >= 3:
-                                    if not is_vip:
-                                        print(f"🚫 Мусор: Обнаружен Jito-бандл (Sybil attack) у {mint}.")
-                                        return False
-                                    else:
-                                        print(f"⚠️ ВНИМАНИЕ: {mint} имеет Jito-бандл, но пропускается по VIP-квоте (Hyper-Rocket)!")
+                                    print(f"🚫 Мусор: Обнаружен Jito-бандл (Sybil attack) у {mint}.")
+                                    return False
         except Exception as e:
             print(f"Helius RPC error: {e}")
         
@@ -543,8 +546,8 @@ class Analyzer:
         import config
         threshold = 15.0
         if is_vip:
-            threshold = 10.0 # Максимальное снижение порога для ракет
-            print(f"🔥 [VIP] Порог XGBoost снижен до {threshold}%")
+            threshold = 0.0 # Полностью отключаем фильтр ИИ для VIP ракет!
+            print(f"🔥 [VIP] Порог XGBoost снижен до {threshold}% (Вход без оглядки на ИИ)")
             
         return conf >= threshold
 
@@ -609,6 +612,8 @@ class Analyzer:
             
             print(f"🧠 Raydium XGBoost (Безлимит): {mint} | Score: {conf:.1f}%")
             import config; threshold = 15.0
+            if self.check_hyper_rocket_momentum(pair_data):
+                threshold = 0.0
             
             is_buy = conf >= threshold
             

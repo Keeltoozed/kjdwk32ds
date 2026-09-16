@@ -391,12 +391,24 @@ async def get_trending() -> list:
             seen.add(mint)
             out.append({"tokenAddress": mint, "chainId": "solana"})
 
-    d = await _gt_get("/networks/solana/trending_pools?page=1")
-    for item in (d.get("data") or []):
-        add(_base_mint(item))
-    d2 = await _gt_get("/networks/solana/dexes/pump-fun/pools?page=1")
-    for item in (d2.get("data") or []):
-        add(_base_mint(item))
+    # Сканируем ТОП-150 трендов
+    for page in range(1, 6):
+        d = await _gt_get(f"/networks/solana/trending_pools?page={page}")
+        for item in (d.get("data") or []):
+            add(_base_mint(item))
+            
+    # Сканируем ТОП-150 свежих Pump.fun
+    for page in range(1, 6):
+        d2 = await _gt_get(f"/networks/solana/dexes/pump-fun/pools?page={page}")
+        for item in (d2.get("data") or []):
+            add(_base_mint(item))
+            
+    # Сканируем ТОП-150 новых Raydium пулов
+    for page in range(1, 6):
+        d3 = await _gt_get(f"/networks/solana/dexes/raydium/pools?page={page}")
+        for item in (d3.get("data") or []):
+            add(_base_mint(item))
+            
     return out
 
 

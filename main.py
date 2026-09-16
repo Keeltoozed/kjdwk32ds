@@ -55,15 +55,15 @@ async def position_manager_loop(analyzer, tracker):
 
                 prev_ts = getattr(position, "price_checked_at", 0.0)
                 if prev_ts > 0 and (time.time() - prev_ts) < 60 and prev_price > 0 \
-                        and current_price <= prev_price * 0.93:
+                        and current_price <= prev_price * 0.80:
                     tracker.close_position(mint, current_price,
                                            f"Crash Guard (-{(1 - current_price/prev_price)*100:.0f}% за {(time.time()-prev_ts):.0f} сек)")
                     continue
                 position.price_checked_at = time.time()
                 
                 # === STAGNANT EXIT: режем ТОЛЬКО монеты, которые ни разу не двинулись ===
-                if minutes_held >= 20 and abs(pnl_pct) < 0.05 and max_pnl_pct < 0.05:
-                    tracker.close_position(mint, current_price, "Stagnant Near Zero (20 min flat)")
+                if minutes_held >= 30 and abs(pnl_pct) < 0.05 and max_pnl_pct < 0.05:
+                    tracker.close_position(mint, current_price, "Stagnant Near Zero (30 min flat)")
                     continue
                 
                 # === PROFIT LOCK: ракета была +10% и откатывает — не отдаём профит в минус ===

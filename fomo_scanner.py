@@ -35,7 +35,7 @@ async def fetch_geckoterminal_trending():
 async def fetch_pumpfun_top():
     """Получает топ монет Pump.fun по капе (близкие к миграции на Raydium)"""
     tokens = []
-    url = "https://frontend-api.pump.fun/coins?offset=0&limit=20&sort=market_cap&order=DESC&includeNsfw=false"
+    url = "https://frontend-api.pump.fun/coins?offset=0&limit=200&sort=market_cap&order=DESC&includeNsfw=false"
     headers = {"Accept": "application/json", "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
     
     session = await get_session()
