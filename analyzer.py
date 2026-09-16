@@ -293,6 +293,7 @@ class Analyzer:
                 return False
 
         # === PULLBACK ENTRY (не-VIP): входим в ОТКАТ после импульса, не в вершину ===
+        _lottery = False
         if not is_vip and pair_data:
             _pc = pair_data.get("priceChange") or {}
             _m5 = _pc.get("m5", 0) or 0
@@ -313,6 +314,7 @@ class Analyzer:
                     print(f"🚫 [LOTTERY] {mint}: m5 {_m5:+.0f}%, но m1 {_m1:+.1f}% — вертикаль откатывает, это вершина.")
                     return False
                 print(f"🎰 [LOTTERY] {mint}: вертикаль m5 {_m5:+.0f}%, m1 {_m1:+.1f}% — вход уменьшенным сайзом.")
+                _lottery = True
             else:
                 if _m5 < getattr(config, "PULLBACK_MIN_M5_PCT", 0.08) * 100:
                     print(f"🚫 [ENTRY] {mint}: m5 {_m5:+.1f}% < импульса не было, пропуск.")
@@ -344,7 +346,7 @@ class Analyzer:
             _created = pair_data.get("pairCreatedAt") or 0
             if _created:
                 _age_h = (time.time() * 1000 - _created) / 3.6e6
-                if _age_h < 6 and isinstance(_socials, list) and len(_socials) == 0:
+                if _age_h < 6 and isinstance(_socials, list) and len(_socials) == 0 and not _lottery:
                     print(f"🚫 [SOCIAL] {mint}: нет соцсетей при возрасте {_age_h:.1f}ч — высокий скам-риск.")
                     return False
             print(f"✅ [ENTRY] {mint}: PULLBACK — импульс m5 {_m5:+.1f}%, откат m1 {_m1:+.1f}%, h1 {_h1:+.0f}%, b/s {_b}/{_s}. Вход.")
@@ -379,6 +381,10 @@ class Analyzer:
             print(f"🚫 Мусор: У {mint} вообще нет ни одной соцсети или сайта.")
             return False
             
+        if is_vip or _lottery:
+            print(f"🚀 [FAST TRACK] {symbol}: гейты пройдены с подтверждением объёма — вход без ML-вето.")
+            return True
+
         dex_id = pair_data.get("dexId")
         created_at = pair_data.get("pairCreatedAt", 0)
         age_minutes = (time.time() * 1000 - created_at) / (1000 * 60) if created_at else 999

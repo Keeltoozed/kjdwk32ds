@@ -248,6 +248,8 @@ class PaperTracker:
 
     def is_trading_allowed(self) -> bool:
         """Проверка глобального Kill-Switch"""
+        if not getattr(config, "KILL_SWITCH_ENABLED", True):
+            return True
         if not hasattr(config, "MAX_DAILY_LOSS_USD"):
             return True
             

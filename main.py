@@ -159,7 +159,7 @@ async def birth_wss_loop(analyzer, tracker):
 
 async def scanner_loop(analyzer, tracker):
     print("🚀 Запуск PhantBot Scanner (Поиск новых монет)...")
-    processed_mints = set()
+    processed_mints = {}
     while True:
         try:
             open_count = len(tracker.get_open_positions())
@@ -168,7 +168,7 @@ async def scanner_loop(analyzer, tracker):
             day_start = _t.time() - (_t.time() % 86400)
             day_pnl = sum(getattr(p, "pnl_usd", 0) or 0 for p in tracker.positions.values()
                           if getattr(p, "status", "") == "closed" and getattr(p, "exit_time", 0) and p.exit_time >= day_start)
-            if day_pnl <= -config.MAX_DAILY_LOSS_USD:
+            if getattr(config, "KILL_SWITCH_ENABLED", True) and day_pnl <= -config.MAX_DAILY_LOSS_USD:
                 print(f"🛑 KILL-SWITCH: дневной PnL ${day_pnl:.2f} <= -${config.MAX_DAILY_LOSS_USD}. Торги остановлены на 24ч.")
                 await asyncio.sleep(3600)
                 continue
@@ -189,10 +189,10 @@ async def scanner_loop(analyzer, tracker):
                 mints_to_scan = list(set(mints_to_scan))
                 
                 for mint in mints_to_scan:
-                    if not mint or mint in tracker.positions or mint in processed_mints:
+                    if not mint or mint in tracker.positions:
                         continue
-                        
-                    processed_mints.add(mint)
+                    if time.time() - processed_mints.get(mint, 0.0) < 600:
+                        continue
                     
                     # Держим память в чистоте
                     if len(processed_mints) > 1000:
@@ -201,6 +201,9 @@ async def scanner_loop(analyzer, tracker):
                     try:
                         # Используем умный маршрутизатор (сам выберет XGBoost или Raydium модель)
                         is_good = await analyzer.analyze_token(mint)
+                        if is_good is None:
+                            continue
+                        processed_mints[mint] = time.time()
                             
                         if is_good:
                             pair_data = await analyzer.fetch_token_data(mint)

@@ -29,7 +29,9 @@ TRADE_AMOUNT_USD = 6.0  # жёсткий размер ордера ($6 = 5% пу
 MAX_CONCURRENT_POSITIONS = 6  # концентрация капитала: максимум 6 ракет  # Режим Снайпера: максимум 5 сделок одновременно
 
 # Risk Management
-MAX_DAILY_LOSS_USD = 18.0  # 15% пула: стоп торгов на 24ч # Минимальный порог в долларах\nMAX_DAILY_LOSS_PCT = 0.25 # Глобальный Kill-Switch: 25% от текущего депозита за день
+MAX_DAILY_LOSS_USD = 18.0
+KILL_SWITCH_ENABLED = True
+MAX_DAILY_LOSS_PCT = 0.25
 STOP_LOSS_PCT = -0.10
 SNIPER_ENTRIES_ENABLED = False
 TIME_EXIT_MINUTES = 60  # Если за 30 минут нет пампа - выходим

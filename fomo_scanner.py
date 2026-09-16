@@ -1,4 +1,5 @@
 import asyncio
+import time
 import aiohttp
 from http_client import get_session
 import config
@@ -93,7 +94,7 @@ async def fomo_loop(analyzer: Analyzer, tracker):
     print("🔥 FOMO Scanner запущен: отслеживаем ракеты и тренды DexScreener!")
     
     # Чтобы не спамить API
-    processed_mints = set()
+    processed_mints = {}
     
     while True:
         try:
@@ -114,9 +115,8 @@ async def fomo_loop(analyzer: Analyzer, tracker):
             # Фильтруем уже обработанные и в кулдауне
             new_mints = []
             for mint in trending_mints:
-                if mint in processed_mints:
+                if time.time() - processed_mints.get(mint, 0.0) < 600:
                     continue
-                processed_mints.add(mint)
                 
                 if mint in tracker.positions:
                     pos = tracker.positions[mint]
@@ -148,11 +148,9 @@ async def fomo_loop(analyzer: Analyzer, tracker):
                 
                 for mint, is_buy in results:
                     if is_buy is None:
-                        # Токен не прогрузился в DexScreener, убираем из истории, чтобы попробовать позже
-                        if mint in processed_mints:
-                            processed_mints.remove(mint)
                         continue
-                        
+                    processed_mints[mint] = time.time()
+                    
                     if is_buy and len(tracker.get_open_positions()) < config.MAX_CONCURRENT_POSITIONS:
                         pair_data = await analyzer.fetch_token_data(mint)
                         if pair_data:
