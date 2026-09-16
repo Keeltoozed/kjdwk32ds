@@ -97,27 +97,11 @@ def simulate_trade(times, prices, entry_idx, amount, is_mature):
                 return full_close(price_raw, reason, t, True)
             continue
 
-        # 1. Частичный тейк 50% на +35% пика
-        if max_pnl >= 0.35 and not pos.is_moonbag:
-            sold = pos.amount_usd * 0.6
-            # Выход с проскальзыванием
-            exit_slippage_pct = simulate_slippage(sold, price_raw)
-            price_exit = price_raw * (1 - exit_slippage_pct)
-            diff = (price_exit * 0.99 - real_entry) / real_entry
-            realized += sold * diff - priority_fee(sold)
-            pos.amount_usd -= sold
-            pos.is_moonbag = True
-            continue
-
-        # 2. Трейлинг
+        # 1. Трейлинг (Бриллиантовые руки)
         drop = (pos.max_price_usd - price_raw) / pos.max_price_usd
-        if pos.is_moonbag:
-            if drop >= 0.20:
-                return full_close(price_raw, "Moonbag Trailing (20% drop)", t, True)
-            continue
         if max_pnl >= config.TRAILING_ACTIVATION_PCT:
             if drop >= config.TRAILING_DISTANCE_PCT:
-                return full_close(price_raw, f"Smart Trailing (+{max_pnl*100:.0f}% peak)", t, True)
+                return full_close(price_raw, f"Diamond Trailing (+{max_pnl*100:.0f}% peak)", t, True)
 
         # 3. Hard stop
         if pnl_pct <= config.STOP_LOSS_PCT:

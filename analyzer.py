@@ -216,11 +216,11 @@ class Analyzer:
                             return False
                             
                         return True
-                    print(f"⚠️ RugCheck HTTP {response.status} для {mint}. Fail-Open: решаю по остальным фильтрам.")
-                    return True
+                    print(f"⚠️ RugCheck HTTP {response.status} для {mint}. Fail-Closed: пропускаем подозрительный токен.")
+                    return False
             except Exception as e:
-                print(f"⚠️ RugCheck fetch error ({type(e).__name__}): {e}. Fail-Open: решаю по остальным фильтрам.")
-                return True
+                print(f"⚠️ RugCheck fetch error ({type(e).__name__}): {e}. Fail-Closed: пропускаем подозрительный токен.")
+                return False
 
     async def get_helius_transaction_metrics(self, mint: str) -> tuple:
         """ Возвращает (unique_buyers_m5, smart_money_inflow) """
@@ -303,12 +303,9 @@ class Analyzer:
     async def analyze_token(self, mint: str) -> bool:
         # Smart Router
         
-        # 1. Сначала жесткий фильтр скама (RugCheck). Если это скам - даже не тратим лимиты.
-        is_safe = await self.check_rugcheck(mint)
-        if not is_safe:
-            print(f"🚫 Скам-фильтр: {mint} не прошел проверку RugCheck (Риск дампа/MintAuthority).")
-            return False
-            
+        # Мы больше не используем глючный RugCheck API.
+        # Вместо этого проверка на снайперов/бандлы идет напрямую через блокчейн (Helius RPC)
+        # в функции extract_features_for_moonshot.
         # Игнорируем базовые монеты и стейблкоины
         if mint in ["So11111111111111111111111111111111111111112", 
                     "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", 
@@ -706,10 +703,7 @@ class Analyzer:
             print(f"🚫 [WSS] Отказ: Создатель выкупил слишком много токенов ({initial_buy} SOL). Высокий риск монопольного дампа.")
             return False
             
-        # 3. Проверка кода (RugCheck)
-        if not await self.check_rugcheck(mint):
-            print(f"🚫 [WSS] Отказ: {symbol} не прошел стартовый RugCheck.")
-            return False
+        # 3. Проверка разработчика и бандлов будет произведена позже или через Helius.
             
         # 4. Проверка кошелька разработчика (Helius RPC) и метаданных IPFS
         trader_pubkey = ws_data.get("traderPublicKey")

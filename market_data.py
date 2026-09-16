@@ -381,9 +381,20 @@ async def _jup_lite_prices(mints: list) -> dict:
     return out
 
 
+_trending_cache = []
+_trending_cache_time = 0
+
+
 async def get_trending() -> list:
     """Замена boosts/profiles: тренды GT + свежие пулы pump.fun.
     Формат как у DexScreener boosts: [{'tokenAddress','chainId'}]."""
+    global _trending_cache, _trending_cache_time
+    
+    # Кэшируем результаты на 60 секунд, чтобы можно было сканировать по 150 монет 
+    # без бана по Rate Limit (HTTP 429), так как fomo_scanner опрашивает каждые 20 сек.
+    if time.time() - _trending_cache_time < 60:
+        return _trending_cache
+
     out, seen = [], set()
 
     def add(mint):
@@ -397,14 +408,14 @@ async def get_trending() -> list:
         for item in (d.get("data") or []):
             add(_base_mint(item))
             
-    # Сканируем ТОП-150 свежих Pump.fun
-    for page in range(1, 6):
+    # Сканируем только ТОП-30 свежих Pump.fun (1 страница)
+    for page in range(1, 2):
         d2 = await _gt_get(f"/networks/solana/dexes/pump-fun/pools?page={page}")
         for item in (d2.get("data") or []):
             add(_base_mint(item))
             
-    # Сканируем ТОП-150 новых Raydium пулов
-    for page in range(1, 6):
+    # Сканируем только ТОП-30 Raydium (1 страница)
+    for page in range(1, 2):
         d3 = await _gt_get(f"/networks/solana/dexes/raydium/pools?page={page}")
         for item in (d3.get("data") or []):
             add(_base_mint(item))
