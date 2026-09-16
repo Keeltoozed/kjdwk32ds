@@ -386,7 +386,7 @@ class Analyzer:
                 print(f"🚫 [VELOCITY] {mint}: txns m5 {_b5 + _s5} < 50 — нет скорости торгов.")
                 return False
             if _s5 > 0:
-                mult = 1.2 if _lottery else 1.5
+                mult = 1.0
                 if _b5 < _s5 * mult:
                     print(f"🚫 [VELOCITY] {mint}: buy/sell m5 {_b5}/{_s5} < {mult}x — {'(лотерея, ослаблено)' if _lottery else 'нет буфера покупателей'}")
                     return False
@@ -541,9 +541,9 @@ class Analyzer:
         conf = prob * 100
         print(f"🤖 XGBoost [DEX Poller]: {mint} | Score: {conf:.1f}%")
         import config
-        threshold = 75.0 if getattr(config, "AI_MODE", "sniper") == "sniper" else 65.0
+        threshold = 30.0
         if is_vip:
-            threshold = 70.0 # Снижаем порог уверенности для ракет
+            threshold = 30.0 # Максимальное снижение порога для ракет
             print(f"🔥 [VIP] Порог XGBoost снижен до {threshold}%")
             
         return conf >= threshold
@@ -608,7 +608,7 @@ class Analyzer:
             # -------------------------------
             
             print(f"🧠 Raydium XGBoost (Безлимит): {mint} | Score: {conf:.1f}%")
-            import config; threshold = 75.0 if getattr(config, "AI_MODE", "sniper") == "sniper" else 65.0
+            import config; threshold = 30.0
             
             is_buy = conf >= threshold
             

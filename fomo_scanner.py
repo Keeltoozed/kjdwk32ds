@@ -120,7 +120,6 @@ async def fomo_loop(analyzer: Analyzer, tracker):
                 
                 if mint in tracker.positions:
                     pos = tracker.positions[mint]
-                    import time
                     if pos.status == "open" or (time.time() - pos.entry_time) < (4 * 3600):
                         continue
                 
