@@ -179,9 +179,10 @@ class Analyzer:
     async def check_rugcheck(self, mint: str) -> bool:
         url = config.RUGCHECK_API.format(mint=mint)
         session = await self.get_session()
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0"}
         if True:
             try:
-                async with session.get(url, timeout=10) as response:
+                async with session.get(url, headers=headers, timeout=5) as response:
                     if response.status == 200:
                         data = await response.json()
                         
@@ -293,8 +294,8 @@ class Analyzer:
         buys_m5 = txns_m5.get("buys", 0)
         volume_m5 = pair_data.get("volume", {}).get("m5", 0)
         
-        # > 10 покупок И > $5k объема в 5-минутном окне
-        if buys_m5 >= 10 and volume_m5 >= 5000:
+        # > 50 покупок И > $30k объема в 5-минутном окне (Реальное FOMO)
+        if buys_m5 >= 50 and volume_m5 >= 30000:
             return True
         return False
         
@@ -368,7 +369,7 @@ class Analyzer:
                 print(f"🎰 [LOTTERY] {mint}: вертикаль m5 {_m5:+.0f}%, m1 {_m1:+.1f}% — кандидат на вход уменьшенным сайзом.")
                 _lottery = True
             else:
-                if _m5 < getattr(config, "PULLBACK_MIN_M5_PCT", 0.08) * 100:
+                if _m5 < getattr(config, "PULLBACK_MIN_M5_PCT", 0.03) * 100:
                     print(f"🚫 [ENTRY] {mint}: m5 {_m5:+.1f}% < импульса не было, пропуск.")
                     return False
                 if _m1 > getattr(config, "PULLBACK_M1_MAX_PCT", 0.05) * 100:
@@ -383,13 +384,13 @@ class Analyzer:
             if _s > 0 and _b < _s * 1.1:
                 print(f"🚫 [ENTRY] {mint}: buys {_b} / sells {_s} — нет давления покупателей.")
                 return False
-            if _v24 < 5000:
-                print(f"🚫 [ENTRY] {mint}: vol24h ${_v24:,.0f} < $5k — нет объёма.")
+            if _v24 < 20000:
+                print(f"🚫 [ENTRY] {mint}: vol24h ${_v24:,.0f} < $20k — нет объёма, это не ракета.")
                 return False
             _txm5 = (pair_data.get("txns") or {}).get("m5", {}) or {}
             _b5, _s5 = _txm5.get("buys", 0) or 0, _txm5.get("sells", 0) or 0
-            if (_b5 + _s5) < 15:
-                print(f"🚫 [VELOCITY] {mint}: txns m5 {_b5 + _s5} < 15 — нет скорости торгов.")
+            if (_b5 + _s5) < 50:
+                print(f"🚫 [VELOCITY] {mint}: txns m5 {_b5 + _s5} < 50 — слишком медленно для ракеты.")
                 return False
             if _s5 > 0:
                 mult = 1.0
@@ -407,8 +408,9 @@ class Analyzer:
         
         # Защита от микро-пулов (Scam сетки типа Fly)
         liquidity = pair_data.get("liquidity", {}).get("usd", 0)
-        if liquidity < 5000 and not is_vip and pair_data.get("dexId") != "pump":
-            print(f"📉 Изоляция: {symbol} имеет микро-пул (${liquidity:.0f} < $5k). Риск 100% проскальзывания.")
+        min_liq = getattr(config, "MIN_LIQUIDITY", 15000)
+        if liquidity < min_liq and not is_vip and pair_data.get("dexId") != "pump":
+            print(f"📉 Изоляция: {symbol} имеет микро-пул (${liquidity:.0f} < ${min_liq//1000}k). Риск 100% проскальзывания.")
             return False
             
         if is_vip:

@@ -32,18 +32,18 @@ MAX_CONCURRENT_POSITIONS = 10  # концентрация капитала: ма
 MAX_DAILY_LOSS_USD = 18.0
 KILL_SWITCH_ENABLED = True
 MAX_DAILY_LOSS_PCT = 0.25
-STOP_LOSS_PCT = -0.10
+STOP_LOSS_PCT = -0.25
 SNIPER_ENTRIES_ENABLED = False
 TIME_EXIT_MINUTES = 60  # Если за 30 минут нет пампа - выходим
 TIME_EXIT_PROFIT_REQ = 0.0
 
 # Trailing Stop Config (Защита прибыли)
-TRAILING_ACTIVATION_PCT = 0.12
-TRAILING_DISTANCE_PCT = 0.04
+TRAILING_ACTIVATION_PCT = 0.25
+TRAILING_DISTANCE_PCT = 0.10
 
 # Filtering
 AI_MODE = "degen" # "sniper" (строго 80-90% уверенности) или "degen"
-MIN_LIQUIDITY = 5000  # Снизили до 5k для большего количества сделок
+MIN_LIQUIDITY = 15000  # Возвращено к 15k для отсева слабых монет
 MAX_LIQUIDITY = 50000000
 
 # AI Аналитика
