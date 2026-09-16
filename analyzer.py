@@ -89,10 +89,56 @@ class Analyzer:
                             sol_pairs = [p for p in pairs if p.get("chainId") == "solana"]
                             if sol_pairs:
                                 return sorted(sol_pairs, key=lambda x: x.get("liquidity", {}).get("usd", 0), reverse=True)[0]
-                    return {}
+                    return await self.fetch_token_data_gecko(mint)
             except Exception as e:
                 print(f"Dexscreener token data error: {type(e).__name__} {e}")
-                return {}
+                return await self.fetch_token_data_gecko(mint)
+
+    async def fetch_token_data_gecko(self, mint: str) -> dict:
+        session = await self.get_session()
+        try:
+            url = f"https://api.geckoterminal.com/api/v2/networks/solana/tokens/{mint}/pools?page=1"
+            async with session.get(url, timeout=8, headers={"Accept": "application/json"}) as response:
+                if response.status != 200:
+                    return {}
+                data = await response.json()
+                pools = data.get("data", [])
+                if not pools:
+                    return {}
+                best = max(pools, key=lambda p: float((p.get("attributes") or {}).get("reserve_in_usd", 0) or 0))
+                a = best.get("attributes", {})
+                pc = a.get("price_change_percentage") or {}
+                tx = a.get("transactions") or {}
+                vu = a.get("volume_usd") or {}
+                created = a.get("pool_created_at")
+                created_ms = 0
+                if created:
+                    from datetime import datetime
+                    created_ms = int(datetime.fromisoformat(created.replace("Z", "+00:00")).timestamp() * 1000)
+                symbol = (a.get("name") or "UNKNOWN").split("/")[0].strip()
+
+                def _tx(key):
+                    t = tx.get(key) or {}
+                    return {"buys": int(t.get("buys", 0) or 0), "sells": int(t.get("sells", 0) or 0)}
+
+                print(f"🦎 GeckoTerminal fallback для {mint[:8]}: пул найден.")
+                return {
+                    "baseToken": {"symbol": symbol, "name": symbol},
+                    "priceUsd": str(a.get("base_token_price_usd") or 0),
+                    "priceChange": {"m5": float(pc.get("m5") or 0), "m1": 0.0,
+                                    "h1": float(pc.get("h1") or 0), "h24": float(pc.get("h24") or 0)},
+                    "txns": {"m5": _tx("m5"), "h1": _tx("h1"), "h24": _tx("h24")},
+                    "volume": {"m5": float(vu.get("m5") or 0), "h1": float(vu.get("h1") or 0),
+                               "h24": float(vu.get("h24") or 0)},
+                    "liquidity": {"usd": float(a.get("reserve_in_usd") or 0)},
+                    "fdv": float(a.get("fdv_usd") or a.get("market_cap_usd") or 0),
+                    "pairCreatedAt": created_ms,
+                    "dexId": "pump" if mint.endswith("pump") else "raydium",
+                    "info": {"socials": [], "websites": []},
+                }
+        except Exception as e:
+            print(f"GeckoTerminal token data error: {type(e).__name__} {e}")
+            return {}
 
     async def is_clone(self, symbol: str, current_mint: str, current_created_at: int, current_fdv: float) -> bool:
         """Проверяет, является ли этот токен дешевой копией (клоном) более старого или крупного оригинала."""
