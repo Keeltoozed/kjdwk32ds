@@ -138,7 +138,23 @@ def simulate_trade(times, prices, entry_idx, amount, is_mature):
 
 def run_scenario(series, entry_mode):
     cands = []
+    
     for mint, (times, prices) in series.items():
+        # Check if entry is in a dead zone
+        entry_dt = pd.to_datetime(times[0])
+        hour = entry_dt.hour
+        day = entry_dt.dayofweek
+        
+        # Dead Zone: Sat(5), Sun(6), or Hour between 5 and 13
+        is_dead = False
+        if day >= 5: 
+            is_dead = True
+        if 5 <= hour <= 13:
+            is_dead = True
+            
+        if is_dead:
+            continue
+
         if entry_mode == "sniper":
             ei = 0
             mature = False

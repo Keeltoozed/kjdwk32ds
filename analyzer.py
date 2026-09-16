@@ -390,9 +390,9 @@ class Analyzer:
                 return False
             _txm5 = (pair_data.get("txns") or {}).get("m5", {}) or {}
             _b5, _s5 = _txm5.get("buys", 0) or 0, _txm5.get("sells", 0) or 0
-            # Увеличена минимальная скорость транзакций, так как скамы в среднем имеют 14 тх/мин, а ракеты - 48 тх/мин.
-            if (_b5 + _s5) < 100:
-                print(f"🚫 [VELOCITY] {mint}: txns m5 {_b5 + _s5} < 100 — слишком медленно, нет органического FOMO.")
+            
+            if (_b5 + _s5) < 80:
+                print(f"🚫 [VELOCITY] {mint}: txns m5 {_b5 + _s5} < 80 — слишком медленно, нет органического FOMO.")
                 return False
             if _s5 > 0:
                 mult = 1.0

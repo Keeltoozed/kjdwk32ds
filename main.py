@@ -117,9 +117,20 @@ async def position_manager_loop(analyzer, tracker):
                     tracker.close_position(mint, current_price, f"Hard Stop Loss ({config.STOP_LOSS_PCT*100:.0f}%)")
                     continue
                     
-                # 4. Time Exit из config.py: если монета застыла
+                # 4. УМНЫЙ ВЫХОД ПО ВРЕМЕНИ (Stagnant / Bleeding cut)
+                # Если монета в минусе больше 15 минут - она мертва, выходим, не дожидаясь -25%
+                if minutes_held >= 15 and pnl_pct < 0:
+                    tracker.close_position(mint, current_price, f"Dead Coin Cut ({minutes_held:.0f}m, {pnl_pct*100:.1f}%)")
+                    continue
+                    
+                # Если монета болтается около нуля больше 25 минут - выходим, освобождаем капитал
+                if minutes_held >= 25 and pnl_pct < 0.10:
+                    tracker.close_position(mint, current_price, f"Stagnant Cut ({minutes_held:.0f}m, {pnl_pct*100:.1f}%)")
+                    continue
+                    
+                # Старый Time Exit (резервный)
                 if minutes_held >= config.TIME_EXIT_MINUTES and pnl_pct < config.TIME_EXIT_PROFIT_REQ:
-                    tracker.close_position(mint, current_price, "Time-based Exit (Dead Coin)")
+                    tracker.close_position(mint, current_price, "Time-based Exit")
                     continue
             # Сохраняем обновлённые цены одним разом за цикл (файл + Supabase)
             tracker.save_portfolio()

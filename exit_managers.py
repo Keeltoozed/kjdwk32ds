@@ -51,7 +51,14 @@ class MatureExitManager:
         if hasattr(config, 'STOP_LOSS_PCT') and pnl_pct <= config.STOP_LOSS_PCT:
             return f"Mature Stop Loss ({config.STOP_LOSS_PCT*100:.0f}%)"
 
-        # Time exit
+        # Time exit - Dead / Stagnant
+        if minutes_held >= 15 and pnl_pct < 0:
+            return f"Mature Dead Coin Cut ({minutes_held:.0f}m)"
+            
+        if minutes_held >= 25 and pnl_pct < 0.10:
+            return f"Mature Stagnant Cut ({minutes_held:.0f}m)"
+            
+        # Old fallback
         if hasattr(config, 'TIME_EXIT_MINUTES') and hasattr(config, 'TIME_EXIT_PROFIT_REQ'):
             if minutes_held >= config.TIME_EXIT_MINUTES and pnl_pct < config.TIME_EXIT_PROFIT_REQ:
                 return "Mature Time Exit"
