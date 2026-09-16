@@ -187,7 +187,7 @@ class Analyzer:
                         
                         score = data.get("score", 1000)
                         # Защита от моментальных дампов (-37%). Строгий фильтр скама.
-                        if score >= 150: # было 300, сделали 150 (очень строго). Отсекает монеты, где у одного кошелька >20% саплая.
+                        if score >= 400: # было 150 (слишком строго, блокировало почти всё). 400 - оптимально.
                             return False
                             
                         token_info = data.get("token", {})
@@ -359,7 +359,7 @@ class Analyzer:
                 if _m1 < 0:
                     print(f"🚫 [LOTTERY] {mint}: m5 {_m5:+.0f}%, но m1 {_m1:+.1f}% — вертикаль откатывает, это вершина.")
                     return False
-                print(f"🎰 [LOTTERY] {mint}: вертикаль m5 {_m5:+.0f}%, m1 {_m1:+.1f}% — вход уменьшенным сайзом.")
+                print(f"🎰 [LOTTERY] {mint}: вертикаль m5 {_m5:+.0f}%, m1 {_m1:+.1f}% — кандидат на вход уменьшенным сайзом.")
                 _lottery = True
             else:
                 if _m5 < getattr(config, "PULLBACK_MIN_M5_PCT", 0.08) * 100:
@@ -377,13 +377,13 @@ class Analyzer:
             if _s > 0 and _b < _s * 1.1:
                 print(f"🚫 [ENTRY] {mint}: buys {_b} / sells {_s} — нет давления покупателей.")
                 return False
-            if _v24 < 20000:
-                print(f"🚫 [ENTRY] {mint}: vol24h ${_v24:,.0f} < $20k — нет объёма.")
+            if _v24 < 10000:
+                print(f"🚫 [ENTRY] {mint}: vol24h ${_v24:,.0f} < $10k — нет объёма.")
                 return False
             _txm5 = (pair_data.get("txns") or {}).get("m5", {}) or {}
             _b5, _s5 = _txm5.get("buys", 0) or 0, _txm5.get("sells", 0) or 0
-            if (_b5 + _s5) < 50:
-                print(f"🚫 [VELOCITY] {mint}: txns m5 {_b5 + _s5} < 50 — нет скорости торгов.")
+            if (_b5 + _s5) < 30:
+                print(f"🚫 [VELOCITY] {mint}: txns m5 {_b5 + _s5} < 30 — нет скорости торгов.")
                 return False
             if _s5 > 0:
                 mult = 1.0
@@ -397,7 +397,7 @@ class Analyzer:
                 if _age_h < 6 and isinstance(_socials, list) and len(_socials) == 0 and not _lottery:
                     print(f"🚫 [SOCIAL] {mint}: нет соцсетей при возрасте {_age_h:.1f}ч — высокий скам-риск.")
                     return False
-            print(f"✅ [ENTRY] {mint}: PULLBACK — импульс m5 {_m5:+.1f}%, откат m1 {_m1:+.1f}%, h1 {_h1:+.0f}%, b/s {_b}/{_s}. Вход.")
+            print(f"✅ [ENTRY-CANDIDATE] {mint}: PULLBACK — импульс m5 {_m5:+.1f}%, откат m1 {_m1:+.1f}%, h1 {_h1:+.0f}%, b/s {_b}/{_s}. Кандидат на вход.")
         
         # Защита от микро-пулов (Scam сетки типа Fly)
         liquidity = pair_data.get("liquidity", {}).get("usd", 0)
