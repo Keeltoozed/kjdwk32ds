@@ -40,6 +40,9 @@ class PumpFunSniper:
         self.trackers = {} # mint -> TokenTrackerState
 
     async def evaluate_and_enter(self, state: TokenTrackerState):
+        if not getattr(config, "SNIPER_ENTRIES_ENABLED", False):
+            state.is_ai_evaluated = True
+            return
         try:
             df = pd.DataFrame(state.trades)
             df['curve_sol_diff'] = df['curve_sol'].diff().fillna(0)

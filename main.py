@@ -55,7 +55,7 @@ async def position_manager_loop(analyzer, tracker):
 
                 prev_ts = getattr(position, "price_checked_at", 0.0)
                 if prev_ts > 0 and (time.time() - prev_ts) < 60 and prev_price > 0 \
-                        and current_price <= prev_price * 0.90:
+                        and current_price <= prev_price * 0.93:
                     tracker.close_position(mint, current_price,
                                            f"Crash Guard (-{(1 - current_price/prev_price)*100:.0f}% за {(time.time()-prev_ts):.0f} сек)")
                     continue
@@ -217,7 +217,12 @@ async def scanner_loop(analyzer, tracker):
                                 fixed = getattr(config, "TRADE_AMOUNT_USD", 0)
                                 position_size = min(fixed, max_allowed_by_pool) if fixed else max(4.0, min(base_position, max_allowed_by_pool, 100.0))
                                 
-                                if position_size < 4.0:
+                                _lot_m5 = ((pair_data.get("priceChange") or {}).get("m5", 0) or 0)
+                                _is_lot = _lot_m5 >= getattr(config, "LOTTERY_MIN_M5_PCT", 1.0) * 100
+                                if _is_lot:
+                                    position_size *= getattr(config, "LOTTERY_SIZE_MULT", 0.25)
+                                
+                                if position_size < (1.0 if _is_lot else 4.0):
                                     print(f"🚫 Отказ (Ликвидность): Недостаточно ликвидности (${liq_usd}) для безопасного входа.")
                                     continue
                                     

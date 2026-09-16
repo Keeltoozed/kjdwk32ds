@@ -24,6 +24,7 @@ class VirtualPosition(BaseModel):
     is_moonbag: bool = False # Флаг, что мы уже зафиксировали 50% прибыли
     price_updated_at: float = 0.0 # Время свежего обновления цены из WSS
     price_checked_at: float = 0.0 # Для Crash Guard
+    exit_time: float = 0.0 # Для дневного kill-switch
 
 class PaperTracker:
     def __init__(self):
@@ -215,6 +216,7 @@ class PaperTracker:
             pos.status = "closed"
             pos.exit_price_usd = exit_price
             pos.exit_reason = reason
+            pos.exit_time = time.time()
             
             # РЕАЛЬНЫЙ РАСЧЕТ PnL С УЧЕТОМ КОМИССИЙ (1% вход, 1% выход + 0.003 SOL сеть)
             real_entry_price = pos.entry_price_usd * 1.01

@@ -30,7 +30,8 @@ MAX_CONCURRENT_POSITIONS = 6  # концентрация капитала: ма�
 
 # Risk Management
 MAX_DAILY_LOSS_USD = 18.0  # 15% пула: стоп торгов на 24ч # Минимальный порог в долларах\nMAX_DAILY_LOSS_PCT = 0.25 # Глобальный Kill-Switch: 25% от текущего депозита за день
-STOP_LOSS_PCT = -0.15   # Жесткий стоп на -15% (чтобы с учетом проскальзывания было не больше -20%)
+STOP_LOSS_PCT = -0.10
+SNIPER_ENTRIES_ENABLED = False
 TIME_EXIT_MINUTES = 60  # Если за 30 минут нет пампа - выходим
 TIME_EXIT_PROFIT_REQ = 0.0
 
@@ -59,5 +60,12 @@ LUNARCRUSH_API_KEY = "syvh43mkvrzrw54sor6kc5r6dmtyj5fhi4jd38ht"
 
 SNIPER_MIN_UNIQUE_BUYERS = 15
 SNIPER_BUYERS_WINDOW_MIN = 5
+VIP_MAX_M5_PCT = 1.00
+PULLBACK_MIN_M5_PCT = 0.06
+PULLBACK_M1_MIN_PCT = -0.15
+PULLBACK_M1_MAX_PCT = 0.08
+PULLBACK_MAX_H1_PCT = 3.00
+LOTTERY_MIN_M5_PCT = 1.00
+LOTTERY_SIZE_MULT = 0.25
 WHALE_CONSENSUS = 2  # вход на 2-м ките (3-й = уже поздно)
 WHALE_MAX_RUNUP = 1.35  # цена не должна вырасти >35% с момента покупки первого кита

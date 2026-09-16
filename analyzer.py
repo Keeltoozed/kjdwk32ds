@@ -285,7 +285,7 @@ class Analyzer:
             _pc = pair_data.get("priceChange") or {}
             _m5 = _pc.get("m5", 0) or 0
             _m1 = _pc.get("m1", 0) or 0
-            if _m5 > 40:
+            if _m5 > getattr(config, "VIP_MAX_M5_PCT", 0.40) * 100:
                 print(f"🚫 [VIP OVERHEAT] {mint}: m5 {_m5:+.0f}% — вертикаль уже прошла, вход = вершина.")
                 return False
             if _m1 < 0:
@@ -308,18 +308,24 @@ class Analyzer:
             if _age_min_pre < 10 and (_txm5_pre.get("buys", 0) + _txm5_pre.get("sells", 0)) == 0 and _vm5_pre == 0:
                 print(f"⏳ [ENTRY] {mint}: возраст {_age_min_pre:.1f} мин, m5-окно API ещё пустое — повторю позже, снайпер ведёт его по WSS.")
                 return None
-            if _m5 < 8.0:
-                print(f"🚫 [ENTRY] {mint}: m5 {_m5:+.1f}% < +8% — импульса не было, пропуск.")
-                return False
-            if _m1 > 5.0:
-                print(f"🚫 [ENTRY] {mint}: m1 {_m1:+.1f}% — вертикаль в процессе, купим вершину. Ждём откат.")
-                return False
-            if _m1 < -10.0:
-                print(f"🚫 [ENTRY] {mint}: m1 {_m1:+.1f}% — импульс схлопнулся, это дамп, не откат.")
-                return False
-            if _h1 > 150.0:
-                print(f"🚫 [ENTRY] {mint}: h1 {_h1:+.0f}% — уже улетел, поздно.")
-                return False
+            if _m5 >= getattr(config, "LOTTERY_MIN_M5_PCT", 1.0) * 100:
+                if _m1 < 0:
+                    print(f"🚫 [LOTTERY] {mint}: m5 {_m5:+.0f}%, но m1 {_m1:+.1f}% — вертикаль откатывает, это вершина.")
+                    return False
+                print(f"🎰 [LOTTERY] {mint}: вертикаль m5 {_m5:+.0f}%, m1 {_m1:+.1f}% — вход уменьшенным сайзом.")
+            else:
+                if _m5 < getattr(config, "PULLBACK_MIN_M5_PCT", 0.08) * 100:
+                    print(f"🚫 [ENTRY] {mint}: m5 {_m5:+.1f}% < импульса не было, пропуск.")
+                    return False
+                if _m1 > getattr(config, "PULLBACK_M1_MAX_PCT", 0.05) * 100:
+                    print(f"🚫 [ENTRY] {mint}: m1 {_m1:+.1f}% — вертикаль в процессе, купим вершину. Ждём откат.")
+                    return False
+                if _m1 < getattr(config, "PULLBACK_M1_MIN_PCT", -0.10) * 100:
+                    print(f"🚫 [ENTRY] {mint}: m1 {_m1:+.1f}% — импульс схлопнулся, это дамп, не откат.")
+                    return False
+                if _h1 > getattr(config, "PULLBACK_MAX_H1_PCT", 1.5) * 100:
+                    print(f"🚫 [ENTRY] {mint}: h1 {_h1:+.0f}% — уже улетел, поздно.")
+                    return False
             if _s > 0 and _b < _s * 1.1:
                 print(f"🚫 [ENTRY] {mint}: buys {_b} / sells {_s} — нет давления покупателей.")
                 return False
