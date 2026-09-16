@@ -226,7 +226,8 @@ async def scanner_loop(analyzer, tracker):
                                 base_position = capital * (config.REINVEST_PERCENT / 100.0)
                                 
                                 liq_usd = pair_data.get("liquidity", {}).get("usd", 0) if pair_data else 0
-                                max_allowed_by_pool = liq_usd * 0.01  # Максимум 1% от ликвидности
+                                # Если ликвидность 0 (часто бывает на свежих pump.fun токенах в GeckoTerminal), игнорируем это ограничение
+                                max_allowed_by_pool = liq_usd * 0.01 if liq_usd > 0 else 99999.0  
                                 
                                 fixed = getattr(config, "TRADE_AMOUNT_USD", 0)
                                 position_size = min(fixed, max_allowed_by_pool) if fixed else max(4.0, min(base_position, max_allowed_by_pool, 100.0))
@@ -249,6 +250,8 @@ async def scanner_loop(analyzer, tracker):
                                     
                                 tracker.add_position(actual_symbol, mint, entry_price, position_size, is_mature=True)
                                 break # Ждем следующего цикла после покупки
+                            else:
+                                print(f"⚠️ Ошибка: Не удалось получить цену для {mint} (entry_price=0). Возможно, Rate Limit (429).")
                         
                         # Пауза между монетами
                         await asyncio.sleep(1.5)
