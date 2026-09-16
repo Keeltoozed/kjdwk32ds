@@ -91,7 +91,7 @@ def full_retrain():
     df_combined = df_combined.fillna(0)
     
     # Динамически получаем все колонки, кроме системных
-    ignore_cols = ['target', 'is_success', 'mint', 'symbol', 'entry_price', 'min_price_5m', 'max_price_1h', 'timestamp', 'status', 'features', 'entry_time', 'exit_time', 'exit_reason', 'pnl', 'pnl_usd', 'confidence', 'id', 'check_24h_done', 'check_1h_done', 'check_4h_done', 'missed_pnl', 'post_exit_ath']
+    ignore_cols = ['target', 'is_success', 'mint', 'symbol', 'entry_price', 'min_price_5m', 'max_price_1h', 'timestamp', 'status', 'features', 'entry_time', 'exit_time', 'exit_reason', 'pnl', 'pnl_usd', 'confidence', 'id', 'check_24h_done', 'check_1h_done', 'check_4h_done', 'missed_pnl', 'post_exit_ath', 'reason', 'score', 'hypothetical_pnl', 'token', 'chain']
     features = [c for c in df_combined.columns if c not in ignore_cols]
     
     print(f"\n📊 Итоговый список фичей ({len(features)} шт.): {features}")
@@ -105,7 +105,8 @@ def full_retrain():
     # Удаляем строки с NaN в таргете (на всякий случай)
     df_combined = df_combined.dropna(subset=['target'])
     
-    X = df_combined[features]
+    # Конвертируем в числа, отбрасываем ошибки
+    X = df_combined[features].apply(pd.to_numeric, errors='coerce').fillna(0)
     y = df_combined['target'].astype(int)
     
     # Даем бОльший вес новым данным (ракетам и скамам)

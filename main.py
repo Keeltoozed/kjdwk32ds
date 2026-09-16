@@ -95,26 +95,22 @@ async def position_manager_loop(analyzer, tracker):
                 priority_fee_usd = 0.075 if position.amount_usd < 10.0 else 0.45
                 min_fee_pct = (priority_fee_usd + 0.02 * position.amount_usd) / position.amount_usd
                 
-                # 🚀 УМНЫЙ ТЕЙК-ПРОФИТ (Снижаем жадность, забираем кэш)
-                # 1. Первая фиксация на +35%: продаем 50% объема
-                if max_pnl_pct >= 0.35 and getattr(position, "is_moonbag", False) == False:
-                    tracker.partial_close_position(mint, current_price, 0.6, "Take Profit 60% (+35%)")
-                    continue
-                
-                # 2. ТРЕЙЛИНГ-СТОП (Динамическая фиксация)
+                # 1. СКАЛЬП-ТРЕЙЛИНГ (Забираем мелкие плюсы)
+                # Если ракета не долетела до +25%, но дала +15% и начала падать, забираем свое.
+                if max_pnl_pct >= 0.15 and max_pnl_pct < getattr(config, "TRAILING_ACTIVATION_PCT", 0.25):
+                    drop_from_max = (position.max_price_usd - current_price) / position.max_price_usd
+                    if drop_from_max >= 0.05:
+                        tracker.close_position(mint, current_price, f"Scalp Profit (peak +{max_pnl_pct*100:.0f}%)")
+                        continue
+                        
+                # 2. ОСНОВНОЙ ТРЕЙЛИНГ-СТОП (Динамическая фиксация всей позиции)
                 drop_from_max = (position.max_price_usd - current_price) / position.max_price_usd
                 
-                if getattr(position, "is_moonbag", False):
-                    # Если уже забрали 50%, даем оставшейся части дышать шире (ждем ракету)
-                    if drop_from_max >= 0.20: 
-                        tracker.close_position(mint, current_price, "Moonbag Trailing (20% drop)")
+                # Активируем трейлинг из config.py
+                if max_pnl_pct >= config.TRAILING_ACTIVATION_PCT:
+                    if drop_from_max >= config.TRAILING_DISTANCE_PCT:
+                        tracker.close_position(mint, current_price, f"Smart Trailing (+{max_pnl_pct*100:.0f}% peak)")
                         continue
-                else:
-                    # Активируем трейлинг из config.py
-                    if max_pnl_pct >= config.TRAILING_ACTIVATION_PCT:
-                        if drop_from_max >= config.TRAILING_DISTANCE_PCT:
-                            tracker.close_position(mint, current_price, f"Smart Trailing (+{max_pnl_pct*100:.0f}% peak)")
-                            continue
                             
                 # 3. ЖЕСТКИЙ Stop Loss из config.py
                 if pnl_pct <= config.STOP_LOSS_PCT:

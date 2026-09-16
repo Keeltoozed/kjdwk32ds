@@ -205,6 +205,9 @@ class PaperTracker:
             
             print(f"🚀 [Moonbag] Частичная фиксация {sell_pct*100}% {pos.symbol}: Профит +${realized_pnl_usd:.2f} ({reason})")
             
+            # Сохраняем этот профит в общую копилку монеты!
+            pos.pnl_usd += realized_pnl_usd
+            
             # Уменьшаем позицию на проданный процент
             pos.amount_usd -= amount_sold_usd
             pos.is_moonbag = True
@@ -229,10 +232,14 @@ class PaperTracker:
             # Если позиция < $10, используем минимальный tip (0.0005 SOL ~ $0.075)
             priority_fee_usd = 0.075 if pos.amount_usd < 10.0 else 0.45
             
-            pos.pnl_usd = (pos.amount_usd * price_diff_pct) - priority_fee_usd
+            # Добавляем профит от закрытия финального остатка к тому, что уже зафиксировано
+            final_pnl = (pos.amount_usd * price_diff_pct) - priority_fee_usd
+            pos.pnl_usd += final_pnl
             
             # Реальный итоговый процент инвестиции
-            pnl_pct = pos.pnl_usd / pos.amount_usd if pos.amount_usd > 0 else 0
+            # Если был Moonbag (продано 60%), изначальный размер был в 2.5 раза больше (1 / 0.4)
+            original_amount = (pos.amount_usd / 0.4) if pos.is_moonbag else pos.amount_usd
+            pnl_pct = pos.pnl_usd / original_amount if original_amount > 0 else 0
             
             self.save_portfolio()
             print(f"🔒 PAPER SELL: {pos.symbol} ({mint}) | Reason: {reason} | PnL: {pnl_pct*100:.2f}% (${pos.pnl_usd:.2f})")
