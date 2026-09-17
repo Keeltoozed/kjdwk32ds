@@ -48,10 +48,14 @@ async def position_manager_loop(analyzer, tracker):
                     
                 if current_price > position.max_price_usd:
                     position.max_price_usd = current_price
+                    position.peak_time = time.time()
                     
                 pnl_pct = (current_price - position.entry_price_usd) / position.entry_price_usd
                 max_pnl_pct = (position.max_price_usd - position.entry_price_usd) / position.entry_price_usd
                 minutes_held = (time.time() - position.entry_time) / 60
+                
+                peak_ts = getattr(position, "peak_time", position.entry_time)
+                minutes_since_peak = (time.time() - peak_ts) / 60 if peak_ts else 0
 
                 prev_ts = getattr(position, "price_checked_at", 0.0)
                 if prev_ts > 0 and (time.time() - prev_ts) < 60 and prev_price > 0 \
@@ -61,9 +65,16 @@ async def position_manager_loop(analyzer, tracker):
                     continue
                 position.price_checked_at = time.time()
                 
+                # === ТАЙМАУТ ПОСЛЕ РАКЕТЫ (По просьбе пользователя) ===
+                # У мемкоинов есть фаза импульса. Если после взлета прошло 5 минут, а нового перехая нет,
+                # и цена ползет вниз (или просто стоит), закрываем в безубыток или мелкий минус.
+                if max_pnl_pct >= 0.10 and minutes_since_peak >= 5:
+                    tracker.close_position(mint, current_price, f"Post-Rocket Fade Cut ({minutes_since_peak:.0f}m after peak)")
+                    continue
+
                 # === STAGNANT EXIT: режем ТОЛЬКО монеты, которые ни разу не двинулись ===
-                if minutes_held >= 30 and abs(pnl_pct) < 0.05 and max_pnl_pct < 0.05:
-                    tracker.close_position(mint, current_price, "Stagnant Near Zero (30 min flat)")
+                if minutes_held >= 7 and abs(pnl_pct) < 0.05 and max_pnl_pct < 0.05:
+                    tracker.close_position(mint, current_price, "Stagnant Near Zero (7 min flat)")
                     continue
                 # Profit lock удален, используется трейлинг-стоп из config.py
                 

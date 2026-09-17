@@ -65,18 +65,19 @@ class JupiterAPI:
              return {"is_safe": False, "reason": f"Error: {e}"}
 
     @staticmethod
-    async def get_swap_transaction(mint: str, is_sell: bool = False, amount_lamports: int = 0) -> dict:
+    async def get_swap_transaction(mint: str, is_sell: bool = False, amount_lamports: int = 0, is_emergency: bool = False) -> dict:
         """
         Генерирует реальную транзакцию на Swap через Jupiter API v6.
-        Блокировка проскальзывания: жесткий лимит slippageBps = 500 (5%).
-        Динамический Priority Fee: если это SELL (Stop-Loss), ставим Very High priority!
+        Блокировка проскальзывания: жесткий лимит slippageBps = 1500 (15%).
+        Динамический Priority Fee: если это SELL (Stop-Loss/Crash Guard), ставим Ultra/Very High priority!
         """
         sol_mint = "So11111111111111111111111111111111111111112"
         input_mint = mint if is_sell else sol_mint
         output_mint = sol_mint if is_sell else mint
         
-        # 1. Динамическое проскальзывание: Вход строгий (3%), Выход агрессивный (15%), чтобы не застрять в падающей монете!
-        slippage = 1500 if is_sell else 300
+        # 1. Динамическое проскальзывание: Вход жесткий лимит 10-15%, Выход агрессивный (15%), чтобы не застрять в падающей монете!
+        # Лучше получить Failed Transaction при покупке, чем купить на хаях после пампа снайпера.
+        slippage = 1500 if is_sell else 1500 
         quote_url = f"https://lite-api.jup.ag/swap/v1/quote?inputMint={input_mint}&outputMint={output_mint}&amount={amount_lamports}&slippageBps={slippage}"
         
         from http_client import get_session
@@ -91,9 +92,14 @@ class JupiterAPI:
                 swap_url = "https://lite-api.jup.ag/swap/v1/swap"
 
             # ИНТЕГРАЦИЯ JITO & PRIORITY FEES
-            # Для покупок (снайпинга) и экстренных продаж ставим Jito Tip и VeryHigh priority
-            jito_tip = 150000 if is_sell else 100000
-            priority_level = "veryHigh"
+            # Для экстренных продаж (Crash Guard / Stop Loss) агрессивно завышаем комиссию (Jito Tip), 
+            # чтобы транзакция гарантированно прошла первой в блоке, обогнав остальных продавцов.
+            if is_emergency:
+                jito_tip = 5000000  # 0.005 SOL для экстренного спасения капитала
+                priority_level = "veryHigh"
+            else:
+                jito_tip = 150000 if is_sell else 100000
+                priority_level = "high"
 
             payload = {
                 "quoteResponse": quote_response,

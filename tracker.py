@@ -15,6 +15,7 @@ class VirtualPosition(BaseModel):
     exit_price_usd: float = 0.0
     pnl_usd: float = 0.0
     max_price_usd: float = 0.0  # Отслеживаем максимальную цену для трейлинга
+    peak_time: float = 0.0      # Время, когда была достигнута максимальная цена (ракета)
     current_price_usd: float = 0.0 # Для отображения в интерфейсе
     current_pnl_usd: float = 0.0 # Для отображения в интерфейсе
     exit_reason: str = "" # Причина выхода
@@ -229,8 +230,11 @@ class PaperTracker:
             price_diff_pct = (real_exit_price - real_entry_price) / real_entry_price if real_entry_price > 0 else 0
             
             # 2. ДИНАМИЧЕСКИЕ МИКРО-КОМИССИИ JITO (Micro-Tips)
-            # Если позиция < $10, используем минимальный tip (0.0005 SOL ~ $0.075)
-            priority_fee_usd = 0.075 if pos.amount_usd < 10.0 else 0.45
+            # Если это экстренный выход из падающей ракеты, симулируем огромный приоритетный Jito Tip ($0.75 - $1.50)
+            if "Crash Guard" in reason or "Stop Loss" in reason:
+                priority_fee_usd = 1.50 
+            else:
+                priority_fee_usd = 0.075 if pos.amount_usd < 10.0 else 0.45
             
             # Добавляем профит от закрытия финального остатка к тому, что уже зафиксировано
             final_pnl = (pos.amount_usd * price_diff_pct) - priority_fee_usd
