@@ -200,6 +200,7 @@ class PaperTracker:
             
             price_diff_pct = (real_exit_price - real_entry_price) / real_entry_price if real_entry_price > 0 else 0
             priority_fee_usd = 0.075 if pos.amount_usd < 10.0 else 0.45
+            priority_fee_usd = min(priority_fee_usd, amount_sold_usd * 0.05)
             
             # PnL от проданной части
             realized_pnl_usd = (amount_sold_usd * price_diff_pct) - priority_fee_usd
@@ -230,11 +231,14 @@ class PaperTracker:
             price_diff_pct = (real_exit_price - real_entry_price) / real_entry_price if real_entry_price > 0 else 0
             
             # 2. ДИНАМИЧЕСКИЕ МИКРО-КОМИССИИ JITO (Micro-Tips)
-            # Если это экстренный выход из падающей ракеты, симулируем огромный приоритетный Jito Tip ($0.75 - $1.50)
             if "Crash Guard" in reason or "Stop Loss" in reason:
-                priority_fee_usd = 1.50 
+                priority_fee_usd = 0.75  # 0.005 SOL
             else:
                 priority_fee_usd = 0.075 if pos.amount_usd < 10.0 else 0.45
+                
+            # Защита математики дашборда: комиссия не может превышать 5% от микро-позиции, 
+            # иначе тестовые входы на $4 будут показывать -50% убытка только из-за комиссии.
+            priority_fee_usd = min(priority_fee_usd, pos.amount_usd * 0.05)
             
             # Добавляем профит от закрытия финального остатка к тому, что уже зафиксировано
             final_pnl = (pos.amount_usd * price_diff_pct) - priority_fee_usd
