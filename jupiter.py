@@ -120,8 +120,25 @@ class JupiterAPI:
                 if response.status != 200:
                     return {"success": False, "reason": "Failed to generate swap tx"}
                 swap_data = await response.json()
+                encoded_tx = swap_data.get("swapTransaction")
 
-                return {"success": True, "tx": swap_data.get("swapTransaction")}
+                if not encoded_tx:
+                    return {"success": False, "reason": "Empty swapTransaction from Jupiter"}
+
+                # === JITO BUNDLE EXECUTION ===
+                # Вместо отправки через обычный RPC (открытый мемпул),
+                # направляем транзакцию напрямую в Jito Block Engine.
+                # MEV-боты не видят нашу транзакцию — нет сэндвич-атак!
+                from jito_executor import JitoExecutor
+                jito_ok = await JitoExecutor.send_bundle(encoded_tx, is_emergency=is_emergency)
+
+                if jito_ok:
+                    return {"success": True, "tx": encoded_tx, "via": "jito"}
+                else:
+                    # Fallback: если Jito недоступен, возвращаем транзакцию (вызывающий сам решит что делать)
+                    print("⚠️ [JITO] Fallback: бандл не принят, транзакция возвращена для ручной отправки")
+                    return {"success": True, "tx": encoded_tx, "via": "fallback_rpc"}
+
         except Exception as e:
             print(f"Jupiter Swap Error: {type(e).__name__} {e}")
             return {"success": False, "reason": f"Jupiter API error: {e}"}

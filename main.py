@@ -68,7 +68,7 @@ async def position_manager_loop(analyzer, tracker):
                 # === ТАЙМАУТ ПОСЛЕ РАКЕТЫ (По просьбе пользователя) ===
                 # У мемкоинов есть фаза импульса. Если после взлета прошло 5 минут, а нового перехая нет,
                 # и цена ползет вниз (или просто стоит), закрываем в безубыток или мелкий минус.
-                if max_pnl_pct >= 0.10 and minutes_since_peak >= 5:
+                if max_pnl_pct >= 0.10 and minutes_since_peak >= 15:
                     tracker.close_position(mint, current_price, f"Post-Rocket Fade Cut ({minutes_since_peak:.0f}m after peak)")
                     continue
 
@@ -123,10 +123,9 @@ async def position_manager_loop(analyzer, tracker):
                 # 2. ОСНОВНОЙ ТРЕЙЛИНГ-СТОП (Динамическая фиксация позиции)
                 drop_from_max = (position.max_price_usd - current_price) / position.max_price_usd
                 
-                # Трейлинг: всегда тянем с жестким шагом 15% от пика.
-                # Это реализует алгоритм безубытка (Breakeven): если монета сделала +30%, 
-                # откат на 15% закроет сделку на уровне +10.5% (мы не уйдем в минус!).
-                trail_distance = 0.15 
+                # Трейлинг: до Moonbag — 25% (стандарт для мемкоинов).
+                # После Moonbag — 35% (деньги уже в кармане, остаток бесплатный — пусть летит!).
+                trail_distance = 0.35 if getattr(position, "is_moonbag", False) else 0.25
                 
                 # Активируем трейлинг из config.py
                 if max_pnl_pct >= getattr(config, "TRAILING_ACTIVATION_PCT", 0.30):
