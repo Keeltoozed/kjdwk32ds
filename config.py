@@ -32,13 +32,13 @@ MAX_CONCURRENT_POSITIONS = 10  # концентрация капитала: ма
 MAX_DAILY_LOSS_USD = 18.0
 KILL_SWITCH_ENABLED = True
 MAX_DAILY_LOSS_PCT = 0.25
-STOP_LOSS_PCT = -0.25
+STOP_LOSS_PCT = -0.20  # -20%: достаточно для ракет, меньше чем -25% который давал -43% убытки
 SNIPER_ENTRIES_ENABLED = False
 TIME_EXIT_MINUTES = 60  # Если за 30 минут нет пампа - выходим
 TIME_EXIT_PROFIT_REQ = 0.0
 
 # Trailing Stop Config (Защита прибыли)
-TRAILING_ACTIVATION_PCT = 0.30
+TRAILING_ACTIVATION_PCT = 0.15  # Активируем трейлинг уже при +15% (было +30% — слишком поздно)
 TRAILING_DISTANCE_PCT = 0.30
 
 # Filtering

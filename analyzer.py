@@ -343,6 +343,42 @@ class Analyzer:
                 print(f"🚫 [VIP REVERSAL] {mint}: m1 {_m1:+.1f}% — всплеск откатывает, ждём pullback.")
                 return False
 
+        # ══════════════════════════════════════════════════════
+        # 🔴 ГЛОБАЛЬНЫЙ АНТИСКАМ БЛОК: MINT + FREEZE AUTHORITY
+        # Работает для ЛЮБЫХ токенов (и Pump, и Raydium)
+        # ══════════════════════════════════════════════════════
+        rpc_url = "https://mainnet.helius-rpc.com/?api-key=9efda6f4-fddb-42d3-a2b1-098bbbecd299"
+        mint_info_payload = {
+            "jsonrpc": "2.0", "id": 1,
+            "method": "getAccountInfo",
+            "params": [mint, {"encoding": "jsonParsed"}]
+        }
+        try:
+            import aiohttp
+            session = await self.get_session()
+            async with session.post(rpc_url, json=mint_info_payload, timeout=5) as resp:
+                mint_data = await resp.json()
+                parsed = mint_data.get("result", {}).get("value", {}).get("data", {}).get("parsed", {})
+                mint_info = parsed.get("info", {})
+                
+                mint_authority = mint_info.get("mintAuthority")
+                freeze_authority = mint_info.get("freezeAuthority")
+                
+                # Официальная программа Pump.fun — её authority разрешена
+                PUMPFUN_PROGRAM = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"
+                SYSTEM_PROGRAM = "11111111111111111111111111111111"
+                SAFE_AUTHORITIES = {PUMPFUN_PROGRAM, SYSTEM_PROGRAM, None, ""}
+                
+                if mint_authority and mint_authority not in SAFE_AUTHORITIES:
+                    print(f"🚫 [АНТИСКАМ] Mint Authority у ДЕВ-кошелька {mint_authority[:8]} у {mint[:8]} → СКАМ")
+                    return False
+                
+                if freeze_authority and freeze_authority not in SAFE_AUTHORITIES:
+                    print(f"🚫 [АНТИСКАМ] Freeze Authority у ДЕВ-кошелька {freeze_authority[:8]} у {mint[:8]} → СКАМ")
+                    return False
+        except Exception as e:
+            print(f"⚠️ Не удалось проверить Mint Authority: {e}")
+
         # === PULLBACK ENTRY (не-VIP): входим в ОТКАТ после импульса, не в вершину ===
         _lottery = False
         if not is_vip and pair_data:

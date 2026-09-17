@@ -364,11 +364,10 @@ class PumpFunSniper:
                             
                             
                             
-                            # Quarantine: Если достигли 60% (Proof of Traction ~ $12k MC), оцениваем ИИ
-                            # Задержка 5 сек — минимальная защита от самых быстрых Block 0 бандлов,
-                            # но не убивает вход по хорошей цене (было 15 сек — слишком поздно!)
+                            # Quarantine: Если достигли 80% (Proof of Traction ~ $20k MC), оцениваем ИИ
+                            # Задержка 5 сек — минимальная защита от самых быстрых Block 0 бандлов.
                             time_alive = time.time() - state.start_time
-                            if not state.is_ai_evaluated and progress >= 60.0 and len(state.trades) > 5 and time_alive >= 5.0:
+                            if not state.is_ai_evaluated and progress >= 80.0 and len(state.trades) > 5 and time_alive >= 5.0:
                                 cutoff = time.time() - config.SNIPER_BUYERS_WINDOW_MIN * 60
                                 buyers_window = sum(1 for ts in state.buy_wallets.values() if ts >= cutoff)
                                 if buyers_window < config.SNIPER_MIN_UNIQUE_BUYERS:
