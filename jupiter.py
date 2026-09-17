@@ -75,9 +75,10 @@ class JupiterAPI:
         input_mint = mint if is_sell else sol_mint
         output_mint = sol_mint if is_sell else mint
         
-        # 1. Динамическое проскальзывание: Вход жесткий лимит 10-15%, Выход агрессивный (15%), чтобы не застрять в падающей монете!
-        # Лучше получить Failed Transaction при покупке, чем купить на хаях после пампа снайпера.
-        slippage = 1500 if is_sell else 1500 
+        # 1. Жесткий контроль проскальзывания (Max Slippage) по просьбе пользователя.
+        # Устанавливаем лимит в 10% (1000 bps) как на вход, так и на выход. 
+        # Бот больше не будет спасать копейки с проскальзыванием 50-100%. Если цена ушла ниже 10% от заявленной - транзакция отменяется.
+        slippage = 1000
         quote_url = f"https://lite-api.jup.ag/swap/v1/quote?inputMint={input_mint}&outputMint={output_mint}&amount={amount_lamports}&slippageBps={slippage}"
         
         from http_client import get_session

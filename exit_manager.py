@@ -16,11 +16,26 @@ class ExitManager:
     async def start_monitoring(self, token_mint: str, dev_wallet: str, initial_dev_balance: int, on_panic_sell: Callable):
         """
         Запускает фоновый asyncio таск для мониторинга активной сделки.
-        Не блокирует основной цикл бота!
         """
+        # Динамически получаем стартовый баланс дева, так как он может быть любым (с учетом 6 decimals)
+        actual_initial_balance = initial_dev_balance
+        if initial_dev_balance == 1_000_000_000:
+            try:
+                from solana.rpc.async_api import AsyncClient
+                from solders.pubkey import Pubkey
+                dev_pubkey = Pubkey.from_string(dev_wallet)
+                mint_pubkey = Pubkey.from_string(token_mint)
+                response = await self.solana_client.get_token_accounts_by_owner(dev_pubkey, {"mint": mint_pubkey})
+                if response.value:
+                    account_info = await self.solana_client.get_account_info_json_parsed(response.value[0].pubkey)
+                    if account_info.value and hasattr(account_info.value.data, "parsed"):
+                        actual_initial_balance = int(account_info.value.data.parsed['info']['tokenAmount']['amount'])
+            except Exception as e:
+                print(f"⚠️ Не удалось получить стартовый баланс дева: {e}")
+
         self.active_trades[token_mint] = {
             "dev_wallet": dev_wallet,
-            "initial_dev_balance": initial_dev_balance,
+            "initial_dev_balance": actual_initial_balance,
             "start_time": time.time(),
             "last_tx_count": 0,
             "last_check_time": time.time()

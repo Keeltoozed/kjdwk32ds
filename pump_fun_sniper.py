@@ -365,7 +365,9 @@ class PumpFunSniper:
                             
                             
                             # Стандартный Quarantine: Если достигли 60% (Proof of Traction ~ $12k MC), оцениваем ИИ
-                            if not state.is_ai_evaluated and progress >= 60.0 and len(state.trades) > 5:
+                            # + ДОБАВЛЕНА ЗАДЕРЖКА 15 СЕКУНД ОТ СОЗДАНИЯ (ЗАЩИТА ОТ BLOCK 0 BUNDLES!)
+                            time_alive = time.time() - state.start_time
+                            if not state.is_ai_evaluated and progress >= 60.0 and len(state.trades) > 5 and time_alive >= 15.0:
                                 cutoff = time.time() - config.SNIPER_BUYERS_WINDOW_MIN * 60
                                 buyers_window = sum(1 for ts in state.buy_wallets.values() if ts >= cutoff)
                                 if buyers_window < config.SNIPER_MIN_UNIQUE_BUYERS:

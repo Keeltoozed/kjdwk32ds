@@ -114,13 +114,24 @@ async def position_manager_loop(analyzer, tracker):
                         tracker.close_position(mint, current_price, f"Scalp Profit (peak +{max_pnl_pct*100:.0f}%)")
                         continue
                         
-                # 2. ОСНОВНОЙ ТРЕЙЛИНГ-СТОП (Динамическая фиксация всей позиции)
+                # === MOONBAG: Возврат инвестиций (Жесткий Take Profit) ===
+                # При +60% профита мгновенно продаем 50% позиции. Забираем свои деньги.
+                if max_pnl_pct >= 0.60 and not getattr(position, "is_moonbag", False):
+                    tracker.partial_close_position(mint, current_price, 0.50, "Take Profit +60% (Risk Free)")
+                    continue
+
+                # 2. ОСНОВНОЙ ТРЕЙЛИНГ-СТОП (Динамическая фиксация позиции)
                 drop_from_max = (position.max_price_usd - current_price) / position.max_price_usd
                 
+                # Трейлинг: всегда тянем с жестким шагом 15% от пика.
+                # Это реализует алгоритм безубытка (Breakeven): если монета сделала +30%, 
+                # откат на 15% закроет сделку на уровне +10.5% (мы не уйдем в минус!).
+                trail_distance = 0.15 
+                
                 # Активируем трейлинг из config.py
-                if max_pnl_pct >= config.TRAILING_ACTIVATION_PCT:
-                    if drop_from_max >= config.TRAILING_DISTANCE_PCT:
-                        tracker.close_position(mint, current_price, f"Diamond Hands Trailing (+{max_pnl_pct*100:.0f}% peak)")
+                if max_pnl_pct >= getattr(config, "TRAILING_ACTIVATION_PCT", 0.30):
+                    if drop_from_max >= trail_distance:
+                        tracker.close_position(mint, current_price, f"Trailing Stop (peak +{max_pnl_pct*100:.0f}%, drop {drop_from_max*100:.0f}%)")
                         continue
                             
                 # 3. ЖЕСТКИЙ Stop Loss из config.py
