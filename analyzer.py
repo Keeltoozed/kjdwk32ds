@@ -363,6 +363,13 @@ class Analyzer:
             "params": [mint, {"encoding": "jsonParsed"}]
         }
         
+        fake_headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+            "Accept": "application/json, text/plain, */*",
+            "Origin": "https://explorer.solana.com",
+            "Referer": "https://explorer.solana.com/"
+        }
+        
         mint_data = None
         try:
             import aiohttp
@@ -379,12 +386,16 @@ class Analyzer:
                 # Если Helius упал, перебираем резервные узлы
                 for fallback_url in fallback_rpcs:
                     try:
-                        async with session.post(fallback_url, json=mint_info_payload, timeout=5) as resp:
+                        async with session.post(fallback_url, json=mint_info_payload, headers=fake_headers, timeout=10) as resp:
                             if resp.status == 200:
                                 mint_data = await resp.json(content_type=None)
-                                break  # Успешно получили данные, выходим из цикла
-                    except Exception:
-                        continue # Пробуем следующий узел
+                                break
+                            else:
+                                err_txt = await resp.text()
+                                print(f"⚠️ Резервный {fallback_url} выдал {resp.status}: {err_txt[:100]}")
+                    except Exception as ex:
+                        print(f"⚠️ Ошибка резервного {fallback_url}: {ex}")
+                        continue
                         
             if mint_data:
                 parsed = mint_data.get("result", {}).get("value", {}).get("data", {}).get("parsed", {})
@@ -576,6 +587,13 @@ class Analyzer:
                 "https://api.mainnet-beta.solana.com"
             ]
             
+            fake_headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+                "Accept": "application/json, text/plain, */*",
+                "Origin": "https://explorer.solana.com",
+                "Referer": "https://explorer.solana.com/"
+            }
+            
             data = None
             try:
                 async with session.post(rpc_url, json=payload, timeout=5) as resp:
@@ -586,11 +604,15 @@ class Analyzer:
             except Exception as e:
                 for fallback_url in fallback_rpcs:
                     try:
-                        async with session.post(fallback_url, json=payload, timeout=5) as resp:
+                        async with session.post(fallback_url, json=payload, headers=fake_headers, timeout=10) as resp:
                             if resp.status == 200:
                                 data = await resp.json(content_type=None)
                                 break
-                    except Exception:
+                            else:
+                                err_txt = await resp.text()
+                                print(f"⚠️ Top-10 Резервный {fallback_url} выдал {resp.status}: {err_txt[:100]}")
+                    except Exception as ex:
+                        print(f"⚠️ Ошибка Top-10 резервного {fallback_url}: {ex}")
                         continue
                         
             if data:
