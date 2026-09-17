@@ -344,20 +344,49 @@ class Analyzer:
                 return False
 
         # ══════════════════════════════════════════════════════
+        # ══════════════════════════════════════════════════════
         # 🔴 ГЛОБАЛЬНЫЙ АНТИСКАМ БЛОК: MINT + FREEZE AUTHORITY
         # Работает для ЛЮБЫХ токенов (и Pump, и Raydium)
         # ══════════════════════════════════════════════════════
-        rpc_url = "https://mainnet.helius-rpc.com/?api-key=9efda6f4-fddb-42d3-a2b1-098bbbecd299"
+        rpc_url = getattr(config, "HELIUS_RPC_URL", "https://mainnet.helius-rpc.com/?api-key=9efda6f4-fddb-42d3-a2b1-098bbbecd299")
+        
+        # Список надежных публичных узлов для резервного подключения
+        fallback_rpcs = [
+            "https://rpc.ankr.com/solana",
+            "https://solana-rpc.publicnode.com",
+            "https://api.mainnet-beta.solana.com"
+        ]
+        
         mint_info_payload = {
             "jsonrpc": "2.0", "id": 1,
             "method": "getAccountInfo",
             "params": [mint, {"encoding": "jsonParsed"}]
         }
+        
+        mint_data = None
         try:
             import aiohttp
             session = await self.get_session()
-            async with session.post(rpc_url, json=mint_info_payload, timeout=5) as resp:
-                mint_data = await resp.json()
+            
+            # Пробуем основной Helius
+            try:
+                async with session.post(rpc_url, json=mint_info_payload, timeout=5) as resp:
+                    if resp.status == 200:
+                        mint_data = await resp.json(content_type=None)
+                    else:
+                        raise Exception(f"HTTP {resp.status} - {await resp.text()}")
+            except Exception as e:
+                # Если Helius упал, перебираем резервные узлы
+                for fallback_url in fallback_rpcs:
+                    try:
+                        async with session.post(fallback_url, json=mint_info_payload, timeout=5) as resp:
+                            if resp.status == 200:
+                                mint_data = await resp.json(content_type=None)
+                                break  # Успешно получили данные, выходим из цикла
+                    except Exception:
+                        continue # Пробуем следующий узел
+                        
+            if mint_data:
                 parsed = mint_data.get("result", {}).get("value", {}).get("data", {}).get("parsed", {})
                 mint_info = parsed.get("info", {})
                 
@@ -376,8 +405,13 @@ class Analyzer:
                 if freeze_authority and freeze_authority not in SAFE_AUTHORITIES:
                     print(f"🚫 [АНТИСКАМ] Freeze Authority у ДЕВ-кошелька {freeze_authority[:8]} у {mint[:8]} → СКАМ")
                     return False
+            else:
+                # Если после перебора ВСЕХ узлов мы так и не получили данные
+                print(f"⚠️ Не удалось проверить Mint Authority (все RPC недоступны). Блокируем вход от греха подальше.")
+                return False
         except Exception as e:
-            print(f"⚠️ Не удалось проверить Mint Authority: {e}")
+            print(f"⚠️ Критическая ошибка при проверке Mint Authority: {str(e)[:50]}. Блокируем вход.")
+            return False
 
         # === PULLBACK ENTRY (не-VIP): входим в ОТКАТ после импульса, не в вершину ===
         _lottery = False
@@ -534,10 +568,33 @@ class Analyzer:
         try:
             import aiohttp
             session = await self.get_session()
-            if True:
+            rpc_url = getattr(config, "HELIUS_RPC_URL", "https://mainnet.helius-rpc.com/?api-key=9efda6f4-fddb-42d3-a2b1-098bbbecd299")
+            
+            fallback_rpcs = [
+                "https://rpc.ankr.com/solana",
+                "https://solana-rpc.publicnode.com",
+                "https://api.mainnet-beta.solana.com"
+            ]
+            
+            data = None
+            try:
                 async with session.post(rpc_url, json=payload, timeout=5) as resp:
-                    data = await resp.json()
-                    accounts = data.get("result", {}).get("value", [])
+                    if resp.status == 200:
+                        data = await resp.json(content_type=None)
+                    else:
+                        raise Exception(f"HTTP {resp.status} - {await resp.text()}")
+            except Exception as e:
+                for fallback_url in fallback_rpcs:
+                    try:
+                        async with session.post(fallback_url, json=payload, timeout=5) as resp:
+                            if resp.status == 200:
+                                data = await resp.json(content_type=None)
+                                break
+                    except Exception:
+                        continue
+                        
+            if data:
+                accounts = data.get("result", {}).get("value", [])
                     total_supply = 1_000_000_000
                     if accounts:
                         # Exclude bonding curve account which holds ~80% initially
