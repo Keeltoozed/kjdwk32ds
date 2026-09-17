@@ -595,33 +595,33 @@ class Analyzer:
                         
             if data:
                 accounts = data.get("result", {}).get("value", [])
-                    total_supply = 1_000_000_000
-                    if accounts:
-                        # Exclude bonding curve account which holds ~80% initially
-                        # We just sum the remaining top 9 accounts
-                        non_curve_accounts = [float(acc["uiAmount"]) for acc in accounts if float(acc["uiAmount"]) < 800_000_000]
-                        top_10_amounts = non_curve_accounts[:10]
-                        top_10_holding_pct = (sum(top_10_amounts) / total_supply) * 100
-                        if top_10_amounts:
-                            dev_holding_pct = (top_10_amounts[0] / total_supply) * 100 
-                            
-                        # ЖЕСТКАЯ ЗАЩИТА: Топ-10 кошельков (без пула) не должны держать >20% саплая.
-                        # Иначе это монополия создателя, готовая к дампу (Rugpull).
-                        if top_10_holding_pct > 20.0:
-                            print(f"🚫 [Защита от дампа] Топ-10 холдеров держат {top_10_holding_pct:.1f}% > 20% у {mint}.")
-                            return False
-                        # Защита от Jito-бандлов (Sybil-атаки):
-                        # Скаммеры часто раскидывают одинаковые суммы по свежим кошелькам.
-                        # Если 3 и более кошельков в топе имеют одинаковый баланс (с погрешностью) - это бандл.
-                        if len(top_10_amounts) >= 3:
-                            rounded_amounts = [round(amt, -4) for amt in top_10_amounts if amt > 1000000]
-                            if rounded_amounts:
-                                # Ищем самый частый баланс
-                                from collections import Counter
-                                counts = Counter(rounded_amounts)
-                                if counts.most_common(1)[0][1] >= 3:
-                                    print(f"🚫 Мусор: Обнаружен Jito-бандл (Sybil attack) у {mint}.")
-                                    return False
+                total_supply = 1_000_000_000
+                if accounts:
+                    # Exclude bonding curve account which holds ~80% initially
+                    # We just sum the remaining top 9 accounts
+                    non_curve_accounts = [float(acc["uiAmount"]) for acc in accounts if float(acc["uiAmount"]) < 800_000_000]
+                    top_10_amounts = non_curve_accounts[:10]
+                    top_10_holding_pct = (sum(top_10_amounts) / total_supply) * 100
+                    if top_10_amounts:
+                        dev_holding_pct = (top_10_amounts[0] / total_supply) * 100 
+                        
+                    # ЖЕСТКАЯ ЗАЩИТА: Топ-10 кошельков (без пула) не должны держать >20% саплая.
+                    # Иначе это монополия создателя, готовая к дампу (Rugpull).
+                    if top_10_holding_pct > 20.0:
+                        print(f"🚫 [Защита от дампа] Топ-10 холдеров держат {top_10_holding_pct:.1f}% > 20% у {mint}.")
+                        return False
+                    # Защита от Jito-бандлов (Sybil-атаки):
+                    # Скаммеры часто раскидывают одинаковые суммы по свежим кошелькам.
+                    # Если 3 и более кошельков в топе имеют одинаковый баланс (с погрешностью) - это бандл.
+                    if len(top_10_amounts) >= 3:
+                        rounded_amounts = [round(amt, -4) for amt in top_10_amounts if amt > 1000000]
+                        if rounded_amounts:
+                            # Ищем самый частый баланс
+                            from collections import Counter
+                            counts = Counter(rounded_amounts)
+                            if counts.most_common(1)[0][1] >= 3:
+                                print(f"🚫 Мусор: Обнаружен Jito-бандл (Sybil attack) у {mint}.")
+                                return False
         except Exception as e:
             print(f"Helius RPC error: {e}")
         
