@@ -302,20 +302,30 @@ class Analyzer:
                 
         return unique_buyers, smart_money_inflow
 
-    def check_hyper_rocket_momentum(self, pair_data: dict) -> bool:
+    async def check_hyper_rocket_momentum(self, mint: str, pair_data: dict) -> bool:
         """
         VIP-полоса для Гипер-Ракет:
-        Ищет аномальные всплески покупок (>50 покупок) и объема (>$30,000) в первые 5 минут.
-        Позволяет пропустить стандартные жесткие фильтры.
+        Ищет аномальные всплески покупок (>50) и объема (>$30k), 
+        с обязательной проверкой на уникальных покупателей (Wash Trading фильтр).
         """
         txns_m5 = pair_data.get("txns", {}).get("m5", {})
         buys_m5 = txns_m5.get("buys", 0)
         volume_m5 = pair_data.get("volume", {}).get("m5", 0)
         
-        # > 50 покупок И > $30k объема в 5-минутном окне (Реальное FOMO)
+        # Базовые условия объема
         if buys_m5 >= 50 and volume_m5 >= 30000:
-            return True
+            # Запрашиваем реальное количество кошельков через Helius
+            unique_buyers, _ = await self.get_helius_transaction_metrics(mint)
+            
+            # Если 50 покупок сделали меньше 30 уникальных людей — это накрутка ботами создателя
+            if unique_buyers > 30:
+                return True
+            else:
+                print(f"🚫 [WASH TRADING] {mint}: 50+ покупок, но всего {unique_buyers} реальных кошельков. Скам-накрутка.")
+                return False
+                
         return False
+
         
     async def analyze_token(self, mint: str) -> bool:
         # Smart Router
@@ -346,7 +356,7 @@ class Analyzer:
             print(f"🚫 Мусор: Токен {symbol} мимикрирует под известный бренд/мем. Это 100% scam.")
             return False
             
-        is_vip = self.check_hyper_rocket_momentum(pair_data)
+        is_vip = await self.check_hyper_rocket_momentum(pair_data)
 
         # === VIP OVERHEAT GUARD: не покупаем вершину вертикали ===
         if is_vip and pair_data:
@@ -393,7 +403,7 @@ class Analyzer:
                 if _m1 > getattr(config, "PULLBACK_M1_MAX_PCT", 0.05) * 100:
                     print(f"🚫 [ENTRY] {mint}: m1 {_m1:+.1f}% — вертикаль в процессе, купим вершину. Ждём откат.")
                     return False
-                if _m1 < getattr(config, "PULLBACK_M1_MIN_PCT", -0.10) * 100:
+                if _m1 < getattr(config, "PULLBACK_M1_MIN_PCT", -0.02) * 100:
                     print(f"🚫 [ENTRY] {mint}: m1 {_m1:+.1f}% — импульс схлопнулся, это дамп, не откат.")
                     return False
                 if _h1 > getattr(config, "PULLBACK_MAX_H1_PCT", 1.5) * 100:
@@ -427,7 +437,7 @@ class Analyzer:
         
         # Защита от микро-пулов (Scam сетки типа Fly)
         liquidity = pair_data.get("liquidity", {}).get("usd", 0)
-        min_liq = getattr(config, "MIN_LIQUIDITY", 15000)
+        min_liq = getattr(config, "MIN_LIQUIDITY", 40000)
         if liquidity < min_liq and not is_vip and pair_data.get("dexId") != "pump":
             print(f"📉 Изоляция: {symbol} имеет микро-пул (${liquidity:.0f} < ${min_liq//1000}k). Риск 100% проскальзывания.")
             return False
@@ -452,7 +462,7 @@ class Analyzer:
         has_website = len(websites) > 0
         
         # Смягченный фильтр: достаточно хотя бы одной соцсети или сайта (пропускаем для VIP)
-        if not (has_twitter or has_tg or has_website) and not is_vip:
+        if not (has_twitter or has_tg or has_website):
             print(f"🚫 Мусор: У {mint} вообще нет ни одной соцсети или сайта.")
             return False
             
@@ -623,7 +633,7 @@ class Analyzer:
         if pair_data.get("dexId") != "pump":
             return False
             
-        is_vip = self.check_hyper_rocket_momentum(pair_data)
+        is_vip = await self.check_hyper_rocket_momentum(pair_data)
         if is_vip:
             print(f"🚀🚀🚀 [HYPER-ROCKET BYPASS] Токен {mint} летит в космос! Игнорируем карантин возраста и соцсетей.")
             
@@ -672,9 +682,7 @@ class Analyzer:
         print(f"🤖 XGBoost [DEX Poller]: {mint} | Score: {conf:.1f}%")
         import config
         threshold = 20.0
-        if is_vip:
-            threshold = 10.0 # Для VIP ракет снижаем порог, но НЕ отключаем ИИ полностью! Скам ИИ должен фильтровать
-            
+
         return conf >= threshold
 
     async def analyze_token_raydium(self, mint: str, pair_data: dict) -> bool:
@@ -736,8 +744,6 @@ class Analyzer:
             
             print(f"🧠 Raydium XGBoost (Безлимит): {mint} | Score: {conf:.1f}%")
             import config; threshold = 15.0
-            if self.check_hyper_rocket_momentum(pair_data):
-                threshold = 0.0
             
             is_buy = conf >= threshold
             
