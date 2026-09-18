@@ -345,134 +345,7 @@ class Analyzer:
 
         # ══════════════════════════════════════════════════════
         # ══════════════════════════════════════════════════════
-        # 🔴 ГЛОБАЛЬНЫЙ АНТИСКАМ БЛОК: MINT + FREEZE AUTHORITY
-        # Работает для ЛЮБЫХ токенов (и Pump, и Raydium)
-        # ══════════════════════════════════════════════════════
-        rpc_url = getattr(config, "HELIUS_RPC_URL", "https://mainnet.helius-rpc.com/?api-key=9efda6f4-fddb-42d3-a2b1-098bbbecd299")
         
-        # Список надежных публичных узлов для резервного подключения
-        fallback_rpcs = [
-            "https://rpc.ankr.com/solana",
-            "https://solana-rpc.publicnode.com",
-            "https://api.mainnet-beta.solana.com"
-        ]
-        
-        mint_info_payload = {
-            "jsonrpc": "2.0", "id": 1,
-            "method": "getAccountInfo",
-            "params": [mint, {"encoding": "jsonParsed"}]
-        }
-        
-        fake_headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
-            "Accept": "application/json, text/plain, */*",
-            "Origin": "https://explorer.solana.com",
-            "Referer": "https://explorer.solana.com/"
-        }
-        
-        mint_data = None
-        try:
-            import aiohttp
-            session = await self.get_session()
-            
-            # Пробуем основной Helius
-            try:
-                async with session.post(rpc_url, json=mint_info_payload, timeout=5) as resp:
-                    if resp.status == 200:
-                        mint_data = await resp.json(content_type=None)
-                    else:
-                        raise Exception(f"HTTP {resp.status} - {await resp.text()}")
-            except Exception as e:
-                # Если Helius упал, перебираем резервные узлы
-                for fallback_url in fallback_rpcs:
-                    try:
-                        async with session.post(fallback_url, json=mint_info_payload, headers=fake_headers, timeout=10) as resp:
-                            if resp.status == 200:
-                                mint_data = await resp.json(content_type=None)
-                                break
-                            else:
-                                err_txt = await resp.text()
-                                print(f"⚠️ Резервный {fallback_url} выдал {resp.status}: {err_txt[:100]}")
-                    except Exception as ex:
-                        print(f"⚠️ Ошибка резервного {fallback_url}: {ex}")
-                        continue
-                        
-            if mint_data:
-                parsed = mint_data.get("result", {}).get("value", {}).get("data", {}).get("parsed", {})
-                mint_info = parsed.get("info", {})
-                
-                mint_authority = mint_info.get("mintAuthority")
-                freeze_authority = mint_info.get("freezeAuthority")
-                
-                # Официальная программа Pump.fun — её authority разрешена
-                PUMPFUN_PROGRAM = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"
-                SYSTEM_PROGRAM = "11111111111111111111111111111111"
-                SAFE_AUTHORITIES = {PUMPFUN_PROGRAM, SYSTEM_PROGRAM, None, ""}
-                
-                if mint_authority and mint_authority not in SAFE_AUTHORITIES:
-                    print(f"🚫 [АНТИСКАМ] Mint Authority у ДЕВ-кошелька {mint_authority[:8]} у {mint[:8]} → СКАМ")
-                    return False
-                
-                if freeze_authority and freeze_authority not in SAFE_AUTHORITIES:
-                    print(f"🚫 [АНТИСКАМ] Freeze Authority у ДЕВ-кошелька {freeze_authority[:8]} у {mint[:8]} → СКАМ")
-                    return False
-            else:
-                # Если после перебора ВСЕХ узлов мы так и не получили данные
-                print(f"⚠️ Не удалось проверить Mint Authority (все RPC недоступны). Блокируем вход от греха подальше.")
-                return False
-        except Exception as e:
-            print(f"⚠️ Критическая ошибка при проверке Mint Authority: {str(e)[:50]}. Блокируем вход.")
-            return False
-
-        # === ГЛОБАЛЬНЫЙ JITO BUNDLE (SYBIL) CHECK ===
-        top10_payload = {"jsonrpc": "2.0", "id": 1, "method": "getTokenLargestAccounts", "params": [mint]}
-        try:
-            bundle_data = None
-            try:
-                async with session.post(rpc_url, json=top10_payload, timeout=5) as resp:
-                    if resp.status == 200: bundle_data = await resp.json(content_type=None)
-            except Exception: pass
-            
-            if not bundle_data:
-                for fallback_url in fallback_rpcs:
-                    try:
-                        async with session.post(fallback_url, json=top10_payload, headers=fake_headers, timeout=10) as resp:
-                            if resp.status == 200:
-                                bundle_data = await resp.json(content_type=None)
-                                break
-                    except Exception: continue
-
-            if bundle_data:
-                accounts = bundle_data.get("result", {}).get("value", [])
-                if accounts:
-                    non_curve_accounts = [float(acc["uiAmount"]) for acc in accounts if float(acc["uiAmount"]) < 800_000_000]
-                    top_10_amounts = non_curve_accounts[:10]
-                    if len(top_10_amounts) >= 3:
-                        rounded_amounts = [round(amt, -6) for amt in top_10_amounts if amt > 1000000]
-                        if rounded_amounts:
-                            from collections import Counter
-                            counts = Counter(rounded_amounts)
-                            if counts.most_common(1)[0][1] >= 3:
-                                print(f"🚫 [АНТИСКАМ] Обнаружен Jito-бандл (Сивил атака) у {mint}. Блокируем.")
-                                return False
-                    
-                    top_10_sum_pct = (sum(top_10_amounts) / 1_000_000_000.0) * 100
-                    dev_holding_pct = (top_10_amounts[0] / 1_000_000_000.0) * 100 if top_10_amounts else 0.0
-                    self._last_top10 = top_10_sum_pct
-                    self._last_dev = dev_holding_pct
-                    
-                    is_pump = pair_data and pair_data.get("dexId") == "pump"
-                    max_allowed_pct = 20.0 if is_pump else 45.0
-                    if top_10_sum_pct > max_allowed_pct:
-                        print(f"🚫 [АНТИСКАМ] Топ-10 держат {top_10_sum_pct:.1f}% (Лимит {max_allowed_pct}%). Блокируем.")
-                        return False
-            else:
-                print(f"⚠️ Не удалось проверить Jito-бандлы (RPC недоступны). Блокируем вход.")
-                return False
-        except Exception as e:
-            print(f"⚠️ Ошибка Jito-bundle: {e}")
-            return False
-
         # === PULLBACK ENTRY (не-VIP): входим в ОТКАТ после импульса, не в вершину ===
         _lottery = False
         if not is_vip and pair_data:
@@ -566,6 +439,152 @@ class Analyzer:
             print(f"🚫 Мусор: У {mint} вообще нет ни одной соцсети или сайта.")
             return False
             
+        # 🔴 ГЛОБАЛЬНЫЙ АНТИСКАМ БЛОК: MINT + FREEZE AUTHORITY
+        # Работает для ЛЮБЫХ токенов (и Pump, и Raydium)
+        # ══════════════════════════════════════════════════════
+        rpc_url = getattr(config, "HELIUS_RPC_URL", "https://mainnet.helius-rpc.com/?api-key=9efda6f4-fddb-42d3-a2b1-098bbbecd299")
+        
+        # Список надежных публичных узлов для резервного подключения
+        fallback_rpcs = [
+            "https://api.mainnet-beta.solana.com",
+            "https://solana-api.projectserum.com",
+            "https://rpc.solscan.com",
+            "https://free.rpcpool.com",
+            "https://api.mainnet.solana.com",
+            "https://solana-rpc.publicnode.com"
+        ]
+        
+        mint_info_payload = {
+            "jsonrpc": "2.0", "id": 1,
+            "method": "getAccountInfo",
+            "params": [mint, {"encoding": "jsonParsed"}]
+        }
+        
+        fake_headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+            "Accept": "application/json, text/plain, */*",
+            "Origin": "https://explorer.solana.com",
+            "Referer": "https://explorer.solana.com/"
+        }
+        
+        mint_data = None
+        try:
+            import aiohttp
+            session = await self.get_session()
+            
+            # Пробуем основной Helius
+            try:
+                async with session.post(rpc_url, json=mint_info_payload, timeout=5) as resp:
+                    if resp.status == 200:
+                        mint_data = await resp.json(content_type=None)
+                    else:
+                        raise Exception(f"HTTP {resp.status} - {await resp.text()}")
+            except Exception as e:
+                # Если Helius упал, перебираем резервные узлы
+                for fallback_url in fallback_rpcs:
+                    try:
+                        async with session.post(fallback_url, json=mint_info_payload, headers=fake_headers, timeout=10) as resp:
+                            if resp.status == 200:
+                                mint_data = await resp.json(content_type=None)
+                                break
+                            else:
+                                err_txt = await resp.text()
+                                print(f"⚠️ Резервный {fallback_url} выдал {resp.status}: {err_txt[:100]}")
+                    except Exception as ex:
+                        print(f"⚠️ Ошибка резервного {fallback_url}: {ex}")
+                        continue
+                        
+            if mint_data:
+                parsed = mint_data.get("result", {}).get("value", {}).get("data", {}).get("parsed", {})
+                mint_info = parsed.get("info", {})
+                
+                mint_authority = mint_info.get("mintAuthority")
+                freeze_authority = mint_info.get("freezeAuthority")
+                
+                # Официальная программа Pump.fun — её authority разрешена
+                PUMPFUN_PROGRAM = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"
+                SYSTEM_PROGRAM = "11111111111111111111111111111111"
+                SAFE_AUTHORITIES = {PUMPFUN_PROGRAM, SYSTEM_PROGRAM, None, ""}
+                
+                if mint_authority and mint_authority not in SAFE_AUTHORITIES:
+                    print(f"🚫 [АНТИСКАМ] Mint Authority у ДЕВ-кошелька {mint_authority[:8]} у {mint[:8]} → СКАМ")
+                    return False
+                
+                if freeze_authority and freeze_authority not in SAFE_AUTHORITIES:
+                    print(f"🚫 [АНТИСКАМ] Freeze Authority у ДЕВ-кошелька {freeze_authority[:8]} у {mint[:8]} → СКАМ")
+                    return False
+            else:
+                # Если после перебора ВСЕХ узлов мы так и не получили данные
+                print(f"⚠️ Не удалось проверить Mint Authority (все RPC недоступны). Блокируем вход от греха подальше.")
+                return False
+        except Exception as e:
+            print(f"⚠️ Критическая ошибка при проверке Mint Authority: {str(e)[:50]}. Блокируем вход.")
+            return False
+
+        # === ГЛОБАЛЬНЫЙ JITO BUNDLE (SYBIL) CHECK ===
+        top10_payload = {"jsonrpc": "2.0", "id": 1, "method": "getTokenLargestAccounts", "params": [mint]}
+        try:
+            bundle_data = None
+            
+            # 1. Helius 2. Alchemy (пользовательский)
+            heavy_rpcs = [
+                rpc_url,
+                "https://solana-mainnet.g.alchemy.com/v2/alch_wwSmrv5RZmrq66-lSNekM"
+            ]
+            
+            for heavy_url in heavy_rpcs:
+                try:
+                    async with session.post(heavy_url, json=top10_payload, headers=fake_headers, timeout=5) as resp:
+                        if resp.status == 200:
+                            bundle_data = await resp.json(content_type=None)
+                            if bundle_data and "result" in bundle_data:
+                                break
+                except Exception:
+                    continue
+            
+            # Если платные/выделенные ключи отвалились, пробуем публичные (но они часто банят)
+            if not bundle_data or "result" not in bundle_data:
+                for fallback_url in fallback_rpcs:
+                    try:
+                        async with session.post(fallback_url, json=top10_payload, headers=fake_headers, timeout=5) as resp:
+                            if resp.status == 200:
+                                res = await resp.json(content_type=None)
+                                if res and "result" in res:
+                                    bundle_data = res
+                                    break
+                    except Exception: continue
+
+            if bundle_data:
+                accounts = bundle_data.get("result", {}).get("value", [])
+                if accounts:
+                    non_curve_accounts = [float(acc["uiAmount"]) for acc in accounts if float(acc["uiAmount"]) < 800_000_000]
+                    top_10_amounts = non_curve_accounts[:10]
+                    if len(top_10_amounts) >= 3:
+                        rounded_amounts = [round(amt, -6) for amt in top_10_amounts if amt > 1000000]
+                        if rounded_amounts:
+                            from collections import Counter
+                            counts = Counter(rounded_amounts)
+                            if counts.most_common(1)[0][1] >= 3:
+                                print(f"🚫 [АНТИСКАМ] Обнаружен Jito-бандл (Сивил атака) у {mint}. Блокируем.")
+                                return False
+                    
+                    top_10_sum_pct = (sum(top_10_amounts) / 1_000_000_000.0) * 100
+                    dev_holding_pct = (top_10_amounts[0] / 1_000_000_000.0) * 100 if top_10_amounts else 0.0
+                    self._last_top10 = top_10_sum_pct
+                    self._last_dev = dev_holding_pct
+                    
+                    is_pump = pair_data and pair_data.get("dexId") == "pump"
+                    max_allowed_pct = 20.0 if is_pump else 45.0
+                    if top_10_sum_pct > max_allowed_pct:
+                        print(f"🚫 [АНТИСКАМ] Топ-10 держат {top_10_sum_pct:.1f}% (Лимит {max_allowed_pct}%). Блокируем.")
+                        return False
+            else:
+                print(f"⚠️ Не удалось проверить Jito-бандлы (RPC недоступны). Блокируем вход.")
+                return False
+        except Exception as e:
+            print(f"⚠️ Ошибка Jito-bundle: {e}")
+            return False
+
         if is_vip or _lottery:
             print(f"🚀 [FAST TRACK] {symbol}: гейты пройдены, передаем на проверку холдеров (Снайперы/Бандлы).")
 
