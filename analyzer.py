@@ -903,6 +903,7 @@ class Analyzer:
                 async with session.get(url, headers=headers, timeout=3) as resp:
                     if resp.status == 200:
                         data = await resp.json()
+                        
                         coin_data = data.get("data", {})
                         
                         return {
