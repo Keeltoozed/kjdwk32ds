@@ -424,6 +424,55 @@ class Analyzer:
             print(f"⚠️ Критическая ошибка при проверке Mint Authority: {str(e)[:50]}. Блокируем вход.")
             return False
 
+        # === ГЛОБАЛЬНЫЙ JITO BUNDLE (SYBIL) CHECK ===
+        top10_payload = {"jsonrpc": "2.0", "id": 1, "method": "getTokenLargestAccounts", "params": [mint]}
+        try:
+            bundle_data = None
+            try:
+                async with session.post(rpc_url, json=top10_payload, timeout=5) as resp:
+                    if resp.status == 200: bundle_data = await resp.json(content_type=None)
+            except Exception: pass
+            
+            if not bundle_data:
+                for fallback_url in fallback_rpcs:
+                    try:
+                        async with session.post(fallback_url, json=top10_payload, headers=fake_headers, timeout=10) as resp:
+                            if resp.status == 200:
+                                bundle_data = await resp.json(content_type=None)
+                                break
+                    except Exception: continue
+
+            if bundle_data:
+                accounts = bundle_data.get("result", {}).get("value", [])
+                if accounts:
+                    non_curve_accounts = [float(acc["uiAmount"]) for acc in accounts if float(acc["uiAmount"]) < 800_000_000]
+                    top_10_amounts = non_curve_accounts[:10]
+                    if len(top_10_amounts) >= 3:
+                        rounded_amounts = [round(amt, -6) for amt in top_10_amounts if amt > 1000000]
+                        if rounded_amounts:
+                            from collections import Counter
+                            counts = Counter(rounded_amounts)
+                            if counts.most_common(1)[0][1] >= 3:
+                                print(f"🚫 [АНТИСКАМ] Обнаружен Jito-бандл (Сивил атака) у {mint}. Блокируем.")
+                                return False
+                    
+                    top_10_sum_pct = (sum(top_10_amounts) / 1_000_000_000.0) * 100
+                    dev_holding_pct = (top_10_amounts[0] / 1_000_000_000.0) * 100 if top_10_amounts else 0.0
+                    self._last_top10 = top_10_sum_pct
+                    self._last_dev = dev_holding_pct
+                    
+                    is_pump = pair_data and pair_data.get("dexId") == "pump"
+                    max_allowed_pct = 20.0 if is_pump else 45.0
+                    if top_10_sum_pct > max_allowed_pct:
+                        print(f"🚫 [АНТИСКАМ] Топ-10 держат {top_10_sum_pct:.1f}% (Лимит {max_allowed_pct}%). Блокируем.")
+                        return False
+            else:
+                print(f"⚠️ Не удалось проверить Jito-бандлы (RPC недоступны). Блокируем вход.")
+                return False
+        except Exception as e:
+            print(f"⚠️ Ошибка Jito-bundle: {e}")
+            return False
+
         # === PULLBACK ENTRY (не-VIP): входим в ОТКАТ после импульса, не в вершину ===
         _lottery = False
         if not is_vip and pair_data:
@@ -518,8 +567,7 @@ class Analyzer:
             return False
             
         if is_vip or _lottery:
-            print(f"🚀 [FAST TRACK] {symbol}: гейты пройдены с подтверждением объёма — вход без ML-вето.")
-            return True
+            print(f"🚀 [FAST TRACK] {symbol}: гейты пройдены, передаем на проверку холдеров (Снайперы/Бандлы).")
 
         dex_id = pair_data.get("dexId")
         created_at = pair_data.get("pairCreatedAt", 0)
@@ -567,87 +615,9 @@ class Analyzer:
         has_website = len(websites) > 0
         has_socials = 1 if (has_twitter and (has_website or has_tg)) else 0
         
-        # Get holders via Helius RPC
-        dev_holding_pct, top_10_holding_pct = 0.0, 0.0
-        rpc_url = "https://mainnet.helius-rpc.com/?api-key=9efda6f4-fddb-42d3-a2b1-098bbbecd299"
-        payload = {
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "getTokenLargestAccounts",
-            "params": [mint]
-        }
-        try:
-            import aiohttp
-            session = await self.get_session()
-            rpc_url = getattr(config, "HELIUS_RPC_URL", "https://mainnet.helius-rpc.com/?api-key=9efda6f4-fddb-42d3-a2b1-098bbbecd299")
-            
-            fallback_rpcs = [
-                "https://rpc.ankr.com/solana",
-                "https://solana-rpc.publicnode.com",
-                "https://api.mainnet-beta.solana.com"
-            ]
-            
-            fake_headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
-                "Accept": "application/json, text/plain, */*",
-                "Origin": "https://explorer.solana.com",
-                "Referer": "https://explorer.solana.com/"
-            }
-            
-            data = None
-            try:
-                async with session.post(rpc_url, json=payload, timeout=5) as resp:
-                    if resp.status == 200:
-                        data = await resp.json(content_type=None)
-                    else:
-                        raise Exception(f"HTTP {resp.status} - {await resp.text()}")
-            except Exception as e:
-                for fallback_url in fallback_rpcs:
-                    try:
-                        async with session.post(fallback_url, json=payload, headers=fake_headers, timeout=10) as resp:
-                            if resp.status == 200:
-                                data = await resp.json(content_type=None)
-                                break
-                            else:
-                                err_txt = await resp.text()
-                                print(f"⚠️ Top-10 Резервный {fallback_url} выдал {resp.status}: {err_txt[:100]}")
-                    except Exception as ex:
-                        print(f"⚠️ Ошибка Top-10 резервного {fallback_url}: {ex}")
-                        continue
-                        
-            if data:
-                accounts = data.get("result", {}).get("value", [])
-                total_supply = 1_000_000_000
-                if accounts:
-                    # Exclude bonding curve account which holds ~80% initially
-                    # We just sum the remaining top 9 accounts
-                    non_curve_accounts = [float(acc["uiAmount"]) for acc in accounts if float(acc["uiAmount"]) < 800_000_000]
-                    top_10_amounts = non_curve_accounts[:10]
-                    top_10_holding_pct = (sum(top_10_amounts) / total_supply) * 100
-                    if top_10_amounts:
-                        dev_holding_pct = (top_10_amounts[0] / total_supply) * 100 
-                        
-                    # ЖЕСТКАЯ ЗАЩИТА: Топ-10 кошельков (без пула) не должны держать >20% саплая.
-                    # Иначе это монополия создателя, готовая к дампу (Rugpull).
-                    if top_10_holding_pct > 20.0:
-                        print(f"🚫 [Защита от дампа] Топ-10 холдеров держат {top_10_holding_pct:.1f}% > 20% у {mint}.")
-                        return False
-                    # Защита от Jito-бандлов (Sybil-атаки):
-                    # Скаммеры часто раскидывают одинаковые суммы по свежим кошелькам.
-                    # Если 3 и более кошельков в топе имеют одинаковый баланс (с погрешностью) - это бандл.
-                    if len(top_10_amounts) >= 3:
-                        rounded_amounts = [round(amt, -4) for amt in top_10_amounts if amt > 1000000]
-                        if rounded_amounts:
-                            # Ищем самый частый баланс
-                            from collections import Counter
-                            counts = Counter(rounded_amounts)
-                            if counts.most_common(1)[0][1] >= 3:
-                                print(f"🚫 Мусор: Обнаружен Jito-бандл (Sybil attack) у {mint}.")
-                                return False
-        except Exception as e:
-            print(f"Helius RPC error: {e}")
+        top_10_holding_pct = getattr(self, '_last_top10', 0.0)
+        dev_holding_pct = getattr(self, '_last_dev', 0.0)
         
-        # Funded from CEX (simplified)
         funded_from_cex = 0
         
         features = pd.DataFrame([{

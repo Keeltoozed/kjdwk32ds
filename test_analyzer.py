@@ -1,13 +1,10 @@
 import asyncio
 from analyzer import Analyzer
 
-async def main():
-    a = Analyzer()
-    tokens = await a.fetch_latest_tokens()
-    print(f"Fetched {len(tokens)} tokens")
-    for t in tokens[:5]:
-        mint = t.get("tokenAddress")
-        res = await a.analyze_token(mint)
-        print(f"Mint: {mint}, result: {res}")
+async def run():
+    analyzer = Analyzer()
+    mint = "6jJU94YrDJPyMyLh6Vk8h2kpoABS4Hrs7vHuPds7boj8"
+    result = await analyzer.analyze_token(mint)
+    print(f"Result for PCAT: {result}")
 
-asyncio.run(main())
+asyncio.run(run())
