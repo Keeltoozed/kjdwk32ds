@@ -56,7 +56,7 @@ class Analyzer:
     async def get_session(self):
         import aiohttp
         if self.session is None or self.session.closed:
-            connector = aiohttp.TCPConnector(limit=100, limit_per_host=30)
+            connector = aiohttp.TCPConnector(limit=100, limit_per_host=30, ttl_dns_cache=300, use_dns_cache=True)
             self.session = aiohttp.ClientSession(connector=connector)
         return self.session
 

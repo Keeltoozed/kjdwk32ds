@@ -125,12 +125,12 @@ async def fomo_loop(analyzer: Analyzer, tracker):
                 
                 new_mints.append(mint)
             
-            # Анализируем батчами по 5 параллельно
-            for i in range(0, len(new_mints), 5):
+            # Снижаем нагрузку на сеть (Render NAT rate limits)
+            for i in range(0, len(new_mints), 3):
                 if len(tracker.get_open_positions()) >= config.MAX_CONCURRENT_POSITIONS:
                     break
                     
-                batch = new_mints[i:i+5]
+                batch = new_mints[i:i+3]
                 print(f"🔍 FOMO: анализируем батч из {len(batch)} токенов...")
                 
                 async def analyze_one(mint):
@@ -140,10 +140,15 @@ async def fomo_loop(analyzer: Analyzer, tracker):
                         print(f"⚠️ Ошибка анализа {mint[:8]}...: {e}")
                         return mint, False
                 
-                results = await asyncio.gather(*[analyze_one(m) for m in batch])
+                # Обрабатываем ПОСЛЕДОВАТЕЛЬНО, чтобы не убивать сеть Render (NAT limits/Timeouts)
+                results = []
+                for m in batch:
+                    res = await analyze_one(m)
+                    results.append(res)
+                    await asyncio.sleep(1) # Крошечная пауза между монетами
                 
-                # Пауза между батчами
-                await asyncio.sleep(2)
+                # Увеличенная пауза между батчами
+                await asyncio.sleep(3)
                 
                 for mint, is_buy in results:
                     if is_buy is None:
