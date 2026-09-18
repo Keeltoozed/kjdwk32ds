@@ -110,6 +110,8 @@ class Analyzer:
                 return await self.fetch_token_data_gecko(mint)
 
     async def fetch_token_data_gecko(self, mint: str) -> dict:
+        import asyncio
+        await asyncio.sleep(2)  # Жесткий лимит: не спамить GeckoTerminal (макс 30/мин)
         session = await self.get_session()
         try:
             url = f"https://api.geckoterminal.com/api/v2/networks/solana/tokens/{mint}/pools?page=1"
@@ -669,10 +671,10 @@ class Analyzer:
         conf = prob * 100
         print(f"🤖 XGBoost [DEX Poller]: {mint} | Score: {conf:.1f}%")
         import config
-        threshold = 15.0
+        threshold = 20.0
         if is_vip:
-            threshold = 0.0 # Полностью отключаем фильтр ИИ для VIP ракет!
-            print(f"🔥 [VIP] Порог XGBoost снижен до {threshold}% (Вход без оглядки на ИИ)")
+            threshold = 10.0 # Для VIP ракет снижаем порог, но НЕ отключаем ИИ полностью! Скам ИИ должен фильтровать
+            print(f"🔥 [VIP] Порог XGBoost снижен до {threshold}%")
             
         return conf >= threshold
 

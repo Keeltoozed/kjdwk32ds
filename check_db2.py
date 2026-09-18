@@ -1,6 +1,12 @@
-import config
-from supabase import create_client
-supabase = create_client(config.SUPABASE_URL, config.SUPABASE_KEY)
-resp = supabase.table("trades_pump").select("*").limit(5).execute()
-import json
-print(json.dumps(resp.data, indent=2))
+import os
+from supabase import create_client, Client
+from dotenv import load_dotenv
+
+load_dotenv()
+url: str = os.environ.get("SUPABASE_URL")
+key: str = os.environ.get("SUPABASE_KEY")
+supabase: Client = create_client(url, key)
+
+response = supabase.table("trades_pump").select("*").execute()
+for t in response.data[-5:]:
+    print(t)

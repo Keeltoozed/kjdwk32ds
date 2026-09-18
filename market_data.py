@@ -403,7 +403,7 @@ async def get_trending() -> list:
             out.append({"tokenAddress": mint, "chainId": "solana"})
 
     # Сканируем ТОП-150 трендов
-    for page in range(1, 6):
+    for page in range(1, 3):
         d = await _gt_get(f"/networks/solana/trending_pools?page={page}")
         for item in (d.get("data") or []):
             add(_base_mint(item))

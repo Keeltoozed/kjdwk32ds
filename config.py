@@ -62,13 +62,13 @@ LUNARCRUSH_API_KEY = "syvh43mkvrzrw54sor6kc5r6dmtyj5fhi4jd38ht"
 
 SNIPER_MIN_UNIQUE_BUYERS = 15
 SNIPER_BUYERS_WINDOW_MIN = 5
-VIP_MAX_M5_PCT = 1.00
-PULLBACK_MIN_M5_PCT = 0.00
-PULLBACK_M1_MIN_PCT = -1.00
-PULLBACK_M1_MAX_PCT = 0.08
+VIP_MAX_M5_PCT = 1.00  # Не покупаем VIP, если он уже дал больше 100% (это вершина, дальше дамп)
+PULLBACK_MIN_M5_PCT = 0.10  # Токен должен ВЫРАСТИ минимум на 10% за 5 минут, чтобы считаться импульсом
+PULLBACK_M1_MIN_PCT = -0.15  # Но и не летим в падающий нож (максимум -15% за минуту)
+PULLBACK_M1_MAX_PCT = 0.00  # Откат должен быть отрицательным, мы не покупаем зеленую минутную свечу
 PULLBACK_MAX_H1_PCT = 10.00
-VIP_MAX_M5_PCT = 3.00
-LOTTERY_MIN_M5_PCT = 0.50
+VIP_MAX_M5_PCT = 1.00  # Не покупаем VIP, если он уже дал больше 100% (это вершина, дальше дамп)
+LOTTERY_MIN_M5_PCT = 0.80  # Лотерея только для мощных вертикалей от 80%
 LOTTERY_SIZE_MULT = 0.25
 WHALE_CONSENSUS = 2  # вход на 2-м ките (3-й = уже поздно)
 WHALE_MAX_RUNUP = 1.35  # цена не должна вырасти >35% с момента покупки первого кита

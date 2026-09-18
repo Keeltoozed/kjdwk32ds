@@ -184,4 +184,4 @@ async def fomo_loop(analyzer: Analyzer, tracker):
         except Exception as e:
             print(f"Ошибка в FOMO Loop: {e}")
             
-        await asyncio.sleep(20) # Проверяем тренды каждые 20 секунд (было 60)
+        await asyncio.sleep(60) # Проверяем тренды каждые 20 секунд (было 60)
