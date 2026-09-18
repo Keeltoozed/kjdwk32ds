@@ -674,7 +674,6 @@ class Analyzer:
         threshold = 20.0
         if is_vip:
             threshold = 10.0 # Для VIP ракет снижаем порог, но НЕ отключаем ИИ полностью! Скам ИИ должен фильтровать
-            print(f"🔥 [VIP] Порог XGBoost снижен до {threshold}%")
             
         return conf >= threshold
 
