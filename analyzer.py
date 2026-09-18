@@ -37,6 +37,21 @@ except Exception as e:
 class Analyzer:
     def __init__(self):
         self.session = None
+        self.pump_model = None
+        self.raydium_model = None
+        
+        # Предзагрузка моделей в память один раз при старте
+        try:
+            import xgboost as xgb
+            self.pump_model = xgb.XGBClassifier()
+            self.pump_model.load_model("pump_model.json")
+        except: pass
+        
+        try:
+            import xgboost as xgb
+            self.raydium_model = xgb.XGBClassifier()
+            self.raydium_model.load_model("raydium_model_dex.json")
+        except: pass
         
     async def get_session(self):
         import aiohttp
@@ -534,12 +549,13 @@ class Analyzer:
             
             for heavy_url in heavy_rpcs:
                 try:
-                    async with session.post(heavy_url, json=top10_payload, headers=fake_headers, timeout=5) as resp:
+                    async with session.post(heavy_url, json=top10_payload, headers=fake_headers, timeout=8) as resp:
                         if resp.status == 200:
                             bundle_data = await resp.json(content_type=None)
                             if bundle_data and "result" in bundle_data:
                                 break
-                except Exception:
+                except Exception as e:
+                    print(f"⚠️ Ошибка Jito RPC {heavy_url}: {type(e).__name__} {e}")
                     continue
             
             # Если платные/выделенные ключи отвалились, пробуем публичные (но они часто банят)
@@ -647,10 +663,9 @@ class Analyzer:
             "funded_from_cex": funded_from_cex
         }])
         
-        import xgboost as xgb
-        model = xgb.XGBClassifier()
-        model.load_model("pump_model.json")
-        prob = model.predict_proba(features)[0][1]
+        if self.pump_model is None:
+            return False # Fail-safe если модель не загрузилась
+        prob = self.pump_model.predict_proba(features)[0][1]
         conf = prob * 100
         print(f"🤖 XGBoost [DEX Poller]: {mint} | Score: {conf:.1f}%")
         import config
@@ -697,10 +712,8 @@ class Analyzer:
         }])
         
         try:
-            import xgboost as xgb
-            model = xgb.XGBClassifier()
-            model.load_model("raydium_model_dex.json")
-            prob = model.predict_proba(df)[0][1]
+            if self.raydium_model is None: return False
+            prob = self.raydium_model.predict_proba(df)[0][1]
             conf = prob * 100
             
             # --- ИНТЕГРАЦИЯ LUNARCRUSH ---
