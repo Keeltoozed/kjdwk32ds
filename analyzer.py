@@ -398,8 +398,9 @@ class Analyzer:
                 _lottery = True
             else:
                 if _m5 < getattr(config, "PULLBACK_MIN_M5_PCT", 0.03) * 100:
-                    print(f"🚫 [ENTRY] {mint}: m5 {_m5:+.1f}% < импульса не было, пропуск.")
-                    return False
+                    if _age_min_pre > 5: # Если токен старше 5 минут и нет роста — тогда пропускаем
+                        print(f"🚫 [ENTRY] {mint}: m5 {_m5:+.1f}% < импульса не было, пропуск.")
+                        return False
                 if _m1 > getattr(config, "PULLBACK_M1_MAX_PCT", 0.05) * 100:
                     print(f"🚫 [ENTRY] {mint}: m1 {_m1:+.1f}% — вертикаль в процессе, купим вершину. Ждём откат.")
                     return False
@@ -418,7 +419,7 @@ class Analyzer:
             _txm5 = (pair_data.get("txns") or {}).get("m5", {}) or {}
             _b5, _s5 = _txm5.get("buys", 0) or 0, _txm5.get("sells", 0) or 0
             
-            if (_b5 + _s5) < 80:
+            if (_b5 + _s5) < 15:
                 print(f"🚫 [VELOCITY] {mint}: txns m5 {_b5 + _s5} < 80 — слишком медленно, нет органического FOMO.")
                 return False
             if _s5 > 0:
@@ -903,7 +904,6 @@ class Analyzer:
                 async with session.get(url, headers=headers, timeout=3) as resp:
                     if resp.status == 200:
                         data = await resp.json()
-                        
                         coin_data = data.get("data", {})
                         
                         return {
