@@ -9,8 +9,8 @@ DEXSCREENER_PROFILES = "https://api.dexscreener.com/token-profiles/latest/v1"
 DEXSCREENER_SEARCH = "https://api.dexscreener.com/latest/dex/tokens/"
 
 # Helius / PumpPortal WSS API
-HELIUS_API_KEY = "9efda6f4-fddb-42d3-a2b1-098bbbecd299"
-HELIUS_RPC_URL = f"https://mainnet.helius-rpc.com/?api-key={HELIUS_API_KEY}"
+HELIUS_API_KEY = "alch_ZM5nhx8APokXuBpRSk4Q3"
+HELIUS_RPC_URL = f"https://solana-mainnet.g.alchemy.com/v2/alch_ZM5nhx8APokXuBpRSk4Q3"
 PUMPPORTAL_WSS = "wss://pumpportal.fun/api/data"
 
 # RugCheck API
@@ -22,25 +22,29 @@ SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
 # Paper Trading Config
 PAPER_PORTFOLIO_FILE = "portfolio.json"
-INITIAL_BALANCE_USD = 35.0    # Стартовый капитал
-REINVEST_PERCENT = 25.0       # Процент от капитала на одну сделку
-VIRTUAL_POSITION_SIZE_USD = 4.0 # (Устарело) базовый размер сделки
-MAX_CONCURRENT_POSITIONS = 20  # Режим Снайпера: максимум 5 сделок одновременно
+INITIAL_BALANCE_USD = 120.0  # торговый пул ($150 депо - $30 газ)    # Стартовый капитал
+REINVEST_PERCENT = 5.0  # 5% пула = $6 на старт       # Процент от капитала на одну сделку
+VIRTUAL_POSITION_SIZE_USD = 4.0
+TRADE_AMOUNT_USD = 6.0  # жёсткий размер ордера ($6 = 5% пула) # (Устарело) базовый размер сделки
+MAX_CONCURRENT_POSITIONS = 10  # концентрация капитала: максимум 10 ракет  # Режим Снайпера: максимум 5 сделок одновременно
 
 # Risk Management
-MAX_DAILY_LOSS_USD = 10.0 # Минимальный порог в долларах\nMAX_DAILY_LOSS_PCT = 0.25 # Глобальный Kill-Switch: 25% от текущего депозита за день
-STOP_LOSS_PCT = -0.15   # Жесткий стоп на -15% (чтобы с учетом проскальзывания было не больше -20%)
+MAX_DAILY_LOSS_USD = 18.0
+KILL_SWITCH_ENABLED = True
+MAX_DAILY_LOSS_PCT = 0.25
+STOP_LOSS_PCT = -0.20  # -20%: достаточно для ракет, меньше чем -25% который давал -43% убытки
+SNIPER_ENTRIES_ENABLED = False
 TIME_EXIT_MINUTES = 60  # Если за 30 минут нет пампа - выходим
 TIME_EXIT_PROFIT_REQ = 0.0
 
 # Trailing Stop Config (Защита прибыли)
-TRAILING_ACTIVATION_PCT = 0.15 # Включаем трейлинг уже при +15% профита!
-TRAILING_DISTANCE_PCT = 0.05   # Держим стоп на 5% ниже пика. Если выросли на 15%, стоп сдвигается в +10% (Безубыток)
+TRAILING_ACTIVATION_PCT = 0.15  # Активируем трейлинг уже при +15% (было +30% — слишком поздно)
+TRAILING_DISTANCE_PCT = 0.30
 
 # Filtering
-AI_MODE = "sniper" # "sniper" (строго 80-90% уверенности) или "degen"
-MIN_LIQUIDITY = 15000  # Увеличили до 15k! При ликвидности 3k любой чих обваливает цену на 30%, пробивая наш стоп-лосс.
-MAX_LIQUIDITY = 50000000 
+AI_MODE = "degen" # "sniper" (строго 80-90% уверенности) или "degen"
+MIN_LIQUIDITY = 10000  # Снижено для скальпинга обычных монет
+MAX_LIQUIDITY = 50000000
 
 # AI Аналитика
 GEMINI_API_KEY = "AQ.Ab8RN6Ju77t6DI8AYru7TGxuPuG_0WOcqHZqq1OBsDAwHtoJxg" # Получить бесплатно на https://aistudio.google.com/
@@ -55,3 +59,16 @@ JITO_ENGINE_URL = "https://mainnet.block-engine.jito.wtf/api/v1/bundles"
 JITO_TIP_AMOUNT_SOL = 0.0005 # Чаевые валидатору (минимум 0.0001)
 JITO_TIP_ACCOUNT = "96gYZGLnJYVFmbjzopPSU6QiCRK4rPdTuQ8hB1aP442b" # Официальный Jito Tip Account
 LUNARCRUSH_API_KEY = "syvh43mkvrzrw54sor6kc5r6dmtyj5fhi4jd38ht"
+
+SNIPER_MIN_UNIQUE_BUYERS = 15
+SNIPER_BUYERS_WINDOW_MIN = 5
+VIP_MAX_M5_PCT = 1.00  # Не покупаем VIP, если он уже дал больше 100% (это вершина, дальше дамп)
+PULLBACK_MIN_M5_PCT = 0.10  # Токен должен ВЫРАСТИ минимум на 10% за 5 минут, чтобы считаться импульсом
+PULLBACK_M1_MIN_PCT = -0.15  # Но и не летим в падающий нож (максимум -15% за минуту)
+PULLBACK_M1_MAX_PCT = 0.00  # Откат должен быть отрицательным, мы не покупаем зеленую минутную свечу
+PULLBACK_MAX_H1_PCT = 10.00
+VIP_MAX_M5_PCT = 1.00  # Не покупаем VIP, если он уже дал больше 100% (это вершина, дальше дамп)
+LOTTERY_MIN_M5_PCT = 0.80  # Лотерея только для мощных вертикалей от 80%
+LOTTERY_SIZE_MULT = 0.25
+WHALE_CONSENSUS = 2  # вход на 2-м ките (3-й = уже поздно)
+WHALE_MAX_RUNUP = 1.35  # цена не должна вырасти >35% с момента покупки первого кита
