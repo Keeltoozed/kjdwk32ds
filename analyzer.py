@@ -356,7 +356,7 @@ class Analyzer:
             print(f"🚫 Мусор: Токен {symbol} мимикрирует под известный бренд/мем. Это 100% scam.")
             return False
             
-        is_vip = await self.check_hyper_rocket_momentum(pair_data)
+        is_vip = await self.check_hyper_rocket_momentum(mint, pair_data)
 
         # === VIP OVERHEAT GUARD: не покупаем вершину вертикали ===
         if is_vip and pair_data:
@@ -633,7 +633,7 @@ class Analyzer:
         if pair_data.get("dexId") != "pump":
             return False
             
-        is_vip = await self.check_hyper_rocket_momentum(pair_data)
+        is_vip = await self.check_hyper_rocket_momentum(mint, pair_data)
         if is_vip:
             print(f"🚀🚀🚀 [HYPER-ROCKET BYPASS] Токен {mint} летит в космос! Игнорируем карантин возраста и соцсетей.")
             
