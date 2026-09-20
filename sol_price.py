@@ -49,13 +49,14 @@ def fetch_bulk_prices_sync(mints: list) -> dict:
         ms = [m for m in dict.fromkeys(mints) if m]
         for i in range(0, len(ms), 50):
             chunk = ms[i:i + 50]
-            url = "https://lite-api.jup.ag/price/v3?ids=" + ",".join(chunk)
+            url = "https://api.jup.ag/price/v2?ids=" + ",".join(chunk)
             resp = requests.get(url, headers={"Accept": "application/json",
                                               "User-Agent": "Mozilla/5.0"}, timeout=10)
             if resp.status_code == 200:
+                data = resp.json().get("data", {})
                 for m in chunk:
                     try:
-                        px = resp.json().get(m, {}).get("usdPrice", 0)
+                        px = data.get(m, {}).get("price", 0)
                         if px and float(px) > 0:
                             out[m] = float(px)
                     except Exception:

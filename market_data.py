@@ -153,11 +153,12 @@ async def _jup_token_data(mint: str) -> dict:
             await asyncio.sleep(wait)
         try:
             async with session.get(
-                    f"https://lite-api.jup.ag/tokens/v2/search?query={mint}",
+                    f"https://tokens.jup.ag/token/{mint}",
                     headers=HEADERS, timeout=10) as r:
                 _jlast = time.monotonic()
                 if r.status == 200:
                     data = await r.json()
+                    data = [data] if data else []
         except Exception as e:
             _jlast = time.monotonic()
             print(f"🔎 JUP token fail {mint[:8]}: {type(e).__name__}")
@@ -359,7 +360,7 @@ async def _jup_lite_prices(mints: list) -> dict:
     out = {}
 
     def one_call(chunk):
-        url = ("https://lite-api.jup.ag/price/v3?ids=" + ",".join(chunk))
+        url = ("https://api.jup.ag/price/v2?ids=" + ",".join(chunk))
         req = _url.Request(url, headers={"User-Agent": "Mozilla/5.0",
                                          "Accept": "application/json"})
         with _url.urlopen(req, timeout=15) as r:
@@ -369,11 +370,12 @@ async def _jup_lite_prices(mints: list) -> dict:
         chunk = mints[i:i + 50]
         try:
             data = await asyncio.to_thread(one_call, chunk)
+            prices_data = data.get("data", {})
         except Exception:
             continue
         for m in chunk:
             try:
-                px = data.get(m, {}).get("usdPrice", 0)
+                px = prices_data.get(m, {}).get("price", 0)
                 if px and float(px) > 0:
                     out[m] = float(px)
             except Exception:
