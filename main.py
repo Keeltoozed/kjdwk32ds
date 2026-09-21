@@ -139,7 +139,7 @@ async def position_manager_loop(analyzer, tracker):
                     continue
                     
                 # 4. УМНЫЙ ВЫХОД ПО ВРЕМЕНИ (Stagnant / Bleeding cut)
-                # Если монета в минусе больше 15 минут - она мертва, выходим, не дожидаясь -25%
+                # Вернули по просьбе: режем мертвые через 15 мин
                 if minutes_held >= 15 and pnl_pct < 0:
                     tracker.close_position(mint, current_price, f"Dead Coin Cut ({minutes_held:.0f}m, {pnl_pct*100:.1f}%)")
                     continue

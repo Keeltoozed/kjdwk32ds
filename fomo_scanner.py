@@ -98,6 +98,15 @@ async def fomo_loop(analyzer: Analyzer, tracker):
     
     while True:
         try:
+            # СРОЧНО: Kill-switch был только в scanner_loop, а FOMO продолжал покупать в минус!
+            import time as _t
+            day_start = _t.time() - (_t.time() % 86400)
+            day_pnl = sum(getattr(p, "pnl_usd", 0) or 0 for p in tracker.positions.values()
+                          if getattr(p, "status", "") == "closed" and getattr(p, "exit_time", 0) and p.exit_time >= day_start)
+            if getattr(config, "KILL_SWITCH_ENABLED", True) and day_pnl <= -config.MAX_DAILY_LOSS_USD:
+                print(f"🛑 FOMO KILL-SWITCH: дневной PnL ${day_pnl:.2f}. Пауза 1ч.")
+                await asyncio.sleep(3600)
+                continue
             if len(tracker.get_open_positions()) >= config.MAX_CONCURRENT_POSITIONS:
                 await asyncio.sleep(10)
                 continue
@@ -184,4 +193,4 @@ async def fomo_loop(analyzer: Analyzer, tracker):
         except Exception as e:
             print(f"Ошибка в FOMO Loop: {e}")
             
-        await asyncio.sleep(60) # Проверяем тренды каждые 20 секунд (было 60)
+        await asyncio.sleep(120) # СРОЧНО: было 60 -> 120. Меньше FOMO-сделок = меньше покупок вершин

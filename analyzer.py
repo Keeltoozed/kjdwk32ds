@@ -410,20 +410,25 @@ class Analyzer:
                 if _h1 > getattr(config, "PULLBACK_MAX_H1_PCT", 1.5) * 100:
                     print(f"🚫 [ENTRY] {mint}: h1 {_h1:+.0f}% — уже улетел, поздно.")
                     return False
-            if _s > 0 and _b < _s * 1.1:
-                print(f"🚫 [ENTRY] {mint}: buys {_b} / sells {_s} — нет давления покупателей.")
+            if _s > 0 and _b < _s * 1.5:
+                print(f"🚫 [ENTRY] {mint}: buys {_b} / sells {_s} — нет давления покупателей (нужно 1.5x).")
                 return False
-            if _v24 < 10000:
-                print(f"🚫 [ENTRY] {mint}: vol24h ${_v24:,.0f} < $10k — совсем нет объёма.")
+            if _v24 < 25000:
+                print(f"🚫 [ENTRY] {mint}: vol24h ${_v24:,.0f} < $25k — совсем нет объёма.")
                 return False
             _txm5 = (pair_data.get("txns") or {}).get("m5", {}) or {}
             _b5, _s5 = _txm5.get("buys", 0) or 0, _txm5.get("sells", 0) or 0
+
+            # СРОЧНО: анти-вершина - не берем вертикали m5 > +40%, это уже памп, дальше дамп (причина Crash Guard -50%)
+            if _m5 > 40.0 and not _lottery:
+                print(f"🚫 [OVERHEAT] {mint}: m5 {_m5:+.1f}% > +40% — вертикаль уже прошла, вход = вершина.")
+                return False
             
-            if (_b5 + _s5) < 15:
-                print(f"🚫 [VELOCITY] {mint}: txns m5 {_b5 + _s5} < 80 — слишком медленно, нет органического FOMO.")
+            if (_b5 + _s5) < 30:
+                print(f"🚫 [VELOCITY] {mint}: txns m5 {_b5 + _s5} < 30 — слишком медленно, нет органического FOMO.")
                 return False
             if _s5 > 0:
-                mult = 1.0
+                mult = 1.5
                 if _b5 < _s5 * mult:
                     print(f"🚫 [VELOCITY] {mint}: buy/sell m5 {_b5}/{_s5} < {mult}x — {'(лотерея, ослаблено)' if _lottery else 'нет буфера покупателей'}")
                     return False
@@ -682,7 +687,7 @@ class Analyzer:
         conf = prob * 100
         print(f"🤖 XGBoost [DEX Poller]: {mint} | Score: {conf:.1f}%")
         import config
-        threshold = 20.0
+        threshold = 65.0  # СРОЧНО: было 20.0 - пропускало ВЕСЬ мусор. 65% = только уверенные входы
 
         return conf >= threshold
 
@@ -744,7 +749,7 @@ class Analyzer:
             # -------------------------------
             
             print(f"🧠 Raydium XGBoost (Безлимит): {mint} | Score: {conf:.1f}%")
-            import config; threshold = 15.0
+            import config; threshold = 60.0  # СРОЧНО: было 15.0 - пропускало весь мусор
             
             is_buy = conf >= threshold
             
