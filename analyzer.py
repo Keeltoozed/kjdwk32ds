@@ -39,6 +39,7 @@ class Analyzer:
         self.session = None
         self.pump_model = None
         self.raydium_model = None
+        self.last_signal = ""  # Метка последнего решения: "VIP RAY-XGB 98%", "PULLBACK", "ROBINHOOD rule 72%"...
         
         # Предзагрузка моделей в память один раз при старте
         try:
@@ -319,6 +320,7 @@ class Analyzer:
         
     async def analyze_token(self, mint: str) -> bool:
         # Smart Router
+        self.last_signal = ""  # сброс метки решения
         
         # Мы больше не используем глючный RugCheck API.
         # Вместо этого проверка на снайперов/бандлы идет напрямую через блокчейн (Helius RPC)
@@ -358,6 +360,11 @@ class Analyzer:
                 return False
             if _m1 < 0:
                 print(f"🚫 [VIP REVERSAL] {mint}: m1 {_m1:+.1f}% — всплеск откатывает, ждём pullback.")
+                return False
+            # VIP БЕЗ ИМПУЛЬСА = объём без направления: 20-мин прогон показал,
+            # такие входы (score 97-99%, m5 ~0%) стоят флетом 7 мин и сливают ~3% на комиссиях
+            if _m5 < 10.0:
+                print(f"🚫 [VIP FLAT] {mint}: объём есть, а импульса нет (m5 {_m5:+.1f}% < +10%) — флет съест комиссиями.")
                 return False
 
         # ══════════════════════════════════════════════════════
@@ -399,6 +406,11 @@ class Analyzer:
                 if _h1 > getattr(config, "PULLBACK_MAX_H1_PCT", 1.5) * 100:
                     print(f"🚫 [ENTRY] {mint}: h1 {_h1:+.0f}% — уже улетел, поздно.")
                     return False
+            # АНТИ-ВЕРШИНА h24: токены типа Drip +3152%, SI +33009% уже отстреляли. Вход = вершина
+            _h24 = (_pc.get("h24", 0) or 0)
+            if _h24 > 500:
+                print(f"🚫 [OVERHEAT-H24] {mint}: h24 {_h24:+.0f}% > +500% — ракета уже улетела, поздно.")
+                return False
             if _s > 0 and _b < _s * 1.1:
                 print(f"🚫 [ENTRY] {mint}: buys {_b} / sells {_s} — нет давления покупателей.")
                 return False
@@ -461,14 +473,11 @@ class Analyzer:
         # ══════════════════════════════════════════════════════
         rpc_url = getattr(config, "HELIUS_RPC_URL", "https://mainnet.helius-rpc.com/?api-key=9efda6f4-fddb-42d3-a2b1-098bbbecd299")
         
-        # Список надежных публичных узлов для резервного подключения
+        # Проверенные бесплатные RPC (2026): Helius (ключ), Solana Foundation, PublicNode, Alchemy (ключ юзера).
+        # Мёртвые удалены: projectserum, rpcpool, solscan, api.mainnet.solana.com-дубль, Ankr без ключа 403.
         fallback_rpcs = [
             "https://api.mainnet-beta.solana.com",
-            "https://solana-api.projectserum.com",
-            "https://rpc.solscan.com",
-            "https://free.rpcpool.com",
-            "https://api.mainnet.solana.com",
-            "https://solana-rpc.publicnode.com"
+            "https://solana-rpc.publicnode.com",
         ]
         
         mint_info_payload = {
@@ -543,10 +552,12 @@ class Analyzer:
         try:
             bundle_data = None
             
-            # 1. Helius 2. Alchemy (пользовательский)
+            # 1. Helius (ключ) 2. Alchemy (пользовательский) 3. Foundation 4. PublicNode
             heavy_rpcs = [
                 rpc_url,
-                "https://solana-mainnet.g.alchemy.com/v2/alch_wwSmrv5RZmrq66-lSNekM"
+                "https://solana-mainnet.g.alchemy.com/v2/alch_wwSmrv5RZmrq66-lSNekM",
+                "https://api.mainnet-beta.solana.com",
+                "https://solana-rpc.publicnode.com",
             ]
             
             for heavy_url in heavy_rpcs:
@@ -593,7 +604,10 @@ class Analyzer:
                     
                     is_pump = pair_data and pair_data.get("dexId") == "pump"
                     max_allowed_pct = 20.0 if is_pump else 45.0
-                    if top_10_sum_pct > max_allowed_pct:
+                    if top_10_sum_pct > 100:
+                        # Баг данных: сапплай не 1B (meteora/raydium), проценты >100% невозможны - пропускаем проверку
+                        print(f"⚠️ [HOLDERS] {mint[:8]}: топ-10 {top_10_sum_pct:.1f}% > 100% — битые данные сапплая, пропускаю проверку.")
+                    elif top_10_sum_pct > max_allowed_pct:
                         print(f"🚫 [АНТИСКАМ] Топ-10 держат {top_10_sum_pct:.1f}% (Лимит {max_allowed_pct}%). Блокируем.")
                         return False
             else:
@@ -605,6 +619,7 @@ class Analyzer:
 
         if is_vip or _lottery:
             print(f"🚀 [FAST TRACK] {symbol}: гейты пройдены, передаем на проверку холдеров (Снайперы/Бандлы).")
+            self.last_signal = "VIP" if is_vip else "LOTTERY"
 
         dex_id = pair_data.get("dexId")
         created_at = pair_data.get("pairCreatedAt", 0)
@@ -614,6 +629,71 @@ class Analyzer:
             return await self.analyze_token_xgboost(mint, pair_data)
         else:
             return await self.analyze_token_raydium(mint, pair_data)
+
+    async def analyze_robinhood_token(self, address: str) -> bool:
+        """Вход по мемам Robinhood Chain (EVM, Uniswap).
+        Solana-проверки (Mint Authority, Helius, Jito-бандлы, XGBoost на Solana-фичах)
+        здесь неприменимы — работает rule-based скоринг на тех же воротах импульса.
+        Возвращает True/False, метка решения в self.last_signal."""
+        import evm_data
+        self.last_signal = ""
+        pair_data = await evm_data.get_token_data(address)
+        if not pair_data:
+            return None
+        base = pair_data.get("baseToken", {}) or {}
+        symbol = base.get("symbol", address[:6])
+        pc = pair_data.get("priceChange") or {}
+        m5 = pc.get("m5", 0) or 0
+        m1 = pc.get("m1", 0) or 0
+        h1 = pc.get("h1", 0) or 0
+        h24 = pc.get("h24", 0) or 0
+        txh1 = (pair_data.get("txns") or {}).get("h1", {}) or {}
+        b, s = txh1.get("buys", 0) or 0, txh1.get("sells", 0) or 0
+        txm5 = (pair_data.get("txns") or {}).get("m5", {}) or {}
+        b5, s5 = txm5.get("buys", 0) or 0, txm5.get("sells", 0) or 0
+        vol24 = (pair_data.get("volume") or {}).get("h24", 0) or 0
+        liq = (pair_data.get("liquidity") or {}).get("usd", 0) or 0
+
+        min_liq = getattr(config, "ROBINHOOD_MIN_LIQUIDITY", 8000)
+        if liq < min_liq:
+            print(f"🚫 [ROB] {symbol}: ликва ${liq:,.0f} < ${min_liq} — микро-пул.")
+            return False
+        if m5 < 10.0:  # импульса нет — флет съест комиссиями (доказано 20-мин прогоном)
+            return False
+        if m5 > 60.0 or h24 > 500.0:  # вершина уже прошла
+            print(f"🚫 [ROB-OVERHEAT] {symbol}: m5 {m5:+.1f}% h24 {h24:+.0f}% — поздно.")
+            return False
+        if m1 > 0:
+            print(f"🚫 [ROB] {symbol}: m1 {m1:+.1f}% зелёная — ждём откат.")
+            return False
+        if m1 < -8.0 or h1 > 300.0:
+            print(f"🚫 [ROB] {symbol}: m1 {m1:+.1f}% h1 {h1:+.0f}% — дамп/улетел.")
+            return False
+        if s > 0 and b < s * 1.5:
+            print(f"🚫 [ROB] {symbol}: buys {b} / sells {s} — нет давления.")
+            return False
+        if (b5 + s5) < 20 or vol24 < 10000:
+            print(f"🚫 [ROB] {symbol}: тихо (tx5 {(b5+s5)}, vol24 ${vol24:,.0f}).")
+            return False
+        info = pair_data.get("info") or {}
+        links = (info.get("socials") or []) + (info.get("websites") or [])
+        if not links:
+            print(f"🚫 [ROB] {symbol}: нет ни одной ссылки — скам-риск.")
+            return False
+
+        score = 50.0
+        score += min(m5, 60.0) * 0.4          # импульс до +24
+        if s > 0:
+            score += min(b / s, 3.0) * 6.0   # давление до +18
+        score += min(liq / 50000.0, 1.0) * 8.0  # ликва до +8
+        if len(links) >= 2:
+            score += 5.0
+        score = min(score, 100.0)
+        print(f"🟣 [ROBINHOOD] {symbol}: m5 {m5:+.1f}% b/s {b}/{s} liq ${liq:,.0f} → score {score:.0f}")
+        if score >= 60.0:
+            self.last_signal = f"ROBINHOOD rule {score:.0f}%"
+            return True
+        return False
         
     async def analyze_token_xgboost(self, mint: str, pair_data: dict) -> bool:
         if not pair_data:
@@ -668,15 +748,18 @@ class Analyzer:
         if self.pump_model is None:
             return False # Fail-safe если модель не загрузилась
         prob = self.pump_model.predict_proba(features)[0][1]
-        conf = prob * 100
+        conf = float(prob) * 100
         print(f"🤖 XGBoost [DEX Poller]: {mint} | Score: {conf:.1f}%")
         import config
-        threshold = 15.0
+        threshold = 45.0  # Было 15.0 - пропускало мусор. 45% - компромисс: не 65% чтобы не зажать, но режет скам
         if is_vip:
-            threshold = 10.0 # Для VIP ракет снижаем порог, но НЕ отключаем ИИ полностью! Скам ИИ должен фильтровать
+            threshold = 30.0 # Было 10.0 - VIP покупал все. 30% минимум для ракет
             print(f"🔥 [VIP] Порог XGBoost снижен до {threshold}%")
-            
-        return conf >= threshold
+
+        ok = bool(conf >= threshold)
+        if ok:
+            self.last_signal = f"{'VIP-' if is_vip else ''}PUMP-XGB {conf:.0f}%"
+        return ok
 
     async def analyze_token_raydium(self, mint: str, pair_data: dict) -> bool:
         # Безлимитный режим: используем ТОЛЬКО данные DexScreener
@@ -736,11 +819,14 @@ class Analyzer:
             # -------------------------------
             
             print(f"🧠 Raydium XGBoost (Безлимит): {mint} | Score: {conf:.1f}%")
-            import config; threshold = 15.0
-            if self.check_hyper_rocket_momentum(pair_data):
-                threshold = 0.0
-            
-            is_buy = conf >= threshold
+            import config; threshold = 45.0  # Было 15.0 - пропускало мусор
+            _hyper = self.check_hyper_rocket_momentum(pair_data)
+            if _hyper:
+                threshold = 25.0  # Было 0.0 - покупало любую вертикаль вслепую
+
+            is_buy = bool(conf >= threshold)
+            if is_buy:
+                self.last_signal = f"{'VIP-' if _hyper else ''}RAY-XGB {conf:.0f}%"
             
             if not is_buy:
                 try:

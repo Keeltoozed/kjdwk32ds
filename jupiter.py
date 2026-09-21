@@ -43,8 +43,8 @@ class JupiterAPI:
         """
         # 1 SOL = 1e9 lamports
         lamports_in = int(input_amount_sol * 1e9)
-        # Input: SOL (v6 мёртв — используем Lite API)
-        url = f"https://quote-api.jup.ag/v6/quote?inputMint=So11111111111111111111111111111111111111112&outputMint={mint}&amount={lamports_in}&slippageBps=300"
+        # Jupiter sunset quote-api.jup.ag/v6 -> Swap V1 на api.jup.ag
+        url = f"https://api.jup.ag/swap/v1/quote?inputMint=So11111111111111111111111111111111111111112&outputMint={mint}&amount={lamports_in}&slippageBps=300"
         
         from http_client import get_session
         session = await get_session()
@@ -67,7 +67,8 @@ class JupiterAPI:
     @staticmethod
     async def get_swap_transaction(mint: str, is_sell: bool = False, amount_lamports: int = 0, is_emergency: bool = False) -> dict:
         """
-        Генерирует реальную транзакцию на Swap через Jupiter API v6.
+        Генерирует реальную транзакцию на Swap через Jupiter Swap V1 (api.jup.ag).
+        quote-api.jup.ag/v6 sunset - мигрировано на Swap V1.
         Блокировка проскальзывания: жесткий лимит slippageBps = 1500 (15%).
         Динамический Priority Fee: если это SELL (Stop-Loss/Crash Guard), ставим Ultra/Very High priority!
         """
@@ -79,7 +80,7 @@ class JupiterAPI:
         # Устанавливаем лимит в 10% (1000 bps) как на вход, так и на выход. 
         # Бот больше не будет спасать копейки с проскальзыванием 50-100%. Если цена ушла ниже 10% от заявленной - транзакция отменяется.
         slippage = 1000
-        quote_url = f"https://quote-api.jup.ag/v6/quote?inputMint={input_mint}&outputMint={output_mint}&amount={amount_lamports}&slippageBps={slippage}"
+        quote_url = f"https://api.jup.ag/swap/v1/quote?inputMint={input_mint}&outputMint={output_mint}&amount={amount_lamports}&slippageBps={slippage}"
         
         from http_client import get_session
         session = await get_session()
@@ -90,7 +91,7 @@ class JupiterAPI:
                 quote_response = await response.json()
 
                 # 2. Формируем транзакцию с динамическими fee
-                swap_url = "https://quote-api.jup.ag/v6/swap"
+                swap_url = "https://api.jup.ag/swap/v1/swap"
 
             # ИНТЕГРАЦИЯ JITO & PRIORITY FEES
             # Для экстренных продаж (Crash Guard / Stop Loss) агрессивно завышаем комиссию (Jito Tip), 

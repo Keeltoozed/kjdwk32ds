@@ -140,29 +140,20 @@ def _normalize_pool(mint: str, name: str, symbol: str, item: dict, token_attrs: 
 
 
 async def _jup_token_data(mint: str) -> dict:
-    """Токен-профиль через Jupiter Token API v2.
-    Даёт то, чего нет у GT: соцсети, холдеры, аудит, точный возраст.
+    """Токен-профиль через Jupiter Token API.
+    Старые хосты tokens.jup.ag sunset (Jupiter их гасит) — идём через
+    api.jup.ag -> lite-api.jup.ag. Даёт соцсети, холдеры, аудит, возраст.
     Нормализация — в форму DexScreener-пары. {} если токен не проиндексирован."""
-    global _jlast
-    from http_client import get_session
-    session = await get_session()
+    from http_client import fetch_json
     data = None
-    async with _jlock:
-        wait = J_MIN_INTERVAL - (time.monotonic() - _jlast)
-        if wait > 0:
-            await asyncio.sleep(wait)
-        try:
-            async with session.get(
-                    f"https://tokens.jup.ag/token/{mint}",
-                    headers=HEADERS, timeout=10) as r:
-                _jlast = time.monotonic()
-                if r.status == 200:
-                    data = await r.json()
-                    data = [data] if data else []
-        except Exception as e:
-            _jlast = time.monotonic()
-            print(f"🔎 JUP token fail {mint[:8]}: {type(e).__name__}")
-            return {}
+    for base in ("https://api.jup.ag", "https://lite-api.jup.ag"):
+        status, body = await fetch_json(f"{base}/tokens/v1/token/{mint}",
+                                        timeout=10, retries=1)
+        if status == 200 and body:
+            data = [body] if isinstance(body, dict) else body
+            break
+    if not data:
+        return {}
     try:
         items = data if isinstance(data, list) else []
         exact = [x for x in items if isinstance(x, dict) and x.get("id") == mint]
@@ -245,7 +236,15 @@ async def get_token_data(mint: str) -> dict:
     hit = _TD_CACHE.get(mint)
     if hit and (now - hit[0]) < TD_TTL:
         return hit[1]
-    # 1. Jupiter: соцсети, холдеры, аудит, возраст, ликвидность
+    # 1. DexScreener первым: 300 зап/мин, самый надёжный, даёт m5/h1/h24 + соцсети.
+    # (Jupiter Token API гаснет - старые хосты sunset, поэтому он теперь вторым.)
+    ds = await _ds_token_data(mint)
+    if ds and float(ds.get("priceUsd", 0) or 0) > 0:
+        _TD_CACHE[mint] = (now, ds)
+        if len(_TD_CACHE) > 2000:
+            _TD_CACHE.clear()
+        return ds
+    # 2. Jupiter: соцсети, холдеры, аудит, возраст, ликвидность
     jup = await _jup_token_data(mint)
     if jup:
         # 2. Добираем m5-окно (txns/volume) из GeckoTerminal — нужно для
@@ -290,38 +289,80 @@ async def get_token_data(mint: str) -> dict:
                 return norm
     except Exception:
         pass
-    # Fallback: DexScreener (старая логика из analyzer)
-    ds = await _ds_token_data(mint)
-    if ds:
-        _TD_CACHE[mint] = (now, ds)
-    return ds
+    # Fallback: DexScreener уже пробовали первым — возвращаем что есть
+    return ds or {}
 
 
 async def _ds_token_data(mint: str) -> dict:
     import config
-    from http_client import get_session
-    session = await get_session()
+    from http_client import fetch_json
     url = f"{config.DEXSCREENER_SEARCH}{mint}"
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                      "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept": "application/json",
-    }
-    try:
-        async with session.get(url, headers=headers, timeout=6) as r:
-            if r.status == 200:
-                data = await r.json()
-                pairs = data.get("pairs", [])
-                sol = [p for p in pairs if p.get("chainId") == "solana"]
-                if sol:
-                    best = sorted(sol, key=lambda x: x.get("liquidity", {}).get("usd", 0),
-                                  reverse=True)[0]
-                    best["_source"] = "dexscreener"
-                    best["_socials_unknown"] = False
-                    return best
-    except Exception as e:
-        print(f"Dexscreener token data error: {type(e).__name__} {e}")
+    status, data = await fetch_json(url, timeout=8, retries=2)
+    if status == 200 and data:
+        try:
+            pairs = data.get("pairs", [])
+            sol = [p for p in pairs if p.get("chainId") == "solana"]
+            if sol:
+                best = sorted(sol, key=lambda x: x.get("liquidity", {}).get("usd", 0),
+                              reverse=True)[0]
+                best["_source"] = "dexscreener"
+                best["_socials_unknown"] = False
+                return best
+        except Exception:
+            pass
     return {}
+
+
+async def _cex_prices(mints: list) -> dict:
+    """Цены majors через CEX public API: бесплатно, без ключей, глобально.
+    Coinbase Spot + Kraken Ticker. Покрывает только SOL (для мемов есть Jupiter/Llama/GT)."""
+    from http_client import fetch_json
+    out = {}
+    SOL = "So11111111111111111111111111111111111111112"
+    if SOL not in mints:
+        return out
+    status, data = await fetch_json("https://api.coinbase.com/v2/prices/SOL-USD/spot",
+                                    timeout=8, retries=1)
+    try:
+        px = float((data.get("data", {}) or {}).get("amount", 0))
+        if px > 0:
+            out[SOL] = px
+            return out
+    except Exception:
+        pass
+    status, data = await fetch_json("https://api.kraken.com/0/public/Ticker?pair=SOLUSD",
+                                    timeout=8, retries=1)
+    try:
+        last = (((data.get("result", {}) or {}).get("SOLUSD", {}) or {}).get("c", []) or [0])[0]
+        if float(last) > 0:
+            out[SOL] = float(last)
+    except Exception:
+        pass
+    return out
+
+
+async def _llama_prices(mints: list) -> dict:
+    """Цены через DeFiLlama Coins API: бесплатно, без ключа.
+    https://coins.llama.fi/prices/current/solana:addr1,solana:addr2"""
+    from http_client import fetch_json
+    out = {}
+    ms = [m for m in dict.fromkeys(mints) if m]
+    for i in range(0, len(ms), 30):
+        chunk = ms[i:i + 30]
+        ids = ",".join(f"solana:{m}" for m in chunk)
+        status, data = await fetch_json(f"https://coins.llama.fi/prices/current/{ids}",
+                                        timeout=10, retries=1)
+        if status != 200:
+            continue
+        try:
+            coins = data.get("coins", {})
+            for m in chunk:
+                px = (coins.get(f"solana:{m}", {}) or {}).get("price", 0)
+                if px and float(px) > 0:
+                    out[m] = float(px)
+        except Exception:
+            pass
+    return out
 
 
 async def get_price(mint: str) -> float:
@@ -330,8 +371,9 @@ async def get_price(mint: str) -> float:
 
 
 async def get_bulk_prices(mints: list) -> dict:
-    """Балк-цены: сначала Jupiter Lite (свой лимит, не трогает квоту GT),
-    недостающее добираем через GeckoTerminal simple endpoint (до 30 за запрос)."""
+    """Балк-цены, цепочка fallback'ов (каждый бесплатный, со своей квотой):
+    Jupiter Price V3 -> CEX (Coinbase/Kraken, для SOL) -> DeFiLlama (без ключа) -> GeckoTerminal simple."""
+    from http_client import fetch_json
     out = {}
     if not mints:
         return out
@@ -339,7 +381,19 @@ async def get_bulk_prices(mints: list) -> dict:
     try:
         out = await _jup_lite_prices(ms)
     except Exception as e:
-        print(f"Jupiter Lite bulk error: {type(e).__name__} {e}")
+        print(f"Jupiter bulk error: {type(e).__name__} {e}")
+    missing = [m for m in ms if m not in out]
+    if missing:
+        try:
+            out.update(await _cex_prices(missing))
+        except Exception as e:
+            print(f"CEX bulk error: {type(e).__name__} {e}")
+    missing = [m for m in ms if m not in out]
+    if missing:
+        try:
+            out.update(await _llama_prices(missing))
+        except Exception as e:
+            print(f"Llama bulk error: {type(e).__name__} {e}")
     missing = [m for m in ms if m not in out]
     for i in range(0, len(missing), 30):
         chunk = missing[i:i + 30]
@@ -354,17 +408,27 @@ async def get_bulk_prices(mints: list) -> dict:
 
 
 async def _jup_lite_prices(mints: list) -> dict:
-    """Цены через Jupiter Lite Price API v3 (до 50 адресов за запрос)."""
+    """Цены через Jupiter Price API: api.jup.ag/price/v3 -> lite-api fallback.
+    Старый price/v2 sunset (Jupiter гасит лимиты), парсинг защищённый под оба формата."""
     import json as _json
     import urllib.request as _url
     out = {}
 
     def one_call(chunk):
-        url = ("https://api.jup.ag/price/v2?ids=" + ",".join(chunk))
-        req = _url.Request(url, headers={"User-Agent": "Mozilla/5.0",
-                                         "Accept": "application/json"})
-        with _url.urlopen(req, timeout=15) as r:
-            return _json.load(r)
+        last = None
+        for base in ("https://api.jup.ag/price/v3?ids=",
+                     "https://lite-api.jup.ag/price/v2?ids="):
+            try:
+                req = _url.Request(base + ",".join(chunk),
+                                   headers={"User-Agent": "Mozilla/5.0",
+                                            "Accept": "application/json"})
+                with _url.urlopen(req, timeout=15) as r:
+                    last = _json.load(r)
+                if last and last.get("data"):
+                    return last
+            except Exception:
+                continue
+        return last or {}
 
     for i in range(0, len(mints), 50):
         chunk = mints[i:i + 50]
@@ -375,7 +439,8 @@ async def _jup_lite_prices(mints: list) -> dict:
             continue
         for m in chunk:
             try:
-                px = prices_data.get(m, {}).get("price", 0)
+                entry = prices_data.get(m, {}) or {}
+                px = entry.get("price", 0) or entry.get("usdPrice", 0)
                 if px and float(px) > 0:
                     out[m] = float(px)
             except Exception:

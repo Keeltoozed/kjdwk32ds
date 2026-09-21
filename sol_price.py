@@ -40,29 +40,78 @@ def get_sol_price_sync() -> float:
 import requests
 
 def fetch_bulk_prices_sync(mints: list) -> dict:
-    """Синхронные лайв-цены: Jupiter Lite первым (своя квота), GeckoTerminal как fallback."""
+    """Синхронные лайв-цены, цепочка: Jupiter Price V3 -> DeFiLlama (без ключа) -> GeckoTerminal.
+    Старый price/v2 sunset - мигрировано на v3."""
     if not mints: return {}
     out = {}
-    # 1. Jupiter Lite (до 50 за запрос)
+    # 1. Jupiter Price V3 (до 50 за запрос), fallback lite v2
     try:
         import json as _json
         ms = [m for m in dict.fromkeys(mints) if m]
         for i in range(0, len(ms), 50):
             chunk = ms[i:i + 50]
-            url = "https://api.jup.ag/price/v2?ids=" + ",".join(chunk)
-            resp = requests.get(url, headers={"Accept": "application/json",
-                                              "User-Agent": "Mozilla/5.0"}, timeout=10)
+            data = {}
+            for base in ("https://api.jup.ag/price/v3?ids=",
+                         "https://lite-api.jup.ag/price/v2?ids="):
+                try:
+                    resp = requests.get(base + ",".join(chunk), headers={"Accept": "application/json",
+                                                      "User-Agent": "Mozilla/5.0"}, timeout=10)
+                    if resp.status_code == 200 and resp.json().get("data"):
+                        data = resp.json().get("data", {})
+                        break
+                except Exception:
+                    continue
+            for m in chunk:
+                try:
+                    entry = data.get(m, {}) or {}
+                    px = entry.get("price", 0) or entry.get("usdPrice", 0)
+                    if px and float(px) > 0:
+                        out[m] = float(px)
+                except Exception:
+                    continue
+    except Exception as e:
+        print(f"⚠️ Ошибка Live-цен Jupiter: {e}")
+    # 1.5 CEX public (без ключей): Coinbase + Kraken для SOL
+    missing_sol = "So11111111111111111111111111111111111111112" not in out
+    if missing_sol:
+        try:
+            resp = requests.get("https://api.coinbase.com/v2/prices/SOL-USD/spot",
+                                headers={"Accept": "application/json",
+                                         "User-Agent": "Mozilla/5.0"}, timeout=8)
             if resp.status_code == 200:
-                data = resp.json().get("data", {})
-                for m in chunk:
+                px = float((resp.json().get("data", {}) or {}).get("amount", 0))
+                if px > 0:
+                    out["So11111111111111111111111111111111111111112"] = px
+        except Exception as e:
+            print(f"⚠️ Ошибка цены SOL Coinbase: {e}")
+    if "So11111111111111111111111111111111111111112" not in out:
+        try:
+            resp = requests.get("https://api.kraken.com/0/public/Ticker?pair=SOLUSD",
+                                headers={"Accept": "application/json",
+                                         "User-Agent": "Mozilla/5.0"}, timeout=8)
+            if resp.status_code == 200:
+                last = (((resp.json().get("result", {}) or {}).get("SOLUSD", {}) or {}).get("c", []) or [0])[0]
+                if float(last) > 0:
+                    out["So11111111111111111111111111111111111111112"] = float(last)
+        except Exception as e:
+            print(f"⚠️ Ошибка цены SOL Kraken: {e}")
+    missing = [m for m in dict.fromkeys(mints) if m and m not in out]
+    if missing:
+        try:
+            ids = ",".join(f"solana:{m}" for m in missing[:30])
+            resp = requests.get(f"https://coins.llama.fi/prices/current/{ids}",
+                                headers={"Accept": "application/json",
+                                         "User-Agent": "Mozilla/5.0"}, timeout=10)
+            if resp.status_code == 200:
+                for m in missing[:30]:
                     try:
-                        px = data.get(m, {}).get("price", 0)
+                        px = (resp.json().get("coins", {}).get(f"solana:{m}", {}) or {}).get("price", 0)
                         if px and float(px) > 0:
                             out[m] = float(px)
                     except Exception:
                         continue
-    except Exception as e:
-        print(f"⚠️ Ошибка Live-цен Jupiter Lite: {e}")
+        except Exception as e:
+            print(f"⚠️ Ошибка Live-цен DeFiLlama: {e}")
     # 2. Недостающее — через GeckoTerminal
     missing = [m for m in dict.fromkeys(mints) if m and m not in out]
     if missing:

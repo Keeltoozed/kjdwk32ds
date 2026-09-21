@@ -32,7 +32,7 @@ MAX_CONCURRENT_POSITIONS = 10  # концентрация капитала: ма
 MAX_DAILY_LOSS_USD = 18.0
 KILL_SWITCH_ENABLED = True
 MAX_DAILY_LOSS_PCT = 0.25
-STOP_LOSS_PCT = -0.15  # -20%: достаточно для ракет, меньше чем -25% который давал -43% убытки
+STOP_LOSS_PCT = -0.20  # Вернули по просьбе: стоп -20% чтобы ракеты дышали
 SNIPER_ENTRIES_ENABLED = False
 TIME_EXIT_MINUTES = 60  # Если за 30 минут нет пампа - выходим
 TIME_EXIT_PROFIT_REQ = 0.0
@@ -60,14 +60,26 @@ JITO_TIP_AMOUNT_SOL = 0.0005 # Чаевые валидатору (минимум
 JITO_TIP_ACCOUNT = "96gYZGLnJYVFmbjzopPSU6QiCRK4rPdTuQ8hB1aP442b" # Официальный Jito Tip Account
 LUNARCRUSH_API_KEY = "syvh43mkvrzrw54sor6kc5r6dmtyj5fhi4jd38ht"
 
+# === ROBINHOOD CHAIN (EVM мемы, Arbitrum Orbit L2) ===
+# Chain ID 4663, slug DexScreener/GeckoTerminal: "robinhood". Проверено живьём 2026-09-21:
+# boosts/profiles DexScreener отдают chainId=robinhood, RPC отвечает 0x1237.
+ROBINHOOD_ENABLED = True
+ROBINHOOD_CHAIN_ID = 4663
+ROBINHOOD_DS_SLUG = "robinhood"  # slug DexScreener (НЕ 4663 - тот вернёт пусто!)
+ROBINHOOD_GT_NETWORK = "robinhood"  # slug GeckoTerminal
+ROBINHOOD_RPC_URL = "https://rpc.mainnet.chain.robinhood.com"
+ROBINHOOD_EXPLORER = "https://robinhoodchain.blockscout.com"
+ROBINHOOD_MIN_LIQUIDITY = 8000  # EVM-пулы Uniswap тоньше Solana - порог ниже
+ROBINHOOD_SCAN_INTERVAL = 45  # секунд между опросами boosts/profiles
+
 SNIPER_MIN_UNIQUE_BUYERS = 10
 SNIPER_BUYERS_WINDOW_MIN = 5
-VIP_MAX_M5_PCT = 1.00  # Не покупаем VIP, если он уже дал больше 100% (это вершина, дальше дамп)
-PULLBACK_MIN_M5_PCT = 0.03  # Токен должен ВЫРАСТИ минимум на 10% за 5 минут, чтобы считаться импульсом
+VIP_MAX_M5_PCT = 0.60  # Было 1.00 - брали вершину +100%. 60% - компромисс: ракеты пропускаем, вертикали нет
+PULLBACK_MIN_M5_PCT = 0.10  # Было 0.03 - брали все подряд без импульса. 10% - мягкий фильтр
 PULLBACK_M1_MIN_PCT = -0.15  # Но и не летим в падающий нож (максимум -15% за минуту)
-PULLBACK_M1_MAX_PCT = 0.08  # Откат должен быть отрицательным, мы не покупаем зеленую минутную свечу
-PULLBACK_MAX_H1_PCT = 10.00
-VIP_MAX_M5_PCT = 1.00  # Не покупаем VIP, если он уже дал больше 100% (это вершина, дальше дамп)
+PULLBACK_M1_MAX_PCT = 0.00  # Было 0.08 - покупали зеленую свечу = вершину. Вернули 0.00: ждем откат
+PULLBACK_MAX_H1_PCT = 3.00  # Было 10.00 (1000%) - брали вершины типа +3152% Drip / +33009% SI. Теперь >+300% за час = поздно
+VIP_MAX_M5_PCT = 0.60  # дубль ниже - держим 60%
 LOTTERY_MIN_M5_PCT = 0.80  # Лотерея только для мощных вертикалей от 80%
 LOTTERY_SIZE_MULT = 0.25
 WHALE_CONSENSUS = 2  # вход на 2-м ките (3-й = уже поздно)

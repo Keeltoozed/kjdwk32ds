@@ -22,6 +22,9 @@ async def position_manager_loop(analyzer, tracker):
             bulk_prices = await JupiterAPI.get_prices(mints_to_fetch) if mints_to_fetch else {}
             
             for mint, position in list(open_positions.items()):
+                # Robinhood (0x...) ведёт отдельный robinhood_loop со своими ценами DS
+                if mint.startswith("0x") or getattr(position, "chain", "solana") != "solana":
+                    continue
                 # 1. Берем цену из Raydium/Gecko (запросили разом для всех)
                 api_price = bulk_prices.get(mint, 0.0)
                 
@@ -269,7 +272,8 @@ async def scanner_loop(analyzer, tracker):
                                     print(f"🚫 Отказ (Ликвидность): Недостаточно ликвидности (${liq_usd}) для безопасного входа.")
                                     continue
                                     
-                                tracker.add_position(actual_symbol, mint, entry_price, position_size, is_mature=True)
+                                tracker.add_position(actual_symbol, mint, entry_price, position_size, is_mature=True,
+                                                     source=f"SCANNER:{getattr(analyzer, 'last_signal', '') or '?'}")
                                 break # Ждем следующего цикла после покупки
                             else:
                                 print(f"⚠️ Ошибка: Не удалось получить цену для {mint} (entry_price=0). Возможно, Rate Limit (429).")
@@ -313,7 +317,8 @@ async def fomo_signal_loop(analyzer, tracker):
                                 if entry_price > 0:
                                     capital = tracker.get_total_capital()
                                     position_size = max(4.0, min(100.0, capital * (config.REINVEST_PERCENT / 100.0)))
-                                    tracker.add_position(actual_symbol, mint, entry_price, position_size)
+                                    tracker.add_position(actual_symbol, mint, entry_price, position_size,
+                                                         source=f"TG-SIGNAL:{getattr(analyzer, 'last_signal', '') or '?'}")
         except Exception as e:
             print(f"Ошибка в fomo_signal_loop: {e}")
         await asyncio.sleep(1) # Проверяем файл каждую секунду для мгновенной реакции
@@ -329,6 +334,99 @@ async def rugpull_feeder_loop():
         except Exception as e:
             print(f"Ошибка в rugpull_feeder: {e}")
         await asyncio.sleep(6 * 60 * 60)  # Спим 6 часов
+
+async def robinhood_loop(analyzer, tracker):
+    """🟣 Robinhood Chain (EVM 4663): boosts+profiles DexScreener -> analyze_robinhood_token.
+    Цены и выходы ведёт сам через evm_data (DS), Solana-менеджер 0x-позиции пропускает."""
+    import evm_data
+    print("🟣 Robinhood Loop запущен: мемы сети 4663 (Uniswap)!")
+    if not getattr(config, "ROBINHOOD_ENABLED", True):
+        print("🟣 Robinhood отключён в config (ROBINHOOD_ENABLED=False).")
+        return
+    processed = {}
+    interval = getattr(config, "ROBINHOOD_SCAN_INTERVAL", 45)
+    while True:
+        try:
+            # Kill-switch общий
+            import time as _t
+            day_start = _t.time() - (_t.time() % 86400)
+            day_pnl = sum(getattr(p, "pnl_usd", 0) or 0 for p in tracker.positions.values()
+                          if getattr(p, "status", "") == "closed" and getattr(p, "exit_time", 0) and p.exit_time >= day_start)
+            if getattr(config, "KILL_SWITCH_ENABLED", True) and day_pnl <= -config.MAX_DAILY_LOSS_USD:
+                print(f"🛑 ROB KILL-SWITCH: PnL ${day_pnl:.2f}. Пауза 1ч.")
+                await asyncio.sleep(3600)
+                continue
+            # --- 1. Трекинг открытых ROB-позиций ---
+            rob_open = {m: p for m, p in tracker.get_open_positions().items()
+                        if m.startswith("0x") or getattr(p, "chain", "") == "robinhood"}
+            if rob_open:
+                try:
+                    px = await evm_data.get_bulk_prices(list(rob_open.keys()))
+                except Exception as e:
+                    print(f"🟣 ROB bulk price err: {e}")
+                    px = {}
+                for mint, pos in list(rob_open.items()):
+                    cur = px.get(mint, 0) or pos.current_price_usd or pos.entry_price_usd
+                    if cur > pos.max_price_usd:
+                        pos.max_price_usd = cur
+                        pos.peak_time = _t.time()
+                    prev = pos.current_price_usd
+                    pos.current_price_usd = cur
+                    if not pos.entry_price_usd:
+                        continue
+                    pnl = (cur - pos.entry_price_usd) / pos.entry_price_usd
+                    maxp = (pos.max_price_usd - pos.entry_price_usd) / pos.entry_price_usd
+                    pos.current_pnl_usd = pos.amount_usd * pnl
+                    held = (_t.time() - pos.entry_time) / 60
+                    reason = None
+                    prev_ts = getattr(pos, "price_checked_at", 0.0)
+                    if prev_ts and (_t.time() - prev_ts) < 60 and prev > 0 and cur <= prev * 0.80:
+                        reason = f"ROB Crash Guard ({(1 - cur / prev) * 100:.0f}% за {_t.time() - prev_ts:.0f}с)"
+                    elif maxp >= 0.15 and (pos.max_price_usd - cur) / pos.max_price_usd >= 0.10:
+                        reason = f"ROB Trailing (peak +{maxp * 100:.0f}%)"
+                    elif pnl <= config.STOP_LOSS_PCT:
+                        reason = f"ROB Stop ({pnl * 100:.1f}%)"
+                    elif held >= 15 and pnl < 0:
+                        reason = f"ROB Dead ({held:.0f}m)"
+                    elif held >= 7 and abs(pnl) < 0.05 and maxp < 0.05:
+                        reason = f"ROB Stagnant ({held:.0f}m)"
+                    pos.price_checked_at = _t.time()
+                    if reason:
+                        tracker.close_position(mint, cur, reason)
+                tracker.save_portfolio()
+            # --- 2. Скан новых ---
+            if len(tracker.get_open_positions()) < config.MAX_CONCURRENT_POSITIONS:
+                boosted = await evm_data.fetch_boosted_tokens()
+                profiles = await evm_data.fetch_profile_tokens()
+                mints = list(dict.fromkeys(boosted + profiles))[:25]
+                for addr in mints:
+                    if not addr or addr in tracker.positions:
+                        continue
+                    if _t.time() - processed.get(addr, 0.0) < 600:
+                        continue
+                    processed[addr] = _t.time()
+                    try:
+                        ok = await analyzer.analyze_robinhood_token(addr)
+                    except Exception as e:
+                        print(f"🟣 ROB analyze err {addr[:10]}: {type(e).__name__} {e}")
+                        continue
+                    if ok is True and len(tracker.get_open_positions()) < config.MAX_CONCURRENT_POSITIONS:
+                        td = await evm_data.get_token_data(addr)
+                        price = float(td.get("priceUsd", 0) or 0) if td else 0
+                        sym = ((td.get("baseToken") or {}).get("symbol", "ROB") if td else "ROB") or "ROB"
+                        if price > 0:
+                            cap = tracker.get_total_capital()
+                            size = max(4.0, min(100.0, cap * (config.REINVEST_PERCENT / 100.0))) if cap > 0 else 4.0
+                            tracker.add_position(sym, addr, price, size, is_mature=True,
+                                                 source=f"ROBINHOOD:{getattr(analyzer, 'last_signal', '') or '?'}",
+                                                 chain="robinhood")
+                            print(f"🟣 ROB BUY {sym} {addr[:10]} @ ${price}")
+                    await asyncio.sleep(1.0)
+                if len(processed) > 1000:
+                    processed.clear()
+        except Exception as e:
+            print(f"Ошибка в robinhood_loop: {e}")
+        await asyncio.sleep(interval)
 
 async def async_main():
     from pump_fun_sniper import PumpFunSniper
@@ -373,6 +471,7 @@ async def async_main():
         copy_trader.listen(),
         fomo_signal_loop(analyzer, tracker),
         fomo_loop(analyzer, tracker),
+        robinhood_loop(analyzer, tracker),  # 🟣 EVM-мемы Robinhood Chain 4663
         sniper.connect_and_listen(),  # ENABLED — с AI фильтром — sniper entry kills capital (-85.8%), mature +162.5%
         trade_logger.post_trade_watcher_loop(),
         rugpull_feeder_loop(),
@@ -464,6 +563,7 @@ with tab1:
                                 <h3 style='margin:0; color: #FFF;'>{row['symbol'] if str(row['symbol']).strip() else row['mint'][:6] + '...'}</h3>
                                 <h3 style='margin:0; color: {color};'>{sign}${pnl_usd:.2f} ({sign}{pnl_pct:.2f}%)</h3>
                             </div>
+                            <div style='margin-top: 6px; font-size: 0.75em; color: #888;'>🔖 {row.get('source', '') if str(row.get('source', '')).strip() else '—'} {'🟣 ROB' if str(row.get('chain', 'solana')) == 'robinhood' else '🟢 SOL'}</div>
                             <div style='display: flex; justify-content: space-between; margin-top: 10px; font-size: 0.85em; color: #BBB;'>
                                 <div><span style='color:#888;'>Вход:</span><br>${row['entry_price_usd']:.8f}</div>
                                 <div><span style='color:#888;'>Сейчас:</span><br>${row['current_price_usd']:.8f}</div>
@@ -499,8 +599,9 @@ with tab1:
                         st.markdown(f"""
                         <div style='background-color: #1A1A1A; padding: 10px 15px; border-radius: 6px; border-right: 4px solid {c_color}; margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center;'>
                             <div>
-                                <div style='color: #FFF; font-weight: bold;'>{row['symbol'] if str(row['symbol']).strip() else row.name[:6] + '...'}</div>
+                                <div style='color: #FFF; font-weight: bold;'>{row['symbol'] if str(row['symbol']).strip() else row.name[:6] + '...'} <span style='font-size: 0.7em; color: #888;'>{'🟣' if str(row.get('chain', 'solana')) == 'robinhood' else '🟢'}</span></div>
                                 <div style='color: #666; font-size: 0.75em;'>{row.get('exit_reason', 'Closed')}</div>
+                                <div style='color: #555; font-size: 0.7em;'>🔖 {row.get('source', '') if str(row.get('source', '')).strip() else '—'}</div>
                             </div>
                             <div style='text-align: right; color: {c_color}; font-weight: bold;'>
                                 {c_sign}${p_usd:.2f} <br> <span style='font-size: 0.8em;'>({c_sign}{p_pct:.2f}%)</span>
@@ -515,8 +616,31 @@ with tab1:
         st.info("Бот еще не совершил первую сделку.")
 
 with tab2:
-    st.subheader("🔥 Последние проанализированные токены (Alpha Agent)")
+    st.subheader("🔥 Последние проанализированные токены (Alpha Scanner)")
     st.markdown("Здесь отображаются монеты, которые бот сканирует прямо сейчас, с расчетом рейтинга в стиле **MemeSniper / GMGNAI**.")
+
+    # Метки покупок: какие монеты уже в портфеле (открыты) или были в сделках (закрыты)
+    try:
+        _pf = data
+    except NameError:
+        _pf = load_dashboard_portfolio()
+    _pf = _pf or {}
+    bought_open, bought_closed = set(), set()
+    for _k, _v in _pf.items():
+        if not isinstance(_v, dict):
+            continue
+        _m = _v.get("mint", _k)
+        if _v.get("status") == "open":
+            bought_open.add(_k)
+            bought_open.add(_m)
+        elif _v.get("status") == "closed":
+            bought_closed.add(_k)
+            bought_closed.add(_m)
+    # Архивные ключи вида mint_old_ts тоже считаем
+    def _is_bought(mint: str, pool: set) -> bool:
+        if mint in pool:
+            return True
+        return any(k.startswith(mint + "_old_") or k == mint for k in pool)
     
     try:
         with open("scanned_tokens.json", 'r') as f:
@@ -526,6 +650,13 @@ with tab2:
             for t in scanned_data:
                 score = t.get('score', 0)
                 color = "🟢" if score >= 70 else "🟡" if score >= 50 else "🔴"
+                _mint = t.get('mint', '')
+                if _is_bought(_mint, bought_open):
+                    _badge = "<div style='margin-top:8px; font-weight:bold; color:#00C851;'>✅ КУПЛЕН — позиция открыта</div>"
+                elif _is_bought(_mint, bought_closed):
+                    _badge = "<div style='margin-top:8px; font-weight:bold; color:#888;'>⚪ БЫЛА СДЕЛКА — уже закрыта</div>"
+                else:
+                    _badge = ""
                 
                 with st.container():
                     st.markdown(f"""
@@ -556,6 +687,7 @@ with tab2:
                             <div style='color: {"#00C851" if t.get("momentum",0) >= 70 else "#FF8800"};'>⚡ {t.get('momentum', 0)}</div>
                             <div style='color: {"#00C851" if t.get("social",0) >= 70 else "#FF8800"};'>📣 {t.get('social', 0)}</div>
                         </div>
+                        {_badge}
                     </div>
                     """, unsafe_allow_html=True)
         else:

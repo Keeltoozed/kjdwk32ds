@@ -102,7 +102,8 @@ async def birdeye_loop(analyzer: Analyzer, tracker):
                                 amount_usd=position_size,
                                 ml_confidence=90.0,
                                 features={"source": "Birdeye Trending"},
-                                is_mature=True
+                                is_mature=True,
+                                source="BIRDEYE"
                             )
                             print(f"✅ Успешный ВХОД (Birdeye) в {mint} по цене ${price:.6f}")
                         

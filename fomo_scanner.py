@@ -47,8 +47,14 @@ async def fetch_pumpfun_top():
                     mint = coin.get("mint")
                     if mint and mint not in tokens:
                         tokens.append(mint)
+            elif response.status == 403:
+                # Cloudflare режет дата-центр IP (и Render, и домашние). Молчим, есть другие источники.
+                pass
+            else:
+                print(f"Pump.fun top: HTTP {response.status}")
     except Exception as e:
-        print(f"Ошибка получения топ-монет Pump.fun: {type(e).__name__} - {e}")
+        # Тихий fail: источник необязательный (есть DexScreener boosts + GT + WSS-роддом)
+        print(f"Pump.fun top недоступен ({type(e).__name__}), пропускаю источник.")
     return tokens
 
 async def fetch_dexscreener_trending():
@@ -184,7 +190,8 @@ async def fomo_loop(analyzer: Analyzer, tracker):
                                     break
                                 position_size = max(4.0, min(100.0, capital * (config.REINVEST_PERCENT / 100.0)))
                                 print(f"🚀 СНАЙП FOMO-РАКЕТЫ {actual_symbol} ({mint})! Входим на {position_size}$ по цене {actual_price}$")
-                                tracker.add_position(actual_symbol, mint, actual_price, position_size)
+                                tracker.add_position(actual_symbol, mint, actual_price, position_size,
+                                                     source=f"FOMO:{getattr(analyzer, 'last_signal', '') or '?'}")
                     
             # Держим память в чистоте
             if len(processed_mints) > 1000:

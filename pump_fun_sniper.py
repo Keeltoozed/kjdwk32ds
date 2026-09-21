@@ -171,7 +171,7 @@ class PumpFunSniper:
             
             if position_size >= 4.0:
                 print(f"🚀 PAPER СНАЙП {state.symbol}! Входим на {position_size}$")
-                tracker.add_position(state.symbol, state.mint, actual_price, position_size, ml_features=state.ml_features_dict, ml_confidence=state.ai_confidence)
+                tracker.add_position(state.symbol, state.mint, actual_price, position_size, ml_features=state.ml_features_dict, ml_confidence=state.ai_confidence, source=f"SNIPER:{state.ai_confidence}%")
                 
                 async def panic_sell_callback(token_mint, reason):
                     pos = tracker.positions.get(token_mint)

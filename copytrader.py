@@ -155,7 +155,8 @@ class CopyTrader:
                     capital = self.tracker.get_total_capital()
                     position_size = max(4.0, min(100.0, capital * (config.REINVEST_PERCENT / 100.0)))
                     
-                    self.tracker.add_position(symbol, mint, price_usd, amount_usd=position_size)
+                    self.tracker.add_position(symbol, mint, price_usd, amount_usd=position_size,
+                                                source=f"COPY:{trader_name}")
                     print(f"✅ Успешно скопировали сделку {trader_name} на {position_size}$!")
 
     async def listen(self):

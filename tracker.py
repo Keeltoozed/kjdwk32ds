@@ -23,6 +23,8 @@ class VirtualPosition(BaseModel):
     ml_confidence: float = 0.0 # Уверенность ИИ (0-100)
     is_mature: bool = False # Флаг для разделения логики (Swing vs Scalp)
     is_moonbag: bool = False # Флаг, что мы уже зафиксировали 50% прибыли
+    source: str = "" # Кто открыл: SCANNER VIP RAY-XGB 98%, FOMO, COPY_xxx, ROBINHOOD rule 72%...
+    chain: str = "solana" # solana | robinhood
     price_updated_at: float = 0.0 # Время свежего обновления цены из WSS
     price_checked_at: float = 0.0 # Для Crash Guard
     exit_time: float = 0.0 # Для дневного kill-switch
@@ -142,7 +144,7 @@ class PaperTracker:
         
         return real_capital
 
-    def add_position(self, symbol, mint, entry_price, amount_usd=5.0, ml_features=None, ml_confidence=0.0, is_mature=False):
+    def add_position(self, symbol, mint, entry_price, amount_usd=5.0, ml_features=None, ml_confidence=0.0, is_mature=False, source="", chain="solana"):
         # БЛОКИРОВКА ПОВТОРНОГО ВХОДА С УМНЫМ КУЛДАУНОМ
         if mint in self.positions:
             pos = self.positions[mint]
@@ -161,7 +163,7 @@ class PaperTracker:
             self.positions[archive_key] = pos
             print(f"🔄 Кулдаун прошел! Разрешен повторный вход в {symbol} (CTO/Вторая волна).")
 
-        print(f"✅ Открыта PAPER сделка: {symbol} по цене ${entry_price}")
+        print(f"✅ Открыта PAPER сделка: {symbol} по цене ${entry_price} [{chain}|{source}]")
         
         ml_features_dict = ml_features if ml_features is not None else {}
         
@@ -175,10 +177,12 @@ class PaperTracker:
             current_price_usd=entry_price,
             ml_features=ml_features_dict,
             ml_confidence=ml_confidence,
-            is_mature=is_mature
+            is_mature=is_mature,
+            source=source,
+            chain=chain
         )
         self.save_portfolio()
-        print(f"📝 PAPER BUY: {symbol} ({mint}) | Amount: ${amount_usd} | Price: ${entry_price}")
+        print(f"📝 PAPER BUY: {symbol} ({mint}) | Amount: ${amount_usd} | Price: ${entry_price} | Src: {source} | Chain: {chain}")
         
         # === СОХРАНЕНИЕ В SUPABASE (ENTRY) ===
         # Сохраняем опыт в базу
