@@ -23,27 +23,27 @@ SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 # Paper Trading Config
 PAPER_PORTFOLIO_FILE = "portfolio.json"
 INITIAL_BALANCE_USD = 120.0  # торговый пул ($150 депо - $30 газ)    # Стартовый капитал
-REINVEST_PERCENT = 3.0  # СРОЧНО УРЕЗАНО: 5% -> 3% пока бот в минусе (меньше размер = дольше живем)
+REINVEST_PERCENT = 5.0  # 5% пула = $6 на старт       # Процент от капитала на одну сделку
 VIRTUAL_POSITION_SIZE_USD = 4.0
-TRADE_AMOUNT_USD = 4.0  # СРОЧНО УРЕЗАНО: было $6, стало $4
-MAX_CONCURRENT_POSITIONS = 10  # Вернули по просьбе: было 3 -> снова 10
+TRADE_AMOUNT_USD = 6.0  # жёсткий размер ордера ($6 = 5% пула) # (Устарело) базовый размер сделки
+MAX_CONCURRENT_POSITIONS = 10  # концентрация капитала: максимум 10 ракет  # Режим Снайпера: максимум 5 сделок одновременно
 
 # Risk Management
-MAX_DAILY_LOSS_USD = 18.0  # Вернули по просьбе: было 10 -> снова 18
+MAX_DAILY_LOSS_USD = 18.0
 KILL_SWITCH_ENABLED = True
 MAX_DAILY_LOSS_PCT = 0.25
-STOP_LOSS_PCT = -0.20  # Вернули по просьбе: было -12% -> снова -20%
+STOP_LOSS_PCT = -0.20  # -20%: достаточно для ракет, меньше чем -25% который давал -43% убытки
 SNIPER_ENTRIES_ENABLED = False
 TIME_EXIT_MINUTES = 60  # Если за 30 минут нет пампа - выходим
 TIME_EXIT_PROFIT_REQ = 0.0
 
 # Trailing Stop Config (Защита прибыли)
-TRAILING_ACTIVATION_PCT = 0.20  # Было 0.15 - слишком рано дергало, но сейчас главное резать убытки
-TRAILING_DISTANCE_PCT = 0.20  # Было 0.30 - слишком широко, отдавали весь профит обратно
+TRAILING_ACTIVATION_PCT = 0.15  # Активируем трейлинг уже при +15% (было +30% — слишком поздно)
+TRAILING_DISTANCE_PCT = 0.10
 
 # Filtering
 AI_MODE = "degen" # "sniper" (строго 80-90% уверенности) или "degen"
-MIN_LIQUIDITY = 25000  # СРОЧНО ПОДНЯТО: было 10000 - микро-пулы давали 100% проскальзывание и Crash Guard -50%
+MIN_LIQUIDITY = 10000  # Снижено для скальпинга обычных монет
 MAX_LIQUIDITY = 50000000
 
 # AI Аналитика
@@ -60,14 +60,15 @@ JITO_TIP_AMOUNT_SOL = 0.0005 # Чаевые валидатору (минимум
 JITO_TIP_ACCOUNT = "96gYZGLnJYVFmbjzopPSU6QiCRK4rPdTuQ8hB1aP442b" # Официальный Jito Tip Account
 LUNARCRUSH_API_KEY = "syvh43mkvrzrw54sor6kc5r6dmtyj5fhi4jd38ht"
 
-SNIPER_MIN_UNIQUE_BUYERS = 15
+SNIPER_MIN_UNIQUE_BUYERS = 10
 SNIPER_BUYERS_WINDOW_MIN = 5
-VIP_MAX_M5_PCT = 0.40  # СРОЧНО: было 1.00 (100%) - покупали вершину вертикали. Теперь >40% за 5мин = перегрев, пропуск
-PULLBACK_MIN_M5_PCT = 0.20  # Было 0.10 - брали вялые +10% без импульса. Теперь нужен реальный импульс от +20%
-PULLBACK_M1_MIN_PCT = -0.08  # Было -0.15 - позволяли брать падающий нож. Теперь откат не глубже -8%
-PULLBACK_M1_MAX_PCT = -0.01  # Было 0.00 - покупали зеленую свечу (вершину). Теперь m1 ДОЛЖНА быть красной минимум -1%
+VIP_MAX_M5_PCT = 1.00  # Не покупаем VIP, если он уже дал больше 100% (это вершина, дальше дамп)
+PULLBACK_MIN_M5_PCT = 0.03  # Токен должен ВЫРАСТИ минимум на 10% за 5 минут, чтобы считаться импульсом
+PULLBACK_M1_MIN_PCT = -0.15  # Но и не летим в падающий нож (максимум -15% за минуту)
+PULLBACK_M1_MAX_PCT = 0.08  # Откат должен быть отрицательным, мы не покупаем зеленую минутную свечу
 PULLBACK_MAX_H1_PCT = 10.00
-LOTTERY_MIN_M5_PCT = 2.00  # СРОЧНО: было 0.80 - лотерея на +80% это покупка вершины. Отключаем лотерею (x200% нереально)
+VIP_MAX_M5_PCT = 1.00  # Не покупаем VIP, если он уже дал больше 100% (это вершина, дальше дамп)
+LOTTERY_MIN_M5_PCT = 0.80  # Лотерея только для мощных вертикалей от 80%
 LOTTERY_SIZE_MULT = 0.25
 WHALE_CONSENSUS = 2  # вход на 2-м ките (3-й = уже поздно)
 WHALE_MAX_RUNUP = 1.35  # цена не должна вырасти >35% с момента покупки первого кита
