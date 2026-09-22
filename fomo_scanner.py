@@ -189,6 +189,10 @@ async def fomo_loop(analyzer: Analyzer, tracker):
                                 if capital <= 0:
                                     break
                                 position_size = max(4.0, min(100.0, capital * (config.REINVEST_PERCENT / 100.0)))
+                                # Кэп от пула как в сканере: не больше 0.5% ликвидности (INFERENCE -59%)
+                                liq_usd = (pair_data.get("liquidity") or {}).get("usd", 0) or 0
+                                if liq_usd > 0:
+                                    position_size = min(position_size, max(1.0, liq_usd * 0.005))
                                 print(f"🚀 СНАЙП FOMO-РАКЕТЫ {actual_symbol} ({mint})! Входим на {position_size}$ по цене {actual_price}$")
                                 tracker.add_position(actual_symbol, mint, actual_price, position_size,
                                                      source=f"FOMO:{getattr(analyzer, 'last_signal', '') or '?'}")

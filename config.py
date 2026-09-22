@@ -39,7 +39,7 @@ TIME_EXIT_PROFIT_REQ = 0.0
 
 # Trailing Stop Config (Защита прибыли)
 TRAILING_ACTIVATION_PCT = 0.15  # Активируем трейлинг уже при +15% (было +30% — слишком поздно)
-TRAILING_DISTANCE_PCT = 0.10
+TRAILING_DISTANCE_PCT = 0.20  # Было 0.10 - резало ракеты рано (RAFFLE +61% пик -> взяли +37%). 20% даёт ехать
 
 # Filtering
 AI_MODE = "degen" # "sniper" (строго 80-90% уверенности) или "degen"

@@ -97,6 +97,11 @@ async def position_manager_loop(analyzer, tracker):
                 
                 # === ИНТЕГРАЦИЯ МАТЕМАТИКИ ДЛЯ ЗРЕЛЫХ МОНЕТ (SWING TRADING) ===
                 if getattr(position, "is_mature", False):
+                    # MOONBAG для mature: RAFFLE дал +61% пик без частичной фиксации.
+                    # При +60% продаём половину сразу - дальше едет бесплатно.
+                    if max_pnl_pct >= 0.60 and not getattr(position, "is_moonbag", False):
+                        tracker.partial_close_position(mint, current_price, 0.50, "Take Profit +60% (Risk Free)")
+                        continue
                     from exit_managers import MatureExitManager
                     mature_exit_reason = MatureExitManager.evaluate_exit(position, current_price)
                     if mature_exit_reason:
@@ -160,10 +165,9 @@ async def position_manager_loop(analyzer, tracker):
             tracker.save_portfolio()
         except Exception as e:
             print(f"Ошибка в менеджере позиций: {e}")
-        # GeckoTerminal разрешает максимум 30 запросов в минуту. 
-        # Если делать sleep(0.5), будет 120 запросов, что вызовет жесткий бан и ослепит бота!
-        # Ставим интервал 3 секунды (20 запросов в минуту) - это максимально быстро и безопасно.
-        await asyncio.sleep(3.0)
+        # Балк-цены Jupiter+DS: 1 запрос на все позиции за цикл, квоту не жрёт.
+        # 2 сек вместо 3: стоп -20% исполнялся как -59% (INFERENCE) из-за проскока между тиками.
+        await asyncio.sleep(2.0)
 
 from birth_tracker import BirthTracker
 birth_tracker = BirthTracker()
@@ -250,8 +254,9 @@ async def scanner_loop(analyzer, tracker):
                                 base_position = capital * (config.REINVEST_PERCENT / 100.0)
                                 
                                 liq_usd = pair_data.get("liquidity", {}).get("usd", 0) if pair_data else 0
-                                # Если ликвидность 0 (часто бывает на свежих pump.fun токенах в GeckoTerminal), игнорируем это ограничение
-                                max_allowed_by_pool = liq_usd * 0.01 if liq_usd > 0 else 99999.0  
+                                # INFERENCE -59%: сайз был велик для тонкого пула, стоп проскочил.
+                                # Не больше 0.5% пула (было 1%) - иначе сами двигаем цену и не выходим.
+                                max_allowed_by_pool = liq_usd * 0.005 if liq_usd > 0 else 99999.0  
                                 
                                 fixed = getattr(config, "TRADE_AMOUNT_USD", 0)
                                 position_size = min(fixed, max_allowed_by_pool) if fixed else max(4.0, min(base_position, max_allowed_by_pool, 100.0))
@@ -380,7 +385,9 @@ async def robinhood_loop(analyzer, tracker):
                     held = (_t.time() - pos.entry_time) / 60
                     reason = None
                     prev_ts = getattr(pos, "price_checked_at", 0.0)
-                    if prev_ts and (_t.time() - prev_ts) < 60 and prev > 0 and cur <= prev * 0.80:
+                    if maxp >= 0.60 and not getattr(pos, "is_moonbag", False):
+                        tracker.partial_close_position(mint, cur, 0.50, "ROB Take Profit +60% (Risk Free)")
+                    elif prev_ts and (_t.time() - prev_ts) < 60 and prev > 0 and cur <= prev * 0.80:
                         reason = f"ROB Crash Guard ({(1 - cur / prev) * 100:.0f}% за {_t.time() - prev_ts:.0f}с)"
                     elif maxp >= 0.15 and (pos.max_price_usd - cur) / pos.max_price_usd >= 0.10:
                         reason = f"ROB Trailing (peak +{maxp * 100:.0f}%)"
