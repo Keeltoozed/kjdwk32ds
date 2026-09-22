@@ -145,6 +145,12 @@ async def position_manager_loop(analyzer, tracker):
                 if pnl_pct <= config.STOP_LOSS_PCT:
                     tracker.close_position(mint, current_price, f"Hard Stop Loss ({config.STOP_LOSS_PCT*100:.0f}%)")
                     continue
+
+                # 3.5 АВАРИЙНЫЙ КЭП: FIBONACCI -68%, INFERENCE -59% проскочили стоп в тонком пуле.
+                # Что бы ни случилось - больше -30% одну сделку не держим, выходим сразу.
+                if pnl_pct <= -0.30:
+                    tracker.close_position(mint, current_price, f"Emergency Cap ({pnl_pct*100:.0f}%)")
+                    continue
                     
                 # 4. УМНЫЙ ВЫХОД ПО ВРЕМЕНИ (Stagnant / Bleeding cut)
                 # Вернули по просьбе: режем мертвые через 15 мин
@@ -272,7 +278,7 @@ async def scanner_loop(analyzer, tracker):
                                 
                                 if _is_lot and not _is_vip:
                                     position_size *= getattr(config, "LOTTERY_SIZE_MULT", 0.25)
-                                
+
                                 if position_size < (1.0 if _is_lot else 4.0):
                                     print(f"🚫 Отказ (Ликвидность): Недостаточно ликвидности (${liq_usd}) для безопасного входа.")
                                     continue
@@ -391,6 +397,8 @@ async def robinhood_loop(analyzer, tracker):
                         reason = f"ROB Crash Guard ({(1 - cur / prev) * 100:.0f}% за {_t.time() - prev_ts:.0f}с)"
                     elif maxp >= 0.15 and (pos.max_price_usd - cur) / pos.max_price_usd >= 0.10:
                         reason = f"ROB Trailing (peak +{maxp * 100:.0f}%)"
+                    elif pnl <= -0.30:
+                        reason = f"ROB Emergency Cap ({pnl * 100:.1f}%)"
                     elif pnl <= config.STOP_LOSS_PCT:
                         reason = f"ROB Stop ({pnl * 100:.1f}%)"
                     elif held >= 15 and pnl < 0:

@@ -31,6 +31,10 @@ class MatureExitManager:
         except Exception:
             minutes_held = 0
 
+        # Аварийный кэп ПЕРВЫМ: гэпы типа FIBONACCI -68% проскакивают обычный стоп
+        if pnl_pct <= -0.30:
+            return f"Mature Emergency Cap ({pnl_pct*100:.0f}%)"
+
         # Trailing stop for mature coins
         if hasattr(config, 'TRAILING_ACTIVATION_PCT') and hasattr(config, 'TRAILING_DISTANCE_PCT'):
             max_pnl_pct = (position.max_price_usd - position.entry_price_usd) / position.entry_price_usd

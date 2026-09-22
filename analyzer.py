@@ -765,7 +765,19 @@ class Analyzer:
         # Безлимитный режим: используем ТОЛЬКО данные DexScreener
         if not pair_data:
             return False
-            
+
+        # FRESHNESS GATE (не-VIP): модель смотрит h24-окно и ставит 100% даже дохлым
+        # монетам (FIBONACCI -68%, paws -51%, HUSKY -30%). Живой токен торгуется СЕЙЧАС:
+        # требуем свежего m5-объёма. Победитель MC +83% шёл с живым m5 - он проходит.
+        _hyper_fresh = self.check_hyper_rocket_momentum(pair_data)
+        if not _hyper_fresh:
+            _txm5 = (pair_data.get("txns") or {}).get("m5", {}) or {}
+            _b5, _s5 = _txm5.get("buys", 0) or 0, _txm5.get("sells", 0) or 0
+            _vm5 = (pair_data.get("volume") or {}).get("m5", 0) or 0
+            if (_b5 + _s5) < 20 or _vm5 < 2000 or (_s5 > 0 and _b5 < _s5):
+                print(f"🚫 [FRESH] {mint[:8]}: m5 мёртв (b/s {_b5}/{_s5}, vol ${_vm5:,.0f}) — h24 может врать, модель пропустит.")
+                return False
+
         import pandas as pd
         import joblib
         
