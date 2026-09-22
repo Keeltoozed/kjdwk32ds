@@ -711,6 +711,46 @@ class Analyzer:
             return True
         return False
         
+    async def analyze_growth_token(self, mint: str) -> bool:
+        """GROWTH MODE: вход в откат часового тренда зрелого капа.
+        Окна H1/H24 (не m5!), широкие допуски. Возвращает True/False,
+        метка в signals[mint] = 'GROWTH h1+..%'."""
+        import config as _c
+        self.signals.pop(mint, None)
+        pair_data = await self.fetch_token_data(mint)
+        if not pair_data:
+            return None
+        base = pair_data.get("baseToken", {}) or {}
+        symbol = base.get("symbol", mint[:6])
+        pc = pair_data.get("priceChange") or {}
+        h1 = pc.get("h1", 0) or 0
+        h6 = pc.get("h6", 0) or 0
+        h24 = pc.get("h24", 0) or 0
+        txh1 = (pair_data.get("txns") or {}).get("h1", {}) or {}
+        b, s = txh1.get("buys", 0) or 0, txh1.get("sells", 0) or 0
+        liq = (pair_data.get("liquidity") or {}).get("usd", 0) or 0
+        if liq < getattr(_c, "GROWTH_MIN_LIQ", 200000):
+            return False
+        if h24 < getattr(_c, "GROWTH_MIN_H24_PCT", 5.0):
+            print(f"🌱 [GROWTH] {symbol}: h24 {h24:+.1f}% — тренда вверх нет.")
+            return False
+        if not (getattr(_c, "GROWTH_MIN_H1_PCT", 1.0) <= h1 <= getattr(_c, "GROWTH_MAX_H1_PCT", 15.0)):
+            print(f"🌱 [GROWTH] {symbol}: h1 {h1:+.1f}% вне окна входа.")
+            return False
+        if h6 > getattr(_c, "GROWTH_MAX_H6_PCT", 80.0):
+            print(f"🌱 [GROWTH] {symbol}: h6 {h6:+.0f}% — перегрев.")
+            return False
+        _mult = getattr(_c, "GROWTH_MIN_BUYSELL", 1.2)
+        if s > 0 and b < s * _mult:
+            print(f"🌱 [GROWTH] {symbol}: buys {b} / sells {s} — покупатели слабее {_mult}x.")
+            return False
+        if (b + s) < 50:
+            print(f"🌱 [GROWTH] {symbol}: тихо ({b+s} сделок/час).")
+            return False
+        self._set_sig(mint, f"GROWTH h1{h1:+.1f}% h24{h24:+.0f}%")
+        print(f"🌱 [GROWTH-CANDIDATE] {symbol}: h1 {h1:+.1f}% h24 {h24:+.0f}% b/s {b}/{s} liq ${liq:,.0f}")
+        return True
+
     def conviction_size_mult(self, pair_data: dict) -> float:
         """Множитель сайза по подтверждённому импульсу (НЕ по скору модели -
         модель всем ставит 100%, а катастрофы были VIP-100%).

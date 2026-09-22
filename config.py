@@ -89,6 +89,32 @@ CONVICTION_MIN_BUYSELL = 2.0  # покупки >= продаж x2
 CONVICTION_MIN_LIQ = 30000  # пул от $30к
 MAX_DEPLOYED_PCT = 0.60  # суммарно в рынке не больше 60% капитала (сдерживает тиринг)
 
+# === GROWTH MODE (тренд старых токенов, пока нет ракет) ===
+# Логика: ракеты ловятся импульсом m5, а зрелые капы едут часами. Отдельный режим:
+# вход в откат часового тренда, широкие стопы, удержание часами, мало сделок.
+GROWTH_ENABLED = True
+GROWTH_WATCHLIST = [  # ликвидные Solana-капы (путать не с чем, рага не будет)
+    "So11111111111111111111111111111111111111112",  # SOL
+    "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN",  # JUP
+    "4k3Dyjzvzp8eMZWUXbBCjEvwSkkk59S5iCNLY3QrkX6R",  # RAY
+    "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263",  # BONK
+    "EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm",  # WIF
+    "orcaEKTdK7LKz57vaAYr9QeNsVEPfiu6QeMU1kektZE",  # ORCA
+]
+GROWTH_MIN_LIQ = 200000  # пул от $200к - проскальзывания нет
+GROWTH_MIN_H24_PCT = 5.0  # дневной тренд вверх от +5%
+GROWTH_MIN_H1_PCT = 1.0  # часовой откат-вход от +1%
+GROWTH_MAX_H1_PCT = 15.0  # выше +15% за час - вершина, не гонимся
+GROWTH_MAX_H6_PCT = 80.0  # выше +80% за 6ч - перегрев
+GROWTH_MIN_BUYSELL = 1.2  # покупки >= продаж x1.2 за h1
+GROWTH_STOP_PCT = -0.10  # широкий стоп -10% (шум часовок)
+GROWTH_TRAIL_ACT = 0.08  # трейлинг с +8%
+GROWTH_TRAIL_DIST = 0.12  # дистанция 12%
+GROWTH_STAGNANT_MIN = 120  # флет режем через 2 часа, не 7 минут
+GROWTH_MAX_POS = 3  # не больше 3 трендовых позиций
+GROWTH_SIZE_USD = 6.0
+GROWTH_INTERVAL = 300  # опрос вотчлиста каждые 5 мин
+
 SNIPER_MIN_UNIQUE_BUYERS = 10
 SNIPER_BUYERS_WINDOW_MIN = 5
 VIP_MAX_M5_PCT = 0.60  # Было 1.00 - брали вершину +100%. 60% - компромисс: ракеты пропускаем, вертикали нет

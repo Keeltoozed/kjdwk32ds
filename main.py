@@ -25,6 +25,9 @@ async def position_manager_loop(analyzer, tracker):
                 # Robinhood (0x...) ведёт отдельный robinhood_loop со своими ценами DS
                 if mint.startswith("0x") or getattr(position, "chain", "solana") != "solana":
                     continue
+                # GROWTH-позиции ведёт growth_loop (медленные выходы) - пропускаем
+                if str(getattr(position, "source", "")).startswith("GROWTH"):
+                    continue
                 # 1. Берем цену из Raydium/Gecko (запросили разом для всех)
                 api_price = bulk_prices.get(mint, 0.0)
                 
@@ -354,6 +357,84 @@ async def fomo_signal_loop(analyzer, tracker):
             print(f"Ошибка в fomo_signal_loop: {e}")
         await asyncio.sleep(1) # Проверяем файл каждую секунду для мгновенной реакции
 
+async def growth_loop(analyzer, tracker):
+    """🌱 GROWTH MODE: тренд зрелых капов, пока нет ракет.
+    Вход в откат H1-тренда, выходы медленные: стоп -10%, трейлинг +8%/12%, стагнант 2ч."""
+    print("🌱 Growth Loop запущен: тренды капов (медленные деньги).")
+    if not getattr(config, "GROWTH_ENABLED", True):
+        return
+    interval = getattr(config, "GROWTH_INTERVAL", 300)
+    while True:
+        try:
+            import time as _t
+            day_start = _t.time() - (_t.time() % 86400)
+            day_pnl = sum(getattr(p, "pnl_usd", 0) or 0 for p in tracker.positions.values()
+                          if getattr(p, "status", "") == "closed" and getattr(p, "exit_time", 0) and p.exit_time >= day_start)
+            if getattr(config, "KILL_SWITCH_ENABLED", True) and day_pnl <= -config.MAX_DAILY_LOSS_USD:
+                await asyncio.sleep(3600)
+                continue
+            mine = {m: p for m, p in tracker.get_open_positions().items()
+                    if str(getattr(p, "source", "")).startswith("GROWTH")}
+            # --- трекинг ---
+            if mine:
+                from jupiter import JupiterAPI
+                px = await JupiterAPI.get_prices(list(mine.keys()))
+                for mint, pos in list(mine.items()):
+                    cur = px.get(mint, 0) or pos.current_price_usd or pos.entry_price_usd
+                    if cur > pos.max_price_usd:
+                        pos.max_price_usd = cur
+                    prev = pos.current_price_usd
+                    pos.current_price_usd = cur
+                    if not pos.entry_price_usd:
+                        continue
+                    pnl = (cur - pos.entry_price_usd) / pos.entry_price_usd
+                    maxp = (pos.max_price_usd - pos.entry_price_usd) / pos.entry_price_usd
+                    pos.current_pnl_usd = pos.amount_usd * pnl
+                    held = (_t.time() - pos.entry_time) / 60
+                    reason = None
+                    prev_ts = getattr(pos, "price_checked_at", 0.0)
+                    if prev_ts and (_t.time() - prev_ts) < 300 and prev > 0 and cur <= prev * 0.80:
+                        reason = f"GROWTH Crash ({(1 - cur / prev) * 100:.0f}%)"
+                    elif maxp >= getattr(config, "GROWTH_TRAIL_ACT", 0.08) and \
+                            (pos.max_price_usd - cur) / pos.max_price_usd >= getattr(config, "GROWTH_TRAIL_DIST", 0.12):
+                        reason = f"GROWTH Trailing (peak +{maxp * 100:.0f}%)"
+                    elif pnl <= getattr(config, "GROWTH_STOP_PCT", -0.10):
+                        reason = f"GROWTH Stop ({pnl * 100:.1f}%)"
+                    elif held >= getattr(config, "GROWTH_STAGNANT_MIN", 120) and pnl < 0.05:
+                        reason = f"GROWTH Stagnant ({held:.0f}m)"
+                    pos.price_checked_at = _t.time()
+                    if reason:
+                        tracker.close_position(mint, cur, reason)
+                tracker.save_portfolio()
+            # --- скан вселенной: ядро вотчлиста + динамический топ Raydium по ликве ---
+            if len(mine) < getattr(config, "GROWTH_MAX_POS", 3) and \
+                    len(tracker.get_open_positions()) < config.MAX_CONCURRENT_POSITIONS:
+                import market_data as _md
+                universe = await _md.get_growth_universe()
+                watch = list(dict.fromkeys(list(getattr(config, "GROWTH_WATCHLIST", [])) + universe))
+                for mint in watch:
+                    if mint in tracker.positions or len(tracker.get_open_positions()) >= config.MAX_CONCURRENT_POSITIONS:
+                        continue
+                    try:
+                        ok = await analyzer.analyze_growth_token(mint)
+                    except Exception as e:
+                        print(f"🌱 GROWTH analyze err: {type(e).__name__} {e}")
+                        continue
+                    if ok is True:
+                        from jupiter import JupiterAPI
+                        price = await JupiterAPI.get_price(mint)
+                        if price > 0:
+                            td = await analyzer.fetch_token_data(mint)
+                            sym = ((td.get("baseToken") or {}).get("symbol", mint[:4]) if td else mint[:4]) or mint[:4]
+                            tracker.add_position(sym, mint, price, float(getattr(config, "GROWTH_SIZE_USD", 6.0)),
+                                                 is_mature=True, source=f"GROWTH:{analyzer.get_signal(mint)}")
+                            print(f"🌱 GROWTH BUY {sym} @ ${price}")
+                    await asyncio.sleep(2)
+        except Exception as e:
+            print(f"Ошибка в growth_loop: {e}")
+        await asyncio.sleep(interval)
+
+
 async def rugpull_feeder_loop():
     print("🧹 Запуск автоматического сборщика скам-рагпулов (раз в 6 часов)...")
     # Ждем 10 секунд перед первым запуском, чтобы не грузить систему на старте
@@ -508,6 +589,7 @@ async def async_main():
         fomo_signal_loop(analyzer, tracker),
         fomo_loop(analyzer, tracker),
         robinhood_loop(analyzer, tracker),  # 🟣 EVM-мемы Robinhood Chain 4663
+        growth_loop(analyzer, tracker),  # 🌱 тренды капов, пока нет ракет
         sniper.connect_and_listen(),  # ENABLED — с AI фильтром — sniper entry kills capital (-85.8%), mature +162.5%
         trade_logger.post_trade_watcher_loop(),
         rugpull_feeder_loop(),

@@ -452,6 +452,46 @@ _trending_cache = []
 _trending_cache_time = 0
 
 
+async def get_growth_universe(min_reserve_usd: float = 500000.0, limit: int = 20) -> list:
+    """Вселенная GROWTH: ядро вотчлиста + топ пулов Raydium по резерву.
+    Адреса только живые из API (не хардкод) + фильтр стейблов. Кэш 5 мин."""
+    global _trending_cache, _trending_cache_time
+    out, seen = [], set()
+
+    def add(mint):
+        if mint and mint not in seen and len(mint) > 30:
+            seen.add(mint)
+            out.append(mint)
+
+    try:
+        import config as _c
+        for m in getattr(_c, "GROWTH_WATCHLIST", []):
+            add(m)
+    except Exception:
+        pass
+    stables = {"EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+               "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB"}
+    try:
+        for page in (1, 2):
+            d = await _gt_get(f"/networks/solana/dexes/raydium/pools?page={page}")
+            for item in (d.get("data") or []):
+                try:
+                    a = item.get("attributes", {})
+                    if float(a.get("reserve_in_usd", 0) or 0) < min_reserve_usd:
+                        continue
+                    m = _base_mint(item)
+                    if m in stables:
+                        continue
+                    add(m)
+                    if len(out) >= limit:
+                        return out
+                except Exception:
+                    continue
+    except Exception as e:
+        print(f"growth universe err: {type(e).__name__} {e}")
+    return out
+
+
 async def get_trending() -> list:
     """Замена boosts/profiles: тренды GT + свежие пулы pump.fun.
     Формат как у DexScreener boosts: [{'tokenAddress','chainId'}]."""
