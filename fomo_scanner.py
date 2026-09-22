@@ -188,14 +188,23 @@ async def fomo_loop(analyzer: Analyzer, tracker):
                                 capital = tracker.get_total_capital()
                                 if capital <= 0:
                                     break
-                                position_size = max(4.0, min(100.0, capital * (config.REINVEST_PERCENT / 100.0)))
+                                # База = фиксированный ордер как в сканере (цель $10/день), не голые 5%
+                                fixed = getattr(config, "TRADE_AMOUNT_USD", 10.0)
+                                position_size = max(4.0, min(100.0, fixed if fixed else capital * (config.REINVEST_PERCENT / 100.0)))
                                 # Кэп от пула как в сканере: не больше 0.5% ликвидности (INFERENCE -59%)
                                 liq_usd = (pair_data.get("liquidity") or {}).get("usd", 0) or 0
                                 if liq_usd > 0:
                                     position_size = min(position_size, max(1.0, liq_usd * 0.005))
+                                position_size *= analyzer.conviction_size_mult(pair_data)
+                                position_size = min(position_size, 100.0)
+                                _dep = sum(p.amount_usd for p in tracker.get_open_positions().values())
+                                _cap = capital * getattr(config, "MAX_DEPLOYED_PCT", 0.60)
+                                if _dep + position_size > _cap:
+                                    print(f"🚫 FOMO Exposure: занято ${_dep:.0f}, лимит ${_cap:.0f}. Пропуск.")
+                                    continue
                                 print(f"🚀 СНАЙП FOMO-РАКЕТЫ {actual_symbol} ({mint})! Входим на {position_size}$ по цене {actual_price}$")
                                 tracker.add_position(actual_symbol, mint, actual_price, position_size,
-                                                     source=f"FOMO:{getattr(analyzer, 'last_signal', '') or '?'}")
+                                                     source=f"FOMO:{analyzer.get_signal(mint)}")
                     
             # Держим память в чистоте
             if len(processed_mints) > 1000:

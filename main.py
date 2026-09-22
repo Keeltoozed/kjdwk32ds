@@ -75,9 +75,14 @@ async def position_manager_loop(analyzer, tracker):
                     tracker.close_position(mint, current_price, f"Post-Rocket Fade Cut ({minutes_since_peak:.0f}m after peak)")
                     continue
 
-                # === STAGNANT EXIT: режем ТОЛЬКО монеты, которые ни разу не двинулись ===
-                if minutes_held >= 7 and abs(pnl_pct) < 0.05 and max_pnl_pct < 0.05:
-                    tracker.close_position(mint, current_price, "Stagnant Near Zero (7 min flat)")
+                # === STAGNANT EXIT: минус режем на STAGNANT_LOSS_MIN, мелкий плюс держим до HOLD_MIN ===
+                _loss_min = getattr(config, "STAGNANT_LOSS_MIN", 7)
+                _hold_min = getattr(config, "STAGNANT_HOLD_MIN", 25)
+                if minutes_held >= _loss_min and pnl_pct < 0 and max_pnl_pct < 0.05:
+                    tracker.close_position(mint, current_price, f"Stagnant Loss Cut ({minutes_held:.0f}m, {pnl_pct*100:.1f}%)")
+                    continue
+                if minutes_held >= _hold_min and abs(pnl_pct) < 0.05 and max_pnl_pct < 0.05:
+                    tracker.close_position(mint, current_price, f"Stagnant Near Zero ({_hold_min} min flat)")
                     continue
                 # Profit lock удален, используется трейлинг-стоп из config.py
                 
@@ -98,9 +103,10 @@ async def position_manager_loop(analyzer, tracker):
                 # === ИНТЕГРАЦИЯ МАТЕМАТИКИ ДЛЯ ЗРЕЛЫХ МОНЕТ (SWING TRADING) ===
                 if getattr(position, "is_mature", False):
                     # MOONBAG для mature: RAFFLE дал +61% пик без частичной фиксации.
-                    # При +60% продаём половину сразу - дальше едет бесплатно.
-                    if max_pnl_pct >= 0.60 and not getattr(position, "is_moonbag", False):
-                        tracker.partial_close_position(mint, current_price, 0.50, "Take Profit +60% (Risk Free)")
+                    # На триггере продаём половину сразу - дальше едет бесплатно.
+                    _mb = getattr(config, "MOONBAG_TRIGGER_PCT", 0.50)
+                    if max_pnl_pct >= _mb and not getattr(position, "is_moonbag", False):
+                        tracker.partial_close_position(mint, current_price, 0.50, f"Take Profit +{_mb*100:.0f}% (Risk Free)")
                         continue
                     from exit_managers import MatureExitManager
                     mature_exit_reason = MatureExitManager.evaluate_exit(position, current_price)
@@ -123,9 +129,10 @@ async def position_manager_loop(analyzer, tracker):
                         continue
                         
                 # === MOONBAG: Возврат инвестиций (Жесткий Take Profit) ===
-                # При +60% профита мгновенно продаем 50% позиции. Забираем свои деньги.
-                if max_pnl_pct >= 0.60 and not getattr(position, "is_moonbag", False):
-                    tracker.partial_close_position(mint, current_price, 0.50, "Take Profit +60% (Risk Free)")
+                # На триггере продаем 50% позиции. Забираем свои деньги.
+                _mb2 = getattr(config, "MOONBAG_TRIGGER_PCT", 0.50)
+                if max_pnl_pct >= _mb2 and not getattr(position, "is_moonbag", False):
+                    tracker.partial_close_position(mint, current_price, 0.50, f"Take Profit +{_mb2*100:.0f}% (Risk Free)")
                     continue
 
                 # 2. ОСНОВНОЙ ТРЕЙЛИНГ-СТОП (Динамическая фиксация позиции)
@@ -225,7 +232,7 @@ async def scanner_loop(analyzer, tracker):
                 mints_to_scan = [p.get("tokenAddress") for p in tokens if p.get("tokenAddress")]
                 
                 # 2. Уличные Токены (Берем молодые ракеты от 5 до 20 минут)
-                mature_mints = birth_tracker.get_mature_tokens(5, 20)
+                mature_mints = birth_tracker.get_mature_tokens(3, 25)  # Было 5-20: шире окно молодняка = больше ракет
                 if mature_mints:
                     print(f"🎂 Найдено {len(mature_mints)} перспективных монет (возраст 5-20 минут)!")
                     mints_to_scan.extend(mature_mints)
@@ -279,12 +286,25 @@ async def scanner_loop(analyzer, tracker):
                                 if _is_lot and not _is_vip:
                                     position_size *= getattr(config, "LOTTERY_SIZE_MULT", 0.25)
 
+                                # Conviction-тиринг: подтверждённый импульс (m5 20-60%, buys 2x+, пул $30к+) едет x2.
+                                # Тир решает рынок, НЕ скор модели и НЕ голый VIP-объём (катастрофы были VIP-100%).
+                                if not _is_lot:
+                                    position_size *= analyzer.conviction_size_mult(pair_data)
+                                position_size = min(position_size, 100.0)
+
                                 if position_size < (1.0 if _is_lot else 4.0):
                                     print(f"🚫 Отказ (Ликвидность): Недостаточно ликвидности (${liq_usd}) для безопасного входа.")
                                     continue
+
+                                # Защита от переразгона: в рынке не больше 60% капитала
+                                _deployed = sum(p.amount_usd for p in tracker.get_open_positions().values())
+                                _cap = tracker.get_total_capital() * getattr(config, "MAX_DEPLOYED_PCT", 0.60)
+                                if _deployed + position_size > _cap:
+                                    print(f"🚫 Отказ (Exposure): занято ${_deployed:.0f} + ${position_size:.0f} > лимит ${_cap:.0f}.")
+                                    continue
                                     
                                 tracker.add_position(actual_symbol, mint, entry_price, position_size, is_mature=True,
-                                                     source=f"SCANNER:{getattr(analyzer, 'last_signal', '') or '?'}")
+                                                     source=f"SCANNER:{analyzer.get_signal(mint)}")
                                 break # Ждем следующего цикла после покупки
                             else:
                                 print(f"⚠️ Ошибка: Не удалось получить цену для {mint} (entry_price=0). Возможно, Rate Limit (429).")
@@ -329,7 +349,7 @@ async def fomo_signal_loop(analyzer, tracker):
                                     capital = tracker.get_total_capital()
                                     position_size = max(4.0, min(100.0, capital * (config.REINVEST_PERCENT / 100.0)))
                                     tracker.add_position(actual_symbol, mint, entry_price, position_size,
-                                                         source=f"TG-SIGNAL:{getattr(analyzer, 'last_signal', '') or '?'}")
+                                                         source=f"TG-SIGNAL:{analyzer.get_signal(mint)}")
         except Exception as e:
             print(f"Ошибка в fomo_signal_loop: {e}")
         await asyncio.sleep(1) # Проверяем файл каждую секунду для мгновенной реакции
@@ -391,8 +411,9 @@ async def robinhood_loop(analyzer, tracker):
                     held = (_t.time() - pos.entry_time) / 60
                     reason = None
                     prev_ts = getattr(pos, "price_checked_at", 0.0)
-                    if maxp >= 0.60 and not getattr(pos, "is_moonbag", False):
-                        tracker.partial_close_position(mint, cur, 0.50, "ROB Take Profit +60% (Risk Free)")
+                    _mbr = getattr(config, "MOONBAG_TRIGGER_PCT", 0.50)
+                    if maxp >= _mbr and not getattr(pos, "is_moonbag", False):
+                        tracker.partial_close_position(mint, cur, 0.50, f"ROB Take Profit +{_mbr*100:.0f}% (Risk Free)")
                     elif prev_ts and (_t.time() - prev_ts) < 60 and prev > 0 and cur <= prev * 0.80:
                         reason = f"ROB Crash Guard ({(1 - cur / prev) * 100:.0f}% за {_t.time() - prev_ts:.0f}с)"
                     elif maxp >= 0.15 and (pos.max_price_usd - cur) / pos.max_price_usd >= 0.10:
@@ -433,7 +454,7 @@ async def robinhood_loop(analyzer, tracker):
                             cap = tracker.get_total_capital()
                             size = max(4.0, min(100.0, cap * (config.REINVEST_PERCENT / 100.0))) if cap > 0 else 4.0
                             tracker.add_position(sym, addr, price, size, is_mature=True,
-                                                 source=f"ROBINHOOD:{getattr(analyzer, 'last_signal', '') or '?'}",
+                                                 source=f"ROBINHOOD:{analyzer.get_signal(addr)}",
                                                  chain="robinhood")
                             print(f"🟣 ROB BUY {sym} {addr[:10]} @ ${price}")
                     await asyncio.sleep(1.0)

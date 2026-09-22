@@ -55,8 +55,13 @@ class MatureExitManager:
         if hasattr(config, 'STOP_LOSS_PCT') and pnl_pct <= config.STOP_LOSS_PCT:
             return f"Mature Stop Loss ({config.STOP_LOSS_PCT*100:.0f}%)"
 
-        # Time exit - Stagnant
-        if minutes_held >= 7 and pnl_pct < 0.05:
+        # Time exit - Stagnant: минус режем быстро (он тянет вниз),
+        # мелкий плюс держим до STAGNANT_HOLD_MIN - даём ракете время (раньше резали и его)
+        _loss_min = getattr(config, 'STAGNANT_LOSS_MIN', 7)
+        _hold_min = getattr(config, 'STAGNANT_HOLD_MIN', 25)
+        if minutes_held >= _loss_min and pnl_pct < 0:
+            return f"Stagnant Loss Cut ({minutes_held:.0f}m)"
+        if minutes_held >= _hold_min and pnl_pct < 0.05:
             return f"Stagnant Cut ({minutes_held:.0f}m)"
             
         # Old fallback

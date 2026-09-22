@@ -40,6 +40,20 @@ class Analyzer:
         self.pump_model = None
         self.raydium_model = None
         self.last_signal = ""  # Метка последнего решения: "VIP RAY-XGB 98%", "PULLBACK", "ROBINHOOD rule 72%"...
+        self.signals = {}  # Метки по mint: НЕ делит состояние между параллельными петлями (иначе FOMO:? в дашборде)
+
+    def _set_sig(self, key: str, text: str):
+        """Метка решения для монеты. Per-mint словарь вместо общего поля:
+        scanner/fomo/robinhood гоняют analyze параллельно на одном Analyzer."""
+        self.signals[key] = text
+        if len(self.signals) > 2000:
+            self.signals.clear()
+            self.signals[key] = text
+        self.last_signal = text
+
+    def get_signal(self, key: str) -> str:
+        # Только своя метка монеты. Чужую (last_signal) не подставляем - давала FOMO:? и чужие метки
+        return self.signals.get(key) or "?"
         
         # Предзагрузка моделей в память один раз при старте
         try:
@@ -321,6 +335,7 @@ class Analyzer:
     async def analyze_token(self, mint: str) -> bool:
         # Smart Router
         self.last_signal = ""  # сброс метки решения
+        self.signals.pop(mint, None)
         
         # Мы больше не используем глючный RugCheck API.
         # Вместо этого проверка на снайперов/бандлы идет напрямую через блокчейн (Helius RPC)
@@ -420,8 +435,8 @@ class Analyzer:
             _txm5 = (pair_data.get("txns") or {}).get("m5", {}) or {}
             _b5, _s5 = _txm5.get("buys", 0) or 0, _txm5.get("sells", 0) or 0
             
-            if (_b5 + _s5) < 40:
-                print(f"🚫 [VELOCITY] {mint}: txns m5 {_b5 + _s5} < 40 — слишком медленно, нет органического FOMO.")
+            if (_b5 + _s5) < 30:
+                print(f"🚫 [VELOCITY] {mint}: txns m5 {_b5 + _s5} < 30 — слишком медленно, нет органического FOMO.")
                 return False
             if _s5 > 0:
                 mult = 1.0
@@ -463,8 +478,8 @@ class Analyzer:
         has_tg = any("telegram" in s.get("type", "").lower() or "t.me" in s.get("url", "").lower() for s in socials)
         has_website = len(websites) > 0
         
-        # Смягченный фильтр: достаточно хотя бы одной соцсети или сайта (пропускаем для VIP)
-        if not (has_twitter or has_tg or has_website) and not is_vip:
+        # Соцсети обязательны для всех включая VIP: объём накрутить можно, сайт - нет
+        if not (has_twitter or has_tg or has_website):
             print(f"🚫 Мусор: У {mint} вообще нет ни одной соцсети или сайта.")
             return False
             
@@ -619,7 +634,7 @@ class Analyzer:
 
         if is_vip or _lottery:
             print(f"🚀 [FAST TRACK] {symbol}: гейты пройдены, передаем на проверку холдеров (Снайперы/Бандлы).")
-            self.last_signal = "VIP" if is_vip else "LOTTERY"
+            self._set_sig(mint, "VIP" if is_vip else "LOTTERY")
 
         dex_id = pair_data.get("dexId")
         created_at = pair_data.get("pairCreatedAt", 0)
@@ -637,6 +652,7 @@ class Analyzer:
         Возвращает True/False, метка решения в self.last_signal."""
         import evm_data
         self.last_signal = ""
+        self.signals.pop(address, None)
         pair_data = await evm_data.get_token_data(address)
         if not pair_data:
             return None
@@ -691,10 +707,29 @@ class Analyzer:
         score = min(score, 100.0)
         print(f"🟣 [ROBINHOOD] {symbol}: m5 {m5:+.1f}% b/s {b}/{s} liq ${liq:,.0f} → score {score:.0f}")
         if score >= 60.0:
-            self.last_signal = f"ROBINHOOD rule {score:.0f}%"
+            self._set_sig(address, f"ROBINHOOD rule {score:.0f}%")
             return True
         return False
         
+    def conviction_size_mult(self, pair_data: dict) -> float:
+        """Множитель сайза по подтверждённому импульсу (НЕ по скору модели -
+        модель всем ставит 100%, а катастрофы были VIP-100%).
+        Conviction = m5 в окне + давление покупок + толстый пул. Иначе 1.0."""
+        try:
+            import config as _c
+            pc = pair_data.get("priceChange") or {}
+            m5 = (pc.get("m5", 0) or 0) / 100.0
+            txm5 = (pair_data.get("txns") or {}).get("m5", {}) or {}
+            b5, s5 = txm5.get("buys", 0) or 0, txm5.get("sells", 0) or 0
+            liq = (pair_data.get("liquidity") or {}).get("usd", 0) or 0
+            if (getattr(_c, "CONVICTION_MIN_M5_PCT", 0.20) <= m5 <= getattr(_c, "CONVICTION_MAX_M5_PCT", 0.60)
+                    and s5 > 0 and b5 >= s5 * getattr(_c, "CONVICTION_MIN_BUYSELL", 2.0)
+                    and liq >= getattr(_c, "CONVICTION_MIN_LIQ", 30000)):
+                return float(getattr(_c, "CONVICTION_MULT", 2.0))
+        except Exception:
+            pass
+        return 1.0
+
     async def analyze_token_xgboost(self, mint: str, pair_data: dict) -> bool:
         if not pair_data:
             return False
@@ -753,12 +788,12 @@ class Analyzer:
         import config
         threshold = 45.0  # Было 15.0 - пропускало мусор. 45% - компромисс: не 65% чтобы не зажать, но режет скам
         if is_vip:
-            threshold = 30.0 # Было 10.0 - VIP покупал все. 30% минимум для ракет
-            print(f"🔥 [VIP] Порог XGBoost снижен до {threshold}%")
+            threshold = 45.0  # Было 30.0: все катастрофы (FIBONACCI -68%, Goblin, CATANA) - VIP-входы. Та же планка для всех
+            print(f"🔥 [VIP] Порог XGBoost как у всех: {threshold}%")
 
         ok = bool(conf >= threshold)
         if ok:
-            self.last_signal = f"{'VIP-' if is_vip else ''}PUMP-XGB {conf:.0f}%"
+            self._set_sig(mint, f"{'VIP-' if is_vip else ''}PUMP-XGB {conf:.0f}%")
         return ok
 
     async def analyze_token_raydium(self, mint: str, pair_data: dict) -> bool:
@@ -833,12 +868,11 @@ class Analyzer:
             print(f"🧠 Raydium XGBoost (Безлимит): {mint} | Score: {conf:.1f}%")
             import config; threshold = 45.0  # Было 15.0 - пропускало мусор
             _hyper = self.check_hyper_rocket_momentum(pair_data)
-            if _hyper:
-                threshold = 25.0  # Было 0.0 - покупало любую вертикаль вслепую
+            # VIP-скидок больше нет: FIBONACCI/CATANA/Goblin зашли по сниженному порогу и слили. Та же планка.
 
             is_buy = bool(conf >= threshold)
             if is_buy:
-                self.last_signal = f"{'VIP-' if _hyper else ''}RAY-XGB {conf:.0f}%"
+                self._set_sig(mint, f"{'VIP-' if _hyper else ''}RAY-XGB {conf:.0f}%")
             
             if not is_buy:
                 try:
