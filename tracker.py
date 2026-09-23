@@ -235,7 +235,10 @@ class PaperTracker:
             price_diff_pct = (real_exit_price - real_entry_price) / real_entry_price if real_entry_price > 0 else 0
             
             # 2. ДИНАМИЧЕСКИЕ МИКРО-КОМИССИИ JITO (Micro-Tips)
-            if "Crash Guard" in reason or "Stop Loss" in reason:
+            # Аварийные выходы дороже: широкая проверка по смыслу, а не двум строкам
+            # (иначе Emergency Cap / ROB/BSC/GROWTH-стопы считались по дешёвому тарифу)
+            _r = reason.upper()
+            if "CRASH" in _r or "STOP" in _r or "CAP" in _r or "GUARD" in _r:
                 priority_fee_usd = 0.75  # 0.005 SOL
             else:
                 priority_fee_usd = 0.075 if pos.amount_usd < 10.0 else 0.45
@@ -248,9 +251,10 @@ class PaperTracker:
             final_pnl = (pos.amount_usd * price_diff_pct) - priority_fee_usd
             pos.pnl_usd += final_pnl
             
-            # Реальный итоговый процент инвестиции
-            # Если был Moonbag (продано 60%), изначальный размер был в 2.5 раза больше (1 / 0.4)
-            original_amount = (pos.amount_usd / 0.4) if pos.is_moonbag else pos.amount_usd
+            # Реальный итоговый процент инвестиции.
+            # Moonbag продаёт 50%: остаток = 0.5 × изначальный → изначальный = остаток / 0.5.
+            # (Было /0.4 от старых 60% - занижало процент на 20%.)
+            original_amount = (pos.amount_usd / 0.5) if pos.is_moonbag else pos.amount_usd
             pnl_pct = pos.pnl_usd / original_amount if original_amount > 0 else 0
             
             self.save_portfolio()

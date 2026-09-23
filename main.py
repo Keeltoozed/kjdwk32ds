@@ -17,8 +17,12 @@ async def position_manager_loop(analyzer, tracker):
         try:
             open_positions = tracker.get_open_positions()
             
-            # ОПТИМИЗАЦИЯ СКОРОСТИ: Запрашиваем цены для ВСЕХ позиций ОДНИМ запросом
-            mints_to_fetch = list(open_positions.keys())
+            # ОПТИМИЗАЦИЯ СКОРОСТИ: Запрашиваем цены для ВСЕХ позиций ОДНИМ запросом.
+            # Только Solana-позиции этого менеджера (0x и GROWTH ведут свои петли).
+            mints_to_fetch = [m for m, p in open_positions.items()
+                              if not m.startswith("0x")
+                              and getattr(p, "chain", "solana") == "solana"
+                              and not str(getattr(p, "source", "")).startswith("GROWTH")]
             bulk_prices = await JupiterAPI.get_prices(mints_to_fetch) if mints_to_fetch else {}
             
             for mint, position in list(open_positions.items()):
@@ -151,15 +155,15 @@ async def position_manager_loop(analyzer, tracker):
                         tracker.close_position(mint, current_price, f"Trailing Stop (peak +{max_pnl_pct*100:.0f}%, drop {drop_from_max*100:.0f}%)")
                         continue
                             
-                # 3. ЖЕСТКИЙ Stop Loss из config.py
-                if pnl_pct <= config.STOP_LOSS_PCT:
-                    tracker.close_position(mint, current_price, f"Hard Stop Loss ({config.STOP_LOSS_PCT*100:.0f}%)")
-                    continue
-
-                # 3.5 АВАРИЙНЫЙ КЭП: FIBONACCI -68%, INFERENCE -59% проскочили стоп в тонком пуле.
-                # Что бы ни случилось - больше -30% одну сделку не держим, выходим сразу.
+                # 3. АВАРИЙНЫЙ КЭП ПЕРВЫМ: FIBONACCI -68% проскочили стоп в тонком пуле.
+                # Больше -30% одну сделку не держим. (Стоял после стопа - был недостижим.)
                 if pnl_pct <= -0.30:
                     tracker.close_position(mint, current_price, f"Emergency Cap ({pnl_pct*100:.0f}%)")
+                    continue
+
+                # 3.5 ЖЕСТКИЙ Stop Loss из config.py
+                if pnl_pct <= config.STOP_LOSS_PCT:
+                    tracker.close_position(mint, current_price, f"Hard Stop Loss ({config.STOP_LOSS_PCT*100:.0f}%)")
                     continue
                     
                 # 4. УМНЫЙ ВЫХОД ПО ВРЕМЕНИ (Stagnant / Bleeding cut)
@@ -537,8 +541,11 @@ async def _evm_chain_loop(analyzer, tracker, chain: str):
                         if price > 0:
                             cap = tracker.get_total_capital()
                             size = max(4.0, min(100.0, cap * (config.REINVEST_PERCENT / 100.0))) if cap > 0 else 4.0
+                            _sig = analyzer.get_signal(addr)
+                            if "LOTTERY" in _sig:
+                                size = min(size, 1.5)  # лотерейный билет, не позиция
                             tracker.add_position(sym, addr, price, size, is_mature=True,
-                                                 source=f"{tag}:{analyzer.get_signal(addr)}",
+                                                 source=f"{tag}:{_sig}",
                                                  chain=chain)
                             print(f"{emoji} {tag} BUY {sym} {addr[:10]} @ ${price}")
                     await asyncio.sleep(1.0)

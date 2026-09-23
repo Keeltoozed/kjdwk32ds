@@ -671,9 +671,20 @@ class Analyzer:
         b5, s5 = txm5.get("buys", 0) or 0, txm5.get("sells", 0) or 0
         vol24 = (pair_data.get("volume") or {}).get("h24", 0) or 0
         liq = (pair_data.get("liquidity") or {}).get("usd", 0) or 0
+        info = pair_data.get("info") or {}
+        links = (info.get("socials") or []) + (info.get("websites") or [])
 
         if liq < min_liq:
             print(f"🚫 [{tag}] {symbol}: ликва ${liq:,.0f} < ${min_liq:,.0f} — микро-пул.")
+            return False
+        # LOTTERY TIER: вертикаль m5 60-150% (HYPERCAT +73% мазал мимо кэпа 60%).
+        # Билет $1.5, не позиция: риск bounded, верх открыт. h24-вершины (>500%) всё равно мимо.
+        if 60.0 <= m5 <= 150.0 and h24 <= 500.0:
+            if (b5 + s5) >= 20 and (s5 == 0 or b5 >= s5) and liq >= 20000 and links:
+                print(f"🎰 [{tag}-LOTTERY] {symbol}: вертикаль m5 {m5:+.1f}% — лотерейный билет.")
+                self._set_sig(address, f"{tag} LOTTERY {m5:+.0f}%")
+                return True
+            print(f"🚫 [{tag}] {symbol}: вертикаль без давления/ликвы/ссылок — не лотерея.")
             return False
         _evm_min_m5 = getattr(config, "EVM_MIN_M5_PCT", 7.0)
         if m5 < _evm_min_m5:  # импульса нет — флет съест комиссиями
@@ -693,8 +704,6 @@ class Analyzer:
         if (b5 + s5) < 20 or vol24 < 10000:
             print(f"🚫 [{tag}] {symbol}: тихо (tx5 {(b5+s5)}, vol24 ${vol24:,.0f}).")
             return False
-        info = pair_data.get("info") or {}
-        links = (info.get("socials") or []) + (info.get("websites") or [])
         if not links:
             print(f"🚫 [{tag}] {symbol}: нет ни одной ссылки — скам-риск.")
             return False
