@@ -675,7 +675,8 @@ class Analyzer:
         if liq < min_liq:
             print(f"🚫 [{tag}] {symbol}: ликва ${liq:,.0f} < ${min_liq:,.0f} — микро-пул.")
             return False
-        if m5 < 10.0:  # импульса нет — флет съест комиссиями (доказано 20-мин прогоном)
+        _evm_min_m5 = getattr(config, "EVM_MIN_M5_PCT", 7.0)
+        if m5 < _evm_min_m5:  # импульса нет — флет съест комиссиями
             return False
         if m5 > 60.0 or h24 > 500.0:  # вершина уже прошла
             print(f"🚫 [{tag}-OVERHEAT] {symbol}: m5 {m5:+.1f}% h24 {h24:+.0f}% — поздно.")
@@ -697,6 +698,40 @@ class Analyzer:
         if not links:
             print(f"🚫 [{tag}] {symbol}: нет ни одной ссылки — скам-риск.")
             return False
+
+        # Блэклист мимикрии под бренды (как в Solana-пути)
+        _up = symbol.upper()
+        _scam_kw = ["AAPL", "MSFT", "TSLA", "NVDA", "GOOG", "AMZN", "META", "NFLX",
+                    "PEPE", "SHIB", "DOGE", "FLOKI", "BONK", "WIF", "BOME", "POPCAT", "TRUMP", "BIDEN"]
+        if any(k in _up for k in _scam_kw):
+            print(f"🚫 [{tag}] {symbol}: мимикрия под бренд/мем — 100% скам.")
+            return False
+
+        # Клон-чек: двойник С ТОЙ ЖЕ сети старше/жирнее = скам.
+        # Та же монета на ДРУГОЙ сети (MONITOR sol+robinhood) = мультчейн, разрешаем.
+        if len(symbol) > 2:
+            try:
+                from http_client import fetch_json as _fj
+                _st, _sd = await _fj(f"https://api.dexscreener.com/latest/dex/search?q={symbol}",
+                                     timeout=8, retries=1)
+                if _st == 200 and _sd:
+                    _mine_addr = (base.get("address") or "").lower()
+                    _mine_created = pair_data.get("pairCreatedAt", 0) or 0
+                    _mine_fdv = pair_data.get("fdv", 0) or 0
+                    for _p in (_sd.get("pairs") or []):
+                        if (_p.get("chainId") or "").lower() != chain.lower():
+                            continue  # другая сеть - мультчейн, ок
+                        _ps = ((_p.get("baseToken") or {}).get("symbol") or "").upper()
+                        _pa = ((_p.get("baseToken") or {}).get("address") or "").lower()
+                        if _ps == _up and _pa and _pa != _mine_addr:
+                            _pc_at = _p.get("pairCreatedAt", 0) or 0
+                            _pf = _p.get("fdv", 0) or 0
+                            if (_pc_at and _mine_created and _pc_at < _mine_created and _pf > 250000) or \
+                                    (_pf > (_mine_fdv * 10) and _pf > 500000):
+                                print(f"🚫 [{tag}] {symbol}: клон (оригинал {str(_pa)[:10]} старше/жирнее).")
+                                return False
+            except Exception:
+                pass
 
         score = 50.0
         score += min(m5, 60.0) * 0.4          # импульс до +24

@@ -452,10 +452,12 @@ async def _evm_chain_loop(analyzer, tracker, chain: str):
     Цены и выходы ведёт сам через evm_data (DS), Solana-менеджер 0x-позиции пропускает."""
     import evm_data
     tag = (evm_data.CHAINS.get(chain) or {}).get("tag", chain.upper())
-    emoji = "🟣" if chain == "robinhood" else "🟦"
+    emoji = {"robinhood": "🟣", "base": "🟦", "bsc": "🟨"}.get(chain, "🔵")
     print(f"{emoji} {tag} Loop запущен: мемы сети {chain}!")
     processed = {}
-    interval = getattr(config, "ROBINHOOD_SCAN_INTERVAL", 45)
+    _iv_key = {"base": "BASE_SCAN_INTERVAL", "bsc": "BSC_SCAN_INTERVAL"}.get(chain, "ROBINHOOD_SCAN_INTERVAL")
+    interval = getattr(config, _iv_key, 25)
+    _recooldown = getattr(config, "EVM_RESCAN_COOLDOWN", 300)
     while True:
         try:
             # Kill-switch общий
@@ -510,15 +512,17 @@ async def _evm_chain_loop(analyzer, tracker, chain: str):
                     if reason:
                         tracker.close_position(mint, cur, reason)
                 tracker.save_portfolio()
-            # --- 2. Скан новых ---
+            # --- 2. Скан новых: бусты + профили + тренды GT + СВЕЖИЕ пулы GT (ракеты до роста) ---
             if len(tracker.get_open_positions()) < config.MAX_CONCURRENT_POSITIONS:
                 boosted = await evm_data.fetch_boosted_tokens(chain)
                 profiles = await evm_data.fetch_profile_tokens(chain)
-                mints = list(dict.fromkeys(boosted + profiles))[:25]
+                trending = await evm_data.get_trending_pools_gt(chain)
+                fresh = await evm_data.get_new_pools_gt(chain)
+                mints = list(dict.fromkeys(boosted + profiles + trending + fresh))[:35]
                 for addr in mints:
                     if not addr or addr in tracker.positions:
                         continue
-                    if _t.time() - processed.get(addr, 0.0) < 600:
+                    if _t.time() - processed.get(addr, 0.0) < _recooldown:
                         continue
                     processed[addr] = _t.time()
                     try:
@@ -557,6 +561,13 @@ async def base_loop(analyzer, tracker):
         print("🟦 Base отключён в config (BASE_ENABLED=False).")
         return
     await _evm_chain_loop(analyzer, tracker, "base")
+
+
+async def bsc_loop(analyzer, tracker):
+    if not getattr(config, "BSC_ENABLED", True):
+        print("🟨 BSC отключён в config (BSC_ENABLED=False).")
+        return
+    await _evm_chain_loop(analyzer, tracker, "bsc")
 
 async def async_main():
     from pump_fun_sniper import PumpFunSniper
@@ -603,6 +614,7 @@ async def async_main():
         fomo_loop(analyzer, tracker),
         robinhood_loop(analyzer, tracker),  # 🟣 EVM-мемы Robinhood Chain 4663
         base_loop(analyzer, tracker),  # 🟦 EVM-мемы Base (fomo.family)
+        bsc_loop(analyzer, tracker),  # 🟨 BSC-мемы (GSTOCK и co)
         growth_loop(analyzer, tracker),  # 🌱 тренды капов, пока нет ракет
         sniper.connect_and_listen(),  # ENABLED — с AI фильтром — sniper entry kills capital (-85.8%), mature +162.5%
         trade_logger.post_trade_watcher_loop(),
@@ -638,6 +650,8 @@ def chain_badge(chain: str, long: bool = False) -> str:
         return "🟣 ROB" if long else "🟣"
     if c == "base":
         return "🟦 BASE" if long else "🟦"
+    if c == "bsc":
+        return "🟨 BSC" if long else "🟨"
     return "🟢 SOL" if long else "🟢"
 
 

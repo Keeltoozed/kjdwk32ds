@@ -18,6 +18,7 @@ DS = "https://api.dexscreener.com"
 CHAINS = {
     "robinhood": {"min_liq": float(getattr(config, "ROBINHOOD_MIN_LIQUIDITY", 8000)), "tag": "ROBINHOOD"},
     "base": {"min_liq": 15000.0, "tag": "BASE"},
+    "bsc": {"min_liq": 15000.0, "tag": "BSC"},
 }
 
 
@@ -89,11 +90,13 @@ async def get_bulk_prices(addresses: list, chain: str = SLUG) -> dict:
     return out
 
 
-async def get_trending_pools_gt() -> list:
-    """Запасной дискавери: трендовые пулы GeckoTerminal сети robinhood."""
+async def get_trending_pools_gt(chain: str = SLUG) -> list:
+    """Запасной дискавери: трендовые пулы GeckoTerminal сети chain.
+    Ловит лидеров по объему (ARCHIBROWN/Agrippa-типа) раньше, чем бусты."""
     from http_client import fetch_json as _f
+    gt_net = "base" if chain == "base" else ("robinhood" if chain == "robinhood" else chain)
     status, data = await _f(
-        "https://api.geckoterminal.com/api/v2/networks/robinhood/trending_pools",
+        f"https://api.geckoterminal.com/api/v2/networks/{gt_net}/trending_pools",
         timeout=10, retries=1)
     if status != 200:
         return []
@@ -106,4 +109,27 @@ async def get_trending_pools_gt() -> list:
                 out.append(addr)
         except Exception:
             continue
+    return out
+
+
+async def get_new_pools_gt(chain: str = SLUG, pages: int = 2) -> list:
+    """РАННИЙ детект: свежесозданные пулы сети (GeckoTerminal new_pools).
+    Именно здесь ракеты видны ДО роста - бусты/тренды показывают уже летящие."""
+    from http_client import fetch_json as _f
+    gt_net = "base" if chain == "base" else ("robinhood" if chain == "robinhood" else chain)
+    out = []
+    for page in range(1, pages + 1):
+        status, data = await _f(
+            f"https://api.geckoterminal.com/api/v2/networks/{gt_net}/new_pools?page={page}",
+            timeout=10, retries=1)
+        if status != 200:
+            continue
+        for item in (data.get("data") or []):
+            try:
+                bid = item.get("relationships", {}).get("base_token", {}).get("data", {}).get("id", "")
+                addr = bid.split("_", 1)[1] if "_" in bid else ""
+                if addr and addr not in out:
+                    out.append(addr)
+            except Exception:
+                continue
     return out
