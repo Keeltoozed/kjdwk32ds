@@ -14,60 +14,66 @@ from http_client import fetch_json
 SLUG = getattr(config, "ROBINHOOD_DS_SLUG", "robinhood")
 DS = "https://api.dexscreener.com"
 
+# Поддерживаемые EVM-сети: slug DexScreener -> (мин. ликва, метка)
+CHAINS = {
+    "robinhood": {"min_liq": float(getattr(config, "ROBINHOOD_MIN_LIQUIDITY", 8000)), "tag": "ROBINHOOD"},
+    "base": {"min_liq": 15000.0, "tag": "BASE"},
+}
 
-async def fetch_boosted_tokens() -> list:
-    """Бусты latest+top, фильтр chainId=robinhood -> адреса 0x..."""
+
+async def fetch_boosted_tokens(chain: str = SLUG) -> list:
+    """Бусты latest+top, фильтр chainId=chain -> адреса 0x..."""
     out = []
     for path in ("/token-boosts/latest/v1", "/token-boosts/top/v1"):
         status, data = await fetch_json(DS + path, timeout=10, retries=2)
         if status != 200 or not isinstance(data, list):
             continue
         for t in data:
-            if t.get("chainId") == SLUG:
+            if t.get("chainId") == chain:
                 addr = t.get("tokenAddress")
                 if addr and addr not in out:
                     out.append(addr)
     return out
 
 
-async def fetch_profile_tokens() -> list:
-    """Новые профили, фильтр chainId=robinhood -> адреса."""
+async def fetch_profile_tokens(chain: str = SLUG) -> list:
+    """Новые профили, фильтр chainId=chain -> адреса."""
     status, data = await fetch_json(DS + "/token-profiles/latest/v1",
                                     timeout=10, retries=2)
     if status != 200 or not isinstance(data, list):
         return []
     return [t.get("tokenAddress") for t in data
-            if t.get("chainId") == SLUG and t.get("tokenAddress")]
+            if t.get("chainId") == chain and t.get("tokenAddress")]
 
 
-async def get_token_data(address: str) -> dict:
-    """Все пулы токена на Robinhood Chain, лучший по ликвидности.
-    Возвращает пару в форме DexScreener (как Solana) + _chain='robinhood'."""
+async def get_token_data(address: str, chain: str = SLUG) -> dict:
+    """Все пулы токена в сети chain, лучший по ликвидности.
+    Возвращает пару в форме DexScreener (как Solana) + _chain."""
     status, data = await fetch_json(
-        f"{DS}/token-pairs/v1/{SLUG}/{address}", timeout=10, retries=2)
+        f"{DS}/token-pairs/v1/{chain}/{address}", timeout=10, retries=2)
     if status != 200 or not data:
         return {}
     # ВАЖНО: этот эндпоинт возвращает голый массив, не {pairs:[...]}
     pairs = data if isinstance(data, list) else data.get("pairs", [])
-    pools = [p for p in pairs if p.get("chainId") == SLUG]
+    pools = [p for p in pairs if p.get("chainId") == chain]
     if not pools:
         return {}
     best = sorted(pools, key=lambda x: (x.get("liquidity") or {}).get("usd", 0),
                   reverse=True)[0]
-    best["_source"] = "dexscreener-robinhood"
-    best["_chain"] = SLUG
+    best["_source"] = f"dexscreener-{chain}"
+    best["_chain"] = chain
     best["_socials_unknown"] = False
     return best
 
 
-async def get_bulk_prices(addresses: list) -> dict:
+async def get_bulk_prices(addresses: list, chain: str = SLUG) -> dict:
     """Балк-цены до 30 адресов за запрос (голый массив в ответе)."""
     out = {}
     ms = [a for a in dict.fromkeys(addresses) if a]
     for i in range(0, len(ms), 30):
         chunk = ms[i:i + 30]
         status, data = await fetch_json(
-            f"{DS}/tokens/v1/{SLUG}/{','.join(chunk)}", timeout=10, retries=2)
+            f"{DS}/tokens/v1/{chain}/{','.join(chunk)}", timeout=10, retries=2)
         if status != 200 or not data:
             continue
         pairs = data if isinstance(data, list) else data.get("pairs", [])

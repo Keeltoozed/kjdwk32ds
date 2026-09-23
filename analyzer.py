@@ -645,15 +645,17 @@ class Analyzer:
         else:
             return await self.analyze_token_raydium(mint, pair_data)
 
-    async def analyze_robinhood_token(self, address: str) -> bool:
-        """Вход по мемам Robinhood Chain (EVM, Uniswap).
-        Solana-проверки (Mint Authority, Helius, Jito-бандлы, XGBoost на Solana-фичах)
-        здесь неприменимы — работает rule-based скоринг на тех же воротах импульса.
-        Возвращает True/False, метка решения в self.last_signal."""
+    async def analyze_robinhood_token(self, address: str, chain: str = "robinhood") -> bool:
+        """Вход по EVM-мемам (Robinhood Chain 4663, Base).
+        Solana-проверки неприменимы — rule-based скоринг на тех же воротах импульса.
+        Возвращает True/False, метка решения в signals[address]."""
         import evm_data
         self.last_signal = ""
         self.signals.pop(address, None)
-        pair_data = await evm_data.get_token_data(address)
+        tag = (evm_data.CHAINS.get(chain) or {}).get("tag", chain.upper())
+        min_liq = (evm_data.CHAINS.get(chain) or {}).get("min_liq",
+                  getattr(config, "ROBINHOOD_MIN_LIQUIDITY", 8000))
+        pair_data = await evm_data.get_token_data(address, chain)
         if not pair_data:
             return None
         base = pair_data.get("baseToken", {}) or {}
@@ -670,31 +672,30 @@ class Analyzer:
         vol24 = (pair_data.get("volume") or {}).get("h24", 0) or 0
         liq = (pair_data.get("liquidity") or {}).get("usd", 0) or 0
 
-        min_liq = getattr(config, "ROBINHOOD_MIN_LIQUIDITY", 8000)
         if liq < min_liq:
-            print(f"🚫 [ROB] {symbol}: ликва ${liq:,.0f} < ${min_liq} — микро-пул.")
+            print(f"🚫 [{tag}] {symbol}: ликва ${liq:,.0f} < ${min_liq:,.0f} — микро-пул.")
             return False
         if m5 < 10.0:  # импульса нет — флет съест комиссиями (доказано 20-мин прогоном)
             return False
         if m5 > 60.0 or h24 > 500.0:  # вершина уже прошла
-            print(f"🚫 [ROB-OVERHEAT] {symbol}: m5 {m5:+.1f}% h24 {h24:+.0f}% — поздно.")
+            print(f"🚫 [{tag}-OVERHEAT] {symbol}: m5 {m5:+.1f}% h24 {h24:+.0f}% — поздно.")
             return False
         if m1 > 0:
-            print(f"🚫 [ROB] {symbol}: m1 {m1:+.1f}% зелёная — ждём откат.")
+            print(f"🚫 [{tag}] {symbol}: m1 {m1:+.1f}% зелёная — ждём откат.")
             return False
         if m1 < -8.0 or h1 > 300.0:
-            print(f"🚫 [ROB] {symbol}: m1 {m1:+.1f}% h1 {h1:+.0f}% — дамп/улетел.")
+            print(f"🚫 [{tag}] {symbol}: m1 {m1:+.1f}% h1 {h1:+.0f}% — дамп/улетел.")
             return False
         if s > 0 and b < s * 1.5:
-            print(f"🚫 [ROB] {symbol}: buys {b} / sells {s} — нет давления.")
+            print(f"🚫 [{tag}] {symbol}: buys {b} / sells {s} — нет давления.")
             return False
         if (b5 + s5) < 20 or vol24 < 10000:
-            print(f"🚫 [ROB] {symbol}: тихо (tx5 {(b5+s5)}, vol24 ${vol24:,.0f}).")
+            print(f"🚫 [{tag}] {symbol}: тихо (tx5 {(b5+s5)}, vol24 ${vol24:,.0f}).")
             return False
         info = pair_data.get("info") or {}
         links = (info.get("socials") or []) + (info.get("websites") or [])
         if not links:
-            print(f"🚫 [ROB] {symbol}: нет ни одной ссылки — скам-риск.")
+            print(f"🚫 [{tag}] {symbol}: нет ни одной ссылки — скам-риск.")
             return False
 
         score = 50.0
@@ -705,9 +706,9 @@ class Analyzer:
         if len(links) >= 2:
             score += 5.0
         score = min(score, 100.0)
-        print(f"🟣 [ROBINHOOD] {symbol}: m5 {m5:+.1f}% b/s {b}/{s} liq ${liq:,.0f} → score {score:.0f}")
+        print(f"🔵 [{tag}] {symbol}: m5 {m5:+.1f}% b/s {b}/{s} liq ${liq:,.0f} → score {score:.0f}")
         if score >= 60.0:
-            self._set_sig(address, f"ROBINHOOD rule {score:.0f}%")
+            self._set_sig(address, f"{tag} rule {score:.0f}%")
             return True
         return False
         
@@ -739,6 +740,11 @@ class Analyzer:
             return False
         if h6 > getattr(_c, "GROWTH_MAX_H6_PCT", 80.0):
             print(f"🌱 [GROWTH] {symbol}: h6 {h6:+.0f}% — перегрев.")
+            return False
+        # Ускорение: часовой темп не слабее среднего за 6ч (h1 >= h6/6).
+        # SPX/BOME входили в затухающий тренд и гнили - теперь только разгон.
+        if h6 > 0 and h1 < h6 / 6.0:
+            print(f"🌱 [GROWTH] {symbol}: h1 {h1:+.1f}% < h6/6 ({h6/6.0:+.1f}%) — тренд затухает.")
             return False
         _mult = getattr(_c, "GROWTH_MIN_BUYSELL", 1.2)
         if s > 0 and b < s * _mult:

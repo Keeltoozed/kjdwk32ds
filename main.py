@@ -447,14 +447,13 @@ async def rugpull_feeder_loop():
             print(f"Ошибка в rugpull_feeder: {e}")
         await asyncio.sleep(6 * 60 * 60)  # Спим 6 часов
 
-async def robinhood_loop(analyzer, tracker):
-    """🟣 Robinhood Chain (EVM 4663): boosts+profiles DexScreener -> analyze_robinhood_token.
+async def _evm_chain_loop(analyzer, tracker, chain: str):
+    """Обобщённая EVM-петля (Robinhood 4663, Base): boosts+profiles DexScreener.
     Цены и выходы ведёт сам через evm_data (DS), Solana-менеджер 0x-позиции пропускает."""
     import evm_data
-    print("🟣 Robinhood Loop запущен: мемы сети 4663 (Uniswap)!")
-    if not getattr(config, "ROBINHOOD_ENABLED", True):
-        print("🟣 Robinhood отключён в config (ROBINHOOD_ENABLED=False).")
-        return
+    tag = (evm_data.CHAINS.get(chain) or {}).get("tag", chain.upper())
+    emoji = "🟣" if chain == "robinhood" else "🟦"
+    print(f"{emoji} {tag} Loop запущен: мемы сети {chain}!")
     processed = {}
     interval = getattr(config, "ROBINHOOD_SCAN_INTERVAL", 45)
     while True:
@@ -465,19 +464,19 @@ async def robinhood_loop(analyzer, tracker):
             day_pnl = sum(getattr(p, "pnl_usd", 0) or 0 for p in tracker.positions.values()
                           if getattr(p, "status", "") == "closed" and getattr(p, "exit_time", 0) and p.exit_time >= day_start)
             if getattr(config, "KILL_SWITCH_ENABLED", True) and day_pnl <= -config.MAX_DAILY_LOSS_USD:
-                print(f"🛑 ROB KILL-SWITCH: PnL ${day_pnl:.2f}. Пауза 1ч.")
+                print(f"🛑 {tag} KILL-SWITCH: PnL ${day_pnl:.2f}. Пауза 1ч.")
                 await asyncio.sleep(3600)
                 continue
-            # --- 1. Трекинг открытых ROB-позиций ---
-            rob_open = {m: p for m, p in tracker.get_open_positions().items()
-                        if m.startswith("0x") or getattr(p, "chain", "") == "robinhood"}
-            if rob_open:
+            # --- 1. Трекинг открытых позиций ЭТОЙ сети (строго по chain, не по префиксу!) ---
+            mine = {m: p for m, p in tracker.get_open_positions().items()
+                    if getattr(p, "chain", "") == chain}
+            if mine:
                 try:
-                    px = await evm_data.get_bulk_prices(list(rob_open.keys()))
+                    px = await evm_data.get_bulk_prices(list(mine.keys()), chain)
                 except Exception as e:
-                    print(f"🟣 ROB bulk price err: {e}")
+                    print(f"{emoji} {tag} bulk price err: {e}")
                     px = {}
-                for mint, pos in list(rob_open.items()):
+                for mint, pos in list(mine.items()):
                     cur = px.get(mint, 0) or pos.current_price_usd or pos.entry_price_usd
                     if cur > pos.max_price_usd:
                         pos.max_price_usd = cur
@@ -494,27 +493,27 @@ async def robinhood_loop(analyzer, tracker):
                     prev_ts = getattr(pos, "price_checked_at", 0.0)
                     _mbr = getattr(config, "MOONBAG_TRIGGER_PCT", 0.50)
                     if maxp >= _mbr and not getattr(pos, "is_moonbag", False):
-                        tracker.partial_close_position(mint, cur, 0.50, f"ROB Take Profit +{_mbr*100:.0f}% (Risk Free)")
+                        tracker.partial_close_position(mint, cur, 0.50, f"{tag} Take Profit +{_mbr*100:.0f}% (Risk Free)")
                     elif prev_ts and (_t.time() - prev_ts) < 60 and prev > 0 and cur <= prev * 0.80:
-                        reason = f"ROB Crash Guard ({(1 - cur / prev) * 100:.0f}% за {_t.time() - prev_ts:.0f}с)"
+                        reason = f"{tag} Crash Guard ({(1 - cur / prev) * 100:.0f}% за {_t.time() - prev_ts:.0f}с)"
                     elif maxp >= 0.15 and (pos.max_price_usd - cur) / pos.max_price_usd >= 0.10:
-                        reason = f"ROB Trailing (peak +{maxp * 100:.0f}%)"
+                        reason = f"{tag} Trailing (peak +{maxp * 100:.0f}%)"
                     elif pnl <= -0.30:
-                        reason = f"ROB Emergency Cap ({pnl * 100:.1f}%)"
+                        reason = f"{tag} Emergency Cap ({pnl * 100:.1f}%)"
                     elif pnl <= config.STOP_LOSS_PCT:
-                        reason = f"ROB Stop ({pnl * 100:.1f}%)"
+                        reason = f"{tag} Stop ({pnl * 100:.1f}%)"
                     elif held >= 15 and pnl < 0:
-                        reason = f"ROB Dead ({held:.0f}m)"
+                        reason = f"{tag} Dead ({held:.0f}m)"
                     elif held >= 7 and abs(pnl) < 0.05 and maxp < 0.05:
-                        reason = f"ROB Stagnant ({held:.0f}m)"
+                        reason = f"{tag} Stagnant ({held:.0f}m)"
                     pos.price_checked_at = _t.time()
                     if reason:
                         tracker.close_position(mint, cur, reason)
                 tracker.save_portfolio()
             # --- 2. Скан новых ---
             if len(tracker.get_open_positions()) < config.MAX_CONCURRENT_POSITIONS:
-                boosted = await evm_data.fetch_boosted_tokens()
-                profiles = await evm_data.fetch_profile_tokens()
+                boosted = await evm_data.fetch_boosted_tokens(chain)
+                profiles = await evm_data.fetch_profile_tokens(chain)
                 mints = list(dict.fromkeys(boosted + profiles))[:25]
                 for addr in mints:
                     if not addr or addr in tracker.positions:
@@ -523,27 +522,41 @@ async def robinhood_loop(analyzer, tracker):
                         continue
                     processed[addr] = _t.time()
                     try:
-                        ok = await analyzer.analyze_robinhood_token(addr)
+                        ok = await analyzer.analyze_robinhood_token(addr, chain)
                     except Exception as e:
-                        print(f"🟣 ROB analyze err {addr[:10]}: {type(e).__name__} {e}")
+                        print(f"{emoji} {tag} analyze err {addr[:10]}: {type(e).__name__} {e}")
                         continue
                     if ok is True and len(tracker.get_open_positions()) < config.MAX_CONCURRENT_POSITIONS:
-                        td = await evm_data.get_token_data(addr)
+                        td = await evm_data.get_token_data(addr, chain)
                         price = float(td.get("priceUsd", 0) or 0) if td else 0
-                        sym = ((td.get("baseToken") or {}).get("symbol", "ROB") if td else "ROB") or "ROB"
+                        sym = ((td.get("baseToken") or {}).get("symbol", tag) if td else tag) or tag
                         if price > 0:
                             cap = tracker.get_total_capital()
                             size = max(4.0, min(100.0, cap * (config.REINVEST_PERCENT / 100.0))) if cap > 0 else 4.0
                             tracker.add_position(sym, addr, price, size, is_mature=True,
-                                                 source=f"ROBINHOOD:{analyzer.get_signal(addr)}",
-                                                 chain="robinhood")
-                            print(f"🟣 ROB BUY {sym} {addr[:10]} @ ${price}")
+                                                 source=f"{tag}:{analyzer.get_signal(addr)}",
+                                                 chain=chain)
+                            print(f"{emoji} {tag} BUY {sym} {addr[:10]} @ ${price}")
                     await asyncio.sleep(1.0)
                 if len(processed) > 1000:
                     processed.clear()
         except Exception as e:
-            print(f"Ошибка в robinhood_loop: {e}")
+            print(f"Ошибка в {tag}_loop: {e}")
         await asyncio.sleep(interval)
+
+
+async def robinhood_loop(analyzer, tracker):
+    if not getattr(config, "ROBINHOOD_ENABLED", True):
+        print("🟣 Robinhood отключён в config (ROBINHOOD_ENABLED=False).")
+        return
+    await _evm_chain_loop(analyzer, tracker, "robinhood")
+
+
+async def base_loop(analyzer, tracker):
+    if not getattr(config, "BASE_ENABLED", True):
+        print("🟦 Base отключён в config (BASE_ENABLED=False).")
+        return
+    await _evm_chain_loop(analyzer, tracker, "base")
 
 async def async_main():
     from pump_fun_sniper import PumpFunSniper
@@ -589,6 +602,7 @@ async def async_main():
         fomo_signal_loop(analyzer, tracker),
         fomo_loop(analyzer, tracker),
         robinhood_loop(analyzer, tracker),  # 🟣 EVM-мемы Robinhood Chain 4663
+        base_loop(analyzer, tracker),  # 🟦 EVM-мемы Base (fomo.family)
         growth_loop(analyzer, tracker),  # 🌱 тренды капов, пока нет ракет
         sniper.connect_and_listen(),  # ENABLED — с AI фильтром — sniper entry kills capital (-85.8%), mature +162.5%
         trade_logger.post_trade_watcher_loop(),
@@ -616,6 +630,16 @@ def start_bot():
     return thread
 
 bot_thread = start_bot()
+
+def chain_badge(chain: str, long: bool = False) -> str:
+    """Бейдж сети для дашборда: 🟢 SOL / 🟣 ROB / 🟦 BASE."""
+    c = str(chain or "solana")
+    if c == "robinhood":
+        return "🟣 ROB" if long else "🟣"
+    if c == "base":
+        return "🟦 BASE" if long else "🟦"
+    return "🟢 SOL" if long else "🟢"
+
 
 def load_dashboard_portfolio():
     """Портфель для дашборда: сначала Supabase (переживает рестарты Render),
@@ -681,7 +705,7 @@ with tab1:
                                 <h3 style='margin:0; color: #FFF;'>{row['symbol'] if str(row['symbol']).strip() else row['mint'][:6] + '...'}</h3>
                                 <h3 style='margin:0; color: {color};'>{sign}${pnl_usd:.2f} ({sign}{pnl_pct:.2f}%)</h3>
                             </div>
-                            <div style='margin-top: 6px; font-size: 0.75em; color: #888;'>🔖 {row.get('source', '') if str(row.get('source', '')).strip() else '—'} {'🟣 ROB' if str(row.get('chain', 'solana')) == 'robinhood' else '🟢 SOL'}</div>
+                            <div style='margin-top: 6px; font-size: 0.75em; color: #888;'>🔖 {row.get('source', '') if str(row.get('source', '')).strip() else '—'} {chain_badge(row.get('chain', 'solana'), True)}</div>
                             <div style='display: flex; justify-content: space-between; margin-top: 10px; font-size: 0.85em; color: #BBB;'>
                                 <div><span style='color:#888;'>Вход:</span><br>${row['entry_price_usd']:.8f}</div>
                                 <div><span style='color:#888;'>Сейчас:</span><br>${row['current_price_usd']:.8f}</div>
@@ -717,7 +741,7 @@ with tab1:
                         st.markdown(f"""
                         <div style='background-color: #1A1A1A; padding: 10px 15px; border-radius: 6px; border-right: 4px solid {c_color}; margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center;'>
                             <div>
-                                <div style='color: #FFF; font-weight: bold;'>{row['symbol'] if str(row['symbol']).strip() else row.name[:6] + '...'} <span style='font-size: 0.7em; color: #888;'>{'🟣' if str(row.get('chain', 'solana')) == 'robinhood' else '🟢'}</span></div>
+                                <div style='color: #FFF; font-weight: bold;'>{row['symbol'] if str(row['symbol']).strip() else row.name[:6] + '...'} <span style='font-size: 0.7em; color: #888;'>{chain_badge(row.get('chain', 'solana'))}</span></div>
                                 <div style='color: #666; font-size: 0.75em;'>{row.get('exit_reason', 'Closed')}</div>
                                 <div style='color: #555; font-size: 0.7em;'>🔖 {row.get('source', '') if str(row.get('source', '')).strip() else '—'}</div>
                             </div>

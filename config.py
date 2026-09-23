@@ -79,6 +79,11 @@ ROBINHOOD_EXPLORER = "https://robinhoodchain.blockscout.com"
 ROBINHOOD_MIN_LIQUIDITY = 8000  # EVM-пулы Uniswap тоньше Solana - порог ниже
 ROBINHOOD_SCAN_INTERVAL = 45  # секунд между опросами boosts/profiles
 
+# === BASE (EVM L2, там сидят мемы с fomo.family: musebook, DELTA...) ===
+# Тот же EVM-движок, slug DexScreener "base". Пулы глубже - порог $15к.
+BASE_ENABLED = True
+BASE_SCAN_INTERVAL = 45
+
 # --- Сайзинг: база $6, conviction x2 ---
 # Тир решает ПОДТВЕРЖДЁННЫЙ импульс рынка (m5 + вести), а не скор модели
 # (модель всем ставит 100%, а катастрофы были именно VIP-100%)
@@ -102,8 +107,8 @@ GROWTH_WATCHLIST = [  # ликвидные Solana-капы (путать не с
     "orcaEKTdK7LKz57vaAYr9QeNsVEPfiu6QeMU1kektZE",  # ORCA
 ]
 GROWTH_MIN_LIQ = 200000  # пул от $200к - проскальзывания нет
-GROWTH_MIN_H24_PCT = 5.0  # дневной тренд вверх от +5%
-GROWTH_MIN_H1_PCT = 1.0  # часовой откат-вход от +1%
+GROWTH_MIN_H24_PCT = 8.0  # Было 5.0: входы на +7% гнили во флете (SPX/BOME -3%). Тренд от +8%
+GROWTH_MIN_H1_PCT = 3.0  # Было 1.0: брали вялые +1.0-1.9%. Вход от +3%
 GROWTH_MAX_H1_PCT = 15.0  # выше +15% за час - вершина, не гонимся
 GROWTH_MAX_H6_PCT = 80.0  # выше +80% за 6ч - перегрев
 GROWTH_MIN_BUYSELL = 1.2  # покупки >= продаж x1.2 за h1
@@ -118,7 +123,7 @@ GROWTH_INTERVAL = 300  # опрос вотчлиста каждые 5 мин
 SNIPER_MIN_UNIQUE_BUYERS = 10
 SNIPER_BUYERS_WINDOW_MIN = 5
 VIP_MAX_M5_PCT = 0.60  # Было 1.00 - брали вершину +100%. 60% - компромисс: ракеты пропускаем, вертикали нет
-PULLBACK_MIN_M5_PCT = 0.07  # Было 0.10: чуть шире импульс = больше кандидатов в ракеты
+PULLBACK_MIN_M5_PCT = 0.05  # Было 0.07: 8 часов без ракет - расширяем сеть. Раги держат FRESH/holders/liq/model
 PULLBACK_M1_MIN_PCT = -0.15  # Но и не летим в падающий нож (максимум -15% за минуту)
 PULLBACK_M1_MAX_PCT = 0.00  # Было 0.08 - покупали зеленую свечу = вершину. Вернули 0.00: ждем откат
 PULLBACK_MAX_H1_PCT = 3.00  # Было 10.00 (1000%) - брали вершины типа +3152% Drip / +33009% SI. Теперь >+300% за час = поздно
