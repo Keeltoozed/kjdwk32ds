@@ -250,6 +250,12 @@ async def scanner_loop(analyzer, tracker):
                 for mint in mints_to_scan:
                     if not mint or mint in tracker.positions:
                         continue
+                    _pl = tracker.last_loss_pct(mint)
+                    if _pl is not None and _pl <= getattr(config, "RUG_REBUY_MAX_LOSS", -0.15):
+                        if time.time() - processed_mints.get(mint, 0.0) >= 86400:
+                            print(f"🚫 SCANNER {mint[:8]}: прошлый лосс {_pl*100:.0f}% — второй раз не входим.")
+                        processed_mints[mint] = time.time()
+                        continue
                     if time.time() - processed_mints.get(mint, 0.0) < 600:
                         continue
                     
@@ -263,7 +269,9 @@ async def scanner_loop(analyzer, tracker):
                         if is_good is None:
                             continue
                         processed_mints[mint] = time.time()
-                            
+                        analyzer.log_scan(mint[:8], mint, "SCANNER",
+                                          is_good, getattr(analyzer, "last_score", 0.0))
+
                         if is_good:
                             pair_data = await analyzer.fetch_token_data(mint)
                             entry_price = float(pair_data.get("priceUsd", 0)) if pair_data else 0
@@ -309,7 +317,13 @@ async def scanner_loop(analyzer, tracker):
                                 if _deployed + position_size > _cap:
                                     print(f"🚫 Отказ (Exposure): занято ${_deployed:.0f} + ${position_size:.0f} > лимит ${_cap:.0f}.")
                                     continue
-                                    
+
+                                _pc = pair_data.get("priceChange") or {}
+                                _tx5 = (pair_data.get("txns") or {}).get("m5", {}) or {}
+                                analyzer.log_scan(actual_symbol, mint, "SCANNER", True,
+                                                  getattr(analyzer, "last_score", 0.0),
+                                                  liq_usd, _pc.get("m5", 0) or 0,
+                                                  _tx5.get("buys", 0) or 0, _tx5.get("sells", 0) or 0)
                                 tracker.add_position(actual_symbol, mint, entry_price, position_size, is_mature=True,
                                                      source=f"SCANNER:{analyzer.get_signal(mint)}")
                                 break # Ждем следующего цикла после покупки
@@ -340,23 +354,59 @@ async def fomo_signal_loop(analyzer, tracker):
                     with open('fomo_signals.txt', 'w') as f:
                         f.write('')
                         
-                    for mint in mints:
-                        mint = mint.strip()
-                        if mint and mint not in tracker.positions:
-                            print(f"🚨 ПРИНЯТ ВНЕШНИЙ СИГНАЛ (FOMO): {mint}")
-                            # Проверяем скам-фильтрами перед покупкой
-                            is_good = await analyzer.analyze_token(mint)
-                            
-                            if is_good:
-                                pair_data = await analyzer.fetch_token_data(mint)
-                                entry_price = float(pair_data.get("priceUsd", 0)) if pair_data else 0
-                                actual_symbol = pair_data.get("baseToken", {}).get("symbol", "FOMO") if pair_data else "FOMO"
-                                
-                                if entry_price > 0:
-                                    capital = tracker.get_total_capital()
-                                    position_size = max(4.0, min(100.0, capital * (config.REINVEST_PERCENT / 100.0)))
-                                    tracker.add_position(actual_symbol, mint, entry_price, position_size,
-                                                         source=f"TG-SIGNAL:{analyzer.get_signal(mint)}")
+                    for raw in mints:
+                        raw = raw.strip()
+                        if not raw:
+                            continue
+                        # Формат: sol:<mint> | evm:<addr> | голый mint (совместимость = solana)
+                        if raw.startswith("evm:"):
+                            kind, mint = "evm", raw[4:].strip()
+                        elif raw.startswith("sol:"):
+                            kind, mint = "sol", raw[4:].strip()
+                        else:
+                            kind, mint = "sol", raw
+                        if not mint or mint in tracker.positions:
+                            continue
+                        print(f"🚨 ПРИНЯТ ВНЕШНИЙ СИГНАЛ (FOMO): {mint}")
+                        if kind == "evm":
+                            # EVM: определяем сеть перебором (base -> bsc -> robinhood), дальше rule-движок
+                            import evm_data
+                            found = None
+                            for _ch in ("base", "bsc", "robinhood"):
+                                try:
+                                    _td = await evm_data.get_token_data(mint, _ch)
+                                except Exception:
+                                    _td = {}
+                                if _td and float(_td.get("priceUsd", 0) or 0) > 0:
+                                    found = (_ch, _td)
+                                    break
+                            if not found:
+                                print(f"📲 TG EVM {mint[:10]}: ни в одной сети не найден.")
+                                continue
+                            _ch, _td = found
+                            ok = await analyzer.analyze_robinhood_token(mint, _ch)
+                            if ok is True and mint not in tracker.positions:
+                                price = float(_td.get("priceUsd", 0))
+                                sym = ((_td.get("baseToken") or {}).get("symbol", "TG") or "TG")
+                                cap = tracker.get_total_capital()
+                                size = max(4.0, min(100.0, cap * (config.REINVEST_PERCENT / 100.0))) if cap > 0 else 4.0
+                                tracker.add_position(sym, mint, price, size, is_mature=True,
+                                                     source=f"TG-SIGNAL:{analyzer.get_signal(mint)}", chain=_ch)
+                                print(f"📲 TG-SIGNAL BUY {sym} [{_ch}] @ ${price}")
+                            continue
+                        # Проверяем скам-фильтрами перед покупкой
+                        is_good = await analyzer.analyze_token(mint)
+
+                        if is_good:
+                            pair_data = await analyzer.fetch_token_data(mint)
+                            entry_price = float(pair_data.get("priceUsd", 0)) if pair_data else 0
+                            actual_symbol = pair_data.get("baseToken", {}).get("symbol", "FOMO") if pair_data else "FOMO"
+
+                            if entry_price > 0:
+                                capital = tracker.get_total_capital()
+                                position_size = max(4.0, min(100.0, capital * (config.REINVEST_PERCENT / 100.0)))
+                                tracker.add_position(actual_symbol, mint, entry_price, position_size,
+                                                     source=f"TG-SIGNAL:{analyzer.get_signal(mint)}")
         except Exception as e:
             print(f"Ошибка в fomo_signal_loop: {e}")
         await asyncio.sleep(1) # Проверяем файл каждую секунду для мгновенной реакции
@@ -371,12 +421,9 @@ async def growth_loop(analyzer, tracker):
     while True:
         try:
             import time as _t
-            day_start = _t.time() - (_t.time() % 86400)
-            day_pnl = sum(getattr(p, "pnl_usd", 0) or 0 for p in tracker.positions.values()
-                          if getattr(p, "status", "") == "closed" and getattr(p, "exit_time", 0) and p.exit_time >= day_start)
-            if getattr(config, "KILL_SWITCH_ENABLED", True) and day_pnl <= -config.MAX_DAILY_LOSS_USD:
-                await asyncio.sleep(3600)
-                continue
+            _killed = _evm_killed(tracker)
+            if _killed:
+                print("🛑 GROWTH KILL-SWITCH: входы на паузе 1ч (выходы работают).")
             mine = {m: p for m, p in tracker.get_open_positions().items()
                     if str(getattr(p, "source", "")).startswith("GROWTH")}
             # --- трекинг ---
@@ -411,7 +458,7 @@ async def growth_loop(analyzer, tracker):
                         tracker.close_position(mint, cur, reason)
                 tracker.save_portfolio()
             # --- скан вселенной: ядро вотчлиста + динамический топ Raydium по ликве ---
-            if len(mine) < getattr(config, "GROWTH_MAX_POS", 3) and \
+            if not _killed and len(mine) < getattr(config, "GROWTH_MAX_POS", 3) and \
                     len(tracker.get_open_positions()) < config.MAX_CONCURRENT_POSITIONS:
                 import market_data as _md
                 universe = await _md.get_growth_universe()
@@ -424,6 +471,10 @@ async def growth_loop(analyzer, tracker):
                     except Exception as e:
                         print(f"🌱 GROWTH analyze err: {type(e).__name__} {e}")
                         continue
+                    if ok is None:
+                        continue
+                    analyzer.log_scan(mint[:6], mint, "GROWTH",
+                                      ok, getattr(analyzer, "last_score", 0.0))
                     if ok is True:
                         from jupiter import JupiterAPI
                         price = await JupiterAPI.get_price(mint)
@@ -451,9 +502,69 @@ async def rugpull_feeder_loop():
             print(f"Ошибка в rugpull_feeder: {e}")
         await asyncio.sleep(6 * 60 * 60)  # Спим 6 часов
 
+def _evm_killed(tracker) -> bool:
+    """Kill-switch только для ВХОДОВ. Выходы обязаны работать всегда."""
+    import time as _t
+    day_start = _t.time() - (_t.time() % 86400)
+    day_pnl = sum(getattr(p, "pnl_usd", 0) or 0 for p in tracker.positions.values()
+                  if getattr(p, "status", "") == "closed" and getattr(p, "exit_time", 0) and p.exit_time >= day_start)
+    return bool(getattr(config, "KILL_SWITCH_ENABLED", True) and day_pnl <= -config.MAX_DAILY_LOSS_USD)
+
+
+async def _evm_track_once(tracker, chain: str, tag: str, emoji: str):
+    """Один проход трекинга позиций сети. Вызывается каждые ~12 сек отдельным таском,
+    поэтому раги не проскакивают кэп за минуту тишины скана (было -35..-60% вместо -20%)."""
+    import time as _t
+    import evm_data
+    mine = {m: p for m, p in tracker.get_open_positions().items()
+            if getattr(p, "chain", "") == chain}
+    if not mine:
+        return
+    try:
+        px = await evm_data.get_bulk_prices(list(mine.keys()), chain)
+    except Exception as e:
+        print(f"{emoji} {tag} bulk price err: {e}")
+        px = {}
+    for mint, pos in list(mine.items()):
+        cur = px.get(mint, 0) or pos.current_price_usd or pos.entry_price_usd
+        if cur > pos.max_price_usd:
+            pos.max_price_usd = cur
+            pos.peak_time = _t.time()
+        prev = pos.current_price_usd
+        pos.current_price_usd = cur
+        if not pos.entry_price_usd:
+            continue
+        pnl = (cur - pos.entry_price_usd) / pos.entry_price_usd
+        maxp = (pos.max_price_usd - pos.entry_price_usd) / pos.entry_price_usd
+        pos.current_pnl_usd = pos.amount_usd * pnl
+        held = (_t.time() - pos.entry_time) / 60
+        reason = None
+        prev_ts = getattr(pos, "price_checked_at", 0.0)
+        _mbr = getattr(config, "MOONBAG_TRIGGER_PCT", 0.50)
+        if maxp >= _mbr and not getattr(pos, "is_moonbag", False):
+            tracker.partial_close_position(mint, cur, 0.50, f"{tag} Take Profit +{_mbr*100:.0f}% (Risk Free)")
+        elif prev_ts and (_t.time() - prev_ts) < 60 and prev > 0 and cur <= prev * 0.80:
+            reason = f"{tag} Crash Guard ({(1 - cur / prev) * 100:.0f}% за {_t.time() - prev_ts:.0f}с)"
+        elif maxp >= getattr(config, "TRAILING_ACTIVATION_PCT", 0.15) and \
+                (pos.max_price_usd - cur) / pos.max_price_usd >= getattr(config, "TRAILING_DISTANCE_PCT", 0.08):
+            reason = f"{tag} Trailing (peak +{maxp * 100:.0f}%)"
+        elif pnl <= -0.30:
+            reason = f"{tag} Emergency Cap ({pnl * 100:.1f}%)"
+        elif pnl <= config.STOP_LOSS_PCT:
+            reason = f"{tag} Stop ({pnl * 100:.1f}%)"
+        elif held >= 15 and pnl < 0:
+            reason = f"{tag} Dead ({held:.0f}m)"
+        elif held >= 7 and abs(pnl) < 0.05 and maxp < 0.05:
+            reason = f"{tag} Stagnant ({held:.0f}m)"
+        pos.price_checked_at = _t.time()
+        if reason:
+            tracker.close_position(mint, cur, reason)
+    tracker.save_portfolio()
+
+
 async def _evm_chain_loop(analyzer, tracker, chain: str):
-    """Обобщённая EVM-петля (Robinhood 4663, Base): boosts+profiles DexScreener.
-    Цены и выходы ведёт сам через evm_data (DS), Solana-менеджер 0x-позиции пропускает."""
+    """Обобщённая EVM-петля: быстрый трек (12с) + скан (25с) отдельными тасками.
+    Kill-switch стопает только входы - выходы идут всегда (баг: раньше час без управления)."""
     import evm_data
     tag = (evm_data.CHAINS.get(chain) or {}).get("tag", chain.upper())
     emoji = {"robinhood": "🟣", "base": "🟦", "bsc": "🟨"}.get(chain, "🔵")
@@ -462,83 +573,64 @@ async def _evm_chain_loop(analyzer, tracker, chain: str):
     _iv_key = {"base": "BASE_SCAN_INTERVAL", "bsc": "BSC_SCAN_INTERVAL"}.get(chain, "ROBINHOOD_SCAN_INTERVAL")
     interval = getattr(config, _iv_key, 25)
     _recooldown = getattr(config, "EVM_RESCAN_COOLDOWN", 300)
-    while True:
-        try:
-            # Kill-switch общий
-            import time as _t
-            day_start = _t.time() - (_t.time() % 86400)
-            day_pnl = sum(getattr(p, "pnl_usd", 0) or 0 for p in tracker.positions.values()
-                          if getattr(p, "status", "") == "closed" and getattr(p, "exit_time", 0) and p.exit_time >= day_start)
-            if getattr(config, "KILL_SWITCH_ENABLED", True) and day_pnl <= -config.MAX_DAILY_LOSS_USD:
-                print(f"🛑 {tag} KILL-SWITCH: PnL ${day_pnl:.2f}. Пауза 1ч.")
-                await asyncio.sleep(3600)
-                continue
-            # --- 1. Трекинг открытых позиций ЭТОЙ сети (строго по chain, не по префиксу!) ---
-            mine = {m: p for m, p in tracker.get_open_positions().items()
-                    if getattr(p, "chain", "") == chain}
-            if mine:
-                try:
-                    px = await evm_data.get_bulk_prices(list(mine.keys()), chain)
-                except Exception as e:
-                    print(f"{emoji} {tag} bulk price err: {e}")
-                    px = {}
-                for mint, pos in list(mine.items()):
-                    cur = px.get(mint, 0) or pos.current_price_usd or pos.entry_price_usd
-                    if cur > pos.max_price_usd:
-                        pos.max_price_usd = cur
-                        pos.peak_time = _t.time()
-                    prev = pos.current_price_usd
-                    pos.current_price_usd = cur
-                    if not pos.entry_price_usd:
-                        continue
-                    pnl = (cur - pos.entry_price_usd) / pos.entry_price_usd
-                    maxp = (pos.max_price_usd - pos.entry_price_usd) / pos.entry_price_usd
-                    pos.current_pnl_usd = pos.amount_usd * pnl
-                    held = (_t.time() - pos.entry_time) / 60
-                    reason = None
-                    prev_ts = getattr(pos, "price_checked_at", 0.0)
-                    _mbr = getattr(config, "MOONBAG_TRIGGER_PCT", 0.50)
-                    if maxp >= _mbr and not getattr(pos, "is_moonbag", False):
-                        tracker.partial_close_position(mint, cur, 0.50, f"{tag} Take Profit +{_mbr*100:.0f}% (Risk Free)")
-                    elif prev_ts and (_t.time() - prev_ts) < 60 and prev > 0 and cur <= prev * 0.80:
-                        reason = f"{tag} Crash Guard ({(1 - cur / prev) * 100:.0f}% за {_t.time() - prev_ts:.0f}с)"
-                    elif maxp >= 0.15 and (pos.max_price_usd - cur) / pos.max_price_usd >= 0.10:
-                        reason = f"{tag} Trailing (peak +{maxp * 100:.0f}%)"
-                    elif pnl <= -0.30:
-                        reason = f"{tag} Emergency Cap ({pnl * 100:.1f}%)"
-                    elif pnl <= config.STOP_LOSS_PCT:
-                        reason = f"{tag} Stop ({pnl * 100:.1f}%)"
-                    elif held >= 15 and pnl < 0:
-                        reason = f"{tag} Dead ({held:.0f}m)"
-                    elif held >= 7 and abs(pnl) < 0.05 and maxp < 0.05:
-                        reason = f"{tag} Stagnant ({held:.0f}m)"
-                    pos.price_checked_at = _t.time()
-                    if reason:
-                        tracker.close_position(mint, cur, reason)
-                tracker.save_portfolio()
-            # --- 2. Скан новых: бусты + профили + тренды GT + СВЕЖИЕ пулы GT (ракеты до роста) ---
-            if len(tracker.get_open_positions()) < config.MAX_CONCURRENT_POSITIONS:
-                boosted = await evm_data.fetch_boosted_tokens(chain)
-                profiles = await evm_data.fetch_profile_tokens(chain)
-                trending = await evm_data.get_trending_pools_gt(chain)
-                fresh = await evm_data.get_new_pools_gt(chain)
-                mints = list(dict.fromkeys(boosted + profiles + trending + fresh))[:35]
-                for addr in mints:
-                    if not addr or addr in tracker.positions:
-                        continue
-                    if _t.time() - processed.get(addr, 0.0) < _recooldown:
-                        continue
-                    processed[addr] = _t.time()
+
+    async def track_task():
+        while True:
+            try:
+                await _evm_track_once(tracker, chain, tag, emoji)
+            except Exception as e:
+                print(f"{emoji} {tag} track err: {e}")
+            await asyncio.sleep(12)
+
+    async def scan_task():
+        while True:
+            try:
+                if _evm_killed(tracker):
+                    print(f"🛑 {tag} KILL-SWITCH: входы на паузе 1ч (выходы работают).")
+                    await asyncio.sleep(3600)
+                    continue
+                # --- Скан новых: бусты + профили + тренды GT + СВЕЖИЕ пулы GT (ракеты до роста) ---
+                if len(tracker.get_open_positions()) < config.MAX_CONCURRENT_POSITIONS:
+                    import time as _t
+                    boosted = await evm_data.fetch_boosted_tokens(chain)
+                    profiles = await evm_data.fetch_profile_tokens(chain)
+                    trending = await evm_data.get_trending_pools_gt(chain)
+                    fresh = await evm_data.get_new_pools_gt(chain)
+                    mints = list(dict.fromkeys(boosted + profiles + trending + fresh))[:35]
+                    for addr in mints:
+                        if not addr or addr in tracker.positions:
+                            continue
+                        # Не усредняемся в раг: был лосс хуже порога - бан на сутки молча (HYDX -52% дважды)
+                        _prev = tracker.last_loss_pct(addr)
+                        if _prev is not None and _prev <= getattr(config, "RUG_REBUY_MAX_LOSS", -0.15):
+                            if _t.time() - processed.get(addr, 0.0) >= 86400:
+                                print(f"🚫 [{tag}] {addr[:10]}: прошлый лосс {_prev*100:.0f}% — второй раз не входим.")
+                            processed[addr] = _t.time()
+                            continue
+                        if _t.time() - processed.get(addr, 0.0) < _recooldown:
+                            continue
+                        processed[addr] = _t.time()
                     try:
                         ok = await analyzer.analyze_robinhood_token(addr, chain)
                     except Exception as e:
                         print(f"{emoji} {tag} analyze err {addr[:10]}: {type(e).__name__} {e}")
                         continue
+                    if ok is None:
+                        continue
+                    analyzer.log_scan(addr[:8], addr, tag,
+                                      ok, getattr(analyzer, "last_score", 0.0))
                     if ok is True and len(tracker.get_open_positions()) < config.MAX_CONCURRENT_POSITIONS:
                         td = await evm_data.get_token_data(addr, chain)
                         price = float(td.get("priceUsd", 0) or 0) if td else 0
                         sym = ((td.get("baseToken") or {}).get("symbol", tag) if td else tag) or tag
                         if price > 0:
+                            _pc = (td.get("priceChange") or {}) if td else {}
+                            _tx5 = ((td.get("txns") or {}).get("m5", {}) or {}) if td else {}
+                            analyzer.log_scan(sym, addr, tag, True,
+                                              getattr(analyzer, "last_score", 0.0),
+                                              (td.get("liquidity") or {}).get("usd", 0) or 0,
+                                              _pc.get("m5", 0) or 0,
+                                              _tx5.get("buys", 0) or 0, _tx5.get("sells", 0) or 0)
                             cap = tracker.get_total_capital()
                             size = max(4.0, min(100.0, cap * (config.REINVEST_PERCENT / 100.0))) if cap > 0 else 4.0
                             _sig = analyzer.get_signal(addr)
@@ -548,12 +640,14 @@ async def _evm_chain_loop(analyzer, tracker, chain: str):
                                                  source=f"{tag}:{_sig}",
                                                  chain=chain)
                             print(f"{emoji} {tag} BUY {sym} {addr[:10]} @ ${price}")
-                    await asyncio.sleep(1.0)
-                if len(processed) > 1000:
-                    processed.clear()
-        except Exception as e:
-            print(f"Ошибка в {tag}_loop: {e}")
-        await asyncio.sleep(interval)
+                        await asyncio.sleep(1.0)
+                    if len(processed) > 1000:
+                        processed.clear()
+            except Exception as e:
+                print(f"Ошибка в {tag}_loop: {e}")
+            await asyncio.sleep(interval)
+
+    await asyncio.gather(track_task(), scan_task())
 
 
 async def robinhood_loop(analyzer, tracker):
@@ -598,6 +692,13 @@ async def async_main():
     from trade_logger import trade_logger
     from birdeye_scanner import birdeye_loop
     from sol_price import get_sol_price
+    try:
+        from tg_listener import tg_listener_loop
+    except Exception as e:
+        print(f"⚠️ tg_listener недоступен ({e}) - пропускаю (есть tg_preview без ключей)")
+        async def tg_listener_loop(*_a, **_k):
+            return
+    from tg_preview import tg_preview_loop
     
     # Получаем актуальную цену SOL при старте
     await get_sol_price()
@@ -618,6 +719,8 @@ async def async_main():
         scanner_loop(analyzer, tracker),
         copy_trader.listen(),
         fomo_signal_loop(analyzer, tracker),
+        tg_listener_loop(analyzer, tracker),
+        tg_preview_loop(analyzer, tracker),  # 📡 TG-коллы без ключей (t.me/s превью)
         fomo_loop(analyzer, tracker),
         robinhood_loop(analyzer, tracker),  # 🟣 EVM-мемы Robinhood Chain 4663
         base_loop(analyzer, tracker),  # 🟦 EVM-мемы Base (fomo.family)
@@ -850,6 +953,7 @@ with tab2:
                             <div style='color: {"#00C851" if t.get("momentum",0) >= 70 else "#FF8800"};'>⚡ {t.get('momentum', 0)}</div>
                             <div style='color: {"#00C851" if t.get("social",0) >= 70 else "#FF8800"};'>📣 {t.get('social', 0)}</div>
                         </div>
+                        <div style='margin-top: 8px; font-size: 0.8em; color: #888;'>🔖 {t.get('source', 'WSS') if str(t.get('source', 'WSS')).strip() else 'WSS'} · {t.get('decision', '') if t.get('decision', '') else ''} {t.get('signal', '') if str(t.get('signal', '')).strip() else ''}</div>
                         {_badge}
                     </div>
                     """, unsafe_allow_html=True)

@@ -40,6 +40,7 @@ class Analyzer:
         self.pump_model = None
         self.raydium_model = None
         self.last_signal = ""  # Метка последнего решения: "VIP RAY-XGB 98%", "PULLBACK", "ROBINHOOD rule 72%"...
+        self.last_score = 0.0  # Скор последнего решения (для радара)
         self.signals = {}  # Метки по mint: НЕ делит состояние между параллельными петлями (иначе FOMO:? в дашборде)
 
     def _set_sig(self, key: str, text: str):
@@ -54,6 +55,47 @@ class Analyzer:
     def get_signal(self, key: str) -> str:
         # Только своя метка монеты. Чужую (last_signal) не подставляем - давала FOMO:? и чужие метки
         return self.signals.get(key) or "?"
+
+    def _save_scanned_token(self, entry: dict):
+        """Единый журнал сканов для радара (раньше метода не было - WSS-путь падал).
+        Дедуп по mint, свежие сверху, максимум 150 записей."""
+        import json as _json
+        import os as _os
+        try:
+            entry = dict(entry or {})
+            entry.setdefault("time", time.time())
+            data = []
+            if _os.path.exists("scanned_tokens.json"):
+                with open("scanned_tokens.json", "r") as f:
+                    data = _json.load(f) or []
+            data = [t for t in data if t.get("mint") != entry.get("mint")]
+            data.insert(0, entry)
+            with open("scanned_tokens.json", "w") as f:
+                _json.dump(data[:150], f)
+        except Exception:
+            pass
+
+    def log_scan(self, symbol: str, mint: str, source: str, decision,
+                 score: float = 0.0, liquidity: float = 0.0,
+                 m5_change: float = 0.0, buys: int = 0, sells: int = 0):
+        """Запись в радар из любой петли: что посмотрели и чем кончилось."""
+        try:
+            sig = self.signals.get(mint, "") or ""
+            self._save_scanned_token({
+                "symbol": symbol or (mint[:6] + "..."),
+                "mint": mint,
+                "score": round(float(score or 0.0), 1),
+                "safety": 0, "momentum": 0, "social": 0,
+                "liquidity": liquidity, "vol_24h": 0,
+                "buys": buys, "sells": sells,
+                "m5_change": m5_change,
+                "source": source,
+                "decision": "BUY" if decision is True else ("SKIP" if decision is False else "?"),
+                "signal": sig,
+                "time": time.time(),
+            })
+        except Exception:
+            pass
         
         # Предзагрузка моделей в память один раз при старте
         try:
@@ -335,6 +377,7 @@ class Analyzer:
     async def analyze_token(self, mint: str) -> bool:
         # Smart Router
         self.last_signal = ""  # сброс метки решения
+        self.last_score = 0.0
         self.signals.pop(mint, None)
         
         # Мы больше не используем глючный RugCheck API.
@@ -651,6 +694,7 @@ class Analyzer:
         Возвращает True/False, метка решения в signals[address]."""
         import evm_data
         self.last_signal = ""
+        self.last_score = 0.0
         self.signals.pop(address, None)
         tag = (evm_data.CHAINS.get(chain) or {}).get("tag", chain.upper())
         min_liq = (evm_data.CHAINS.get(chain) or {}).get("min_liq",
@@ -750,6 +794,7 @@ class Analyzer:
         if len(links) >= 2:
             score += 5.0
         score = min(score, 100.0)
+        self.last_score = float(score)
         print(f"🔵 [{tag}] {symbol}: m5 {m5:+.1f}% b/s {b}/{s} liq ${liq:,.0f} → score {score:.0f}")
         if score >= 60.0:
             self._set_sig(address, f"{tag} rule {score:.0f}%")
@@ -874,6 +919,7 @@ class Analyzer:
             return False # Fail-safe если модель не загрузилась
         prob = self.pump_model.predict_proba(features)[0][1]
         conf = float(prob) * 100
+        self.last_score = conf
         print(f"🤖 XGBoost [DEX Poller]: {mint} | Score: {conf:.1f}%")
         import config
         threshold = 45.0  # Было 15.0 - пропускало мусор. 45% - компромисс: не 65% чтобы не зажать, но режет скам
@@ -937,7 +983,6 @@ class Analyzer:
             if self.raydium_model is None: return False
             prob = self.raydium_model.predict_proba(df)[0][1]
             conf = prob * 100
-            
             # --- ИНТЕГРАЦИЯ LUNARCRUSH ---
             symbol = pair_data.get("baseToken", {}).get("symbol", "")
             if symbol:
@@ -956,6 +1001,7 @@ class Analyzer:
             # -------------------------------
             
             print(f"🧠 Raydium XGBoost (Безлимит): {mint} | Score: {conf:.1f}%")
+            self.last_score = float(conf)
             import config; threshold = 45.0  # Было 15.0 - пропускало мусор
             _hyper = self.check_hyper_rocket_momentum(pair_data)
             # VIP-скидок больше нет: FIBONACCI/CATANA/Goblin зашли по сниженному порогу и слили. Та же планка.

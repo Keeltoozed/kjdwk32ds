@@ -12,3 +12,4 @@ xgboost
 scikit-learn
 joblib
 supabase
+telethon

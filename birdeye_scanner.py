@@ -109,5 +109,6 @@ async def birdeye_loop(analyzer: Analyzer, tracker):
                         
         except Exception as e:
             print(f"Ошибка в birdeye_loop: {e}")
-            
-        await asyncio.sleep(15) # Опрашиваем раз в 15 секунд (было 30)
+
+        # Free-tier: 30K CU/мес. Раз в 15 сек съест бюджет за дни - интервал из конфига.
+        await asyncio.sleep(int(getattr(config, "BIRDEYE_INTERVAL", 600)))

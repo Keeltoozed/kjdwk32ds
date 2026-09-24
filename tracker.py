@@ -133,6 +133,20 @@ class PaperTracker:
     def get_open_positions(self) -> Dict[str, VirtualPosition]:
         return {k: v for k, v in self.positions.items() if v.status == "open"}
 
+    def last_loss_pct(self, mint: str):
+        """Худший % закрытых сделок по монете (включая архивные *_old_*).
+        None — не торговали. Считается по ценам входа/выхода."""
+        worst = None
+        for k, pos in self.positions.items():
+            if k != mint and not k.startswith(mint + "_old_"):
+                continue
+            if pos.status != "closed" or not pos.entry_price_usd:
+                continue
+            pct = (pos.exit_price_usd - pos.entry_price_usd) / pos.entry_price_usd
+            if worst is None or pct < worst:
+                worst = pct
+        return worst
+
     def get_total_capital(self) -> float:
         # Считаем изначальный капитал + сумма PnL всех закрытых позиций
         total_pnl = sum(pos.pnl_usd for pos in self.positions.values() if pos.status == "closed")

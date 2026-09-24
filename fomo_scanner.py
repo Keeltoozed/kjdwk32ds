@@ -169,7 +169,9 @@ async def fomo_loop(analyzer: Analyzer, tracker):
                     if is_buy is None:
                         continue
                     processed_mints[mint] = time.time()
-                    
+                    analyzer.log_scan(mint[:8], mint, "FOMO",
+                                      is_buy, getattr(analyzer, "last_score", 0.0))
+
                     if is_buy and len(tracker.get_open_positions()) < config.MAX_CONCURRENT_POSITIONS:
                         pair_data = await analyzer.fetch_token_data(mint)
                         if pair_data:

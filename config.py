@@ -57,6 +57,7 @@ GEMINI_API_KEY = "AQ.Ab8RN6Ju77t6DI8AYru7TGxuPuG_0WOcqHZqq1OBsDAwHtoJxg" # По�
 
 # Birdeye API Key
 BIRDEYE_API_KEY = os.getenv("BIRDEYE_API_KEY", "")
+BIRDEYE_INTERVAL = 600  # Free-tier 30K CU/мес: опрос раз в 10 мин, иначе бюджет сгорит за дни
 
 
 # === JITO BLOCK ENGINE (MEV Protection) ===
@@ -99,6 +100,7 @@ CONVICTION_MAX_M5_PCT = 0.60  # m5 до +60% (выше - вершина)
 CONVICTION_MIN_BUYSELL = 2.0  # покупки >= продаж x2
 CONVICTION_MIN_LIQ = 30000  # пул от $30к
 MAX_DEPLOYED_PCT = 0.60  # суммарно в рынке не больше 60% капитала (сдерживает тиринг)
+RUG_REBUY_MAX_LOSS = -0.15  # был лосс хуже -15% по монете (HYDX -52%) - второй раз не входим, раги не оживают
 
 # === GROWTH MODE (тренд старых токенов, пока нет ракет) ===
 # Логика: ракеты ловятся импульсом m5, а зрелые капы едут часами. Отдельный режим:
@@ -125,6 +127,18 @@ GROWTH_STAGNANT_MIN = 120  # флет режем через 2 часа, не 7 �
 GROWTH_MAX_POS = 3  # не больше 3 трендовых позиций
 GROWTH_SIZE_USD = 6.0
 GROWTH_INTERVAL = 300  # опрос вотчлиста каждые 5 мин
+
+# === TG CALLS (живые коллы из Telegram-каналов) ===
+# Бесплатно: API ID+Hash с https://my.telegram.org -> env TG_API_ID/TG_API_HASH.
+# Первый запуск локально (создаст .session), дальше работает везде.
+TG_ENABLED = True
+TG_CHANNELS = ["lxetrades"]  # добавь свои: ["lxetrades", "calls_channel", ...]
+TG_SESSION = "sniper_session"
+# Бесключевой сборщик коллов через t.me/s/ превью (без Telethon и API-ключей).
+# Проверено: pumpfunmemecalls отдаёт контракты. solanamemeradar закрылся - не добавлять.
+TG_PREVIEW_ENABLED = True
+TG_PREVIEW_CHANNELS = ["pumpfunmemecalls"]
+TG_PREVIEW_INTERVAL = 90  # секунд между опросами (вежливо, превью не банит)
 
 SNIPER_MIN_UNIQUE_BUYERS = 10
 SNIPER_BUYERS_WINDOW_MIN = 5

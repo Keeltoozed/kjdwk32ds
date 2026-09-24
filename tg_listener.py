@@ -1,42 +1,67 @@
+"""TG-слушатель живых коллов: каналы -> fomo_signals.txt -> fomo_signal_loop.
+Ловит Solana-минты (base58 32-44) и EVM-адреса (0x + 40 hex).
+Формат строк: 'sol:<mint>' или 'evm:<addr>' (сеть EVM определяется при обработке).
+Требует env TG_API_ID / TG_API_HASH (бесплатно: https://my.telegram.org).
+Первый запуск - локально (Telegram спросит код, создастся .session файл).
+"""
 from telethon import TelegramClient, events
 import re
 import os
 import asyncio
 
-TARGET_CHANNEL = "lxetrades"
 SOLANA_MINT_REGEX = r"\b[1-9A-HJ-NP-Za-km-z]{32,44}\b"
+EVM_ADDR_REGEX = r"\b0x[a-fA-F0-9]{40}\b"
 
-async def tg_listener_loop():
+
+def _extract_signals(text: str) -> list:
+    out = []
+    for m in set(re.findall(SOLANA_MINT_REGEX, text or "")):
+        out.append(f"sol:{m}")
+    for a in set(re.findall(EVM_ADDR_REGEX, text or "")):
+        out.append(f"evm:{a}")
+    return out
+
+
+async def tg_listener_loop(*_args, **_kwargs):
+    import config
+    if not getattr(config, "TG_ENABLED", True):
+        return
     api_id = os.getenv("TG_API_ID")
     api_hash = os.getenv("TG_API_HASH")
-    
-    if not api_id or not api_hash:
-        print("⚠️ Telegram-парсер отключен (Не указаны TG_API_ID и TG_API_HASH)")
-        return
-        
-    client = TelegramClient('sniper_session', int(api_id), api_hash)
-    
-    @client.on(events.NewMessage(chats=TARGET_CHANNEL))
-    async def handler(event):
-        message_text = event.message.message
-        if not message_text:
-            return
-            
-        print(f"\n[TG] Сигнал из {TARGET_CHANNEL}:\n{message_text[:100]}...\n")
-        
-        mints = re.findall(SOLANA_MINT_REGEX, message_text)
-        if mints:
-            unique_mints = list(set(mints))
-            print(f"🎯 ИЗВЛЕЧЕНЫ КОНТРАКТЫ: {unique_mints}")
-            with open('fomo_signals.txt', 'a') as f:
-                for mint in unique_mints:
-                    f.write(f"{mint}\n")
-                    
-    try:
-        print(f"🚀 Подключение Telegram-парсера к каналу: {TARGET_CHANNEL}...")
-        await client.start()
-        print("✅ Успешно подключено к Telegram (слушаем сигналы)!")
-        await client.run_until_disconnected()
-    except Exception as e:
-        print(f"❌ Ошибка Telegram: {e}. Возможно, нет файла sniper_session.session")
+    channels = list(getattr(config, "TG_CHANNELS", []) or [])
 
+    if not api_id or not api_hash:
+        print("⚠️ Telegram-парсер отключен (нет TG_API_ID / TG_API_HASH в env)")
+        return
+    if not channels:
+        print("⚠️ Telegram-парсер: пуст TG_CHANNELS в config.py")
+        return
+
+    client = TelegramClient(getattr(config, "TG_SESSION", "sniper_session"),
+                            int(api_id), api_hash)
+
+    @client.on(events.NewMessage(chats=channels))
+    async def handler(event):
+        try:
+            text = event.message.message or ""
+        except Exception:
+            return
+        if not text:
+            return
+        print(f"\n[TG] Сигнал ({len(text)} симв): {text[:120]}...")
+        sigs = _extract_signals(text)
+        if sigs:
+            print(f"🎯 TG-контракты: {sigs}")
+            with open('fomo_signals.txt', 'a') as f:
+                for s in sigs:
+                    f.write(s + "\n")
+
+    while True:
+        try:
+            print(f"🚀 TG-парсер: подключаюсь, каналы: {channels}...")
+            await client.start()
+            print("✅ TG слушает живые коллы!")
+            await client.run_until_disconnected()
+        except Exception as e:
+            print(f"❌ Ошибка Telegram: {type(e).__name__} {e}. Ретраю через 30с...")
+            await asyncio.sleep(30)
