@@ -550,6 +550,8 @@ async def _evm_track_once(tracker, chain: str, tag: str, emoji: str):
             reason = f"{tag} Trailing (peak +{maxp * 100:.0f}%)"
         elif pnl <= -0.30:
             reason = f"{tag} Emergency Cap ({pnl * 100:.1f}%)"
+        elif held < 3 and pnl <= -0.12:
+            reason = f"{tag} Infant Dump ({pnl * 100:.1f}%)"
         elif pnl <= config.STOP_LOSS_PCT:
             reason = f"{tag} Stop ({pnl * 100:.1f}%)"
         elif held >= 15 and pnl < 0:
@@ -589,14 +591,16 @@ async def _evm_chain_loop(analyzer, tracker, chain: str):
                     print(f"🛑 {tag} KILL-SWITCH: входы на паузе 1ч (выходы работают).")
                     await asyncio.sleep(3600)
                     continue
-                # --- Скан новых: бусты + профили + тренды GT + СВЕЖИЕ пулы GT (ракеты до роста) ---
+                # --- Скан новых: бусты + профили + тренды GT + СВЕЖИЕ пулы GT + топ объём GT + DS поиск ---
                 if len(tracker.get_open_positions()) < config.MAX_CONCURRENT_POSITIONS:
                     import time as _t
-                    boosted = await evm_data.fetch_boosted_tokens(chain)
+                    boosted  = await evm_data.fetch_boosted_tokens(chain)
                     profiles = await evm_data.fetch_profile_tokens(chain)
                     trending = await evm_data.get_trending_pools_gt(chain)
-                    fresh = await evm_data.get_new_pools_gt(chain)
-                    mints = list(dict.fromkeys(boosted + profiles + trending + fresh))[:35]
+                    fresh    = await evm_data.get_new_pools_gt(chain)
+                    top_vol  = await evm_data.get_top_volume_pools_gt(chain)
+                    search   = await evm_data.fetch_dex_search_tokens(chain)
+                    mints = list(dict.fromkeys(boosted + profiles + trending + fresh + top_vol + search))[:60]
                     for addr in mints:
                         if not addr or addr in tracker.positions:
                             continue
@@ -634,8 +638,8 @@ async def _evm_chain_loop(analyzer, tracker, chain: str):
                             cap = tracker.get_total_capital()
                             size = max(4.0, min(100.0, cap * (config.REINVEST_PERCENT / 100.0))) if cap > 0 else 4.0
                             _sig = analyzer.get_signal(addr)
-                            if "LOTTERY" in _sig:
-                                size = min(size, 1.5)  # лотерейный билет, не позиция
+                            if "LOTTERY" in _sig or "SCOUT" in _sig:
+                                size = min(size, 1.5)  # лотерейный/скаут билет, не позиция
                             tracker.add_position(sym, addr, price, size, is_mature=True,
                                                  source=f"{tag}:{_sig}",
                                                  chain=chain)
@@ -692,6 +696,7 @@ async def async_main():
     from trade_logger import trade_logger
     from birdeye_scanner import birdeye_loop
     from sol_price import get_sol_price
+    from evm_wss import evm_wss_loop
     try:
         from tg_listener import tg_listener_loop
     except Exception as e:
@@ -725,6 +730,7 @@ async def async_main():
         robinhood_loop(analyzer, tracker),  # 🟣 EVM-мемы Robinhood Chain 4663
         base_loop(analyzer, tracker),  # 🟦 EVM-мемы Base (fomo.family)
         bsc_loop(analyzer, tracker),  # 🟨 BSC-мемы (GSTOCK и co)
+        evm_wss_loop(analyzer, tracker),  # ⚡ WSS фабрик Base+BSC: новые пулы за секунды
         growth_loop(analyzer, tracker),  # 🌱 тренды капов, пока нет ракет
         sniper.connect_and_listen(),  # ENABLED — с AI фильтром — sniper entry kills capital (-85.8%), mature +162.5%
         trade_logger.post_trade_watcher_loop(),

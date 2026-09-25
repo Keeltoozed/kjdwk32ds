@@ -688,6 +688,46 @@ class Analyzer:
         else:
             return await self.analyze_token_raydium(mint, pair_data)
 
+    _EVM_SCAM_KW = ["AAPL", "MSFT", "TSLA", "NVDA", "GOOG", "AMZN", "META", "NFLX",
+                    "PEPE", "SHIB", "DOGE", "FLOKI", "BONK", "WIF", "BOME", "POPCAT", "TRUMP", "BIDEN"]
+
+    def _evm_brand_ok(self, symbol: str, tag: str) -> bool:
+        """Блэклист мимикрии под бренды. Бесплатно, без сети."""
+        if any(k in symbol.upper() for k in self._EVM_SCAM_KW):
+            print(f"🚫 [{tag}] {symbol}: мимикрия под бренд/мем — 100% скам.")
+            return False
+        return True
+
+    async def _evm_clone_ok(self, symbol: str, address: str, pair_data: dict, chain: str, tag: str) -> bool:
+        """Внутрисетевой двойник старше/жирнее = скам. Кросчейн = мультчейн, ок."""
+        if len(symbol) <= 2:
+            return True
+        try:
+            from http_client import fetch_json as _fj
+            _st, _sd = await _fj(f"https://api.dexscreener.com/latest/dex/search?q={symbol}",
+                                 timeout=8, retries=1)
+            if _st != 200 or not _sd:
+                return True  # API лег - не блокируем вслепую
+            _up = symbol.upper()
+            _mine_addr = ((pair_data.get("baseToken") or {}).get("address") or "").lower()
+            _mine_created = pair_data.get("pairCreatedAt", 0) or 0
+            _mine_fdv = pair_data.get("fdv", 0) or 0
+            for _p in (_sd.get("pairs") or []):
+                if ((_p.get("chainId") or "").lower()) != chain.lower():
+                    continue
+                _ps = (((_p.get("baseToken") or {}).get("symbol")) or "").upper()
+                _pa = (((_p.get("baseToken") or {}).get("address")) or "").lower()
+                if _ps == _up and _pa and _pa != _mine_addr:
+                    _pc_at = _p.get("pairCreatedAt", 0) or 0
+                    _pf = _p.get("fdv", 0) or 0
+                    if (_pc_at and _mine_created and _pc_at < _mine_created and _pf > 250000) or \
+                            (_pf > (_mine_fdv * 10) and _pf > 500000):
+                        print(f"🚫 [{tag}] {symbol}: клон (оригинал {_pa[:10]} старше/жирнее).")
+                        return False
+        except Exception:
+            pass
+        return True
+
     async def analyze_robinhood_token(self, address: str, chain: str = "robinhood") -> bool:
         """Вход по EVM-мемам (Robinhood Chain 4663, Base).
         Solana-проверки неприменимы — rule-based скоринг на тех же воротах импульса.
@@ -717,6 +757,21 @@ class Analyzer:
         liq = (pair_data.get("liquidity") or {}).get("usd", 0) or 0
         info = pair_data.get("info") or {}
         links = (info.get("socials") or []) + (info.get("websites") or [])
+        import time as _tt
+        _age_min = ((_tt.time() * 1000 - (pair_data.get("pairCreatedAt") or 0)) / 60000.0) \
+            if pair_data.get("pairCreatedAt") else 999.0
+
+        # SCOUT TIER: пулу меньше 5 минут - входим ДО вершины микробилетом $1.5.
+        # Ракеты видны здесь, а не на m5 +70%. Скам-фильтры (бренд+клон) действуют и тут.
+        # Остальное держит пост-вход: сайз $1.5, infant-guard, emergency cap, no-rebuy.
+        if _age_min < 5 and m5 > 2.0 and (b5 + s5) >= 10 and liq >= 3000:
+            if not self._evm_brand_ok(symbol, tag):
+                return False
+            if not await self._evm_clone_ok(symbol, address, pair_data, chain, tag):
+                return False
+            print(f"🔭 [{tag}-SCOUT] {symbol}: возраст {_age_min:.1f}м, m5 {m5:+.1f}% — ранний билет.")
+            self._set_sig(address, f"{tag} SCOUT {_age_min:.0f}m")
+            return True
 
         if liq < min_liq:
             print(f"🚫 [{tag}] {symbol}: ликва ${liq:,.0f} < ${min_liq:,.0f} — микро-пул.")
@@ -736,8 +791,8 @@ class Analyzer:
         if m5 > 60.0 or h24 > 500.0:  # вершина уже прошла
             print(f"🚫 [{tag}-OVERHEAT] {symbol}: m5 {m5:+.1f}% h24 {h24:+.0f}% — поздно.")
             return False
-        if m1 > 0:
-            print(f"🚫 [{tag}] {symbol}: m1 {m1:+.1f}% зелёная — ждём откат.")
+        if m1 > 5.0:
+            print(f"🚫 [{tag}] {symbol}: m1 {m1:+.1f}% — вершина в моменте, ждём.")
             return False
         if m1 < -8.0 or h1 > 300.0:
             print(f"🚫 [{tag}] {symbol}: m1 {m1:+.1f}% h1 {h1:+.0f}% — дамп/улетел.")

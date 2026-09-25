@@ -112,7 +112,7 @@ async def get_trending_pools_gt(chain: str = SLUG) -> list:
     return out
 
 
-async def get_new_pools_gt(chain: str = SLUG, pages: int = 2) -> list:
+async def get_new_pools_gt(chain: str = SLUG, pages: int = 4) -> list:
     """РАННИЙ детект: свежесозданные пулы сети (GeckoTerminal new_pools).
     Именно здесь ракеты видны ДО роста - бусты/тренды показывают уже летящие."""
     from http_client import fetch_json as _f
@@ -133,3 +133,45 @@ async def get_new_pools_gt(chain: str = SLUG, pages: int = 2) -> list:
             except Exception:
                 continue
     return out
+
+
+async def get_top_volume_pools_gt(chain: str = SLUG) -> list:
+    """Топ пулов по объёму h24 (GeckoTerminal). Ракеты у которых УЖЕ идёт объём,
+    но они ещё не попали в бусты/тренды DexScreener."""
+    from http_client import fetch_json as _f
+    gt_net = "base" if chain == "base" else ("robinhood" if chain == "robinhood" else chain)
+    status, data = await _f(
+        f"https://api.geckoterminal.com/api/v2/networks/{gt_net}/pools"
+        f"?sort=h24_volume_usd_liquidity_desc&page=1",
+        timeout=10, retries=1)
+    if status != 200:
+        return []
+    out = []
+    for item in (data.get("data") or []):
+        try:
+            bid = item.get("relationships", {}).get("base_token", {}).get("data", {}).get("id", "")
+            addr = bid.split("_", 1)[1] if "_" in bid else ""
+            if addr and addr not in out:
+                out.append(addr)
+        except Exception:
+            continue
+    return out
+
+
+async def fetch_dex_search_tokens(chain: str = SLUG) -> list:
+    """DexScreener поиск активных пар сети. Находит органические ракеты
+    которые не проплачены (нет буста/профиля), но уже летят."""
+    status, data = await fetch_json(
+        f"{DS}/latest/dex/search?chainIds={chain}&rankBy=trendingScoreH6&order=desc",
+        timeout=10, retries=1)
+    if status != 200 or not data:
+        return []
+    out = []
+    for p in (data.get("pairs") or []):
+        if p.get("chainId") != chain:
+            continue
+        addr = (p.get("baseToken") or {}).get("address", "")
+        if addr and addr not in out:
+            out.append(addr)
+    return out
+

@@ -35,6 +35,10 @@ class MatureExitManager:
         if pnl_pct <= -0.30:
             return f"Mature Emergency Cap ({pnl_pct*100:.0f}%)"
 
+        # Infant guard: дамп в первые 3 минуты = дев сливает, не шум
+        if minutes_held < 3 and pnl_pct <= -0.12:
+            return f"Mature Infant Dump ({pnl_pct*100:.0f}%)"
+
         # Trailing stop for mature coins
         if hasattr(config, 'TRAILING_ACTIVATION_PCT') and hasattr(config, 'TRAILING_DISTANCE_PCT'):
             max_pnl_pct = (position.max_price_usd - position.entry_price_usd) / position.entry_price_usd

@@ -77,19 +77,23 @@ ROBINHOOD_GT_NETWORK = "robinhood"  # slug GeckoTerminal
 ROBINHOOD_RPC_URL = "https://rpc.mainnet.chain.robinhood.com"
 ROBINHOOD_EXPLORER = "https://robinhoodchain.blockscout.com"
 ROBINHOOD_MIN_LIQUIDITY = 8000  # EVM-пулы Uniswap тоньше Solana - порог ниже
-ROBINHOOD_SCAN_INTERVAL = 25  # Было 45: импульсы m5 живут минуты, опрос чаще = вход раньше (SI успел остыть)
+ROBINHOOD_SCAN_INTERVAL = 15  # Было 25: чаще опрос = раньше вход на ракету
 EVM_MIN_M5_PCT = 7.0  # Было 10.0: окно входа шире = чаще сделки. Раги держат остальные гейты
-EVM_RESCAN_COOLDOWN = 300  # Было 600: перепроверка отклонённых через 5 мин (волна может прийти позже)
+EVM_RESCAN_COOLDOWN = 90  # Было 300: ракеты живут минуты, повторная проверка через 90 сек
 
 # === BASE (EVM L2, там сидят мемы с fomo.family: musebook, DELTA...) ===
 # Тот же EVM-движок, slug DexScreener "base". Пулы глубже - порог $15к.
 BASE_ENABLED = True
-BASE_SCAN_INTERVAL = 25  # как Robinhood: чаще опрос = раньше вход
+BASE_SCAN_INTERVAL = 15  # было 25: чаще опрос = раньше вход
+
+# === EVM WSS factory-listener (новые пулы в реальном времени, Base+BSC) ===
+# Без ключей (PublicNode). Robinhood публичного WSS не даёт - только опрос.
+EVM_WSS_ENABLED = True
 
 # === BSC (GSTOCK и co с fomo.family сидят там) ===
 # Тот же движок, slug "bsc".
 BSC_ENABLED = True
-BSC_SCAN_INTERVAL = 25
+BSC_SCAN_INTERVAL = 15  # было 25
 
 # --- Сайзинг: база $6, conviction x2 ---
 # Тир решает ПОДТВЕРЖДЁННЫЙ импульс рынка (m5 + вести), а не скор модели
