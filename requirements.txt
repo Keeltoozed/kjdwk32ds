@@ -13,4 +13,3 @@ scikit-learn
 joblib
 supabase
 telethon
-pysha3  # keccak для топиков Uniswap V2/V3 в evm_wss (иначе fallback-константы)
