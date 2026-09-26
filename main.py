@@ -302,12 +302,19 @@ async def scanner_loop(analyzer, tracker):
                                     position_size *= getattr(config, "LOTTERY_SIZE_MULT", 0.25)
 
                                 # Conviction-тиринг: подтверждённый импульс (m5 20-60%, buys 2x+, пул $30к+) едет x2.
-                                # Тир решает рынок, НЕ скор модели и НЕ голый VIP-объём (катастрофы были VIP-100%).
-                                if not _is_lot:
+                                # НО НЕ для VIP-объёма: катастрофы UNPEG/8080/FIBONACCI были VIP-шипами
+                                # (шипастый объём = раздача дева, а не ракета). VIP едет базовым сайзом.
+                                if not _is_lot and not _is_vip:
                                     position_size *= analyzer.conviction_size_mult(pair_data)
                                 position_size = min(position_size, 100.0)
 
-                                if position_size < (1.0 if _is_lot else 4.0):
+                                # VIP-ШИП = РАЗДАЧА (доказано метками: UNPEG/FIBONACCI/BackCat/Goblin).
+                                # Таким входам - лотерейные $2 максимум, что бы ни показывал скор 100%.
+                                _is_vipsig = analyzer.get_signal(mint).startswith("VIP-")
+                                if _is_vipsig:
+                                    position_size = min(position_size, 2.0)
+
+                                if position_size < (1.0 if (_is_lot or _is_vipsig) else 4.0):
                                     print(f"🚫 Отказ (Ликвидность): Недостаточно ликвидности (${liq_usd}) для безопасного входа.")
                                     continue
 
@@ -325,6 +332,8 @@ async def scanner_loop(analyzer, tracker):
                                                   liq_usd, _pc.get("m5", 0) or 0,
                                                   _tx5.get("buys", 0) or 0, _tx5.get("sells", 0) or 0)
                                 tracker.add_position(actual_symbol, mint, entry_price, position_size, is_mature=True,
+                                                     ml_features=analyzer.pack_features(pair_data),
+                                                     ml_confidence=float(getattr(analyzer, "last_score", 0.0)),
                                                      source=f"SCANNER:{analyzer.get_signal(mint)}")
                                 break # Ждем следующего цикла после покупки
                             else:
@@ -482,7 +491,10 @@ async def growth_loop(analyzer, tracker):
                             td = await analyzer.fetch_token_data(mint)
                             sym = ((td.get("baseToken") or {}).get("symbol", mint[:4]) if td else mint[:4]) or mint[:4]
                             tracker.add_position(sym, mint, price, float(getattr(config, "GROWTH_SIZE_USD", 6.0)),
-                                                 is_mature=True, source=f"GROWTH:{analyzer.get_signal(mint)}")
+                                                 is_mature=True,
+                                                 ml_features=analyzer.pack_features(td) if td else {},
+                                                 ml_confidence=float(getattr(analyzer, "last_score", 0.0)),
+                                                 source=f"GROWTH:{analyzer.get_signal(mint)}")
                             print(f"🌱 GROWTH BUY {sym} @ ${price}")
                     await asyncio.sleep(2)
         except Exception as e:
@@ -640,7 +652,12 @@ async def _evm_chain_loop(analyzer, tracker, chain: str):
                             _sig = analyzer.get_signal(addr)
                             if "LOTTERY" in _sig or "SCOUT" in _sig:
                                 size = min(size, 1.5)  # лотерейный/скаут билет, не позиция
+                            else:
+                                size *= analyzer.conviction_size_mult(td)  # коридор с импульсом едет x2
+                                size = min(size, 100.0)
                             tracker.add_position(sym, addr, price, size, is_mature=True,
+                                                 ml_features=analyzer.pack_features(td),
+                                                 ml_confidence=float(getattr(analyzer, "last_score", 0.0)),
                                                  source=f"{tag}:{_sig}",
                                                  chain=chain)
                             print(f"{emoji} {tag} BUY {sym} {addr[:10]} @ ${price}")

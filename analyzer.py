@@ -52,6 +52,12 @@ class Analyzer:
             self.signals[key] = text
         self.last_signal = text
 
+    def _deny(self, key: str, short: str, msg: str) -> bool:
+        """Отказ с записью причины в signals: радар показывает ЧТО видели и ПОЧЕМУ скип."""
+        print(msg)
+        self._set_sig(key, f"SKIP {short}")
+        return False
+
     def get_signal(self, key: str) -> str:
         # Только своя метка монеты. Чужую (last_signal) не подставляем - давала FOMO:? и чужие метки
         return self.signals.get(key) or "?"
@@ -505,10 +511,11 @@ class Analyzer:
         if is_vip:
             print(f"🚀 [VIP] {symbol}: Пропуск проверок клонов и соцсетей из-за гипер-моментума!")
             
-        # 1.5 Защита от вторичных клонов (Copycat Filter)
+        # 1.5 Защита от вторичных клонов (Copycat Filter) - ДЛЯ ВСЕХ включая VIP.
+        # Катастрофы UNPEG/8080/FIBONACCI заходили по VIP и пропускали эту проверку.
         current_created_at = pair_data.get("pairCreatedAt", 0)
         current_fdv = pair_data.get("fdv", 0)
-        if not is_vip and await self.is_clone(symbol, mint, current_created_at, current_fdv):
+        if await self.is_clone(symbol, mint, current_created_at, current_fdv):
             print(f"🚫 Мусор: Токен {symbol} является клоном! На DexScreener найден более старый/крупный оригинал.")
             return False
             
@@ -774,8 +781,7 @@ class Analyzer:
             return True
 
         if liq < min_liq:
-            print(f"🚫 [{tag}] {symbol}: ликва ${liq:,.0f} < ${min_liq:,.0f} — микро-пул.")
-            return False
+            return self._deny(address, "micro-liq", f"🚫 [{tag}] {symbol}: ликва ${liq:,.0f} < ${min_liq:,.0f} — микро-пул.")
         # LOTTERY TIER: вертикаль m5 60-150% (HYPERCAT +73% мазал мимо кэпа 60%).
         # Билет $1.5, не позиция: риск bounded, верх открыт. h24-вершины (>500%) всё равно мимо.
         if 60.0 <= m5 <= 150.0 and h24 <= 500.0:
@@ -783,29 +789,22 @@ class Analyzer:
                 print(f"🎰 [{tag}-LOTTERY] {symbol}: вертикаль m5 {m5:+.1f}% — лотерейный билет.")
                 self._set_sig(address, f"{tag} LOTTERY {m5:+.0f}%")
                 return True
-            print(f"🚫 [{tag}] {symbol}: вертикаль без давления/ликвы/ссылок — не лотерея.")
-            return False
+            return self._deny(address, "vert-no-pressure", f"🚫 [{tag}] {symbol}: вертикаль без давления/ликвы/ссылок — не лотерея.")
         _evm_min_m5 = getattr(config, "EVM_MIN_M5_PCT", 7.0)
         if m5 < _evm_min_m5:  # импульса нет — флет съест комиссиями
-            return False
+            return self._deny(address, f"flat m5 {m5:+.1f}%", f"· [{tag}] {symbol}: флет m5 {m5:+.1f}%")
         if m5 > 60.0 or h24 > 500.0:  # вершина уже прошла
-            print(f"🚫 [{tag}-OVERHEAT] {symbol}: m5 {m5:+.1f}% h24 {h24:+.0f}% — поздно.")
-            return False
+            return self._deny(address, f"top m5 {m5:+.0f}% h24 {h24:+.0f}%", f"🚫 [{tag}-OVERHEAT] {symbol}: m5 {m5:+.1f}% h24 {h24:+.0f}% — поздно.")
         if m1 > 5.0:
-            print(f"🚫 [{tag}] {symbol}: m1 {m1:+.1f}% — вершина в моменте, ждём.")
-            return False
+            return self._deny(address, f"m1-green {m1:+.1f}%", f"🚫 [{tag}] {symbol}: m1 {m1:+.1f}% — вершина в моменте, ждём.")
         if m1 < -8.0 or h1 > 300.0:
-            print(f"🚫 [{tag}] {symbol}: m1 {m1:+.1f}% h1 {h1:+.0f}% — дамп/улетел.")
-            return False
+            return self._deny(address, "dump/gone", f"🚫 [{tag}] {symbol}: m1 {m1:+.1f}% h1 {h1:+.0f}% — дамп/улетел.")
         if s > 0 and b < s * 1.5:
-            print(f"🚫 [{tag}] {symbol}: buys {b} / sells {s} — нет давления.")
-            return False
+            return self._deny(address, f"no-pressure {b}/{s}", f"🚫 [{tag}] {symbol}: buys {b} / sells {s} — нет давления.")
         if (b5 + s5) < 20 or vol24 < 10000:
-            print(f"🚫 [{tag}] {symbol}: тихо (tx5 {(b5+s5)}, vol24 ${vol24:,.0f}).")
-            return False
+            return self._deny(address, "quiet", f"🚫 [{tag}] {symbol}: тихо (tx5 {(b5+s5)}, vol24 ${vol24:,.0f}).")
         if not links:
-            print(f"🚫 [{tag}] {symbol}: нет ни одной ссылки — скам-риск.")
-            return False
+            return self._deny(address, "no-links", f"🚫 [{tag}] {symbol}: нет ни одной ссылки — скам-риск.")
 
         # Блэклист мимикрии под бренды (как в Solana-пути)
         _up = symbol.upper()
@@ -901,6 +900,37 @@ class Analyzer:
         print(f"🌱 [GROWTH-CANDIDATE] {symbol}: h1 {h1:+.1f}% h24 {h24:+.0f}% b/s {b}/{s} liq ${liq:,.0f}")
         return True
 
+    def pack_features(self, pair_data: dict) -> dict:
+        """Снапшот фич для trade_logger: чтобы будущие переобучения учились и на КУПЛЕННЫХ.
+        Раньше писалось '{}' - обучение было фикцией."""
+        try:
+            pc = pair_data.get("priceChange") or {}
+            txm5 = (pair_data.get("txns") or {}).get("m5", {}) or {}
+            txh = (pair_data.get("txns") or {}).get("h24", {}) or {}
+            liq = (pair_data.get("liquidity") or {}).get("usd", 0) or 0
+            b5, s5 = txm5.get("buys", 0) or 0, txm5.get("sells", 0) or 0
+            bh, sh = txh.get("buys", 0) or 0, txh.get("sells", 0) or 0
+            vm5 = (pair_data.get("volume") or {}).get("m5", 0) or 0
+            vh = (pair_data.get("volume") or {}).get("h24", 0) or 0
+            try:
+                from shadow_score import pair_shadow_score
+                sh_score = round(pair_shadow_score(pair_data), 3)
+            except Exception:
+                sh_score = 0.0
+            return {
+                "price_change_m5": pc.get("m5", 0) or 0,
+                "price_change_h24": pc.get("h24", 0) or 0,
+                "volume_m5": vm5, "volume_h24": vh,
+                "buys_m5": b5, "sells_m5": s5, "buys_h24": bh, "sells_h24": sh,
+                "liquidity": liq, "fdv": pair_data.get("fdv", 0) or 0,
+                "buy_sell_ratio": (b5 / (s5 + 1)) if (b5 + s5) > 0 else (bh / (sh + 1)),
+                "vol_to_liq": (vm5 / (liq + 1)) if vm5 else (vh / (liq + 1)),
+                "shadow_score": sh_score,
+                "dex": pair_data.get("dexId", ""),
+            }
+        except Exception:
+            return {}
+
     def conviction_size_mult(self, pair_data: dict) -> float:
         """Множитель сайза по подтверждённому импульсу (НЕ по скору модели -
         модель всем ставит 100%, а катастрофы были VIP-100%).
@@ -972,6 +1002,15 @@ class Analyzer:
         
         if self.pump_model is None:
             return False # Fail-safe если модель не загрузилась
+        # SHADOW VETO и тут: дохлый m5 не спасает даже хороший холдинг
+        try:
+            from shadow_score import pair_shadow_score, VETO_THRESHOLD
+            _sh = pair_shadow_score(pair_data)
+            if _sh < VETO_THRESHOLD:
+                print(f"🚫 [SHADOW] {mint[:8]}: score {_sh:.2f} < {VETO_THRESHOLD}.")
+                return False
+        except Exception:
+            pass
         prob = self.pump_model.predict_proba(features)[0][1]
         conf = float(prob) * 100
         self.last_score = conf
@@ -1057,6 +1096,15 @@ class Analyzer:
             
             print(f"🧠 Raydium XGBoost (Безлимит): {mint} | Score: {conf:.1f}%")
             self.last_score = float(conf)
+            # SHADOW VETO (P0.1, обучено на 513 отказах): явных лузеров режем до модели
+            try:
+                from shadow_score import pair_shadow_score, VETO_THRESHOLD
+                _sh = pair_shadow_score(pair_data)
+                if _sh < VETO_THRESHOLD:
+                    print(f"🚫 [SHADOW] {mint[:8]}: score {_sh:.2f} < {VETO_THRESHOLD} — обучено на истории лузеров.")
+                    return False
+            except Exception:
+                pass
             import config; threshold = 45.0  # Было 15.0 - пропускало мусор
             _hyper = self.check_hyper_rocket_momentum(pair_data)
             # VIP-скидок больше нет: FIBONACCI/CATANA/Goblin зашли по сниженному порогу и слили. Та же планка.

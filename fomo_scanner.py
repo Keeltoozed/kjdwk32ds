@@ -206,6 +206,8 @@ async def fomo_loop(analyzer: Analyzer, tracker):
                                     continue
                                 print(f"🚀 СНАЙП FOMO-РАКЕТЫ {actual_symbol} ({mint})! Входим на {position_size}$ по цене {actual_price}$")
                                 tracker.add_position(actual_symbol, mint, actual_price, position_size,
+                                                     ml_features=analyzer.pack_features(pair_data),
+                                                     ml_confidence=float(getattr(analyzer, "last_score", 0.0)),
                                                      source=f"FOMO:{analyzer.get_signal(mint)}")
                     
             # Держим память в чистоте
