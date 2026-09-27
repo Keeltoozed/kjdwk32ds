@@ -31,6 +31,7 @@ MAX_CONCURRENT_POSITIONS = 10  # концентрация капитала: ма
 # Risk Management
 MAX_DAILY_LOSS_USD = 18.0
 KILL_SWITCH_ENABLED = True
+KILL_SWITCH_PAUSE = 300  # Было 3600: пауза 5 мин вместо часа (блокирует условие дневного минуса, а не сон)
 MAX_DAILY_LOSS_PCT = 0.25
 STOP_LOSS_PCT = -0.20  # Вернули по просьбе: стоп -20% чтобы ракеты дышали
 SNIPER_ENTRIES_ENABLED = False
@@ -80,6 +81,8 @@ ROBINHOOD_MIN_LIQUIDITY = 8000  # EVM-пулы Uniswap тоньше Solana - п�
 ROBINHOOD_SCAN_INTERVAL = 15  # Было 25: чаще опрос = раньше вход на ракету
 EVM_MIN_M5_PCT = 5.0  # Было 7.0: шире окно + вето 0.58 держит раги. Больше кандидатов в ракеты
 EVM_RESCAN_COOLDOWN = 90  # Было 300: ракеты живут минуты, повторная проверка через 90 сек
+EVM_NEW_POOL_PAGES = 8  # Было 4: глубже свежие пулы GT = больше ранних ракет Robinhood
+EVM_MAX_MINTS = 100  # Было 60: хвост выдачи больше не отрезается
 
 # === BASE (EVM L2, там сидят мемы с fomo.family: musebook, DELTA...) ===
 # Тот же EVM-движок, slug DexScreener "base". Пулы глубже - порог $15к.

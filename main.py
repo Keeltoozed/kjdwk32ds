@@ -229,7 +229,7 @@ async def scanner_loop(analyzer, tracker):
                           if getattr(p, "status", "") == "closed" and getattr(p, "exit_time", 0) and p.exit_time >= day_start)
             if getattr(config, "KILL_SWITCH_ENABLED", True) and day_pnl <= -config.MAX_DAILY_LOSS_USD:
                 print(f"🛑 KILL-SWITCH: дневной PnL ${day_pnl:.2f} <= -${config.MAX_DAILY_LOSS_USD}. Торги остановлены на 24ч.")
-                await asyncio.sleep(3600)
+                await asyncio.sleep(int(getattr(config, "KILL_SWITCH_PAUSE", 300)))
                 continue
             if open_count < config.MAX_CONCURRENT_POSITIONS:
                 print(f"🔎 Сканируем монеты... (Открыто: {open_count}/{config.MAX_CONCURRENT_POSITIONS})")
@@ -605,12 +605,18 @@ async def _evm_chain_loop(analyzer, tracker, chain: str):
         while True:
             try:
                 if _evm_killed(tracker):
-                    print(f"🛑 {tag} KILL-SWITCH: входы на паузе 1ч (выходы работают).")
-                    await asyncio.sleep(3600)
+                    print(f"🛑 {tag} KILL-SWITCH: входы на паузе 5мин (выходы работают).")
+                    await asyncio.sleep(int(getattr(config, "KILL_SWITCH_PAUSE", 300)))
                     continue
-                # --- Скан новых: бусты + профили + тренды GT + СВЕЖИЕ пулы GT + топ объём GT + DS поиск ---
+                # --- Скан новых: WSS-свежатина + свежие пулы GT ПЕРВЫЕ, потом бусты/профили/тренды/топ/поиск ---
                 if len(tracker.get_open_positions()) < config.MAX_CONCURRENT_POSITIONS:
                     import time as _t
+                    import evm_wss as _evm_wss
+                    try:
+                        _wss_list = _evm_wss.drain_fresh(chain) or []
+                    except Exception:
+                        _wss_list = []
+                    _wss_fresh = set(_wss_list)
                     boosted  = await evm_data.fetch_boosted_tokens(chain)
                     profiles = await evm_data.fetch_profile_tokens(chain)
                     trending = await evm_data.get_trending_pools_gt(chain)
@@ -619,7 +625,8 @@ async def _evm_chain_loop(analyzer, tracker, chain: str):
                     search   = await evm_data.fetch_dex_search_tokens(chain)
                     _user = [w for w in (getattr(config, "USER_WATCHLIST", []) or [])
                              if w and w.startswith("0x")]
-                    mints = list(dict.fromkeys(_user + boosted + profiles + trending + fresh + top_vol + search))[:60]
+                    _cap = int(getattr(config, "EVM_MAX_MINTS", 100))
+                    mints = list(dict.fromkeys(_user + _wss_list + fresh + boosted + profiles + trending + top_vol + search))[:_cap]
                     for addr in mints:
                         if not addr or addr in tracker.positions:
                             continue

@@ -111,7 +111,7 @@ async def fomo_loop(analyzer: Analyzer, tracker):
                           if getattr(p, "status", "") == "closed" and getattr(p, "exit_time", 0) and p.exit_time >= day_start)
             if getattr(config, "KILL_SWITCH_ENABLED", True) and day_pnl <= -config.MAX_DAILY_LOSS_USD:
                 print(f"🛑 FOMO KILL-SWITCH: дневной PnL ${day_pnl:.2f}. Пауза 1ч.")
-                await asyncio.sleep(3600)
+                await asyncio.sleep(int(getattr(config, "KILL_SWITCH_PAUSE", 300)))
                 continue
             if len(tracker.get_open_positions()) >= config.MAX_CONCURRENT_POSITIONS:
                 await asyncio.sleep(10)
