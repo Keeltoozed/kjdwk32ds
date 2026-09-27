@@ -222,13 +222,13 @@ async def scanner_loop(analyzer, tracker):
     while True:
         try:
             open_count = len(tracker.get_open_positions())
-            # Дневной kill-switch: -$18 за день -> стоп входов на 24ч
+            # Дневной kill-switch: ВЫКЛЮЧЕН (KILL_SWITCH_ENABLED=False) - блок ниже не срабатывает
             import time as _t
             day_start = _t.time() - (_t.time() % 86400)
             day_pnl = sum(getattr(p, "pnl_usd", 0) or 0 for p in tracker.positions.values()
                           if getattr(p, "status", "") == "closed" and getattr(p, "exit_time", 0) and p.exit_time >= day_start)
             if getattr(config, "KILL_SWITCH_ENABLED", True) and day_pnl <= -config.MAX_DAILY_LOSS_USD:
-                print(f"🛑 KILL-SWITCH: дневной PnL ${day_pnl:.2f} <= -${config.MAX_DAILY_LOSS_USD}. Торги остановлены на 24ч.")
+                print(f"🛑 KILL-SWITCH: дневной PnL ${day_pnl:.2f} <= -${config.MAX_DAILY_LOSS_USD}. Входы на паузе 5мин.")
                 await asyncio.sleep(int(getattr(config, "KILL_SWITCH_PAUSE", 300)))
                 continue
             if open_count < config.MAX_CONCURRENT_POSITIONS:
@@ -437,7 +437,7 @@ async def growth_loop(analyzer, tracker):
             import time as _t
             _killed = _evm_killed(tracker)
             if _killed:
-                print("🛑 GROWTH KILL-SWITCH: входы на паузе 1ч (выходы работают).")
+                print("🛑 GROWTH KILL-SWITCH: входы на паузе 5мин (выходы работают).")
             mine = {m: p for m, p in tracker.get_open_positions().items()
                     if str(getattr(p, "source", "")).startswith("GROWTH")}
             # --- трекинг ---

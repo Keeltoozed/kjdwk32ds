@@ -30,7 +30,7 @@ MAX_CONCURRENT_POSITIONS = 10  # концентрация капитала: ма
 
 # Risk Management
 MAX_DAILY_LOSS_USD = 18.0
-KILL_SWITCH_ENABLED = True
+KILL_SWITCH_ENABLED = False  # ВЫКЛ по требованию: торговать и в красный день (риск: без стопа минус не ограничен)
 KILL_SWITCH_PAUSE = 300  # Было 3600: пауза 5 мин вместо часа (блокирует условие дневного минуса, а не сон)
 MAX_DAILY_LOSS_PCT = 0.25
 STOP_LOSS_PCT = -0.20  # Вернули по просьбе: стоп -20% чтобы ракеты дышали
