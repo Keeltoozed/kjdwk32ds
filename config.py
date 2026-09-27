@@ -88,6 +88,21 @@ EVM_MIN_M5_PCT = 5.0  # Было 7.0: шире окно + вето 0.58 держ
 EVM_RESCAN_COOLDOWN = 90  # Было 300: ракеты живут минуты, повторная проверка через 90 сек
 EVM_NEW_POOL_PAGES = 8  # Было 4: глубже свежие пулы GT = больше ранних ракет Robinhood
 EVM_MAX_MINTS = 100  # Было 60: хвост выдачи больше не отрезается
+# EVM-копитрейдинг: кошельки китов по сетям (0x...). Их входящие Transfer = покупки:
+# токен летит в скан первым с меткой COPY. Пусто = выключено (нужны адреса!).
+EVM_COPY_WALLETS = {"base": [], "bsc": [], "robinhood": []}
+# fomoapi.io — независимое API данных fomo.family (топ-трейдеры, доски, WS-алерты).
+# Бесплатный ключ: fomoapi.io/dashboard (250k кредитов/мес). Без ключа — демо WS с задержкой 60с.
+FOMO_API_KEY = ""
+FOMO_WS_ENABLED = True
+FOMO_FOLLOW_TRADERS = []  # ники топов, напр. ["whatever_fomo", "pricedin"] — их покупки в приоритет
+FOMO_MIN_USD = 100  # игнорить покупки меньше $100 (пыль)
+FOMO_BOARDS_INTERVAL = 7200  # доски trending/graduated раз в 2ч (экономия кредитов)
+# GMGN живой мост (headless-Chromium ловит create-сигналы trenches).
+# ТЯЖЁЛЫЙ: +200-400MB RAM, на бесплатном Render не влезет. Включать на тарифе 2GB+
+# (и в build добавить: playwright install chromium) либо локально.
+GMGN_ENABLED = False
+GMGN_CHAINS = ["sol", "base", "bsc", "robinhood"]
 
 # === BASE (EVM L2, там сидят мемы с fomo.family: musebook, DELTA...) ===
 # Тот же EVM-движок, slug DexScreener "base". Пулы глубже - порог $15к.

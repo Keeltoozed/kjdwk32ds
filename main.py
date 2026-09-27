@@ -86,6 +86,21 @@ async def position_manager_loop(analyzer, tracker):
                 _loss_min = getattr(config, "STAGNANT_LOSS_MIN", 7)
                 _hold_min = getattr(config, "STAGNANT_HOLD_MIN", 25)
                 if minutes_held >= _loss_min and pnl_pct < 0 and max_pnl_pct < 0.05:
+                    # ЖИВОЙ ФЛЕТ НЕ РЕЖЕМ: консолидация 5-15 мин перед выстрелом выглядит
+                    # как -2%. Проверяем сделки за 5 мин: есть buys = пул жив, даём +5 мин
+                    # (макс 2 грейса). Нет сделок = труп, режем. Ошибка API = пропуск цикла.
+                    _graces = getattr(position, "stagnant_graces", 0)
+                    try:
+                        _td = await analyzer.fetch_token_data(mint)
+                        _tx5 = ((_td.get("txns") or {}).get("m5", {}) or {}) if _td else {}
+                        _alive = ((_tx5.get("buys", 0) or 0) + (_tx5.get("sells", 0) or 0)) >= 3
+                    except Exception:
+                        continue
+                    if _alive and _graces < 2:
+                        position.stagnant_graces = _graces + 1
+                        position.entry_time = time.time() - 2 * 60
+                        print(f"⏳ {mint[:8]}: живой флет ({pnl_pct*100:.1f}%), грейс {position.stagnant_graces}/2 — ждём выстрел.")
+                        continue
                     tracker.close_position(mint, current_price, f"Stagnant Loss Cut ({minutes_held:.0f}m, {pnl_pct*100:.1f}%)")
                     continue
                 if minutes_held >= _hold_min and abs(pnl_pct) < 0.05 and max_pnl_pct < 0.05:
@@ -378,9 +393,14 @@ async def fomo_signal_loop(analyzer, tracker):
                         raw = raw.strip()
                         if not raw:
                             continue
-                        # Формат: sol:<mint> | evm:<addr> | голый mint (совместимость = solana)
+                        # Формат: sol:<mint> | evm:<addr> | evm:<chain>:<addr> | голый mint (= solana)
                         if raw.startswith("evm:"):
-                            kind, mint = "evm", raw[4:].strip()
+                            rest = raw[4:].strip()
+                            if ":" in rest:
+                                _chn, mint = rest.split(":", 1)
+                                kind, mint = f"evm:{_chn.strip().lower()}", mint.strip()
+                            else:
+                                kind, mint = "evm", rest
                         elif raw.startswith("sol:"):
                             kind, mint = "sol", raw[4:].strip()
                         else:
@@ -388,18 +408,27 @@ async def fomo_signal_loop(analyzer, tracker):
                         if not mint or mint in tracker.positions:
                             continue
                         print(f"🚨 ПРИНЯТ ВНЕШНИЙ СИГНАЛ (FOMO): {mint}")
-                        if kind == "evm":
-                            # EVM: определяем сеть перебором (base -> bsc -> robinhood), дальше rule-движок
+                        if kind == "evm" or kind.startswith("evm:"):
+                            # EVM: сеть либо указана (evm:robinhood:0x...), либо перебором
                             import evm_data
                             found = None
-                            for _ch in ("base", "bsc", "robinhood"):
+                            if ":" in kind:
+                                _want = kind.split(":", 1)[1]
                                 try:
-                                    _td = await evm_data.get_token_data(mint, _ch)
+                                    _td = await evm_data.get_token_data(mint, _want)
                                 except Exception:
                                     _td = {}
                                 if _td and float(_td.get("priceUsd", 0) or 0) > 0:
-                                    found = (_ch, _td)
-                                    break
+                                    found = (_want, _td)
+                            if not found:
+                                    for _ch in ("base", "bsc", "robinhood"):
+                                        try:
+                                            _td = await evm_data.get_token_data(mint, _ch)
+                                        except Exception:
+                                            _td = {}
+                                        if _td and float(_td.get("priceUsd", 0) or 0) > 0:
+                                            found = (_ch, _td)
+                                            break
                             if not found:
                                 print(f"📲 TG EVM {mint[:10]}: ни в одной сети не найден.")
                                 continue
@@ -585,6 +614,23 @@ async def _evm_track_once(tracker, chain: str, tag: str, emoji: str):
         elif held >= 15 and pnl < 0:
             reason = f"{tag} Dead ({held:.0f}m)"
         elif held >= 7 and abs(pnl) < 0.05 and maxp < 0.05:
+            # ЖИВОЙ ФЛЕТ НЕ РЕЖЕМ: консолидация перед выстрелом выглядит как ~0%.
+            # Есть сделки за 5 мин = пул жив: +5 мин грейса (макс 2). Нет сделок = труп.
+            # Ошибка API = пропуск цикла (Dead на 15м всё равно подстрахует).
+            _graces = getattr(pos, "stagnant_graces", 0)
+            try:
+                _td = await evm_data.get_token_data(mint, chain)
+                _tx5 = ((_td.get("txns") or {}).get("m5", {}) or {}) if _td else {}
+                _alive = ((_tx5.get("buys", 0) or 0) + (_tx5.get("sells", 0) or 0)) >= 3
+            except Exception:
+                pos.price_checked_at = _t.time()
+                continue
+            if _alive and _graces < 2:
+                pos.stagnant_graces = _graces + 1
+                pos.entry_time = _t.time() - 4 * 60
+                print(f"⏳ {emoji} {tag} {mint[:10]}: живой флет ({pnl*100:.1f}%), грейс {pos.stagnant_graces}/2 — ждём выстрел.")
+                pos.price_checked_at = _t.time()
+                continue
             reason = f"{tag} Stagnant ({held:.0f}m)"
         pos.price_checked_at = _t.time()
         if reason:
@@ -685,10 +731,10 @@ async def _evm_chain_loop(analyzer, tracker, chain: str):
                                     size *= analyzer.conviction_size_mult(td)  # коридор с импульсом едет x2
                                     size = min(size, 100.0)
                                 tracker.add_position(sym, addr, price, size, is_mature=True,
-                                                     ml_features=analyzer.pack_features(td),
-                                                     ml_confidence=float(getattr(analyzer, "last_score", 0.0)),
-                                                     source=f"{tag}:{_sig}",
-                                                     chain=chain)
+                                                 ml_features=analyzer.pack_features(td),
+                                                 ml_confidence=float(getattr(analyzer, "last_score", 0.0)),
+                                                 source=(f"{tag}:COPY:{_sig}" if _evm_wss.is_copybuy(chain, addr) else f"{tag}:{_sig}"),
+                                                 chain=chain)
                                 print(f"{emoji} {tag} BUY {sym} {addr[:10]} @ ${price}")
                             await asyncio.sleep(1.0)
                         if len(processed) > 1000:
@@ -745,12 +791,24 @@ async def async_main():
     from sol_price import get_sol_price
     from evm_wss import evm_wss_loop
     try:
+        from fomo_api import fomo_api_loop
+    except Exception as e:
+        print(f"⚠️ fomo_api недоступен ({e}) - пропускаю")
+        async def fomo_api_loop(*_a, **_k):
+            return
+    try:
         from tg_listener import tg_listener_loop
     except Exception as e:
         print(f"⚠️ tg_listener недоступен ({e}) - пропускаю (есть tg_preview без ключей)")
         async def tg_listener_loop(*_a, **_k):
             return
     from tg_preview import tg_preview_loop
+    try:
+        from gmgn_bridge import gmgn_bridge_loop
+    except Exception as e:
+        print(f"⚠️ gmgn_bridge недоступен ({e}) - пропускаю (нужен playwright+chromium)")
+        async def gmgn_bridge_loop(*_a, **_k):
+            return
     
     # Получаем актуальную цену SOL при старте
     await get_sol_price()
@@ -780,6 +838,8 @@ async def async_main():
         base_loop(analyzer, tracker),  # 🟦 EVM-мемы Base (fomo.family)
         bsc_loop(analyzer, tracker),  # 🟨 BSC-мемы (GSTOCK и co)
         evm_wss_loop(analyzer, tracker),  # ⚡ WSS фабрик Base+BSC: новые пулы за секунды
+        fomo_api_loop(analyzer, tracker),  # 📡 fomoapi.io: покупки топов fomo.family -> очередь сигналов
+        gmgn_bridge_loop(analyzer, tracker),  # 🟢 GMGN trenches: create-сигналы (нужен GMGN_ENABLED+chromium)
         growth_loop(analyzer, tracker),  # 🌱 тренды капов, пока нет ракет
         sniper.connect_and_listen(),  # ENABLED — с AI фильтром — sniper entry kills capital (-85.8%), mature +162.5%
         trade_logger.post_trade_watcher_loop(),

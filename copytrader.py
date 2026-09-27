@@ -109,7 +109,10 @@ class CopyTrader:
             post_dict = {b["mint"]: float(b["uiTokenAmount"]["uiAmountString"]) for b in post_bals if b.get("owner") == wallet}
 
             for mint, post_amt in post_dict.items():
-                if not mint.endswith("pump"): continue
+                # Раньше только pump-минты — пропускали Raydium-миграции и прямые листинги.
+                # Теперь все минты: ИИ-гейт ниже отсеет мусор.
+                if len(mint) < 30:
+                    continue
                 
                 pre_amt = pre_dict.get(mint, 0.0)
                 if post_amt > pre_amt: # Баланс вырос = ПОКУПКА

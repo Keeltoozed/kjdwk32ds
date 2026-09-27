@@ -13,3 +13,4 @@ scikit-learn
 joblib
 supabase
 telethon
+playwright  # GMGN живой мост (нужен GMGN_ENABLED=True + build: playwright install chromium)

@@ -33,6 +33,70 @@ CHAINS_WSS = {
 # chain -> [(token, pool, ts), ...] свежие пулы (моложе 10 мин)
 FRESH_POOLS: dict = {}
 
+# Копи-покупки китов: chain -> {token_lower: ts}. Скан разбирает их первыми,
+# в сделке метим source COPY (видно в дашборде, откуда вход).
+COPY_BUYS: dict = {}
+
+# ERC20 Transfer(address,address,uint256) — канонический топик, одинаков везде
+TOPIC_TRANSFER = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3e6"
+
+
+def _pad_addr(a: str) -> str:
+    a = a.lower().replace("0x", "")
+    return "0x" + "0" * (64 - len(a)) + a
+
+
+def is_copybuy(chain: str, addr: str) -> bool:
+    try:
+        ts = (COPY_BUYS.get(chain) or {}).get((addr or "").lower(), 0)
+        return (time.time() - ts) <= 600
+    except Exception:
+        return False
+
+
+def _copy_wallets(chain: str) -> list:
+    try:
+        import config
+        return list((getattr(config, "EVM_COPY_WALLETS", {}) or {}).get(chain, []) or [])
+    except Exception:
+        return []
+
+
+async def _listen_wallets(chain: str, url: str):
+    """Копитрейдинг EVM: входящие Transfer на кошельки китов = их покупки.
+    Токен (log.address) уходит в очередь свежих с меткой COPY — скан разберёт первым."""
+    import websockets
+    wallets = [w.lower() for w in _copy_wallets(chain) if w]
+    if not wallets:
+        return
+    padded = [_pad_addr(w) for w in wallets]
+    while True:
+        try:
+            print(f"🐋 EVM-COPY {chain}: подключаюсь ({len(wallets)} китов)...")
+            async with websockets.connect(url, max_size=10 ** 6, ping_interval=20) as ws:
+                await ws.send(json.dumps({
+                    "jsonrpc": "2.0", "id": 21, "method": "eth_subscribe",
+                    "params": ["logs", {"topics": [TOPIC_TRANSFER, None, padded]}]}))
+                await ws.recv()
+                print(f"✅ EVM-COPY {chain}: слушаю покупки китов")
+                async for message in ws:
+                    try:
+                        d = json.loads(message)
+                        if d.get("method") != "eth_subscription":
+                            continue
+                        res = d.get("params", {}).get("result", {}) or {}
+                        token = str(res.get("address", "") or "")
+                        if len(token) != 42 or not token.startswith("0x"):
+                            continue
+                        FRESH_POOLS.setdefault(chain, []).append((token, "", time.time()))
+                        COPY_BUYS.setdefault(chain, {})[token.lower()] = time.time()
+                        print(f"🐋 EVM-COPY {chain}: кит купил {token[:10]}")
+                    except Exception:
+                        continue
+        except Exception as e:
+            print(f"⚠️ EVM-COPY {chain}: {type(e).__name__} {e}. Реконнект 5с...")
+            await asyncio.sleep(5)
+
 
 def _keccak_topics():
     try:
@@ -135,4 +199,13 @@ async def evm_wss_loop(*_args, **_kwargs):
     import config
     if not getattr(config, "EVM_WSS_ENABLED", True):
         return
-    await asyncio.gather(*[_listen_chain(c, u, q) for c, (u, q) in CHAINS_WSS.items()])
+    tasks = [_listen_chain(c, u, q) for c, (u, q) in CHAINS_WSS.items()]
+    # Копи-покупки китов (только где заданы кошельки в EVM_COPY_WALLETS)
+    for c, (u, _q) in CHAINS_WSS.items():
+        try:
+            import config as _c
+            if ((getattr(_c, "EVM_COPY_WALLETS", {}) or {}).get(c)):
+                tasks.append(_listen_wallets(c, u))
+        except Exception:
+            pass
+    await asyncio.gather(*tasks)
