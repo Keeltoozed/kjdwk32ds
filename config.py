@@ -78,7 +78,7 @@ ROBINHOOD_RPC_URL = "https://rpc.mainnet.chain.robinhood.com"
 ROBINHOOD_EXPLORER = "https://robinhoodchain.blockscout.com"
 ROBINHOOD_MIN_LIQUIDITY = 8000  # EVM-пулы Uniswap тоньше Solana - порог ниже
 ROBINHOOD_SCAN_INTERVAL = 15  # Было 25: чаще опрос = раньше вход на ракету
-EVM_MIN_M5_PCT = 7.0  # Было 10.0: окно входа шире = чаще сделки. Раги держат остальные гейты
+EVM_MIN_M5_PCT = 5.0  # Было 7.0: шире окно + вето 0.58 держит раги. Больше кандидатов в ракеты
 EVM_RESCAN_COOLDOWN = 90  # Было 300: ракеты живут минуты, повторная проверка через 90 сек
 
 # === BASE (EVM L2, там сидят мемы с fomo.family: musebook, DELTA...) ===
@@ -143,6 +143,11 @@ TG_SESSION = "sniper_session"
 TG_PREVIEW_ENABLED = True
 TG_PREVIEW_CHANNELS = ["pumpfunmemecalls"]
 TG_PREVIEW_INTERVAL = 90  # секунд между опросами (вежливо, превью не банит)
+
+# === USER WATCHLIST: ты видишь рано на fomo.family - кидаешь контракт сюда, бот исполняет ===
+# Формат: ["mint_solana", "0xEVM..."]. Проверка теми же гейтами (скам не пройдет),
+# но без ожидания бустов/трендов. Именно так ловятся AMERICA/YAP до +1000%.
+USER_WATCHLIST = []
 
 SNIPER_MIN_UNIQUE_BUYERS = 10
 SNIPER_BUYERS_WINDOW_MIN = 5

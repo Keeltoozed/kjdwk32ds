@@ -514,19 +514,18 @@ async def get_trending() -> list:
         d = await _gt_get(f"/networks/solana/trending_pools?page={page}")
         for item in (d.get("data") or []):
             add(_base_mint(item))
-            
-    # Сканируем только ТОП-30 свежих Pump.fun (1 страница)
-    for page in range(1, 2):
+
+    # Свежие Pump.fun (2 страницы) + Raydium (2 страницы): шире невод для ракет
+    for page in range(1, 3):
         d2 = await _gt_get(f"/networks/solana/dexes/pump-fun/pools?page={page}")
         for item in (d2.get("data") or []):
             add(_base_mint(item))
-            
-    # Сканируем только ТОП-30 Raydium (1 страница)
-    for page in range(1, 2):
+
+    for page in range(1, 3):
         d3 = await _gt_get(f"/networks/solana/dexes/raydium/pools?page={page}")
         for item in (d3.get("data") or []):
             add(_base_mint(item))
-            
+
     return out
 
 

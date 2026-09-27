@@ -239,11 +239,16 @@ async def scanner_loop(analyzer, tracker):
                 mints_to_scan = [p.get("tokenAddress") for p in tokens if p.get("tokenAddress")]
                 
                 # 2. Уличные Токены (Берем молодые ракеты от 5 до 20 минут)
-                mature_mints = birth_tracker.get_mature_tokens(3, 25)  # Было 5-20: шире окно молодняка = больше ракет
+                mature_mints = birth_tracker.get_mature_tokens(2, 30)  # Было 3-25: шире окно молодняка = больше ракет
                 if mature_mints:
                     print(f"🎂 Найдено {len(mature_mints)} перспективных монет (возраст 5-20 минут)!")
                     mints_to_scan.extend(mature_mints)
-                
+
+                # 3. Ручной вотчлист юзера (увидел рано на fomo - бот исполняет по своим гейтам)
+                for _w in getattr(config, "USER_WATCHLIST", []) or []:
+                    if _w and _w not in mints_to_scan:
+                        mints_to_scan.append(_w)
+
                 # Удаляем дубликаты
                 mints_to_scan = list(set(mints_to_scan))
                 
@@ -612,7 +617,9 @@ async def _evm_chain_loop(analyzer, tracker, chain: str):
                     fresh    = await evm_data.get_new_pools_gt(chain)
                     top_vol  = await evm_data.get_top_volume_pools_gt(chain)
                     search   = await evm_data.fetch_dex_search_tokens(chain)
-                    mints = list(dict.fromkeys(boosted + profiles + trending + fresh + top_vol + search))[:60]
+                    _user = [w for w in (getattr(config, "USER_WATCHLIST", []) or [])
+                             if w and w.startswith("0x")]
+                    mints = list(dict.fromkeys(_user + boosted + profiles + trending + fresh + top_vol + search))[:60]
                     for addr in mints:
                         if not addr or addr in tracker.positions:
                             continue
@@ -623,47 +630,51 @@ async def _evm_chain_loop(analyzer, tracker, chain: str):
                                 print(f"🚫 [{tag}] {addr[:10]}: прошлый лосс {_prev*100:.0f}% — второй раз не входим.")
                             processed[addr] = _t.time()
                             continue
-                        if _t.time() - processed.get(addr, 0.0) < _recooldown:
+                        # WSS-свежатина проверяется КАЖДЫЙ круг (без кулдауна): окно ракеты - минуты.
+                        # Нет данных DS (None) = тоже не маркируем надолго, повтор через ~30 сек.
+                        _is_wss = addr in _wss_fresh
+                        if not _is_wss and _t.time() - processed.get(addr, 0.0) < _recooldown:
+                            continue
+                        try:
+                            ok = await analyzer.analyze_robinhood_token(addr, chain)
+                        except Exception as e:
+                            print(f"{emoji} {tag} analyze err {addr[:10]}: {type(e).__name__} {e}")
+                            continue
+                        if ok is None:
+                            processed[addr] = _t.time() - _recooldown + 30
                             continue
                         processed[addr] = _t.time()
-                    try:
-                        ok = await analyzer.analyze_robinhood_token(addr, chain)
-                    except Exception as e:
-                        print(f"{emoji} {tag} analyze err {addr[:10]}: {type(e).__name__} {e}")
-                        continue
-                    if ok is None:
-                        continue
-                    analyzer.log_scan(addr[:8], addr, tag,
-                                      ok, getattr(analyzer, "last_score", 0.0))
-                    if ok is True and len(tracker.get_open_positions()) < config.MAX_CONCURRENT_POSITIONS:
-                        td = await evm_data.get_token_data(addr, chain)
-                        price = float(td.get("priceUsd", 0) or 0) if td else 0
-                        sym = ((td.get("baseToken") or {}).get("symbol", tag) if td else tag) or tag
-                        if price > 0:
-                            _pc = (td.get("priceChange") or {}) if td else {}
-                            _tx5 = ((td.get("txns") or {}).get("m5", {}) or {}) if td else {}
-                            analyzer.log_scan(sym, addr, tag, True,
-                                              getattr(analyzer, "last_score", 0.0),
-                                              (td.get("liquidity") or {}).get("usd", 0) or 0,
-                                              _pc.get("m5", 0) or 0,
-                                              _tx5.get("buys", 0) or 0, _tx5.get("sells", 0) or 0)
-                            cap = tracker.get_total_capital()
-                            size = max(4.0, min(100.0, cap * (config.REINVEST_PERCENT / 100.0))) if cap > 0 else 4.0
-                            _sig = analyzer.get_signal(addr)
-                            if "LOTTERY" in _sig or "SCOUT" in _sig:
-                                size = min(size, 1.5)  # лотерейный/скаут билет, не позиция
-                            else:
-                                size *= analyzer.conviction_size_mult(td)  # коридор с импульсом едет x2
-                                size = min(size, 100.0)
-                            tracker.add_position(sym, addr, price, size, is_mature=True,
-                                                 ml_features=analyzer.pack_features(td),
-                                                 ml_confidence=float(getattr(analyzer, "last_score", 0.0)),
-                                                 source=f"{tag}:{_sig}",
-                                                 chain=chain)
-                            print(f"{emoji} {tag} BUY {sym} {addr[:10]} @ ${price}")
-                        await asyncio.sleep(1.0)
-                    if len(processed) > 1000:
-                        processed.clear()
+                        analyzer.log_scan(addr[:8], addr, tag,
+                                          ok, getattr(analyzer, "last_score", 0.0))
+                        if ok is True and len(tracker.get_open_positions()) < config.MAX_CONCURRENT_POSITIONS:
+                            td = await evm_data.get_token_data(addr, chain)
+                            price = float(td.get("priceUsd", 0) or 0) if td else 0
+                            sym = ((td.get("baseToken") or {}).get("symbol", tag) if td else tag) or tag
+                            if price > 0:
+                                _pc = (td.get("priceChange") or {}) if td else {}
+                                _tx5 = ((td.get("txns") or {}).get("m5", {}) or {}) if td else {}
+                                analyzer.log_scan(sym, addr, tag, True,
+                                                  getattr(analyzer, "last_score", 0.0),
+                                                  (td.get("liquidity") or {}).get("usd", 0) or 0,
+                                                  _pc.get("m5", 0) or 0,
+                                                  _tx5.get("buys", 0) or 0, _tx5.get("sells", 0) or 0)
+                                cap = tracker.get_total_capital()
+                                size = max(4.0, min(100.0, cap * (config.REINVEST_PERCENT / 100.0))) if cap > 0 else 4.0
+                                _sig = analyzer.get_signal(addr)
+                                if "LOTTERY" in _sig or "SCOUT" in _sig:
+                                    size = min(size, 1.5)  # лотерейный/скаут билет, не позиция
+                                else:
+                                    size *= analyzer.conviction_size_mult(td)  # коридор с импульсом едет x2
+                                    size = min(size, 100.0)
+                                tracker.add_position(sym, addr, price, size, is_mature=True,
+                                                     ml_features=analyzer.pack_features(td),
+                                                     ml_confidence=float(getattr(analyzer, "last_score", 0.0)),
+                                                     source=f"{tag}:{_sig}",
+                                                     chain=chain)
+                                print(f"{emoji} {tag} BUY {sym} {addr[:10]} @ ${price}")
+                            await asyncio.sleep(1.0)
+                        if len(processed) > 1000:
+                            processed.clear()
             except Exception as e:
                 print(f"Ошибка в {tag}_loop: {e}")
             await asyncio.sleep(interval)
