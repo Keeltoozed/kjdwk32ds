@@ -20,7 +20,7 @@ HEADERS = {"Accept": "application/json", "User-Agent": "Mozilla/5.0"}
 
 _lock = asyncio.Lock()
 _last_call = 0.0
-MIN_INTERVAL = 2.0  # не чаще ~30/мин на весь процесс для GeckoTerminal
+MIN_INTERVAL = 2.5  # ~24/мин на весь процесс: квота GT ~30/мин, запас от 429
 
 _jlock = asyncio.Lock()
 _jlast = 0.0
@@ -34,7 +34,8 @@ TD_TTL = 90.0  # секунд свежие данные считаются го�
 
 async def _gt_get(path: str, retries: int = 2):
     """GET к GeckoTerminal с общим rate-limiter'ом.
-    Ретраи на 429/5xx/таймауты (сеть Render медленная). Возвращает dict или {}."""
+    ВАЖНО: 429 НЕ ретраится (повторный долбёж усугубляет бан) — сразу {}.
+    Ретраи только на 5xx/таймауты. Возвращает dict или {}."""
     global _last_call
     from http_client import get_session
     session = await get_session()
@@ -51,6 +52,9 @@ async def _gt_get(path: str, retries: int = 2):
                         return await r.json()
                     if r.status == 404:
                         return {}  # токен/пул ещё не проиндексирован — ретраи бессмысленны
+                    if r.status == 429:
+                        last_err = "HTTP 429"
+                        break  # не ретраим rate-limit — отдаём {} и ждём следующего цикла
                     last_err = f"HTTP {r.status}"
             except asyncio.TimeoutError:
                 _last_call = time.monotonic()
@@ -450,12 +454,16 @@ async def _jup_lite_prices(mints: list) -> dict:
 
 _trending_cache = []
 _trending_cache_time = 0
+_growth_cache = []
+_growth_cache_time = 0.0
 
 
 async def get_growth_universe(min_reserve_usd: float = 500000.0, limit: int = 20) -> list:
     """Вселенная GROWTH: ядро вотчлиста + топ пулов Raydium по резерву.
     Адреса только живые из API (не хардкод) + фильтр стейблов. Кэш 5 мин."""
-    global _trending_cache, _trending_cache_time
+    global _growth_cache, _growth_cache_time
+    if time.time() - _growth_cache_time < 300 and _growth_cache:
+        return _growth_cache
     out, seen = [], set()
 
     def add(mint):
@@ -484,11 +492,15 @@ async def get_growth_universe(min_reserve_usd: float = 500000.0, limit: int = 20
                         continue
                     add(m)
                     if len(out) >= limit:
+                        _growth_cache = out
+                        _growth_cache_time = time.time()
                         return out
                 except Exception:
                     continue
     except Exception as e:
         print(f"growth universe err: {type(e).__name__} {e}")
+    _growth_cache = out
+    _growth_cache_time = time.time()
     return out
 
 
@@ -497,9 +509,9 @@ async def get_trending() -> list:
     Формат как у DexScreener boosts: [{'tokenAddress','chainId'}]."""
     global _trending_cache, _trending_cache_time
     
-    # Кэшируем результаты на 60 секунд, чтобы можно было сканировать по 150 монет 
+    # Кэшируем результаты на 180 секунд, чтобы можно было сканировать по 150 монет
     # без бана по Rate Limit (HTTP 429), так как fomo_scanner опрашивает каждые 20 сек.
-    if time.time() - _trending_cache_time < 60:
+    if time.time() - _trending_cache_time < 180:
         return _trending_cache
 
     out, seen = [], set()
@@ -526,6 +538,9 @@ async def get_trending() -> list:
         for item in (d3.get("data") or []):
             add(_base_mint(item))
 
+    # Кэш реально записываем (раньше только читался — 6 запросов GT каждые 20 сек = 429)
+    _trending_cache = out
+    _trending_cache_time = time.time()
     return out
 
 

@@ -105,16 +105,15 @@ async def get_bulk_prices(addresses: list, chain: str = SLUG) -> dict:
 
 async def get_trending_pools_gt(chain: str = SLUG) -> list:
     """Запасной дискавери: трендовые пулы GeckoTerminal сети chain.
-    Ловит лидеров по объему (ARCHIBROWN/Agrippa-типа) раньше, чем бусты."""
+    Ловит лидеров по объему (ARCHIBROWN/Agrippa-типа) раньше, чем бусты.
+    Идёт через общий лимитер market_data._gt_get (единая квота GT на процесс)."""
     hit = _cached(f"trend:{chain}", 180)
     if hit is not None:
         return hit
-    from http_client import fetch_json as _f
+    from market_data import _gt_get as _g
     gt_net = "base" if chain == "base" else ("robinhood" if chain == "robinhood" else chain)
-    status, data = await _f(
-        f"https://api.geckoterminal.com/api/v2/networks/{gt_net}/trending_pools",
-        timeout=10, retries=1)
-    if status != 200:
+    data = await _g(f"/networks/{gt_net}/trending_pools", retries=1)
+    if not data:
         return []
     out = []
     for item in (data.get("data") or []):
@@ -131,19 +130,17 @@ async def get_trending_pools_gt(chain: str = SLUG) -> list:
 async def get_new_pools_gt(chain: str = SLUG, pages: int = 0) -> list:
     """РАННИЙ детект: свежесозданные пулы сети (GeckoTerminal new_pools).
     Именно здесь ракеты видны ДО роста - бусты/тренды показывают уже летящие."""
-    from http_client import fetch_json as _f
+    from market_data import _gt_get as _g
     if not pages:
         pages = int(getattr(config, "EVM_NEW_POOL_PAGES", 8))
-    hit = _cached(f"new:{chain}:{pages}", 40)
+    hit = _cached(f"new:{chain}:{pages}", 60)
     if hit is not None:
         return hit
     gt_net = "base" if chain == "base" else ("robinhood" if chain == "robinhood" else chain)
     out = []
     for page in range(1, pages + 1):
-        status, data = await _f(
-            f"https://api.geckoterminal.com/api/v2/networks/{gt_net}/new_pools?page={page}",
-            timeout=10, retries=1)
-        if status != 200:
+        data = await _g(f"/networks/{gt_net}/new_pools?page={page}", retries=1)
+        if not data:
             continue
         for item in (data.get("data") or []):
             try:
@@ -157,20 +154,17 @@ async def get_new_pools_gt(chain: str = SLUG, pages: int = 0) -> list:
 
 
 async def get_top_volume_pools_gt(chain: str = SLUG) -> list:
-    """Топ пулов по объёму h24+h6 (GeckoTerminal, стр 1-2). Ракеты у которых УЖЕ идёт объём,
+    """Топ пулов по объёму (GeckoTerminal, стр 1-3). Ракеты у которых УЖЕ идёт объём,
     но они ещё не попали в бусты/тренды DexScreener."""
     hit = _cached(f"topvol:{chain}", 180)
     if hit is not None:
         return hit
-    from http_client import fetch_json as _f
+    from market_data import _gt_get as _g
     gt_net = "base" if chain == "base" else ("robinhood" if chain == "robinhood" else chain)
     out = []
     for page in (1, 2, 3):
-        status, data = await _f(
-            f"https://api.geckoterminal.com/api/v2/networks/{gt_net}/pools"
-            f"?page={page}",
-            timeout=10, retries=1)
-        if status != 200 or not data:
+        data = await _g(f"/networks/{gt_net}/pools?page={page}", retries=1)
+        if not data:
             continue
         for item in (data.get("data") or []):
             try:

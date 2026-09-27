@@ -770,8 +770,11 @@ class Analyzer:
 
         # SCOUT TIER: пулу меньше 5 минут - входим ДО вершины микробилетом $1.5.
         # Ракеты видны здесь, а не на m5 +70%. Скам-фильтры (бренд+клон) действуют и тут.
+        # Ужесточено: плоский вход (m5 2% без давления) = гарантированные -7% комиссий
+        # на выходе Stagnant. Требуем давление покупателей + ссылки + ликву.
         # Остальное держит пост-вход: сайз $1.5, infant-guard, emergency cap, no-rebuy.
-        if _age_min < 5 and m5 > 2.0 and (b5 + s5) >= 10 and liq >= 3000:
+        if (_age_min < 5 and m5 >= 3.0 and (b5 + s5) >= 15 and liq >= 5000
+                and b5 >= s5 and links):
             if not self._evm_brand_ok(symbol, tag):
                 return False
             if not await self._evm_clone_ok(symbol, address, pair_data, chain, tag):
