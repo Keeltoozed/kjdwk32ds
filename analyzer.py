@@ -425,6 +425,11 @@ class Analyzer:
             if _m1 < 0:
                 print(f"🚫 [VIP REVERSAL] {mint}: m1 {_m1:+.1f}% — всплеск откатывает, ждём pullback.")
                 return False
+            # dfp -23%, NEARPAD -8.9%: вход в печатающуюся spike-свечу = вершина.
+            # Экстремальный m1 (>15%) у VIP тоже ждём, а не покупаем.
+            if _m1 > 15.0:
+                print(f"🚫 [VIP SPIKE] {mint}: m1 {_m1:+.1f}% — свеча-spike в моменте, вход = вершина. Ждём.")
+                return False
             # VIP БЕЗ ИМПУЛЬСА = объём без направления: 20-мин прогон показал,
             # такие входы (score 97-99%, m5 ~0%) стоят флетом 7 мин и сливают ~3% на комиссиях
             if _m5 < 10.0:
@@ -788,6 +793,12 @@ class Analyzer:
         # LOTTERY TIER: вертикаль m5 60-150% (HYPERCAT +73% мазал мимо кэпа 60%).
         # Билет $1.5, не позиция: риск bounded, верх открыт. h24-вершины (>500%) всё равно мимо.
         if 60.0 <= m5 <= 150.0 and h24 <= 500.0:
+            # MCPLT -20%: вход на TXAFO +79% = вершина spike. Вертикаль берём только
+            # на спокойной минутке (консолидация), не на печатающейся свече.
+            if m1 > 3.0:
+                return self._deny(address, f"lottery-spike m1 {m1:+.1f}%", f"🚫 [{tag}] {symbol}: вертикаль m5 {m5:+.0f}%, но m1 {m1:+.1f}% — свеча spike, это вершина. Ждём.")
+            if m1 < -8.0:
+                return self._deny(address, "lottery-dump", f"🚫 [{tag}] {symbol}: вертикаль откатывает m1 {m1:+.1f}% — дамп, не вход.")
             if (b5 + s5) >= 20 and (s5 == 0 or b5 >= s5) and liq >= 20000 and links:
                 print(f"🎰 [{tag}-LOTTERY] {symbol}: вертикаль m5 {m5:+.1f}% — лотерейный билет.")
                 self._set_sig(address, f"{tag} LOTTERY {m5:+.0f}%")

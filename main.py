@@ -109,6 +109,12 @@ async def position_manager_loop(analyzer, tracker):
                 
                 # === ИНТЕГРАЦИЯ МАТЕМАТИКИ ДЛЯ ЗРЕЛЫХ МОНЕТ (SWING TRADING) ===
                 if getattr(position, "is_mature", False):
+                    # TIER-1: RAMP дал +36% пик, а вышли +8% — трейлинг отдаёт почти всё.
+                    # На +25% продаём 30% сразу: прибыль в кармане, остаток едет дальше.
+                    if max_pnl_pct >= 0.25 and not getattr(position, "tp1_done", False):
+                        tracker.partial_close_position(mint, current_price, 0.30, "Take Profit +25% (Tier-1)")
+                        position.tp1_done = True
+                        continue
                     # MOONBAG для mature: RAFFLE дал +61% пик без частичной фиксации.
                     # На триггере продаём половину сразу - дальше едет бесплатно.
                     _mb = getattr(config, "MOONBAG_TRIGGER_PCT", 0.50)
@@ -558,6 +564,11 @@ async def _evm_track_once(tracker, chain: str, tag: str, emoji: str):
         reason = None
         prev_ts = getattr(pos, "price_checked_at", 0.0)
         _mbr = getattr(config, "MOONBAG_TRIGGER_PCT", 0.50)
+        if maxp >= 0.25 and not getattr(pos, "tp1_done", False):
+            tracker.partial_close_position(mint, cur, 0.30, f"{tag} Take Profit +25% (Tier-1)")
+            pos.tp1_done = True
+            pos.price_checked_at = _t.time()
+            continue
         if maxp >= _mbr and not getattr(pos, "is_moonbag", False):
             tracker.partial_close_position(mint, cur, 0.50, f"{tag} Take Profit +{_mbr*100:.0f}% (Risk Free)")
         elif prev_ts and (_t.time() - prev_ts) < 60 and prev > 0 and cur <= prev * 0.80:
@@ -730,6 +741,7 @@ async def async_main():
 
     from trade_logger import trade_logger
     from birdeye_scanner import birdeye_loop
+    from jup_discovery import jup_loop
     from sol_price import get_sol_price
     from evm_wss import evm_wss_loop
     try:
@@ -762,6 +774,8 @@ async def async_main():
         tg_listener_loop(analyzer, tracker),
         tg_preview_loop(analyzer, tracker),  # 📡 TG-коллы без ключей (t.me/s превью)
         fomo_loop(analyzer, tracker),
+        birdeye_loop(analyzer, tracker),  # 🦅 Birdeye trending, ротация solana/robinhood/base/bsc
+        jup_loop(analyzer, tracker),  # 🪐 Jupiter recent + toptrending/5m (Solana)
         robinhood_loop(analyzer, tracker),  # 🟣 EVM-мемы Robinhood Chain 4663
         base_loop(analyzer, tracker),  # 🟦 EVM-мемы Base (fomo.family)
         bsc_loop(analyzer, tracker),  # 🟨 BSC-мемы (GSTOCK и co)

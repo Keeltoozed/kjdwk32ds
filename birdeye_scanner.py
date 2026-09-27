@@ -1,114 +1,97 @@
+"""Birdeye-дискавери мультичейн: /defi/token_trending с ротацией сетей.
+
+Эндпоинт поддерживает x-chain: solana, robinhood, base, bsc (проверено по докам).
+Ключ: бесплатно на bds.birdeye.so (Standard 30K CU/мес, token_trending = 50 CU).
+
+CU-бюджет: ротация по 1 запросу за тик, интервал BIRDEYE_INTERVAL (30 мин) —
+48 запросов/сутки. Free-хватит частично; на Lite ($39, 1.5M) — с запасом.
+Без BIRDEYE_API_KEY петля молча спит.
+
+EVM-минты идут в analyze_robinhood_token (не в Solana-анализатор!),
+Solana — в analyze_token.
+"""
 import asyncio
-import aiohttp
+import time
+
 import config
-from analyzer import Analyzer
+from http_client import fetch_json
 
-async def fetch_birdeye_trending():
-    """Получает трендовые токены Solana через Birdeye API"""
-    if not hasattr(config, 'BIRDEYE_API_KEY') or not config.BIRDEYE_API_KEY:
-        print("⚠️ Birdeye API ключ не настроен в config.py!")
-        await asyncio.sleep(60)
+URL = ("https://public-api.birdeye.so/defi/token_trending"
+       "?sort_by=rank&sort_type=asc&offset=0&limit=50")
+
+
+async def fetch_birdeye_trending(chain: str) -> list:
+    """[(address, chain), ...] трендов сети. Пусто без ключа или при 429."""
+    key = getattr(config, "BIRDEYE_API_KEY", "") or ""
+    if not key:
         return []
-        
-    tokens = []
-    # API эндпоинт Birdeye для получения трендов (сортировка по объему/популярности)
-    url = "https://public-api.birdeye.so/defi/token_trending?sort_by=rank&sort_type=asc&offset=0&limit=50"
-    
-    headers = {
-        "X-API-KEY": config.BIRDEYE_API_KEY,
-        "x-chain": "solana"
-    }
-    
-    async with aiohttp.ClientSession() as session:
-        try:
-            async with session.get(url, headers=headers, timeout=10) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    items = data.get("data", {}).get("tokens", [])
-                    for item in items:
-                        mint = item.get("address")
-                        if mint and mint not in tokens:
-                            tokens.append(mint)
-                else:
-                    err_text = await response.text()
-                    print(f"Ошибка Birdeye API: {response.status} - {err_text}")
-        except Exception as e:
-            print(f"Ошибка подключения к Birdeye: {e}")
-            
-    return tokens
+    status, data = await fetch_json(
+        URL, headers={"X-API-KEY": key, "x-chain": chain},
+        timeout=12, retries=1)
+    if status != 200 or not isinstance(data, dict):
+        return []
+    out = []
+    for item in ((data.get("data") or {}).get("tokens") or []):
+        a = item.get("address", "")
+        if a and a not in [x[0] for x in out]:
+            out.append((a, chain))
+    return out
 
-async def birdeye_loop(analyzer: Analyzer, tracker):
-    """Цикл сканирования глобальных трендов через Birdeye"""
-    if not hasattr(config, 'BIRDEYE_API_KEY') or not config.BIRDEYE_API_KEY:
+
+async def birdeye_loop(analyzer, tracker):
+    """Петля Birdeye: ротация сетей по 1 запросу за тик (бережём CU)."""
+    if not (getattr(config, "BIRDEYE_API_KEY", "") or ""):
         return
-        
-    print("🦅 Birdeye Scanner запущен: отслеживаем глобальные тренды Solana!")
-    processed_mints = set()
-    
+    chains = list(getattr(config, "BIRDEYE_CHAINS",
+                          ["solana", "robinhood", "base", "bsc"]))
+    print(f"🦅 Birdeye Scanner запущен: ротация {chains}!")
+    processed = {}
+    tick = 0
+    interval = int(getattr(config, "BIRDEYE_INTERVAL", 1800))
     while True:
         try:
-            if len(tracker.get_open_positions()) >= config.MAX_CONCURRENT_POSITIONS:
-                await asyncio.sleep(10)
-                continue
-                
-            trending_mints = await fetch_birdeye_trending()
-            
-            # Фильтруем уже обработанные и в кулдауне
-            new_mints = []
-            for mint in trending_mints:
-                if mint in processed_mints:
-                    continue
-                processed_mints.add(mint)
-                
-                if mint in tracker.positions:
-                    pos = tracker.positions[mint]
-                    import time
-                    if pos.status == "open" or (time.time() - pos.entry_time) < (4 * 3600):
+            chain = chains[tick % len(chains)]
+            tick += 1
+            if len(tracker.get_open_positions()) < config.MAX_CONCURRENT_POSITIONS:
+                for addr, ch in await fetch_birdeye_trending(chain):
+                    if not addr or addr in tracker.positions:
                         continue
-                
-                new_mints.append(mint)
-            
-            # Анализируем батчами по 5 параллельно (вместо 1 за раз)
-            for i in range(0, len(new_mints), 5):
-                if len(tracker.get_open_positions()) >= config.MAX_CONCURRENT_POSITIONS:
-                    break
-                    
-                batch = new_mints[i:i+5]
-                print(f"🔍 Birdeye: анализируем батч из {len(batch)} токенов...")
-                
-                async def analyze_one(mint):
+                    if time.time() - processed.get(addr, 0.0) < 3600:
+                        continue
                     try:
-                        return mint, await analyzer.analyze_token(mint)
+                        if ch == "solana":
+                            ok = await analyzer.analyze_token(addr)
+                            td = await analyzer.fetch_token_data(addr) if ok else None
+                        else:
+                            import evm_data
+                            ok = await analyzer.analyze_robinhood_token(addr, ch)
+                            td = await evm_data.get_token_data(addr, ch) if ok else None
                     except Exception as e:
-                        print(f"⚠️ Ошибка анализа {mint[:8]}...: {e}")
-                        return mint, False
-                
-                results = await asyncio.gather(*[analyze_one(m) for m in batch])
-                
-                # Пауза между батчами (защита от Rate Limit)
-                await asyncio.sleep(2)
-                
-                for mint, is_buy in results:
-                    if is_buy and len(tracker.get_open_positions()) < config.MAX_CONCURRENT_POSITIONS:
-                        from jupiter import JupiterAPI
-                        import time
-                        price = await JupiterAPI.get_price(mint)
+                        print(f"🦅 Birdeye analyze err {addr[:8]}: {type(e).__name__}")
+                        continue
+                    if ok is None:
+                        continue
+                    processed[addr] = time.time()
+                    analyzer.log_scan(addr[:8], addr, "BIRDEYE", ok,
+                                      getattr(analyzer, "last_score", 0.0))
+                    if ok is True and len(tracker.get_open_positions()) < config.MAX_CONCURRENT_POSITIONS:
+                        price = float((td.get("priceUsd") or 0)) if td else 0
                         if price > 0:
-                            position_size = config.VIRTUAL_POSITION_SIZE_USD
+                            sym = ((td.get("baseToken") or {}).get("symbol", addr[:8])
+                                   if td else addr[:8]) or addr[:8]
+                            cap = tracker.get_total_capital()
+                            size = max(4.0, min(100.0, cap * (config.REINVEST_PERCENT / 100.0))) if cap > 0 else 4.0
                             tracker.add_position(
-                                mint=mint,
-                                symbol=mint[:4],
-                                entry_price=price,
-                                amount_usd=position_size,
-                                ml_confidence=90.0,
-                                features={"source": "Birdeye Trending"},
-                                is_mature=True,
-                                source="BIRDEYE"
-                            )
-                            print(f"✅ Успешный ВХОД (Birdeye) в {mint} по цене ${price:.6f}")
-                        
+                                sym, addr, price, min(size, 100.0), is_mature=True,
+                                ml_features=analyzer.pack_features(td or {}),
+                                ml_confidence=float(getattr(analyzer, "last_score", 0.0)),
+                                source=f"BIRDEYE:{analyzer.get_signal(addr)}",
+                                **({"chain": ch} if ch != "solana" else {}))
+                            print(f"🦅 BIRDEYE BUY {sym} [{ch}] @ ${price}")
+                            break
+                    await asyncio.sleep(1.0)
+                if len(processed) > 1000:
+                    processed.clear()
         except Exception as e:
             print(f"Ошибка в birdeye_loop: {e}")
-
-        # Free-tier: 30K CU/мес. Раз в 15 сек съест бюджет за дни - интервал из конфига.
-        await asyncio.sleep(int(getattr(config, "BIRDEYE_INTERVAL", 600)))
+        await asyncio.sleep(interval)

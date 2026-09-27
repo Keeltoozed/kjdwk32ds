@@ -56,9 +56,14 @@ MAX_LIQUIDITY = 50000000
 # AI Аналитика
 GEMINI_API_KEY = "AQ.Ab8RN6Ju77t6DI8AYru7TGxuPuG_0WOcqHZqq1OBsDAwHtoJxg" # Получить бесплатно на https://aistudio.google.com/
 
-# Birdeye API Key
+# Birdeye API Key (free: bds.birdeye.so, 30K CU/мес; token_trending = 50 CU/запрос)
 BIRDEYE_API_KEY = os.getenv("BIRDEYE_API_KEY", "")
-BIRDEYE_INTERVAL = 600  # Free-tier 30K CU/мес: опрос раз в 10 мин, иначе бюджет сгорит за дни
+BIRDEYE_INTERVAL = 1800  # Ротация 4 сетей по 1 запросу: ~48 запросов/сутки. На free (20/сутки) хватит частично - ключ спит без CU
+BIRDEYE_CHAINS = ["robinhood", "solana", "robinhood", "base", "robinhood", "bsc"]  # ROB каждый второй тик (50% квоты)
+
+# Jupiter Tokens API v2 (free key: portal.jup.ag): recent + toptrending/5m для Solana
+JUP_API_KEY = os.getenv("JUP_API_KEY", "")
+JUP_INTERVAL = 120  # 2 запроса за цикл - безопасно для любого тира
 
 
 # === JITO BLOCK ENGINE (MEV Protection) ===
