@@ -39,6 +39,9 @@ class VirtualPosition(BaseModel):
     tp1_done: bool = False # Tier-1 +25% уже зафиксирован
     stagnant_graces: int = 0 # грейсы живого флета
     first_zero_ts: float = 0.0 # когда цена впервые стала 0 (Solana Stale Price)
+    # --- трекинг просадки раннеров (чтобы видеть, какой dip они пережили) ---
+    min_price_usd: float = 0.0 # минимальная цена с момента входа
+    max_dd_pct: float = 0.0 # максимальная просадка от входа (0..-1, напр. -0.15)
 
 class PaperTracker:
     def __init__(self):
@@ -199,6 +202,7 @@ class PaperTracker:
             amount_usd=amount_usd,
             entry_time=time.time(),
             max_price_usd=entry_price,
+            min_price_usd=entry_price,
             current_price_usd=entry_price,
             ml_features=ml_features_dict,
             ml_confidence=ml_confidence,

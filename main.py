@@ -53,20 +53,26 @@ async def position_manager_loop(analyzer, tracker):
                     current_price = ws_price
                 elif api_price > 0.0:
                     current_price = api_price
-                elif ws_price > 0.0:
-                    current_price = ws_price
                 else:
-                    current_price = 0.0
+                    # ОБА источника слепые: НЕ подставляем entry (иначе $0.00 0.00%
+                    # висит вечно как у KLIK: current==entry, stale-ветка недостижима).
+                    # Только свежая WS-цена (<120с) может прикрыть API-провал.
+                    _ws_age = time.time() - ws_ts if ws_ts else 1e9
+                    if ws_price > 0.0 and _ws_age < 120:
+                        current_price = ws_price
+                    else:
+                        current_price = 0.0
 
                 prev_price = position.current_price_usd
                 if current_price <= 0.0:
                     minutes_held = (time.time() - position.entry_time) / 60
-                    # Без цены позиция неуправляема: 10 мин — и выходим по последней
+                    # Без цены позиция неуправляема: 5 мин — и выходим по последней
                     # известной (а не маринуем $0.00 три часа). Мёртвый пул = cut.
+                    # (было 10 мин — KLIK-подобные висели на нуле; унифицировано с EVM 25 циклов ~5 мин)
                     _fz = getattr(position, "first_zero_ts", 0.0) or time.time()
                     position.first_zero_ts = _fz
                     _last = ws_price if ws_price > 0 else position.entry_price_usd
-                    if time.time() - _fz > 600:
+                    if time.time() - _fz > 300:
                         tracker.close_position(mint, _last, f"Stale Price ({minutes_held:.0f} мин без цены)")
                     elif minutes_held > 180:
                         tracker.close_position(mint, 0.0, "Rug Pull / No Liquidity")
@@ -629,6 +635,17 @@ async def _evm_track_once(tracker, chain: str, tag: str, emoji: str):
                 if cur > pos.max_price_usd:
                     pos.max_price_usd = cur
                     pos.peak_time = _t.time()
+                # Просадка раннера: минимум с входа + макс. DD (анализ выживших)
+                try:
+                    _prev_min = float(getattr(pos, "min_price_usd", 0) or 0)
+                    if not _prev_min or cur < _prev_min:
+                        pos.min_price_usd = cur
+                    if pos.entry_price_usd:
+                        _dd = (cur - pos.entry_price_usd) / pos.entry_price_usd
+                        if _dd < float(getattr(pos, "max_dd_pct", 0) or 0):
+                            pos.max_dd_pct = _dd
+                except Exception:
+                    pass
                 prev = pos.current_price_usd
                 pos.current_price_usd = cur
                 if not pos.entry_price_usd:
@@ -640,6 +657,21 @@ async def _evm_track_once(tracker, chain: str, tag: str, emoji: str):
                 reason = None
                 prev_ts = getattr(pos, "price_checked_at", 0.0)
                 _mbr = getattr(config, "MOONBAG_TRIGGER_PCT", 0.50)
+                # RUNNER MODE: параметры, при которых SHCAT +1126%/+627%,
+                # 中国人能飞 +152% держались ~5ч и фильтры их НЕ выбили:
+                # в плюсе время не режем, стопы от входа OFF, только широкий трейлинг от пика.
+                _runner_thr = float(getattr(config, "EVM_RUNNER_MAXP", 0.50))
+                _is_runner = maxp >= _runner_thr
+                _is_moon = bool(getattr(pos, "is_moonbag", False))
+                if _is_runner:
+                    _trail_dist = float(getattr(config, "EVM_RUNNER_TRAIL", 0.25))
+                elif _is_moon:
+                    _trail_dist = float(getattr(config, "EVM_MOONBAG_TRAIL", 0.20))
+                else:
+                    _trail_dist = float(getattr(config, "TRAILING_DISTANCE_PCT", 0.08))
+                _crash_drop = float(getattr(config, "EVM_RUNNER_CRASH", 0.30)) if _is_runner else 0.20
+                _dead_min = int(getattr(config, "EVM_DEAD_MIN", 60))
+                _stag_min = int(getattr(config, "EVM_STAGNANT_MIN", 45))
                 if maxp >= 0.25 and not getattr(pos, "tp1_done", False):
                     tracker.partial_close_position(mint, cur, 0.30, f"{tag} Take Profit +25% (Tier-1)")
                     pos.tp1_done = True
@@ -647,20 +679,20 @@ async def _evm_track_once(tracker, chain: str, tag: str, emoji: str):
                     continue
                 if maxp >= _mbr and not getattr(pos, "is_moonbag", False):
                     tracker.partial_close_position(mint, cur, 0.50, f"{tag} Take Profit +{_mbr*100:.0f}% (Risk Free)")
-                elif prev_ts and (_t.time() - prev_ts) < 60 and prev > 0 and cur <= prev * 0.80:
+                elif prev_ts and (_t.time() - prev_ts) < 60 and prev > 0 and cur <= prev * (1 - _crash_drop):
                     reason = f"{tag} Crash Guard ({(1 - cur / prev) * 100:.0f}% за {_t.time() - prev_ts:.0f}с)"
-                elif maxp >= getattr(config, "TRAILING_ACTIVATION_PCT", 0.15) and \
-                        (pos.max_price_usd - cur) / pos.max_price_usd >= getattr(config, "TRAILING_DISTANCE_PCT", 0.08):
-                    reason = f"{tag} Trailing (peak +{maxp * 100:.0f}%)"
+                elif maxp >= getattr(config, "TRAILING_ACTIVATION_PCT", 0.25) and \
+                        (pos.max_price_usd - cur) / pos.max_price_usd >= _trail_dist:
+                    reason = f"{tag} Trailing (peak +{maxp * 100:.0f}%, dd {(1 - cur / pos.max_price_usd) * 100:.0f}%)"
                 elif pnl <= -0.30:
                     reason = f"{tag} Emergency Cap ({pnl * 100:.1f}%)"
                 elif held < 3 and pnl <= -0.12:
                     reason = f"{tag} Infant Dump ({pnl * 100:.1f}%)"
-                elif pnl <= config.STOP_LOSS_PCT:
+                elif not _is_runner and pnl <= config.STOP_LOSS_PCT:
                     reason = f"{tag} Stop ({pnl * 100:.1f}%)"
-                elif held >= 30 and pnl < -0.05:
+                elif not _is_runner and held >= _dead_min and pnl < -0.05:
                     reason = f"{tag} Dead ({held:.0f}m)"
-                elif held >= 15 and abs(pnl) < 0.05 and maxp < 0.05:
+                elif not _is_runner and held >= _stag_min and abs(pnl) < 0.05 and maxp < 0.05:
                     # ЖИВОЙ ФЛЕТ НЕ РЕЖЕМ: консолидация перед выстрелом выглядит как ~0%.
                     # Есть сделки за 5 мин = пул жив: +5 мин грейса (макс 2). Нет сделок = труп.
                     # Ошибка API = пропуск цикла (Dead на 15м всё равно подстрахует).
