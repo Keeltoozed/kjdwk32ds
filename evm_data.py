@@ -32,7 +32,19 @@ CHAINS = {
     "robinhood": {"min_liq": float(getattr(config, "ROBINHOOD_MIN_LIQUIDITY", 8000)), "tag": "ROBINHOOD"},
     "base": {"min_liq": 15000.0, "tag": "BASE"},
     "bsc": {"min_liq": 15000.0, "tag": "BSC"},
+    "ethereum": {"min_liq": float(getattr(config, "ETHEREUM_MIN_LIQUIDITY", 15000.0)), "tag": "ETHEREUM"},
 }
+
+
+def _gt_net(chain: str) -> str:
+    """GeckoTerminal network slug: у Ethereum — 'eth', остальные 1:1."""
+    if chain == "base":
+        return "base"
+    if chain == "robinhood":
+        return "robinhood"
+    if chain == "ethereum":
+        return "eth"
+    return chain
 
 
 async def fetch_boosted_tokens(chain: str = SLUG) -> list:
@@ -84,8 +96,12 @@ async def get_bulk_prices(addresses: list, chain: str = SLUG) -> dict:
     """Балк-цены до 30 адресов за запрос (голый массив в ответе).
     Ключи — в ОБОИХ регистрах (оригинал + lower): DexScreener отдаёт
     checksum, а трекер может хранить lower — без этого px.get(mint)==0
-    и дашборд встаёт на $0.00 (0.00%)."""
+    и дашборд встаёт на $0.00 (0.00%).
+    ВАЖНО: берём цену пула с МАКС. ликвидностью, а не макс. цену.
+    Иначе мусорный пул с liq=0 даёт фантом +1544% (AVOCADO: реальный
+    $0.0001056 при liq $26k, а пыль $0.001816 при liq 0)."""
     out = {}
+    _liq = {}
     ms = [a for a in dict.fromkeys(addresses) if a]
     for i in range(0, len(ms), 30):
         chunk = ms[i:i + 30]
@@ -101,13 +117,16 @@ async def get_bulk_prices(addresses: list, chain: str = SLUG) -> dict:
                 base = (p.get("baseToken") or {})
                 addr = base.get("address", "")
                 price = float(p.get("priceUsd", 0) or 0)
-                if addr and price > out.get(addr, 0):
-                    out[addr] = price
-                if addr and price > out.get(addr.lower(), 0):
-                    out[addr.lower()] = price
-                if addr and price > out.get(addr.upper(), 0):
-                    # на всякий: некоторые источники дают upper
-                    out[addr.upper()] = price
+                liq = float((p.get("liquidity") or {}).get("usd", 0) or 0)
+                if not addr or not price:
+                    continue
+                # пулы без ликвидности (dust) игнорируем, если есть нормальный
+                for _k in (addr, addr.lower(), addr.upper()):
+                    if liq > _liq.get(_k, -1):
+                        _liq[_k] = liq
+                        out[_k] = price
+                    elif _k not in out and liq == 0 and _liq.get(_k) is None:
+                        out[_k] = price
             except Exception:
                 continue
     return out
@@ -121,7 +140,7 @@ async def get_trending_pools_gt(chain: str = SLUG) -> list:
     if hit is not None:
         return hit
     from market_data import _gt_get as _g
-    gt_net = "base" if chain == "base" else ("robinhood" if chain == "robinhood" else chain)
+    gt_net = _gt_net(chain)
     data = await _g(f"/networks/{gt_net}/trending_pools", retries=1)
     if not data:
         return []
@@ -146,7 +165,7 @@ async def get_new_pools_gt(chain: str = SLUG, pages: int = 0) -> list:
     hit = _cached(f"new:{chain}:{pages}", 60)
     if hit is not None:
         return hit
-    gt_net = "base" if chain == "base" else ("robinhood" if chain == "robinhood" else chain)
+    gt_net = _gt_net(chain)
     out = []
     for page in range(1, pages + 1):
         data = await _g(f"/networks/{gt_net}/new_pools?page={page}", retries=1)
@@ -170,7 +189,7 @@ async def get_top_volume_pools_gt(chain: str = SLUG) -> list:
     if hit is not None:
         return hit
     from market_data import _gt_get as _g
-    gt_net = "base" if chain == "base" else ("robinhood" if chain == "robinhood" else chain)
+    gt_net = _gt_net(chain)
     out = []
     for page in (1, 2, 3):
         data = await _g(f"/networks/{gt_net}/pools?page={page}", retries=1)

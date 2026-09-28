@@ -50,6 +50,18 @@ class PaperTracker:
         self._sb = None  # ленивый Supabase-клиент
         self.load_portfolio()
 
+    @staticmethod
+    def _fees_for(chain: str):
+        """Комиссии сети: (small, big, emergency, cap_frac).
+        Ethereum L1 в разы дороже L2/Solana — считать его по $0.075 значит врать в плюс."""
+        try:
+            fees = getattr(config, "EVM_CHAIN_FEES", {})
+            if isinstance(fees, dict) and chain in fees:
+                return tuple(fees[chain])
+        except Exception:
+            pass
+        return (0.075, 0.45, 0.75, 0.05)
+
     def _supabase(self):
         """Возвращает Supabase-клиент или None, если нет настроек."""
         if self._sb is not None:
@@ -230,10 +242,11 @@ class PaperTracker:
             amount_sold_usd = pos.amount_usd * sell_pct
             real_entry_price = pos.entry_price_usd * 1.01
             real_exit_price = exit_price * 0.99
-            
+
             price_diff_pct = (real_exit_price - real_entry_price) / real_entry_price if real_entry_price > 0 else 0
-            priority_fee_usd = 0.075 if pos.amount_usd < 10.0 else 0.45
-            priority_fee_usd = min(priority_fee_usd, amount_sold_usd * 0.05)
+            _f_small, _f_big, _f_emg, _f_cap = self._fees_for(getattr(pos, "chain", "solana"))
+            priority_fee_usd = _f_small if pos.amount_usd < 10.0 else _f_big
+            priority_fee_usd = min(priority_fee_usd, amount_sold_usd * _f_cap)
             
             # PnL от проданной части
             realized_pnl_usd = (amount_sold_usd * price_diff_pct) - priority_fee_usd
@@ -267,14 +280,16 @@ class PaperTracker:
             # Аварийные выходы дороже: широкая проверка по смыслу, а не двум строкам
             # (иначе Emergency Cap / ROB/BSC/GROWTH-стопы считались по дешёвому тарифу)
             _r = reason.upper()
+            _f_small, _f_big, _f_emg, _f_cap = self._fees_for(getattr(pos, "chain", "solana"))
             if "CRASH" in _r or "STOP" in _r or "CAP" in _r or "GUARD" in _r:
-                priority_fee_usd = 0.75  # 0.005 SOL
+                priority_fee_usd = _f_emg
             else:
-                priority_fee_usd = 0.075 if pos.amount_usd < 10.0 else 0.45
-                
-            # Защита математики дашборда: комиссия не может превышать 5% от микро-позиции, 
+                priority_fee_usd = _f_small if pos.amount_usd < 10.0 else _f_big
+
+            # Защита математики дашборда: комиссия не может превышать cap_frac от микро-позиции,
             # иначе тестовые входы на $4 будут показывать -50% убытка только из-за комиссии.
-            priority_fee_usd = min(priority_fee_usd, pos.amount_usd * 0.05)
+            # (Для Ethereum cap 20%: газ честно виден, L1-микроскальпы показывают реальный минус.)
+            priority_fee_usd = min(priority_fee_usd, pos.amount_usd * _f_cap)
             
             # Добавляем профит от закрытия финального остатка к тому, что уже зафиксировано
             final_pnl = (pos.amount_usd * price_diff_pct) - priority_fee_usd

@@ -447,7 +447,7 @@ async def fomo_signal_loop(analyzer, tracker):
                                 if _td and float(_td.get("priceUsd", 0) or 0) > 0:
                                     found = (_want, _td)
                             if not found:
-                                    for _ch in ("base", "bsc", "robinhood"):
+                                    for _ch in ("base", "bsc", "robinhood", "ethereum"):
                                         try:
                                             _td = await evm_data.get_token_data(mint, _ch)
                                         except Exception:
@@ -731,10 +731,10 @@ async def _evm_chain_loop(analyzer, tracker, chain: str):
     Kill-switch стопает только входы - выходы идут всегда (баг: раньше час без управления)."""
     import evm_data
     tag = (evm_data.CHAINS.get(chain) or {}).get("tag", chain.upper())
-    emoji = {"robinhood": "🟣", "base": "🟦", "bsc": "🟨"}.get(chain, "🔵")
+    emoji = {"robinhood": "🟣", "base": "🟦", "bsc": "🟨", "ethereum": "⬜"}.get(chain, "🔵")
     print(f"{emoji} {tag} Loop запущен: мемы сети {chain}!")
     processed = {}
-    _iv_key = {"base": "BASE_SCAN_INTERVAL", "bsc": "BSC_SCAN_INTERVAL"}.get(chain, "ROBINHOOD_SCAN_INTERVAL")
+    _iv_key = {"base": "BASE_SCAN_INTERVAL", "bsc": "BSC_SCAN_INTERVAL", "ethereum": "ETHEREUM_SCAN_INTERVAL"}.get(chain, "ROBINHOOD_SCAN_INTERVAL")
     interval = getattr(config, _iv_key, 25)
     _recooldown = getattr(config, "EVM_RESCAN_COOLDOWN", 300)
 
@@ -749,6 +749,10 @@ async def _evm_chain_loop(analyzer, tracker, chain: str):
     async def scan_task():
         while True:
             try:
+                if chain == "ethereum" and not getattr(config, "ETHEREUM_ENTRIES_ENABLED", False):
+                    # L1: только ведём существующие (KLIK), новых не открываем — газ съедает.
+                    await asyncio.sleep(interval)
+                    continue
                 if _evm_killed(tracker):
                     print(f"🛑 {tag} KILL-SWITCH: входы на паузе 5мин (выходы работают).")
                     await asyncio.sleep(int(getattr(config, "KILL_SWITCH_PAUSE", 300)))
@@ -818,6 +822,14 @@ async def _evm_chain_loop(analyzer, tracker, chain: str):
                                 else:
                                     size *= analyzer.conviction_size_mult(td)  # коридор с импульсом едет x2
                                     size = min(size, 100.0)
+                                if chain == "ethereum":
+                                    # L1-газ $2-6 за круг: микро-сайз $4-6 гарантирует минус.
+                                    # Меньше минимума — скип входа (а не враньё в плюс).
+                                    _eth_min = float(getattr(config, "ETHEREUM_MIN_SIZE_USD", 15.0))
+                                    if size < _eth_min:
+                                        print(f"🚫 {tag} {sym}: сайз ${size:.2f} < min ${_eth_min:.0f} (L1-газ) — скип.")
+                                        await asyncio.sleep(1.0)
+                                        continue
                                 tracker.add_position(sym, addr, price, size, is_mature=True,
                                                  ml_features=analyzer.pack_features(td),
                                                  ml_confidence=float(getattr(analyzer, "last_score", 0.0)),
@@ -853,6 +865,13 @@ async def bsc_loop(analyzer, tracker):
         print("🟨 BSC отключён в config (BSC_ENABLED=False).")
         return
     await _evm_chain_loop(analyzer, tracker, "bsc")
+
+
+async def ethereum_loop(analyzer, tracker):
+    if not getattr(config, "ETHEREUM_ENABLED", True):
+        print("⬜ Ethereum отключён в config (ETHEREUM_ENABLED=False).")
+        return
+    await _evm_chain_loop(analyzer, tracker, "ethereum")
 
 async def async_main():
     from pump_fun_sniper import PumpFunSniper
@@ -925,6 +944,7 @@ async def async_main():
         robinhood_loop(analyzer, tracker),  # 🟣 EVM-мемы Robinhood Chain 4663
         base_loop(analyzer, tracker),  # 🟦 EVM-мемы Base (fomo.family)
         bsc_loop(analyzer, tracker),  # 🟨 BSC-мемы (GSTOCK и co)
+        ethereum_loop(analyzer, tracker),  # ⬜ Ethereum-мемы (KLIK висел без лупа)
         evm_wss_loop(analyzer, tracker),  # ⚡ WSS фабрик Base+BSC: новые пулы за секунды
         fomo_api_loop(analyzer, tracker),  # 📡 fomoapi.io: покупки топов fomo.family -> очередь сигналов
         gmgn_bridge_loop(analyzer, tracker),  # 🟢 GMGN trenches: create-сигналы (нужен GMGN_ENABLED+chromium)
@@ -965,6 +985,8 @@ def chain_badge(chain: str, long: bool = False) -> str:
         return "🟦 BASE" if long else "🟦"
     if c == "bsc":
         return "🟨 BSC" if long else "🟨"
+    if c == "ethereum":
+        return "⬜ ETH" if long else "⬜"
     return "🟢 SOL" if long else "🟢"
 
 

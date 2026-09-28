@@ -413,9 +413,12 @@ async def get_bulk_prices(mints: list) -> dict:
 
 
 async def _ds_bulk_prices(mints: list) -> dict:
-    """Балк-цены через DexScreener (работает и для Solana)."""
+    """Балк-цены через DexScreener (работает и для Solana).
+    Цена — с пула макс. ликвидности, не макс. цена (иначе пыль с liq 0
+    даёт фантомные +1500% как AVOCADO на EVM)."""
     from http_client import fetch_json
     out = {}
+    _liq = {}
     for i in range(0, len(mints), 30):
         chunk = mints[i:i + 30]
         status, data = await fetch_json(f"https://api.dexscreener.com/latest/dex/tokens/{','.join(chunk)}", timeout=10)
@@ -426,7 +429,11 @@ async def _ds_bulk_prices(mints: list) -> dict:
             if p.get("chainId") == "solana":
                 addr = (p.get("baseToken") or {}).get("address", "")
                 px = float(p.get("priceUsd", 0) or 0)
-                if addr and px > out.get(addr, 0):
+                liq = float((p.get("liquidity") or {}).get("usd", 0) or 0)
+                if not addr or not px:
+                    continue
+                if liq > _liq.get(addr, -1):
+                    _liq[addr] = liq
                     out[addr] = px
     return out
 

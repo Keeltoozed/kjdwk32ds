@@ -100,7 +100,7 @@ EVM_NEW_POOL_PAGES = 8  # Было 4: глубже свежие пулы GT = б
 EVM_MAX_MINTS = 100  # Было 60: хвост выдачи больше не отрезается
 # EVM-копитрейдинг: кошельки китов по сетям (0x...). Их входящие Transfer = покупки:
 # токен летит в скан первым с меткой COPY. Пусто = выключено (нужны адреса!).
-EVM_COPY_WALLETS = {"base": [], "bsc": [], "robinhood": []}
+EVM_COPY_WALLETS = {"base": [], "bsc": [], "robinhood": [], "ethereum": []}
 # fomoapi.io — независимое API данных fomo.family (топ-трейдеры, доски, WS-алерты).
 # Бесплатный ключ: fomoapi.io/dashboard (250k кредитов/мес). Без ключа — демо WS с задержкой 60с.
 FOMO_API_KEY = ""
@@ -127,6 +127,25 @@ EVM_WSS_ENABLED = True
 # Тот же движок, slug "bsc".
 BSC_ENABLED = True
 BSC_SCAN_INTERVAL = 15  # было 25
+
+# === ETHEREUM (KLIK: TG-SIGNAL:ETHEREUM висел на $0.00 — ни один луп его не вёл,
+# chain=ethereum не входил в CHAINS. Тот же EVM-движок, slug DexScreener "ethereum".)
+ETHEREUM_ENABLED = True  # луп трекинга: ведём существующие (KLIK), иначе висят на $0.00
+ETHEREUM_ENTRIES_ENABLED = False  # НОВЫЕ входы в L1 выкл: газ $2-6 съедает скальп, ловим только дешёвые L2
+ETHEREUM_SCAN_INTERVAL = 15
+ETHEREUM_MIN_LIQUIDITY = 15000.0  # пулы глубокие, как Base/BSC
+# === КОМИССИИ ПО СЕТЯМ (paper-честность: L1-газ на порядок дороже L2/Solana) ===
+# (fee_small <$10, fee_big, fee_emergency, cap_frac от позиции)
+# Было везде одинаково $0.075/$0.45/$0.75 cap 5% — для Ethereum это враньё:
+# реальный своп L1 $2-5, аварийный с приоритетом $6+.
+EVM_CHAIN_FEES = {
+    "solana": (0.075, 0.45, 0.75, 0.05),
+    "robinhood": (0.075, 0.45, 0.75, 0.05),
+    "base": (0.075, 0.45, 0.75, 0.05),
+    "bsc": (0.075, 0.45, 0.75, 0.05),
+    "ethereum": (2.0, 3.5, 6.0, 0.20),
+}
+ETHEREUM_MIN_SIZE_USD = 15.0  # меньше $15 в L1 не входим: газ съест любой скальп
 
 # --- Сайзинг: база $6, conviction x2 ---
 # Тир решает ПОДТВЕРЖДЁННЫЙ импульс рынка (m5 + вести), а не скор модели
