@@ -383,21 +383,21 @@ async def get_bulk_prices(mints: list) -> dict:
         return out
     ms = [m for m in dict.fromkeys(mints) if m]
     try:
-        out = await _jup_lite_prices(ms)
+        out = await _ds_bulk_prices(ms)
     except Exception as e:
-        print(f"Jupiter bulk error: {type(e).__name__} {e}")
+        print(f"DS bulk error: {type(e).__name__} {e}")
     missing = [m for m in ms if m not in out]
     if missing:
         try:
             out.update(await _cex_prices(missing))
         except Exception as e:
-            print(f"CEX bulk error: {type(e).__name__} {e}")
+            pass
     missing = [m for m in ms if m not in out]
     if missing:
         try:
             out.update(await _llama_prices(missing))
         except Exception as e:
-            print(f"Llama bulk error: {type(e).__name__} {e}")
+            pass
     missing = [m for m in ms if m not in out]
     for i in range(0, len(missing), 30):
         chunk = missing[i:i + 30]
@@ -405,50 +405,29 @@ async def get_bulk_prices(mints: list) -> dict:
         try:
             px = d.get("data", {}).get("attributes", {}).get("token_prices", {})
             for m, p in px.items():
-                out[m] = float(p)
+                if float(p) > 0:
+                    out[m] = float(p)
         except Exception:
             pass
     return out
 
 
-async def _jup_lite_prices(mints: list) -> dict:
-    """Цены через Jupiter Price API: api.jup.ag/price/v3 -> lite-api fallback.
-    Старый price/v2 sunset (Jupiter гасит лимиты), парсинг защищённый под оба формата."""
-    import json as _json
-    import urllib.request as _url
+async def _ds_bulk_prices(mints: list) -> dict:
+    """Балк-цены через DexScreener (работает и для Solana)."""
+    from http_client import fetch_json
     out = {}
-
-    def one_call(chunk):
-        last = None
-        for base in ("https://api.jup.ag/price/v3?ids=",
-                     "https://lite-api.jup.ag/price/v2?ids="):
-            try:
-                req = _url.Request(base + ",".join(chunk),
-                                   headers={"User-Agent": "Mozilla/5.0",
-                                            "Accept": "application/json"})
-                with _url.urlopen(req, timeout=15) as r:
-                    last = _json.load(r)
-                if last and last.get("data"):
-                    return last
-            except Exception:
-                continue
-        return last or {}
-
-    for i in range(0, len(mints), 50):
-        chunk = mints[i:i + 50]
-        try:
-            data = await asyncio.to_thread(one_call, chunk)
-            prices_data = data.get("data", {})
-        except Exception:
+    for i in range(0, len(mints), 30):
+        chunk = mints[i:i + 30]
+        status, data = await fetch_json(f"https://api.dexscreener.com/latest/dex/tokens/{','.join(chunk)}", timeout=10)
+        if status != 200 or not data:
             continue
-        for m in chunk:
-            try:
-                entry = prices_data.get(m, {}) or {}
-                px = entry.get("price", 0) or entry.get("usdPrice", 0)
-                if px and float(px) > 0:
-                    out[m] = float(px)
-            except Exception:
-                continue
+        pairs = data.get("pairs", [])
+        for p in pairs:
+            if p.get("chainId") == "solana":
+                addr = (p.get("baseToken") or {}).get("address", "")
+                px = float(p.get("priceUsd", 0) or 0)
+                if addr and px > out.get(addr, 0):
+                    out[addr] = px
     return out
 
 

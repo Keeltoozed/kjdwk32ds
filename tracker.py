@@ -28,8 +28,6 @@ class VirtualPosition(BaseModel):
     price_updated_at: float = 0.0 # Время свежего обновления цены из WSS
     price_checked_at: float = 0.0 # Для Crash Guard
     exit_time: float = 0.0 # Для дневного kill-switch
-    price_stale_n: int = 0 # <--- ДОБАВЬТЕ ЭТУ СТРОКУ (счетчик устаревания цены)
-
 
 class PaperTracker:
     def __init__(self):

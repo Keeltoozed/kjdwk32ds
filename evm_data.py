@@ -87,11 +87,13 @@ async def get_bulk_prices(addresses: list, chain: str = SLUG) -> dict:
     for i in range(0, len(ms), 30):
         chunk = ms[i:i + 30]
         status, data = await fetch_json(
-            f"{DS}/tokens/v1/{chain}/{','.join(chunk)}", timeout=10, retries=2)
+            f"{DS}/latest/dex/tokens/{','.join(chunk)}", timeout=10, retries=2)
         if status != 200 or not data:
             continue
         pairs = data if isinstance(data, list) else data.get("pairs", [])
         for p in pairs:
+            if p.get("chainId") != chain:
+                continue
             try:
                 base = (p.get("baseToken") or {})
                 addr = base.get("address", "")
