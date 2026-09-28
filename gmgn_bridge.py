@@ -118,14 +118,20 @@ async def gmgn_bridge_loop(*_a, **_k):
     print(f"📡 GMGN мост: запуск Chromium, сети {chains}...")
     async with async_playwright() as pw:
         try:
+            # Худой режим: без GPU/SHM/песочницы/аудио — один браузер на все сети.
+            # Легче Chromium ничего не проходит CF (проверено: curl_cffi, куки,
+            # сырой WS — все 403, валидируется TLS каждого соединения).
             browser = await pw.chromium.launch(
                 headless=True,
                 args=["--disable-blink-features=AutomationControlled",
-                      "--disable-dev-shm-usage", "--no-sandbox"])
+                      "--disable-dev-shm-usage", "--no-sandbox",
+                      "--disable-gpu", "--mute-audio",
+                      "--disable-extensions", "--disable-background-timer-throttling",
+                      "--js-flags=--max-old-space-size=256"])
         except Exception as e:
             print(f"⚠️ GMGN: браузер не стартовал ({e}).")
             return
         ctx = await browser.new_context(
-            user_agent=UA, viewport={"width": 1280, "height": 800},
+            user_agent=UA, viewport={"width": 800, "height": 600},
             locale="en-US")
         await asyncio.gather(*[_chain_page(ctx, r) for r in chains])

@@ -34,6 +34,15 @@ async def position_manager_loop(analyzer, tracker):
                     continue
                 # 1. Берем цену из Raydium/Gecko (запросили разом для всех)
                 api_price = bulk_prices.get(mint, 0.0)
+                # 1b. Добор слепых: Jupiter не знает свежий/тонкий пул — дёргаем DS
+                # напрямую, иначе цена встаёт ($0.00 в дашборде) и глохнут выходы.
+                if not api_price:
+                    try:
+                        import market_data as _md
+                        _td0 = await _md.get_token_data(mint)
+                        api_price = float((_td0.get("priceUsd", 0) or 0)) if _td0 else 0.0
+                    except Exception:
+                        pass
                 
                 # 2. Берем цену из WebSocket (если она СВЕЖАЯ, а не записанная этим же циклом)
                 ws_price = position.current_price_usd if hasattr(position, 'current_price_usd') else 0.0
@@ -52,9 +61,17 @@ async def position_manager_loop(analyzer, tracker):
                 prev_price = position.current_price_usd
                 if current_price <= 0.0:
                     minutes_held = (time.time() - position.entry_time) / 60
-                    if minutes_held > 180:
+                    # Без цены позиция неуправляема: 10 мин — и выходим по последней
+                    # известной (а не маринуем $0.00 три часа). Мёртвый пул = cut.
+                    _fz = getattr(position, "first_zero_ts", 0.0) or time.time()
+                    position.first_zero_ts = _fz
+                    _last = ws_price if ws_price > 0 else position.entry_price_usd
+                    if time.time() - _fz > 600:
+                        tracker.close_position(mint, _last, f"Stale Price ({minutes_held:.0f} мин без цены)")
+                    elif minutes_held > 180:
                         tracker.close_position(mint, 0.0, "Rug Pull / No Liquidity")
                     continue
+                position.first_zero_ts = 0.0
                     
                 if current_price > position.max_price_usd:
                     position.max_price_usd = current_price
@@ -188,8 +205,8 @@ async def position_manager_loop(analyzer, tracker):
                     continue
                     
                 # 4. УМНЫЙ ВЫХОД ПО ВРЕМЕНИ (Stagnant / Bleeding cut)
-                # Вернули по просьбе: режем мертвые через 15 мин
-                if minutes_held >= 15 and pnl_pct < 0:
+                # Ждем 30 минут, режем если минус уже больше 5% (чтобы не убивать комиссиями)
+                if minutes_held >= 30 and pnl_pct < -0.05:
                     tracker.close_position(mint, current_price, f"Dead Coin Cut ({minutes_held:.0f}m, {pnl_pct*100:.1f}%)")
                     continue
                     
@@ -393,7 +410,8 @@ async def fomo_signal_loop(analyzer, tracker):
                         raw = raw.strip()
                         if not raw:
                             continue
-                        # Формат: sol:<mint> | evm:<addr> | evm:<chain>:<addr> | голый mint (= solana)
+                        # Формат: sol:<mint> | evm:<addr> | evm:<chain>:<addr> | голый mint (= solana,
+                        # НО голый 0x... = EVM (иначе EVM-токен идёт в Solana-ветку и цены встают)
                         if raw.startswith("evm:"):
                             rest = raw[4:].strip()
                             if ":" in rest:
@@ -403,6 +421,8 @@ async def fomo_signal_loop(analyzer, tracker):
                                 kind, mint = "evm", rest
                         elif raw.startswith("sol:"):
                             kind, mint = "sol", raw[4:].strip()
+                        elif raw.strip().startswith("0x"):
+                            kind, mint = "evm", raw.strip()
                         else:
                             kind, mint = "sol", raw
                         if not mint or mint in tracker.positions:
@@ -577,8 +597,27 @@ async def _evm_track_once(tracker, chain: str, tag: str, emoji: str):
     except Exception as e:
         print(f"{emoji} {tag} bulk price err: {e}")
         px = {}
+    # Добор слепых: кого нет в балке (свежие/тонкие пулы) — поштучно, иначе цены
+    # встают на entry ($0.00 0.00% в дашборде) и глохнут все выходы по профиту.
+    _missing = [m for m in mine if not px.get(m, 0)]
+    for _mm in _missing[:12]:
+        try:
+            _td1 = await evm_data.get_token_data(_mm, chain)
+            _px1 = float((_td1.get("priceUsd", 0) or 0)) if _td1 else 0
+            if _px1 > 0:
+                px[_mm] = _px1
+        except Exception:
+            continue
     for mint, pos in list(mine.items()):
         cur = px.get(mint, 0) or pos.current_price_usd or pos.entry_price_usd
+        # Счётчик слепоты: ни балк, ни добор цены не дали (cur упал на entry/current).
+        # 25 циклов (~5 мин) без живой цены = выходим, слот не маринуем.
+        _live = bool(px.get(mint, 0))
+        pos.price_stale_n = 0 if _live else int(getattr(pos, "price_stale_n", 0) or 0) + 1
+        if pos.price_stale_n >= 25:
+            tracker.close_position(mint, pos.current_price_usd or pos.entry_price_usd,
+                                   f"{tag} Stale Price (5 мин без цены)")
+            continue
         if cur > pos.max_price_usd:
             pos.max_price_usd = cur
             pos.peak_time = _t.time()
@@ -611,9 +650,9 @@ async def _evm_track_once(tracker, chain: str, tag: str, emoji: str):
             reason = f"{tag} Infant Dump ({pnl * 100:.1f}%)"
         elif pnl <= config.STOP_LOSS_PCT:
             reason = f"{tag} Stop ({pnl * 100:.1f}%)"
-        elif held >= 15 and pnl < 0:
+        elif held >= 30 and pnl < -0.05:
             reason = f"{tag} Dead ({held:.0f}m)"
-        elif held >= 7 and abs(pnl) < 0.05 and maxp < 0.05:
+        elif held >= 15 and abs(pnl) < 0.05 and maxp < 0.05:
             # ЖИВОЙ ФЛЕТ НЕ РЕЖЕМ: консолидация перед выстрелом выглядит как ~0%.
             # Есть сделки за 5 мин = пул жив: +5 мин грейса (макс 2). Нет сделок = труп.
             # Ошибка API = пропуск цикла (Dead на 15м всё равно подстрахует).
@@ -931,7 +970,18 @@ with tab1:
             with col1:
                 st.subheader("🟢 Открытые позиции")
                 if not open_df.empty:
-                    open_df['pnl_%'] = (open_df['current_pnl_usd'] / open_df['amount_usd']) * 100
+                    # % считаем от цен (иммунно к искажению amount после partials),
+                    # кап ±9999%: мусорный entry ~0 давал +586М% как у SOLFROG.
+                    def _pct(r):
+                        try:
+                            e = float(r.get('entry_price_usd') or 0)
+                            c = float(r.get('current_price_usd') or 0)
+                            if e > 0 and c >= 0:
+                                return max(-99.99, min(9999.0, (c / e - 1) * 100))
+                        except Exception:
+                            pass
+                        return 0.0
+                    open_df['pnl_%'] = open_df.apply(_pct, axis=1)
                     for index, row in open_df.iterrows():
                         pnl_usd = row['current_pnl_usd']
                         pnl_pct = row['pnl_%']
@@ -969,7 +1019,23 @@ with tab1:
                     """, unsafe_allow_html=True)
                     
                     closed_df = closed_df.tail(15).iloc[::-1] # Показываем 15 последних в обратном порядке
-                    closed_df['pnl_%'] = (closed_df['pnl_usd'] / closed_df['amount_usd']) * 100
+                    # % от цен выхода/входа (не от искажённого partials amount), кап ±9999%
+                    def _cpct(r):
+                        try:
+                            e = float(r.get('entry_price_usd') or 0)
+                            x = float(r.get('exit_price_usd') or 0)
+                            if e > 0 and x >= 0:
+                                return max(-99.99, min(9999.0, (x / e - 1) * 100))
+                        except Exception:
+                            pass
+                        try:
+                            a = float(r.get('amount_usd') or 0)
+                            if a >= 0.01:
+                                return max(-99.99, min(9999.0, float(r.get('pnl_usd') or 0) / a * 100))
+                        except Exception:
+                            pass
+                        return 0.0
+                    closed_df['pnl_%'] = closed_df.apply(_cpct, axis=1)
                     
                     for index, row in closed_df.iterrows():
                         p_usd = row['pnl_usd']
