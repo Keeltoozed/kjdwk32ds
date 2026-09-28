@@ -81,7 +81,10 @@ async def get_token_data(address: str, chain: str = SLUG) -> dict:
 
 
 async def get_bulk_prices(addresses: list, chain: str = SLUG) -> dict:
-    """Балк-цены до 30 адресов за запрос (голый массив в ответе)."""
+    """Балк-цены до 30 адресов за запрос (голый массив в ответе).
+    Ключи — в ОБОИХ регистрах (оригинал + lower): DexScreener отдаёт
+    checksum, а трекер может хранить lower — без этого px.get(mint)==0
+    и дашборд встаёт на $0.00 (0.00%)."""
     out = {}
     ms = [a for a in dict.fromkeys(addresses) if a]
     for i in range(0, len(ms), 30):
@@ -100,6 +103,11 @@ async def get_bulk_prices(addresses: list, chain: str = SLUG) -> dict:
                 price = float(p.get("priceUsd", 0) or 0)
                 if addr and price > out.get(addr, 0):
                     out[addr] = price
+                if addr and price > out.get(addr.lower(), 0):
+                    out[addr.lower()] = price
+                if addr and price > out.get(addr.upper(), 0):
+                    # на всякий: некоторые источники дают upper
+                    out[addr.upper()] = price
             except Exception:
                 continue
     return out

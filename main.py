@@ -599,82 +599,99 @@ async def _evm_track_once(tracker, chain: str, tag: str, emoji: str):
         px = {}
     # Добор слепых: кого нет в балке (свежие/тонкие пулы) — поштучно, иначе цены
     # встают на entry ($0.00 0.00% в дашборде) и глохнут все выходы по профиту.
-    _missing = [m for m in mine if not px.get(m, 0)]
+    def _px_get(_m: str) -> float:
+        # case-insensitive: DS отдаёт checksum, трекер может хранить lower
+        return float(px.get(_m, 0) or px.get(_m.lower(), 0) or px.get(_m.upper(), 0) or 0)
+    _missing = [m for m in mine if not _px_get(m)]
     for _mm in _missing[:12]:
         try:
             _td1 = await evm_data.get_token_data(_mm, chain)
             _px1 = float((_td1.get("priceUsd", 0) or 0)) if _td1 else 0
             if _px1 > 0:
                 px[_mm] = _px1
+                px[_mm.lower()] = _px1
+                px[_mm.upper()] = _px1
         except Exception:
             continue
-    for mint, pos in list(mine.items()):
-        cur = px.get(mint, 0) or pos.current_price_usd or pos.entry_price_usd
-        # Счётчик слепоты: ни балк, ни добор цены не дали (cur упал на entry/current).
-        # 25 циклов (~5 мин) без живой цены = выходим, слот не маринуем.
-        _live = bool(px.get(mint, 0))
-        pos.price_stale_n = 0 if _live else int(getattr(pos, "price_stale_n", 0) or 0) + 1
-        if pos.price_stale_n >= 25:
-            tracker.close_position(mint, pos.current_price_usd or pos.entry_price_usd,
-                                   f"{tag} Stale Price (5 мин без цены)")
-            continue
-        if cur > pos.max_price_usd:
-            pos.max_price_usd = cur
-            pos.peak_time = _t.time()
-        prev = pos.current_price_usd
-        pos.current_price_usd = cur
-        if not pos.entry_price_usd:
-            continue
-        pnl = (cur - pos.entry_price_usd) / pos.entry_price_usd
-        maxp = (pos.max_price_usd - pos.entry_price_usd) / pos.entry_price_usd
-        pos.current_pnl_usd = pos.amount_usd * pnl
-        held = (_t.time() - pos.entry_time) / 60
-        reason = None
-        prev_ts = getattr(pos, "price_checked_at", 0.0)
-        _mbr = getattr(config, "MOONBAG_TRIGGER_PCT", 0.50)
-        if maxp >= 0.25 and not getattr(pos, "tp1_done", False):
-            tracker.partial_close_position(mint, cur, 0.30, f"{tag} Take Profit +25% (Tier-1)")
-            pos.tp1_done = True
-            pos.price_checked_at = _t.time()
-            continue
-        if maxp >= _mbr and not getattr(pos, "is_moonbag", False):
-            tracker.partial_close_position(mint, cur, 0.50, f"{tag} Take Profit +{_mbr*100:.0f}% (Risk Free)")
-        elif prev_ts and (_t.time() - prev_ts) < 60 and prev > 0 and cur <= prev * 0.80:
-            reason = f"{tag} Crash Guard ({(1 - cur / prev) * 100:.0f}% за {_t.time() - prev_ts:.0f}с)"
-        elif maxp >= getattr(config, "TRAILING_ACTIVATION_PCT", 0.15) and \
-                (pos.max_price_usd - cur) / pos.max_price_usd >= getattr(config, "TRAILING_DISTANCE_PCT", 0.08):
-            reason = f"{tag} Trailing (peak +{maxp * 100:.0f}%)"
-        elif pnl <= -0.30:
-            reason = f"{tag} Emergency Cap ({pnl * 100:.1f}%)"
-        elif held < 3 and pnl <= -0.12:
-            reason = f"{tag} Infant Dump ({pnl * 100:.1f}%)"
-        elif pnl <= config.STOP_LOSS_PCT:
-            reason = f"{tag} Stop ({pnl * 100:.1f}%)"
-        elif held >= 30 and pnl < -0.05:
-            reason = f"{tag} Dead ({held:.0f}m)"
-        elif held >= 15 and abs(pnl) < 0.05 and maxp < 0.05:
-            # ЖИВОЙ ФЛЕТ НЕ РЕЖЕМ: консолидация перед выстрелом выглядит как ~0%.
-            # Есть сделки за 5 мин = пул жив: +5 мин грейса (макс 2). Нет сделок = труп.
-            # Ошибка API = пропуск цикла (Dead на 15м всё равно подстрахует).
-            _graces = getattr(pos, "stagnant_graces", 0)
+    try:
+        for mint, pos in list(mine.items()):
             try:
-                _td = await evm_data.get_token_data(mint, chain)
-                _tx5 = ((_td.get("txns") or {}).get("m5", {}) or {}) if _td else {}
-                _alive = ((_tx5.get("buys", 0) or 0) + (_tx5.get("sells", 0) or 0)) >= 3
-            except Exception:
+                _live_px = _px_get(mint)
+                cur = _live_px or pos.current_price_usd or pos.entry_price_usd
+                # Счётчик слепоты: ни балк, ни добор цены не дали (cur упал на entry/current).
+                # 25 циклов (~5 мин) без живой цены = выходим, слот не маринуем.
+                _live = bool(_live_px)
+                pos.price_stale_n = 0 if _live else int(getattr(pos, "price_stale_n", 0) or 0) + 1
+                if pos.price_stale_n >= 25:
+                    tracker.close_position(mint, pos.current_price_usd or pos.entry_price_usd,
+                                           f"{tag} Stale Price (5 мин без цены)")
+                    continue
+                if cur > pos.max_price_usd:
+                    pos.max_price_usd = cur
+                    pos.peak_time = _t.time()
+                prev = pos.current_price_usd
+                pos.current_price_usd = cur
+                if not pos.entry_price_usd:
+                    continue
+                pnl = (cur - pos.entry_price_usd) / pos.entry_price_usd
+                maxp = (pos.max_price_usd - pos.entry_price_usd) / pos.entry_price_usd
+                pos.current_pnl_usd = pos.amount_usd * pnl
+                held = (_t.time() - pos.entry_time) / 60
+                reason = None
+                prev_ts = getattr(pos, "price_checked_at", 0.0)
+                _mbr = getattr(config, "MOONBAG_TRIGGER_PCT", 0.50)
+                if maxp >= 0.25 and not getattr(pos, "tp1_done", False):
+                    tracker.partial_close_position(mint, cur, 0.30, f"{tag} Take Profit +25% (Tier-1)")
+                    pos.tp1_done = True
+                    pos.price_checked_at = _t.time()
+                    continue
+                if maxp >= _mbr and not getattr(pos, "is_moonbag", False):
+                    tracker.partial_close_position(mint, cur, 0.50, f"{tag} Take Profit +{_mbr*100:.0f}% (Risk Free)")
+                elif prev_ts and (_t.time() - prev_ts) < 60 and prev > 0 and cur <= prev * 0.80:
+                    reason = f"{tag} Crash Guard ({(1 - cur / prev) * 100:.0f}% за {_t.time() - prev_ts:.0f}с)"
+                elif maxp >= getattr(config, "TRAILING_ACTIVATION_PCT", 0.15) and \
+                        (pos.max_price_usd - cur) / pos.max_price_usd >= getattr(config, "TRAILING_DISTANCE_PCT", 0.08):
+                    reason = f"{tag} Trailing (peak +{maxp * 100:.0f}%)"
+                elif pnl <= -0.30:
+                    reason = f"{tag} Emergency Cap ({pnl * 100:.1f}%)"
+                elif held < 3 and pnl <= -0.12:
+                    reason = f"{tag} Infant Dump ({pnl * 100:.1f}%)"
+                elif pnl <= config.STOP_LOSS_PCT:
+                    reason = f"{tag} Stop ({pnl * 100:.1f}%)"
+                elif held >= 30 and pnl < -0.05:
+                    reason = f"{tag} Dead ({held:.0f}m)"
+                elif held >= 15 and abs(pnl) < 0.05 and maxp < 0.05:
+                    # ЖИВОЙ ФЛЕТ НЕ РЕЖЕМ: консолидация перед выстрелом выглядит как ~0%.
+                    # Есть сделки за 5 мин = пул жив: +5 мин грейса (макс 2). Нет сделок = труп.
+                    # Ошибка API = пропуск цикла (Dead на 15м всё равно подстрахует).
+                    _graces = getattr(pos, "stagnant_graces", 0) or 0
+                    try:
+                        _td = await evm_data.get_token_data(mint, chain)
+                        _tx5 = ((_td.get("txns") or {}).get("m5", {}) or {}) if _td else {}
+                        _alive = ((_tx5.get("buys", 0) or 0) + (_tx5.get("sells", 0) or 0)) >= 3
+                    except Exception:
+                        pos.price_checked_at = _t.time()
+                        continue
+                    if _alive and _graces < 2:
+                        pos.stagnant_graces = _graces + 1
+                        pos.entry_time = _t.time() - 4 * 60
+                        print(f"⏳ {emoji} {tag} {mint[:10]}: живой флет ({pnl*100:.1f}%), грейс {pos.stagnant_graces}/2 — ждём выстрел.")
+                        pos.price_checked_at = _t.time()
+                        continue
+                    reason = f"{tag} Stagnant ({held:.0f}m)"
                 pos.price_checked_at = _t.time()
+                if reason:
+                    tracker.close_position(mint, cur, reason)
+            except Exception as _e:
+                # Одна битая позиция не должна ронять весь трек
+                # (иначе все цены встают на $0.00 как в баге price_stale_n).
+                print(f"{emoji} {tag} pos err {str(mint)[:10]}: {_e}")
                 continue
-            if _alive and _graces < 2:
-                pos.stagnant_graces = _graces + 1
-                pos.entry_time = _t.time() - 4 * 60
-                print(f"⏳ {emoji} {tag} {mint[:10]}: живой флет ({pnl*100:.1f}%), грейс {pos.stagnant_graces}/2 — ждём выстрел.")
-                pos.price_checked_at = _t.time()
-                continue
-            reason = f"{tag} Stagnant ({held:.0f}m)"
-        pos.price_checked_at = _t.time()
-        if reason:
-            tracker.close_position(mint, cur, reason)
-    tracker.save_portfolio()
+    finally:
+        try:
+            tracker.save_portfolio()
+        except Exception:
+            pass
 
 
 async def _evm_chain_loop(analyzer, tracker, chain: str):

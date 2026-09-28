@@ -2,10 +2,15 @@ import json
 import os
 import time
 from typing import Dict
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 import config
 
 class VirtualPosition(BaseModel):
+    # extra='allow' — страховка от "опять нет цен": любое новое поле
+    # трекинга (price_stale_n, tp1_done...) не должно ронять весь цикл
+    # с ошибкой "object has no field".
+    model_config = ConfigDict(extra="allow")
+
     symbol: str
     mint: str
     entry_price_usd: float
@@ -28,6 +33,12 @@ class VirtualPosition(BaseModel):
     price_updated_at: float = 0.0 # Время свежего обновления цены из WSS
     price_checked_at: float = 0.0 # Для Crash Guard
     exit_time: float = 0.0 # Для дневного kill-switch
+    # --- поля трекинга (раньше их не было в модели → трек падал с
+    # '"VirtualPosition" object has no field "price_stale_n"' и цены вставали) ---
+    price_stale_n: int = 0 # счётчик циклов без живой цены (EVM)
+    tp1_done: bool = False # Tier-1 +25% уже зафиксирован
+    stagnant_graces: int = 0 # грейсы живого флета
+    first_zero_ts: float = 0.0 # когда цена впервые стала 0 (Solana Stale Price)
 
 class PaperTracker:
     def __init__(self):
