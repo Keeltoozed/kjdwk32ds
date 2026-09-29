@@ -42,6 +42,7 @@ class Analyzer:
         self.last_signal = ""  # Метка последнего решения: "VIP RAY-XGB 98%", "PULLBACK", "ROBINHOOD rule 72%"...
         self.last_score = 0.0  # Скор последнего решения (для радара)
         self.signals = {}  # Метки по mint: НЕ делит состояние между параллельными петлями (иначе FOMO:? в дашборде)
+        self._dip_watch = {}  # OVERHEAT-пики для dip-buy: {address: (peak_price, ts)}
 
     def _set_sig(self, key: str, text: str):
         """Метка решения для монеты. Per-mint словарь вместо общего поля:
@@ -409,8 +410,11 @@ class Analyzer:
                          "PEPE", "SHIB", "DOGE", "FLOKI", "BONK", "WIF", "BOME", "POPCAT", "TRUMP", "BIDEN"]
                          
         if any(keyword in symbol for keyword in scam_keywords) or any(keyword in name for keyword in scam_keywords):
-            print(f"🚫 Мусор: Токен {symbol} мимикрирует под известный бренд/мем. Это 100% scam.")
-            return False
+            if self._brand_whitelisted(mint):
+                print(f"✅ Вайтлист: {symbol} — известный контракт, мимикри-фильтр пропущен.")
+            else:
+                print(f"🚫 Мусор: Токен {symbol} мимикрирует под известный бренд/мем. Это 100% scam.")
+                return False
             
         is_vip = self.check_hyper_rocket_momentum(pair_data)
 
@@ -703,6 +707,15 @@ class Analyzer:
     _EVM_SCAM_KW = ["AAPL", "MSFT", "TSLA", "NVDA", "GOOG", "AMZN", "META", "NFLX",
                     "PEPE", "SHIB", "DOGE", "FLOKI", "BONK", "WIF", "BOME", "POPCAT", "TRUMP", "BIDEN"]
 
+    def _brand_whitelisted(self, address: str) -> bool:
+        """Точный минт из вайтлиста (BOME и др. топы) — мимикри-фильтр пропускает.
+        Клоны с другим адресом режутся как раньше."""
+        try:
+            wl = {str(m).lower() for m in (getattr(config, "BRAND_WHITELIST_MINTS", []) or [])}
+            return (address or "").lower() in wl
+        except Exception:
+            return False
+
     def _evm_brand_ok(self, symbol: str, tag: str) -> bool:
         """Блэклист мимикрии под бренды. Бесплатно, без сети."""
         if any(k in symbol.upper() for k in self._EVM_SCAM_KW):
@@ -772,6 +785,37 @@ class Analyzer:
         import time as _tt
         _age_min = ((_tt.time() * 1000 - (pair_data.get("pairCreatedAt") or 0)) / 60000.0) \
             if pair_data.get("pairCreatedAt") else 999.0
+        _px_now = float(pair_data.get("priceUsd", 0) or 0)
+
+        # DIP-BUY после OVERHEAT: вертикаль не покупаем, а запоминаем пик.
+        # Откат 20-30% от пика за 15 мин при живом давлении/ликве/ссылках = вход,
+        # а не вершина (иначе ракеты типа +1200% пролетают мимо навсегда).
+        try:
+            _dw = self._dip_watch.get(address)
+            if _dw and _px_now > 0:
+                _peak, _pvol, _pts = _dw
+                _win = float(getattr(config, "DIPBUY_WINDOW_MIN", 15)) * 60
+                if _tt.time() - _pts > _win:
+                    self._dip_watch.pop(address, None)
+                else:
+                    _drop = (_peak - _px_now) / _peak if _peak > 0 else 0
+                    _dmin = float(getattr(config, "DIPBUY_DROP_MIN", 0.20))
+                    _dmax = float(getattr(config, "DIPBUY_DROP_MAX", 0.35))
+                    _vol_now = float(((pair_data.get("volume") or {}).get("m5", 0)) or 0)
+                    _vol_ok = (not _pvol) or (not _vol_now) or (_vol_now >= 0.3 * _pvol)
+                    if not _vol_ok:
+                        print(f"📉 [{tag}-DIPBUY] {symbol}: откат есть, но объём сдох — это слив, не откат. Ждём.")
+                    elif not _vol_now and ((b5 + s5) < 10 or not (s5 == 0 or b5 >= 0.5 * s5)):
+                        # Объём пуст с обеих сторон: без живых сделок не входим даже на откате
+                        print(f"📉 [{tag}-DIPBUY] {symbol}: объём пуст и сделок нет — мёртвый токен, скип.")
+                    elif _dmin <= _drop <= _dmax and (b5 + s5) >= 20 and (s5 == 0 or b5 >= s5) \
+                            and liq >= min_liq and links and m1 <= 3.0:
+                        self._dip_watch.pop(address, None)
+                        print(f"📉 [{tag}-DIPBUY] {symbol}: откат {_drop*100:.0f}% от пика при живом объёме — вход на коррекции.")
+                        self._set_sig(address, f"{tag} DIPBUY -{_drop*100:.0f}%")
+                        return True
+        except Exception:
+            pass
 
         # SCOUT TIER: пулу меньше 5 минут - входим ДО вершины микробилетом $1.5.
         # Ракеты видны здесь, а не на m5 +70%. Скам-фильтры (бренд+клон) действуют и тут.
@@ -808,7 +852,14 @@ class Analyzer:
         if m5 < _evm_min_m5:  # импульса нет — флет съест комиссиями
             return self._deny(address, f"flat m5 {m5:+.1f}%", f"· [{tag}] {symbol}: флет m5 {m5:+.1f}%")
         if m5 > 60.0 or h24 > 500.0:  # вершина уже прошла
-            return self._deny(address, f"top m5 {m5:+.0f}% h24 {h24:+.0f}%", f"🚫 [{tag}-OVERHEAT] {symbol}: m5 {m5:+.1f}% h24 {h24:+.0f}% — поздно.")
+            # Пик в dip-watch: купим на откате 20-30%, а не гоним вершину
+            try:
+                if _px_now > 0:
+                    _pv = float(((pair_data.get("volume") or {}).get("m5", 0)) or 0)
+                    self._dip_watch[address] = (_px_now, _pv, _tt.time())
+            except Exception:
+                pass
+            return self._deny(address, f"top m5 {m5:+.0f}% h24 {h24:+.0f}%", f"🚫 [{tag}-OVERHEAT] {symbol}: m5 {m5:+.1f}% h24 {h24:+.0f}% — поздно, ждём откат для DIPBUY.")
         if m1 > 5.0:
             return self._deny(address, f"m1-green {m1:+.1f}%", f"🚫 [{tag}] {symbol}: m1 {m1:+.1f}% — вершина в моменте, ждём.")
         if m1 < -8.0 or h1 > 300.0:
@@ -824,7 +875,7 @@ class Analyzer:
         _up = symbol.upper()
         _scam_kw = ["AAPL", "MSFT", "TSLA", "NVDA", "GOOG", "AMZN", "META", "NFLX",
                     "PEPE", "SHIB", "DOGE", "FLOKI", "BONK", "WIF", "BOME", "POPCAT", "TRUMP", "BIDEN"]
-        if any(k in _up for k in _scam_kw):
+        if any(k in _up for k in _scam_kw) and not self._brand_whitelisted(address):
             print(f"🚫 [{tag}] {symbol}: мимикрия под бренд/мем — 100% скам.")
             return False
 

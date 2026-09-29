@@ -303,6 +303,23 @@ class PaperTracker:
             
             self.save_portfolio()
             print(f"🔒 PAPER SELL: {pos.symbol} ({mint}) | Reason: {reason} | PnL: {pnl_pct*100:.2f}% (${pos.pnl_usd:.2f})")
+            # Структурный лог сделки (JSONL): точная статистика по exit_reason без grep-гаданий
+            try:
+                import json as _json
+                _dur = (pos.exit_time - pos.entry_time) if pos.entry_time else 0
+                _mp = ((pos.max_price_usd - pos.entry_price_usd) / pos.entry_price_usd) \
+                    if pos.entry_price_usd else 0
+                with open("trades_log.jsonl", "a") as _f:
+                    _f.write(_json.dumps({
+                        "ts": pos.exit_time, "mint": mint, "symbol": pos.symbol,
+                        "chain": pos.chain, "exit_reason": reason,
+                        "entry": pos.entry_price_usd, "exit": exit_price,
+                        "peak": pos.max_price_usd, "pnl_pct": round(pnl_pct * 100, 2),
+                        "pnl_usd": round(pos.pnl_usd, 2),
+                        "peak_pct": round(_mp * 100, 1), "held_sec": round(_dur),
+                    }) + "\n")
+            except Exception:
+                pass
             
             # === СОХРАНЕНИЕ ОПЫТА ДЛЯ ИИ (Continuous Learning) ===
             try:

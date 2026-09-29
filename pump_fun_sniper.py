@@ -335,6 +335,14 @@ class PumpFunSniper:
                                 if state.is_ai_evaluated and not state.is_entered:
                                     # ИИ отверг, а она взлетела! Логируем (False Negative)
                                     pass
+                                # Эстафета сканеру: миграция = приоритетный разбор в новом пуле
+                                # (раньше токен тут умирал и сканер видел его через 2-30 мин).
+                                try:
+                                    from birth_tracker import birth_tracker as _bt
+                                    _bt.add_graduated(mint)
+                                    print(f"🏁 [MIGRATED] {state.symbol} → очередь сканера (graduated).")
+                                except Exception as _e:
+                                    print(f"⚠️ Не отдал миграцию сканеру: {_e}")
                                     
                                 # Отписываемся, чтобы не засорять сокет Raydium торгами
                                 del self.trackers[mint]

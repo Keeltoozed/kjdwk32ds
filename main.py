@@ -147,10 +147,10 @@ async def position_manager_loop(analyzer, tracker):
                 
                 # === ИНТЕГРАЦИЯ МАТЕМАТИКИ ДЛЯ ЗРЕЛЫХ МОНЕТ (SWING TRADING) ===
                 if getattr(position, "is_mature", False):
-                    # TIER-1: RAMP дал +36% пик, а вышли +8% — трейлинг отдаёт почти всё.
-                    # На +25% продаём 30% сразу: прибыль в кармане, остаток едет дальше.
+                    # TIER-1: лестница вместо жадного тейка — на +25% продаём 20% (было 30%),
+                    # остальное едет дальше. Прибыль в кармане, раннер жив.
                     if max_pnl_pct >= 0.25 and not getattr(position, "tp1_done", False):
-                        tracker.partial_close_position(mint, current_price, 0.30, "Take Profit +25% (Tier-1)")
+                        tracker.partial_close_position(mint, current_price, 0.20, "Take Profit +25% (Tier-1 20%)")
                         position.tp1_done = True
                         continue
                     # MOONBAG для mature: RAFFLE дал +61% пик без частичной фиксации.
@@ -198,6 +198,15 @@ async def position_manager_loop(analyzer, tracker):
                     if drop_from_max >= trail_distance:
                         tracker.close_position(mint, current_price, f"Trailing Stop (peak +{max_pnl_pct*100:.0f}%, drop {drop_from_max*100:.0f}%)")
                         continue
+
+                # Breakeven: был пик +30%+, вернулись ко входу — выходим в ноль, не ждём стоп
+                if max_pnl_pct >= float(getattr(config, "BREAKEVEN_PCT", 0.30)) and pnl_pct <= 0:
+                    tracker.close_position(mint, current_price, f"Breakeven (был пик +{max_pnl_pct*100:.0f}%)")
+                    continue
+                # Мягкий стоп: был +15%+, сползли к -5%
+                if max_pnl_pct >= 0.15 and pnl_pct <= -0.05:
+                    tracker.close_position(mint, current_price, f"Soft Guard (был пик +{max_pnl_pct*100:.0f}%)")
+                    continue
                             
                 # 3. АВАРИЙНЫЙ КЭП ПЕРВЫМ: FIBONACCI -68% проскочили стоп в тонком пуле.
                 # Больше -30% одну сделку не держим. (Стоял после стопа - был недостижим.)
@@ -232,9 +241,7 @@ async def position_manager_loop(analyzer, tracker):
         # Балк-цены Jupiter+DS: 1 запрос на все позиции за цикл, квоту не жрёт.
         # 2 сек вместо 3: стоп -20% исполнялся как -59% (INFERENCE) из-за проскока между тиками.
         await asyncio.sleep(2.0)
-
-from birth_tracker import BirthTracker
-birth_tracker = BirthTracker()
+from birth_tracker import BirthTracker, birth_tracker
 
 async def birth_wss_loop(analyzer, tracker):
     import websockets
@@ -263,6 +270,7 @@ async def birth_wss_loop(analyzer, tracker):
 async def scanner_loop(analyzer, tracker):
     print("🚀 Запуск PhantBot Scanner (Поиск новых монет)...")
     processed_mints = {}
+    _grad_none = {}  # mint -> число None от DS (скам/нестандарт: после 3 — хороним, не жрём циклы)
     while True:
         try:
             open_count = len(tracker.get_open_positions())
@@ -281,6 +289,19 @@ async def scanner_loop(analyzer, tracker):
                 # 1. VIP Токены (DexScreener API)
                 tokens = await analyzer.fetch_latest_tokens()
                 mints_to_scan = [p.get("tokenAddress") for p in tokens if p.get("tokenAddress")]
+
+                # 0. Миграции ПЕРВЫМИ: только что вышли из кёрва в Raydium-пул —
+                # окно ракеты минуты, DS ещё может не проиндексировать (None → вернём в очередь).
+                # Срез 25/цикл: при панике очередь не блочит VIP-разбор надолго.
+                graduated_mints = []
+                try:
+                    graduated_mints = (birth_tracker.drain_graduated() or [])[:25]
+                except Exception:
+                    pass
+                if graduated_mints:
+                    print(f"🏁 Разбираю {len(graduated_mints)} свежих миграций ПЕРВЫМИ!")
+                    mints_to_scan = graduated_mints + mints_to_scan
+                _graduated_set = set(graduated_mints)
                 
                 # 2. Уличные Токены (Берем молодые ракеты от 5 до 20 минут)
                 mature_mints = birth_tracker.get_mature_tokens(2, 30)  # Было 3-25: шире окно молодняка = больше ракет
@@ -293,8 +314,8 @@ async def scanner_loop(analyzer, tracker):
                     if _w and _w not in mints_to_scan:
                         mints_to_scan.append(_w)
 
-                # Удаляем дубликаты
-                mints_to_scan = list(set(mints_to_scan))
+                # Удаляем дубликаты, порядок сохраняем (миграции остаются первыми)
+                mints_to_scan = list(dict.fromkeys(m for m in mints_to_scan if m))
                 
                 for mint in mints_to_scan:
                     if not mint or mint in tracker.positions:
@@ -315,7 +336,28 @@ async def scanner_loop(analyzer, tracker):
                     try:
                         # Используем умный маршрутизатор (сам выберет XGBoost или Raydium модель)
                         is_good = await analyzer.analyze_token(mint)
+                        if is_good is not None and mint in _graduated_set:
+                            # Метрика time_to_index: миграция → первый успешный разбор DS
+                            try:
+                                _tti = birth_tracker.graduated_age(mint)
+                                if _tti >= 0:
+                                    print(f"⏱️ [MIGRATION] {mint[:8]}: time_to_index {_tti:.0f}с (p95>480с → поднять TTL).")
+                            except Exception:
+                                pass
                         if is_good is None:
+                            if mint in _graduated_set:
+                                # DS ещё не проиндексировал новый пул — вернём в очередь, не теряем.
+                                # Но после 3 пустых — это не лаг, а скам/нестандарт: хороним.
+                                _n = _grad_none.get(mint, 0) + 1
+                                _grad_none[mint] = _n
+                                if _n >= 3:
+                                    _grad_none.pop(mint, None)
+                                    print(f"⚰️ [MIGRATION] {mint[:8]}: DS не видит после 3 попыток — unindexable, хороню.")
+                                else:
+                                    try:
+                                        birth_tracker.add_graduated(mint)
+                                    except Exception:
+                                        pass
                             continue
                         processed_mints[mint] = time.time()
                         analyzer.log_scan(mint[:8], mint, "SCANNER",
@@ -602,11 +644,28 @@ async def _evm_track_once(tracker, chain: str, tag: str, emoji: str):
             if getattr(p, "chain", "") == chain}
     if not mine:
         return
+    # 0. Прямые цены с ноды (батч getReserves, мимо лимитов DS/GT). DS — только добор.
+    px = {}
+    if getattr(config, "EVM_DIRECT_ENABLED", True):
+        try:
+            import evm_pool as _ep
+            _rpcs = getattr(config, "EVM_DIRECT_RPC", None) or None
+            if _rpcs:
+                _ep.RPCS.update({k: v for k, v in _rpcs.items() if v})
+            px = await _ep.get_direct_prices(list(mine.keys()), chain) or {}
+            if px:
+                print(f"{emoji} {tag} node-direct: {len(px)//3}/{len(mine)} цен с ноды")
+        except Exception as e:
+            print(f"{emoji} {tag} node-direct err: {e}")
+            px = {}
     try:
-        px = await evm_data.get_bulk_prices(list(mine.keys()), chain)
+        _need = [m for m in mine if not (px.get(m, 0) or px.get(m.lower(), 0) or px.get(m.upper(), 0))]
+        if _need:
+            _ds = await evm_data.get_bulk_prices(_need, chain)
+            for _k, _v in (_ds or {}).items():
+                px.setdefault(_k, _v)  # нода первична, DS — добор
     except Exception as e:
         print(f"{emoji} {tag} bulk price err: {e}")
-        px = {}
     # Добор слепых: кого нет в балке (свежие/тонкие пулы) — поштучно, иначе цены
     # встают на entry ($0.00 0.00% в дашборде) и глохнут все выходы по профиту.
     def _px_get(_m: str) -> float:
@@ -677,7 +736,7 @@ async def _evm_track_once(tracker, chain: str, tag: str, emoji: str):
                 _dead_min = int(getattr(config, "EVM_DEAD_MIN", 60))
                 _stag_min = int(getattr(config, "EVM_STAGNANT_MIN", 45))
                 if maxp >= 0.25 and not getattr(pos, "tp1_done", False):
-                    tracker.partial_close_position(mint, cur, 0.30, f"{tag} Take Profit +25% (Tier-1)")
+                    tracker.partial_close_position(mint, cur, 0.20, f"{tag} Take Profit +25% (Tier-1 20%)")
                     pos.tp1_done = True
                     pos.price_checked_at = _t.time()
                     continue
@@ -690,6 +749,12 @@ async def _evm_track_once(tracker, chain: str, tag: str, emoji: str):
                     reason = f"{tag} Trailing (peak +{maxp * 100:.0f}%, dd {(1 - cur / pos.max_price_usd) * 100:.0f}%)"
                 elif pnl <= -0.30:
                     reason = f"{tag} Emergency Cap ({pnl * 100:.1f}%)"
+                elif maxp >= float(getattr(config, "BREAKEVEN_PCT", 0.30)) and pnl <= 0:
+                    reason = f"{tag} Breakeven (был пик +{maxp * 100:.0f}%)"
+                elif maxp >= 0.15 and pnl <= -0.05:
+                    # Мягкий стоп: был +15%+, сползли к -5% — пила, фиксируем малый минус,
+                    # не ждём -20%. Живую ракету (выше -5%) не трогает.
+                    reason = f"{tag} Soft Guard (был пик +{maxp * 100:.0f}%)"
                 elif held < float(getattr(config, "INFANT_WINDOW_MIN", 2)) and pnl <= float(getattr(config, "INFANT_DUMP_PCT", -0.25)):
                     reason = f"{tag} Infant Dump ({pnl * 100:.1f}%)"
                 elif not _is_runner and pnl <= config.STOP_LOSS_PCT:
@@ -748,7 +813,7 @@ async def _evm_chain_loop(analyzer, tracker, chain: str):
                 await _evm_track_once(tracker, chain, tag, emoji)
             except Exception as e:
                 print(f"{emoji} {tag} track err: {e}")
-            await asyncio.sleep(12)
+            await asyncio.sleep(int(getattr(config, "EVM_TRACK_INTERVAL", 8)))
 
     async def scan_task():
         while True:

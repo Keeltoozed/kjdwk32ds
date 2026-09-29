@@ -96,10 +96,12 @@ ROBINHOOD_EXPLORER = "https://robinhoodchain.blockscout.com"
 ROBINHOOD_MIN_LIQUIDITY = 12000  # было 8000: пыль с $8-12k рагается в ноль за секунды,
 # а все реальные раннеры (SHCAT 85k/120k, OLEAF 44k, WOULD 29k) глубже — их не задевает
 ROBINHOOD_SCAN_INTERVAL = 15  # Было 25: чаще опрос = раньше вход на ракету
+EVM_TRACK_INTERVAL = 8  # Было захардкожено 12с: цены с ноды идут 1 батчем без лимитов DS,
+# поэтому трек стопов/трейлингов можно крутить чаще — раньше режем раги, раньше фиксим пик
 EVM_MIN_M5_PCT = 5.0  # Было 7.0: шире окно + вето 0.58 держит раги. Больше кандидатов в ракеты
 EVM_RESCAN_COOLDOWN = 90  # Было 300: ракеты живут минуты, повторная проверка через 90 сек
-EVM_NEW_POOL_PAGES = 8  # Было 4: глубже свежие пулы GT = больше ранних ракет Robinhood
-EVM_MAX_MINTS = 100  # Было 60: хвост выдачи больше не отрезается
+EVM_NEW_POOL_PAGES = 10  # Было 8: глубже свежие пулы GT = больше ранних ракет (GT-кэш 60с держит квоту)
+EVM_MAX_MINTS = 150  # Было 100: хвост выдачи больше не отрезается (повторы режет recooldown 90с)
 # EVM-копитрейдинг: кошельки китов по сетям (0x...). Их входящие Transfer = покупки:
 # токен летит в скан первым с меткой COPY. Пусто = выключено (нужны адреса!).
 EVM_COPY_WALLETS = {"base": [], "bsc": [], "robinhood": [], "ethereum": []}
@@ -136,6 +138,17 @@ ETHEREUM_ENABLED = True  # луп трекинга: ведём существу�
 ETHEREUM_ENTRIES_ENABLED = False  # НОВЫЕ входы в L1 выкл: газ $2-6 съедает скальп, ловим только дешёвые L2
 ETHEREUM_SCAN_INTERVAL = 15
 ETHEREUM_MIN_LIQUIDITY = 15000.0  # пулы глубокие, как Base/BSC
+# === ПРЯМЫЕ ЦЕНЫ С НОД (мимо лимитов DS/GT для открытых позиций) ===
+# Трекинг идёт батчем eth_call getReserves с RPC ноды: 1 HTTP-батч на сеть за цикл.
+# DS/GT остаются только для дискавери (там кэши). V4-пулы (весь ROB-uniswap) —
+# DS-фолбэк (у ROB нет канонического PoolManager для чтения slot0 напрямую).
+EVM_DIRECT_ENABLED = True
+EVM_DIRECT_RPC = {
+    "robinhood": ROBINHOOD_RPC_URL,
+    "base": "https://base-rpc.publicnode.com",
+    "bsc": "https://bsc-rpc.publicnode.com",
+    "ethereum": "https://ethereum-rpc.publicnode.com",
+}
 # === КОМИССИИ ПО СЕТЯМ (paper-честность: L1-газ на порядок дороже L2/Solana) ===
 # (fee_small <$10, fee_big, fee_emergency, cap_frac от позиции)
 # Было везде одинаково $0.075/$0.45/$0.75 cap 5% — для Ethereum это враньё:
@@ -165,6 +178,14 @@ RUG_REBUY_MAX_LOSS = -0.15  # был лосс хуже -15% по монете (H
 INFANT_WINDOW_MIN = 2  # было 3: окно уже — меньше rescues пропустим, раги всё равно ловим ниже
 INFANT_DUMP_PCT = -0.25  # было -0.12: -15..-18% переживаем, -25%+ = дев сливает, режем
 
+# === ROCKET MODE (ловля ракет, а не скальпинг: прибыли расти, убытки резать) ===
+BREAKEVEN_PCT = 0.30  # пик +30% → стоп в безубыток: ниже входа уже не уйдём, что бы ни было
+DIPBUY_DROP_MIN = 0.20  # dip-buy после OVERHEAT: откат 20-30% от пика = вход, не вершина
+DIPBUY_DROP_MAX = 0.35
+DIPBUY_WINDOW_MIN = 15  # пик помним 15 мин, потом протухает
+# Вайтлист точных минтов: BOME и ко — легитимные топ-мемы, мимикри-фильтр их не трогает.
+# (Клоны с ДРУГИМ адресом по-прежнему режутся.) Задаётся ниже, после GROWTH_WATCHLIST.
+
 # === GROWTH MODE (тренд старых токенов, пока нет ракет) ===
 # Логика: ракеты ловятся импульсом m5, а зрелые капы едут часами. Отдельный режим:
 # вход в откат часового тренда, широкие стопы, удержание часами, мало сделок.
@@ -176,6 +197,11 @@ GROWTH_WATCHLIST = [  # ликвидные Solana-капы (путать не с
     "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263",  # BONK
     "EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm",  # WIF
     "orcaEKTdK7LKz57vaAYr9QeNsVEPfiu6QeMU1kektZE",  # ORCA
+]
+# Вайтлист точных минтов для мимикри-фильтра (BOME и др. топы — легитимны,
+# клоны с другим адресом режутся как раньше).
+BRAND_WHITELIST_MINTS = list(GROWTH_WATCHLIST) + [
+    "ukHH6c7mMyiWCf1b9pnWe25TSpkDDt3H5pQZgZ74J82",  # BOME (проверен по нашим сделкам)
 ]
 GROWTH_MIN_LIQ = 200000  # пул от $200к - проскальзывания нет
 GROWTH_MIN_H24_PCT = 8.0  # Было 5.0: входы на +7% гнили во флете (SPX/BOME -3%). Тренд от +8%
