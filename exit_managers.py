@@ -35,8 +35,12 @@ class MatureExitManager:
         if pnl_pct <= -0.30:
             return f"Mature Emergency Cap ({pnl_pct*100:.0f}%)"
 
-        # Infant guard: дамп в первые 3 минуты = дев сливает, не шум
-        if minutes_held < 3 and pnl_pct <= -0.12:
+        # Infant guard: дамп в первые минуты = дев сливает, не шум.
+        # Было held<3 / -12%: резало SWORDGUY/LAP (-15..-18% за 30-70с) с живым
+        # импульсом (m5 +16..+68%, 1000+ buys). Раги идут -40..-96% — их и -25% ловит.
+        _inf_win = float(getattr(config, "INFANT_WINDOW_MIN", 2))
+        _inf_pct = float(getattr(config, "INFANT_DUMP_PCT", -0.25))
+        if minutes_held < _inf_win and pnl_pct <= _inf_pct:
             return f"Mature Infant Dump ({pnl_pct*100:.0f}%)"
 
         # Trailing stop for mature coins

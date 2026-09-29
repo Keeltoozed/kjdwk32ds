@@ -459,6 +459,10 @@ async def fomo_signal_loop(analyzer, tracker):
                                 print(f"📲 TG EVM {mint[:10]}: ни в одной сети не найден.")
                                 continue
                             _ch, _td = found
+                            if _ch == "ethereum" and not getattr(config, "ETHEREUM_ENTRIES_ENABLED", False):
+                                # L1-входы выкл: газ $2-6 съедает скальп (SEND/AP брались именно здесь).
+                                print(f"🚫 TG EVM {mint[:10]}: сеть ethereum, входы выкл — скип.")
+                                continue
                             ok = await analyzer.analyze_robinhood_token(mint, _ch)
                             if ok is True and mint not in tracker.positions:
                                 price = float(_td.get("priceUsd", 0))
@@ -686,7 +690,7 @@ async def _evm_track_once(tracker, chain: str, tag: str, emoji: str):
                     reason = f"{tag} Trailing (peak +{maxp * 100:.0f}%, dd {(1 - cur / pos.max_price_usd) * 100:.0f}%)"
                 elif pnl <= -0.30:
                     reason = f"{tag} Emergency Cap ({pnl * 100:.1f}%)"
-                elif held < 3 and pnl <= -0.12:
+                elif held < float(getattr(config, "INFANT_WINDOW_MIN", 2)) and pnl <= float(getattr(config, "INFANT_DUMP_PCT", -0.25)):
                     reason = f"{tag} Infant Dump ({pnl * 100:.1f}%)"
                 elif not _is_runner and pnl <= config.STOP_LOSS_PCT:
                     reason = f"{tag} Stop ({pnl * 100:.1f}%)"
