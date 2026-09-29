@@ -26,7 +26,8 @@ INITIAL_BALANCE_USD = 120.0  # торговый пул ($150 депо - $30 га
 REINVEST_PERCENT = 5.0  # Было 3%: цель $10/день требует сайз. 5% пула на сделку
 VIRTUAL_POSITION_SIZE_USD = 4.0
 TRADE_AMOUNT_USD = 10.0  # Было $6: базовый ордер $10 (комиссия $0.20 = всего 2% вместо 3.3%)
-MAX_CONCURRENT_POSITIONS = 10  # концентрация капитала: максимум 10 ракет  # Режим Снайпера: максимум 5 сделок одновременно
+MAX_CONCURRENT_POSITIONS = 12  # было 10: стагнанты теперь живут до 45м (а не 7м) и дольше
+# держат слоты — иначе ракете некуда войти. Капитальный тормоз MAX_DEPLOYED_PCT=60% остаётся.
 
 # Risk Management
 MAX_DAILY_LOSS_USD = 18.0
@@ -92,7 +93,8 @@ ROBINHOOD_DS_SLUG = "robinhood"  # slug DexScreener (НЕ 4663 - тот верн
 ROBINHOOD_GT_NETWORK = "robinhood"  # slug GeckoTerminal
 ROBINHOOD_RPC_URL = "https://rpc.mainnet.chain.robinhood.com"
 ROBINHOOD_EXPLORER = "https://robinhoodchain.blockscout.com"
-ROBINHOOD_MIN_LIQUIDITY = 8000  # EVM-пулы Uniswap тоньше Solana - порог ниже
+ROBINHOOD_MIN_LIQUIDITY = 12000  # было 8000: пыль с $8-12k рагается в ноль за секунды,
+# а все реальные раннеры (SHCAT 85k/120k, OLEAF 44k, WOULD 29k) глубже — их не задевает
 ROBINHOOD_SCAN_INTERVAL = 15  # Было 25: чаще опрос = раньше вход на ракету
 EVM_MIN_M5_PCT = 5.0  # Было 7.0: шире окно + вето 0.58 держит раги. Больше кандидатов в ракеты
 EVM_RESCAN_COOLDOWN = 90  # Было 300: ракеты живут минуты, повторная проверка через 90 сек
