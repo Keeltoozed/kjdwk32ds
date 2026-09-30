@@ -19,14 +19,18 @@ sys.path.insert(0, "/Users/taya/Downloads/kjdwk32ds-main-")
 import config  # noqa: F401  (пороги из прод-конфига)
 
 STOP = float(getattr(config, "STOP_LOSS_PCT", -0.20))
-TRAIL_ACT = float(getattr(config, "TRAILING_ACTIVATION_PCT", 0.15))
-TRAIL_DIST = float(getattr(config, "TRAILING_DISTANCE_PCT", 0.08))
+TRAIL_ACT = float(getattr(config, "TRAILING_ACTIVATION_PCT", 0.25))
+TRAIL_DIST = float(getattr(config, "EVM_RUNNER_TRAIL", 0.25))
 MOONBAG = float(getattr(config, "MOONBAG_TRIGGER_PCT", 0.60))
 CAP = -0.30
-SIZE = 10.0
-M5_MIN, M5_MAX = 7.0, 60.0
+SIZE = 6.0  # прод-сайз EVM/sol (cap*5% при $120)
+M5_MIN = float(getattr(config, "EVM_MIN_M5_PCT", 5.0))
+M5_MAX = 60.0
+STAG_LOSS_MIN = float(getattr(config, "STAGNANT_LOSS_MIN", 15))
+STAG_HOLD_MIN = float(getattr(config, "STAGNANT_HOLD_MIN", 25))
 
-# (сеть GT, минт) - микс: прошлые ракеты/раги из истории + живые тренды
+# (сеть GT, минт) - микс: прошлые ракеты/раги из истории + живые тренды.
+# GT отдаёт до ~6 мес 5m-свечей; мёртвые пулы скипаются автоматически.
 UNIVERSE = [
     ("solana", "GTBxUiw6wJdmmkCGZgRHLyYxqu1vG4KtRpeox6yDpump"),   # JEANPHIL
     ("solana", "Ai66LHZG9MCzg1WKdawwqduVAXpNDUuV8M3uyq5ppump"),   # CATE
@@ -35,6 +39,9 @@ UNIVERSE = [
     ("solana", "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN"),    # JUP кап
     ("solana", "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263"),   # BONK кап
     ("solana", "So11111111111111111111111111111111111111112"),    # SOL
+    ("solana", "4k3Dyjzvzp8eMZWUXbBCjEvwSkkk59S5iCNLY3QrkX6R"),    # RAY кап
+    ("solana", "EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm"),    # WIF кап
+    ("solana", "orcaEKTdK7LKz57vaAYr9QeNsVEPfiu6QeMU1kektZE"),     # ORCA кап
 ]
 
 FEE_TIP = 0.075
@@ -131,9 +138,9 @@ def simulate(candles):
             reason = "cap"
         elif pnl <= STOP:
             reason = "stop"
-        elif held >= 7 and pnl < 0:
+        elif held >= STAG_LOSS_MIN and pnl < 0:
             reason = "stagnant-"
-        elif held >= 25 and pnl < 0.05:
+        elif held >= STAG_HOLD_MIN and pnl < 0.05:
             reason = "stagnant"
         if reason:
             fin = pos["amt"] * net_pct(pos["entry"], c) - min(0.75 if reason in ("cap", "stop") else FEE_TIP, pos["amt"] * 0.05)
@@ -149,6 +156,7 @@ async def main():
     days = int(sys.argv[1]) if len(sys.argv) > 1 else 30
     print(f"Бектест {days}д: пулы -> 5m-свечи -> replay. Пороги из config.", flush=True)
     grand, gw, gl = 0.0, 0, 0
+    all_trades = []
     for network, mint in UNIVERSE:
         pool = await best_pool(None, network, mint)
         await asyncio.sleep(3)  # не упираемся в 30/мин GT
@@ -165,9 +173,26 @@ async def main():
         gw += sum(1 for t in trades if t[0] > 0)
         gl += sum(1 for t in trades if t[0] <= 0)
         big = max(trades, key=lambda t: t[0]) if trades else (0, "-", 0, 0)
+        from collections import Counter as _C
+        reasons = dict(_C(t[1] for t in trades))
         print(f"{mint[:10]}: свечей {len(candles)}, сделок {len(trades)}, итог ${tot:+.2f}, лучшая ${big[0]:+.2f} ({big[1]} пик +{big[2]}%)")
+        if reasons:
+            print(f"  причины: " + ", ".join(f"{k}={v}" for k, v in sorted(reasons.items())))
+            for _t in trades:
+                all_trades.append((mint[:10],) + _t)
     n = gw + gl
     print(f"\nИТОГ {days}д: сделок {n}, вин {gw} ({100*gw/max(n,1):.0f}%), P&L ${grand:+.2f}")
+    from collections import Counter as _C2
+    print("Причины всех выходов: " + ", ".join(f"{k}={v}" for k, v in sorted(_C2(t[2] for t in all_trades).items())))
+    wins = sorted([t for t in all_trades if t[1] > 0], key=lambda t: -t[1])[:5]
+    print("Топ-5 винов: " + "; ".join(f"{t[0]} ${t[1]:+.2f} ({t[2]} пик +{t[3]}%)" for t in wins))
+    loss = sorted([t for t in all_trades if t[1] <= 0])[:5]
+    print("Топ-5 лузеров: " + "; ".join(f"{t[0]} ${t[1]:+.2f} ({t[2]})" for t in loss))
+    try:
+        from http_client import close_session as _cs
+        await _cs()
+    except Exception:
+        pass
 
 
 if __name__ == "__main__":

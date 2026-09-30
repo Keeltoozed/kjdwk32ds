@@ -39,10 +39,66 @@ class Analyzer:
         self.session = None
         self.pump_model = None
         self.raydium_model = None
+        self.rocket_model = None  # ROCKET-модель (EVM ракеты). None = нет файла, гейты как раньше
+        self.rocket_scores = {}  # address -> score 0..1 (для сайзинга в main)
         self.last_signal = ""  # Метка последнего решения: "VIP RAY-XGB 98%", "PULLBACK", "ROBINHOOD rule 72%"...
         self.last_score = 0.0  # Скор последнего решения (для радара)
         self.signals = {}  # Метки по mint: НЕ делит состояние между параллельными петлями (иначе FOMO:? в дашборде)
         self._dip_watch = {}  # OVERHEAT-пики для dip-buy: {address: (peak_price, ts)}
+
+    def _rocket(self):
+        """Ленивая загрузка ROCKET-модели + хот-релоад по mtime.
+        Ретрейн идёт раз в 6ч фоном — без релоада бот до рестарта сидел бы
+        на старой матрице. Fail-open: нет файла → None → поведение как раньше."""
+        try:
+            import os as _os
+            import config as _c
+            import rocket_model as _rm
+            path = getattr(_c, "ROCKET_MODEL_PATH", "rocket_model.json")
+            try:
+                mt = _os.path.getmtime(path) if path else -1
+            except Exception:
+                mt = -1
+            if self.rocket_model is None or mt != getattr(self, "_rocket_mtime", None):
+                self.rocket_model = _rm.load(path)
+                self._rocket_mtime = mt
+                if self.rocket_model is not None:
+                    print("🚀 ROCKET-модель загружена — ранжирую EVM-входы.")
+        except Exception:
+            self.rocket_model = None
+        return self.rocket_model
+
+    def _rkt_tag(self, address: str, pair_data: dict) -> str:
+        """Скор ракеты для метки сигнала. Fail-open: нет модели → ''."""
+        try:
+            import rocket_model as _rm
+            clf = self._rocket()
+            s = _rm.score(clf, pair_data)
+            if s is None:
+                return ""
+            self.rocket_scores[address] = float(s)
+            if len(self.rocket_scores) > 2000:
+                self.rocket_scores.clear()
+                self.rocket_scores[address] = float(s)
+            return f" RKT{s:.2f}"
+        except Exception:
+            return ""
+
+    def rocket_size_mult(self, address: str) -> float:
+        """Множитель сайза по скору ракеты: strong x1.5 / weak x0.5 / иначе x1.0.
+        Нет модели или скора → 1.0 (старое поведение)."""
+        try:
+            import config as _c
+            s = self.rocket_scores.get(address)
+            if s is None:
+                return 1.0
+            if s >= float(getattr(_c, "ROCKET_STRONG", 0.65)):
+                return float(getattr(_c, "ROCKET_SIZE_UP", 1.5))
+            if s <= float(getattr(_c, "ROCKET_WEAK", 0.35)):
+                return float(getattr(_c, "ROCKET_SIZE_DOWN", 0.5))
+        except Exception:
+            pass
+        return 1.0
 
     def _set_sig(self, key: str, text: str):
         """Метка решения для монеты. Per-mint словарь вместо общего поля:
@@ -685,6 +741,19 @@ class Analyzer:
             print(f"⚠️ Ошибка Jito-bundle: {e}")
             return False
 
+        # === GOPLUS (общедоступная модель риска, бесплатно/без ключа) ===
+        # Honeypot и sell tax видны только здесь: Mint Authority чистая,
+        # а продать потом нельзя или с -30%. Действует и на VIP — катастрофы
+        # UNPEG/8080/FIBONACCI заходили именно VIP-шипами.
+        try:
+            import goplus as _gp
+            _g_ok, _g_why = await _gp.check_solana(mint)
+            if not _g_ok:
+                print(f"🚫 [GOPLUS] {symbol} ({mint[:8]}): {_g_why} — блок входа.")
+                return False
+        except Exception as e:
+            print(f"⚠️ GoPlus err: {type(e).__name__} (fail-open, вход разрешён).")
+
         if is_vip or _lottery:
             print(f"🚀 [FAST TRACK] {symbol}: гейты пройдены, передаем на проверку холдеров (Снайперы/Бандлы).")
             self._set_sig(mint, "VIP" if is_vip else "LOTTERY")
@@ -806,7 +875,7 @@ class Analyzer:
                             and liq >= min_liq and links and m1 <= 3.0:
                         self._dip_watch.pop(address, None)
                         print(f"📉 [{tag}-DIPBUY] {symbol}: откат {_drop*100:.0f}% от пика при живом объёме — вход на коррекции.")
-                        self._set_sig(address, f"{tag} DIPBUY -{_drop*100:.0f}%")
+                        self._set_sig(address, f"{tag} DIPBUY -{_drop*100:.0f}%" + self._rkt_tag(address, pair_data))
                         return True
         except Exception:
             pass
@@ -823,7 +892,7 @@ class Analyzer:
             if not await self._evm_clone_ok(symbol, address, pair_data, chain, tag):
                 return False
             print(f"🔭 [{tag}-SCOUT] {symbol}: возраст {_age_min:.1f}м, m5 {m5:+.1f}% — ранний билет.")
-            self._set_sig(address, f"{tag} SCOUT {_age_min:.0f}m")
+            self._set_sig(address, f"{tag} SCOUT {_age_min:.0f}m" + self._rkt_tag(address, pair_data))
             return True
 
         if liq < min_liq:
@@ -845,7 +914,7 @@ class Analyzer:
                 if not await self._evm_clone_ok(symbol, address, pair_data, chain, tag):
                     return False
                 print(f"🎰 [{tag}-LOTTERY] {symbol}: вертикаль m5 {m5:+.1f}% — лотерейный билет.")
-                self._set_sig(address, f"{tag} LOTTERY {m5:+.0f}%")
+                self._set_sig(address, f"{tag} LOTTERY {m5:+.0f}%" + self._rkt_tag(address, pair_data))
                 return True
             return self._deny(address, "vert-no-pressure", f"🚫 [{tag}] {symbol}: вертикаль без давления/ликвы/ссылок — не лотерея.")
         _evm_min_m5 = getattr(config, "EVM_MIN_M5_PCT", 7.0)
@@ -916,7 +985,7 @@ class Analyzer:
         self.last_score = float(score)
         print(f"🔵 [{tag}] {symbol}: m5 {m5:+.1f}% b/s {b}/{s} liq ${liq:,.0f} → score {score:.0f}")
         if score >= 60.0:
-            self._set_sig(address, f"{tag} rule {score:.0f}%")
+            self._set_sig(address, f"{tag} rule {score:.0f}%" + self._rkt_tag(address, pair_data))
             return True
         return False
         
@@ -970,13 +1039,25 @@ class Analyzer:
         Раньше писалось '{}' - обучение было фикцией."""
         try:
             pc = pair_data.get("priceChange") or {}
-            txm5 = (pair_data.get("txns") or {}).get("m5", {}) or {}
-            txh = (pair_data.get("txns") or {}).get("h24", {}) or {}
+            txns = pair_data.get("txns") or {}
+            txm5 = txns.get("m5", {}) or {}
+            txh1 = txns.get("h1", {}) or {}
+            txh = txns.get("h24", {}) or {}
             liq = (pair_data.get("liquidity") or {}).get("usd", 0) or 0
             b5, s5 = txm5.get("buys", 0) or 0, txm5.get("sells", 0) or 0
+            b1, s1 = txh1.get("buys", 0) or 0, txh1.get("sells", 0) or 0
             bh, sh = txh.get("buys", 0) or 0, txh.get("sells", 0) or 0
             vm5 = (pair_data.get("volume") or {}).get("m5", 0) or 0
             vh = (pair_data.get("volume") or {}).get("h24", 0) or 0
+            info = pair_data.get("info") or {}
+            links_n = len(info.get("socials") or []) + len(info.get("websites") or [])
+            age_min = 999.0
+            try:
+                _created = pair_data.get("pairCreatedAt") or 0
+                if _created:
+                    age_min = max(0.0, (time.time() * 1000 - float(_created)) / 60000.0)
+            except Exception:
+                pass
             try:
                 from shadow_score import pair_shadow_score
                 sh_score = round(pair_shadow_score(pair_data), 3)
@@ -984,12 +1065,17 @@ class Analyzer:
                 sh_score = 0.0
             return {
                 "price_change_m5": pc.get("m5", 0) or 0,
+                "price_change_m1": pc.get("m1", 0) or 0,
+                "price_change_h1": pc.get("h1", 0) or 0,
                 "price_change_h24": pc.get("h24", 0) or 0,
                 "volume_m5": vm5, "volume_h24": vh,
-                "buys_m5": b5, "sells_m5": s5, "buys_h24": bh, "sells_h24": sh,
+                "buys_m5": b5, "sells_m5": s5,
+                "buys_h1": b1, "sells_h1": s1,
+                "buys_h24": bh, "sells_h24": sh,
                 "liquidity": liq, "fdv": pair_data.get("fdv", 0) or 0,
                 "buy_sell_ratio": (b5 / (s5 + 1)) if (b5 + s5) > 0 else (bh / (sh + 1)),
                 "vol_to_liq": (vm5 / (liq + 1)) if vm5 else (vh / (liq + 1)),
+                "age_min": age_min, "links_count": links_n,
                 "shadow_score": sh_score,
                 "dex": pair_data.get("dexId", ""),
             }

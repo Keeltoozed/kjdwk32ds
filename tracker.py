@@ -109,41 +109,40 @@ class PaperTracker:
                     continue
 
     def load_portfolio(self):
-        # 1. Пытаемся загрузить из Supabase (чтобы не терять данные при перезагрузке Render)
+        # Грузим ОБА слепка (облако + файл) и сливаем через merge_states:
+        # апсерты в Supabase идут каждые ~2с и могут лагать — stale-облако
+        # без свежих открытых позиций больше не затирает локальную правду.
+        cloud, local = {}, {}
         sb = self._supabase()
         if sb is not None:
             try:
                 res = sb.table("trades_pump").select("features").eq("mint", "PORTFOLIO_STATE_V3").execute()
                 if res.data and res.data[0].get("features"):
-                    data = json.loads(res.data[0]["features"])
-                    if data:
-                        print("✅ Портфель успешно загружен из Supabase!")
-                        self._parse_portfolio_data(data)
-                        # Синхронизируем с локальным файлом для дашборда
-                        try:
-                            with open(self.filename, 'w') as f:
-                                json.dump(data, f, indent=4)
-                        except Exception:
-                            pass
-                        return
-                    print("ℹ️ В Supabase пустой слепок портфеля, пробуем локальный файл...")
+                    cloud = json.loads(res.data[0]["features"]) or {}
             except Exception as e:
-                print(f"⚠️ Не удалось загрузить портфель из Supabase: {e}. Пробуем локальный файл...")
-            
-        # 2. Fallback: загружаем из локального файла
+                print(f"⚠️ Не удалось загрузить портфель из Supabase: {e}.")
         try:
             with open(self.filename, 'r') as f:
-                data = json.load(f)
-                if data:
-                    print("✅ Портфель загружен из локального файла!")
-                    self._parse_portfolio_data(data)
-                    return
+                local = json.load(f) or {}
         except (FileNotFoundError, json.JSONDecodeError):
             pass
         except Exception as e:
             print(f"⚠️ Не удалось прочитать локальный портфель: {e}")
-            
-        # 3. Данных нигде нет — стартуем пустыми, но НИЧЕГО НЕ ПИШЕМ,
+
+        data = self.merge_states(cloud, local)
+        if data:
+            _src = "облако+файл" if (cloud and local) else ("Supabase" if cloud else "локальный файл")
+            print(f"✅ Портфель загружен ({_src}): {len(data)} слотов.")
+            self._parse_portfolio_data(data)
+            # Синхронизируем merged-версию в файл для дашборда
+            try:
+                with open(self.filename, 'w') as f:
+                    json.dump(data, f, indent=4)
+            except Exception:
+                pass
+            return
+
+        # Данных нигде нет — стартуем пустыми, но НИЧЕГО НЕ ПИШЕМ,
         # чтобы случайно не затереть облачный слепок пустым словарём.
         print("🧹 Локальных и облачных данных нет — начинаем с чистого листа (в памяти, без записи).")
 
@@ -199,6 +198,49 @@ class PaperTracker:
             return (str(s) or "").strip().upper()
         except Exception:
             return ""
+
+    @staticmethod
+    def merge_states(cloud: dict, local: dict) -> dict:
+        """Слияние облачного и локального слепков портфеля (анти-«пропадание» сделок).
+        Проблема: сейвы идут каждые ~2с, апсерты в Supabase могут лагать/падать —
+        тогда дашборд (или бот после рестарта) видел stale-облако без свежих
+        открытых позиций. Правила: ключ из любого источника сохраняется;
+        open+closed → closed побеждает (терминальное событие); open+open →
+        свежее по price_updated_at; closed+closed → позднее по exit_time."""
+        cloud = cloud if isinstance(cloud, dict) else {}
+        local = local if isinstance(local, dict) else {}
+        if not cloud:
+            return dict(local)
+        if not local:
+            return dict(cloud)
+        out = dict(local)
+        for k, cv in cloud.items():
+            if k not in out:
+                out[k] = cv
+                continue
+            lv = out[k]
+            if not isinstance(cv, dict) or not isinstance(lv, dict):
+                continue
+            cs, ls = cv.get("status"), lv.get("status")
+            if cs != ls:
+                # Терминальное состояние (closed/quarantined) важнее висящего open
+                if cs != "open" and ls == "open":
+                    out[k] = cv
+                # иначе оставляем local (свежие правки трекинга идут в файл первым)
+                continue
+            if cs == "open":
+                try:
+                    if float(cv.get("price_updated_at", 0) or 0) > float(lv.get("price_updated_at", 0) or 0):
+                        out[k] = cv
+                except Exception:
+                    pass
+            else:
+                try:
+                    if float(cv.get("exit_time", 0) or 0) > float(lv.get("exit_time", 0) or 0):
+                        out[k] = cv
+                except Exception:
+                    pass
+        return out
 
     @staticmethod
     def _is_suspicious_pnl(pos) -> bool:

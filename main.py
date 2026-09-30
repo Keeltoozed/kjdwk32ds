@@ -412,6 +412,16 @@ async def scanner_loop(analyzer, tracker):
                                 # (шипастый объём = раздача дева, а не ракета). VIP едет базовым сайзом.
                                 if not _is_lot and not _is_vip:
                                     position_size *= analyzer.conviction_size_mult(pair_data)
+                                    # ROCKET-модель (публичный baseline + свои сделки):
+                                    # strong x1.5 / weak x0.5. Нет файла → 1.0.
+                                    try:
+                                        analyzer._rkt_tag(mint, pair_data)
+                                        _rm = analyzer.rocket_size_mult(mint)
+                                        if _rm != 1.0:
+                                            print(f"🚀 SCANNER {actual_symbol}: ROCKET-mult x{_rm}")
+                                        position_size *= _rm
+                                    except Exception:
+                                        pass
                                 position_size = min(position_size, 100.0)
 
                                 # VIP-ШИП = РАЗДАЧА (доказано метками: UNPEG/FIBONACCI/BackCat/Goblin).
@@ -642,6 +652,13 @@ async def rugpull_feeder_loop():
             rugpull_feeder.feed_rugs_and_retrain()
         except Exception as e:
             print(f"Ошибка в rugpull_feeder: {e}")
+        try:
+            # ROCKET-ретрейн там же (раз в 6ч, тихо, только если хватило данных).
+            # Новым сделкам нужны entry-фичи — их пишет pack_features при входе.
+            import train_rocket
+            await asyncio.to_thread(train_rocket.retrain_rocket_quiet)
+        except Exception as e:
+            print(f"Ошибка в rocket-retrain: {e}")
         await asyncio.sleep(6 * 60 * 60)  # Спим 6 часов
 
 def _evm_killed(tracker) -> bool:
@@ -917,6 +934,17 @@ async def _evm_chain_loop(analyzer, tracker, chain: str):
                                     size = min(size, 1.5)  # лотерейный/скаут билет, не позиция
                                 else:
                                     size *= analyzer.conviction_size_mult(td)  # коридор с импульсом едет x2
+                                    # DIPBUY-билеты mult не трогает: откаты с умеренным
+                                    # давлением (CSI 1.92) модель может недооценить, а это
+                                    # наш рабочий край (NFLOAT +400%, CSI +114%).
+                                    if "DIPBUY" not in _sig:
+                                        try:
+                                            _rm = analyzer.rocket_size_mult(addr)  # ROCKET: strong x1.5 / weak x0.5
+                                            if _rm != 1.0:
+                                                print(f"🚀 {tag} {sym}: ROCKET-mult x{_rm} (сигнал: {_sig})")
+                                            size *= _rm
+                                        except Exception:
+                                            pass
                                     size = min(size, 100.0)
                                 if chain == "ethereum":
                                     # L1-газ $2-6 за круг: микро-сайз $4-6 гарантирует минус.
@@ -926,6 +954,18 @@ async def _evm_chain_loop(analyzer, tracker, chain: str):
                                         print(f"🚫 {tag} {sym}: сайз ${size:.2f} < min ${_eth_min:.0f} (L1-газ) — скип.")
                                         await asyncio.sleep(1.0)
                                         continue
+                                # GOPLUS (общедоступная модель риска): honeypot/sell tax
+                                # убивают сделку на выходе (-30%). Только финалисты —
+                                # единицы запросов в час, квота free цела (кэш 1ч).
+                                try:
+                                    import goplus as _gp
+                                    _g_ok, _g_why = await _gp.check_token(addr, chain)
+                                    if not _g_ok:
+                                        print(f"🚫 [{tag}] {sym}: GoPlus {_g_why} — блок входа.")
+                                        await asyncio.sleep(1.0)
+                                        continue
+                                except Exception as _ge:
+                                    print(f"⚠️ GoPlus err: {type(_ge).__name__} (fail-open).")
                                 tracker.add_position(sym, addr, price, size, is_mature=True,
                                                  ml_features=analyzer.pack_features(td),
                                                  ml_confidence=float(getattr(analyzer, "last_score", 0.0)),
@@ -1087,9 +1127,11 @@ def chain_badge(chain: str, long: bool = False) -> str:
 
 
 def load_dashboard_portfolio():
-    """Портфель для дашборда: сначала Supabase (переживает рестарты Render),
-    потом локальный файл. Возвращает dict (возможно пустой)."""
-    # 1. Supabase — главный источник правды
+    """Портфель для дашборда: слияние Supabase + локальный файл.
+    Раньше облако было «главным источником правды»: если апсерт лагал,
+    открытые сделки пропадали с экрана (хотя бот их вёл). Теперь ни один
+    источник не может спрятать сделку — merge_states берёт объединение."""
+    cloud, local = {}, {}
     try:
         url = getattr(config, 'SUPABASE_URL', None)
         key = getattr(config, 'SUPABASE_KEY', None)
@@ -1098,20 +1140,21 @@ def load_dashboard_portfolio():
             sb = create_client(url, key)
             res = sb.table("trades_pump").select("features").eq("mint", "PORTFOLIO_STATE_V3").execute()
             if res.data and res.data[0].get("features"):
-                data = json.loads(res.data[0]["features"])
-                if data:
-                    return data
+                cloud = json.loads(res.data[0]["features"]) or {}
     except Exception as e:
         print(f"⚠️ Дашборд: не удалось прочитать портфель из Supabase: {e}")
-    # 2. Fallback: локальный файл
     try:
         with open(config.PAPER_PORTFOLIO_FILE, 'r') as f:
-            return json.load(f)
+            local = json.load(f) or {}
     except (FileNotFoundError, json.JSONDecodeError):
-        return {}
+        pass
     except Exception as e:
         print(f"⚠️ Дашборд: не удалось прочитать локальный портфель: {e}")
-        return {}
+    try:
+        from tracker import PaperTracker
+        return PaperTracker.merge_states(cloud, local)
+    except Exception:
+        return cloud or local
 
 # Отрисовка интерфейса
 st.title("🚀 PhantBot - Alpha Agent Dashboard")
@@ -1229,6 +1272,21 @@ with tab1:
                             return 0.0
                         closed_df['pnl_%'] = closed_df.apply(_cpct, axis=1)
 
+                        def _held(r):
+                            # Сколько сделка прожила: отвечает на «открылась и пропала».
+                            try:
+                                e = float(r.get('entry_time') or 0)
+                                x = float(r.get('exit_time') or 0)
+                                if e > 0 and x > e:
+                                    s = x - e
+                                    if s < 3600:
+                                        return "⏱ в рынке %dм" % int(s // 60)
+                                    return "⏱ в рынке %.1fч" % (s / 3600)
+                            except Exception:
+                                pass
+                            return ""
+                        closed_df['held'] = closed_df.apply(_held, axis=1)
+
                         for index, row in closed_df.iterrows():
                             p_usd = row['pnl_usd']
                             p_pct = row['pnl_%']
@@ -1239,7 +1297,7 @@ with tab1:
                             <div style='background-color: #1A1A1A; padding: 10px 15px; border-radius: 6px; border-right: 4px solid {c_color}; margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center;'>
                                 <div>
                                     <div style='color: #FFF; font-weight: bold;'>{row['symbol'] if str(row['symbol']).strip() else row.name[:6] + '...'} <span style='font-size: 0.7em; color: #888;'>{chain_badge(row.get('chain', 'solana'))}</span></div>
-                                    <div style='color: #666; font-size: 0.75em;'>{row.get('exit_reason', 'Closed')}</div>
+                                    <div style='color: #666; font-size: 0.75em;'>{row.get('exit_reason', 'Closed')} {row.get('held', '')}</div>
                                     <div style='color: #555; font-size: 0.7em;'>🔖 {row.get('source', '') if str(row.get('source', '')).strip() else '—'}</div>
                                 </div>
                                 <div style='text-align: right; color: {c_color}; font-weight: bold;'>

@@ -61,10 +61,11 @@ STAGNANT_HOLD_MIN = 25
 
 # Filtering
 AI_MODE = "degen" # "sniper" (строго 80-90% уверенности) или "degen"
-# Поднято до $30k: пулы $12-20k не держат выход даже на $500 (проскальзывание
-# 20-30%), сделки sendor -74% / QUINE -27% именно оттуда. Раннеры (SHCAT/OLEAF)
-# все глубже $29k — их не задевает.
-MIN_LIQUIDITY = 30000
+# GROWTH: $20k. Практика показала: все лузеры (Saw/TIPPED/APE/VRAX#2) сидели
+# в пулах ГЛУБЖЕ $30k — убил их вход на вершине, а не проскальзывание.
+# Смерти от проскальзывания (sendor -74%) были из $12-15k — их $20k режет.
+# При сайзах $4-10 позиция в $20k пуле = 0.03%, импакта нет.
+MIN_LIQUIDITY = 20000
 MAX_LIQUIDITY = 50000000
 # Внешние сигналы — главный источник -60..-75% (FOMO:VIP-RAY-XGB, COPY):
 # вход в чужой памп = выходная ликвидность. Выкл по умолчанию, вкл осознанно.
@@ -74,6 +75,21 @@ USE_COPYTRADE = False
 # (кейс VRAX: +5% → перезаход в клона с тем же именем → -32%).
 # Mint-гарды клонов не видят (другой адрес), тикер — видят.
 SYMBOL_REBUY_COOLDOWN_SEC = 4 * 3600  # 4ч, как mint-кулдаун в add_position
+# === ROCKET-МОДЕЛЬ (XGBoost поверх entry-снапшота, метка: пик >= +50%) ===
+# Fail-open: нет файла — гейты и сайзы как раньше. Модель только ранжирует:
+# strong-сайз x1.5, weak-сайз x0.5, середина без изменений.
+ROCKET_MODEL_PATH = "rocket_model.json"
+ROCKET_PEAK_PCT = 0.50  # пик/entry-1 от которого сделка считается ракетой
+ROCKET_MIN_TRAIN = 40  # минимум закрытых сделок с фичами для обучения (и ≥5 ракет)
+ROCKET_STRONG = 0.65  # score >= → strong
+ROCKET_WEAK = 0.35  # score <= → weak
+ROCKET_SIZE_UP = 1.5
+ROCKET_SIZE_DOWN = 0.5
+# === GOPLUS (общедоступная модель риска: honeypot/налоги; бесплатно, без ключа) ===
+GOPLUS_ENABLED = True
+GOPLUS_MAX_BUY_TAX = 0.10  # блок, если налог на покупку выше 10%
+GOPLUS_MAX_SELL_TAX = 0.10  # блок, если налог на продажу выше 10% (иначе -30% на выходе)
+GOPLUS_CACHE_SEC = 3600  # вердикты кэшируем на час (квота free бережётся)
 
 # AI Аналитика
 GEMINI_API_KEY = "AQ.Ab8RN6Ju77t6DI8AYru7TGxuPuG_0WOcqHZqq1OBsDAwHtoJxg" # Получить бесплатно на https://aistudio.google.com/
@@ -104,8 +120,8 @@ ROBINHOOD_DS_SLUG = "robinhood"  # slug DexScreener (НЕ 4663 - тот верн
 ROBINHOOD_GT_NETWORK = "robinhood"  # slug GeckoTerminal
 ROBINHOOD_RPC_URL = "https://rpc.mainnet.chain.robinhood.com"
 ROBINHOOD_EXPLORER = "https://robinhoodchain.blockscout.com"
-ROBINHOOD_MIN_LIQUIDITY = 30000  # было 12000: пыль $12-20k рагается в ноль за секунды
-# (sendor -74%, QUINE -27%). Реальные раннеры (SHCAT 85k/120k, OLEAF 44k) глубже $29k.
+ROBINHOOD_MIN_LIQUIDITY = 20000  # GROWTH: было 30k. Пыль $0-15k режется,
+# $20k+ с сайзом $6 (0.03% пула) едут. Conviction-x2 по-прежнему только от $30k.
 ROBINHOOD_SCAN_INTERVAL = 15  # Было 25: чаще опрос = раньше вход на ракету
 EVM_TRACK_INTERVAL = 8  # Было захардкожено 12с: цены с ноды идут 1 батчем без лимитов DS,
 # поэтому трек стопов/трейлингов можно крутить чаще — раньше режем раги, раньше фиксим пик
@@ -148,7 +164,7 @@ BSC_SCAN_INTERVAL = 15  # было 25
 ETHEREUM_ENABLED = True  # луп трекинга: ведём существующие (KLIK), иначе висят на $0.00
 ETHEREUM_ENTRIES_ENABLED = False  # НОВЫЕ входы в L1 выкл: газ $2-6 съедает скальп, ловим только дешёвые L2
 ETHEREUM_SCAN_INTERVAL = 15
-ETHEREUM_MIN_LIQUIDITY = 30000.0  # было 15k: тонкие пулы = проскальзывание и раги
+ETHEREUM_MIN_LIQUIDITY = 20000.0  # GROWTH: было 30k, синхронно с остальными EVM
 # === ПРЯМЫЕ ЦЕНЫ С НОД (мимо лимитов DS/GT для открытых позиций) ===
 # Трекинг идёт батчем eth_call getReserves с RPC ноды: 1 HTTP-батч на сеть за цикл.
 # DS/GT остаются только для дискавери (там кэши). V4-пулы (весь ROB-uniswap) —
