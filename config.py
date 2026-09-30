@@ -61,8 +61,15 @@ STAGNANT_HOLD_MIN = 25
 
 # Filtering
 AI_MODE = "degen" # "sniper" (строго 80-90% уверенности) или "degen"
-MIN_LIQUIDITY = 20000  # Снижено для скальпинга обычных монет
+# Поднято до $30k: пулы $12-20k не держат выход даже на $500 (проскальзывание
+# 20-30%), сделки sendor -74% / QUINE -27% именно оттуда. Раннеры (SHCAT/OLEAF)
+# все глубже $29k — их не задевает.
+MIN_LIQUIDITY = 30000
 MAX_LIQUIDITY = 50000000
+# Внешние сигналы — главный источник -60..-75% (FOMO:VIP-RAY-XGB, COPY):
+# вход в чужой памп = выходная ликвидность. Выкл по умолчанию, вкл осознанно.
+USE_FOMO_SIGNALS = False
+USE_COPYTRADE = False
 
 # AI Аналитика
 GEMINI_API_KEY = "AQ.Ab8RN6Ju77t6DI8AYru7TGxuPuG_0WOcqHZqq1OBsDAwHtoJxg" # Получить бесплатно на https://aistudio.google.com/
@@ -93,8 +100,8 @@ ROBINHOOD_DS_SLUG = "robinhood"  # slug DexScreener (НЕ 4663 - тот верн
 ROBINHOOD_GT_NETWORK = "robinhood"  # slug GeckoTerminal
 ROBINHOOD_RPC_URL = "https://rpc.mainnet.chain.robinhood.com"
 ROBINHOOD_EXPLORER = "https://robinhoodchain.blockscout.com"
-ROBINHOOD_MIN_LIQUIDITY = 12000  # было 8000: пыль с $8-12k рагается в ноль за секунды,
-# а все реальные раннеры (SHCAT 85k/120k, OLEAF 44k, WOULD 29k) глубже — их не задевает
+ROBINHOOD_MIN_LIQUIDITY = 30000  # было 12000: пыль $12-20k рагается в ноль за секунды
+# (sendor -74%, QUINE -27%). Реальные раннеры (SHCAT 85k/120k, OLEAF 44k) глубже $29k.
 ROBINHOOD_SCAN_INTERVAL = 15  # Было 25: чаще опрос = раньше вход на ракету
 EVM_TRACK_INTERVAL = 8  # Было захардкожено 12с: цены с ноды идут 1 батчем без лимитов DS,
 # поэтому трек стопов/трейлингов можно крутить чаще — раньше режем раги, раньше фиксим пик
@@ -137,7 +144,7 @@ BSC_SCAN_INTERVAL = 15  # было 25
 ETHEREUM_ENABLED = True  # луп трекинга: ведём существующие (KLIK), иначе висят на $0.00
 ETHEREUM_ENTRIES_ENABLED = False  # НОВЫЕ входы в L1 выкл: газ $2-6 съедает скальп, ловим только дешёвые L2
 ETHEREUM_SCAN_INTERVAL = 15
-ETHEREUM_MIN_LIQUIDITY = 15000.0  # пулы глубокие, как Base/BSC
+ETHEREUM_MIN_LIQUIDITY = 30000.0  # было 15k: тонкие пулы = проскальзывание и раги
 # === ПРЯМЫЕ ЦЕНЫ С НОД (мимо лимитов DS/GT для открытых позиций) ===
 # Трекинг идёт батчем eth_call getReserves с RPC ноды: 1 HTTP-батч на сеть за цикл.
 # DS/GT остаются только для дискавери (там кэши). V4-пулы (весь ROB-uniswap) —

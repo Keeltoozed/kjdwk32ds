@@ -15,6 +15,7 @@ class VirtualPosition(BaseModel):
     mint: str
     entry_price_usd: float
     amount_usd: float
+    original_amount_usd: float = 0.0  # изначальный сайз (не меняется partials) — база для pnl%
     entry_time: float
     status: str = "open"  # "open" or "closed"
     exit_price_usd: float = 0.0
@@ -87,7 +88,25 @@ class PaperTracker:
                     v["is_mature"] = False
                 if "is_moonbag" not in v:
                     v["is_moonbag"] = False
-                self.positions[k] = VirtualPosition(**v)
+                # Миграция старых сделок: восстанавливаем original_amount_usd.
+                # TP1 продаёт 20% (остаток 0.8), Moonbag 50% остатка (0.4 при обоих).
+                if not v.get("original_amount_usd"):
+                    _rem = float(v.get("amount_usd", 0) or 0)
+                    _tp1 = bool(v.get("tp1_done", False))
+                    _moon = bool(v.get("is_moonbag", False))
+                    if _tp1 and _moon:
+                        v["original_amount_usd"] = _rem / 0.4 if _rem else _rem
+                    elif _moon:
+                        v["original_amount_usd"] = _rem / 0.5 if _rem else _rem
+                    elif _tp1:
+                        v["original_amount_usd"] = _rem / 0.8 if _rem else _rem
+                    else:
+                        v["original_amount_usd"] = _rem
+                try:
+                    self.positions[k] = VirtualPosition(**v)
+                except Exception as e:
+                    print(f"⚠️ Битый слот {k[:12]} пропущен: {e}")
+                    continue
 
     def load_portfolio(self):
         # 1. Пытаемся загрузить из Supabase (чтобы не терять данные при перезагрузке Render)
@@ -173,9 +192,42 @@ class PaperTracker:
                 worst = pct
         return worst
 
+    @staticmethod
+    def _is_suspicious_pnl(pos) -> bool:
+        """Фантомный PnL (как NUTFLEX +$1.6M при +14%): stored pnl не бьётся
+        с ценовым. Такие сделки исключаем из капитала/тотала, чиним ремонтом."""
+        try:
+            entry = float(pos.entry_price_usd or 0)
+            exitp = float(pos.exit_price_usd or 0)
+            amt = float(getattr(pos, "original_amount_usd", 0) or pos.amount_usd or 0)
+            pnl = float(pos.pnl_usd or 0)
+            if not entry or not amt:
+                return abs(pnl) > 100
+            if amt <= 0 or amt > 1000:
+                return True
+            # ожидаемый порядок: |pnl| <= amt * (|exit/entry-1| + 0.05 комиссий) + $2
+            # + запас x3 на partials/округления. Превышение в разы = битые единицы цены.
+            price_move = abs(exitp / entry - 1) if entry > 0 and exitp >= 0 else 1.0
+            expected_max = amt * (price_move + 0.05) + 2.0
+            if expected_max <= 0:
+                return abs(pnl) > 50
+            return abs(pnl) > expected_max * 3 and abs(pnl) > 50
+        except Exception:
+            return False
+
     def get_total_capital(self) -> float:
-        # Считаем изначальный капитал + сумма PnL всех закрытых позиций
-        total_pnl = sum(pos.pnl_usd for pos in self.positions.values() if pos.status == "closed")
+        # Считаем изначальный капитал + сумма PnL всех закрытых позиций.
+        # Битые фантомы (pnl не бьётся с ценами) из капитала исключаем,
+        # иначе один +$1.6M ломает весь сайзинг.
+        total_pnl = 0.0
+        for pos in self.positions.values():
+            if pos.status != "closed":
+                continue
+            if self._is_suspicious_pnl(pos):
+                print(f"⚠️ Suspicious PnL исключён из капитала: {pos.symbol} ${pos.pnl_usd:.2f} "
+                      f"(entry {pos.entry_price_usd}, exit {pos.exit_price_usd})")
+                continue
+            total_pnl += pos.pnl_usd
         real_capital = config.INITIAL_BALANCE_USD + total_pnl
         
         if real_capital < 5.0:
@@ -185,6 +237,19 @@ class PaperTracker:
         return real_capital
 
     def add_position(self, symbol, mint, entry_price, amount_usd=5.0, ml_features=None, ml_confidence=0.0, is_mature=False, source="", chain="solana"):
+        # Валидация входа: мусорный entry ~0 давал фантомы +586М% и $1.6M.
+        try:
+            entry_price = float(entry_price or 0)
+            amount_usd = float(amount_usd or 0)
+        except Exception:
+            print(f"🚫 Отказ: битая цена/сайз {symbol} {mint[:8]}.")
+            return
+        if not (entry_price > 0) or entry_price > 1e6:
+            print(f"🚫 Отказ: entry_price ${entry_price} вне диапазона для {symbol}.")
+            return
+        if not (0.5 <= amount_usd <= 100.0):
+            print(f"🚫 Отказ: сайз ${amount_usd:.2f} вне [0.5, 100] для {symbol}.")
+            return
         # БЛОКИРОВКА ПОВТОРНОГО ВХОДА С УМНЫМ КУЛДАУНОМ
         if mint in self.positions:
             pos = self.positions[mint]
@@ -212,6 +277,7 @@ class PaperTracker:
             mint=mint,
             entry_price_usd=entry_price,
             amount_usd=amount_usd,
+            original_amount_usd=amount_usd,
             entry_time=time.time(),
             max_price_usd=entry_price,
             min_price_usd=entry_price,
@@ -239,23 +305,37 @@ class PaperTracker:
         """Частичная фиксация позиции (Moonbags)"""
         pos = self.positions.get(mint)
         if pos and pos.status == "open":
+            try:
+                exit_price = float(exit_price or 0)
+                sell_pct = float(sell_pct or 0)
+            except Exception:
+                return
+            if not (exit_price > 0) or not (0 < sell_pct <= 1.0):
+                print(f"🚫 Partial отказ: битая цена/доля {pos.symbol}.")
+                return
+            if not getattr(pos, "original_amount_usd", 0):
+                pos.original_amount_usd = pos.amount_usd
             amount_sold_usd = pos.amount_usd * sell_pct
             real_entry_price = pos.entry_price_usd * 1.01
             real_exit_price = exit_price * 0.99
 
             price_diff_pct = (real_exit_price - real_entry_price) / real_entry_price if real_entry_price > 0 else 0
+            # Защита от фантома единиц цены: +5000% на partial = битые данные, не фиксируем
+            if abs(price_diff_pct) > 50:
+                print(f"🚫 Partial отказ: фантом {price_diff_pct*100:.0f}% {pos.symbol} (entry {pos.entry_price_usd}, exit {exit_price}).")
+                return
             _f_small, _f_big, _f_emg, _f_cap = self._fees_for(getattr(pos, "chain", "solana"))
             priority_fee_usd = _f_small if pos.amount_usd < 10.0 else _f_big
             priority_fee_usd = min(priority_fee_usd, amount_sold_usd * _f_cap)
-            
+
             # PnL от проданной части
             realized_pnl_usd = (amount_sold_usd * price_diff_pct) - priority_fee_usd
-            
+
             print(f"🚀 [Moonbag] Частичная фиксация {sell_pct*100}% {pos.symbol}: Профит +${realized_pnl_usd:.2f} ({reason})")
-            
+
             # Сохраняем этот профит в общую копилку монеты!
             pos.pnl_usd += realized_pnl_usd
-            
+
             # Уменьшаем позицию на проданный процент
             pos.amount_usd -= amount_sold_usd
             pos.is_moonbag = True
@@ -264,15 +344,35 @@ class PaperTracker:
     def close_position(self, mint: str, exit_price: float, reason: str):
         pos = self.positions.get(mint)
         if pos and pos.status == "open":
+            try:
+                exit_price = float(exit_price or 0)
+            except Exception:
+                exit_price = 0.0
+            # Stale-выход по 0: закрываем по entry (0% - комиссии), а не -100% фантомом.
+            # Иначе одна слепая сделка даёт -100% и тянет статистику в ад.
+            if not (exit_price > 0):
+                exit_price = pos.current_price_usd or pos.max_price_usd or pos.entry_price_usd
+                if not (exit_price > 0):
+                    exit_price = pos.entry_price_usd
+                reason = f"{reason} [stale→entry]"
+            # Фантом единиц цены: exit в разы от entry+пика = битые данные, не пишем миллион.
+            try:
+                _ref = max(pos.entry_price_usd, pos.max_price_usd or 0) or pos.entry_price_usd
+                if _ref > 0 and exit_price / _ref > 50:
+                    print(f"🚫 Close отказ-фантом: exit {exit_price} >> entry/peak {_ref} ({pos.symbol}). Закрываю по пику.")
+                    exit_price = pos.max_price_usd or pos.entry_price_usd
+                    reason = f"{reason} [bad-price→peak]"
+            except Exception:
+                pass
             pos.status = "closed"
             pos.exit_price_usd = exit_price
             pos.exit_reason = reason
             pos.exit_time = time.time()
-            
+
             # РЕАЛЬНЫЙ РАСЧЕТ PnL С УЧЕТОМ КОМИССИЙ (1% вход, 1% выход + 0.003 SOL сеть)
             real_entry_price = pos.entry_price_usd * 1.01
             real_exit_price = exit_price * 0.99
-            
+
             # Считаем изменение цены актива (процент)
             price_diff_pct = (real_exit_price - real_entry_price) / real_entry_price if real_entry_price > 0 else 0
             
@@ -294,11 +394,24 @@ class PaperTracker:
             # Добавляем профит от закрытия финального остатка к тому, что уже зафиксировано
             final_pnl = (pos.amount_usd * price_diff_pct) - priority_fee_usd
             pos.pnl_usd += final_pnl
-            
-            # Реальный итоговый процент инвестиции.
-            # Moonbag продаёт 50%: остаток = 0.5 × изначальный → изначальный = остаток / 0.5.
-            # (Было /0.4 от старых 60% - занижало процент на 20%.)
-            original_amount = (pos.amount_usd / 0.5) if pos.is_moonbag else pos.amount_usd
+
+            # Реальный итоговый процент инвестиции — от ИЗНАЧАЛЬНОГО сайза.
+            # Баг: остаток/0.5 занижал базу при связке TP1 20% + Moonbag 50%
+            # (остаток 0.4×orig → делили на 0.5 = 0.8×orig, +% завышался на 25%).
+            original_amount = float(getattr(pos, "original_amount_usd", 0) or 0)
+            if not original_amount:
+                _rem = pos.amount_usd
+                _tp1 = bool(getattr(pos, "tp1_done", False))
+                _moon = bool(getattr(pos, "is_moonbag", False))
+                if _tp1 and _moon:
+                    original_amount = _rem / 0.4 if _rem else _rem
+                elif _moon:
+                    original_amount = _rem / 0.5 if _rem else _rem
+                elif _tp1:
+                    original_amount = _rem / 0.8 if _rem else _rem
+                else:
+                    original_amount = _rem
+                pos.original_amount_usd = original_amount
             pnl_pct = pos.pnl_usd / original_amount if original_amount > 0 else 0
             
             self.save_portfolio()
@@ -343,6 +456,8 @@ class PaperTracker:
         
         for pos in self.positions.values():
             if pos.status == "closed":
+                if self._is_suspicious_pnl(pos):
+                    continue
                 pos_date = datetime.datetime.fromtimestamp(pos.entry_time).date()
                 if pos_date == today:
                     daily_pnl += pos.pnl_usd

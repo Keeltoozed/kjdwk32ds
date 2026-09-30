@@ -97,6 +97,9 @@ async def fetch_dexscreener_trending():
 
 async def fomo_loop(analyzer: Analyzer, tracker):
     """Цикл, который постоянно сканирует тренды (FOMO) и топ-токены"""
+    if not getattr(config, "USE_FOMO_SIGNALS", False):
+        print("🔥 FOMO Scanner ВЫКЛ (USE_FOMO_SIGNALS=False): тренды только в радар, без покупок.")
+        return
     print("🔥 FOMO Scanner запущен: отслеживаем ракеты и тренды DexScreener!")
     
     # Чтобы не спамить API

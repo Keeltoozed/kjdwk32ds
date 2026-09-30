@@ -34,6 +34,12 @@ def push_signal(chain: str, addr: str, why: str = ""):
     """Положить сигнал в очередь FOMO-петли. Формат sol:<mint> | evm:<chain>:<addr>."""
     if not addr:
         return
+    try:
+        import config as _c
+        if not getattr(_c, "USE_FOMO_SIGNALS", False):
+            return
+    except Exception:
+        pass
     chain = (chain or "").lower()
     now = time.time()
     k = (chain, addr.lower())

@@ -28,11 +28,12 @@ def _store(key: str, val: list):
     return val
 
 # Поддерживаемые EVM-сети: slug DexScreener -> (мин. ликва, метка)
+# Минимум $30k везде: пулы $12-20k не держат выход (sendor -74% за 18с).
 CHAINS = {
-    "robinhood": {"min_liq": float(getattr(config, "ROBINHOOD_MIN_LIQUIDITY", 8000)), "tag": "ROBINHOOD"},
-    "base": {"min_liq": 15000.0, "tag": "BASE"},
-    "bsc": {"min_liq": 15000.0, "tag": "BSC"},
-    "ethereum": {"min_liq": float(getattr(config, "ETHEREUM_MIN_LIQUIDITY", 15000.0)), "tag": "ETHEREUM"},
+    "robinhood": {"min_liq": float(getattr(config, "ROBINHOOD_MIN_LIQUIDITY", 30000)), "tag": "ROBINHOOD"},
+    "base": {"min_liq": 30000.0, "tag": "BASE"},
+    "bsc": {"min_liq": 30000.0, "tag": "BSC"},
+    "ethereum": {"min_liq": float(getattr(config, "ETHEREUM_MIN_LIQUIDITY", 30000.0)), "tag": "ETHEREUM"},
 }
 
 

@@ -79,13 +79,28 @@ async def position_manager_loop(analyzer, tracker):
                     continue
                 position.first_zero_ts = 0.0
                     
+                # Фантом цены (смена источника DS->node, пыль с liq 0): один тик
+                # +5000% — не пик, а битые данные. Пик не обновляем, трек не ломаем.
+                if position.entry_price_usd > 0 and current_price / position.entry_price_usd > 50:
+                    print(f"⚠️ Phantom price {mint[:8]}: x{current_price/position.entry_price_usd:.0f} за тик — игнор.")
+                    continue
                 if current_price > position.max_price_usd:
                     position.max_price_usd = current_price
                     position.peak_time = time.time()
-                    
+
                 pnl_pct = (current_price - position.entry_price_usd) / position.entry_price_usd
                 max_pnl_pct = (position.max_price_usd - position.entry_price_usd) / position.entry_price_usd
                 minutes_held = (time.time() - position.entry_time) / 60
+                # Infant Dump (как в EVM): слив в первые минуты = дев, не шум.
+                # Раги идут -40..-96%, шум импульса -15..-18% переживаем.
+                try:
+                    _inf_w = float(getattr(config, "INFANT_WINDOW_MIN", 2))
+                    _inf_p = float(getattr(config, "INFANT_DUMP_PCT", -0.25))
+                    if minutes_held < _inf_w and pnl_pct <= _inf_p:
+                        tracker.close_position(mint, current_price, f"Infant Dump ({pnl_pct*100:.0f}%)")
+                        continue
+                except Exception:
+                    pass
                 
                 peak_ts = getattr(position, "peak_time", position.entry_time)
                 minutes_since_peak = (time.time() - peak_ts) / 60 if peak_ts else 0
@@ -442,6 +457,9 @@ from copytrader import CopyTrader
 import os
 
 async def fomo_signal_loop(analyzer, tracker):
+    if not getattr(config, "USE_FOMO_SIGNALS", False):
+        print("📲 FOMO-сигналы ВЫКЛ (USE_FOMO_SIGNALS=False): внешние пампы не покупаем.")
+        return
     print("📲 Запуск обработчика сигналов FOMO...")
     while True:
         try:
@@ -695,6 +713,15 @@ async def _evm_track_once(tracker, chain: str, tag: str, emoji: str):
                     tracker.close_position(mint, pos.current_price_usd or pos.entry_price_usd,
                                            f"{tag} Stale Price (5 мин без цены)")
                     continue
+                # Фантом node-direct (неверные decimals/пул): x50 за тик = битые
+                # данные, не пик. Пик не двигаем, cur откатываем на прошлый.
+                try:
+                    if pos.entry_price_usd > 0 and cur / pos.entry_price_usd > 50:
+                        print(f"⚠️ {tag} phantom {mint[:10]}: x{cur/pos.entry_price_usd:.0f} — игнор тика.")
+                        pos.price_checked_at = _t.time()
+                        continue
+                except Exception:
+                    pass
                 if cur > pos.max_price_usd:
                     pos.max_price_usd = cur
                     pos.peak_time = _t.time()
@@ -1148,7 +1175,28 @@ with tab1:
             with col2:
                 st.subheader("📓 История сделок")
                 if not closed_df.empty:
-                    total_pnl = closed_df['pnl_usd'].sum()
+                    # Фильтр фантомов (NUTFLEX +$1.6M при +14%): stored pnl обязан
+                    # биться с ценовым движением, иначе это битые единицы цены.
+                    def _is_bad(r):
+                        try:
+                            e = float(r.get('entry_price_usd') or 0)
+                            x = float(r.get('exit_price_usd') or 0)
+                            p = float(r.get('pnl_usd') or 0)
+                            a = float(r.get('original_amount_usd') or r.get('amount_usd') or 0)
+                            if not e or a <= 0 or a > 1000:
+                                return abs(p) > 100
+                            move = abs(x / e - 1) if e > 0 and x >= 0 else 1.0
+                            exp_max = a * (move + 0.05) + 2.0
+                            return abs(p) > exp_max * 3 and abs(p) > 50
+                        except Exception:
+                            return False
+                    _bad_mask = closed_df.apply(_is_bad, axis=1)
+                    _bad_n = int(_bad_mask.sum())
+                    _clean = closed_df[~_bad_mask]
+                    total_pnl = _clean['pnl_usd'].sum() if not _clean.empty else 0.0
+                    if _bad_n:
+                        st.warning(f"⚠️ { _bad_n} бит. сделок исключено из тотала (фантом единиц цены, см. логи Suspicious).")
+                    closed_df = _clean
                     st.markdown(f"""
                     <div style='background-color: #2D2D2D; padding: 20px; border-radius: 10px; text-align: center; margin-bottom: 15px;'>
                         <div style='color: #888; font-size: 1.1em; text-transform: uppercase;'>Общий PnL</div>
@@ -1158,43 +1206,47 @@ with tab1:
                     </div>
                     """, unsafe_allow_html=True)
                     
-                    closed_df = closed_df.tail(15).iloc[::-1] # Показываем 15 последних в обратном порядке
-                    # % от цен выхода/входа (не от искажённого partials amount), кап ±9999%
-                    def _cpct(r):
-                        try:
-                            e = float(r.get('entry_price_usd') or 0)
-                            x = float(r.get('exit_price_usd') or 0)
-                            if e > 0 and x >= 0:
-                                return max(-99.99, min(9999.0, (x / e - 1) * 100))
-                        except Exception:
-                            pass
-                        try:
-                            a = float(r.get('amount_usd') or 0)
-                            if a >= 0.01:
-                                return max(-99.99, min(9999.0, float(r.get('pnl_usd') or 0) / a * 100))
-                        except Exception:
-                            pass
-                        return 0.0
-                    closed_df['pnl_%'] = closed_df.apply(_cpct, axis=1)
-                    
-                    for index, row in closed_df.iterrows():
-                        p_usd = row['pnl_usd']
-                        p_pct = row['pnl_%']
-                        c_color = "#00C851" if p_usd >= 0 else "#FF4444"
-                        c_sign = "+" if p_usd > 0 else ""
-                        
-                        st.markdown(f"""
-                        <div style='background-color: #1A1A1A; padding: 10px 15px; border-radius: 6px; border-right: 4px solid {c_color}; margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center;'>
-                            <div>
-                                <div style='color: #FFF; font-weight: bold;'>{row['symbol'] if str(row['symbol']).strip() else row.name[:6] + '...'} <span style='font-size: 0.7em; color: #888;'>{chain_badge(row.get('chain', 'solana'))}</span></div>
-                                <div style='color: #666; font-size: 0.75em;'>{row.get('exit_reason', 'Closed')}</div>
-                                <div style='color: #555; font-size: 0.7em;'>🔖 {row.get('source', '') if str(row.get('source', '')).strip() else '—'}</div>
+                    if closed_df.empty:
+                        st.info("История пуста (все сделки отфильтрованы как битые).")
+                    else:
+                        closed_df = closed_df.tail(15).iloc[::-1] # Показываем 15 последних в обратном порядке
+                        # % честный: pnl/original_amount (учитывает partials+комиссии),
+                        # фолбэк — от цен. Кап ±9999%.
+                        def _cpct(r):
+                            try:
+                                a0 = float(r.get('original_amount_usd') or r.get('amount_usd') or 0)
+                                if a0 >= 0.01:
+                                    return max(-99.99, min(9999.0, float(r.get('pnl_usd') or 0) / a0 * 100))
+                            except Exception:
+                                pass
+                            try:
+                                e = float(r.get('entry_price_usd') or 0)
+                                x = float(r.get('exit_price_usd') or 0)
+                                if e > 0 and x >= 0:
+                                    return max(-99.99, min(9999.0, (x / e - 1) * 100))
+                            except Exception:
+                                pass
+                            return 0.0
+                        closed_df['pnl_%'] = closed_df.apply(_cpct, axis=1)
+
+                        for index, row in closed_df.iterrows():
+                            p_usd = row['pnl_usd']
+                            p_pct = row['pnl_%']
+                            c_color = "#00C851" if p_usd >= 0 else "#FF4444"
+                            c_sign = "+" if p_usd > 0 else ""
+
+                            st.markdown(f"""
+                            <div style='background-color: #1A1A1A; padding: 10px 15px; border-radius: 6px; border-right: 4px solid {c_color}; margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center;'>
+                                <div>
+                                    <div style='color: #FFF; font-weight: bold;'>{row['symbol'] if str(row['symbol']).strip() else row.name[:6] + '...'} <span style='font-size: 0.7em; color: #888;'>{chain_badge(row.get('chain', 'solana'))}</span></div>
+                                    <div style='color: #666; font-size: 0.75em;'>{row.get('exit_reason', 'Closed')}</div>
+                                    <div style='color: #555; font-size: 0.7em;'>🔖 {row.get('source', '') if str(row.get('source', '')).strip() else '—'}</div>
+                                </div>
+                                <div style='text-align: right; color: {c_color}; font-weight: bold;'>
+                                    {c_sign}${p_usd:.2f} <br> <span style='font-size: 0.8em;'>({c_sign}{p_pct:.2f}%)</span>
+                                </div>
                             </div>
-                            <div style='text-align: right; color: {c_color}; font-weight: bold;'>
-                                {c_sign}${p_usd:.2f} <br> <span style='font-size: 0.8em;'>({c_sign}{p_pct:.2f}%)</span>
-                            </div>
-                        </div>
-                        """, unsafe_allow_html=True)
+                            """, unsafe_allow_html=True)
                 else:
                     st.info("История пуста.")
         else:

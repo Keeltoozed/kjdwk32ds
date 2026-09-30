@@ -163,6 +163,13 @@ class CopyTrader:
                     print(f"✅ Успешно скопировали сделку {trader_name} на {position_size}$!")
 
     async def listen(self):
+        try:
+            import config as _c
+            if not getattr(_c, "USE_COPYTRADE", False):
+                print("👥 Копитрейдер ВЫКЛ (USE_COPYTRADE=False): чужие пампы не покупаем.")
+                return
+        except Exception:
+            pass
         # Список бесплатных публичных WSS
         wss_endpoints = [
             self.wss_url, # Helius
