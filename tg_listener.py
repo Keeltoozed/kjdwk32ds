@@ -14,12 +14,17 @@ EVM_ADDR_REGEX = r"\b0x[a-fA-F0-9]{40}\b"
 
 
 def _extract_signals(text: str) -> list:
-    out = []
-    for m in set(re.findall(SOLANA_MINT_REGEX, text or "")):
-        out.append(f"sol:{m}")
-    for a in set(re.findall(EVM_ADDR_REGEX, text or "")):
-        out.append(f"evm:{a}")
-    return out
+    # Tier-1 плоские regex + tier-2 деобфускатор (как в tg_preview).
+    try:
+        import addr_decode as _ad
+        return _ad.extract_signals(text)
+    except Exception:
+        out = []
+        for m in set(re.findall(SOLANA_MINT_REGEX, text or "")):
+            out.append(f"sol:{m}")
+        for a in set(re.findall(EVM_ADDR_REGEX, text or "")):
+            out.append(f"evm:{a}")
+        return out
 
 
 async def tg_listener_loop(*_args, **_kwargs):

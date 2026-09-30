@@ -134,6 +134,25 @@ async def get_bulk_prices(addresses: list, chain: str = SLUG) -> dict:
     return out
 
 
+async def resolve_ds_pair(pair: str, chain: str) -> str:
+    """DexScreener pair-URL → адрес ТОКЕНА (baseToken). Кнопки TG-каналов
+    ссылаются на страницы ПАР, а не токенов. '' при любой беде (fail-skip)."""
+    if not pair or not chain:
+        return ""
+    try:
+        status, data = await fetch_json(
+            f"{DS}/latest/dex/pairs/{chain}/{pair}", timeout=10, retries=1)
+        if status != 200 or not isinstance(data, dict):
+            return ""
+        _pair = data.get("pair") or {}
+        if not _pair and isinstance(data.get("pairs"), list) and data["pairs"]:
+            _pair = data["pairs"][0]
+        addr = ((_pair.get("baseToken") or {}).get("address")) or ""
+        return addr if len(addr) > 10 else ""
+    except Exception:
+        return ""
+
+
 async def get_trending_pools_gt(chain: str = SLUG) -> list:
     """Запасной дискавери: трендовые пулы GeckoTerminal сети chain.
     Ловит лидеров по объему (ARCHIBROWN/Agrippa-типа) раньше, чем бусты.

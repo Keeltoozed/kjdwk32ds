@@ -100,6 +100,33 @@ class Analyzer:
             pass
         return 1.0
 
+    def rocket_veto(self, address: str, pair_data: dict, sig: str):
+        """Вето слабых дженерик-входов: RKT < порога → причина-строка, иначе None.
+        Факт из прода: MERRGER/MTA/LUXR зашли по rule 77-90% со скором
+        0.04-0.25 и все умерли стопом -30%. Модель видела distribution заранее.
+        Exempt (bounded билеты / чужие стратегии): DIPBUY, SCOUT, LOTTERY,
+        VIP ($2 кэп), COPY, GROWTH. Нет модели/скора → None (fail-open)."""
+        try:
+            import config as _c
+            if not getattr(_c, "ROCKET_VETO_ENABLED", True):
+                return None
+            s = (sig or "").upper()
+            for _t in ("DIPBUY", "SCOUT", "LOTTERY", "VIP", "COPY", "GROWTH"):
+                if _t in s:
+                    return None
+            if not pair_data:
+                return None  # нечем счислить — fail-open (пустой вектор всегда скор 0!)
+            self._rkt_tag(address, pair_data or {})
+            sc = self.rocket_scores.get(address)
+            if sc is None:
+                return None
+            if sc < float(getattr(_c, "ROCKET_VETO_MIN", 0.30)):
+                return (f"RKT-вето {sc:.2f}: слабая структура под импульсом "
+                        f"(rule-high, distribution) — не платим за чужой выход")
+        except Exception:
+            pass
+        return None
+
     def _set_sig(self, key: str, text: str):
         """Метка решения для монеты. Per-mint словарь вместо общего поля:
         scanner/fomo/robinhood гоняют analyze параллельно на одном Analyzer."""
@@ -114,6 +141,24 @@ class Analyzer:
         print(msg)
         self._set_sig(key, f"SKIP {short}")
         return False
+
+    @staticmethod
+    def is_churn(b5, s5, m5, n_min: int = 40) -> bool:
+        """CHURN/WASH (идея ChainLens: trade-pattern анализ): высокий оборот
+        без перевеса покупателей — накрутка/раздача, а не органический FOMO.
+        Живой импульс давится покупателями; топтание с оборотом съедается
+        комиссиями и стопами. Две зоны: слабый импульс без перевеса (<1.2)
+        и вертикаль без перевеса (<1.15 — раздача под свечу)."""
+        try:
+            b5 = float(b5 or 0)
+            s5 = float(s5 or 0)
+            m5 = float(m5 or 0)
+        except Exception:
+            return False
+        if (b5 + s5) < n_min or s5 <= 0:
+            return False
+        r = b5 / s5
+        return (r < 1.2 and abs(m5) < 15.0) or (r < 1.15 and abs(m5) < 60.0)
 
     def get_signal(self, key: str) -> str:
         # Только своя метка монеты. Чужую (last_signal) не подставляем - давала FOMO:? и чужие метки
@@ -551,6 +596,11 @@ class Analyzer:
                 if _b5 < _s5 * mult:
                     print(f"🚫 [VELOCITY] {mint}: buy/sell m5 {_b5}/{_s5} < {mult}x — {'(лотерея, ослаблено)' if _lottery else 'нет буфера покупателей'}")
                     return False
+            # CHURN/WASH: высокий оборот без перевеса — накрутка, не органика.
+            # Лотерею не трогаем (билет $1.5, риск bounded).
+            if not _lottery and self.is_churn(_b5, _s5, _m5):
+                print(f"🚫 [CHURN] {mint}: {_b5 + _s5} сделок, b/s {_b5 / _s5:.2f}, m5 {_m5:+.1f}% — накрутка, не FOMO.")
+                return False
             _socials = (pair_data.get("info") or {}).get("socials") or []
             _created = pair_data.get("pairCreatedAt") or 0
             if _created:
@@ -929,6 +979,11 @@ class Analyzer:
             except Exception:
                 pass
             return self._deny(address, f"top m5 {m5:+.0f}% h24 {h24:+.0f}%", f"🚫 [{tag}-OVERHEAT] {symbol}: m5 {m5:+.1f}% h24 {h24:+.0f}% — поздно, ждём откат для DIPBUY.")
+        # CHURN/WASH: в коридоре m5, но без перевеса при обороте — накрутка.
+        # LOTTERY/SCOUT/DIPBUY идут своими ветками раньше — их не трогаем.
+        if self.is_churn(b5, s5, m5):
+            return self._deny(address, f"churn {b5}/{s5} m5 {m5:+.1f}%",
+                              f"🚫 [{tag}-CHURN] {symbol}: {b5 + s5} сделок без перевеса (b/s {b5 / s5:.2f}) — накрутка, не FOMO.")
         if m1 > 5.0:
             return self._deny(address, f"m1-green {m1:+.1f}%", f"🚫 [{tag}] {symbol}: m1 {m1:+.1f}% — вершина в моменте, ждём.")
         if m1 < -8.0 or h1 > 300.0:

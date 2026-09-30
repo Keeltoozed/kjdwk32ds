@@ -17,14 +17,26 @@ def fomo_webhook():
 
     print(f"\n[WEBHOOK] Получено уведомление с телефона: {text}")
 
-    # Ищем адрес контракта Solana
-    match = re.search(r'\b[1-9A-HJ-NP-Za-km-z]{32,44}\b', text)
-    if match:
-        mint = match.group(0)
-        print(f"🔥 Найден смарт-контракт: {mint}")
-        
+    # Ищем адреса: сначала плоские, потом скрытые (деобфускатор:
+    # zerox[four], скобки, дефисы, пробелы, арифметика).
+    found = []
+    try:
+        import addr_decode as _ad
+        for sig in _ad.extract_signals(text):
+            kind, addr = sig.split(":", 1)
+            found.append(addr)  # bare-формат, как раньше (loop сам разберёт sol/evm)
+    except Exception:
+        pass
+    if not found:
+        # Fallback: старый плоский regex Solana
+        match = re.search(r'\b[1-9A-HJ-NP-Za-km-z]{32,44}\b', text)
+        if match:
+            found = [match.group(0)]
+    if found:
+        print(f"🔥 Найдены контракты: {found}")
         with open('fomo_signals.txt', 'a') as f:
-            f.write(mint + '\n')
+            for mint in dict.fromkeys(found):
+                f.write(mint + '\n')
         print(f"✅ Сигнал успешно передан основному боту!")
         return "OK", 200
     else:

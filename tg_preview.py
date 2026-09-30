@@ -19,20 +19,72 @@ from http_client import fetch_json  # noqa: F401 (сессия через get_se
 SOLANA_MINT_REGEX = r"\b[1-9A-HJ-NP-Za-km-z]{32,44}\b"
 EVM_ADDR_REGEX = r"\b0x[a-fA-F0-9]{40}\b"
 
+# href-паттерны кнопок-ссылок (EVM-каналы прячут адреса в URL, не в тексте):
+# poocoin/rh-scan = токен сразу; dexscreener/solscan-token/pump.coin = см. ниже.
+_HREF_TOKEN = [
+    (re.compile(r"poocoin\.app/tokens/(0x[a-fA-F0-9]{40})", re.I), "evm_token"),
+    (re.compile(r"rh-scan\.com/address/(0x[a-fA-F0-9]{40})", re.I), "evm_token"),
+    (re.compile(r"solscan\.io/token/([1-9A-HJ-NP-Za-km-z]{32,44})"), "sol"),
+    (re.compile(r"pump\.fun/coin/([1-9A-HJ-NP-Za-km-z]{32,44})"), "sol"),
+]
+# dexscreener/URL = PAIR-адрес (не токен!): dexscreener.com/<chain>/<pair>
+_HREF_PAIR = re.compile(r"dexscreener\.com/([a-z0-9-]+)/((?:0x[a-fA-F0-9]{40})|(?:[1-9A-HJ-NP-Za-km-z]{32,44}))", re.I)
+# t.me-боты со стартовым параметром: ?start=<junk>_<MINT>
+_HREF_BOTMINT = re.compile(r"t(?:elegram)?\.me/[a-zA-Z0-9_]+bot\?start=[^\"'& ]*?_([1-9A-HJ-NP-Za-km-z]{32,44})")
+
 _seen = set()  # (channel, post_id)
 
 
 def _extract_signals(text: str) -> list:
-    out = []
-    for m in set(re.findall(SOLANA_MINT_REGEX, text or "")):
-        out.append(f"sol:{m}")
-    for a in set(re.findall(EVM_ADDR_REGEX, text or "")):
-        out.append(f"evm:{a}")
-    return out
+    # Tier-1 плоские regex (как раньше) + tier-2 деобфускатор
+    # (cniper-стайл: zerox[four], скобки, дефисы, арифметика).
+    try:
+        import addr_decode as _ad
+        return _ad.extract_signals(text)
+    except Exception:
+        out = []
+        for m in set(re.findall(SOLANA_MINT_REGEX, text or "")):
+            out.append(f"sol:{m}")
+        for a in set(re.findall(EVM_ADDR_REGEX, text or "")):
+            out.append(f"evm:{a}")
+        return out
+
+
+def _tag(sig: str, channel: str) -> str:
+    """Подпись источника: sol:..@канал. fomo_signal_loop её разберёт."""
+    return f"{sig}@{channel}" if channel else sig
+
+
+def extract_from_html(chunk_html: str, channel: str = "") -> list:
+    """Сигналы из HTML-куска поста: текст (плоские+скрытые) + href-кнопки.
+    Возвращает (tagged_sigs, pair_links[(chain, pair)]). Пары резолвятся позже."""
+    html_chunk = chunk_html or ""
+    # Мусор, который деобфускатор склеил бы в псевдо-адрес: base64 data-view,
+    # URL (их разбираем отдельно по href), CSS-классы вне тегов после кривого сплита.
+    clean = re.sub(r'data-view="[^"]*"', " ", html_chunk)
+    text = html.unescape(re.sub(r"<[^>]+>", " ", clean))
+    text = re.sub(r"https?://\S+", " ", text)
+    out = [_tag(s, channel) for s in _extract_signals(text)]
+    hrefs = re.findall(r'href="([^"]+)"', html_chunk)
+    pairs = []
+    for h in hrefs:
+        for rx, kind in _HREF_TOKEN:
+            m = rx.search(h)
+            if m:
+                out.append(_tag(("sol:" if kind == "sol" else "evm:") + m.group(1), channel))
+        m = _HREF_PAIR.search(h)
+        if m:
+            pairs.append((m.group(1).lower(), m.group(2)))
+        m = _HREF_BOTMINT.search(h)
+        if m:
+            out.append(_tag("sol:" + m.group(1), channel))
+    return sorted(set(out)), pairs
 
 
 async def _fetch_preview(channel: str):
-    """Возвращает [(post_id, text), ...] свежие сверху. Никогда не падает."""
+    """Возвращает [(post_id, text, chunk_html), ...] свежие сверху.
+    chunk_html нужен для href-кнопок (адреса в URL, не в тексте).
+    Никогда не падает."""
     from http_client import get_session
     url = f"https://t.me/s/{channel}"
     try:
@@ -47,8 +99,10 @@ async def _fetch_preview(channel: str):
         print(f"📡 TG preview {channel}: {type(e).__name__}")
         return None
     posts = []
-    # посты: data-post="channel/123" + блок текста (два варианта разметки)
-    blocks = re.split(r'data-post="[^"]+/(\d+)"', page)
+    # посты: data-post="channel/123" + блок текста (два варианта разметки).
+    # Сплит ЕСТ через закрывающий > открывающего тега: иначе чанк начинается
+    # внутри атрибутов (data-view base64, class-имена) и мусор парсится как текст.
+    blocks = re.split(r'data-post="[^"]+/(\d+)"[^>]*>', page)
     # blocks[0] мусор, дальше чередуются id, html-кусок
     for i in range(1, len(blocks) - 1, 2):
         pid, chunk = blocks[i], blocks[i + 1]
@@ -56,7 +110,7 @@ async def _fetch_preview(channel: str):
         if not m:
             m = re.search(r'tgme_widget_message_text[^>]*>(.*?)</div\s*>', chunk, re.S)
         text = html.unescape(re.sub(r"<[^>]+>", " ", m.group(1))) if m else ""
-        posts.append((pid, text))
+        posts.append((pid, text, chunk))
     return posts
 
 
@@ -77,16 +131,35 @@ async def tg_preview_loop(*_args, **_kwargs):
                 if posts is None:
                     continue
                 if first:
-                    for pid, _t in posts:
+                    for pid, _t, _c in posts:
                         _seen.add((ch, pid))
                     print(f"📡 TG {ch}: запомнил {len(posts)} старых постов, жду новые коллы")
                     continue
-                fresh = [(pid, t) for pid, t in posts if (ch, pid) not in _seen]
-                for pid, t in fresh:
+                fresh = [p for p in posts if (ch, p[0]) not in _seen]
+                for pid, _t, _c in fresh:
                     _seen.add((ch, pid))
-                sigs = []
-                for _pid, t in fresh:
-                    sigs.extend(_extract_signals(t))
+                # Текст (плоские+скрытые) + href-кнопки, всё с тегом канала.
+                # DS pair-ссылки резолвим в токены (иначе это адрес ПАРЫ).
+                sigs, pair_links = [], []
+                for _pid, t, chunk in fresh:
+                    try:
+                        _hs, _pl = extract_from_html(chunk, ch)
+                    except Exception:
+                        _hs, _pl = [], []
+                    if not _hs:
+                        # fallback без HTML (юнит-тесты, обрезанные чанки)
+                        _hs = [_tag(s, ch) for s in _extract_signals(t)]
+                    sigs.extend(_hs)
+                    pair_links.extend(_pl)
+                if pair_links:
+                    try:
+                        import evm_data as _ev
+                        for _chain, _pair in dict.fromkeys(pair_links):
+                            tok = await _ev.resolve_ds_pair(_pair, _chain)
+                            if tok:
+                                sigs.append(_tag(f"evm:{_chain}:{tok}", ch))
+                    except Exception:
+                        pass
                 sigs = sorted(set(sigs))
                 if sigs:
                     print(f"🎯 TG-колл @{ch}: {sigs}")
@@ -105,6 +178,6 @@ if __name__ == "__main__":
     async def _t():
         posts = await _fetch_preview("pumpfunmemecalls")
         print("постов:", len(posts or []))
-        for pid, t in (posts or [])[:5]:
+        for pid, t, _c in (posts or [])[:5]:
             print(pid, _extract_signals(t))
     asyncio.run(_t())

@@ -383,6 +383,15 @@ async def scanner_loop(analyzer, tracker):
                             entry_price = float(pair_data.get("priceUsd", 0)) if pair_data else 0
                             actual_symbol = pair_data.get("baseToken", {}).get("symbol", "UNKNOWN") if pair_data else "UNKNOWN"
                             if entry_price > 0:
+                                # RKT-вето дженерик-входов Solana (лотереи/VIP-билеты exempt).
+                                _ssig = analyzer.get_signal(mint)
+                                _sveto = analyzer.rocket_veto(mint, pair_data, _ssig)
+                                if _sveto:
+                                    print(f"🚫 [SCANNER] {actual_symbol}: {_sveto}")
+                                    analyzer.log_scan(actual_symbol, mint, "SCANNER", False,
+                                                      getattr(analyzer, "last_score", 0.0))
+                                    await asyncio.sleep(1.5)
+                                    continue
                                 # Динамический сайзинг
                                 capital = tracker.get_total_capital()
                                 base_position = capital * (config.REINVEST_PERCENT / 100.0)
@@ -466,6 +475,30 @@ async def scanner_loop(analyzer, tracker):
 from copytrader import CopyTrader
 import os
 
+
+def parse_signal_line(raw: str):
+    """Разбор строки очереди: sol:<mint>[@канал] | evm:[chain:]<addr>[@канал] |
+    голый mint/0x... (канала нет). Возвращает (kind, mint, channel).
+    kind: 'sol' | 'evm' | 'evm:<chain>'. Тег @канал ставит tg_preview
+    (видно в дашборде как TG-SIGNAL:канал:...)."""
+    raw = (raw or "").strip()
+    channel = ""
+    if "@" in raw:
+        raw, _, channel = raw.rpartition("@")
+        raw, channel = raw.strip(), channel.strip()
+    if raw.startswith("evm:"):
+        rest = raw[4:].strip()
+        if ":" in rest:
+            _chn, mint = rest.split(":", 1)
+            return f"evm:{_chn.strip().lower()}", mint.strip(), channel
+        return "evm", rest, channel
+    if raw.startswith("sol:"):
+        return "sol", raw[4:].strip(), channel
+    if raw.startswith("0x"):
+        return "evm", raw, channel
+    return "sol", raw, channel
+
+
 async def fomo_signal_loop(analyzer, tracker):
     if not getattr(config, "USE_FOMO_SIGNALS", False):
         print("📲 FOMO-сигналы ВЫКЛ (USE_FOMO_SIGNALS=False): внешние пампы не покупаем.")
@@ -481,29 +514,18 @@ async def fomo_signal_loop(analyzer, tracker):
                     # Очищаем файл после прочтения
                     with open('fomo_signals.txt', 'w') as f:
                         f.write('')
-                        
+                    # Бёрст-контроль: очередь могла копиться пока петля спала —
+                    # старые коллы = чужие вершины. Берём 3 самых свежих.
+                    _maxpass = int(getattr(config, "MAX_FOMO_BUYS_PER_PASS", 3) or 3)
+                    mints = [m for m in mints if (m or "").strip()][-25:]
+                    _buys = 0
+
                     for raw in mints:
-                        raw = raw.strip()
-                        if not raw:
-                            continue
-                        # Формат: sol:<mint> | evm:<addr> | evm:<chain>:<addr> | голый mint (= solana,
-                        # НО голый 0x... = EVM (иначе EVM-токен идёт в Solana-ветку и цены встают)
-                        if raw.startswith("evm:"):
-                            rest = raw[4:].strip()
-                            if ":" in rest:
-                                _chn, mint = rest.split(":", 1)
-                                kind, mint = f"evm:{_chn.strip().lower()}", mint.strip()
-                            else:
-                                kind, mint = "evm", rest
-                        elif raw.startswith("sol:"):
-                            kind, mint = "sol", raw[4:].strip()
-                        elif raw.strip().startswith("0x"):
-                            kind, mint = "evm", raw.strip()
-                        else:
-                            kind, mint = "sol", raw
+                        kind, mint, _src_ch = parse_signal_line(raw)
                         if not mint or mint in tracker.positions:
                             continue
-                        print(f"🚨 ПРИНЯТ ВНЕШНИЙ СИГНАЛ (FOMO): {mint}")
+                        _tag = f"TG:{_src_ch} " if _src_ch else ""
+                        print(f"🚨 ПРИНЯТ ВНЕШНИЙ СИГНАЛ ({_tag}FOMO): {mint}")
                         if kind == "evm" or kind.startswith("evm:"):
                             # EVM: сеть либо указана (evm:robinhood:0x...), либо перебором
                             import evm_data
@@ -535,13 +557,37 @@ async def fomo_signal_loop(analyzer, tracker):
                                 continue
                             ok = await analyzer.analyze_robinhood_token(mint, _ch)
                             if ok is True and mint not in tracker.positions:
+                                # Тот же комплект гейтов, что у сканера: RKT-вето +
+                                # GoPlus/honeypot.is (иначе TG-ветка их обходила).
+                                _esig = analyzer.get_signal(mint)
+                                _eveto = analyzer.rocket_veto(mint, _td, _esig)
+                                if _eveto:
+                                    print(f"🚫 TG EVM {mint[:10]}: {_eveto}")
+                                    continue
+                                try:
+                                    import goplus as _tgp, honeypot_is as _thp
+                                    _gok, _gwhy = await _tgp.check_token(mint, _ch)
+                                    if not _gok:
+                                        print(f"🚫 TG EVM {mint[:10]}: GoPlus {_gwhy} — блок.")
+                                        continue
+                                    _hok, _hwhy = await _thp.check_token(mint, _ch)
+                                    if not _hok:
+                                        print(f"🚫 TG EVM {mint[:10]}: honeypot.is {_hwhy} — блок.")
+                                        continue
+                                except Exception as _se:
+                                    print(f"⚠️ TG security err: {type(_se).__name__} (fail-open).")
                                 price = float(_td.get("priceUsd", 0))
                                 sym = ((_td.get("baseToken") or {}).get("symbol", "TG") or "TG")
                                 cap = tracker.get_total_capital()
                                 size = max(4.0, min(100.0, cap * (config.REINVEST_PERCENT / 100.0))) if cap > 0 else 4.0
+                                size = min(size, float(getattr(config, "TG_MAX_SIZE_USD", 4.0) or 4.0))
+                                _tg_src = f"TG-SIGNAL:{_src_ch}:{_esig}" if _src_ch else f"TG-SIGNAL:{_esig}"
                                 tracker.add_position(sym, mint, price, size, is_mature=True,
-                                                     source=f"TG-SIGNAL:{analyzer.get_signal(mint)}", chain=_ch)
+                                                     source=_tg_src, chain=_ch)
                                 print(f"📲 TG-SIGNAL BUY {sym} [{_ch}] @ ${price}")
+                                _buys += 1
+                                if _buys >= _maxpass:
+                                    break
                             continue
                         # Проверяем скам-фильтрами перед покупкой
                         is_good = await analyzer.analyze_token(mint)
@@ -552,10 +598,20 @@ async def fomo_signal_loop(analyzer, tracker):
                             actual_symbol = pair_data.get("baseToken", {}).get("symbol", "FOMO") if pair_data else "FOMO"
 
                             if entry_price > 0:
+                                _ssig = analyzer.get_signal(mint)
+                                _sveto = analyzer.rocket_veto(mint, pair_data, _ssig)
+                                if _sveto:
+                                    print(f"🚫 TG SOL {mint[:10]}: {_sveto}")
+                                    continue
                                 capital = tracker.get_total_capital()
                                 position_size = max(4.0, min(100.0, capital * (config.REINVEST_PERCENT / 100.0)))
+                                position_size = min(position_size, float(getattr(config, "TG_MAX_SIZE_USD", 4.0) or 4.0))
+                                _tg_src = f"TG-SIGNAL:{_src_ch}:{_ssig}" if _src_ch else f"TG-SIGNAL:{_ssig}"
                                 tracker.add_position(actual_symbol, mint, entry_price, position_size,
-                                                     source=f"TG-SIGNAL:{analyzer.get_signal(mint)}")
+                                                     source=_tg_src)
+                                _buys += 1
+                                if _buys >= _maxpass:
+                                    break
         except Exception as e:
             print(f"Ошибка в fomo_signal_loop: {e}")
         await asyncio.sleep(1) # Проверяем файл каждую секунду для мгновенной реакции
@@ -581,6 +637,15 @@ async def growth_loop(analyzer, tracker):
                 px = await JupiterAPI.get_prices(list(mine.keys()))
                 for mint, pos in list(mine.items()):
                     cur = px.get(mint, 0) or pos.current_price_usd or pos.entry_price_usd
+                    # Фантом цены (кейс RAY: пик +1624120% с битого тика повалил
+                    # трейлинг). x50 за тик — не пик, а битые данные.
+                    try:
+                        if pos.entry_price_usd > 0 and cur / pos.entry_price_usd > 50:
+                            print(f"⚠️ GROWTH phantom {mint[:8]}: x{cur / pos.entry_price_usd:.0f} за тик — игнор.")
+                            pos.price_checked_at = _t.time()
+                            continue
+                    except Exception:
+                        pass
                     if cur > pos.max_price_usd:
                         pos.max_price_usd = cur
                     prev = pos.current_price_usd
@@ -930,6 +995,15 @@ async def _evm_chain_loop(analyzer, tracker, chain: str):
                                 cap = tracker.get_total_capital()
                                 size = max(4.0, min(100.0, cap * (config.REINVEST_PERCENT / 100.0))) if cap > 0 else 4.0
                                 _sig = analyzer.get_signal(addr)
+                                # RKT-вето дженерик-входов (не билетов): слабая структура
+                                # под импульсом = чужой выход. MERRGER/MTA/LUXR урок.
+                                _veto = analyzer.rocket_veto(addr, td, _sig)
+                                if _veto:
+                                    print(f"🚫 [{tag}] {sym}: {_veto}")
+                                    analyzer.log_scan(sym, addr, tag, False,
+                                                      getattr(analyzer, "last_score", 0.0))
+                                    await asyncio.sleep(1.0)
+                                    continue
                                 if "LOTTERY" in _sig or "SCOUT" in _sig:
                                     size = min(size, 1.5)  # лотерейный/скаут билет, не позиция
                                 else:
@@ -966,6 +1040,18 @@ async def _evm_chain_loop(analyzer, tracker, chain: str):
                                         continue
                                 except Exception as _ge:
                                     print(f"⚠️ GoPlus err: {type(_ge).__name__} (fail-open).")
+                                # HONEYPOT.IS — второе мнение (идея awesome-web3-rug-check):
+                                # только для финалистов GoPlus, единицы запросов в час.
+                                # Ловит нестандартные transfer-ловушки, которые GoPlus пропускает.
+                                try:
+                                    import honeypot_is as _hp
+                                    _h_ok, _h_why = await _hp.check_token(addr, chain)
+                                    if not _h_ok:
+                                        print(f"🚫 [{tag}] {sym}: honeypot.is {_h_why} — блок входа.")
+                                        await asyncio.sleep(1.0)
+                                        continue
+                                except Exception as _he:
+                                    print(f"⚠️ honeypot.is err: {type(_he).__name__} (fail-open).")
                                 tracker.add_position(sym, addr, price, size, is_mature=True,
                                                  ml_features=analyzer.pack_features(td),
                                                  ml_confidence=float(getattr(analyzer, "last_score", 0.0)),
@@ -1011,7 +1097,16 @@ async def ethereum_loop(analyzer, tracker):
 
 async def async_main():
     from pump_fun_sniper import PumpFunSniper
-    
+
+    # Карта покрытия радаров: видно, какие парсеры в эфире, а какие спят
+    # (нет бесплатного ключа / выкл флагом / забанены). Без этого слепые
+    # зоны выглядят как "ракет нет", хотя их просто никто не смотрит.
+    try:
+        import radar_coverage as _rc
+        _rc.print_coverage()
+    except Exception as _e:
+        print(f"⚠️ coverage report err: {_e}")
+
     # Keep-Alive задача, чтобы Render не засыпал (работает в фоне)
     async def keep_alive():
         import aiohttp, os
@@ -1195,14 +1290,29 @@ with tab1:
                     for index, row in open_df.iterrows():
                         pnl_usd = row['current_pnl_usd']
                         pnl_pct = row['pnl_%']
+                        # Слепая позиция (sBTC-кейс): ни один источник цены минт
+                        # не проиндексировал — вместо лживых $0.00 показываем факт.
+                        try:
+                            _e = float(row.get('entry_price_usd') or 0)
+                            _c = float(row.get('current_price_usd') or 0)
+                            _mx = float(row.get('max_price_usd') or 0)
+                            _upd = float(row.get('price_updated_at') or 0)
+                            _fz = float(row.get('first_zero_ts') or 0)
+                            _blind = (_e > 0 and _c == _e and _mx == _e
+                                      and (not _upd or _fz > 0))
+                        except Exception:
+                            _blind = False
                         color = "#00C851" if pnl_usd >= 0 else "#FF4444"
                         sign = "+" if pnl_usd > 0 else ""
-                        
+                        _right = (f"<h3 style='margin:0; color: #888;'>⏳ нет цены</h3>"
+                                  if _blind else
+                                  f"<h3 style='margin:0; color: {color};'>{sign}${pnl_usd:.2f} ({sign}{pnl_pct:.2f}%)</h3>")
+
                         st.markdown(f"""
                         <div style='background-color: #1E1E1E; padding: 15px; border-radius: 8px; border-left: 5px solid {color}; margin-bottom: 10px; font-family: sans-serif;'>
                             <div style='display: flex; justify-content: space-between; align-items: center;'>
                                 <h3 style='margin:0; color: #FFF;'>{row['symbol'] if str(row['symbol']).strip() else row['mint'][:6] + '...'}</h3>
-                                <h3 style='margin:0; color: {color};'>{sign}${pnl_usd:.2f} ({sign}{pnl_pct:.2f}%)</h3>
+                                {_right}
                             </div>
                             <div style='margin-top: 6px; font-size: 0.75em; color: #888;'>🔖 {row.get('source', '') if str(row.get('source', '')).strip() else '—'} {chain_badge(row.get('chain', 'solana'), True)}</div>
                             <div style='display: flex; justify-content: space-between; margin-top: 10px; font-size: 0.85em; color: #BBB;'>

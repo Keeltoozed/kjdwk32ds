@@ -33,7 +33,8 @@ HOST_LIMITS = {
     "public-api.birdeye.so": 30.0,
     "lunarcrush.com": 10.0,
     "api.rugcheck.xyz": 30.0,
-    "api.gopluslabs.io": 30.0,
+    "api.honeypot.is": 60.0,
+    "api.coingecko.com": 10.0,
 }
 
 # Шаг 1: конкурентность по хостам. DS=3, GT=1 — требование задачи.
@@ -51,7 +52,8 @@ HOST_SEMAPHORES = {
     "frontend-api.pump.fun": 1,
     "public-api.birdeye.so": 1,
     "api.rugcheck.xyz": 2,
-    "api.gopluslabs.io": 2,
+    "api.honeypot.is": 2,
+    "api.coingecko.com": 1,
 }
 DEFAULT_SEM = 5
 

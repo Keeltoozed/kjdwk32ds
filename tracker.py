@@ -88,6 +88,17 @@ class PaperTracker:
                     v["is_mature"] = False
                 if "is_moonbag" not in v:
                     v["is_moonbag"] = False
+                # Санация отравленного пика (кейс RAY: max +1624120% с битого тика).
+                # Больше x500 от входа за всю жизнь сделки не бывает даже у SHCAT
+                # (x12) — это фантом, он валит трейлинги. Сбрасываем на текущую.
+                try:
+                    _e = float(v.get("entry_price_usd", 0) or 0)
+                    _mx = float(v.get("max_price_usd", 0) or 0)
+                    if _e > 0 and _mx / _e > 500:
+                        print(f"🧹 Санация пика {k[:12]}: x{_mx / _e:.0f} → сброс на текущую.")
+                        v["max_price_usd"] = float(v.get("current_price_usd", 0) or _e)
+                except Exception:
+                    pass
                 # Миграция старых сделок: восстанавливаем original_amount_usd.
                 # TP1 продаёт 20% (остаток 0.8), Moonbag 50% остатка (0.4 при обоих).
                 if not v.get("original_amount_usd"):

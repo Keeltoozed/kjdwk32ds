@@ -457,6 +457,14 @@ async def get_growth_universe(min_reserve_usd: float = 500000.0, limit: int = 20
             add(m)
     except Exception:
         pass
+    # CoinGecko trending (без ключей): ротации рынка, которых нет ни в вотчлисте,
+    # ни в топе Raydium. Кэш 30 мин, единицы запросов — квоту не трогает.
+    try:
+        import coingecko as _cg
+        for m in await _cg.trending_solana_mints():
+            add(m)
+    except Exception:
+        pass
     stables = {"EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
                "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB"}
     try:

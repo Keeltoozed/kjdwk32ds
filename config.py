@@ -67,10 +67,13 @@ AI_MODE = "degen" # "sniper" (строго 80-90% уверенности) или
 # При сайзах $4-10 позиция в $20k пуле = 0.03%, импакта нет.
 MIN_LIQUIDITY = 20000
 MAX_LIQUIDITY = 50000000
-# Внешние сигналы — главный источник -60..-75% (FOMO:VIP-RAY-XGB, COPY):
-# вход в чужой памп = выходная ликвидность. Выкл по умолчанию, вкл осознанно.
-USE_FOMO_SIGNALS = False
+# Внешние сигналы (TG-каналы): ВКЛ, но в наморднике — полный комплект гейтов
+# в fomo_signal_loop (фильтры анализатора + RKT-вето + GoPlus/honeypot.is для EVM
+# + символьный кулдаун + кэп сайза). Старые -70% были до гейтов.
+USE_FOMO_SIGNALS = True
 USE_COPYTRADE = False
+TG_MAX_SIZE_USD = 4.0  # TG-вход не больше $4 (тренировочные колёса: дешевле tuition)
+MAX_FOMO_BUYS_PER_PASS = 3  # не больше 3 покупок за проход очереди (бёрст-контроль)
 # Символьный кулдаун: после закрытия ЛЮБОЙ сделки тикер банится целиком
 # (кейс VRAX: +5% → перезаход в клона с тем же именем → -32%).
 # Mint-гарды клонов не видят (другой адрес), тикер — видят.
@@ -85,11 +88,19 @@ ROCKET_STRONG = 0.65  # score >= → strong
 ROCKET_WEAK = 0.35  # score <= → weak
 ROCKET_SIZE_UP = 1.5
 ROCKET_SIZE_DOWN = 0.5
+ROCKET_VETO_ENABLED = True  # вето слабых дженерик-входов (MERRGER/MTA/LUXR: rule 77-90% + RKT 0.04-0.25 → стопы)
+ROCKET_VETO_MIN = 0.30  # RKT ниже → скип. DIPBUY/SCOUT/LOTTERY/VIP/COPY/GROWTH exempt
 # === GOPLUS (общедоступная модель риска: honeypot/налоги; бесплатно, без ключа) ===
 GOPLUS_ENABLED = True
 GOPLUS_MAX_BUY_TAX = 0.10  # блок, если налог на покупку выше 10%
 GOPLUS_MAX_SELL_TAX = 0.10  # блок, если налог на продажу выше 10% (иначе -30% на выходе)
 GOPLUS_CACHE_SEC = 3600  # вердикты кэшируем на час (квота free бережётся)
+# === HONEYPOT.IS (второй honeypot-гейт EVM; бесплатно, без ключа) ===
+HONEYPOTIS_ENABLED = True  # второе мнение после GoPlus: ловит нестандартные transfer-ловушки
+HONEYPOTIS_MAX_TAX = 0.10  # блок, если sim-налог выше 10%
+HONEYPOTIS_CACHE_SEC = 3600
+# === COINGECKO TRENDING (без ключей; минты для GROWTH-вселенной) ===
+COINGECKO_ENABLED = True  # search/trending + резолв platforms.solana, кэш 30 мин
 
 # AI Аналитика
 GEMINI_API_KEY = "AQ.Ab8RN6Ju77t6DI8AYru7TGxuPuG_0WOcqHZqq1OBsDAwHtoJxg" # Получить бесплатно на https://aistudio.google.com/
@@ -253,7 +264,15 @@ TG_SESSION = "sniper_session"
 # Бесключевой сборщик коллов через t.me/s/ превью (без Telethon и API-ключей).
 # Проверено: pumpfunmemecalls отдаёт контракты. solanamemeradar закрылся - не добавлять.
 TG_PREVIEW_ENABLED = True
-TG_PREVIEW_CHANNELS = ["pumpfunmemecalls"]
+# Проверены 30.09 (превью открыто у всех): pumpfunearlytrending даёт CA $15-36k,
+# memecoinwhalespump — минты в тексте; CherryTrendingEVM/Cherry — адреса в href-кнопках
+# (парсер их читает); остальные (short_cryptoo, hiro_trade, CrWhale, Trade_Nobody,
+# cryptosmart_org1, WhAleir_fx, noiambilliolaurent, solearlytrending) — превью живо,
+# контрактов в тексте нет (картинки/кнопки без адресов), держим на случай коллов.
+TG_PREVIEW_CHANNELS = ["pumpfunmemecalls", "pumpfunearlytrending", "cherrytrending",
+                       "Trade_Nobody", "noiambilliolaurent", "hiro_trade", "CrWhale",
+                       "short_cryptoo", "CherryTrendingEVM", "WhAleir_fx",
+                       "memecoinwhalespump", "cryptosmart_org1", "solearlytrending"]
 TG_PREVIEW_INTERVAL = 90  # секунд между опросами (вежливо, превью не банит)
 
 # === USER WATCHLIST: ты видишь рано на fomo.family - кидаешь контракт сюда, бот исполняет ===
