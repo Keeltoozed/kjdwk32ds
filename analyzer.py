@@ -100,6 +100,19 @@ class Analyzer:
             pass
         return 1.0
 
+    async def meme_tag(self, address: str, symbol: str, pair_data: dict,
+                       chain: str = "solana") -> str:
+        """Тег нарратива от Gemini (ADVISORY): '' или ' MEME85'.
+        Входы не режет — копим статистику тег vs исход для будущих порогов."""
+        try:
+            import meme_judge as _mj
+            s, _w = await _mj.judge(address, symbol, pair_data or {}, chain)
+            if s is None:
+                return ""
+            return f" MEME{s:.0f}"
+        except Exception:
+            return ""
+
     def rocket_veto(self, address: str, pair_data: dict, sig: str):
         """Вето слабых дженерик-входов: RKT < порога → причина-строка, иначе None.
         Факт из прода: MERRGER/MTA/LUXR зашли по rule 77-90% со скором
@@ -925,7 +938,7 @@ class Analyzer:
                             and liq >= min_liq and links and m1 <= 3.0:
                         self._dip_watch.pop(address, None)
                         print(f"📉 [{tag}-DIPBUY] {symbol}: откат {_drop*100:.0f}% от пика при живом объёме — вход на коррекции.")
-                        self._set_sig(address, f"{tag} DIPBUY -{_drop*100:.0f}%" + self._rkt_tag(address, pair_data))
+                        self._set_sig(address, f"{tag} DIPBUY -{_drop*100:.0f}%" + self._rkt_tag(address, pair_data) + await self.meme_tag(address, symbol, pair_data, chain))
                         return True
         except Exception:
             pass
@@ -942,7 +955,7 @@ class Analyzer:
             if not await self._evm_clone_ok(symbol, address, pair_data, chain, tag):
                 return False
             print(f"🔭 [{tag}-SCOUT] {symbol}: возраст {_age_min:.1f}м, m5 {m5:+.1f}% — ранний билет.")
-            self._set_sig(address, f"{tag} SCOUT {_age_min:.0f}m" + self._rkt_tag(address, pair_data))
+            self._set_sig(address, f"{tag} SCOUT {_age_min:.0f}m" + self._rkt_tag(address, pair_data) + await self.meme_tag(address, symbol, pair_data, chain))
             return True
 
         if liq < min_liq:
@@ -964,7 +977,7 @@ class Analyzer:
                 if not await self._evm_clone_ok(symbol, address, pair_data, chain, tag):
                     return False
                 print(f"🎰 [{tag}-LOTTERY] {symbol}: вертикаль m5 {m5:+.1f}% — лотерейный билет.")
-                self._set_sig(address, f"{tag} LOTTERY {m5:+.0f}%" + self._rkt_tag(address, pair_data))
+                self._set_sig(address, f"{tag} LOTTERY {m5:+.0f}%" + self._rkt_tag(address, pair_data) + await self.meme_tag(address, symbol, pair_data, chain))
                 return True
             return self._deny(address, "vert-no-pressure", f"🚫 [{tag}] {symbol}: вертикаль без давления/ликвы/ссылок — не лотерея.")
         _evm_min_m5 = getattr(config, "EVM_MIN_M5_PCT", 7.0)
@@ -1040,7 +1053,7 @@ class Analyzer:
         self.last_score = float(score)
         print(f"🔵 [{tag}] {symbol}: m5 {m5:+.1f}% b/s {b}/{s} liq ${liq:,.0f} → score {score:.0f}")
         if score >= 60.0:
-            self._set_sig(address, f"{tag} rule {score:.0f}%" + self._rkt_tag(address, pair_data))
+            self._set_sig(address, f"{tag} rule {score:.0f}%" + self._rkt_tag(address, pair_data) + await self.meme_tag(address, symbol, pair_data, chain))
             return True
         return False
         

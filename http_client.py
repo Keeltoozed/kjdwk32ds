@@ -35,6 +35,7 @@ HOST_LIMITS = {
     "api.rugcheck.xyz": 30.0,
     "api.honeypot.is": 60.0,
     "api.coingecko.com": 10.0,
+    "generativelanguage.googleapis.com": 10.0,
 }
 
 # Шаг 1: конкурентность по хостам. DS=3, GT=1 — требование задачи.
@@ -54,6 +55,7 @@ HOST_SEMAPHORES = {
     "api.rugcheck.xyz": 2,
     "api.honeypot.is": 2,
     "api.coingecko.com": 1,
+    "generativelanguage.googleapis.com": 1,
 }
 DEFAULT_SEM = 5
 

@@ -120,9 +120,13 @@ async def position_manager_loop(analyzer, tracker):
                     tracker.close_position(mint, current_price, f"Post-Rocket Fade Cut ({minutes_since_peak:.0f}m after peak)")
                     continue
 
-                # === STAGNANT EXIT: минус режем на STAGNANT_LOSS_MIN, мелкий плюс держим до HOLD_MIN ===
-                _loss_min = getattr(config, "STAGNANT_LOSS_MIN", 7)
+                # === STAGNANT EXIT (PRO: время по заслугам) ===
+                # Профи не маринуют мёртвые деньги: ни намёка на импульс
+                # (пик <5%) — кат на FAST-минуте; что-то показал — живёт до HOLD.
                 _hold_min = getattr(config, "STAGNANT_HOLD_MIN", 25)
+                _loss_min = (float(getattr(config, "STAGNANT_LOSS_MIN", 15))
+                             if max_pnl_pct >= 0.05 else
+                             float(getattr(config, "STAGNANT_LOSS_MIN_FAST", 7)))
                 if minutes_held >= _loss_min and pnl_pct < 0 and max_pnl_pct < 0.05:
                     # ЖИВОЙ ФЛЕТ НЕ РЕЖЕМ: консолидация 5-15 мин перед выстрелом выглядит
                     # как -2%. Проверяем сделки за 5 мин: есть buys = пул жив, даём +5 мин
@@ -429,6 +433,9 @@ async def scanner_loop(analyzer, tracker):
                                         if _rm != 1.0:
                                             print(f"🚀 SCANNER {actual_symbol}: ROCKET-mult x{_rm}")
                                         position_size *= _rm
+                                        _meme = await analyzer.meme_tag(mint, actual_symbol, pair_data, "solana")
+                                        if _meme:
+                                            analyzer.signals[mint] = analyzer.get_signal(mint) + _meme
                                     except Exception:
                                         pass
                                 position_size = min(position_size, 100.0)
@@ -581,6 +588,12 @@ async def fomo_signal_loop(analyzer, tracker):
                                 cap = tracker.get_total_capital()
                                 size = max(4.0, min(100.0, cap * (config.REINVEST_PERCENT / 100.0))) if cap > 0 else 4.0
                                 size = min(size, float(getattr(config, "TG_MAX_SIZE_USD", 4.0) or 4.0))
+                                if str(_esig).startswith("VIP-"):
+                                    # VIP-шип = раздача (PEGGED -40% за 3с): лотерейные $2, как в сканерах
+                                    size = min(size, float(getattr(config, "TG_VIP_SIZE_USD", 2.0) or 2.0))
+                                if _ch == "robinhood":
+                                    # ROB без honeypot-покрытия: кэп сайза (ZUPITER -72%)
+                                    size = min(size, float(getattr(config, "ROB_MAX_SIZE_USD", 4.0) or 4.0))
                                 _tg_src = f"TG-SIGNAL:{_src_ch}:{_esig}" if _src_ch else f"TG-SIGNAL:{_esig}"
                                 tracker.add_position(sym, mint, price, size, is_mature=True,
                                                      source=_tg_src, chain=_ch)
@@ -606,6 +619,9 @@ async def fomo_signal_loop(analyzer, tracker):
                                 capital = tracker.get_total_capital()
                                 position_size = max(4.0, min(100.0, capital * (config.REINVEST_PERCENT / 100.0)))
                                 position_size = min(position_size, float(getattr(config, "TG_MAX_SIZE_USD", 4.0) or 4.0))
+                                if str(_ssig).startswith("VIP-"):
+                                    # VIP-шип = раздача: лотерейные $2, как в сканерах
+                                    position_size = min(position_size, float(getattr(config, "TG_VIP_SIZE_USD", 2.0) or 2.0))
                                 _tg_src = f"TG-SIGNAL:{_src_ch}:{_ssig}" if _src_ch else f"TG-SIGNAL:{_ssig}"
                                 tracker.add_position(actual_symbol, mint, entry_price, position_size,
                                                      source=_tg_src)
@@ -868,6 +884,11 @@ async def _evm_track_once(tracker, chain: str, tag: str, emoji: str):
                     reason = f"{tag} Infant Dump ({pnl * 100:.1f}%)"
                 elif not _is_runner and pnl <= config.STOP_LOSS_PCT:
                     reason = f"{tag} Stop ({pnl * 100:.1f}%)"
+                elif (not _is_runner and maxp < 0.05 and pnl < -0.05
+                        and held >= float(getattr(config, "STAGNANT_LOSS_MIN", 15))):
+                    # PRO Bleed-cut: ни намёка на жизнь — не мариновать до Dead 60м
+                    # (memestock гнил 61м до -14.5%). Раннеры (maxp 5%+) не трогаем.
+                    reason = f"{tag} Bleed ({held:.0f}m, {pnl * 100:.1f}%)"
                 elif not _is_runner and held >= _dead_min and pnl < -0.05:
                     reason = f"{tag} Dead ({held:.0f}m)"
                 elif not _is_runner and held >= _stag_min and abs(pnl) < 0.05 and maxp < 0.05:
@@ -1020,6 +1041,10 @@ async def _evm_chain_loop(analyzer, tracker, chain: str):
                                         except Exception:
                                             pass
                                     size = min(size, 100.0)
+                                    if chain == "robinhood":
+                                        # ROB без honeypot-покрытия (GoPlus/honeypot.is не знают 4663):
+                                        # кэп ПОСЛЕ всех mult — единственная защита от -72% гэпов (ZUPITER)
+                                        size = min(size, float(getattr(config, "ROB_MAX_SIZE_USD", 4.0) or 4.0))
                                 if chain == "ethereum":
                                     # L1-газ $2-6 за круг: микро-сайз $4-6 гарантирует минус.
                                     # Меньше минимума — скип входа (а не враньё в плюс).

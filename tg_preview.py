@@ -123,12 +123,23 @@ async def tg_preview_loop(*_args, **_kwargs):
         return
     interval = int(getattr(config, "TG_PREVIEW_INTERVAL", 90))
     print(f"📡 TG-превью запущен (без ключей): {channels}, опрос каждые {interval}с")
+    _stat = {}  # ch -> [опросов, новых постов, сигналов]
     first = True
     while True:
         try:
+            _cycle = []
             for ch in channels:
                 posts = await _fetch_preview(ch)
                 if posts is None:
+                    _cycle.append(f"{ch} ERR")
+                    continue
+                _st = _stat.setdefault(ch, [0, 0, 0])
+                _st[0] += 1
+                if first:
+                    for pid, _t, _c in posts:
+                        _seen.add((ch, pid))
+                    print(f"📡 TG {ch}: запомнил {len(posts)} старых постов, жду новые коллы")
+                    _cycle.append(f"{ch} init({len(posts)})")
                     continue
                 if first:
                     for pid, _t, _c in posts:
@@ -138,6 +149,7 @@ async def tg_preview_loop(*_args, **_kwargs):
                 fresh = [p for p in posts if (ch, p[0]) not in _seen]
                 for pid, _t, _c in fresh:
                     _seen.add((ch, pid))
+                _stat[ch][1] += len(fresh)
                 # Текст (плоские+скрытые) + href-кнопки, всё с тегом канала.
                 # DS pair-ссылки резолвим в токены (иначе это адрес ПАРЫ).
                 sigs, pair_links = [], []
@@ -166,8 +178,23 @@ async def tg_preview_loop(*_args, **_kwargs):
                     with open("fomo_signals.txt", "a") as f:
                         for s in sigs:
                             f.write(s + "\n")
+                _stat[ch][2] += len(sigs)
+                _cycle.append(f"{ch} +{len(fresh)}/{len(sigs)}⚡")
                 if len(_seen) > 5000:
                     _seen.clear()
+            # Пульс цикла: видно, что опрос идёт, даже когда тихо.
+            # Формат: канал +новых/сигналов. Пусто везде несколько циклов
+            # подряд = каналы молчат (а не парсер мёртв).
+            try:
+                _tot = " ".join(_cycle) if _cycle else "—"
+                print(f"📡 TG-цикл: {_tot}")
+                with open("tg_status.json", "w") as _f:
+                    import json as _json
+                    _json.dump({"ts": time.time(),
+                                "channels": {c: {"polls": v[0], "new_posts": v[1], "signals": v[2]}
+                                             for c, v in _stat.items()}}, _f)
+            except Exception:
+                pass
         except Exception as e:
             print(f"Ошибка TG-превью: {type(e).__name__} {e}")
         first = False

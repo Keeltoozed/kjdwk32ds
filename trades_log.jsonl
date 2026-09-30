@@ -4,3 +4,4 @@
 {"ts": 1790773852.2606962, "mint": "MA", "symbol": "VRAX", "chain": "solana", "exit_reason": "Trailing", "entry": 0.004, "exit": 0.0042, "peak": 0.004, "pnl_pct": 1.67, "pnl_usd": 0.1, "peak_pct": 0.0, "held_sec": 0}
 {"ts": 1790773852.2618492, "mint": "M2", "symbol": "N", "chain": "solana", "exit_reason": "T", "entry": 0.001, "exit": 0.0011485, "peak": 0.001, "pnl_pct": 10.7, "pnl_usd": 0.43, "peak_pct": 0.0, "held_sec": 0}
 {"ts": 1790784103.9619079, "mint": "MA", "symbol": "VRAX", "chain": "solana", "exit_reason": "Trailing", "entry": 0.004, "exit": 0.0042, "peak": 0.004, "pnl_pct": 1.67, "pnl_usd": 0.1, "peak_pct": 0.0, "held_sec": 0}
+{"ts": 1790798204.4649699, "mint": "MA", "symbol": "VRAX", "chain": "solana", "exit_reason": "Trailing", "entry": 0.004, "exit": 0.0042, "peak": 0.004, "pnl_pct": 1.67, "pnl_usd": 0.1, "peak_pct": 0.0, "held_sec": 0}

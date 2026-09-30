@@ -31,7 +31,7 @@ MAX_CONCURRENT_POSITIONS = 12  # было 10: стагнанты теперь ж
 
 # Risk Management
 MAX_DAILY_LOSS_USD = 18.0
-KILL_SWITCH_ENABLED = False  # ВЫКЛ по требованию: торговать и в красный день (риск: без стопа минус не ограничен)
+KILL_SWITCH_ENABLED = True  # PRO-дисциплина: -$18/день = стоп до завтра. Профи не отбиваются в красный день
 KILL_SWITCH_PAUSE = 300  # Было 3600: пауза 5 мин вместо часа (блокирует условие дневного минуса, а не сон)
 MAX_DAILY_LOSS_PCT = 0.25
 STOP_LOSS_PCT = -0.20  # Вернули по просьбе: стоп -20% чтобы ракеты дышали
@@ -55,8 +55,10 @@ EVM_STAGNANT_MIN = 45  # было 15: SHCAT-подобные сидели бы �
 
 # Moonbag: частичная фиксация 50% позиции на этом профите (свип: 0.60 лучше 0.50 - ранняя фикса режет раннеры)
 MOONBAG_TRIGGER_PCT = 0.60
-# Stagnant: минус режем на N-й минуте, мелкий плюс держим до M-й (бектест-свип)
+# Stagnant (PRO: время по заслугам): показал импульс (пик 5%+) — минус режем
+# на N-й минуте; даже не дёрнулся — кат на FAST-минуте, слот под следующий выстрел
 STAGNANT_LOSS_MIN = 15
+STAGNANT_LOSS_MIN_FAST = 7
 STAGNANT_HOLD_MIN = 25
 
 # Filtering
@@ -73,7 +75,11 @@ MAX_LIQUIDITY = 50000000
 USE_FOMO_SIGNALS = True
 USE_COPYTRADE = False
 TG_MAX_SIZE_USD = 4.0  # TG-вход не больше $4 (тренировочные колёса: дешевле tuition)
+TG_VIP_SIZE_USD = 2.0  # TG VIP-шип = раздача (PEGGED -40% за 3с на $4): как в сканерах, $2 макс
 MAX_FOMO_BUYS_PER_PASS = 3  # не больше 3 покупок за проход очереди (бёрст-контроль)
+# Robinhood Chain: ни GoPlus, ни honeypot.is сеть 4663 не знают (fail-open всегда).
+# Единственная защита от honeypot-рага (-72% ZUPITER) — размер: кэп как у TG.
+ROB_MAX_SIZE_USD = 4.0
 # Символьный кулдаун: после закрытия ЛЮБОЙ сделки тикер банится целиком
 # (кейс VRAX: +5% → перезаход в клона с тем же именем → -32%).
 # Mint-гарды клонов не видят (другой адрес), тикер — видят.
@@ -104,6 +110,11 @@ COINGECKO_ENABLED = True  # search/trending + резолв platforms.solana, к�
 
 # AI Аналитика
 GEMINI_API_KEY = "AQ.Ab8RN6Ju77t6DI8AYru7TGxuPuG_0WOcqHZqq1OBsDAwHtoJxg" # Получить бесплатно на https://aistudio.google.com/
+# === СУДЬЯ НАРРАТИВА (читает мем, а не цифры; free tier) ===
+GEMINI_MODEL = "gemini-2.0-flash"
+MEME_JUDGE_ENABLED = True  # ADVISORY: только тег MEME85 в сигнал, входы не трогает
+MEME_JUDGE_TTL_SEC = 6 * 3600  # нарратив за часы не меняется
+MEME_JUDGE_COOLDOWN_SEC = 3600  # пауза после 429/quota
 
 # Birdeye API Key (free: bds.birdeye.so, 30K CU/мес; token_trending = 50 CU/запрос)
 BIRDEYE_API_KEY = os.getenv("BIRDEYE_API_KEY", "")

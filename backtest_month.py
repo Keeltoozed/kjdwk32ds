@@ -67,7 +67,9 @@ async def best_pool(session, network, mint):
     def _pool_addr(p):
         return ((p.get("attributes") or {}).get("address")) or ""
     best = max(pools, key=lambda x: float((x.get("attributes") or {}).get("reserve_in_usd", 0) or 0))
-    return _pool_addr(best) or None
+    addr = _pool_addr(best) or None
+    reserve = float((best.get("attributes") or {}).get("reserve_in_usd", 0) or 0)
+    return addr, reserve
 
 
 async def fetch_candles(network, pool_id, days):
@@ -99,8 +101,17 @@ async def fetch_candles(network, pool_id, days):
     return out[-need:]
 
 
-def simulate(candles):
-    """Возвращает (реализованный pnl$, сделок,细节 список)."""
+def pressure_proxy(o, c, v):
+    """Прокси давления (в свечах нет buys/sells): зелёная = покупки, красная = продажи.
+    Честное приближение rule-гейта b/s>=1.5: требуем явный перевес, иначе скип."""
+    if c >= o:
+        return v, v * 0.3
+    return v * 0.3, v
+
+
+def simulate(candles, liq_usd=999999.0):
+    """Возвращает [(pnl$, причина, пик%, pnl%)]. liq_usd — статичный прокси
+    текущего резерва (исторической ликвидности в свечах нет)."""
     trades = []
     vols = [c[5] for c in candles]
     pos = None  # dict(entry, amt, max, locked, t0)
@@ -116,8 +127,14 @@ def simulate(candles):
             c288 = candles[max(0, i - 288)][1]
             h1 = (c - c60) / c60 * 100 if c60 else 0
             h24 = (c - c288) / c288 * 100 if c288 else 0
-            if M5_MIN <= chg <= M5_MAX and prev_red and v >= 2 * med and h1 < 300 and h24 < 500:
-                pos = {"entry": c, "amt": SIZE, "max": c, "locked": 0.0, "t0": ts, "moon": False}
+            if liq_usd < 20000:
+                continue  # liq-гейт $20k (прокси: текущий резерв пула)
+            if not (M5_MIN <= chg <= M5_MAX and prev_red and v >= 2 * med and h1 < 300 and h24 < 500):
+                continue
+            _b, _s = pressure_proxy(o, c, v)
+            if _s > 0 and _b < _s * 1.5:
+                continue  # нет давления покупателей — как в проде
+            pos = {"entry": c, "amt": SIZE, "max": c, "locked": 0.0, "t0": ts, "moon": False}
             continue
         # трекинг открытой
         if c > pos["max"]:
@@ -152,14 +169,51 @@ def simulate(candles):
     return trades
 
 
+async def live_universe(per_chain=5):
+    """Свежая вселенная недели: тренды GT по solana/base/bsc (+robinhood best-effort).
+    Тестируем на ТЕКУЩЕМ рынке, а не на музейных минтах."""
+    from http_client import fetch_json
+    uni, seen = [], set()
+    for net in ("solana", "base", "bsc", "robinhood"):
+        try:
+            st, d = await fetch_json(
+                f"https://api.geckoterminal.com/api/v2/networks/{net}/trending_pools",
+                timeout=12, retries=1)
+            if st != 200 or not isinstance(d, dict):
+                continue
+            for item in (d.get("data") or [])[:per_chain]:
+                try:
+                    bid = (item.get("relationships") or {}).get("base_token", {}).get("data", {}).get("id", "")
+                    mint = bid.split("_", 1)[1] if "_" in bid else ""
+                    if mint and mint not in seen and len(mint) > 10:
+                        seen.add(mint)
+                        uni.append((net, mint))
+                except Exception:
+                    continue
+        except Exception:
+            continue
+    return uni
+
+
+async def pool_reserve(network, pool_id):
+    """Заглушка: резерв уже известен из best_pool (лишний запрос убит —
+    каждый GT-запрос ~3с+ретраи, экономим квоту)."""
+    return 0.0
+
+
 async def main():
-    days = int(sys.argv[1]) if len(sys.argv) > 1 else 30
+    days = int(sys.argv[1]) if len(sys.argv) > 1 else 7
+    live = "--live" in sys.argv
     print(f"Бектест {days}д: пулы -> 5m-свечи -> replay. Пороги из config.", flush=True)
+    universe = await live_universe() if live else list(UNIVERSE)
+    if live:
+        print(f"LIVE-вселенная: {len(universe)} трендовых пулов (solana/base/bsc/robinhood).")
+        universe += [u for u in UNIVERSE if u not in universe]
     grand, gw, gl = 0.0, 0, 0
     all_trades = []
-    for network, mint in UNIVERSE:
-        pool = await best_pool(None, network, mint)
-        await asyncio.sleep(3)  # не упираемся в 30/мин GT
+    for network, mint in universe:
+        # best_pool отдаёт и резерв (лишний запрос убит); троттлинг уже в fetch_json
+        pool, liq = await best_pool(None, network, mint)
         if not pool:
             print(f"{mint[:10]}: нет пула в GT - скип")
             continue
@@ -167,7 +221,7 @@ async def main():
         if len(candles) < 100:
             print(f"{mint[:10]}: свечей {len(candles)} - скип")
             continue
-        trades = simulate(candles)
+        trades = simulate(candles, liq_usd=liq)
         tot = sum(t[0] for t in trades)
         grand += tot
         gw += sum(1 for t in trades if t[0] > 0)
@@ -175,7 +229,7 @@ async def main():
         big = max(trades, key=lambda t: t[0]) if trades else (0, "-", 0, 0)
         from collections import Counter as _C
         reasons = dict(_C(t[1] for t in trades))
-        print(f"{mint[:10]}: свечей {len(candles)}, сделок {len(trades)}, итог ${tot:+.2f}, лучшая ${big[0]:+.2f} ({big[1]} пик +{big[2]}%)")
+        print(f"{mint[:10]} [{network} liq~${liq:,.0f}]: свечей {len(candles)}, сделок {len(trades)}, итог ${tot:+.2f}, лучшая ${big[0]:+.2f} ({big[1]} пик +{big[2]}%)")
         if reasons:
             print(f"  причины: " + ", ".join(f"{k}={v}" for k, v in sorted(reasons.items())))
             for _t in trades:
@@ -184,6 +238,13 @@ async def main():
     print(f"\nИТОГ {days}д: сделок {n}, вин {gw} ({100*gw/max(n,1):.0f}%), P&L ${grand:+.2f}")
     from collections import Counter as _C2
     print("Причины всех выходов: " + ", ".join(f"{k}={v}" for k, v in sorted(_C2(t[2] for t in all_trades).items())))
+    _wp = [t[1] for t in all_trades if t[1] > 0]
+    _lp = [t[1] for t in all_trades if t[1] <= 0]
+    _aw = sum(_wp) / len(_wp) if _wp else 0
+    _al = sum(_lp) / len(_lp) if _lp else 0
+    _pf = (sum(_wp) / abs(sum(_lp))) if _lp and sum(_lp) else 0.0
+    _exp = (grand / n) if n else 0.0
+    print(f"Средний вин ${ _aw:+.2f} / средний лосс ${_al:+.2f} | профит-фактор {_pf:.2f} | expectancy ${_exp:+.2f}/сделку")
     wins = sorted([t for t in all_trades if t[1] > 0], key=lambda t: -t[1])[:5]
     print("Топ-5 винов: " + "; ".join(f"{t[0]} ${t[1]:+.2f} ({t[2]} пик +{t[3]}%)" for t in wins))
     loss = sorted([t for t in all_trades if t[1] <= 0])[:5]
