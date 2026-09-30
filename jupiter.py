@@ -17,15 +17,13 @@ class JupiterAPI:
         addresses = ",".join(mints)
         url = f"https://api.geckoterminal.com/api/v2/simple/networks/solana/token_price/{addresses}"
         headers = {"Accept": "application/json"}
-        
-        from http_client import get_session
-        session = await get_session()
+
+        from http_client import fetch_json
         try:
-            async with session.get(url, headers=headers, timeout=5) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    prices = data.get("data", {}).get("attributes", {}).get("token_prices", {})
-                    return {mint: float(price) for mint, price in prices.items()}
+            status, data = await fetch_json(url, headers=headers, timeout=8, retries=1)
+            if status == 200 and data:
+                prices = data.get("data", {}).get("attributes", {}).get("token_prices", {})
+                return {mint: float(price) for mint, price in prices.items() if float(price or 0) > 0}
         except Exception:
             pass
         return {}

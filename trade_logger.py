@@ -111,24 +111,23 @@ class TradeLogger:
         except Exception as e:
             print(f"GT bulk prices error (Trades): {e}")
         
+        from http_client import fetch_json
         chunk_size = 30
         for i in range(0, len(mints), chunk_size):
             chunk = mints[i:i+chunk_size]
             url = f"{config.DEXSCREENER_SEARCH}{','.join(chunk)}"
             try:
-                async with aiohttp.ClientSession() as session:
-                    async with session.get(url, timeout=10) as resp:
-                        if resp.status == 200:
-                            data = await resp.json()
-                            for pair in data.get("pairs", []):
-                                if pair.get("chainId") == "solana":
-                                    m = pair.get("baseToken", {}).get("address")
-                                    p = float(pair.get("priceUsd", 0))
-                                    if m and p > prices.get(m, 0):
-                                        prices[m] = p
+                status, data = await fetch_json(url, timeout=10, retries=1)
+                if status == 200 and data:
+                    for pair in data.get("pairs", []):
+                        if pair.get("chainId") == "solana":
+                            m = pair.get("baseToken", {}).get("address")
+                            p = float(pair.get("priceUsd", 0))
+                            if m and p > prices.get(m, 0):
+                                prices[m] = p
             except Exception as e:
                 print(f"Ошибка DexScreener Fetch (Trades): {e}")
-            await asyncio.sleep(1) # Rate limit
+            # Пауза не нужна: fetch_json уже держит семафор DS(3) + стаггер 0.2с
         return prices
 
     async def post_trade_watcher_loop(self):

@@ -9,23 +9,21 @@ class TATools:
         Это решает задачу получения глубоких исторических данных.
         """
         url = f"https://api.geckoterminal.com/api/v2/networks/solana/pools/{pool_address}/ohlcv/minute?limit={limit}"
-        async with aiohttp.ClientSession() as session:
-            try:
-                # API часто требует User-Agent
-                headers = {'User-Agent': 'Mozilla/5.0'}
-                async with session.get(url, headers=headers, timeout=10) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        # Формат: [timestamp, open, high, low, close, volume]
-                        # GeckoTerminal возвращает новые свечи первыми
-                        return data.get('data', {}).get('attributes', {}).get('ohlcv_list', [])
-                    else:
-                        if response.status not in (404, 429):
-                            print(f"GeckoTerminal API Error: {response.status}")
-                        return []
-            except Exception as e:
-                print(f"Error fetching OHLCV: {e}")
-                return []
+        from http_client import fetch_json
+        try:
+            # API часто требует User-Agent; идёт через ГЛОБАЛЬНЫЙ семафор GT (1)
+            status, data = await fetch_json(url, headers={'User-Agent': 'Mozilla/5.0'},
+                                            timeout=10, retries=1)
+            if status == 200 and data:
+                # Формат: [timestamp, open, high, low, close, volume]
+                # GeckoTerminal возвращает новые свечи первыми
+                return data.get('data', {}).get('attributes', {}).get('ohlcv_list', [])
+            if status not in (404, 429, 0):
+                print(f"GeckoTerminal API Error: {status}")
+            return []
+        except Exception as e:
+            print(f"Error fetching OHLCV: {e}")
+            return []
 
     @staticmethod
     def calculate_rsi(ohlcv_list: list, periods: int = 14) -> float:

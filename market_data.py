@@ -33,39 +33,33 @@ TD_TTL = 90.0  # секунд свежие данные считаются го�
 
 
 async def _gt_get(path: str, retries: int = 2):
-    """GET к GeckoTerminal с общим rate-limiter'ом.
+    """GET к GeckoTerminal через ГЛОБАЛЬНЫЙ семафор http_client (Sem=1).
     ВАЖНО: 429 НЕ ретраится (повторный долбёж усугубляет бан) — сразу {}.
     Ретраи только на 5xx/таймауты. Возвращает dict или {}."""
-    global _last_call
-    from http_client import get_session
-    session = await get_session()
-    last_err = "?"
-    for attempt in range(retries + 1):
-        async with _lock:
-            wait = MIN_INTERVAL - (time.monotonic() - _last_call)
-            if wait > 0:
-                await asyncio.sleep(wait)
-            try:
-                async with session.get(BASE + path, headers=HEADERS, timeout=12) as r:
-                    _last_call = time.monotonic()
-                    if r.status == 200:
-                        return await r.json()
-                    if r.status == 404:
-                        return {}  # токен/пул ещё не проиндексирован — ретраи бессмысленны
-                    if r.status == 429:
-                        last_err = "HTTP 429"
-                        break  # не ретраим rate-limit — отдаём {} и ждём следующего цикла
-                    last_err = f"HTTP {r.status}"
-            except asyncio.TimeoutError:
-                _last_call = time.monotonic()
-                last_err = "timeout"
-            except Exception as e:
-                _last_call = time.monotonic()
-                last_err = f"{type(e).__name__}"
-        if attempt < retries:
-            await asyncio.sleep(2 + 3 * attempt)
-    print(f"🔎 GT fail {path.split('?')[0][:60]}: {last_err}")
-    return {}
+    from http_client import fetch_json
+    # fetch_json уже держит Sem=1 + интервал 2.4с + штраф за 429.
+    # retries=0 внутри, чтобы не долбить 429: один проход, снаружи добьём только 5xx.
+    status, data = await fetch_json(BASE + path, headers=HEADERS, timeout=12, retries=0)
+    if status == 200 and isinstance(data, dict):
+        return data
+    if status == 404:
+        return {}  # токен/пул ещё не проиндексирован — ретраи бессмысленны
+    if status == 429:
+        print(f"🔎 GT fail {path.split('?')[0][:60]}: HTTP 429")
+        return {}
+    # 5xx/таймаут: максимум `retries` доборов с паузой (не впритык к бану)
+    last_err = f"HTTP {status}"
+    for attempt in range(retries):
+        await asyncio.sleep(2 + 3 * attempt)
+        status, data = await fetch_json(BASE + path, headers=HEADERS, timeout=12, retries=0)
+        if status == 200 and isinstance(data, dict):
+            return data
+        if status in (404, 429):
+            break
+        last_err = f"HTTP {status}"
+    if status != 200:
+        print(f"🔎 GT fail {path.split('?')[0][:60]}: {last_err}")
+    return {} if status != 200 else (data if isinstance(data, dict) else {})
 
 
 def _parse_ms(ts) -> int:

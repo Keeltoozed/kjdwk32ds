@@ -44,12 +44,14 @@ class CopyTrader:
         except:
             pass
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(f"https://api.dexscreener.com/latest/dex/tokens/{mint}") as resp:
-                    data = await resp.json()
-                    pairs = data.get("pairs", [])
-                    if pairs:
-                        return float(pairs[0].get("priceUsd", 0))
+            from http_client import fetch_json
+            status, data = await fetch_json(
+                f"https://api.dexscreener.com/latest/dex/tokens/{mint}",
+                timeout=8, retries=1)
+            if status == 200 and data:
+                pairs = data.get("pairs", [])
+                if pairs:
+                    return float(pairs[0].get("priceUsd", 0))
         except:
             pass
         return 0.0001

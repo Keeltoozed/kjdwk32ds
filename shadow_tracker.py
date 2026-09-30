@@ -100,28 +100,23 @@ class ShadowTracker:
         except Exception as e:
             print(f"GT bulk prices error (Shadow): {e}")
         prices = {}
-        async with self._rate_limit_lock:
-            # Ограничитель: 1 запрос в секунду для бесплатного API
-            await asyncio.sleep(1.0)
-            
-            # DexScreener поддерживает до 30 адресов через запятую
-            addresses = ",".join(mints[:30])
-            url = f"https://api.dexscreener.com/latest/dex/tokens/{addresses}"
-            
-            try:
-                async with aiohttp.ClientSession() as session:
-                    async with session.get(url, timeout=5) as response:
-                        if response.status == 200:
-                            data = await response.json()
-                            for pair in data.get("pairs", []):
-                                # Берем цену из пула Solana
-                                if pair.get("chainId") == "solana":
-                                    m = pair.get("baseToken", {}).get("address")
-                                    p = float(pair.get("priceUsd", 0))
-                                    if m and p > prices.get(m, 0):
-                                        prices[m] = p
-            except Exception as e:
-                print(f"Ошибка DexScreener Fetch: {e}")
+        # DexScreener поддерживает до 30 адресов через запятую.
+        # Лимитер не нужен локально: fetch_json держит семафор DS(3) + стаггер 0.2с.
+        from http_client import fetch_json
+        addresses = ",".join(mints[:30])
+        url = f"https://api.dexscreener.com/latest/dex/tokens/{addresses}"
+        try:
+            status, data = await fetch_json(url, timeout=8, retries=1)
+            if status == 200 and data:
+                for pair in data.get("pairs", []):
+                    # Берем цену из пула Solana
+                    if pair.get("chainId") == "solana":
+                        m = pair.get("baseToken", {}).get("address")
+                        p = float(pair.get("priceUsd", 0))
+                        if m and p > prices.get(m, 0):
+                            prices[m] = p
+        except Exception as e:
+            print(f"Ошибка DexScreener Fetch: {e}")
         return prices
 
     async def price_watcher_loop(self):

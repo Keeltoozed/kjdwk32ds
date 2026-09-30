@@ -126,21 +126,21 @@ class Analyzer:
 
     async def fetch_latest_tokens(self) -> list:
         tokens = []
-        session = await self.get_session()
+        from http_client import fetch_json
         if True:
-            # 1. Сканируем топовые (Boosted) монеты
+            # 1. Сканируем топовые (Boosted) монеты — через ГЛОБАЛЬНЫЙ семафор DS (3)
             try:
-                async with session.get(config.DEXSCREENER_LATEST, timeout=5) as response:
-                    if response.status == 200:
-                        tokens.extend(await response.json())
+                status, data = await fetch_json(config.DEXSCREENER_LATEST, timeout=8, retries=1)
+                if status == 200 and isinstance(data, list):
+                    tokens.extend(data)
             except Exception as e:
                 print(f"Dexscreener boosts fetch error: {e}")
-                
+
             # 2. Сканируем новые профили, чтобы не пропускать свежие ракеты
             try:
-                async with session.get(config.DEXSCREENER_PROFILES, timeout=5) as response:
-                    if response.status == 200:
-                        tokens.extend(await response.json())
+                status, data = await fetch_json(config.DEXSCREENER_PROFILES, timeout=8, retries=1)
+                if status == 200 and isinstance(data, list):
+                    tokens.extend(data)
             except Exception as e:
                 print(f"Dexscreener profiles fetch error: {e}")
                 
@@ -157,32 +157,29 @@ class Analyzer:
                 
     async def fetch_token_data(self, mint: str) -> dict:
         url = f"{config.DEXSCREENER_SEARCH}{mint}"
-        session = await self.get_session()
+        from http_client import fetch_json
         headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0"}
         if True:
             try:
-                async with session.get(url, headers=headers, timeout=5) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        pairs = data.get("pairs", [])
-                        if pairs:
-                            sol_pairs = [p for p in pairs if p.get("chainId") == "solana"]
-                            if sol_pairs:
-                                return sorted(sol_pairs, key=lambda x: x.get("liquidity", {}).get("usd", 0), reverse=True)[0]
-                    return await self.fetch_token_data_gecko(mint)
+                status, data = await fetch_json(url, headers=headers, timeout=8, retries=1)
+                if status == 200 and data:
+                    pairs = data.get("pairs", [])
+                    if pairs:
+                        sol_pairs = [p for p in pairs if p.get("chainId") == "solana"]
+                        if sol_pairs:
+                            return sorted(sol_pairs, key=lambda x: x.get("liquidity", {}).get("usd", 0), reverse=True)[0]
+                return await self.fetch_token_data_gecko(mint)
             except Exception as e:
                 return await self.fetch_token_data_gecko(mint)
 
     async def fetch_token_data_gecko(self, mint: str) -> dict:
-        import asyncio
-        await asyncio.sleep(2)  # Жесткий лимит: не спамить GeckoTerminal (макс 30/мин)
-        session = await self.get_session()
+        from http_client import fetch_json
         try:
             url = f"https://api.geckoterminal.com/api/v2/networks/solana/tokens/{mint}/pools?page=1"
-            async with session.get(url, timeout=8, headers={"Accept": "application/json"}) as response:
-                if response.status != 200:
-                    return {}
-                data = await response.json()
+            status, data = await fetch_json(url, timeout=10, retries=1,
+                                            headers={"Accept": "application/json"})
+            if status != 200 or not data:
+                return {}
                 pools = data.get("data", [])
                 if not pools:
                     return {}
@@ -227,78 +224,75 @@ class Analyzer:
             return False 
             
         url = f"https://api.dexscreener.com/latest/dex/search?q={symbol}"
-        session = await self.get_session()
+        from http_client import fetch_json
         if True:
             try:
-                async with session.get(url, timeout=5) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        pairs = data.get("pairs", [])
-                        
-                        for p in pairs:
-                            if p.get("chainId") == "solana":
-                                p_symbol = p.get("baseToken", {}).get("symbol", "").upper()
-                                p_mint = p.get("baseToken", {}).get("address", "")
-                                
-                                if p_symbol == symbol.upper() and p_mint != current_mint:
-                                    p_created_at = p.get("pairCreatedAt", float('inf'))
-                                    p_fdv = p.get("fdv", 0)
-                                    
-                                    # Если мы нашли другой токен с таким же именем, который был создан РАНЬШЕ нас
-                                    # и имеет какую-то ЗНАЧИТЕЛЬНУЮ капитализацию (а не просто мертвый токен)
-                                    if p_created_at < current_created_at and p_fdv > 250000:
-                                        return True
-                                        
-                                    # Либо если другой токен имеет огромную капу (в 10 раз больше нашей),
-                                    # значит он - оригинал, а мы клон.
-                                    if p_fdv > (current_fdv * 10) and p_fdv > 500000:
-                                        return True
+                status, data = await fetch_json(url, timeout=8, retries=1)
+                if status == 200 and data:
+                    pairs = data.get("pairs", [])
+
+                    for p in pairs:
+                        if p.get("chainId") == "solana":
+                            p_symbol = p.get("baseToken", {}).get("symbol", "").upper()
+                            p_mint = p.get("baseToken", {}).get("address", "")
+
+                            if p_symbol == symbol.upper() and p_mint != current_mint:
+                                p_created_at = p.get("pairCreatedAt", float('inf'))
+                                p_fdv = p.get("fdv", 0)
+
+                                # Если мы нашли другой токен с таким же именем, который был создан РАНЬШЕ нас
+                                # и имеет какую-то ЗНАЧИТЕЛЬНУЮ капитализацию (а не просто мертвый токен)
+                                if p_created_at < current_created_at and p_fdv > 250000:
+                                    return True
+
+                                # Либо если другой токен имеет огромную капу (в 10 раз больше нашей),
+                                # значит он - оригинал, а мы клон.
+                                if p_fdv > (current_fdv * 10) and p_fdv > 500000:
+                                    return True
             except Exception as e:
                 pass
         return False
 
     async def check_rugcheck(self, mint: str) -> bool:
         url = config.RUGCHECK_API.format(mint=mint)
-        session = await self.get_session()
+        from http_client import fetch_json
         headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0"}
         if True:
             try:
-                async with session.get(url, headers=headers, timeout=5) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        
-                        score = data.get("score", 1000)
-                        # Защита от моментальных дампов (-37%). Строгий фильтр скама.
-                        if score >= 400: # было 150 (слишком строго, блокировало почти всё). 400 - оптимально.
-                            return False
-                            
-                        token_info = data.get("token", {})
-                        if token_info.get("mintAuthority") is not None:
-                            return False
-                        if token_info.get("freezeAuthority") is not None:
-                            return False
-                        
-                        # Фильтр по названию токена
-                        name = token_info.get("name", "").lower()
-                        symbol = token_info.get("symbol", "").lower()
-                        bad_words = ["test", "scam", "fuck", "nigger", "pump and dump", "rug"]
-                        if any(w in name for w in bad_words) or any(w in symbol for w in bad_words):
-                            return False
-                            
-                        # Индекс Херфиндаля-Хиршмана (HHI) для выявления скрытых монополий (как Bubble Map)
-                        top_holders = data.get("topHolders", [])
-                        hhi_index = sum([(h.get("pct", 0) * 100) ** 2 for h in top_holders[:15] if not h.get("isContract", False)])
-                        
-                        top_10_pct = sum([h.get("pct", 0) for h in top_holders[:10] if not h.get("isContract", False)])
-                        
-                        # По статистике: скамы имеют 6% удержания топ-10, ракеты - 34.5%.
-                        # Блокируем только очевидный снайперский скам (>75% у одного кабала)
-                        if top_10_pct >= 75 or hhi_index > 4000:
-                            return False
-                            
-                        return True
-                    print(f"⚠️ RugCheck HTTP {response.status} для {mint}. Fail-Closed: пропускаем подозрительный токен.")
-                    return False
+                status, data = await fetch_json(url, headers=headers, timeout=8, retries=1)
+                if status == 200 and data:
+                    score = data.get("score", 1000)
+                    # Защита от моментальных дампов (-37%). Строгий фильтр скама.
+                    if score >= 400: # было 150 (слишком строго, блокировало почти всё). 400 - оптимально.
+                        return False
+
+                    token_info = data.get("token", {})
+                    if token_info.get("mintAuthority") is not None:
+                        return False
+                    if token_info.get("freezeAuthority") is not None:
+                        return False
+
+                    # Фильтр по названию токена
+                    name = token_info.get("name", "").lower()
+                    symbol = token_info.get("symbol", "").lower()
+                    bad_words = ["test", "scam", "fuck", "nigger", "pump and dump", "rug"]
+                    if any(w in name for w in bad_words) or any(w in symbol for w in bad_words):
+                        return False
+
+                    # Индекс Херфиндаля-Хиршмана (HHI) для выявления скрытых монополий (как Bubble Map)
+                    top_holders = data.get("topHolders", [])
+                    hhi_index = sum([(h.get("pct", 0) * 100) ** 2 for h in top_holders[:15] if not h.get("isContract", False)])
+
+                    top_10_pct = sum([h.get("pct", 0) for h in top_holders[:10] if not h.get("isContract", False)])
+
+                    # По статистике: скамы имеют 6% удержания топ-10, ракеты - 34.5%.
+                    # Блокируем только очевидный снайперский скам (>75% у одного кабала)
+                    if top_10_pct >= 75 or hhi_index > 4000:
+                        return False
+
+                    return True
+                print(f"⚠️ RugCheck HTTP {status} для {mint}. Fail-Closed: пропускаем подозрительный токен.")
+                return False
             except Exception as e:
                 print(f"⚠️ RugCheck fetch error ({type(e).__name__}): {e}. Fail-Closed: пропускаем подозрительный токен.")
                 return False
@@ -844,6 +838,12 @@ class Analyzer:
             if m1 < -8.0:
                 return self._deny(address, "lottery-dump", f"🚫 [{tag}] {symbol}: вертикаль откатывает m1 {m1:+.1f}% — дамп, не вход.")
             if (b5 + s5) >= 20 and (s5 == 0 or b5 >= s5) and liq >= 20000 and links:
+                # Скам-фильтры действуют и тут (как в SCOUT): вертикаль с мимикрией
+                # под бренд (PEPE/BONK/...) — это развод, а не лотерея.
+                if not self._evm_brand_ok(symbol, tag):
+                    return False
+                if not await self._evm_clone_ok(symbol, address, pair_data, chain, tag):
+                    return False
                 print(f"🎰 [{tag}-LOTTERY] {symbol}: вертикаль m5 {m5:+.1f}% — лотерейный билет.")
                 self._set_sig(address, f"{tag} LOTTERY {m5:+.0f}%")
                 return True

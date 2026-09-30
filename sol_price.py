@@ -38,6 +38,45 @@ def get_sol_price_sync() -> float:
     return _sol_price
 
 import requests
+import threading as _th
+
+# Синхронный лимитер для requests-пути (вызывается из to_thread, где asyncio.Semaphore
+# недоступен). Зеркалит http_client: DS стаггер 0.2с, GT не чаще 1 раза в ~2.4с.
+_sync_lock = _th.Lock()
+_sync_last: dict = {}
+_SYNC_GAP = {
+    "api.jup.ag": 2.4, "lite-api.jup.ag": 2.4,
+    "api.coinbase.com": 1.0, "api.kraken.com": 1.0,
+    "coins.llama.fi": 1.0,
+    "api.geckoterminal.com": 2.4,
+    "api.dexscreener.com": 0.2,
+}
+
+def _sync_wait(url: str):
+    try:
+        from urllib.parse import urlparse as _up
+        host = _up(url).hostname or ""
+    except Exception:
+        return
+    gap = 0.0
+    for h, g in _SYNC_GAP.items():
+        if host == h or host.endswith("." + h):
+            gap = g
+            break
+    if not gap:
+        return
+    import time as _t
+    with _sync_lock:
+        now = _t.monotonic()
+        wait = gap - (now - _sync_last.get(host, 0.0))
+        _sync_last[host] = now + max(0.0, wait)
+    if wait > 0:
+        import time as _t2
+        _t2.sleep(wait)
+
+def _sget(url: str, **kw):
+    _sync_wait(url)
+    return requests.get(url, **kw)
 
 def fetch_bulk_prices_sync(mints: list) -> dict:
     """Синхронные лайв-цены, цепочка: Jupiter Price V3 -> DeFiLlama (без ключа) -> GeckoTerminal.
@@ -54,7 +93,7 @@ def fetch_bulk_prices_sync(mints: list) -> dict:
             for base in ("https://api.jup.ag/price/v3?ids=",
                          "https://lite-api.jup.ag/price/v2?ids="):
                 try:
-                    resp = requests.get(base + ",".join(chunk), headers={"Accept": "application/json",
+                    resp = _sget(base + ",".join(chunk), headers={"Accept": "application/json",
                                                       "User-Agent": "Mozilla/5.0"}, timeout=10)
                     if resp.status_code == 200 and resp.json().get("data"):
                         data = resp.json().get("data", {})
@@ -75,7 +114,7 @@ def fetch_bulk_prices_sync(mints: list) -> dict:
     missing_sol = "So11111111111111111111111111111111111111112" not in out
     if missing_sol:
         try:
-            resp = requests.get("https://api.coinbase.com/v2/prices/SOL-USD/spot",
+            resp = _sget("https://api.coinbase.com/v2/prices/SOL-USD/spot",
                                 headers={"Accept": "application/json",
                                          "User-Agent": "Mozilla/5.0"}, timeout=8)
             if resp.status_code == 200:
@@ -86,7 +125,7 @@ def fetch_bulk_prices_sync(mints: list) -> dict:
             print(f"⚠️ Ошибка цены SOL Coinbase: {e}")
     if "So11111111111111111111111111111111111111112" not in out:
         try:
-            resp = requests.get("https://api.kraken.com/0/public/Ticker?pair=SOLUSD",
+            resp = _sget("https://api.kraken.com/0/public/Ticker?pair=SOLUSD",
                                 headers={"Accept": "application/json",
                                          "User-Agent": "Mozilla/5.0"}, timeout=8)
             if resp.status_code == 200:
@@ -99,7 +138,7 @@ def fetch_bulk_prices_sync(mints: list) -> dict:
     if missing:
         try:
             ids = ",".join(f"solana:{m}" for m in missing[:30])
-            resp = requests.get(f"https://coins.llama.fi/prices/current/{ids}",
+            resp = _sget(f"https://coins.llama.fi/prices/current/{ids}",
                                 headers={"Accept": "application/json",
                                          "User-Agent": "Mozilla/5.0"}, timeout=10)
             if resp.status_code == 200:
@@ -118,7 +157,7 @@ def fetch_bulk_prices_sync(mints: list) -> dict:
         try:
             url = ("https://api.geckoterminal.com/api/v2/simple/networks/solana/token_price/"
                    + ",".join(missing[:30]))
-            resp = requests.get(url, headers={"Accept": "application/json",
+            resp = _sget(url, headers={"Accept": "application/json",
                                               "User-Agent": "Mozilla/5.0"}, timeout=5)
             if resp.status_code == 200:
                 px = resp.json().get("data", {}).get("attributes", {}).get("token_prices", {})
