@@ -70,6 +70,10 @@ MAX_LIQUIDITY = 50000000
 # вход в чужой памп = выходная ликвидность. Выкл по умолчанию, вкл осознанно.
 USE_FOMO_SIGNALS = False
 USE_COPYTRADE = False
+# Символьный кулдаун: после закрытия ЛЮБОЙ сделки тикер банится целиком
+# (кейс VRAX: +5% → перезаход в клона с тем же именем → -32%).
+# Mint-гарды клонов не видят (другой адрес), тикер — видят.
+SYMBOL_REBUY_COOLDOWN_SEC = 4 * 3600  # 4ч, как mint-кулдаун в add_position
 
 # AI Аналитика
 GEMINI_API_KEY = "AQ.Ab8RN6Ju77t6DI8AYru7TGxuPuG_0WOcqHZqq1OBsDAwHtoJxg" # Получить бесплатно на https://aistudio.google.com/

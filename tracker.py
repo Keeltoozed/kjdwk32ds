@@ -193,6 +193,14 @@ class PaperTracker:
         return worst
 
     @staticmethod
+    def _norm_symbol(s) -> str:
+        """Тикер к каноническому виду для символьного кулдауна."""
+        try:
+            return (str(s) or "").strip().upper()
+        except Exception:
+            return ""
+
+    @staticmethod
     def _is_suspicious_pnl(pos) -> bool:
         """Фантомный PnL (как NUTFLEX +$1.6M при +14%): stored pnl не бьётся
         с ценовым. Такие сделки исключаем из капитала/тотала, чиним ремонтом."""
@@ -250,6 +258,35 @@ class PaperTracker:
         if not (0.5 <= amount_usd <= 100.0):
             print(f"🚫 Отказ: сайз ${amount_usd:.2f} вне [0.5, 100] для {symbol}.")
             return
+        # СИМВОЛЬНЫЙ КУЛДАУН (кейс VRAX: +5% → перезаход в клона → -32%).
+        # Все старые гарды keyed by mint (адрес), а клоны выходят под тем же
+        # тикером с другим адресом. Баним тикер целиком: открыт такой же —
+        # отказ (не удваиваемся в тот же памп); закрыт недавно — отказ
+        # (не покупаем вершину, с которой только вышли, и не ловим нож).
+        # История закрытых живёт в positions (включая архив *_old_*), поэтому
+        # переживает рестарты через файл/Supabase.
+        _sym = self._norm_symbol(symbol)
+        if _sym:
+            _cd = float(getattr(config, "SYMBOL_REBUY_COOLDOWN_SEC", 4 * 3600) or 0)
+            _now = time.time()
+            for _k, _p in self.positions.items():
+                if _k == mint:
+                    continue  # свой же адрес ведёт mint-ветка ниже
+                try:
+                    if self._norm_symbol(_p.symbol) != _sym:
+                        continue
+                except Exception:
+                    continue
+                if _p.status == "open":
+                    print(f"🚫 Отказ: {symbol} уже в рынке (другой контракт, {_k[:10]}). Не удваиваемся в тот же тикер.")
+                    return
+                if _p.status == "closed" and _cd > 0:
+                    _xt = float(getattr(_p, "exit_time", 0) or 0)
+                    if _xt and (_now - _xt) < _cd:
+                        _left = (_cd - (_now - _xt)) / 3600
+                        print(f"⏳ Символьный кулдаун: {symbol} закрыт {_p.pnl_usd:+.2f}$ недавно ({getattr(_p, 'exit_reason', '')}). "
+                              f"Повтор через {_left:.1f}ч — не покупаем свой же выход.")
+                        return
         # БЛОКИРОВКА ПОВТОРНОГО ВХОДА С УМНЫМ КУЛДАУНОМ
         if mint in self.positions:
             pos = self.positions[mint]
