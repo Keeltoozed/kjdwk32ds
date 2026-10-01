@@ -1132,6 +1132,20 @@ async def async_main():
     except Exception as _e:
         print(f"⚠️ coverage report err: {_e}")
 
+    # Метка РЕЖИМА: какие пороги крутят этот деплой. Сделки до/после деплоя
+    # сравнивать нельзя — метка в логе делит эры (тихая неделя начинается тут).
+    try:
+        import time as _tt
+        print(f"🏷️ РЕЖИМ { _tt.strftime('%Y-%m-%d %H:%M UTC', _tt.gmtime())}: "
+              f"STOP {config.STOP_LOSS_PCT} TRAIL {config.TRAILING_ACTIVATION_PCT}/{config.TRAILING_DISTANCE_PCT} "
+              f"MOONBAG {config.MOONBAG_TRIGGER_PCT} LIQ {getattr(config, 'MIN_LIQUIDITY', '?')} "
+              f"VETO {getattr(config, 'ROCKET_VETO_MIN', '?')}@{getattr(config, 'ROCKET_VETO_ENABLED', '?')} "
+              f"TG_MAX {getattr(config, 'TG_MAX_SIZE_USD', '?')}/VIP {getattr(config, 'TG_VIP_SIZE_USD', '?')} "
+              f"ROB_MAX {getattr(config, 'ROB_MAX_SIZE_USD', '?')} "
+              f"FOMO {getattr(config, 'USE_FOMO_SIGNALS', '?')} COPY {getattr(config, 'USE_COPYTRADE', '?')}")
+    except Exception as _e:
+        print(f"⚠️ regime line err: {_e}")
+
     # Keep-Alive задача, чтобы Render не засыпал (работает в фоне)
     async def keep_alive():
         import aiohttp, os

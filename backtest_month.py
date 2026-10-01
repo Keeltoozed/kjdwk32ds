@@ -73,7 +73,24 @@ async def best_pool(session, network, mint):
 
 
 async def fetch_candles(network, pool_id, days):
-    """5m-свечи назад на days дней. Возвращает [(ts, o,h,l,c,vol), ...] по возрастанию."""
+    """5m-свечи назад на days дней. Возвращает [(ts, o,h,l,c,vol), ...] по возрастанию.
+    Кэш на диск (/tmp/bt_cache): окна GT плывут между прогонами, без кэша A/B
+    сравнивает разные данные."""
+    import hashlib as _h
+    import json as _j
+    import os as _o
+    _cdir = "/tmp/bt_cache"
+    try:
+        _o.makedirs(_cdir, exist_ok=True)
+    except Exception:
+        pass
+    _cf = _o.path.join(_cdir, _h.md5(f"{network}|{pool_id}|{days}".encode()).hexdigest() + ".json")
+    try:
+        if _o.path.exists(_cf):
+            with open(_cf) as _f:
+                return [tuple(r) for r in _j.load(_f)]
+    except Exception:
+        pass
     from http_client import fetch_json
     out = []
     need = int(days * 24 * 12)
@@ -98,15 +115,28 @@ async def fetch_candles(network, pool_id, days):
             break
         if len(out) > need + 1000:
             break
-    return out[-need:]
+    out = out[-need:]
+    try:
+        with open(_cf, "w") as _f:
+            _j.dump(out, _f)
+    except Exception:
+        pass
+    return out
 
 
-def pressure_proxy(o, c, v):
-    """Прокси давления (в свечах нет buys/sells): зелёная = покупки, красная = продажи.
-    Честное приближение rule-гейта b/s>=1.5: требуем явный перевес, иначе скип."""
-    if c >= o:
-        return v, v * 0.3
-    return v * 0.3, v
+def pressure_proxy(candles, i):
+    """Прокси давления (в свечах нет buys/sells): объёмы зелёных свечей часа
+    против красных — аналог прод-гейта h1 buys>=sells*1.5. Возвращает (ok, b, s)."""
+    b = s = 0.0
+    for j in range(max(0, i - 12), i):
+        _o, _c, _v = candles[j][1], candles[j][4], candles[j][5]
+        if _c >= _o:
+            b += _v
+        else:
+            s += _v
+    if s <= 0:
+        return True, b, s
+    return (b >= s * 1.5), b, s
 
 
 def simulate(candles, liq_usd=999999.0):
@@ -131,9 +161,9 @@ def simulate(candles, liq_usd=999999.0):
                 continue  # liq-гейт $20k (прокси: текущий резерв пула)
             if not (M5_MIN <= chg <= M5_MAX and prev_red and v >= 2 * med and h1 < 300 and h24 < 500):
                 continue
-            _b, _s = pressure_proxy(o, c, v)
-            if _s > 0 and _b < _s * 1.5:
-                continue  # нет давления покупателей — как в проде
+            # Без прокси давления: для A/B exits важен один набор входов
+            # с ракетами (давление в свечах невосстановимо; живые гейты
+            # режут входы — это занижает винрейт replay, помним).
             pos = {"entry": c, "amt": SIZE, "max": c, "locked": 0.0, "t0": ts, "moon": False}
             continue
         # трекинг открытой
@@ -204,6 +234,37 @@ async def pool_reserve(network, pool_id):
 async def main():
     days = int(sys.argv[1]) if len(sys.argv) > 1 else 7
     live = "--live" in sys.argv
+    # Переопределения порогов для A/B:
+    # python3 backtest_month.py 7 --set MOONBAG_TRIGGER_PCT=0.5
+    # (форма --set K=V одним токеном тоже работает)
+    global MOONBAG, STOP, TRAIL_ACT, TRAIL_DIST, M5_MIN, SIZE
+    _args = list(sys.argv[2:])
+    _kvs = []
+    _i = 0
+    while _i < len(_args):
+        _a = _args[_i]
+        if _a == "--set" and _i + 1 < len(_args) and "=" in _args[_i + 1]:
+            _kvs.append(_args[_i + 1])
+            _i += 2
+            continue
+        if _a.startswith("--set") and "=" in _a:
+            _kvs.append(_a.split("--set", 1)[1].lstrip("="))
+        _i += 1
+    for _kv in _kvs:
+        if "=" not in _kv:
+            continue
+        _k, _v = _kv.split("=", 1)
+        _k = _k.strip()
+        try:
+            _v = float(_v.strip())
+        except Exception:
+            print(f"не число: {_kv}")
+            continue
+        if _k in globals():
+            globals()[_k] = _v
+            print(f"override {_k}={_v}")
+        else:
+            print(f"неизвестный ключ {_k} (MOONBAG/STOP/TRAIL_ACT/TRAIL_DIST/M5_MIN/SIZE)")
     print(f"Бектест {days}д: пулы -> 5m-свечи -> replay. Пороги из config.", flush=True)
     universe = await live_universe() if live else list(UNIVERSE)
     if live:
