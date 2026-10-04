@@ -77,7 +77,7 @@ MAX_LIQUIDITY = 50000000
 # в fomo_signal_loop (фильтры анализатора + RKT-вето + GoPlus/honeypot.is для EVM
 # + символьный кулдаун + кэп сайза). Старые -70% были до гейтов.
 USE_FOMO_SIGNALS = True
-USE_COPYTRADE = False
+USE_COPYTRADE = True
 TG_MAX_SIZE_USD = 4.0  # TG-вход не больше $4 (тренировочные колёса: дешевле tuition)
 TG_VIP_SIZE_USD = 2.0  # TG VIP-шип = раздача (PEGGED -40% за 3с на $4): как в сканерах, $2 макс
 MAX_FOMO_BUYS_PER_PASS = 3  # не больше 3 покупок за проход очереди (бёрст-контроль)
@@ -99,7 +99,7 @@ ROCKET_WEAK = 0.35  # score <= → weak
 ROCKET_SIZE_UP = 1.5
 ROCKET_SIZE_DOWN = 0.5
 ROCKET_VETO_ENABLED = True  # вето слабых дженерик-входов (MERRGER/MTA/LUXR: rule 77-90% + RKT 0.04-0.25 → стопы)
-ROCKET_VETO_MIN = 0.30  # RKT ниже → скип. DIPBUY/SCOUT/LOTTERY/VIP/COPY/GROWTH exempt
+ROCKET_VETO_MIN = 0.20  # RKT ниже → скип. DIPBUY/SCOUT/LOTTERY/VIP/COPY/GROWTH exempt
 # === GOPLUS (общедоступная модель риска: honeypot/налоги; бесплатно, без ключа) ===
 GOPLUS_ENABLED = True
 GOPLUS_MAX_BUY_TAX = 0.10  # блок, если налог на покупку выше 10%
@@ -151,7 +151,7 @@ ROBINHOOD_MIN_LIQUIDITY = 20000  # GROWTH: было 30k. Пыль $0-15k реж�
 ROBINHOOD_SCAN_INTERVAL = 15  # Было 25: чаще опрос = раньше вход на ракету
 EVM_TRACK_INTERVAL = 8  # Было захардкожено 12с: цены с ноды идут 1 батчем без лимитов DS,
 # поэтому трек стопов/трейлингов можно крутить чаще — раньше режем раги, раньше фиксим пик
-EVM_MIN_M5_PCT = 5.0  # Было 7.0: шире окно + вето 0.58 держит раги. Больше кандидатов в ракеты
+EVM_MIN_M5_PCT = 3.5  # Было 7.0: шире окно + вето 0.58 держит раги. Больше кандидатов в ракеты
 EVM_RESCAN_COOLDOWN = 90  # Было 300: ракеты живут минуты, повторная проверка через 90 сек
 EVM_NEW_POOL_PAGES = 10  # Было 8: глубже свежие пулы GT = больше ранних ракет (GT-кэш 60с держит квоту)
 EVM_MAX_MINTS = 150  # Было 100: хвост выдачи больше не отрезается (повторы режет recooldown 90с)
@@ -220,7 +220,7 @@ ETHEREUM_MIN_SIZE_USD = 15.0  # меньше $15 в L1 не входим: газ
 # (модель всем ставит 100%, а катастрофы были именно VIP-100%)
 CONVICTION_MULT = 2.0  # conviction-вход едет удвоенным
 CONVICTION_MIN_M5_PCT = 0.20  # m5 от +20%
-CONVICTION_MAX_M5_PCT = 0.60  # m5 до +60% (выше - вершина)
+CONVICTION_MAX_M5_PCT = 1.20  # m5 до +60% (выше - вершина)
 CONVICTION_MIN_BUYSELL = 2.0  # покупки >= продаж x2
 CONVICTION_MIN_LIQ = 30000  # пул от $30к
 MAX_DEPLOYED_PCT = 0.60  # суммарно в рынке не больше 60% капитала (сдерживает тиринг)
@@ -301,8 +301,8 @@ VIP_MAX_M5_PCT = 1.50  # Было 0.60: резали настоящие раке
 PULLBACK_MIN_M5_PCT = 0.03  # Было 0.05: расширяем сеть входа
 PULLBACK_M1_MIN_PCT = -0.15  # Но и не летим в падающий нож (максимум -15% за минуту)
 PULLBACK_M1_MAX_PCT = 0.05  # Было 0.00 - ждали идеальный откат. Ракеты летят с m1 > 0
-PULLBACK_MAX_H1_PCT = 3.00  # Было 10.00 (1000%) - брали вершины типа +3152% Drip / +33009% SI. Теперь >+300% за час = поздно
+PULLBACK_MAX_H1_PCT = 8.00  # Было 10.00 (1000%) - брали вершины типа +3152% Drip / +33009% SI. Теперь >+300% за час = поздно
 LOTTERY_MIN_M5_PCT = 0.80  # Лотерея только для мощных вертикалей от 80%
 LOTTERY_SIZE_MULT = 0.25
 WHALE_CONSENSUS = 2  # вход на 2-м ките (3-й = уже поздно)
-WHALE_MAX_RUNUP = 1.35  # цена не должна вырасти >35% с момента покупки первого кита
+WHALE_MAX_RUNUP = 1.55  # цена не должна вырасти >35% с момента покупки первого кита
