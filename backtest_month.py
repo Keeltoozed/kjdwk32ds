@@ -157,8 +157,8 @@ def simulate(candles, liq_usd=999999.0):
             c288 = candles[max(0, i - 288)][1]
             h1 = (c - c60) / c60 * 100 if c60 else 0
             h24 = (c - c288) / c288 * 100 if c288 else 0
-            if liq_usd < 20000:
-                continue  # liq-гейт $20k (прокси: текущий резерв пула)
+            if liq_usd < float(getattr(config, "MIN_LIQUIDITY", 10000)):
+                continue  # liq-гейт из прод-конфига (прокси: текущий резерв пула)
             if not (M5_MIN <= chg <= M5_MAX and prev_red and v >= 2 * med and h1 < 300 and h24 < 500):
                 continue
             # Без прокси давления: для A/B exits важен один набор входов

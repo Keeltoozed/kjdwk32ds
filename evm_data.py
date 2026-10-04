@@ -32,8 +32,8 @@ def _store(key: str, val: list):
 # а не от глубины (все лузеры были в $30k+ пулах). Conviction-x2 от $30k отдельно.
 CHAINS = {
     "robinhood": {"min_liq": float(getattr(config, "ROBINHOOD_MIN_LIQUIDITY", 20000)), "tag": "ROBINHOOD"},
-    "base": {"min_liq": 20000.0, "tag": "BASE"},
-    "bsc": {"min_liq": 20000.0, "tag": "BSC"},
+    "base": {"min_liq": 10000.0, "tag": "BASE"},
+    "bsc": {"min_liq": 10000.0, "tag": "BSC"},
     "ethereum": {"min_liq": float(getattr(config, "ETHEREUM_MIN_LIQUIDITY", 20000.0)), "tag": "ETHEREUM"},
 }
 

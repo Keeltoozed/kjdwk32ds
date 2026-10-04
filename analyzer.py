@@ -595,14 +595,19 @@ class Analyzer:
             if _s > 0 and _b < _s * 1.1:
                 print(f"🚫 [ENTRY] {mint}: buys {_b} / sells {_s} — нет давления покупателей.")
                 return False
-            if _v24 < 10000:
-                print(f"🚫 [ENTRY] {mint}: vol24h ${_v24:,.0f} < $10k — совсем нет объёма.")
+            # Молодняк (<30 мин, стадия $10К): объёма $10К ещё нет — порог $3К.
+            # Старше 30 мин без $10К объёма = труп, режем как раньше.
+            _v24_min = 3000 if _age_min_pre < 30 else 10000
+            if _v24 < _v24_min:
+                print(f"🚫 [ENTRY] {mint}: vol24h ${_v24:,.0f} < ${_v24_min:,.0f} — совсем нет объёма.")
                 return False
             _txm5 = (pair_data.get("txns") or {}).get("m5", {}) or {}
             _b5, _s5 = _txm5.get("buys", 0) or 0, _txm5.get("sells", 0) or 0
-            
-            if (_b5 + _s5) < 30:
-                print(f"🚫 [VELOCITY] {mint}: txns m5 {_b5 + _s5} < 30 — слишком медленно, нет органического FOMO.")
+
+            # Молодняк: 15 сделок за 5 мин достаточно (стадия $10К). Старше — 30 как раньше.
+            _tx_min = 15 if _age_min_pre < 30 else 30
+            if (_b5 + _s5) < _tx_min:
+                print(f"🚫 [VELOCITY] {mint}: txns m5 {_b5 + _s5} < {_tx_min} — слишком медленно, нет органического FOMO.")
                 return False
             if _s5 > 0:
                 mult = 1.0
@@ -1003,7 +1008,11 @@ class Analyzer:
             return self._deny(address, "dump/gone", f"🚫 [{tag}] {symbol}: m1 {m1:+.1f}% h1 {h1:+.0f}% — дамп/улетел.")
         if s > 0 and b < s * 1.5:
             return self._deny(address, f"no-pressure {b}/{s}", f"🚫 [{tag}] {symbol}: buys {b} / sells {s} — нет давления.")
-        if (b5 + s5) < 20 or vol24 < 10000:
+        # Молодняк (<30 мин, стадия $10К): пороги ниже — 12 сделок и $3К объёма.
+        # Старше без объёма = труп. SCOUT (<5 мин) идёт отдельной веткой выше.
+        _evm_tx_min = 12 if _age_min < 30 else 20
+        _evm_vol_min = 3000 if _age_min < 30 else 10000
+        if (b5 + s5) < _evm_tx_min or vol24 < _evm_vol_min:
             return self._deny(address, "quiet", f"🚫 [{tag}] {symbol}: тихо (tx5 {(b5+s5)}, vol24 ${vol24:,.0f}).")
         if not links:
             return self._deny(address, "no-links", f"🚫 [{tag}] {symbol}: нет ни одной ссылки — скам-риск.")

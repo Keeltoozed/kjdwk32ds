@@ -34,13 +34,13 @@ MAX_DAILY_LOSS_USD = 18.0
 KILL_SWITCH_ENABLED = True  # PRO-дисциплина: -$18/день = стоп до завтра. Профи не отбиваются в красный день
 KILL_SWITCH_PAUSE = 300  # Было 3600: пауза 5 мин вместо часа (блокирует условие дневного минуса, а не сон)
 MAX_DAILY_LOSS_PCT = 0.25
-STOP_LOSS_PCT = -0.20  # Вернули по просьбе: стоп -20% чтобы ракеты дышали
+STOP_LOSS_PCT = -0.12  # Было -0.20: шесть стопов по -20% = -$13.71. Режем лузеров быстро, ракеты дышат трейлингом а не стопом
 SNIPER_ENTRIES_ENABLED = False
 TIME_EXIT_MINUTES = 60  # Если за 30 минут нет пампа - выходим
 TIME_EXIT_PROFIT_REQ = 0.0
 
 # Trailing Stop Config (Защита прибыли)
-TRAILING_ACTIVATION_PCT = 0.25  # Активируем трейлинг уже при +25% (было +15% — слишком рано, резало профит)
+TRAILING_ACTIVATION_PCT = 0.18  # Было 0.25: BUTTONS +37% отдали в -13%. Трейлинг раньше — прибыль не отдаём
 TRAILING_DISTANCE_PCT = 0.08  # базовый для скальпа; раннеры после мунбэга едут шире (см. EVM_RUNNER_TRAIL)
 # === RUNNER MODE (SHCAT +1126%/+627%, 中国人能飞 +152% держались ~5ч, пик==сейчас) ===
 # При каких параметрах они выжили и фильтры их НЕ выбили — фиксируем как норму:
@@ -58,7 +58,7 @@ EVM_STAGNANT_MIN = 45  # было 15: SHCAT-подобные сидели бы �
 # потому что вертикали (+200%) проскакивают оба уровня за одну 5м-свечу.
 # А живые SPIRITUAL (+55%) и BINF (+82% пологий) уперлись в потолок 60%:
 # 50% их фиксирует (~+20% бленд вместо -10%/+6%). Ставим 0.50.
-MOONBAG_TRIGGER_PCT = 0.50
+MOONBAG_TRIGGER_PCT = 0.35
 # Stagnant (PRO: время по заслугам): показал импульс (пик 5%+) — минус режем
 # на N-й минуте; даже не дёрнулся — кат на FAST-минуте, слот под следующий выстрел
 STAGNANT_LOSS_MIN = 15
@@ -71,19 +71,22 @@ AI_MODE = "degen" # "sniper" (строго 80-90% уверенности) или
 # в пулах ГЛУБЖЕ $30k — убил их вход на вершине, а не проскальзывание.
 # Смерти от проскальзывания (sendor -74%) были из $12-15k — их $20k режет.
 # При сайзах $4-10 позиция в $20k пуле = 0.03%, импакта нет.
-MIN_LIQUIDITY = 20000
+MIN_LIQUIDITY = 10000
 MAX_LIQUIDITY = 50000000
+# Было 20000: токены на стадии $10К (KOTH/EGO/HIGGS до выноса) скипались как микро-пулы.
+# Сайз $4-6 в пуле $10К = 0.05%, проскальзывания нет (кэп 0.5% пула в main.py держит).
+# Скам режут соцсети+mint/freeze+Jito+GoPlus, а не ликва.
 # Внешние сигналы (TG-каналы): ВКЛ, но в наморднике — полный комплект гейтов
 # в fomo_signal_loop (фильтры анализатора + RKT-вето + GoPlus/honeypot.is для EVM
 # + символьный кулдаун + кэп сайза). Старые -70% были до гейтов.
 USE_FOMO_SIGNALS = True
 USE_COPYTRADE = True
-TG_MAX_SIZE_USD = 4.0  # TG-вход не больше $4 (тренировочные колёса: дешевле tuition)
-TG_VIP_SIZE_USD = 2.0  # TG VIP-шип = раздача (PEGGED -40% за 3с на $4): как в сканерах, $2 макс
+TG_MAX_SIZE_USD = 3.0  # Было 4.0: TG-коллы на вершинах тоже сливают. Меньше сайз на чужие вершины
+TG_VIP_SIZE_USD = 1.5  # Было 2.0: TG VIP-шипы 83-100% = раздача. Лотерейный билет ещё меньше
 MAX_FOMO_BUYS_PER_PASS = 3  # не больше 3 покупок за проход очереди (бёрст-контроль)
 # Robinhood Chain: ни GoPlus, ни honeypot.is сеть 4663 не знают (fail-open всегда).
 # Единственная защита от honeypot-рага (-72% ZUPITER) — размер: кэп как у TG.
-ROB_MAX_SIZE_USD = 4.0
+ROB_MAX_SIZE_USD = 3.0  # Было 4.0: ROB без honeypot-покрытия, LOTTERY +131% слилась. Меньше сайз
 # Символьный кулдаун: после закрытия ЛЮБОЙ сделки тикер банится целиком
 # (кейс VRAX: +5% → перезаход в клона с тем же именем → -32%).
 # Mint-гарды клонов не видят (другой адрес), тикер — видят.
@@ -127,7 +130,7 @@ BIRDEYE_CHAINS = ["robinhood", "solana", "robinhood", "base", "robinhood", "bsc"
 
 # Jupiter Tokens API v2 (free key: portal.jup.ag): recent + toptrending/5m для Solana
 JUP_API_KEY = os.getenv("JUP_API_KEY", "")
-JUP_INTERVAL = 120  # 2 запроса за цикл - безопасно для любого тира
+JUP_INTERVAL = 60  # Было 120: свежие Solana-токены каждые 60с — до выноса
 
 
 # === JITO BLOCK ENGINE (MEV Protection) ===
@@ -146,15 +149,15 @@ ROBINHOOD_DS_SLUG = "robinhood"  # slug DexScreener (НЕ 4663 - тот верн
 ROBINHOOD_GT_NETWORK = "robinhood"  # slug GeckoTerminal
 ROBINHOOD_RPC_URL = "https://rpc.mainnet.chain.robinhood.com"
 ROBINHOOD_EXPLORER = "https://robinhoodchain.blockscout.com"
-ROBINHOOD_MIN_LIQUIDITY = 20000  # GROWTH: было 30k. Пыль $0-15k режется,
+ROBINHOOD_MIN_LIQUIDITY = 10000  # Было 20000: стадия $10К должна проходить. Скам режут GoPlus/honeypot+ссылки, сайз мелкий
 # $20k+ с сайзом $6 (0.03% пула) едут. Conviction-x2 по-прежнему только от $30k.
-ROBINHOOD_SCAN_INTERVAL = 15  # Было 25: чаще опрос = раньше вход на ракету
+ROBINHOOD_SCAN_INTERVAL = 10  # Было 25→15: опрос каждые 10с = вход до выноса, не на вершине
 EVM_TRACK_INTERVAL = 8  # Было захардкожено 12с: цены с ноды идут 1 батчем без лимитов DS,
 # поэтому трек стопов/трейлингов можно крутить чаще — раньше режем раги, раньше фиксим пик
 EVM_MIN_M5_PCT = 3.5  # Было 7.0: шире окно + вето 0.58 держит раги. Больше кандидатов в ракеты
-EVM_RESCAN_COOLDOWN = 90  # Было 300: ракеты живут минуты, повторная проверка через 90 сек
+EVM_RESCAN_COOLDOWN = 60  # Было 300→90: повторная проверка через 60с — окно ракеты минуты
 EVM_NEW_POOL_PAGES = 10  # Было 8: глубже свежие пулы GT = больше ранних ракет (GT-кэш 60с держит квоту)
-EVM_MAX_MINTS = 150  # Было 100: хвост выдачи больше не отрезается (повторы режет recooldown 90с)
+EVM_MAX_MINTS = 200  # Было 100→150: хвост выдачи не отрезается, ранние ракеты не теряем
 # EVM-копитрейдинг: кошельки китов по сетям (0x...). Их входящие Transfer = покупки:
 # токен летит в скан первым с меткой COPY. Пусто = выключено (нужны адреса!).
 EVM_COPY_WALLETS = {"base": [], "bsc": [], "robinhood": [], "ethereum": []}
@@ -163,7 +166,7 @@ EVM_COPY_WALLETS = {"base": [], "bsc": [], "robinhood": [], "ethereum": []}
 FOMO_API_KEY = ""
 FOMO_WS_ENABLED = True
 FOMO_FOLLOW_TRADERS = []  # ники топов, напр. ["whatever_fomo", "pricedin"] — их покупки в приоритет
-FOMO_MIN_USD = 100  # игнорить покупки меньше $100 (пыль)
+FOMO_MIN_USD = 50  # Было 100: покупки китов от $50 ловим раньше — первый кит важнее крупного
 FOMO_BOARDS_INTERVAL = 7200  # доски trending/graduated раз в 2ч (экономия кредитов)
 # GMGN живой мост (headless-Chromium ловит create-сигналы trenches).
 # ТЯЖЁЛЫЙ: +200-400MB RAM, на бесплатном Render не влезет. Включать на тарифе 2GB+
@@ -174,7 +177,7 @@ GMGN_CHAINS = ["sol", "base", "bsc", "robinhood"]
 # === BASE (EVM L2, там сидят мемы с fomo.family: musebook, DELTA...) ===
 # Тот же EVM-движок, slug DexScreener "base". Пулы глубже - порог $15к.
 BASE_ENABLED = True
-BASE_SCAN_INTERVAL = 15  # было 25: чаще опрос = раньше вход
+BASE_SCAN_INTERVAL = 10  # было 25→15: каждые 10с — до пампа
 
 # === EVM WSS factory-listener (новые пулы в реальном времени, Base+BSC) ===
 # Без ключей (PublicNode). Robinhood публичного WSS не даёт - только опрос.
@@ -183,7 +186,7 @@ EVM_WSS_ENABLED = True
 # === BSC (GSTOCK и co с fomo.family сидят там) ===
 # Тот же движок, slug "bsc".
 BSC_ENABLED = True
-BSC_SCAN_INTERVAL = 15  # было 25
+BSC_SCAN_INTERVAL = 10  # было 25→15: каждые 10с — до пампа
 
 # === ETHEREUM (KLIK: TG-SIGNAL:ETHEREUM висел на $0.00 — ни один луп его не вёл,
 # chain=ethereum не входил в CHAINS. Тот же EVM-движок, slug DexScreener "ethereum".)
@@ -220,7 +223,7 @@ ETHEREUM_MIN_SIZE_USD = 15.0  # меньше $15 в L1 не входим: газ
 # (модель всем ставит 100%, а катастрофы были именно VIP-100%)
 CONVICTION_MULT = 2.0  # conviction-вход едет удвоенным
 CONVICTION_MIN_M5_PCT = 0.20  # m5 от +20%
-CONVICTION_MAX_M5_PCT = 1.20  # m5 до +60% (выше - вершина)
+CONVICTION_MAX_M5_PCT = 0.70  # Было 1.20: x2 сайз на +120% = догон вершины. Conviction только +20-70%
 CONVICTION_MIN_BUYSELL = 2.0  # покупки >= продаж x2
 CONVICTION_MIN_LIQ = 30000  # пул от $30к
 MAX_DEPLOYED_PCT = 0.60  # суммарно в рынке не больше 60% капитала (сдерживает тиринг)
@@ -229,10 +232,10 @@ RUG_REBUY_MAX_LOSS = -0.15  # был лосс хуже -15% по монете (H
 # === INFANT DUMP (дев-дамп в первые минуты; SWORDGUY/LAP -15..-18% за 30-70с,
 # AP ETH -18.6% за 16с — это шум импульса с 1000+ buys, а не раг; раги идут -40..-96%) ===
 INFANT_WINDOW_MIN = 2  # было 3: окно уже — меньше rescues пропустим, раги всё равно ловим ниже
-INFANT_DUMP_PCT = -0.25  # было -0.12: -15..-18% переживаем, -25%+ = дев сливает, режем
+INFANT_DUMP_PCT = -0.18  # Было -0.25: ACP успел -48% за 1м. Дев-дамп режем раньше
 
 # === ROCKET MODE (ловля ракет, а не скальпинг: прибыли расти, убытки резать) ===
-BREAKEVEN_PCT = 0.30  # пик +30% → стоп в безубыток: ниже входа уже не уйдём, что бы ни было
+BREAKEVEN_PCT = 0.20  # Было 0.30: пик +20% → стоп в безубыток. Не отдаём ракеты обратно в ноль/минус
 DIPBUY_DROP_MIN = 0.20  # dip-buy после OVERHEAT: откат 20-30% от пика = вход, не вершина
 DIPBUY_DROP_MAX = 0.35
 DIPBUY_WINDOW_MIN = 15  # пик помним 15 мин, потом протухает
@@ -288,7 +291,7 @@ TG_PREVIEW_CHANNELS = ["pumpfunmemecalls", "pumpfunearlytrending", "cherrytrendi
                        "Trade_Nobody", "noiambilliolaurent", "hiro_trade", "CrWhale",
                        "short_cryptoo", "CherryTrendingEVM", "WhAleir_fx",
                        "memecoinwhalespump", "cryptosmart_org1", "solearlytrending"]
-TG_PREVIEW_INTERVAL = 90  # секунд между опросами (вежливо, превью не банит)
+TG_PREVIEW_INTERVAL = 60  # Было 90: коллы из TG-каналов забираем каждую минуту — до пампа, не после
 
 # === USER WATCHLIST: ты видишь рано на fomo.family - кидаешь контракт сюда, бот исполняет ===
 # Формат: ["mint_solana", "0xEVM..."]. Проверка теми же гейтами (скам не пройдет),
@@ -297,12 +300,12 @@ USER_WATCHLIST = []
 
 SNIPER_MIN_UNIQUE_BUYERS = 10
 SNIPER_BUYERS_WINDOW_MIN = 5
-VIP_MAX_M5_PCT = 1.50  # Было 0.60: резали настоящие ракеты. 150% - пропускаем только реальные пики
+VIP_MAX_M5_PCT = 0.70  # Было 1.50: VIP-входы 83-100% на +100-150% m5 = вершины, все в стоп -20-53%. VIP только +10-70%
 PULLBACK_MIN_M5_PCT = 0.03  # Было 0.05: расширяем сеть входа
 PULLBACK_M1_MIN_PCT = -0.15  # Но и не летим в падающий нож (максимум -15% за минуту)
 PULLBACK_M1_MAX_PCT = 0.05  # Было 0.00 - ждали идеальный откат. Ракеты летят с m1 > 0
-PULLBACK_MAX_H1_PCT = 8.00  # Было 10.00 (1000%) - брали вершины типа +3152% Drip / +33009% SI. Теперь >+300% за час = поздно
+PULLBACK_MAX_H1_PCT = 2.00  # Было 8.00: вход на +800%/час = догон SPEC-подобных вертикалей после выноса. Ракета берётся до +200%/час
 LOTTERY_MIN_M5_PCT = 0.80  # Лотерея только для мощных вертикалей от 80%
-LOTTERY_SIZE_MULT = 0.25
+LOTTERY_SIZE_MULT = 0.15  # Было 0.25: LOTTERY +110-131% (CGNA/WISP) сливались в стоп. Билет ещё меньше
 WHALE_CONSENSUS = 2  # вход на 2-м ките (3-й = уже поздно)
-WHALE_MAX_RUNUP = 1.55  # цена не должна вырасти >35% с момента покупки первого кита
+WHALE_MAX_RUNUP = 1.25  # Было 1.55: вход на 2-м ките только если не убежал >25%. Киты уже надули = их выход, не наш вход
