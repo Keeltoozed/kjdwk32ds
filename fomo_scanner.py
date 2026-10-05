@@ -14,9 +14,14 @@ async def fetch_fomo_family_trending():
                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
     if api_key:
         headers["x-api-key"] = api_key
+    # Эндпоинты fomo.family: ищем по Solana, Ethereum, Base, BSC, Robinhood
     urls = [
         "https://api.fomo.family/api/tokens/trending?chain=sol&limit=50",
         "https://api.fomo.family/api/tokens/bonding?chain=sol&limit=50",
+        "https://api.fomo.family/api/tokens/trending?chain=eth&limit=50",
+        "https://api.fomo.family/api/tokens/trending?chain=base&limit=50",
+        "https://api.fomo.family/api/tokens/trending?chain=robinhood&limit=50",
+        "https://api.fomo.family/api/tokens/trending?chain=bsc&limit=50"
     ]
     from http_client import fetch_json
     for url in urls:
@@ -111,8 +116,10 @@ async def fetch_dexscreener_trending():
             status, data = await fetch_json(url, headers=headers, timeout=8, retries=1)
             if status == 200 and isinstance(data, list):
                 for item in data:
-                    # Извлекаем адрес токена на Solana
-                    if item.get('chainId') == 'solana':
+                    chain_id = item.get('chainId')
+                    # Извлекаем токены Solana и EVM-сетей (включая Robinhood)
+                    valid_chains = {'solana', 'robinhood', 'base', 'bsc', 'ethereum'}
+                    if chain_id in valid_chains:
                         mint = item.get('tokenAddress')
                         if mint and mint not in tokens:
                             tokens.append(mint)
