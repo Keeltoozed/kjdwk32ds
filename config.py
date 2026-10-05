@@ -26,16 +26,16 @@ INITIAL_BALANCE_USD = 120.0  # торговый пул ($150 депо - $30 га
 REINVEST_PERCENT = 5.0  # Было 3%: цель $10/день требует сайз. 5% пула на сделку
 VIRTUAL_POSITION_SIZE_USD = 4.0
 TRADE_AMOUNT_USD = 10.0  # Было $6: базовый ордер $10 (комиссия $0.20 = всего 2% вместо 3.3%)
-MAX_CONCURRENT_POSITIONS = 12  # было 10: стагнанты теперь живут до 45м (а не 7м) и дольше
+MAX_CONCURRENT_POSITIONS = 7  # Было 12: 12 открытых = деньги в мусоре. 7 — только лучшие входы
 # держат слоты — иначе ракете некуда войти. Капитальный тормоз MAX_DEPLOYED_PCT=60% остаётся.
 
 # Risk Management
-MAX_DAILY_LOSS_USD = 18.0
+MAX_DAILY_LOSS_USD = 12.0  # Было 18.0: уже -$22. При 100$ депо лимит 12% строже, стоп раньше
 KILL_SWITCH_ENABLED = True  # PRO-дисциплина: -$18/день = стоп до завтра. Профи не отбиваются в красный день
-KILL_SWITCH_PAUSE = 300  # Было 3600: пауза 5 мин вместо часа (блокирует условие дневного минуса, а не сон)
+KILL_SWITCH_PAUSE = 3600  # 1 час паузы после дневного убытка — не лезем обратно сразу в мусор
 MAX_DAILY_LOSS_PCT = 0.25
 STOP_LOSS_PCT = -0.12  # Было -0.20: шесть стопов по -20% = -$13.71. Режем лузеров быстро, ракеты дышат трейлингом а не стопом
-SNIPER_ENTRIES_ENABLED = False
+SNIPER_ENTRIES_ENABLED = True  # Было False: Human/KOTH/HIGGS рождались на pump.fun. Снайпер ловит их на 80% кривой
 TIME_EXIT_MINUTES = 60  # Если за 30 минут нет пампа - выходим
 TIME_EXIT_PROFIT_REQ = 0.0
 
@@ -51,7 +51,7 @@ EVM_RUNNER_TRAIL = 0.25  # трейлинг раннера 25% от пика (б
 EVM_MOONBAG_TRAIL = 0.20  # после мунбэга (+60%, деньги в кармане) даём дышать 20% вместо 8%
 EVM_RUNNER_CRASH = 0.30  # Crash Guard для раннера: -30% за 60с вместо -20% (шум вертикали)
 EVM_DEAD_MIN = 60  # было 30: флет-раннеры консолидируются часами перед выстрелом
-EVM_STAGNANT_MIN = 45  # было 15: SHCAT-подобные сидели бы в ~0% первые 15-30 мин и их бы выбило
+EVM_STAGNANT_MIN = 20  # Было 45: HI/PLAGUE держались мёртвыми 25м-1.6ч. Режем флет быстрее
 
 # Moonbag: частичная фиксация 50% позиции на этом профите.
 # A/B 30д (идентичные данные из кэша): 50 vs 60 — точь-в-точь одинаково,
@@ -66,12 +66,12 @@ STAGNANT_LOSS_MIN_FAST = 7
 STAGNANT_HOLD_MIN = 25
 
 # Filtering
-AI_MODE = "degen" # "sniper" (строго 80-90% уверенности) или "degen"
+AI_MODE = "sniper" # Было "degen": PIL/AGENCYSOL/PLAGUE пропускались. Sniper требует 80%+ уверенности
 # GROWTH: $20k. Практика показала: все лузеры (Saw/TIPPED/APE/VRAX#2) сидели
 # в пулах ГЛУБЖЕ $30k — убил их вход на вершине, а не проскальзывание.
 # Смерти от проскальзывания (sendor -74%) были из $12-15k — их $20k режет.
 # При сайзах $4-10 позиция в $20k пуле = 0.03%, импакта нет.
-MIN_LIQUIDITY = 10000
+MIN_LIQUIDITY = 20000  # Было 10000: пулы $10-20к дают PIL/PLAGUE-подобные -30%. Поднимаем защиту
 MAX_LIQUIDITY = 50000000
 # Было 20000: токены на стадии $10К (KOTH/EGO/HIGGS до выноса) скипались как микро-пулы.
 # Сайз $4-6 в пуле $10К = 0.05%, проскальзывания нет (кэп 0.5% пула в main.py держит).
@@ -102,7 +102,7 @@ ROCKET_WEAK = 0.35  # score <= → weak
 ROCKET_SIZE_UP = 1.5
 ROCKET_SIZE_DOWN = 0.5
 ROCKET_VETO_ENABLED = True  # вето слабых дженерик-входов (MERRGER/MTA/LUXR: rule 77-90% + RKT 0.04-0.25 → стопы)
-ROCKET_VETO_MIN = 0.20  # RKT ниже → скип. DIPBUY/SCOUT/LOTTERY/VIP/COPY/GROWTH exempt
+ROCKET_VETO_MIN = 0.40  # Было 0.20: PIL(94%)/AGENCYSOL(100%) прошли но слились. Ужесточаем RKT-порог
 # === GOPLUS (общедоступная модель риска: honeypot/налоги; бесплатно, без ключа) ===
 GOPLUS_ENABLED = True
 GOPLUS_MAX_BUY_TAX = 0.10  # блок, если налог на покупку выше 10%
@@ -163,11 +163,11 @@ EVM_MAX_MINTS = 200  # Было 100→150: хвост выдачи не отре
 EVM_COPY_WALLETS = {"base": [], "bsc": [], "robinhood": [], "ethereum": []}
 # fomoapi.io — независимое API данных fomo.family (топ-трейдеры, доски, WS-алерты).
 # Бесплатный ключ: fomoapi.io/dashboard (250k кредитов/мес). Без ключа — демо WS с задержкой 60с.
-FOMO_API_KEY = ""
+FOMO_API_KEY = "fapi_72204b592a5944b18c2600f18b47b2a7f1b852230f7b4ffebc5ae1929dcbb3dc"
 FOMO_WS_ENABLED = True
 FOMO_FOLLOW_TRADERS = []  # ники топов, напр. ["whatever_fomo", "pricedin"] — их покупки в приоритет
 FOMO_MIN_USD = 50  # Было 100: покупки китов от $50 ловим раньше — первый кит важнее крупного
-FOMO_BOARDS_INTERVAL = 7200  # доски trending/graduated раз в 2ч (экономия кредитов)
+FOMO_BOARDS_INTERVAL = 180  # Было 7200 (2ч!): тренды живут минуты. Опрос каждые 3 мин
 # GMGN живой мост (headless-Chromium ловит create-сигналы trenches).
 # ТЯЖЁЛЫЙ: +200-400MB RAM, на бесплатном Render не влезет. Включать на тарифе 2GB+
 # (и в build добавить: playwright install chromium) либо локально.

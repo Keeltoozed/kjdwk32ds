@@ -4,6 +4,35 @@ import config
 from analyzer import Analyzer  # noqa: F401 (сигнатура fomo_loop)
 
 
+
+async def fetch_fomo_family_trending():
+    """Парсит fomo.family trending — именно отсюда Human/KOTH/HIGGS/ShibaLisa.
+    Без ключа — публичный endpoint. С ключом FOMO_API_KEY — полный доступ."""
+    tokens = []
+    api_key = getattr(config, "FOMO_API_KEY", "")
+    headers = {"Accept": "application/json",
+               "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+    if api_key:
+        headers["x-api-key"] = api_key
+    urls = [
+        "https://api.fomo.family/api/tokens/trending?chain=sol&limit=50",
+        "https://api.fomo.family/api/tokens/bonding?chain=sol&limit=50",
+    ]
+    from http_client import fetch_json
+    for url in urls:
+        try:
+            status, data = await fetch_json(url, headers=headers, timeout=10, retries=1)
+            if status == 200 and data:
+                items = data if isinstance(data, list) else data.get("tokens", data.get("data", []))
+                for item in items:
+                    mint = item.get("address") or item.get("mint") or item.get("tokenAddress")
+                    if mint and len(mint) > 30 and mint not in tokens:
+                        tokens.append(mint)
+        except Exception:
+            pass
+    return tokens
+
+
 async def fetch_geckoterminal_trending():
     """Получает реальные тренды с GeckoTerminal (как в Photon)"""
     tokens = []
@@ -119,12 +148,17 @@ async def fomo_loop(analyzer: Analyzer, tracker):
             trending_mints = await fetch_dexscreener_trending()
             gecko_mints = await fetch_geckoterminal_trending()
             pump_mints = await fetch_pumpfun_top()
+            fomo_mints = await fetch_fomo_family_trending()  # 🆕 fomo.family: Human/KOTH/HIGGS/ShibaLisa
             for m in pump_mints:
                 if m not in trending_mints:
                     trending_mints.append(m)
             for m in gecko_mints:
                 if m not in trending_mints:
                     trending_mints.append(m)
+            # fomo.family вставляем В НАЧАЛО — приоритет (самые свежие тренды)
+            for m in reversed(fomo_mints):
+                if m not in trending_mints:
+                    trending_mints.insert(0, m)
             
             # Фильтруем уже обработанные и в кулдауне
             new_mints = []
@@ -216,4 +250,4 @@ async def fomo_loop(analyzer: Analyzer, tracker):
         except Exception as e:
             print(f"Ошибка в FOMO Loop: {e}")
             
-        await asyncio.sleep(120) # СРОЧНО: было 60 -> 120. Меньше FOMO-сделок = меньше покупок вершин
+        await asyncio.sleep(30) # Было 120с: за 2 мин ракета уже +300%. Скан каждые 30с

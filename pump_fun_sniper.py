@@ -103,6 +103,12 @@ class PumpFunSniper:
                 rpc_url = "https://mainnet.helius-rpc.com/?api-key=9efda6f4-fddb-42d3-a2b1-098bbbecd299"
                 from http_client import get_session
                 session = await get_session()
+                payload = {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "getTokenLargestAccounts",
+                    "params": [state.mint]
+                }
                 async with session.post(rpc_url, json=payload, timeout=10) as resp:
                         data = await resp.json()
                         accounts = data.get("result", {}).get("value", [])
