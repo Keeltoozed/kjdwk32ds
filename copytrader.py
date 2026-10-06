@@ -115,6 +115,10 @@ class CopyTrader:
                 # Теперь все минты: ИИ-гейт ниже отсеет мусор.
                 if len(mint) < 30:
                     continue
+                if mint in ["So11111111111111111111111111111111111111112", 
+                            "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", 
+                            "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB"]:
+                    continue
                 
                 pre_amt = pre_dict.get(mint, 0.0)
                 if post_amt > pre_amt: # Баланс вырос = ПОКУПКА
