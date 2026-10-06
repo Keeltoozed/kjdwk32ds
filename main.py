@@ -444,7 +444,8 @@ async def scanner_loop(analyzer, tracker):
                                 # Таким входам - лотерейные $2 максимум, что бы ни показывал скор 100%.
                                 _is_vipsig = analyzer.get_signal(mint).startswith("VIP-")
                                 if _is_vipsig:
-                                    position_size = min(position_size, 2.0)
+                                    _vip_cap = float(getattr(config, "TG_VIP_SIZE_USD", 5.0))
+                                    position_size = min(position_size, _vip_cap)
 
                                 if position_size < (1.0 if (_is_lot or _is_vipsig) else 4.0):
                                     print(f"🚫 Отказ (Ликвидность): Недостаточно ликвидности (${liq_usd}) для безопасного входа.")
