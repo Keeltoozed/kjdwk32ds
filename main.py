@@ -857,7 +857,7 @@ async def _evm_track_once(tracker, chain: str, tag: str, emoji: str):
                     _trail_dist = float(getattr(config, "EVM_MOONBAG_TRAIL", 0.20))
                 else:
                     _trail_dist = float(getattr(config, "TRAILING_DISTANCE_PCT", 0.08))
-                _crash_drop = float(getattr(config, "EVM_RUNNER_CRASH", 0.30)) if _is_runner else 0.20
+                _crash_drop = float(getattr(config, "EVM_RUNNER_CRASH", 0.45)) if _is_runner else float(getattr(config, "EVM_NORMAL_CRASH", 0.35))
                 _dead_min = int(getattr(config, "EVM_DEAD_MIN", 60))
                 _stag_min = int(getattr(config, "EVM_STAGNANT_MIN", 45))
                 if maxp >= 0.25 and not getattr(pos, "tp1_done", False):

@@ -190,6 +190,14 @@ async def fomo_loop(analyzer: Analyzer, tracker):
                 
                 async def analyze_one(mint):
                     try:
+                        if mint.startswith("0x") and len(mint) >= 40:
+                            from http_client import fetch_json
+                            st, dat = await fetch_json(f"https://api.dexscreener.com/latest/dex/search?q={mint}")
+                            if st == 200 and dat and dat.get("pairs"):
+                                chain_id = dat["pairs"][0].get("chainId")
+                                if chain_id and chain_id != "solana":
+                                    return mint, await analyzer.analyze_robinhood_token(mint, chain_id)
+                            return mint, False
                         return mint, await analyzer.analyze_token(mint)
                     except Exception as e:
                         print(f"⚠️ Ошибка анализа {mint[:8]}...: {e}")

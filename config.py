@@ -49,7 +49,8 @@ TRAILING_DISTANCE_PCT = 0.08  # базовый для скальпа; ранне
 EVM_RUNNER_MAXP = 0.50  # +50% пик = раннер: Dead/Stagnant/Stop от входа OFF, только трейлинг от пика
 EVM_RUNNER_TRAIL = 0.25  # трейлинг раннера 25% от пика (было 8% — резало CORGI +294%→+153%, $THRONE +121%→+10%)
 EVM_MOONBAG_TRAIL = 0.20  # после мунбэга (+60%, деньги в кармане) даём дышать 20% вместо 8%
-EVM_RUNNER_CRASH = 0.30  # Crash Guard для раннера: -30% за 60с вместо -20% (шум вертикали)
+EVM_RUNNER_CRASH = 0.45  # Crash Guard для раннера: -45% за 60с (допускаем сильные вытряхивания)
+EVM_NORMAL_CRASH = 0.35  # Crash Guard для обычных токенов: -35% за 60с вместо 20%
 EVM_DEAD_MIN = 60  # было 30: флет-раннеры консолидируются часами перед выстрелом
 EVM_STAGNANT_MIN = 20  # Было 45: HI/PLAGUE держались мёртвыми 25м-1.6ч. Режем флет быстрее
 
@@ -276,7 +277,7 @@ GROWTH_INTERVAL = 300  # опрос вотчлиста каждые 5 мин
 # === TG CALLS (живые коллы из Telegram-каналов) ===
 # Бесплатно: API ID+Hash с https://my.telegram.org -> env TG_API_ID/TG_API_HASH.
 # Первый запуск локально (создаст .session), дальше работает везде.
-TG_ENABLED = True
+TG_ENABLED = False
 TG_CHANNELS = ["lxetrades"]  # добавь свои: ["lxetrades", "calls_channel", ...]
 TG_SESSION = "sniper_session"
 # Бесключевой сборщик коллов через t.me/s/ превью (без Telethon и API-ключей).
