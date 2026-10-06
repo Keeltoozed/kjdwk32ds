@@ -587,11 +587,7 @@ class Analyzer:
                 if _h1 > getattr(config, "PULLBACK_MAX_H1_PCT", 1.5) * 100:
                     print(f"🚫 [ENTRY] {mint}: h1 {_h1:+.0f}% — уже улетел, поздно.")
                     return False
-            # АНТИ-ВЕРШИНА h24: токены типа Drip +3152%, SI +33009% уже отстреляли. Вход = вершина
-            _h24 = (_pc.get("h24", 0) or 0)
-            if _h24 > 500:
-                print(f"🚫 [OVERHEAT-H24] {mint}: h24 {_h24:+.0f}% > +500% — ракета уже улетела, поздно.")
-                return False
+            # АНТИ-ВЕРШИНА: Опираемся только на рост за 1 час (h1) и 5 минут (m5), h24 для новых токенов не имеет смысла.
             if _s > 0 and _b < _s * 1.1:
                 print(f"🚫 [ENTRY] {mint}: buys {_b} / sells {_s} — нет давления покупателей.")
                 return False
@@ -988,7 +984,7 @@ class Analyzer:
         _evm_min_m5 = getattr(config, "EVM_MIN_M5_PCT", 7.0)
         if m5 < _evm_min_m5:  # импульса нет — флет съест комиссиями
             return self._deny(address, f"flat m5 {m5:+.1f}%", f"· [{tag}] {symbol}: флет m5 {m5:+.1f}%")
-        if m5 > 60.0 or h24 > 500.0:  # вершина уже прошла
+        if m5 > 60.0:  # вершина уже прошла
             # Пик в dip-watch: купим на откате 20-30%, а не гоним вершину
             try:
                 if _px_now > 0:
@@ -996,7 +992,7 @@ class Analyzer:
                     self._dip_watch[address] = (_px_now, _pv, _tt.time())
             except Exception:
                 pass
-            return self._deny(address, f"top m5 {m5:+.0f}% h24 {h24:+.0f}%", f"🚫 [{tag}-OVERHEAT] {symbol}: m5 {m5:+.1f}% h24 {h24:+.0f}% — поздно, ждём откат для DIPBUY.")
+            return self._deny(address, f"top m5 {m5:+.0f}%", f"🚫 [{tag}-OVERHEAT] {symbol}: m5 {m5:+.1f}% — поздно, ждём откат для DIPBUY.")
         # CHURN/WASH: в коридоре m5, но без перевеса при обороте — накрутка.
         # LOTTERY/SCOUT/DIPBUY идут своими ветками раньше — их не трогаем.
         if self.is_churn(b5, s5, m5):
