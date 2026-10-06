@@ -237,9 +237,9 @@ INFANT_DUMP_PCT = -0.18  # Было -0.25: ACP успел -48% за 1м. Дев-
 
 # === ROCKET MODE (ловля ракет, а не скальпинг: прибыли расти, убытки резать) ===
 BREAKEVEN_PCT = 0.20  # Было 0.30: пик +20% → стоп в безубыток. Не отдаём ракеты обратно в ноль/минус
-DIPBUY_DROP_MIN = 0.20  # dip-buy после OVERHEAT: откат 20-30% от пика = вход, не вершина
-DIPBUY_DROP_MAX = 0.35
-DIPBUY_WINDOW_MIN = 15  # пик помним 15 мин, потом протухает
+DIPBUY_DROP_MIN = 0.10  # Расширено: ловим даже небольшие паузы в 10% у сильных ракет
+DIPBUY_DROP_MAX = 0.45  # Расширено: допускаем глубокие высадки пассажиров до 45% перед вторым импульсом
+DIPBUY_WINDOW_MIN = 30  # Расширено: помним пик 30 минут, ракеты часто консолидируются дольше
 # Вайтлист точных минтов: BOME и ко — легитимные топ-мемы, мимикри-фильтр их не трогает.
 # (Клоны с ДРУГИМ адресом по-прежнему режутся.) Задаётся ниже, после GROWTH_WATCHLIST.
 
@@ -282,7 +282,7 @@ TG_CHANNELS = ["lxetrades"]  # добавь свои: ["lxetrades", "calls_chann
 TG_SESSION = "sniper_session"
 # Бесключевой сборщик коллов через t.me/s/ превью (без Telethon и API-ключей).
 # Проверено: pumpfunmemecalls отдаёт контракты. solanamemeradar закрылся - не добавлять.
-TG_PREVIEW_ENABLED = True
+TG_PREVIEW_ENABLED = False
 # Проверены 30.09 (превью открыто у всех): pumpfunearlytrending даёт CA $15-36k,
 # memecoinwhalespump — минты в тексте; CherryTrendingEVM/Cherry — адреса в href-кнопках
 # (парсер их читает); остальные (short_cryptoo, hiro_trade, CrWhale, Trade_Nobody,

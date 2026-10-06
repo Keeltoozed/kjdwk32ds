@@ -997,11 +997,22 @@ class Analyzer:
         # LOTTERY/SCOUT/DIPBUY идут своими ветками раньше — их не трогаем.
         if self.is_churn(b5, s5, m5):
             return self._deny(address, f"churn {b5}/{s5} m5 {m5:+.1f}%",
-                              f"🚫 [{tag}-CHURN] {symbol}: {b5 + s5} сделок без перевеса (b/s {b5 / s5:.2f}) — накрутка, не FOMO.")
+                              f"🚫 [{tag}-CHURN] {symbol}: {b5 + s5} сделок без перевеса (b/s {b5 / (s5+1):.2f}) — накрутка, не FOMO.")
         if m1 > 5.0:
             return self._deny(address, f"m1-green {m1:+.1f}%", f"🚫 [{tag}] {symbol}: m1 {m1:+.1f}% — вершина в моменте, ждём.")
         if m1 < -8.0 or h1 > 300.0:
             return self._deny(address, "dump/gone", f"🚫 [{tag}] {symbol}: m1 {m1:+.1f}% h1 {h1:+.0f}% — дамп/улетел.")
+        
+        # --- БЕЗУСЛОВНАЯ ЗАЩИТА ОТ HONEYPOT ДЛЯ ROBINHOOD/EVM ---
+        # В этих сетях нет API-проверок, поэтому защищаемся математикой.
+        if s == 0 and b >= 3:
+            return self._deny(address, "honeypot-zero-sells", f"🚫 [{tag}] {symbol}: {b} покупок и 0 продаж — 100% Honeypot (нельзя продать).")
+        if s > 0 and (b / s) > 15.0:
+            return self._deny(address, "honeypot-ratio", f"🚫 [{tag}] {symbol}: аномалия {b} покупок / {s} продаж — Honeypot-риск.")
+        vol_to_liq = vol24 / (liq + 1)
+        if vol_to_liq > 100:
+            return self._deny(address, "wash-trading", f"🚫 [{tag}] {symbol}: Объем в {vol_to_liq:.0f} раз больше пула ликвидности — накрутка ботами создателя.")
+        
         if s > 0 and b < s * 1.5:
             return self._deny(address, f"no-pressure {b}/{s}", f"🚫 [{tag}] {symbol}: buys {b} / sells {s} — нет давления.")
         # Молодняк (<30 мин, стадия $10К): пороги ниже — 12 сделок и $3К объёма.
@@ -1240,7 +1251,7 @@ class Analyzer:
         self.last_score = conf
         print(f"🤖 XGBoost [DEX Poller]: {mint} | Score: {conf:.1f}%")
         import config
-        threshold = 45.0  # Было 15.0 - пропускало мусор. 45% - компромисс: не 65% чтобы не зажать, но режет скам
+        threshold = 35.0  # Снизили с 45.0 до 35.0. Бот был слишком "стеснительным" и ждал идеальных графиков. 35% даст больше ракет.
         if is_vip:
             threshold = 45.0  # Было 30.0: все катастрофы (FIBONACCI -68%, Goblin, CATANA) - VIP-входы. Та же планка для всех
             print(f"🔥 [VIP] Порог XGBoost как у всех: {threshold}%")
