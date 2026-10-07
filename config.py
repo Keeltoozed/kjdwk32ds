@@ -310,3 +310,17 @@ LOTTERY_MIN_M5_PCT = 0.80  # Лотерея только для мощных в�
 LOTTERY_SIZE_MULT = 0.50  # Было 0.15: Увеличили размер билета, чтобы прибыль с ракет перекрывала убытки от скама
 WHALE_CONSENSUS = 2  # вход на 2-м ките (3-й = уже поздно)
 WHALE_MAX_RUNUP = 1.25  # Было 1.55: вход на 2-м ките только если не убежал >25%. Киты уже надули = их выход, не наш вход
+
+# === ПРАВКИ: меньше минусов, ракеты через малые билеты ===
+VIP_ENTRIES_ENABLED = False        # читается в analyzer.analyze_token (патч из прошлого ответа)
+SNIPER_ENTRIES_ENABLED = False     # sniper entry = -85.8% по твоим данным
+TG_VIP_SIZE_USD = 2.0
+LOTTERY_SIZE_MULT = 0.25
+CONVICTION_MULT = 1.0              # вернёшь 1.5-2.0, когда статистика станет плюсовой
+PULLBACK_MAX_H1_PCT = 3.0          # не гонимся за +300%/час
+DIPBUY_DROP_MIN = 0.20
+DIPBUY_DROP_MAX = 0.35
+DIPBUY_WINDOW_MIN = 15
+MOONBAG_TRIGGER_PCT = 0.50
+ROB_MAX_SIZE_USD = 1.5             # сеть без honeypot-проверок
+ROCKET_VETO_MIN = 0.40
