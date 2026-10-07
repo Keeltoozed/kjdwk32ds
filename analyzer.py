@@ -37,14 +37,27 @@ except Exception as e:
 class Analyzer:
     def __init__(self):
         self.session = None
-        self.pump_model = None
-        self.raydium_model = None
         self.rocket_model = None  # ROCKET-модель (EVM ракеты). None = нет файла, гейты как раньше
         self.rocket_scores = {}  # address -> score 0..1 (для сайзинга в main)
         self.last_signal = ""  # Метка последнего решения: "VIP RAY-XGB 98%", "PULLBACK", "ROBINHOOD rule 72%"...
         self.last_score = 0.0  # Скор последнего решения (для радара)
         self.signals = {}  # Метки по mint: НЕ делит состояние между параллельными петлями (иначе FOMO:? в дашборде)
         self._dip_watch = {}  # OVERHEAT-пики для dip-buy: {address: (peak_price, ts)}
+
+        # Предзагрузка моделей в память один раз при старте
+        try:
+            import xgboost as xgb
+            self.pump_model = xgb.XGBClassifier()
+            self.pump_model.load_model("pump_model.json")
+        except: 
+            self.pump_model = None
+        
+        try:
+            import xgboost as xgb
+            self.raydium_model = xgb.XGBClassifier()
+            self.raydium_model.load_model("raydium_model_dex.json")
+        except: 
+            self.raydium_model = None
 
     def _rocket(self):
         """Ленивая загрузка ROCKET-модели + хот-релоад по mtime.
@@ -218,19 +231,6 @@ class Analyzer:
         except Exception:
             pass
         
-        # Предзагрузка моделей в память один раз при старте
-        try:
-            import xgboost as xgb
-            self.pump_model = xgb.XGBClassifier()
-            self.pump_model.load_model("pump_model.json")
-        except: pass
-        
-        try:
-            import xgboost as xgb
-            self.raydium_model = xgb.XGBClassifier()
-            self.raydium_model.load_model("raydium_model_dex.json")
-        except: pass
-        
     async def get_session(self):
         import aiohttp
         if self.session is None or self.session.closed:
@@ -294,40 +294,41 @@ class Analyzer:
                                             headers={"Accept": "application/json"})
             if status != 200 or not data:
                 return {}
-                pools = data.get("data", [])
-                if not pools:
-                    return {}
-                best = max(pools, key=lambda p: float((p.get("attributes") or {}).get("reserve_in_usd", 0) or 0))
-                a = best.get("attributes", {})
-                pc = a.get("price_change_percentage") or {}
-                tx = a.get("transactions") or {}
-                vu = a.get("volume_usd") or {}
-                created = a.get("pool_created_at")
-                created_ms = 0
-                if created:
-                    from datetime import datetime
-                    created_ms = int(datetime.fromisoformat(created.replace("Z", "+00:00")).timestamp() * 1000)
-                symbol = (a.get("name") or "UNKNOWN").split("/")[0].strip()
+            
+            pools = data.get("data", [])
+            if not pools:
+                return {}
+            best = max(pools, key=lambda p: float((p.get("attributes") or {}).get("reserve_in_usd", 0) or 0))
+            a = best.get("attributes", {})
+            pc = a.get("price_change_percentage") or {}
+            tx = a.get("transactions") or {}
+            vu = a.get("volume_usd") or {}
+            created = a.get("pool_created_at")
+            created_ms = 0
+            if created:
+                from datetime import datetime
+                created_ms = int(datetime.fromisoformat(created.replace("Z", "+00:00")).timestamp() * 1000)
+            symbol = (a.get("name") or "UNKNOWN").split("/")[0].strip()
 
-                def _tx(key):
-                    t = tx.get(key) or {}
-                    return {"buys": int(t.get("buys", 0) or 0), "sells": int(t.get("sells", 0) or 0)}
+            def _tx(key):
+                t = tx.get(key) or {}
+                return {"buys": int(t.get("buys", 0) or 0), "sells": int(t.get("sells", 0) or 0)}
 
-                print(f"🦎 GeckoTerminal fallback для {mint[:8]}: пул найден.")
-                return {
-                    "baseToken": {"symbol": symbol, "name": symbol},
-                    "priceUsd": str(a.get("base_token_price_usd") or 0),
-                    "priceChange": {"m5": float(pc.get("m5") or 0), "m1": 0.0,
-                                    "h1": float(pc.get("h1") or 0), "h24": float(pc.get("h24") or 0)},
-                    "txns": {"m5": _tx("m5"), "h1": _tx("h1"), "h24": _tx("h24")},
-                    "volume": {"m5": float(vu.get("m5") or 0), "h1": float(vu.get("h1") or 0),
-                               "h24": float(vu.get("h24") or 0)},
-                    "liquidity": {"usd": float(a.get("reserve_in_usd") or 0)},
-                    "fdv": float(a.get("fdv_usd") or a.get("market_cap_usd") or 0),
-                    "pairCreatedAt": created_ms,
-                    "dexId": "pump" if mint.endswith("pump") else "raydium",
-                    "info": {"socials": [], "websites": []},
-                }
+            print(f"🦎 GeckoTerminal fallback для {mint[:8]}: пул найден.")
+            return {
+                "baseToken": {"symbol": symbol, "name": symbol},
+                "priceUsd": str(a.get("base_token_price_usd") or 0),
+                "priceChange": {"m5": float(pc.get("m5") or 0), "m1": 0.0,
+                                "h1": float(pc.get("h1") or 0), "h24": float(pc.get("h24") or 0)},
+                "txns": {"m5": _tx("m5"), "h1": _tx("h1"), "h24": _tx("h24")},
+                "volume": {"m5": float(vu.get("m5") or 0), "h1": float(vu.get("h1") or 0),
+                           "h24": float(vu.get("h24") or 0)},
+                "liquidity": {"usd": float(a.get("reserve_in_usd") or 0)},
+                "fdv": float(a.get("fdv_usd") or a.get("market_cap_usd") or 0),
+                "pairCreatedAt": created_ms,
+                "dexId": "pump" if mint.endswith("pump") else "raydium",
+                "info": {"socials": [], "websites": []},
+            }
         except Exception as e:
             print(f"GeckoTerminal token data error: {type(e).__name__} {e}")
             return {}
@@ -354,13 +355,9 @@ class Analyzer:
                                 p_created_at = p.get("pairCreatedAt", float('inf'))
                                 p_fdv = p.get("fdv", 0)
 
-                                # Если мы нашли другой токен с таким же именем, который был создан РАНЬШЕ нас
-                                # и имеет какую-то ЗНАЧИТЕЛЬНУЮ капитализацию (а не просто мертвый токен)
                                 if p_created_at < current_created_at and p_fdv > 250000:
                                     return True
 
-                                # Либо если другой токен имеет огромную капу (в 10 раз больше нашей),
-                                # значит он - оригинал, а мы клон.
                                 if p_fdv > (current_fdv * 10) and p_fdv > 500000:
                                     return True
             except Exception as e:
@@ -376,8 +373,7 @@ class Analyzer:
                 status, data = await fetch_json(url, headers=headers, timeout=8, retries=1)
                 if status == 200 and data:
                     score = data.get("score", 1000)
-                    # Защита от моментальных дампов (-37%). Строгий фильтр скама.
-                    if score >= 400: # было 150 (слишком строго, блокировало почти всё). 400 - оптимально.
+                    if score >= 400:
                         return False
 
                     token_info = data.get("token", {})
@@ -386,21 +382,17 @@ class Analyzer:
                     if token_info.get("freezeAuthority") is not None:
                         return False
 
-                    # Фильтр по названию токена
                     name = token_info.get("name", "").lower()
                     symbol = token_info.get("symbol", "").lower()
                     bad_words = ["test", "scam", "fuck", "nigger", "pump and dump", "rug"]
                     if any(w in name for w in bad_words) or any(w in symbol for w in bad_words):
                         return False
 
-                    # Индекс Херфиндаля-Хиршмана (HHI) для выявления скрытых монополий (как Bubble Map)
                     top_holders = data.get("topHolders", [])
                     hhi_index = sum([(h.get("pct", 0) * 100) ** 2 for h in top_holders[:15] if not h.get("isContract", False)])
 
                     top_10_pct = sum([h.get("pct", 0) for h in top_holders[:10] if not h.get("isContract", False)])
 
-                    # По статистике: скамы имеют 6% удержания топ-10, ракеты - 34.5%.
-                    # Блокируем только очевидный снайперский скам (>75% у одного кабала)
                     if top_10_pct >= 75 or hhi_index > 4000:
                         return False
 
@@ -416,7 +408,6 @@ class Analyzer:
         unique_buyers = 0
         smart_money_inflow = 0
         
-        # Читаем smart wallets
         smart_wallets = set()
         import os
         if os.path.exists("smart_wallets.txt"):
@@ -434,7 +425,6 @@ class Analyzer:
         session = await self.get_session()
         if True:
             try:
-                # 1. Получаем сигнатуры
                 async with session.post(config.HELIUS_RPC_URL, json=payload_sigs, timeout=3) as resp:
                     data = await resp.json()
                     signatures = [item["signature"] for item in data.get("result", [])]
@@ -442,7 +432,6 @@ class Analyzer:
                 if not signatures:
                     return 0, 0
                     
-                # 2. Получаем детали транзакций
                 payload_txs = {
                     "jsonrpc": "2.0",
                     "id": 1,
@@ -484,21 +473,15 @@ class Analyzer:
         buys_m5 = txns_m5.get("buys", 0)
         volume_m5 = pair_data.get("volume", {}).get("m5", 0)
         
-        # > 50 покупок И > $30k объема в 5-минутном окне (Реальное FOMO)
         if buys_m5 >= 50 and volume_m5 >= 30000:
             return True
         return False
         
     async def analyze_token(self, mint: str) -> bool:
-        # Smart Router
-        self.last_signal = ""  # сброс метки решения
+        self.last_signal = ""
         self.last_score = 0.0
         self.signals.pop(mint, None)
         
-        # Мы больше не используем глючный RugCheck API.
-        # Вместо этого проверка на снайперов/бандлы идет напрямую через блокчейн (Helius RPC)
-        # в функции extract_features_for_moonshot.
-        # Игнорируем базовые монеты и стейблкоины
         if mint in ["So11111111111111111111111111111111111111112", 
                     "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", 
                     "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB"]:
@@ -506,10 +489,8 @@ class Analyzer:
 
         pair_data = await self.fetch_token_data(mint)
         if not pair_data:
-            # Токен слишком новый (API еще не проиндексировал его)
             return None
             
-        # Блэклист тикеров и названий (Защита от фейковых токенов)
         base_token = pair_data.get("baseToken", {})
         name = base_token.get("name", "").upper()
         symbol = base_token.get("symbol", "").upper()
@@ -526,6 +507,10 @@ class Analyzer:
             
         is_vip = self.check_hyper_rocket_momentum(pair_data)
 
+        if is_vip and not getattr(config, "VIP_ENTRIES_ENABLED", False):
+            print(f"🚫 [VIP OFF] {mint[:8]}: вход отключён")
+            return False
+
         # === VIP OVERHEAT GUARD: не покупаем вершину вертикали ===
         if is_vip and pair_data:
             _pc = pair_data.get("priceChange") or {}
@@ -537,21 +522,13 @@ class Analyzer:
             if _m1 < 0:
                 print(f"🚫 [VIP REVERSAL] {mint}: m1 {_m1:+.1f}% — всплеск откатывает, ждём pullback.")
                 return False
-            # dfp -23%, NEARPAD -8.9%: вход в печатающуюся spike-свечу = вершина.
-            # Экстремальный m1 (>15%) у VIP тоже ждём, а не покупаем.
             if _m1 > 15.0:
                 print(f"🚫 [VIP SPIKE] {mint}: m1 {_m1:+.1f}% — свеча-spike в моменте, вход = вершина. Ждём.")
                 return False
-            # VIP БЕЗ ИМПУЛЬСА = объём без направления: 20-мин прогон показал,
-            # такие входы (score 97-99%, m5 ~0%) стоят флетом 7 мин и сливают ~3% на комиссиях
             if _m5 < 10.0:
                 print(f"🚫 [VIP FLAT] {mint}: объём есть, а импульса нет (m5 {_m5:+.1f}% < +10%) — флет съест комиссиями.")
                 return False
 
-        # ══════════════════════════════════════════════════════
-        # ══════════════════════════════════════════════════════
-        
-        # === PULLBACK ENTRY (не-VIP): входим в ОТКАТ после импульса, не в вершину ===
         _lottery = False
         if not is_vip and pair_data:
             _pc = pair_data.get("priceChange") or {}
@@ -587,12 +564,9 @@ class Analyzer:
                 if _h1 > getattr(config, "PULLBACK_MAX_H1_PCT", 1.5) * 100:
                     print(f"🚫 [ENTRY] {mint}: h1 {_h1:+.0f}% — уже улетел, поздно.")
                     return False
-            # АНТИ-ВЕРШИНА: Опираемся только на рост за 1 час (h1) и 5 минут (m5), h24 для новых токенов не имеет смысла.
             if _s > 0 and _b < _s * 1.1:
                 print(f"🚫 [ENTRY] {mint}: buys {_b} / sells {_s} — нет давления покупателей.")
                 return False
-            # Молодняк (<30 мин, стадия $10К): объёма $10К ещё нет — порог $3К.
-            # Старше 30 мин без $10К объёма = труп, режем как раньше.
             _v24_min = 3000 if _age_min_pre < 30 else 10000
             if _v24 < _v24_min:
                 print(f"🚫 [ENTRY] {mint}: vol24h ${_v24:,.0f} < ${_v24_min:,.0f} — совсем нет объёма.")
@@ -600,7 +574,6 @@ class Analyzer:
             _txm5 = (pair_data.get("txns") or {}).get("m5", {}) or {}
             _b5, _s5 = _txm5.get("buys", 0) or 0, _txm5.get("sells", 0) or 0
 
-            # Молодняк: 15 сделок за 5 мин достаточно (стадия $10К). Старше — 30 как раньше.
             _tx_min = 15 if _age_min_pre < 30 else 30
             if (_b5 + _s5) < _tx_min:
                 print(f"🚫 [VELOCITY] {mint}: txns m5 {_b5 + _s5} < {_tx_min} — слишком медленно, нет органического FOMO.")
@@ -610,8 +583,6 @@ class Analyzer:
                 if _b5 < _s5 * mult:
                     print(f"🚫 [VELOCITY] {mint}: buy/sell m5 {_b5}/{_s5} < {mult}x — {'(лотерея, ослаблено)' if _lottery else 'нет буфера покупателей'}")
                     return False
-            # CHURN/WASH: высокий оборот без перевеса — накрутка, не органика.
-            # Лотерею не трогаем (билет $1.5, риск bounded).
             if not _lottery and self.is_churn(_b5, _s5, _m5):
                 print(f"🚫 [CHURN] {mint}: {_b5 + _s5} сделок, b/s {_b5 / _s5:.2f}, m5 {_m5:+.1f}% — накрутка, не FOMO.")
                 return False
@@ -624,25 +595,22 @@ class Analyzer:
                     return False
             print(f"✅ [ENTRY-CANDIDATE] {mint}: PULLBACK — импульс m5 {_m5:+.1f}%, откат m1 {_m1:+.1f}%, h1 {_h1:+.0f}%, b/s {_b}/{_s}. Кандидат на вход.")
         
-        # Защита от микро-пулов (Scam сетки типа Fly)
+        # Защита от микро-пулов (теперь применяется ко ВСЕМ токенам, включая pump и VIP)
         liquidity = pair_data.get("liquidity", {}).get("usd", 0)
-        min_liq = getattr(config, "MIN_LIQUIDITY", 15000)
-        if liquidity < min_liq and not is_vip and pair_data.get("dexId") != "pump":
+        min_liq = getattr(config, "MIN_LIQUIDITY", 30000)
+        if liquidity < min_liq:
             print(f"📉 Изоляция: {symbol} имеет микро-пул (${liquidity:.0f} < ${min_liq//1000}k). Риск 100% проскальзывания.")
             return False
             
         if is_vip:
             print(f"🚀 [VIP] {symbol}: Пропуск проверок клонов и соцсетей из-за гипер-моментума!")
             
-        # 1.5 Защита от вторичных клонов (Copycat Filter) - ДЛЯ ВСЕХ включая VIP.
-        # Катастрофы UNPEG/8080/FIBONACCI заходили по VIP и пропускали эту проверку.
         current_created_at = pair_data.get("pairCreatedAt", 0)
         current_fdv = pair_data.get("fdv", 0)
         if await self.is_clone(symbol, mint, current_created_at, current_fdv):
             print(f"🚫 Мусор: Токен {symbol} является клоном! На DexScreener найден более старый/крупный оригинал.")
             return False
             
-        # 2. Обязательное наличие соцсетей (Proof of Effort: Twitter + Website/TG)
         info = pair_data.get("info", {})
         socials = info.get("socials", [])
         websites = info.get("websites", [])
@@ -651,18 +619,12 @@ class Analyzer:
         has_tg = any("telegram" in s.get("type", "").lower() or "t.me" in s.get("url", "").lower() for s in socials)
         has_website = len(websites) > 0
         
-        # Соцсети обязательны для всех включая VIP: объём накрутить можно, сайт - нет
         if not (has_twitter or has_tg or has_website):
             print(f"🚫 Мусор: У {mint} вообще нет ни одной соцсети или сайта.")
             return False
             
-        # 🔴 ГЛОБАЛЬНЫЙ АНТИСКАМ БЛОК: MINT + FREEZE AUTHORITY
-        # Работает для ЛЮБЫХ токенов (и Pump, и Raydium)
-        # ══════════════════════════════════════════════════════
         rpc_url = getattr(config, "HELIUS_RPC_URL", "https://mainnet.helius-rpc.com/?api-key=9efda6f4-fddb-42d3-a2b1-098bbbecd299")
         
-        # Проверенные бесплатные RPC (2026): Helius (ключ), Solana Foundation, PublicNode, Alchemy (ключ юзера).
-        # Мёртвые удалены: projectserum, rpcpool, solscan, api.mainnet.solana.com-дубль, Ankr без ключа 403.
         fallback_rpcs = [
             "https://api.mainnet-beta.solana.com",
             "https://solana-rpc.publicnode.com",
@@ -686,7 +648,6 @@ class Analyzer:
             import aiohttp
             session = await self.get_session()
             
-            # Пробуем основной Helius
             try:
                 async with session.post(rpc_url, json=mint_info_payload, timeout=5) as resp:
                     if resp.status == 200:
@@ -694,7 +655,6 @@ class Analyzer:
                     else:
                         raise Exception(f"HTTP {resp.status} - {await resp.text()}")
             except Exception as e:
-                # Если Helius упал, перебираем резервные узлы
                 for fallback_url in fallback_rpcs:
                     try:
                         async with session.post(fallback_url, json=mint_info_payload, headers=fake_headers, timeout=10) as resp:
@@ -715,7 +675,6 @@ class Analyzer:
                 mint_authority = mint_info.get("mintAuthority")
                 freeze_authority = mint_info.get("freezeAuthority")
                 
-                # Официальная программа Pump.fun — её authority разрешена
                 PUMPFUN_PROGRAM = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"
                 SYSTEM_PROGRAM = "11111111111111111111111111111111"
                 SAFE_AUTHORITIES = {PUMPFUN_PROGRAM, SYSTEM_PROGRAM, None, ""}
@@ -728,19 +687,16 @@ class Analyzer:
                     print(f"🚫 [АНТИСКАМ] Freeze Authority у ДЕВ-кошелька {freeze_authority[:8]} у {mint[:8]} → СКАМ")
                     return False
             else:
-                # Если после перебора ВСЕХ узлов мы так и не получили данные
                 print(f"⚠️ Не удалось проверить Mint Authority (все RPC недоступны). Блокируем вход от греха подальше.")
                 return False
         except Exception as e:
             print(f"⚠️ Критическая ошибка при проверке Mint Authority: {str(e)[:50]}. Блокируем вход.")
             return False
 
-        # === ГЛОБАЛЬНЫЙ JITO BUNDLE (SYBIL) CHECK ===
         top10_payload = {"jsonrpc": "2.0", "id": 1, "method": "getTokenLargestAccounts", "params": [mint]}
         try:
             bundle_data = None
             
-            # 1. Helius (ключ) 2. Alchemy (пользовательский) 3. Foundation 4. PublicNode
             heavy_rpcs = [
                 rpc_url,
                 "https://solana-mainnet.g.alchemy.com/v2/alch_wwSmrv5RZmrq66-lSNekM",
@@ -759,7 +715,6 @@ class Analyzer:
                     print(f"⚠️ Ошибка Jito RPC {heavy_url}: {type(e).__name__} {e}")
                     continue
             
-            # Если платные/выделенные ключи отвалились, пробуем публичные (но они часто банят)
             if not bundle_data or "result" not in bundle_data:
                 for fallback_url in fallback_rpcs:
                     try:
@@ -793,7 +748,6 @@ class Analyzer:
                     is_pump = pair_data and pair_data.get("dexId") == "pump"
                     max_allowed_pct = 20.0 if is_pump else 45.0
                     if top_10_sum_pct > 100:
-                        # Баг данных: сапплай не 1B (meteora/raydium), проценты >100% невозможны - пропускаем проверку
                         print(f"⚠️ [HOLDERS] {mint[:8]}: топ-10 {top_10_sum_pct:.1f}% > 100% — битые данные сапплая, пропускаю проверку.")
                     elif top_10_sum_pct > max_allowed_pct:
                         print(f"🚫 [АНТИСКАМ] Топ-10 держат {top_10_sum_pct:.1f}% (Лимит {max_allowed_pct}%). Блокируем.")
@@ -805,10 +759,6 @@ class Analyzer:
             print(f"⚠️ Ошибка Jito-bundle: {e}")
             return False
 
-        # === GOPLUS (общедоступная модель риска, бесплатно/без ключа) ===
-        # Honeypot и sell tax видны только здесь: Mint Authority чистая,
-        # а продать потом нельзя или с -30%. Действует и на VIP — катастрофы
-        # UNPEG/8080/FIBONACCI заходили именно VIP-шипами.
         try:
             import goplus as _gp
             _g_ok, _g_why = await _gp.check_solana(mint)
@@ -881,9 +831,6 @@ class Analyzer:
         return True
 
     async def analyze_robinhood_token(self, address: str, chain: str = "robinhood") -> bool:
-        """Вход по EVM-мемам (Robinhood Chain 4663, Base).
-        Solana-проверки неприменимы — rule-based скоринг на тех же воротах импульса.
-        Возвращает True/False, метка решения в signals[address]."""
         import evm_data
         self.last_signal = ""
         self.last_score = 0.0
@@ -914,9 +861,6 @@ class Analyzer:
             if pair_data.get("pairCreatedAt") else 999.0
         _px_now = float(pair_data.get("priceUsd", 0) or 0)
 
-        # DIP-BUY после OVERHEAT: вертикаль не покупаем, а запоминаем пик.
-        # Откат 20-30% от пика за 15 мин при живом давлении/ликве/ссылках = вход,
-        # а не вершина (иначе ракеты типа +1200% пролетают мимо навсегда).
         try:
             _dw = self._dip_watch.get(address)
             if _dw and _px_now > 0:
@@ -933,7 +877,6 @@ class Analyzer:
                     if not _vol_ok:
                         print(f"📉 [{tag}-DIPBUY] {symbol}: откат есть, но объём сдох — это слив, не откат. Ждём.")
                     elif not _vol_now and ((b5 + s5) < 10 or not (s5 == 0 or b5 >= 0.5 * s5)):
-                        # Объём пуст с обеих сторон: без живых сделок не входим даже на откате
                         print(f"📉 [{tag}-DIPBUY] {symbol}: объём пуст и сделок нет — мёртвый токен, скип.")
                     elif _dmin <= _drop <= _dmax and (b5 + s5) >= 20 and (s5 == 0 or b5 >= s5) \
                             and liq >= min_liq and links and m1 <= 3.0:
@@ -944,11 +887,6 @@ class Analyzer:
         except Exception:
             pass
 
-        # SCOUT TIER: пулу меньше 5 минут - входим ДО вершины микробилетом $1.5.
-        # Ракеты видны здесь, а не на m5 +70%. Скам-фильтры (бренд+клон) действуют и тут.
-        # Ужесточено: плоский вход (m5 2% без давления) = гарантированные -7% комиссий
-        # на выходе Stagnant. Требуем давление покупателей + ссылки + ликву.
-        # Остальное держит пост-вход: сайз $1.5, infant-guard, emergency cap, no-rebuy.
         if (_age_min < 5 and m5 >= 3.0 and (b5 + s5) >= 15 and liq >= 5000
                 and b5 >= s5 and links):
             if not self._evm_brand_ok(symbol, tag):
@@ -961,18 +899,13 @@ class Analyzer:
 
         if liq < min_liq:
             return self._deny(address, "micro-liq", f"🚫 [{tag}] {symbol}: ликва ${liq:,.0f} < ${min_liq:,.0f} — микро-пул.")
-        # LOTTERY TIER: вертикаль m5 60-150% (HYPERCAT +73% мазал мимо кэпа 60%).
-        # Билет $1.5, не позиция: риск bounded, верх открыт. h24-вершины (>500%) всё равно мимо.
+        
         if 60.0 <= m5 <= 150.0 and h24 <= 500.0:
-            # MCPLT -20%: вход на TXAFO +79% = вершина spike. Вертикаль берём только
-            # на спокойной минутке (консолидация), не на печатающейся свече.
             if m1 > 3.0:
                 return self._deny(address, f"lottery-spike m1 {m1:+.1f}%", f"🚫 [{tag}] {symbol}: вертикаль m5 {m5:+.0f}%, но m1 {m1:+.1f}% — свеча spike, это вершина. Ждём.")
             if m1 < -8.0:
                 return self._deny(address, "lottery-dump", f"🚫 [{tag}] {symbol}: вертикаль откатывает m1 {m1:+.1f}% — дамп, не вход.")
             if (b5 + s5) >= 20 and (s5 == 0 or b5 >= s5) and liq >= 20000 and links:
-                # Скам-фильтры действуют и тут (как в SCOUT): вертикаль с мимикрией
-                # под бренд (PEPE/BONK/...) — это развод, а не лотерея.
                 if not self._evm_brand_ok(symbol, tag):
                     return False
                 if not await self._evm_clone_ok(symbol, address, pair_data, chain, tag):
@@ -981,11 +914,11 @@ class Analyzer:
                 self._set_sig(address, f"{tag} LOTTERY {m5:+.0f}%" + self._rkt_tag(address, pair_data) + await self.meme_tag(address, symbol, pair_data, chain))
                 return True
             return self._deny(address, "vert-no-pressure", f"🚫 [{tag}] {symbol}: вертикаль без давления/ликвы/ссылок — не лотерея.")
+        
         _evm_min_m5 = getattr(config, "EVM_MIN_M5_PCT", 7.0)
-        if m5 < _evm_min_m5:  # импульса нет — флет съест комиссиями
+        if m5 < _evm_min_m5:
             return self._deny(address, f"flat m5 {m5:+.1f}%", f"· [{tag}] {symbol}: флет m5 {m5:+.1f}%")
-        if m5 > 60.0:  # вершина уже прошла
-            # Пик в dip-watch: купим на откате 20-30%, а не гоним вершину
+        if m5 > 60.0:
             try:
                 if _px_now > 0:
                     _pv = float(((pair_data.get("volume") or {}).get("m5", 0)) or 0)
@@ -993,8 +926,7 @@ class Analyzer:
             except Exception:
                 pass
             return self._deny(address, f"top m5 {m5:+.0f}%", f"🚫 [{tag}-OVERHEAT] {symbol}: m5 {m5:+.1f}% — поздно, ждём откат для DIPBUY.")
-        # CHURN/WASH: в коридоре m5, но без перевеса при обороте — накрутка.
-        # LOTTERY/SCOUT/DIPBUY идут своими ветками раньше — их не трогаем.
+        
         if self.is_churn(b5, s5, m5):
             return self._deny(address, f"churn {b5}/{s5} m5 {m5:+.1f}%",
                               f"🚫 [{tag}-CHURN] {symbol}: {b5 + s5} сделок без перевеса (b/s {b5 / (s5+1):.2f}) — накрутка, не FOMO.")
@@ -1003,8 +935,6 @@ class Analyzer:
         if m1 < -8.0 or h1 > 300.0:
             return self._deny(address, "dump/gone", f"🚫 [{tag}] {symbol}: m1 {m1:+.1f}% h1 {h1:+.0f}% — дамп/улетел.")
         
-        # --- БЕЗУСЛОВНАЯ ЗАЩИТА ОТ HONEYPOT ДЛЯ ROBINHOOD/EVM ---
-        # В этих сетях нет API-проверок, поэтому защищаемся математикой.
         if s == 0 and b >= 3:
             return self._deny(address, "honeypot-zero-sells", f"🚫 [{tag}] {symbol}: {b} покупок и 0 продаж — 100% Honeypot (нельзя продать).")
         if s > 0 and (b / s) > 15.0:
@@ -1015,8 +945,7 @@ class Analyzer:
         
         if s > 0 and b < s * 1.5:
             return self._deny(address, f"no-pressure {b}/{s}", f"🚫 [{tag}] {symbol}: buys {b} / sells {s} — нет давления.")
-        # Молодняк (<30 мин, стадия $10К): пороги ниже — 12 сделок и $3К объёма.
-        # Старше без объёма = труп. SCOUT (<5 мин) идёт отдельной веткой выше.
+        
         _evm_tx_min = 12 if _age_min < 30 else 20
         _evm_vol_min = 3000 if _age_min < 30 else 10000
         if (b5 + s5) < _evm_tx_min or vol24 < _evm_vol_min:
@@ -1024,7 +953,6 @@ class Analyzer:
         if not links:
             return self._deny(address, "no-links", f"🚫 [{tag}] {symbol}: нет ни одной ссылки — скам-риск.")
 
-        # Блэклист мимикрии под бренды (как в Solana-пути)
         _up = symbol.upper()
         _scam_kw = ["AAPL", "MSFT", "TSLA", "NVDA", "GOOG", "AMZN", "META", "NFLX",
                     "PEPE", "SHIB", "DOGE", "FLOKI", "BONK", "WIF", "BOME", "POPCAT", "TRUMP", "BIDEN"]
@@ -1032,8 +960,6 @@ class Analyzer:
             print(f"🚫 [{tag}] {symbol}: мимикрия под бренд/мем — 100% скам.")
             return False
 
-        # Клон-чек: двойник С ТОЙ ЖЕ сети старше/жирнее = скам.
-        # Та же монета на ДРУГОЙ сети (MONITOR sol+robinhood) = мультчейн, разрешаем.
         if len(symbol) > 2:
             try:
                 from http_client import fetch_json as _fj
@@ -1045,7 +971,7 @@ class Analyzer:
                     _mine_fdv = pair_data.get("fdv", 0) or 0
                     for _p in (_sd.get("pairs") or []):
                         if (_p.get("chainId") or "").lower() != chain.lower():
-                            continue  # другая сеть - мультчейн, ок
+                            continue 
                         _ps = ((_p.get("baseToken") or {}).get("symbol") or "").upper()
                         _pa = ((_p.get("baseToken") or {}).get("address") or "").lower()
                         if _ps == _up and _pa and _pa != _mine_addr:
@@ -1059,10 +985,10 @@ class Analyzer:
                 pass
 
         score = 50.0
-        score += min(m5, 60.0) * 0.4          # импульс до +24
+        score += min(m5, 60.0) * 0.4
         if s > 0:
-            score += min(b / s, 3.0) * 6.0   # давление до +18
-        score += min(liq / 50000.0, 1.0) * 8.0  # ликва до +8
+            score += min(b / s, 3.0) * 6.0
+        score += min(liq / 50000.0, 1.0) * 8.0
         if len(links) >= 2:
             score += 5.0
         score = min(score, 100.0)
@@ -1074,9 +1000,6 @@ class Analyzer:
         return False
         
     async def analyze_growth_token(self, mint: str) -> bool:
-        """GROWTH MODE: вход в откат часового тренда зрелого капа.
-        Окна H1/H24 (не m5!), широкие допуски. Возвращает True/False,
-        метка в signals[mint] = 'GROWTH h1+..%'."""
         import config as _c
         self.signals.pop(mint, None)
         pair_data = await self.fetch_token_data(mint)
@@ -1102,8 +1025,6 @@ class Analyzer:
         if h6 > getattr(_c, "GROWTH_MAX_H6_PCT", 80.0):
             print(f"🌱 [GROWTH] {symbol}: h6 {h6:+.0f}% — перегрев.")
             return False
-        # Ускорение: часовой темп не слабее среднего за 6ч (h1 >= h6/6).
-        # SPX/BOME входили в затухающий тренд и гнили - теперь только разгон.
         if h6 > 0 and h1 < h6 / 6.0:
             print(f"🌱 [GROWTH] {symbol}: h1 {h1:+.1f}% < h6/6 ({h6/6.0:+.1f}%) — тренд затухает.")
             return False
@@ -1119,8 +1040,6 @@ class Analyzer:
         return True
 
     def pack_features(self, pair_data: dict) -> dict:
-        """Снапшот фич для trade_logger: чтобы будущие переобучения учились и на КУПЛЕННЫХ.
-        Раньше писалось '{}' - обучение было фикцией."""
         try:
             pc = pair_data.get("priceChange") or {}
             txns = pair_data.get("txns") or {}
@@ -1167,9 +1086,6 @@ class Analyzer:
             return {}
 
     def conviction_size_mult(self, pair_data: dict) -> float:
-        """Множитель сайза по подтверждённому импульсу (НЕ по скору модели -
-        модель всем ставит 100%, а катастрофы были VIP-100%).
-        Conviction = m5 в окне + давление покупок + толстый пул. Иначе 1.0."""
         try:
             import config as _c
             pc = pair_data.get("priceChange") or {}
@@ -1189,7 +1105,6 @@ class Analyzer:
         if not pair_data:
             return False
             
-        # 1. Проверяем, что токен все еще на Pump.fun (не ушел на Raydium)
         if pair_data.get("dexId") != "pump":
             return False
             
@@ -1197,11 +1112,10 @@ class Analyzer:
         if is_vip:
             print(f"🚀🚀🚀 [HYPER-ROCKET BYPASS] Токен {mint} летит в космос! Игнорируем карантин возраста и соцсетей.")
             
-        # 2. Проверяем возраст токена (только для обычных монет)
         created_at = pair_data.get("pairCreatedAt")
         if created_at and not is_vip:
             age_minutes = (time.time() * 1000 - created_at) / (1000 * 60)
-            if age_minutes > 15:  # Игнорируем токены старше 15 минут
+            if age_minutes > 15:  
                 return False
                 
         import pandas as pd
@@ -1236,8 +1150,7 @@ class Analyzer:
         }])
         
         if self.pump_model is None:
-            return False # Fail-safe если модель не загрузилась
-        # SHADOW VETO и тут: дохлый m5 не спасает даже хороший холдинг
+            return False 
         try:
             from shadow_score import pair_shadow_score, VETO_THRESHOLD
             _sh = pair_shadow_score(pair_data)
@@ -1251,9 +1164,9 @@ class Analyzer:
         self.last_score = conf
         print(f"🤖 XGBoost [DEX Poller]: {mint} | Score: {conf:.1f}%")
         import config
-        threshold = 35.0  # Снизили с 45.0 до 35.0. Бот был слишком "стеснительным" и ждал идеальных графиков. 35% даст больше ракет.
+        threshold = 35.0  
         if is_vip:
-            threshold = 45.0  # Было 30.0: все катастрофы (FIBONACCI -68%, Goblin, CATANA) - VIP-входы. Та же планка для всех
+            threshold = 45.0  
             print(f"🔥 [VIP] Порог XGBoost как у всех: {threshold}%")
 
         ok = bool(conf >= threshold)
@@ -1262,13 +1175,9 @@ class Analyzer:
         return ok
 
     async def analyze_token_raydium(self, mint: str, pair_data: dict) -> bool:
-        # Безлимитный режим: используем ТОЛЬКО данные DexScreener
         if not pair_data:
             return False
 
-        # FRESHNESS GATE (не-VIP): модель смотрит h24-окно и ставит 100% даже дохлым
-        # монетам (FIBONACCI -68%, paws -51%, HUSKY -30%). Живой токен торгуется СЕЙЧАС:
-        # требуем свежего m5-объёма. Победитель MC +83% шёл с живым m5 - он проходит.
         _hyper_fresh = self.check_hyper_rocket_momentum(pair_data)
         if not _hyper_fresh:
             _txm5 = (pair_data.get("txns") or {}).get("m5", {}) or {}
@@ -1281,7 +1190,6 @@ class Analyzer:
         import pandas as pd
         import joblib
         
-        # Извлекаем признаки
         txns_h24 = pair_data.get("txns", {}).get("h24", {})
         buys_h24 = txns_h24.get("buys", 0)
         sells_h24 = txns_h24.get("sells", 0)
@@ -1295,7 +1203,6 @@ class Analyzer:
         buy_sell_ratio = buys_h24 / (sells_h24 + 1)
         vol_to_liq = volume_h24 / (liquidity + 1)
         
-        # Формируем DataFrame для XGBoost
         features = ['price_change_h24', 'volume_h24', 'buys_h24', 'sells_h24', 'liquidity', 'fdv', 'buy_sell_ratio', 'vol_to_liq']
         df = pd.DataFrame([{
             'price_change_h24': price_change_h24,
@@ -1312,7 +1219,6 @@ class Analyzer:
             if self.raydium_model is None: return False
             prob = self.raydium_model.predict_proba(df)[0][1]
             conf = prob * 100
-            # --- ИНТЕГРАЦИЯ LUNARCRUSH ---
             symbol = pair_data.get("baseToken", {}).get("symbol", "")
             if symbol:
                 lc_data = await self.fetch_lunarcrush_sentiment(symbol)
@@ -1322,16 +1228,14 @@ class Analyzer:
                     print(f"🌕 [LunarCrush] {symbol}: Interactions: {interactions}, Sentiment: {sentiment}%")
                     
                     if sentiment >= 70 and interactions > 500:
-                        conf += 15.0 # Бустим уверенность ИИ за счет сильного социального хайпа!
+                        conf += 15.0 
                         print(f"📈 [LunarCrush] Хайп подтвержден! Буст +15% к Score.")
                     elif sentiment < 30:
                         conf -= 20.0
                         print(f"📉 [LunarCrush] Негативный сентимент! Штраф -20% к Score.")
-            # -------------------------------
             
             print(f"🧠 Raydium XGBoost (Безлимит): {mint} | Score: {conf:.1f}%")
             self.last_score = float(conf)
-            # SHADOW VETO (P0.1, обучено на 513 отказах): явных лузеров режем до модели
             try:
                 from shadow_score import pair_shadow_score, VETO_THRESHOLD
                 _sh = pair_shadow_score(pair_data)
@@ -1340,9 +1244,8 @@ class Analyzer:
                     return False
             except Exception:
                 pass
-            import config; threshold = 45.0  # Было 15.0 - пропускало мусор
+            import config; threshold = 45.0  
             _hyper = self.check_hyper_rocket_momentum(pair_data)
-            # VIP-скидок больше нет: FIBONACCI/CATANA/Goblin зашли по сниженному порогу и слили. Та же планка.
 
             is_buy = bool(conf >= threshold)
             if is_buy:
@@ -1353,7 +1256,6 @@ class Analyzer:
                     from shadow_tracker import ShadowTracker
                     shadow = ShadowTracker()
                     price = float(pair_data.get("priceUsd", 0))
-                    # Пишем Raydium FOMO-монеты в ту же таблицу shadow_log для дальнейшего анализа
                     shadow.log_rejection(
                         mint=mint,
                         reason=f"FOMO XGBoost low score: {conf:.1f}%",
@@ -1368,18 +1270,17 @@ class Analyzer:
         except Exception as e:
             print(f"⚠️ Ошибка XGBoost (analyze_token_raydium) для {mint}: {e}")
             return False
+
     async def analyze_token_ws(self, ws_data: dict) -> bool:
         mint = ws_data.get("mint")
         symbol = ws_data.get("symbol", "UNKNOWN")
         name = ws_data.get("name", "Unknown")
         
-        # Читаем соцсети прямо из смарт-контракта (создатель обязан их указать при деплое на Pump.fun)
         has_twitter = bool(ws_data.get("twitter"))
         has_telegram = bool(ws_data.get("telegram"))
         has_website = bool(ws_data.get("website"))
         socials_count = sum([has_twitter, has_telegram, has_website])
         
-        # Расчет стартовой ликвидности из кривой Bonding Curve
         v_sol = ws_data.get("vSolInBondingCurve", 30.0)
         from sol_price import get_sol_price_sync
         sol_price = get_sol_price_sync()
@@ -1390,7 +1291,6 @@ class Analyzer:
         safety_score = 40
         momentum_score = 40 if initial_buy > 0 else 20
         
-        # Social Score теперь зависит от того, сколько ссылок создатель прикрепил к контракту
         social_score = 10
         if has_twitter: social_score += 30
         if has_telegram: social_score += 30
@@ -1417,15 +1317,10 @@ class Analyzer:
         
         print(f"📡 [WSS SNIPER] Пойман токен: {name} (${symbol}) | Liq: ${liq_usd:.0f} | Socials: {socials_count}")
         
-        # СТРОГИЕ ФИЛЬТРЫ ДЛЯ 0-СЕКУНДНЫХ МОНЕТ
-        
-        # 1. Защита от ленивых скаммеров (мусор без соцсетей)
         if socials_count == 0:
             print(f"🚫 [WSS] Отказ: Создатель {symbol} даже не прикрепил соцсети. 100% мусор.")
             return False
             
-        # 2. Skin in the game & Анти-монополия (Initial Buy)
-        # PumpPortal отдает initialBuy в SOL. Требуем от 0.1 до 5 SOL.
         if initial_buy < 0.1:
             print(f"🚫 [WSS] Отказ: Создатель вкинул слишком мало ({initial_buy} SOL). У него нет 'шкуры на кону'.")
             return False
@@ -1433,9 +1328,6 @@ class Analyzer:
             print(f"🚫 [WSS] Отказ: Создатель выкупил слишком много токенов ({initial_buy} SOL). Высокий риск монопольного дампа.")
             return False
             
-        # 3. Проверка разработчика и бандлов будет произведена позже или через Helius.
-            
-        # 4. Проверка кошелька разработчика (Helius RPC) и метаданных IPFS
         trader_pubkey = ws_data.get("traderPublicKey")
         uri = ws_data.get("uri")
         
@@ -1445,7 +1337,6 @@ class Analyzer:
         import aiohttp
         session = await self.get_session()
         if True:
-            # Запрос баланса к Helius
             if trader_pubkey:
                 payload = {
                     "jsonrpc": "2.0",
@@ -1461,7 +1352,6 @@ class Analyzer:
                 except Exception as e:
                     print(f"⚠️ Ошибка RPC баланса: {e}")
                     
-            # Загрузка метаданных IPFS
             if uri:
                 try:
                     async with session.get(uri, timeout=2) as resp:
@@ -1481,15 +1371,11 @@ class Analyzer:
             
         print(f"🚀 [WSS СИГНАЛ] Входим в токен {symbol} на нулевой секунде! (Dev Wallet: {dev_balance_sol:.2f} SOL, Socials: {socials_count})")
         
-        # Эмуляция цены (записываем цену в usd в словарь, чтобы main.py мог ее взять)
         v_tok = ws_data.get("vTokensInBondingCurve", 1073000000.0)
         ws_data["priceUsd"] = (v_sol / v_tok) * sol_price
         return True
 
     async def fetch_lunarcrush_sentiment(self, symbol: str) -> dict:
-        """
-        Проверяет хайп (Social Sentiment) монеты в Twitter через LunarCrush.
-        """
         import config
         api_key = getattr(config, "LUNARCRUSH_API_KEY", "")
         if not api_key:
