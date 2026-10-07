@@ -1016,7 +1016,8 @@ async def _evm_chain_loop(analyzer, tracker, chain: str):
                                                   _pc.get("m5", 0) or 0,
                                                   _tx5.get("buys", 0) or 0, _tx5.get("sells", 0) or 0)
                                 cap = tracker.get_total_capital()
-                                size = max(4.0, min(100.0, cap * (config.REINVEST_PERCENT / 100.0))) if cap > 0 else 4.0
+                                fixed = getattr(config, "TRADE_AMOUNT_USD", 0)
+                                size = fixed if fixed > 0 else (max(4.0, min(100.0, cap * (config.REINVEST_PERCENT / 100.0))) if cap > 0 else 4.0)
                                 _sig = analyzer.get_signal(addr)
                                 # RKT-вето дженерик-входов (не билетов): слабая структура
                                 # под импульсом = чужой выход. MERRGER/MTA/LUXR урок.

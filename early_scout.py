@@ -153,7 +153,7 @@ async def early_scout_loop(analyzer, tracker):
 
     while True:
         try:
-            async with websockets.connect(config.PUMPPORTAL_WSS, extra_headers=headers) as ws:
+            async with websockets.connect(config.PUMPPORTAL_WSS, extra_headers=headers, ping_interval=None, ping_timeout=None) as ws:
                 await ws.send(json.dumps({"method": "subscribeNewToken"}))
                 keys = list(states) + list(held)
                 if keys:
