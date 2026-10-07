@@ -25,7 +25,7 @@ PAPER_PORTFOLIO_FILE = "portfolio.json"
 INITIAL_BALANCE_USD = 120.0  # торговый пул ($150 депо - $30 газ)    # Стартовый капитал
 REINVEST_PERCENT = 5.0  # Было 3%: цель $10/день требует сайз. 5% пула на сделку
 VIRTUAL_POSITION_SIZE_USD = 4.0
-TRADE_AMOUNT_USD = 10.0  # Было $6: базовый ордер $10 (комиссия $0.20 = всего 2% вместо 3.3%)
+TRADE_AMOUNT_USD = 6.0  # Было $6: базовый ордер $10 (комиссия $0.20 = всего 2% вместо 3.3%)
 MAX_CONCURRENT_POSITIONS = 7  # Было 12: 12 открытых = деньги в мусоре. 7 — только лучшие входы
 # держат слоты — иначе ракете некуда войти. Капитальный тормоз MAX_DEPLOYED_PCT=60% остаётся.
 
@@ -47,7 +47,7 @@ TRAILING_DISTANCE_PCT = 0.08  # базовый для скальпа; ранне
 # pnl>+5%, maxp>+5%, без -20% краша за 60с, без -8% от пика. Новое: в прибыли время не режем,
 # трейлинг расширяем, стопы от входа отключаем (только от пика).
 EVM_RUNNER_MAXP = 0.50  # +50% пик = раннер: Dead/Stagnant/Stop от входа OFF, только трейлинг от пика
-EVM_RUNNER_TRAIL = 0.60  # Было 0.25: РАКЕТАМ НУЖЕН ВОЗДУХ! Чтобы поймать +1000%, нужно терпеть откаты в -60% от пика.
+EVM_RUNNER_TRAIL = 0.25  # Было 0.25: РАКЕТАМ НУЖЕН ВОЗДУХ! Чтобы поймать +1000%, нужно терпеть откаты в -60% от пика.
 EVM_MOONBAG_TRAIL = 0.40  # после мунбэга (деньги в кармане) даём дышать 40% вместо 20%
 EVM_RUNNER_CRASH = 0.55  # Crash Guard для раннера: -55% за 60с (сильные вытряхивания)
 EVM_NORMAL_CRASH = 0.35  # Crash Guard для обычных токенов: -35% за 60с вместо 20%
@@ -82,12 +82,12 @@ MAX_LIQUIDITY = 50000000
 # + символьный кулдаун + кэп сайза). Старые -70% были до гейтов.
 USE_FOMO_SIGNALS = True
 USE_COPYTRADE = True
-TG_MAX_SIZE_USD = 3.0  # Было 4.0: TG-коллы на вершинах тоже сливают. Меньше сайз на чужие вершины
-TG_VIP_SIZE_USD = 5.0  # Увеличили сайз на VIP-ракеты (как Buto), чтобы профит покрывал минусы
+TG_MAX_SIZE_USD = 6.0  # Было 4.0: TG-коллы на вершинах тоже сливают. Меньше сайз на чужие вершины
+TG_VIP_SIZE_USD = 6.0  # Увеличили сайз на VIP-ракеты (как Buto), чтобы профит покрывал минусы
 MAX_FOMO_BUYS_PER_PASS = 3  # не больше 3 покупок за проход очереди (бёрст-контроль)
 # Robinhood Chain: ни GoPlus, ни honeypot.is сеть 4663 не знают (fail-open всегда).
 # Единственная защита от honeypot-рага (-72% ZUPITER) — размер: кэп как у TG.
-ROB_MAX_SIZE_USD = 3.0  # Было 4.0: ROB без honeypot-покрытия, LOTTERY +131% слилась. Меньше сайз
+ROB_MAX_SIZE_USD = 6.0  # Было 4.0: ROB без honeypot-покрытия, LOTTERY +131% слилась. Меньше сайз
 # Символьный кулдаун: после закрытия ЛЮБОЙ сделки тикер банится целиком
 # (кейс VRAX: +5% → перезаход в клона с тем же именем → -32%).
 # Mint-гарды клонов не видят (другой адрес), тикер — видят.
@@ -314,13 +314,20 @@ WHALE_MAX_RUNUP = 1.25  # Было 1.55: вход на 2-м ките тольк�
 # === ПРАВКИ: меньше минусов, ракеты через малые билеты ===
 VIP_ENTRIES_ENABLED = False        # читается в analyzer.analyze_token (патч из прошлого ответа)
 SNIPER_ENTRIES_ENABLED = False     # sniper entry = -85.8% по твоим данным
-TG_VIP_SIZE_USD = 2.0
-LOTTERY_SIZE_MULT = 0.25
+TG_VIP_SIZE_USD = 6.0
+LOTTERY_SIZE_MULT = 1.0
 CONVICTION_MULT = 1.0              # вернёшь 1.5-2.0, когда статистика станет плюсовой
 PULLBACK_MAX_H1_PCT = 3.0          # не гонимся за +300%/час
 DIPBUY_DROP_MIN = 0.20
 DIPBUY_DROP_MAX = 0.35
 DIPBUY_WINDOW_MIN = 15
 MOONBAG_TRIGGER_PCT = 0.50
-ROB_MAX_SIZE_USD = 1.5             # сеть без honeypot-проверок
+ROB_MAX_SIZE_USD = 6.0             # сеть без honeypot-проверок
 ROCKET_VETO_MIN = 0.40
+
+# === EARLY SCOUT ===
+EARLY_SCOUT_ENABLED = True
+EARLY_SHADOW = True
+EARLY_SHADOW_FILE = "early_shadow.jsonl"
+EARLY_SHADOW_MAX_POS = 30
+EARLY_SIZE_USD = 6.0

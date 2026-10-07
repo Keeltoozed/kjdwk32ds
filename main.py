@@ -22,7 +22,8 @@ async def position_manager_loop(analyzer, tracker):
             mints_to_fetch = [m for m, p in open_positions.items()
                               if not m.startswith("0x")
                               and getattr(p, "chain", "solana") == "solana"
-                              and not str(getattr(p, "source", "")).startswith("GROWTH")]
+                              and not str(getattr(p, "source", "")).startswith("GROWTH")
+                              and not str(getattr(p, "source", "")).startswith("EARLY")]
             bulk_prices = await JupiterAPI.get_prices(mints_to_fetch) if mints_to_fetch else {}
             
             for mint, position in list(open_positions.items()):
@@ -30,7 +31,7 @@ async def position_manager_loop(analyzer, tracker):
                 if mint.startswith("0x") or getattr(position, "chain", "solana") != "solana":
                     continue
                 # GROWTH-позиции ведёт growth_loop (медленные выходы) - пропускаем
-                if str(getattr(position, "source", "")).startswith("GROWTH"):
+                if str(getattr(position, "source", "")).startswith("GROWTH") or str(getattr(position, "source", "")).startswith("EARLY"):
                     continue
                 # 1. Берем цену из Raydium/Gecko (запросили разом для всех)
                 api_price = bulk_prices.get(mint, 0.0)
@@ -1027,7 +1028,7 @@ async def _evm_chain_loop(analyzer, tracker, chain: str):
                                     await asyncio.sleep(1.0)
                                     continue
                                 if "LOTTERY" in _sig or "SCOUT" in _sig:
-                                    size = min(size, 1.5)  # лотерейный/скаут билет, не позиция
+                                    size = min(size, 6.0)  # лотерейный/скаут билет
                                 else:
                                     size *= analyzer.conviction_size_mult(td)  # коридор с импульсом едет x2
                                     # DIPBUY-билеты mult не трогает: откаты с умеренным
@@ -1202,7 +1203,9 @@ async def async_main():
             await get_sol_price()
             await asyncio.sleep(300)
     
+    from early_scout import early_scout_loop
     await asyncio.gather(
+        early_scout_loop(analyzer, tracker),
         position_manager_loop(analyzer, tracker),
         scanner_loop(analyzer, tracker),
         copy_trader.listen(),
