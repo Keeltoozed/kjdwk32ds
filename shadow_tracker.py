@@ -108,7 +108,7 @@ class ShadowTracker:
         try:
             status, data = await fetch_json(url, timeout=8, retries=1)
             if status == 200 and data:
-                for pair in data.get("pairs", []):
+                for pair in data.get("pairs") or []:
                     # Берем цену из пула Solana
                     if pair.get("chainId") == "solana":
                         m = pair.get("baseToken", {}).get("address")

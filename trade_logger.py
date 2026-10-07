@@ -119,7 +119,7 @@ class TradeLogger:
             try:
                 status, data = await fetch_json(url, timeout=10, retries=1)
                 if status == 200 and data:
-                    for pair in data.get("pairs", []):
+                    for pair in data.get("pairs") or []:
                         if pair.get("chainId") == "solana":
                             m = pair.get("baseToken", {}).get("address")
                             p = float(pair.get("priceUsd", 0))

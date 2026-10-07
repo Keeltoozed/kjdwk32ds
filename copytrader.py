@@ -49,7 +49,7 @@ class CopyTrader:
                 f"https://api.dexscreener.com/latest/dex/tokens/{mint}",
                 timeout=8, retries=1)
             if status == 200 and data:
-                pairs = data.get("pairs", [])
+                pairs = data.get("pairs") or []
                 if pairs:
                     return float(pairs[0].get("priceUsd", 0))
         except:

@@ -277,7 +277,7 @@ class Analyzer:
             try:
                 status, data = await fetch_json(url, headers=headers, timeout=8, retries=1)
                 if status == 200 and data:
-                    pairs = data.get("pairs", [])
+                    pairs = data.get("pairs") or []
                     if pairs:
                         sol_pairs = [p for p in pairs if p.get("chainId") == "solana"]
                         if sol_pairs:
@@ -344,7 +344,7 @@ class Analyzer:
             try:
                 status, data = await fetch_json(url, timeout=8, retries=1)
                 if status == 200 and data:
-                    pairs = data.get("pairs", [])
+                    pairs = data.get("pairs") or []
 
                     for p in pairs:
                         if p.get("chainId") == "solana":

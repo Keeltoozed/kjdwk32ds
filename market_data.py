@@ -298,7 +298,7 @@ async def _ds_token_data(mint: str) -> dict:
     status, data = await fetch_json(url, timeout=8, retries=2)
     if status == 200 and data:
         try:
-            pairs = data.get("pairs", [])
+            pairs = data.get("pairs") or []
             sol = [p for p in pairs if p.get("chainId") == "solana"]
             if sol:
                 best = sorted(sol, key=lambda x: x.get("liquidity", {}).get("usd", 0),
@@ -416,9 +416,9 @@ async def _ds_bulk_prices(mints: list) -> dict:
     for i in range(0, len(mints), 30):
         chunk = mints[i:i + 30]
         status, data = await fetch_json(f"https://api.dexscreener.com/latest/dex/tokens/{','.join(chunk)}", timeout=10)
-        if status != 200 or not data:
+        if status != 200 or not isinstance(data, dict):
             continue
-        pairs = data.get("pairs", [])
+        pairs = data.get("pairs") or []
         for p in pairs:
             if p.get("chainId") == "solana":
                 addr = (p.get("baseToken") or {}).get("address", "")

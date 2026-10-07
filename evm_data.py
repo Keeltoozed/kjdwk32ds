@@ -82,7 +82,7 @@ async def get_token_data(address: str, chain: str = SLUG) -> dict:
     if status != 200 or not data:
         return {}
     # ВАЖНО: этот эндпоинт возвращает голый массив, не {pairs:[...]}
-    pairs = data if isinstance(data, list) else data.get("pairs", [])
+    pairs = data if isinstance(data, list) else data.get("pairs") or []
     pools = [p for p in pairs if p.get("chainId") == chain]
     if not pools:
         return {}
@@ -111,7 +111,7 @@ async def get_bulk_prices(addresses: list, chain: str = SLUG) -> dict:
             f"{DS}/latest/dex/tokens/{','.join(chunk)}", timeout=10, retries=2)
         if status != 200 or not data:
             continue
-        pairs = data if isinstance(data, list) else data.get("pairs", [])
+        pairs = data if isinstance(data, list) else data.get("pairs") or []
         for p in pairs:
             if p.get("chainId") != chain:
                 continue
