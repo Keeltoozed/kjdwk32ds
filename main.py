@@ -853,12 +853,17 @@ async def _evm_track_once(tracker, chain: str, tag: str, emoji: str):
                 _runner_thr = float(getattr(config, "EVM_RUNNER_MAXP", 0.50))
                 _is_runner = maxp >= _runner_thr
                 _is_moon = bool(getattr(pos, "is_moonbag", False))
-                if _is_runner:
-                    _trail_dist = float(getattr(config, "EVM_RUNNER_TRAIL", 0.25))
-                elif _is_moon:
-                    _trail_dist = float(getattr(config, "EVM_MOONBAG_TRAIL", 0.20))
+                
+                # ДИНАМИЧЕСКИЙ ТРЕЙЛИНГ (чем выше ракета, тем шире даем ей дышать)
+                if maxp >= 3.0: # +300%
+                    _trail_dist = 0.35 # На гигантских иксах даем 35% воздуха
+                elif maxp >= 1.0: # +100%
+                    _trail_dist = 0.25 # На средних иксах 25% воздуха
+                elif maxp >= 0.50: # +50%
+                    _trail_dist = 0.15 # Зажимаем первую прибыль (откат 15%)
                 else:
-                    _trail_dist = float(getattr(config, "TRAILING_DISTANCE_PCT", 0.08))
+                    _trail_dist = float(getattr(config, "TRAILING_DISTANCE_PCT", 0.08)) # Стандартный скальп 8%
+                    
                 _crash_drop = float(getattr(config, "EVM_RUNNER_CRASH", 0.45)) if _is_runner else float(getattr(config, "EVM_NORMAL_CRASH", 0.35))
                 _dead_min = int(getattr(config, "EVM_DEAD_MIN", 60))
                 _stag_min = int(getattr(config, "EVM_STAGNANT_MIN", 45))
@@ -869,6 +874,7 @@ async def _evm_track_once(tracker, chain: str, tag: str, emoji: str):
                     continue
                 if maxp >= _mbr and not getattr(pos, "is_moonbag", False):
                     tracker.partial_close_position(mint, cur, 0.50, f"{tag} Take Profit +{_mbr*100:.0f}% (Risk Free)")
+                    pos.is_moonbag = True # ИСПРАВЛЕН БАГ (бесконечные продажи)
                 elif prev_ts and (_t.time() - prev_ts) < 60 and prev > 0 and cur <= prev * (1 - _crash_drop):
                     reason = f"{tag} Crash Guard ({(1 - cur / prev) * 100:.0f}% за {_t.time() - prev_ts:.0f}с)"
                 elif maxp >= getattr(config, "TRAILING_ACTIVATION_PCT", 0.25) and \

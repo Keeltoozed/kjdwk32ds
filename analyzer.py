@@ -570,6 +570,9 @@ class Analyzer:
             if _s > 0 and _b < _s * 1.1:
                 print(f"🚫 [ENTRY] {mint}: buys {_b} / sells {_s} — нет давления покупателей.")
                 return False
+            if _s == 0 and _b > 10:
+                print(f"🚫 [HONEYPOT] {mint}: {_b} покупок и 0 продаж! Очевидный скам/honeypot.")
+                return False
             _v24_min = 3000 if _age_min_pre < 30 else 10000
             if _v24 < _v24_min:
                 print(f"🚫 [ENTRY] {mint}: vol24h ${_v24:,.0f} < ${_v24_min:,.0f} — совсем нет объёма.")
