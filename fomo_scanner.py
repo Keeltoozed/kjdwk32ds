@@ -15,8 +15,8 @@ async def fetch_fomo_family_trending():
     
     # Сортируем по 5m объему и транзакциям, чтобы получить актуальные тренды
     urls = [
-        "https://api.parse.bot/scraper/0f1557da-d981-4a07-9074-6683f352ab0f/list_tokens?sort=volume_5m_usd&limit=50",
-        "https://api.parse.bot/scraper/0f1557da-d981-4a07-9074-6683f352ab0f/list_tokens?sort=txn_count_1h&limit=50"
+        "https://api.parse.bot/scraper/0f1557da-d981-4a07-9074-6683f352ab0f/list_tokens?sort=newest&limit=50",
+        "https://api.parse.bot/scraper/0f1557da-d981-4a07-9074-6683f352ab0f/list_tokens?sort=volume_24h&limit=50"
     ]
     
     from http_client import fetch_json
