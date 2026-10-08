@@ -117,7 +117,7 @@ async def position_manager_loop(analyzer, tracker):
                 # === ТАЙМАУТ ПОСЛЕ РАКЕТЫ (По просьбе пользователя) ===
                 # У мемкоинов есть фаза импульса. Если после взлета прошло 5 минут, а нового перехая нет,
                 # и цена ползет вниз (или просто стоит), закрываем в безубыток или мелкий минус.
-                if max_pnl_pct >= 0.10 and minutes_since_peak >= 15:
+                if max_pnl_pct >= 0.10 and minutes_since_peak >= 7:
                     tracker.close_position(mint, current_price, f"Post-Rocket Fade Cut ({minutes_since_peak:.0f}m after peak)")
                     continue
 
@@ -153,7 +153,7 @@ async def position_manager_loop(analyzer, tracker):
                 
                 # === СКАЛЬП-ТРЕЙЛИНГ (Забираем мелкие плюсы) ===
                 # Если ракета не долетела до +25%, но дала +15% и начала падать, забираем свое.
-                if max_pnl_pct >= 0.15 and max_pnl_pct < getattr(config, "TRAILING_ACTIVATION_PCT", 0.25):
+                if max_pnl_pct >= 0.10 and max_pnl_pct < getattr(config, "TRAILING_ACTIVATION_PCT", 0.25):
                     drop_from_max = (position.max_price_usd - current_price) / position.max_price_usd
                     if drop_from_max >= 0.05:
                         tracker.close_position(mint, current_price, f"Scalp Profit (peak +{max_pnl_pct*100:.0f}%)")
@@ -193,7 +193,7 @@ async def position_manager_loop(analyzer, tracker):
                 
                 # 1. СКАЛЬП-ТРЕЙЛИНГ (Забираем мелкие плюсы)
                 # Если ракета не долетела до +25%, но дала +15% и начала падать, забираем свое.
-                if max_pnl_pct >= 0.15 and max_pnl_pct < getattr(config, "TRAILING_ACTIVATION_PCT", 0.25):
+                if max_pnl_pct >= 0.10 and max_pnl_pct < getattr(config, "TRAILING_ACTIVATION_PCT", 0.25):
                     drop_from_max = (position.max_price_usd - current_price) / position.max_price_usd
                     if drop_from_max >= 0.05:
                         tracker.close_position(mint, current_price, f"Scalp Profit (peak +{max_pnl_pct*100:.0f}%)")
@@ -224,7 +224,7 @@ async def position_manager_loop(analyzer, tracker):
                     tracker.close_position(mint, current_price, f"Breakeven (был пик +{max_pnl_pct*100:.0f}%)")
                     continue
                 # Мягкий стоп: был +15%+, сползли к -5%
-                if max_pnl_pct >= 0.15 and pnl_pct <= -0.05:
+                if max_pnl_pct >= 0.10 and pnl_pct <= -0.05:
                     tracker.close_position(mint, current_price, f"Soft Guard (был пик +{max_pnl_pct*100:.0f}%)")
                     continue
                             

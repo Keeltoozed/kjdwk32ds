@@ -629,22 +629,57 @@ class Analyzer:
             print(f"🚫 Мусор: У {mint} вообще нет ни одной соцсети или сайта.")
             return False
             
+        rpc_url = getattr(config, "HELIUS_RPC_URL", "https://mainnet.helius-rpc.com/?api-key=9efda6f4-fddb-42d3-a2b1-098bbbecd299")
+        
+        fallback_rpcs = [
+            "https://api.mainnet-beta.solana.com",
+            "https://solana-rpc.publicnode.com",
+        ]
+        
+        mint_info_payload = {
+            "jsonrpc": "2.0", "id": 1,
+            "method": "getAccountInfo",
+            "params": [mint, {"encoding": "jsonParsed"}]
+        }
+        
+        fake_headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+            "Accept": "application/json, text/plain, */*",
+            "Origin": "https://explorer.solana.com",
+            "Referer": "https://explorer.solana.com/"
+        }
+        
+        mint_data = None
         try:
             import aiohttp
             session = await self.get_session()
             
-            rugcheck_url = f"https://api.rugcheck.xyz/v1/tokens/{mint}/report"
-            rc_data = None
-            async with session.get(rugcheck_url, timeout=8) as resp:
-                if resp.status == 200:
-                    rc_data = await resp.json(content_type=None)
-                else:
-                    print(f"⚠️ RugCheck API вернул {resp.status} для {mint[:8]}.")
-                    
-            if rc_data:
-                token_info = rc_data.get("token", {})
-                mint_authority = token_info.get("mintAuthority")
-                freeze_authority = token_info.get("freezeAuthority")
+            try:
+                async with session.post(rpc_url, json=mint_info_payload, timeout=5) as resp:
+                    if resp.status == 200:
+                        mint_data = await resp.json(content_type=None)
+                    else:
+                        raise Exception(f"HTTP {resp.status} - {await resp.text()}")
+            except Exception as e:
+                for fallback_url in fallback_rpcs:
+                    try:
+                        async with session.post(fallback_url, json=mint_info_payload, headers=fake_headers, timeout=10) as resp:
+                            if resp.status == 200:
+                                mint_data = await resp.json(content_type=None)
+                                break
+                            else:
+                                err_txt = await resp.text()
+                                print(f"⚠️ Резервный {fallback_url} выдал {resp.status}: {err_txt[:100]}")
+                    except Exception as ex:
+                        print(f"⚠️ Ошибка резервного {fallback_url}: {ex}")
+                        continue
+                        
+            if mint_data:
+                parsed = mint_data.get("result", {}).get("value", {}).get("data", {}).get("parsed", {})
+                mint_info = parsed.get("info", {})
+                
+                mint_authority = mint_info.get("mintAuthority")
+                freeze_authority = mint_info.get("freezeAuthority")
                 
                 PUMPFUN_PROGRAM = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"
                 SYSTEM_PROGRAM = "11111111111111111111111111111111"
@@ -657,57 +692,86 @@ class Analyzer:
                 if freeze_authority and freeze_authority not in SAFE_AUTHORITIES:
                     print(f"🚫 [АНТИСКАМ] Freeze Authority у ДЕВ-кошелька {freeze_authority[:8]} у {mint[:8]} → СКАМ")
                     return False
-                    
-                holders = rc_data.get("topHolders", [])
-                if not holders:
-                    print(f"⚠️ Ошибка RugCheck (пустой список аккаунтов). Блокируем вход.")
-                    return False
-                    
-                non_curve_accounts = []
-                for h in holders:
-                    pct = h.get("pct", 0)
-                    amt = h.get("uiAmount", 0)
-                    owner = h.get("owner", "")
-                    
-                    if "Raydium" in owner or "Meteora" in owner or pct > 80.0 or owner == "5Q544fKrFoe6tsEbD7S8EmxGTJYAKtTVhAW5Q5pge4j1":
-                        continue
-                    non_curve_accounts.append((amt, pct))
-                
-                top_10 = non_curve_accounts[:10]
-                top_10_amounts = [x[0] for x in top_10]
-                
-                if len(top_10_amounts) >= 3:
-                    rounded_amounts = [round(amt, -6) for amt in top_10_amounts if amt > 1000000]
-                    if rounded_amounts:
-                        from collections import Counter
-                        counts = Counter(rounded_amounts)
-                        if counts.most_common(1)[0][1] >= 3:
-                            print(f"🚫 [АНТИСКАМ] Обнаружен Jito-бандл (Сивил атака) у {mint}. Блокируем.")
-                            return False
-                
-                top_10_sum_pct = sum([x[1] for x in top_10])
-                dev_holding_pct = top_10[0][1] if top_10 else 0.0
-                
-                self._last_top10 = top_10_sum_pct
-                self._last_dev = dev_holding_pct
-                
-                is_pump = pair_data and pair_data.get("dexId") == "pump"
-                max_allowed_pct = 20.0 if is_pump else 45.0
-                
-                if top_10_sum_pct > 100:
-                    print(f"⚠️ [HOLDERS] {mint[:8]}: топ-10 {top_10_sum_pct:.1f}% > 100% — битые данные сапплая.")
-                elif dev_holding_pct > 15.0:
-                    print(f"🚫 [АНТИСКАМ] Один кошелек (Dev) держит {dev_holding_pct:.1f}% (Лимит 15%). Блокируем.")
-                    return False
-                elif top_10_sum_pct > max_allowed_pct:
-                    print(f"🚫 [АНТИСКАМ] Топ-10 держат {top_10_sum_pct:.1f}% (Лимит {max_allowed_pct}%). Блокируем.")
-                    return False
             else:
-                print(f"⚠️ Не удалось проверить через RugCheck. Блокируем вход от греха подальше.")
+                print(f"⚠️ Не удалось проверить Mint Authority (все RPC недоступны). Блокируем вход от греха подальше.")
                 return False
         except Exception as e:
-            print(f"⚠️ Критическая ошибка при проверке RugCheck: {str(e)[:50]}. Блокируем вход.")
+            print(f"⚠️ Критическая ошибка при проверке Mint Authority: {str(e)[:50]}. Блокируем вход.")
             return False
+
+        top10_payload = {"jsonrpc": "2.0", "id": 1, "method": "getTokenLargestAccounts", "params": [mint]}
+        try:
+            bundle_data = None
+            
+            heavy_rpcs = [
+                rpc_url,
+                "https://solana-mainnet.g.alchemy.com/v2/alch_wwSmrv5RZmrq66-lSNekM",
+                "https://api.mainnet-beta.solana.com",
+                "https://solana-rpc.publicnode.com",
+            ]
+            
+            for heavy_url in heavy_rpcs:
+                try:
+                    async with session.post(heavy_url, json=top10_payload, headers=fake_headers, timeout=8) as resp:
+                        if resp.status == 200:
+                            bundle_data = await resp.json(content_type=None)
+                            if bundle_data and "result" in bundle_data:
+                                break
+                except Exception as e:
+                    print(f"⚠️ Ошибка Jito RPC {heavy_url}: {type(e).__name__} {e}")
+                    continue
+            
+            if not bundle_data or "result" not in bundle_data:
+                for fallback_url in fallback_rpcs:
+                    try:
+                        async with session.post(fallback_url, json=top10_payload, headers=fake_headers, timeout=5) as resp:
+                            if resp.status == 200:
+                                res = await resp.json(content_type=None)
+                                if res and "result" in res:
+                                    bundle_data = res
+                                    break
+                    except Exception: continue
+
+            if bundle_data and "result" in bundle_data:
+                accounts = bundle_data.get("result", {}).get("value", [])
+                if not accounts:
+                    print(f"⚠️ Ошибка RPC (пустой список аккаунтов). Блокируем вход.")
+                    return False
+                    
+                non_curve_accounts = [float(acc["uiAmount"]) for acc in accounts[1:]] if len(accounts) > 1 else []
+                top_10_amounts = non_curve_accounts[:10]
+                if len(top_10_amounts) >= 3:
+                        rounded_amounts = [round(amt, -6) for amt in top_10_amounts if amt > 1000000]
+                        if rounded_amounts:
+                            from collections import Counter
+                            counts = Counter(rounded_amounts)
+                            if counts.most_common(1)[0][1] >= 3:
+                                print(f"🚫 [АНТИСКАМ] Обнаружен Jito-бандл (Сивил атака) у {mint}. Блокируем.")
+                                return False
+                    
+                    top_10_sum_pct = (sum(top_10_amounts) / 1_000_000_000.0) * 100
+                    dev_holding_pct = (top_10_amounts[0] / 1_000_000_000.0) * 100 if top_10_amounts else -1.0
+                    self._last_top10 = top_10_sum_pct
+                    self._last_dev = dev_holding_pct
+                    
+                    is_pump = pair_data and pair_data.get("dexId") == "pump"
+                    max_allowed_pct = 20.0 if is_pump else 45.0
+                    if top_10_sum_pct > 100:
+                        print(f"⚠️ [HOLDERS] {mint[:8]}: топ-10 {top_10_sum_pct:.1f}% > 100% — битые данные сапплая, пропускаю проверку.")
+                    elif dev_holding_pct == -1.0:
+                        print(f"🚫 [АНТИСКАМ] Ошибка RPC: не удалось проверить кошелек создателя. Отказ в целях безопасности.")
+                        return False
+
+                    elif dev_holding_pct > 15.0:
+                        print(f"🚫 [АНТИСКАМ] Один кошелек (Dev) держит {dev_holding_pct:.1f}% (Лимит 15%). Блокируем.")
+                        return False
+
+                    elif top_10_sum_pct > max_allowed_pct:
+                        print(f"🚫 [АНТИСКАМ] Топ-10 держат {top_10_sum_pct:.1f}% (Лимит {max_allowed_pct}%). Блокируем.")
+                        return False
+            else:
+                print(f"⚠️ Не удалось проверить Jito-бандлы (RPC недоступны). Блокируем вход.")
+                return False
         except Exception as e:
             print(f"⚠️ Ошибка Jito-bundle: {e}")
             return False

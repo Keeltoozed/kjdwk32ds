@@ -97,42 +97,42 @@ class PumpFunSniper:
             df['price_acceleration'] = df['price_vel'].diff().fillna(0)
             # ------------------------------------------------
             
-            # --- ВНЕДРЕНИЕ АНТИ-СКАМ ФИЛЬТРОВ ОТ ПОЛЬЗОВАТЕЛЯ ---
+            # --- ВНЕДРЕНИЕ АНТИ-СКАМ ФИЛЬТРОВ (RUGCHECK) ---
             try:
                 import aiohttp
-                rpc_url = "https://mainnet.helius-rpc.com/?api-key=9efda6f4-fddb-42d3-a2b1-098bbbecd299"
                 from http_client import get_session
                 session = await get_session()
-                payload = {
-                    "jsonrpc": "2.0",
-                    "id": 1,
-                    "method": "getTokenLargestAccounts",
-                    "params": [state.mint]
-                }
-                async with session.post(rpc_url, json=payload, timeout=10) as resp:
-                        data = await resp.json()
-                        accounts = data.get("result", {}).get("value", [])
-                        total_supply = 1_000_000_000
-                        if accounts:
-                            # Исключаем самый первый аккаунт (это всегда Bonding Curve на Pump.fun)
-                            if len(accounts) > 1:
-                                non_curve_accounts = [float(acc["uiAmount"]) for acc in accounts[1:]]
-                                dev_holding_pct = (non_curve_accounts[0] / total_supply) * 100 if non_curve_accounts else 0
-                                top_10_holding_pct = (sum(non_curve_accounts[:10]) / total_supply) * 100
-                            else:
-                                dev_holding_pct, top_10_holding_pct = 0, 0
+                
+                rugcheck_url = f"https://api.rugcheck.xyz/v1/tokens/{state.mint}/report"
+                async with session.get(rugcheck_url, timeout=10) as resp:
+                    if resp.status == 200:
+                        rc_data = await resp.json(content_type=None)
+                        holders = rc_data.get("topHolders", [])
+                        if holders:
+                            non_curve_accounts = []
+                            for h in holders:
+                                pct = h.get("pct", 0)
+                                amt = h.get("uiAmount", 0)
+                                owner = h.get("owner", "")
+                                if "Raydium" in owner or "Meteora" in owner or pct > 80.0 or owner == "5Q544fKrFoe6tsEbD7S8EmxGTJYAKtTVhAW5Q5pge4j1":
+                                    continue
+                                non_curve_accounts.append((amt, pct))
                                 
+                            top_10 = non_curve_accounts[:10]
+                            top_10_sum_pct = sum([x[1] for x in top_10])
+                            dev_holding_pct = top_10[0][1] if top_10 else 0.0
+                            
                             if dev_holding_pct > 7.0:
                                 print(f"🚫 [DEV DUMP RISK] {state.symbol}: Создатель держит {dev_holding_pct:.1f}% (>7%). Пропуск!")
                                 state.is_ai_evaluated = True
                                 return
                                 
-                            if top_10_holding_pct > 30.0:
-                                print(f"🚫 [SYBIL RISK] {state.symbol}: Топ-10 холдеров держат {top_10_holding_pct:.1f}% (>30%). Пропуск!")
+                            if top_10_sum_pct > 30.0:
+                                print(f"🚫 [SYBIL RISK] {state.symbol}: Топ-10 холдеров держат {top_10_sum_pct:.1f}% (>30%). Пропуск!")
                                 state.is_ai_evaluated = True
                                 return
             except Exception as e:
-                print(f"⚠️ Ошибка проверки холдеров: {e}")
+                print(f"⚠️ Ошибка проверки холдеров (RugCheck): {e}")
             # --- КОНЕЦ ФИЛЬТРОВ ---
 
             pro_res = await ask_pro_oracle(df)

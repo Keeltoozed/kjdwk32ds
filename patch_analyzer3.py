@@ -3,10 +3,9 @@ import re
 with open("analyzer.py", "r") as f:
     content = f.read()
 
-# Find the start of the RPC section
-start_pattern = r'rpc_url = getattr\(config, "HELIUS_RPC_URL".*?elif top_10_sum_pct > max_allowed_pct:\s*print\(f"🚫 \[АНТИСКАМ\] Топ-10 держат \{top_10_sum_pct:.1f\}% \(Лимит \{max_allowed_pct\}%\). Блокируем."\)\s*return False'
+start_pattern = r'rpc_url = getattr\(config, "HELIUS_RPC_URL".*?elif top_10_sum_pct > max_allowed_pct:\s*print\(f"🚫 \[АНТИСКАМ\] Топ-10 держат \{top_10_sum_pct:.1f\}% \(Лимит \{max_allowed_pct\}%\). Блокируем."\)\s*return False\n\s*else:\n\s*print\(f"⚠️ Не удалось проверить Jito-бандлы \(RPC недоступны\)\. Блокируем вход\."\)\s*return False'
 
-replacement = """        try:
+replacement = """try:
             import aiohttp
             session = await self.get_session()
             
@@ -40,33 +39,16 @@ replacement = """        try:
                     print(f"⚠️ Ошибка RugCheck (пустой список аккаунтов). Блокируем вход.")
                     return False
                     
-                # Исключаем AMM пулы (Raydium, Meteora и т.д.) из топ-10. RugCheck обычно их не помечает инсайдерами, но у них огромный uiAmount
-                # Bonding curve тоже нужно исключить. Часто они имеют адрес 5Q54...
-                # У RugCheck пулы ликвидности перечислены в markets
-                market_lps = set()
-                for m in rc_data.get("markets", []):
-                    if m.get("lp") and m["lp"].get("lpMint"):
-                        # LP tokens are not base tokens
-                        pass
-                    # If it's raydium, the pool holds the base token in liquidityAAccount or liquidityBAccount
-                    if m.get("liquidityAAccount") and m["liquidityAAccount"].get("mint") == mint:
-                        market_lps.add(m["liquidityAAccount"]["pubkey"]) # wait, RugCheck doesn't always show pubkey of the account
-                
-                # To be safe, we just take the highest human wallets by ignoring those with > 80% (which is usually the curve/pool)
-                # But actually RugCheck returns accurate pct. Let's just use the first 11 and skip the very first if it's > 70%
-                
                 non_curve_accounts = []
                 for h in holders:
                     pct = h.get("pct", 0)
                     amt = h.get("uiAmount", 0)
                     owner = h.get("owner", "")
                     
-                    # Пропускаем явные системные пулы:
                     if "Raydium" in owner or "Meteora" in owner or pct > 80.0 or owner == "5Q544fKrFoe6tsEbD7S8EmxGTJYAKtTVhAW5Q5pge4j1":
                         continue
                     non_curve_accounts.append((amt, pct))
                 
-                # Если первая учетка была пулом, она отфильтрована
                 top_10 = non_curve_accounts[:10]
                 top_10_amounts = [x[0] for x in top_10]
                 
@@ -89,7 +71,7 @@ replacement = """        try:
                 max_allowed_pct = 20.0 if is_pump else 45.0
                 
                 if top_10_sum_pct > 100:
-                    print(f"⚠️ [HOLDERS] {mint[:8]}: топ-10 {top_10_sum_pct:.1f}% > 100% — битые данные сапплая, пропускаю проверку.")
+                    print(f"⚠️ [HOLDERS] {mint[:8]}: топ-10 {top_10_sum_pct:.1f}% > 100% — битые данные сапплая.")
                 elif dev_holding_pct > 15.0:
                     print(f"🚫 [АНТИСКАМ] Один кошелек (Dev) держит {dev_holding_pct:.1f}% (Лимит 15%). Блокируем.")
                     return False

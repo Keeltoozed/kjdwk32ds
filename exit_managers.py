@@ -54,7 +54,7 @@ class MatureExitManager:
         # Scalp Trailing (для мелких профитов)
         if hasattr(config, 'TRAILING_ACTIVATION_PCT'):
             max_pnl_pct = (position.max_price_usd - position.entry_price_usd) / position.entry_price_usd
-            if max_pnl_pct >= 0.15 and max_pnl_pct < config.TRAILING_ACTIVATION_PCT:
+            if max_pnl_pct >= 0.10 and max_pnl_pct < config.TRAILING_ACTIVATION_PCT:
                 drop_from_max = (position.max_price_usd - current_price) / position.max_price_usd
                 if drop_from_max >= 0.05:
                     return f"Scalp Profit (peak +{max_pnl_pct*100:.0f}%)"
@@ -69,7 +69,7 @@ class MatureExitManager:
         if _maxp >= _be and pnl_pct <= 0:
             return f"Mature Breakeven (был пик +{_maxp*100:.0f}%)"
         # Мягкий стоп: был +15%+, сползли к -5% — пила, режем малый минус
-        if _maxp >= 0.15 and pnl_pct <= -0.05:
+        if _maxp >= 0.10 and pnl_pct <= -0.05:
             return f"Mature Soft Guard (был пик +{_maxp*100:.0f}%)"
 
         # Hard stop loss
