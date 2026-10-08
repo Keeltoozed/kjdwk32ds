@@ -471,9 +471,12 @@ class Analyzer:
         """
         txns_m5 = pair_data.get("txns", {}).get("m5", {})
         buys_m5 = txns_m5.get("buys", 0)
+        sells_m5 = txns_m5.get("sells", 0)
         volume_m5 = pair_data.get("volume", {}).get("m5", 0)
+        liquidity = pair_data.get("liquidity", {}).get("usd", 0)
         
-        if buys_m5 >= 50 and volume_m5 >= 30000:
+        # Защита от накрутки (wash-trading): требуем реальную ликвидность и наличие хоть каких-то продаж
+        if buys_m5 >= 100 and volume_m5 >= 50000 and liquidity >= 10000 and sells_m5 > 0:
             return True
         return False
         
@@ -776,6 +779,12 @@ class Analyzer:
         created_at = pair_data.get("pairCreatedAt", 0)
         age_minutes = (time.time() * 1000 - created_at) / (1000 * 60) if created_at else 999
         
+        # Глобальная защита от дешевых скрамов/рагпуллов
+        liq = pair_data.get("liquidity", {}).get("usd", 0)
+        if liq < 5000:
+            print(f"🚫 [ANTI-RUG] {symbol} ({mint[:8]}): Ликвидность всего ${liq:,.0f} < $5000. Слишком опасно.")
+            return False
+            
         if dex_id == "pump" and age_minutes <= 15:
             return await self.analyze_token_xgboost(mint, pair_data)
         else:
@@ -1127,6 +1136,8 @@ class Analyzer:
         sells_m5 = txns_m5.get("sells", 0)
             
         tx_velocity_1m = (buys_m5 + sells_m5) / 5.0
+        # Защита от накрутки для Pump-модели: не даем ботам задирать velocity в космос
+        tx_velocity_1m = min(tx_velocity_1m, 15.0)
         
         info = pair_data.get("info", {})
         socials = info.get("socials", [])
@@ -1200,8 +1211,17 @@ class Analyzer:
         liquidity = pair_data.get("liquidity", {}).get("usd", 0)
         fdv = pair_data.get("fdv", 0)
         
+        # Защита XGBoost от накрученных скам-данных (Robust Inference/Winsorization):
+        # Ограничиваем искусственно раздутый объем и покупки, чтобы модель не выдавала слепые 100%
+        volume_h24 = min(volume_h24, liquidity * 3) 
+        buys_h24 = min(buys_h24, sells_h24 * 3 + 20)
+        
         buy_sell_ratio = buys_h24 / (sells_h24 + 1)
         vol_to_liq = volume_h24 / (liquidity + 1)
+        
+        # Дополнительно режем ratio для модели
+        buy_sell_ratio = min(buy_sell_ratio, 4.0)
+        vol_to_liq = min(vol_to_liq, 3.0)
         
         features = ['price_change_h24', 'volume_h24', 'buys_h24', 'sells_h24', 'liquidity', 'fdv', 'buy_sell_ratio', 'vol_to_liq']
         df = pd.DataFrame([{

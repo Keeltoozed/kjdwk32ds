@@ -35,7 +35,7 @@ KILL_SWITCH_ENABLED = True  # PRO-дисциплина: -$18/день = стоп
 KILL_SWITCH_PAUSE = 3600  # 1 час паузы после дневного убытка — не лезем обратно сразу в мусор
 MAX_DAILY_LOSS_PCT = 0.25
 STOP_LOSS_PCT = -0.25  # Расширили до -25%, чтобы выдерживать "высадку пассажиров" (раньше было -0.12 и ракеты отлетали на паузах)
-SNIPER_ENTRIES_ENABLED = True  # Было False: Human/KOTH/HIGGS рождались на pump.fun. Снайпер ловит их на 80% кривой
+SNIPER_ENTRIES_ENABLED = False  # Было False: Human/KOTH/HIGGS рождались на pump.fun. Снайпер ловит их на 80% кривой
 TIME_EXIT_MINUTES = 60  # Если за 30 минут нет пампа - выходим
 TIME_EXIT_PROFIT_REQ = 0.0
 
@@ -312,8 +312,8 @@ WHALE_CONSENSUS = 2  # вход на 2-м ките (3-й = уже поздно)
 WHALE_MAX_RUNUP = 1.25  # Было 1.55: вход на 2-м ките только если не убежал >25%. Киты уже надули = их выход, не наш вход
 
 # === ПРАВКИ: меньше минусов, ракеты через малые билеты ===
-VIP_ENTRIES_ENABLED = True        # читается в analyzer.analyze_token (патч из прошлого ответа)
-SNIPER_ENTRIES_ENABLED = True     # sniper entry = -85.8% по твоим данным
+VIP_ENTRIES_ENABLED = False        # читается в analyzer.analyze_token (патч из прошлого ответа)
+SNIPER_ENTRIES_ENABLED = False     # sniper entry = -85.8% по твоим данным
 TG_VIP_SIZE_USD = 6.0
 LOTTERY_SIZE_MULT = 1.0
 CONVICTION_MULT = 1.0              # вернёшь 1.5-2.0, когда статистика станет плюсовой
