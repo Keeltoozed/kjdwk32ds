@@ -164,7 +164,8 @@ EVM_MAX_MINTS = 150  # Было 100→150: хвост выдачи не отре
 EVM_COPY_WALLETS = {"base": [], "bsc": [], "robinhood": [], "ethereum": []}
 # fomoapi.io — независимое API данных fomo.family (топ-трейдеры, доски, WS-алерты).
 # Бесплатный ключ: fomoapi.io/dashboard (250k кредитов/мес). Без ключа — демо WS с задержкой 60с.
-FOMO_API_KEY = "fapi_72204b592a5944b18c2600f18b47b2a7f1b852230f7b4ffebc5ae1929dcbb3dc"\nFOMO_PROXY_KEY = "pmx_a51501b026b92993489638dca1bee38f"
+FOMO_API_KEY = "fapi_72204b592a5944b18c2600f18b47b2a7f1b852230f7b4ffebc5ae1929dcbb3dc"
+FOMO_PROXY_KEY = "pmx_a51501b026b92993489638dca1bee38f"
 FOMO_WS_ENABLED = True
 FOMO_FOLLOW_TRADERS = []  # ники топов, напр. ["whatever_fomo", "pricedin"] — их покупки в приоритет
 FOMO_MIN_USD = 50  # Было 100: покупки китов от $50 ловим раньше — первый кит важнее крупного
