@@ -6,36 +6,42 @@ from analyzer import Analyzer  # noqa: F401 (сигнатура fomo_loop)
 
 
 async def fetch_fomo_family_trending():
-    """Парсит fomo.family trending — именно отсюда Human/KOTH/HIGGS/ShibaLisa.
-    Без ключа — публичный endpoint. С ключом FOMO_API_KEY — полный доступ."""
+    """Парсит fomo.family trending через parse.bot API."""
     tokens = []
-    api_key = getattr(config, "FOMO_API_KEY", "")
-    headers = {"Accept": "application/json",
-               "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+    api_key = getattr(config, "FOMO_PROXY_KEY", getattr(config, "FOMO_API_KEY", ""))
+    headers = {"Accept": "application/json", "User-Agent": "Mozilla/5.0"}
     if api_key:
         headers["x-api-key"] = api_key
-    # Эндпоинты fomo.family: ищем по Solana, Ethereum, Base, BSC, Robinhood
+    
+    # Сортируем по 5m объему и транзакциям, чтобы получить актуальные тренды
     urls = [
-        "https://api.fomo.family/api/tokens/trending?chain=sol&limit=50",
-        "https://api.fomo.family/api/tokens/bonding?chain=sol&limit=50",
-        "https://api.fomo.family/api/tokens/trending?chain=eth&limit=50",
-        "https://api.fomo.family/api/tokens/trending?chain=base&limit=50",
-        "https://api.fomo.family/api/tokens/trending?chain=robinhood&limit=50",
-        "https://api.fomo.family/api/tokens/trending?chain=bsc&limit=50"
+        "https://api.parse.bot/scraper/0f1557da-d981-4a07-9074-6683f352ab0f/list_tokens?sort=volume_5m_usd&limit=50",
+        "https://api.parse.bot/scraper/0f1557da-d981-4a07-9074-6683f352ab0f/list_tokens?sort=txn_count_1h&limit=50"
     ]
+    
     from http_client import fetch_json
     for url in urls:
         try:
             status, data = await fetch_json(url, headers=headers, timeout=10, retries=1)
             if status == 200 and data:
-                items = data if isinstance(data, list) else data.get("tokens", data.get("data", []))
+                # Поддержка структуры parse.bot: {"status": "success", "data": {"tokens": [...]}}
+                if isinstance(data, dict) and "data" in data and isinstance(data["data"], dict) and "tokens" in data["data"]:
+                    items = data["data"]["tokens"]
+                elif isinstance(data, dict):
+                    items = data.get("tokens", data.get("data", []))
+                    if isinstance(items, dict):
+                        items = items.get("tokens", [])
+                else:
+                    items = data if isinstance(data, list) else []
+                    
                 for item in items:
-                    mint = item.get("address") or item.get("mint") or item.get("tokenAddress")
+                    mint = item.get("token_address") or item.get("address") or item.get("mint")
                     if mint and len(mint) > 30 and mint not in tokens:
                         tokens.append(mint)
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"FOMO API Error: {e}")
     return tokens
+
 
 
 async def fetch_geckoterminal_trending():

@@ -35,7 +35,7 @@ KILL_SWITCH_ENABLED = True  # PRO-дисциплина: -$18/день = стоп
 KILL_SWITCH_PAUSE = 3600  # 1 час паузы после дневного убытка — не лезем обратно сразу в мусор
 MAX_DAILY_LOSS_PCT = 0.25
 STOP_LOSS_PCT = -0.25  # Расширили до -25%, чтобы выдерживать "высадку пассажиров" (раньше было -0.12 и ракеты отлетали на паузах)
-SNIPER_ENTRIES_ENABLED = False  # Было False: Human/KOTH/HIGGS рождались на pump.fun. Снайпер ловит их на 80% кривой
+SNIPER_ENTRIES_ENABLED = True  # Было False: Human/KOTH/HIGGS рождались на pump.fun. Снайпер ловит их на 80% кривой
 TIME_EXIT_MINUTES = 60  # Если за 30 минут нет пампа - выходим
 TIME_EXIT_PROFIT_REQ = 0.0
 
@@ -152,19 +152,19 @@ ROBINHOOD_RPC_URL = "https://rpc.mainnet.chain.robinhood.com"
 ROBINHOOD_EXPLORER = "https://robinhoodchain.blockscout.com"
 ROBINHOOD_MIN_LIQUIDITY = 10000  # Было 20000: стадия $10К должна проходить. Скам режут GoPlus/honeypot+ссылки, сайз мелкий
 # $20k+ с сайзом $6 (0.03% пула) едут. Conviction-x2 по-прежнему только от $30k.
-ROBINHOOD_SCAN_INTERVAL = 10  # Было 25→15: опрос каждые 10с = вход до выноса, не на вершине
+ROBINHOOD_SCAN_INTERVAL = 15  # Было 25→15: опрос каждые 10с = вход до выноса, не на вершине
 EVM_TRACK_INTERVAL = 8  # Было захардкожено 12с: цены с ноды идут 1 батчем без лимитов DS,
 # поэтому трек стопов/трейлингов можно крутить чаще — раньше режем раги, раньше фиксим пик
 EVM_MIN_M5_PCT = 3.5  # Было 7.0: шире окно + вето 0.58 держит раги. Больше кандидатов в ракеты
 EVM_RESCAN_COOLDOWN = 60  # Было 300→90: повторная проверка через 60с — окно ракеты минуты
-EVM_NEW_POOL_PAGES = 10  # Было 8: глубже свежие пулы GT = больше ранних ракет (GT-кэш 60с держит квоту)
-EVM_MAX_MINTS = 200  # Было 100→150: хвост выдачи не отрезается, ранние ракеты не теряем
+EVM_NEW_POOL_PAGES = 2  # СНИЖЕНО с 10 до 2! GeckoTerminal не тянет 10 страниц на 4 сети (это 40 запросов в минуту при лимите 25). WSS ловит всё остальное!
+EVM_MAX_MINTS = 150  # Было 100→150: хвост выдачи не отрезается, ранние ракеты не теряем
 # EVM-копитрейдинг: кошельки китов по сетям (0x...). Их входящие Transfer = покупки:
 # токен летит в скан первым с меткой COPY. Пусто = выключено (нужны адреса!).
 EVM_COPY_WALLETS = {"base": [], "bsc": [], "robinhood": [], "ethereum": []}
 # fomoapi.io — независимое API данных fomo.family (топ-трейдеры, доски, WS-алерты).
 # Бесплатный ключ: fomoapi.io/dashboard (250k кредитов/мес). Без ключа — демо WS с задержкой 60с.
-FOMO_API_KEY = "fapi_72204b592a5944b18c2600f18b47b2a7f1b852230f7b4ffebc5ae1929dcbb3dc"
+FOMO_API_KEY = "fapi_72204b592a5944b18c2600f18b47b2a7f1b852230f7b4ffebc5ae1929dcbb3dc"\nFOMO_PROXY_KEY = "pmx_a51501b026b92993489638dca1bee38f"
 FOMO_WS_ENABLED = True
 FOMO_FOLLOW_TRADERS = []  # ники топов, напр. ["whatever_fomo", "pricedin"] — их покупки в приоритет
 FOMO_MIN_USD = 50  # Было 100: покупки китов от $50 ловим раньше — первый кит важнее крупного
@@ -178,7 +178,7 @@ GMGN_CHAINS = ["sol", "base", "bsc", "robinhood"]
 # === BASE (EVM L2, там сидят мемы с fomo.family: musebook, DELTA...) ===
 # Тот же EVM-движок, slug DexScreener "base". Пулы глубже - порог $15к.
 BASE_ENABLED = True
-BASE_SCAN_INTERVAL = 10  # было 25→15: каждые 10с — до пампа
+BASE_SCAN_INTERVAL = 15  # было 25→15: каждые 10с — до пампа
 
 # === EVM WSS factory-listener (новые пулы в реальном времени, Base+BSC) ===
 # Без ключей (PublicNode). Robinhood публичного WSS не даёт - только опрос.
@@ -187,13 +187,13 @@ EVM_WSS_ENABLED = True
 # === BSC (GSTOCK и co с fomo.family сидят там) ===
 # Тот же движок, slug "bsc".
 BSC_ENABLED = True
-BSC_SCAN_INTERVAL = 10  # было 25→15: каждые 10с — до пампа
+BSC_SCAN_INTERVAL = 15  # было 25→15: каждые 10с — до пампа
 
 # === ETHEREUM (KLIK: TG-SIGNAL:ETHEREUM висел на $0.00 — ни один луп его не вёл,
 # chain=ethereum не входил в CHAINS. Тот же EVM-движок, slug DexScreener "ethereum".)
 ETHEREUM_ENABLED = True  # луп трекинга: ведём существующие (KLIK), иначе висят на $0.00
-ETHEREUM_ENTRIES_ENABLED = False  # НОВЫЕ входы в L1 выкл: газ $2-6 съедает скальп, ловим только дешёвые L2
-ETHEREUM_SCAN_INTERVAL = 15
+ETHEREUM_ENTRIES_ENABLED = True  # НОВЫЕ входы в L1 выкл: газ $2-6 съедает скальп, ловим только дешёвые L2
+ETHEREUM_SCAN_INTERVAL = 20
 ETHEREUM_MIN_LIQUIDITY = 20000.0  # GROWTH: было 30k, синхронно с остальными EVM
 # === ПРЯМЫЕ ЦЕНЫ С НОД (мимо лимитов DS/GT для открытых позиций) ===
 # Трекинг идёт батчем eth_call getReserves с RPC ноды: 1 HTTP-батч на сеть за цикл.
@@ -312,8 +312,8 @@ WHALE_CONSENSUS = 2  # вход на 2-м ките (3-й = уже поздно)
 WHALE_MAX_RUNUP = 1.25  # Было 1.55: вход на 2-м ките только если не убежал >25%. Киты уже надули = их выход, не наш вход
 
 # === ПРАВКИ: меньше минусов, ракеты через малые билеты ===
-VIP_ENTRIES_ENABLED = False        # читается в analyzer.analyze_token (патч из прошлого ответа)
-SNIPER_ENTRIES_ENABLED = False     # sniper entry = -85.8% по твоим данным
+VIP_ENTRIES_ENABLED = True        # читается в analyzer.analyze_token (патч из прошлого ответа)
+SNIPER_ENTRIES_ENABLED = True     # sniper entry = -85.8% по твоим данным
 TG_VIP_SIZE_USD = 6.0
 LOTTERY_SIZE_MULT = 1.0
 CONVICTION_MULT = 1.0              # вернёшь 1.5-2.0, когда статистика станет плюсовой
