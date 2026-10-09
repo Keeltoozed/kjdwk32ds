@@ -1,274 +1,84 @@
 import asyncio
 import time
+import random
 import config
-from analyzer import Analyzer  # noqa: F401 (сигнатура fomo_loop)
+from http_client import fetch_json
 
-
-
-async def fetch_fomo_family_trending():
-    """Парсит fomo.family trending через parse.bot API."""
-    tokens = []
-    api_key = getattr(config, "FOMO_PROXY_KEY", getattr(config, "FOMO_API_KEY", ""))
-    headers = {"Accept": "application/json", "User-Agent": "Mozilla/5.0"}
-    if api_key:
-        headers["x-api-key"] = api_key
+async def fomo_loop(analyzer, tracker):
+    print("📡 Радар DexScreener/Gecko (Расширенный) запущен.")
     
-    # Сортируем по 5m объему и транзакциям, чтобы получить актуальные тренды
-    urls = [
-        "https://api.parse.bot/scraper/0f1557da-d981-4a07-9074-6683f352ab0f/list_tokens?sort=newest&limit=50",
-        "https://api.parse.bot/scraper/0f1557da-d981-4a07-9074-6683f352ab0f/list_tokens?sort=volume_24h&limit=50"
-    ]
-    
-    from http_client import fetch_json
-    for url in urls:
-        try:
-            status, data = await fetch_json(url, headers=headers, timeout=10, retries=1)
-            if status == 200 and data:
-                # Поддержка структуры parse.bot: {"status": "success", "data": {"tokens": [...]}}
-                if isinstance(data, dict) and "data" in data and isinstance(data["data"], dict) and "tokens" in data["data"]:
-                    items = data["data"]["tokens"]
-                elif isinstance(data, dict):
-                    items = data.get("tokens", data.get("data", []))
-                    if isinstance(items, dict):
-                        items = items.get("tokens", [])
-                else:
-                    items = data if isinstance(data, list) else []
-                    
-                for item in items:
-                    mint = item.get("token_address") or item.get("address") or item.get("mint")
-                    if mint and len(mint) > 30 and mint not in tokens:
-                        tokens.append(mint)
-        except Exception as e:
-            print(f"FOMO API Error: {e}")
-    return tokens
-
-
-
-async def fetch_geckoterminal_trending():
-    """Получает реальные тренды с GeckoTerminal (как в Photon)"""
-    tokens = []
-    url = "https://api.geckoterminal.com/api/v2/networks/solana/trending_pools"
-    headers = {"Accept": "application/json", "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
-
-    from http_client import fetch_json
-    try:
-        status, data = await fetch_json(url, headers=headers, timeout=12, retries=1)
-        if status == 200 and data:
-            for pool in data.get("data", []):
-                try:
-                    # GeckoTerminal хранит адрес токена в relationships
-                    base_token_id = pool["relationships"]["base_token"]["data"]["id"]
-                    # Формат: "solana_MintAddress"
-                    mint = base_token_id.split("_")[1]
-                    if mint and mint not in tokens:
-                        tokens.append(mint)
-                except:
-                    pass
-    except Exception as e:
-        print(f"Ошибка получения трендов GeckoTerminal: {type(e).__name__} - {e}")
-    return tokens
-
-
-async def fetch_pumpfun_top():
-    """Получает топ монет Pump.fun по капе (близкие к миграции на Raydium)"""
-    tokens = []
-    url = "https://frontend-api.pump.fun/coins?offset=0&limit=200&sort=market_cap&order=DESC&includeNsfw=false"
-    headers = {"Accept": "application/json", "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
-
-    from http_client import fetch_json
-    try:
-        status, data = await fetch_json(url, headers=headers, timeout=12, retries=1)
-        if status == 200 and isinstance(data, list):
-            for coin in data:
-                mint = coin.get("mint")
-                if mint and mint not in tokens:
-                    tokens.append(mint)
-        elif status == 403:
-            # Cloudflare режет дата-центр IP (и Render, и домашние). Молчим, есть другие источники.
-            pass
-        elif status:
-            print(f"Pump.fun top: HTTP {status}")
-    except Exception as e:
-        # Тихий fail: источник необязательный (есть DexScreener boosts + GT + WSS-роддом)
-        print(f"Pump.fun top недоступен ({type(e).__name__}), пропускаю источник.")
-    return tokens
-
-async def fetch_dexscreener_trending():
-    """Трендовые токены: сначала GeckoTerminal (работает с Render),
-    потом DexScreener endpoints как fallback."""
-    tokens = []
-    try:
-        import market_data
-        for t in await market_data.get_trending():
-            m = t.get("tokenAddress")
-            if m and m not in tokens:
-                tokens.append(m)
-    except Exception as e:
-        print(f"Ошибка GT-трендов: {type(e).__name__} - {e}")
-    # Эндпоинты DexScreener для поиска самого горячего (FOMO)
-    urls = [
+    ds_urls = [
         "https://api.dexscreener.com/token-profiles/latest/v1",
-        "https://api.dexscreener.com/token-boosts/top/v1",
-        "https://api.dexscreener.com/token-boosts/latest/v1"
+        "https://api.dexscreener.com/token-boosts/latest/v1",
+        "https://api.dexscreener.com/token-boosts/top/v1"
     ]
+    gt_url = "https://api.geckoterminal.com/api/v2/networks/solana/trending_pools"
+    headers = {"Accept": "application/json", "User-Agent": "Mozilla/5.0"}
     
-    headers = {"Accept": "application/json", "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
-
-    from http_client import fetch_json
-    for url in urls:
-        try:
-            # DS с Render часто висит до таймаута — короткий таймаут, это лишь fallback.
-            # Семафор DS(3) очередит их сами, sleep не нужен.
-            status, data = await fetch_json(url, headers=headers, timeout=8, retries=1)
-            if status == 200 and isinstance(data, list):
-                for item in data:
-                    chain_id = item.get('chainId')
-                    # Извлекаем токены Solana и EVM-сетей (включая Robinhood)
-                    valid_chains = {'solana', 'robinhood', 'base', 'bsc', 'ethereum'}
-                    if chain_id in valid_chains:
-                        mint = item.get('tokenAddress')
-                        if mint and mint not in tokens:
-                            tokens.append(mint)
-        except Exception as e:
-            print(f"Ошибка получения FOMO токенов: {type(e).__name__} - {e}")
-    return tokens
-
-async def fomo_loop(analyzer: Analyzer, tracker):
-    """Цикл, который постоянно сканирует тренды (FOMO) и топ-токены"""
-    if not getattr(config, "USE_FOMO_SIGNALS", False):
-        print("🔥 FOMO Scanner ВЫКЛ (USE_FOMO_SIGNALS=False): тренды только в радар, без покупок.")
-        return
-    print("🔥 FOMO Scanner запущен: отслеживаем ракеты и тренды DexScreener!")
+    keywords = ["pump", "meme", "dog", "cat", "ai", "trump", "sol", "pepe"]
     
-    # Чтобы не спамить API
-    processed_mints = {}
+    seen = set()
     
     while True:
         try:
-            # СРОЧНО: Kill-switch был только в scanner_loop, а FOMO продолжал покупать в минус!
-            import time as _t
-            day_start = _t.time() - (_t.time() % 86400)
-            day_pnl = sum(getattr(p, "pnl_usd", 0) or 0 for p in tracker.positions.values()
-                          if getattr(p, "status", "") == "closed" and getattr(p, "exit_time", 0) and p.exit_time >= day_start)
-            if getattr(config, "KILL_SWITCH_ENABLED", True) and day_pnl <= -config.MAX_DAILY_LOSS_USD:
-                print(f"🛑 FOMO KILL-SWITCH: дневной PnL ${day_pnl:.2f}. Пауза 5мин.")
-                await asyncio.sleep(int(getattr(config, "KILL_SWITCH_PAUSE", 300)))
-                continue
-            if len(tracker.get_open_positions()) >= config.MAX_CONCURRENT_POSITIONS:
-                await asyncio.sleep(10)
-                continue
-                
-            trending_mints = await fetch_dexscreener_trending()
-            gecko_mints = await fetch_geckoterminal_trending()
-            pump_mints = await fetch_pumpfun_top()
-            fomo_mints = await fetch_fomo_family_trending()  # 🆕 fomo.family: Human/KOTH/HIGGS/ShibaLisa
-            for m in pump_mints:
-                if m not in trending_mints:
-                    trending_mints.append(m)
-            for m in gecko_mints:
-                if m not in trending_mints:
-                    trending_mints.append(m)
-            # fomo.family вставляем В НАЧАЛО — приоритет (самые свежие тренды)
-            for m in reversed(fomo_mints):
-                if m not in trending_mints:
-                    trending_mints.insert(0, m)
+            mints = []
             
-            # Фильтруем уже обработанные и в кулдауне
-            new_mints = []
-            for mint in trending_mints:
-                if time.time() - processed_mints.get(mint, 0.0) < 600:
-                    continue
-                
-                if mint in tracker.positions:
-                    pos = tracker.positions[mint]
-                    if pos.status == "open" or (time.time() - pos.entry_time) < (4 * 3600):
-                        continue
-                
-                new_mints.append(mint)
+            # 1. Свежие профили и бусты
+            for url in ds_urls:
+                try:
+                    status, data = await fetch_json(url, headers=headers, timeout=10, retries=1)
+                    if status == 200 and isinstance(data, list):
+                        for item in data:
+                            if item.get("chainId") == "solana" and "tokenAddress" in item:
+                                mints.append(item["tokenAddress"])
+                except Exception:
+                    pass
             
-            # Снижаем нагрузку на сеть (Render NAT rate limits)
-            for i in range(0, len(new_mints), 3):
-                if len(tracker.get_open_positions()) >= config.MAX_CONCURRENT_POSITIONS:
-                    break
-                    
-                batch = new_mints[i:i+3]
-                print(f"🔍 FOMO: анализируем батч из {len(batch)} токенов...")
-                
-                async def analyze_one(mint):
-                    try:
-                        if mint.startswith("0x") and len(mint) >= 40:
-                            from http_client import fetch_json
-                            st, dat = await fetch_json(f"https://api.dexscreener.com/latest/dex/search?q={mint}")
-                            if st == 200 and dat and dat.get("pairs"):
-                                chain_id = dat["pairs"][0].get("chainId")
-                                if chain_id and chain_id != "solana":
-                                    return mint, await analyzer.analyze_robinhood_token(mint, chain_id)
-                            return mint, False
-                        return mint, await analyzer.analyze_token(mint)
-                    except Exception as e:
-                        print(f"⚠️ Ошибка анализа {mint[:8]}...: {e}")
-                        return mint, False
-                
-                # Обрабатываем ПОСЛЕДОВАТЕЛЬНО, чтобы не убивать сеть Render (NAT limits/Timeouts)
-                results = []
-                for m in batch:
-                    res = await analyze_one(m)
-                    results.append(res)
-                    await asyncio.sleep(1) # Крошечная пауза между монетами
-                
-                # Увеличенная пауза между батчами
-                await asyncio.sleep(3)
-                
-                for mint, is_buy in results:
-                    if is_buy is None:
-                        continue
-                    processed_mints[mint] = time.time()
-                    analyzer.log_scan(mint[:8], mint, "FOMO",
-                                      is_buy, getattr(analyzer, "last_score", 0.0))
+            # 2. Ротация поиска DexScreener (Тренды по тегам)
+            random.shuffle(keywords)
+            for kw in keywords[:3]:  # Берем 3 случайных тега за проход
+                try:
+                    status, data = await fetch_json(f"https://api.dexscreener.com/latest/dex/search?q={kw}", headers=headers, timeout=10, retries=1)
+                    if status == 200 and data and "pairs" in data:
+                        for pair in data.get("pairs", []):
+                            if pair.get("chainId") == "solana":
+                                mints.append(pair.get("baseToken", {}).get("address"))
+                except Exception:
+                    pass
 
-                    if is_buy and len(tracker.get_open_positions()) < config.MAX_CONCURRENT_POSITIONS:
-                        pair_data = await analyzer.fetch_token_data(mint)
-                        if pair_data:
-                            actual_symbol = pair_data.get("baseToken", {}).get("symbol", "FOMO")
-                            
-                            # ИСПРАВЛЕНИЕ: Берем LIVE цену без кэша (GeckoTerminal), а не отстающую цену DexScreener!
-                            from sol_price import fetch_bulk_prices_sync
-                            # Запускаем синхронную функцию в пуле потоков, чтобы не блокировать весь event loop бота!
-                            live_prices = await asyncio.to_thread(fetch_bulk_prices_sync, [mint])
-                            actual_price = float(live_prices.get(mint, 0.0))
-                            
-                            if actual_price <= 0:
-                                actual_price = float(pair_data.get("priceUsd", 0)) # Fallback, если GeckoTerminal не знает монету
-                                
-                            if actual_price > 0:
-                                capital = tracker.get_total_capital()
-                                if capital <= 0:
-                                    break
-                                # База = фиксированный ордер как в сканере (цель $10/день), не голые 5%
-                                fixed = getattr(config, "TRADE_AMOUNT_USD", 10.0)
-                                position_size = max(4.0, min(100.0, fixed if fixed else capital * (config.REINVEST_PERCENT / 100.0)))
-                                # Кэп от пула как в сканере: не больше 0.5% ликвидности (INFERENCE -59%)
-                                liq_usd = (pair_data.get("liquidity") or {}).get("usd", 0) or 0
-                                if liq_usd > 0:
-                                    position_size = min(position_size, max(1.0, liq_usd * 0.005))
-                                position_size *= analyzer.conviction_size_mult(pair_data)
-                                position_size = min(position_size, 100.0)
-                                _dep = sum(p.amount_usd for p in tracker.get_open_positions().values())
-                                _cap = capital * getattr(config, "MAX_DEPLOYED_PCT", 0.60)
-                                if _dep + position_size > _cap:
-                                    print(f"🚫 FOMO Exposure: занято ${_dep:.0f}, лимит ${_cap:.0f}. Пропуск.")
-                                    continue
-                                print(f"🚀 СНАЙП FOMO-РАКЕТЫ {actual_symbol} ({mint})! Входим на {position_size}$ по цене {actual_price}$")
-                                tracker.add_position(actual_symbol, mint, actual_price, position_size,
-                                                     ml_features=analyzer.pack_features(pair_data),
-                                                     ml_confidence=float(getattr(analyzer, "last_score", 0.0)),
-                                                     source=f"FOMO:{analyzer.get_signal(mint)}")
+            # 3. GeckoTerminal
+            try:
+                status, data = await fetch_json(gt_url, headers=headers, timeout=10, retries=1)
+                if status == 200 and data and "data" in data:
+                    for pool in data.get("data", []):
+                        try:
+                            mints.append(pool["relationships"]["base_token"]["data"]["id"])
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+            
+            mints = [m for m in mints if m]
+            new_mints = list(set(mints) - seen)
+            
+            for mint in new_mints:
+                seen.add(mint)
+                if len(seen) > 3000:
+                    seen.clear()
                     
-            # Держим память в чистоте
-            if len(processed_mints) > 1000:
-                processed_mints.clear()
+                if mint in tracker.positions or len(tracker.get_open_positions()) >= config.MAX_CONCURRENT_POSITIONS:
+                    continue
+                    
+                try:
+                    ok = await analyzer.analyze_growth_token(mint)
+                except Exception:
+                    pass
+                await asyncio.sleep(0.5)
                 
         except Exception as e:
-            print(f"Ошибка в FOMO Loop: {e}")
+            print(f"⚠️ Ошибка fomo_loop: {e}")
             
-        await asyncio.sleep(30) # Было 120с: за 2 мин ракета уже +300%. Скан каждые 30с
+        await asyncio.sleep(60)
+
+if __name__ == "__main__":
+    pass

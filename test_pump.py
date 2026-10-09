@@ -1,28 +1,13 @@
 import asyncio
-import websockets
 import json
+import websockets
 
-async def run():
+async def listen():
     uri = "wss://pumpportal.fun/api/data"
     async with websockets.connect(uri) as ws:
-        payload = {"method": "subscribeNewToken"}
-        await ws.send(json.dumps(payload))
-        
-        while True:
+        await ws.send(json.dumps({"method": "subscribeNewToken"}))
+        for _ in range(3):
             msg = await ws.recv()
-            data = json.loads(msg)
-            if "mint" in data:
-                mint = data["mint"]
-                print(f"New token: {mint}")
-                
-                # Subscribe to trades
-                trade_payload = {"method": "subscribeTokenTrade", "keys": [mint]}
-                await ws.send(json.dumps(trade_payload))
-                
-                # Wait for 1 trade
-                trade_msg = await ws.recv()
-                trade_data = json.loads(trade_msg)
-                print(json.dumps(trade_data, indent=2))
-                break
+            print(json.loads(msg))
 
-asyncio.run(run())
+asyncio.run(listen())
