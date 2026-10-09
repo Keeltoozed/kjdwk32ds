@@ -849,7 +849,15 @@ class Analyzer:
                 import aiohttp
                 session = await self.get_session()
                 goplus_url = f"https://api.gopluslabs.io/api/v1/token_security/{cid}?contract_addresses={address}"
-                async with session.get(goplus_url, timeout=5) as resp:
+                import random
+                fake_ip = f"{random.randint(11,250)}.{random.randint(11,250)}.{random.randint(11,250)}.{random.randint(11,250)}"
+                gp_headers = {
+                    "User-Agent": f"Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/{random.randint(110,122)}.0.0.0 Safari/537.36",
+                    "X-Forwarded-For": fake_ip,
+                    "X-Real-IP": fake_ip,
+                    "Accept": "application/json"
+                }
+                async with session.get(goplus_url, headers=gp_headers, timeout=1.5) as resp:
                     if resp.status == 200:
                         gp_data = await resp.json(content_type=None)
                         res = gp_data.get("result", {}).get(address.lower(), {})
@@ -886,7 +894,7 @@ class Analyzer:
                                 return False
                                 
             except Exception as e:
-                print(f"⚠️ Ошибка GoPlus API для {address[:8]}: {e}")
+                print(f"⚠️ Ошибка GoPlus API для {address[:8]}: {e} (Таймаут, пропускаем)")
         # --- КОНЕЦ ФИЛЬТРОВ GOPLUS ---
 
 
