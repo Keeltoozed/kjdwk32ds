@@ -36,6 +36,8 @@ except Exception as e:
 
 class Analyzer:
     def __init__(self):
+        self._clone_cache = {}
+        self._clone_cache_time = {}
         self.session = None
         self.rocket_model = None  # ROCKET-модель (EVM ракеты). None = нет файла, гейты как раньше
         self.rocket_scores = {}  # address -> score 0..1 (для сайзинга в main)
@@ -333,17 +335,37 @@ class Analyzer:
             print(f"GeckoTerminal token data error: {type(e).__name__} {e}")
             return {}
 
+    async def _fetch_dex_search(self, symbol: str):
+        import time
+        now = time.time()
+        cache_key = symbol.upper()
+        if cache_key in getattr(self, '_clone_cache', {}) and now - self._clone_cache_time.get(cache_key, 0) < 600:
+            return self._clone_cache[cache_key]
+            
+        url = f"https://api.dexscreener.com/latest/dex/search?q={symbol}"
+        from http_client import fetch_json
+        try:
+            status, data = await fetch_json(url, timeout=8, retries=1)
+            if status == 200 and data:
+                if not hasattr(self, '_clone_cache'):
+                    self._clone_cache = {}
+                    self._clone_cache_time = {}
+                self._clone_cache[cache_key] = data
+                self._clone_cache_time[cache_key] = now
+                return data
+        except Exception:
+            pass
+        return None
+
+
+
     async def is_clone(self, symbol: str, current_mint: str, current_created_at: int, current_fdv: float) -> bool:
         """Проверяет, является ли этот токен дешевой копией (клоном) более старого или крупного оригинала."""
         if not symbol or len(symbol) <= 2:
             return False 
             
-        url = f"https://api.dexscreener.com/latest/dex/search?q={symbol}"
-        from http_client import fetch_json
-        if True:
-            try:
-                status, data = await fetch_json(url, timeout=8, retries=1)
-                if status == 200 and data:
+        data = await self._fetch_dex_search(symbol)
+        if data:
                     pairs = data.get("pairs") or []
 
                     for p in pairs:
@@ -360,8 +382,7 @@ class Analyzer:
 
                                 if p_fdv > (current_fdv * 10) and p_fdv > 500000:
                                     return True
-            except Exception as e:
-                pass
+
         return False
 
     async def check_rugcheck(self, mint: str) -> bool:
@@ -1001,7 +1022,7 @@ class Analyzer:
             score += 5.0
         score = min(score, 100.0)
         self.last_score = float(score)
-        print(f"🔵 [{tag}] {symbol}: m5 {m5:+.1f}% b/s {b}/{s} liq ${liq:,.0f} → score {score:.0f}")
+        print(f"📊 [{tag}] {symbol}: финальный score {score:.1f} (порог 60), m5 {m5:+.1f}%, m1 {m1:+.1f}%")
         if score >= 60.0:
             self._set_sig(address, f"{tag} rule {score:.0f}%" + self._rkt_tag(address, pair_data) + await self.meme_tag(address, symbol, pair_data, chain))
             return True
@@ -1416,6 +1437,7 @@ class Analyzer:
                             "interactions": coin_data.get("interactions_24h", 0),
                             "sentiment": coin_data.get("sentiment", 50)
                         }
+
             except Exception as e:
                 pass
         return {}
