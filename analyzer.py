@@ -923,7 +923,7 @@ class Analyzer:
                 return True
             return self._deny(address, "vert-no-pressure", f"🚫 [{tag}] {symbol}: вертикаль без давления/ликвы/ссылок — не лотерея.")
         
-        _evm_min_m5 = getattr(config, "EVM_MIN_M5_PCT", 7.0)
+        _evm_min_m5 = getattr(config, "EVM_MIN_M5_PCT", 5.0)
         if m5 < _evm_min_m5:
             return self._deny(address, f"flat m5 {m5:+.1f}%", f"· [{tag}] {symbol}: флет m5 {m5:+.1f}%")
         if m5 > 60.0:
