@@ -226,7 +226,7 @@ ETHEREUM_MIN_SIZE_USD = 15.0  # меньше $15 в L1 не входим: газ
 CONVICTION_MULT = 2.0  # conviction-вход едет удвоенным
 CONVICTION_MIN_M5_PCT = 0.20  # m5 от +20%
 CONVICTION_MAX_M5_PCT = 0.70  # Было 1.20: x2 сайз на +120% = догон вершины. Conviction только +20-70%
-CONVICTION_MIN_BUYSELL = 2.0  # покупки >= продаж x2
+CONVICTION_MIN_BUYSELL = 1.5  # покупки >= продаж x2
 CONVICTION_MIN_LIQ = 30000  # пул от $30к
 MAX_DEPLOYED_PCT = 0.60  # суммарно в рынке не больше 60% капитала (сдерживает тиринг)
 RUG_REBUY_MAX_LOSS = -0.15  # был лосс хуже -15% по монете (HYDX -52%) - второй раз не входим, раги не оживают
@@ -271,7 +271,7 @@ GROWTH_STOP_PCT = -0.10  # широкий стоп -10% (шум часовок)
 GROWTH_TRAIL_ACT = 0.08  # трейлинг с +8%
 GROWTH_TRAIL_DIST = 0.12  # дистанция 12%
 GROWTH_STAGNANT_MIN = 120  # флет режем через 2 часа, не 7 минут
-GROWTH_MAX_POS = 3  # не больше 3 трендовых позиций
+GROWTH_MAX_POS = 5  # не больше 5 трендовых позиций
 GROWTH_SIZE_USD = 6.0
 GROWTH_INTERVAL = 300  # опрос вотчлиста каждые 5 мин
 
@@ -303,7 +303,7 @@ USER_WATCHLIST = []
 SNIPER_MIN_UNIQUE_BUYERS = 10
 SNIPER_BUYERS_WINDOW_MIN = 5
 VIP_MAX_M5_PCT = 0.70  # Было 1.50: VIP-входы 83-100% на +100-150% m5 = вершины, все в стоп -20-53%. VIP только +10-70%
-PULLBACK_MIN_M5_PCT = 0.03  # Было 0.05: расширяем сеть входа
+PULLBACK_MIN_M5_PCT = 0.02  # Было 0.05: расширяем сеть входа
 PULLBACK_M1_MIN_PCT = -0.15  # Но и не летим в падающий нож (максимум -15% за минуту)
 PULLBACK_M1_MAX_PCT = 0.05  # Было 0.00 - ждали идеальный откат. Ракеты летят с m1 > 0
 PULLBACK_MAX_H1_PCT = 20.00  # Было 2.00: вход на +800%/час = догон SPEC-подобных вертикалей после выноса. Ракета берётся до +2000%/час
