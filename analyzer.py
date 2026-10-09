@@ -692,12 +692,12 @@ class Analyzer:
                 self._last_dev = dev_holding_pct
                 
                 is_pump = pair_data and pair_data.get("dexId") == "pump"
-                max_allowed_pct = 20.0 if is_pump else 45.0
+                max_allowed_pct = 20.0 if is_pump else 25.0
                 
                 if top_10_sum_pct > 100:
                     print(f"⚠️ [HOLDERS] {mint[:8]}: топ-10 {top_10_sum_pct:.1f}% > 100% — битые данные сапплая.")
-                elif dev_holding_pct > 15.0:
-                    print(f"🚫 [АНТИСКАМ] Один кошелек (Dev) держит {dev_holding_pct:.1f}% (Лимит 15%). Блокируем.")
+                elif dev_holding_pct > 10.0:
+                    print(f"🚫 [АНТИСКАМ] Один кошелек (Dev) держит {dev_holding_pct:.1f}% (Лимит 10%). Блокируем.")
                     return False
                 elif top_10_sum_pct > max_allowed_pct:
                     print(f"🚫 [АНТИСКАМ] Топ-10 держат {top_10_sum_pct:.1f}% (Лимит {max_allowed_pct}%). Блокируем.")
