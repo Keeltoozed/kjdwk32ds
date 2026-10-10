@@ -81,7 +81,7 @@ MAX_LIQUIDITY = 50000000
 # в fomo_signal_loop (фильтры анализатора + RKT-вето + GoPlus/honeypot.is для EVM
 # + символьный кулдаун + кэп сайза). Старые -70% были до гейтов.
 USE_FOMO_SIGNALS = True
-USE_COPYTRADE = True
+USE_COPYTRADE = False
 TG_MAX_SIZE_USD = 6.0  # Было 4.0: TG-коллы на вершинах тоже сливают. Меньше сайз на чужие вершины
 TG_VIP_SIZE_USD = 6.0  # Увеличили сайз на VIP-ракеты (как Buto), чтобы профит покрывал минусы
 MAX_FOMO_BUYS_PER_PASS = 3  # не больше 3 покупок за проход очереди (бёрст-контроль)
