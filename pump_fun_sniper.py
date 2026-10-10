@@ -127,7 +127,7 @@ class PumpFunSniper:
                                 state.is_ai_evaluated = True
                                 return
                                 
-                            if top_10_sum_pct > 25.0:
+                            if top_10_sum_pct > 35.0:
                                 print(f"🚫 [SYBIL RISK] {state.symbol}: Топ-10 холдеров держат {top_10_sum_pct:.1f}% (>25%). Пропуск!")
                                 state.is_ai_evaluated = True
                                 return

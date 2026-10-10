@@ -45,7 +45,7 @@ async def _gt_get(path: str, retries: int = 2):
     if status == 404:
         return {}  # токен/пул ещё не проиндексирован — ретраи бессмысленны
     if status == 429:
-        print(f"🔎 GT fail {path.split('?')[0][:60]}: HTTP 429")
+        pass
         return {}
     # 5xx/таймаут: максимум `retries` доборов с паузой (не впритык к бану)
     last_err = f"HTTP {status}"
@@ -58,7 +58,8 @@ async def _gt_get(path: str, retries: int = 2):
             break
         last_err = f"HTTP {status}"
     if status != 200:
-        print(f"🔎 GT fail {path.split('?')[0][:60]}: {last_err}")
+        if status != 429:
+            print(f"🔎 GT fail {path.split('?')[0][:60]}: {last_err}")
     return {} if status != 200 else (data if isinstance(data, dict) else {})
 
 

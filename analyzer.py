@@ -272,13 +272,10 @@ class Analyzer:
         return unique_tokens
                 
     async def fetch_token_data(self, mint: str) -> dict:
-        url = f"{config.DEXSCREENER_SEARCH}{mint}"
-        from http_client import fetch_json
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0"}
+        data = await self._fetch_dex_search(mint)
         if True:
             try:
-                status, data = await fetch_json(url, headers=headers, timeout=8, retries=1)
-                if status == 200 and data:
+                if data:
                     pairs = data.get("pairs") or []
                     if pairs:
                         sol_pairs = [p for p in pairs if p.get("chainId") == "solana"]
@@ -713,7 +710,7 @@ class Analyzer:
                 self._last_dev = dev_holding_pct
                 
                 is_pump = pair_data and pair_data.get("dexId") == "pump"
-                max_allowed_pct = 20.0 if is_pump else 25.0
+                max_allowed_pct = 30.0 if is_pump else 35.0
                 
                 if top_10_sum_pct > 100:
                     print(f"⚠️ [HOLDERS] {mint[:8]}: топ-10 {top_10_sum_pct:.1f}% > 100% — битые данные сапплая.")

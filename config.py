@@ -150,7 +150,7 @@ ROBINHOOD_DS_SLUG = "robinhood"  # slug DexScreener (НЕ 4663 - тот верн
 ROBINHOOD_GT_NETWORK = "robinhood"  # slug GeckoTerminal
 ROBINHOOD_RPC_URL = "https://rpc.mainnet.chain.robinhood.com"
 ROBINHOOD_EXPLORER = "https://robinhoodchain.blockscout.com"
-ROBINHOOD_MIN_LIQUIDITY = 10000  # Было 20000: стадия $10К должна проходить. Скам режут GoPlus/honeypot+ссылки, сайз мелкий
+ROBINHOOD_MIN_LIQUIDITY = 30000  # Было 20000: стадия $10К должна проходить. Скам режут GoPlus/honeypot+ссылки, сайз мелкий
 # $20k+ с сайзом $6 (0.03% пула) едут. Conviction-x2 по-прежнему только от $30k.
 ROBINHOOD_SCAN_INTERVAL = 15  # Было 25→15: опрос каждые 10с = вход до выноса, не на вершине
 EVM_TRACK_INTERVAL = 8  # Было захардкожено 12с: цены с ноды идут 1 батчем без лимитов DS,

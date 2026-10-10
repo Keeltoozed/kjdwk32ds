@@ -232,5 +232,7 @@ async def fetch_json(url: str, params=None, headers=None, timeout: int = 12,
                 await asyncio.sleep(8 + 4 * attempt)
             else:
                 await asyncio.sleep(2 + 3 * attempt)
-    print(f"🔌 API fail {host}{urlparse(url).path[:50]}: {last_err} (status {last_status})")
+    if last_status != 429:
+        if last_status != 429:
+            print(f"🔌 API fail {host}{urlparse(url).path[:50]}: {last_err} (status {last_status})")
     return last_status, {}
