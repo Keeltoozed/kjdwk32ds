@@ -105,7 +105,7 @@ ROCKET_SIZE_DOWN = 0.5
 ROCKET_VETO_ENABLED = True  # вето слабых дженерик-входов (MERRGER/MTA/LUXR: rule 77-90% + RKT 0.04-0.25 → стопы)
 ROCKET_VETO_MIN = 0.40  # Было 0.20: PIL(94%)/AGENCYSOL(100%) прошли но слились. Ужесточаем RKT-порог
 # === GOPLUS (общедоступная модель риска: honeypot/налоги; бесплатно, без ключа) ===
-GOPLUS_ENABLED = True
+GOPLUS_ENABLED = False  # Отключено: Cloudflare блокирует сервера Render
 GOPLUS_MAX_BUY_TAX = 0.10  # блок, если налог на покупку выше 10%
 GOPLUS_MAX_SELL_TAX = 0.10  # блок, если налог на продажу выше 10% (иначе -30% на выходе)
 GOPLUS_CACHE_SEC = 3600  # вердикты кэшируем на час (квота free бережётся)
@@ -302,7 +302,7 @@ USER_WATCHLIST = []
 
 SNIPER_MIN_UNIQUE_BUYERS = 10
 SNIPER_BUYERS_WINDOW_MIN = 5
-VIP_MAX_M5_PCT = 0.80  # Расширен коридор для VIP входов
+VIP_MAX_M5_PCT = 0.45  # Расширен коридор для VIP входов
 PULLBACK_MIN_M5_PCT = 0.02  # Снижено с 0.03
 PULLBACK_M1_MIN_PCT = -0.15  # Но и не летим в падающий нож (максимум -15% за минуту)
 PULLBACK_M1_MAX_PCT = 0.05  # Было 0.00 - ждали идеальный откат. Ракеты летят с m1 > 0

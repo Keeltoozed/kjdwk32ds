@@ -494,7 +494,9 @@ class Analyzer:
         liquidity = pair_data.get("liquidity", {}).get("usd", 0)
         
         # Защита от накрутки (wash-trading): требуем реальную ликвидность и наличие хоть каких-то продаж
-        if buys_m5 >= 100 and volume_m5 >= 50000 and liquidity >= 10000 and sells_m5 > 0:
+        _min_tx = getattr(config, "VIP_MIN_TX_M5", 40)
+        _min_vol = getattr(config, "VIP_MIN_VOL_M5", 15000)
+        if buys_m5 >= _min_tx and volume_m5 >= _min_vol and liquidity >= 10000 and sells_m5 > 0:
             return True
         return False
         
@@ -546,7 +548,7 @@ class Analyzer:
             if _m1 > 15.0:
                 print(f"🚫 [VIP SPIKE] {mint}: m1 {_m1:+.1f}% — свеча-spike в моменте, вход = вершина. Ждём.")
                 return False
-            if _m5 < 10.0:
+            if _m5 < getattr(config, "VIP_MIN_M5_PCT", 5.0):
                 print(f"🚫 [VIP FLAT] {mint}: объём есть, а импульса нет (m5 {_m5:+.1f}% < +10%) — флет съест комиссиями.")
                 return False
 
@@ -891,7 +893,25 @@ class Analyzer:
                                 return False
                                 
             except Exception as e:
-                print(f"⚠️ Ошибка GoPlus API для {address[:8]}: {e} (Таймаут, пропускаем)")
+                # Fallback on honeypot.is if GoPlus fails
+                try:
+                    hp_url = f"https://api.honeypot.is/v2/IsHoneypot?address={address}&chainID={cid}"
+                    async with session.get(hp_url, timeout=2.5) as hp_resp:
+                        if hp_resp.status == 200:
+                            hp_data = await hp_resp.json()
+                            is_hp = hp_data.get("honeypotResult", {}).get("isHoneypot", False)
+                            if is_hp:
+                                print(f"🚫 [HONEYPOT.IS] {symbol} — Это Honeypot! Блокируем.")
+                                return False
+                            sim_res = hp_data.get("simulationResult") or {}
+                            sell_tax = float(sim_res.get("sellTax", 0) or 0)
+                            if sell_tax > 10.0:
+                                print(f"🚫 [HONEYPOT.IS] {symbol} — Скрытый налог {sell_tax}% (>10%). Блокируем.")
+                                return False
+                        else:
+                            print(f"⚠️ Ошибка Антискама (GoPlus + Honeypot.is) для {address[:8]}: {e} (Таймаут обеих систем, пропускаем)")
+                except Exception as hp_e:
+                    print(f"⚠️ Ошибка Антискама (GoPlus + Honeypot.is) для {address[:8]}: {e} (Таймаут обеих систем, пропускаем)")
         # --- КОНЕЦ ФИЛЬТРОВ GOPLUS ---
 
 
