@@ -897,33 +897,6 @@ class Analyzer:
             return self._deny(address, f"bsc-age {_age_min:.1f}m",
                               f"🚫 [{tag}] {symbol}: возраст {_age_min:.1f}м < {float(getattr(config, 'BSC_MIN_AGE_MIN', 3.0)):.1f}м — ранняя BSC flash-rug зона.")
 
-        # АНТИСКАМ (GoPlus + Honeypot.is через кэшированные модули)
-        if chain in ("bsc", "base", "ethereum"):
-            try:
-                import goplus as _gp
-                _g_ok, _g_why = await _gp.check_token(address, chain)
-                if not _g_ok and _g_why not in ("no-data", "unsupported", "off"):
-                    return self._deny(address, f"antiscam-{_g_why}",
-                                      f"🚫 [{tag}] {symbol}: GoPlus {_g_why} — блок.")
-                if chain == "bsc":
-                    _g_verified = (_g_ok and _g_why == "")
-                    _h_verified = False
-                    if not _g_verified:
-                        import honeypot_is as _hp
-                        _h_ok, _h_why = await _hp.check_token(address, chain)
-                        if not _h_ok and _h_why not in ("no-data", "unsupported", "off"):
-                            return self._deny(address, f"honeypot-{_h_why}",
-                                              f"🚫 [{tag}] {symbol}: honeypot.is {_h_why} — блок.")
-                        _h_verified = (_h_ok and _h_why == "")
-                    if not (_g_verified or _h_verified):
-                        return self._deny(address, "bsc-unverified",
-                                          f"🚫 [{tag}] {symbol}: ни GoPlus, ни honeypot.is не подтвердили контракт — BSC риск.")
-            except Exception as _ae:
-                if chain == "bsc":
-                    return self._deny(address, "antiscam-err",
-                                      f"🚫 [{tag}] {symbol}: ошибка антискама ({type(_ae).__name__}) — BSC fail-closed.")
-
-
         try:
             _dw = self._dip_watch.get(address)
             if _dw and _px_now > 0:
@@ -1064,6 +1037,17 @@ class Analyzer:
         self.last_score = float(score)
         print(f"📊 [{tag}] {symbol}: финальный score {score:.1f} (порог 60), m5 {m5:+.1f}%, m1 {m1:+.1f}%")
         if score >= 60.0:
+            if chain in ("bsc", "base", "ethereum"):
+                try:
+                    import goplus as _gp
+                    _v_ok, _v_why = await _gp.verify_evm_token(address, chain, pair_data)
+                    if not _v_ok:
+                        return self._deny(address, f"antiscam-{_v_why}",
+                                          f"🚫 [{tag}] {symbol}: {_v_why} — блок.")
+                except Exception as _e:
+                    if chain == "bsc":
+                        return self._deny(address, "antiscam-err",
+                                          f"🚫 [{tag}] {symbol}: ошибка антискама ({type(_e).__name__}) — BSC риск.")
             self._set_sig(address, f"{tag} rule {score:.0f}%" + self._rkt_tag(address, pair_data) + await self.meme_tag(address, symbol, pair_data, chain))
             return True
         return False

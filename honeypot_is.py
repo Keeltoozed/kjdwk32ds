@@ -61,6 +61,21 @@ def _verdict(data: dict):
     return True, ""
 
 
+def is_hard_scam(reason: str) -> bool:
+    """Возвращает True если honeypot.is зафиксировал реальный скам/ловушку."""
+    if not reason:
+        return False
+    r = str(reason).lower()
+    if r in ("no-data", "unsupported", "off", "no-addr", "hp-rate-limit", "hp-status-429"):
+        return False
+    if r.startswith("error") or r.startswith("hp-status-") or r.startswith("hp-err-"):
+        return False
+    for danger in ("honeypot", "cannot-sell", "sim-failed", "tax"):
+        if danger in r:
+            return True
+    return False
+
+
 async def check_token(address: str, chain: str):
     """EVM-гейт: (True, '') — можно брать; (False, причина) — блок."""
     chain = (chain or "").lower()
@@ -86,15 +101,22 @@ async def check_token(address: str, chain: str):
         status, data = await fetch_json(url, timeout=10, retries=1)
         if status == 200 and data:
             verdict = _verdict(data)
+        elif status == 429:
+            verdict = (False, "hp-rate-limit")
         else:
             verdict = (False, f"hp-status-{status}")
     except Exception as e:
         verdict = (False, f"error-{type(e).__name__}")
     if ttl > 0:
-        _ts = _t.time() if (verdict[0] or (verdict[1] not in ("no-data", "error") and "err" not in verdict[1])) else (_t.time() - ttl + 30)
+        if verdict[0] or is_hard_scam(verdict[1]):
+            _ts = _t.time()
+        elif "rate-limit" in verdict[1] or "429" in verdict[1]:
+            _ts = _t.time() - ttl + 10
+        else:
+            _ts = _t.time() - ttl + 30
         _CACHE[key] = (_ts, verdict)
         if len(_CACHE) > 2000:
             _CACHE.clear()
-    if not verdict[0]:
+    if is_hard_scam(verdict[1]):
         CALLS["block"] += 1
     return verdict

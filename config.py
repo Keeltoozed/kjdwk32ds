@@ -106,6 +106,7 @@ ROCKET_VETO_ENABLED = True  # вето слабых дженерик-входо�
 ROCKET_VETO_MIN = 0.25  # Режет откровенный мусор (bQuantum 0.09, MERRGER 0.04), но пропускает ракеты (Altai 0.46, Crocollout 0.70)
 # === GOPLUS (общедоступная модель риска: honeypot/налоги; бесплатно, без ключа) ===
 GOPLUS_ENABLED = True  # Включено: ловит honeypot, налоги >10%, бэкдоры, mintable и дев-дампы
+GOPLUS_API_KEY = os.getenv("GOPLUS_API_KEY", "")  # Опционально: бесплатный API-ключ на gopluslabs.io (150k CU/мес, выделенный лимит)
 GOPLUS_MAX_BUY_TAX = 0.10  # блок, если налог на покупку выше 10%
 GOPLUS_MAX_SELL_TAX = 0.10  # блок, если налог на продажу выше 10% (иначе -30% на выходе)
 GOPLUS_CACHE_SEC = 3600  # вердикты кэшируем на час (квота free бережётся)

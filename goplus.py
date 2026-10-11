@@ -123,6 +123,30 @@ def _verdict_sol(info: dict):
     return True, ""
 
 
+def is_hard_scam(reason: str) -> bool:
+    """Возвращает True ТОЛЬКО если причина — реальный риск контракта токена.
+    Сетевые ошибки, троттлинг (4029), 429 и отсутствие данных возвращают False."""
+    if not reason:
+        return False
+    r = str(reason).lower()
+    if r in ("no-data", "unindexed", "unsupported", "off", "no-addr",
+             "goplus-rate-limit", "goplus-server-error"):
+        return False
+    if r.startswith("error") or r.startswith("goplus-status-") or r.startswith("goplus-err-"):
+        return False
+    if r.startswith("goplus-code-"):
+        code_str = r.replace("goplus-code-", "").strip()
+        if code_str in ("4029", "3", "2024", "0", ""):
+            return False
+    # Известные уязвимости / ловушки контракта
+    for danger in ("honeypot", "cannot_sell", "cannot_buy", "blacklist", "cooldown",
+                   "mintable", "ownership", "hidden_owner", "selfdestruct",
+                   "external_call", "tax", "creator_pct", "owner_pct"):
+        if danger in r:
+            return True
+    return False
+
+
 async def check_token(address: str, chain: str):
     """EVM-гейт: (True, '') — можно брать; (False, причина) — блок."""
     chain = (chain or "").lower()
@@ -145,35 +169,55 @@ async def check_token(address: str, chain: str):
         from http_client import fetch_json
         url = (f"https://api.gopluslabs.io/api/v1/token_security/{cid}"
                f"?contract_addresses={address}")
-        status, data = await fetch_json(url, timeout=10, retries=1)
-        if status == 200 and isinstance(data, dict) and data.get("code") == 1:
-            result = data.get("result") or {}
-            info = result.get(address) or result.get(address.lower()) or {}
-            if not info and isinstance(result, dict):
-                # регистронезависимый поиск ключа в ответе
-                for k, v in result.items():
-                    if str(k).lower() == address.lower() and isinstance(v, dict):
-                        info = v
-                        break
-                if not info:
-                    for v in result.values():
-                        if isinstance(v, dict):
+        headers = {}
+        api_key = str(_cfg("GOPLUS_API_KEY", "") or "").strip()
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+        status, data = await fetch_json(url, headers=headers if headers else None, timeout=10, retries=1)
+        if status == 200 and isinstance(data, dict):
+            code = data.get("code")
+            if code == 1:
+                result = data.get("result") or {}
+                info = result.get(address) or result.get(address.lower()) or {}
+                if not info and isinstance(result, dict):
+                    # регистронезависимый поиск ключа в ответе
+                    for k, v in result.items():
+                        if str(k).lower() == address.lower() and isinstance(v, dict):
                             info = v
                             break
-            verdict = _verdict_evm(info)
-        elif status == 200 and isinstance(data, dict):
-            verdict = (False, f"goplus-code-{data.get('code')}")
+                    if not info:
+                        for v in result.values():
+                            if isinstance(v, dict):
+                                info = v
+                                break
+                verdict = _verdict_evm(info)
+            elif code == 4029:
+                verdict = (False, "goplus-rate-limit")
+            elif code == 3:
+                verdict = (False, "no-data")
+            elif code == 2024:
+                verdict = (True, "unsupported")
+            else:
+                verdict = (False, f"goplus-code-{code}")
+        elif status == 429:
+            verdict = (False, "goplus-rate-limit")
+        elif status in (500, 502, 503, 504):
+            verdict = (False, "goplus-server-error")
         else:
             verdict = (False, f"goplus-status-{status}")
     except Exception as e:
         verdict = (False, f"error-{type(e).__name__}")
     if ttl > 0:
-        # no-data / error кэшируем лишь на 30с, чтобы свежий токен после индексации мог пройти
-        _ts = _t.time() if (verdict[0] or (verdict[1] not in ("no-data", "error") and "err" not in verdict[1])) else (_t.time() - ttl + 30)
+        if verdict[0] or is_hard_scam(verdict[1]):
+            _ts = _t.time()
+        elif verdict[1] == "goplus-rate-limit":
+            _ts = _t.time() - ttl + 10
+        else:
+            _ts = _t.time() - ttl + 30
         _CACHE[key] = (_ts, verdict)
         if len(_CACHE) > 2000:
             _CACHE.clear()
-    if not verdict[0]:
+    if is_hard_scam(verdict[1]):
         CALLS["block"] += 1
     return verdict
 
@@ -196,7 +240,11 @@ async def check_solana(mint: str):
         from http_client import fetch_json
         url = ("https://api.gopluslabs.io/api/v1/solana/token_security"
                f"?contract_addresses={mint}")
-        status, data = await fetch_json(url, timeout=10, retries=1)
+        headers = {}
+        api_key = str(_cfg("GOPLUS_API_KEY", "") or "").strip()
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+        status, data = await fetch_json(url, headers=headers if headers else None, timeout=10, retries=1)
         if status == 200 and isinstance(data, dict) and data.get("code") == 1:
             result = data.get("result") or {}
             info = result.get(mint) or {}
@@ -212,6 +260,62 @@ async def check_solana(mint: str):
         _CACHE[key] = (_t.time(), verdict)
         if len(_CACHE) > 2000:
             _CACHE.clear()
-    if not verdict[0]:
+    if is_hard_scam(verdict[1]):
         CALLS["block"] += 1
     return verdict
+
+
+async def verify_evm_token(address: str, chain: str, pair_data: dict = None) -> tuple:
+    """3-уровневая гибридная защита EVM (GoPlus + Honeypot.is симуляция + On-Chain DEX).
+    
+    Возвращает (ok: bool, reason: str).
+    - (True, ''): контракт чист и проверен.
+    - (False, reason): подтверждённый скам, ханипот или не подтверждён на BSC.
+    """
+    chain = (chain or "").lower().strip()
+    address = (address or "").strip()
+    if not address:
+        return True, "no-addr"
+    if chain in ("robinhood",):
+        # Robinhood Chain (4663) не индексируется публичными сервисами — fail-open под кэпом $4.0
+        return True, "robinhood-failopen"
+    if chain not in ("bsc", "base", "ethereum"):
+        return True, "unsupported"
+
+    # Уровень 1: GoPlus Security API
+    _g_ok, _g_why = await check_token(address, chain)
+    if is_hard_scam(_g_why):
+        return False, f"GoPlus {_g_why}"
+    if _g_ok and _g_why == "":
+        return True, ""
+
+    # Уровень 2: Honeypot.is (симуляция транзакций покупки и продажи)
+    # Вызывается если GoPlus вернул rate-limit (4029), no-data (3) или ошибку.
+    try:
+        import honeypot_is as _hp
+        _h_ok, _h_why = await _hp.check_token(address, chain)
+        if _hp.is_hard_scam(_h_why):
+            return False, f"honeypot.is {_h_why}"
+        if _h_ok and _h_why == "":
+            return True, ""
+    except Exception:
+        _h_ok, _h_why = False, "hp-exception"
+
+    # Уровень 3: Ончейн-валидация пула DEX (если оба внешних сервиса не проиндексировали / перегружены)
+    if chain in ("base", "ethereum"):
+        # Base/ETH: fail-open с логированием
+        return True, ""
+
+    if chain == "bsc":
+        # BSC: зона повышенного риска. Проверяем реальные сделки продажи в пуле:
+        if pair_data and isinstance(pair_data, dict):
+            txns_m5 = ((pair_data.get("txns") or {}).get("m5") or {})
+            s5 = int(txns_m5.get("sells", 0) or 0)
+            b5 = int(txns_m5.get("buys", 0) or 0)
+            vol5 = float(((pair_data.get("volume") or {}).get("m5", 0) or 0))
+            if s5 >= 4 and b5 >= s5 and vol5 >= 8000:
+                # Физическое ончейн-доказательство: пользователи прямо сейчас успешно продают токен
+                return True, ""
+        return False, f"ни GoPlus ({_g_why}), ни honeypot.is ({_h_why}) не подтвердили контракт (BSC)"
+
+    return True, ""
