@@ -913,9 +913,9 @@ class Analyzer:
         if m5 < _evm_min_m5:
             return self._deny(address, f"flat m5 {m5:+.1f}%", f"· [{tag}] {symbol}: флет m5 {m5:+.1f}%")
         _max_m5 = 60.0
-        # На Robinhood при органическом перевесе покупателей (b5 >= 1.8*s5, liq >= min_liq, m1 <= 4.0%)
+        # При органическом перевесе покупателей (b5 >= 1.8*s5, liq >= min_liq, m1 <= 4.0%)
         # расширяем коридор до 85%, чтобы забирать сильные выносы (JARETH/ANIMATES/TRENCHTV/DOPE) без риска накрутки
-        if chain == "robinhood" and liq >= min_liq and s5 > 0 and (b5 / s5) >= 1.8 and m1 <= 4.0 and not self.is_churn(b5, s5, m5):
+        if chain in ("robinhood", "base", "bsc") and liq >= min_liq and s5 > 0 and (b5 / s5) >= 1.8 and m1 <= 4.0 and not self.is_churn(b5, s5, m5):
             _max_m5 = 85.0
 
         if m5 > _max_m5:
@@ -948,8 +948,8 @@ class Analyzer:
         if vol_to_liq > 100:
             return self._deny(address, "wash-trading", f"🚫 [{tag}] {symbol}: Объем в {vol_to_liq:.0f} раз больше пула ликвидности — накрутка ботами создателя.")
         
-        # Если в моменте сильный 5м импульс (m5 >= 15% и b5 >= s5 * 1.5), 1-часовой флет до пампа не блокирует свежий пробой (DUGE)
-        if s > 0 and b < s * 1.5 and not (m5 >= 15.0 and s5 > 0 and b5 >= s5 * 1.5):
+        # Если в моменте сильный 5м импульс (m5 >= 5% и b5 >= s5 * 1.3), 1-часовой флет до пампа не блокирует свежий пробой
+        if s > 0 and b < s * 1.2 and not (m5 >= 5.0 and s5 > 0 and b5 >= s5 * 1.3):
             return self._deny(address, f"no-pressure {b}/{s}", f"🚫 [{tag}] {symbol}: buys {b} / sells {s} — нет давления.")
         if s5 > 0 and b5 < s5 * 1.3:
             return self._deny(address, f"m5-no-pressure {b5}/{s5}", f"🚫 [{tag}] {symbol}: m5 buys {b5} / sells {s5} — продавцы давят в моменте.")
