@@ -913,9 +913,9 @@ class Analyzer:
         if m5 < _evm_min_m5:
             return self._deny(address, f"flat m5 {m5:+.1f}%", f"· [{tag}] {symbol}: флет m5 {m5:+.1f}%")
         _max_m5 = 60.0
-        # На Robinhood при органическом перевесе покупателей (b5 >= 2*s5, liq >= min_liq, m1 <= 2.0%)
-        # расширяем коридор до 85%, чтобы забирать сильные выносы (JARETH/ANIMATES) без риска накрутки
-        if chain == "robinhood" and liq >= min_liq and s5 > 0 and (b5 / s5) >= 2.0 and m1 <= 2.0 and not self.is_churn(b5, s5, m5):
+        # На Robinhood при органическом перевесе покупателей (b5 >= 1.8*s5, liq >= min_liq, m1 <= 4.0%)
+        # расширяем коридор до 85%, чтобы забирать сильные выносы (JARETH/ANIMATES/TRENCHTV/DOPE) без риска накрутки
+        if chain == "robinhood" and liq >= min_liq and s5 > 0 and (b5 / s5) >= 1.8 and m1 <= 4.0 and not self.is_churn(b5, s5, m5):
             _max_m5 = 85.0
 
         if m5 > _max_m5:
@@ -938,17 +938,18 @@ class Analyzer:
             return self._deny(address, "honeypot-zero-sells-5m", f"🚫 [{tag}] {symbol}: {b5} покупок и 0 продаж за 5м — 100% Honeypot (нельзя продать).")
         if s5 <= 1 and b5 >= 8:
             return self._deny(address, "honeypot-1sell-5m", f"🚫 [{tag}] {symbol}: {b5} покупок и всего {s5} продажа за 5м — ловушка Honeypot.")
-        if s5 > 0 and ((s5 < 3 and (b5 / s5) > 4.0) or (b5 / s5) > 6.0) and (b5 + s5) >= 15:
+        if s5 > 0 and ((s5 < 3 and (b5 / s5) > 5.0) or (b5 / s5) > 12.0) and (b5 + s5) >= 15:
             return self._deny(address, "honeypot-ratio-5m", f"🚫 [{tag}] {symbol}: аномалия m5 {b5}b/{s5}s ({b5/s5:.1f}x) — Honeypot-риск.")
         if s == 0 and b >= 3:
             return self._deny(address, "honeypot-zero-sells-h1", f"🚫 [{tag}] {symbol}: {b} покупок и 0 продаж за 1ч — 100% Honeypot.")
-        if s > 0 and ((s < 5 and (b / s) > 4.5) or (b / s) > 6.5) and (b + s) >= 30:
+        if s > 0 and ((s < 5 and (b / s) > 5.0) or (b / s) > 12.0) and (b + s) >= 30:
             return self._deny(address, "honeypot-ratio-h1", f"🚫 [{tag}] {symbol}: аномалия h1 {b}b/{s}s ({b/s:.1f}x) — Honeypot-риск.")
         vol_to_liq = vol24 / (liq + 1)
         if vol_to_liq > 100:
             return self._deny(address, "wash-trading", f"🚫 [{tag}] {symbol}: Объем в {vol_to_liq:.0f} раз больше пула ликвидности — накрутка ботами создателя.")
         
-        if s > 0 and b < s * 1.5:
+        # Если в моменте сильный 5м импульс (m5 >= 15% и b5 >= s5 * 1.5), 1-часовой флет до пампа не блокирует свежий пробой (DUGE)
+        if s > 0 and b < s * 1.5 and not (m5 >= 15.0 and s5 > 0 and b5 >= s5 * 1.5):
             return self._deny(address, f"no-pressure {b}/{s}", f"🚫 [{tag}] {symbol}: buys {b} / sells {s} — нет давления.")
         if s5 > 0 and b5 < s5 * 1.3:
             return self._deny(address, f"m5-no-pressure {b5}/{s5}", f"🚫 [{tag}] {symbol}: m5 buys {b5} / sells {s5} — продавцы давят в моменте.")

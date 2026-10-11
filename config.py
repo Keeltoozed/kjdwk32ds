@@ -1,7 +1,9 @@
 import os
-from dotenv import load_dotenv
-
-load_dotenv()
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
 
 # Dexscreener API (Оставляем для фоновых проверок портфеля, если нужно)
 DEXSCREENER_LATEST = "https://api.dexscreener.com/token-boosts/top/v1" 
@@ -151,8 +153,8 @@ ROBINHOOD_DS_SLUG = "robinhood"  # slug DexScreener (НЕ 4663 - тот верн
 ROBINHOOD_GT_NETWORK = "robinhood"  # slug GeckoTerminal
 ROBINHOOD_RPC_URL = "https://rpc.mainnet.chain.robinhood.com"
 ROBINHOOD_EXPLORER = "https://robinhoodchain.blockscout.com"
-ROBINHOOD_MIN_LIQUIDITY = 25000  # Снижено до $25k: ловит ракеты NORMIE/ANIMATES ($26-29k), отсекая мусор <$25k
-# $20k+ с сайзом $6 (0.03% пула) едут. Conviction-x2 по-прежнему только от $30k.
+ROBINHOOD_MIN_LIQUIDITY = 17500  # Снижено до $17.5k: ловит ранние ракеты LARP/TARDI/ЮЛИ/LINGONBERRY ($18-24k), отсекая микро-мусор <$17.5k
+# $18k+ с сайзом $6 (0.03% пула) едут безопасно без проскальзывания. Conviction-x2 по-прежнему только от $30k.
 ROBINHOOD_SCAN_INTERVAL = 15  # Было 25→15: опрос каждые 10с = вход до выноса, не на вершине
 EVM_TRACK_INTERVAL = 8  # Было захардкожено 12с: цены с ноды идут 1 батчем без лимитов DS,
 # поэтому трек стопов/трейлингов можно крутить чаще — раньше режем раги, раньше фиксим пик
