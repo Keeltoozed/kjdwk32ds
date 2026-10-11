@@ -637,9 +637,13 @@ async def fomo_signal_loop(analyzer, tracker):
 async def growth_loop(analyzer, tracker):
     """🌱 GROWTH MODE: тренд зрелых капов, пока нет ракет.
     Вход в откат H1-тренда, выходы медленные: стоп -10%, трейлинг +8%/12%, стагнант 2ч."""
-    print("🌱 Growth Loop запущен: тренды капов (медленные деньги).")
-    if not getattr(config, "GROWTH_ENABLED", True):
-        return
+    growth_enabled = getattr(config, "GROWTH_ENABLED", False)
+    if not growth_enabled:
+        mine_check = {m: p for m, p in tracker.get_open_positions().items()
+                      if str(getattr(p, "source", "")).startswith("GROWTH")}
+        if not mine_check:
+            print("🌱 Growth Loop отключён (новых входов нет).")
+            return
     interval = getattr(config, "GROWTH_INTERVAL", 300)
     while True:
         try:
@@ -690,7 +694,7 @@ async def growth_loop(analyzer, tracker):
                         tracker.close_position(mint, cur, reason)
                 tracker.save_portfolio()
             # --- скан вселенной: ядро вотчлиста + динамический топ Raydium по ликве ---
-            if not _killed and len(mine) < getattr(config, "GROWTH_MAX_POS", 3) and \
+            if growth_enabled and not _killed and len(mine) < getattr(config, "GROWTH_MAX_POS", 3) and \
                     len(tracker.get_open_positions()) < config.MAX_CONCURRENT_POSITIONS:
                 import market_data as _md
                 universe = await _md.get_growth_universe()
@@ -918,6 +922,27 @@ async def _evm_track_once(tracker, chain: str, tag: str, emoji: str):
                         pos.price_checked_at = _t.time()
                         continue
                     reason = f"{tag} Stagnant ({held:.0f}m)"
+                # DEAD POOL GUARD (ловит застрявшие/замороженные пулы вроде BRML: 0 сделок, цена застыла)
+                # Работает даже для раннеров, если торги в блокчейне физически остановились:
+                if not reason and held >= 10:
+                    try:
+                        _td_pool = await evm_data.get_token_data(mint, chain)
+                        if _td_pool:
+                            _tx5_p = (_td_pool.get("txns") or {}).get("m5", {}) or {}
+                            _txh1_p = (_td_pool.get("txns") or {}).get("h1", {}) or {}
+                            _b5_p = int(_tx5_p.get("buys", 0) or 0)
+                            _s5_p = int(_tx5_p.get("sells", 0) or 0)
+                            _bh1_p = int(_txh1_p.get("buys", 0) or 0)
+                            _sh1_p = int(_txh1_p.get("sells", 0) or 0)
+                            if (_bh1_p + _sh1_p) == 0 or ((_b5_p + _s5_p) == 0 and float(((_td_pool.get("volume") or {}).get("m5", 0)) or 0) <= 0.01):
+                                _z_cyc = int(getattr(pos, "zero_vol_cycles", 0) or 0) + 1
+                                pos.zero_vol_cycles = _z_cyc
+                                if _z_cyc >= 3:
+                                    reason = f"{tag} Dead Pool (0 txns in pool, frozen)"
+                            else:
+                                pos.zero_vol_cycles = 0
+                    except Exception:
+                        pass
                 pos.price_checked_at = _t.time()
                 if reason:
                     tracker.close_position(mint, cur, reason)
@@ -1172,6 +1197,7 @@ async def async_main():
     asyncio.create_task(keep_alive())
 
     from trade_logger import trade_logger
+    from shadow_tracker import shadow_tracker
     from birdeye_scanner import birdeye_loop
     from jup_discovery import jup_loop
     from sol_price import get_sol_price
@@ -1232,6 +1258,7 @@ async def async_main():
         growth_loop(analyzer, tracker),  # 🌱 тренды капов, пока нет ракет
         sniper.connect_and_listen(),  # ENABLED — с AI фильтром — sniper entry kills capital (-85.8%), mature +162.5%
         trade_logger.post_trade_watcher_loop(),
+        shadow_tracker.price_watcher_loop(),
         rugpull_feeder_loop(),
         sol_price_updater()
     )

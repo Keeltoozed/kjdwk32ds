@@ -46,7 +46,11 @@ def _verdict(data: dict):
     _hp = hr.get("isHoneypot", False)
     if _hp is True or str(_hp).lower() == "true":
         return False, "honeypot"
+    if data.get("simulationSuccess") is False:
+        return False, "sim-failed"
     sim = data.get("simulationResult") or {}
+    if sim.get("sellSuccess") is False:
+        return False, "cannot-sell"
     worst, worst_k = 0.0, ""
     for k in ("buyTax", "sellTax", "transferTax"):
         t = _tax_frac(sim.get(k, 0))

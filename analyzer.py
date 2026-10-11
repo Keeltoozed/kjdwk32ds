@@ -139,8 +139,15 @@ class Analyzer:
             if not getattr(_c, "ROCKET_VETO_ENABLED", True):
                 return None
             s = (sig or "").upper()
-            for _t in ("DIPBUY", "SCOUT", "LOTTERY", "VIP", "COPY", "GROWTH"):
+            # DIPBUY / SCOUT имеют право на сниженный сайз при умеренном скоре,
+            # но мусор (RKT < 0.20) не должен проходить НИ ПОД КАКИМ флагом.
+            for _t in ("DIPBUY", "SCOUT"):
                 if _t in s:
+                    # Даже для DIPBUY/SCOUT не пускаем откровенный скам/дамп со скором ниже 0.20
+                    self._rkt_tag(address, pair_data or {})
+                    sc = self.rocket_scores.get(address)
+                    if sc is not None and sc < 0.20:
+                        return f"RKT-вето {sc:.2f}: экстремально слабый скор для {_t}"
                     return None
             if not pair_data:
                 return None  # нечем счислить — fail-open (пустой вектор всегда скор 0!)
@@ -149,8 +156,31 @@ class Analyzer:
             if sc is None:
                 return None
             if sc < float(getattr(_c, "ROCKET_VETO_MIN", 0.30)):
-                return (f"RKT-вето {sc:.2f}: слабая структура под импульсом "
-                        f"(rule-high, distribution) — не платим за чужой выход")
+                reason_str = (f"RKT-вето {sc:.2f}: слабая структура под импульсом "
+                              f"(rule-high, distribution) — не платим за чужой выход")
+                try:
+                    from shadow_tracker import shadow_tracker
+                    _base = (pair_data or {}).get("baseToken", {}) or {}
+                    _sym = _base.get("symbol", address[:6])
+                    _ch = (pair_data or {}).get("chainId", "evm")
+                    _px = float((pair_data or {}).get("priceUsd", 0) or 0)
+                    _lq = float(((pair_data or {}).get("liquidity", {}) or {}).get("usd", 0) or 0)
+                    _m5 = float(((pair_data or {}).get("priceChange", {}) or {}).get("m5", 0) or 0)
+                    shadow_tracker.log_rejection(
+                        mint=address,
+                        reason=f"RKT-вето {sc:.2f}",
+                        symbol=_sym,
+                        chain=_ch,
+                        score=0.0,
+                        rkt_score=sc,
+                        price=_px,
+                        liquidity=_lq,
+                        m5_pct=_m5,
+                        source=sig or "ROCKET_VETO"
+                    )
+                except Exception:
+                    pass
+                return reason_str
         except Exception:
             pass
         return None
@@ -165,9 +195,26 @@ class Analyzer:
         self.last_signal = text
 
     def _deny(self, key: str, short: str, msg: str) -> bool:
-        """Отказ с записью причины в signals: радар показывает ЧТО видели и ПОЧЕМУ скип."""
+        """Отказ с записью причины в signals и отправкой в Supabase (rejected_tokens)."""
         print(msg)
         self._set_sig(key, f"SKIP {short}")
+        try:
+            from shadow_tracker import shadow_tracker
+            ctx = getattr(self, "_eval_ctx", {}).get(key, {})
+            shadow_tracker.log_rejection(
+                mint=key,
+                reason=short,
+                symbol=ctx.get("symbol", key[:6]),
+                chain=ctx.get("chain", "solana"),
+                score=float(ctx.get("score", 0.0) or 0.0),
+                rkt_score=self.rocket_scores.get(key),
+                price=float(ctx.get("price", 0.0) or 0.0),
+                liquidity=float(ctx.get("liq", 0.0) or 0.0),
+                m5_pct=float(ctx.get("m5", 0.0) or 0.0),
+                source=ctx.get("source", "SCANNER")
+            )
+        except Exception:
+            pass
         return False
 
     @staticmethod
@@ -839,8 +886,12 @@ class Analyzer:
         _age_min = ((_tt.time() * 1000 - (pair_data.get("pairCreatedAt") or 0)) / 60000.0) \
             if pair_data.get("pairCreatedAt") else 999.0
         _px_now = float(pair_data.get("priceUsd", 0) or 0)
-
-        # --- ВНЕДРЕНИЕ АНТИ-СКАМ ФИЛЬТРОВ ОТ GOPLUS LABS ДЛЯ EVM ---
+        if not hasattr(self, "_eval_ctx"):
+            self._eval_ctx = {}
+        self._eval_ctx[address] = {
+            "symbol": symbol, "chain": chain, "price": _px_now,
+            "liq": liq, "m5": m5, "source": tag
+        }
         if liq >= 2000 and (chain == "bsc" or chain == "base" or chain == "ethereum" or chain == "robinhood"):
             chain_map = {"bsc": "56", "base": "8453", "ethereum": "1", "robinhood": "4663"}
             cid = chain_map.get(chain, "1")
@@ -941,8 +992,8 @@ class Analyzer:
         except Exception:
             pass
 
-        if (_age_min < 5 and m5 >= 3.0 and (b5 + s5) >= 15 and liq >= 5000
-                and b5 >= s5 and links):
+        if (_age_min < 5 and m5 >= 3.0 and (b5 + s5) >= 15 and liq >= 15000
+                and s5 >= 2 and b5 >= s5 and (b5 / max(s5, 1)) <= 4.0 and links):
             if not self._evm_brand_ok(symbol, tag):
                 return False
             if not await self._evm_clone_ok(symbol, address, pair_data, chain, tag):
@@ -954,20 +1005,7 @@ class Analyzer:
         if liq < min_liq:
             return self._deny(address, "micro-liq", f"🚫 [{tag}] {symbol}: ликва ${liq:,.0f} < ${min_liq:,.0f} — микро-пул.")
         
-        if 60.0 <= m5 <= 150.0 and h24 <= 500.0:
-            if m1 > 3.0:
-                return self._deny(address, f"lottery-spike m1 {m1:+.1f}%", f"🚫 [{tag}] {symbol}: вертикаль m5 {m5:+.0f}%, но m1 {m1:+.1f}% — свеча spike, это вершина. Ждём.")
-            if m1 < -8.0:
-                return self._deny(address, "lottery-dump", f"🚫 [{tag}] {symbol}: вертикаль откатывает m1 {m1:+.1f}% — дамп, не вход.")
-            if (b5 + s5) >= 20 and (s5 == 0 or b5 >= s5) and liq >= 20000 and links:
-                if not self._evm_brand_ok(symbol, tag):
-                    return False
-                if not await self._evm_clone_ok(symbol, address, pair_data, chain, tag):
-                    return False
-                print(f"🎰 [{tag}-LOTTERY] {symbol}: вертикаль m5 {m5:+.1f}% — лотерейный билет.")
-                self._set_sig(address, f"{tag} LOTTERY {m5:+.0f}%" + self._rkt_tag(address, pair_data) + await self.meme_tag(address, symbol, pair_data, chain))
-                return True
-            return self._deny(address, "vert-no-pressure", f"🚫 [{tag}] {symbol}: вертикаль без давления/ликвы/ссылок — не лотерея.")
+
         
         _evm_min_m5 = getattr(config, "EVM_MIN_M5_PCT", 7.0)
         if m5 < _evm_min_m5:
@@ -989,10 +1027,17 @@ class Analyzer:
         if m1 < -8.0 or h1 > 300.0:
             return self._deny(address, "dump/gone", f"🚫 [{tag}] {symbol}: m1 {m1:+.1f}% h1 {h1:+.0f}% — дамп/улетел.")
         
+        # --- СТРОГАЯ ЗАЩИТА ОТ HONEYPOT (Проверка реальных сделок в пуле) ---
+        if s5 == 0 and b5 >= 3:
+            return self._deny(address, "honeypot-zero-sells-5m", f"🚫 [{tag}] {symbol}: {b5} покупок и 0 продаж за 5м — 100% Honeypot (нельзя продать).")
+        if s5 <= 1 and b5 >= 8:
+            return self._deny(address, "honeypot-1sell-5m", f"🚫 [{tag}] {symbol}: {b5} покупок и всего {s5} продажа за 5м — ловушка Honeypot.")
+        if s5 > 0 and (b5 / s5) > 4.0 and (b5 + s5) >= 15:
+            return self._deny(address, "honeypot-ratio-5m", f"🚫 [{tag}] {symbol}: аномалия m5 {b5}b/{s5}s ({b5/s5:.1f}x > 4x) — Honeypot-риск.")
         if s == 0 and b >= 3:
-            return self._deny(address, "honeypot-zero-sells", f"🚫 [{tag}] {symbol}: {b} покупок и 0 продаж — 100% Honeypot (нельзя продать).")
-        if s > 0 and (b / s) > 15.0:
-            return self._deny(address, "honeypot-ratio", f"🚫 [{tag}] {symbol}: аномалия {b} покупок / {s} продаж — Honeypot-риск.")
+            return self._deny(address, "honeypot-zero-sells-h1", f"🚫 [{tag}] {symbol}: {b} покупок и 0 продаж за 1ч — 100% Honeypot.")
+        if s > 0 and (b / s) > 4.5:
+            return self._deny(address, "honeypot-ratio-h1", f"🚫 [{tag}] {symbol}: аномалия h1 {b}b/{s}s ({b/s:.1f}x > 4.5x) — Honeypot-риск.")
         vol_to_liq = vol24 / (liq + 1)
         if vol_to_liq > 100:
             return self._deny(address, "wash-trading", f"🚫 [{tag}] {symbol}: Объем в {vol_to_liq:.0f} раз больше пула ликвидности — накрутка ботами создателя.")
@@ -1028,6 +1073,12 @@ class Analyzer:
                             continue 
                         _ps = ((_p.get("baseToken") or {}).get("symbol") or "").upper()
                         _pa = ((_p.get("baseToken") or {}).get("address") or "").lower()
+                        # Защита от рерагов: если параллельный пул этого же токена обвалился на -80%+ (BRML-кейс)
+                        if _pa == _mine_addr and (_p.get("pairAddress", "") or "").lower() != (pair_data.get("pairAddress", "") or "").lower():
+                            _p_pc = _p.get("priceChange", {}) or {}
+                            if float(_p_pc.get("h24", 0) or 0) <= -80 or float(_p_pc.get("h6", 0) or 0) <= -80:
+                                print(f"🚫 [{tag}] {symbol}: параллельный пул этого токена обвалился ({_p_pc.get('h24')}%) — рераг/скам.")
+                                return False
                         if _ps == _up and _pa and _pa != _mine_addr:
                             _pc_at = _p.get("pairCreatedAt", 0) or 0
                             _pf = _p.get("fdv", 0) or 0

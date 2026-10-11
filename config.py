@@ -103,7 +103,7 @@ ROCKET_WEAK = 0.35  # score <= → weak
 ROCKET_SIZE_UP = 1.5
 ROCKET_SIZE_DOWN = 0.5
 ROCKET_VETO_ENABLED = True  # вето слабых дженерик-входов (MERRGER/MTA/LUXR: rule 77-90% + RKT 0.04-0.25 → стопы)
-ROCKET_VETO_MIN = 0.40  # Было 0.20: PIL(94%)/AGENCYSOL(100%) прошли но слились. Ужесточаем RKT-порог
+ROCKET_VETO_MIN = 0.25  # Режет откровенный мусор (bQuantum 0.09, MERRGER 0.04), но пропускает ракеты (Altai 0.46, Crocollout 0.70)
 # === GOPLUS (общедоступная модель риска: honeypot/налоги; бесплатно, без ключа) ===
 GOPLUS_ENABLED = False  # Отключено: Cloudflare блокирует сервера Render
 GOPLUS_MAX_BUY_TAX = 0.10  # блок, если налог на покупку выше 10%
@@ -193,7 +193,7 @@ BSC_SCAN_INTERVAL = 15  # было 25→15: каждые 10с — до памп�
 # === ETHEREUM (KLIK: TG-SIGNAL:ETHEREUM висел на $0.00 — ни один луп его не вёл,
 # chain=ethereum не входил в CHAINS. Тот же EVM-движок, slug DexScreener "ethereum".)
 ETHEREUM_ENABLED = True  # луп трекинга: ведём существующие (KLIK), иначе висят на $0.00
-ETHEREUM_ENTRIES_ENABLED = True  # НОВЫЕ входы в L1 выкл: газ $2-6 съедает скальп, ловим только дешёвые L2
+ETHEREUM_ENTRIES_ENABLED = False  # НОВЫЕ входы в L1 выкл: газ $2-6 съедает скальп, ловим только дешёвые L2
 ETHEREUM_SCAN_INTERVAL = 20
 ETHEREUM_MIN_LIQUIDITY = 20000.0  # GROWTH: было 30k, синхронно с остальными EVM
 # === ПРЯМЫЕ ЦЕНЫ С НОД (мимо лимитов DS/GT для открытых позиций) ===
@@ -247,7 +247,7 @@ DIPBUY_WINDOW_MIN = 30  # Расширено: помним пик 30 минут,
 # === GROWTH MODE (тренд старых токенов, пока нет ракет) ===
 # Логика: ракеты ловятся импульсом m5, а зрелые капы едут часами. Отдельный режим:
 # вход в откат часового тренда, широкие стопы, удержание часами, мало сделок.
-GROWTH_ENABLED = True
+GROWTH_ENABLED = False
 GROWTH_WATCHLIST = [  # ликвидные Solana-капы (путать не с чем, рага не будет)
     "So11111111111111111111111111111111111111112",  # SOL
     "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN",  # JUP
@@ -307,7 +307,7 @@ PULLBACK_MIN_M5_PCT = 0.02  # Снижено с 0.03
 PULLBACK_M1_MIN_PCT = -0.15  # Но и не летим в падающий нож (максимум -15% за минуту)
 PULLBACK_M1_MAX_PCT = 0.05  # Было 0.00 - ждали идеальный откат. Ракеты летят с m1 > 0
 PULLBACK_MAX_H1_PCT = 20.00  # Было 2.00: вход на +800%/час = догон SPEC-подобных вертикалей после выноса. Ракета берётся до +2000%/час
-LOTTERY_MIN_M5_PCT = 0.80  # Лотерея только для мощных вертикалей от 80%
+LOTTERY_MIN_M5_PCT = 999.0  # Лотерея только для мощных вертикалей от 80%
 LOTTERY_SIZE_MULT = 0.50  # Было 0.15: Увеличили размер билета, чтобы прибыль с ракет перекрывала убытки от скама
 WHALE_CONSENSUS = 2  # вход на 2-м ките (3-й = уже поздно)
 WHALE_MAX_RUNUP = 1.25  # Было 1.55: вход на 2-м ките только если не убежал >25%. Киты уже надули = их выход, не наш вход
@@ -324,7 +324,7 @@ DIPBUY_DROP_MAX = 0.35
 DIPBUY_WINDOW_MIN = 15
 MOONBAG_TRIGGER_PCT = 0.50
 ROB_MAX_SIZE_USD = 6.0             # сеть без honeypot-проверок
-ROCKET_VETO_MIN = 0.40
+ROCKET_VETO_MIN = 0.25
 
 # === EARLY SCOUT ===
 EARLY_SCOUT_ENABLED = True
