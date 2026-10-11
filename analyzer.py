@@ -143,11 +143,11 @@ class Analyzer:
             # но мусор (RKT < 0.20) не должен проходить НИ ПОД КАКИМ флагом.
             for _t in ("DIPBUY", "SCOUT"):
                 if _t in s:
-                    # Даже для DIPBUY/SCOUT не пускаем откровенный скам/дамп со скором ниже 0.20
+                    # Для DIPBUY/SCOUT не пускаем падающие ножи со скором ниже 0.45 (кейс Animates 0.38)
                     self._rkt_tag(address, pair_data or {})
                     sc = self.rocket_scores.get(address)
-                    if sc is not None and sc < 0.20:
-                        return f"RKT-вето {sc:.2f}: экстремально слабый скор для {_t}"
+                    if sc is not None and sc < 0.45:
+                        return f"RKT-вето {sc:.2f}: слабый скор для {_t} (падающий нож)"
                     return None
             if not pair_data:
                 return None  # нечем счислить — fail-open (пустой вектор всегда скор 0!)
@@ -984,7 +984,7 @@ class Analyzer:
                     elif not _vol_now and ((b5 + s5) < 10 or not (s5 == 0 or b5 >= 0.5 * s5)):
                         print(f"📉 [{tag}-DIPBUY] {symbol}: объём пуст и сделок нет — мёртвый токен, скип.")
                     elif _dmin <= _drop <= _dmax and (b5 + s5) >= 20 and (s5 == 0 or b5 >= s5) \
-                            and liq >= min_liq and links and m1 <= 3.0:
+                            and liq >= min_liq and links and -2.0 <= m1 <= 3.0:
                         self._dip_watch.pop(address, None)
                         print(f"📉 [{tag}-DIPBUY] {symbol}: откат {_drop*100:.0f}% от пика при живом объёме — вход на коррекции.")
                         self._set_sig(address, f"{tag} DIPBUY -{_drop*100:.0f}%" + self._rkt_tag(address, pair_data) + await self.meme_tag(address, symbol, pair_data, chain))

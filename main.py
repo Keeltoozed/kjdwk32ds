@@ -894,6 +894,10 @@ async def _evm_track_once(tracker, chain: str, tag: str, emoji: str):
                     reason = f"{tag} Soft Guard (был пик +{maxp * 100:.0f}%)"
                 elif held < float(getattr(config, "INFANT_WINDOW_MIN", 2)) and pnl <= float(getattr(config, "INFANT_DUMP_PCT", -0.25)):
                     reason = f"{tag} Infant Dump ({pnl * 100:.1f}%)"
+                elif not _is_runner and maxp < 0.02 and pnl <= -0.18 and held >= 4:
+                    # Fail Cut: если монета за 4+ мин ни разу не дала даже +2% и просела до -18%, режем сразу.
+                    # Не ждём -30%..-40% (Starlink кейс). Живые ракеты (maxp >= 2%) защищены и не трогаются.
+                    reason = f"{tag} Fail Cut ({held:.0f}m, {pnl * 100:.1f}%)"
                 elif not _is_runner and pnl <= config.STOP_LOSS_PCT:
                     reason = f"{tag} Stop ({pnl * 100:.1f}%)"
                 elif (not _is_runner and maxp < 0.05 and pnl < -0.05
