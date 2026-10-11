@@ -1010,7 +1010,13 @@ class Analyzer:
         _evm_min_m5 = getattr(config, "EVM_MIN_M5_PCT", 7.0)
         if m5 < _evm_min_m5:
             return self._deny(address, f"flat m5 {m5:+.1f}%", f"· [{tag}] {symbol}: флет m5 {m5:+.1f}%")
-        if m5 > 60.0:
+        _max_m5 = 60.0
+        # На Robinhood при органическом перевесе покупателей (b5 >= 2*s5, liq >= 30k, m1 <= 2.0%)
+        # расширяем коридор до 85%, чтобы забирать сильные выносы (JARETH/ANIMATES) без риска накрутки
+        if chain == "robinhood" and liq >= 30000 and s5 > 0 and (b5 / s5) >= 2.0 and m1 <= 2.0 and not self.is_churn(b5, s5, m5):
+            _max_m5 = 85.0
+
+        if m5 > _max_m5:
             try:
                 if _px_now > 0:
                     _pv = float(((pair_data.get("volume") or {}).get("m5", 0)) or 0)

@@ -150,7 +150,7 @@ ROBINHOOD_DS_SLUG = "robinhood"  # slug DexScreener (НЕ 4663 - тот верн
 ROBINHOOD_GT_NETWORK = "robinhood"  # slug GeckoTerminal
 ROBINHOOD_RPC_URL = "https://rpc.mainnet.chain.robinhood.com"
 ROBINHOOD_EXPLORER = "https://robinhoodchain.blockscout.com"
-ROBINHOOD_MIN_LIQUIDITY = 30000  # Было 20000: стадия $10К должна проходить. Скам режут GoPlus/honeypot+ссылки, сайз мелкий
+ROBINHOOD_MIN_LIQUIDITY = 25000  # Снижено до $25k: ловит ракеты NORMIE/ANIMATES ($26-29k), отсекая мусор <$25k
 # $20k+ с сайзом $6 (0.03% пула) едут. Conviction-x2 по-прежнему только от $30k.
 ROBINHOOD_SCAN_INTERVAL = 15  # Было 25→15: опрос каждые 10с = вход до выноса, не на вершине
 EVM_TRACK_INTERVAL = 8  # Было захардкожено 12с: цены с ноды идут 1 батчем без лимитов DS,
@@ -319,9 +319,7 @@ TG_VIP_SIZE_USD = 6.0
 LOTTERY_SIZE_MULT = 1.0
 CONVICTION_MULT = 1.0              # вернёшь 1.5-2.0, когда статистика станет плюсовой
 PULLBACK_MAX_H1_PCT = 3.0          # не гонимся за +300%/час
-DIPBUY_DROP_MIN = 0.20
-DIPBUY_DROP_MAX = 0.35
-DIPBUY_WINDOW_MIN = 15
+# DIPBUY параметры активны из строк 241-243 (откат 10-45%, окно 30 мин для ловли легких откатов ракет)
 MOONBAG_TRIGGER_PCT = 0.50
 ROB_MAX_SIZE_USD = 6.0             # сеть без honeypot-проверок
 ROCKET_VETO_MIN = 0.25
