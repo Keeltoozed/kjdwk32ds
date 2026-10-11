@@ -141,14 +141,13 @@ class Analyzer:
             s = (sig or "").upper()
             # DIPBUY / SCOUT имеют право на сниженный сайз при умеренном скоре,
             # но мусор (RKT < 0.20) не должен проходить НИ ПОД КАКИМ флагом.
-            for _t in ("DIPBUY", "SCOUT"):
-                if _t in s:
-                    # Для DIPBUY/SCOUT не пускаем падающие ножи со скором ниже 0.45 (кейс Animates 0.38)
-                    self._rkt_tag(address, pair_data or {})
-                    sc = self.rocket_scores.get(address)
-                    if sc is not None and sc < 0.45:
-                        return f"RKT-вето {sc:.2f}: слабый скор для {_t} (падающий нож)"
-                    return None
+            if "SCOUT" in s:
+                # Для SCOUT не пускаем падающие ножи со скором ниже 0.45 (кейс Animates 0.38)
+                self._rkt_tag(address, pair_data or {})
+                sc = self.rocket_scores.get(address)
+                if sc is not None and sc < 0.45:
+                    return f"RKT-вето {sc:.2f}: слабый скор для SCOUT (падающий нож)"
+                return None
             if not pair_data:
                 return None  # нечем счислить — fail-open (пустой вектор всегда скор 0!)
             self._rkt_tag(address, pair_data or {})
@@ -897,32 +896,6 @@ class Analyzer:
             return self._deny(address, f"bsc-age {_age_min:.1f}m",
                               f"🚫 [{tag}] {symbol}: возраст {_age_min:.1f}м < {float(getattr(config, 'BSC_MIN_AGE_MIN', 3.0)):.1f}м — ранняя BSC flash-rug зона.")
 
-        try:
-            _dw = self._dip_watch.get(address)
-            if _dw and _px_now > 0:
-                _peak, _pvol, _pts = _dw
-                _win = float(getattr(config, "DIPBUY_WINDOW_MIN", 15)) * 60
-                if _tt.time() - _pts > _win:
-                    self._dip_watch.pop(address, None)
-                else:
-                    _drop = (_peak - _px_now) / _peak if _peak > 0 else 0
-                    _dmin = float(getattr(config, "DIPBUY_DROP_MIN", 0.20))
-                    _dmax = float(getattr(config, "DIPBUY_DROP_MAX", 0.35))
-                    _vol_now = float(((pair_data.get("volume") or {}).get("m5", 0)) or 0)
-                    _vol_ok = (not _pvol) or (not _vol_now) or (_vol_now >= 0.3 * _pvol)
-                    if not _vol_ok:
-                        print(f"📉 [{tag}-DIPBUY] {symbol}: откат есть, но объём сдох — это слив, не откат. Ждём.")
-                    elif not _vol_now and ((b5 + s5) < 10 or not (s5 == 0 or b5 >= 0.5 * s5)):
-                        print(f"📉 [{tag}-DIPBUY] {symbol}: объём пуст и сделок нет — мёртвый токен, скип.")
-                    elif _dmin <= _drop <= _dmax and (b5 + s5) >= 20 and (s5 == 0 or b5 >= s5) \
-                            and liq >= min_liq and links and -2.0 <= m1 <= 3.0:
-                        self._dip_watch.pop(address, None)
-                        print(f"📉 [{tag}-DIPBUY] {symbol}: откат {_drop*100:.0f}% от пика при живом объёме — вход на коррекции.")
-                        self._set_sig(address, f"{tag} DIPBUY -{_drop*100:.0f}%" + self._rkt_tag(address, pair_data) + await self.meme_tag(address, symbol, pair_data, chain))
-                        return True
-        except Exception:
-            pass
-
         if (_age_min < 5 and m5 >= 3.0 and (b5 + s5) >= 15 and liq >= 15000
                 and s5 >= 2 and b5 >= s5 and (b5 / max(s5, 1)) <= 4.0 and links):
             if not self._evm_brand_ok(symbol, tag):
@@ -936,8 +909,6 @@ class Analyzer:
         if liq < min_liq:
             return self._deny(address, "micro-liq", f"🚫 [{tag}] {symbol}: ликва ${liq:,.0f} < ${min_liq:,.0f} — микро-пул.")
         
-
-        
         _evm_min_m5 = getattr(config, "EVM_MIN_M5_PCT", 7.0)
         if m5 < _evm_min_m5:
             return self._deny(address, f"flat m5 {m5:+.1f}%", f"· [{tag}] {symbol}: флет m5 {m5:+.1f}%")
@@ -948,21 +919,19 @@ class Analyzer:
             _max_m5 = 85.0
 
         if m5 > _max_m5:
-            try:
-                if _px_now > 0:
-                    _pv = float(((pair_data.get("volume") or {}).get("m5", 0)) or 0)
-                    self._dip_watch[address] = (_px_now, _pv, _tt.time())
-            except Exception:
-                pass
-            return self._deny(address, f"top m5 {m5:+.0f}%", f"🚫 [{tag}-OVERHEAT] {symbol}: m5 {m5:+.1f}% — поздно, ждём откат для DIPBUY.")
+            return self._deny(address, f"top m5 {m5:+.0f}%", f"🚫 [{tag}-OVERHEAT] {symbol}: m5 {m5:+.1f}% — вертикаль уже прошла, вход = вершина.")
         
         if self.is_churn(b5, s5, m5):
             return self._deny(address, f"churn {b5}/{s5} m5 {m5:+.1f}%",
                               f"🚫 [{tag}-CHURN] {symbol}: {b5 + s5} сделок без перевеса (b/s {b5 / (s5+1):.2f}) — накрутка, не FOMO.")
         if m1 > 5.0:
             return self._deny(address, f"m1-green {m1:+.1f}%", f"🚫 [{tag}] {symbol}: m1 {m1:+.1f}% — вершина в моменте, ждём.")
-        if m1 < -8.0 or h1 > 300.0:
-            return self._deny(address, "dump/gone", f"🚫 [{tag}] {symbol}: m1 {m1:+.1f}% h1 {h1:+.0f}% — дамп/улетел.")
+        if m1 < -3.0:
+            return self._deny(address, f"m1-drop {m1:+.1f}%", f"🚫 [{tag}] {symbol}: m1 {m1:+.1f}% — резкое падение за 1м, падающий нож.")
+        if h1 < 0.0:
+            return self._deny(address, f"h1-red {h1:+.1f}%", f"🚫 [{tag}] {symbol}: h1 {h1:+.1f}% — часовой тренд вниз, падающий токен.")
+        if h1 > 300.0:
+            return self._deny(address, "gone", f"🚫 [{tag}] {symbol}: h1 {h1:+.0f}% — параболик уже улетел, вершина.")
         
         # --- СТРОГАЯ ЗАЩИТА ОТ HONEYPOT (Проверка реальных сделок в пуле) ---
         if s5 == 0 and b5 >= 3:
@@ -981,6 +950,8 @@ class Analyzer:
         
         if s > 0 and b < s * 1.5:
             return self._deny(address, f"no-pressure {b}/{s}", f"🚫 [{tag}] {symbol}: buys {b} / sells {s} — нет давления.")
+        if s5 > 0 and b5 < s5 * 1.3:
+            return self._deny(address, f"m5-no-pressure {b5}/{s5}", f"🚫 [{tag}] {symbol}: m5 buys {b5} / sells {s5} — продавцы давят в моменте.")
         
         _evm_tx_min = 12 if _age_min < 30 else 20
         _evm_vol_min = 3000 if _age_min < 30 else 10000
