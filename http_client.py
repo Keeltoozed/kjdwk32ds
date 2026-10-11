@@ -34,6 +34,7 @@ HOST_LIMITS = {
     "lunarcrush.com": 10.0,
     "api.rugcheck.xyz": 30.0,
     "api.honeypot.is": 60.0,
+    "api.gopluslabs.io": 30.0,
     "api.coingecko.com": 10.0,
     "generativelanguage.googleapis.com": 10.0,
 }
@@ -54,6 +55,7 @@ HOST_SEMAPHORES = {
     "public-api.birdeye.so": 1,
     "api.rugcheck.xyz": 2,
     "api.honeypot.is": 2,
+    "api.gopluslabs.io": 1,
     "api.coingecko.com": 1,
     "generativelanguage.googleapis.com": 1,
 }
@@ -193,7 +195,10 @@ async def fetch_json(url: str, params=None, headers=None, timeout: int = 12,
     except Exception:
         host = "?"
     session = await get_session()
-    hdrs = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
+    hdrs = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+        "Accept": "application/json",
+    }
     if headers:
         hdrs.update(headers)
     sem = _sem_for(host)

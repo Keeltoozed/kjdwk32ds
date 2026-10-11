@@ -105,7 +105,7 @@ ROCKET_SIZE_DOWN = 0.5
 ROCKET_VETO_ENABLED = True  # вето слабых дженерик-входов (MERRGER/MTA/LUXR: rule 77-90% + RKT 0.04-0.25 → стопы)
 ROCKET_VETO_MIN = 0.25  # Режет откровенный мусор (bQuantum 0.09, MERRGER 0.04), но пропускает ракеты (Altai 0.46, Crocollout 0.70)
 # === GOPLUS (общедоступная модель риска: honeypot/налоги; бесплатно, без ключа) ===
-GOPLUS_ENABLED = False  # Отключено: Cloudflare блокирует сервера Render
+GOPLUS_ENABLED = True  # Включено: ловит honeypot, налоги >10%, бэкдоры, mintable и дев-дампы
 GOPLUS_MAX_BUY_TAX = 0.10  # блок, если налог на покупку выше 10%
 GOPLUS_MAX_SELL_TAX = 0.10  # блок, если налог на продажу выше 10% (иначе -30% на выходе)
 GOPLUS_CACHE_SEC = 3600  # вердикты кэшируем на час (квота free бережётся)
@@ -320,8 +320,11 @@ LOTTERY_SIZE_MULT = 1.0
 CONVICTION_MULT = 1.0              # вернёшь 1.5-2.0, когда статистика станет плюсовой
 PULLBACK_MAX_H1_PCT = 3.0          # не гонимся за +300%/час
 # DIPBUY параметры активны из строк 241-243 (откат 10-45%, окно 30 мин для ловли легких откатов ракет)
-MOONBAG_TRIGGER_PCT = 0.50
 ROB_MAX_SIZE_USD = 6.0             # сеть без honeypot-проверок
+BSC_MAX_SIZE_USD = 4.5             # кэп сайза на BSC: защита от мгновенных дев-дампов и рагов (ORRIS)
+BSC_MIN_AGE_MIN = 3.0              # на BSC токены младше 3 минут — зона мгновенных rug pull
+GOPLUS_MAX_CREATOR_PCT = 0.15      # создатель держит максимум 15% эмиссии
+GOPLUS_MAX_OWNER_PCT = 0.20        # владелец держит максимум 20% эмиссии
 ROCKET_VETO_MIN = 0.25
 
 # === EARLY SCOUT ===

@@ -892,78 +892,36 @@ class Analyzer:
             "symbol": symbol, "chain": chain, "price": _px_now,
             "liq": liq, "m5": m5, "source": tag
         }
-        if liq >= 2000 and (chain == "bsc" or chain == "base" or chain == "ethereum" or chain == "robinhood"):
-            chain_map = {"bsc": "56", "base": "8453", "ethereum": "1", "robinhood": "4663"}
-            cid = chain_map.get(chain, "1")
+        # BSC: токены младше 3 минут — зона мгновенных flash-рагов и дев-дампов (ORRIS)
+        if chain == "bsc" and _age_min < float(getattr(config, "BSC_MIN_AGE_MIN", 3.0)):
+            return self._deny(address, f"bsc-age {_age_min:.1f}m",
+                              f"🚫 [{tag}] {symbol}: возраст {_age_min:.1f}м < {float(getattr(config, 'BSC_MIN_AGE_MIN', 3.0)):.1f}м — ранняя BSC flash-rug зона.")
+
+        # АНТИСКАМ (GoPlus + Honeypot.is через кэшированные модули)
+        if chain in ("bsc", "base", "ethereum"):
             try:
-                import aiohttp
-                session = await self.get_session()
-                goplus_url = f"https://api.gopluslabs.io/api/v1/token_security/{cid}?contract_addresses={address}"
-                import random
-                fake_ip = f"{random.randint(11,250)}.{random.randint(11,250)}.{random.randint(11,250)}.{random.randint(11,250)}"
-                gp_headers = {
-                    "User-Agent": f"Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/{random.randint(110,122)}.0.0.0 Safari/537.36",
-                    "X-Forwarded-For": fake_ip,
-                    "X-Real-IP": fake_ip,
-                    "Accept": "application/json"
-                }
-                async with session.get(goplus_url, headers=gp_headers, timeout=1.5) as resp:
-                    if resp.status == 200:
-                        gp_data = await resp.json(content_type=None)
-                        res = gp_data.get("result", {}).get(address.lower(), {})
-                        if res:
-                            # Honeypot / ограничения
-                            if res.get("is_honeypot") == "1":
-                                print(f"🚫 [АНТИСКАМ-EVM] {symbol} — Это Honeypot! Блокируем.")
-                                return False
-                            if res.get("cannot_sell_all") == "1" or res.get("cannot_buy") == "1" or res.get("is_blacklisted") == "1":
-                                print(f"🚫 [АНТИСКАМ-EVM] {symbol} — Ограничения на торговлю! Блокируем.")
-                                return False
-                                
-                            # Налоги
-                            sell_tax = float(res.get("sell_tax", 0) or 0)
-                            if sell_tax > 0.1:
-                                print(f"🚫 [АНТИСКАМ-EVM] {symbol} — Скрытый налог {sell_tax*100}% (>10%). Блокируем.")
-                                return False
-                                
-                            # Бэкдоры
-                            if res.get("is_mintable") == "1":
-                                print(f"🚫 [АНТИСКАМ-EVM] {symbol} — Контракт позволяет печатать новые токены (is_mintable). Блокируем.")
-                                return False
-                            if res.get("can_take_back_ownership") == "1":
-                                print(f"🚫 [АНТИСКАМ-EVM] {symbol} — Скрытый бэкдор владельца (take back). Блокируем.")
-                                return False
-                            if res.get("trading_cooldown") == "1":
-                                print(f"🚫 [АНТИСКАМ-EVM] {symbol} — Торговый кулдаун (манипуляция). Блокируем.")
-                                return False
-                                
-                            # Кошелек создателя
-                            creator_pct = float(res.get("creator_percent", 0) or 0)
-                            if creator_pct > 0.15:
-                                print(f"🚫 [АНТИСКАМ-EVM] {symbol} — Создатель держит {creator_pct*100}% (>15%). Блокируем.")
-                                return False
-                                
-            except Exception as e:
-                # Fallback on honeypot.is if GoPlus fails
-                try:
-                    hp_url = f"https://api.honeypot.is/v2/IsHoneypot?address={address}&chainID={cid}"
-                    async with session.get(hp_url, timeout=2.5) as hp_resp:
-                        if hp_resp.status == 200:
-                            hp_data = await hp_resp.json()
-                            is_hp = hp_data.get("honeypotResult", {}).get("isHoneypot", False)
-                            if is_hp:
-                                print(f"🚫 [HONEYPOT.IS] {symbol} — Это Honeypot! Блокируем.")
-                                return False
-                            sim_res = hp_data.get("simulationResult") or {}
-                            sell_tax = float(sim_res.get("sellTax", 0) or 0)
-                            if sell_tax > 10.0:
-                                print(f"🚫 [HONEYPOT.IS] {symbol} — Скрытый налог {sell_tax}% (>10%). Блокируем.")
-                                return False
-                        else:
-                            print(f"⚠️ Ошибка Антискама (GoPlus + Honeypot.is) для {address[:8]}: {e} (Таймаут обеих систем, пропускаем)")
-                except Exception as hp_e:
-                    print(f"⚠️ Ошибка Антискама (GoPlus + Honeypot.is) для {address[:8]}: {e} (Таймаут обеих систем, пропускаем)")
-        # --- КОНЕЦ ФИЛЬТРОВ GOPLUS ---
+                import goplus as _gp
+                _g_ok, _g_why = await _gp.check_token(address, chain)
+                if not _g_ok and _g_why not in ("no-data", "unsupported", "off"):
+                    return self._deny(address, f"antiscam-{_g_why}",
+                                      f"🚫 [{tag}] {symbol}: GoPlus {_g_why} — блок.")
+                if chain == "bsc":
+                    _g_verified = (_g_ok and _g_why == "")
+                    _h_verified = False
+                    if not _g_verified:
+                        import honeypot_is as _hp
+                        _h_ok, _h_why = await _hp.check_token(address, chain)
+                        if not _h_ok and _h_why not in ("no-data", "unsupported", "off"):
+                            return self._deny(address, f"honeypot-{_h_why}",
+                                              f"🚫 [{tag}] {symbol}: honeypot.is {_h_why} — блок.")
+                        _h_verified = (_h_ok and _h_why == "")
+                    if not (_g_verified or _h_verified):
+                        return self._deny(address, "bsc-unverified",
+                                          f"🚫 [{tag}] {symbol}: ни GoPlus, ни honeypot.is не подтвердили контракт — BSC риск.")
+            except Exception as _ae:
+                if chain == "bsc":
+                    return self._deny(address, "antiscam-err",
+                                      f"🚫 [{tag}] {symbol}: ошибка антискама ({type(_ae).__name__}) — BSC fail-closed.")
 
 
         try:
@@ -1011,9 +969,9 @@ class Analyzer:
         if m5 < _evm_min_m5:
             return self._deny(address, f"flat m5 {m5:+.1f}%", f"· [{tag}] {symbol}: флет m5 {m5:+.1f}%")
         _max_m5 = 60.0
-        # На Robinhood при органическом перевесе покупателей (b5 >= 2*s5, liq >= 30k, m1 <= 2.0%)
+        # На Robinhood при органическом перевесе покупателей (b5 >= 2*s5, liq >= min_liq, m1 <= 2.0%)
         # расширяем коридор до 85%, чтобы забирать сильные выносы (JARETH/ANIMATES) без риска накрутки
-        if chain == "robinhood" and liq >= 30000 and s5 > 0 and (b5 / s5) >= 2.0 and m1 <= 2.0 and not self.is_churn(b5, s5, m5):
+        if chain == "robinhood" and liq >= min_liq and s5 > 0 and (b5 / s5) >= 2.0 and m1 <= 2.0 and not self.is_churn(b5, s5, m5):
             _max_m5 = 85.0
 
         if m5 > _max_m5:
@@ -1038,12 +996,12 @@ class Analyzer:
             return self._deny(address, "honeypot-zero-sells-5m", f"🚫 [{tag}] {symbol}: {b5} покупок и 0 продаж за 5м — 100% Honeypot (нельзя продать).")
         if s5 <= 1 and b5 >= 8:
             return self._deny(address, "honeypot-1sell-5m", f"🚫 [{tag}] {symbol}: {b5} покупок и всего {s5} продажа за 5м — ловушка Honeypot.")
-        if s5 > 0 and (b5 / s5) > 4.0 and (b5 + s5) >= 15:
-            return self._deny(address, "honeypot-ratio-5m", f"🚫 [{tag}] {symbol}: аномалия m5 {b5}b/{s5}s ({b5/s5:.1f}x > 4x) — Honeypot-риск.")
+        if s5 > 0 and ((s5 < 3 and (b5 / s5) > 4.0) or (b5 / s5) > 6.0) and (b5 + s5) >= 15:
+            return self._deny(address, "honeypot-ratio-5m", f"🚫 [{tag}] {symbol}: аномалия m5 {b5}b/{s5}s ({b5/s5:.1f}x) — Honeypot-риск.")
         if s == 0 and b >= 3:
             return self._deny(address, "honeypot-zero-sells-h1", f"🚫 [{tag}] {symbol}: {b} покупок и 0 продаж за 1ч — 100% Honeypot.")
-        if s > 0 and (b / s) > 4.5:
-            return self._deny(address, "honeypot-ratio-h1", f"🚫 [{tag}] {symbol}: аномалия h1 {b}b/{s}s ({b/s:.1f}x > 4.5x) — Honeypot-риск.")
+        if s > 0 and ((s < 5 and (b / s) > 4.5) or (b / s) > 6.5) and (b + s) >= 30:
+            return self._deny(address, "honeypot-ratio-h1", f"🚫 [{tag}] {symbol}: аномалия h1 {b}b/{s}s ({b/s:.1f}x) — Honeypot-риск.")
         vol_to_liq = vol24 / (liq + 1)
         if vol_to_liq > 100:
             return self._deny(address, "wash-trading", f"🚫 [{tag}] {symbol}: Объем в {vol_to_liq:.0f} раз больше пула ликвидности — накрутка ботами создателя.")

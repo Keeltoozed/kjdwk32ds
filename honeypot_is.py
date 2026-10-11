@@ -38,9 +38,9 @@ def _tax_frac(raw) -> float:
 
 
 def _verdict(data: dict):
-    """Разбор ответа v2. Возвращает (ok, reason). Fail-open при сомнениях."""
+    """Разбор ответа v2. Возвращает (ok, reason)."""
     if not isinstance(data, dict) or not data:
-        return True, "no-data"
+        return False, "no-data"
     hr = data.get("honeypotResult") or {}
     # isHoneypot может быть bool или строкой
     _hp = hr.get("isHoneypot", False)
@@ -78,7 +78,7 @@ async def check_token(address: str, chain: str):
         CALLS["hit"] += 1
         return hit[1]
     CALLS["miss"] += 1
-    verdict = (True, "no-data")
+    verdict = (False, "no-data")
     try:
         from http_client import fetch_json
         url = (f"https://api.honeypot.is/v2/IsHoneypot"
@@ -86,10 +86,13 @@ async def check_token(address: str, chain: str):
         status, data = await fetch_json(url, timeout=10, retries=1)
         if status == 200 and data:
             verdict = _verdict(data)
-    except Exception:
-        verdict = (True, "error")
+        else:
+            verdict = (False, f"hp-status-{status}")
+    except Exception as e:
+        verdict = (False, f"error-{type(e).__name__}")
     if ttl > 0:
-        _CACHE[key] = (_t.time(), verdict)
+        _ts = _t.time() if (verdict[0] or (verdict[1] not in ("no-data", "error") and "err" not in verdict[1])) else (_t.time() - ttl + 30)
+        _CACHE[key] = (_ts, verdict)
         if len(_CACHE) > 2000:
             _CACHE.clear()
     if not verdict[0]:

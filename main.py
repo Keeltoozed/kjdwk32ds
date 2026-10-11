@@ -574,17 +574,31 @@ async def fomo_signal_loop(analyzer, tracker):
                                     print(f"🚫 TG EVM {mint[:10]}: {_eveto}")
                                     continue
                                 try:
-                                    import goplus as _tgp, honeypot_is as _thp
+                                    import goplus as _tgp
                                     _gok, _gwhy = await _tgp.check_token(mint, _ch)
-                                    if not _gok:
-                                        print(f"🚫 TG EVM {mint[:10]}: GoPlus {_gwhy} — блок.")
-                                        continue
+                                except Exception as _tge:
+                                    _gok, _gwhy = (False if _ch == "bsc" else True), f"goplus-err-{type(_tge).__name__}"
+
+                                if not _gok and _gwhy not in ("no-data", "unsupported", "off"):
+                                    print(f"🚫 TG EVM {mint[:10]}: GoPlus {_gwhy} — блок.")
+                                    continue
+
+                                try:
+                                    import honeypot_is as _thp
                                     _hok, _hwhy = await _thp.check_token(mint, _ch)
-                                    if not _hok:
-                                        print(f"🚫 TG EVM {mint[:10]}: honeypot.is {_hwhy} — блок.")
+                                except Exception as _the:
+                                    _hok, _hwhy = (False if _ch == "bsc" else True), f"hp-err-{type(_the).__name__}"
+
+                                if not _hok and _hwhy not in ("no-data", "unsupported", "off"):
+                                    print(f"🚫 TG EVM {mint[:10]}: honeypot.is {_hwhy} — блок.")
+                                    continue
+
+                                if _ch == "bsc":
+                                    _g_v = (_gok and _gwhy == "")
+                                    _h_v = (_hok and _hwhy == "")
+                                    if not (_g_v or _h_v):
+                                        print(f"🚫 TG BSC {mint[:10]}: ни GoPlus ({_gwhy}), ни honeypot.is ({_hwhy}) не подтвердили — блок.")
                                         continue
-                                except Exception as _se:
-                                    print(f"⚠️ TG security err: {type(_se).__name__} (fail-open).")
                                 price = float(_td.get("priceUsd", 0))
                                 sym = ((_td.get("baseToken") or {}).get("symbol", "TG") or "TG")
                                 cap = tracker.get_total_capital()
@@ -596,6 +610,8 @@ async def fomo_signal_loop(analyzer, tracker):
                                 if _ch == "robinhood":
                                     # ROB без honeypot-покрытия: кэп сайза (ZUPITER -72%)
                                     size = min(size, float(getattr(config, "ROB_MAX_SIZE_USD", 4.0) or 4.0))
+                                if _ch == "bsc":
+                                    size = min(size, float(getattr(config, "BSC_MAX_SIZE_USD", 4.5) or 4.5))
                                 _tg_src = f"TG-SIGNAL:{_src_ch}:{_esig}" if _src_ch else f"TG-SIGNAL:{_esig}"
                                 tracker.add_position(sym, mint, price, size, is_mature=True,
                                                      source=_tg_src, chain=_ch)
@@ -1083,6 +1099,9 @@ async def _evm_chain_loop(analyzer, tracker, chain: str):
                                         # ROB без honeypot-покрытия (GoPlus/honeypot.is не знают 4663):
                                         # кэп ПОСЛЕ всех mult — единственная защита от -72% гэпов (ZUPITER)
                                         size = min(size, float(getattr(config, "ROB_MAX_SIZE_USD", 4.0) or 4.0))
+                                    if chain == "bsc":
+                                        # BSC кэп ПОСЛЕ всех mult: защита от мгновенных дев-дампов и рагов (ORRIS)
+                                        size = min(size, float(getattr(config, "BSC_MAX_SIZE_USD", 4.5) or 4.5))
                                 if chain == "ethereum":
                                     # L1-газ $2-6 за круг: микро-сайз $4-6 гарантирует минус.
                                     # Меньше минимума — скип входа (а не враньё в плюс).
@@ -1091,30 +1110,40 @@ async def _evm_chain_loop(analyzer, tracker, chain: str):
                                         print(f"🚫 {tag} {sym}: сайз ${size:.2f} < min ${_eth_min:.0f} (L1-газ) — скип.")
                                         await asyncio.sleep(1.0)
                                         continue
-                                # GOPLUS (общедоступная модель риска): honeypot/sell tax
-                                # убивают сделку на выходе (-30%). Только финалисты —
-                                # единицы запросов в час, квота free цела (кэш 1ч).
+                                # GOPLUS & HONEYPOT.IS Security Gate
                                 try:
                                     import goplus as _gp
                                     _g_ok, _g_why = await _gp.check_token(addr, chain)
-                                    if not _g_ok:
-                                        print(f"🚫 [{tag}] {sym}: GoPlus {_g_why} — блок входа.")
-                                        await asyncio.sleep(1.0)
-                                        continue
                                 except Exception as _ge:
-                                    print(f"⚠️ GoPlus err: {type(_ge).__name__} (fail-open).")
-                                # HONEYPOT.IS — второе мнение (идея awesome-web3-rug-check):
-                                # только для финалистов GoPlus, единицы запросов в час.
-                                # Ловит нестандартные transfer-ловушки, которые GoPlus пропускает.
+                                    _g_ok, _g_why = (False if chain == "bsc" else True), f"goplus-err-{type(_ge).__name__}"
+
+                                # Однозначный скам по GoPlus — мгновенный блок
+                                if not _g_ok and _g_why not in ("no-data", "unsupported", "off"):
+                                    print(f"🚫 [{tag}] {sym}: GoPlus {_g_why} — блок входа.")
+                                    await asyncio.sleep(1.0)
+                                    continue
+
                                 try:
                                     import honeypot_is as _hp
                                     _h_ok, _h_why = await _hp.check_token(addr, chain)
-                                    if not _h_ok:
-                                        print(f"🚫 [{tag}] {sym}: honeypot.is {_h_why} — блок входа.")
+                                except Exception as _he:
+                                    _h_ok, _h_why = (False if chain == "bsc" else True), f"hp-err-{type(_he).__name__}"
+
+                                # Однозначный скам по honeypot.is — мгновенный блок
+                                if not _h_ok and _h_why not in ("no-data", "unsupported", "off"):
+                                    print(f"🚫 [{tag}] {sym}: honeypot.is {_h_why} — блок входа.")
+                                    await asyncio.sleep(1.0)
+                                    continue
+
+                                # На BSC антискам ОБЯЗАН подтвердить контракт хотя бы одной системой:
+                                # Неверифицированные токены (оба no-data/ошибка) на BSC блокируются (защита от мгновенных рагов вроде ORRIS)
+                                if chain == "bsc":
+                                    _g_verified = (_g_ok and _g_why == "")
+                                    _h_verified = (_h_ok and _h_why == "")
+                                    if not (_g_verified or _h_verified):
+                                        print(f"🚫 [{tag}] {sym}: ни GoPlus ({_g_why}), ни honeypot.is ({_h_why}) не подтвердили контракт — блок входа (защита от BSC-рагов).")
                                         await asyncio.sleep(1.0)
                                         continue
-                                except Exception as _he:
-                                    print(f"⚠️ honeypot.is err: {type(_he).__name__} (fail-open).")
                                 tracker.add_position(sym, addr, price, size, is_mature=True,
                                                  ml_features=analyzer.pack_features(td),
                                                  ml_confidence=float(getattr(analyzer, "last_score", 0.0)),
