@@ -33,7 +33,7 @@ def _store(key: str, val: list):
 CHAINS = {
     "robinhood": {"min_liq": float(getattr(config, "ROBINHOOD_MIN_LIQUIDITY", 20000)), "tag": "ROBINHOOD"},
     "base": {"min_liq": 10000.0, "tag": "BASE"},
-    "bsc": {"min_liq": 10000.0, "tag": "BSC"},
+    "bsc": {"min_liq": float(getattr(config, "BSC_MIN_LIQUIDITY", 25000.0)), "tag": "BSC"},
     "ethereum": {"min_liq": float(getattr(config, "ETHEREUM_MIN_LIQUIDITY", 20000.0)), "tag": "ETHEREUM"},
 }
 
@@ -94,36 +94,32 @@ async def get_token_data(address: str, chain: str = SLUG) -> dict:
     return best
 
 
-async def get_bulk_prices(addresses: list, chain: str = SLUG) -> dict:
+async def get_bulk_prices(addresses: list, chain: str = SLUG, pair_addresses: list = None) -> dict:
     """Балк-цены до 30 адресов за запрос (голый массив в ответе).
-    Ключи — в ОБОИХ регистрах (оригинал + lower): DexScreener отдаёт
-    checksum, а трекер может хранить lower — без этого px.get(mint)==0
-    и дашборд встаёт на $0.00 (0.00%).
-    ВАЖНО: берём цену пула с МАКС. ликвидностью, а не макс. цену.
-    Иначе мусорный пул с liq=0 даёт фантом +1544% (AVOCADO: реальный
-    $0.0001056 при liq $26k, а пыль $0.001816 при liq 0)."""
+    Поддерживает как token-адреса (/latest/dex/tokens/), так и pair-адреса (/latest/dex/pairs/{chain}/).
+    Ключи — в ОБОИХ регистрах (оригинал + lower + upper) для token и pair.
+    ВАЖНО: берём цену пула с МАКС. ликвидностью, а не макс. цену."""
     out = {}
     _liq = {}
-    ms = [a for a in dict.fromkeys(addresses) if a]
-    for i in range(0, len(ms), 30):
-        chunk = ms[i:i + 30]
-        status, data = await fetch_json(
-            f"{DS}/latest/dex/tokens/{','.join(chunk)}", timeout=10, retries=2)
-        if status != 200 or not data:
-            continue
-        pairs = data if isinstance(data, list) else data.get("pairs") or []
-        for p in pairs:
-            if p.get("chainId") != chain:
+
+    def _process_pairs(pairs_list):
+        for p in pairs_list:
+            if (p.get("chainId") or "").lower() != (chain or "").lower():
                 continue
             try:
                 base = (p.get("baseToken") or {})
                 addr = base.get("address", "")
+                p_addr = p.get("pairAddress", "")
                 price = float(p.get("priceUsd", 0) or 0)
                 liq = float((p.get("liquidity") or {}).get("usd", 0) or 0)
-                if not addr or not price:
+                if not price:
                     continue
-                # пулы без ликвидности (dust) игнорируем, если есть нормальный
-                for _k in (addr, addr.lower(), addr.upper()):
+                keys_to_set = []
+                if addr:
+                    keys_to_set.extend([addr, addr.lower(), addr.upper()])
+                if p_addr:
+                    keys_to_set.extend([p_addr, p_addr.lower(), p_addr.upper()])
+                for _k in keys_to_set:
                     if liq > _liq.get(_k, -1):
                         _liq[_k] = liq
                         out[_k] = price
@@ -131,6 +127,32 @@ async def get_bulk_prices(addresses: list, chain: str = SLUG) -> dict:
                         out[_k] = price
             except Exception:
                 continue
+
+    # 1. Если известны адреса пар (pairAddress), батчим их первыми — они всегда актуальны
+    if pair_addresses:
+        ps = [p for p in dict.fromkeys(pair_addresses) if p]
+        for i in range(0, len(ps), 30):
+            p_chunk = ps[i:i + 30]
+            try:
+                status, data = await fetch_json(
+                    f"{DS}/latest/dex/pairs/{chain}/{','.join(p_chunk)}", timeout=8, retries=1)
+                if status == 200 and data:
+                    pairs = data if isinstance(data, list) else data.get("pairs") or []
+                    _process_pairs(pairs)
+            except Exception:
+                pass
+
+    # 2. Добираем по адресам токенов (tokens/{addresses}) тех, чьих цен ещё нет
+    ms = [a for a in dict.fromkeys(addresses) if a and a not in out and a.lower() not in out]
+    if ms:
+        for i in range(0, len(ms), 30):
+            chunk = ms[i:i + 30]
+            status, data = await fetch_json(
+                f"{DS}/latest/dex/tokens/{','.join(chunk)}", timeout=8, retries=1)
+            if status != 200 or not data:
+                continue
+            pairs = data if isinstance(data, list) else data.get("pairs") or []
+            _process_pairs(pairs)
     return out
 
 

@@ -974,8 +974,18 @@ class Analyzer:
         if len(symbol) > 2:
             try:
                 from http_client import fetch_json as _fj
-                _st, _sd = await _fj(f"https://api.dexscreener.com/latest/dex/search?q={symbol}",
-                                     timeout=8, retries=1)
+                _st, _sd = 0, None
+                _now = time.time()
+                if not hasattr(self, "_dex_search_cache"):
+                    self._dex_search_cache = {}
+                _c_entry = self._dex_search_cache.get(symbol.upper())
+                if _c_entry and (_now - _c_entry[0]) < 180.0:
+                    _st, _sd = 200, _c_entry[1]
+                else:
+                    _st, _sd = await _fj(f"https://api.dexscreener.com/latest/dex/search?q={symbol}",
+                                         timeout=8, retries=1)
+                    if _st == 200 and _sd:
+                        self._dex_search_cache[symbol.upper()] = (_now, _sd)
                 if _st == 200 and _sd:
                     _mine_addr = (base.get("address") or "").lower()
                     _mine_created = pair_data.get("pairCreatedAt", 0) or 0

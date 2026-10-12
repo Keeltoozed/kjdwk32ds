@@ -60,10 +60,20 @@ TIME_EXIT_PROFIT_REQ = 0.0
 
 # Trailing Stop Config (Защита прибыли)
 TRAILING_ACTIVATION_PCT = 0.15  # Активируем трейлинг уже при +15% (было +30% — слишком поздно)
-TRAILING_DISTANCE_PCT = 0.08  # Свип 45 комбо x 10 сценариев: 0.08 лучший и на гладких, и на шумных (+2.92 vs +1.64 у 0.10)
+TRAILING_DISTANCE_PCT = 0.12  # 12% воздуха (было 8%: 8% резало раннеры вроде MINU x3.1 на первом тике, 12% держит рагпулы и даёт дышать)
 
-# Moonbag: частичная фиксация 50% позиции на этом профите (свип: 0.60 лучше 0.50 - ранняя фикса режет раннеры)
-MOONBAG_TRIGGER_PCT = 0.60
+# Moonbag: частичная фиксация 50% позиции на +100% (даем монете удвоиться перед фиксацией половины)
+MOONBAG_TRIGGER_PCT = 1.00
+
+# Breakeven: пик был +30%+, а цена вернулась ко входу — ракета сдохла, выходим в ноль (pnl <= 0),
+# не ждём -20% стоп. Даём ракетам свободно дышать на откатах, не зажимая преждевременными локами.
+BREAKEVEN_PCT = 0.30
+
+# Infant Dump: защита от дев-дампа в первые минуты. Порог -22% переживает нормальный
+# шум ранних снайперов (-15..-18%), но отсекает реальный крах дева (-40..-90%).
+INFANT_WINDOW_MIN = 2.0
+INFANT_DUMP_PCT = -0.22
+
 # Stagnant: минус режем на N-й минуте, мелкий плюс держим до M-й (бектест-свип)
 STAGNANT_LOSS_MIN = 7
 STAGNANT_HOLD_MIN = 25
@@ -96,7 +106,7 @@ ROBINHOOD_DS_SLUG = "robinhood"  # slug DexScreener (НЕ 4663 - тот верн
 ROBINHOOD_GT_NETWORK = "robinhood"  # slug GeckoTerminal
 ROBINHOOD_RPC_URL = "https://rpc.mainnet.chain.robinhood.com"
 ROBINHOOD_EXPLORER = "https://robinhoodchain.blockscout.com"
-ROBINHOOD_MIN_LIQUIDITY = 8000  # EVM-пулы Uniswap тоньше Solana - порог ниже
+ROBINHOOD_MIN_LIQUIDITY = 15000  # Пулы от $15к (отсекаем тонкие мусорные пулы $8к)
 ROBINHOOD_SCAN_INTERVAL = 90  # Было 25: 3 сети x 2 GT-запроса = 429. EVM-импульсы живут дольше solana-пампов
 EVM_MIN_M5_PCT = 7.0  # Было 10.0: окно входа шире = чаще сделки. Раги держат остальные гейты
 EVM_RESCAN_COOLDOWN = 300  # Было 600: перепроверка отклонённых через 5 мин (волна может прийти позже)
@@ -188,6 +198,12 @@ TG_MAX_SIZE_USD = 15.0  # кэп TG/FOMO-входа
 TG_VIP_SIZE_USD = 5.0
 ROB_MAX_SIZE_USD = 15.0  # кэп Robinhood (не урезает $15 вход)
 BSC_MAX_SIZE_USD = 15.0
+BSC_MIN_LIQUIDITY = 25000  # Пулы от $25к на BSC (отсекаем $10к одноминутные раги девов)
+BSC_WEAK_SIZE_USD = 4.0   # Билет $4 на сомнительных BSC-монетах (RKT < 0.65), не рискуем $15
+
+# EVM tracking intervals (адаптивный опрос открытых позиций без 429)
+EVM_TRACK_INTERVAL = 2.5  # Быстрый трекинг при открытых сделках (2.5с вместо 8с для мгновенных стопов)
+EVM_IDLE_TRACK_INTERVAL = 6.0  # Опрос в режиме ожидания (нет открытых позиций)
 
 # EVM factory WSS (новые пулы Base/BSC за секунды, без ключей, PublicNode)
 EVM_WSS_ENABLED = True

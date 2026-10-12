@@ -95,8 +95,8 @@ async def position_manager_loop(analyzer, tracker):
                 # Infant Dump (как в EVM): слив в первые минуты = дев, не шум.
                 # Раги идут -40..-96%, шум импульса -15..-18% переживаем.
                 try:
-                    _inf_w = float(getattr(config, "INFANT_WINDOW_MIN", 2))
-                    _inf_p = float(getattr(config, "INFANT_DUMP_PCT", -0.25))
+                    _inf_w = float(getattr(config, "INFANT_WINDOW_MIN", 2.0))
+                    _inf_p = float(getattr(config, "INFANT_DUMP_PCT", -0.22))
                     if minutes_held < _inf_w and pnl_pct <= _inf_p:
                         tracker.close_position(mint, current_price, f"Infant Dump ({pnl_pct*100:.0f}%)")
                         continue
@@ -468,7 +468,8 @@ async def scanner_loop(analyzer, tracker):
                                 tracker.add_position(actual_symbol, mint, entry_price, position_size, is_mature=True,
                                                      ml_features=analyzer.pack_features(pair_data),
                                                      ml_confidence=float(getattr(analyzer, "last_score", 0.0)),
-                                                     source=f"SCANNER:{analyzer.get_signal(mint)}")
+                                                     source=f"SCANNER:{analyzer.get_signal(mint)}",
+                                                     pair_address=pair_data.get("pairAddress", ""))
                                 break # Ждем следующего цикла после покупки
                             else:
                                 print(f"⚠️ Ошибка: Не удалось получить цену для {mint} (entry_price=0). Возможно, Rate Limit (429).")
@@ -602,7 +603,8 @@ async def fomo_signal_loop(analyzer, tracker):
                                     size = min(size, _bsc_cap)
                                 _tg_src = f"TG-SIGNAL:{_src_ch}:{_esig}" if _src_ch else f"TG-SIGNAL:{_esig}"
                                 tracker.add_position(sym, mint, price, size, is_mature=True,
-                                                     source=_tg_src, chain=_ch)
+                                                     source=_tg_src, chain=_ch,
+                                                     pair_address=_td.get("pairAddress", ""))
                                 print(f"📲 TG-SIGNAL BUY {sym} [{_ch}] @ ${price}")
                                 _buys += 1
                                 if _buys >= _maxpass:
@@ -632,7 +634,8 @@ async def fomo_signal_loop(analyzer, tracker):
                                     position_size = min(position_size, float(getattr(config, "TG_VIP_SIZE_USD", 2.0) or 2.0))
                                 _tg_src = f"TG-SIGNAL:{_src_ch}:{_ssig}" if _src_ch else f"TG-SIGNAL:{_ssig}"
                                 tracker.add_position(actual_symbol, mint, entry_price, position_size,
-                                                     source=_tg_src)
+                                                     source=_tg_src,
+                                                     pair_address=(pair_data.get("pairAddress", "") if pair_data else ""))
                                 _buys += 1
                                 if _buys >= _maxpass:
                                     break
@@ -727,7 +730,8 @@ async def growth_loop(analyzer, tracker):
                                                  is_mature=True,
                                                  ml_features=analyzer.pack_features(td) if td else {},
                                                  ml_confidence=float(getattr(analyzer, "last_score", 0.0)),
-                                                 source=f"GROWTH:{analyzer.get_signal(mint)}")
+                                                 source=f"GROWTH:{analyzer.get_signal(mint)}",
+                                                 pair_address=(td.get("pairAddress", "") if td else ""))
                             print(f"🌱 GROWTH BUY {sym} @ ${price}")
                     await asyncio.sleep(2)
         except Exception as e:
@@ -763,9 +767,11 @@ def _evm_killed(tracker) -> bool:
     return bool(getattr(config, "KILL_SWITCH_ENABLED", True) and day_pnl <= -config.MAX_DAILY_LOSS_USD)
 
 
+_evm_missing_fetch_ts: dict = {}
+
 async def _evm_track_once(tracker, chain: str, tag: str, emoji: str):
-    """Один проход трекинга позиций сети. Вызывается каждые ~12 сек отдельным таском,
-    поэтому раги не проскакивают кэп за минуту тишины скана (было -35..-60% вместо -20%)."""
+    """Один проход трекинга позиций сети. Вызывается каждые ~2.5 сек отдельным таском
+    при открытых позициях, поэтому стопы срабатывают мгновенно без проскальзывания."""
     import time as _t
     import evm_data
     mine = {m: p for m, p in tracker.get_open_positions().items()
@@ -789,18 +795,30 @@ async def _evm_track_once(tracker, chain: str, tag: str, emoji: str):
     try:
         _need = [m for m in mine if not (px.get(m, 0) or px.get(m.lower(), 0) or px.get(m.upper(), 0))]
         if _need:
-            _ds = await evm_data.get_bulk_prices(_need, chain)
+            _pairs = [getattr(mine[m], "pair_address", "") for m in _need if getattr(mine[m], "pair_address", "")]
+            _ds = await evm_data.get_bulk_prices(_need, chain, pair_addresses=_pairs)
             for _k, _v in (_ds or {}).items():
                 px.setdefault(_k, _v)  # нода первична, DS — добор
     except Exception as e:
         print(f"{emoji} {tag} bulk price err: {e}")
-    # Добор слепых: кого нет в балке (свежие/тонкие пулы) — поштучно, иначе цены
-    # встают на entry ($0.00 0.00% в дашборде) и глохнут все выходы по профиту.
+    # Добор слепых: кого нет в балке (свежие/тонкие пулы) — поштучно с кулдауном 15с,
+    # иначе цены встают на entry, но при частых вызовах мы не спамим запросы и избегаем 429.
     def _px_get(_m: str) -> float:
-        # case-insensitive: DS отдаёт checksum, трекер может хранить lower
-        return float(px.get(_m, 0) or px.get(_m.lower(), 0) or px.get(_m.upper(), 0) or 0)
+        # case-insensitive: DS отдаёт checksum, трекер может хранить lower или pairAddress
+        pos = mine.get(_m)
+        pair = getattr(pos, "pair_address", "") if pos else ""
+        return float(
+            px.get(_m, 0) or px.get(_m.lower(), 0) or px.get(_m.upper(), 0) or
+            (px.get(pair, 0) if pair else 0) or
+            (px.get(pair.lower(), 0) if pair else 0) or
+            (px.get(pair.upper(), 0) if pair else 0) or 0
+        )
     _missing = [m for m in mine if not _px_get(m)]
+    _now = _t.time()
     for _mm in _missing[:12]:
+        if _now - _evm_missing_fetch_ts.get(_mm, 0) < 15.0:
+            continue
+        _evm_missing_fetch_ts[_mm] = _now
         try:
             _td1 = await evm_data.get_token_data(_mm, chain)
             _px1 = float((_td1.get("priceUsd", 0) or 0)) if _td1 else 0
@@ -808,6 +826,9 @@ async def _evm_track_once(tracker, chain: str, tag: str, emoji: str):
                 px[_mm] = _px1
                 px[_mm.lower()] = _px1
                 px[_mm.upper()] = _px1
+                pos_mm = mine.get(_mm)
+                if pos_mm and not getattr(pos_mm, "pair_address", "") and _td1.get("pairAddress"):
+                    pos_mm.pair_address = _td1["pairAddress"]
         except Exception:
             continue
     try:
@@ -816,10 +837,11 @@ async def _evm_track_once(tracker, chain: str, tag: str, emoji: str):
                 _live_px = _px_get(mint)
                 cur = _live_px or pos.current_price_usd or pos.entry_price_usd
                 # Счётчик слепоты: ни балк, ни добор цены не дали (cur упал на entry/current).
-                # 25 циклов (~5 мин) без живой цены = выходим, слот не маринуем.
+                # ~5 мин (с расчётом на текущий интервал) без живой цены = выходим, слот не маринуем.
                 _live = bool(_live_px)
                 pos.price_stale_n = 0 if _live else int(getattr(pos, "price_stale_n", 0) or 0) + 1
-                if pos.price_stale_n >= 25:
+                _max_stale_cycles = int(300 / max(float(getattr(config, "EVM_TRACK_INTERVAL", 2.5)), 1.0))
+                if pos.price_stale_n >= _max_stale_cycles:
                     tracker.close_position(mint, pos.current_price_usd or pos.entry_price_usd,
                                            f"{tag} Stale Price (5 мин без цены)")
                     continue
@@ -898,7 +920,7 @@ async def _evm_track_once(tracker, chain: str, tag: str, emoji: str):
                     # Мягкий стоп: был +15%+, сползли к -5% — пила, фиксируем малый минус,
                     # не ждём -20%. Живую ракету (выше -5%) не трогает.
                     reason = f"{tag} Soft Guard (был пик +{maxp * 100:.0f}%)"
-                elif held < float(getattr(config, "INFANT_WINDOW_MIN", 2)) and pnl <= float(getattr(config, "INFANT_DUMP_PCT", -0.25)):
+                elif held < float(getattr(config, "INFANT_WINDOW_MIN", 2.0)) and pnl <= float(getattr(config, "INFANT_DUMP_PCT", -0.22)):
                     reason = f"{tag} Infant Dump ({pnl * 100:.1f}%)"
                 elif not _is_runner and maxp < 0.02 and pnl <= -0.18 and held >= 4:
                     # Fail Cut: если монета за 4+ мин ни разу не дала даже +2% и просела до -18%, режем сразу.
@@ -986,7 +1008,11 @@ async def _evm_chain_loop(analyzer, tracker, chain: str):
                 await _evm_track_once(tracker, chain, tag, emoji)
             except Exception as e:
                 print(f"{emoji} {tag} track err: {e}")
-            await asyncio.sleep(int(getattr(config, "EVM_TRACK_INTERVAL", 8)))
+            # Адаптивный интервал: при открытых сделках в сети — 2.5с (быстрый стоп),
+            # если позиций нет — 6с (экономия лимитов API)
+            has_open = any(getattr(p, "chain", "") == chain for p in tracker.get_open_positions().values())
+            _iv = float(getattr(config, "EVM_TRACK_INTERVAL", 2.5)) if has_open else float(getattr(config, "EVM_IDLE_TRACK_INTERVAL", 6.0))
+            await asyncio.sleep(_iv)
 
     async def scan_task():
         while True:
@@ -1095,6 +1121,11 @@ async def _evm_chain_loop(analyzer, tracker, chain: str):
                                         # BSC кэп ПОСЛЕ всех mult: защита от дев-дампов, но не ниже базового fixed-сайза
                                         _bsc_cap = max(float(getattr(config, "BSC_MAX_SIZE_USD", 15.0) or 15.0), _fixed_sz)
                                         size = min(size, _bsc_cap)
+                                        _rkt_s = analyzer.rocket_scores.get(addr, 0.0)
+                                        if _rkt_s < 0.65:
+                                            _w_sz = float(getattr(config, "BSC_WEAK_SIZE_USD", 4.0))
+                                            size = min(size, _w_sz)
+                                            print(f"🟨 BSC {sym}: RKT {_rkt_s:.2f} < 0.65 — сайз ${_w_sz:.1f} (защита от дев-дампа)")
                                 if chain == "ethereum":
                                     # L1-газ $2-6 за круг: микро-сайз $4-6 гарантирует минус.
                                     # Меньше минимума — скип входа (а не враньё в плюс).
@@ -1120,7 +1151,8 @@ async def _evm_chain_loop(analyzer, tracker, chain: str):
                                                  ml_features=analyzer.pack_features(td),
                                                  ml_confidence=float(getattr(analyzer, "last_score", 0.0)),
                                                  source=(f"{tag}:COPY:{_sig}" if _evm_wss.is_copybuy(chain, addr) else f"{tag}:{_sig}"),
-                                                 chain=chain)
+                                                 chain=chain,
+                                                 pair_address=td.get("pairAddress", ""))
                                 print(f"{emoji} {tag} BUY {sym} {addr[:10]} @ ${price}")
                             await asyncio.sleep(1.0)
                         if len(processed) > 1000:

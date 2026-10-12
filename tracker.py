@@ -43,6 +43,7 @@ class VirtualPosition(BaseModel):
     # --- трекинг просадки раннеров (чтобы видеть, какой dip они пережили) ---
     min_price_usd: float = 0.0 # минимальная цена с момента входа
     max_dd_pct: float = 0.0 # максимальная просадка от входа (0..-1, напр. -0.15)
+    pair_address: str = "" # Адрес пула DexScreener для мгновенного балка без 429
 
 class PaperTracker:
     def __init__(self):
@@ -297,7 +298,7 @@ class PaperTracker:
         
         return real_capital
 
-    def add_position(self, symbol, mint, entry_price, amount_usd=5.0, ml_features=None, ml_confidence=0.0, is_mature=False, source="", chain="solana"):
+    def add_position(self, symbol, mint, entry_price, amount_usd=5.0, ml_features=None, ml_confidence=0.0, is_mature=False, source="", chain="solana", pair_address=""):
         # Валидация входа: мусорный entry ~0 давал фантомы +586М% и $1.6M.
         try:
             entry_price = float(entry_price or 0)
@@ -376,7 +377,8 @@ class PaperTracker:
             ml_confidence=ml_confidence,
             is_mature=is_mature,
             source=source,
-            chain=chain
+            chain=chain,
+            pair_address=pair_address
         )
         self.save_portfolio()
         print(f"📝 PAPER BUY: {symbol} ({mint}) | Amount: ${amount_usd} | Price: ${entry_price} | Src: {source} | Chain: {chain}")

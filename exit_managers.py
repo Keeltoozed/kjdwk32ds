@@ -38,8 +38,8 @@ class MatureExitManager:
         # Infant guard: дамп в первые минуты = дев сливает, не шум.
         # Было held<3 / -12%: резало SWORDGUY/LAP (-15..-18% за 30-70с) с живым
         # импульсом (m5 +16..+68%, 1000+ buys). Раги идут -40..-96% — их и -25% ловит.
-        _inf_win = float(getattr(config, "INFANT_WINDOW_MIN", 2))
-        _inf_pct = float(getattr(config, "INFANT_DUMP_PCT", -0.25))
+        _inf_win = float(getattr(config, "INFANT_WINDOW_MIN", 2.0))
+        _inf_pct = float(getattr(config, "INFANT_DUMP_PCT", -0.22))
         if minutes_held < _inf_win and pnl_pct <= _inf_pct:
             return f"Mature Infant Dump ({pnl_pct*100:.0f}%)"
 
@@ -60,7 +60,7 @@ class MatureExitManager:
                     return f"Scalp Profit (peak +{max_pnl_pct*100:.0f}%)"
 
         # Breakeven: пик был +30%+, а цена вернулась ко входу — ракета сдохла,
-        # выходим в ноль, а не ждём -20% стоп. Ракеты не убивает (живая выше входа).
+        # выходим в ноль (pnl <= 0), а не ждём -20% стоп. Ракеты не убивает (живая выше входа).
         _be = float(getattr(config, 'BREAKEVEN_PCT', 0.30))
         try:
             _maxp = (position.max_price_usd - position.entry_price_usd) / position.entry_price_usd
