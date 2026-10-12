@@ -913,9 +913,9 @@ class Analyzer:
         if m5 < _evm_min_m5:
             return self._deny(address, f"flat m5 {m5:+.1f}%", f"· [{tag}] {symbol}: флет m5 {m5:+.1f}%")
         _max_m5 = 60.0
-        # При органическом перевесе покупателей (b5 >= 1.8*s5, liq >= min_liq, m1 <= 4.0%)
+        # При органическом перевесе покупателей (b5 >= 1.5*s5, liq >= min_liq, m1 <= 4.0%)
         # расширяем коридор до 85%, чтобы забирать сильные выносы (JARETH/ANIMATES/TRENCHTV/DOPE) без риска накрутки
-        if chain in ("robinhood", "base", "bsc") and liq >= min_liq and s5 > 0 and (b5 / s5) >= 1.8 and m1 <= 4.0 and not self.is_churn(b5, s5, m5):
+        if chain in ("robinhood", "base", "bsc") and liq >= min_liq and s5 > 0 and (b5 / s5) >= 1.5 and m1 <= 4.0 and not self.is_churn(b5, s5, m5):
             _max_m5 = 85.0
 
         if m5 > _max_m5:
@@ -958,8 +958,11 @@ class Analyzer:
         _evm_vol_min = 3000 if _age_min < 30 else 10000
         if (b5 + s5) < _evm_tx_min or vol24 < _evm_vol_min:
             return self._deny(address, "quiet", f"🚫 [{tag}] {symbol}: тихо (tx5 {(b5+s5)}, vol24 ${vol24:,.0f}).")
-        if not links:
-            return self._deny(address, "no-links", f"🚫 [{tag}] {symbol}: нет ни одной ссылки — скам-риск.")
+        # Соцсети DexScreener требуют $300 и ручной привязки девом. На ранних L2 (Robinhood/Base/BSC)
+        # реальные раннеры с пулом >$20k (WISP +349%, CAESAR +324%) не имеют ссылок в первые часы.
+        # Блокируем только тонкие пулы (<$20k) или слабую активность (<15 сделок).
+        if not links and (liq < 20000 or (b5 + s5) < 15):
+            return self._deny(address, "no-links", f"🚫 [{tag}] {symbol}: нет ни одной ссылки при пуле <$20k — скам-риск.")
 
         _up = symbol.upper()
         _scam_kw = ["AAPL", "MSFT", "TSLA", "NVDA", "GOOG", "AMZN", "META", "NFLX",

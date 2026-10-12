@@ -586,16 +586,20 @@ async def fomo_signal_loop(analyzer, tracker):
                                 price = float(_td.get("priceUsd", 0))
                                 sym = ((_td.get("baseToken") or {}).get("symbol", "TG") or "TG")
                                 cap = tracker.get_total_capital()
-                                size = max(4.0, min(100.0, cap * (config.REINVEST_PERCENT / 100.0))) if cap > 0 else 4.0
-                                size = min(size, float(getattr(config, "TG_MAX_SIZE_USD", 4.0) or 4.0))
+                                _fixed_sz = float(getattr(config, "TRADE_AMOUNT_USD", 0.0) or 0.0)
+                                size = _fixed_sz if _fixed_sz > 0 else (max(4.0, min(100.0, cap * (config.REINVEST_PERCENT / 100.0))) if cap > 0 else 4.0)
+                                _tg_cap = max(float(getattr(config, "TG_MAX_SIZE_USD", 15.0) or 15.0), _fixed_sz)
+                                size = min(size, _tg_cap)
                                 if str(_esig).startswith("VIP-"):
                                     # VIP-шип = раздача (PEGGED -40% за 3с): лотерейные $2, как в сканерах
                                     size = min(size, float(getattr(config, "TG_VIP_SIZE_USD", 2.0) or 2.0))
                                 if _ch == "robinhood":
                                     # ROB без honeypot-покрытия: кэп сайза (ZUPITER -72%)
-                                    size = min(size, float(getattr(config, "ROB_MAX_SIZE_USD", 4.0) or 4.0))
+                                    _rob_cap = max(float(getattr(config, "ROB_MAX_SIZE_USD", 15.0) or 15.0), _fixed_sz)
+                                    size = min(size, _rob_cap)
                                 if _ch == "bsc":
-                                    size = min(size, float(getattr(config, "BSC_MAX_SIZE_USD", 4.5) or 4.5))
+                                    _bsc_cap = max(float(getattr(config, "BSC_MAX_SIZE_USD", 15.0) or 15.0), _fixed_sz)
+                                    size = min(size, _bsc_cap)
                                 _tg_src = f"TG-SIGNAL:{_src_ch}:{_esig}" if _src_ch else f"TG-SIGNAL:{_esig}"
                                 tracker.add_position(sym, mint, price, size, is_mature=True,
                                                      source=_tg_src, chain=_ch)
@@ -619,8 +623,10 @@ async def fomo_signal_loop(analyzer, tracker):
                                     print(f"🚫 TG SOL {mint[:10]}: {_sveto}")
                                     continue
                                 capital = tracker.get_total_capital()
-                                position_size = max(4.0, min(100.0, capital * (config.REINVEST_PERCENT / 100.0)))
-                                position_size = min(position_size, float(getattr(config, "TG_MAX_SIZE_USD", 4.0) or 4.0))
+                                _fixed_sz = float(getattr(config, "TRADE_AMOUNT_USD", 0.0) or 0.0)
+                                position_size = _fixed_sz if _fixed_sz > 0 else max(4.0, min(100.0, capital * (config.REINVEST_PERCENT / 100.0)))
+                                _tg_cap = max(float(getattr(config, "TG_MAX_SIZE_USD", 15.0) or 15.0), _fixed_sz)
+                                position_size = min(position_size, _tg_cap)
                                 if str(_ssig).startswith("VIP-"):
                                     # VIP-шип = раздача: лотерейные $2, как в сканерах
                                     position_size = min(position_size, float(getattr(config, "TG_VIP_SIZE_USD", 2.0) or 2.0))
@@ -1079,13 +1085,16 @@ async def _evm_chain_loop(analyzer, tracker, chain: str):
                                         except Exception:
                                             pass
                                     size = min(size, 100.0)
+                                    _fixed_sz = float(getattr(config, "TRADE_AMOUNT_USD", 0.0) or 0.0)
                                     if chain == "robinhood":
                                         # ROB без honeypot-покрытия (GoPlus/honeypot.is не знают 4663):
-                                        # кэп ПОСЛЕ всех mult — единственная защита от -72% гэпов (ZUPITER)
-                                        size = min(size, float(getattr(config, "ROB_MAX_SIZE_USD", 4.0) or 4.0))
+                                        # кэп ПОСЛЕ всех mult — защита от гэпов, но не ниже базового fixed-сайза
+                                        _rob_cap = max(float(getattr(config, "ROB_MAX_SIZE_USD", 15.0) or 15.0), _fixed_sz)
+                                        size = min(size, _rob_cap)
                                     if chain == "bsc":
-                                        # BSC кэп ПОСЛЕ всех mult: защита от мгновенных дев-дампов и рагов (ORRIS)
-                                        size = min(size, float(getattr(config, "BSC_MAX_SIZE_USD", 4.5) or 4.5))
+                                        # BSC кэп ПОСЛЕ всех mult: защита от дев-дампов, но не ниже базового fixed-сайза
+                                        _bsc_cap = max(float(getattr(config, "BSC_MAX_SIZE_USD", 15.0) or 15.0), _fixed_sz)
+                                        size = min(size, _bsc_cap)
                                 if chain == "ethereum":
                                     # L1-газ $2-6 за круг: микро-сайз $4-6 гарантирует минус.
                                     # Меньше минимума — скип входа (а не враньё в плюс).
