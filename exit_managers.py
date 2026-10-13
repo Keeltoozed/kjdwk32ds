@@ -43,20 +43,39 @@ class MatureExitManager:
         if minutes_held < _inf_win and pnl_pct <= _inf_pct:
             return f"Mature Infant Dump ({pnl_pct*100:.0f}%)"
 
-        # Trailing stop for mature coins (Динамический трейлинг: даём ракетам воздух перед +200% мунбегом)
+        # 1. ГАРАНТИРОВАННЫЙ НЕСНИЖАЕМЫЙ ПОРОГ ПРИБЫЛИ (PROFIT FLOOR LOCK)
+        max_pnl_pct = (position.max_price_usd - position.entry_price_usd) / position.entry_price_usd if position.entry_price_usd else 0
+        _floor_pnl = None
+        if max_pnl_pct >= 2.00:       # Пик +200%+ (3x) -> гарантируем минимум +100%
+            _floor_pnl = 1.00
+        elif max_pnl_pct >= 1.00:     # Пик +100%+ (2x) -> гарантируем минимум +50%
+            _floor_pnl = 0.50
+        elif max_pnl_pct >= 0.60:     # Пик +60%+ -> гарантируем минимум +30%
+            _floor_pnl = 0.30
+        elif max_pnl_pct >= 0.40:     # Пик +40%+ (кейс binancians +47%) -> гарантируем минимум +20%
+            _floor_pnl = 0.20
+        elif max_pnl_pct >= 0.25:     # Пик +25%+ -> гарантируем минимум +10%
+            _floor_pnl = 0.10
+        elif max_pnl_pct >= 0.15:     # Пик +15%+ -> гарантируем минимум +4%
+            _floor_pnl = 0.04
+        if _floor_pnl is not None and pnl_pct <= _floor_pnl:
+            return f"Mature Profit Floor (+{_floor_pnl*100:.0f}% locked after peak +{max_pnl_pct*100:.0f}%)"
+
+        # 2. ОСНОВНОЙ ПЛОТНЫЙ ТРЕЙЛИНГ-СТОП (Динамическая фиксация позиции)
         if hasattr(config, 'TRAILING_ACTIVATION_PCT'):
-            max_pnl_pct = (position.max_price_usd - position.entry_price_usd) / position.entry_price_usd
-            if max_pnl_pct >= config.TRAILING_ACTIVATION_PCT:
+            if max_pnl_pct >= getattr(config, 'TRAILING_ACTIVATION_PCT', 0.15):
                 if max_pnl_pct >= 3.0:
-                    _trail_dist = 0.30
-                elif max_pnl_pct >= 2.0 or getattr(position, "is_moonbag", False):
                     _trail_dist = 0.25
+                elif max_pnl_pct >= 2.0 or getattr(position, "is_moonbag", False):
+                    _trail_dist = 0.20
                 elif max_pnl_pct >= 1.0:
-                    _trail_dist = float(getattr(config, "TRAILING_RUNNER_DISTANCE_PCT", 0.18))  # Подтягиваем до 18% (не отдаём китам 50% прибыли!)
+                    _trail_dist = float(getattr(config, "TRAILING_RUNNER_DISTANCE_PCT", 0.16))
                 elif max_pnl_pct >= 0.50:
-                    _trail_dist = 0.18
+                    _trail_dist = 0.14
+                elif max_pnl_pct >= 0.25:
+                    _trail_dist = 0.12
                 else:
-                    _trail_dist = max(0.15, float(getattr(config, "TRAILING_DISTANCE_PCT", 0.15)))
+                    _trail_dist = float(getattr(config, "TRAILING_DISTANCE_PCT", 0.10))
 
                 drop_from_max = (position.max_price_usd - current_price) / position.max_price_usd
                 if drop_from_max >= _trail_dist:
@@ -104,7 +123,7 @@ class MatureExitManager:
         return None
 
 class TrailingExitManager:
-    def __init__(self, trail_pct=0.30, min_profit=0.50):
+    def __init__(self, trail_pct=0.12, min_profit=0.40):
         self.trail_pct = trail_pct
         self.min_profit = min_profit
     
@@ -117,16 +136,16 @@ class TrailingExitManager:
         if pnl <= -0.40:
             return "Moonshot Hard Stop (-40%)"
         
-        # Частичный тейк после +50% минимального профита
+        # Частичный тейк после +40% минимального профита
         if max_pnl >= self.min_profit and not getattr(position, 'tp_1_hit', False):
             position.tp_1_hit = True
-            return "Moonshot TP +50% (30% продано)"
+            return "Moonshot TP +40% (30% продано)"
         
-        # Trailing 30% после первого TP
+        # Trailing 12% после первого TP (не даём сливать 30% прибыли)
         if getattr(position, 'tp_1_hit', False):
             trail_stop = position.max_price_usd * (1 - self.trail_pct)
             if current_price <= trail_stop:
-                return "Moonshot Trailing Stop (-30% от пика)"
+                return f"Moonshot Trailing Stop (-{int(self.trail_pct*100)}% от пика)"
         
         # Дополнительные уровни тейка (5x/20x/100x) — симулировано в backtest
         for pct, label in [(5.0, "5x"), (20.0, "20x"), (100.0, "100x")]:

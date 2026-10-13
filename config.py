@@ -64,16 +64,16 @@ TP1_TRIGGER_PCT = 0.25   # +25%: фиксируем 20% позиции (поду
 TP2_TRIGGER_PCT = 1.00   # +100% (2x удвоение!): фиксируем 35% позиции — полный возврат тела входа ($15 в карман!)
 MOONBAG_TRIGGER_PCT = 2.00 # +200% (3x утроение!): фиксируем 50% оставшейся позиции
 
-# Trailing Stop & Whale Protection
-TRAILING_ACTIVATION_PCT = 0.25  # Активируем трейлинг при +25%
-TRAILING_DISTANCE_PCT = 0.15  # 15% воздуха на раннем этапе
-TRAILING_RUNNER_DISTANCE_PCT = 0.18 # 18% воздуха на иксах (+100%..+200%): подтягиваем трейлинг, не отдаём китам 50% прибыли!
-SCALP_PROFIT_ENABLED = False  # Скальп-срез +5% выключен
+# Trailing Stop & Profit Protection (Идеальный баланс: дышит при шуме 8-10%, но не отдает пик)
+TRAILING_ACTIVATION_PCT = 0.15  # Начинаем трейлинг от +15%
+TRAILING_DISTANCE_PCT = 0.12    # 12% воздуха (держит микро-тени свечей 8-10%, не выбивая ракету)
+TRAILING_RUNNER_DISTANCE_PCT = 0.15 # 15% воздуха на раннерах (+50%..+100%)
+SCALP_PROFIT_ENABLED = False    # Скальп-срез +5% выключен
 
 # Whale Dump Guard & Crash Protection
-WHALE_DUMP_GUARD_PCT = 0.20 # Если в прибыли (maxp >= 30%) цена падает на 20% за <15с — моментальный выход от китового слива
-EVM_RUNNER_CRASH = 0.25    # Было 0.45: при сбросе кита на 25% за 60с режем сразу (не ждём -50% дампа)
-EVM_NORMAL_CRASH = 0.25    # Сброс на 25%
+WHALE_DUMP_GUARD_PCT = 0.15     # Слив на 15% за <15с при наличии прибыли — моментальный выход
+EVM_RUNNER_CRASH = 0.20         # Сброс на 20% за 60с режем сразу (не ждём дальнейшего дампа)
+EVM_NORMAL_CRASH = 0.20         # Сброс на 20%
 
 # Breakeven: пик был +30%+, а цена вернулась ко входу — ракета сдохла, выходим в ноль (pnl <= 0)
 BREAKEVEN_PCT = 0.30
