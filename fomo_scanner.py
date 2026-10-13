@@ -15,15 +15,13 @@ async def fomo_loop(analyzer, tracker):
     gt_url = "https://api.geckoterminal.com/api/v2/networks/solana/trending_pools"
     headers = {"Accept": "application/json", "User-Agent": "Mozilla/5.0"}
     
-    keywords = ["pump", "meme", "dog", "cat", "ai", "trump", "sol", "pepe"]
-    
     seen = set()
     
     while True:
         try:
             mints = []
             
-            # 1. Свежие профили и бусты
+            # 1. Свежие профили и бусты DexScreener
             for url in ds_urls:
                 try:
                     status, data = await fetch_json(url, headers=headers, timeout=10, retries=1)
@@ -33,26 +31,19 @@ async def fomo_loop(analyzer, tracker):
                                 mints.append(item["tokenAddress"])
                 except Exception:
                     pass
-            
-            # 2. Ротация поиска DexScreener (Тренды по тегам)
-            random.shuffle(keywords)
-            for kw in keywords[:3]:  # Берем 3 случайных тега за проход
-                try:
-                    status, data = await fetch_json(f"https://api.dexscreener.com/latest/dex/search?q={kw}", headers=headers, timeout=10, retries=1)
-                    if status == 200 and data and "pairs" in data:
-                        for pair in data.get("pairs", []):
-                            if pair.get("chainId") == "solana":
-                                mints.append(pair.get("baseToken", {}).get("address"))
-                except Exception:
-                    pass
 
-            # 3. GeckoTerminal
+            # 2. GeckoTerminal ТОП-тренды (только с реальным импульсом m5 >= 3.0%)
             try:
                 status, data = await fetch_json(gt_url, headers=headers, timeout=10, retries=1)
                 if status == 200 and data and "data" in data:
                     for pool in data.get("data", []):
                         try:
-                            bid = pool["relationships"]["base_token"]["data"]["id"]
+                            attrs = pool.get("attributes", {})
+                            chg_m5 = float((attrs.get("price_change_percentage") or {}).get("m5", 0) or 0)
+                            # Не шлём во флете: только монеты с реальным импульсом m5 >= 3.0%
+                            if chg_m5 < 3.0:
+                                continue
+                            bid = pool.get("relationships", {}).get("base_token", {}).get("data", {}).get("id", "")
                             m = bid.split("_", 1)[1] if "_" in bid else bid
                             if m and len(m) > 30:
                                 mints.append(m)

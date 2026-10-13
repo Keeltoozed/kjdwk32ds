@@ -73,7 +73,7 @@ async def _listen_wallets(chain: str, url: str):
     while True:
         try:
             print(f"🐋 EVM-COPY {chain}: подключаюсь ({len(wallets)} китов)...")
-            async with websockets.connect(url, max_size=10 ** 6, ping_interval=20) as ws:
+            async with websockets.connect(url, max_size=10 ** 6, ping_interval=30, ping_timeout=60) as ws:
                 await ws.send(json.dumps({
                     "jsonrpc": "2.0", "id": 21, "method": "eth_subscribe",
                     "params": ["logs", {"topics": [TOPIC_TRANSFER, None, padded]}]}))
@@ -94,7 +94,10 @@ async def _listen_wallets(chain: str, url: str):
                     except Exception:
                         continue
         except Exception as e:
-            print(f"⚠️ EVM-COPY {chain}: {type(e).__name__} {e}. Реконнект 5с...")
+            if "ConnectionClosed" in type(e).__name__ or "keepalive" in str(e).lower():
+                print(f"🔄 EVM-COPY {chain}: переподключение к WSS...")
+            else:
+                print(f"⚠️ EVM-COPY {chain}: {type(e).__name__} {e}. Реконнект 5с...")
             await asyncio.sleep(5)
 
 
@@ -171,7 +174,7 @@ async def _listen_chain(chain: str, url: str, quotes: set):
     while True:
         try:
             print(f"🔌 EVM-WSS {chain}: подключаюсь...")
-            async with websockets.connect(url, max_size=10 ** 6, ping_interval=20) as ws:
+            async with websockets.connect(url, max_size=10 ** 6, ping_interval=30, ping_timeout=60) as ws:
                 for i, (factory, topic) in enumerate(((V3_FACTORY, v3), (V2_FACTORY, v2))):
                     await ws.send(json.dumps({
                         "jsonrpc": "2.0", "id": 10 + i, "method": "eth_subscribe",
@@ -191,7 +194,10 @@ async def _listen_chain(chain: str, url: str, quotes: set):
                     except Exception:
                         continue
         except Exception as e:
-            print(f"⚠️ EVM-WSS {chain}: {type(e).__name__} {e}. Реконнект 5с...")
+            if "ConnectionClosed" in type(e).__name__ or "keepalive" in str(e).lower():
+                print(f"🔄 EVM-WSS {chain}: сокет закрыт узлом. Переподключение через 5с...")
+            else:
+                print(f"⚠️ EVM-WSS {chain}: {type(e).__name__} {e}. Реконнект 5с...")
             await asyncio.sleep(5)
 
 
