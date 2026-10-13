@@ -277,76 +277,108 @@ async def verify_evm_token(address: str, chain: str, pair_data: dict = None) -> 
     if not address:
         return True, "no-addr"
     if chain in ("robinhood",):
-        # Robinhood Chain (4663) ончейн-аудит и валидация метаданных.
-        # Отсекает 100% рагпулов (BATONA, HYPOCRITE, ¥) без занижения ставки $15.
+        # Robinhood Chain (4663) строгий ончейн-аудит: Blockscout верификация + байткод + LP-Burn + Fail-Closed.
+        # Защита от рагпулов (LVR, FAST, BATONA, ¥) без дыр fail-open.
         if not pair_data or not isinstance(pair_data, dict):
             return False, "нет данных пары для Robinhood"
         
-        # 1. Возрастной барьер: не входить в первые 3 минуты (зона минутных флеш-рагов дева)
+        # 1. Возрастной барьер: не входить в первые 5 минут (зона flash-рагов дева)
         _c_ms = pair_data.get("pairCreatedAt") or 0
         import time as _t_rob
         _a_min = ((_t_rob.time() * 1000 - _c_ms) / 60000.0) if _c_ms else 999.0
-        if _a_min < 3.0:
-            return False, f"возраст {_a_min:.1f}м < 3.0м — ранняя flash-rug зона"
+        if _a_min < 5.0:
+            return False, f"возраст {_a_min:.1f}м < 5.0м — ранняя flash-rug зона"
             
-        # 2. Проверка социальных ссылок: все раги (BATONA, HYPOCRITE, ¥) имели 0 ссылок.
-        # Ракеты (MINU, Altai) имели подтверждённые Twitter / сайт.
+        # 2. Проверка социальных ссылок: строгая валидация (не пустые заглушки)
         info = pair_data.get("info") or {}
         links = (info.get("socials") or []) + (info.get("websites") or [])
-        if not links:
-            return False, "нет соцсетей/сайта (анонимный дев-раг)"
+        if not links or len(links) < 2:
+            return False, "менее 2 ссылок (соцсети/сайт) — анонимный дев-раг"
             
-        # 3. Наличие реальных продаж в пуле
+        # 3. Наличие реальных продаж и глубина пула
         txns_m5 = ((pair_data.get("txns") or {}).get("m5") or {})
         s5 = int(txns_m5.get("sells", 0) or 0)
         b5 = int(txns_m5.get("buys", 0) or 0)
         vol5 = float(((pair_data.get("volume") or {}).get("m5", 0) or 0))
-        if s5 < 3:
-            return False, f"продаж за 5м {s5} < 3 — ханипот или заблокированный стакан"
-        if b5 < s5 * 1.1:
+        liq = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
+        if s5 < 5:
+            return False, f"продаж за 5м {s5} < 5 — ханипот или заблокированный стакан"
+        if b5 < s5 * 1.2:
             return False, f"нет перевеса покупателей ({b5}b/{s5}s)"
-        if vol5 < 3000:
-            return False, f"объем за 5м ${vol5:,.0f} < $3,000 — искусственный пул"
-            
-        # 4. Ончейн-проверка концентрации у создателя через RPC
+        if vol5 < 5000:
+            return False, f"объем за 5м ${vol5:,.0f} < $5,000 — искусственный пул"
+        if liq < 20000:
+            return False, f"ликвидность ${liq:,.0f} < $20,000 — тонкий пул"
+
+        # 4. Ончейн-аудит байткода, верификации и LP-лока через RPC / Blockscout
         try:
+            from http_client import fetch_json, get_session
             import aiohttp
-            from http_client import get_session
             _rpc_url = getattr(config, "ROBINHOOD_RPC_URL", "https://rpc.mainnet.chain.robinhood.com")
-            _TRANSFER = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
-            _ZERO_T = "0x" + "0" * 64
+            
+            # А. Проверка верификации исходного кода на Blockscout
+            _bs_url = f"https://robinhoodchain.blockscout.com/api?module=contract&action=getsourcecode&address={address}"
+            _bs_st, _bs_data = await fetch_json(_bs_url, timeout=6, retries=1)
+            if _bs_st == 200 and isinstance(_bs_data, dict):
+                _res_list = _bs_data.get("result")
+                if isinstance(_res_list, list) and len(_res_list) > 0:
+                    _c_info = _res_list[0]
+                    _src = str(_c_info.get("SourceCode", "") or "").strip()
+                    _abi = str(_c_info.get("ABI", "") or "").strip()
+                    if not _src or "Contract source code not verified" in _abi:
+                        return False, "контракт не верифицирован на Blockscout (закрытый код = риск рага)"
+                elif str(_bs_data.get("message", "")).lower() == "notok":
+                    return False, "контракт не найден или не верифицирован на Blockscout"
+
+            # Б. Байткод-аудит (поиск скрытого минта, блэклистов и паузы)
             _s_sess = await get_session()
-            _pl = [
-                {"jsonrpc": "2.0", "id": 1, "method": "eth_call", "params": [{"to": address, "data": "0x18160ddd"}, "latest"]},
-                {"jsonrpc": "2.0", "id": 2, "method": "eth_blockNumber", "params": []}
-            ]
-            async with _s_sess.post(_rpc_url, json=_pl, timeout=aiohttp.ClientTimeout(total=4)) as _r_rpc:
-                _res_rpc = await _r_rpc.json()
-            _sup_h = (_res_rpc[0].get("result") or "") if isinstance(_res_rpc, list) and len(_res_rpc) > 0 else ""
-            if _sup_h and _sup_h != "0x":
-                _tot_sup = int(_sup_h, 16) / 1e18
-                if _tot_sup > 0:
-                    _hd = int(_res_rpc[1]["result"], 16)
-                    _age_s = max(60, (_t_rob.time() - (_c_ms / 1000.0))) if _c_ms else 1800
-                    _st_blk = _hd - int((_age_s + 60) / 0.10387)
-                    _l_req = {
-                        "jsonrpc": "2.0", "id": 3, "method": "eth_getLogs",
-                        "params": [{"fromBlock": hex(max(1, _st_blk - 2500)), "toBlock": hex(_st_blk + 5000), "address": address, "topics": [_TRANSFER, _ZERO_T]}]
-                    }
-                    async with _s_sess.post(_rpc_url, json=_l_req, timeout=aiohttp.ClientTimeout(total=4)) as _lr:
-                        _l_res = await _lr.json()
-                    _logs = _l_res.get("result") or []
-                    if _logs and isinstance(_logs, list):
-                        _minter = "0x" + _logs[0]["topics"][2][-40:]
-                        _b_data = "0x70a08231" + _minter[2:].lower().zfill(64)
-                        async with _s_sess.post(_rpc_url, json={"jsonrpc": "2.0", "id": 4, "method": "eth_call", "params": [{"to": address, "data": _b_data}, "latest"]}, timeout=aiohttp.ClientTimeout(total=3)) as _br:
-                            _b_res = await _br.json()
-                        _m_bal = int(_b_res.get("result", "0x0"), 16) / 1e18
-                        _pct = (_m_bal / _tot_sup) * 100.0
-                        if _pct > 15.0:
-                            return False, f"создатель держит {_pct:.1f}% (>15%) эмиссии — раг-риск"
-        except Exception:
-            pass
+            _pl_code = {"jsonrpc": "2.0", "id": 1, "method": "eth_getCode", "params": [address, "latest"]}
+            async with _s_sess.post(_rpc_url, json=_pl_code, timeout=aiohttp.ClientTimeout(total=4)) as _r_c:
+                _res_c = await _r_c.json()
+            _bytecode = str(_res_c.get("result", "") or "").lower()
+            if not _bytecode or _bytecode in ("0x", "0x0"):
+                return False, "нет байткода (не смарт-контракт)"
+                
+            # Проверка опасных селекторов функций
+            _dangerous_selectors = {
+                "40c10f19": "скрытый минт mint(address,uint256)",
+                "a0712d68": "скрытый минт mint(uint256)",
+                "42f21696": "блэклист blacklist(address)",
+                "83e2007e": "isBlacklisted",
+                "8456cb59": "пауза торговли pause()",
+                "03a118d5": "пауза торговли pause(bool)"
+            }
+            for _sel, _desc in _dangerous_selectors.items():
+                if _sel in _bytecode:
+                    return False, f"бэкдор в байткоде токена: {_desc}"
+                    
+            # В. Проверка сжигания ликвидности (LP Burn Guard)
+            _pair_addr = pair_data.get("pairAddress")
+            if _pair_addr:
+                _DEAD = "000000000000000000000000000000000000dead".zfill(64)
+                _ZERO = "0000000000000000000000000000000000000000".zfill(64)
+                _pl_lp = [
+                    {"jsonrpc": "2.0", "id": 10, "method": "eth_call", "params": [{"to": _pair_addr, "data": "0x18160ddd"}, "latest"]}, # totalSupply
+                    {"jsonrpc": "2.0", "id": 11, "method": "eth_call", "params": [{"to": _pair_addr, "data": f"0x70a08231{_DEAD}"}, "latest"]}, # dead
+                    {"jsonrpc": "2.0", "id": 12, "method": "eth_call", "params": [{"to": _pair_addr, "data": f"0x70a08231{_ZERO}"}, "latest"]}  # zero
+                ]
+                async with _s_sess.post(_rpc_url, json=_pl_lp, timeout=aiohttp.ClientTimeout(total=4)) as _r_lp:
+                    _res_lp = await _r_lp.json()
+                if isinstance(_res_lp, list) and len(_res_lp) >= 3:
+                    _tot_lp_h = _res_lp[0].get("result", "0x")
+                    _dead_lp_h = _res_lp[1].get("result", "0x")
+                    _zero_lp_h = _res_lp[2].get("result", "0x")
+                    if _tot_lp_h and _tot_lp_h != "0x":
+                        _tot_lp = int(_tot_lp_h, 16)
+                        _dead_lp = int(_dead_lp_h, 16) if _dead_lp_h and _dead_lp_h != "0x" else 0
+                        _zero_lp = int(_zero_lp_h, 16) if _zero_lp_h and _zero_lp_h != "0x" else 0
+                        if _tot_lp > 0:
+                            _burnt_pct = ((_dead_lp + _zero_lp) / _tot_lp) * 100.0
+                            if _burnt_pct < 80.0:
+                                return False, f"ликва пула не сожжена ({_burnt_pct:.1f}% < 80%) — риск вывода ликвидности девом"
+        except Exception as _e_rob:
+            # СТРОГИЙ FAIL-CLOSED: если Robinhood RPC не ответил или упал с ошибкой — НЕ ВХОДИТЬ!
+            return False, f"ошибка ончейн-аудита Robinhood ({type(_e_rob).__name__}) — блок по безопасности"
 
         return True, ""
 

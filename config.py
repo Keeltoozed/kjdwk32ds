@@ -113,7 +113,8 @@ ROBINHOOD_DS_SLUG = "robinhood"  # slug DexScreener (НЕ 4663 - тот верн
 ROBINHOOD_GT_NETWORK = "robinhood"  # slug GeckoTerminal
 ROBINHOOD_RPC_URL = "https://rpc.mainnet.chain.robinhood.com"
 ROBINHOOD_EXPLORER = "https://robinhoodchain.blockscout.com"
-ROBINHOOD_MIN_LIQUIDITY = 15000  # Пулы от $15к (отсекаем тонкие мусорные пулы $8к)
+ROBINHOOD_MIN_LIQUIDITY = 20000  # Пулы от $20к (отсекаем тонкие мусорные пулы)
+ROBINHOOD_MIN_AGE_MIN = 5.0  # Не моложе 5 минут (flash-rug зона девов)
 ROBINHOOD_SCAN_INTERVAL = 90  # Было 25: 3 сети x 2 GT-запроса = 429. EVM-импульсы живут дольше solana-пампов
 EVM_MIN_M5_PCT = 7.0  # Было 10.0: окно входа шире = чаще сделки. Раги держат остальные гейты
 EVM_RESCAN_COOLDOWN = 300  # Было 600: перепроверка отклонённых через 5 мин (волна может прийти позже)
