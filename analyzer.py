@@ -928,9 +928,11 @@ class Analyzer:
         if m5 < _evm_min_m5:
             return self._deny(address, f"flat m5 {m5:+.1f}%", f"· [{tag}] {symbol}: флет m5 {m5:+.1f}%")
         _max_m5 = 60.0
-        # При органическом перевесе покупателей (b5 >= 1.5*s5, liq >= min_liq, m1 <= 4.0%)
-        # расширяем коридор до 85%, чтобы забирать сильные выносы (JARETH/ANIMATES/TRENCHTV/DOPE) без риска накрутки
-        if chain in ("robinhood", "base", "bsc") and liq >= min_liq and s5 > 0 and (b5 / s5) >= 1.5 and m1 <= 4.0 and not self.is_churn(b5, s5, m5, liq=liq):
+        # При органическом перевесе покупателей (b5 >= 1.5*s5, liq >= min_liq, m1 <= 6.0%)
+        # расширяем коридор до 135% на глубоких пулах ($30k+), чтобы забирать мощные ракеты (NOM +434%, CAP +319%, DOPE)
+        if chain in ("robinhood", "base", "bsc") and liq >= 30000.0 and s5 > 0 and (b5 / s5) >= 1.5 and m1 <= 6.0 and not self.is_churn(b5, s5, m5, liq=liq):
+            _max_m5 = 135.0
+        elif chain in ("robinhood", "base", "bsc") and liq >= min_liq and s5 > 0 and (b5 / s5) >= 1.5 and m1 <= 4.0 and not self.is_churn(b5, s5, m5, liq=liq):
             _max_m5 = 85.0
 
         if m5 > _max_m5:

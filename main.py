@@ -720,8 +720,18 @@ async def growth_loop(analyzer, tracker):
                     held = (_t.time() - pos.entry_time) / 60
                     reason = None
                     prev_ts = getattr(pos, "price_checked_at", 0.0)
+                    _g_floor = None
+                    if maxp >= 0.50:
+                        _g_floor = 0.30
+                    elif maxp >= 0.25:
+                        _g_floor = 0.12
+                    elif maxp >= 0.15:
+                        _g_floor = 0.05
+
                     if prev_ts and (_t.time() - prev_ts) < 300 and prev > 0 and cur <= prev * 0.80:
                         reason = f"GROWTH Crash ({(1 - cur / prev) * 100:.0f}%)"
+                    elif _g_floor is not None and pnl <= _g_floor:
+                        reason = f"GROWTH Profit Floor (+{_g_floor * 100:.0f}% locked after peak +{maxp * 100:.0f}%)"
                     elif maxp >= getattr(config, "GROWTH_TRAIL_ACT", 0.08) and \
                             (pos.max_price_usd - cur) / pos.max_price_usd >= getattr(config, "GROWTH_TRAIL_DIST", 0.12):
                         reason = f"GROWTH Trailing (peak +{maxp * 100:.0f}%)"
