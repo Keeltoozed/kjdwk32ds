@@ -55,6 +55,7 @@ KILL_SWITCH_ENABLED = True
 MAX_DAILY_LOSS_PCT = 0.25
 STOP_LOSS_PCT = -0.20  # Вернули по просьбе: стоп -20% чтобы ракеты дышали
 SNIPER_ENTRIES_ENABLED = False
+VIP_ENTRIES_ENABLED = False  # ОТКЛЮЧЕНО: защита от фейковых шипов и wash-trading раздач (UNPEG/FIBONACCI)
 TIME_EXIT_MINUTES = 60  # Если за 30 минут нет пампа - выходим
 TIME_EXIT_PROFIT_REQ = 0.0
 
@@ -128,6 +129,7 @@ BASE_SCAN_INTERVAL = 90  # как Robinhood: реже = без 429
 # Тот же движок, slug "bsc".
 BSC_ENABLED = True
 BSC_SCAN_INTERVAL = 90
+BSC_MIN_LIQUIDITY = 15000.0  # Порог $15k (открывает ракеты типа XUSD, SHARE, ARX без риска копеечных скамов)
 
 # --- Сайзинг: база $6, conviction x2 ---
 # Тир решает ПОДТВЕРЖДЁННЫЙ импульс рынка (m5 + вести), а не скор модели
@@ -162,7 +164,7 @@ GROWTH_TRAIL_ACT = 0.08  # трейлинг с +8%
 GROWTH_TRAIL_DIST = 0.12  # дистанция 12%
 GROWTH_STAGNANT_MIN = 120  # флет режем через 2 часа, не 7 минут
 GROWTH_MAX_POS = 3  # не больше 3 трендовых позиций
-GROWTH_SIZE_USD = 6.0
+GROWTH_SIZE_USD = 15.0  # Ордер $15 (по запросу пользователя, было 6.0)
 GROWTH_INTERVAL = 300  # опрос вотчлиста каждые 5 мин
 
 SNIPER_MIN_UNIQUE_BUYERS = 10

@@ -1098,7 +1098,15 @@ async def _evm_chain_loop(analyzer, tracker, chain: str):
                         if ok is None:
                             processed[addr] = _t.time() - _recooldown + 30
                             continue
-                        processed[addr] = _t.time()
+                        if ok is False and "flat" in analyzer.get_signal(addr):
+                            td_tmp = await evm_data.get_token_data(addr, chain)
+                            _lq_tmp = float(((td_tmp or {}).get("liquidity", {}) or {}).get("usd", 0) or 0)
+                            if _lq_tmp >= 30000:
+                                processed[addr] = _t.time() - _recooldown + 60  # Быстрый опрос через 60с для глубоких пулов (DOPE/NOICE)
+                            else:
+                                processed[addr] = _t.time()
+                        else:
+                            processed[addr] = _t.time()
                         analyzer.log_scan(addr[:8], addr, tag,
                                           ok, getattr(analyzer, "last_score", 0.0))
                         if ok is True and len(tracker.get_open_positions()) < config.MAX_CONCURRENT_POSITIONS:

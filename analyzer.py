@@ -217,12 +217,15 @@ class Analyzer:
         return False
 
     @staticmethod
-    def is_churn(b5, s5, m5, n_min: int = 40) -> bool:
+    def is_churn(b5, s5, m5, n_min: int = 40, liq: float = 0.0) -> bool:
         """CHURN/WASH (идея ChainLens: trade-pattern анализ): высокий оборот
         без перевеса покупателей — накрутка/раздача, а не органический FOMO.
         Живой импульс давится покупателями; топтание с оборотом съедается
         комиссиями и стопами. Две зоны: слабый импульс без перевеса (<1.2)
-        и вертикаль без перевеса (<1.15 — раздача под свечу)."""
+        и вертикаль без перевеса (<1.15 — раздача под свечу).
+        ВАЖНО: В пулах от $50k (кейс MOBY $417k) борьба быков и медведей — это живой рынок, а не скам-накрутка."""
+        if liq >= 50000.0:
+            return False
         try:
             b5 = float(b5 or 0)
             s5 = float(s5 or 0)
@@ -655,7 +658,8 @@ class Analyzer:
                 if _b5 < _s5 * mult:
                     print(f"🚫 [VELOCITY] {mint}: buy/sell m5 {_b5}/{_s5} < {mult}x — {'(лотерея, ослаблено)' if _lottery else 'нет буфера покупателей'}")
                     return False
-            if not _lottery and self.is_churn(_b5, _s5, _m5):
+            _cur_liq = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
+            if not _lottery and self.is_churn(_b5, _s5, _m5, liq=_cur_liq):
                 print(f"🚫 [CHURN] {mint}: {_b5 + _s5} сделок, b/s {_b5 / _s5:.2f}, m5 {_m5:+.1f}% — накрутка, не FOMO.")
                 return False
             _socials = (pair_data.get("info") or {}).get("socials") or []
@@ -926,13 +930,13 @@ class Analyzer:
         _max_m5 = 60.0
         # При органическом перевесе покупателей (b5 >= 1.5*s5, liq >= min_liq, m1 <= 4.0%)
         # расширяем коридор до 85%, чтобы забирать сильные выносы (JARETH/ANIMATES/TRENCHTV/DOPE) без риска накрутки
-        if chain in ("robinhood", "base", "bsc") and liq >= min_liq and s5 > 0 and (b5 / s5) >= 1.5 and m1 <= 4.0 and not self.is_churn(b5, s5, m5):
+        if chain in ("robinhood", "base", "bsc") and liq >= min_liq and s5 > 0 and (b5 / s5) >= 1.5 and m1 <= 4.0 and not self.is_churn(b5, s5, m5, liq=liq):
             _max_m5 = 85.0
 
         if m5 > _max_m5:
             return self._deny(address, f"top m5 {m5:+.0f}%", f"🚫 [{tag}-OVERHEAT] {symbol}: m5 {m5:+.1f}% — вертикаль уже прошла, вход = вершина.")
         
-        if self.is_churn(b5, s5, m5):
+        if self.is_churn(b5, s5, m5, liq=liq):
             return self._deny(address, f"churn {b5}/{s5} m5 {m5:+.1f}%",
                               f"🚫 [{tag}-CHURN] {symbol}: {b5 + s5} сделок без перевеса (b/s {b5 / (s5+1):.2f}) — накрутка, не FOMO.")
         if m1 > 5.0:
