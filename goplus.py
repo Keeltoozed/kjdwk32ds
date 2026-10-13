@@ -289,11 +289,11 @@ async def verify_evm_token(address: str, chain: str, pair_data: dict = None) -> 
         if _a_min < 5.0:
             return False, f"возраст {_a_min:.1f}м < 5.0м — ранняя flash-rug зона"
             
-        # 2. Проверка социальных ссылок: строгая валидация (не пустые заглушки)
+        # 2. Проверка социальных ссылок: требуем хотя бы 1 валидную ссылку (Twitter/TG/сайт)
         info = pair_data.get("info") or {}
         links = (info.get("socials") or []) + (info.get("websites") or [])
-        if not links or len(links) < 2:
-            return False, "менее 2 ссылок (соцсети/сайт) — анонимный дев-раг"
+        if not links or len(links) < 1:
+            return False, "нет ссылок (соцсети/сайт) — анонимный дев-раг"
             
         # 3. Наличие реальных продаж и глубина пула
         txns_m5 = ((pair_data.get("txns") or {}).get("m5") or {})

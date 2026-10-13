@@ -42,7 +42,7 @@ PAPER_PORTFOLIO_FILE = "portfolio.json"
 # Ключ слепка в Supabase. ВАЖНО: у каждого бота свой, иначе два бота на одной
 # базе перезаписывают друг друга (сделки появляются и пропадают).
 # Задай в Render → Environment: первый бот PF_IDEBOT, второй PF_QYO7.
-PORTFOLIO_SNAPSHOT_MINT = (os.getenv("PORTFOLIO_SNAPSHOT_MINT", "") or "").strip().strip('"').strip("'") or "PORTFOLIO_STATE_V3"
+PORTFOLIO_SNAPSHOT_MINT = (os.getenv("PORTFOLIO_SNAPSHOT_MINT", "") or "").strip().strip('"').strip("'") or "PORTFOLIO_STATE_V4"
 INITIAL_BALANCE_USD = 120.0  # торговый пул ($150 депо - $30 газ)    # Стартовый капитал
 REINVEST_PERCENT = 5.0  # Было 3%: цель $10/день требует сайз. 5% пула на сделку
 VIRTUAL_POSITION_SIZE_USD = 15.0
@@ -129,8 +129,7 @@ BASE_SCAN_INTERVAL = 90  # как Robinhood: реже = без 429
 # === BSC (GSTOCK и co с fomo.family сидят там) ===
 # Тот же движок, slug "bsc".
 BSC_ENABLED = True
-BSC_SCAN_INTERVAL = 90
-BSC_MIN_LIQUIDITY = 12000.0  # Порог $12k (не пропускает ракеты MDUCK $19k, 币安人 $18k, XUSD $22k)
+BSC_MIN_LIQUIDITY = 6000.0  # Порог $6k (не пропускает ракеты вроде DOPEUS $6.3k +64%, 币安理论 $7.8k +169%)
 
 # --- Сайзинг: база $6, conviction x2 ---
 # Тир решает ПОДТВЕРЖДЁННЫЙ импульс рынка (m5 + вести), а не скор модели
@@ -192,24 +191,24 @@ FAST_EARLY_MAX_AGE_SEC = 180  # early-микро-вход только если 
 JUP_API_KEY = os.getenv("JUP_API_KEY", "")
 JUP_INTERVAL = 120
 
-# TG-превью коллов без ключей (t.me/s опрос). Пишет в fomo_signals.txt.
-TG_PREVIEW_ENABLED = True
+# TG-превью коллов: ОТКЛЮЧЕНО (защита от скам-коллов и дев-дампов)
+TG_PREVIEW_ENABLED = False
 TG_PREVIEW_CHANNELS = ["pumpfunmemecalls", "pumpfunearlytrending", "cherrytrending"]
 TG_PREVIEW_INTERVAL = 90
 
-# fomoapi.io WS (покупки топов fomo.family). Без ключа — демо с задержкой 60с.
+# fomoapi.io WS: ОТКЛЮЧЕНО
 FOMO_API_KEY = os.getenv("FOMO_API_KEY", "")
-FOMO_WS_ENABLED = True
+FOMO_WS_ENABLED = False
 FOMO_FOLLOW_TRADERS = []
 FOMO_MIN_USD = 100
 FOMO_BOARDS_INTERVAL = 7200
-USE_FOMO_SIGNALS = True  # очередь fomo_signals.txt покупается через те же гейты
+USE_FOMO_SIGNALS = False  # ОТКЛЮЧЕНО: исключает попадание любых токсичных памп-энд-дамп коллов в бота
 MAX_FOMO_BUYS_PER_PASS = 3  # бёрст-контроль: не больше 3 входов за проход очереди
 TG_MAX_SIZE_USD = 5.0  # кэп TG/FOMO-входа: $5 (защита от памп-энд-дампа каналов)
 TG_VIP_SIZE_USD = 5.0
 ROB_MAX_SIZE_USD = 15.0  # Robinhood: теперь защищён ончейн-проверкой и возрастом 3м+, сайз $15 (ставка не снижается)
 BSC_MAX_SIZE_USD = 15.0
-BSC_MIN_LIQUIDITY = 12000.0  # Пулы от $12к на BSC (вместо $25к)
+BSC_MIN_LIQUIDITY = 6000.0  # Пулы от $6к на BSC (вместо $12к)
 BSC_WEAK_SIZE_USD = 15.0   # Сайз $15 по запросу пользователя (ставка не снижается)
 
 # EVM tracking intervals (адаптивный опрос открытых позиций без 429)

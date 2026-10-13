@@ -585,6 +585,9 @@ async def fomo_signal_loop(analyzer, tracker):
                     _buys = 0
 
                     for raw in mints:
+                        if _evm_killed(tracker):
+                            print("🛑 FOMO KILL-SWITCH: дневной лимит убытка исчерпан, внешний сигнал отклонён.")
+                            continue
                         kind, mint, _src_ch = parse_signal_line(raw)
                         if not mint or mint in tracker.positions:
                             continue
@@ -1450,7 +1453,8 @@ def load_dashboard_portfolio():
         if url and key:
             from supabase import create_client
             sb = create_client(url, key)
-            res = sb.table("trades_pump").select("features").eq("mint", "PORTFOLIO_STATE_V3").execute()
+            _snap_key = getattr(config, "PORTFOLIO_SNAPSHOT_MINT", "PORTFOLIO_STATE_V3")
+            res = sb.table("trades_pump").select("features").eq("mint", _snap_key).execute()
             if res.data and res.data[0].get("features"):
                 cloud = json.loads(res.data[0]["features"]) or {}
     except Exception as e:

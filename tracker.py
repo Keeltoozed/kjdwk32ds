@@ -128,7 +128,8 @@ class PaperTracker:
         sb = self._supabase()
         if sb is not None:
             try:
-                res = sb.table("trades_pump").select("features").eq("mint", "PORTFOLIO_STATE_V3").execute()
+                _snap_key = getattr(config, "PORTFOLIO_SNAPSHOT_MINT", "PORTFOLIO_STATE_V3")
+                res = sb.table("trades_pump").select("features").eq("mint", _snap_key).execute()
                 if res.data and res.data[0].get("features"):
                     cloud = json.loads(res.data[0]["features"]) or {}
             except Exception as e:
@@ -177,8 +178,9 @@ class PaperTracker:
         if sb is None:
             return
         try:
+            _snap_key = getattr(config, "PORTFOLIO_SNAPSHOT_MINT", "PORTFOLIO_STATE_V3")
             sb.table("trades_pump").upsert({
-                "mint": "PORTFOLIO_STATE_V3",
+                "mint": _snap_key,
                 "features": json.dumps(data),
                 "confidence": 0,
                 "status": "SYSTEM"
