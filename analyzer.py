@@ -663,11 +663,12 @@ class Analyzer:
                 print(f"🚫 [CHURN] {mint}: {_b5 + _s5} сделок, b/s {_b5 / _s5:.2f}, m5 {_m5:+.1f}% — накрутка, не FOMO.")
                 return False
             _socials = (pair_data.get("info") or {}).get("socials") or []
+            _socials_unknown = bool(pair_data.get("_socials_unknown", False))
             _created = pair_data.get("pairCreatedAt") or 0
-            if _created:
+            if _created and not _socials_unknown:
                 _age_h = (time.time() * 1000 - _created) / 3.6e6
-                if _age_h < 6 and isinstance(_socials, list) and len(_socials) == 0 and not _lottery:
-                    print(f"🚫 [SOCIAL] {mint}: нет соцсетей при возрасте {_age_h:.1f}ч — высокий скам-риск.")
+                if _age_h < 6 and isinstance(_socials, list) and len(_socials) == 0 and not _lottery and _cur_liq < 25000:
+                    print(f"🚫 [SOCIAL] {mint}: нет соцсетей при возрасте {_age_h:.1f}ч и ликве <$25k — высокий скам-риск.")
                     return False
             print(f"✅ [ENTRY-CANDIDATE] {mint}: PULLBACK — импульс m5 {_m5:+.1f}%, откат m1 {_m1:+.1f}%, h1 {_h1:+.0f}%, b/s {_b}/{_s}. Кандидат на вход.")
         
@@ -680,24 +681,26 @@ class Analyzer:
             
         if is_vip:
             print(f"🚀 [VIP] {symbol}: Пропуск проверок клонов и соцсетей из-за гипер-моментума!")
+        else:
+            current_created_at = pair_data.get("pairCreatedAt", 0)
+            current_fdv = pair_data.get("fdv", 0)
+            if await self.is_clone(symbol, mint, current_created_at, current_fdv):
+                print(f"🚫 Мусор: Токен {symbol} является клоном! На DexScreener найден более старый/крупный оригинал.")
+                return False
+                
+            info = pair_data.get("info", {})
+            socials = info.get("socials", [])
+            websites = info.get("websites", [])
             
-        current_created_at = pair_data.get("pairCreatedAt", 0)
-        current_fdv = pair_data.get("fdv", 0)
-        if await self.is_clone(symbol, mint, current_created_at, current_fdv):
-            print(f"🚫 Мусор: Токен {symbol} является клоном! На DexScreener найден более старый/крупный оригинал.")
-            return False
+            has_twitter = any("twitter" in s.get("type", "").lower() or "x.com" in s.get("url", "").lower() for s in socials)
+            has_tg = any("telegram" in s.get("type", "").lower() or "t.me" in s.get("url", "").lower() for s in socials)
+            has_website = len(websites) > 0
             
-        info = pair_data.get("info", {})
-        socials = info.get("socials", [])
-        websites = info.get("websites", [])
-        
-        has_twitter = any("twitter" in s.get("type", "").lower() or "x.com" in s.get("url", "").lower() for s in socials)
-        has_tg = any("telegram" in s.get("type", "").lower() or "t.me" in s.get("url", "").lower() for s in socials)
-        has_website = len(websites) > 0
-        
-        if not (has_twitter or has_tg or has_website):
-            print(f"🚫 Мусор: У {mint} вообще нет ни одной соцсети или сайта.")
-            return False
+            _socials_unknown = bool(pair_data.get("_socials_unknown", False))
+            if not _socials_unknown and liquidity < 25000:
+                if not (has_twitter or has_tg or has_website):
+                    print(f"🚫 Мусор: У {mint} вообще нет ни одной соцсети или сайта.")
+                    return False
             
         try:
             import aiohttp
@@ -773,11 +776,26 @@ class Analyzer:
                     print(f"🚫 [АНТИСКАМ] Топ-10 держат {top_10_sum_pct:.1f}% (Лимит {max_allowed_pct}%). Блокируем.")
                     return False
             else:
-                print(f"⚠️ Не удалось проверить через RugCheck. Блокируем вход от греха подальше.")
-                return False
+                # Фоллбэк: если RugCheck временно недоступен (404/429), проверяем через GoPlus
+                try:
+                    import goplus as _gp
+                    _g_ok, _g_why = await _gp.check_solana(mint)
+                    if not _g_ok:
+                        print(f"🚫 [GOPLUS] {symbol} ({mint[:8]}): {_g_why} — блок входа.")
+                        return False
+                    print(f"🛡️ [GOPLUS] RugCheck недоступен, но GoPlus подтвердил безопасность {mint[:8]}.")
+                except Exception:
+                    print(f"⚠️ Не удалось проверить через RugCheck и GoPlus. Блокируем вход.")
+                    return False
         except Exception as e:
-            print(f"⚠️ Критическая ошибка при проверке RugCheck: {str(e)[:50]}. Блокируем вход.")
-            return False
+            print(f"⚠️ Ошибка RugCheck: {str(e)[:50]}.")
+            try:
+                import goplus as _gp
+                _g_ok, _g_why = await _gp.check_solana(mint)
+                if not _g_ok:
+                    return False
+            except Exception:
+                return False
         except Exception as e:
             print(f"⚠️ Ошибка Jito-bundle: {e}")
             return False

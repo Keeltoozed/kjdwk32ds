@@ -348,6 +348,15 @@ async def scanner_loop(analyzer, tracker):
                 tokens = await analyzer.fetch_latest_tokens()
                 mints_to_scan = [p.get("tokenAddress") for p in tokens if p.get("tokenAddress")]
 
+                # 1b. Органика Solana: GeckoTerminal Trending + свежие пулы Raydium и Pump.fun
+                try:
+                    import market_data
+                    trending_pools = await market_data.get_trending()
+                    if trending_pools:
+                        mints_to_scan.extend([p.get("tokenAddress") for p in trending_pools if p.get("tokenAddress")])
+                except Exception as _e:
+                    pass
+
                 # 0. Миграции ПЕРВЫМИ: только что вышли из кёрва в Raydium-пул —
                 # окно ракеты минуты, DS ещё может не проиндексировать (None → вернём в очередь).
                 # Срез 25/цикл: при панике очередь не блочит VIP-разбор надолго.
@@ -435,52 +444,51 @@ async def scanner_loop(analyzer, tracker):
                                                       getattr(analyzer, "last_score", 0.0))
                                     await asyncio.sleep(1.5)
                                     continue
-                                # Динамический сайзинг
-                                capital = tracker.get_total_capital()
-                                base_position = capital * (config.REINVEST_PERCENT / 100.0)
-                                
-                                liq_usd = pair_data.get("liquidity", {}).get("usd", 0) if pair_data else 0
-                                # INFERENCE -59%: сайз был велик для тонкого пула, стоп проскочил.
-                                # Не больше 0.5% пула (было 1%) - иначе сами двигаем цену и не выходим.
-                                max_allowed_by_pool = liq_usd * 0.005 if liq_usd > 0 else 99999.0  
-                                
-                                fixed = getattr(config, "TRADE_AMOUNT_USD", 0)
-                                position_size = min(fixed, max_allowed_by_pool) if fixed else max(4.0, min(base_position, max_allowed_by_pool, 100.0))
-                                
-                                _lot_m5 = ((pair_data.get("priceChange") or {}).get("m5", 0) or 0)
-                                _is_lot = _lot_m5 >= getattr(config, "LOTTERY_MIN_M5_PCT", 1.0) * 100
-                                
-                                # Если это настоящая VIP-ракета (огромный объем), входим на полный сайз
-                                _txns_m5 = pair_data.get("txns", {}).get("m5", {})
-                                _buys = _txns_m5.get("buys", 0)
-                                _vol = pair_data.get("volume", {}).get("m5", 0)
-                                _is_vip = _buys >= 50 and _vol >= 30000
-                                
-                                if _is_lot and not _is_vip:
-                                    position_size *= getattr(config, "LOTTERY_SIZE_MULT", 0.25)
+                                fixed = float(getattr(config, "TRADE_AMOUNT_USD", 0.0) or 0.0)
+                                if fixed > 0:
+                                    position_size = fixed
+                                    _is_lot = False
+                                    _is_vipsig = False
+                                else:
+                                    capital = tracker.get_total_capital()
+                                    base_position = capital * (config.REINVEST_PERCENT / 100.0)
+                                    liq_usd = pair_data.get("liquidity", {}).get("usd", 0) if pair_data else 0
+                                    max_allowed_by_pool = liq_usd * 0.01 if liq_usd > 0 else 99999.0  
+                                    position_size = max(4.0, min(base_position, max_allowed_by_pool, 100.0))
+                                    
+                                    _lot_m5 = ((pair_data.get("priceChange") or {}).get("m5", 0) or 0)
+                                    _is_lot = _lot_m5 >= getattr(config, "LOTTERY_MIN_M5_PCT", 1.0) * 100
+                                    
+                                    # Если это настоящая VIP-ракета (огромный объем), входим на полный сайз
+                                    _txns_m5 = pair_data.get("txns", {}).get("m5", {})
+                                    _buys = _txns_m5.get("buys", 0)
+                                    _vol = pair_data.get("volume", {}).get("m5", 0)
+                                    _is_vip = _buys >= 50 and _vol >= 30000
+                                    
+                                    if _is_lot and not _is_vip:
+                                        position_size *= getattr(config, "LOTTERY_SIZE_MULT", 0.25)
 
-                                # Conviction-тиринг и ROCKET-mult: только для динамического сайзинга (если TRADE_AMOUNT_USD не задан)
-                                if not fixed and not _is_lot and not _is_vip:
-                                    position_size *= analyzer.conviction_size_mult(pair_data)
-                                    try:
-                                        analyzer._rkt_tag(mint, pair_data)
-                                        _rm = analyzer.rocket_size_mult(mint)
-                                        if _rm != 1.0:
-                                            print(f"🚀 SCANNER {actual_symbol}: ROCKET-mult x{_rm}")
-                                        position_size *= _rm
-                                        _meme = await analyzer.meme_tag(mint, actual_symbol, pair_data, "solana")
-                                        if _meme:
-                                            analyzer.signals[mint] = analyzer.get_signal(mint) + _meme
-                                    except Exception:
-                                        pass
-                                position_size = min(position_size, 100.0)
+                                    # Conviction-тиринг и ROCKET-mult: только для динамического сайзинга (если TRADE_AMOUNT_USD не задан)
+                                    if not _is_lot and not _is_vip:
+                                        position_size *= analyzer.conviction_size_mult(pair_data)
+                                        try:
+                                            analyzer._rkt_tag(mint, pair_data)
+                                            _rm = analyzer.rocket_size_mult(mint)
+                                            if _rm != 1.0:
+                                                print(f"🚀 SCANNER {actual_symbol}: ROCKET-mult x{_rm}")
+                                            position_size *= _rm
+                                            _meme = await analyzer.meme_tag(mint, actual_symbol, pair_data, "solana")
+                                            if _meme:
+                                                analyzer.signals[mint] = analyzer.get_signal(mint) + _meme
+                                        except Exception:
+                                            pass
+                                    position_size = min(position_size, 100.0)
 
-                                # VIP-ШИП = РАЗДАЧА (доказано метками: UNPEG/FIBONACCI/BackCat/Goblin).
-                                # Таким входам - лотерейные $2 максимум, что бы ни показывал скор 100%.
-                                _is_vipsig = analyzer.get_signal(mint).startswith("VIP-")
-                                if _is_vipsig:
-                                    _vip_cap = float(getattr(config, "TG_VIP_SIZE_USD", 5.0))
-                                    position_size = min(position_size, _vip_cap)
+                                    # VIP-ШИП = РАЗДАЧА (доказано метками: UNPEG/FIBONACCI/BackCat/Goblin).
+                                    _is_vipsig = analyzer.get_signal(mint).startswith("VIP-")
+                                    if _is_vipsig:
+                                        _vip_cap = float(getattr(config, "TG_VIP_SIZE_USD", 5.0))
+                                        position_size = min(position_size, _vip_cap)
 
                                 if position_size < (1.0 if (_is_lot or _is_vipsig) else 4.0):
                                     print(f"🚫 Отказ (Ликвидность): Недостаточно ликвидности (${liq_usd}) для безопасного входа.")
@@ -657,12 +665,15 @@ async def fomo_signal_loop(analyzer, tracker):
                                     continue
                                 capital = tracker.get_total_capital()
                                 _fixed_sz = float(getattr(config, "TRADE_AMOUNT_USD", 0.0) or 0.0)
-                                position_size = _fixed_sz if _fixed_sz > 0 else max(4.0, min(100.0, capital * (config.REINVEST_PERCENT / 100.0)))
-                                _tg_cap = max(float(getattr(config, "TG_MAX_SIZE_USD", 15.0) or 15.0), _fixed_sz)
-                                position_size = min(position_size, _tg_cap)
-                                if str(_ssig).startswith("VIP-"):
-                                    # VIP-шип = раздача: лотерейные $2, как в сканерах
-                                    position_size = min(position_size, float(getattr(config, "TG_VIP_SIZE_USD", 2.0) or 2.0))
+                                if _fixed_sz > 0:
+                                    position_size = _fixed_sz
+                                else:
+                                    capital = tracker.get_total_capital()
+                                    position_size = max(4.0, min(100.0, capital * (config.REINVEST_PERCENT / 100.0)))
+                                    _tg_cap = float(getattr(config, "TG_MAX_SIZE_USD", 15.0) or 15.0)
+                                    position_size = min(position_size, _tg_cap)
+                                    if str(_ssig).startswith("VIP-"):
+                                        position_size = min(position_size, float(getattr(config, "TG_VIP_SIZE_USD", 2.0) or 2.0))
                                 _tg_src = f"TG-SIGNAL:{_src_ch}:{_ssig}" if _src_ch else f"TG-SIGNAL:{_ssig}"
                                 tracker.add_position(actual_symbol, mint, entry_price, position_size,
                                                      source=_tg_src,

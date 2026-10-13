@@ -169,11 +169,15 @@ class PumpFunSniper:
                 # Фоллбэк (хотя marketCapSol должен быть всегда)
                 actual_price = (sol_amount / 1_000_000_000.0) * get_sol_price_sync() 
             
-            capital = tracker.get_total_capital()
-            base_position = capital * (config.REINVEST_PERCENT / 100.0)
-            liq_usd = sol_amount * get_sol_price_sync() 
-            max_allowed = liq_usd * 0.05
-            position_size = max(4.0, min(base_position, max_allowed, 100.0))
+            fixed_sz = float(getattr(config, "TRADE_AMOUNT_USD", 0.0) or 0.0)
+            if fixed_sz > 0:
+                position_size = fixed_sz
+            else:
+                capital = tracker.get_total_capital()
+                base_position = capital * (config.REINVEST_PERCENT / 100.0)
+                liq_usd = sol_amount * get_sol_price_sync() 
+                max_allowed = liq_usd * 0.05
+                position_size = max(4.0, min(base_position, max_allowed, 100.0))
             
             if position_size >= 4.0:
                 print(f"🚀 PAPER СНАЙП {state.symbol}! Входим на {position_size}$")
@@ -241,15 +245,28 @@ class PumpFunSniper:
             to_remove = []
             
             for mint, state in list(self.trackers.items()):
-                # Если прошло 30 минут, считаем что токен умер
-                if now - state.start_time > 1800:
-                    state.is_dead = True
-                    print(f"💀 [Очистка] Токен {state.symbol} мертв (30 мин без миграции).")
+                # Если в позиции - никогда не удаляем из трекинга
+                if state.is_entered:
+                    continue
+                
+                # Время последней сделки
+                last_trade_time = state.trades[-1]['timestamp'] if state.trades else state.start_time
+                idle_seconds = now - last_trade_time
+                age_seconds = now - state.start_time
+                
+                # Токен считается мёртвым ТОЛЬКО если:
+                # 1) Нет активности более 20 минут И кёрв не набрал даже 15%
+                # 2) Либо токену более 90 минут И кёрв < 25%
+                # (Ракеты вроде ROUTE часто заполняют кёрв 40-70 минут!)
+                is_dead = False
+                if idle_seconds > 1200 and state.max_curve_progress < 15.0:
+                    is_dead = True
+                elif age_seconds > 5400 and state.max_curve_progress < 25.0:
+                    is_dead = True
                     
-                    # Если был отвергнут ИИ, логируем неудачу (True Negative)
-                    if state.is_ai_evaluated and not state.is_entered:
-                        pass
-                        
+                if is_dead:
+                    state.is_dead = True
+                    print(f"💀 [Очистка] Токен {state.symbol} мертв (нет активности или >90 мин).")
                     to_remove.append(mint)
                     
             for mint in to_remove:
@@ -304,6 +321,12 @@ class PumpFunSniper:
                             print(f"\n🔔 [НОВЫЙ ТОКЕН] {symbol} | Mint: {mint}")
                             
                             self.trackers[mint] = TokenTrackerState(mint, symbol, trader_pubkey)
+                            # Регистрируем в birth_tracker для созревания и сканирования в scanner_loop
+                            try:
+                                from birth_tracker import birth_tracker
+                                birth_tracker.add_token(mint)
+                            except Exception:
+                                pass
                             # Динамически добавляем подписку на торги этого токена в ЭТОТ ЖЕ сокет
                             await ws.send(json.dumps({"method": "subscribeTokenTrade", "keys": [mint]}))
                             

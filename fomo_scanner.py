@@ -52,15 +52,19 @@ async def fomo_loop(analyzer, tracker):
                 if status == 200 and data and "data" in data:
                     for pool in data.get("data", []):
                         try:
-                            mints.append(pool["relationships"]["base_token"]["data"]["id"])
+                            bid = pool["relationships"]["base_token"]["data"]["id"]
+                            m = bid.split("_", 1)[1] if "_" in bid else bid
+                            if m and len(m) > 30:
+                                mints.append(m)
                         except Exception:
                             pass
             except Exception:
                 pass
             
-            mints = [m for m in mints if m]
+            mints = [m for m in mints if m and len(m) > 30]
             new_mints = list(set(mints) - seen)
             
+            from fomo_api import push_signal
             for mint in new_mints:
                 seen.add(mint)
                 if len(seen) > 3000:
@@ -69,11 +73,8 @@ async def fomo_loop(analyzer, tracker):
                 if mint in tracker.positions or len(tracker.get_open_positions()) >= config.MAX_CONCURRENT_POSITIONS:
                     continue
                     
-                try:
-                    ok = await analyzer.analyze_growth_token(mint)
-                except Exception:
-                    pass
-                await asyncio.sleep(0.5)
+                push_signal("solana", mint, "FOMO_RADAR")
+                await asyncio.sleep(0.1)
                 
         except Exception as e:
             print(f"⚠️ Ошибка fomo_loop: {e}")
