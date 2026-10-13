@@ -43,16 +43,27 @@ class MatureExitManager:
         if minutes_held < _inf_win and pnl_pct <= _inf_pct:
             return f"Mature Infant Dump ({pnl_pct*100:.0f}%)"
 
-        # Trailing stop for mature coins
-        if hasattr(config, 'TRAILING_ACTIVATION_PCT') and hasattr(config, 'TRAILING_DISTANCE_PCT'):
+        # Trailing stop for mature coins (Динамический трейлинг: даём ракетам воздух перед +200% мунбегом)
+        if hasattr(config, 'TRAILING_ACTIVATION_PCT'):
             max_pnl_pct = (position.max_price_usd - position.entry_price_usd) / position.entry_price_usd
             if max_pnl_pct >= config.TRAILING_ACTIVATION_PCT:
+                if max_pnl_pct >= 3.0:
+                    _trail_dist = 0.35
+                elif max_pnl_pct >= 2.0 or getattr(position, "is_moonbag", False):
+                    _trail_dist = 0.30
+                elif max_pnl_pct >= 1.0:
+                    _trail_dist = 0.25  # На +100% даём 25% воздуха, чтобы не выбило перед мунбегом +200%
+                elif max_pnl_pct >= 0.50:
+                    _trail_dist = 0.20
+                else:
+                    _trail_dist = max(0.15, float(getattr(config, "TRAILING_DISTANCE_PCT", 0.15)))
+
                 drop_from_max = (position.max_price_usd - current_price) / position.max_price_usd
-                if drop_from_max >= config.TRAILING_DISTANCE_PCT:
-                    return f"Mature Trailing (+{max_pnl_pct*100:.0f}% peak)"
+                if drop_from_max >= _trail_dist:
+                    return f"Mature Trailing (+{max_pnl_pct*100:.0f}% peak, drop {drop_from_max*100:.0f}%)"
                     
-        # Scalp Trailing (для мелких профитов)
-        if hasattr(config, 'TRAILING_ACTIVATION_PCT'):
+        # Scalp Trailing (для мелких профитов) - ВЫКЛЮЧЕН: не режем ракеты на первом 5% откате при пике +10%
+        if getattr(config, 'SCALP_PROFIT_ENABLED', False) and hasattr(config, 'TRAILING_ACTIVATION_PCT'):
             max_pnl_pct = (position.max_price_usd - position.entry_price_usd) / position.entry_price_usd
             if max_pnl_pct >= 0.10 and max_pnl_pct < config.TRAILING_ACTIVATION_PCT:
                 drop_from_max = (position.max_price_usd - current_price) / position.max_price_usd
@@ -68,8 +79,8 @@ class MatureExitManager:
             _maxp = 0
         if _maxp >= _be and pnl_pct <= 0:
             return f"Mature Breakeven (был пик +{_maxp*100:.0f}%)"
-        # Мягкий стоп: был +15%+, сползли к -5% — пила, режем малый минус
-        if _maxp >= 0.10 and pnl_pct <= -0.05:
+        # Мягкий стоп: был пик +25%+, сползли к -5% — пила, фиксируем малый минус
+        if _maxp >= 0.25 and pnl_pct <= -0.05:
             return f"Mature Soft Guard (был пик +{_maxp*100:.0f}%)"
 
         # Hard stop loss

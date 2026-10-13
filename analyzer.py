@@ -891,10 +891,10 @@ class Analyzer:
             "symbol": symbol, "chain": chain, "price": _px_now,
             "liq": liq, "m5": m5, "source": tag
         }
-        # BSC: токены младше 3 минут — зона мгновенных flash-рагов и дев-дампов (ORRIS)
-        if chain == "bsc" and _age_min < float(getattr(config, "BSC_MIN_AGE_MIN", 3.0)):
-            return self._deny(address, f"bsc-age {_age_min:.1f}m",
-                              f"🚫 [{tag}] {symbol}: возраст {_age_min:.1f}м < {float(getattr(config, 'BSC_MIN_AGE_MIN', 3.0)):.1f}м — ранняя BSC flash-rug зона.")
+        # BSC & Robinhood: токены младше 3 минут — зона мгновенных flash-рагов и дев-дампов (ORRIS/BATONA)
+        if chain in ("bsc", "robinhood") and _age_min < float(getattr(config, f"{chain.upper()}_MIN_AGE_MIN", 3.0)):
+            return self._deny(address, f"{chain}-age {_age_min:.1f}m",
+                              f"🚫 [{tag}] {symbol}: возраст {_age_min:.1f}м < {float(getattr(config, f'{chain.upper()}_MIN_AGE_MIN', 3.0)):.1f}м — ранняя {tag} flash-rug зона.")
 
         if (_age_min < 5 and m5 >= 3.0 and (b5 + s5) >= 15 and liq >= 15000
                 and s5 >= 2 and b5 >= s5 and (b5 / max(s5, 1)) <= 4.0 and links):
@@ -902,6 +902,17 @@ class Analyzer:
                 return False
             if not await self._evm_clone_ok(symbol, address, pair_data, chain, tag):
                 return False
+            if chain in ("robinhood", "bsc", "base", "ethereum"):
+                try:
+                    import goplus as _gp
+                    _v_ok, _v_why = await _gp.verify_evm_token(address, chain, pair_data)
+                    if not _v_ok:
+                        return self._deny(address, f"antiscam-{_v_why}",
+                                          f"🚫 [{tag}] {symbol}: {_v_why} — блок.")
+                except Exception as _e:
+                    if chain in ("bsc", "robinhood"):
+                        return self._deny(address, "antiscam-err",
+                                          f"🚫 [{tag}] {symbol}: ошибка антискама ({type(_e).__name__}) — {tag} риск.")
             print(f"🔭 [{tag}-SCOUT] {symbol}: возраст {_age_min:.1f}м, m5 {m5:+.1f}% — ранний билет.")
             self._set_sig(address, f"{tag} SCOUT {_age_min:.0f}m" + self._rkt_tag(address, pair_data) + await self.meme_tag(address, symbol, pair_data, chain))
             return True
@@ -1022,7 +1033,7 @@ class Analyzer:
         self.last_score = float(score)
         print(f"📊 [{tag}] {symbol}: финальный score {score:.1f} (порог 60), m5 {m5:+.1f}%, m1 {m1:+.1f}%")
         if score >= 60.0:
-            if chain in ("bsc", "base", "ethereum"):
+            if chain in ("robinhood", "bsc", "base", "ethereum"):
                 try:
                     import goplus as _gp
                     _v_ok, _v_why = await _gp.verify_evm_token(address, chain, pair_data)
@@ -1030,9 +1041,9 @@ class Analyzer:
                         return self._deny(address, f"antiscam-{_v_why}",
                                           f"🚫 [{tag}] {symbol}: {_v_why} — блок.")
                 except Exception as _e:
-                    if chain == "bsc":
+                    if chain in ("bsc", "robinhood"):
                         return self._deny(address, "antiscam-err",
-                                          f"🚫 [{tag}] {symbol}: ошибка антискама ({type(_e).__name__}) — BSC риск.")
+                                          f"🚫 [{tag}] {symbol}: ошибка антискама ({type(_e).__name__}) — {tag} риск.")
             self._set_sig(address, f"{tag} rule {score:.0f}%" + self._rkt_tag(address, pair_data) + await self.meme_tag(address, symbol, pair_data, chain))
             return True
         return False

@@ -173,9 +173,8 @@ async def position_manager_loop(analyzer, tracker):
                         tracker.partial_close_position(mint, current_price, 0.20, "Take Profit +25% (Tier-1 20%)")
                         position.tp1_done = True
                         continue
-                    # MOONBAG для mature: RAFFLE дал +61% пик без частичной фиксации.
-                    # На триггере продаём половину сразу - дальше едет бесплатно.
-                    _mb = getattr(config, "MOONBAG_TRIGGER_PCT", 0.50)
+                    # MOONBAG для mature: на триггере продаём половину сразу - дальше едет бесплатно.
+                    _mb = getattr(config, "MOONBAG_TRIGGER_PCT", 2.00)
                     if max_pnl_pct >= _mb and not getattr(position, "is_moonbag", False):
                         tracker.partial_close_position(mint, current_price, 0.50, f"Take Profit +{_mb*100:.0f}% (Risk Free)")
                         continue
@@ -191,9 +190,8 @@ async def position_manager_loop(analyzer, tracker):
                 priority_fee_usd = 0.075 if position.amount_usd < 10.0 else 0.45
                 min_fee_pct = (priority_fee_usd + 0.02 * position.amount_usd) / position.amount_usd
                 
-                # 1. СКАЛЬП-ТРЕЙЛИНГ (Забираем мелкие плюсы)
-                # Если ракета не долетела до +25%, но дала +15% и начала падать, забираем свое.
-                if max_pnl_pct >= 0.10 and max_pnl_pct < getattr(config, "TRAILING_ACTIVATION_PCT", 0.25):
+                # 1. СКАЛЬП-ТРЕЙЛИНГ - ВЫКЛЮЧЕН (не режем ракеты на первом 5% откате при пике +10%)
+                if getattr(config, "SCALP_PROFIT_ENABLED", False) and max_pnl_pct >= 0.10 and max_pnl_pct < getattr(config, "TRAILING_ACTIVATION_PCT", 0.25):
                     drop_from_max = (position.max_price_usd - current_price) / position.max_price_usd
                     if drop_from_max >= 0.05:
                         tracker.close_position(mint, current_price, f"Scalp Profit (peak +{max_pnl_pct*100:.0f}%)")
@@ -201,7 +199,7 @@ async def position_manager_loop(analyzer, tracker):
                         
                 # === MOONBAG: Возврат инвестиций (Жесткий Take Profit) ===
                 # На триггере продаем 50% позиции. Забираем свои деньги.
-                _mb2 = getattr(config, "MOONBAG_TRIGGER_PCT", 0.50)
+                _mb2 = getattr(config, "MOONBAG_TRIGGER_PCT", 2.00)
                 if max_pnl_pct >= _mb2 and not getattr(position, "is_moonbag", False):
                     tracker.partial_close_position(mint, current_price, 0.50, f"Take Profit +{_mb2*100:.0f}% (Risk Free)")
                     continue
@@ -214,7 +212,7 @@ async def position_manager_loop(analyzer, tracker):
                 trail_distance = 0.35 if getattr(position, "is_moonbag", False) else 0.25
                 
                 # Активируем трейлинг из config.py
-                if max_pnl_pct >= getattr(config, "TRAILING_ACTIVATION_PCT", 0.30):
+                if max_pnl_pct >= getattr(config, "TRAILING_ACTIVATION_PCT", 0.25):
                     if drop_from_max >= trail_distance:
                         tracker.close_position(mint, current_price, f"Trailing Stop (peak +{max_pnl_pct*100:.0f}%, drop {drop_from_max*100:.0f}%)")
                         continue
@@ -223,8 +221,8 @@ async def position_manager_loop(analyzer, tracker):
                 if max_pnl_pct >= float(getattr(config, "BREAKEVEN_PCT", 0.30)) and pnl_pct <= 0:
                     tracker.close_position(mint, current_price, f"Breakeven (был пик +{max_pnl_pct*100:.0f}%)")
                     continue
-                # Мягкий стоп: был +15%+, сползли к -5%
-                if max_pnl_pct >= 0.10 and pnl_pct <= -0.05:
+                # Мягкий стоп: был пик +25%+, сползли к -5% — пила, фиксируем малый минус
+                if max_pnl_pct >= 0.25 and pnl_pct <= -0.05:
                     tracker.close_position(mint, current_price, f"Soft Guard (был пик +{max_pnl_pct*100:.0f}%)")
                     continue
                             
@@ -592,12 +590,9 @@ async def fomo_signal_loop(analyzer, tracker):
                                 _tg_cap = max(float(getattr(config, "TG_MAX_SIZE_USD", 15.0) or 15.0), _fixed_sz)
                                 size = min(size, _tg_cap)
                                 if str(_esig).startswith("VIP-"):
-                                    # VIP-шип = раздача (PEGGED -40% за 3с): лотерейные $2, как в сканерах
-                                    size = min(size, float(getattr(config, "TG_VIP_SIZE_USD", 2.0) or 2.0))
+                                    size = min(size, float(getattr(config, "TG_VIP_SIZE_USD", 15.0) or 15.0))
                                 if _ch == "robinhood":
-                                    # ROB без honeypot-покрытия: кэп сайза (ZUPITER -72%)
-                                    _rob_cap = max(float(getattr(config, "ROB_MAX_SIZE_USD", 15.0) or 15.0), _fixed_sz)
-                                    size = min(size, _rob_cap)
+                                    size = min(size, float(getattr(config, "ROB_MAX_SIZE_USD", 15.0) or 15.0))
                                 if _ch == "bsc":
                                     _bsc_cap = max(float(getattr(config, "BSC_MAX_SIZE_USD", 15.0) or 15.0), _fixed_sz)
                                     size = min(size, _bsc_cap)
@@ -878,7 +873,7 @@ async def _evm_track_once(tracker, chain: str, tag: str, emoji: str):
                 held = (_t.time() - pos.entry_time) / 60
                 reason = None
                 prev_ts = getattr(pos, "price_checked_at", 0.0)
-                _mbr = getattr(config, "MOONBAG_TRIGGER_PCT", 0.50)
+                _mbr = getattr(config, "MOONBAG_TRIGGER_PCT", 2.00)
                 # RUNNER MODE: параметры, при которых SHCAT +1126%/+627%,
                 # 中国人能飞 +152% держались ~5ч и фильтры их НЕ выбили:
                 # в плюсе время не режем, стопы от входа OFF, только широкий трейлинг от пика.
@@ -889,12 +884,14 @@ async def _evm_track_once(tracker, chain: str, tag: str, emoji: str):
                 # ДИНАМИЧЕСКИЙ ТРЕЙЛИНГ (чем выше ракета, тем шире даем ей дышать)
                 if maxp >= 3.0: # +300%
                     _trail_dist = 0.35 # На гигантских иксах даем 35% воздуха
+                elif maxp >= 2.0 or _is_moon: # +200% или после мунбега
+                    _trail_dist = 0.30 # После фиксации мунбега даём 30% воздуха
                 elif maxp >= 1.0: # +100%
-                    _trail_dist = 0.25 # На средних иксах 25% воздуха
+                    _trail_dist = 0.25 # На средних иксах 25% воздуха (не режем перед +200% мунбегом)
                 elif maxp >= 0.50: # +50%
-                    _trail_dist = 0.15 # Зажимаем первую прибыль (откат 15%)
+                    _trail_dist = 0.20 # Даём 20% воздуха на +50%
                 else:
-                    _trail_dist = float(getattr(config, "TRAILING_DISTANCE_PCT", 0.08)) # Стандартный скальп 8%
+                    _trail_dist = max(0.15, float(getattr(config, "TRAILING_DISTANCE_PCT", 0.15))) # Минимум 15% воздуха (не 8%, чтобы не душить раннеры)
                     
                 _crash_drop = float(getattr(config, "EVM_RUNNER_CRASH", 0.45)) if _is_runner else float(getattr(config, "EVM_NORMAL_CRASH", 0.35))
                 _dead_min = int(getattr(config, "EVM_DEAD_MIN", 60))
@@ -907,6 +904,8 @@ async def _evm_track_once(tracker, chain: str, tag: str, emoji: str):
                 if maxp >= _mbr and not getattr(pos, "is_moonbag", False):
                     tracker.partial_close_position(mint, cur, 0.50, f"{tag} Take Profit +{_mbr*100:.0f}% (Risk Free)")
                     pos.is_moonbag = True # ИСПРАВЛЕН БАГ (бесконечные продажи)
+                    pos.price_checked_at = _t.time()
+                    continue
                 elif prev_ts and (_t.time() - prev_ts) < 60 and prev > 0 and cur <= prev * (1 - _crash_drop):
                     reason = f"{tag} Crash Guard ({(1 - cur / prev) * 100:.0f}% за {_t.time() - prev_ts:.0f}с)"
                 elif maxp >= getattr(config, "TRAILING_ACTIVATION_PCT", 0.25) and \
@@ -916,8 +915,8 @@ async def _evm_track_once(tracker, chain: str, tag: str, emoji: str):
                     reason = f"{tag} Emergency Cap ({pnl * 100:.1f}%)"
                 elif maxp >= float(getattr(config, "BREAKEVEN_PCT", 0.30)) and pnl <= 0:
                     reason = f"{tag} Breakeven (был пик +{maxp * 100:.0f}%)"
-                elif maxp >= 0.15 and pnl <= -0.05:
-                    # Мягкий стоп: был +15%+, сползли к -5% — пила, фиксируем малый минус,
+                elif maxp >= 0.25 and pnl <= -0.05:
+                    # Мягкий стоп: был пик +25%+, сползли к -5% — пила, фиксируем малый минус,
                     # не ждём -20%. Живую ракету (выше -5%) не трогает.
                     reason = f"{tag} Soft Guard (был пик +{maxp * 100:.0f}%)"
                 elif held < float(getattr(config, "INFANT_WINDOW_MIN", 2.0)) and pnl <= float(getattr(config, "INFANT_DUMP_PCT", -0.22)):
@@ -955,8 +954,8 @@ async def _evm_track_once(tracker, chain: str, tag: str, emoji: str):
                         continue
                     reason = f"{tag} Stagnant ({held:.0f}m)"
                 # DEAD POOL GUARD (ловит застрявшие/замороженные пулы вроде BRML: 0 сделок, цена застыла)
-                # Работает даже для раннеров, если торги в блокчейне физически остановились:
-                if not reason and held >= 10:
+                # Не убивает прибыльные сделки (GRASS кейс: +1.26% закрыло из-за временной 7.5с задержки API)
+                if not reason and held >= 10 and pnl <= 0.02:
                     try:
                         _td_pool = await evm_data.get_token_data(mint, chain)
                         if _td_pool:
@@ -969,7 +968,7 @@ async def _evm_track_once(tracker, chain: str, tag: str, emoji: str):
                             if (_bh1_p + _sh1_p) == 0 or ((_b5_p + _s5_p) == 0 and float(((_td_pool.get("volume") or {}).get("m5", 0)) or 0) <= 0.01):
                                 _z_cyc = int(getattr(pos, "zero_vol_cycles", 0) or 0) + 1
                                 pos.zero_vol_cycles = _z_cyc
-                                if _z_cyc >= 3:
+                                if _z_cyc >= 12:  # ~30 сек подтвержденной тишины в пуле (было 3 цикла = 7.5с)
                                     reason = f"{tag} Dead Pool (0 txns in pool, frozen)"
                             else:
                                 pos.zero_vol_cycles = 0
@@ -1096,7 +1095,7 @@ async def _evm_chain_loop(analyzer, tracker, chain: str):
                                     await asyncio.sleep(1.0)
                                     continue
                                 if "LOTTERY" in _sig or "SCOUT" in _sig:
-                                    size = min(size, 6.0)  # лотерейный/скаут билет
+                                    size = min(size, max(float(getattr(config, "LOTTERY_SIZE_USD", 15.0) or 15.0), fixed))
                                 else:
                                     size *= analyzer.conviction_size_mult(td)  # коридор с импульсом едет x2
                                     # DIPBUY-билеты mult не трогает: откаты с умеренным
@@ -1113,19 +1112,15 @@ async def _evm_chain_loop(analyzer, tracker, chain: str):
                                     size = min(size, 100.0)
                                     _fixed_sz = float(getattr(config, "TRADE_AMOUNT_USD", 0.0) or 0.0)
                                     if chain == "robinhood":
-                                        # ROB без honeypot-покрытия (GoPlus/honeypot.is не знают 4663):
-                                        # кэп ПОСЛЕ всех mult — защита от гэпов, но не ниже базового fixed-сайза
-                                        _rob_cap = max(float(getattr(config, "ROB_MAX_SIZE_USD", 15.0) or 15.0), _fixed_sz)
-                                        size = min(size, _rob_cap)
+                                        size = min(size, float(getattr(config, "ROB_MAX_SIZE_USD", 15.0) or 15.0))
                                     if chain == "bsc":
                                         # BSC кэп ПОСЛЕ всех mult: защита от дев-дампов, но не ниже базового fixed-сайза
                                         _bsc_cap = max(float(getattr(config, "BSC_MAX_SIZE_USD", 15.0) or 15.0), _fixed_sz)
                                         size = min(size, _bsc_cap)
                                         _rkt_s = analyzer.rocket_scores.get(addr, 0.0)
                                         if _rkt_s < 0.65:
-                                            _w_sz = float(getattr(config, "BSC_WEAK_SIZE_USD", 4.0))
+                                            _w_sz = float(getattr(config, "BSC_WEAK_SIZE_USD", 15.0))
                                             size = min(size, _w_sz)
-                                            print(f"🟨 BSC {sym}: RKT {_rkt_s:.2f} < 0.65 — сайз ${_w_sz:.1f} (защита от дев-дампа)")
                                 if chain == "ethereum":
                                     # L1-газ $2-6 за круг: микро-сайз $4-6 гарантирует минус.
                                     # Меньше минимума — скип входа (а не враньё в плюс).
