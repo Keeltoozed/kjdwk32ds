@@ -429,8 +429,8 @@ class PaperTracker:
             pos.pnl_usd += realized_pnl_usd
 
             # Уменьшаем позицию на проданный процент
-            pos.amount_usd -= amount_sold_usd
-            pos.is_moonbag = True
+            if "MOONBAG" in reason.upper() or "RISK FREE" in reason.upper() or "200%" in reason:
+                pos.is_moonbag = True
             self.save_portfolio()
 
     def close_position(self, mint: str, exit_price: float, reason: str):

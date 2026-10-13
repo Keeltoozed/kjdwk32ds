@@ -204,7 +204,7 @@ async def position_manager_loop(analyzer, tracker):
                         
                 # === TAKE-PROFIT LADDER (Лестница фиксации прибыли) ===
                 if max_pnl_pct >= 0.25 and not getattr(position, "tp1_done", False):
-                    tracker.partial_close_position(mint, current_price, 0.20, "Take Profit +25% (Tier-1 20%)")
+                    tracker.partial_close_position(mint, current_price, 0.40, "Take Profit +25% (Tier-1 40%)")
                     position.tp1_done = True
                     continue
                 _tp2_sol = float(getattr(config, "TP2_TRIGGER_PCT", 1.00))
@@ -221,15 +221,15 @@ async def position_manager_loop(analyzer, tracker):
                 # 1.5 ГАРАНТИРОВАННЫЙ НЕСНИЖАЕМЫЙ ПОРОГ ПРИБЫЛИ (PROFIT FLOOR LOCK)
                 # Ни при каких обстоятельствах не даём ракете отдать заработанное китам:
                 _floor_pnl = None
-                if max_pnl_pct >= 2.00:       # Пик +200%+ (3x) -> гарантируем минимум +100%
+                if max_pnl_pct >= 2.00:       # Пик +200%+ (3x) -> гарантируем минимум +100% (удвоение)
                     _floor_pnl = 1.00
                 elif max_pnl_pct >= 1.00:     # Пик +100%+ (2x) -> гарантируем минимум +50%
                     _floor_pnl = 0.50
-                elif max_pnl_pct >= 0.60:     # Пик +60%+ -> гарантируем минимум +30%
+                elif max_pnl_pct >= 0.60:     # Пик +60%+ -> гарантируем минимум +30% (18.7% воздуха от пика)
                     _floor_pnl = 0.30
-                elif max_pnl_pct >= 0.40:     # Пик +40%+ (кейс binancians +47%) -> гарантируем минимум +20%
+                elif max_pnl_pct >= 0.40:     # Пик +40%+ -> гарантируем минимум +20% (14.3% воздуха от пика)
                     _floor_pnl = 0.20
-                elif max_pnl_pct >= 0.25:     # Пик +25%+ -> гарантируем минимум +10%
+                elif max_pnl_pct >= 0.25:     # Пик +25%+ -> гарантируем минимум +10% (12% воздуха от пика)
                     _floor_pnl = 0.10
                 elif max_pnl_pct >= 0.15:     # Пик +15%+ -> гарантируем минимум +4% (комиссии окуплены)
                     _floor_pnl = 0.04
@@ -643,14 +643,14 @@ async def fomo_signal_loop(analyzer, tracker):
                                 cap = tracker.get_total_capital()
                                 _fixed_sz = float(getattr(config, "TRADE_AMOUNT_USD", 0.0) or 0.0)
                                 size = _fixed_sz if _fixed_sz > 0 else (max(4.0, min(100.0, cap * (config.REINVEST_PERCENT / 100.0))) if cap > 0 else 4.0)
-                                _tg_cap = max(float(getattr(config, "TG_MAX_SIZE_USD", 15.0) or 15.0), _fixed_sz)
+                                _tg_cap = float(getattr(config, "TG_MAX_SIZE_USD", 5.0) or 5.0)
                                 size = min(size, _tg_cap)
                                 if str(_esig).startswith("VIP-"):
-                                    size = min(size, float(getattr(config, "TG_VIP_SIZE_USD", 15.0) or 15.0))
+                                    size = min(size, float(getattr(config, "TG_VIP_SIZE_USD", 5.0) or 5.0))
                                 if _ch == "robinhood":
                                     size = min(size, float(getattr(config, "ROB_MAX_SIZE_USD", 15.0) or 15.0))
                                 if _ch == "bsc":
-                                    _bsc_cap = max(float(getattr(config, "BSC_MAX_SIZE_USD", 15.0) or 15.0), _fixed_sz)
+                                    _bsc_cap = float(getattr(config, "BSC_MAX_SIZE_USD", 15.0) or 15.0)
                                     size = min(size, _bsc_cap)
                                 _tg_src = f"TG-SIGNAL:{_src_ch}:{_esig}" if _src_ch else f"TG-SIGNAL:{_esig}"
                                 tracker.add_position(sym, mint, price, size, is_mature=True,
@@ -677,15 +677,11 @@ async def fomo_signal_loop(analyzer, tracker):
                                     continue
                                 capital = tracker.get_total_capital()
                                 _fixed_sz = float(getattr(config, "TRADE_AMOUNT_USD", 0.0) or 0.0)
-                                if _fixed_sz > 0:
-                                    position_size = _fixed_sz
-                                else:
-                                    capital = tracker.get_total_capital()
-                                    position_size = max(4.0, min(100.0, capital * (config.REINVEST_PERCENT / 100.0)))
-                                    _tg_cap = float(getattr(config, "TG_MAX_SIZE_USD", 15.0) or 15.0)
-                                    position_size = min(position_size, _tg_cap)
-                                    if str(_ssig).startswith("VIP-"):
-                                        position_size = min(position_size, float(getattr(config, "TG_VIP_SIZE_USD", 2.0) or 2.0))
+                                position_size = _fixed_sz if _fixed_sz > 0 else max(4.0, min(100.0, capital * (config.REINVEST_PERCENT / 100.0)))
+                                _tg_cap = float(getattr(config, "TG_MAX_SIZE_USD", 5.0) or 5.0)
+                                position_size = min(position_size, _tg_cap)
+                                if str(_ssig).startswith("VIP-"):
+                                    position_size = min(position_size, float(getattr(config, "TG_VIP_SIZE_USD", 5.0) or 5.0))
                                 _tg_src = f"TG-SIGNAL:{_src_ch}:{_ssig}" if _src_ch else f"TG-SIGNAL:{_ssig}"
                                 tracker.add_position(actual_symbol, mint, entry_price, position_size,
                                                      source=_tg_src,
@@ -954,15 +950,15 @@ async def _evm_track_once(tracker, chain: str, tag: str, emoji: str):
                 # 1. ГАРАНТИРОВАННЫЙ НЕСНИЖАЕМЫЙ ПОРОГ ПРИБЫЛИ (PROFIT FLOOR LOCK)
                 # Ни при каких обстоятельствах не даём ракете отдать заработанное китам:
                 _floor_pnl = None
-                if maxp >= 2.00:       # Пик +200%+ (3x) -> гарантируем минимум +100%
+                if maxp >= 2.00:       # Пик +200%+ (3x) -> гарантируем минимум +100% (удвоение)
                     _floor_pnl = 1.00
                 elif maxp >= 1.00:     # Пик +100%+ (2x) -> гарантируем минимум +50%
                     _floor_pnl = 0.50
-                elif maxp >= 0.60:     # Пик +60%+ -> гарантируем минимум +30%
+                elif maxp >= 0.60:     # Пик +60%+ -> гарантируем минимум +30% (18.7% воздуха от пика)
                     _floor_pnl = 0.30
-                elif maxp >= 0.40:     # Пик +40%+ (кейс binancians +47%) -> гарантируем минимум +20%
+                elif maxp >= 0.40:     # Пик +40%+ -> гарантируем минимум +20% (14.3% воздуха от пика)
                     _floor_pnl = 0.20
-                elif maxp >= 0.25:     # Пик +25%+ -> гарантируем минимум +10%
+                elif maxp >= 0.25:     # Пик +25%+ -> гарантируем минимум +10% (12% воздуха от пика)
                     _floor_pnl = 0.10
                 elif maxp >= 0.15:     # Пик +15%+ -> гарантируем минимум +4% (комиссии окуплены)
                     _floor_pnl = 0.04
@@ -985,7 +981,7 @@ async def _evm_track_once(tracker, chain: str, tag: str, emoji: str):
                 _dead_min = int(getattr(config, "EVM_DEAD_MIN", 60))
                 _stag_min = int(getattr(config, "EVM_STAGNANT_MIN", 45))
                 if maxp >= 0.25 and not getattr(pos, "tp1_done", False):
-                    tracker.partial_close_position(mint, cur, 0.20, f"{tag} Take Profit +25% (Tier-1 20%)")
+                    tracker.partial_close_position(mint, cur, 0.40, f"{tag} Take Profit +25% (Tier-1 40%)")
                     pos.tp1_done = True
                     pos.price_checked_at = _t.time()
                     continue

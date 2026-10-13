@@ -46,17 +46,17 @@ class MatureExitManager:
         # 1. ГАРАНТИРОВАННЫЙ НЕСНИЖАЕМЫЙ ПОРОГ ПРИБЫЛИ (PROFIT FLOOR LOCK)
         max_pnl_pct = (position.max_price_usd - position.entry_price_usd) / position.entry_price_usd if position.entry_price_usd else 0
         _floor_pnl = None
-        if max_pnl_pct >= 2.00:       # Пик +200%+ (3x) -> гарантируем минимум +100%
+        if max_pnl_pct >= 2.00:       # Пик +200%+ (3x) -> гарантируем минимум +100% (удвоение)
             _floor_pnl = 1.00
         elif max_pnl_pct >= 1.00:     # Пик +100%+ (2x) -> гарантируем минимум +50%
             _floor_pnl = 0.50
-        elif max_pnl_pct >= 0.60:     # Пик +60%+ -> гарантируем минимум +30%
+        elif max_pnl_pct >= 0.60:     # Пик +60%+ -> гарантируем минимум +30% (18.7% воздуха от пика)
             _floor_pnl = 0.30
-        elif max_pnl_pct >= 0.40:     # Пик +40%+ (кейс binancians +47%) -> гарантируем минимум +20%
+        elif max_pnl_pct >= 0.40:     # Пик +40%+ -> гарантируем минимум +20% (14.3% воздуха от пика)
             _floor_pnl = 0.20
-        elif max_pnl_pct >= 0.25:     # Пик +25%+ -> гарантируем минимум +10%
+        elif max_pnl_pct >= 0.25:     # Пик +25%+ -> гарантируем минимум +10% (12% воздуха от пика)
             _floor_pnl = 0.10
-        elif max_pnl_pct >= 0.15:     # Пик +15%+ -> гарантируем минимум +4%
+        elif max_pnl_pct >= 0.15:     # Пик +15%+ -> гарантируем минимум +4% (комиссии окуплены)
             _floor_pnl = 0.04
         if _floor_pnl is not None and pnl_pct <= _floor_pnl:
             return f"Mature Profit Floor (+{_floor_pnl*100:.0f}% locked after peak +{max_pnl_pct*100:.0f}%)"

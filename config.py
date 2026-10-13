@@ -53,7 +53,7 @@ MAX_CONCURRENT_POSITIONS = 10  # концентрация капитала: ма
 MAX_DAILY_LOSS_USD = 18.0
 KILL_SWITCH_ENABLED = True
 MAX_DAILY_LOSS_PCT = 0.25
-STOP_LOSS_PCT = -0.20  # Вернули по просьбе: стоп -20% чтобы ракеты дышали
+STOP_LOSS_PCT = -0.14  # Стоп -14% (было -20%, что при слипе давало -31% убытка)
 SNIPER_ENTRIES_ENABLED = False
 VIP_ENTRIES_ENABLED = False  # ОТКЛЮЧЕНО: защита от фейковых шипов и wash-trading раздач (UNPEG/FIBONACCI)
 TIME_EXIT_MINUTES = 60  # Если за 30 минут нет пампа - выходим
@@ -80,7 +80,7 @@ BREAKEVEN_PCT = 0.30
 
 # Infant Dump: защита от дев-дампа в первые минуты
 INFANT_WINDOW_MIN = 2.0
-INFANT_DUMP_PCT = -0.22
+INFANT_DUMP_PCT = -0.15  # Резать сразу при -15% в первые 2 мин (было -22%, давало -28% на Taku)
 
 # Stagnant: минус режем на N-й минуте, мелкий плюс держим до M-й (бектест-свип)
 STAGNANT_LOSS_MIN = 7
@@ -205,8 +205,8 @@ FOMO_MIN_USD = 100
 FOMO_BOARDS_INTERVAL = 7200
 USE_FOMO_SIGNALS = True  # очередь fomo_signals.txt покупается через те же гейты
 MAX_FOMO_BUYS_PER_PASS = 3  # бёрст-контроль: не больше 3 входов за проход очереди
-TG_MAX_SIZE_USD = 15.0  # кэп TG/FOMO-входа
-TG_VIP_SIZE_USD = 15.0
+TG_MAX_SIZE_USD = 5.0  # кэп TG/FOMO-входа: $5 (защита от памп-энд-дампа каналов)
+TG_VIP_SIZE_USD = 5.0
 ROB_MAX_SIZE_USD = 15.0  # Robinhood: теперь защищён ончейн-проверкой и возрастом 3м+, сайз $15 (ставка не снижается)
 BSC_MAX_SIZE_USD = 15.0
 BSC_MIN_LIQUIDITY = 12000.0  # Пулы от $12к на BSC (вместо $25к)
