@@ -443,6 +443,9 @@ async def scanner_loop(analyzer, tracker):
                             entry_price = float(pair_data.get("priceUsd", 0)) if pair_data else 0
                             actual_symbol = pair_data.get("baseToken", {}).get("symbol", "UNKNOWN") if pair_data else "UNKNOWN"
                             liq_usd = float(((pair_data or {}).get("liquidity", {}) or {}).get("usd", 0) or 0)
+                            if liq_usd == 0 and (mint.endswith("pump") or (pair_data or {}).get("dexId") == "pump"):
+                                _fdv = float(((pair_data or {}).get("fdv", 0) or (pair_data or {}).get("marketCap", 0) or 0))
+                                liq_usd = _fdv * 0.40
                             if entry_price > 0:
                                 # RKT-вето дженерик-входов Solana (лотереи/VIP-билеты exempt).
                                 _ssig = analyzer.get_signal(mint)

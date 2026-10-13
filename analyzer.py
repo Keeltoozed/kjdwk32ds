@@ -645,7 +645,7 @@ class Analyzer:
                 print(f"🚫 [ENTRY] {mint}: vol24h ${_v24:,.0f} < ${_v24_min:,.0f} — совсем нет объёма.")
                 return False
 
-            _tx_min = 15 if _age_min_pre < 30 else 30
+            _tx_min = 12 if _age_min_pre < 60 else 18
             if (_b5 + _s5) < _tx_min:
                 print(f"🚫 [VELOCITY] {mint}: txns m5 {_b5 + _s5} < {_tx_min} — слишком медленно, нет органического FOMO.")
                 return False
@@ -655,6 +655,8 @@ class Analyzer:
                     print(f"🚫 [VELOCITY] {mint}: buy/sell m5 {_b5}/{_s5} < {mult}x — {'(лотерея, ослаблено)' if _lottery else 'нет буфера покупателей'}")
                     return False
             _cur_liq = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
+            if _cur_liq == 0 and (mint.endswith("pump") or pair_data.get("dexId") == "pump"):
+                _cur_liq = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0) * 0.40
             if not _lottery and self.is_churn(_b5, _s5, _m5, liq=_cur_liq):
                 print(f"🚫 [CHURN] {mint}: {_b5 + _s5} сделок, b/s {_b5 / _s5:.2f}, m5 {_m5:+.1f}% — накрутка, не FOMO.")
                 return False
@@ -668,9 +670,24 @@ class Analyzer:
                     return False
             print(f"✅ [ENTRY-CANDIDATE] {mint}: PULLBACK — импульс m5 {_m5:+.1f}%, откат m1 {_m1:+.1f}%, h1 {_h1:+.0f}%, b/s {_b}/{_s}. Кандидат на вход.")
         
-        # Защита от микро-пулов (теперь применяется ко ВСЕМ токенам, включая pump и VIP)
-        liquidity = pair_data.get("liquidity", {}).get("usd", 0)
-        _min_liq = 12000 if _age_min_pre < 30 else getattr(config, "MIN_LIQUIDITY", 20000)
+        # Защита от микро-пулов:
+        # Для Pump.fun бондинг-кёрва DexScreener не создаёт AMM-пул (пишет $0), но кёрв обеспечен
+        # виртуальными резервами SOL (~40% от FDV/MarketCap).
+        dex_id = pair_data.get("dexId", "")
+        is_pump_token = (dex_id == "pump") or mint.endswith("pump")
+        raw_liq = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
+        fdv_mc = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
+
+        if is_pump_token and raw_liq == 0:
+            liquidity = fdv_mc * 0.40
+        else:
+            liquidity = raw_liq
+
+        if is_pump_token:
+            _min_liq = 6000  # Для Pump.fun кёрва $6k ликвы (MC ~$15k+) достаточно для ордера $15
+        else:
+            _min_liq = 12000 if _age_min_pre < 30 else getattr(config, "MIN_LIQUIDITY", 20000)
+
         if liquidity < _min_liq:
             print(f"📉 Изоляция: {symbol} имеет микро-пул (${liquidity:.0f} < ${_min_liq//1000}k). Риск 100% проскальзывания.")
             return False
@@ -814,9 +831,12 @@ class Analyzer:
         age_minutes = (time.time() * 1000 - created_at) / (1000 * 60) if created_at else 999
         
         # Глобальная защита от дешевых скрамов/рагпуллов
-        liq = pair_data.get("liquidity", {}).get("usd", 0)
-        if liq < 5000:
-            print(f"🚫 [ANTI-RUG] {symbol} ({mint[:8]}): Ликвидность всего ${liq:,.0f} < $5000. Слишком опасно.")
+        liq = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
+        if liq == 0 and ((dex_id == "pump") or mint.endswith("pump")):
+            liq = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0) * 0.40
+        _floor_liq = 4000 if ((dex_id == "pump") or mint.endswith("pump")) else 5000
+        if liq < _floor_liq:
+            print(f"🚫 [ANTI-RUG] {symbol} ({mint[:8]}): Ликвидность всего ${liq:,.0f} < ${_floor_liq}. Слишком опасно.")
             return False
             
         if dex_id == "pump" and age_minutes <= 15:
