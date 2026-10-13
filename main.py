@@ -167,16 +167,22 @@ async def position_manager_loop(analyzer, tracker):
                 
                 # === ИНТЕГРАЦИЯ МАТЕМАТИКИ ДЛЯ ЗРЕЛЫХ МОНЕТ (SWING TRADING) ===
                 if getattr(position, "is_mature", False):
-                    # TIER-1: лестница вместо жадного тейка — на +25% продаём 20% (было 30%),
-                    # остальное едет дальше. Прибыль в кармане, раннер жив.
+                    # TIER-1: лестница вместо жадного тейка — на +25% продаём 20%
                     if max_pnl_pct >= 0.25 and not getattr(position, "tp1_done", False):
                         tracker.partial_close_position(mint, current_price, 0.20, "Take Profit +25% (Tier-1 20%)")
                         position.tp1_done = True
+                        continue
+                    # TIER-2: возврат 100% тела входа на удвоении (+100%) — продаём 35% позиции
+                    _tp2 = float(getattr(config, "TP2_TRIGGER_PCT", 1.00))
+                    if max_pnl_pct >= _tp2 and not getattr(position, "tp2_done", False):
+                        tracker.partial_close_position(mint, current_price, 0.35, f"Take Profit +{_tp2*100:.0f}% (2x Free Ride)")
+                        position.tp2_done = True
                         continue
                     # MOONBAG для mature: на триггере продаём половину сразу - дальше едет бесплатно.
                     _mb = getattr(config, "MOONBAG_TRIGGER_PCT", 2.00)
                     if max_pnl_pct >= _mb and not getattr(position, "is_moonbag", False):
                         tracker.partial_close_position(mint, current_price, 0.50, f"Take Profit +{_mb*100:.0f}% (Risk Free)")
+                        position.is_moonbag = True
                         continue
                     from exit_managers import MatureExitManager
                     mature_exit_reason = MatureExitManager.evaluate_exit(position, current_price)
@@ -197,19 +203,36 @@ async def position_manager_loop(analyzer, tracker):
                         tracker.close_position(mint, current_price, f"Scalp Profit (peak +{max_pnl_pct*100:.0f}%)")
                         continue
                         
-                # === MOONBAG: Возврат инвестиций (Жесткий Take Profit) ===
-                # На триггере продаем 50% позиции. Забираем свои деньги.
+                # === TAKE-PROFIT LADDER (Лестница фиксации прибыли) ===
+                if max_pnl_pct >= 0.25 and not getattr(position, "tp1_done", False):
+                    tracker.partial_close_position(mint, current_price, 0.20, "Take Profit +25% (Tier-1 20%)")
+                    position.tp1_done = True
+                    continue
+                _tp2_sol = float(getattr(config, "TP2_TRIGGER_PCT", 1.00))
+                if max_pnl_pct >= _tp2_sol and not getattr(position, "tp2_done", False):
+                    tracker.partial_close_position(mint, current_price, 0.35, f"Take Profit +{_tp2_sol*100:.0f}% (2x Free Ride)")
+                    position.tp2_done = True
+                    continue
                 _mb2 = getattr(config, "MOONBAG_TRIGGER_PCT", 2.00)
                 if max_pnl_pct >= _mb2 and not getattr(position, "is_moonbag", False):
                     tracker.partial_close_position(mint, current_price, 0.50, f"Take Profit +{_mb2*100:.0f}% (Risk Free)")
+                    position.is_moonbag = True
                     continue
 
                 # 2. ОСНОВНОЙ ТРЕЙЛИНГ-СТОП (Динамическая фиксация позиции)
                 drop_from_max = (position.max_price_usd - current_price) / position.max_price_usd
                 
-                # Трейлинг: до Moonbag — 25% (стандарт для мемкоинов).
-                # После Moonbag — 35% (деньги уже в кармане, остаток бесплатный — пусть летит!).
-                trail_distance = 0.35 if getattr(position, "is_moonbag", False) else 0.25
+                # Трейлинг: динамический воздух (на иксах 18% чтобы не отдавать 50% прибыли китам)
+                if max_pnl_pct >= 3.0:
+                    trail_distance = 0.35
+                elif max_pnl_pct >= 2.0 or getattr(position, "is_moonbag", False):
+                    trail_distance = 0.30
+                elif max_pnl_pct >= 1.0:
+                    trail_distance = float(getattr(config, "TRAILING_RUNNER_DISTANCE_PCT", 0.18))
+                elif max_pnl_pct >= 0.50:
+                    trail_distance = 0.20
+                else:
+                    trail_distance = max(0.15, float(getattr(config, "TRAILING_DISTANCE_PCT", 0.15)))
                 
                 # Активируем трейлинг из config.py
                 if max_pnl_pct >= getattr(config, "TRAILING_ACTIVATION_PCT", 0.25):
@@ -887,13 +910,13 @@ async def _evm_track_once(tracker, chain: str, tag: str, emoji: str):
                 elif maxp >= 2.0 or _is_moon: # +200% или после мунбега
                     _trail_dist = 0.30 # После фиксации мунбега даём 30% воздуха
                 elif maxp >= 1.0: # +100%
-                    _trail_dist = 0.25 # На средних иксах 25% воздуха (не режем перед +200% мунбегом)
+                    _trail_dist = float(getattr(config, "TRAILING_RUNNER_DISTANCE_PCT", 0.18)) # На иксах 18% воздуха — не отдаем китам 50% прибыли!
                 elif maxp >= 0.50: # +50%
                     _trail_dist = 0.20 # Даём 20% воздуха на +50%
                 else:
                     _trail_dist = max(0.15, float(getattr(config, "TRAILING_DISTANCE_PCT", 0.15))) # Минимум 15% воздуха (не 8%, чтобы не душить раннеры)
                     
-                _crash_drop = float(getattr(config, "EVM_RUNNER_CRASH", 0.45)) if _is_runner else float(getattr(config, "EVM_NORMAL_CRASH", 0.35))
+                _crash_drop = float(getattr(config, "EVM_RUNNER_CRASH", 0.25)) if _is_runner else float(getattr(config, "EVM_NORMAL_CRASH", 0.25))
                 _dead_min = int(getattr(config, "EVM_DEAD_MIN", 60))
                 _stag_min = int(getattr(config, "EVM_STAGNANT_MIN", 45))
                 if maxp >= 0.25 and not getattr(pos, "tp1_done", False):
@@ -901,12 +924,21 @@ async def _evm_track_once(tracker, chain: str, tag: str, emoji: str):
                     pos.tp1_done = True
                     pos.price_checked_at = _t.time()
                     continue
+                _tp2_thr = float(getattr(config, "TP2_TRIGGER_PCT", 1.00))
+                if maxp >= _tp2_thr and not getattr(pos, "tp2_done", False):
+                    tracker.partial_close_position(mint, cur, 0.35, f"{tag} Take Profit +{_tp2_thr*100:.0f}% (2x Free Ride)")
+                    pos.tp2_done = True
+                    pos.price_checked_at = _t.time()
+                    continue
                 if maxp >= _mbr and not getattr(pos, "is_moonbag", False):
                     tracker.partial_close_position(mint, cur, 0.50, f"{tag} Take Profit +{_mbr*100:.0f}% (Risk Free)")
                     pos.is_moonbag = True # ИСПРАВЛЕН БАГ (бесконечные продажи)
                     pos.price_checked_at = _t.time()
                     continue
-                elif prev_ts and (_t.time() - prev_ts) < 60 and prev > 0 and cur <= prev * (1 - _crash_drop):
+                _w_guard = float(getattr(config, "WHALE_DUMP_GUARD_PCT", 0.20))
+                if not reason and prev_ts and (_t.time() - prev_ts) < 15 and prev > 0 and cur <= prev * (1 - _w_guard) and maxp >= 0.30:
+                    reason = f"{tag} Whale Dump Guard ({(1 - cur / prev) * 100:.0f}% за {_t.time() - prev_ts:.0f}с)"
+                elif not reason and prev_ts and (_t.time() - prev_ts) < 60 and prev > 0 and cur <= prev * (1 - _crash_drop):
                     reason = f"{tag} Crash Guard ({(1 - cur / prev) * 100:.0f}% за {_t.time() - prev_ts:.0f}с)"
                 elif maxp >= getattr(config, "TRAILING_ACTIVATION_PCT", 0.25) and \
                         (pos.max_price_usd - cur) / pos.max_price_usd >= _trail_dist:

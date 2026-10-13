@@ -48,13 +48,13 @@ class MatureExitManager:
             max_pnl_pct = (position.max_price_usd - position.entry_price_usd) / position.entry_price_usd
             if max_pnl_pct >= config.TRAILING_ACTIVATION_PCT:
                 if max_pnl_pct >= 3.0:
-                    _trail_dist = 0.35
-                elif max_pnl_pct >= 2.0 or getattr(position, "is_moonbag", False):
                     _trail_dist = 0.30
+                elif max_pnl_pct >= 2.0 or getattr(position, "is_moonbag", False):
+                    _trail_dist = 0.25
                 elif max_pnl_pct >= 1.0:
-                    _trail_dist = 0.25  # На +100% даём 25% воздуха, чтобы не выбило перед мунбегом +200%
+                    _trail_dist = float(getattr(config, "TRAILING_RUNNER_DISTANCE_PCT", 0.18))  # Подтягиваем до 18% (не отдаём китам 50% прибыли!)
                 elif max_pnl_pct >= 0.50:
-                    _trail_dist = 0.20
+                    _trail_dist = 0.18
                 else:
                     _trail_dist = max(0.15, float(getattr(config, "TRAILING_DISTANCE_PCT", 0.15)))
 

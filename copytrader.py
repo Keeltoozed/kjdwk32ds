@@ -110,7 +110,8 @@ class CopyTrader:
             pre_dict = {b["mint"]: float(b["uiTokenAmount"]["uiAmountString"]) for b in pre_bals if b.get("owner") == wallet}
             post_dict = {b["mint"]: float(b["uiTokenAmount"]["uiAmountString"]) for b in post_bals if b.get("owner") == wallet}
 
-            for mint, post_amt in post_dict.items():
+            all_mints = set(pre_dict.keys()) | set(post_dict.keys())
+            for mint in all_mints:
                 # Раньше только pump-минты — пропускали Raydium-миграции и прямые листинги.
                 # Теперь все минты: ИИ-гейт ниже отсеет мусор.
                 if len(mint) < 30:
@@ -121,7 +122,21 @@ class CopyTrader:
                     continue
                 
                 pre_amt = pre_dict.get(mint, 0.0)
-                if post_amt > pre_amt: # Баланс вырос = ПОКУПКА
+                post_amt = post_dict.get(mint, 0.0)
+
+                # 1. ОТСЛЕЖИВАНИЕ СБРОСА КИТА: если кит продаёт монету, которая у нас открыта — выходим вслед за ним!
+                if post_amt < pre_amt and pre_amt > 0:
+                    open_pos = self.tracker.get_open_positions()
+                    if mint in open_pos:
+                        sell_pct = (pre_amt - post_amt) / pre_amt
+                        cur_p = await self.get_token_price(mint)
+                        print(f"🐋 [WHALE DUMP] {trader_name} продал {sell_pct*100:.0f}% доли {mint[:12]}! Срочно выходим вслед за китом...")
+                        if sell_pct >= 0.70:
+                            self.tracker.close_position(mint, cur_p, f"Whale Exit ({trader_name} dump {sell_pct*100:.0f}%)")
+                        else:
+                            self.tracker.partial_close_position(mint, cur_p, 0.50, f"Whale Frontrun ({trader_name} sold {sell_pct*100:.0f}%)")
+
+                elif post_amt > pre_amt: # Баланс вырос = ПОКУПКА
                     import config
                     now = time.time()
                     self.whale_buys.setdefault(mint, {})
