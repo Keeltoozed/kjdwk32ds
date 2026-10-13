@@ -40,8 +40,8 @@ async def fomo_loop(analyzer, tracker):
                         try:
                             attrs = pool.get("attributes", {})
                             chg_m5 = float((attrs.get("price_change_percentage") or {}).get("m5", 0) or 0)
-                            # Не шлём во флете: только монеты с реальным импульсом m5 >= 3.0%
-                            if chg_m5 < 3.0:
+                            # Не шлём во флете: только монеты с реальным импульсом m5 >= 2.5%
+                            if chg_m5 < 2.5:
                                 continue
                             bid = pool.get("relationships", {}).get("base_token", {}).get("data", {}).get("id", "")
                             m = bid.split("_", 1)[1] if "_" in bid else bid

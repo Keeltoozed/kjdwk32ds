@@ -577,11 +577,7 @@ class Analyzer:
                 print(f"🚫 Мусор: Токен {symbol} мимикрирует под известный бренд/мем. Это 100% scam.")
                 return False
             
-        is_vip = self.check_hyper_rocket_momentum(pair_data)
-
-        if is_vip and not getattr(config, "VIP_ENTRIES_ENABLED", False):
-            print(f"🚫 [VIP OFF] {mint[:8]}: вход отключён")
-            return False
+        is_vip = self.check_hyper_rocket_momentum(pair_data) and getattr(config, "VIP_ENTRIES_ENABLED", False)
 
         # === VIP OVERHEAT GUARD: не покупаем вершину вертикали ===
         if is_vip and pair_data:
@@ -602,6 +598,8 @@ class Analyzer:
                 return False
 
         _lottery = False
+        _created_pre = pair_data.get("pairCreatedAt") or 0
+        _age_min_pre = (time.time() * 1000 - _created_pre) / 60000.0 if _created_pre else 999
         if not is_vip and pair_data:
             _pc = pair_data.get("priceChange") or {}
             _m5 = _pc.get("m5", 0) or 0
@@ -612,8 +610,6 @@ class Analyzer:
             _v24 = (pair_data.get("volume") or {}).get("h24", 0) or 0
             _txm5_pre = (pair_data.get("txns") or {}).get("m5", {}) or {}
             _vm5_pre = (pair_data.get("volume") or {}).get("m5", 0) or 0
-            _created_pre = pair_data.get("pairCreatedAt") or 0
-            _age_min_pre = (time.time() * 1000 - _created_pre) / 60000.0 if _created_pre else 999
             if _age_min_pre < 10 and (_txm5_pre.get("buys", 0) + _txm5_pre.get("sells", 0)) == 0 and _vm5_pre == 0:
                 print(f"⏳ [ENTRY] {mint}: возраст {_age_min_pre:.1f} мин, m5-окно API ещё пустое — повторю позже, снайпер ведёт его по WSS.")
                 return None
@@ -624,19 +620,21 @@ class Analyzer:
                 print(f"🎰 [LOTTERY] {mint}: вертикаль m5 {_m5:+.0f}%, m1 {_m1:+.1f}% — кандидат на вход уменьшенным сайзом.")
                 _lottery = True
             else:
-                if _m5 < getattr(config, "PULLBACK_MIN_M5_PCT", 0.03) * 100:
+                if _m5 < getattr(config, "PULLBACK_MIN_M5_PCT", 0.025) * 100:
                     print(f"🚫 [ENTRY] {mint}: m5 {_m5:+.1f}% < импульса не было, пропуск.")
                     return False
-                if _m1 > getattr(config, "PULLBACK_M1_MAX_PCT", 0.10) * 100:
+                if _m1 > getattr(config, "PULLBACK_M1_MAX_PCT", 0.08) * 100:
                     print(f"🚫 [ENTRY] {mint}: m1 {_m1:+.1f}% — вертикаль в процессе, купим вершину. Ждём откат.")
                     return False
                 if _m1 < getattr(config, "PULLBACK_M1_MIN_PCT", -0.15) * 100:
                     print(f"🚫 [ENTRY] {mint}: m1 {_m1:+.1f}% — импульс схлопнулся, это дамп, не откат.")
                     return False
-                if _h1 > getattr(config, "PULLBACK_MAX_H1_PCT", 1.5) * 100:
+                if _h1 > getattr(config, "PULLBACK_MAX_H1_PCT", 3.0) * 100:
                     print(f"🚫 [ENTRY] {mint}: h1 {_h1:+.0f}% — уже улетел, поздно.")
                     return False
-            if _s > 0 and _b < _s * 1.1:
+            _txm5 = (pair_data.get("txns") or {}).get("m5", {}) or {}
+            _b5, _s5 = _txm5.get("buys", 0) or 0, _txm5.get("sells", 0) or 0
+            if _s > 0 and _b < _s * 1.1 and not (_m5 >= 3.0 and _s5 > 0 and _b5 >= _s5 * 1.2):
                 print(f"🚫 [ENTRY] {mint}: buys {_b} / sells {_s} — нет давления покупателей.")
                 return False
             if _s == 0 and _b > 10:
@@ -646,8 +644,6 @@ class Analyzer:
             if _v24 < _v24_min:
                 print(f"🚫 [ENTRY] {mint}: vol24h ${_v24:,.0f} < ${_v24_min:,.0f} — совсем нет объёма.")
                 return False
-            _txm5 = (pair_data.get("txns") or {}).get("m5", {}) or {}
-            _b5, _s5 = _txm5.get("buys", 0) or 0, _txm5.get("sells", 0) or 0
 
             _tx_min = 15 if _age_min_pre < 30 else 30
             if (_b5 + _s5) < _tx_min:
@@ -674,9 +670,9 @@ class Analyzer:
         
         # Защита от микро-пулов (теперь применяется ко ВСЕМ токенам, включая pump и VIP)
         liquidity = pair_data.get("liquidity", {}).get("usd", 0)
-        min_liq = getattr(config, "MIN_LIQUIDITY", 30000)
-        if liquidity < min_liq:
-            print(f"📉 Изоляция: {symbol} имеет микро-пул (${liquidity:.0f} < ${min_liq//1000}k). Риск 100% проскальзывания.")
+        _min_liq = 12000 if _age_min_pre < 30 else getattr(config, "MIN_LIQUIDITY", 20000)
+        if liquidity < _min_liq:
+            print(f"📉 Изоляция: {symbol} имеет микро-пул (${liquidity:.0f} < ${_min_liq//1000}k). Риск 100% проскальзывания.")
             return False
             
         if is_vip:

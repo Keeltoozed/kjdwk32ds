@@ -393,7 +393,8 @@ async def scanner_loop(analyzer, tracker):
                             print(f"🚫 SCANNER {mint[:8]}: прошлый лосс {_pl*100:.0f}% — второй раз не входим.")
                         processed_mints[mint] = time.time()
                         continue
-                    if time.time() - processed_mints.get(mint, 0.0) < 600:
+                    _cd = 60 if mint in _graduated_set else 600
+                    if time.time() - processed_mints.get(mint, 0.0) < _cd:
                         continue
                     
                     # Держим память в чистоте
@@ -426,7 +427,14 @@ async def scanner_loop(analyzer, tracker):
                                     except Exception:
                                         pass
                             continue
-                        processed_mints[mint] = time.time()
+                        if is_good is False:
+                            _sig = str(analyzer.get_signal(mint) or "")
+                            if "откат" in _sig or "вертикаль" in _sig or mint in _graduated_set:
+                                processed_mints[mint] = time.time() - 600 + 45  # Перепроверить через 45с
+                            else:
+                                processed_mints[mint] = time.time()
+                        else:
+                            processed_mints[mint] = time.time()
                         analyzer.log_scan(mint[:8], mint, "SCANNER",
                                           is_good, getattr(analyzer, "last_score", 0.0))
 
@@ -434,6 +442,7 @@ async def scanner_loop(analyzer, tracker):
                             pair_data = await analyzer.fetch_token_data(mint)
                             entry_price = float(pair_data.get("priceUsd", 0)) if pair_data else 0
                             actual_symbol = pair_data.get("baseToken", {}).get("symbol", "UNKNOWN") if pair_data else "UNKNOWN"
+                            liq_usd = float(((pair_data or {}).get("liquidity", {}) or {}).get("usd", 0) or 0)
                             if entry_price > 0:
                                 # RKT-вето дженерик-входов Solana (лотереи/VIP-билеты exempt).
                                 _ssig = analyzer.get_signal(mint)
@@ -452,7 +461,6 @@ async def scanner_loop(analyzer, tracker):
                                 else:
                                     capital = tracker.get_total_capital()
                                     base_position = capital * (config.REINVEST_PERCENT / 100.0)
-                                    liq_usd = pair_data.get("liquidity", {}).get("usd", 0) if pair_data else 0
                                     max_allowed_by_pool = liq_usd * 0.01 if liq_usd > 0 else 99999.0  
                                     position_size = max(4.0, min(base_position, max_allowed_by_pool, 100.0))
                                     
@@ -1129,7 +1137,7 @@ async def _evm_chain_loop(analyzer, tracker, chain: str):
                     _user = [w for w in (getattr(config, "USER_WATCHLIST", []) or [])
                              if w and w.startswith("0x")]
                     _cap = int(getattr(config, "EVM_MAX_MINTS", 100))
-                    mints = list(dict.fromkeys(_user + _wss_list + fresh + boosted + profiles + trending + top_vol + search))[:_cap]
+                    mints = list(dict.fromkeys(_user + trending + top_vol + fresh + boosted + profiles + _wss_list[-25:] + search))[:_cap]
                     for addr in mints:
                         if not addr or addr in tracker.positions:
                             continue
@@ -1140,9 +1148,10 @@ async def _evm_chain_loop(analyzer, tracker, chain: str):
                                 print(f"🚫 [{tag}] {addr[:10]}: прошлый лосс {_prev*100:.0f}% — второй раз не входим.")
                             processed[addr] = _t.time()
                             continue
-                        # WSS-свежатина проверяется КАЖДЫЙ круг (без кулдауна): окно ракеты - минуты.
-                        # Нет данных DS (None) = тоже не маркируем надолго, повтор через ~30 сек.
+                        # WSS-свежатина: опрашиваем раз в 20с пока дев заливает ликву
                         _is_wss = addr in _wss_fresh
+                        if _is_wss and _t.time() - processed.get(addr, 0.0) < 20:
+                            continue
                         if not _is_wss and _t.time() - processed.get(addr, 0.0) < _recooldown:
                             continue
                         try:
@@ -1151,13 +1160,23 @@ async def _evm_chain_loop(analyzer, tracker, chain: str):
                             print(f"{emoji} {tag} analyze err {addr[:10]}: {type(e).__name__} {e}")
                             continue
                         if ok is None:
-                            processed[addr] = _t.time() - _recooldown + 30
+                            processed[addr] = _t.time() - _recooldown + 20
                             continue
-                        if ok is False and "flat" in analyzer.get_signal(addr):
-                            td_tmp = await evm_data.get_token_data(addr, chain)
-                            _lq_tmp = float(((td_tmp or {}).get("liquidity", {}) or {}).get("usd", 0) or 0)
-                            if _lq_tmp >= 30000:
-                                processed[addr] = _t.time() - _recooldown + 60  # Быстрый опрос через 60с для глубоких пулов (DOPE/NOICE)
+                        _sig = str(analyzer.get_signal(addr) or "")
+                        if ok is False:
+                            if "micro-liq" in _sig:
+                                processed[addr] = _t.time() - _recooldown + 25  # Дев может залить ликвидность через 20-30с
+                            elif "age" in _sig:
+                                processed[addr] = _t.time() - _recooldown + 30  # Ждем минимального возраста
+                            elif "m1-green" in _sig or "вершина" in _sig:
+                                processed[addr] = _t.time() - _recooldown + 35  # Ждем отката 1м импульса
+                            elif "flat" in _sig or "m5-no-pressure" in _sig:
+                                td_tmp = await evm_data.get_token_data(addr, chain)
+                                _lq_tmp = float(((td_tmp or {}).get("liquidity", {}) or {}).get("usd", 0) or 0)
+                                if _lq_tmp >= 20000:
+                                    processed[addr] = _t.time() - _recooldown + 60  # Глубокий пул перепроверить через 60с
+                                else:
+                                    processed[addr] = _t.time()
                             else:
                                 processed[addr] = _t.time()
                         else:

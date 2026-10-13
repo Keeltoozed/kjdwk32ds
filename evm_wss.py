@@ -155,11 +155,11 @@ def drain_fresh(chain: str, max_age_sec: int = 600) -> list:
     """Забрать свежие пулы сети (и почистить старые). Возвращает [token, ...]."""
     now = time.time()
     box = FRESH_POOLS.setdefault(chain, [])
-    fresh = [tok for tok, _pool, ts in box if now - ts <= max_age_sec]
-    FRESH_POOLS[chain] = [(tok, pool, ts) for tok, pool, ts in box if now - ts <= max_age_sec]
+    valid = [(tok, pool, ts) for tok, pool, ts in box if now - ts <= max_age_sec][-30:]
+    FRESH_POOLS[chain] = valid
     seen = set()
     out = []
-    for tok in fresh:
+    for tok, _pool, _ts in valid:
         if tok not in seen:
             seen.add(tok)
             out.append(tok)
