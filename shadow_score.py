@@ -60,23 +60,28 @@ def pump_score(chg: float = 0.0, vol: float = 0.0, buys: float = 0.0,
 def pair_shadow_score(pair_data: dict) -> float:
     """Скор из пары DexScreener: m5-окно если живое, иначе h24."""
     try:
+        raw_liq = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
+        dex_id = pair_data.get("dexId", "")
+        base_addr = ((pair_data.get("baseToken") or {}).get("address") or "")
+        if raw_liq == 0 and (dex_id == "pump" or base_addr.endswith("pump")):
+            raw_liq = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0) * 0.40
+
         txm5 = (pair_data.get("txns") or {}).get("m5", {}) or {}
         b5, s5 = txm5.get("buys", 0) or 0, txm5.get("sells", 0) or 0
         vm5 = (pair_data.get("volume") or {}).get("m5", 0) or 0
         if (b5 + s5) > 0:
             pc = pair_data.get("priceChange") or {}
             return pump_score(chg=pc.get("m5", 0) or 0, vol=vm5, buys=b5, sells=s5,
-                              liq=(pair_data.get("liquidity") or {}).get("usd", 0) or 0,
+                              liq=raw_liq,
                               fdv=pair_data.get("fdv", 0) or 0,
                               bsr=(b5 / (s5 + 1)),
-                              vtl=(vm5 / (((pair_data.get("liquidity") or {}).get("usd", 0) or 0) + 1)))
+                              vtl=(vm5 / (raw_liq + 1)))
         txh = (pair_data.get("txns") or {}).get("h24", {}) or {}
         bh, sh = txh.get("buys", 0) or 0, txh.get("sells", 0) or 0
         vh = (pair_data.get("volume") or {}).get("h24", 0) or 0
-        liq = (pair_data.get("liquidity") or {}).get("usd", 0) or 0
         pc = pair_data.get("priceChange") or {}
         return pump_score(chg=pc.get("h24", 0) or 0, vol=vh, buys=bh, sells=sh,
-                          liq=liq, fdv=pair_data.get("fdv", 0) or 0,
-                          bsr=(bh / (sh + 1)), vtl=(vh / (liq + 1)))
+                          liq=raw_liq, fdv=pair_data.get("fdv", 0) or 0,
+                          bsr=(bh / (sh + 1)), vtl=(vh / (raw_liq + 1)))
     except Exception:
         return 0.5

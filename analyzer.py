@@ -139,8 +139,8 @@ class Analyzer:
             if not getattr(_c, "ROCKET_VETO_ENABLED", True):
                 return None
             s = (sig or "").upper()
-            # DIPBUY / SCOUT имеют право на сниженный сайз при умеренном скоре,
-            # но мусор (RKT < 0.20) не должен проходить НИ ПОД КАКИМ флагом.
+            if any(k in s for k in ("LOTTERY", "VIP", "DIPBUY", "COPY")):
+                return None
             if "SCOUT" in s:
                 # Для SCOUT не пускаем падающие ножи со скором ниже 0.45 (кейс Animates 0.38)
                 self._rkt_tag(address, pair_data or {})
@@ -321,18 +321,35 @@ class Analyzer:
         return unique_tokens
                 
     async def fetch_token_data(self, mint: str) -> dict:
-        data = await self._fetch_dex_search(mint)
-        if True:
-            try:
-                if data:
-                    pairs = data.get("pairs") or []
-                    if pairs:
-                        sol_pairs = [p for p in pairs if p.get("chainId") == "solana"]
-                        if sol_pairs:
-                            return sorted(sol_pairs, key=lambda x: x.get("liquidity", {}).get("usd", 0), reverse=True)[0]
-                return await self.fetch_token_data_gecko(mint)
-            except Exception as e:
-                return await self.fetch_token_data_gecko(mint)
+        url = f"https://api.dexscreener.com/latest/dex/tokens/{mint}"
+        from http_client import fetch_json
+        try:
+            status, data = await fetch_json(url, timeout=8, retries=1)
+            if status == 200 and data:
+                pairs = data.get("pairs") or []
+                if pairs:
+                    sol_pairs = [p for p in pairs if (p.get("chainId") or "").lower() == "solana"]
+                    if sol_pairs:
+                        def _get_eff_liq(p):
+                            raw_l = float(((p.get("liquidity") or {}).get("usd", 0) or 0))
+                            if raw_l > 0:
+                                return raw_l
+                            if p.get("dexId") == "pump" or mint.endswith("pump"):
+                                return float(p.get("fdv", 0) or p.get("marketCap", 0) or 0) * 0.40
+                            return 0.0
+
+                        best_pair = sorted(sol_pairs, key=_get_eff_liq, reverse=True)[0]
+                        if best_pair.get("dexId") == "pump" or mint.endswith("pump"):
+                            cur_l = float(((best_pair.get("liquidity") or {}).get("usd", 0) or 0))
+                            if cur_l == 0:
+                                eff = float(best_pair.get("fdv", 0) or best_pair.get("marketCap", 0) or 0) * 0.40
+                                if not isinstance(best_pair.get("liquidity"), dict):
+                                    best_pair["liquidity"] = {}
+                                best_pair["liquidity"]["usd"] = eff
+                        return best_pair
+            return await self.fetch_token_data_gecko(mint)
+        except Exception as e:
+            return await self.fetch_token_data_gecko(mint)
 
     async def fetch_token_data_gecko(self, mint: str) -> dict:
         from http_client import fetch_json
@@ -610,9 +627,13 @@ class Analyzer:
             _v24 = (pair_data.get("volume") or {}).get("h24", 0) or 0
             _txm5_pre = (pair_data.get("txns") or {}).get("m5", {}) or {}
             _vm5_pre = (pair_data.get("volume") or {}).get("m5", 0) or 0
-            if _age_min_pre < 10 and (_txm5_pre.get("buys", 0) + _txm5_pre.get("sells", 0)) == 0 and _vm5_pre == 0:
-                print(f"⏳ [ENTRY] {mint}: возраст {_age_min_pre:.1f} мин, m5-окно API ещё пустое — повторю позже, снайпер ведёт его по WSS.")
-                return None
+            if (_txm5_pre.get("buys", 0) + _txm5_pre.get("sells", 0)) == 0 and _vm5_pre == 0:
+                if _age_min_pre < 2.0:
+                    print(f"⏳ [ENTRY] {mint}: возраст {_age_min_pre:.1f} мин, m5-окно API ещё пустое — повторю позже.")
+                    return None
+                else:
+                    print(f"💀 [ENTRY] {mint}: возраст {_age_min_pre:.1f} мин, 0 сделок в m5 — мёртвый токен.")
+                    return False
             if _m5 >= getattr(config, "LOTTERY_MIN_M5_PCT", 1.0) * 100:
                 if _m1 < 0:
                     print(f"🚫 [LOTTERY] {mint}: m5 {_m5:+.0f}%, но m1 {_m1:+.1f}% — вертикаль откатывает, это вершина.")
@@ -678,14 +699,11 @@ class Analyzer:
         raw_liq = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
         fdv_mc = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
 
-        if is_pump_token and raw_liq == 0:
-            liquidity = fdv_mc * 0.40
+        if is_pump_token:
+            liquidity = max(raw_liq, fdv_mc * 0.40)
+            _min_liq = 2000  # Для Pump.fun кёрва $2k ликвы (MC ~$5k+) достаточно для ордера $15 (проскальзывание <0.8%)
         else:
             liquidity = raw_liq
-
-        if is_pump_token:
-            _min_liq = 6000  # Для Pump.fun кёрва $6k ликвы (MC ~$15k+) достаточно для ордера $15
-        else:
             _min_liq = 12000 if _age_min_pre < 30 else getattr(config, "MIN_LIQUIDITY", 20000)
 
         if liquidity < _min_liq:
@@ -710,7 +728,7 @@ class Analyzer:
             has_website = len(websites) > 0
             
             _socials_unknown = bool(pair_data.get("_socials_unknown", False))
-            if not _socials_unknown and liquidity < 25000:
+            if not _socials_unknown and not _lottery and liquidity < 25000:
                 if not (has_twitter or has_tg or has_website):
                     print(f"🚫 Мусор: У {mint} вообще нет ни одной соцсети или сайта.")
                     return False
@@ -832,15 +850,17 @@ class Analyzer:
         
         # Глобальная защита от дешевых скрамов/рагпуллов
         liq = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
-        if liq == 0 and ((dex_id == "pump") or mint.endswith("pump")):
-            liq = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0) * 0.40
-        _floor_liq = 4000 if ((dex_id == "pump") or mint.endswith("pump")) else 5000
+        if (dex_id == "pump") or mint.endswith("pump"):
+            liq = max(liq, float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0) * 0.40)
+            _floor_liq = 2000
+        else:
+            _floor_liq = 5000
         if liq < _floor_liq:
             print(f"🚫 [ANTI-RUG] {symbol} ({mint[:8]}): Ликвидность всего ${liq:,.0f} < ${_floor_liq}. Слишком опасно.")
             return False
             
         if dex_id == "pump" and age_minutes <= 15:
-            return await self.analyze_token_xgboost(mint, pair_data)
+            return await self.analyze_token_xgboost(mint, pair_data, _lottery=_lottery)
         else:
             return await self.analyze_token_raydium(mint, pair_data)
 
@@ -1190,7 +1210,7 @@ class Analyzer:
             pass
         return 1.0
 
-    async def analyze_token_xgboost(self, mint: str, pair_data: dict) -> bool:
+    async def analyze_token_xgboost(self, mint: str, pair_data: dict, _lottery: bool = False) -> bool:
         if not pair_data:
             return False
             
@@ -1259,10 +1279,14 @@ class Analyzer:
         if is_vip:
             threshold = 45.0  
             print(f"🔥 [VIP] Порог XGBoost как у всех: {threshold}%")
+        elif _lottery:
+            threshold = 25.0
+            print(f"🎰 [LOTTERY] Порог XGBoost для вертикали ослаблен: {threshold}% (сайз 0.25x)")
 
         ok = bool(conf >= threshold)
         if ok:
-            self._set_sig(mint, f"{'VIP-' if is_vip else ''}PUMP-XGB {conf:.0f}%")
+            _sig_name = f"{'VIP-' if is_vip else ''}{'LOTTERY-' if _lottery else ''}PUMP-XGB {conf:.0f}%"
+            self._set_sig(mint, _sig_name)
         return ok
 
     async def analyze_token_raydium(self, mint: str, pair_data: dict) -> bool:

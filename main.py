@@ -413,6 +413,7 @@ async def scanner_loop(analyzer, tracker):
                             except Exception:
                                 pass
                         if is_good is None:
+                            processed_mints[mint] = time.time() - 600 + 30  # Перепроверить через 30с вместо бесконечного цикла каждую секунду
                             if mint in _graduated_set:
                                 # DS ещё не проиндексировал новый пул — вернём в очередь, не теряем.
                                 # Но после 3 пустых — это не лаг, а скам/нестандарт: хороним.

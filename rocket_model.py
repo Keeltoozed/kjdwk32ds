@@ -53,6 +53,8 @@ def features_from_pair(pair_data: dict) -> list:
         txh1 = ((pd.get("txns") or {}).get("h1") or {})
         vol = (pd.get("volume") or {})
         liq = _f((pd.get("liquidity") or {}).get("usd", 0))
+        if liq == 0 and (pd.get("dexId") == "pump" or ((pd.get("baseToken") or {}).get("address") or "").endswith("pump")):
+            liq = _f(pd.get("fdv", 0) or pd.get("marketCap", 0)) * 0.40
         b5, s5 = _f(txm5.get("buys", 0)), _f(txm5.get("sells", 0))
         bh, sh = _f(txh1.get("buys", 0)), _f(txh1.get("sells", 0))
         vm5, vh = _f(vol.get("m5", 0)), _f(vol.get("h24", 0))

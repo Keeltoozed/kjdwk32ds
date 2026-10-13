@@ -123,6 +123,7 @@ EVM_RESCAN_COOLDOWN = 300  # Было 600: перепроверка отклон
 # === BASE (EVM L2, там сидят мемы с fomo.family: musebook, DELTA...) ===
 # Тот же EVM-движок, slug DexScreener "base". Пулы глубже - порог $15к.
 BASE_ENABLED = True
+BASE_MIN_LIQUIDITY = 3500.0  # Снижено до $3.5k: стандартные Clanker/Uniswap v3 мемы на Base стартуют с 1-1.5 ETH (~$3-4k)
 BASE_SCAN_INTERVAL = 90  # как Robinhood: реже = без 429
 
 # === BSC (GSTOCK и co с fomo.family сидят там) ===
