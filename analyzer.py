@@ -777,17 +777,17 @@ class Analyzer:
                         continue
                     non_curve_accounts.append((amt, pct))
                 
-                top_10 = non_curve_accounts[:10]
-                top_10_amounts = [x[0] for x in top_10]
-                
-                if len(top_10_amounts) >= 3:
-                    rounded_amounts = [round(amt, -6) for amt in top_10_amounts if amt > 1000000]
-                    if rounded_amounts:
-                        from collections import Counter
-                        counts = Counter(rounded_amounts)
-                        if counts.most_common(1)[0][1] >= 3:
-                            print(f"🚫 [АНТИСКАМ] Обнаружен Jito-бандл (Сивил атака) у {mint}. Блокируем.")
-                            return False
+                # Защита от Jito-бандлов (Сивил-атака дева):
+                # Проверяем ТОЛЬКО крупные кошельки (>= 1.5% сапплая), которые реально могут сдампить.
+                # Розничные покупки (< 1.5%, т.е. $10-$20) не являются бандлом.
+                bundle_suspects = [round(pct, 1) for (amt, pct) in top_10 if pct >= 1.5]
+                if len(bundle_suspects) >= 3:
+                    from collections import Counter
+                    counts = Counter(bundle_suspects)
+                    most_common_pct, count = counts.most_common(1)[0]
+                    if count >= 3 and (most_common_pct * count) >= 6.0:
+                        print(f"🚫 [АНТИСКАМ] Обнаружен Jito-бандл (Сивил атака: {count} кошельков по ~{most_common_pct:.1f}%) у {mint}. Блокируем.")
+                        return False
                 
                 top_10_sum_pct = sum([x[1] for x in top_10])
                 dev_holding_pct = top_10[0][1] if top_10 else 0.0

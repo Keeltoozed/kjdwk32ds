@@ -313,7 +313,7 @@ class PumpFunSniper:
                             mint = data["mint"]
                             symbol = data.get("symbol", "UNKNOWN")
                             trader_pubkey = data.get("traderPublicKey", "")
-                            initial_buy = data.get("initialBuy", 0)
+                            initial_buy = float(data.get("initialBuy") or 0)
                             
                             if initial_buy > 200_000_000:
                                 continue # Пропускаем мега-дампы
@@ -337,7 +337,7 @@ class PumpFunSniper:
                             if not state:
                                 continue
                                 
-                            sol_amount = data.get("vSolInBondingCurve", 0)
+                            sol_amount = float(data.get("vSolInBondingCurve") or 0)
                             if sol_amount == 0:
                                 continue
                                 
@@ -346,7 +346,7 @@ class PumpFunSniper:
                                 'timestamp': time.time(),
                                 'type': tx_type,
                                 'curve_sol': sol_amount,
-                                'market_cap_sol': data.get("marketCapSol", 0),
+                                'market_cap_sol': float(data.get("marketCapSol") or 0),
                                 'wallet': data.get('traderPublicKey')
                             })
                             state.unique_buyers.add(data.get('traderPublicKey'))
@@ -385,18 +385,18 @@ class PumpFunSniper:
                                 p_tracker = self.tracker if self.tracker else PaperTracker()
                                 pos = p_tracker.positions.get(mint)
                                 if pos and pos.status == "open":
-                                    # ИСПРАВЛЕНИЕ: берем marketCapSol, а не vSolInBondingCurve, для правильного расчета цены!
-                                    market_cap_sol = data.get("marketCapSol", 0)
+                                    market_cap_sol = float(data.get("marketCapSol") or 0)
                                     if market_cap_sol > 0:
                                         live_price = (market_cap_sol / 1_000_000_000.0) * get_sol_price_sync()
                                         pos.current_price_usd = live_price
                                         pos.price_updated_at = time.time()
-                                    if live_price > pos.max_price_usd:
-                                        pos.max_price_usd = live_price
-                                    # Рассчитываем PNL для логов (Stop-Loss все равно сработает в главном цикле, но быстрее)
-                                    pnl_pct = (live_price - pos.entry_price_usd) / pos.entry_price_usd
-                                    pos.current_pnl_usd = pos.amount_usd * pnl_pct
-                                    p_tracker.save_portfolio()
+                                        if live_price > float(pos.max_price_usd or 0.0):
+                                            pos.max_price_usd = live_price
+                                        # Рассчитываем PNL для логов (Stop-Loss все равно сработает в главном цикле, но быстрее)
+                                        if pos.entry_price_usd and pos.entry_price_usd > 0:
+                                            pnl_pct = (live_price - pos.entry_price_usd) / pos.entry_price_usd
+                                            pos.current_pnl_usd = pos.amount_usd * pnl_pct
+                                        p_tracker.save_portfolio()
                                     
                             
                             
