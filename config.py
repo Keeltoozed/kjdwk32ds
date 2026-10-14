@@ -118,8 +118,8 @@ ROBINHOOD_EXPLORER = "https://robinhoodchain.blockscout.com"
 ROBINHOOD_MIN_LIQUIDITY = 10000.0  # Снижено до $10k (не пропускает ракеты вроде NOCKAI $15.7k +943%)
 ROBINHOOD_MIN_AGE_MIN = 5.0  # Не моложе 5 минут (flash-rug зона девов)
 ROBINHOOD_SCAN_INTERVAL = 90  # Было 25: 3 сети x 2 GT-запроса = 429. EVM-импульсы живут дольше solana-пампов
-EVM_MIN_M5_PCT = 5.0  # Было 7.0: ранние подтверждённые импульсы от +5% пускаем
-EVM_RESCAN_COOLDOWN = 300  # Было 600: перепроверка отклонённых через 5 мин (волна может прийти позже)
+EVM_MIN_M5_PCT = 2.0  # Ранние импульсы от +2% пускаем (не отсекать ранние старты вроде binancians +2.6%, 旺柴 +2.8%)
+EVM_RESCAN_COOLDOWN = 180  # Перепроверка через 3 мин (волна может прийти позже)
 
 # === BASE (EVM L2, там сидят мемы с fomo.family: musebook, DELTA...) ===
 # Тот же EVM-движок, slug DexScreener "base". Пулы глубже - порог $15к.

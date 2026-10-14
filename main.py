@@ -344,11 +344,8 @@ async def scanner_loop(analyzer, tracker):
             if open_count < config.MAX_CONCURRENT_POSITIONS:
                 print(f"🔎 Сканируем монеты... (Открыто: {open_count}/{config.MAX_CONCURRENT_POSITIONS})")
                 
-                # 1. VIP Токены (DexScreener API)
-                tokens = await analyzer.fetch_latest_tokens()
-                mints_to_scan = [p.get("tokenAddress") for p in tokens if p.get("tokenAddress")]
-
-                # 1b. Органика Solana: GeckoTerminal Trending + свежие пулы Raydium и Pump.fun
+                mints_to_scan = []
+                # 1. Органика Solana ПЕРВЫМИ: GeckoTerminal Trending + свежие живые пулы с объемом
                 try:
                     import market_data
                     trending_pools = await market_data.get_trending()
@@ -356,6 +353,11 @@ async def scanner_loop(analyzer, tracker):
                         mints_to_scan.extend([p.get("tokenAddress") for p in trending_pools if p.get("tokenAddress")])
                 except Exception as _e:
                     pass
+
+                # 2. DexScreener бусты и профили
+                tokens = await analyzer.fetch_latest_tokens()
+                if tokens:
+                    mints_to_scan.extend([p.get("tokenAddress") for p in tokens if p.get("tokenAddress")])
 
                 # 0. Миграции ПЕРВЫМИ: только что вышли из кёрва в Raydium-пул —
                 # окно ракеты минуты, DS ещё может не проиндексировать (None → вернём в очередь).
