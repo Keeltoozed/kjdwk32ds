@@ -31,7 +31,7 @@ def _store(key: str, val: list):
 # GROWTH: минимум $20k везде (было $30k). Пыль $0-15k режется, раги от вершины,
 # а не от глубины (все лузеры были в $30k+ пулах). Conviction-x2 от $30k отдельно.
 CHAINS = {
-    "robinhood": {"min_liq": float(getattr(config, "ROBINHOOD_MIN_LIQUIDITY", 10000.0)), "tag": "ROBINHOOD"},
+    "robinhood": {"min_liq": float(getattr(config, "ROBINHOOD_MIN_LIQUIDITY", 3500.0)), "tag": "ROBINHOOD"},
     "base": {"min_liq": float(getattr(config, "BASE_MIN_LIQUIDITY", 3500.0)), "tag": "BASE"},
     "bsc": {"min_liq": float(getattr(config, "BSC_MIN_LIQUIDITY", 12000.0)), "tag": "BSC"},
     "ethereum": {"min_liq": float(getattr(config, "ETHEREUM_MIN_LIQUIDITY", 15000.0)), "tag": "ETHEREUM"},

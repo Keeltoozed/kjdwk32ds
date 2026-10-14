@@ -115,11 +115,13 @@ ROBINHOOD_DS_SLUG = "robinhood"  # slug DexScreener (НЕ 4663 - тот верн
 ROBINHOOD_GT_NETWORK = "robinhood"  # slug GeckoTerminal
 ROBINHOOD_RPC_URL = "https://rpc.mainnet.chain.robinhood.com"
 ROBINHOOD_EXPLORER = "https://robinhoodchain.blockscout.com"
-ROBINHOOD_MIN_LIQUIDITY = 10000.0  # Снижено до $10k (не пропускает ракеты вроде NOCKAI $15.7k +943%)
-ROBINHOOD_MIN_AGE_MIN = 5.0  # Не моложе 5 минут (flash-rug зона девов)
+ROBINHOOD_MIN_LIQUIDITY = 3500.0  # Снижено до $3.5k (как Base: Clanker/Uniswap v3 мемы стартуют с $3-4k, не пропускает CLAUDIA $3.9k)
+ROBINHOOD_MIN_AGE_MIN = 2.5  # 2.5 мин (как Solana, не пропускает ранние импульсы)
 ROBINHOOD_SCAN_INTERVAL = 90  # Было 25: 3 сети x 2 GT-запроса = 429. EVM-импульсы живут дольше solana-пампов
 EVM_MIN_M5_PCT = 2.0  # Ранние импульсы от +2% пускаем (не отсекать ранние старты вроде binancians +2.6%, 旺柴 +2.8%)
 EVM_RESCAN_COOLDOWN = 180  # Перепроверка через 3 мин (волна может прийти позже)
+EVM_MAX_MINTS = 120  # Лимит активных кандидатов за цикл скана
+
 
 # === BASE (EVM L2, там сидят мемы с fomo.family: musebook, DELTA...) ===
 # Тот же EVM-движок, slug DexScreener "base". Пулы глубже - порог $15к.

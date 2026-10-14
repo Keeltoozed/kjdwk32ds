@@ -10,6 +10,11 @@ class BirthTracker:
     def add_token(self, mint: str):
         with self.lock:
             self.tokens[mint] = time.time()
+
+    def remove_token(self, mint: str):
+        """Удалить мертвый или отсканированный токен из трекера, чтобы не опрашивать повторно."""
+        with self.lock:
+            self.tokens.pop(mint, None)
     
     def get_mature_tokens(self, min_age_minutes: int, max_age_minutes: int):
         now = time.time()

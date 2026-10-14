@@ -641,6 +641,11 @@ class Analyzer:
                     return None
                 else:
                     print(f"💀 [ENTRY] {mint}: возраст {_age_min_pre:.1f} мин, 0 сделок в m5 — мёртвый токен.")
+                    try:
+                        from birth_tracker import birth_tracker
+                        birth_tracker.remove_token(mint)
+                    except Exception:
+                        pass
                     return False
             if _m5 >= getattr(config, "LOTTERY_MIN_M5_PCT", 1.0) * 100:
                 if _m1 < 0:
@@ -959,13 +964,17 @@ class Analyzer:
             "symbol": symbol, "chain": chain, "price": _px_now,
             "liq": liq, "m5": m5, "source": tag
         }
-        # BSC & Robinhood: токены младше 3 минут — зона мгновенных flash-рагов и дев-дампов (ORRIS/BATONA)
-        if chain in ("bsc", "robinhood") and _age_min < float(getattr(config, f"{chain.upper()}_MIN_AGE_MIN", 3.0)):
+        # BSC & Robinhood: токены младше 2.5 минут — зона мгновенных flash-рагов и дев-дампов (ORRIS/BATONA)
+        _min_age_thr = float(getattr(config, f"{chain.upper()}_MIN_AGE_MIN", 2.5))
+        if chain in ("bsc", "robinhood") and _age_min < _min_age_thr:
             return self._deny(address, f"{chain}-age {_age_min:.1f}m",
-                              f"🚫 [{tag}] {symbol}: возраст {_age_min:.1f}м < {float(getattr(config, f'{chain.upper()}_MIN_AGE_MIN', 3.0)):.1f}м — ранняя {tag} flash-rug зона.")
+                              f"🚫 [{tag}] {symbol}: возраст {_age_min:.1f}м < {_min_age_thr:.1f}м — ранняя {tag} flash-rug зона.")
 
-        if (_age_min < 5 and m5 >= 3.0 and (b5 + s5) >= 15 and liq >= 15000
-                and s5 >= 2 and b5 >= s5 and (b5 / max(s5, 1)) <= 4.0 and links):
+        # Ранний Scout-режим для свежих ракет (<10 мин):
+        # Пулы только зарождаются ($3k+), соцсети девы ещё не привязали к DexScreener, но есть реальные покупки и продажи.
+        _scout_min_liq = 3000.0
+        if (_age_min < 10.0 and m5 >= 2.0 and (b5 + s5) >= 12 and liq >= _scout_min_liq
+                and s5 >= 2 and b5 >= s5 and (b5 / max(s5, 1)) <= 5.0):
             if not self._evm_brand_ok(symbol, tag):
                 return False
             if not await self._evm_clone_ok(symbol, address, pair_data, chain, tag):
@@ -981,7 +990,7 @@ class Analyzer:
                     if chain in ("bsc", "robinhood"):
                         return self._deny(address, "antiscam-err",
                                           f"🚫 [{tag}] {symbol}: ошибка антискама ({type(_e).__name__}) — {tag} риск.")
-            print(f"🔭 [{tag}-SCOUT] {symbol}: возраст {_age_min:.1f}м, m5 {m5:+.1f}% — ранний билет.")
+            print(f"🔭 [{tag}-SCOUT] {symbol}: возраст {_age_min:.1f}м, m5 {m5:+.1f}%, liq ${liq:,.0f} — ранний билет.")
             self._set_sig(address, f"{tag} SCOUT {_age_min:.0f}m" + self._rkt_tag(address, pair_data) + await self.meme_tag(address, symbol, pair_data, chain))
             return True
 
@@ -992,11 +1001,11 @@ class Analyzer:
         if m5 < _evm_min_m5:
             return self._deny(address, f"flat m5 {m5:+.1f}%", f"· [{tag}] {symbol}: флет m5 {m5:+.1f}%")
         _max_m5 = 60.0
-        # При органическом перевесе покупателей (b5 >= 1.5*s5, liq >= min_liq, m1 <= 6.0%)
+        # При органическом перевесе покупателей (b5 >= 1.5*s5, liq >= min_liq, m1 <= 12.0%)
         # расширяем коридор до 135% на глубоких пулах ($30k+), чтобы забирать мощные ракеты (NOM +434%, CAP +319%, DOPE)
-        if chain in ("robinhood", "base", "bsc") and liq >= 30000.0 and s5 > 0 and (b5 / s5) >= 1.5 and m1 <= 6.0 and not self.is_churn(b5, s5, m5, liq=liq):
+        if chain in ("robinhood", "base", "bsc") and liq >= 30000.0 and s5 > 0 and (b5 / s5) >= 1.5 and m1 <= 12.0 and not self.is_churn(b5, s5, m5, liq=liq):
             _max_m5 = 135.0
-        elif chain in ("robinhood", "base", "bsc") and liq >= min_liq and s5 > 0 and (b5 / s5) >= 1.5 and m1 <= 4.0 and not self.is_churn(b5, s5, m5, liq=liq):
+        elif chain in ("robinhood", "base", "bsc") and liq >= min_liq and s5 > 0 and (b5 / s5) >= 1.4 and m1 <= 10.0 and not self.is_churn(b5, s5, m5, liq=liq):
             _max_m5 = 85.0
 
         if m5 > _max_m5:
@@ -1005,9 +1014,12 @@ class Analyzer:
         if self.is_churn(b5, s5, m5, liq=liq):
             return self._deny(address, f"churn {b5}/{s5} m5 {m5:+.1f}%",
                               f"🚫 [{tag}-CHURN] {symbol}: {b5 + s5} сделок без перевеса (b/s {b5 / (s5+1):.2f}) — накрутка, не FOMO.")
-        if m1 > 5.0:
-            return self._deny(address, f"m1-green {m1:+.1f}%", f"🚫 [{tag}] {symbol}: m1 {m1:+.1f}% — вершина в моменте, ждём.")
-        if m1 < -3.0:
+        # Ослабление m1-green: мощные ракеты пробивают импульсом без отката.
+        # Разрешаем m1 до +12.0% (или до +15.0% при сильном доминировании покупателей b5 >= 2*s5)
+        _max_m1 = 15.0 if (s5 > 0 and b5 >= 2 * s5 and (b5 + s5) >= 12) else (10.0 if (s5 > 0 and b5 >= 1.4 * s5) else 5.0)
+        if m1 > _max_m1:
+            return self._deny(address, f"m1-green {m1:+.1f}%", f"🚫 [{tag}] {symbol}: m1 {m1:+.1f}% > +{_max_m1:.0f}% — вершина в моменте, ждём.")
+        if m1 < -5.0:
             return self._deny(address, f"m1-drop {m1:+.1f}%", f"🚫 [{tag}] {symbol}: m1 {m1:+.1f}% — резкое падение за 1м, падающий нож.")
         if h1 < 0.0:
             return self._deny(address, f"h1-red {h1:+.1f}%", f"🚫 [{tag}] {symbol}: h1 {h1:+.1f}% — часовой тренд вниз, падающий токен.")
@@ -1039,11 +1051,15 @@ class Analyzer:
         _evm_vol_min = 3000 if _age_min < 30 else 10000
         if (b5 + s5) < _evm_tx_min or vol24 < _evm_vol_min:
             return self._deny(address, "quiet", f"🚫 [{tag}] {symbol}: тихо (tx5 {(b5+s5)}, vol24 ${vol24:,.0f}).")
-        # Соцсети DexScreener требуют $300 и ручной привязки девом. На ранних L2 (Robinhood/Base/BSC)
-        # реальные раннеры с пулом >$20k (WISP +349%, CAESAR +324%) не имеют ссылок в первые часы.
-        # Блокируем только тонкие пулы (<$20k) или слабую активность (<15 сделок).
-        if not links and (liq < 20000 or (b5 + s5) < 15):
-            return self._deny(address, "no-links", f"🚫 [{tag}] {symbol}: нет ни одной ссылки при пуле <$20k — скам-риск.")
+        # Соцсети DexScreener требуют $300 и ручной модерации. На ранней стадии (<15 мин)
+        # девы часто привязывают их позже. Если контракт чист по GoPlus/Honeypot и есть живая активность (tx5 >= 12),
+        # пускаем без ссылок при пуле от $3,500. Блокируем только если токен старше 15 мин и без ссылок при liq < 20k,
+        # либо если совсем нет активности (<12 сделок).
+        if not links:
+            if (b5 + s5) < 12:
+                return self._deny(address, "no-links-inactive", f"🚫 [{tag}] {symbol}: нет ссылок и мало сделок (tx5 {b5+s5} < 12).")
+            if _age_min >= 15.0 and liq < 20000:
+                return self._deny(address, "no-links", f"🚫 [{tag}] {symbol}: токену {_age_min:.0f}м, нет ссылок при пуле <$20k — скам-риск.")
 
         _up = symbol.upper()
         _scam_kw = ["AAPL", "MSFT", "TSLA", "NVDA", "GOOG", "AMZN", "META", "NFLX",
