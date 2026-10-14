@@ -117,7 +117,7 @@ ROBINHOOD_RPC_URL = "https://rpc.mainnet.chain.robinhood.com"
 ROBINHOOD_EXPLORER = "https://robinhoodchain.blockscout.com"
 ROBINHOOD_MIN_LIQUIDITY = 3500.0  # Снижено до $3.5k (как Base: Clanker/Uniswap v3 мемы стартуют с $3-4k, не пропускает CLAUDIA $3.9k)
 ROBINHOOD_MIN_AGE_MIN = 2.5  # 2.5 мин (как Solana, не пропускает ранние импульсы)
-ROBINHOOD_SCAN_INTERVAL = 90  # Было 25: 3 сети x 2 GT-запроса = 429. EVM-импульсы живут дольше solana-пампов
+ROBINHOOD_SCAN_INTERVAL = 25  # 25с: быстрый опрос (BSC отключен, лимиты не превышаются)
 EVM_MIN_M5_PCT = 2.0  # Ранние импульсы от +2% пускаем (не отсекать ранние старты вроде binancians +2.6%, 旺柴 +2.8%)
 EVM_RESCAN_COOLDOWN = 180  # Перепроверка через 3 мин (волна может прийти позже)
 EVM_MAX_MINTS = 120  # Лимит активных кандидатов за цикл скана
@@ -127,7 +127,7 @@ EVM_MAX_MINTS = 120  # Лимит активных кандидатов за ц�
 # Тот же EVM-движок, slug DexScreener "base". Пулы глубже - порог $15к.
 BASE_ENABLED = True
 BASE_MIN_LIQUIDITY = 3500.0  # Снижено до $3.5k: стандартные Clanker/Uniswap v3 мемы на Base стартуют с 1-1.5 ETH (~$3-4k)
-BASE_SCAN_INTERVAL = 90  # как Robinhood: реже = без 429
+BASE_SCAN_INTERVAL = 25  # 25с: быстрый поиск ранних ракет Base
 
 # === BSC (ОТКЛЮЧЕНО: 100% сделок на BSC обернулись дев-рагпуллами с выводом пула) ===
 BSC_ENABLED = False
@@ -174,7 +174,7 @@ SNIPER_BUYERS_WINDOW_MIN = 5
 VIP_MAX_M5_PCT = 0.60  # Было 1.00 - брали вершину +100%. 60% - компромисс: ракеты пропускаем, вертикали нет
 PULLBACK_MIN_M5_PCT = 0.025  # Было 0.05: не отсекаем зарождающийся импульс (+2.5%..+4.9%) как флет
 PULLBACK_M1_MIN_PCT = -0.15  # Но и не летим в падающий нож (максимум -15% за минуту)
-PULLBACK_M1_MAX_PCT = 0.08  # Было 0.06: пускает нормальные импульсные свечи до +8% (как на EVM)
+PULLBACK_M1_MAX_PCT = 0.20  # Поднято до 20%: позволяет заходить в реальный пробойный импульс (breakout), а не ждать затухания
 PULLBACK_MAX_H1_PCT = 3.00  # До +300% за час
 LOTTERY_MIN_M5_PCT = 0.60  # Было 0.80: закрываем мертвую зону m5 60-80% (VIP_MAX 60% + лотерея от 60%)
 LOTTERY_SIZE_MULT = 0.30  # $10 * 0.30 = $3.0 билет (было 0.25 = $2.5)

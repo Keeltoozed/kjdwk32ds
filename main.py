@@ -114,11 +114,10 @@ async def position_manager_loop(analyzer, tracker):
                     continue
                 position.price_checked_at = time.time()
                 
-                # === ТАЙМАУТ ПОСЛЕ РАКЕТЫ (По просьбе пользователя) ===
-                # У мемкоинов есть фаза импульса. Если после взлета прошло 5 минут, а нового перехая нет,
-                # и цена ползет вниз (или просто стоит), закрываем в безубыток или мелкий минус.
-                if max_pnl_pct >= 0.10 and minutes_since_peak >= 7:
-                    tracker.close_position(mint, current_price, f"Post-Rocket Fade Cut ({minutes_since_peak:.0f}m after peak)")
+                # === ТАЙМАУТ ПОСЛЕ РАКЕТЫ: только если прибыль растеряна (ушла в ноль/минус) ===
+                # Если позиция в плюсе (pnl_pct > 2%), пусть дальше работает трейлинг-стоп и тейк-профит!
+                if max_pnl_pct >= 0.10 and minutes_since_peak >= 7 and pnl_pct <= 0.02:
+                    tracker.close_position(mint, current_price, f"Post-Rocket Fade Cut ({minutes_since_peak:.0f}m after peak, pnl {pnl_pct*100:+.1f}%)")
                     continue
 
                 # === STAGNANT EXIT (PRO: время по заслугам) ===
@@ -533,8 +532,8 @@ async def scanner_loop(analyzer, tracker):
                             else:
                                 print(f"⚠️ Ошибка: Не удалось получить цену для {mint} (entry_price=0). Возможно, Rate Limit (429).")
                         
-                        # Пауза между монетами
-                        await asyncio.sleep(1.5)
+                        # Микро-пауза для yield event loop (было 1.5с, что создавало задержку 2.5 мин на цикл)
+                        await asyncio.sleep(0.05)
                     except Exception as e:
                         print(f"⚠️ Ошибка анализа {mint[:8]}: {type(e).__name__}: {e}. Сканирую дальше.")
         except Exception as e:

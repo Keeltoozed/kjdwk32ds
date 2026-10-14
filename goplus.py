@@ -87,26 +87,48 @@ def _verdict_evm(info: dict):
     if worst > float(_cfg("GOPLUS_MAX_SELL_TAX", 0.10)):
         return False, f"{worst_k} {worst * 100:.0f}%"
 
-    # 4. Концентрация у создателя / владельца (защита от дев-дампов вроде ORRIS)
+    # 4. Концентрация у создателя / владельца (защита от дев-дампов вроде 1KTO100M/ORRIS)
     try:
         creator_pct = _tax_frac(info.get("creator_percent", 0))
-        max_creator = float(_cfg("GOPLUS_MAX_CREATOR_PCT", 0.15))
+        max_creator = float(_cfg("GOPLUS_MAX_CREATOR_PCT", 0.08))
         if creator_pct > max_creator:
-            return False, f"creator_pct {creator_pct * 100:.1f}%"
+            return False, f"creator_pct {creator_pct * 100:.1f}% (>8%)"
     except Exception:
         pass
     try:
         owner_pct = _tax_frac(info.get("owner_percent", 0))
-        max_owner = float(_cfg("GOPLUS_MAX_OWNER_PCT", 0.20))
+        max_owner = float(_cfg("GOPLUS_MAX_OWNER_PCT", 0.10))
         if owner_pct > max_owner:
-            return False, f"owner_pct {owner_pct * 100:.1f}%"
+            return False, f"owner_pct {owner_pct * 100:.1f}% (>10%)"
     except Exception:
         pass
 
-    # 5. Проверка блокировки / сжигания LP (защита от вывода ликвидности девом на BSC/EVM)
+    # 4.5. Концентрация у топ-10 китов (Сивил атака / кошельки дева / бандлы)
+    try:
+        holders = info.get("holders") or []
+        if holders and isinstance(holders, list):
+            top10_sum = 0.0
+            for h in holders[:10]:
+                is_contract = int(h.get("is_contract", 0) or 0)
+                is_locked = int(h.get("is_locked", 0) or 0)
+                # Исключаем пул ликвидности (DEX pair) и проверенные контракты-локеры
+                if is_contract == 1 or is_locked == 1:
+                    continue
+                pct = _tax_frac(h.get("percent", 0))
+                max_single = float(_cfg("GOPLUS_MAX_SINGLE_WHALE_PCT", 0.08))
+                if pct > max_single:
+                    return False, f"кит держит {pct*100:.1f}% (>{max_single*100:.0f}%) — риск дампа"
+                top10_sum += pct
+            max_top10 = float(_cfg("GOPLUS_MAX_TOP10_PCT", 0.30))
+            if top10_sum > max_top10:
+                return False, f"топ-10 китов держат {top10_sum*100:.1f}% (>{max_top10*100:.0f}%) — дамп-риск"
+    except Exception:
+        pass
+
+    # 5. Проверка блокировки / сжигания LP (защита от вывода ликвидности девом на Base/EVM)
     try:
         lp_holders = info.get("lp_holders") or []
-        if lp_holders and isinstance(lp_holders, list):
+        if lp_holders and isinstance(lp_holders, list) and len(lp_holders) > 0:
             locked_burned = 0.0
             for lph in lp_holders:
                 is_locked = int(lph.get("is_locked", 0) or 0)
@@ -114,8 +136,9 @@ def _verdict_evm(info: dict):
                 pct = _tax_frac(lph.get("percent", 0))
                 if is_locked == 1 or "dead" in addr or addr == "0x0000000000000000000000000000000000000000":
                     locked_burned += pct
-            if locked_burned < 0.35 and len(lp_holders) > 0:
-                return False, f"LP не заблокирован ({locked_burned*100:.0f}% < 35%) — риск рагпулла"
+            min_lp_lock = float(_cfg("GOPLUS_MIN_LP_LOCKED_PCT", 0.40))
+            if locked_burned < min_lp_lock:
+                return False, f"LP не заблокирован ({locked_burned*100:.0f}% < {min_lp_lock*100:.0f}%) — риск рагпулла"
     except Exception:
         pass
 
@@ -157,7 +180,8 @@ def is_hard_scam(reason: str) -> bool:
     # Известные уязвимости / ловушки контракта
     for danger in ("honeypot", "cannot_sell", "cannot_buy", "blacklist", "cooldown",
                    "mintable", "ownership", "hidden_owner", "selfdestruct",
-                   "external_call", "tax", "creator_pct", "owner_pct", "lp", "рагпулл"):
+                   "external_call", "tax", "creator_pct", "owner_pct", "lp", "рагпулл",
+                   "кит", "дамп"):
         if danger in r:
             return True
     return False
@@ -422,7 +446,16 @@ async def verify_evm_token(address: str, chain: str, pair_data: dict = None) -> 
 
     # Уровень 3: Ончейн-валидация пула DEX (если оба внешних сервиса не проиндексировали / перегружены)
     if chain in ("base", "ethereum"):
-        # Base/ETH: fail-open с логированием
+        if pair_data and isinstance(pair_data, dict):
+            import time as _t_base
+            _c_ms = pair_data.get("pairCreatedAt") or 0
+            _age_min = ((_t_base.time() * 1000 - _c_ms) / 60000.0) if _c_ms else 999.0
+            # Если токен свежий (<15 мин), а GoPlus и Honeypot.is ещё не проверили — требуем ончейн-доказательство
+            if _age_min < 15.0 and (_g_why in ("no-data", "unindexed") or not _g_ok):
+                txns_m5 = ((pair_data.get("txns") or {}).get("m5") or {})
+                s5 = int(txns_m5.get("sells", 0) or 0)
+                if s5 < 3:
+                    return False, f"контракт {chain} ещё не проверен GoPlus/Honeypot ({_g_why}) и <3 продаж — ждём верификации"
         return True, ""
 
     if chain == "bsc":

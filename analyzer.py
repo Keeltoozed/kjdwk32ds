@@ -657,8 +657,9 @@ class Analyzer:
                 if _m5 < getattr(config, "PULLBACK_MIN_M5_PCT", 0.025) * 100:
                     print(f"🚫 [ENTRY] {mint}: m5 {_m5:+.1f}% < импульса не было, пропуск.")
                     return False
-                if _m1 > getattr(config, "PULLBACK_M1_MAX_PCT", 0.08) * 100:
-                    print(f"🚫 [ENTRY] {mint}: m1 {_m1:+.1f}% — вертикаль в процессе, купим вершину. Ждём откат.")
+                _m1_max = getattr(config, "PULLBACK_M1_MAX_PCT", 0.20) * 100
+                if _m1 > _m1_max:
+                    print(f"🚫 [ENTRY] {mint}: m1 {_m1:+.1f}% > +{_m1_max:.0f}% — вертикаль в процессе, купим вершину. Ждём откат.")
                     return False
                 if _m1 < getattr(config, "PULLBACK_M1_MIN_PCT", -0.15) * 100:
                     print(f"🚫 [ENTRY] {mint}: m1 {_m1:+.1f}% — импульс схлопнулся, это дамп, не откат.")
@@ -912,6 +913,7 @@ class Analyzer:
             _mine_addr = ((pair_data.get("baseToken") or {}).get("address") or "").lower()
             _mine_created = pair_data.get("pairCreatedAt", 0) or 0
             _mine_fdv = pair_data.get("fdv", 0) or 0
+            dead_clones = 0
             for _p in (_sd.get("pairs") or []):
                 if ((_p.get("chainId") or "").lower()) != chain.lower():
                     continue
@@ -920,10 +922,17 @@ class Analyzer:
                 if _ps == _up and _pa and _pa != _mine_addr:
                     _pc_at = _p.get("pairCreatedAt", 0) or 0
                     _pf = _p.get("fdv", 0) or 0
+                    _p_pc = _p.get("priceChange", {}) or {}
+                    _p_liq = float((_p.get("liquidity", {}) or {}).get("usd", 0) or 0)
+                    if float(_p_pc.get("h24", 0) or 0) <= -80.0 or _p_liq < 500.0:
+                        dead_clones += 1
                     if (_pc_at and _mine_created and _pc_at < _mine_created and _pf > 250000) or \
                             (_pf > (_mine_fdv * 10) and _pf > 500000):
                         print(f"🚫 [{tag}] {symbol}: клон (оригинал {_pa[:10]} старше/жирнее).")
                         return False
+            if dead_clones >= 2:
+                print(f"🚫 [{tag}] {symbol}: обнаружено {dead_clones} обвалившихся пулов-двойников на {chain} — серийный раггер!")
+                return False
         except Exception:
             pass
         return True
@@ -1015,8 +1024,8 @@ class Analyzer:
             return self._deny(address, f"churn {b5}/{s5} m5 {m5:+.1f}%",
                               f"🚫 [{tag}-CHURN] {symbol}: {b5 + s5} сделок без перевеса (b/s {b5 / (s5+1):.2f}) — накрутка, не FOMO.")
         # Ослабление m1-green: мощные ракеты пробивают импульсом без отката.
-        # Разрешаем m1 до +12.0% (или до +15.0% при сильном доминировании покупателей b5 >= 2*s5)
-        _max_m1 = 15.0 if (s5 > 0 and b5 >= 2 * s5 and (b5 + s5) >= 12) else (10.0 if (s5 > 0 and b5 >= 1.4 * s5) else 5.0)
+        # Разрешаем m1 до +18.0% (или до +22.0% при сильном доминировании покупателей b5 >= 2*s5)
+        _max_m1 = 22.0 if (s5 > 0 and b5 >= 2 * s5 and (b5 + s5) >= 12) else (15.0 if (s5 > 0 and b5 >= 1.4 * s5) else 8.0)
         if m1 > _max_m1:
             return self._deny(address, f"m1-green {m1:+.1f}%", f"🚫 [{tag}] {symbol}: m1 {m1:+.1f}% > +{_max_m1:.0f}% — вершина в моменте, ждём.")
         if m1 < -5.0:
