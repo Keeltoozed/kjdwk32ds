@@ -234,7 +234,10 @@ async def position_manager_loop(analyzer, tracker):
                 elif max_pnl_pct >= 0.15:     # Пик +15%+ -> гарантируем минимум +4% (комиссии окуплены)
                     _floor_pnl = 0.04
                 if _floor_pnl is not None and pnl_pct <= _floor_pnl:
-                    tracker.close_position(mint, current_price, f"Profit Floor (+{_floor_pnl*100:.0f}% locked after peak +{max_pnl_pct*100:.0f}%)")
+                    if pnl_pct >= 0:
+                        tracker.close_position(mint, current_price, f"Profit Floor (+{_floor_pnl*100:.0f}% locked after peak +{max_pnl_pct*100:.0f}%)")
+                    else:
+                        tracker.close_position(mint, current_price, f"Crash Dump after peak (+{max_pnl_pct*100:.0f}% -> {pnl_pct*100:.0f}%)")
                     continue
 
                 # 2. ОСНОВНОЙ ПЛОТНЫЙ ТРЕЙЛИНГ-СТОП (Динамическая фиксация позиции)
@@ -1007,7 +1010,10 @@ async def _evm_track_once(tracker, chain: str, tag: str, emoji: str):
                 elif not reason and prev_ts and (_t.time() - prev_ts) < 60 and prev > 0 and cur <= prev * (1 - _crash_drop):
                     reason = f"{tag} Crash Guard ({(1 - cur / prev) * 100:.0f}% за {_t.time() - prev_ts:.0f}с)"
                 elif _floor_pnl is not None and pnl <= _floor_pnl:
-                    reason = f"{tag} Profit Floor (+{_floor_pnl*100:.0f}% locked after peak +{maxp*100:.0f}%)"
+                    if pnl >= 0:
+                        reason = f"{tag} Profit Floor (+{_floor_pnl*100:.0f}% locked after peak +{maxp*100:.0f}%)"
+                    else:
+                        reason = f"{tag} Crash Dump after peak (+{maxp*100:.0f}% -> {pnl*100:.0f}%)"
                 elif maxp >= getattr(config, "TRAILING_ACTIVATION_PCT", 0.15) and \
                         (pos.max_price_usd - cur) / pos.max_price_usd >= _trail_dist:
                     reason = f"{tag} Trailing (peak +{maxp * 100:.0f}%, dd {(1 - cur / pos.max_price_usd) * 100:.0f}%)"

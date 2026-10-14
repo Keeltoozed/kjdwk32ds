@@ -59,7 +59,9 @@ class MatureExitManager:
         elif max_pnl_pct >= 0.15:     # Пик +15%+ -> гарантируем минимум +4% (комиссии окуплены)
             _floor_pnl = 0.04
         if _floor_pnl is not None and pnl_pct <= _floor_pnl:
-            return f"Mature Profit Floor (+{_floor_pnl*100:.0f}% locked after peak +{max_pnl_pct*100:.0f}%)"
+            if pnl_pct >= 0:
+                return f"Mature Profit Floor (+{_floor_pnl*100:.0f}% locked after peak +{max_pnl_pct*100:.0f}%)"
+            return f"Crash Dump after peak (+{max_pnl_pct*100:.0f}% -> {pnl_pct*100:.0f}%)"
 
         # 2. ОСНОВНОЙ ПЛОТНЫЙ ТРЕЙЛИНГ-СТОП (Динамическая фиксация позиции)
         if hasattr(config, 'TRAILING_ACTIVATION_PCT'):

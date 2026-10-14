@@ -127,10 +127,9 @@ BASE_ENABLED = True
 BASE_MIN_LIQUIDITY = 3500.0  # Снижено до $3.5k: стандартные Clanker/Uniswap v3 мемы на Base стартуют с 1-1.5 ETH (~$3-4k)
 BASE_SCAN_INTERVAL = 90  # как Robinhood: реже = без 429
 
-# === BSC (GSTOCK и co с fomo.family сидят там) ===
-# Тот же движок, slug "bsc".
-BSC_ENABLED = True
-BSC_MIN_LIQUIDITY = 6000.0  # Порог $6k (не пропускает ракеты вроде DOPEUS $6.3k +64%, 币安理论 $7.8k +169%)
+# === BSC (ОТКЛЮЧЕНО: 100% сделок на BSC обернулись дев-рагпуллами с выводом пула) ===
+BSC_ENABLED = False
+BSC_MIN_LIQUIDITY = 6000.0
 
 # --- Сайзинг: база $6, conviction x2 ---
 # Тир решает ПОДТВЕРЖДЁННЫЙ импульс рынка (m5 + вести), а не скор модели
