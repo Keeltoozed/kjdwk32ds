@@ -785,6 +785,8 @@ class Analyzer:
                         continue
                     non_curve_accounts.append((amt, pct))
                 
+                top_10 = non_curve_accounts[:10]
+                
                 # Защита от Jito-бандлов (Сивил-атака дева):
                 # Проверяем ТОЛЬКО крупные кошельки (>= 1.5% сапплая), которые реально могут сдампить.
                 # Розничные покупки (< 1.5%, т.е. $10-$20) не являются бандлом.
@@ -1392,7 +1394,7 @@ class Analyzer:
                     return False
             except Exception:
                 pass
-            import config; threshold = float(getattr(config, "RAYDIUM_BUY_THRESHOLD", 55.0))  
+            threshold = float(getattr(config, "RAYDIUM_BUY_THRESHOLD", 55.0))  
             _hyper = self.check_hyper_rocket_momentum(pair_data)
 
             is_buy = bool(conf >= threshold)
@@ -1524,7 +1526,6 @@ class Analyzer:
         return True
 
     async def fetch_lunarcrush_sentiment(self, symbol: str) -> dict:
-        import config
         api_key = getattr(config, "LUNARCRUSH_API_KEY", "")
         if not api_key:
             return {}
