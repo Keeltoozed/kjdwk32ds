@@ -79,6 +79,7 @@ EVM_NORMAL_CRASH = 0.20         # Сброс на 20%
 BREAKEVEN_PCT = 0.30
 
 # Infant Dump: защита от дев-дампа в первые минуты
+PREFETCH_TTL_SEC = 10  # Пакетный кэш DexScreener (до 30 токенов за запрос): сек жизни данных для анализа
 SOLANA_MIN_AGE_MIN = 2.5  # Не входить в пулы Solana моложе 2.5 мин (flash-rug зона дева)
 INFANT_WINDOW_MIN = 2.0
 INFANT_DUMP_PCT = -0.15  # Резать сразу при -15% в первые 2 мин (было -22%, давало -28% на Taku)

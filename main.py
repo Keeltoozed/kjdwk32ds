@@ -387,6 +387,17 @@ async def scanner_loop(analyzer, tracker):
 
                 # Удаляем дубликаты, порядок сохраняем (миграции остаются первыми)
                 mints_to_scan = list(dict.fromkeys(m for m in mints_to_scan if m))
+
+                # ⚡ Пакетный префетч: вся очередь за ceil(N/30) запросов к DexScreener
+                # вместо N одиночных. analyze_token() дальше читает из кэша без сети.
+                try:
+                    _pf_list = [m for m in mints_to_scan if m not in tracker.positions
+                                and time.time() - processed_mints.get(m, 0.0) >= 25]
+                    _pf_n = await analyzer.prefetch_token_data(_pf_list)
+                    if _pf_list:
+                        print(f"⚡ Префетч: {_pf_n}/{len(_pf_list)} токенов за {(len(_pf_list) + 29) // 30} запрос(а) DS.")
+                except Exception as _pfe:
+                    print(f"⚠️ prefetch err: {type(_pfe).__name__}")
                 
                 for mint in mints_to_scan:
                     if not mint or mint in tracker.positions:
@@ -444,6 +455,7 @@ async def scanner_loop(analyzer, tracker):
                                           is_good, getattr(analyzer, "last_score", 0.0))
 
                         if is_good:
+                            getattr(analyzer, "_prefetch_cache", {}).pop(mint, None)  # цена входа — только живая
                             pair_data = await analyzer.fetch_token_data(mint)
                             entry_price = float(pair_data.get("priceUsd", 0)) if pair_data else 0
                             actual_symbol = pair_data.get("baseToken", {}).get("symbol", "UNKNOWN") if pair_data else "UNKNOWN"

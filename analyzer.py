@@ -139,7 +139,7 @@ class Analyzer:
             if not getattr(_c, "ROCKET_VETO_ENABLED", True):
                 return None
             s = (sig or "").upper()
-            if any(k in s for k in ("LOTTERY", "VIP", "DIPBUY", "COPY")):
+            if any(k in s for k in ("LOTTERY", "DIPBUY", "COPY")):
                 return None
             if "SCOUT" in s:
                 # Для SCOUT не пускаем падающие ножи со скором ниже 0.45 (кейс Animates 0.38)
@@ -320,33 +320,84 @@ class Analyzer:
                 unique_tokens.append(t)
         return unique_tokens
                 
+    @staticmethod
+    def _best_solana_pair(mint: str, pairs: list):
+        """Лучший Solana-пул токена по эффективной ликвидности (pump-кёрв = 40% FDV)."""
+        sol_pairs = [p for p in (pairs or []) if (p.get("chainId") or "").lower() == "solana"
+                     and ((p.get("baseToken") or {}).get("address") or mint) == mint]
+        if not sol_pairs:
+            return None
+
+        def _get_eff_liq(p):
+            raw_l = float(((p.get("liquidity") or {}).get("usd", 0) or 0))
+            if raw_l > 0:
+                return raw_l
+            if p.get("dexId") == "pump" or mint.endswith("pump"):
+                return float(p.get("fdv", 0) or p.get("marketCap", 0) or 0) * 0.40
+            return 0.0
+
+        best_pair = sorted(sol_pairs, key=_get_eff_liq, reverse=True)[0]
+        if best_pair.get("dexId") == "pump" or mint.endswith("pump"):
+            cur_l = float(((best_pair.get("liquidity") or {}).get("usd", 0) or 0))
+            if cur_l == 0:
+                eff = float(best_pair.get("fdv", 0) or best_pair.get("marketCap", 0) or 0) * 0.40
+                if not isinstance(best_pair.get("liquidity"), dict):
+                    best_pair["liquidity"] = {}
+                best_pair["liquidity"]["usd"] = eff
+        return best_pair
+
+    async def prefetch_token_data(self, mints: list, ttl: float = None) -> int:
+        """Пакетная загрузка: до 30 mint'ов за ОДИН запрос DexScreener.
+        Результат кладём в кэш, fetch_token_data берёт оттуда без сети.
+        Было: 1 запрос на токен (100 токенов = 100 запросов → 429).
+        Стало: 100 токенов = 4 запроса."""
+        from http_client import fetch_json
+        if not hasattr(self, "_prefetch_cache"):
+            self._prefetch_cache = {}
+        ttl = float(ttl if ttl is not None else getattr(config, "PREFETCH_TTL_SEC", 10))
+        now = time.time()
+        todo = [m for m in dict.fromkeys(mints or []) if m and not m.startswith("0x")
+                and now - self._prefetch_cache.get(m, (0, None))[0] >= ttl]
+        got = 0
+        for i in range(0, len(todo), 30):
+            chunk = todo[i:i + 30]
+            try:
+                status, data = await fetch_json(
+                    "https://api.dexscreener.com/latest/dex/tokens/" + ",".join(chunk),
+                    timeout=10, retries=1)
+            except Exception:
+                continue
+            if status != 200 or not data:
+                continue
+            by_mint = {}
+            for p in (data.get("pairs") or []):
+                a = (p.get("baseToken") or {}).get("address")
+                if a:
+                    by_mint.setdefault(a, []).append(p)
+            ts = time.time()
+            for m in chunk:
+                best = self._best_solana_pair(m, by_mint.get(m, []))
+                if best:
+                    self._prefetch_cache[m] = (ts, best)
+                    got += 1
+        if len(self._prefetch_cache) > 3000:
+            cutoff = time.time() - 120
+            self._prefetch_cache = {k: v for k, v in self._prefetch_cache.items() if v[0] >= cutoff}
+        return got
+
     async def fetch_token_data(self, mint: str) -> dict:
+        # 1. Свежий пакетный кэш (prefetch_token_data) — без сетевого запроса
+        _hit = getattr(self, "_prefetch_cache", {}).get(mint)
+        if _hit and time.time() - _hit[0] < float(getattr(config, "PREFETCH_TTL_SEC", 10)):
+            return dict(_hit[1])
         url = f"https://api.dexscreener.com/latest/dex/tokens/{mint}"
         from http_client import fetch_json
         try:
             status, data = await fetch_json(url, timeout=8, retries=1)
             if status == 200 and data:
-                pairs = data.get("pairs") or []
-                if pairs:
-                    sol_pairs = [p for p in pairs if (p.get("chainId") or "").lower() == "solana"]
-                    if sol_pairs:
-                        def _get_eff_liq(p):
-                            raw_l = float(((p.get("liquidity") or {}).get("usd", 0) or 0))
-                            if raw_l > 0:
-                                return raw_l
-                            if p.get("dexId") == "pump" or mint.endswith("pump"):
-                                return float(p.get("fdv", 0) or p.get("marketCap", 0) or 0) * 0.40
-                            return 0.0
-
-                        best_pair = sorted(sol_pairs, key=_get_eff_liq, reverse=True)[0]
-                        if best_pair.get("dexId") == "pump" or mint.endswith("pump"):
-                            cur_l = float(((best_pair.get("liquidity") or {}).get("usd", 0) or 0))
-                            if cur_l == 0:
-                                eff = float(best_pair.get("fdv", 0) or best_pair.get("marketCap", 0) or 0) * 0.40
-                                if not isinstance(best_pair.get("liquidity"), dict):
-                                    best_pair["liquidity"] = {}
-                                best_pair["liquidity"]["usd"] = eff
-                        return best_pair
+                best_pair = self._best_solana_pair(mint, data.get("pairs") or [])
+                if best_pair:
+                    return best_pair
             return await self.fetch_token_data_gecko(mint)
         except Exception as e:
             return await self.fetch_token_data_gecko(mint)
