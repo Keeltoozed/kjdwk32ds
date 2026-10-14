@@ -103,6 +103,22 @@ def _verdict_evm(info: dict):
     except Exception:
         pass
 
+    # 5. Проверка блокировки / сжигания LP (защита от вывода ликвидности девом на BSC/EVM)
+    try:
+        lp_holders = info.get("lp_holders") or []
+        if lp_holders and isinstance(lp_holders, list):
+            locked_burned = 0.0
+            for lph in lp_holders:
+                is_locked = int(lph.get("is_locked", 0) or 0)
+                addr = str(lph.get("address", "")).lower()
+                pct = _tax_frac(lph.get("percent", 0))
+                if is_locked == 1 or "dead" in addr or addr == "0x0000000000000000000000000000000000000000":
+                    locked_burned += pct
+            if locked_burned < 0.35 and len(lp_holders) > 0:
+                return False, f"LP не заблокирован ({locked_burned*100:.0f}% < 35%) — риск рагпулла"
+    except Exception:
+        pass
+
     return True, ""
 
 
@@ -141,7 +157,7 @@ def is_hard_scam(reason: str) -> bool:
     # Известные уязвимости / ловушки контракта
     for danger in ("honeypot", "cannot_sell", "cannot_buy", "blacklist", "cooldown",
                    "mintable", "ownership", "hidden_owner", "selfdestruct",
-                   "external_call", "tax", "creator_pct", "owner_pct"):
+                   "external_call", "tax", "creator_pct", "owner_pct", "lp", "рагпулл"):
         if danger in r:
             return True
     return False

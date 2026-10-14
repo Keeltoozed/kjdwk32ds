@@ -559,10 +559,14 @@ class Analyzer:
         volume_m5 = pair_data.get("volume", {}).get("m5", 0)
         liquidity = pair_data.get("liquidity", {}).get("usd", 0)
         
-        # Защита от накрутки (wash-trading): требуем реальную ликвидность и наличие хоть каких-то продаж
+        # Защита от накрутки (wash-trading): требуем реальную ликвидность, перевес покупателей и зелёный импульс
         _min_tx = getattr(config, "VIP_MIN_TX_M5", 40)
         _min_vol = getattr(config, "VIP_MIN_VOL_M5", 15000)
-        if buys_m5 >= _min_tx and volume_m5 >= _min_vol and liquidity >= 10000 and sells_m5 > 0:
+        _pc = pair_data.get("priceChange") or {}
+        _m5 = float(_pc.get("m5", 0) or 0)
+        _m1 = float(_pc.get("m1", 0) or 0)
+        if (buys_m5 >= _min_tx and volume_m5 >= _min_vol and liquidity >= 12000 
+                and sells_m5 > 0 and buys_m5 >= sells_m5 * 1.2 and _m5 >= 3.0 and _m1 >= -2.0):
             return True
         return False
         
@@ -617,6 +621,10 @@ class Analyzer:
         _lottery = False
         _created_pre = pair_data.get("pairCreatedAt") or 0
         _age_min_pre = (time.time() * 1000 - _created_pre) / 60000.0 if _created_pre else 999
+        _sol_min_age = float(getattr(config, "SOLANA_MIN_AGE_MIN", 2.5))
+        if _age_min_pre < _sol_min_age:
+            print(f"⏳ [ENTRY] {mint[:8]}: возраст {_age_min_pre:.1f}м < {_sol_min_age}м — flash-rug зона дева, ждём созревания.")
+            return None
         if not is_vip and pair_data:
             _pc = pair_data.get("priceChange") or {}
             _m5 = _pc.get("m5", 0) or 0
@@ -1293,14 +1301,30 @@ class Analyzer:
         if not pair_data:
             return False
 
-        _hyper_fresh = self.check_hyper_rocket_momentum(pair_data)
-        if not _hyper_fresh:
-            _txm5 = (pair_data.get("txns") or {}).get("m5", {}) or {}
-            _b5, _s5 = _txm5.get("buys", 0) or 0, _txm5.get("sells", 0) or 0
-            _vm5 = (pair_data.get("volume") or {}).get("m5", 0) or 0
-            if (_b5 + _s5) < 20 or _vm5 < 2000 or (_s5 > 0 and _b5 < _s5):
-                print(f"🚫 [FRESH] {mint[:8]}: m5 мёртв (b/s {_b5}/{_s5}, vol ${_vm5:,.0f}) — h24 может врать, модель пропустит.")
-                return False
+        _c_ms = pair_data.get("pairCreatedAt") or 0
+        import time as _t
+        _age_min = ((_t.time() * 1000 - _c_ms) / 60000.0) if _c_ms else 999.0
+        _sol_min_age = float(getattr(config, "SOLANA_MIN_AGE_MIN", 2.5))
+        if _age_min < _sol_min_age:
+            print(f"⏳ [RAYDIUM] {mint[:8]}: возраст {_age_min:.1f}м < {_sol_min_age}м — ранняя flash-rug зона.")
+            return False
+
+        _pc = pair_data.get("priceChange") or {}
+        _m5 = float(_pc.get("m5", 0) or 0)
+        _m1 = float(_pc.get("m1", 0) or 0)
+        if _m1 < -3.5:
+            print(f"🚫 [RAYDIUM] {mint[:8]}: m1 {_m1:+.1f}% — активный сброс в моменте (падающий нож).")
+            return False
+        if _m5 < 2.5:
+            print(f"🚫 [RAYDIUM] {mint[:8]}: m5 {_m5:+.1f}% < +2.5% — нет импульса.")
+            return False
+
+        _txm5 = (pair_data.get("txns") or {}).get("m5", {}) or {}
+        _b5, _s5 = _txm5.get("buys", 0) or 0, _txm5.get("sells", 0) or 0
+        _vm5 = (pair_data.get("volume") or {}).get("m5", 0) or 0
+        if (_b5 + _s5) < 20 or _vm5 < 2000 or (_s5 > 0 and _b5 < _s5 * 1.15):
+            print(f"🚫 [FRESH] {mint[:8]}: слабый поток (b/s {_b5}/{_s5}, vol ${_vm5:,.0f}) — нет покупателей.")
+            return False
 
         import pandas as pd
         import joblib
@@ -1368,7 +1392,7 @@ class Analyzer:
                     return False
             except Exception:
                 pass
-            import config; threshold = 45.0  
+            import config; threshold = float(getattr(config, "RAYDIUM_BUY_THRESHOLD", 55.0))  
             _hyper = self.check_hyper_rocket_momentum(pair_data)
 
             is_buy = bool(conf >= threshold)
