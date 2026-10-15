@@ -139,7 +139,7 @@ class Analyzer:
             if not getattr(_c, "ROCKET_VETO_ENABLED", True):
                 return None
             s = (sig or "").upper()
-            if any(k in s for k in ("LOTTERY", "DIPBUY", "COPY")):
+            if any(k in s for k in ("LOTTERY", "DIPBUY", "COPY", "VIP", "VIP-RAY", "XGB 9")):
                 return None
             if "SCOUT" in s:
                 # Для SCOUT не пускаем падающие ножи со скором ниже 0.45 (кейс Animates 0.38)
@@ -217,25 +217,31 @@ class Analyzer:
         return False
 
     @staticmethod
-    def is_churn(b5, s5, m5, n_min: int = 40, liq: float = 0.0) -> bool:
-        """CHURN/WASH (идея ChainLens: trade-pattern анализ): высокий оборот
-        без перевеса покупателей — накрутка/раздача, а не органический FOMO.
-        Живой импульс давится покупателями; топтание с оборотом съедается
-        комиссиями и стопами. Две зоны: слабый импульс без перевеса (<1.2)
-        и вертикаль без перевеса (<1.15 — раздача под свечу).
-        ВАЖНО: В пулах от $50k (кейс MOBY $417k) борьба быков и медведей — это живой рынок, а не скам-накрутка."""
-        if liq >= 50000.0:
+    def is_churn(b5, s5, m5, n_min: int = 18, liq: float = 0.0, vol5: float = 0.0) -> bool:
+        """CHURN/WASH (анализ паттернов накрутки): высокий оборот без перевеса покупателей,
+        микро-сделки ботов или аномальный оборот к ликвидности."""
+        if liq >= 60000.0 and vol5 < liq * 2:
             return False
         try:
             b5 = float(b5 or 0)
             s5 = float(s5 or 0)
             m5 = float(m5 or 0)
+            vol5 = float(vol5 or 0)
         except Exception:
             return False
         if (b5 + s5) < n_min or s5 <= 0:
             return False
         r = b5 / s5
-        return (r < 1.2 and abs(m5) < 15.0) or (r < 1.15 and abs(m5) < 60.0)
+        # 1. Топтание без перевеса
+        if (r < 1.2 and abs(m5) < 15.0) or (r < 1.15 and abs(m5) < 60.0):
+            return True
+        # 2. Аномальный оборот без импульса (wash-trading ботов)
+        if liq > 0 and vol5 > 0 and (vol5 / liq) > 3.0 and abs(m5) < 10.0:
+            return True
+        # 3. Микро-чеки (боты накручивают транзакции мелкими чеками)
+        if (b5 + s5) >= 20 and vol5 > 0 and (vol5 / (b5 + s5)) < 15.0:
+            return True
+        return False
 
     def get_signal(self, key: str) -> str:
         # Только своя метка монеты. Чужую (last_signal) не подставляем - давала FOMO:? и чужие метки
@@ -874,16 +880,30 @@ class Analyzer:
                     print(f"🚫 [АНТИСКАМ] Топ-10 держат {top_10_sum_pct:.1f}% (Лимит {max_allowed_pct}%). Блокируем.")
                     return False
             else:
-                # Фоллбэк: если RugCheck временно недоступен (404/429), проверяем через GoPlus
+                # Фоллбэк: если RugCheck временно недоступен (404/429), проводим полный аудит через GoPlus
                 try:
                     import goplus as _gp
                     _g_ok, _g_why = await _gp.check_solana(mint)
                     if not _g_ok:
                         print(f"🚫 [GOPLUS] {symbol} ({mint[:8]}): {_g_why} — блок входа.")
                         return False
-                    print(f"🛡️ [GOPLUS] RugCheck недоступен, но GoPlus подтвердил безопасность {mint[:8]}.")
-                except Exception:
-                    print(f"⚠️ Не удалось проверить через RugCheck и GoPlus. Блокируем вход.")
+                    # Извлекаем и проверяем реальные метрики китов и создателя
+                    _h_stats = _gp.get_solana_holder_stats(mint)
+                    if _h_stats.get("has_data"):
+                        self._last_top10 = _h_stats.get("top_10_pct", 0.0)
+                        self._last_dev = _h_stats.get("dev_pct", 0.0)
+                        if self._last_dev > 10.0:
+                            print(f"🚫 [GOPLUS-DEV] {symbol} ({mint[:8]}): дев держит {self._last_dev:.1f}% > 10% — риск дампа.")
+                            return False
+                        _max_top10 = 30.0 if (pair_data and pair_data.get("dexId") == "pump") else 35.0
+                        if self._last_top10 > _max_top10:
+                            print(f"🚫 [GOPLUS-CABAL] {symbol} ({mint[:8]}): топ-10 держат {self._last_top10:.1f}% > {_max_top10:.0f}% — риск кабала.")
+                            return False
+                        print(f"🛡️ [GOPLUS] RugCheck 404, но GoPlus подтвердил безопасность {mint[:8]} (Топ-10: {self._last_top10:.1f}%, Дев: {self._last_dev:.1f}%).")
+                    else:
+                        print(f"🛡️ [GOPLUS] RugCheck 404, GoPlus подтвердил отсутствие ловушек у {mint[:8]}.")
+                except Exception as _ge:
+                    print(f"⚠️ Не удалось проверить через RugCheck и GoPlus ({_ge}). Блокируем вход.")
                     return False
         except Exception as e:
             print(f"⚠️ Ошибка RugCheck: {str(e)[:50]}.")
@@ -892,6 +912,10 @@ class Analyzer:
                 _g_ok, _g_why = await _gp.check_solana(mint)
                 if not _g_ok:
                     return False
+                _h_stats = _gp.get_solana_holder_stats(mint)
+                if _h_stats.get("has_data"):
+                    self._last_top10 = _h_stats.get("top_10_pct", 0.0)
+                    self._last_dev = _h_stats.get("dev_pct", 0.0)
             except Exception:
                 return False
         except Exception as e:
@@ -1032,14 +1056,31 @@ class Analyzer:
 
         # Ранний Scout-режим для свежих ракет (<10 мин):
         # Пулы только зарождаются ($3k+), соцсети девы ещё не привязали к DexScreener, но есть реальные покупки и продажи.
-        # Без соцсетей (links) требуем глубокий пул минимум $12k, чтобы дев не мог слить его одной кнопкой
-        _scout_min_liq = 3500.0 if links else 3500.0  
-        if (_age_min < 10.0 and m5 >= 2.0 and (b5 + s5) >= 12 and liq >= _scout_min_liq
+        _scout_min_liq = 3000.0
+        if (_age_min < 10.0 and m5 >= -3.0 and (b5 + s5) >= 12 and liq >= _scout_min_liq
                 and s5 >= 2 and b5 >= s5 and (b5 / max(s5, 1)) <= 5.0):
             if not self._evm_brand_ok(symbol, tag):
                 return False
             if not await self._evm_clone_ok(symbol, address, pair_data, chain, tag):
                 return False
+            # 1. Защита от покупки вершины 1м свечи и падающего ножа (кейс WETH)
+            if m1 > 18.0:
+                return self._deny(address, f"scout-m1-spike {m1:+.1f}%",
+                                  f"🚫 [{tag}-SCOUT] {symbol}: m1 {m1:+.1f}% — верхушка 1м импульса, вход = вершина.")
+            if m1 < -5.0:
+                return self._deny(address, f"scout-m1-drop {m1:+.1f}%",
+                                  f"🚫 [{tag}-SCOUT] {symbol}: m1 {m1:+.1f}% — падающий нож.")
+            # 2. Защита от картонных пулов (FDV / Liq > 120x)
+            _fdv_scout = float(pair_data.get("fdv", 0) or 0)
+            if liq > 0 and _fdv_scout > 0 and (_fdv_scout / liq) > 120.0:
+                return self._deny(address, "hollow-pool",
+                                  f"🚫 [{tag}-SCOUT] {symbol}: FDV ${_fdv_scout:,.0f} vs Liq ${liq:,.0f} — картонный пул.")
+            # 3. Защита от микро-чеков ботов (накрутка объёма)
+            _vm5_scout = float((pair_data.get("volume") or {}).get("m5", 0) or 0)
+            if (b5 + s5) >= 20 and (_vm5_scout / max(b5 + s5, 1)) < 15.0:
+                return self._deny(address, "wash-bot",
+                                  f"🚫 [{tag}-SCOUT] {symbol}: средний чек ${_vm5_scout / max(b5 + s5, 1):.1f} < $15 — накрутка ботов.")
+            # 4. Антискам аудит (GoPlus + Honeypot.is)
             if chain in ("robinhood", "bsc", "base", "ethereum"):
                 try:
                     import goplus as _gp
@@ -1048,7 +1089,7 @@ class Analyzer:
                         return self._deny(address, f"antiscam-{_v_why}",
                                           f"🚫 [{tag}] {symbol}: {_v_why} — блок.")
                 except Exception as _e:
-                    if chain in ("bsc", "robinhood"):
+                    if chain in ("bsc", "robinhood", "base"):
                         return self._deny(address, "antiscam-err",
                                           f"🚫 [{tag}] {symbol}: ошибка антискама ({type(_e).__name__}) — {tag} риск.")
             print(f"🔭 [{tag}-SCOUT] {symbol}: возраст {_age_min:.1f}м, m5 {m5:+.1f}%, liq ${liq:,.0f} — ранний билет.")
@@ -1060,6 +1101,34 @@ class Analyzer:
         
         _evm_min_m5 = getattr(config, "EVM_MIN_M5_PCT", 2.0)
         if m5 < _evm_min_m5:
+            # === ПРОВЕРКА НАКОПЛЕНИЯ (ACCUMULATION) vs МЕРТВЫЙ ФЛЭТ (DEAD-FLAT) ===
+            # Отличаем живое накопление перед взрывом (ANTI, IRL, TILIK, BREZCAT) от мертвых токенов (TAP, KIRK, CONFIRMATIO)
+            _tx1 = ((pair_data.get("txns") or {}).get("h1") or {})
+            _b1 = int(_tx1.get("buys", 0) or 0)
+            _s1 = int(_tx1.get("sells", 0) or 0)
+            _v1 = float(((pair_data.get("volume") or {}).get("h1", 0) or 0))
+
+            # 1. Мертвые пулы (нет сделок за час или нет покупок) — жесткий отсев
+            if (_b1 + _s1) < 6 or _v1 < 800.0 or b5 == 0:
+                return self._deny(address, f"dead-flat m5 {m5:+.1f}%", f"· [{tag}] {symbol}: мертвый флет (сделок за 1ч: {_b1+_s1}, vol1h: ${_v1:.0f})")
+
+            # 2. Мамонты / стейблкоины / utility (AERO, USDC, PAPER, VELVET)
+            if liq > 350000.0 or any(sb in symbol.upper() for sb in ("USDC", "USDT", "DAI")):
+                return self._deny(address, "dex-giant", f"· [{tag}] {symbol}: тяжелый пул (${liq:,.0f}) или стейблкоин — не мем-ракета")
+
+            # 3. Накопление: живая торговля за час, умеренный флэт (m5 >= -10%), покупатели активны
+            if m5 >= -10.0 and (_b1 + _s1) >= 10 and _b1 >= _s1 * 0.75 and not self.is_churn(b5, s5, m5, liq=liq):
+                try:
+                    import goplus as _gp
+                    _v_ok, _v_why = await _gp.verify_evm_token(address, chain, pair_data)
+                    if not _v_ok:
+                        return self._deny(address, f"antiscam-{_v_why}", f"🚫 [{tag}] {symbol}: {_v_why} — блок.")
+                except Exception:
+                    pass
+                print(f"💎 [{tag}-ACCUM] {symbol}: m5 {m5:+.1f}%, liq ${liq:,.0f}, tx1h {_b1}b/{_s1}s — живое накопление перед взлетом.")
+                self._set_sig(address, f"{tag} ACCUM" + self._rkt_tag(address, pair_data) + await self.meme_tag(address, symbol, pair_data, chain))
+                return True
+
             return self._deny(address, f"flat m5 {m5:+.1f}%", f"· [{tag}] {symbol}: флет m5 {m5:+.1f}%")
         _max_m5 = 60.0
         # При органическом перевесе покупателей (b5 >= 1.5*s5, liq >= min_liq, m1 <= 12.0%)
@@ -1082,8 +1151,12 @@ class Analyzer:
             return self._deny(address, f"m1-green {m1:+.1f}%", f"🚫 [{tag}] {symbol}: m1 {m1:+.1f}% > +{_max_m1:.0f}% — вершина в моменте, ждём.")
         if m1 < -5.0:
             return self._deny(address, f"m1-drop {m1:+.1f}%", f"🚫 [{tag}] {symbol}: m1 {m1:+.1f}% — резкое падение за 1м, падающий нож.")
+        # Часовой тренд: глубокий дамп режем, но здоровый откат с разворотом на m5 пропускаем (кейс IRL +775%)
+        if h1 < -25.0:
+            return self._deny(address, f"h1-dump {h1:+.1f}%", f"🚫 [{tag}] {symbol}: h1 {h1:+.1f}% — глубокий часовой дамп.")
         if h1 < 0.0:
-            return self._deny(address, f"h1-red {h1:+.1f}%", f"🚫 [{tag}] {symbol}: h1 {h1:+.1f}% — часовой тренд вниз, падающий токен.")
+            if not (m5 >= 1.5 and s5 > 0 and b5 >= s5 * 1.2):
+                return self._deny(address, f"h1-red {h1:+.1f}%", f"🚫 [{tag}] {symbol}: h1 {h1:+.1f}% — часовой тренд вниз без разворота.")
         if h1 > 300.0:
             return self._deny(address, "gone", f"🚫 [{tag}] {symbol}: h1 {h1:+.0f}% — параболик уже улетел, вершина.")
         
@@ -1405,6 +1478,35 @@ class Analyzer:
             print(f"🚫 [FRESH] {mint[:8]}: слабый поток (b/s {_b5}/{_s5}, vol ${_vm5:,.0f}) — нет покупателей.")
             return False
 
+        # 1. Защита от микро-чеков ботов (накрутка объёма и транзакций)
+        _avg_tx = _vm5 / max(_b5 + _s5, 1)
+        if (_b5 + _s5) >= 20 and _avg_tx < 15.0:
+            print(f"🚫 [WASH-BOT] {mint[:8]}: средний чек ${_avg_tx:.1f} < $15 при {_b5+_s5} сделках — микро-боты накручивают объём.")
+            return False
+
+        liquidity = pair_data.get("liquidity", {}).get("usd", 0)
+        fdv = pair_data.get("fdv", 0)
+
+        # 2. Защита от картонных пулов (FDV / Liquidity > 120x — 1 кит продает и пул схлопывается)
+        if liquidity > 0 and fdv > 0 and (fdv / liquidity) > 120.0:
+            print(f"🚫 [HOLLOW-POOL] {mint[:8]}: FDV ${fdv:,.0f} vs Liq ${liquidity:,.0f} ({fdv/liquidity:.0f}x > 120x) — картонная ликвидность.")
+            return False
+
+        # 3. Защита от кругового wash-churn (350% оборота за 5м без движения цены)
+        if liquidity > 0 and (_vm5 / liquidity) > 3.5 and abs(_m5) < 12.0:
+            print(f"🚫 [CHURN] {mint[:8]}: оборот {_vm5 / liquidity:.1f}x от ликвидности за 5м без импульса (m5 {_m5:+.1f}%) — накрутка.")
+            return False
+
+        # 4. Проверка безопасности холдеров и создателя
+        _t10 = getattr(self, '_last_top10', 0.0)
+        _dev = getattr(self, '_last_dev', 0.0)
+        if _dev > 10.0:
+            print(f"🚫 [DEV-HOLD] {mint[:8]}: создатель держит {_dev:.1f}% > 10% — дамп-риск.")
+            return False
+        if _t10 > 35.0:
+            print(f"🚫 [TOP10-CABAL] {mint[:8]}: топ-10 держат {_t10:.1f}% > 35% — кабал/дамп-риск.")
+            return False
+
         import pandas as pd
         import joblib
         
@@ -1414,9 +1516,6 @@ class Analyzer:
         
         volume_h24 = pair_data.get("volume", {}).get("h24", 0)
         price_change_h24 = pair_data.get("priceChange", {}).get("h24", 0)
-        
-        liquidity = pair_data.get("liquidity", {}).get("usd", 0)
-        fdv = pair_data.get("fdv", 0)
         
         # Защита XGBoost от накрученных скам-данных (Robust Inference/Winsorization):
         # Ограничиваем искусственно раздутый объем и покупки, чтобы модель не выдавала слепые 100%
@@ -1460,8 +1559,16 @@ class Analyzer:
                     elif sentiment < 30:
                         conf -= 20.0
                         print(f"📉 [LunarCrush] Негативный сентимент! Штраф -20% к Score.")
+
+            # Многофакторная калибровка скора (защита от слепых 100%):
+            if _s5 > 0 and (_b5 / _s5) > 6.0 and (_b5 + _s5) >= 20:
+                conf -= 15.0  # аномально однобокий стакан (риск honeypot/фальш-стенки)
+            if liquidity > 0 and (fdv / liquidity) > 50.0:
+                conf -= 10.0  # штраф за повышенную надутость капитализации
+            if _avg_tx < 25.0 and (_b5 + _s5) >= 30:
+                conf -= 10.0  # штраф за подозрительно мелкие чеки
             
-            print(f"🧠 Raydium XGBoost (Безлимит): {mint} | Score: {conf:.1f}%")
+            print(f"🧠 Raydium XGBoost: {mint} | Score: {conf:.1f}%")
             self.last_score = float(conf)
             try:
                 from shadow_score import pair_shadow_score, VETO_THRESHOLD

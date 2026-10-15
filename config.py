@@ -51,7 +51,7 @@ MAX_CONCURRENT_POSITIONS = 10  # концентрация капитала: ма
 
 # Risk Management
 MAX_DAILY_LOSS_USD = 18.0
-KILL_SWITCH_ENABLED = False
+KILL_SWITCH_ENABLED = True
 MAX_DAILY_LOSS_PCT = 0.25
 STOP_LOSS_PCT = -0.14  # Стоп -14% (было -20%, что при слипе давало -31% убытка)
 SNIPER_ENTRIES_ENABLED = False
@@ -75,8 +75,8 @@ WHALE_DUMP_GUARD_PCT = 0.15     # Слив на 15% за <15с при налич
 EVM_RUNNER_CRASH = 0.20         # Сброс на 20% за 60с режем сразу (не ждём дальнейшего дампа)
 EVM_NORMAL_CRASH = 0.20         # Сброс на 20%
 
-# Breakeven: пик был +30%+, а цена вернулась ко входу — ракета сдохла, выходим в ноль (pnl <= 0)
-BREAKEVEN_PCT = 0.30
+# Breakeven: пик был +15%+, а цена вернулась ко входу — импульс угас, выходим в безубыток
+BREAKEVEN_PCT = 0.15
 
 # Infant Dump: защита от дев-дампа в первые минуты
 PREFETCH_TTL_SEC = 10  # Пакетный кэш DexScreener (до 30 токенов за запрос): сек жизни данных для анализа
@@ -116,7 +116,7 @@ ROBINHOOD_DS_SLUG = "robinhood"  # slug DexScreener (НЕ 4663 - тот верн
 ROBINHOOD_GT_NETWORK = "robinhood"  # slug GeckoTerminal
 ROBINHOOD_RPC_URL = "https://rpc.mainnet.chain.robinhood.com"
 ROBINHOOD_EXPLORER = "https://robinhoodchain.blockscout.com"
-ROBINHOOD_MIN_LIQUIDITY = 3500.0  # Снижено до $3.5k (как Base: Clanker/Uniswap v3 мемы стартуют с $3-4k, не пропускает CLAUDIA $3.9k)
+ROBINHOOD_MIN_LIQUIDITY = 3000.0  # Порог $3.0k: пулы GIGALAUDIA ($3.3k) и NIHILISM ($3.4k) забирают ракеты x2.5
 ROBINHOOD_MIN_AGE_MIN = 2.5  # 2.5 мин (как Solana, не пропускает ранние импульсы)
 ROBINHOOD_SCAN_INTERVAL = 25  # 25с: быстрый опрос (BSC отключен, лимиты не превышаются)
 EVM_MIN_M5_PCT = 2.0  # Ранние импульсы от +2% пускаем (не отсекать ранние старты вроде binancians +2.6%, 旺柴 +2.8%)
@@ -125,9 +125,9 @@ EVM_MAX_MINTS = 120  # Лимит активных кандидатов за ц�
 
 
 # === BASE (EVM L2, там сидят мемы с fomo.family: musebook, DELTA...) ===
-# Тот же EVM-движок, slug DexScreener "base". Пулы глубже - порог $15к.
+# Тот же EVM-движок, slug DexScreener "base".
 BASE_ENABLED = True
-BASE_MIN_LIQUIDITY = 3500.0  # Снижено до $3.5k: стандартные Clanker/Uniswap v3 мемы на Base стартуют с 1-1.5 ETH (~$3-4k)
+BASE_MIN_LIQUIDITY = 3000.0  # Порог $3.0k: стандартные Clanker/Uniswap v3 мемы на Base стартуют с ~$3k
 BASE_SCAN_INTERVAL = 25  # 25с: быстрый поиск ранних ракет Base
 
 # === BSC (ОТКЛЮЧЕНО: 100% сделок на BSC обернулись дев-рагпуллами с выводом пула) ===

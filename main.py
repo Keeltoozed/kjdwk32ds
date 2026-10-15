@@ -115,8 +115,11 @@ async def position_manager_loop(analyzer, tracker):
                 position.price_checked_at = time.time()
                 
                 # === ТАЙМАУТ ПОСЛЕ РАКЕТЫ: только если прибыль растеряна (ушла в ноль/минус) ===
-                # Если позиция в плюсе (pnl_pct > 2%), пусть дальше работает трейлинг-стоп и тейк-профит!
-                if max_pnl_pct >= 0.10 and minutes_since_peak >= 7 and pnl_pct <= 0.02:
+                # Если монета давала +10%+ и провалилась в минус (-5%), не ждем 7 минут — спасаем депозит!
+                if max_pnl_pct >= 0.10 and pnl_pct <= -0.05:
+                    tracker.close_position(mint, current_price, f"Early Fade Cut (был пик +{max_pnl_pct*100:.0f}%, слив до {pnl_pct*100:.1f}%)")
+                    continue
+                if max_pnl_pct >= 0.10 and minutes_since_peak >= 5 and pnl_pct <= 0.01:
                     tracker.close_position(mint, current_price, f"Post-Rocket Fade Cut ({minutes_since_peak:.0f}m after peak, pnl {pnl_pct*100:+.1f}%)")
                     continue
 
@@ -261,11 +264,12 @@ async def position_manager_loop(analyzer, tracker):
                         continue
 
                 # Breakeven / Soft Guard резерв:
-                if max_pnl_pct >= float(getattr(config, "BREAKEVEN_PCT", 0.30)) and pnl_pct <= 0:
-                    tracker.close_position(mint, current_price, f"Breakeven (был пик +{max_pnl_pct*100:.0f}%)")
+                if max_pnl_pct >= 0.10 and pnl_pct <= -0.05:
+                    tracker.close_position(mint, current_price, f"Soft Guard (был пик +{max_pnl_pct*100:.0f}%, слив до {pnl_pct*100:.1f}%)")
                     continue
-                if max_pnl_pct >= 0.25 and pnl_pct <= -0.05:
-                    tracker.close_position(mint, current_price, f"Soft Guard (был пик +{max_pnl_pct*100:.0f}%)")
+                _be_sol = min(float(getattr(config, "BREAKEVEN_PCT", 0.20)), 0.12)
+                if max_pnl_pct >= _be_sol and pnl_pct <= 0.005:
+                    tracker.close_position(mint, current_price, f"Breakeven (был пик +{max_pnl_pct*100:.0f}%)")
                     continue
                             
                 # 3. АВАРИЙНЫЙ КЭП ПЕРВЫМ: FIBONACCI -68% проскочили стоп в тонком пуле.
@@ -1030,12 +1034,12 @@ async def _evm_track_once(tracker, chain: str, tag: str, emoji: str):
                     reason = f"{tag} Trailing (peak +{maxp * 100:.0f}%, dd {(1 - cur / pos.max_price_usd) * 100:.0f}%)"
                 elif pnl <= -0.30:
                     reason = f"{tag} Emergency Cap ({pnl * 100:.1f}%)"
-                elif maxp >= float(getattr(config, "BREAKEVEN_PCT", 0.30)) and pnl <= 0:
+                elif maxp >= 0.10 and pnl <= -0.05:
+                    # Мягкий стоп: был пик +10%+, сползли к -5% — импульс угас, фиксируем малый минус,
+                    # не ждём -20%..-30%. Живую ракету (выше -5%) не трогает.
+                    reason = f"{tag} Soft Guard (был пик +{maxp * 100:.0f}%, слив до {pnl * 100:.1f}%)"
+                elif maxp >= min(float(getattr(config, "BREAKEVEN_PCT", 0.20)), 0.12) and pnl <= 0.005:
                     reason = f"{tag} Breakeven (был пик +{maxp * 100:.0f}%)"
-                elif maxp >= 0.25 and pnl <= -0.05:
-                    # Мягкий стоп: был пик +25%+, сползли к -5% — пила, фиксируем малый минус,
-                    # не ждём -20%. Живую ракету (выше -5%) не трогает.
-                    reason = f"{tag} Soft Guard (был пик +{maxp * 100:.0f}%)"
                 elif held < float(getattr(config, "INFANT_WINDOW_MIN", 2.0)) and pnl <= float(getattr(config, "INFANT_DUMP_PCT", -0.22)):
                     reason = f"{tag} Infant Dump ({pnl * 100:.1f}%)"
                 elif not _is_runner and maxp < 0.02 and pnl <= -0.18 and held >= 4:

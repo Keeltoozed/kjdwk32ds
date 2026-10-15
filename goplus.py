@@ -16,6 +16,7 @@
 проверку, чем встать всем ботом.
 """
 import time as _t
+import config
 
 EVM_CHAIN_IDS = {"ethereum": "1", "bsc": "56", "base": "8453"}
 
@@ -145,20 +146,98 @@ def _verdict_evm(info: dict):
     return True, ""
 
 
+RAW_SOLANA_INFO: dict = {}  # mint -> raw goplus dict
+
+
+def get_solana_holder_stats(mint: str) -> dict:
+    """Извлекает метрики холдеров из кэша GoPlus Solana для анализатора."""
+    info = RAW_SOLANA_INFO.get(mint) or {}
+    if not info:
+        return {"top_10_pct": 0.0, "dev_pct": 0.0, "has_data": False}
+    holders = info.get("holders") or []
+    if not isinstance(holders, list) or not holders:
+        return {"top_10_pct": 0.0, "dev_pct": 0.0, "has_data": False}
+    top10_sum = 0.0
+    dev_pct = 0.0
+    valid_holders = []
+    for h in holders:
+        pct = _tax_frac(h.get("percent", 0)) * 100.0
+        tag = str(h.get("tag", "")).lower()
+        if "raydium" in tag or "meteora" in tag or "orca" in tag or "pump" in tag or pct > 65.0:
+            continue
+        valid_holders.append(pct)
+    if valid_holders:
+        dev_pct = valid_holders[0]
+        top10_sum = sum(valid_holders[:10])
+    return {
+        "top_10_pct": top10_sum,
+        "dev_pct": dev_pct,
+        "has_data": True,
+        "raw_holders_count": len(holders)
+    }
+
+
 def _verdict_sol(info: dict):
-    """Разбор Solana-карточки (поля беднее EVM — парсим дефенсивно)."""
+    """Глубокий аудит Solana-токена через GoPlus (Mint/Freeze authority, налоги, киты)."""
     if not isinstance(info, dict) or not info:
         return True, "no-data"
+    
+    # 1. Прямой Honeypot
     for k in ("is_honeypot", "honeypot"):
         if str(info.get(k, "0")) == "1":
             return False, "honeypot"
-    # налоги могут лежать в разных ключах — ищем любое *tax*
+
+    # 2. Mintable (права бесконечного довыпуска токенов девом для дампа)
+    mintable = info.get("mintable")
+    if isinstance(mintable, dict):
+        if str(mintable.get("status", "0")) == "1" or len(mintable.get("authority", []) or []) > 0:
+            return False, "mintable (не отозваны права минта)"
+    elif str(mintable) in ("1", "true"):
+        return False, "mintable"
+
+    # 3. Freezable (права заморозки кошельков покупателей — скрытый honeypot)
+    freezable = info.get("freezable")
+    if isinstance(freezable, dict):
+        if str(freezable.get("status", "0")) == "1" or len(freezable.get("authority", []) or []) > 0:
+            return False, "freezable (не отозваны права заморозки)"
+    elif str(freezable) in ("1", "true"):
+        return False, "freezable"
+
+    # 4. Closable & Balance Mutable (бэкдоры управления балансами)
+    closable = info.get("closable")
+    if isinstance(closable, dict) and str(closable.get("status", "0")) == "1":
+        return False, "closable (дев может закрыть токен-аккаунт)"
+    if str(info.get("balance_mutable_authority", "0")) in ("1", "true"):
+        return False, "balance_mutable (дев может изменить баланс)"
+
+    # 5. Налоги и скрытые комиссии transfer_fee
     worst = 0.0
     for k, v in info.items():
         if "tax" in str(k).lower():
             worst = max(worst, _tax_frac(v))
+    tf = info.get("transfer_fee") or {}
+    if isinstance(tf, dict) and tf:
+        worst = max(worst, _tax_frac(tf.get("rate", 0)))
     if worst > float(_cfg("GOPLUS_MAX_SELL_TAX", 0.10)):
         return False, f"tax {worst * 100:.0f}%"
+
+    # 6. Концентрация у китов и топ-10 холдеров (защита от Cabal/Инсайдерских дампов)
+    holders = info.get("holders") or []
+    if holders and isinstance(holders, list):
+        top10_sum = 0.0
+        for h in holders[:10]:
+            pct = _tax_frac(h.get("percent", 0))
+            tag = str(h.get("tag", "")).lower()
+            if "raydium" in tag or "meteora" in tag or "orca" in tag or "pump" in tag or pct > 0.65:
+                continue
+            max_single = float(_cfg("SOLANA_MAX_SINGLE_WHALE_PCT", 0.08))
+            if pct > max_single:
+                return False, f"кит держит {pct*100:.1f}% (>{max_single*100:.0f}%) — риск дампа"
+            top10_sum += pct
+        max_top10 = float(_cfg("SOLANA_MAX_TOP10_PCT", 0.35))
+        if top10_sum > max_top10:
+            return False, f"топ-10 китов держат {top10_sum*100:.1f}% (>{max_top10*100:.0f}%) — кабал-риск"
+
     return True, ""
 
 
@@ -181,7 +260,7 @@ def is_hard_scam(reason: str) -> bool:
     for danger in ("honeypot", "cannot_sell", "cannot_buy", "blacklist", "cooldown",
                    "mintable", "ownership", "hidden_owner", "selfdestruct",
                    "external_call", "tax", "creator_pct", "owner_pct", "lp", "рагпулл",
-                   "кит", "дамп"):
+                   "кит", "дамп", "freezable", "closable", "balance_mutable", "кабал"):
         if danger in r:
             return True
     return False
@@ -284,7 +363,6 @@ async def check_solana(mint: str):
         api_key = str(_cfg("GOPLUS_API_KEY", "") or "").strip()
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
-        status, data = await fetch_json(url, headers=headers if headers else None, timeout=10, retries=1)
         if status == 200 and isinstance(data, dict) and data.get("code") == 1:
             result = data.get("result") or {}
             info = result.get(mint) or {}
@@ -293,6 +371,7 @@ async def check_solana(mint: str):
                     if isinstance(v, dict):
                         info = v
                         break
+            RAW_SOLANA_INFO[mint] = info
             verdict = _verdict_sol(info)
     except Exception:
         verdict = (True, "error")
@@ -310,7 +389,7 @@ async def verify_evm_token(address: str, chain: str, pair_data: dict = None) -> 
     
     Возвращает (ok: bool, reason: str).
     - (True, ''): контракт чист и проверен.
-    - (False, reason): подтверждённый скам, ханипот или не подтверждён на BSC.
+    - (False, reason): подтверждённый скам, ханипот или не подтверждён на BSC/Base.
     """
     chain = (chain or "").lower().strip()
     address = (address or "").strip()
@@ -322,33 +401,37 @@ async def verify_evm_token(address: str, chain: str, pair_data: dict = None) -> 
         if not pair_data or not isinstance(pair_data, dict):
             return False, "нет данных пары для Robinhood"
         
-        # 1. Возрастной барьер: не входить в первые 5 минут (зона flash-рагов дева)
+        # 1. Возрастной барьер: настраиваемый порог из config.py (по умолчанию 2.5 мин)
         _c_ms = pair_data.get("pairCreatedAt") or 0
         import time as _t_rob
         _a_min = ((_t_rob.time() * 1000 - _c_ms) / 60000.0) if _c_ms else 999.0
-        if _a_min < 5.0:
-            return False, f"возраст {_a_min:.1f}м < 5.0м — ранняя flash-rug зона"
+        _min_age = float(getattr(config, "ROBINHOOD_MIN_AGE_MIN", 2.5))
+        if _a_min < _min_age:
+            return False, f"возраст {_a_min:.1f}м < {_min_age:.1f}м — ранняя flash-rug зона"
             
-        # 2. Проверка социальных ссылок: требуем хотя бы 1 валидную ссылку (Twitter/TG/сайт)
+        # 2. Проверка социальных ссылок
         info = pair_data.get("info") or {}
         links = (info.get("socials") or []) + (info.get("websites") or [])
+        vol5 = float(((pair_data.get("volume") or {}).get("m5", 0) or 0))
+        liq = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
         if not links or len(links) < 1:
-            return False, "нет ссылок (соцсети/сайт) — анонимный дев-раг"
+            # Для пулов < $15k требуем ссылки (дешевый анонимный дев-раг)
+            # Для глубоких пулов ($15k+) с объемом от $3k отсутствие плашки соцсетей не фатально при чистом байткоде (кейсы ALIENS, FART)
+            if liq < 15000.0 or vol5 < 3000.0:
+                return False, "нет ссылок (соцсети/сайт) — анонимный дев-раг"
             
         # 3. Наличие реальных продаж и глубина пула
         txns_m5 = ((pair_data.get("txns") or {}).get("m5") or {})
         s5 = int(txns_m5.get("sells", 0) or 0)
         b5 = int(txns_m5.get("buys", 0) or 0)
-        vol5 = float(((pair_data.get("volume") or {}).get("m5", 0) or 0))
-        liq = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
-        if s5 < 5:
-            return False, f"продаж за 5м {s5} < 5 — ханипот или заблокированный стакан"
-        if b5 < s5 * 1.2:
+        if s5 < 2:
+            return False, f"продаж за 5м {s5} < 2 — ханипот или заблокированный стакан"
+        if b5 < s5:
             return False, f"нет перевеса покупателей ({b5}b/{s5}s)"
-        if vol5 < 5000:
-            return False, f"объем за 5м ${vol5:,.0f} < $5,000 — искусственный пул"
-        if liq < 20000:
-            return False, f"ликвидность ${liq:,.0f} < $20,000 — тонкий пул"
+        if vol5 < 800:
+            return False, f"объем за 5м ${vol5:,.0f} < $800 — искусственный пул"
+        if liq < 3000:
+            return False, f"ликвидность ${liq:,.0f} < $3,000 — тонкий пул"
 
         # 4. Ончейн-аудит байткода, верификации и LP-лока через RPC / Blockscout
         try:
@@ -429,34 +512,45 @@ async def verify_evm_token(address: str, chain: str, pair_data: dict = None) -> 
     _g_ok, _g_why = await check_token(address, chain)
     if is_hard_scam(_g_why):
         return False, f"GoPlus {_g_why}"
-    if _g_ok and _g_why == "":
-        return True, ""
 
     # Уровень 2: Honeypot.is (симуляция транзакций покупки и продажи)
-    # Вызывается если GoPlus вернул rate-limit (4029), no-data (3) или ошибку.
+    # Запускаем для Base и Ethereum для подтверждения возможности продажи
+    _h_ok, _h_why = True, ""
     try:
         import honeypot_is as _hp
         _h_ok, _h_why = await _hp.check_token(address, chain)
         if _hp.is_hard_scam(_h_why):
             return False, f"honeypot.is {_h_why}"
-        if _h_ok and _h_why == "":
-            return True, ""
     except Exception:
         _h_ok, _h_why = False, "hp-exception"
 
-    # Уровень 3: Ончейн-валидация пула DEX (если оба внешних сервиса не проиндексировали / перегружены)
+    # Если GoPlus подтвердил токен И Honeypot.is подтвердил (или unsupported) — чистый вход
+    if _g_ok and _g_why == "" and _h_ok:
+        return True, ""
+
+    # Уровень 3: Ончейн-валидация пула DEX (если внешний сервис ещё не успел проиндексировать токен)
     if chain in ("base", "ethereum"):
         if pair_data and isinstance(pair_data, dict):
             import time as _t_base
             _c_ms = pair_data.get("pairCreatedAt") or 0
             _age_min = ((_t_base.time() * 1000 - _c_ms) / 60000.0) if _c_ms else 999.0
-            # Если токен свежий (<15 мин), а GoPlus и Honeypot.is ещё не проверили — требуем ончейн-доказательство
-            if _age_min < 15.0 and (_g_why in ("no-data", "unindexed") or not _g_ok):
-                txns_m5 = ((pair_data.get("txns") or {}).get("m5") or {})
-                s5 = int(txns_m5.get("sells", 0) or 0)
-                if s5 < 3:
-                    return False, f"контракт {chain} ещё не проверен GoPlus/Honeypot ({_g_why}) и <3 продаж — ждём верификации"
-        return True, ""
+            txns_m5 = ((pair_data.get("txns") or {}).get("m5") or {})
+            s5 = int(txns_m5.get("sells", 0) or 0)
+            b5 = int(txns_m5.get("buys", 0) or 0)
+            vol5 = float(((pair_data.get("volume") or {}).get("m5", 0) or 0))
+
+            # Если Honeypot.is подтвердил возможность продажи — пропускаем свежий пул
+            if _h_ok and _h_why == "" and s5 >= 2:
+                return True, ""
+
+            # Если ни GoPlus, ни Honeypot.is не подтвердили контракт:
+            # Свежие токены (<15 мин) без верификации НЕ ПУСКАЕМ (защита от мгновенных дев-рагпуллов вроде SPACEX)
+            if _age_min < 15.0:
+                if s5 < 4 or b5 < s5 * 1.2 or vol5 < 3000:
+                    return False, f"контракт {chain} не верифицирован (GoPlus: {_g_why}, Honeypot: {_h_why}) и слабый стакан — ждём проверки"
+                # Если идут активные подтвержденные продажи в пуле:
+                return True, ""
+        return False, f"контракт {chain} не подтверждён по безопасности (GoPlus: {_g_why})"
 
     if chain == "bsc":
         # BSC: зона повышенного риска. Проверяем реальные сделки продажи в пуле и возраст:
@@ -471,7 +565,6 @@ async def verify_evm_token(address: str, chain: str, pair_data: dict = None) -> 
             b5 = int(txns_m5.get("buys", 0) or 0)
             vol5 = float(((pair_data.get("volume") or {}).get("m5", 0) or 0))
             if s5 >= 4 and b5 >= s5 * 1.2 and vol5 >= 8000:
-                # Физическое ончейн-доказательство: пользователи прямо сейчас успешно продают токен
                 return True, ""
         return False, f"ни GoPlus ({_g_why}), ни honeypot.is ({_h_why}) не подтвердили контракт (BSC)"
 

@@ -91,18 +91,18 @@ class MatureExitManager:
                 if drop_from_max >= 0.05:
                     return f"Scalp Profit (peak +{max_pnl_pct*100:.0f}%)"
 
-        # Breakeven: пик был +30%+, а цена вернулась ко входу — ракета сдохла,
-        # выходим в ноль (pnl <= 0), а не ждём -20% стоп. Ракеты не убивает (живая выше входа).
-        _be = float(getattr(config, 'BREAKEVEN_PCT', 0.30))
         try:
             _maxp = (position.max_price_usd - position.entry_price_usd) / position.entry_price_usd
         except Exception:
             _maxp = 0
-        if _maxp >= _be and pnl_pct <= 0:
+        # Мягкий стоп: был пик +10%+, сползли к -5% — импульс угас, фиксируем малый минус
+        if _maxp >= 0.10 and pnl_pct <= -0.05:
+            return f"Mature Soft Guard (был пик +{_maxp*100:.0f}%, слив до {pnl_pct*100:.1f}%)"
+        # Breakeven: если был пик +12%+ и цена вернулась ко входу — импульс сдох,
+        # выходим в безубыток (+0.5%..0%), а не ждём стоп -14%..-30%.
+        _be = min(float(getattr(config, 'BREAKEVEN_PCT', 0.20)), 0.12)
+        if _maxp >= _be and pnl_pct <= 0.005:
             return f"Mature Breakeven (был пик +{_maxp*100:.0f}%)"
-        # Мягкий стоп: был пик +25%+, сползли к -5% — пила, фиксируем малый минус
-        if _maxp >= 0.25 and pnl_pct <= -0.05:
-            return f"Mature Soft Guard (был пик +{_maxp*100:.0f}%)"
 
         # Hard stop loss
         if hasattr(config, 'STOP_LOSS_PCT') and pnl_pct <= config.STOP_LOSS_PCT:
