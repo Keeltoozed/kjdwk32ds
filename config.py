@@ -51,7 +51,7 @@ MAX_CONCURRENT_POSITIONS = 10  # концентрация капитала: ма
 
 # Risk Management
 MAX_DAILY_LOSS_USD = 18.0
-KILL_SWITCH_ENABLED = True
+KILL_SWITCH_ENABLED = False
 MAX_DAILY_LOSS_PCT = 0.25
 STOP_LOSS_PCT = -0.14  # Стоп -14% (было -20%, что при слипе давало -31% убытка)
 SNIPER_ENTRIES_ENABLED = False
