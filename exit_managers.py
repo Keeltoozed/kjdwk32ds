@@ -52,12 +52,12 @@ class MatureExitManager:
             _floor_pnl = 0.50
         elif max_pnl_pct >= 0.60:     # Пик +60%+ -> гарантируем минимум +30% (18.7% воздуха от пика)
             _floor_pnl = 0.30
-        elif max_pnl_pct >= 0.40:     # Пик +40%+ -> гарантируем минимум +20% (14.3% воздуха от пика)
-            _floor_pnl = 0.20
-        elif max_pnl_pct >= 0.25:     # Пик +25%+ -> гарантируем минимум +10% (12% воздуха от пика)
-            _floor_pnl = 0.10
-        elif max_pnl_pct >= 0.15:     # Пик +15%+ -> гарантируем минимум +4% (комиссии окуплены)
-            _floor_pnl = 0.04
+        elif max_pnl_pct >= 0.40:     # Пик +40%+ -> гарантируем минимум +25% (было 0.20)
+            _floor_pnl = 0.25
+        elif max_pnl_pct >= 0.25:     # Пик +25%+ -> гарантируем минимум +16% (было 0.10)
+            _floor_pnl = 0.16
+        elif max_pnl_pct >= 0.15:     # Пик +15%+ -> гарантируем минимум +7% (было 0.04)
+            _floor_pnl = 0.07
         if _floor_pnl is not None and pnl_pct <= _floor_pnl:
             if pnl_pct >= 0:
                 return f"Mature Profit Floor (+{_floor_pnl*100:.0f}% locked after peak +{max_pnl_pct*100:.0f}%)"
@@ -75,7 +75,7 @@ class MatureExitManager:
                 elif max_pnl_pct >= 0.50:
                     _trail_dist = 0.14
                 elif max_pnl_pct >= 0.25:
-                    _trail_dist = 0.12
+                    _trail_dist = 0.10
                 else:
                     _trail_dist = float(getattr(config, "TRAILING_DISTANCE_PCT", 0.10))
 
@@ -103,6 +103,10 @@ class MatureExitManager:
         _be = min(float(getattr(config, 'BREAKEVEN_PCT', 0.20)), 0.12)
         if _maxp >= _be and pnl_pct <= 0.005:
             return f"Mature Breakeven (был пик +{_maxp*100:.0f}%)"
+
+        # Zero-Momentum Cut: монета за 3+ мин ни разу не дала даже +1.5% и ушла в -8%
+        if _maxp < 0.015 and pnl_pct <= -0.08 and minutes_held >= 3:
+            return f"Mature Zero-Momentum Cut ({minutes_held:.0f}m, {pnl_pct*100:.1f}%)"
 
         # Hard stop loss
         if hasattr(config, 'STOP_LOSS_PCT') and pnl_pct <= config.STOP_LOSS_PCT:

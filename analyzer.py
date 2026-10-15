@@ -1118,6 +1118,11 @@ class Analyzer:
 
             # 3. Накопление: живая торговля за час, умеренный флэт (m5 >= -10%), покупатели активны
             if m5 >= -10.0 and (_b1 + _s1) >= 10 and _b1 >= _s1 * 0.75 and not self.is_churn(b5, s5, m5, liq=liq):
+                _rkt = self._rkt_tag(address, pair_data)
+                _rkt_sc = self.rocket_scores.get(address)
+                if _rkt_sc is not None and _rkt_sc < 0.40:
+                    return self._deny(address, f"accum-low-rkt {_rkt_sc:.2f}",
+                                      f"· [{tag}-ACCUM] {symbol}: скор ракеты {_rkt_sc:.2f} < 0.40 — слабый потенциал.")
                 try:
                     import goplus as _gp
                     _v_ok, _v_why = await _gp.verify_evm_token(address, chain, pair_data)
@@ -1126,7 +1131,7 @@ class Analyzer:
                 except Exception:
                     pass
                 print(f"💎 [{tag}-ACCUM] {symbol}: m5 {m5:+.1f}%, liq ${liq:,.0f}, tx1h {_b1}b/{_s1}s — живое накопление перед взлетом.")
-                self._set_sig(address, f"{tag} ACCUM" + self._rkt_tag(address, pair_data) + await self.meme_tag(address, symbol, pair_data, chain))
+                self._set_sig(address, f"{tag} ACCUM" + _rkt + await self.meme_tag(address, symbol, pair_data, chain))
                 return True
 
             return self._deny(address, f"flat m5 {m5:+.1f}%", f"· [{tag}] {symbol}: флет m5 {m5:+.1f}%")
