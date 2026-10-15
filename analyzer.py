@@ -1033,7 +1033,7 @@ class Analyzer:
         # Ранний Scout-режим для свежих ракет (<10 мин):
         # Пулы только зарождаются ($3k+), соцсети девы ещё не привязали к DexScreener, но есть реальные покупки и продажи.
         # Без соцсетей (links) требуем глубокий пул минимум $12k, чтобы дев не мог слить его одной кнопкой
-        _scout_min_liq = 3500.0 if links else 12000.0  
+        _scout_min_liq = 3500.0 if links else 3500.0  
         if (_age_min < 10.0 and m5 >= 2.0 and (b5 + s5) >= 12 and liq >= _scout_min_liq
                 and s5 >= 2 and b5 >= s5 and (b5 / max(s5, 1)) <= 5.0):
             if not self._evm_brand_ok(symbol, tag):
