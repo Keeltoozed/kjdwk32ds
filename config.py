@@ -51,7 +51,7 @@ MAX_CONCURRENT_POSITIONS = 10  # концентрация капитала: ма
 
 # Risk Management
 MAX_DAILY_LOSS_USD = 18.0
-KILL_SWITCH_ENABLED = True
+KILL_SWITCH_ENABLED = False  # ОТКЛЮЧЕНО для тестов (не ставить торговлю на паузу при дневном минусе)
 MAX_DAILY_LOSS_PCT = 0.25
 STOP_LOSS_PCT = -0.11  # Стоп -11% (при слипе даёт реальный выход на -15% вместо -22%)
 SNIPER_ENTRIES_ENABLED = False
@@ -123,6 +123,7 @@ ROBINHOOD_MAX_CREATOR_PCT = 0.20  # Блок токенов, где у созд�
 ROBINHOOD_MAX_OWNER_PCT = 0.20
 ROBINHOOD_SCAN_INTERVAL = 25  # 25с: быстрый опрос (BSC отключен, лимиты не превышаются)
 EVM_MIN_M5_PCT = 2.0  # Ранние импульсы от +2% пускаем (не отсекать ранние старты вроде binancians +2.6%, 旺柴 +2.8%)
+EVM_ACCUM_ENABLED = False  # Выключено: флэт m5 < 2% не покупаем, чтобы не ловить сползающий минус (-7..-12%) как на FRC/BANKERS
 EVM_RESCAN_COOLDOWN = 180  # Перепроверка через 3 мин (волна может прийти позже)
 EVM_MAX_MINTS = 120  # Лимит активных кандидатов за цикл скана
 

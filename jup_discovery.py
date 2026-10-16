@@ -133,13 +133,31 @@ async def jup_loop(analyzer, tracker):
                     analyzer.log_scan(mint[:8], mint, "JUP",
                                       ok, getattr(analyzer, "last_score", 0.0))
                     if ok is True and len(tracker.get_open_positions()) < config.MAX_CONCURRENT_POSITIONS:
+                        if td and td.get("_price_divergence"):
+                            _div_r = float(td.get("_price_divergence_ratio", 0.0) or 0.0)
+                            print(f"🚫 [JUP-PRICE-SPLIT] {_sym_tmp} ({mint[:8]}): рассинхрон пулов {_div_r:.1f}x — блок.")
+                            continue
                         import goplus as _gp
                         _g_ok, _g_why = await _gp.check_solana(mint)
                         if not _g_ok:
                             print(f"🚫 [JUP-GOPLUS] {_sym_tmp} ({mint[:8]}): {_g_why} — блок входа.")
                             continue
                         from jupiter import JupiterAPI
-                        price = await JupiterAPI.get_price(mint)
+                        ds_price = float((td or {}).get("priceUsd", 0) or 0.0)
+                        jup_price = await JupiterAPI.get_price(mint)
+                        if ds_price > 0 and jup_price and jup_price > 0:
+                            ratio = max(ds_price, jup_price) / min(ds_price, jup_price)
+                            if ratio > 1.25:
+                                print(f"🚫 [JUP-PRICE-MISMATCH] {_sym_tmp} ({mint[:8]}): Jupiter (${jup_price:.8f}) vs Dex (${ds_price:.8f}) расхождение {ratio:.1f}x — блок.")
+                                continue
+                            price = jup_price
+                        elif ds_price > 0:
+                            price = ds_price
+                        elif jup_price and jup_price > 0:
+                            price = jup_price
+                        else:
+                            price = 0.0
+
                         if price and price > 0:
                             _sig = analyzer.get_signal(mint)
                             _veto = analyzer.rocket_veto(mint, td or {}, _sig)
@@ -162,7 +180,7 @@ async def jup_loop(analyzer, tracker):
                                 ml_features=analyzer.pack_features(td or {}),
                                 ml_confidence=float(getattr(analyzer, "last_score", 0.0)),
                                 source=f"JUP:{analyzer.get_signal(mint)}")
-                            print(f"🪐 JUP BUY {_sym} ({mint[:8]}) @ ${price}")
+                            print(f"🪐 JUP BUY {_sym} ({mint[:8]}) @ ${price} [size: ${min(size, 100.0):.1f}]")
                             break
                     await asyncio.sleep(1.0)
                 if len(processed) > 1000:

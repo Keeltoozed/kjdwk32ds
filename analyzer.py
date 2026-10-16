@@ -343,25 +343,35 @@ class Analyzer:
         # 1. Приоритет реальным AMM пулам с живой ликвидностью
         real_pairs = [p for p in sol_pairs if float(((p.get("liquidity") or {}).get("usd", 0) or 0)) >= 500]
         if real_pairs:
-            return sorted(real_pairs, key=lambda p: float(((p.get("liquidity") or {}).get("usd", 0) or 0)), reverse=True)[0]
+            best_pair = sorted(real_pairs, key=lambda p: float(((p.get("liquidity") or {}).get("usd", 0) or 0)), reverse=True)[0]
+        else:
+            # 2. Если реальных пулов нет — токен ещё на bonding curve pump.fun
+            def _get_eff_liq(p):
+                raw_l = float(((p.get("liquidity") or {}).get("usd", 0) or 0))
+                if raw_l > 0:
+                    return raw_l
+                if p.get("dexId") in ("pump", "pumpfun") or mint.endswith("pump"):
+                    return float(p.get("fdv", 0) or p.get("marketCap", 0) or 0) * 0.40
+                return 0.0
 
-        # 2. Если реальных пулов нет — токен ещё на bonding curve pump.fun
-        def _get_eff_liq(p):
-            raw_l = float(((p.get("liquidity") or {}).get("usd", 0) or 0))
-            if raw_l > 0:
-                return raw_l
-            if p.get("dexId") in ("pump", "pumpfun") or mint.endswith("pump"):
-                return float(p.get("fdv", 0) or p.get("marketCap", 0) or 0) * 0.40
-            return 0.0
+            best_pair = sorted(sol_pairs, key=_get_eff_liq, reverse=True)[0]
+            if best_pair.get("dexId") in ("pump", "pumpfun") or mint.endswith("pump"):
+                cur_l = float(((best_pair.get("liquidity") or {}).get("usd", 0) or 0))
+                if cur_l == 0:
+                    eff = float(best_pair.get("fdv", 0) or best_pair.get("marketCap", 0) or 0) * 0.40
+                    if not isinstance(best_pair.get("liquidity"), dict):
+                        best_pair["liquidity"] = {}
+                    best_pair["liquidity"]["usd"] = eff
 
-        best_pair = sorted(sol_pairs, key=_get_eff_liq, reverse=True)[0]
-        if best_pair.get("dexId") in ("pump", "pumpfun") or mint.endswith("pump"):
-            cur_l = float(((best_pair.get("liquidity") or {}).get("usd", 0) or 0))
-            if cur_l == 0:
-                eff = float(best_pair.get("fdv", 0) or best_pair.get("marketCap", 0) or 0) * 0.40
-                if not isinstance(best_pair.get("liquidity"), dict):
-                    best_pair["liquidity"] = {}
-                best_pair["liquidity"]["usd"] = eff
+        # Проверка рассинхрона цен между реальными пулами (миграция / арбитраж / фейковые пулы):
+        # Проверяем только между пулами с живой ликвидностью (>= $500), закрытый bonding curve pump.fun не учитываем
+        if real_pairs and len(real_pairs) >= 2:
+            real_prices = [float(p.get("priceUsd", 0) or 0) for p in real_pairs if float(p.get("priceUsd", 0) or 0) > 0]
+            if len(real_prices) >= 2:
+                max_px, min_px = max(real_prices), min(real_prices)
+                if min_px > 0 and (max_px / min_px) > 1.30:
+                    best_pair["_price_divergence"] = True
+                    best_pair["_price_divergence_ratio"] = max_px / min_px
         return best_pair
 
     async def prefetch_token_data(self, mints: list, ttl: float = None) -> int:
@@ -656,6 +666,11 @@ class Analyzer:
         base_token = pair_data.get("baseToken", {})
         name = base_token.get("name", "").upper()
         symbol = base_token.get("symbol", "").upper()
+
+        if pair_data.get("_price_divergence"):
+            _div_r = float(pair_data.get("_price_divergence_ratio", 0.0) or 0.0)
+            print(f"🚫 [PRICE-SPLIT] {symbol} ({mint[:8]}): рассинхрон цен между пулами {_div_r:.1f}x (миграция/гэп) — блок входа.")
+            return False
         
         scam_keywords = ["AAPL", "S&P", "SP500", "MSFT", "TSLA", "NVDA", "GOOG", "AMZN", "META", "NFLX", 
                          "PEPE", "SHIB", "DOGE", "FLOKI", "BONK", "WIF", "BOME", "POPCAT", "TRUMP", "BIDEN"]
@@ -1161,6 +1176,9 @@ class Analyzer:
         
         _evm_min_m5 = getattr(config, "EVM_MIN_M5_PCT", 2.0)
         if m5 < _evm_min_m5:
+            _accum_on = bool(getattr(config, "EVM_ACCUM_ENABLED", False))
+            if not _accum_on:
+                return self._deny(address, f"flat m5 {m5:+.1f}%", f"· [{tag}] {symbol}: флет m5 {m5:+.1f}% < {_evm_min_m5:.1f}% (ACCUM выключен, нет импульса)")
             # === ПРОВЕРКА НАКОПЛЕНИЯ (ACCUMULATION) vs МЕРТВЫЙ ФЛЭТ (DEAD-FLAT) ===
             # Отличаем живое накопление перед взрывом (ANTI, IRL, TILIK, BREZCAT) от мертвых токенов (TAP, KIRK, CONFIRMATIO)
             _tx1 = ((pair_data.get("txns") or {}).get("h1") or {})

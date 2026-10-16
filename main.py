@@ -501,6 +501,17 @@ async def scanner_loop(analyzer, tracker):
                                 _fdv = float(((pair_data or {}).get("fdv", 0) or (pair_data or {}).get("marketCap", 0) or 0))
                                 liq_usd = _fdv * 0.40
                             if entry_price > 0:
+                                if pair_data.get("_price_divergence"):
+                                    _div_r = float(pair_data.get("_price_divergence_ratio", 0.0) or 0.0)
+                                    print(f"🚫 [SCANNER-PRICE-SPLIT] {actual_symbol} ({mint[:8]}): рассинхрон пулов {_div_r:.1f}x — блок.")
+                                    continue
+                                from jupiter import JupiterAPI
+                                _jup_chk = await JupiterAPI.get_price(mint)
+                                if _jup_chk and _jup_chk > 0 and entry_price > 0:
+                                    _chk_r = max(_jup_chk, entry_price) / min(_jup_chk, entry_price)
+                                    if _chk_r > 1.25:
+                                        print(f"🚫 [SCANNER-PRICE-MISMATCH] {actual_symbol} ({mint[:8]}): Jupiter (${_jup_chk:.8f}) vs DS (${entry_price:.8f}) расхождение {_chk_r:.1f}x — блок.")
+                                        continue
                                 # RKT-вето дженерик-входов Solana (лотереи/VIP-билеты exempt).
                                 _ssig = analyzer.get_signal(mint)
                                 _sveto = analyzer.rocket_veto(mint, pair_data, _ssig)
