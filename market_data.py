@@ -302,7 +302,7 @@ async def _ds_token_data(mint: str) -> dict:
             pairs = data.get("pairs") or []
             sol = [p for p in pairs if p.get("chainId") == "solana"]
             if sol:
-                best = sorted(sol, key=lambda x: x.get("liquidity", {}).get("usd", 0),
+                best = sorted(sol, key=lambda x: float(((x.get("liquidity") or {}).get("usd", 0) or 0)),
                               reverse=True)[0]
                 best["_source"] = "dexscreener"
                 best["_socials_unknown"] = False

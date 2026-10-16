@@ -328,22 +328,34 @@ class Analyzer:
                 
     @staticmethod
     def _best_solana_pair(mint: str, pairs: list):
-        """Лучший Solana-пул токена по эффективной ликвидности (pump-кёрв = 40% FDV)."""
+        """Лучший Solana-пул токена:
+        1. Если у токена уже есть пулы с РЕАЛЬНОЙ ликвидностью (Raydium, Pumpswap, Meteora, Orca),
+           выбираем пул с максимальной реальной ликвидностью usd.
+           Мёртвый bonding curve (liq=0) никогда не перебивает живой AMM-пул.
+        2. И только если токен всё ещё на bonding curve pump.fun (нет ни одного AMM-пула с liq >= 500),
+           выбираем pump.fun пул с эффективной ликвидностью (fdv * 0.40).
+        """
         sol_pairs = [p for p in (pairs or []) if (p.get("chainId") or "").lower() == "solana"
                      and ((p.get("baseToken") or {}).get("address") or mint) == mint]
         if not sol_pairs:
             return None
 
+        # 1. Приоритет реальным AMM пулам с живой ликвидностью
+        real_pairs = [p for p in sol_pairs if float(((p.get("liquidity") or {}).get("usd", 0) or 0)) >= 500]
+        if real_pairs:
+            return sorted(real_pairs, key=lambda p: float(((p.get("liquidity") or {}).get("usd", 0) or 0)), reverse=True)[0]
+
+        # 2. Если реальных пулов нет — токен ещё на bonding curve pump.fun
         def _get_eff_liq(p):
             raw_l = float(((p.get("liquidity") or {}).get("usd", 0) or 0))
             if raw_l > 0:
                 return raw_l
-            if p.get("dexId") == "pump" or mint.endswith("pump"):
+            if p.get("dexId") in ("pump", "pumpfun") or mint.endswith("pump"):
                 return float(p.get("fdv", 0) or p.get("marketCap", 0) or 0) * 0.40
             return 0.0
 
         best_pair = sorted(sol_pairs, key=_get_eff_liq, reverse=True)[0]
-        if best_pair.get("dexId") == "pump" or mint.endswith("pump"):
+        if best_pair.get("dexId") in ("pump", "pumpfun") or mint.endswith("pump"):
             cur_l = float(((best_pair.get("liquidity") or {}).get("usd", 0) or 0))
             if cur_l == 0:
                 eff = float(best_pair.get("fdv", 0) or best_pair.get("marketCap", 0) or 0) * 0.40
@@ -747,7 +759,7 @@ class Analyzer:
                     print(f"🚫 [VELOCITY] {mint}: buy/sell m5 {_b5}/{_s5} < {mult}x — {'(лотерея, ослаблено)' if _lottery else 'нет буфера покупателей'}")
                     return False
             _cur_liq = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
-            if _cur_liq == 0 and (mint.endswith("pump") or pair_data.get("dexId") == "pump"):
+            if _cur_liq == 0 and (mint.endswith("pump") or pair_data.get("dexId") in ("pump", "pumpfun")):
                 _cur_liq = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0) * 0.40
             if not _lottery and self.is_churn(_b5, _s5, _m5, liq=_cur_liq):
                 print(f"🚫 [CHURN] {mint}: {_b5 + _s5} сделок, b/s {_b5 / _s5:.2f}, m5 {_m5:+.1f}% — накрутка, не FOMO.")
@@ -908,7 +920,7 @@ class Analyzer:
                 self._last_top10 = top_10_sum_pct
                 self._last_dev = dev_holding_pct
                 
-                is_pump = pair_data and pair_data.get("dexId") == "pump"
+                is_pump = pair_data and pair_data.get("dexId") in ("pump", "pumpfun")
                 max_allowed_pct = 30.0 if is_pump else 35.0
                 
                 if top_10_sum_pct > 100:
@@ -942,7 +954,7 @@ class Analyzer:
                         if self._last_dev > 10.0:
                             print(f"🚫 [GOPLUS-DEV] {symbol} ({mint[:8]}): дев держит {self._last_dev:.1f}% > 10% — риск дампа.")
                             return False
-                        _max_top10 = 30.0 if (pair_data and pair_data.get("dexId") == "pump") else 35.0
+                        _max_top10 = 30.0 if (pair_data and pair_data.get("dexId") in ("pump", "pumpfun")) else 35.0
                         if self._last_top10 > _max_top10:
                             print(f"🚫 [GOPLUS-CABAL] {symbol} ({mint[:8]}): топ-10 держат {self._last_top10:.1f}% > {_max_top10:.0f}% — риск кабала.")
                             return False
@@ -988,8 +1000,8 @@ class Analyzer:
         
         # Глобальная защита от дешевых скрамов/рагпуллов
         liq = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
-        if (dex_id == "pump") or mint.endswith("pump"):
-            liq = max(liq, float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0) * 0.40)
+        if liq == 0 and (dex_id in ("pump", "pumpfun") or mint.endswith("pump")):
+            liq = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0) * 0.40
             _floor_liq = 2000
         else:
             _floor_liq = 5000
@@ -997,7 +1009,7 @@ class Analyzer:
             print(f"🚫 [ANTI-RUG] {symbol} ({mint[:8]}): Ликвидность всего ${liq:,.0f} < ${_floor_liq}. Слишком опасно.")
             return False
             
-        if dex_id == "pump" and age_minutes <= 15:
+        if dex_id in ("pump", "pumpfun") and age_minutes <= 15:
             return await self.analyze_token_xgboost(mint, pair_data, _lottery=_lottery)
         else:
             return await self.analyze_token_raydium(mint, pair_data)
@@ -1427,7 +1439,7 @@ class Analyzer:
         if not pair_data:
             return False
             
-        if pair_data.get("dexId") != "pump":
+        if pair_data.get("dexId") not in ("pump", "pumpfun"):
             return False
             
         is_vip = self.check_hyper_rocket_momentum(pair_data)
