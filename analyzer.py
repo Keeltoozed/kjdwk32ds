@@ -350,12 +350,12 @@ class Analyzer:
                 raw_l = float(((p.get("liquidity") or {}).get("usd", 0) or 0))
                 if raw_l > 0:
                     return raw_l
-                if p.get("dexId") in ("pump", "pumpfun") or mint.endswith("pump"):
+                if p.get("dexId") in ("pump", "pumpfun"):
                     return float(p.get("fdv", 0) or p.get("marketCap", 0) or 0) * 0.40
                 return 0.0
 
             best_pair = sorted(sol_pairs, key=_get_eff_liq, reverse=True)[0]
-            if best_pair.get("dexId") in ("pump", "pumpfun") or mint.endswith("pump"):
+            if best_pair.get("dexId") in ("pump", "pumpfun"):
                 cur_l = float(((best_pair.get("liquidity") or {}).get("usd", 0) or 0))
                 if cur_l == 0:
                     eff = float(best_pair.get("fdv", 0) or best_pair.get("marketCap", 0) or 0) * 0.40
@@ -774,7 +774,7 @@ class Analyzer:
                     print(f"🚫 [VELOCITY] {mint}: buy/sell m5 {_b5}/{_s5} < {mult}x — {'(лотерея, ослаблено)' if _lottery else 'нет буфера покупателей'}")
                     return False
             _cur_liq = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
-            if _cur_liq == 0 and (mint.endswith("pump") or pair_data.get("dexId") in ("pump", "pumpfun")):
+            if _cur_liq == 0 and str(pair_data.get("dexId", "")).lower() in ("pump", "pumpfun"):
                 _cur_liq = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0) * 0.40
             if not _lottery and self.is_churn(_b5, _s5, _m5, liq=_cur_liq):
                 print(f"🚫 [CHURN] {mint}: {_b5 + _s5} сделок, b/s {_b5 / _s5:.2f}, m5 {_m5:+.1f}% — накрутка, не FOMO.")
@@ -792,14 +792,15 @@ class Analyzer:
         # Защита от микро-пулов:
         # Для Pump.fun бондинг-кёрва DexScreener не создаёт AMM-пул (пишет $0), но кёрв обеспечен
         # виртуальными резервами SOL (~40% от FDV/MarketCap).
-        dex_id = pair_data.get("dexId", "")
-        is_pump_token = (dex_id == "pump") or mint.endswith("pump")
+        # Как только токен перешел на AMM (Raydium, Pumpswap, Meteora), требуется РЕАЛЬНАЯ ликвидность >= $12k!
+        dex_id = str(pair_data.get("dexId", "")).lower()
+        is_pump_curve = dex_id in ("pump", "pumpfun")
         raw_liq = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
         fdv_mc = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
 
-        if is_pump_token:
+        if is_pump_curve:
             liquidity = max(raw_liq, fdv_mc * 0.40)
-            _min_liq = 2000  # Для Pump.fun кёрва $2k ликвы (MC ~$5k+) достаточно для ордера $15 (проскальзывание <0.8%)
+            _min_liq = 2000  # Для закрытого Pump.fun кёрва $2k ликвы достаточно для ордера $15
         else:
             liquidity = raw_liq
             _min_liq = 12000 if _age_min_pre < 30 else getattr(config, "MIN_LIQUIDITY", 20000)
@@ -1015,11 +1016,11 @@ class Analyzer:
         
         # Глобальная защита от дешевых скрамов/рагпуллов
         liq = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
-        if liq == 0 and (dex_id in ("pump", "pumpfun") or mint.endswith("pump")):
+        if liq == 0 and dex_id in ("pump", "pumpfun"):
             liq = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0) * 0.40
             _floor_liq = 2000
         else:
-            _floor_liq = 5000
+            _floor_liq = 12000 if (pair_data.get("chainId") or "").lower() == "solana" else 5000
         if liq < _floor_liq:
             print(f"🚫 [ANTI-RUG] {symbol} ({mint[:8]}): Ликвидность всего ${liq:,.0f} < ${_floor_liq}. Слишком опасно.")
             return False
@@ -1567,8 +1568,11 @@ class Analyzer:
             print(f"🚫 [WASH-BOT] {mint[:8]}: средний чек ${_avg_tx:.1f} < $15 при {_b5+_s5} сделках — микро-боты накручивают объём.")
             return False
 
-        liquidity = pair_data.get("liquidity", {}).get("usd", 0)
-        fdv = pair_data.get("fdv", 0)
+        liquidity = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
+        fdv = float(pair_data.get("fdv", 0) or 0)
+        if liquidity < 12000:
+            print(f"📉 [RAYDIUM] {mint[:8]}: реальная ликвидность пула ${liquidity:,.0f} < $12,000 — микро-пул с риском мгновенного слива.")
+            return False
 
         # 2. Защита от картонных пулов (FDV / Liquidity > 120x — 1 кит продает и пул схлопывается)
         if liquidity > 0 and fdv > 0 and (fdv / liquidity) > 120.0:
