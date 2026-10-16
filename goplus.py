@@ -269,7 +269,7 @@ def is_hard_scam(reason: str) -> bool:
     return False
 
 
-async def check_token(address: str, chain: str):
+async def check_token(address: str, chain: str, force_refresh: bool = False):
     """EVM-гейт: (True, '') — можно брать; (False, причина) — блок."""
     chain = (chain or "").lower()
     if not _cfg("GOPLUS_ENABLED", True):
@@ -282,7 +282,7 @@ async def check_token(address: str, chain: str):
     key = (chain, address.lower())
     ttl = float(_cfg("GOPLUS_CACHE_SEC", 3600) or 0)
     hit = _CACHE.get(key)
-    if hit and ttl > 0 and (_t.time() - hit[0]) < ttl:
+    if not force_refresh and hit and ttl > 0 and (_t.time() - hit[0]) < ttl:
         CALLS["hit"] += 1
         return hit[1]
     CALLS["miss"] += 1
@@ -388,6 +388,139 @@ async def check_solana(mint: str):
     return verdict
 
 
+EVM_RPC_URLS = {
+    "robinhood": ["https://rpc.mainnet.chain.robinhood.com"],
+    "base": ["https://base-rpc.publicnode.com", "https://mainnet.base.org"],
+    "bsc": ["https://bsc-rpc.publicnode.com", "https://bsc-dataseed.binance.org"],
+    "ethereum": ["https://ethereum-rpc.publicnode.com", "https://eth.llamarpc.com"],
+}
+
+UNISWAP_V4_POOL_MANAGERS = {
+    "robinhood": "8366a39cc670b4001a1121b8f6a443a643e40951",
+    "base": "498581ff718922c3f8e6a244956af099b2652b2b",
+    "bsc": "28e2ea090877bf75740558f6bfb36a5ffee9e9df",
+    "ethereum": "000000000004444c5dc75cb358380d2e3de08a90",
+}
+
+
+async def check_onchain_evm_security(address: str, chain: str, pair_data: dict = None, is_open_pos: bool = False) -> tuple:
+    """Прямой ончейн-аудит байткода и реальных резервов пула (Uniswap V4 PoolManager / V2 LP) через RPC.
+    Защищает от серийных 15-минутных LP-rug ботов (шаблоны 9312 на Robinhood и 3256 на Base: 1, VC, Satoshi, STK),
+    которые заливают 2% эмиссии в V4 пул, накручивают +80% и выдергивают всю ликвидность, пока DexScreener показывает старую цену."""
+    chain = (chain or "").lower().strip()
+    address = (address or "").strip()
+    if not address or chain not in EVM_RPC_URLS:
+        return True, ""
+
+    _cfg_rpc = getattr(config, f"{chain.upper()}_RPC_URL", None)
+    _rpc_candidates = ([_cfg_rpc] if _cfg_rpc else []) + [u for u in EVM_RPC_URLS[chain] if u != _cfg_rpc]
+    try:
+        from http_client import get_session
+        import aiohttp
+        _s_sess = await get_session()
+
+        _pd = pair_data if isinstance(pair_data, dict) else {}
+        _pair_addr = str(_pd.get("pairAddress") or "")
+        _labels = [str(x).lower() for x in (_pd.get("labels") or [])]
+        _dex_id = str(_pd.get("dexId") or "").lower()
+        _v4_pm_raw = UNISWAP_V4_POOL_MANAGERS.get(chain)
+        _is_v4 = ("v4" in _labels) or ("v4" in _dex_id) or (len(_pair_addr) > 42)
+
+        # Единый батч-запрос: eth_getCode + totalSupply() + balanceOf(Uniswap_V4_PoolManager)
+        _batch_pl = [
+            {"jsonrpc": "2.0", "id": 1, "method": "eth_getCode", "params": [address, "latest"]},
+            {"jsonrpc": "2.0", "id": 2, "method": "eth_call", "params": [{"to": address, "data": "0x18160ddd"}, "latest"]},
+        ]
+        if _v4_pm_raw:
+            _V4_PM = _v4_pm_raw.zfill(64)
+            _batch_pl.append(
+                {"jsonrpc": "2.0", "id": 3, "method": "eth_call", "params": [{"to": address, "data": f"0x70a08231{_V4_PM}"}, "latest"]}
+            )
+
+        _res_map = {}
+        _rpc_url = _rpc_candidates[0]
+        for _u in _rpc_candidates:
+            try:
+                async with _s_sess.post(_u, json=_batch_pl, timeout=aiohttp.ClientTimeout(total=4)) as _r_b:
+                    _raw_b = await _r_b.json()
+                if isinstance(_raw_b, list):
+                    _tmp = {item.get("id"): item for item in _raw_b if isinstance(item, dict)}
+                    if 1 in _tmp and "result" in _tmp[1] and "error" not in _tmp[1]:
+                        _res_map = _tmp
+                        _rpc_url = _u
+                        break
+            except Exception:
+                continue
+
+        if not _res_map:
+            if chain == "robinhood":
+                return False, "ошибка ончейн-аудита Robinhood (RPC недоступен)"
+            return True, ""
+
+        # 1. Байткод-аудит (шаблоны серийных LP-рагов и скрытые селекторы минта/паузы/блэклиста)
+        _bytecode = str(_res_map[1].get("result") or "").lower()
+        if _bytecode in ("0x", "0x0", ""):
+            return False, "нет байткода (не смарт-контракт)"
+        if len(_bytecode) == 9312 and _bytecode.startswith("0x608060405234801561001057600080fd5b50600436106100a957"):
+            return False, "серийный 15м LP-rug шаблон (FEE/Speed бот)"
+        if len(_bytecode) == 3256 and _bytecode.startswith("0x60806040526004361015610011575f80fd5b5f3560e01c806306fdde03"):
+            return False, "серийный 15м V4 LP-rug шаблон Base (1/VC/Satoshi фабрика)"
+
+        if not is_open_pos:
+            _dangerous_selectors = {
+                "40c10f19": "скрытый минт mint(address,uint256)",
+                "a0712d68": "скрытый минт mint(uint256)",
+                "42f21696": "блэклист blacklist(address)",
+                "83e2007e": "isBlacklisted",
+                "8456cb59": "пауза торговли pause()",
+                "03a118d5": "пауза торговли pause(bool)",
+            }
+            for _sel, _desc in _dangerous_selectors.items():
+                if _sel in _bytecode:
+                    return False, f"бэкдор в байткоде токена: {_desc}"
+
+        # 2. Проверка реальной ликвидности пула (Uniswap V4 PoolManager vs V2 LP Burn)
+        if 2 in _res_map and 3 in _res_map:
+            _tot_h = _res_map[2].get("result", "0x")
+            _pm_h = _res_map[3].get("result", "0x")
+            if _tot_h and _tot_h != "0x":
+                _tot_v = int(_tot_h, 16)
+                _pm_v = int(_pm_h, 16) if _pm_h and _pm_h != "0x" else 0
+                if _tot_v > 0 and (_is_v4 or (is_open_pos and not _pair_addr and _pm_v > 0)):
+                    _frac = _pm_v / _tot_v
+                    if _frac < 0.005:
+                        return False, f"пул Uniswap V4 опустошён девом (остаток {_frac*100:.4f}% — V4 LP Rug)"
+                    if not is_open_pos and _frac < 0.15:
+                        return False, f"картонный пул Uniswap V4 (в пуле всего {_frac*100:.1f}% эмиссии < 15% — схема V4 LP-rug)"
+        if len(_pair_addr) == 42 and chain == "robinhood":
+            _DEAD = "000000000000000000000000000000000000dead".zfill(64)
+            _ZERO = "0000000000000000000000000000000000000000".zfill(64)
+            _pl_lp = [
+                {"jsonrpc": "2.0", "id": 10, "method": "eth_call", "params": [{"to": _pair_addr, "data": "0x18160ddd"}, "latest"]},
+                {"jsonrpc": "2.0", "id": 11, "method": "eth_call", "params": [{"to": _pair_addr, "data": f"0x70a08231{_DEAD}"}, "latest"]},
+                {"jsonrpc": "2.0", "id": 12, "method": "eth_call", "params": [{"to": _pair_addr, "data": f"0x70a08231{_ZERO}"}, "latest"]},
+            ]
+            async with _s_sess.post(_rpc_url, json=_pl_lp, timeout=aiohttp.ClientTimeout(total=4)) as _r_lp:
+                _res_lp = await _r_lp.json()
+            if isinstance(_res_lp, list) and len(_res_lp) >= 3:
+                _tot_lp_h = _res_lp[0].get("result", "0x")
+                _dead_lp_h = _res_lp[1].get("result", "0x")
+                _zero_lp_h = _res_lp[2].get("result", "0x")
+                if _tot_lp_h and _tot_lp_h != "0x":
+                    _tot_lp = int(_tot_lp_h, 16)
+                    _dead_lp = int(_dead_lp_h, 16) if _dead_lp_h and _dead_lp_h != "0x" else 0
+                    _zero_lp = int(_zero_lp_h, 16) if _zero_lp_h and _zero_lp_h != "0x" else 0
+                    if _tot_lp > 0:
+                        _burnt_pct = ((_dead_lp + _zero_lp) / _tot_lp) * 100.0
+                        if _burnt_pct < 80.0:
+                            return False, f"ликва пула не сожжена ({_burnt_pct:.1f}% < 80%) — риск вывода ликвидности девом"
+    except Exception as _e_oc:
+        if chain == "robinhood":
+            return False, f"ошибка ончейн-аудита Robinhood ({type(_e_oc).__name__}) — блок по безопасности"
+
+    return True, ""
+
+
 async def verify_evm_token(address: str, chain: str, pair_data: dict = None) -> tuple:
     """3-уровневая гибридная защита EVM (GoPlus + Honeypot.is симуляция + On-Chain DEX).
     
@@ -401,7 +534,6 @@ async def verify_evm_token(address: str, chain: str, pair_data: dict = None) -> 
         return True, "no-addr"
     if chain in ("robinhood",):
         # Robinhood Chain (4663) строгий ончейн-аудит: Blockscout верификация + байткод + LP-Burn + Fail-Closed.
-        # Защита от рагпулов (LVR, FAST, BATONA, ¥) без дыр fail-open.
         if not pair_data or not isinstance(pair_data, dict):
             return False, "нет данных пары для Robinhood"
         
@@ -420,8 +552,6 @@ async def verify_evm_token(address: str, chain: str, pair_data: dict = None) -> 
         vol1 = float(((pair_data.get("volume") or {}).get("h1", 0) or 0))
         liq = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
         if not links or len(links) < 1:
-            # Для пулов < $15k требуем ссылки (дешевый анонимный дев-раг)
-            # Для глубоких пулов ($15k+) с объемом от $3k отсутствие плашки соцсетей не фатально при чистом байткоде (кейсы ALIENS, FART, PawPilot)
             if liq < 15000.0 or (vol5 < 3000.0 and vol1 < 8000.0):
                 return False, "нет ссылок (соцсети/сайт) — анонимный дев-раг"
             
@@ -450,86 +580,16 @@ async def verify_evm_token(address: str, chain: str, pair_data: dict = None) -> 
         except Exception:
             pass
 
-        # 4. Ончейн-аудит байткода, верификации и LP-резервов через RPC
-        try:
-            from http_client import fetch_json, get_session
-            import aiohttp
-            _rpc_url = getattr(config, "ROBINHOOD_RPC_URL", "https://rpc.mainnet.chain.robinhood.com")
-            
-            # Б. Байткод-аудит (поиск скрытого минта, блэклистов, паузы и серийного 15м раг-шаблона FEE/Speed)
-            _s_sess = await get_session()
-            _pl_code = {"jsonrpc": "2.0", "id": 1, "method": "eth_getCode", "params": [address, "latest"]}
-            async with _s_sess.post(_rpc_url, json=_pl_code, timeout=aiohttp.ClientTimeout(total=4)) as _r_c:
-                _res_c = await _r_c.json()
-            _bytecode = str(_res_c.get("result", "") or "").lower()
-            if not _bytecode or _bytecode in ("0x", "0x0"):
-                return False, "нет байткода (не смарт-контракт)"
-            if len(_bytecode) == 9312 and _bytecode.startswith("0x608060405234801561001057600080fd5b50600436106100a957"):
-                return False, "серийный 15м LP-rug шаблон (FEE/Speed бот)"
-                
-            # Проверка опасных селекторов функций
-            _dangerous_selectors = {
-                "40c10f19": "скрытый минт mint(address,uint256)",
-                "a0712d68": "скрытый минт mint(uint256)",
-                "42f21696": "блэклист blacklist(address)",
-                "83e2007e": "isBlacklisted",
-                "8456cb59": "пауза торговли pause()",
-                "03a118d5": "пауза торговли pause(bool)"
-            }
-            for _sel, _desc in _dangerous_selectors.items():
-                if _sel in _bytecode:
-                    return False, f"бэкдор в байткоде токена: {_desc}"
-                    
-            # В. Проверка реальной ликвидности пула (Uniswap V4 PoolManager vs V2 LP Burn)
-            _pair_addr = str(pair_data.get("pairAddress") or "")
-            _labels = [str(x).lower() for x in (pair_data.get("labels") or [])]
-            if "v4" in _labels or len(_pair_addr) > 42:
-                # Uniswap V4: проверяем реальный баланс токенов в синглтоне PoolManager (защита от фантомной ликвы DexScreener)
-                _V4_PM = "8366a39cc670b4001a1121b8f6a443a643e40951".zfill(64)
-                _pl_v4 = [
-                    {"jsonrpc": "2.0", "id": 10, "method": "eth_call", "params": [{"to": address, "data": "0x18160ddd"}, "latest"]},
-                    {"jsonrpc": "2.0", "id": 11, "method": "eth_call", "params": [{"to": address, "data": f"0x70a08231{_V4_PM}"}, "latest"]},
-                ]
-                async with _s_sess.post(_rpc_url, json=_pl_v4, timeout=aiohttp.ClientTimeout(total=4)) as _r_v4:
-                    _res_v4 = await _r_v4.json()
-                if isinstance(_res_v4, list) and len(_res_v4) >= 2:
-                    _tot_h = _res_v4[0].get("result", "0x")
-                    _pm_h = _res_v4[1].get("result", "0x")
-                    if _tot_h and _tot_h != "0x":
-                        _tot_v = int(_tot_h, 16)
-                        _pm_v = int(_pm_h, 16) if _pm_h and _pm_h != "0x" else 0
-                        if _tot_v > 0 and (_pm_v / _tot_v) < 0.005:
-                            return False, "пул Uniswap V4 опустошён девом (фантомная ликвидность DexScreener)"
-            elif len(_pair_addr) == 42:
-                _DEAD = "000000000000000000000000000000000000dead".zfill(64)
-                _ZERO = "0000000000000000000000000000000000000000".zfill(64)
-                _pl_lp = [
-                    {"jsonrpc": "2.0", "id": 10, "method": "eth_call", "params": [{"to": _pair_addr, "data": "0x18160ddd"}, "latest"]}, # totalSupply
-                    {"jsonrpc": "2.0", "id": 11, "method": "eth_call", "params": [{"to": _pair_addr, "data": f"0x70a08231{_DEAD}"}, "latest"]}, # dead
-                    {"jsonrpc": "2.0", "id": 12, "method": "eth_call", "params": [{"to": _pair_addr, "data": f"0x70a08231{_ZERO}"}, "latest"]}  # zero
-                ]
-                async with _s_sess.post(_rpc_url, json=_pl_lp, timeout=aiohttp.ClientTimeout(total=4)) as _r_lp:
-                    _res_lp = await _r_lp.json()
-                if isinstance(_res_lp, list) and len(_res_lp) >= 3:
-                    _tot_lp_h = _res_lp[0].get("result", "0x")
-                    _dead_lp_h = _res_lp[1].get("result", "0x")
-                    _zero_lp_h = _res_lp[2].get("result", "0x")
-                    if _tot_lp_h and _tot_lp_h != "0x":
-                        _tot_lp = int(_tot_lp_h, 16)
-                        _dead_lp = int(_dead_lp_h, 16) if _dead_lp_h and _dead_lp_h != "0x" else 0
-                        _zero_lp = int(_zero_lp_h, 16) if _zero_lp_h and _zero_lp_h != "0x" else 0
-                        if _tot_lp > 0:
-                            _burnt_pct = ((_dead_lp + _zero_lp) / _tot_lp) * 100.0
-                            if _burnt_pct < 80.0:
-                                return False, f"ликва пула не сожжена ({_burnt_pct:.1f}% < 80%) — риск вывода ликвидности девом"
-        except Exception as _e_rob:
-            # СТРОГИЙ FAIL-CLOSED: если Robinhood RPC не ответил или упал с ошибкой — НЕ ВХОДИТЬ!
-            return False, f"ошибка ончейн-аудита Robinhood ({type(_e_rob).__name__}) — блок по безопасности"
-
-        return True, ""
+        # 4. Ончейн-аудит байткода и LP-резервов через RPC
+        return await check_onchain_evm_security(address, "robinhood", pair_data, is_open_pos=False)
 
     if chain not in ("bsc", "base", "ethereum"):
         return True, "unsupported"
+
+    # Уровень 0: Прямой ончейн-аудит байткода и Uniswap V4 PoolManager резервов (ловит 15м V4 LP-rug фабрику на Base/ETH/BSC до входа!)
+    _oc_ok, _oc_why = await check_onchain_evm_security(address, chain, pair_data, is_open_pos=False)
+    if not _oc_ok:
+        return False, _oc_why
 
     # Уровень 1: GoPlus Security API
     _g_ok, _g_why = await check_token(address, chain)
@@ -537,7 +597,6 @@ async def verify_evm_token(address: str, chain: str, pair_data: dict = None) -> 
         return False, f"GoPlus {_g_why}"
 
     # Уровень 2: Honeypot.is (симуляция транзакций покупки и продажи)
-    # Запускаем для Base и Ethereum для подтверждения возможности продажи
     _h_ok, _h_why = True, ""
     try:
         import honeypot_is as _hp
@@ -566,17 +625,21 @@ async def verify_evm_token(address: str, chain: str, pair_data: dict = None) -> 
             if _h_ok and _h_why == "" and s5 >= 2:
                 return True, ""
 
-            # Если ни GoPlus, ни Honeypot.is не подтвердили контракт:
-            # Свежие токены (<15 мин) без верификации НЕ ПУСКАЕМ (защита от мгновенных дев-рагпуллов вроде SPACEX)
+            # Для Uniswap V4 пулов Honeypot.is возвращает 404 (не поддерживает V4),
+            # поэтому если пул <15 мин не прошёл ни GoPlus, ни Honeypot.is — требуем жёсткий фильтр и НЕ пускаем V4 без верификации!
+            _p_addr = str(pair_data.get("pairAddress") or "")
+            _lbls = [str(x).lower() for x in (pair_data.get("labels") or [])]
+            if "v4" in _lbls or len(_p_addr) > 42:
+                if not _g_ok:
+                    return False, f"пул Uniswap V4 на {chain} не верифицирован GoPlus ({_g_why}) — защита от V4 LP-rug"
+
             if _age_min < 15.0:
                 if s5 < 4 or b5 < s5 * 1.2 or vol5 < 3000:
                     return False, f"контракт {chain} не верифицирован (GoPlus: {_g_why}, Honeypot: {_h_why}) и слабый стакан — ждём проверки"
-                # Если идут активные подтвержденные продажи в пуле:
                 return True, ""
         return False, f"контракт {chain} не подтверждён по безопасности (GoPlus: {_g_why})"
 
     if chain == "bsc":
-        # BSC: зона повышенного риска. Проверяем реальные сделки продажи в пуле и возраст:
         if pair_data and isinstance(pair_data, dict):
             import time as _t_bsc
             _c_bsc = pair_data.get("pairCreatedAt") or 0

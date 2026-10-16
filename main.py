@@ -1006,16 +1006,31 @@ async def _evm_track_once(tracker, chain: str, tag: str, emoji: str):
                 held = (_t.time() - pos.entry_time) / 60
                 
                 # --- АУДИТ БЕЗОПАСНОСТИ ОТКРЫТОЙ ПОЗИЦИИ (HONEYPOT / V4 LP RUG GUARD) ---
-                # Если токен оказался Honeypot или создатель выдернул ликвидность из V4 PoolManager (кейс FEE/Speed):
+                # Если токен оказался Honeypot или создатель выдернул ликвидность из V4 PoolManager (кейс 1 / VC / FEE / Speed):
                 # токен физически непродаваем на блокчейне! Списываем как честный Honeypot (-100% / $0.0).
                 _last_sec_chk = getattr(pos, "last_security_check_ts", 0.0)
-                if (_t.time() - _last_sec_chk) > 120:  # каждые 2 минуты
+                _need_tp_audit = (
+                    (maxp >= 0.25 and not getattr(pos, "tp1_done", False))
+                    or (maxp >= float(getattr(config, "TP2_TRIGGER_PCT", 1.00)) and not getattr(pos, "tp2_done", False))
+                    or (maxp >= getattr(config, "MOONBAG_TRIGGER_PCT", 2.00) and not getattr(pos, "is_moonbag", False))
+                    or (held >= 30 and (_t.time() - (getattr(pos, "peak_time", 0.0) or pos.entry_time)) >= 1500 and pnl > 0.10)
+                )
+                if (_t.time() - _last_sec_chk) > 60 or (_need_tp_audit and (_t.time() - _last_sec_chk) > 15):
                     pos.last_security_check_ts = _t.time()
                     try:
                         import goplus as _gp
-                        _g_ok, _g_why = await _gp.check_token(mint, chain)
+                        # 1. Прямая On-Chain RPC проверка контракта + баланса Uniswap V4 PoolManager (ловит 15-мин V4 LP Rug на Base)
+                        _oc_ok, _oc_why = await _gp.check_onchain_evm_security(
+                            mint, chain, {"pairAddress": getattr(pos, "pair_address", "")}, is_open_pos=True
+                        )
+                        if not _oc_ok:
+                            print(f"🚨 [{tag}-V4-RUG/HONEYPOT] {pos.symbol} ({mint[:10]}): {_oc_why} — пул осушен или контракт заблокирован, списание в -100%.")
+                            tracker.close_position(mint, 0.0, f"{tag} Honeypot / V4 LP Rug ({_oc_why})")
+                            continue
+                        # 2. Свежая проверка GoPlus в обход 1-часового кеша (force_refresh=True)
+                        _g_ok, _g_why = await _gp.check_token(mint, chain, force_refresh=True)
                         _w_low = str(_g_why or "").lower()
-                        if not _g_ok and any(k in _w_low for k in ("honeypot", "cannot_sell", "creator_pct", "owner_pct", "blacklist", "cooldown", "tax")):
+                        if not _g_ok and any(k in _w_low for k in ("honeypot", "cannot_sell", "creator_pct", "owner_pct", "blacklist", "cooldown", "tax", "pause", "transfer_pausable")):
                             print(f"🚨 [{tag}-HONEYPOT] {pos.symbol} ({mint[:10]}): {_g_why} — токен непродаваем, списание в -100%.")
                             tracker.close_position(mint, 0.0, f"{tag} Honeypot / Unsellable ({_g_why})")
                             continue
