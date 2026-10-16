@@ -366,6 +366,7 @@ async def check_solana(mint: str):
         api_key = str(_cfg("GOPLUS_API_KEY", "") or "").strip()
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
+        status, data = await fetch_json(url, headers=headers, timeout=8, retries=1)
         if status == 200 and isinstance(data, dict) and data.get("code") == 1:
             result = data.get("result") or {}
             info = result.get(mint) or {}

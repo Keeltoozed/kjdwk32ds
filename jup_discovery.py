@@ -68,8 +68,26 @@ async def jup_loop(analyzer, tracker):
                 for mint in mints:
                     if not mint or mint in tracker.positions:
                         continue
-                    if _t.time() - processed.get(mint, 0.0) < 600:
+                    # Кулдаун на повторный вход после жесткого стопа (-15%+):
+                    # Ждём 2 часа, чтобы не ловить повторный дев-дамп, но если монета ожила позже — даём шанс!
+                    _prev = tracker.last_loss_pct(mint)
+                    if _prev is not None and _prev <= getattr(config, "RUG_REBUY_MAX_LOSS", -0.15):
+                        _old_pos = tracker.positions.get(mint) or tracker.positions.get(mint + "_old_1")
+                        _exit_t = getattr(_old_pos, "exit_time", 0.0) or 0.0
+                        if _exit_t and (_t.time() - _exit_t) < 7200:
+                            continue
+                    if _t.time() - processed.get(mint, 0.0) < 300:
                         continue
+                    td = await analyzer.fetch_token_data(mint)
+                    if not td:
+                        continue
+                    _created = td.get("pairCreatedAt") or 0
+                    _age_min = (_t.time() * 1000 - _created) / 60000.0 if _created else 999.0
+                    _min_age = float(getattr(config, "SOLANA_MIN_AGE_MIN", 2.5))
+                    if _age_min < _min_age:
+                        print(f"⏳ [JUP] {mint[:8]}: возраст {_age_min:.1f}м < {_min_age}м — flash-rug зона дева, ждём созревания.")
+                        continue
+                    # Старые монеты НЕ блокируем! Если монета старше суток, но делает взрывной памп на Jupiter — берём!
                     try:
                         ok = await analyzer.analyze_token(mint)
                     except Exception as e:
@@ -81,20 +99,36 @@ async def jup_loop(analyzer, tracker):
                     analyzer.log_scan(mint[:8], mint, "JUP",
                                       ok, getattr(analyzer, "last_score", 0.0))
                     if ok is True and len(tracker.get_open_positions()) < config.MAX_CONCURRENT_POSITIONS:
+                        import goplus as _gp
+                        _g_ok, _g_why = await _gp.check_solana(mint)
+                        if not _g_ok:
+                            print(f"🚫 [JUP-GOPLUS] {mint[:8]}: {_g_why} — блок входа.")
+                            continue
                         from jupiter import JupiterAPI
                         price = await JupiterAPI.get_price(mint)
                         if price and price > 0:
-                            cap = tracker.get_total_capital()
-                            size = max(4.0, min(100.0, cap * (config.REINVEST_PERCENT / 100.0))) if cap > 0 else 4.0
-                            td = await analyzer.fetch_token_data(mint)
-                            size *= analyzer.conviction_size_mult(td or {})
+                            _sig = analyzer.get_signal(mint)
+                            _veto = analyzer.rocket_veto(mint, td or {}, _sig)
+                            if _veto:
+                                print(f"🚫 [JUP-VETO] {mint[:8]}: {_veto}")
+                                continue
+                            fixed = float(getattr(config, "TRADE_AMOUNT_USD", 0.0) or 0.0)
+                            if fixed > 0:
+                                size = fixed
+                            else:
+                                cap = tracker.get_total_capital()
+                                size = max(4.0, min(100.0, cap * (config.REINVEST_PERCENT / 100.0))) if cap > 0 else 4.0
+                                size *= analyzer.conviction_size_mult(td or {})
+                            _base_tok = (td or {}).get("baseToken", {}) or {}
+                            _sym = str(_base_tok.get("symbol") or mint[:6]).strip().upper()
+                            _is_mature = _age_min >= 30.0
                             tracker.add_position(
-                                mint[:4], mint, price, min(size, 100.0),
-                                is_mature=True,
+                                _sym, mint, price, min(size, 100.0),
+                                is_mature=_is_mature,
                                 ml_features=analyzer.pack_features(td or {}),
                                 ml_confidence=float(getattr(analyzer, "last_score", 0.0)),
                                 source=f"JUP:{analyzer.get_signal(mint)}")
-                            print(f"🪐 JUP BUY {mint[:8]} @ ${price}")
+                            print(f"🪐 JUP BUY {_sym} ({mint[:8]}) @ ${price}")
                             break
                     await asyncio.sleep(1.0)
                 if len(processed) > 1000:

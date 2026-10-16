@@ -81,6 +81,7 @@ BREAKEVEN_PCT = 0.15
 # Infant Dump: защита от дев-дампа в первые минуты
 PREFETCH_TTL_SEC = 10  # Пакетный кэш DexScreener (до 30 токенов за запрос): сек жизни данных для анализа
 SOLANA_MIN_AGE_MIN = 2.5  # Не входить в пулы Solana моложе 2.5 мин (flash-rug зона дева)
+SOLANA_MAX_AGE_HOURS = 24.0  # Не покупать старые тухлые монеты старше 24ч (только свежие волны и ракеты)
 INFANT_WINDOW_MIN = 2.0
 INFANT_DUMP_PCT = -0.15  # Резать сразу при -15% в первые 2 мин (было -22%, давало -28% на Taku)
 
@@ -193,7 +194,7 @@ FAST_EARLY_MAX_AGE_SEC = 180  # early-микро-вход только если 
 
 # === ДОП. ИСТОЧНИКИ (портировано из прим; фильтры режут мусор, как раньше) ===
 # Jupiter Tokens API v2 (free key: portal.jup.ag). Без ключа jup_loop спит.
-JUP_API_KEY = os.getenv("JUP_API_KEY", "")
+JUP_API_KEY = (os.getenv("JUPITER_API") or os.getenv("JUP_API_KEY") or os.getenv("JUPITER_API_KEY") or "").strip().strip('"').strip("'")
 JUP_INTERVAL = 120
 
 # TG-превью коллов: ОТКЛЮЧЕНО (защита от скам-коллов и дев-дампов)
