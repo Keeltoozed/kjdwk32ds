@@ -30,8 +30,6 @@ async def fetch_jup_tokens() -> list:
     global _cache, _cache_time
     if time.time() - _cache_time < CACHE_TTL and _cache:
         return _cache
-    if not (getattr(config, "JUP_API_KEY", "") or ""):
-        return []
     out, seen, scored = [], set(), []
     for path in ("/recent",
                  "/toptrending/5m?limit=100",
@@ -54,10 +52,9 @@ async def fetch_jup_tokens() -> list:
 
 
 async def jup_loop(analyzer, tracker):
-    """Петля Jupiter-дискавери (Solana). Молчит без JUP_API_KEY."""
-    if not (getattr(config, "JUP_API_KEY", "") or ""):
-        return
-    print("🪐 Jupiter Discovery запущен: recent + toptrending/5m (Solana)!")
+    """Петля Jupiter-дискавери (Solana). Работает автономно, использует JUP_API_KEY при наличии."""
+    _has_key = bool(getattr(config, "JUP_API_KEY", "") or "")
+    print(f"🪐 Jupiter Discovery запущен: recent + toptrending/5m + toptraded/1h (Solana) [{'API-KEY подключен' if _has_key else 'Public'}]!")
     processed = {}
     interval = int(getattr(config, "JUP_INTERVAL", 120))
     while True:

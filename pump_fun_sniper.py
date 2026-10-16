@@ -279,15 +279,17 @@ class PumpFunSniper:
     async def connect_and_listen(self):
         self.running = True
         uri = config.PUMPPORTAL_WSS
+        backoff = 5.0
         
         while self.running:
             try:
                 print("🟢 Подключение к ЕДИНОМУ PumpPortal WSS...")
                 headers = {
-                    "User-Agent": "Mozilla/5.0",
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
                     "Origin": "https://pumpportal.fun"
                 }
-                async with websockets.connect(uri, extra_headers=headers) as ws:
+                async with websockets.connect(uri, extra_headers=headers, ping_interval=20, ping_timeout=20) as ws:
+                    backoff = 5.0  # Успешное подключение — сброс задержки
                     # 1. Подписка на новые токены
                     await ws.send(json.dumps({"method": "subscribeNewToken"}))
                     print("🚀 Подписка на InitializeMint оформлена!")
@@ -412,11 +414,13 @@ class PumpFunSniper:
                                 await self.evaluate_and_enter(state)
                                 
             except websockets.exceptions.ConnectionClosed:
-                print("⚠️ WSS соединение закрыто. Переподключение через 2 секунды...")
-                await asyncio.sleep(2)
+                print(f"⚠️ WSS соединение закрыто. Переподключение через {backoff:.0f}с...")
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 1.5, 60.0)
             except Exception as e:
-                print(f"❌ WSS Ошибка: {e}")
-                await asyncio.sleep(2)
+                print(f"❌ WSS Ошибка ({e}). Сервер PumpPortal временно недоступен. Повтор через {backoff:.0f}с...")
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 1.5, 60.0)
 
 # === DUMMY HTTP SERVER FOR RENDER ===
 from aiohttp import web

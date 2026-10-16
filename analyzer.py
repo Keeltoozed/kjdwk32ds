@@ -838,22 +838,59 @@ class Analyzer:
                     print(f"⚠️ Ошибка RugCheck (пустой список аккаунтов). Блокируем вход.")
                     return False
                     
+                # Собираем все известные адреса пулов и маркеров ликвидности (DEX, AMM, Bonding curve, Lockers)
+                pool_accounts = set()
+                if pair_data:
+                    _p_addr = pair_data.get("pairAddress")
+                    if _p_addr:
+                        pool_accounts.add(_p_addr)
+                    for _p in (pair_data.get("pairs") or []):
+                        if isinstance(_p, dict) and _p.get("pairAddress"):
+                            pool_accounts.add(_p["pairAddress"])
+                
+                # Известные аккаунты из RugCheck (AMM, LOCKER)
+                for _k_acc, _v_acc in (rc_data.get("knownAccounts") or {}).items():
+                    if isinstance(_v_acc, dict) and _v_acc.get("type") in ("AMM", "LOCKER"):
+                        pool_accounts.add(_k_acc)
+                
+                # Маркеты из RugCheck
+                for _mkt in (rc_data.get("markets") or []):
+                    if isinstance(_mkt, dict):
+                        for _m_field in ("pubkey", "liquidityA", "liquidityB"):
+                            if _mkt.get(_m_field):
+                                pool_accounts.add(_mkt[_m_field])
+                
+                pool_keywords = ("raydium", "meteora", "pump", "orca", "pool", "vault", "locker", "amm", "pumpswap")
+                
+                # Реальный создатель токена по данным RugCheck
+                real_creator = rc_data.get("creator") or ""
+                dev_holding_pct = 0.0
+                if real_creator:
+                    for h in holders:
+                        if h.get("owner") == real_creator or h.get("address") == real_creator:
+                            dev_holding_pct = float(h.get("pct", 0) or 0.0)
+                            break
+
                 non_curve_accounts = []
                 for h in holders:
-                    pct = h.get("pct", 0)
-                    amt = h.get("uiAmount", 0)
-                    owner = h.get("owner", "")
+                    pct = float(h.get("pct", 0) or 0.0)
+                    amt = float(h.get("uiAmount", 0) or 0.0)
+                    owner = str(h.get("owner") or "")
+                    addr = str(h.get("address") or "")
                     
-                    if "Raydium" in owner or "Meteora" in owner or pct > 80.0 or owner == "5Q544fKrFoe6tsEbD7S8EmxGTJYAKtTVhAW5Q5pge4j1":
+                    # Исключаем пулы ликвидности, AMM и системные адреса Raydium/Pump/Meteora
+                    if owner in pool_accounts or addr in pool_accounts or owner == "5Q544fKrFoe6tsEbD7S8EmxGTJYAKtTVhAW5Q5pge4j1":
                         continue
-                    non_curve_accounts.append((amt, pct))
+                    if any(w in owner.lower() for w in pool_keywords):
+                        continue
+                    if pct > 80.0:  # Первичный кёрв Pump.fun
+                        continue
+                    non_curve_accounts.append((amt, pct, owner))
                 
                 top_10 = non_curve_accounts[:10]
                 
                 # Защита от Jito-бандлов (Сивил-атака дева):
-                # Проверяем ТОЛЬКО крупные кошельки (>= 1.5% сапплая), которые реально могут сдампить.
-                # Розничные покупки (< 1.5%, т.е. $10-$20) не являются бандлом.
-                bundle_suspects = [round(pct, 1) for (amt, pct) in top_10 if pct >= 1.5]
+                bundle_suspects = [round(pct, 1) for (amt, pct, owner) in top_10 if pct >= 1.5]
                 if len(bundle_suspects) >= 3:
                     from collections import Counter
                     counts = Counter(bundle_suspects)
@@ -863,7 +900,10 @@ class Analyzer:
                         return False
                 
                 top_10_sum_pct = sum([x[1] for x in top_10])
-                dev_holding_pct = top_10[0][1] if top_10 else 0.0
+                
+                # Если дев не найден в rc_data, берем крупнейший реальный некомандный кошелек
+                if not real_creator and top_10:
+                    dev_holding_pct = top_10[0][1]
                 
                 self._last_top10 = top_10_sum_pct
                 self._last_dev = dev_holding_pct
@@ -874,7 +914,14 @@ class Analyzer:
                 if top_10_sum_pct > 100:
                     print(f"⚠️ [HOLDERS] {mint[:8]}: топ-10 {top_10_sum_pct:.1f}% > 100% — битые данные сапплая.")
                 elif dev_holding_pct > 10.0:
-                    print(f"🚫 [АНТИСКАМ] Один кошелек (Dev) держит {dev_holding_pct:.1f}% (Лимит 10%). Блокируем.")
+                    print(f"🚫 [АНТИСКАМ] Создатель (Dev) держит {dev_holding_pct:.1f}% (Лимит 10%). Блокируем.")
+                    return False
+                
+                # Защита от скрытого второго кошелька дева: ни один кит не должен держать > 10%
+                largest_whale_pct = top_10[0][1] if top_10 else 0.0
+                max_single_whale = 10.0
+                if largest_whale_pct > max_single_whale:
+                    print(f"🚫 [АНТИСКАМ] Кит держит {largest_whale_pct:.1f}% > {max_single_whale:.0f}% (риск скрытого дева/дампа). Блокируем.")
                     return False
                 elif top_10_sum_pct > max_allowed_pct:
                     print(f"🚫 [АНТИСКАМ] Топ-10 держат {top_10_sum_pct:.1f}% (Лимит {max_allowed_pct}%). Блокируем.")
