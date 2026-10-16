@@ -1273,11 +1273,10 @@ async def _evm_chain_loop(analyzer, tracker, chain: str):
                                 processed[addr] = _t.time() - _recooldown + 25  # Ждем минимального возраста 25с
                             elif "m1-green" in _sig or "вершина" in _sig:
                                 processed[addr] = _t.time() - _recooldown + 30  # Ждем отката 1м импульса 30с
-                            elif "flat" in _sig or "m5-no-pressure" in _sig:
-                                td_tmp = await evm_data.get_token_data(addr, chain)
-                                _lq_tmp = float(((td_tmp or {}).get("liquidity", {}) or {}).get("usd", 0) or 0)
-                                if _lq_tmp >= 10000:
-                                    processed[addr] = _t.time() - _recooldown + 45  # Живой пул перепроверить через 45с
+                            elif "flat" in _sig or "m5-no-pressure" in _sig or "quiet" in _sig:
+                                _lq_tmp = float((getattr(analyzer, "_eval_ctx", {}).get(addr, {}) or {}).get("liq", 0.0) or 0.0)
+                                if _lq_tmp >= 5000:
+                                    processed[addr] = _t.time() - _recooldown + 40  # Живой пул перепроверить через 40с без лишней сети
                                 else:
                                     processed[addr] = _t.time()
                             else:
