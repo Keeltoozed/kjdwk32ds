@@ -490,10 +490,6 @@ class PaperTracker:
             # (Для Ethereum cap 20%: газ честно виден, L1-микроскальпы показывают реальный минус.)
             priority_fee_usd = min(priority_fee_usd, pos.amount_usd * _f_cap)
             
-            # Добавляем профит от закрытия финального остатка к тому, что уже зафиксировано
-            final_pnl = (pos.amount_usd * price_diff_pct) - priority_fee_usd
-            pos.pnl_usd += final_pnl
-
             # Реальный итоговый процент инвестиции — от ИЗНАЧАЛЬНОГО сайза.
             # Баг: остаток/0.5 занижал базу при связке TP1 20% + Moonbag 50%
             # (остаток 0.4×orig → делили на 0.5 = 0.8×orig, +% завышался на 25%).
@@ -511,6 +507,17 @@ class PaperTracker:
                 else:
                     original_amount = _rem
                 pos.original_amount_usd = original_amount
+
+            # ХАНИПОД / РАГ / UNSELLABLE: на реальном блокчейне частичные тейки (TP1/TP2)
+            # физически не исполнились бы! Списываем 100% от ИЗНАЧАЛЬНОГО депозита без иллюзий.
+            if "HONEYPOT" in _r or "UNSELLABLE" in _r or "RUG" in _r:
+                pos.pnl_usd = -original_amount - priority_fee_usd
+                pos.exit_price_usd = 0.0
+            else:
+                # Добавляем профит от закрытия финального остатка к тому, что уже зафиксировано
+                final_pnl = (pos.amount_usd * price_diff_pct) - priority_fee_usd
+                pos.pnl_usd += final_pnl
+
             pnl_pct = pos.pnl_usd / original_amount if original_amount > 0 else 0
             
             self.save_portfolio()

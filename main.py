@@ -1683,7 +1683,11 @@ with tab1:
                     if closed_df.empty:
                         st.info("История пуста (все сделки отфильтрованы как битые).")
                     else:
-                        closed_df = closed_df.tail(15).iloc[::-1] # Показываем 15 последних в обратном порядке
+                        if 'exit_time' in closed_df.columns:
+                            closed_df['exit_time_num'] = pd.to_numeric(closed_df['exit_time'], errors='coerce').fillna(0)
+                            closed_df = closed_df.sort_values(by='exit_time_num', ascending=False).head(15)
+                        else:
+                            closed_df = closed_df.tail(15).iloc[::-1] # Показываем 15 последних в обратном порядке
                         # % честный: pnl/original_amount (учитывает partials+комиссии),
                         # фолбэк — от цен. Кап ±9999%.
                         def _cpct(r):
