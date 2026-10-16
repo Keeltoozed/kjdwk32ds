@@ -1055,10 +1055,11 @@ class Analyzer:
                               f"🚫 [{tag}] {symbol}: возраст {_age_min:.1f}м < {_min_age_thr:.1f}м — ранняя {tag} flash-rug зона.")
 
         # Ранний Scout-режим для свежих ракет (<10 мин):
+        # Ранний Scout-режим для свежих ракет (<10 мин):
         # Пулы только зарождаются ($3k+), соцсети девы ещё не привязали к DexScreener, но есть реальные покупки и продажи.
         _scout_min_liq = 3000.0
         if (_age_min < 10.0 and m5 >= -3.0 and (b5 + s5) >= 12 and liq >= _scout_min_liq
-                and s5 >= 2 and b5 >= s5 and (b5 / max(s5, 1)) <= 5.0):
+                and s5 >= 2 and s >= 2 and b5 >= s5 and (b5 / max(s5, 1)) <= 5.0):
             if not self._evm_brand_ok(symbol, tag):
                 return False
             if not await self._evm_clone_ok(symbol, address, pair_data, chain, tag):
@@ -1166,15 +1167,15 @@ class Analyzer:
             return self._deny(address, "gone", f"🚫 [{tag}] {symbol}: h1 {h1:+.0f}% — параболик уже улетел, вершина.")
         
         # --- СТРОГАЯ ЗАЩИТА ОТ HONEYPOT (Проверка реальных сделок в пуле) ---
-        if s5 == 0 and b5 >= 3:
-            return self._deny(address, "honeypot-zero-sells-5m", f"🚫 [{tag}] {symbol}: {b5} покупок и 0 продаж за 5м — 100% Honeypot (нельзя продать).")
-        if s5 <= 1 and b5 >= 8:
+        if s5 == 0:
+            return self._deny(address, "honeypot-zero-sells-5m", f"🚫 [{tag}] {symbol}: 0 продаж за 5м — Honeypot (нельзя продать).")
+        if s <= 1:
+            return self._deny(address, "honeypot-no-sells-h1", f"🚫 [{tag}] {symbol}: всего {s} продаж за 1ч — неподтвержденная продаваемость.")
+        if s5 <= 1 and b5 >= 6:
             return self._deny(address, "honeypot-1sell-5m", f"🚫 [{tag}] {symbol}: {b5} покупок и всего {s5} продажа за 5м — ловушка Honeypot.")
-        if s5 > 0 and ((s5 < 3 and (b5 / s5) > 5.0) or (b5 / s5) > 12.0) and (b5 + s5) >= 15:
+        if s5 > 0 and ((s5 < 3 and (b5 / s5) > 5.0) or (b5 / s5) > 10.0) and (b5 + s5) >= 15:
             return self._deny(address, "honeypot-ratio-5m", f"🚫 [{tag}] {symbol}: аномалия m5 {b5}b/{s5}s ({b5/s5:.1f}x) — Honeypot-риск.")
-        if s == 0 and b >= 3:
-            return self._deny(address, "honeypot-zero-sells-h1", f"🚫 [{tag}] {symbol}: {b} покупок и 0 продаж за 1ч — 100% Honeypot.")
-        if s > 0 and ((s < 5 and (b / s) > 5.0) or (b / s) > 12.0) and (b + s) >= 30:
+        if s > 0 and ((s < 5 and (b / s) > 5.0) or (b / s) > 10.0) and (b + s) >= 25:
             return self._deny(address, "honeypot-ratio-h1", f"🚫 [{tag}] {symbol}: аномалия h1 {b}b/{s}s ({b/s:.1f}x) — Honeypot-риск.")
         vol_to_liq = vol24 / (liq + 1)
         if vol_to_liq > 100:

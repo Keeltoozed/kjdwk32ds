@@ -82,6 +82,28 @@ class MatureExitManager:
                 drop_from_max = (position.max_price_usd - current_price) / position.max_price_usd
                 if drop_from_max >= _trail_dist:
                     return f"Mature Trailing (+{max_pnl_pct*100:.0f}% peak, drop {drop_from_max*100:.0f}%)"
+
+        # Runner Stagnation / Inactive Pool (фиксация прибыли при затухании объёмов в пуле)
+        _pt = getattr(position, 'peak_time', et)
+        if hasattr(_pt, 'timestamp'):
+            try:
+                _pt = _pt.timestamp()
+            except Exception:
+                _pt = et
+        try:
+            _peak_age_min = (now_ts - float(_pt)) / 60
+        except Exception:
+            _peak_age_min = 0
+
+        _dd_peak = (position.max_price_usd - current_price) / position.max_price_usd if position.max_price_usd else 0
+        if max_pnl_pct >= 0.25 and _peak_age_min >= 25 and pnl_pct > 0.05 and _dd_peak >= 0.05:
+            return f"Mature Runner Stagnation (+{pnl_pct*100:.1f}% locked after peak +{max_pnl_pct*100:.0f}%, {_peak_age_min:.0f}m no ATH)"
+
+        if minutes_held >= 30 and _peak_age_min >= 25:
+            if pnl_pct > 0.10:
+                return f"Mature Inactive Pool TP (+{pnl_pct*100:.1f}%, {minutes_held:.0f}m)"
+            elif pnl_pct < -0.05:
+                return f"Mature Inactive Pool Cut ({pnl_pct*100:.1f}%, {minutes_held:.0f}m)"
                     
         # Scalp Trailing (для мелких профитов) - ВЫКЛЮЧЕН: не режем ракеты на первом 5% откате при пике +10%
         if getattr(config, 'SCALP_PROFIT_ENABLED', False) and hasattr(config, 'TRAILING_ACTIVATION_PCT'):

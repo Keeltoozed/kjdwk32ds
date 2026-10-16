@@ -18,7 +18,7 @@
 import time as _t
 import config
 
-EVM_CHAIN_IDS = {"ethereum": "1", "bsc": "56", "base": "8453"}
+EVM_CHAIN_IDS = {"ethereum": "1", "bsc": "56", "base": "8453", "robinhood": "4663"}
 
 _CACHE: dict = {}  # (chain, addr_lower) -> (ts, (ok, reason))
 CALLS = {"hit": 0, "miss": 0, "block": 0}
@@ -44,7 +44,7 @@ def _tax_frac(raw) -> float:
     return max(0.0, v)
 
 
-def _verdict_evm(info: dict):
+def _verdict_evm(info: dict, chain: str = ""):
     """Разбор EVM-карточки. Возвращает (ok, reason)."""
     if not isinstance(info, dict) or not info:
         return False, "no-data"
@@ -88,19 +88,19 @@ def _verdict_evm(info: dict):
     if worst > float(_cfg("GOPLUS_MAX_SELL_TAX", 0.10)):
         return False, f"{worst_k} {worst * 100:.0f}%"
 
-    # 4. Концентрация у создателя / владельца (защита от дев-дампов вроде 1KTO100M/ORRIS)
+    # 4. Концентрация у создателя / владельца (защита от дев-дампов вроде 1KTO100M/ORRIS/FEE/Speed)
     try:
         creator_pct = _tax_frac(info.get("creator_percent", 0))
-        max_creator = float(_cfg("GOPLUS_MAX_CREATOR_PCT", 0.08))
+        max_creator = float(_cfg("ROBINHOOD_MAX_CREATOR_PCT", 0.20) if chain == "robinhood" else _cfg("GOPLUS_MAX_CREATOR_PCT", 0.08))
         if creator_pct > max_creator:
-            return False, f"creator_pct {creator_pct * 100:.1f}% (>8%)"
+            return False, f"creator_pct {creator_pct * 100:.1f}% (>{max_creator*100:.0f}%)"
     except Exception:
         pass
     try:
         owner_pct = _tax_frac(info.get("owner_percent", 0))
-        max_owner = float(_cfg("GOPLUS_MAX_OWNER_PCT", 0.10))
+        max_owner = float(_cfg("ROBINHOOD_MAX_OWNER_PCT", 0.20) if chain == "robinhood" else _cfg("GOPLUS_MAX_OWNER_PCT", 0.10))
         if owner_pct > max_owner:
-            return False, f"owner_pct {owner_pct * 100:.1f}% (>10%)"
+            return False, f"owner_pct {owner_pct * 100:.1f}% (>{max_owner*100:.0f}%)"
     except Exception:
         pass
 
@@ -127,21 +127,24 @@ def _verdict_evm(info: dict):
         pass
 
     # 5. Проверка блокировки / сжигания LP (защита от вывода ликвидности девом на Base/EVM)
-    try:
-        lp_holders = info.get("lp_holders") or []
-        if lp_holders and isinstance(lp_holders, list) and len(lp_holders) > 0:
-            locked_burned = 0.0
-            for lph in lp_holders:
-                is_locked = int(lph.get("is_locked", 0) or 0)
-                addr = str(lph.get("address", "")).lower()
-                pct = _tax_frac(lph.get("percent", 0))
-                if is_locked == 1 or "dead" in addr or addr == "0x0000000000000000000000000000000000000000":
-                    locked_burned += pct
-            min_lp_lock = float(_cfg("GOPLUS_MIN_LP_LOCKED_PCT", 0.40))
-            if locked_burned < min_lp_lock:
-                return False, f"LP не заблокирован ({locked_burned*100:.0f}% < {min_lp_lock*100:.0f}%) — риск рагпулла"
-    except Exception:
-        pass
+    # На Robinhood (Uniswap V4 PoolManager) GoPlus не индексирует V4 LP и пишет в lp_holders
+    # только пылевые пулы V2/V3 на $2 (кейс DOPE $325k), поэтому для Robinhood/V4 проверяем PoolManager ончейн.
+    if chain != "robinhood":
+        try:
+            lp_holders = info.get("lp_holders") or []
+            if lp_holders and isinstance(lp_holders, list) and len(lp_holders) > 0:
+                locked_burned = 0.0
+                for lph in lp_holders:
+                    is_locked = int(lph.get("is_locked", 0) or 0)
+                    addr = str(lph.get("address", "")).lower()
+                    pct = _tax_frac(lph.get("percent", 0))
+                    if is_locked == 1 or "dead" in addr or addr == "0x0000000000000000000000000000000000000000":
+                        locked_burned += pct
+                min_lp_lock = float(_cfg("GOPLUS_MIN_LP_LOCKED_PCT", 0.40))
+                if locked_burned < min_lp_lock:
+                    return False, f"LP не заблокирован ({locked_burned*100:.0f}% < {min_lp_lock*100:.0f}%) — риск рагпулла"
+        except Exception:
+            pass
 
     return True, ""
 
@@ -309,7 +312,7 @@ async def check_token(address: str, chain: str):
                             if isinstance(v, dict):
                                 info = v
                                 break
-                verdict = _verdict_evm(info)
+                verdict = _verdict_evm(info, chain=chain)
             elif code == 4029:
                 verdict = (False, "goplus-rate-limit")
             elif code == 3:
@@ -413,47 +416,46 @@ async def verify_evm_token(address: str, chain: str, pair_data: dict = None) -> 
         info = pair_data.get("info") or {}
         links = (info.get("socials") or []) + (info.get("websites") or [])
         vol5 = float(((pair_data.get("volume") or {}).get("m5", 0) or 0))
+        vol1 = float(((pair_data.get("volume") or {}).get("h1", 0) or 0))
         liq = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
         if not links or len(links) < 1:
             # Для пулов < $15k требуем ссылки (дешевый анонимный дев-раг)
-            # Для глубоких пулов ($15k+) с объемом от $3k отсутствие плашки соцсетей не фатально при чистом байткоде (кейсы ALIENS, FART)
-            if liq < 15000.0 or vol5 < 3000.0:
+            # Для глубоких пулов ($15k+) с объемом от $3k отсутствие плашки соцсетей не фатально при чистом байткоде (кейсы ALIENS, FART, PawPilot)
+            if liq < 15000.0 or (vol5 < 3000.0 and vol1 < 8000.0):
                 return False, "нет ссылок (соцсети/сайт) — анонимный дев-раг"
             
         # 3. Наличие реальных продаж и глубина пула
         txns_m5 = ((pair_data.get("txns") or {}).get("m5") or {})
+        txns_h1 = ((pair_data.get("txns") or {}).get("h1") or {})
         s5 = int(txns_m5.get("sells", 0) or 0)
         b5 = int(txns_m5.get("buys", 0) or 0)
-        if s5 < 2:
-            return False, f"продаж за 5м {s5} < 2 — ханипот или заблокированный стакан"
-        if b5 < s5:
+        s1 = int(txns_h1.get("sells", 0) or 0)
+        if (s5 < 2 and s1 < 5) or s1 == 0:
+            return False, f"продаж за 5м {s5} и за 1ч {s1} — неподтвержденная продаваемость (honeypot-риск)"
+        if b5 < s5 and s1 < 20:
             return False, f"нет перевеса покупателей ({b5}b/{s5}s)"
-        if vol5 < 800:
+        if (b5 + s5) >= 15 and (s5 / (b5 + s5)) < 0.10:
+            return False, f"аномалия продаж m5 {s5}s/{b5}b ({s5/(b5+s5)*100:.0f}%) — honeypot-ловушка"
+        if vol5 < 800 and vol1 < 3000:
             return False, f"объем за 5м ${vol5:,.0f} < $800 — искусственный пул"
         if liq < 3000:
             return False, f"ликвидность ${liq:,.0f} < $3,000 — тонкий пул"
 
-        # 4. Ончейн-аудит байткода, верификации и LP-лока через RPC / Blockscout
+        # 3.5. Аудит безопасности GoPlus (проверка creator_percent, hidden_owner, mintable)
+        try:
+            _g_ok_rob, _g_why_rob = await check_token(address, "robinhood")
+            if not _g_ok_rob and is_hard_scam(_g_why_rob):
+                return False, f"GoPlus {_g_why_rob}"
+        except Exception:
+            pass
+
+        # 4. Ончейн-аудит байткода, верификации и LP-резервов через RPC
         try:
             from http_client import fetch_json, get_session
             import aiohttp
             _rpc_url = getattr(config, "ROBINHOOD_RPC_URL", "https://rpc.mainnet.chain.robinhood.com")
             
-            # А. Проверка верификации исходного кода на Blockscout
-            _bs_url = f"https://robinhoodchain.blockscout.com/api?module=contract&action=getsourcecode&address={address}"
-            _bs_st, _bs_data = await fetch_json(_bs_url, timeout=6, retries=1)
-            if _bs_st == 200 and isinstance(_bs_data, dict):
-                _res_list = _bs_data.get("result")
-                if isinstance(_res_list, list) and len(_res_list) > 0:
-                    _c_info = _res_list[0]
-                    _src = str(_c_info.get("SourceCode", "") or "").strip()
-                    _abi = str(_c_info.get("ABI", "") or "").strip()
-                    if not _src or "Contract source code not verified" in _abi:
-                        return False, "контракт не верифицирован на Blockscout (закрытый код = риск рага)"
-                elif str(_bs_data.get("message", "")).lower() == "notok":
-                    return False, "контракт не найден или не верифицирован на Blockscout"
-
-            # Б. Байткод-аудит (поиск скрытого минта, блэклистов и паузы)
+            # Б. Байткод-аудит (поиск скрытого минта, блэклистов, паузы и серийного 15м раг-шаблона FEE/Speed)
             _s_sess = await get_session()
             _pl_code = {"jsonrpc": "2.0", "id": 1, "method": "eth_getCode", "params": [address, "latest"]}
             async with _s_sess.post(_rpc_url, json=_pl_code, timeout=aiohttp.ClientTimeout(total=4)) as _r_c:
@@ -461,6 +463,8 @@ async def verify_evm_token(address: str, chain: str, pair_data: dict = None) -> 
             _bytecode = str(_res_c.get("result", "") or "").lower()
             if not _bytecode or _bytecode in ("0x", "0x0"):
                 return False, "нет байткода (не смарт-контракт)"
+            if len(_bytecode) == 9312 and _bytecode.startswith("0x608060405234801561001057600080fd5b50600436106100a957"):
+                return False, "серийный 15м LP-rug шаблон (FEE/Speed бот)"
                 
             # Проверка опасных селекторов функций
             _dangerous_selectors = {
@@ -475,9 +479,27 @@ async def verify_evm_token(address: str, chain: str, pair_data: dict = None) -> 
                 if _sel in _bytecode:
                     return False, f"бэкдор в байткоде токена: {_desc}"
                     
-            # В. Проверка сжигания ликвидности (LP Burn Guard)
-            _pair_addr = pair_data.get("pairAddress")
-            if _pair_addr:
+            # В. Проверка реальной ликвидности пула (Uniswap V4 PoolManager vs V2 LP Burn)
+            _pair_addr = str(pair_data.get("pairAddress") or "")
+            _labels = [str(x).lower() for x in (pair_data.get("labels") or [])]
+            if "v4" in _labels or len(_pair_addr) > 42:
+                # Uniswap V4: проверяем реальный баланс токенов в синглтоне PoolManager (защита от фантомной ликвы DexScreener)
+                _V4_PM = "8366a39cc670b4001a1121b8f6a443a643e40951".zfill(64)
+                _pl_v4 = [
+                    {"jsonrpc": "2.0", "id": 10, "method": "eth_call", "params": [{"to": address, "data": "0x18160ddd"}, "latest"]},
+                    {"jsonrpc": "2.0", "id": 11, "method": "eth_call", "params": [{"to": address, "data": f"0x70a08231{_V4_PM}"}, "latest"]},
+                ]
+                async with _s_sess.post(_rpc_url, json=_pl_v4, timeout=aiohttp.ClientTimeout(total=4)) as _r_v4:
+                    _res_v4 = await _r_v4.json()
+                if isinstance(_res_v4, list) and len(_res_v4) >= 2:
+                    _tot_h = _res_v4[0].get("result", "0x")
+                    _pm_h = _res_v4[1].get("result", "0x")
+                    if _tot_h and _tot_h != "0x":
+                        _tot_v = int(_tot_h, 16)
+                        _pm_v = int(_pm_h, 16) if _pm_h and _pm_h != "0x" else 0
+                        if _tot_v > 0 and (_pm_v / _tot_v) < 0.005:
+                            return False, "пул Uniswap V4 опустошён девом (фантомная ликвидность DexScreener)"
+            elif len(_pair_addr) == 42:
                 _DEAD = "000000000000000000000000000000000000dead".zfill(64)
                 _ZERO = "0000000000000000000000000000000000000000".zfill(64)
                 _pl_lp = [

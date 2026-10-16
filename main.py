@@ -92,6 +92,21 @@ async def position_manager_loop(analyzer, tracker):
                 pnl_pct = (current_price - position.entry_price_usd) / position.entry_price_usd
                 max_pnl_pct = (position.max_price_usd - position.entry_price_usd) / position.entry_price_usd
                 minutes_held = (time.time() - position.entry_time) / 60
+
+                # --- АУДИТ БЕЗОПАСНОСТИ ОТКРЫТОЙ ПОЗИЦИИ (HONEYPOT / HARD SCAM GUARD) ---
+                _last_sol_sec_chk = getattr(position, "last_security_check_ts", 0.0)
+                if (time.time() - _last_sol_sec_chk) > 120:
+                    position.last_security_check_ts = time.time()
+                    try:
+                        import goplus as _gp
+                        _g_ok, _g_why = await _gp.check_solana(mint)
+                        _w_low = str(_g_why or "").lower()
+                        if not _g_ok and any(k in _w_low for k in ("honeypot", "cannot_sell", "freezable", "closable", "balance_mutable")):
+                            print(f"🚨 [SOL-HONEYPOT] {position.symbol} ({mint[:10]}): {_g_why} — токен непродаваем, списание в -100%.")
+                            tracker.close_position(mint, 0.0, f"SOL Honeypot / Unsellable ({_g_why})")
+                            continue
+                    except Exception:
+                        pass
                 # Infant Dump (как в EVM): слив в первые минуты = дев, не шум.
                 # Раги идут -40..-96%, шум импульса -15..-18% переживаем.
                 try:
@@ -261,6 +276,19 @@ async def position_manager_loop(analyzer, tracker):
                 if max_pnl_pct >= getattr(config, "TRAILING_ACTIVATION_PCT", 0.15):
                     if drop_from_max >= trail_distance:
                         tracker.close_position(mint, current_price, f"Trailing Stop (peak +{max_pnl_pct*100:.0f}%, drop {drop_from_max*100:.0f}%)")
+                        continue
+
+                _pt_sol = getattr(position, "peak_time", 0.0) or getattr(position, "entry_time", 0.0) or time.time()
+                _peak_age_sol = (time.time() - _pt_sol) / 60
+                if max_pnl_pct >= 0.25 and _peak_age_sol >= 25 and pnl_pct > 0.05 and drop_from_max >= 0.05:
+                    tracker.close_position(mint, current_price, f"Runner Stagnation (+{pnl_pct*100:.1f}% locked after peak +{max_pnl_pct*100:.0f}%, {_peak_age_sol:.0f}м без ATH)")
+                    continue
+                elif minutes_held >= 30 and _peak_age_sol >= 25:
+                    if pnl_pct > 0.10:
+                        tracker.close_position(mint, current_price, f"Inactive Pool TP (+{pnl_pct*100:.1f}%, {minutes_held:.0f}м)")
+                        continue
+                    elif pnl_pct < -0.05:
+                        tracker.close_position(mint, current_price, f"Inactive Pool Cut ({pnl_pct*100:.1f}%, {minutes_held:.0f}м)")
                         continue
 
                 # Breakeven / Soft Guard резерв:
@@ -965,6 +993,24 @@ async def _evm_track_once(tracker, chain: str, tag: str, emoji: str):
                 maxp = (pos.max_price_usd - pos.entry_price_usd) / pos.entry_price_usd
                 pos.current_pnl_usd = pos.amount_usd * pnl
                 held = (_t.time() - pos.entry_time) / 60
+                
+                # --- АУДИТ БЕЗОПАСНОСТИ ОТКРЫТОЙ ПОЗИЦИИ (HONEYPOT / V4 LP RUG GUARD) ---
+                # Если токен оказался Honeypot или создатель выдернул ликвидность из V4 PoolManager (кейс FEE/Speed):
+                # токен физически непродаваем на блокчейне! Списываем как честный Honeypot (-100% / $0.0).
+                _last_sec_chk = getattr(pos, "last_security_check_ts", 0.0)
+                if (_t.time() - _last_sec_chk) > 120:  # каждые 2 минуты
+                    pos.last_security_check_ts = _t.time()
+                    try:
+                        import goplus as _gp
+                        _g_ok, _g_why = await _gp.check_token(mint, chain)
+                        _w_low = str(_g_why or "").lower()
+                        if not _g_ok and any(k in _w_low for k in ("honeypot", "cannot_sell", "creator_pct", "owner_pct", "blacklist", "cooldown", "tax")):
+                            print(f"🚨 [{tag}-HONEYPOT] {pos.symbol} ({mint[:10]}): {_g_why} — токен непродаваем, списание в -100%.")
+                            tracker.close_position(mint, 0.0, f"{tag} Honeypot / Unsellable ({_g_why})")
+                            continue
+                    except Exception:
+                        pass
+
                 reason = None
                 prev_ts = getattr(pos, "price_checked_at", 0.0)
                 _mbr = getattr(config, "MOONBAG_TRIGGER_PCT", 2.00)
@@ -1037,6 +1083,14 @@ async def _evm_track_once(tracker, chain: str, tag: str, emoji: str):
                 elif maxp >= getattr(config, "TRAILING_ACTIVATION_PCT", 0.15) and \
                         (pos.max_price_usd - cur) / pos.max_price_usd >= _trail_dist:
                     reason = f"{tag} Trailing (peak +{maxp * 100:.0f}%, dd {(1 - cur / pos.max_price_usd) * 100:.0f}%)"
+                elif not reason and maxp >= 0.25 and (_t.time() - (getattr(pos, "peak_time", 0.0) or pos.entry_time)) >= 1500 and pnl > 0.05 and ((pos.max_price_usd - cur) / pos.max_price_usd) >= 0.05:
+                    _pk_age = (_t.time() - (getattr(pos, "peak_time", 0.0) or pos.entry_time)) / 60
+                    reason = f"{tag} Runner Stagnation (+{pnl*100:.1f}% locked after peak +{maxp*100:.0f}%, {_pk_age:.0f}м без ATH)"
+                elif not reason and held >= 30 and (_t.time() - (getattr(pos, "peak_time", 0.0) or pos.entry_time)) >= 1500:
+                    if pnl > 0.10:
+                        reason = f"{tag} Inactive Pool TP (+{pnl*100:.1f}%, {held:.0f}м в рынке)"
+                    elif pnl < -0.05:
+                        reason = f"{tag} Inactive Pool Cut ({pnl*100:.1f}%, {held:.0f}м)"
                 elif pnl <= -0.30:
                     reason = f"{tag} Emergency Cap ({pnl * 100:.1f}%)"
                 elif maxp >= 0.10 and pnl <= -0.05:
@@ -1106,7 +1160,8 @@ async def _evm_track_once(tracker, chain: str, tag: str, emoji: str):
                         pass
                 pos.price_checked_at = _t.time()
                 if reason:
-                    tracker.close_position(mint, cur, reason)
+                    _exit_px = 0.0 if any(k in reason.upper() for k in ("HONEYPOT", "RUG", "SCAM", "CANNOT SELL", "UNSELLABLE", "NO LIQUIDITY")) else cur
+                    tracker.close_position(mint, _exit_px, reason)
             except Exception as _e:
                 # Одна битая позиция не должна ронять весь трек
                 # (иначе все цены встают на $0.00 как в баге price_stale_n).

@@ -442,22 +442,27 @@ class PaperTracker:
                 exit_price = float(exit_price or 0)
             except Exception:
                 exit_price = 0.0
-            # Stale-выход по 0: закрываем по entry (0% - комиссии), а не -100% фантомом.
-            # Иначе одна слепая сделка даёт -100% и тянет статистику в ад.
-            if not (exit_price > 0):
-                exit_price = pos.current_price_usd or pos.max_price_usd or pos.entry_price_usd
-                if not (exit_price > 0):
-                    exit_price = pos.entry_price_usd
+            
+            # 1. Жесткий скам / Honeypot / Rugpull: честное списание по 0.0 (-100% реальный исход)
+            _r_up = str(reason or "").upper()
+            _is_hard_scam = any(k in _r_up for k in ("HONEYPOT", "RUG", "SCAM", "CANNOT SELL", "UNSELLABLE", "NO LIQUIDITY"))
+            if _is_hard_scam:
+                exit_price = 0.0
+            elif not (exit_price > 0):
+                # Stale-выход по 0 (сбой API котировок): закрываем по цене входа (0% PnL - комиссии)
+                exit_price = pos.entry_price_usd
                 reason = f"{reason} [stale→entry]"
+
             # Фантом единиц цены: exit в разы от entry+пика = битые данные, не пишем миллион.
-            try:
-                _ref = max(pos.entry_price_usd, pos.max_price_usd or 0) or pos.entry_price_usd
-                if _ref > 0 and exit_price / _ref > 50:
-                    print(f"🚫 Close отказ-фантом: exit {exit_price} >> entry/peak {_ref} ({pos.symbol}). Закрываю по пику.")
-                    exit_price = pos.max_price_usd or pos.entry_price_usd
-                    reason = f"{reason} [bad-price→peak]"
-            except Exception:
-                pass
+            if not _is_hard_scam:
+                try:
+                    _ref = max(pos.entry_price_usd, pos.max_price_usd or 0) or pos.entry_price_usd
+                    if _ref > 0 and exit_price / _ref > 50:
+                        print(f"🚫 Close отказ-фантом: exit {exit_price} >> entry/peak {_ref} ({pos.symbol}). Закрываю по пику.")
+                        exit_price = pos.max_price_usd or pos.entry_price_usd
+                        reason = f"{reason} [bad-price→peak]"
+                except Exception:
+                    pass
             pos.status = "closed"
             pos.exit_price_usd = exit_price
             pos.exit_reason = reason
