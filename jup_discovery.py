@@ -17,7 +17,8 @@ BASE = "https://api.jup.ag/tokens/v2"
 
 _cache = []
 _cache_time = 0.0
-CACHE_TTL = 120
+CACHE_TTL = 30
+SKIP_SYMBOLS = {"SOL", "WSOL", "USDC", "USDT", "USDG", "EURC", "CBBTC", "WBTC", "WETH", "JLP", "PYTH", "JUP", "NEAR"}
 
 
 def _headers():
@@ -26,27 +27,59 @@ def _headers():
 
 
 async def fetch_jup_tokens() -> list:
-    """Возвращает [mint, ...] Solana: recent + toptrending/5m (дедуп, топ по organicScore)."""
+    """Возвращает [mint, ...] Solana: приоритет взрывным ракетам (toptrending m5) + свежим пулам (recent)."""
     global _cache, _cache_time
     if time.time() - _cache_time < CACHE_TTL and _cache:
         return _cache
-    out, seen, scored = [], set(), []
-    for path in ("/recent",
-                 "/toptrending/5m?limit=100",
-                 "/toptraded/1h?limit=50"):
-        status, data = await fetch_json(BASE + path, headers=_headers(),
-                                        timeout=12, retries=1)
-        if status != 200 or not isinstance(data, list):
-            continue
-        for t in data:
+    
+    trending_url = f"{BASE}/toptrending/5m?limit=100"
+    recent_url = f"{BASE}/recent"
+    top_vol_url = f"{BASE}/toptraded/1h?limit=50"
+    
+    headers = _headers()
+    s1, d1 = await fetch_json(trending_url, headers=headers, timeout=10)
+    s2, d2 = await fetch_json(recent_url, headers=headers, timeout=10)
+    s3, d3 = await fetch_json(top_vol_url, headers=headers, timeout=10)
+    
+    ranked = []
+    seen = set()
+    
+    # 1. Топ-тренды по росту за 5 минут — самые горячие взрывные ракеты первыми!
+    if s1 == 200 and isinstance(d1, list):
+        for t in d1:
             m = t.get("id", "")
-            if not m or m in seen:
+            sym = str(t.get("symbol") or "").upper().strip()
+            if not m or m in seen or sym in SKIP_SYMBOLS:
                 continue
             seen.add(m)
-            scored.append((float(t.get("organicScore", 0) or 0), m))
-    # органику выше — раньше в очередь (мусор все равно режут гейты анализатора)
-    scored.sort(reverse=True)
-    out = [m for _, m in scored][:120]
+            st = t.get("stats5m") or {}
+            pc = float(st.get("priceChange") or 0.0)
+            vol = float(st.get("buyVolume") or 0.0) + float(st.get("sellVolume") or 0.0)
+            ranked.append((pc, vol, sym, m, "trending"))
+    # Сортируем топ-тренды по максимальному 5м импульсу цены:
+    ranked.sort(key=lambda x: x[0], reverse=True)
+    
+    # 2. Свежие листинги с пулом (recent)
+    if s2 == 200 and isinstance(d2, list):
+        for t in d2:
+            m = t.get("id", "")
+            sym = str(t.get("symbol") or "").upper().strip()
+            if not m or m in seen or sym in SKIP_SYMBOLS:
+                continue
+            seen.add(m)
+            ranked.append((0.0, 0.0, sym, m, "recent"))
+            
+    # 3. Топ по объему за 1 час
+    if s3 == 200 and isinstance(d3, list):
+        for t in d3:
+            m = t.get("id", "")
+            sym = str(t.get("symbol") or "").upper().strip()
+            if not m or m in seen or sym in SKIP_SYMBOLS:
+                continue
+            seen.add(m)
+            ranked.append((-1.0, 0.0, sym, m, "volume"))
+            
+    out = [m for _, _, _, m, _ in ranked][:120]
     _cache, _cache_time = out, time.time()
     return out
 
@@ -54,26 +87,27 @@ async def fetch_jup_tokens() -> list:
 async def jup_loop(analyzer, tracker):
     """Петля Jupiter-дискавери (Solana). Работает автономно, использует JUP_API_KEY при наличии."""
     _has_key = bool(getattr(config, "JUP_API_KEY", "") or "")
-    print(f"🪐 Jupiter Discovery запущен: recent + toptrending/5m + toptraded/1h (Solana) [{'API-KEY подключен' if _has_key else 'Public'}]!")
+    print(f"🪐 Jupiter Discovery запущен: toptrending/5m + recent + toptraded/1h (Solana) [{'API-KEY активен' if _has_key else 'Public'}]!")
     processed = {}
-    interval = int(getattr(config, "JUP_INTERVAL", 120))
+    interval = int(getattr(config, "JUP_INTERVAL", 30))
     while True:
         try:
             if len(tracker.get_open_positions()) < config.MAX_CONCURRENT_POSITIONS:
                 import time as _t
                 mints = await fetch_jup_tokens()
+                if mints:
+                    print(f"🪐 [JUPITER] Получено {len(mints)} кандидатов (toptrending + recent). Сканирую...")
                 for mint in mints:
                     if not mint or mint in tracker.positions:
                         continue
                     # Кулдаун на повторный вход после жесткого стопа (-15%+):
-                    # Ждём 2 часа, чтобы не ловить повторный дев-дамп, но если монета ожила позже — даём шанс!
                     _prev = tracker.last_loss_pct(mint)
                     if _prev is not None and _prev <= getattr(config, "RUG_REBUY_MAX_LOSS", -0.15):
                         _old_pos = tracker.positions.get(mint) or tracker.positions.get(mint + "_old_1")
                         _exit_t = getattr(_old_pos, "exit_time", 0.0) or 0.0
                         if _exit_t and (_t.time() - _exit_t) < 7200:
                             continue
-                    if _t.time() - processed.get(mint, 0.0) < 300:
+                    if _t.time() - processed.get(mint, 0.0) < 90:
                         continue
                     td = await analyzer.fetch_token_data(mint)
                     if not td:
@@ -81,10 +115,13 @@ async def jup_loop(analyzer, tracker):
                     _created = td.get("pairCreatedAt") or 0
                     _age_min = (_t.time() * 1000 - _created) / 60000.0 if _created else 999.0
                     _min_age = float(getattr(config, "SOLANA_MIN_AGE_MIN", 2.5))
+                    _sym_tmp = str(((td.get("baseToken") or {}).get("symbol") or mint[:6])).upper()
+                    
                     if _age_min < _min_age:
-                        print(f"⏳ [JUP] {mint[:8]}: возраст {_age_min:.1f}м < {_min_age}м — flash-rug зона дева, ждём созревания.")
+                        print(f"⏳ [JUP] {_sym_tmp} ({mint[:8]}): возраст {_age_min:.1f}м < {_min_age}м — flash-rug зона дева, ждём.")
                         continue
-                    # Старые монеты НЕ блокируем! Если монета старше суток, но делает взрывной памп на Jupiter — берём!
+                        
+                    print(f"🪐 [JUP] Анализирую {_sym_tmp} ({mint[:8]}): возраст {_age_min:.1f}м...")
                     try:
                         ok = await analyzer.analyze_token(mint)
                     except Exception as e:
@@ -99,7 +136,7 @@ async def jup_loop(analyzer, tracker):
                         import goplus as _gp
                         _g_ok, _g_why = await _gp.check_solana(mint)
                         if not _g_ok:
-                            print(f"🚫 [JUP-GOPLUS] {mint[:8]}: {_g_why} — блок входа.")
+                            print(f"🚫 [JUP-GOPLUS] {_sym_tmp} ({mint[:8]}): {_g_why} — блок входа.")
                             continue
                         from jupiter import JupiterAPI
                         price = await JupiterAPI.get_price(mint)
@@ -107,7 +144,7 @@ async def jup_loop(analyzer, tracker):
                             _sig = analyzer.get_signal(mint)
                             _veto = analyzer.rocket_veto(mint, td or {}, _sig)
                             if _veto:
-                                print(f"🚫 [JUP-VETO] {mint[:8]}: {_veto}")
+                                print(f"🚫 [JUP-VETO] {_sym_tmp} ({mint[:8]}): {_veto}")
                                 continue
                             fixed = float(getattr(config, "TRADE_AMOUNT_USD", 0.0) or 0.0)
                             if fixed > 0:
