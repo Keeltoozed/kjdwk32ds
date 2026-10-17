@@ -373,6 +373,38 @@ class Analyzer:
                 if min_px > 0 and (max_px / min_px) > 1.30:
                     best_pair["_price_divergence"] = True
                     best_pair["_price_divergence_ratio"] = max_px / min_px
+
+        # Обогащаем реальным изменением за 1 минуту (DexScreener не отдает m1 в priceChange!)
+        try:
+            px = float(best_pair.get("priceUsd", 0) or 0)
+            if px > 0 and mint:
+                now = time.time()
+                if not hasattr(Analyzer, "_sol_price_obs"):
+                    Analyzer._sol_price_obs = {}
+                hist = Analyzer._sol_price_obs.setdefault(mint, [])
+                hist.append((now, px))
+                if len(hist) > 40:
+                    hist[:] = [x for x in hist if now - x[0] <= 600.0]
+                if len(Analyzer._sol_price_obs) > 4000:
+                    Analyzer._sol_price_obs.clear()
+
+                recent_5m = [p for ts, p in hist if now - ts <= 300.0 and p > 0]
+                if recent_5m:
+                    peak_5m = max(recent_5m)
+                    if peak_5m > 0:
+                        best_pair["_drop_from_peak_5m"] = (px - peak_5m) / peak_5m * 100.0
+
+                cands = [(abs((now - ts) - 60.0), ts, p) for ts, p in hist if 12.0 <= (now - ts) <= 150.0 and p > 0]
+                if cands:
+                    cands.sort(key=lambda x: x[0])
+                    old_px = cands[0][2]
+                    real_m1 = (px - old_px) / old_px * 100.0
+                    if not isinstance(best_pair.get("priceChange"), dict):
+                        best_pair["priceChange"] = {}
+                    if not best_pair["priceChange"].get("m1"):
+                        best_pair["priceChange"]["m1"] = round(real_m1, 2)
+        except Exception:
+            pass
         return best_pair
 
     async def prefetch_token_data(self, mints: list, ttl: float = None) -> int:
@@ -1028,9 +1060,99 @@ class Analyzer:
             return False
 
         if dex_id in ("pump", "pumpfun"):
-            return await self.analyze_token_xgboost(mint, pair_data, _lottery=_lottery)
+            ok = await self.analyze_token_xgboost(mint, pair_data, _lottery=_lottery)
         else:
-            return await self.analyze_token_raydium(mint, pair_data)
+            ok = await self.analyze_token_raydium(mint, pair_data)
+        if ok:
+            if not await self.verify_1m_candles_not_dumping(mint, pair_data, "solana"):
+                return False
+        return ok
+
+    async def verify_1m_candles_not_dumping(self, address: str, pair_data: dict, chain: str = "solana") -> bool:
+        """Финальная проверка 1-минутных свечей перед самой покупкой (кейс sBTC -31% за 1м):
+        DexScreener не отдает m1 в priceChange, поэтому без проверки 1м свечей бот мог купить
+        токен, который 2 минуты назад сделал памп, а последние 1-2 минуты уже летит камнем вниз."""
+        if not pair_data:
+            return True
+        symbol = ((pair_data.get("baseToken") or {}).get("symbol") or address[:8])
+        # 1. Проверяем просадку от уже виденного 5м-пика в памяти бота
+        drop_seen = float(pair_data.get("_drop_from_peak_5m", 0.0) or 0.0)
+        if drop_seen <= -12.0:
+            print(f"🚫 [PEAK-DUMP] {symbol} ({address[:8]}): цена уже упала на {drop_seen:.1f}% от недавнего пика — падающий нож.")
+            return False
+
+        # 2. Запрашиваем последние 5 минутных свечей из GeckoTerminal (только для финальных кандидатов на вход)
+        pair_addr = pair_data.get("pairAddress") or ""
+        if not pair_addr:
+            return True
+        gt_net = {"solana": "solana", "base": "base", "bsc": "bsc", "robinhood": "robinhood", "ethereum": "eth"}.get(chain.lower(), chain.lower())
+        now = time.time()
+        if not hasattr(self, "_ohlcv_1m_cache"):
+            self._ohlcv_1m_cache = {}
+        hit = self._ohlcv_1m_cache.get(pair_addr)
+        ohlcv = None
+        if hit and (now - hit[0]) < 12.0:
+            ohlcv = hit[1]
+        else:
+            try:
+                import market_data as _md
+                data = await _md._gt_get(f"/networks/{gt_net}/pools/{pair_addr}/ohlcv/minute?aggregate=1&limit=5", retries=1)
+                if data:
+                    ohlcv = ((data.get("data") or {}).get("attributes") or {}).get("ohlcv_list") or []
+                    self._ohlcv_1m_cache[pair_addr] = (now, ohlcv)
+            except Exception:
+                ohlcv = None
+
+        if not ohlcv:
+            return True
+
+        try:
+            cur_px = float(pair_data.get("priceUsd", 0) or 0)
+            c0 = ohlcv[0]
+            c0_open, c0_high, c0_low, c0_close = float(c0[1] or 0), float(c0[2] or 0), float(c0[3] or 0), float(c0[4] or 0)
+            eff_close = min(c0_close, cur_px) if (cur_px > 0 and c0_close > 0) else (cur_px or c0_close)
+            c0_pct = ((eff_close - c0_open) / c0_open * 100.0) if c0_open > 0 else 0.0
+
+            if not isinstance(pair_data.get("priceChange"), dict):
+                pair_data["priceChange"] = {}
+            pair_data["priceChange"]["m1"] = round(c0_pct, 2)
+
+            highs_5m = [float(r[2] or 0) for r in ohlcv[:5] if float(r[2] or 0) > 0]
+            if cur_px > 0:
+                highs_5m.append(cur_px)
+            high_5m = max(highs_5m) if highs_5m else 0.0
+            drawdown_5m_pct = ((eff_close - high_5m) / high_5m * 100.0) if high_5m > 0 else 0.0
+
+            # А) Активная красная свеча прямо сейчас (слив >= -3.5% за текущую минуту)
+            if c0_pct <= -3.5:
+                print(f"🚫 [1M-DUMP] {symbol} ({address[:8]}): текущая 1м свеча летит вниз ({c0_pct:+.1f}%) — падающий нож, отмена входа.")
+                return False
+
+            # Б) Прошлая минутная свеча обвалилась или идут 2 красные свечи подряд (кейс sBTC: -9.6% и -3.5%)
+            if len(ohlcv) >= 2:
+                c1 = ohlcv[1]
+                c1_open, c1_high, c1_low, c1_close = float(c1[1] or 0), float(c1[2] or 0), float(c1[3] or 0), float(c1[4] or 0)
+                c1_pct = ((c1_close - c1_open) / c1_open * 100.0) if c1_open > 0 else 0.0
+                if c1_pct <= -6.0 and c0_pct < 2.0:
+                    print(f"🚫 [1M-CRASH] {symbol} ({address[:8]}): прошлая 1м свеча слилась на {c1_pct:+.1f}% без откупа (сейчас {c0_pct:+.1f}%) — обвал в процессе.")
+                    return False
+                if c1_pct <= -1.5 and c0_pct <= -1.0 and eff_close <= c1_close:
+                    print(f"🚫 [2-RED-1M] {symbol} ({address[:8]}): 2 красные минутные свечи подряд ({c1_pct:+.1f}%, {c0_pct:+.1f}%) — импульс сломлен.")
+                    return False
+
+            # В) Blow-off Top: цена уже упала на >= 12% от максимума последних 5 минут (кейс sBTC -20.9% от пика)
+            if drawdown_5m_pct <= -12.0 and c0_pct < 4.0:
+                print(f"🚫 [BLOWOFF-TOP] {symbol} ({address[:8]}): цена уже упала на {drawdown_5m_pct:.1f}% от 5м-пика — вершина пройдена, идёт разгрузка.")
+                return False
+
+            # Г) Верхний фитиль (Shooting Star): внутри текущей минуты токен кольнул верх и тут же сложился на >= 10%
+            c0_wick_drop = ((c0_high - eff_close) / c0_high * 100.0) if c0_high > 0 else 0.0
+            if c0_wick_drop >= 10.0 and c0_pct <= 2.0:
+                print(f"🚫 [WICK-DUMP] {symbol} ({address[:8]}): слив от хая текущей свечи на -{c0_wick_drop:.1f}% — раздача в стакан.")
+                return False
+        except Exception:
+            pass
+        return True
 
     _EVM_SCAM_KW = ["AAPL", "MSFT", "TSLA", "NVDA", "GOOG", "AMZN", "META", "NFLX",
                     "PEPE", "SHIB", "DOGE", "FLOKI", "BONK", "WIF", "BOME", "POPCAT", "TRUMP", "BIDEN"]
@@ -1170,6 +1292,8 @@ class Analyzer:
                     if chain in ("bsc", "robinhood", "base"):
                         return self._deny(address, "antiscam-err",
                                           f"🚫 [{tag}] {symbol}: ошибка антискама ({type(_e).__name__}) — {tag} риск.")
+            if not await self.verify_1m_candles_not_dumping(address, pair_data, chain):
+                return self._deny(address, "1m-candle-dump", f"🚫 [{tag}-SCOUT] {symbol}: 1м свеча в сливе / вершина пройдена.")
             print(f"🔭 [{tag}-SCOUT] {symbol}: возраст {_age_min:.1f}м, m5 {m5:+.1f}%, liq ${liq:,.0f} — ранний билет.")
             self._set_sig(address, f"{tag} SCOUT {_age_min:.0f}m" + self._rkt_tag(address, pair_data) + await self.meme_tag(address, symbol, pair_data, chain))
             return True
@@ -1350,6 +1474,8 @@ class Analyzer:
                     if chain in ("bsc", "robinhood"):
                         return self._deny(address, "antiscam-err",
                                           f"🚫 [{tag}] {symbol}: ошибка антискама ({type(_e).__name__}) — {tag} риск.")
+            if not await self.verify_1m_candles_not_dumping(address, pair_data, chain):
+                return self._deny(address, "1m-candle-dump", f"🚫 [{tag}] {symbol}: 1м свеча в сливе / вершина пройдена.")
             self._set_sig(address, f"{tag} rule {score:.0f}%" + self._rkt_tag(address, pair_data) + await self.meme_tag(address, symbol, pair_data, chain))
             return True
         return False

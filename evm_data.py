@@ -74,6 +74,47 @@ async def fetch_profile_tokens(chain: str = SLUG) -> list:
             if t.get("chainId") == chain and t.get("tokenAddress")]
 
 
+_EVM_PRICE_OBS = {}
+
+
+def _enrich_evm_m1(address: str, best: dict):
+    if not best or not address:
+        return
+    try:
+        px = float(best.get("priceUsd", 0) or 0)
+        if px <= 0:
+            return
+        now = _t.time()
+        key = address.lower()
+        hist = _EVM_PRICE_OBS.setdefault(key, [])
+        hist.append((now, px))
+        cutoff = now - 600.0
+        if len(hist) > 40:
+            hist[:] = [x for x in hist if x[0] >= cutoff]
+        if len(_EVM_PRICE_OBS) > 3000:
+            _EVM_PRICE_OBS.clear()
+
+        # 5-минутный наблюдавшийся пик
+        recent_5m = [p for ts, p in hist if now - ts <= 300.0 and p > 0]
+        if recent_5m:
+            peak_5m = max(recent_5m)
+            if peak_5m > 0:
+                best["_drop_from_peak_5m"] = (px - peak_5m) / peak_5m * 100.0
+
+        # Реальное изменение за ~1 минуту (ищем точку 15..120 сек назад)
+        cands = [( abs((now - ts) - 60.0), ts, p ) for ts, p in hist if 12.0 <= (now - ts) <= 150.0 and p > 0]
+        if cands:
+            cands.sort(key=lambda x: x[0])
+            old_px = cands[0][2]
+            real_m1 = (px - old_px) / old_px * 100.0
+            if not isinstance(best.get("priceChange"), dict):
+                best["priceChange"] = {}
+            if not best["priceChange"].get("m1"):
+                best["priceChange"]["m1"] = round(real_m1, 2)
+    except Exception:
+        pass
+
+
 async def get_token_data(address: str, chain: str = SLUG) -> dict:
     """Все пулы токена в сети chain, лучший по ликвидности.
     Возвращает пару в форме DexScreener (как Solana) + _chain."""
@@ -91,6 +132,7 @@ async def get_token_data(address: str, chain: str = SLUG) -> dict:
     best["_source"] = f"dexscreener-{chain}"
     best["_chain"] = chain
     best["_socials_unknown"] = False
+    _enrich_evm_m1(address, best)
     return best
 
 
