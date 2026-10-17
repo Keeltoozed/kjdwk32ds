@@ -39,45 +39,47 @@ class MatureExitManager:
         # Было held<3 / -12%: резало SWORDGUY/LAP (-15..-18% за 30-70с) с живым
         # импульсом (m5 +16..+68%, 1000+ buys). Раги идут -40..-96% — их и -25% ловит.
         _inf_win = float(getattr(config, "INFANT_WINDOW_MIN", 2.0))
-        _inf_pct = float(getattr(config, "INFANT_DUMP_PCT", -0.22))
+        _inf_pct = float(getattr(config, "INFANT_DUMP_PCT", -0.25))
         if minutes_held < _inf_win and pnl_pct <= _inf_pct:
             return f"Mature Infant Dump ({pnl_pct*100:.0f}%)"
 
         # 1. ГАРАНТИРОВАННЫЙ НЕСНИЖАЕМЫЙ ПОРОГ ПРИБЫЛИ (PROFIT FLOOR LOCK)
+        # Не душим ракеты на старте (+15..+30%, кейсы ELON +184% и SEXCOIN +258%):
+        # фиксация пола включается только от +35% (после TP1 30%) с запасом ~20% на рабочую коррекцию.
         max_pnl_pct = (position.max_price_usd - position.entry_price_usd) / position.entry_price_usd if position.entry_price_usd else 0
         _floor_pnl = None
-        if max_pnl_pct >= 2.00:       # Пик +200%+ (3x) -> гарантируем минимум +100% (удвоение)
-            _floor_pnl = 1.00
-        elif max_pnl_pct >= 1.00:     # Пик +100%+ (2x) -> гарантируем минимум +50%
-            _floor_pnl = 0.50
-        elif max_pnl_pct >= 0.60:     # Пик +60%+ -> гарантируем минимум +30% (18.7% воздуха от пика)
-            _floor_pnl = 0.30
-        elif max_pnl_pct >= 0.40:     # Пик +40%+ -> гарантируем минимум +25% (было 0.20)
-            _floor_pnl = 0.25
-        elif max_pnl_pct >= 0.25:     # Пик +25%+ -> гарантируем минимум +16% (было 0.10)
-            _floor_pnl = 0.16
-        elif max_pnl_pct >= 0.15:     # Пик +15%+ -> гарантируем минимум +7% (было 0.04)
-            _floor_pnl = 0.07
+        if max_pnl_pct >= 2.00:       # Пик +200%+ (3x) -> гарантируем минимум +110%
+            _floor_pnl = 1.10
+        elif max_pnl_pct >= 1.00:     # Пик +100%+ (2x) -> гарантируем минимум +55%
+            _floor_pnl = 0.55
+        elif max_pnl_pct >= 0.70:     # Пик +70%+ -> гарантируем минимум +35%
+            _floor_pnl = 0.35
+        elif max_pnl_pct >= 0.50:     # Пик +50%+ -> гарантируем минимум +22%
+            _floor_pnl = 0.22
+        elif max_pnl_pct >= 0.35:     # Пик +35%+ (после TP1 30%) -> гарантируем безубыток +6%
+            _floor_pnl = 0.06
         if _floor_pnl is not None and pnl_pct <= _floor_pnl:
+            # Защита от 1-тикового глюка вторичного пула (кейс Tour Hood +175% -> -11% на 1 тик):
+            if max_pnl_pct >= 0.35 and (max_pnl_pct - pnl_pct) >= 0.40:
+                _fc = int(getattr(position, "floor_confirm_n", 0) or 0) + 1
+                position.floor_confirm_n = _fc
+                if _fc < 2:
+                    return None
             if pnl_pct >= 0:
                 return f"Mature Profit Floor (+{_floor_pnl*100:.0f}% locked after peak +{max_pnl_pct*100:.0f}%)"
             return f"Crash Dump after peak (+{max_pnl_pct*100:.0f}% -> {pnl_pct*100:.0f}%)"
+        else:
+            position.floor_confirm_n = 0
 
-        # 2. ОСНОВНОЙ ПЛОТНЫЙ ТРЕЙЛИНГ-СТОП (Динамическая фиксация позиции)
+        # 2. ОСНОВНОЙ ДИНАМИЧЕСКИЙ ТРЕЙЛИНГ-СТОП (Включается от +45% пика, давая ракете разгон)
         if hasattr(config, 'TRAILING_ACTIVATION_PCT'):
-            if max_pnl_pct >= getattr(config, 'TRAILING_ACTIVATION_PCT', 0.15):
+            if max_pnl_pct >= getattr(config, 'TRAILING_ACTIVATION_PCT', 0.45):
                 if max_pnl_pct >= 3.0:
                     _trail_dist = 0.25
-                elif max_pnl_pct >= 2.0 or getattr(position, "is_moonbag", False):
-                    _trail_dist = 0.20
-                elif max_pnl_pct >= 1.0:
-                    _trail_dist = float(getattr(config, "TRAILING_RUNNER_DISTANCE_PCT", 0.16))
-                elif max_pnl_pct >= 0.50:
-                    _trail_dist = 0.14
-                elif max_pnl_pct >= 0.25:
-                    _trail_dist = 0.10
+                elif max_pnl_pct >= 1.0 or getattr(position, "is_moonbag", False):
+                    _trail_dist = float(getattr(config, "TRAILING_RUNNER_DISTANCE_PCT", 0.22))
                 else:
-                    _trail_dist = float(getattr(config, "TRAILING_DISTANCE_PCT", 0.10))
+                    _trail_dist = float(getattr(config, "TRAILING_DISTANCE_PCT", 0.20))
 
                 drop_from_max = (position.max_price_usd - current_price) / position.max_price_usd
                 if drop_from_max >= _trail_dist:
@@ -96,7 +98,7 @@ class MatureExitManager:
             _peak_age_min = 0
 
         _dd_peak = (position.max_price_usd - current_price) / position.max_price_usd if position.max_price_usd else 0
-        if max_pnl_pct >= 0.25 and _peak_age_min >= 25 and pnl_pct > 0.05 and _dd_peak >= 0.05:
+        if max_pnl_pct >= 0.35 and _peak_age_min >= 25 and pnl_pct > 0.05 and _dd_peak >= 0.08:
             return f"Mature Runner Stagnation (+{pnl_pct*100:.1f}% locked after peak +{max_pnl_pct*100:.0f}%, {_peak_age_min:.0f}m no ATH)"
 
         if minutes_held >= 30 and _peak_age_min >= 25:
@@ -117,21 +119,20 @@ class MatureExitManager:
             _maxp = (position.max_price_usd - position.entry_price_usd) / position.entry_price_usd
         except Exception:
             _maxp = 0
-        # Мягкий стоп: был пик +10%+, сползли к -5% — импульс угас, фиксируем малый минус
-        if _maxp >= 0.10 and pnl_pct <= -0.05:
+        # Мягкий стоп (только после 6 минут в рынке, чтобы не резать 1-2 минутные свечи на старте!):
+        if minutes_held >= 6.0 and _maxp >= 0.18 and pnl_pct <= -0.08:
             return f"Mature Soft Guard (был пик +{_maxp*100:.0f}%, слив до {pnl_pct*100:.1f}%)"
-        # Breakeven: если был пик +12%+ и цена вернулась ко входу — импульс сдох,
-        # выходим в безубыток (+0.5%..0%), а не ждём стоп -14%..-30%.
-        _be = min(float(getattr(config, 'BREAKEVEN_PCT', 0.20)), 0.12)
-        if _maxp >= _be and pnl_pct <= 0.005:
+        # Breakeven: если был пик +25%+ и спустя 4+ мин цена вернулась ко входу — выходим в безубыток
+        _be = float(getattr(config, 'BREAKEVEN_PCT', 0.25))
+        if minutes_held >= 4.0 and _maxp >= _be and pnl_pct <= 0.01:
             return f"Mature Breakeven (был пик +{_maxp*100:.0f}%)"
 
-        # Zero-Momentum Cut: монета за 3+ мин ни разу не дала даже +1.5% и ушла в -8%
-        if _maxp < 0.015 and pnl_pct <= -0.08 and minutes_held >= 3:
+        # Zero-Momentum Cut: монета за 3.5+ мин ни разу не дала даже +1.5% и ушла в -10%
+        if _maxp < 0.015 and pnl_pct <= -0.10 and minutes_held >= 3.5:
             return f"Mature Zero-Momentum Cut ({minutes_held:.0f}m, {pnl_pct*100:.1f}%)"
 
-        # Hard stop loss
-        if hasattr(config, 'STOP_LOSS_PCT') and pnl_pct <= config.STOP_LOSS_PCT:
+        # Hard stop loss (после 1.5 мин, чтобы не выбивать ракету на стартовом спреде в 0м)
+        if minutes_held >= 1.5 and hasattr(config, 'STOP_LOSS_PCT') and pnl_pct <= config.STOP_LOSS_PCT:
             return f"Mature Stop Loss ({config.STOP_LOSS_PCT*100:.0f}%)"
 
         # Time exit - Stagnant: минус режем быстро (он тянет вниз),

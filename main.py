@@ -111,7 +111,7 @@ async def position_manager_loop(analyzer, tracker):
                 # Раги идут -40..-96%, шум импульса -15..-18% переживаем.
                 try:
                     _inf_w = float(getattr(config, "INFANT_WINDOW_MIN", 2.0))
-                    _inf_p = float(getattr(config, "INFANT_DUMP_PCT", -0.22))
+                    _inf_p = float(getattr(config, "INFANT_DUMP_PCT", -0.25))
                     if minutes_held < _inf_w and pnl_pct <= _inf_p:
                         tracker.close_position(mint, current_price, f"Infant Dump ({pnl_pct*100:.0f}%)")
                         continue
@@ -123,18 +123,22 @@ async def position_manager_loop(analyzer, tracker):
 
                 prev_ts = getattr(position, "price_checked_at", 0.0)
                 if prev_ts > 0 and (time.time() - prev_ts) < 60 and prev_price > 0 \
-                        and current_price <= prev_price * 0.80:
-                    tracker.close_position(mint, current_price,
-                                           f"Crash Guard (-{(1 - current_price/prev_price)*100:.0f}% за {(time.time()-prev_ts):.0f} сек)")
-                    continue
+                        and current_price <= prev_price * 0.78:
+                    _cg_n = int(getattr(position, "crash_confirm_n", 0) or 0) + 1
+                    position.crash_confirm_n = _cg_n
+                    if _cg_n >= 2 or max_pnl_pct < 0.15:
+                        tracker.close_position(mint, current_price,
+                                               f"Crash Guard (-{(1 - current_price/prev_price)*100:.0f}% за {(time.time()-prev_ts):.0f} сек)")
+                        continue
+                else:
+                    position.crash_confirm_n = 0
                 position.price_checked_at = time.time()
                 
-                # === ТАЙМАУТ ПОСЛЕ РАКЕТЫ: только если прибыль растеряна (ушла в ноль/минус) ===
-                # Если монета давала +10%+ и провалилась в минус (-5%), не ждем 7 минут — спасаем депозит!
-                if max_pnl_pct >= 0.10 and pnl_pct <= -0.05:
+                # === ТАЙМАУТ ПОСЛЕ ИМПУЛЬСА (только после 6+ минут в рынке, чтобы не резать 1-2м свечи!) ===
+                if minutes_held >= 6.0 and max_pnl_pct >= 0.18 and pnl_pct <= -0.08:
                     tracker.close_position(mint, current_price, f"Early Fade Cut (был пик +{max_pnl_pct*100:.0f}%, слив до {pnl_pct*100:.1f}%)")
                     continue
-                if max_pnl_pct >= 0.10 and minutes_since_peak >= 5 and pnl_pct <= 0.01:
+                if minutes_held >= 8.0 and max_pnl_pct >= 0.20 and minutes_since_peak >= 7 and pnl_pct <= 0.01:
                     tracker.close_position(mint, current_price, f"Post-Rocket Fade Cut ({minutes_since_peak:.0f}m after peak, pnl {pnl_pct*100:+.1f}%)")
                     continue
 
@@ -169,7 +173,7 @@ async def position_manager_loop(analyzer, tracker):
                 # Profit lock удален, используется трейлинг-стоп из config.py
                 
                 # === СКАЛЬП-ТРЕЙЛИНГ (Забираем мелкие плюсы, если включено) ===
-                if getattr(config, "SCALP_PROFIT_ENABLED", False) and max_pnl_pct >= 0.10 and max_pnl_pct < getattr(config, "TRAILING_ACTIVATION_PCT", 0.15):
+                if getattr(config, "SCALP_PROFIT_ENABLED", False) and max_pnl_pct >= 0.10 and max_pnl_pct < getattr(config, "TRAILING_ACTIVATION_PCT", 0.45):
                     drop_from_max = (position.max_price_usd - current_price) / position.max_price_usd
                     if drop_from_max >= 0.05:
                         tracker.close_position(mint, current_price, f"Scalp Profit (peak +{max_pnl_pct*100:.0f}%)")
@@ -182,10 +186,11 @@ async def position_manager_loop(analyzer, tracker):
                 position.current_pnl_usd = position.amount_usd * pnl_pct
                 
                 # === ИНТЕГРАЦИЯ МАТЕМАТИКИ ДЛЯ ЗРЕЛЫХ МОНЕТ (SWING TRADING) ===
+                _tp1_sol_thr = float(getattr(config, "TP1_TRIGGER_PCT", 0.35))
                 if getattr(position, "is_mature", False):
-                    # TIER-1: лестница вместо жадного тейка — на +25% продаём 20%
-                    if max_pnl_pct >= 0.25 and not getattr(position, "tp1_done", False):
-                        tracker.partial_close_position(mint, current_price, 0.20, "Take Profit +25% (Tier-1 20%)")
+                    # TIER-1: на +35% продаём 30% позиции и переводим остаток в безубыток
+                    if max_pnl_pct >= _tp1_sol_thr and not getattr(position, "tp1_done", False):
+                        tracker.partial_close_position(mint, current_price, 0.30, f"Take Profit +{_tp1_sol_thr*100:.0f}% (Tier-1 30%)")
                         position.tp1_done = True
                         continue
                     # TIER-2: возврат 100% тела входа на удвоении (+100%) — продаём 35% позиции
@@ -213,15 +218,15 @@ async def position_manager_loop(analyzer, tracker):
                 min_fee_pct = (priority_fee_usd + 0.02 * position.amount_usd) / position.amount_usd
                 
                 # 1. СКАЛЬП-ТРЕЙЛИНГ - ВЫКЛЮЧЕН (не режем ракеты на первом 5% откате при пике +10%)
-                if getattr(config, "SCALP_PROFIT_ENABLED", False) and max_pnl_pct >= 0.10 and max_pnl_pct < getattr(config, "TRAILING_ACTIVATION_PCT", 0.25):
+                if getattr(config, "SCALP_PROFIT_ENABLED", False) and max_pnl_pct >= 0.10 and max_pnl_pct < getattr(config, "TRAILING_ACTIVATION_PCT", 0.45):
                     drop_from_max = (position.max_price_usd - current_price) / position.max_price_usd
                     if drop_from_max >= 0.05:
                         tracker.close_position(mint, current_price, f"Scalp Profit (peak +{max_pnl_pct*100:.0f}%)")
                         continue
                         
                 # === TAKE-PROFIT LADDER (Лестница фиксации прибыли) ===
-                if max_pnl_pct >= 0.25 and not getattr(position, "tp1_done", False):
-                    tracker.partial_close_position(mint, current_price, 0.40, "Take Profit +25% (Tier-1 40%)")
+                if max_pnl_pct >= _tp1_sol_thr and not getattr(position, "tp1_done", False):
+                    tracker.partial_close_position(mint, current_price, 0.30, f"Take Profit +{_tp1_sol_thr*100:.0f}% (Tier-1 30%)")
                     position.tp1_done = True
                     continue
                 _tp2_sol = float(getattr(config, "TP2_TRIGGER_PCT", 1.00))
@@ -236,51 +241,48 @@ async def position_manager_loop(analyzer, tracker):
                     continue
 
                 # 1.5 ГАРАНТИРОВАННЫЙ НЕСНИЖАЕМЫЙ ПОРОГ ПРИБЫЛИ (PROFIT FLOOR LOCK)
-                # Ни при каких обстоятельствах не даём ракете отдать заработанное китам:
+                # Включается только от +35% пика (после TP1), не душа ракеты на +15..+30%:
                 _floor_pnl = None
-                if max_pnl_pct >= 2.00:       # Пик +200%+ (3x) -> гарантируем минимум +100% (удвоение)
-                    _floor_pnl = 1.00
-                elif max_pnl_pct >= 1.00:     # Пик +100%+ (2x) -> гарантируем минимум +50%
-                    _floor_pnl = 0.50
-                elif max_pnl_pct >= 0.60:     # Пик +60%+ -> гарантируем минимум +30% (18.7% воздуха от пика)
-                    _floor_pnl = 0.30
-                elif max_pnl_pct >= 0.40:     # Пик +40%+ -> гарантируем минимум +25% (было 0.20)
-                    _floor_pnl = 0.25
-                elif max_pnl_pct >= 0.25:     # Пик +25%+ -> гарантируем минимум +16% (было 0.10)
-                    _floor_pnl = 0.16
-                elif max_pnl_pct >= 0.15:     # Пик +15%+ -> гарантируем минимум +7% (было 0.04)
-                    _floor_pnl = 0.07
+                if max_pnl_pct >= 2.00:       # Пик +200%+ (3x) -> гарантируем минимум +110%
+                    _floor_pnl = 1.10
+                elif max_pnl_pct >= 1.00:     # Пик +100%+ (2x) -> гарантируем минимум +55%
+                    _floor_pnl = 0.55
+                elif max_pnl_pct >= 0.70:     # Пик +70%+ -> гарантируем минимум +35%
+                    _floor_pnl = 0.35
+                elif max_pnl_pct >= 0.50:     # Пик +50%+ -> гарантируем минимум +22%
+                    _floor_pnl = 0.22
+                elif max_pnl_pct >= 0.35:     # Пик +35%+ -> гарантируем безубыток +6%
+                    _floor_pnl = 0.06
                 if _floor_pnl is not None and pnl_pct <= _floor_pnl:
+                    if max_pnl_pct >= 0.35 and (max_pnl_pct - pnl_pct) >= 0.40:
+                        _fc_s = int(getattr(position, "floor_confirm_n", 0) or 0) + 1
+                        position.floor_confirm_n = _fc_s
+                        if _fc_s < 2:
+                            continue
                     if pnl_pct >= 0:
                         tracker.close_position(mint, current_price, f"Profit Floor (+{_floor_pnl*100:.0f}% locked after peak +{max_pnl_pct*100:.0f}%)")
                     else:
                         tracker.close_position(mint, current_price, f"Crash Dump after peak (+{max_pnl_pct*100:.0f}% -> {pnl_pct*100:.0f}%)")
                     continue
+                else:
+                    position.floor_confirm_n = 0
 
-                # 2. ОСНОВНОЙ ПЛОТНЫЙ ТРЕЙЛИНГ-СТОП (Динамическая фиксация позиции)
+                # 2. ОСНОВНОЙ ДИНАМИЧЕСКИЙ ТРЕЙЛИНГ-СТОП (Включается от +45% пика)
                 drop_from_max = (position.max_price_usd - current_price) / position.max_price_usd
-                
-                # Трейлинг: плотный контроль отката от пика (не даем отдавать прибыль!)
                 if max_pnl_pct >= 3.0:
                     trail_distance = 0.25
-                elif max_pnl_pct >= 2.0 or getattr(position, "is_moonbag", False):
-                    trail_distance = 0.20
-                elif max_pnl_pct >= 1.0:
-                    trail_distance = float(getattr(config, "TRAILING_RUNNER_DISTANCE_PCT", 0.16))
-                elif max_pnl_pct >= 0.50:
-                    trail_distance = 0.14
-                elif max_pnl_pct >= 0.25:
-                    trail_distance = 0.10
+                elif max_pnl_pct >= 1.0 or getattr(position, "is_moonbag", False):
+                    trail_distance = float(getattr(config, "TRAILING_RUNNER_DISTANCE_PCT", 0.22))
                 else:
-                    trail_distance = float(getattr(config, "TRAILING_DISTANCE_PCT", 0.10))
-                if max_pnl_pct >= getattr(config, "TRAILING_ACTIVATION_PCT", 0.15):
+                    trail_distance = float(getattr(config, "TRAILING_DISTANCE_PCT", 0.20))
+                if max_pnl_pct >= getattr(config, "TRAILING_ACTIVATION_PCT", 0.45):
                     if drop_from_max >= trail_distance:
                         tracker.close_position(mint, current_price, f"Trailing Stop (peak +{max_pnl_pct*100:.0f}%, drop {drop_from_max*100:.0f}%)")
                         continue
 
                 _pt_sol = getattr(position, "peak_time", 0.0) or getattr(position, "entry_time", 0.0) or time.time()
                 _peak_age_sol = (time.time() - _pt_sol) / 60
-                if max_pnl_pct >= 0.25 and _peak_age_sol >= 25 and pnl_pct > 0.05 and drop_from_max >= 0.05:
+                if max_pnl_pct >= 0.35 and _peak_age_sol >= 25 and pnl_pct > 0.05 and drop_from_max >= 0.08:
                     tracker.close_position(mint, current_price, f"Runner Stagnation (+{pnl_pct*100:.1f}% locked after peak +{max_pnl_pct*100:.0f}%, {_peak_age_sol:.0f}м без ATH)")
                     continue
                 elif minutes_held >= 30 and _peak_age_sol >= 25:
@@ -291,28 +293,27 @@ async def position_manager_loop(analyzer, tracker):
                         tracker.close_position(mint, current_price, f"Inactive Pool Cut ({pnl_pct*100:.1f}%, {minutes_held:.0f}м)")
                         continue
 
-                # Breakeven / Soft Guard резерв:
-                if max_pnl_pct >= 0.10 and pnl_pct <= -0.05:
+                # Breakeven / Soft Guard резерв (только после 4-6 минут, не режем стартовые свечи):
+                if minutes_held >= 6.0 and max_pnl_pct >= 0.18 and pnl_pct <= -0.08:
                     tracker.close_position(mint, current_price, f"Soft Guard (был пик +{max_pnl_pct*100:.0f}%, слив до {pnl_pct*100:.1f}%)")
                     continue
-                _be_sol = min(float(getattr(config, "BREAKEVEN_PCT", 0.20)), 0.12)
-                if max_pnl_pct >= _be_sol and pnl_pct <= 0.005:
+                _be_sol = float(getattr(config, "BREAKEVEN_PCT", 0.25))
+                if minutes_held >= 4.0 and max_pnl_pct >= _be_sol and pnl_pct <= 0.01:
                     tracker.close_position(mint, current_price, f"Breakeven (был пик +{max_pnl_pct*100:.0f}%)")
                     continue
 
-                # Zero-Momentum Cut: монета за 3+ мин ни разу не дала даже +1.5% и ушла в -8%
-                if max_pnl_pct < 0.015 and pnl_pct <= -0.08 and minutes_held >= 3:
+                # Zero-Momentum Cut: монета за 3.5+ мин ни разу не дала даже +1.5% и ушла в -10%
+                if max_pnl_pct < 0.015 and pnl_pct <= -0.10 and minutes_held >= 3.5:
                     tracker.close_position(mint, current_price, f"Zero-Momentum Cut ({minutes_held:.0f}m, {pnl_pct*100:.1f}%)")
                     continue
                             
-                # 3. АВАРИЙНЫЙ КЭП ПЕРВЫМ: FIBONACCI -68% проскочили стоп в тонком пуле.
-                # Больше -30% одну сделку не держим. (Стоял после стопа - был недостижим.)
+                # 3. АВАРИЙНЫЙ КЭП ПЕРВЫМ: больше -30% одну сделку не держим.
                 if pnl_pct <= -0.30:
                     tracker.close_position(mint, current_price, f"Emergency Cap ({pnl_pct*100:.0f}%)")
                     continue
 
-                # 3.5 ЖЕСТКИЙ Stop Loss из config.py
-                if pnl_pct <= config.STOP_LOSS_PCT:
+                # 3.5 ЖЕСТКИЙ Stop Loss из config.py (после 1.5 мин, чтобы пережить стартовый спред)
+                if minutes_held >= 1.5 and pnl_pct <= config.STOP_LOSS_PCT:
                     tracker.close_position(mint, current_price, f"Hard Stop Loss ({config.STOP_LOSS_PCT*100:.0f}%)")
                     continue
                     
@@ -826,6 +827,7 @@ async def growth_loop(analyzer, tracker):
                     elif held >= getattr(config, "GROWTH_STAGNANT_MIN", 120) and pnl < 0.05:
                         reason = f"GROWTH Stagnant ({held:.0f}m)"
                     pos.price_checked_at = _t.time()
+                    pos.price_updated_at = _t.time()
                     if reason:
                         tracker.close_position(mint, cur, reason)
                 tracker.save_portfolio()
@@ -860,6 +862,9 @@ async def growth_loop(analyzer, tracker):
                                                  ml_confidence=float(getattr(analyzer, "last_score", 0.0)),
                                                  source=f"GROWTH:{analyzer.get_signal(mint)}",
                                                  pair_address=(td.get("pairAddress", "") if td else ""))
+                            if mint in tracker.positions:
+                                tracker.positions[mint].price_updated_at = _t.time()
+                                tracker.save_portfolio()
                             print(f"🌱 GROWTH BUY {sym} @ ${price}")
                     await asyncio.sleep(2)
         except Exception as e:
@@ -1048,40 +1053,33 @@ async def _evm_track_once(tracker, chain: str, tag: str, emoji: str):
                 _is_moon = bool(getattr(pos, "is_moonbag", False))
                 
                 # 1. ГАРАНТИРОВАННЫЙ НЕСНИЖАЕМЫЙ ПОРОГ ПРИБЫЛИ (PROFIT FLOOR LOCK)
-                # Ни при каких обстоятельствах не даём ракете отдать заработанное китам:
+                # Включается от +35% пика (после TP1 30%), давая ракетам ~20% воздуха на коррекцию:
                 _floor_pnl = None
-                if maxp >= 2.00:       # Пик +200%+ (3x) -> гарантируем минимум +100% (удвоение)
-                    _floor_pnl = 1.00
-                elif maxp >= 1.00:     # Пик +100%+ (2x) -> гарантируем минимум +50%
-                    _floor_pnl = 0.50
-                elif maxp >= 0.60:     # Пик +60%+ -> гарантируем минимум +30% (18.7% воздуха от пика)
-                    _floor_pnl = 0.30
-                elif maxp >= 0.40:     # Пик +40%+ -> гарантируем минимум +25% (было 0.20)
-                    _floor_pnl = 0.25
-                elif maxp >= 0.25:     # Пик +25%+ -> гарантируем минимум +16% (было 0.10)
-                    _floor_pnl = 0.16
-                elif maxp >= 0.15:     # Пик +15%+ -> гарантируем минимум +7% (было 0.04)
-                    _floor_pnl = 0.07
+                if maxp >= 2.00:       # Пик +200%+ (3x) -> гарантируем минимум +110%
+                    _floor_pnl = 1.10
+                elif maxp >= 1.00:     # Пик +100%+ (2x) -> гарантируем минимум +55%
+                    _floor_pnl = 0.55
+                elif maxp >= 0.70:     # Пик +70%+ -> гарантируем минимум +35%
+                    _floor_pnl = 0.35
+                elif maxp >= 0.50:     # Пик +50%+ -> гарантируем минимум +22%
+                    _floor_pnl = 0.22
+                elif maxp >= 0.35:     # Пик +35%+ -> гарантируем безубыток +6%
+                    _floor_pnl = 0.06
 
-                # 2. ПЛОТНЫЙ ДИНАМИЧЕСКИЙ ТРЕЙЛИНГ (не давать уходить далеко от пика)
+                # 2. ДИНАМИЧЕСКИЙ ТРЕЙЛИНГ (включается от +45% пика, 20-25% воздуха)
                 if maxp >= 3.0:        # Мега-ракета (+300%+): 25% хода для гипер-иксов
                     _trail_dist = 0.25
-                elif maxp >= 2.0 or _is_moon: # Мунбег (+200%+): 20% воздуха
-                    _trail_dist = 0.20
-                elif maxp >= 1.0:      # Удвоение (+100%+): 16% от пика
-                    _trail_dist = float(getattr(config, "TRAILING_RUNNER_DISTANCE_PCT", 0.16))
-                elif maxp >= 0.50:     # Сильный импульс (+50%..+100%): 14% от пика
-                    _trail_dist = 0.14
-                elif maxp >= 0.25:     # Начальный профит (+25%..+50%): 10% от пика (было 0.12)
-                    _trail_dist = 0.10
-                else:                  # Младший диапазон: 10% от пика
-                    _trail_dist = float(getattr(config, "TRAILING_DISTANCE_PCT", 0.10))
+                elif maxp >= 1.0 or _is_moon: # Удвоение / Мунбег: 22% воздуха
+                    _trail_dist = float(getattr(config, "TRAILING_RUNNER_DISTANCE_PCT", 0.22))
+                else:                  # Диапазон +45%..+100%: 20% воздуха
+                    _trail_dist = float(getattr(config, "TRAILING_DISTANCE_PCT", 0.20))
                     
-                _crash_drop = float(getattr(config, "EVM_RUNNER_CRASH", 0.20)) if _is_runner else float(getattr(config, "EVM_NORMAL_CRASH", 0.20))
+                _crash_drop = float(getattr(config, "EVM_RUNNER_CRASH", 0.25)) if _is_runner else float(getattr(config, "EVM_NORMAL_CRASH", 0.22))
                 _dead_min = int(getattr(config, "EVM_DEAD_MIN", 60))
                 _stag_min = int(getattr(config, "EVM_STAGNANT_MIN", 45))
-                if maxp >= 0.25 and not getattr(pos, "tp1_done", False):
-                    tracker.partial_close_position(mint, cur, 0.40, f"{tag} Take Profit +25% (Tier-1 40%)")
+                _tp1_evm_thr = float(getattr(config, "TP1_TRIGGER_PCT", 0.35))
+                if maxp >= _tp1_evm_thr and not getattr(pos, "tp1_done", False):
+                    tracker.partial_close_position(mint, cur, 0.30, f"{tag} Take Profit +{_tp1_evm_thr*100:.0f}% (Tier-1 30%)")
                     pos.tp1_done = True
                     pos.price_checked_at = _t.time()
                     continue
@@ -1096,8 +1094,21 @@ async def _evm_track_once(tracker, chain: str, tag: str, emoji: str):
                     pos.is_moonbag = True # ИСПРАВЛЕН БАГ (бесконечные продажи)
                     pos.price_checked_at = _t.time()
                     continue
-                _w_guard = float(getattr(config, "WHALE_DUMP_GUARD_PCT", 0.15))
-                if not reason and prev_ts and (_t.time() - prev_ts) < 15 and prev > 0 and cur <= prev * (1 - _w_guard) and maxp >= 0.25:
+
+                # Защита раннера (кейс Tour Hood +175% -> -11% из-за 1 тика побочного пула $1.98):
+                # если монета была в плюсе (maxp >= 15%) и за 1 тик обвалилась на 22%+, требуем подтверждение 2-м тиком подряд!
+                _w_guard = float(getattr(config, "WHALE_DUMP_GUARD_PCT", 0.22))
+                _sudden_tick_drop = (prev > 0 and cur <= prev * (1 - _w_guard)) or (_floor_pnl is not None and pnl <= _floor_pnl and (maxp - pnl) >= 0.35)
+                if _sudden_tick_drop and maxp >= 0.15:
+                    pos.crash_confirm_n = int(getattr(pos, "crash_confirm_n", 0) or 0) + 1
+                    if pos.crash_confirm_n < 2:
+                        print(f"⚠️ [{tag}-TICK-VERIFY] {pos.symbol} ({mint[:10]}): резкий тик {pnl*100:+.1f}% после пика +{maxp*100:.0f}% — ждём 2-й тик подтверждения.")
+                        pos.price_checked_at = _t.time()
+                        continue
+                else:
+                    pos.crash_confirm_n = 0
+
+                if not reason and prev_ts and (_t.time() - prev_ts) < 15 and prev > 0 and cur <= prev * (1 - _w_guard) and maxp >= 0.35:
                     reason = f"{tag} Whale Dump Guard ({(1 - cur / prev) * 100:.0f}% за {_t.time() - prev_ts:.0f}с)"
                 elif not reason and prev_ts and (_t.time() - prev_ts) < 60 and prev > 0 and cur <= prev * (1 - _crash_drop):
                     reason = f"{tag} Crash Guard ({(1 - cur / prev) * 100:.0f}% за {_t.time() - prev_ts:.0f}с)"
@@ -1106,10 +1117,10 @@ async def _evm_track_once(tracker, chain: str, tag: str, emoji: str):
                         reason = f"{tag} Profit Floor (+{_floor_pnl*100:.0f}% locked after peak +{maxp*100:.0f}%)"
                     else:
                         reason = f"{tag} Crash Dump after peak (+{maxp*100:.0f}% -> {pnl*100:.0f}%)"
-                elif maxp >= getattr(config, "TRAILING_ACTIVATION_PCT", 0.15) and \
+                elif maxp >= getattr(config, "TRAILING_ACTIVATION_PCT", 0.45) and \
                         (pos.max_price_usd - cur) / pos.max_price_usd >= _trail_dist:
                     reason = f"{tag} Trailing (peak +{maxp * 100:.0f}%, dd {(1 - cur / pos.max_price_usd) * 100:.0f}%)"
-                elif not reason and maxp >= 0.25 and (_t.time() - (getattr(pos, "peak_time", 0.0) or pos.entry_time)) >= 1500 and pnl > 0.05 and ((pos.max_price_usd - cur) / pos.max_price_usd) >= 0.05:
+                elif not reason and maxp >= 0.35 and (_t.time() - (getattr(pos, "peak_time", 0.0) or pos.entry_time)) >= 1500 and pnl > 0.05 and ((pos.max_price_usd - cur) / pos.max_price_usd) >= 0.08:
                     _pk_age = (_t.time() - (getattr(pos, "peak_time", 0.0) or pos.entry_time)) / 60
                     reason = f"{tag} Runner Stagnation (+{pnl*100:.1f}% locked after peak +{maxp*100:.0f}%, {_pk_age:.0f}м без ATH)"
                 elif not reason and held >= 30 and (_t.time() - (getattr(pos, "peak_time", 0.0) or pos.entry_time)) >= 1500:
@@ -1117,25 +1128,20 @@ async def _evm_track_once(tracker, chain: str, tag: str, emoji: str):
                         reason = f"{tag} Inactive Pool TP (+{pnl*100:.1f}%, {held:.0f}м в рынке)"
                     elif pnl < -0.05:
                         reason = f"{tag} Inactive Pool Cut ({pnl*100:.1f}%, {held:.0f}м)"
-                elif pnl <= -0.30:
+                elif held >= 1.5 and pnl <= -0.30:
                     reason = f"{tag} Emergency Cap ({pnl * 100:.1f}%)"
-                elif maxp >= 0.10 and pnl <= -0.05:
-                    # Мягкий стоп: был пик +10%+, сползли к -5% — импульс угас, фиксируем малый минус,
-                    # не ждём -20%..-30%. Живую ракету (выше -5%) не трогает.
+                elif held >= 6.0 and maxp >= 0.18 and pnl <= -0.08:
+                    # Мягкий стоп только после 6+ минут (не режем стартовые свечи в первые минуты):
                     reason = f"{tag} Soft Guard (был пик +{maxp * 100:.0f}%, слив до {pnl * 100:.1f}%)"
-                elif maxp >= min(float(getattr(config, "BREAKEVEN_PCT", 0.20)), 0.12) and pnl <= 0.005:
+                elif held >= 4.0 and maxp >= float(getattr(config, "BREAKEVEN_PCT", 0.25)) and pnl <= 0.01:
                     reason = f"{tag} Breakeven (был пик +{maxp * 100:.0f}%)"
-                elif held < float(getattr(config, "INFANT_WINDOW_MIN", 2.0)) and pnl <= float(getattr(config, "INFANT_DUMP_PCT", -0.22)):
+                elif held < float(getattr(config, "INFANT_WINDOW_MIN", 2.0)) and pnl <= float(getattr(config, "INFANT_DUMP_PCT", -0.25)):
                     reason = f"{tag} Infant Dump ({pnl * 100:.1f}%)"
-                elif not _is_runner and maxp < 0.015 and pnl <= -0.08 and held >= 3:
-                    # Zero-Momentum Cut: если монета за 3+ мин ни разу не дала даже +1.5% и просела до -8%, режем сразу.
-                    # Режем вялый затухающий минус, не давая ему соскользнуть в -20%..-22%.
+                elif not _is_runner and maxp < 0.015 and pnl <= -0.10 and held >= 3.5:
                     reason = f"{tag} Zero-Momentum Cut ({held:.0f}m, {pnl * 100:.1f}%)"
                 elif not _is_runner and maxp < 0.02 and pnl <= -0.18 and held >= 4:
-                    # Fail Cut: если монета за 4+ мин ни разу не дала даже +2% и просела до -18%, режем сразу.
-                    # Не ждём -30%..-40% (Starlink кейс). Живые ракеты (maxp >= 2%) защищены и не трогаются.
                     reason = f"{tag} Fail Cut ({held:.0f}m, {pnl * 100:.1f}%)"
-                elif not _is_runner and pnl <= config.STOP_LOSS_PCT:
+                elif not _is_runner and held >= 1.5 and pnl <= config.STOP_LOSS_PCT:
                     reason = f"{tag} Stop ({pnl * 100:.1f}%)"
                 elif (not _is_runner and maxp < 0.05 and pnl < -0.05
                         and held >= float(getattr(config, "STAGNANT_LOSS_MIN", 15))):

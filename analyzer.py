@@ -340,12 +340,14 @@ class Analyzer:
         if not sol_pairs:
             return None
 
-        # 1. Приоритет реальным AMM пулам с живой ликвидностью
-        real_pairs = [p for p in sol_pairs if float(((p.get("liquidity") or {}).get("usd", 0) or 0)) >= 500]
-        if real_pairs:
-            best_pair = sorted(real_pairs, key=lambda p: float(((p.get("liquidity") or {}).get("usd", 0) or 0)), reverse=True)[0]
+        # 1. Если у токена уже есть AMM-пулы (pumpswap/raydium/meteora/orca), он УЖЕ мигрировал с кривой pump.fun.
+        # Ни при каких условиях не возвращаемся к замороженному мёртвому пулу pumpfun ($43k FDV, кейс DUMB -99%).
+        amm_pairs = [p for p in sol_pairs if p.get("dexId") not in ("pump", "pumpfun")]
+        real_pairs = [p for p in amm_pairs if float(((p.get("liquidity") or {}).get("usd", 0) or 0)) >= 500]
+        if amm_pairs:
+            best_pair = sorted(amm_pairs, key=lambda p: float(((p.get("liquidity") or {}).get("usd", 0) or 0)), reverse=True)[0]
         else:
-            # 2. Если реальных пулов нет — токен ещё на bonding curve pump.fun
+            # 2. Если AMM-пулов вообще нет — токен ещё на bonding curve pump.fun
             def _get_eff_liq(p):
                 raw_l = float(((p.get("liquidity") or {}).get("usd", 0) or 0))
                 if raw_l > 0:
@@ -364,7 +366,6 @@ class Analyzer:
                     best_pair["liquidity"]["usd"] = eff
 
         # Проверка рассинхрона цен между реальными пулами (миграция / арбитраж / фейковые пулы):
-        # Проверяем только между пулами с живой ликвидностью (>= $500), закрытый bonding curve pump.fun не учитываем
         if real_pairs and len(real_pairs) >= 2:
             real_prices = [float(p.get("priceUsd", 0) or 0) for p in real_pairs if float(p.get("priceUsd", 0) or 0) > 0]
             if len(real_prices) >= 2:
@@ -1016,16 +1017,17 @@ class Analyzer:
         
         # Глобальная защита от дешевых скрамов/рагпуллов
         liq = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
-        if liq == 0 and dex_id in ("pump", "pumpfun"):
-            liq = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0) * 0.40
-            _floor_liq = 2000
+        if dex_id in ("pump", "pumpfun"):
+            if liq == 0:
+                liq = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0) * 0.40
+            _floor_liq = 3500
         else:
-            _floor_liq = 12000 if (pair_data.get("chainId") or "").lower() == "solana" else 5000
+            _floor_liq = 15000 if (pair_data.get("chainId") or "").lower() == "solana" else 5000
         if liq < _floor_liq:
             print(f"🚫 [ANTI-RUG] {symbol} ({mint[:8]}): Ликвидность всего ${liq:,.0f} < ${_floor_liq}. Слишком опасно.")
             return False
-            
-        if dex_id in ("pump", "pumpfun") and age_minutes <= 15:
+
+        if dex_id in ("pump", "pumpfun"):
             return await self.analyze_token_xgboost(mint, pair_data, _lottery=_lottery)
         else:
             return await self.analyze_token_raydium(mint, pair_data)
@@ -1460,6 +1462,11 @@ class Analyzer:
             
         if pair_data.get("dexId") not in ("pump", "pumpfun"):
             return False
+
+        _fdv_curve = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
+        if _fdv_curve > 32000:
+            print(f"🚫 [GRADUATION-CLIFF] {mint[:8]}: кривая Pump.fun у потолка миграции (FDV ${_fdv_curve:,.0f} > $32k) — риск мгновенного дампа при выходе на AMM.")
+            return False
             
         is_vip = self.check_hyper_rocket_momentum(pair_data)
         if is_vip:
@@ -1535,6 +1542,14 @@ class Analyzer:
 
     async def analyze_token_raydium(self, mint: str, pair_data: dict) -> bool:
         if not pair_data:
+            return False
+
+        if (pair_data.get("dexId") or "").lower() in ("pump", "pumpfun"):
+            return False
+
+        _ray_liq = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
+        if _ray_liq < 15000:
+            print(f"🚫 [RAYDIUM] {mint[:8]}: реальная ликвидность AMM ${_ray_liq:,.0f} < $15,000.")
             return False
 
         _c_ms = pair_data.get("pairCreatedAt") or 0

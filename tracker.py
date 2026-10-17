@@ -431,6 +431,7 @@ class PaperTracker:
             pos.pnl_usd += realized_pnl_usd
 
             # Уменьшаем позицию на проданный процент
+            pos.amount_usd = max(0.0, pos.amount_usd - amount_sold_usd)
             if "MOONBAG" in reason.upper() or "RISK FREE" in reason.upper() or "200%" in reason:
                 pos.is_moonbag = True
             self.save_portfolio()
