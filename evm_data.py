@@ -16,7 +16,8 @@ DS = "https://api.dexscreener.com"
 
 # TTL-кэш дискавери: свежие пулы обновляем каждый цикл (ранний детект),
 # тяжёлые списки (тренды/топ/поиск) держим 2-3 мин, чтобы не превысить квоту GT 25/мин.
-import time as _t
+import time
+_t = time
 _DISC_CACHE = {}
 def _cached(key: str, ttl: int):
     hit = _DISC_CACHE.get(key)
