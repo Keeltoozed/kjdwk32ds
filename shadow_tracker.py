@@ -181,11 +181,13 @@ class ShadowTracker:
     async def _fetch_prices_batch(self, mints: list) -> dict:
         """
         Батч-запрос цен с DexScreener для любых сетей (Solana, BSC, Base, Robinhood, Ethereum).
-        DexScreener API поддерживает до 30 токенов через запятую.
+        Берём цену только из живого пула с МАКСИМАЛЬНОЙ ликвидностью (>= $2,500) и реальными продажами,
+        чтобы опустошённые пулы ($0.82 ликвы как LILEDGE) и 0-sell ханиподы не считались «ракетами».
         """
         if not mints:
             return {}
         prices = {}
+        max_liq = {}
         from http_client import fetch_json
         addresses = ",".join(mints[:30])
         url = f"https://api.dexscreener.com/latest/dex/tokens/{addresses}"
@@ -196,9 +198,17 @@ class ShadowTracker:
                     base = pair.get("baseToken", {}) or {}
                     m = (base.get("address") or "").lower()
                     p = float(pair.get("priceUsd", 0) or 0.0)
-                    if m and p > prices.get(m, 0):
+                    liq = float((pair.get("liquidity") or {}).get("usd", 0) or 0.0)
+                    dex_id = str(pair.get("dexId") or "").lower()
+                    if liq == 0 and dex_id in ("pump", "pumpfun"):
+                        liq = float(pair.get("fdv", 0) or 0.0) * 0.40
+                    tx24 = ((pair.get("txns") or {}).get("h24") or {})
+                    sells24 = int(tx24.get("sells", 0) or 0)
+                    if not m or p <= 0 or liq < 2500.0 or sells24 < 2:
+                        continue
+                    if liq > max_liq.get(m, -1.0):
+                        max_liq[m] = liq
                         prices[m] = p
-                        # Сохраняем и оригинальный кейс
                         orig_m = base.get("address")
                         if orig_m:
                             prices[orig_m] = p

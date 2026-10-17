@@ -198,7 +198,8 @@ async def get_token_data(address: str, chain: str = SLUG) -> dict:
         return {}
     # ВАЖНО: этот эндпоинт возвращает голый массив, не {pairs:[...]}
     pairs = data if isinstance(data, list) else data.get("pairs") or []
-    pools = [p for p in pairs if p.get("chainId") == chain]
+    pools = [p for p in pairs if p.get("chainId") == chain
+             and ((p.get("baseToken") or {}).get("address") or "").lower() == address.lower()]
     if not pools:
         return {}
     best = sorted(pools, key=lambda x: (x.get("liquidity") or {}).get("usd", 0),

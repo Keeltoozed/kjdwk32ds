@@ -48,19 +48,23 @@ class MatureExitManager:
         # фиксация пола включается только от +35% (после TP1 30%) с запасом ~20% на рабочую коррекцию.
         max_pnl_pct = (position.max_price_usd - position.entry_price_usd) / position.entry_price_usd if position.entry_price_usd else 0
         _floor_pnl = None
-        if max_pnl_pct >= 2.00:       # Пик +200%+ (3x) -> гарантируем минимум +110%
+        if max_pnl_pct >= 3.00:       # Пик +300%+ (4x) -> гарантируем минимум +235%
+            _floor_pnl = 2.35
+        elif max_pnl_pct >= 2.00:     # Пик +200%+ (3x) -> гарантируем минимум +150%
+            _floor_pnl = 1.50
+        elif max_pnl_pct >= 1.50:     # Пик +150%+ (2.5x) -> гарантируем минимум +110%
             _floor_pnl = 1.10
-        elif max_pnl_pct >= 1.00:     # Пик +100%+ (2x) -> гарантируем минимум +55%
-            _floor_pnl = 0.55
-        elif max_pnl_pct >= 0.70:     # Пик +70%+ -> гарантируем минимум +35%
-            _floor_pnl = 0.35
-        elif max_pnl_pct >= 0.50:     # Пик +50%+ -> гарантируем минимум +22%
-            _floor_pnl = 0.22
-        elif max_pnl_pct >= 0.35:     # Пик +35%+ (после TP1 30%) -> гарантируем безубыток +6%
-            _floor_pnl = 0.06
+        elif max_pnl_pct >= 1.00:     # Пик +100%+ (2x) -> гарантируем минимум +70%
+            _floor_pnl = 0.70
+        elif max_pnl_pct >= 0.70:     # Пик +70%+ -> гарантируем минимум +45%
+            _floor_pnl = 0.45
+        elif max_pnl_pct >= 0.50:     # Пик +50%+ -> гарантируем минимум +28%
+            _floor_pnl = 0.28
+        elif max_pnl_pct >= 0.35:     # Пик +35%+ -> гарантируем безубыток +8%
+            _floor_pnl = 0.08
         if _floor_pnl is not None and pnl_pct <= _floor_pnl:
-            # Защита от 1-тикового глюка вторичного пула (кейс Tour Hood +175% -> -11% на 1 тик):
-            if max_pnl_pct >= 0.35 and (max_pnl_pct - pnl_pct) >= 0.40:
+            # Защита ТОЛЬКО от 1-тикового глюка вторичного пула (когда из плюса +40%+ цена за 1 тик падает в минус):
+            if max_pnl_pct >= 0.40 and pnl_pct <= -0.05:
                 _fc = int(getattr(position, "floor_confirm_n", 0) or 0) + 1
                 position.floor_confirm_n = _fc
                 if _fc < 2:
@@ -71,15 +75,17 @@ class MatureExitManager:
         else:
             position.floor_confirm_n = 0
 
-        # 2. ОСНОВНОЙ ДИНАМИЧЕСКИЙ ТРЕЙЛИНГ-СТОП (Включается от +45% пика, давая ракете разгон)
+        # 2. СУЖАЮЩИЙСЯ ПАРАБОЛИЧЕСКИЙ ТРЕЙЛИНГ-СТОП (Чем выше пик, тем плотнее зажимаем профит у вершины!)
         if hasattr(config, 'TRAILING_ACTIVATION_PCT'):
             if max_pnl_pct >= getattr(config, 'TRAILING_ACTIVATION_PCT', 0.45):
-                if max_pnl_pct >= 3.0:
-                    _trail_dist = 0.25
-                elif max_pnl_pct >= 1.0 or getattr(position, "is_moonbag", False):
-                    _trail_dist = float(getattr(config, "TRAILING_RUNNER_DISTANCE_PCT", 0.22))
+                if max_pnl_pct >= 2.50:
+                    _trail_dist = 0.09  # На гипер-пиках (+250%+) режем откат уже на 9% от макушки!
+                elif max_pnl_pct >= 1.50:
+                    _trail_dist = 0.10  # На +150..+250% держим плотный стоп 10%
+                elif max_pnl_pct >= 0.80 or getattr(position, "is_moonbag", False):
+                    _trail_dist = float(getattr(config, "TRAILING_RUNNER_DISTANCE_PCT", 0.12))
                 else:
-                    _trail_dist = float(getattr(config, "TRAILING_DISTANCE_PCT", 0.20))
+                    _trail_dist = float(getattr(config, "TRAILING_DISTANCE_PCT", 0.16))
 
                 drop_from_max = (position.max_price_usd - current_price) / position.max_price_usd
                 if drop_from_max >= _trail_dist:

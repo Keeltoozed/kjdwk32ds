@@ -250,7 +250,7 @@ async def get_token_data(mint: str) -> dict:
         # VIP-фильтра и XGBoost-velocity. Не критично: при провале нули.
         try:
             g = await _gt_get(f"/networks/solana/tokens/{mint}?include=top_pools")
-            pools = [x for x in g.get("included", []) if x.get("type") == "pool"]
+            pools = [x for x in g.get("included", []) if x.get("type") == "pool" and _base_mint(x) == mint]
             if pools:
                 best = max(pools, key=lambda x: float(
                     x.get("attributes", {}).get("reserve_in_usd", 0) or 0))
@@ -274,7 +274,7 @@ async def get_token_data(mint: str) -> dict:
     try:
         data = d.get("data", {})
         ta = data.get("attributes", {})
-        pools = [x for x in d.get("included", []) if x.get("type") == "pool"]
+        pools = [x for x in d.get("included", []) if x.get("type") == "pool" and _base_mint(x) == mint]
         if ta and pools:
             name = ta.get("name", "") or ""
             symbol = ta.get("symbol", "") or ""
@@ -292,6 +292,14 @@ async def get_token_data(mint: str) -> dict:
     return ds or {}
 
 
+_ALLOWED_SOL_QUOTES = {
+    "so11111111111111111111111111111111111111112",
+    "epjfwdd5aufqssqem2qnxzybapc8g4weggkzwytdt1v",
+    "es9vmfrzacerjmffrff4h2fyd4kconky11mcce8benwnyb",
+}
+_ALLOWED_SOL_SYMBOLS = {"SOL", "WSOL", "USDC", "USDT"}
+
+
 async def _ds_token_data(mint: str) -> dict:
     import config
     from http_client import fetch_json
@@ -300,7 +308,17 @@ async def _ds_token_data(mint: str) -> dict:
     if status == 200 and data:
         try:
             pairs = data.get("pairs") or []
-            sol = [p for p in pairs if p.get("chainId") == "solana"]
+            sol = []
+            for p in pairs:
+                if p.get("chainId") != "solana":
+                    continue
+                if ((p.get("baseToken") or {}).get("address") or "") != mint:
+                    continue
+                q_addr = str((p.get("quoteToken") or {}).get("address") or "").lower()
+                q_sym = str((p.get("quoteToken") or {}).get("symbol") or "").upper()
+                if q_addr and q_addr not in _ALLOWED_SOL_QUOTES and q_sym not in _ALLOWED_SOL_SYMBOLS:
+                    continue
+                sol.append(p)
             if sol:
                 best = sorted(sol, key=lambda x: float(((x.get("liquidity") or {}).get("usd", 0) or 0)),
                               reverse=True)[0]
@@ -414,6 +432,7 @@ async def _ds_bulk_prices(mints: list) -> dict:
     from http_client import fetch_json
     out = {}
     _liq = {}
+    _mset = set(mints)
     for i in range(0, len(mints), 30):
         chunk = mints[i:i + 30]
         status, data = await fetch_json(f"https://api.dexscreener.com/latest/dex/tokens/{','.join(chunk)}", timeout=10)
@@ -423,9 +442,15 @@ async def _ds_bulk_prices(mints: list) -> dict:
         for p in pairs:
             if p.get("chainId") == "solana":
                 addr = (p.get("baseToken") or {}).get("address", "")
+                if not addr or addr not in _mset:
+                    continue
+                q_addr = str((p.get("quoteToken") or {}).get("address") or "").lower()
+                q_sym = str((p.get("quoteToken") or {}).get("symbol") or "").upper()
+                if q_addr and q_addr not in _ALLOWED_SOL_QUOTES and q_sym not in _ALLOWED_SOL_SYMBOLS:
+                    continue
                 px = float(p.get("priceUsd", 0) or 0)
                 liq = float((p.get("liquidity") or {}).get("usd", 0) or 0)
-                if not addr or not px:
+                if not px:
                     continue
                 if liq > _liq.get(addr, -1):
                     _liq[addr] = liq
