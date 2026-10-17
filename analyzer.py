@@ -410,14 +410,19 @@ class Analyzer:
                         best_pair["liquidity"] = {}
                     best_pair["liquidity"]["usd"] = eff
 
-        # Проверка рассинхрона цен между реальными пулами (миграция / арбитраж / фейковые пулы):
-        if real_pairs and len(real_pairs) >= 2:
-            real_prices = [float(p.get("priceUsd", 0) or 0) for p in real_pairs if float(p.get("priceUsd", 0) or 0) > 0]
-            if len(real_prices) >= 2:
-                max_px, min_px = max(real_prices), min(real_prices)
-                if min_px > 0 and (max_px / min_px) > 1.30:
-                    best_pair["_price_divergence"] = True
-                    best_pair["_price_divergence_ratio"] = max_px / min_px
+        # Проверка рассинхрона цен между КРУПНЫМИ пулами (только пулы со сравнимой ликвидностью):
+        # Исключаем заброшенные/старые микро-пулы, сравниваем только живые пулы >= 25% от топа
+        if amm_pairs and len(amm_pairs) >= 2:
+            _top_liq = float(((best_pair.get("liquidity") or {}).get("usd", 0) or 0))
+            if _top_liq >= 5000.0:
+                _comp_pairs = [p for p in amm_pairs if float(((p.get("liquidity") or {}).get("usd", 0) or 0)) >= max(4000.0, _top_liq * 0.25)]
+                if len(_comp_pairs) >= 2:
+                    _c_prices = [float(p.get("priceUsd", 0) or 0) for p in _comp_pairs if float(p.get("priceUsd", 0) or 0) > 0]
+                    if len(_c_prices) >= 2:
+                        max_px, min_px = max(_c_prices), min(_c_prices)
+                        if min_px > 0 and (max_px / min_px) > 1.40:
+                            best_pair["_price_divergence"] = True
+                            best_pair["_price_divergence_ratio"] = max_px / min_px
 
         # Обогащаем реальным изменением за 1 минуту (DexScreener не отдает m1 в priceChange!)
         try:
