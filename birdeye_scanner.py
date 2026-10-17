@@ -79,17 +79,27 @@ async def birdeye_loop(analyzer, tracker):
                         if price > 0:
                             sym = ((td.get("baseToken") or {}).get("symbol", addr[:8])
                                    if td else addr[:8]) or addr[:8]
-                            cap = tracker.get_total_capital()
-                            size = max(4.0, min(100.0, cap * (config.REINVEST_PERCENT / 100.0))) if cap > 0 else 4.0
+                            _sig = analyzer.get_signal(addr)
+                            _veto = analyzer.rocket_veto(addr, td or {}, _sig)
+                            if _veto:
+                                print(f"🚫 [BIRDEYE-VETO] {sym} [{ch}]: {_veto}")
+                                continue
+                            fixed = float(getattr(config, "TRADE_AMOUNT_USD", 0.0) or 0.0)
+                            if fixed > 0:
+                                size = fixed
+                            else:
+                                cap = tracker.get_total_capital()
+                                size = max(4.0, min(100.0, cap * (config.REINVEST_PERCENT / 100.0))) if cap > 0 else 4.0
                             tracker.add_position(
                                 sym, addr, price, min(size, 100.0), is_mature=True,
                                 ml_features=analyzer.pack_features(td or {}),
                                 ml_confidence=float(getattr(analyzer, "last_score", 0.0)),
-                                source=f"BIRDEYE:{analyzer.get_signal(addr)}",
+                                source=f"BIRDEYE:{_sig}",
+                                pair_address=((td or {}).get("pairAddress", "") or ""),
                                 **({"chain": ch} if ch != "solana" else {}))
                             print(f"🦅 BIRDEYE BUY {sym} [{ch}] @ ${price}")
                             break
-                    await asyncio.sleep(1.0)
+                    await asyncio.sleep(0.3)
                 if len(processed) > 1000:
                     processed.clear()
         except Exception as e:

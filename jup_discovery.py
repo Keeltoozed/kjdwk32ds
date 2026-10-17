@@ -150,6 +150,9 @@ async def jup_loop(analyzer, tracker):
                             if ratio > 1.25:
                                 print(f"🚫 [JUP-PRICE-MISMATCH] {_sym_tmp} ({mint[:8]}): Jupiter (${jup_price:.8f}) vs Dex (${ds_price:.8f}) расхождение {ratio:.1f}x — блок.")
                                 continue
+                            if jup_price < ds_price * 0.965:
+                                print(f"🚫 [JUP-LIVE-DUMP] {_sym_tmp} ({mint[:8]}): живая котировка Jupiter (${jup_price:.8f}) уже ниже DexScreener (${ds_price:.8f}) на {(jup_price/ds_price - 1)*100:+.1f}% — слив в процессе!")
+                                continue
                             price = jup_price
                         elif ds_price > 0:
                             price = ds_price
@@ -173,16 +176,16 @@ async def jup_loop(analyzer, tracker):
                                 size *= analyzer.conviction_size_mult(td or {})
                             _base_tok = (td or {}).get("baseToken", {}) or {}
                             _sym = str(_base_tok.get("symbol") or mint[:6]).strip().upper()
-                            _is_mature = _age_min >= 30.0
                             tracker.add_position(
                                 _sym, mint, price, min(size, 100.0),
-                                is_mature=_is_mature,
+                                is_mature=True,
                                 ml_features=analyzer.pack_features(td or {}),
                                 ml_confidence=float(getattr(analyzer, "last_score", 0.0)),
-                                source=f"JUP:{analyzer.get_signal(mint)}")
+                                source=f"JUP:{analyzer.get_signal(mint)}",
+                                pair_address=((td or {}).get("pairAddress", "") or ""))
                             print(f"🪐 JUP BUY {_sym} ({mint[:8]}) @ ${price} [size: ${min(size, 100.0):.1f}]")
                             break
-                    await asyncio.sleep(1.0)
+                    await asyncio.sleep(0.15)
                 if len(processed) > 1000:
                     processed.clear()
         except Exception as e:

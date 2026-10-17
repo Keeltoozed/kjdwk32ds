@@ -115,9 +115,82 @@ def _enrich_evm_m1(address: str, best: dict):
         pass
 
 
+# Кэш батч-префетча пар EVM: (chain.lower(), addr.lower()) -> (ts, best_pair_dict)
+_EVM_PREFETCH_CACHE: dict = {}
+
+
+def _cache_evm_pair(chain: str, address: str, best: dict):
+    if not address or not isinstance(best, dict):
+        return
+    best["_source"] = f"dexscreener-{chain}"
+    best["_chain"] = chain
+    best["_socials_unknown"] = False
+    _enrich_evm_m1(address, best)
+    now = time.time()
+    _EVM_PREFETCH_CACHE[(chain.lower(), address.lower())] = (now, best)
+    if len(_EVM_PREFETCH_CACHE) > 2000:
+        cutoff = now - 60.0
+        for k in [k for k, (ts, _) in list(_EVM_PREFETCH_CACHE.items()) if ts < cutoff]:
+            _EVM_PREFETCH_CACHE.pop(k, None)
+
+
+async def prefetch_token_data(addresses: list, chain: str = SLUG, ttl: float = 12.0) -> dict:
+    """Батч-загрузка полных пар до 30 токенов за 1 запрос (/tokens/v1/{chain}/{addrs}).
+    Ускоряет сканирование EVM-сетей в 25-30 раз (4 запроса вместо 120!)."""
+    now = time.time()
+    out = {}
+    missing = []
+    seen = set()
+    for a in addresses or []:
+        if not a:
+            continue
+        al = a.lower()
+        if al in seen:
+            continue
+        seen.add(al)
+        hit = _EVM_PREFETCH_CACHE.get((chain.lower(), al))
+        if hit and (now - hit[0]) <= ttl:
+            out[al] = hit[1]
+        else:
+            missing.append(a)
+
+    for i in range(0, len(missing), 30):
+        chunk = missing[i:i + 30]
+        try:
+            status, data = await fetch_json(
+                f"{DS}/tokens/v1/{chain}/{','.join(chunk)}", timeout=10, retries=1)
+            if status != 200 or not data:
+                continue
+            pairs = data if isinstance(data, list) else data.get("pairs") or []
+            by_addr = {}
+            for p in pairs:
+                if (p.get("chainId") or "").lower() != chain.lower():
+                    continue
+                addr = ((p.get("baseToken") or {}).get("address") or "")
+                if not addr:
+                    continue
+                al = addr.lower()
+                liq = float((p.get("liquidity") or {}).get("usd", 0) or 0)
+                prev = by_addr.get(al)
+                if prev is None or liq > float((prev.get("liquidity") or {}).get("usd", 0) or 0):
+                    by_addr[al] = p
+            for al, best in by_addr.items():
+                addr_orig = ((best.get("baseToken") or {}).get("address") or al)
+                _cache_evm_pair(chain, addr_orig, best)
+                out[al] = best
+        except Exception:
+            continue
+    return out
+
+
 async def get_token_data(address: str, chain: str = SLUG) -> dict:
     """Все пулы токена в сети chain, лучший по ликвидности.
     Возвращает пару в форме DexScreener (как Solana) + _chain."""
+    if not address:
+        return {}
+    hit = _EVM_PREFETCH_CACHE.get((chain.lower(), address.lower()))
+    if hit and (time.time() - hit[0]) <= 12.0:
+        return hit[1]
     status, data = await fetch_json(
         f"{DS}/token-pairs/v1/{chain}/{address}", timeout=10, retries=2)
     if status != 200 or not data:
@@ -129,10 +202,7 @@ async def get_token_data(address: str, chain: str = SLUG) -> dict:
         return {}
     best = sorted(pools, key=lambda x: (x.get("liquidity") or {}).get("usd", 0),
                   reverse=True)[0]
-    best["_source"] = f"dexscreener-{chain}"
-    best["_chain"] = chain
-    best["_socials_unknown"] = False
-    _enrich_evm_m1(address, best)
+    _cache_evm_pair(chain, address, best)
     return best
 
 
@@ -217,11 +287,48 @@ async def resolve_ds_pair(pair: str, chain: str) -> str:
         return ""
 
 
+def _filter_and_rank_gt_items(items: list, min_liq: float = 2000.0) -> list:
+    """Отсеивает мёртвые пулы ($0 ликвидности / 0 сделок) сразу на этапе GeckoTerminal
+    и сортирует живые ракеты по m5-импульсу и объёму."""
+    scored = []
+    seen = set()
+    for item in (items or []):
+        try:
+            bid = item.get("relationships", {}).get("base_token", {}).get("data", {}).get("id", "")
+            addr = bid.split("_", 1)[1] if "_" in bid else ""
+            if not addr or addr.lower() in seen:
+                continue
+            attrs = item.get("attributes") or {}
+            liq = float(attrs.get("reserve_in_usd") or 0)
+            if liq > 0 and liq < min_liq:
+                continue
+            tx = attrs.get("transactions") or {}
+            m5_tx = tx.get("m5") or {}
+            h1_tx = tx.get("h1") or {}
+            b5 = int(m5_tx.get("buys") or 0)
+            s5 = int(m5_tx.get("sells") or 0)
+            b1 = int(h1_tx.get("buys") or 0)
+            s1 = int(h1_tx.get("sells") or 0)
+            if (b5 + s5) == 0 and (b1 + s1) < 3 and liq < 5000:
+                continue
+            pc = attrs.get("price_change_percentage") or {}
+            m5_chg = float(pc.get("m5") or 0)
+            h1_chg = float(pc.get("h1") or 0)
+            # Приоритет живым зелёным пулам с покупками
+            score = m5_chg * 2.0 + min(h1_chg, 100.0) * 0.2 + (b5 - s5) * 1.5
+            seen.add(addr.lower())
+            scored.append((score, addr))
+        except Exception:
+            continue
+    scored.sort(key=lambda x: x[0], reverse=True)
+    return [addr for _, addr in scored]
+
+
 async def get_trending_pools_gt(chain: str = SLUG) -> list:
     """Запасной дискавери: трендовые пулы GeckoTerminal сети chain.
     Ловит лидеров по объему (ARCHIBROWN/Agrippa-типа) раньше, чем бусты.
     Идёт через общий лимитер market_data._gt_get (единая квота GT на процесс)."""
-    hit = _cached(f"trend:{chain}", 180)
+    hit = _cached(f"trend:{chain}", 90)
     if hit is not None:
         return hit
     from market_data import _gt_get as _g
@@ -229,15 +336,7 @@ async def get_trending_pools_gt(chain: str = SLUG) -> list:
     data = await _g(f"/networks/{gt_net}/trending_pools", retries=1)
     if not data:
         return []
-    out = []
-    for item in (data.get("data") or []):
-        try:
-            bid = item.get("relationships", {}).get("base_token", {}).get("data", {}).get("id", "")
-            addr = bid.split("_", 1)[1] if "_" in bid else ""
-            if addr and addr not in out:
-                out.append(addr)
-        except Exception:
-            continue
+    out = _filter_and_rank_gt_items(data.get("data") or [], min_liq=2000.0)
     return _store(f"trend:{chain}", out)
 
 
@@ -246,61 +345,49 @@ async def get_new_pools_gt(chain: str = SLUG, pages: int = 0) -> list:
     Именно здесь ракеты видны ДО роста - бусты/тренды показывают уже летящие."""
     from market_data import _gt_get as _g
     if not pages:
-        pages = int(getattr(config, "EVM_NEW_POOL_PAGES", 8))
-    hit = _cached(f"new:{chain}:{pages}", 60)
+        pages = int(getattr(config, "EVM_NEW_POOL_PAGES", 2))
+    hit = _cached(f"new:{chain}:{pages}", 45)
     if hit is not None:
         return hit
     gt_net = _gt_net(chain)
-    out = []
+    raw_items = []
     for page in range(1, pages + 1):
         data = await _g(f"/networks/{gt_net}/new_pools?page={page}", retries=1)
         if not data:
             continue
-        for item in (data.get("data") or []):
-            try:
-                bid = item.get("relationships", {}).get("base_token", {}).get("data", {}).get("id", "")
-                addr = bid.split("_", 1)[1] if "_" in bid else ""
-                if addr and addr not in out:
-                    out.append(addr)
-            except Exception:
-                continue
+        raw_items.extend(data.get("data") or [])
+    out = _filter_and_rank_gt_items(raw_items, min_liq=2000.0)
     return _store(f"new:{chain}:{pages}", out)
 
 
 async def get_top_volume_pools_gt(chain: str = SLUG) -> list:
-    """Топ пулов по объёму (GeckoTerminal, стр 1-3). Ракеты у которых УЖЕ идёт объём,
+    """Топ пулов по объёму (GeckoTerminal, стр 1). Ракеты у которых УЖЕ идёт объём,
     но они ещё не попали в бусты/тренды DexScreener."""
-    hit = _cached(f"topvol:{chain}", 180)
+    hit = _cached(f"topvol:{chain}", 120)
     if hit is not None:
         return hit
     from market_data import _gt_get as _g
     gt_net = _gt_net(chain)
-    out = []
-    for page in (1, 2, 3):
+    raw_items = []
+    for page in (1,):
         data = await _g(f"/networks/{gt_net}/pools?page={page}", retries=1)
         if not data:
             continue
-        for item in (data.get("data") or []):
-            try:
-                bid = item.get("relationships", {}).get("base_token", {}).get("data", {}).get("id", "")
-                addr = bid.split("_", 1)[1] if "_" in bid else ""
-                if addr and addr not in out:
-                    out.append(addr)
-            except Exception:
-                continue
+        raw_items.extend(data.get("data") or [])
+    out = _filter_and_rank_gt_items(raw_items, min_liq=2500.0)
     return _store(f"topvol:{chain}", out)
 
 
 async def fetch_dex_search_tokens(chain: str = SLUG) -> list:
-    """DexScreener поиск активных пар сети (3 сортировки). Находит органические ракеты
-    которые не проплачены (нет буста/профиля), но уже летят."""
-    hit = _cached(f"search:{chain}", 120)
+    """DexScreener поиск активных пар сети. Находит органические ракеты,
+    которые не проплачены (нет буста/профиля), но уже летят, и сразу кэширует их пары."""
+    hit = _cached(f"search:{chain}", 75)
     if hit is not None:
         return hit
-    out = []
+    scored = []
+    seen = set()
     # Внимание: /search требует q длиной 2+ (без него/1 символ = 400).
-    # Несколько частых биграмм покрывают разные имена, дедуп по адресу ниже.
-    for q in ("an", "er", "in", "on", "ar", "es"):
+    for q in ("an", "er", "in", "on", "ar", "es", "ai", "el"):
         status, data = await fetch_json(
             f"{DS}/latest/dex/search?q={q}&chainIds={chain}&order=desc",
             timeout=10, retries=1)
@@ -310,7 +397,31 @@ async def fetch_dex_search_tokens(chain: str = SLUG) -> list:
             if p.get("chainId") != chain:
                 continue
             addr = (p.get("baseToken") or {}).get("address", "")
-            if addr and addr not in out:
-                out.append(addr)
+            if not addr or addr.lower() in seen:
+                continue
+            liq = float((p.get("liquidity") or {}).get("usd", 0) or 0)
+            if liq < 2500:
+                continue
+            tx = p.get("txns") or {}
+            m5_tx = tx.get("m5") or {}
+            h1_tx = tx.get("h1") or {}
+            b5 = int(m5_tx.get("buys") or 0)
+            s5 = int(m5_tx.get("sells") or 0)
+            b1 = int(h1_tx.get("buys") or 0)
+            s1 = int(h1_tx.get("sells") or 0)
+            if (b5 + s5) == 0 and (b1 + s1) < 5:
+                continue
+            pc = p.get("priceChange") or {}
+            m5_chg = float(pc.get("m5") or 0)
+            h1_chg = float(pc.get("h1") or 0)
+            if m5_chg < -8.0 and h1_chg < 0:
+                continue
+            _cache_evm_pair(chain, addr, p)
+            seen.add(addr.lower())
+            score = m5_chg * 2.5 + min(h1_chg, 120.0) * 0.25 + (b5 - s5) * 1.5
+            scored.append((score, addr))
+    scored.sort(key=lambda x: x[0], reverse=True)
+    out = [addr for _, addr in scored]
     return _store(f"search:{chain}", out)
+
 

@@ -55,7 +55,7 @@ KILL_SWITCH_ENABLED = False  # ОТКЛЮЧЕНО для тестов (не ст
 MAX_DAILY_LOSS_PCT = 0.25
 STOP_LOSS_PCT = -0.16  # Стоп -16% после 90с (не выбивает ракеты вроде Chameleon +788% на первой теневой свече -13%)
 SNIPER_ENTRIES_ENABLED = False
-VIP_ENTRIES_ENABLED = False  # ОТКЛЮЧЕНО: защита от фейковых шипов и wash-trading раздач (UNPEG/FIBONACCI)
+VIP_ENTRIES_ENABLED = True  # ВКЛЮЧЕНО: защищено 1м свечным фильтром, анти-клоном и пост-миграционным фильтром
 TIME_EXIT_MINUTES = 60  # Если за 30 минут нет пампа - выходим
 TIME_EXIT_PROFIT_REQ = 0.0
 
@@ -121,10 +121,11 @@ ROBINHOOD_MIN_LIQUIDITY = 3000.0  # Порог $3.0k: пулы GIGALAUDIA ($3.3k
 ROBINHOOD_MIN_AGE_MIN = 2.5  # 2.5 мин (как Solana, не пропускает ранние импульсы)
 ROBINHOOD_MAX_CREATOR_PCT = 0.20  # Блок токенов, где у создателя >20% (FEE 35.5%, Speed 100% honeypot)
 ROBINHOOD_MAX_OWNER_PCT = 0.20
-ROBINHOOD_SCAN_INTERVAL = 25  # 25с: быстрый опрос (BSC отключен, лимиты не превышаются)
-EVM_MIN_M5_PCT = 2.0  # Ранние импульсы от +2% пускаем (не отсекать ранние старты вроде binancians +2.6%, 旺柴 +2.8%)
-EVM_ACCUM_ENABLED = False  # Выключено: флэт m5 < 2% не покупаем, чтобы не ловить сползающий минус (-7..-12%) как на FRC/BANKERS
-EVM_RESCAN_COOLDOWN = 180  # Перепроверка через 3 мин (волна может прийти позже)
+ROBINHOOD_SCAN_INTERVAL = 20  # 20с: быстрый опрос с батч-префетчем
+EVM_MIN_M5_PCT = 0.8  # Ранние импульсы от +0.8% пускаем при перевесе покупателей
+EVM_ACCUM_ENABLED = True  # Включено для накопления на растущем часовом тренде (WOLFPACK +4350%, HDONNI +2024%)
+EVM_NEW_POOL_PAGES = 2  # 2 страницы вместо 8 (убирает очередь мертвых пулов и ускоряет GeckoTerminal в 4 раза)
+EVM_RESCAN_COOLDOWN = 90  # Перепроверка через 90с
 EVM_MAX_MINTS = 120  # Лимит активных кандидатов за цикл скана
 
 
@@ -132,7 +133,7 @@ EVM_MAX_MINTS = 120  # Лимит активных кандидатов за ц�
 # Тот же EVM-движок, slug DexScreener "base".
 BASE_ENABLED = True
 BASE_MIN_LIQUIDITY = 3000.0  # Порог $3.0k: стандартные Clanker/Uniswap v3 мемы на Base стартуют с ~$3k
-BASE_SCAN_INTERVAL = 25  # 25с: быстрый поиск ранних ракет Base
+BASE_SCAN_INTERVAL = 20  # 20с: быстрый поиск ранних ракет Base
 
 # === BSC (ОТКЛЮЧЕНО: 100% сделок на BSC обернулись дев-рагпуллами с выводом пула) ===
 BSC_ENABLED = False
@@ -180,7 +181,7 @@ VIP_MAX_M5_PCT = 0.60  # Было 1.00 - брали вершину +100%. 60% - 
 PULLBACK_MIN_M5_PCT = 0.025  # Было 0.05: не отсекаем зарождающийся импульс (+2.5%..+4.9%) как флет
 PULLBACK_M1_MIN_PCT = -0.15  # Но и не летим в падающий нож (максимум -15% за минуту)
 PULLBACK_M1_MAX_PCT = 0.20  # Поднято до 20%: позволяет заходить в реальный пробойный импульс (breakout), а не ждать затухания
-PULLBACK_MAX_H1_PCT = 3.00  # До +300% за час
+PULLBACK_MAX_H1_PCT = 25.00  # До +2500% за час (выпускники Pump.fun имеют +400%..+2000% от цены создания кривой)
 LOTTERY_MIN_M5_PCT = 0.60  # Было 0.80: закрываем мертвую зону m5 60-80% (VIP_MAX 60% + лотерея от 60%)
 LOTTERY_SIZE_MULT = 0.30  # $10 * 0.30 = $3.0 билет (было 0.25 = $2.5)
 WHALE_CONSENSUS = 2  # вход на 2-м ките (3-й = уже поздно)
@@ -196,7 +197,7 @@ FAST_EARLY_MAX_AGE_SEC = 180  # early-микро-вход только если 
 # === ДОП. ИСТОЧНИКИ (портировано из прим; фильтры режут мусор, как раньше) ===
 # Jupiter Tokens API v2 (free key: portal.jup.ag). Без ключа jup_loop спит.
 JUP_API_KEY = (os.getenv("JUPITER_API") or os.getenv("JUP_API_KEY") or os.getenv("JUPITER_API_KEY") or "").strip().strip('"').strip("'")
-JUP_INTERVAL = 120
+JUP_INTERVAL = 45
 
 # TG-превью коллов: ОТКЛЮЧЕНО (защита от скам-коллов и дев-дампов)
 TG_PREVIEW_ENABLED = False

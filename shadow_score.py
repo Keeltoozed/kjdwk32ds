@@ -20,11 +20,9 @@ _COEF = {
     'log_liq': -0.1443, 'log_fdv': +0.0323, 'bsr': -0.2107, 'vtl': -0.5761,
 }
 _INTERCEPT = -0.0871
-# Порог откалиброван на живых сделках 26-27 сен (n=30, OOS AUC 0.72):
-# <0.58: 19 сделок, -228% (всех режем); >=0.58: 11 сделок, +15%, винрейт 45%.
-# ПОЛЬЗОВАТЕЛЬ ПРАВ: Старые лоссы были из-за кривых стопов и настроек, а не из-за токенов.
-# Снижаем порог до 0.50, чтобы пропускать больше хороших ракет.
-VETO_THRESHOLD = 0.50
+# Порог 0.28 (по докстрингу <0.30 -> блок): отсекает явный мусор, но не режет
+# живые ракеты с глубокой ликвидностью ($20k-$100k) и сильным перевесом покупателей (Score 99.9%).
+VETO_THRESHOLD = 0.28
 
 
 def _clip(x: float) -> float:
@@ -44,7 +42,7 @@ def pump_score(chg: float = 0.0, vol: float = 0.0, buys: float = 0.0,
             'buys_sells': float(buys or 0.0) - float(sells or 0.0),
             'log_liq': math.log1p(max(float(liq or 0.0), 0.0)),
             'log_fdv': math.log1p(max(float(fdv or 0.0), 0.0)),
-            'bsr': float(bsr or 0.0),
+            'bsr': min(float(bsr or 0.0), 1.5),
             'vtl': float(vtl or 0.0),
         }
         z = _INTERCEPT
@@ -74,7 +72,7 @@ def pair_shadow_score(pair_data: dict) -> float:
             return pump_score(chg=pc.get("m5", 0) or 0, vol=vm5, buys=b5, sells=s5,
                               liq=raw_liq,
                               fdv=pair_data.get("fdv", 0) or 0,
-                              bsr=(b5 / (s5 + 1)),
+                              bsr=min(b5 / (s5 + 1), 1.5),
                               vtl=(vm5 / (raw_liq + 1)))
         txh = (pair_data.get("txns") or {}).get("h24", {}) or {}
         bh, sh = txh.get("buys", 0) or 0, txh.get("sells", 0) or 0
@@ -82,6 +80,6 @@ def pair_shadow_score(pair_data: dict) -> float:
         pc = pair_data.get("priceChange") or {}
         return pump_score(chg=pc.get("h24", 0) or 0, vol=vh, buys=bh, sells=sh,
                           liq=raw_liq, fdv=pair_data.get("fdv", 0) or 0,
-                          bsr=(bh / (sh + 1)), vtl=(vh / (raw_liq + 1)))
+                          bsr=min(bh / (sh + 1), 1.5), vtl=(vh / (raw_liq + 1)))
     except Exception:
         return 0.5

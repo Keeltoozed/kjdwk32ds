@@ -272,12 +272,41 @@ class Analyzer:
         """Запись в радар из любой петли: что посмотрели и чем кончилось."""
         try:
             sig = self.signals.get(mint, "") or ""
+            vol_24h = 0.0
+            ctx = (getattr(self, "_eval_ctx", None) or {}).get(mint) or {}
+            pd = ctx.get("pair_data") if isinstance(ctx, dict) else None
+            if not pd and hasattr(self, "_prefetch_cache"):
+                hit = self._prefetch_cache.get(mint)
+                if isinstance(hit, tuple) and len(hit) == 2:
+                    pd = hit[1]
+            if not pd:
+                try:
+                    import evm_data as _ed
+                    for (_ch, _ad), (_ts, _pair) in list(_ed._EVM_PREFETCH_CACHE.items()):
+                        if _ad == (mint or "").lower():
+                            pd = _pair
+                            break
+                except Exception:
+                    pass
+            if isinstance(pd, dict):
+                if not symbol:
+                    symbol = ((pd.get("baseToken") or {}).get("symbol")) or ""
+                if not liquidity:
+                    liquidity = float((pd.get("liquidity") or {}).get("usd", 0) or 0)
+                if not m5_change:
+                    m5_change = float((pd.get("priceChange") or {}).get("m5", 0) or 0)
+                tx_m5 = ((pd.get("txns") or {}).get("m5") or {})
+                if not buys:
+                    buys = int(tx_m5.get("buys", 0) or 0)
+                if not sells:
+                    sells = int(tx_m5.get("sells", 0) or 0)
+                vol_24h = float((pd.get("volume") or {}).get("h24", 0) or 0)
             self._save_scanned_token({
                 "symbol": symbol or (mint[:6] + "..."),
                 "mint": mint,
                 "score": round(float(score or 0.0), 1),
                 "safety": 0, "momentum": 0, "social": 0,
-                "liquidity": liquidity, "vol_24h": 0,
+                "liquidity": liquidity, "vol_24h": vol_24h,
                 "buys": buys, "sells": sells,
                 "m5_change": m5_change,
                 "source": source,
@@ -287,6 +316,7 @@ class Analyzer:
             })
         except Exception:
             pass
+
         
     async def get_session(self):
         import aiohttp
@@ -742,6 +772,19 @@ class Analyzer:
         if _age_min_pre < _sol_min_age:
             print(f"⏳ [ENTRY] {mint[:8]}: возраст {_age_min_pre:.1f}м < {_sol_min_age}м — flash-rug зона дева, ждём созревания.")
             return None
+        if pair_data:
+            _dex_pre = str(pair_data.get("dexId", "")).lower()
+            if _dex_pre not in ("pump", "pumpfun"):
+                _fdv_pre = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
+                _pc_pre = pair_data.get("priceChange") or {}
+                _h1_pre = float(_pc_pre.get("h1", 0) or 0)
+                _h6_pre = float(_pc_pre.get("h6", 0) or 0)
+                if 0 < _fdv_pre < 46000:
+                    print(f"🚫 [POST-MIGRATION-DUMP] {mint[:8]}: AMM FDV ${_fdv_pre:,.0f} < $46k (ниже цены миграции Pump.fun) — слитый токен.")
+                    return False
+                if _h1_pre < -5.0 or _h6_pre < -5.0:
+                    print(f"🚫 [POST-MIGRATION-DUMP] {mint[:8]}: часовой/6ч тренд в сливе (h1 {_h1_pre:+.1f}%, h6 {_h6_pre:+.1f}%) — отскок дохлой кошки.")
+                    return False
         if not is_vip and pair_data:
             _pc = pair_data.get("priceChange") or {}
             _m5 = _pc.get("m5", 0) or 0
@@ -781,7 +824,8 @@ class Analyzer:
                 if _m1 < getattr(config, "PULLBACK_M1_MIN_PCT", -0.15) * 100:
                     print(f"🚫 [ENTRY] {mint}: m1 {_m1:+.1f}% — импульс схлопнулся, это дамп, не откат.")
                     return False
-                if _h1 > getattr(config, "PULLBACK_MAX_H1_PCT", 3.0) * 100:
+                _max_h1_pct = getattr(config, "PULLBACK_MAX_H1_PCT", 25.0) * 100
+                if _h1 > _max_h1_pct:
                     print(f"🚫 [ENTRY] {mint}: h1 {_h1:+.0f}% — уже улетел, поздно.")
                     return False
             _txm5 = (pair_data.get("txns") or {}).get("m5", {}) or {}
@@ -1301,52 +1345,57 @@ class Analyzer:
         if liq < min_liq:
             return self._deny(address, "micro-liq", f"🚫 [{tag}] {symbol}: ликва ${liq:,.0f} < ${min_liq:,.0f} — микро-пул.")
         
-        _evm_min_m5 = getattr(config, "EVM_MIN_M5_PCT", 2.0)
+        _evm_min_m5 = 0.8 if (s5 > 0 and b5 > s5) else float(getattr(config, "EVM_MIN_M5_PCT", 1.2))
         if m5 < _evm_min_m5:
-            _accum_on = bool(getattr(config, "EVM_ACCUM_ENABLED", False))
+            _accum_on = bool(getattr(config, "EVM_ACCUM_ENABLED", True))
             if not _accum_on:
                 return self._deny(address, f"flat m5 {m5:+.1f}%", f"· [{tag}] {symbol}: флет m5 {m5:+.1f}% < {_evm_min_m5:.1f}% (ACCUM выключен, нет импульса)")
-            # === ПРОВЕРКА НАКОПЛЕНИЯ (ACCUMULATION) vs МЕРТВЫЙ ФЛЭТ (DEAD-FLAT) ===
-            # Отличаем живое накопление перед взрывом (ANTI, IRL, TILIK, BREZCAT) от мертвых токенов (TAP, KIRK, CONFIRMATIO)
+            # === ПРОВЕРКА НАКОПЛЕНИЯ В ТРЕНДЕ (ACCUMULATION / CONTINUATION) vs МЕРТВЫЙ ФЛЭТ ===
+            # Ловит ракеты в фазе 5м-паузы на растущем часовом тренде (WOLFPACK +4350%, HDONNI +2024%, SGAGE +1306%, NET +867%, INVR, GNEX)
             _tx1 = ((pair_data.get("txns") or {}).get("h1") or {})
             _b1 = int(_tx1.get("buys", 0) or 0)
             _s1 = int(_tx1.get("sells", 0) or 0)
             _v1 = float(((pair_data.get("volume") or {}).get("h1", 0) or 0))
 
-            # 1. Мертвые пулы (нет сделок за час или нет покупок) — жесткий отсев
-            if (_b1 + _s1) < 6 or _v1 < 800.0 or b5 == 0:
+            # 1. Мертвые пулы (нет сделок за час или нет покупок/продаж) — жесткий отсев
+            if (_b1 + _s1) < 8 or _v1 < 1000.0 or b5 == 0 or s5 == 0 or _s1 <= 1:
                 return self._deny(address, f"dead-flat m5 {m5:+.1f}%", f"· [{tag}] {symbol}: мертвый флет (сделок за 1ч: {_b1+_s1}, vol1h: ${_v1:.0f})")
 
             # 2. Мамонты / стейблкоины / utility (AERO, USDC, PAPER, VELVET)
             if liq > 350000.0 or any(sb in symbol.upper() for sb in ("USDC", "USDT", "DAI")):
                 return self._deny(address, "dex-giant", f"· [{tag}] {symbol}: тяжелый пул (${liq:,.0f}) или стейблкоин — не мем-ракета")
 
-            # 3. Накопление: живая торговля за час, умеренный флэт (m5 >= -10%), покупатели активны
-            if m5 >= -10.0 and (_b1 + _s1) >= 10 and _b1 >= _s1 * 0.75 and not self.is_churn(b5, s5, m5, liq=liq):
-                _rkt = self._rkt_tag(address, pair_data)
-                _rkt_sc = self.rocket_scores.get(address)
-                if _rkt_sc is not None and _rkt_sc < 0.40:
-                    return self._deny(address, f"accum-low-rkt {_rkt_sc:.2f}",
-                                      f"· [{tag}-ACCUM] {symbol}: скор ракеты {_rkt_sc:.2f} < 0.40 — слабый потенциал.")
+            # 3. Накопление на растущем тренде (h1 от +3% до +350%, m5 >= -6%, покупатели сильнее продавцов)
+            if (-6.0 <= m5 < _evm_min_m5 and 3.0 <= h1 <= 350.0 and m1 >= -3.0
+                    and (_b1 + _s1) >= 10 and _b1 >= _s1 * 1.15 and b5 >= s5
+                    and not self.is_churn(b5, s5, m5, liq=liq)):
+                if not self._evm_brand_ok(symbol, tag):
+                    return False
+                if not await self._evm_clone_ok(symbol, address, pair_data, chain, tag):
+                    return False
                 try:
                     import goplus as _gp
                     _v_ok, _v_why = await _gp.verify_evm_token(address, chain, pair_data)
                     if not _v_ok:
                         return self._deny(address, f"antiscam-{_v_why}", f"🚫 [{tag}] {symbol}: {_v_why} — блок.")
-                except Exception:
-                    pass
-                print(f"💎 [{tag}-ACCUM] {symbol}: m5 {m5:+.1f}%, liq ${liq:,.0f}, tx1h {_b1}b/{_s1}s — живое накопление перед взлетом.")
+                except Exception as _e:
+                    if chain in ("bsc", "robinhood", "base"):
+                        return self._deny(address, "antiscam-err", f"🚫 [{tag}] {symbol}: ошибка антискама ({type(_e).__name__}) — блок.")
+                if not await self.verify_1m_candles_not_dumping(address, pair_data, chain):
+                    return self._deny(address, "1m-candle-dump", f"🚫 [{tag}-ACCUM] {symbol}: 1м свеча в сливе / вершина пройдена.")
+                _rkt = self._rkt_tag(address, pair_data)
+                print(f"💎 [{tag}-ACCUM] {symbol}: m5 {m5:+.1f}%, h1 {h1:+.1f}%, liq ${liq:,.0f}, tx1h {_b1}b/{_s1}s — живое накопление в тренде перед взлетом.")
                 self._set_sig(address, f"{tag} ACCUM" + _rkt + await self.meme_tag(address, symbol, pair_data, chain))
                 return True
 
             return self._deny(address, f"flat m5 {m5:+.1f}%", f"· [{tag}] {symbol}: флет m5 {m5:+.1f}%")
-        _max_m5 = 60.0
-        # При органическом перевесе покупателей (b5 >= 1.5*s5, liq >= min_liq, m1 <= 12.0%)
-        # расширяем коридор до 135% на глубоких пулах ($30k+), чтобы забирать мощные ракеты (NOM +434%, CAP +319%, DOPE)
-        if chain in ("robinhood", "base", "bsc") and liq >= 30000.0 and s5 > 0 and (b5 / s5) >= 1.5 and m1 <= 12.0 and not self.is_churn(b5, s5, m5, liq=liq):
+        _max_m5 = 65.0
+        # При органическом перевесе покупателей расширяем коридор до 135% на глубоких пулах ($25k+),
+        # чтобы забирать мощные ракеты (NOM +434%, CAP +319%, DOPE)
+        if chain in ("robinhood", "base", "bsc") and liq >= 25000.0 and s5 > 0 and (b5 / s5) >= 1.35 and m1 <= 15.0 and not self.is_churn(b5, s5, m5, liq=liq):
             _max_m5 = 135.0
-        elif chain in ("robinhood", "base", "bsc") and liq >= min_liq and s5 > 0 and (b5 / s5) >= 1.4 and m1 <= 10.0 and not self.is_churn(b5, s5, m5, liq=liq):
-            _max_m5 = 85.0
+        elif chain in ("robinhood", "base", "bsc") and liq >= min_liq and s5 > 0 and (b5 / s5) >= 1.25 and m1 <= 12.0 and not self.is_churn(b5, s5, m5, liq=liq):
+            _max_m5 = 95.0
 
         if m5 > _max_m5:
             return self._deny(address, f"top m5 {m5:+.0f}%", f"🚫 [{tag}-OVERHEAT] {symbol}: m5 {m5:+.1f}% — вертикаль уже прошла, вход = вершина.")
@@ -1355,20 +1404,20 @@ class Analyzer:
             return self._deny(address, f"churn {b5}/{s5} m5 {m5:+.1f}%",
                               f"🚫 [{tag}-CHURN] {symbol}: {b5 + s5} сделок без перевеса (b/s {b5 / (s5+1):.2f}) — накрутка, не FOMO.")
         # Ослабление m1-green: мощные ракеты пробивают импульсом без отката.
-        # Разрешаем m1 до +18.0% (или до +22.0% при сильном доминировании покупателей b5 >= 2*s5)
-        _max_m1 = 22.0 if (s5 > 0 and b5 >= 2 * s5 and (b5 + s5) >= 12) else (15.0 if (s5 > 0 and b5 >= 1.4 * s5) else 8.0)
+        _max_m1 = 22.0 if (s5 > 0 and b5 >= 1.8 * s5 and (b5 + s5) >= 10) else (16.0 if (s5 > 0 and b5 >= 1.25 * s5) else 10.0)
         if m1 > _max_m1:
             return self._deny(address, f"m1-green {m1:+.1f}%", f"🚫 [{tag}] {symbol}: m1 {m1:+.1f}% > +{_max_m1:.0f}% — вершина в моменте, ждём.")
         if m1 < -5.0:
             return self._deny(address, f"m1-drop {m1:+.1f}%", f"🚫 [{tag}] {symbol}: m1 {m1:+.1f}% — резкое падение за 1м, падающий нож.")
-        # Часовой тренд: глубокий дамп режем, но здоровый откат с разворотом на m5 пропускаем (кейс IRL +775%)
+        # Часовой тренд: глубокий дамп режем, но здоровый откат с разворотом на m5 пропускаем (кейсы IRL +775%, FTR +123%)
         if h1 < -25.0:
             return self._deny(address, f"h1-dump {h1:+.1f}%", f"🚫 [{tag}] {symbol}: h1 {h1:+.1f}% — глубокий часовой дамп.")
         if h1 < 0.0:
-            if not (m5 >= 1.5 and s5 > 0 and b5 >= s5 * 1.2):
+            if not (m5 >= 1.5 and s5 > 0 and b5 >= s5 * 1.15):
                 return self._deny(address, f"h1-red {h1:+.1f}%", f"🚫 [{tag}] {symbol}: h1 {h1:+.1f}% — часовой тренд вниз без разворота.")
-        if h1 > 300.0:
-            return self._deny(address, "gone", f"🚫 [{tag}] {symbol}: h1 {h1:+.0f}% — параболик уже улетел, вершина.")
+        _max_h1 = 800.0 if (liq >= 12000.0 and s5 > 0 and b5 >= s5 * 1.15 and m5 <= 85.0) else 350.0
+        if h1 > _max_h1:
+            return self._deny(address, "gone", f"🚫 [{tag}] {symbol}: h1 {h1:+.0f}% > +{_max_h1:.0f}% — параболик уже улетел, вершина.")
         
         # --- СТРОГАЯ ЗАЩИТА ОТ HONEYPOT (Проверка реальных сделок в пуле) ---
         if s5 == 0:
@@ -1377,33 +1426,42 @@ class Analyzer:
             return self._deny(address, "honeypot-no-sells-h1", f"🚫 [{tag}] {symbol}: всего {s} продаж за 1ч — неподтвержденная продаваемость.")
         if s5 <= 1 and b5 >= 6:
             return self._deny(address, "honeypot-1sell-5m", f"🚫 [{tag}] {symbol}: {b5} покупок и всего {s5} продажа за 5м — ловушка Honeypot.")
-        if s5 > 0 and ((s5 < 3 and (b5 / s5) > 5.0) or (b5 / s5) > 10.0) and (b5 + s5) >= 15:
-            return self._deny(address, "honeypot-ratio-5m", f"🚫 [{tag}] {symbol}: аномалия m5 {b5}b/{s5}s ({b5/s5:.1f}x) — Honeypot-риск.")
-        if s > 0 and ((s < 5 and (b / s) > 5.0) or (b / s) > 10.0) and (b + s) >= 25:
-            return self._deny(address, "honeypot-ratio-h1", f"🚫 [{tag}] {symbol}: аномалия h1 {b}b/{s}s ({b/s:.1f}x) — Honeypot-риск.")
+        # Блокируем высокий b/s только когда продаж мало (s5 <= 2 или s <= 5).
+        # Если в пуле уже прошло >= 4 продаж за 5м и >= 8 продаж за 1ч (и GoPlus/Honeypot.is подтвердил 0% tax), это живое FOMO (кейс ASI_AI +400%).
+        if s5 > 0 and s5 <= 2 and (b5 / s5) > 6.0 and (b5 + s5) >= 15:
+            return self._deny(address, "honeypot-ratio-5m", f"🚫 [{tag}] {symbol}: аномалия m5 {b5}b/{s5}s ({b5/s5:.1f}x) при малом числе продаж — Honeypot-риск.")
+        if s > 0 and s <= 5 and (b / s) > 6.0 and (b + s) >= 25:
+            return self._deny(address, "honeypot-ratio-h1", f"🚫 [{tag}] {symbol}: аномалия h1 {b}b/{s}s ({b/s:.1f}x) при малом числе продаж — Honeypot-риск.")
         vol_to_liq = vol24 / (liq + 1)
         if vol_to_liq > 100:
             return self._deny(address, "wash-trading", f"🚫 [{tag}] {symbol}: Объем в {vol_to_liq:.0f} раз больше пула ликвидности — накрутка ботами создателя.")
         
-        # Если в моменте сильный 5м импульс (m5 >= 5% и b5 >= s5 * 1.3), 1-часовой флет до пампа не блокирует свежий пробой
-        if s > 0 and b < s * 1.2 and not (m5 >= 5.0 and s5 > 0 and b5 >= s5 * 1.3):
+        # Если в моменте активный 5м импульс (m5 >= 2% и b5 >= s5 * 1.15), 1-часовой флет до пампа не блокирует свежий пробой (кейс ELON-SAN +131%)
+        if s > 0 and b < s * 1.15 and not (m5 >= 2.0 and s5 > 0 and b5 >= s5 * 1.15):
             return self._deny(address, f"no-pressure {b}/{s}", f"🚫 [{tag}] {symbol}: buys {b} / sells {s} — нет давления.")
-        if s5 > 0 and b5 < s5 * 1.3:
+        _min_b5_s5 = 1.10 if (m5 >= 5.0 and liq >= 12000.0) else 1.15
+        if s5 > 0 and b5 < s5 * _min_b5_s5:
             return self._deny(address, f"m5-no-pressure {b5}/{s5}", f"🚫 [{tag}] {symbol}: m5 buys {b5} / sells {s5} — продавцы давят в моменте.")
         
-        _evm_tx_min = 12 if _age_min < 30 else 20
-        _evm_vol_min = 3000 if _age_min < 30 else 10000
+        if chain == "robinhood":
+            _evm_tx_min = 6 if _age_min < 30 else 8
+            _evm_vol_min = 1200 if _age_min < 30 else 3000
+        elif liq >= 15000.0 and b5 > s5 and m5 >= 2.0:
+            # На глубоком пуле ($15k+) органические ракеты стартуют с 8-12 крупными покупками (кейсы DNA +1493%, 1 +1150%, FTR +115%)
+            _evm_tx_min = 8
+            _evm_vol_min = 2000 if _age_min < 30 else 4500
+        else:
+            _evm_tx_min = 10 if _age_min < 30 else 14
+            _evm_vol_min = 2000 if _age_min < 30 else 6000
         if (b5 + s5) < _evm_tx_min or vol24 < _evm_vol_min:
             return self._deny(address, "quiet", f"🚫 [{tag}] {symbol}: тихо (tx5 {(b5+s5)}, vol24 ${vol24:,.0f}).")
-        # Соцсети DexScreener требуют $300 и ручной модерации. На ранней стадии (<15 мин)
-        # девы часто привязывают их позже. Если контракт чист по GoPlus/Honeypot и есть живая активность (tx5 >= 12),
-        # пускаем без ссылок при пуле от $3,500. Блокируем только если токен старше 15 мин и без ссылок при liq < 20k,
-        # либо если совсем нет активности (<12 сделок).
+        # Соцсети DexScreener требуют $300 и ручной модерации.
         if not links:
-            if (b5 + s5) < 12:
-                return self._deny(address, "no-links-inactive", f"🚫 [{tag}] {symbol}: нет ссылок и мало сделок (tx5 {b5+s5} < 12).")
-            if _age_min >= 15.0 and liq < 20000:
-                return self._deny(address, "no-links", f"🚫 [{tag}] {symbol}: токену {_age_min:.0f}м, нет ссылок при пуле <$20k — скам-риск.")
+            _min_unlinked_tx = 6 if chain == "robinhood" else 8
+            if (b5 + s5) < _min_unlinked_tx:
+                return self._deny(address, "no-links-inactive", f"🚫 [{tag}] {symbol}: нет ссылок и мало сделок (tx5 {b5+s5} < {_min_unlinked_tx}).")
+            if _age_min >= 20.0 and liq < 12000:
+                return self._deny(address, "no-links", f"🚫 [{tag}] {symbol}: токену {_age_min:.0f}м, нет ссылок при пуле <$12k — скам-риск.")
 
         _up = symbol.upper()
         _scam_kw = ["AAPL", "MSFT", "TSLA", "NVDA", "GOOG", "AMZN", "META", "NFLX",
@@ -1689,6 +1747,17 @@ class Analyzer:
         _pc = pair_data.get("priceChange") or {}
         _m5 = float(_pc.get("m5", 0) or 0)
         _m1 = float(_pc.get("m1", 0) or 0)
+        _h1 = float(_pc.get("h1", 0) or 0)
+        _h6 = float(_pc.get("h6", 0) or 0)
+        _fdv_check = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
+        # Защита от пост-миграционных трупов (Gemma -$4.12, sBTC -$0.49):
+        # Pump.fun мигрирует при ~$42k-$69k MC. Если токен на AMM уже упал ниже $46k или имеет красный часовой/6ч тренд — это слитый токен!
+        if 0 < _fdv_check < 46000:
+            print(f"🚫 [RAYDIUM] {mint[:8]}: FDV ${_fdv_check:,.0f} < $46,000 (ниже цены миграции Pump.fun) — слитый после миграции токен.")
+            return False
+        if _h1 < -5.0 or _h6 < -5.0:
+            print(f"🚫 [RAYDIUM] {mint[:8]}: часовой/6ч тренд в сливе (h1 {_h1:+.1f}%, h6 {_h6:+.1f}%) — отскок дохлой кошки.")
+            return False
         if _m1 < -3.5:
             print(f"🚫 [RAYDIUM] {mint[:8]}: m1 {_m1:+.1f}% — активный сброс в моменте (падающий нож).")
             return False

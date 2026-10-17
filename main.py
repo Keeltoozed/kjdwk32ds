@@ -1300,6 +1300,12 @@ async def _evm_chain_loop(analyzer, tracker, chain: str):
                         if len(mints) >= _cap:
                             break
 
+                    if mints:
+                        try:
+                            await evm_data.prefetch_token_data(mints, chain)
+                        except Exception as _pe:
+                            print(f"{emoji} {tag} prefetch err: {_pe}")
+
                     for addr in mints:
                         _is_wss = addr in _wss_fresh
                         try:
@@ -1317,11 +1323,11 @@ async def _evm_chain_loop(analyzer, tracker, chain: str):
                             elif "age" in _sig:
                                 processed[addr] = _t.time() - _recooldown + 25  # Ждем минимального возраста 25с
                             elif "m1-green" in _sig or "вершина" in _sig:
-                                processed[addr] = _t.time() - _recooldown + 30  # Ждем отката 1м импульса 30с
+                                processed[addr] = _t.time() - _recooldown + 25  # Ждем отката 1м импульса 25с
                             elif "flat" in _sig or "m5-no-pressure" in _sig or "quiet" in _sig:
                                 _lq_tmp = float((getattr(analyzer, "_eval_ctx", {}).get(addr, {}) or {}).get("liq", 0.0) or 0.0)
-                                if _lq_tmp >= 5000:
-                                    processed[addr] = _t.time() - _recooldown + 40  # Живой пул перепроверить через 40с без лишней сети
+                                if _lq_tmp >= 3000:
+                                    processed[addr] = _t.time() - _recooldown + 25  # Живой пул перепроверить через 25с
                                 else:
                                     processed[addr] = _t.time()
                             else:
