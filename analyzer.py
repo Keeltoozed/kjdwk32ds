@@ -1225,6 +1225,12 @@ class Analyzer:
             if (c0_wick_drop >= 12.0 and c0_pct <= 2.0) or c0_wick_drop >= 25.0:
                 print(f"🚫 [WICK-DUMP] {symbol} ({address[:8]}): слив от хая текущей свечи на -{c0_wick_drop:.1f}% — раздача в стакан.")
                 return False
+
+            # Г2) Спайк с откатом (Spike Reversal / кейс Mao -28%): свеча сделала резкий взлёт >= 15% и уже откатила сверху вниз на >= 8%
+            c0_spike_pct = ((c0_high - c0_open) / c0_open * 100.0) if c0_open > 0 else 0.0
+            if c0_spike_pct >= 15.0 and c0_wick_drop >= 8.0:
+                print(f"🚫 [SPIKE-REVERSAL] {symbol} ({address[:8]}): спайк +{c0_spike_pct:.1f}% уже откатил на -{c0_wick_drop:.1f}% от пика — раздача на хае.")
+                return False
         except Exception:
             pass
         return True
@@ -1414,10 +1420,12 @@ class Analyzer:
             _b1 = int(_tx1.get("buys", 0) or 0)
             _s1 = int(_tx1.get("sells", 0) or 0)
             _v1 = float(((pair_data.get("volume") or {}).get("h1", 0) or 0))
+            _vm5 = float(((pair_data.get("volume") or {}).get("m5", 0) or 0))
 
-            # 1. Мертвые пулы (нет сделок за час или нет покупок/продаж) — жесткий отсев
-            if (_b1 + _s1) < 8 or _v1 < 1000.0 or b5 == 0 or s5 == 0 or _s1 <= 1:
-                return self._deny(address, f"dead-flat m5 {m5:+.1f}%", f"· [{tag}] {symbol}: мертвый флет (сделок за 1ч: {_b1+_s1}, vol1h: ${_v1:.0f})")
+            # 1. Мертвые пулы (нет сделок за час или нет реальной активности в m5) — жесткий отсев
+            # Защита от кейсов VRAX, BANKHAUS, ROBINCAT: 1-2 сделки за 5м — это не накопление, а затухающий/замороженный пул.
+            if (_b1 + _s1) < 12 or _v1 < 1200.0 or (b5 + s5) < 5 or s5 < 2 or b5 < 3 or _vm5 < 250.0:
+                return self._deny(address, f"dead-flat m5 {m5:+.1f}%", f"· [{tag}] {symbol}: мертвый флет (m5 txns: {b5}b/{s5}s, vol5m: ${_vm5:.0f}, vol1h: ${_v1:.0f})")
 
             # 2. Мамонты / стейблкоины / utility (AERO, USDC, PAPER, VELVET)
             if liq > 350000.0 or any(sb in symbol.upper() for sb in ("USDC", "USDT", "DAI")):
@@ -1425,7 +1433,7 @@ class Analyzer:
 
             # 3. Накопление на растущем тренде (h1 от +3% до +350%, m5 >= -6%, покупатели сильнее продавцов)
             if (-6.0 <= m5 < _evm_min_m5 and 3.0 <= h1 <= 350.0 and m1 >= -3.0
-                    and (_b1 + _s1) >= 10 and _b1 >= _s1 * 1.15 and b5 >= s5
+                    and (_b1 + _s1) >= 12 and _b1 >= _s1 * 1.15 and b5 >= s5 * 1.15
                     and not self.is_churn(b5, s5, m5, liq=liq)):
                 if not self._evm_brand_ok(symbol, tag):
                     return False
@@ -1441,8 +1449,14 @@ class Analyzer:
                         return self._deny(address, "antiscam-err", f"🚫 [{tag}] {symbol}: ошибка антискама ({type(_e).__name__}) — блок.")
                 if not await self.verify_1m_candles_not_dumping(address, pair_data, chain):
                     return self._deny(address, "1m-candle-dump", f"🚫 [{tag}-ACCUM] {symbol}: 1м свеча в сливе / вершина пройдена.")
+                
+                # Защита от мертвых/скамных стаканов со скором ракеты 0.00-0.02 (BANKHAUS, ROBINCAT, CHUBBY, VRAX)
                 _rkt = self._rkt_tag(address, pair_data)
-                print(f"💎 [{tag}-ACCUM] {symbol}: m5 {m5:+.1f}%, h1 {h1:+.1f}%, liq ${liq:,.0f}, tx1h {_b1}b/{_s1}s — живое накопление в тренде перед взлетом.")
+                sc = self.rocket_scores.get(address)
+                if sc is not None and sc < 0.03:
+                    return self._deny(address, f"rkt-low {sc:.2f}", f"🚫 [{tag}-ACCUM] {symbol}: скор ракеты {sc:.2f} < 0.03 — пустой/скамный стакан.")
+
+                print(f"💎 [{tag}-ACCUM] {symbol}: m5 {m5:+.1f}%, h1 {h1:+.1f}%, liq ${liq:,.0f}, tx1h {_b1}b/{_s1}s, tx5m {b5}b/{s5}s — живое накопление в тренде перед взлетом.")
                 self._set_sig(address, f"{tag} ACCUM" + _rkt + await self.meme_tag(address, symbol, pair_data, chain))
                 return True
 

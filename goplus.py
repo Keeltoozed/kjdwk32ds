@@ -44,7 +44,7 @@ def _tax_frac(raw) -> float:
     return max(0.0, v)
 
 
-def _verdict_evm(info: dict, chain: str = ""):
+def _verdict_evm(info: dict, chain: str = "", pair_data: dict = None):
     """Разбор EVM-карточки. Возвращает (ok, reason)."""
     if not isinstance(info, dict) or not info:
         return False, "no-data"
@@ -127,9 +127,13 @@ def _verdict_evm(info: dict, chain: str = ""):
         pass
 
     # 5. Проверка блокировки / сжигания LP (защита от вывода ликвидности девом на EVM)
-    # На Robinhood и Base (Uniswap V3/V4 / Aerodrome / Clanker) GoPlus не индексирует NFT/PoolManager LP
-    # и ошибочно возвращает 0% locked (кейс KOLECT / DOPE), поэтому безопасность проверяется ончейн-аудитом.
-    if chain not in ("robinhood", "base"):
+    # На Robinhood GoPlus не индексирует PoolManager LP.
+    # На Base: проверяем LP для стандартных Uniswap V2 пулов (защита от рагпулла CHUBBY).
+    # Исключение только для V3/V4 / Aerodrome Slipstream / Clanker NFT-пулов.
+    _dex = str((pair_data or {}).get("dexId", "")).lower()
+    _labels = [str(lb).lower() for lb in ((pair_data or {}).get("labels") or [])]
+    _is_nft_pool = any(v in _dex for v in ("v3", "v4", "slipstream")) or any("v3" in lb or "slipstream" in lb for lb in _labels)
+    if chain not in ("robinhood",) and (chain != "base" or not _is_nft_pool):
         try:
             lp_holders = info.get("lp_holders") or []
             if lp_holders and isinstance(lp_holders, list) and len(lp_holders) > 0:
@@ -269,7 +273,7 @@ def is_hard_scam(reason: str) -> bool:
     return False
 
 
-async def check_token(address: str, chain: str, force_refresh: bool = False):
+async def check_token(address: str, chain: str, force_refresh: bool = False, pair_data: dict = None):
     """EVM-гейт: (True, '') — можно брать; (False, причина) — блок."""
     chain = (chain or "").lower()
     if not _cfg("GOPLUS_ENABLED", True):
@@ -312,7 +316,7 @@ async def check_token(address: str, chain: str, force_refresh: bool = False):
                             if isinstance(v, dict):
                                 info = v
                                 break
-                verdict = _verdict_evm(info, chain=chain)
+                verdict = _verdict_evm(info, chain=chain, pair_data=pair_data)
             elif code == 4029:
                 verdict = (False, "goplus-rate-limit")
             elif code == 3:
@@ -619,7 +623,7 @@ async def verify_evm_token(address: str, chain: str, pair_data: dict = None) -> 
 
         # 3.5. Аудит безопасности GoPlus (проверка creator_percent, hidden_owner, mintable)
         try:
-            _g_ok_rob, _g_why_rob = await check_token(address, "robinhood")
+            _g_ok_rob, _g_why_rob = await check_token(address, "robinhood", pair_data=pair_data)
             if not _g_ok_rob and is_hard_scam(_g_why_rob):
                 return False, f"GoPlus {_g_why_rob}"
         except Exception:
@@ -637,7 +641,7 @@ async def verify_evm_token(address: str, chain: str, pair_data: dict = None) -> 
         return False, _oc_why
 
     # Уровень 1: GoPlus Security API
-    _g_ok, _g_why = await check_token(address, chain)
+    _g_ok, _g_why = await check_token(address, chain, pair_data=pair_data)
     if is_hard_scam(_g_why):
         return False, f"GoPlus {_g_why}"
 
