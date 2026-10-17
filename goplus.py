@@ -486,7 +486,7 @@ async def check_onchain_evm_security(address: str, chain: str, pair_data: dict =
             if _tot_h and _tot_h != "0x":
                 _tot_v = int(_tot_h, 16)
                 _pm_v = int(_pm_h, 16) if _pm_h and _pm_h != "0x" else 0
-                if _tot_v > 0 and (_is_v4 or (is_open_pos and not _pair_addr and _pm_v > 0)):
+                if _tot_v > 0 and _is_v4:
                     _frac = _pm_v / _tot_v
                     if _frac < 0.005:
                         return False, f"пул Uniswap V4 опустошён девом (остаток {_frac*100:.4f}% — V4 LP Rug)"
