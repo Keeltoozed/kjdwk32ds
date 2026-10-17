@@ -756,7 +756,8 @@ class Analyzer:
             return False
         
         scam_keywords = ["AAPL", "S&P", "SP500", "MSFT", "TSLA", "NVDA", "GOOG", "AMZN", "META", "NFLX", 
-                         "PEPE", "SHIB", "DOGE", "FLOKI", "BONK", "WIF", "BOME", "POPCAT", "TRUMP", "BIDEN"]
+                         "PEPE", "SHIB", "DOGE", "FLOKI", "BONK", "WIF", "BOME", "POPCAT", "TRUMP", "BIDEN",
+                         "ANTHROPIC", "CLAUDE", "OPENAI", "CHATGPT", "DEEPSEEK", "GROK", "GEMINI", "PERPLEXITY"]
                          
         if any(keyword in symbol for keyword in scam_keywords) or any(keyword in name for keyword in scam_keywords):
             if self._brand_whitelisted(mint):
@@ -1241,7 +1242,8 @@ class Analyzer:
         return True
 
     _EVM_SCAM_KW = ["AAPL", "MSFT", "TSLA", "NVDA", "GOOG", "AMZN", "META", "NFLX",
-                    "PEPE", "SHIB", "DOGE", "FLOKI", "BONK", "WIF", "BOME", "POPCAT", "TRUMP", "BIDEN"]
+                    "PEPE", "SHIB", "DOGE", "FLOKI", "BONK", "WIF", "BOME", "POPCAT", "TRUMP", "BIDEN",
+                    "ANTHROPIC", "CLAUDE", "OPENAI", "CHATGPT", "DEEPSEEK", "GROK", "GEMINI", "PERPLEXITY"]
 
     def _brand_whitelisted(self, address: str) -> bool:
         """Точный минт из вайтлиста (BOME и др. топы) — мимикри-фильтр пропускает.

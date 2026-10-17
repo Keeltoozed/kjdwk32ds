@@ -951,7 +951,8 @@ async def _evm_track_once(tracker, chain: str, tag: str, emoji: str):
                 _ep.RPCS.update({k: v for k, v in _rpcs.items() if v})
             px = await _ep.get_direct_prices(list(mine.keys()), chain) or {}
             if px:
-                print(f"{emoji} {tag} node-direct: {len(px)//3}/{len(mine)} цен с ноды")
+                _direct_ok = sum(1 for m in mine if (m in px or m.lower() in px or m.upper() in px))
+                print(f"{emoji} {tag} node-direct: {_direct_ok}/{len(mine)} цен с ноды")
         except Exception as e:
             print(f"{emoji} {tag} node-direct err: {e}")
             px = {}

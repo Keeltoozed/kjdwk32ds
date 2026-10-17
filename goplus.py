@@ -670,17 +670,24 @@ async def verify_evm_token(address: str, chain: str, pair_data: dict = None) -> 
             b5 = int(txns_m5.get("buys", 0) or 0)
             vol5 = float(((pair_data.get("volume") or {}).get("m5", 0) or 0))
 
-            # Если Honeypot.is подтвердил возможность продажи — пропускаем свежий пул
-            if _h_ok and _h_why == "" and s5 >= 2:
-                return True, ""
-
-            # Для Uniswap V4 пулов Honeypot.is возвращает 404 (не поддерживает V4),
-            # поэтому если пул <15 мин не прошёл ни GoPlus, ни Honeypot.is — требуем жёсткий фильтр и НЕ пускаем V4 без верификации!
-            _p_addr = str(pair_data.get("pairAddress") or "")
+            # Для стандартных Uniswap V2 пулов на Base:
+            # Нельзя пускать пул, пока GoPlus не подтвердил блокировку/сжигание LP (защита от CHUBBY и ANTHROPIC LP-rug)!
+            _dex_id = str((pair_data or {}).get("dexId", "")).lower()
             _lbls = [str(x).lower() for x in (pair_data.get("labels") or [])]
-            if "v4" in _lbls or len(_p_addr) > 42:
-                if not _g_ok:
-                    return False, f"пул Uniswap V4 на {chain} не верифицирован GoPlus ({_g_why}) — защита от V4 LP-rug"
+            _p_addr = str(pair_data.get("pairAddress") or "")
+            _is_nft_p = any(v in _dex_id for v in ("v3", "v4", "slipstream")) or any("v3" in lb or "slipstream" in lb for lb in _lbls) or len(_p_addr) > 42
+            
+            if not _is_nft_p:
+                if not _g_ok or _g_why != "":
+                    return False, f"пул V2 на {chain} не верифицирован GoPlus по LP-локу ({_g_why or 'no-data'}) — защита от LP-рагпулла"
+
+            # Для проверенных NFT-пулов (V3/V4/Aerodrome Slipstream/Clanker):
+            if _is_nft_p:
+                if "v4" in _lbls or len(_p_addr) > 42:
+                    if not _g_ok:
+                        return False, f"пул Uniswap V4 на {chain} не верифицирован GoPlus ({_g_why}) — защита от V4 LP-rug"
+                if _h_ok and _h_why == "" and s5 >= 2:
+                    return True, ""
 
             if _age_min < 15.0:
                 if s5 < 4 or b5 < s5 * 1.2 or vol5 < 3000:
