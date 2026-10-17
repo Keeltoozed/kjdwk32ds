@@ -52,6 +52,10 @@ async def birdeye_loop(analyzer, tracker):
         try:
             chain = chains[tick % len(chains)]
             tick += 1
+            if chain != "solana":
+                _en_flag = bool(getattr(config, f"{chain.upper()}_ENABLED", True))
+                if not _en_flag:
+                    continue
             if len(tracker.get_open_positions()) < config.MAX_CONCURRENT_POSITIONS:
                 for addr, ch in await fetch_birdeye_trending(chain):
                     if not addr or addr in tracker.positions:

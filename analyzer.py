@@ -365,8 +365,23 @@ class Analyzer:
         2. И только если токен всё ещё на bonding curve pump.fun (нет ни одного AMM-пула с liq >= 500),
            выбираем pump.fun пул с эффективной ликвидностью (fdv * 0.40).
         """
-        sol_pairs = [p for p in (pairs or []) if (p.get("chainId") or "").lower() == "solana"
-                     and ((p.get("baseToken") or {}).get("address") or mint) == mint]
+        ALLOWED_SOL_QUOTES = {
+            "so11111111111111111111111111111111111111112",  # WSOL/SOL
+            "epjfwdd5aufqssqem2qnxzybapc8g4weggkzwytdt1v",  # USDC
+            "es9vmfrzacerjmffrff4h2fyd4kconky11mcce8benwnyb",  # USDT
+        }
+        ALLOWED_SOL_SYMBOLS = {"SOL", "WSOL", "USDC", "USDT"}
+        sol_pairs = []
+        for p in (pairs or []):
+            if (p.get("chainId") or "").lower() != "solana":
+                continue
+            if ((p.get("baseToken") or {}).get("address") or mint) != mint:
+                continue
+            q_addr = str((p.get("quoteToken") or {}).get("address") or "").lower()
+            q_sym = str((p.get("quoteToken") or {}).get("symbol") or "").upper()
+            if q_addr and q_addr not in ALLOWED_SOL_QUOTES and q_sym not in ALLOWED_SOL_SYMBOLS:
+                continue
+            sol_pairs.append(p)
         if not sol_pairs:
             return None
 
@@ -886,15 +901,15 @@ class Analyzer:
             print(f"📉 Изоляция: {symbol} имеет микро-пул (${liquidity:.0f} < ${_min_liq//1000}k). Риск 100% проскальзывания.")
             return False
             
+        current_created_at = pair_data.get("pairCreatedAt", 0)
+        current_fdv = pair_data.get("fdv", 0)
+        if await self.is_clone(symbol, mint, current_created_at, current_fdv):
+            print(f"🚫 Мусор: Токен {symbol} является клоном! На DexScreener найден более старый/крупный оригинал.")
+            return False
+
         if is_vip:
-            print(f"🚀 [VIP] {symbol}: Пропуск проверок клонов и соцсетей из-за гипер-моментума!")
+            print(f"🚀 [VIP] {symbol}: Пропуск проверок соцсетей из-за гипер-моментума (проверка клонов пройдена)!")
         else:
-            current_created_at = pair_data.get("pairCreatedAt", 0)
-            current_fdv = pair_data.get("fdv", 0)
-            if await self.is_clone(symbol, mint, current_created_at, current_fdv):
-                print(f"🚫 Мусор: Токен {symbol} является клоном! На DexScreener найден более старый/крупный оригинал.")
-                return False
-                
             info = pair_data.get("info", {})
             socials = info.get("socials", [])
             websites = info.get("websites", [])
@@ -1770,6 +1785,14 @@ class Analyzer:
         _vm5 = (pair_data.get("volume") or {}).get("m5", 0) or 0
         if (_b5 + _s5) < 20 or _vm5 < 2000 or (_s5 > 0 and _b5 < _s5 * 1.15):
             print(f"🚫 [FRESH] {mint[:8]}: слабый поток (b/s {_b5}/{_s5}, vol ${_vm5:,.0f}) — нет покупателей.")
+            return False
+
+        # Защита от лавины продаж (сброс позиций на хаях)
+        if _s5 >= 40 and _b5 < _s5 * 1.35:
+            print(f"🚫 [SELL-AVALANCHE] {mint[:8]}: лавина продаж ({_s5} продаж vs {_b5} покупок за 5м) — риск дампа.")
+            return False
+        if _s5 >= 80 and _b5 < _s5 * 1.50:
+            print(f"🚫 [SELL-AVALANCHE] {mint[:8]}: критический сброс ({_s5} продаж vs {_b5} покупок за 5м) — риск дампа.")
             return False
 
         # 1. Защита от микро-чеков ботов (накрутка объёма и транзакций)

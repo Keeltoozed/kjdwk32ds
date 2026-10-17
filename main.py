@@ -985,6 +985,8 @@ async def _evm_track_once(tracker, chain: str, tag: str, emoji: str):
                 # Счётчик слепоты: ни балк, ни добор цены не дали (cur упал на entry/current).
                 # ~5 мин (с расчётом на текущий интервал) без живой цены = выходим, слот не маринуем.
                 _live = bool(_live_px)
+                if _live:
+                    pos.price_updated_at = _t.time()
                 pos.price_stale_n = 0 if _live else int(getattr(pos, "price_stale_n", 0) or 0) + 1
                 _max_stale_cycles = int(300 / max(float(getattr(config, "EVM_TRACK_INTERVAL", 2.5)), 1.0))
                 if pos.price_stale_n >= _max_stale_cycles:
@@ -1250,6 +1252,10 @@ async def _evm_chain_loop(analyzer, tracker, chain: str):
                     # L1: только ведём существующие (KLIK), новых не открываем — газ съедает.
                     await asyncio.sleep(interval)
                     continue
+                if chain == "bsc" and not getattr(config, "BSC_ENABLED", False):
+                    # BSC: только ведём существующие открытые сделки, новых не открываем
+                    await asyncio.sleep(interval)
+                    continue
                 if _evm_killed(tracker):
                     print(f"🛑 {tag} KILL-SWITCH: входы на паузе 5мин (выходы работают).")
                     await asyncio.sleep(int(getattr(config, "KILL_SWITCH_PAUSE", 300)))
@@ -1435,7 +1441,8 @@ async def base_loop(analyzer, tracker):
 
 
 async def bsc_loop(analyzer, tracker):
-    if not getattr(config, "BSC_ENABLED", True):
+    has_open_bsc = any(getattr(p, "chain", "") == "bsc" for p in tracker.get_open_positions().values())
+    if not getattr(config, "BSC_ENABLED", False) and not has_open_bsc:
         print("🟨 BSC отключён в config (BSC_ENABLED=False).")
         return
     await _evm_chain_loop(analyzer, tracker, "bsc")
