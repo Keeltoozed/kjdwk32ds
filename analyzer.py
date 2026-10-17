@@ -136,7 +136,7 @@ class Analyzer:
         VIP ($2 кэп), COPY, GROWTH. Нет модели/скора → None (fail-open)."""
         try:
             import config as _c
-            if not getattr(_c, "ROCKET_VETO_ENABLED", True):
+            if not getattr(_c, "ROCKET_VETO_ENABLED", False):
                 return None
             s = (sig or "").upper()
             if any(k in s for k in ("LOTTERY", "DIPBUY", "COPY", "VIP", "VIP-RAY", "XGB 9")):
@@ -1177,9 +1177,12 @@ class Analyzer:
             pair_data["priceChange"]["m1"] = round(c0_pct, 2)
 
             highs_5m = [float(r[2] or 0) for r in ohlcv[:5] if float(r[2] or 0) > 0]
+            lows_5m = [float(r[3] or 0) for r in ohlcv[:5] if float(r[3] or 0) > 0]
             if cur_px > 0:
                 highs_5m.append(cur_px)
+                lows_5m.append(cur_px)
             high_5m = max(highs_5m) if highs_5m else 0.0
+            low_5m = min(lows_5m) if lows_5m else 0.0
             drawdown_5m_pct = ((eff_close - high_5m) / high_5m * 100.0) if high_5m > 0 else 0.0
 
             # А) Активная красная свеча прямо сейчас (слив >= -3.5% за текущую минуту)
@@ -1187,7 +1190,12 @@ class Analyzer:
                 print(f"🚫 [1M-DUMP] {symbol} ({address[:8]}): текущая 1м свеча летит вниз ({c0_pct:+.1f}%) — падающий нож, отмена входа.")
                 return False
 
-            # Б) Прошлая минутная свеча обвалилась или идут 2 красные свечи подряд (кейс sBTC: -9.6% и -3.5%)
+            # А2) Перегрев текущей 1м свечи (вход на макушке аномального прострела)
+            if c0_pct > 28.0:
+                print(f"🚫 [1M-OVERHEAT] {symbol} ({address[:8]}): текущая 1м свеча +{c0_pct:.1f}% > +28% — вертикальный прострел, вход = вершина.")
+                return False
+
+            # Б) Прошлая минутная свеча обвалилась, идут 2 красные свечи подряд или экстремальный blow-off
             if len(ohlcv) >= 2:
                 c1 = ohlcv[1]
                 c1_open, c1_high, c1_low, c1_close = float(c1[1] or 0), float(c1[2] or 0), float(c1[3] or 0), float(c1[4] or 0)
@@ -1198,15 +1206,23 @@ class Analyzer:
                 if c1_pct <= -1.5 and c0_pct <= -1.0 and eff_close <= c1_close:
                     print(f"🚫 [2-RED-1M] {symbol} ({address[:8]}): 2 красные минутные свечи подряд ({c1_pct:+.1f}%, {c0_pct:+.1f}%) — импульс сломлен.")
                     return False
+                if c1_pct > 60.0 or (c0_pct + c1_pct) > 75.0:
+                    print(f"🚫 [1M-BLOWOFF] {symbol} ({address[:8]}): вертикальный памп за 2 мин ({c1_pct:+.1f}%, {c0_pct:+.1f}%) — риск мгновенного дампа.")
+                    return False
 
-            # В) Blow-off Top: цена уже упала на >= 12% от максимума последних 5 минут (кейс sBTC -20.9% от пика)
-            if drawdown_5m_pct <= -12.0 and c0_pct < 4.0:
+            # В) Blow-off Top: цена уже упала на >= 16% от максимума последних 5 минут (кейс sBTC -20.9% от пика)
+            if drawdown_5m_pct <= -16.0 and c0_pct < 3.0:
                 print(f"🚫 [BLOWOFF-TOP] {symbol} ({address[:8]}): цена уже упала на {drawdown_5m_pct:.1f}% от 5м-пика — вершина пройдена, идёт разгрузка.")
                 return False
 
-            # Г) Верхний фитиль (Shooting Star): внутри текущей минуты токен кольнул верх и тут же сложился на >= 10%
+            # В2) 5-минутное истощение (5m Exhaustion): если за последние 5 минут токен уже вырос в >= 3.8 раза от лоя (кейс DMN 5.3x за 4м -> Infant Dump -32.8%)
+            if low_5m > 0 and (high_5m / low_5m) >= 3.8:
+                print(f"🚫 [5M-EXHAUSTION] {symbol} ({address[:8]}): за 5м уже сделал {high_5m/low_5m:.1f}x от лоя — кульминация пройдена.")
+                return False
+
+            # Г) Верхний фитиль (Shooting Star): внутри текущей минуты токен кольнул верх и сложился на >= 12% при слабом закрытии (<=2%), либо резкий обвал >= 25%
             c0_wick_drop = ((c0_high - eff_close) / c0_high * 100.0) if c0_high > 0 else 0.0
-            if c0_wick_drop >= 10.0 and c0_pct <= 2.0:
+            if (c0_wick_drop >= 12.0 and c0_pct <= 2.0) or c0_wick_drop >= 25.0:
                 print(f"🚫 [WICK-DUMP] {symbol} ({address[:8]}): слив от хая текущей свечи на -{c0_wick_drop:.1f}% — раздача в стакан.")
                 return False
         except Exception:
@@ -1233,37 +1249,63 @@ class Analyzer:
         return True
 
     async def _evm_clone_ok(self, symbol: str, address: str, pair_data: dict, chain: str, tag: str) -> bool:
-        """Внутрисетевой двойник старше/жирнее = скам. Кросчейн = мультчейн, ок."""
+        """Внутрисетевой двойник старше/жирнее или серийный спам одноимённых пулов = скам. Кросчейн = мультчейн, ок."""
         if len(symbol) <= 2:
             return True
         try:
             from http_client import fetch_json as _fj
-            _st, _sd = await _fj(f"https://api.dexscreener.com/latest/dex/search?q={symbol}",
-                                 timeout=8, retries=1)
+            _now = time.time()
+            if not hasattr(self, "_dex_search_cache"):
+                self._dex_search_cache = {}
+            _up = symbol.upper()
+            _c_entry = self._dex_search_cache.get(_up)
+            if _c_entry and (_now - _c_entry[0]) < 120.0:
+                _st, _sd = 200, _c_entry[1]
+            else:
+                _st, _sd = await _fj(f"https://api.dexscreener.com/latest/dex/search?q={symbol}",
+                                     timeout=8, retries=1)
+                if _st == 200 and _sd:
+                    self._dex_search_cache[_up] = (_now, _sd)
             if _st != 200 or not _sd:
                 return True  # API лег - не блокируем вслепую
-            _up = symbol.upper()
             _mine_addr = ((pair_data.get("baseToken") or {}).get("address") or "").lower()
+            _mine_pair = (pair_data.get("pairAddress") or "").lower()
             _mine_created = pair_data.get("pairCreatedAt", 0) or 0
-            _mine_fdv = pair_data.get("fdv", 0) or 0
+            _mine_fdv = float(pair_data.get("fdv", 0) or 0)
+            _mine_liq = float((pair_data.get("liquidity", {}) or {}).get("usd", 0) or 0)
+            _mine_info = pair_data.get("info") or {}
+            _mine_links = (_mine_info.get("socials") or []) + (_mine_info.get("websites") or [])
             dead_clones = 0
             for _p in (_sd.get("pairs") or []):
                 if ((_p.get("chainId") or "").lower()) != chain.lower():
                     continue
-                _ps = (((_p.get("baseToken") or {}).get("symbol")) or "").upper()
                 _pa = (((_p.get("baseToken") or {}).get("address")) or "").lower()
+                _p_pair = str(_p.get("pairAddress", "") or "").lower()
+                _p_liq = float((_p.get("liquidity", {}) or {}).get("usd", 0) or 0)
+                # Защита от рерагов: только если крупный параллельный пул (liq >= $10,000) сейчас реально слит (h24 <= -80% и h1 <= -50%)
+                if _pa == _mine_addr and _p_pair != _mine_pair and _p_liq >= 10000.0:
+                    _p_pc_same = _p.get("priceChange", {}) or {}
+                    if float(_p_pc_same.get("h24", 0) or 0) <= -80.0 and float(_p_pc_same.get("h1", 0) or 0) <= -50.0:
+                        print(f"🚫 [{tag}] {symbol}: крупный параллельный пул этого токена слит ({_p_pc_same.get('h24')}%) — рераг/скам.")
+                        return False
+                _ps = (((_p.get("baseToken") or {}).get("symbol")) or "").upper()
                 if _ps == _up and _pa and _pa != _mine_addr:
                     _pc_at = _p.get("pairCreatedAt", 0) or 0
-                    _pf = _p.get("fdv", 0) or 0
+                    _pf = float(_p.get("fdv", 0) or 0)
                     _p_pc = _p.get("priceChange", {}) or {}
-                    _p_liq = float((_p.get("liquidity", {}) or {}).get("usd", 0) or 0)
-                    if float(_p_pc.get("h24", 0) or 0) <= -80.0 or _p_liq < 500.0:
-                        dead_clones += 1
-                    if (_pc_at and _mine_created and _pc_at < _mine_created and _pf > 250000) or \
-                            (_pf > (_mine_fdv * 10) and _pf > 500000):
+                    _p_tx5 = ((_p.get("txns") or {}).get("m5") or {})
+                    _p_b5 = int(_p_tx5.get("buys", 0) or 0)
+                    _p_s5 = int(_p_tx5.get("sells", 0) or 0)
+                    _is_older = bool(_pc_at and _mine_created and _pc_at < (_mine_created - 300000))
+                    # Клон, если старший оригинал на этой же сети очевидно крупнее
+                    if _is_older and _p_liq >= 25000.0 and _pf >= 100000.0 and (_pf > _mine_fdv * 2.0 or _p_liq > _mine_liq * 1.5):
                         print(f"🚫 [{tag}] {symbol}: клон (оригинал {_pa[:10]} старше/жирнее).")
                         return False
-            if dead_clones >= 2:
+                    # Серийный раггер (мёртвые пулы-двойники): проверяется ТОЛЬКО для анонимных токенов без ссылок или микро-пулов
+                    if not _mine_links or _mine_liq < 15000.0:
+                        if float(_p_pc.get("h24", 0) or 0) <= -65.0 or ((_p_b5 + _p_s5) == 0 and _p_liq < 3000.0):
+                            dead_clones += 1
+            if dead_clones >= 2 and (not _mine_links or _mine_liq < 15000.0):
                 print(f"🚫 [{tag}] {symbol}: обнаружено {dead_clones} обвалившихся пулов-двойников на {chain} — серийный раггер!")
                 return False
         except Exception:
@@ -1313,33 +1355,34 @@ class Analyzer:
                               f"🚫 [{tag}] {symbol}: возраст {_age_min:.1f}м < {_min_age_thr:.1f}м — ранняя {tag} flash-rug зона.")
 
         # Ранний Scout-режим для свежих ракет (<10 мин):
-        # Ранний Scout-режим для свежих ракет (<10 мин):
-        # Пулы только зарождаются ($3k+), соцсети девы ещё не привязали к DexScreener, но есть реальные покупки и продажи.
-        _scout_min_liq = 3000.0
-        if (_age_min < 10.0 and m5 >= -3.0 and (b5 + s5) >= 12 and liq >= _scout_min_liq
-                and s5 >= 2 and s >= 2 and b5 >= s5 and (b5 / max(s5, 1)) <= 5.0):
+        # Жёстко ограничен по перегреву (0.8% <= m5 <= 75%, h1 <= 250%), чтобы не покупать хаи 5x-свечей (кейсы DMN +433%, detected +559%).
+        # Антискам verify_evm_token пропускает без ссылок ТОЛЬКО официальные лаунчпад-контракты с >=35% эмиссии в пуле, а ручные ERC20 без ссылок блокирует.
+        _scout_min_liq = max(3000.0, float(min_liq))
+        if (_age_min < 10.0 and 0.8 <= m5 <= 75.0 and 0.0 <= h1 <= 250.0
+                and (b5 + s5) >= 15 and liq >= _scout_min_liq
+                and s5 >= 3 and s >= 3 and b5 >= int(s5 * 1.25) and (b5 / max(s5, 1)) <= 5.0):
             if not self._evm_brand_ok(symbol, tag):
                 return False
             if not await self._evm_clone_ok(symbol, address, pair_data, chain, tag):
                 return False
             # 1. Защита от покупки вершины 1м свечи и падающего ножа (кейс WETH)
-            if m1 > 18.0:
+            if m1 > 24.0:
                 return self._deny(address, f"scout-m1-spike {m1:+.1f}%",
                                   f"🚫 [{tag}-SCOUT] {symbol}: m1 {m1:+.1f}% — верхушка 1м импульса, вход = вершина.")
-            if m1 < -5.0:
+            if m1 < -7.0:
                 return self._deny(address, f"scout-m1-drop {m1:+.1f}%",
                                   f"🚫 [{tag}-SCOUT] {symbol}: m1 {m1:+.1f}% — падающий нож.")
-            # 2. Защита от картонных пулов (FDV / Liq > 120x)
+            # 2. Защита от картонных пулов (FDV / Liq > 80x)
             _fdv_scout = float(pair_data.get("fdv", 0) or 0)
-            if liq > 0 and _fdv_scout > 0 and (_fdv_scout / liq) > 120.0:
+            if liq > 0 and _fdv_scout > 0 and (_fdv_scout / liq) > 80.0:
                 return self._deny(address, "hollow-pool",
                                   f"🚫 [{tag}-SCOUT] {symbol}: FDV ${_fdv_scout:,.0f} vs Liq ${liq:,.0f} — картонный пул.")
             # 3. Защита от микро-чеков ботов (накрутка объёма)
             _vm5_scout = float((pair_data.get("volume") or {}).get("m5", 0) or 0)
-            if (b5 + s5) >= 20 and (_vm5_scout / max(b5 + s5, 1)) < 15.0:
+            if (b5 + s5) >= 15 and (_vm5_scout / max(b5 + s5, 1)) < 18.0:
                 return self._deny(address, "wash-bot",
-                                  f"🚫 [{tag}-SCOUT] {symbol}: средний чек ${_vm5_scout / max(b5 + s5, 1):.1f} < $15 — накрутка ботов.")
-            # 4. Антискам аудит (GoPlus + Honeypot.is)
+                                  f"🚫 [{tag}-SCOUT] {symbol}: средний чек ${_vm5_scout / max(b5 + s5, 1):.1f} < $18 — накрутка ботов.")
+            # 4. Антискам аудит (GoPlus + Honeypot.is + On-Chain V4 PoolManager)
             if chain in ("robinhood", "bsc", "base", "ethereum"):
                 try:
                     import goplus as _gp
@@ -1470,7 +1513,7 @@ class Analyzer:
             _evm_vol_min = 2000 if _age_min < 30 else 6000
         if (b5 + s5) < _evm_tx_min or vol24 < _evm_vol_min:
             return self._deny(address, "quiet", f"🚫 [{tag}] {symbol}: тихо (tx5 {(b5+s5)}, vol24 ${vol24:,.0f}).")
-        # Соцсети DexScreener требуют $300 и ручной модерации.
+        # Соцсети DexScreener требуют $300 и ручной модерации (для безссылочных токенов goplus.verify_evm_token проверит лаунчпад и >=35% эмиссии в пуле).
         if not links:
             _min_unlinked_tx = 6 if chain == "robinhood" else 8
             if (b5 + s5) < _min_unlinked_tx:
@@ -1485,45 +1528,8 @@ class Analyzer:
             print(f"🚫 [{tag}] {symbol}: мимикрия под бренд/мем — 100% скам.")
             return False
 
-        if len(symbol) > 2:
-            try:
-                from http_client import fetch_json as _fj
-                _st, _sd = 0, None
-                _now = time.time()
-                if not hasattr(self, "_dex_search_cache"):
-                    self._dex_search_cache = {}
-                _c_entry = self._dex_search_cache.get(symbol.upper())
-                if _c_entry and (_now - _c_entry[0]) < 180.0:
-                    _st, _sd = 200, _c_entry[1]
-                else:
-                    _st, _sd = await _fj(f"https://api.dexscreener.com/latest/dex/search?q={symbol}",
-                                         timeout=8, retries=1)
-                    if _st == 200 and _sd:
-                        self._dex_search_cache[symbol.upper()] = (_now, _sd)
-                if _st == 200 and _sd:
-                    _mine_addr = (base.get("address") or "").lower()
-                    _mine_created = pair_data.get("pairCreatedAt", 0) or 0
-                    _mine_fdv = pair_data.get("fdv", 0) or 0
-                    for _p in (_sd.get("pairs") or []):
-                        if (_p.get("chainId") or "").lower() != chain.lower():
-                            continue 
-                        _ps = ((_p.get("baseToken") or {}).get("symbol") or "").upper()
-                        _pa = ((_p.get("baseToken") or {}).get("address") or "").lower()
-                        # Защита от рерагов: если параллельный пул этого же токена обвалился на -80%+ (BRML-кейс)
-                        if _pa == _mine_addr and (_p.get("pairAddress", "") or "").lower() != (pair_data.get("pairAddress", "") or "").lower():
-                            _p_pc = _p.get("priceChange", {}) or {}
-                            if float(_p_pc.get("h24", 0) or 0) <= -80 or float(_p_pc.get("h6", 0) or 0) <= -80:
-                                print(f"🚫 [{tag}] {symbol}: параллельный пул этого токена обвалился ({_p_pc.get('h24')}%) — рераг/скам.")
-                                return False
-                        if _ps == _up and _pa and _pa != _mine_addr:
-                            _pc_at = _p.get("pairCreatedAt", 0) or 0
-                            _pf = _p.get("fdv", 0) or 0
-                            if (_pc_at and _mine_created and _pc_at < _mine_created and _pf > 250000) or \
-                                    (_pf > (_mine_fdv * 10) and _pf > 500000):
-                                print(f"🚫 [{tag}] {symbol}: клон (оригинал {str(_pa)[:10]} старше/жирнее).")
-                                return False
-            except Exception:
-                pass
+        if not await self._evm_clone_ok(symbol, address, pair_data, chain, tag):
+            return False
 
         score = 50.0
         score += min(m5, 60.0) * 0.4

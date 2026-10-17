@@ -116,20 +116,20 @@ def _verdict_evm(info: dict, chain: str = ""):
                 if is_contract == 1 or is_locked == 1:
                     continue
                 pct = _tax_frac(h.get("percent", 0))
-                max_single = float(_cfg("GOPLUS_MAX_SINGLE_WHALE_PCT", 0.08))
+                max_single = float(_cfg("GOPLUS_MAX_SINGLE_WHALE_PCT", 0.15))
                 if pct > max_single:
                     return False, f"кит держит {pct*100:.1f}% (>{max_single*100:.0f}%) — риск дампа"
                 top10_sum += pct
-            max_top10 = float(_cfg("GOPLUS_MAX_TOP10_PCT", 0.30))
+            max_top10 = float(_cfg("GOPLUS_MAX_TOP10_PCT", 0.40))
             if top10_sum > max_top10:
                 return False, f"топ-10 китов держат {top10_sum*100:.1f}% (>{max_top10*100:.0f}%) — дамп-риск"
     except Exception:
         pass
 
-    # 5. Проверка блокировки / сжигания LP (защита от вывода ликвидности девом на Base/EVM)
-    # На Robinhood (Uniswap V4 PoolManager) GoPlus не индексирует V4 LP и пишет в lp_holders
-    # только пылевые пулы V2/V3 на $2 (кейс DOPE $325k), поэтому для Robinhood/V4 проверяем PoolManager ончейн.
-    if chain != "robinhood":
+    # 5. Проверка блокировки / сжигания LP (защита от вывода ликвидности девом на EVM)
+    # На Robinhood и Base (Uniswap V3/V4 / Aerodrome / Clanker) GoPlus не индексирует NFT/PoolManager LP
+    # и ошибочно возвращает 0% locked (кейс KOLECT / DOPE), поэтому безопасность проверяется ончейн-аудитом.
+    if chain not in ("robinhood", "base"):
         try:
             lp_holders = info.get("lp_holders") or []
             if lp_holders and isinstance(lp_holders, list) and len(lp_holders) > 0:
@@ -461,10 +461,26 @@ async def check_onchain_evm_security(address: str, chain: str, pair_data: dict =
         _bytecode = str(_res_map[1].get("result") or "").lower()
         if _bytecode in ("0x", "0x0", ""):
             return False, "нет байткода (не смарт-контракт)"
-        if len(_bytecode) == 9312 and _bytecode.startswith("0x608060405234801561001057600080fd5b50600436106100a957"):
-            return False, "серийный 15м LP-rug шаблон (FEE/Speed бот)"
-        if len(_bytecode) == 3256 and _bytecode.startswith("0x60806040526004361015610011575f80fd5b5f3560e01c806306fdde03"):
-            return False, "серийный 15м V4 LP-rug шаблон Base (1/VC/Satoshi фабрика)"
+        _info_pd = _pd.get("info") or {}
+        _links_pd = (_info_pd.get("socials") or []) + (_info_pd.get("websites") or [])
+        _c_ms_pd = _pd.get("pairCreatedAt") or 0
+        _age_pd = ((_t.time() * 1000 - _c_ms_pd) / 60000.0) if _c_ms_pd else 999.0
+        _liq_pd = float((_pd.get("liquidity") or {}).get("usd", 0) or 0)
+        _vol1_pd = float(((_pd.get("volume") or {}).get("h1", 0) or 0))
+        _tx_h1 = (_pd.get("txns") or {}).get("h1") or {}
+        _s1_pd = int(_tx_h1.get("sells", 0) or 0)
+        _is_mature = (_liq_pd >= 25000.0 and _vol1_pd >= 10000.0 and _s1_pd >= 30 and _age_pd >= 15.0)
+        _has_reputation = bool(_links_pd) or _is_mature
+
+        # Жёсткие шаблоны серийных ботов блокируем ТОЛЬКО когда у токена нет репутации (links == 0 и не зрелый пул),
+        # чтобы нормальный токен (например DOPE liq $313k, vol1 $684k или GRGKO на стандартном OpenZeppelin ERC20) НЕ блокировался!
+        if not _has_reputation:
+            if len(_bytecode) == 9312 and _bytecode.startswith("0x608060405234801561001057600080fd5b50600436106100a957"):
+                return False, "серийный 15м LP-rug шаблон без соцсетей (FEE/Speed бот)"
+            if len(_bytecode) == 7710 and _bytecode.startswith("0x608060405234801561000f575f5ffd5b50600436106100a757"):
+                return False, "серийный V4 LP-rug шаблон без соцсетей (detected/DMN фабрика 7710)"
+            if len(_bytecode) == 3256 and _bytecode.startswith("0x60806040526004361015610011575f80fd5b5f3560e01c806306fdde03"):
+                return False, "серийный 15м V4 LP-rug шаблон Base без соцсетей (1/VC/Satoshi фабрика)"
 
         if not is_open_pos:
             _dangerous_selectors = {
@@ -479,6 +495,25 @@ async def check_onchain_evm_security(address: str, chain: str, pair_data: dict =
                 if _sel in _bytecode:
                     return False, f"бэкдор в байткоде токена: {_desc}"
 
+        # 1.5. Структурный ABI-отпечаток диспетчера (НЕ ЗАВИСИТ ОТ ДЛИНЫ БАЙТКОДА!):
+        # Любой официальный лаунчпад (Clanker, RobinPump, Zora, Virtuals) либо деплоит EIP-1167 прокси (<=130 симв.),
+        # либо содержит >= 5 специальных селекторов лаунчпада/локера/EIP-2612 помимо голого ERC-20.
+        # Ручной голый ERC-20 (extra_selectors <= 2) опасен на V4 ТОЛЬКО тогда, когда у токена НЕТ соцсетей (not _links_pd):
+        # если у токена есть соцсети (DOPE, GRGKO), то это нормальный проект, использовавший стандартный OpenZeppelin ERC-20!
+        _is_bare_manual_erc20 = False
+        if not is_open_pos and _is_v4 and len(_bytecode) > 150:
+            import re as _re_bc
+            _BARE_ERC20_SELS = {
+                "06fdde03", "095ea7b3", "18160ddd", "23b872dd", "313ce567",
+                "70a08231", "95d89b41", "a9059cbb", "dd62ed3e",
+                "42966c68", "79cc6790", "39509351", "a457c2d7",
+                "8da5cb5b", "715018a6", "f2fde38b", "3c130d90",
+            }
+            _disp_head = _bytecode[:1400]
+            _found_sels = set(_re_bc.findall(r"63([0-9a-f]{8})(?:14|11)", _disp_head))
+            if len(_found_sels) >= 6 and len(_found_sels - _BARE_ERC20_SELS) <= 2:
+                _is_bare_manual_erc20 = True
+
         # 2. Проверка реальной ликвидности пула (Uniswap V4 PoolManager vs V2 LP Burn)
         if 2 in _res_map and 3 in _res_map:
             _tot_h = _res_map[2].get("result", "0x")
@@ -490,8 +525,15 @@ async def check_onchain_evm_security(address: str, chain: str, pair_data: dict =
                     _frac = _pm_v / _tot_v
                     if _frac < 0.005:
                         return False, f"пул Uniswap V4 опустошён девом (остаток {_frac*100:.4f}% — V4 LP Rug)"
-                    if not is_open_pos and _frac < 0.15:
-                        return False, f"картонный пул Uniswap V4 (в пуле всего {_frac*100:.1f}% эмиссии < 15% — схема V4 LP-rug)"
+                    if not is_open_pos:
+                        # А) Анонимный (без соцсетей и не зрелый) + ручной голый ERC-20 на V4 (без лаунчпада) = 100% V4 LP-rug (detected, DMN, FEE, Base 3256)
+                        if _is_bare_manual_erc20 and not _has_reputation and chain in ("robinhood", "base"):
+                            return False, f"анонимный ручной V4 ERC20 без лаунчпада и соцсетей (len={len(_bytecode)}, в пуле {_frac*100:.1f}% — схема V4 LP-rug)"
+                        # Б) Если репутации ещё нет (свежий токен с лаунчпада вроде WHEELLOW/BONKY/PACKD), требуем минимум 35% эмиссии в V4 PoolManager.
+                        # Если репутация ЕСТЬ (соцсети или зрелый пул вроде DOPE, GRGKO, WORM, BELIEVE), то даже на стандартном ERC20 пропускаем при остатке >= 1% в пуле!
+                        _min_v4_frac = 0.35 if not _has_reputation else 0.01
+                        if _frac < _min_v4_frac:
+                            return False, f"картонный пул Uniswap V4 (в пуле всего {_frac*100:.1f}% эмиссии < {_min_v4_frac*100:.0f}% без соцсетей — схема V4 LP-rug)"
         if len(_pair_addr) == 42 and chain == "robinhood":
             _DEAD = "000000000000000000000000000000000000dead".zfill(64)
             _ZERO = "0000000000000000000000000000000000000000".zfill(64)
@@ -545,15 +587,18 @@ async def verify_evm_token(address: str, chain: str, pair_data: dict = None) -> 
         if _a_min < _min_age:
             return False, f"возраст {_a_min:.1f}м < {_min_age:.1f}м — ранняя flash-rug зона"
             
-        # 2. Проверка социальных ссылок
+        # 2. Проверка социальных ссылок и объёма (антискам V4 проверит лаунчпад и >=35% эмиссии в пуле, если ссылок ещё нет)
         info = pair_data.get("info") or {}
         links = (info.get("socials") or []) + (info.get("websites") or [])
         vol5 = float(((pair_data.get("volume") or {}).get("m5", 0) or 0))
         vol1 = float(((pair_data.get("volume") or {}).get("h1", 0) or 0))
         liq = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
-        if not links or len(links) < 1:
-            if liq < 15000.0 or (vol5 < 3000.0 and vol1 < 8000.0):
-                return False, "нет ссылок (соцсети/сайт) — анонимный дев-раг"
+        tx_h1 = (pair_data.get("txns") or {}).get("h1") or {}
+        _s1_h1 = int(tx_h1.get("sells", 0) or 0)
+        _is_mat = (liq >= 25000.0 and vol1 >= 10000.0 and _s1_h1 >= 30 and _a_min >= 15.0)
+        if (not links or len(links) < 1) and not _is_mat:
+            if liq < 4000.0 or (liq < 12000.0 and (vol5 < 1500.0 and vol1 < 5000.0)):
+                return False, "нет ссылок (соцсети/сайт) при малом пуле — анонимный дев-раг"
             
         # 3. Наличие реальных продаж и глубина пула
         txns_m5 = ((pair_data.get("txns") or {}).get("m5") or {})
