@@ -484,19 +484,9 @@ async def check_onchain_evm_security(address: str, chain: str, pair_data: dict =
         _is_mature = (_liq_pd >= 25000.0 and _vol1_pd >= 10000.0 and _s1_pd >= 30 and _age_pd >= 15.0)
         _has_reputation = bool(_links_pd) or _is_mature
 
-        # Жёсткие шаблоны серийных ботов блокируем ТОЛЬКО на входе (not is_open_pos) и когда у токена нет репутации (links == 0 и не зрелый пул),
-        # чтобы нормальный токен (например DOPE liq $313k, vol1 $684k, SHOOT liq $312k) НЕ блокировался!
-        if not is_open_pos and not _has_reputation:
-            if len(_bytecode) == 9312 and _bytecode.startswith("0x608060405234801561001057600080fd5b50600436106100a957"):
-                return False, "серийный 15м LP-rug шаблон без соцсетей (FEE/Speed бот)"
-            if len(_bytecode) == 7710 and _bytecode.startswith("0x608060405234801561000f575f5ffd5b50600436106100a757"):
-                return False, "серийный V4 LP-rug шаблон без соцсетей (detected/DMN фабрика 7710)"
-            if len(_bytecode) == 3256 and _bytecode.startswith("0x60806040526004361015610011575f80fd5b5f3560e01c806306fdde03"):
-                return False, "серийный 15м V4 LP-rug шаблон Base без соцсетей (1/VC/Satoshi фабрика)"
-            if len(_bytecode) == 7108 and _bytecode.startswith("0x608060405234801561000f575f80fd5b5060043610610091575f3560e01c8063"):
-                return False, "серийный V2 LP-rug шаблон Base без соцсетей (CHUBBY/SPACEX фабрика 7108)"
-            if len(_bytecode) == 3530 and _bytecode.startswith("0x608060405234801561000f575f80fd5b5060043610610090575f3560e01c8063"):
-                return False, "серийный V3 LP-rug шаблон без соцсетей (SEXLA фабрика 3530)"
+        # Реальные серийные скамы отсекаются бэкдорами байткода (минт/пауза/блэклист),
+        # проверкой доли эмиссии в пуле (_frac < 25%), Honeypot-симуляцией и балансом дева (creator_pct > 20%).
+        # Стандартные байткоды OpenZeppelin/Clanker (3256, 7710 и др.) НЕ блокируем, чтобы не терять ракеты (CAPA, 1, BOO, GENNY, CURE)!
 
         if not is_open_pos:
             _dangerous_selectors = {
@@ -542,11 +532,8 @@ async def check_onchain_evm_security(address: str, chain: str, pair_data: dict =
                     if _frac < 0.005:
                         return False, f"пул Uniswap V4 опустошён девом (остаток {_frac*100:.4f}% — V4 LP Rug)"
                     if not is_open_pos:
-                        # А) Анонимный (без соцсетей и не зрелый) + ручной голый ERC-20 на V4 (без лаунчпада) = 100% V4 LP-rug (detected, DMN, FEE, Base 3256)
-                        if _is_bare_manual_erc20 and not _has_reputation and chain in ("robinhood", "base"):
-                            return False, f"анонимный ручной V4 ERC20 без лаунчпада и соцсетей (len={len(_bytecode)}, в пуле {_frac*100:.1f}% — схема V4 LP-rug)"
-                        # Без ссылок анонимный токен обязан держать >= 25% эмиссии в V4 PoolManager (кейс PIPS: 0 ссылок, в пуле 2% -> слив в 0.005%).
-                        # Ссылочным нормальным проектам требуется минимум 5% эмиссии в V4 пуле.
+                        # Без ссылок токен обязан держать >= 25% эмиссии в V4 PoolManager (кейс PIPS: 0 ссылок, в пуле 2% -> слив в 0.005%).
+                        # Ссылочным проектам требуется минимум 5% эмиссии в V4 пуле.
                         _min_v4_frac = 0.25 if not _links_pd else 0.05
                         if _frac < _min_v4_frac:
                             return False, f"картонный пул Uniswap V4 (в пуле всего {_frac*100:.1f}% эмиссии < {_min_v4_frac*100:.0f}% — V4 LP-rug риск)"
@@ -557,8 +544,6 @@ async def check_onchain_evm_security(address: str, chain: str, pair_data: dict =
                     if _p_frac < 0.005:
                         return False, f"пул V2/V3 опустошён девом (остаток {_p_frac*100:.4f}% — LP Rug)"
                     if not is_open_pos and not _has_reputation and chain in ("robinhood", "base"):
-                        if _is_bare_manual_erc20:
-                            return False, f"анонимный ручной V2/V3 ERC20 без лаунчпада и соцсетей (len={len(_bytecode)}, в пуле {_p_frac*100:.1f}% — схема LP-rug)"
                         if _p_frac < 0.25:
                             return False, f"картонный пул V2/V3 (в пуле всего {_p_frac*100:.1f}% эмиссии < 25% без соцсетей — схема LP-rug)"
         if len(_pair_addr) == 42 and chain in ("robinhood", "base", "bsc"):
@@ -611,7 +596,14 @@ async def verify_evm_token(address: str, chain: str, pair_data: dict = None) -> 
         import time as _t_rob
         _a_min = ((_t_rob.time() * 1000 - _c_ms) / 60000.0) if _c_ms else 999.0
         _liq_rob = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
-        _min_age = 1.5 if _liq_rob >= 15000.0 else float(getattr(config, "ROBINHOOD_MIN_AGE_MIN", 2.5))
+        if _liq_rob >= 15000.0:
+            _min_age = 1.0
+        elif _liq_rob >= 5000.0:
+            _min_age = 1.2
+        elif _liq_rob >= 3500.0:
+            _min_age = 1.6
+        else:
+            _min_age = float(getattr(config, "ROBINHOOD_MIN_AGE_MIN", 2.0))
         if _a_min < _min_age:
             return False, f"возраст {_a_min:.1f}м < {_min_age:.1f}м — ранняя flash-rug зона"
             
@@ -708,9 +700,11 @@ async def verify_evm_token(address: str, chain: str, pair_data: dict = None) -> 
             # Для проверенных NFT-пулов (V3/V4/Aerodrome Slipstream/Clanker):
             if _is_nft_p:
                 if "v4" in _lbls or len(_p_addr) > 42:
-                    if not _g_ok:
-                        return False, f"пул Uniswap V4 на {chain} не верифицирован GoPlus ({_g_why}) — защита от V4 LP-rug"
+                    if not _g_ok and is_hard_scam(_g_why):
+                        return False, f"пул Uniswap V4 на {chain}: {_g_why}"
                 if _h_ok and _h_why == "" and s5 >= 2:
+                    return True, ""
+                if s5 >= 2 and b5 >= s5:
                     return True, ""
 
             if _age_min < 15.0:

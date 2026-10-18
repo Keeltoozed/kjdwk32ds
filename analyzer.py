@@ -141,6 +141,16 @@ class Analyzer:
             s = (sig or "").upper()
             if any(k in s for k in ("LOTTERY", "DIPBUY", "COPY")):
                 return None
+            _ch_veto = str((pair_data or {}).get("chainId", "")).lower()
+            if _ch_veto in ("robinhood", "base", "bsc", "ethereum"):
+                # На EVM скор ракеты калиброван иначе из-за специфики L2 (меньше объем, чем на Solana Pump.fun).
+                # Отсекаем только полностью пустые/мертвые стаканы (< 0.03, как в ACCUM)
+                self._rkt_tag(address, pair_data or {})
+                sc = self.rocket_scores.get(address)
+                if sc is not None and sc < 0.03:
+                    return f"RKT-вето {sc:.2f}: пустой стакан"
+                return None
+
             if "SCOUT" in s:
                 # Для SCOUT не пускаем падающие ножи со скором ниже 0.45 (кейс Animates 0.38)
                 self._rkt_tag(address, pair_data or {})
@@ -1363,22 +1373,30 @@ class Analyzer:
             "symbol": symbol, "chain": chain, "price": _px_now,
             "liq": liq, "m5": m5, "source": tag
         }
-        # BSC, Robinhood & Base: токены младше порога — зона мгновенных flash-рагов и дев-дампов.
-        # Для пулов с живым капиталом (liq >= $15k) порог снижен до 1.5м (кейсы SCRAFT +648% на 2.2м, INFLUENCE +950% на 2.4м),
-        # для тонких пулов (< $15k) сохраняем безопасные 2.5м.
-        _cfg_age = float(getattr(config, f"{chain.upper()}_MIN_AGE_MIN", 2.5))
-        _min_age_thr = 1.5 if (chain in ("robinhood", "base", "bsc") and liq >= 15000.0) else _cfg_age
+        # BSC, Robinhood & Base: адаптивный возрастной барьер.
+        # Для пулов $15k+ порог 1.0м; для пулов $5k+ (кейсы REDOC +236% на 1.9м, YOUTUBE на 1.4м) порог 1.2м;
+        # для пулов $3.5k-$5k порог 1.6м; для микро-пулов <$3.5k сохраняем 2.5м.
+        _cfg_age = float(getattr(config, f"{chain.upper()}_MIN_AGE_MIN", 2.0))
+        if chain in ("robinhood", "base", "bsc"):
+            if liq >= 15000.0:
+                _min_age_thr = 1.0
+            elif liq >= 5000.0:
+                _min_age_thr = 1.2
+            elif liq >= 3500.0:
+                _min_age_thr = 1.6
+            else:
+                _min_age_thr = _cfg_age
+        else:
+            _min_age_thr = _cfg_age
         if chain in ("bsc", "robinhood", "base") and _age_min < _min_age_thr:
             return self._deny(address, f"{chain}-age {_age_min:.1f}m",
                               f"🚫 [{tag}] {symbol}: возраст {_age_min:.1f}м < {_min_age_thr:.1f}м — ранняя {tag} flash-rug зона.")
 
         # Ранний Scout-режим для свежих ракет (<10 мин):
-        # Жёстко ограничен по перегреву (0.8% <= m5 <= 75%, h1 <= 250%), чтобы не покупать хаи 5x-свечей (кейсы DMN +433%, detected +559%).
-        # Антискам verify_evm_token пропускает без ссылок ТОЛЬКО официальные лаунчпад-контракты с >=35% эмиссии в пуле, а ручные ERC20 без ссылок блокирует.
-        _scout_min_liq = max(5000.0, float(min_liq))
-        if (_age_min < 10.0 and 0.8 <= m5 <= 150.0 and 0.0 <= h1 <= 450.0
-                and (b5 + s5) >= 15 and liq >= _scout_min_liq
-                and s5 >= 2 and s >= 2 and b5 >= int(s5 * 1.25) and (b5 / max(s5, 1)) <= 5.0):
+        _scout_min_liq = max(3500.0, float(min_liq))
+        if (_age_min < 12.0 and 0.8 <= m5 <= 350.0 and 0.0 <= h1 <= 800.0
+                and (b5 + s5) >= 10 and liq >= _scout_min_liq
+                and s5 >= 1 and s >= 1 and b5 >= int(s5 * 1.15) and (b5 / max(s5, 1)) <= 7.0):
             if not self._evm_brand_ok(symbol, tag):
                 return False
             if not await self._evm_clone_ok(symbol, address, pair_data, chain, tag):
@@ -1473,13 +1491,16 @@ class Analyzer:
                 return True
 
             return self._deny(address, f"flat m5 {m5:+.1f}%", f"· [{tag}] {symbol}: флет m5 {m5:+.1f}%")
-        _max_m5 = 65.0
+        _max_m5 = 350.0 if chain in ("robinhood", "base", "bsc") else 85.0
         # При органическом перевесе покупателей расширяем коридор m5, чтобы забирать супер-ракеты
-        # (кейсы INFLUENCE +159% -> +950%, USEMATH +385% -> +108%, ZDOG +327% -> +177%, FINI +268%, PEPÉ +256%)
-        if chain in ("robinhood", "base", "bsc") and liq >= 20000.0 and s5 > 0 and (b5 / s5) >= 1.35 and m1 <= 16.0 and not self.is_churn(b5, s5, m5, liq=liq):
-            _max_m5 = 450.0  # Мощное ралли на глубоком пуле ($20k+): вход на 2-й ступени ракеты
-        elif chain in ("robinhood", "base", "bsc") and liq >= min_liq and s5 > 0 and (b5 / s5) >= 1.25 and m1 <= 14.0 and not self.is_churn(b5, s5, m5, liq=liq):
-            _max_m5 = 200.0  # Умеренный пул (от $6k): коридор до +200% (кейсы BWIGITTE +108%, 1649AC +111%)
+        # (кейсы INFLUENCE +159% -> +950%, VERDIS +289%, KAIDA +270%, BRIVON +393%, NULL +375%, PIKA +72%, JEVO +125%, OBC +163%)
+        if chain in ("robinhood", "base", "bsc"):
+            if liq >= 15000.0 and s5 > 0 and b5 >= s5 and not self.is_churn(b5, s5, m5, liq=liq):
+                _max_m5 = 500.0  # Мощное ралли на глубоком пуле ($15k+): вход на 2-й ступени ракеты
+            elif s5 > 0 and b5 >= s5 and not self.is_churn(b5, s5, m5, liq=liq):
+                _max_m5 = 350.0  # Умеренный пул: коридор до +350%
+            else:
+                _max_m5 = 150.0
 
         if m5 > _max_m5:
             return self._deny(address, f"top m5 {m5:+.0f}%", f"🚫 [{tag}-OVERHEAT] {symbol}: m5 {m5:+.1f}% — вертикаль уже прошла, вход = вершина.")
@@ -1488,7 +1509,7 @@ class Analyzer:
             return self._deny(address, f"churn {b5}/{s5} m5 {m5:+.1f}%",
                               f"🚫 [{tag}-CHURN] {symbol}: {b5 + s5} сделок без перевеса (b/s {b5 / (s5+1):.2f}) — накрутка, не FOMO.")
         # Ослабление m1-green: мощные ракеты пробивают импульсом без отката.
-        _max_m1 = 22.0 if (s5 > 0 and b5 >= 1.8 * s5 and (b5 + s5) >= 10) else (16.0 if (s5 > 0 and b5 >= 1.25 * s5) else 10.0)
+        _max_m1 = 25.0 if (s5 > 0 and b5 >= 1.5 * s5 and (b5 + s5) >= 8) else (18.0 if (s5 > 0 and b5 >= 1.2 * s5) else 12.0)
         if m1 > _max_m1:
             return self._deny(address, f"m1-green {m1:+.1f}%", f"🚫 [{tag}] {symbol}: m1 {m1:+.1f}% > +{_max_m1:.0f}% — вершина в моменте, ждём.")
         if m1 < -5.0:
@@ -1735,11 +1756,11 @@ class Analyzer:
         funded_from_cex = 0
         
         features = pd.DataFrame([{
-            "dev_holding_pct": dev_holding_pct,
-            "top_10_holding_pct": top_10_holding_pct,
-            "tx_velocity_1m": tx_velocity_1m,
-            "has_socials": has_socials,
-            "funded_from_cex": funded_from_cex
+            "dev_holding_pct": float(dev_holding_pct or 0.0),
+            "top_10_holding_pct": float(top_10_holding_pct or 0.0),
+            "tx_velocity_1m": float(tx_velocity_1m or 0.0),
+            "has_socials": int(has_socials or 0),
+            "funded_from_cex": int(funded_from_cex or 0)
         }])
         
         if self.pump_model is None:
@@ -1859,20 +1880,20 @@ class Analyzer:
         import pandas as pd
         import joblib
         
-        txns_h24 = pair_data.get("txns", {}).get("h24", {})
-        buys_h24 = txns_h24.get("buys", 0)
-        sells_h24 = txns_h24.get("sells", 0)
+        txns_h24 = (pair_data.get("txns") or {}).get("h24") or {}
+        buys_h24 = float(txns_h24.get("buys", 0) or 0)
+        sells_h24 = float(txns_h24.get("sells", 0) or 0)
         
-        volume_h24 = pair_data.get("volume", {}).get("h24", 0)
-        price_change_h24 = pair_data.get("priceChange", {}).get("h24", 0)
+        volume_h24 = float(((pair_data.get("volume") or {}).get("h24", 0) or 0))
+        price_change_h24 = float(((pair_data.get("priceChange") or {}).get("h24", 0) or 0))
         
         # Защита XGBoost от накрученных скам-данных (Robust Inference/Winsorization):
         # Ограничиваем искусственно раздутый объем и покупки, чтобы модель не выдавала слепые 100%
         volume_h24 = min(volume_h24, liquidity * 3) 
         buys_h24 = min(buys_h24, sells_h24 * 3 + 20)
         
-        buy_sell_ratio = buys_h24 / (sells_h24 + 1)
-        vol_to_liq = volume_h24 / (liquidity + 1)
+        buy_sell_ratio = buys_h24 / (sells_h24 + 1.0)
+        vol_to_liq = volume_h24 / (liquidity + 1.0)
         
         # Дополнительно режем ratio для модели
         buy_sell_ratio = min(buy_sell_ratio, 4.0)
@@ -1880,14 +1901,14 @@ class Analyzer:
         
         features = ['price_change_h24', 'volume_h24', 'buys_h24', 'sells_h24', 'liquidity', 'fdv', 'buy_sell_ratio', 'vol_to_liq']
         df = pd.DataFrame([{
-            'price_change_h24': price_change_h24,
-            'volume_h24': volume_h24,
-            'buys_h24': buys_h24,
-            'sells_h24': sells_h24,
-            'liquidity': liquidity,
-            'fdv': fdv,
-            'buy_sell_ratio': buy_sell_ratio,
-            'vol_to_liq': vol_to_liq
+            'price_change_h24': float(price_change_h24),
+            'volume_h24': float(volume_h24),
+            'buys_h24': float(buys_h24),
+            'sells_h24': float(sells_h24),
+            'liquidity': float(liquidity),
+            'fdv': float(fdv),
+            'buy_sell_ratio': float(buy_sell_ratio),
+            'vol_to_liq': float(vol_to_liq)
         }])
         
         try:

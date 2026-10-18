@@ -121,22 +121,22 @@ ROBINHOOD_DS_SLUG = "robinhood"  # slug DexScreener (НЕ 4663 - тот верн
 ROBINHOOD_GT_NETWORK = "robinhood"  # slug GeckoTerminal
 ROBINHOOD_RPC_URL = "https://rpc.mainnet.chain.robinhood.com"
 ROBINHOOD_EXPLORER = "https://robinhoodchain.blockscout.com"
-ROBINHOOD_MIN_LIQUIDITY = 6000.0  # Порог $6.0k: отсекает пустые ловушки ($3k TRN/Tortue), оставляя живые ракеты (PawPilot $40k+, MINTER $18k+)
-ROBINHOOD_MIN_AGE_MIN = 2.5  # 2.5 мин (как Solana, не пропускает ранние импульсы)
+ROBINHOOD_MIN_LIQUIDITY = 4500.0  # Порог $4.5k: отсекает пустые ловушки ($1k-$2.5k), пропуская живые ракеты (REDOC, YOUTUBE, PawPilot)
+ROBINHOOD_MIN_AGE_MIN = 2.0  # 2.0 мин база (для пулов $5k+ динамически 1.2м)
 ROBINHOOD_MAX_CREATOR_PCT = 0.20  # Блок токенов, где у создателя >20% (FEE 35.5%, Speed 100% honeypot)
 ROBINHOOD_MAX_OWNER_PCT = 0.20
 ROBINHOOD_SCAN_INTERVAL = 20  # 20с: быстрый опрос с батч-префетчем
 EVM_MIN_M5_PCT = 0.8  # Ранние импульсы от +0.8% пускаем при перевесе покупателей
 EVM_ACCUM_ENABLED = True  # Включено для накопления на растущем часовом тренде (WOLFPACK +4350%, HDONNI +2024%)
 EVM_NEW_POOL_PAGES = 2  # 2 страницы вместо 8 (убирает очередь мертвых пулов и ускоряет GeckoTerminal в 4 раза)
-EVM_RESCAN_COOLDOWN = 90  # Перепроверка через 90с
+EVM_RESCAN_COOLDOWN = 60  # Перепроверка через 60с
 EVM_MAX_MINTS = 120  # Лимит активных кандидатов за цикл скана
 
 
 # === BASE (EVM L2, там сидят мемы с fomo.family: musebook, DELTA...) ===
 # Тот же EVM-движок, slug DexScreener "base".
 BASE_ENABLED = True
-BASE_MIN_LIQUIDITY = 3000.0  # Порог $3.0k: стандартные Clanker/Uniswap v3 мемы на Base стартуют с ~$3k
+BASE_MIN_LIQUIDITY = 3500.0  # Порог $3.5k: стандартные Clanker/Uniswap v3 мемы на Base стартуют с ~$3.5k
 BASE_SCAN_INTERVAL = 20  # 20с: быстрый поиск ранних ракет Base
 
 # === BSC (ОТКЛЮЧЕНО: 100% сделок на BSC обернулись дев-рагпуллами с выводом пула) ===
@@ -152,8 +152,8 @@ CONVICTION_MAX_M5_PCT = 0.60  # m5 до +60% (выше - вершина)
 CONVICTION_MIN_BUYSELL = 2.0  # покупки >= продаж x2
 CONVICTION_MIN_LIQ = 30000  # пул от $30к
 MAX_DEPLOYED_PCT = 0.60  # суммарно в рынке не больше 60% капитала (сдерживает тиринг)
-ROCKET_VETO_ENABLED = True  # Включено вето RKT >= 0.35: режет мертвечину и затухающие пулы (ROBINCAT 0.06, HYPURRT 0.10, COVENANT 0.14, BELIEVE 0.16)
-ROCKET_VETO_MIN = 0.35
+ROCKET_VETO_ENABLED = True  # Включено вето RKT >= 0.25: режет мертвечину и затухающие пулы (ROBINCAT 0.06, HYPURRT 0.10, COVENANT 0.14)
+ROCKET_VETO_MIN = 0.25
 
 # === GROWTH MODE (тренд старых токенов, пока нет ракет) ===
 # Логика: ракеты ловятся импульсом m5, а зрелые капы едут часами. Отдельный режим:
