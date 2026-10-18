@@ -301,8 +301,14 @@ def _filter_and_rank_gt_items(items: list, min_liq: float = 2000.0) -> list:
             if not addr or addr.lower() in seen:
                 continue
             attrs = item.get("attributes") or {}
+            name = str(attrs.get("name") or "").upper()
+            _stock_tickers = ("SGOV", "SPY", "QQQ", "META", "INTC", "MU", "NVDA", "AAPL", "GOOGL", "MSFT", "GLD", "HXMAX", "STANDARD")
+            if any(name.startswith(st + " ") or name.startswith(st + "/") or name == st or f"/{st}" in name for st in _stock_tickers):
+                continue
             liq = float(attrs.get("reserve_in_usd") or 0)
             if liq > 0 and liq < min_liq:
+                continue
+            if liq > 500000.0:
                 continue
             tx = attrs.get("transactions") or {}
             m5_tx = tx.get("m5") or {}

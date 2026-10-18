@@ -1363,13 +1363,15 @@ async def _evm_chain_loop(analyzer, tracker, chain: str):
                             if "micro-liq" in _sig:
                                 processed[addr] = _t.time() - _recooldown + 20  # Дев может залить ликвидность через 20с
                             elif "age" in _sig:
-                                processed[addr] = _t.time() - _recooldown + 25  # Ждем минимального возраста 25с
+                                processed[addr] = _t.time() - _recooldown + 20  # Ждем созревания 20с
                             elif "m1-green" in _sig or "вершина" in _sig:
-                                processed[addr] = _t.time() - _recooldown + 25  # Ждем отката 1м импульса 25с
+                                processed[addr] = _t.time() - _recooldown + 20  # Ждем отката 1м импульса 20с
                             elif "flat" in _sig or "m5-no-pressure" in _sig or "quiet" in _sig:
                                 _lq_tmp = float((getattr(analyzer, "_eval_ctx", {}).get(addr, {}) or {}).get("liq", 0.0) or 0.0)
-                                if _lq_tmp >= 3000:
-                                    processed[addr] = _t.time() - _recooldown + 25  # Живой пул перепроверить через 25с
+                                if "dead-flat" in _sig or _lq_tmp > 500000.0:
+                                    processed[addr] = _t.time() - _recooldown + 1800  # Мертвый флет / мамонты (SPY, QQQ, AAPL): пауза 30 минут
+                                elif _lq_tmp >= 2500:
+                                    processed[addr] = _t.time() - _recooldown + 20  # Живой мем-пул перепроверить через 20с
                                 else:
                                     processed[addr] = _t.time()
                             else:
@@ -1400,12 +1402,16 @@ async def _evm_chain_loop(analyzer, tracker, chain: str):
                                     continue
                                 fixed = float(getattr(config, "TRADE_AMOUNT_USD", 0.0) or 0.0)
                                 if fixed > 0:
-                                    size = fixed  # Строго заданный ордер пользователя ($15), без искажения множителями
+                                    size = fixed  # Строго заданный ордер пользователя ($15)
+                                    if "LOTTERY" in _sig or "SCOUT" in _sig:
+                                        _scout_cap = float(getattr(config, "SCOUT_SIZE_USD", getattr(config, "LOTTERY_SIZE_USD", 5.0)) or 5.0)
+                                        size = min(size, _scout_cap)
                                 else:
                                     cap = tracker.get_total_capital()
                                     size = max(4.0, min(100.0, cap * (config.REINVEST_PERCENT / 100.0))) if cap > 0 else 4.0
                                     if "LOTTERY" in _sig or "SCOUT" in _sig:
-                                        size = min(size, float(getattr(config, "LOTTERY_SIZE_USD", 15.0) or 15.0))
+                                        _scout_cap = float(getattr(config, "SCOUT_SIZE_USD", getattr(config, "LOTTERY_SIZE_USD", 5.0)) or 5.0)
+                                        size = min(size, _scout_cap)
                                     else:
                                         size *= analyzer.conviction_size_mult(td)
                                         if "DIPBUY" not in _sig:
@@ -1441,8 +1447,8 @@ async def _evm_chain_loop(analyzer, tracker, chain: str):
                                         await asyncio.sleep(1.0)
                                         continue
                                 except Exception as _ve:
-                                    if chain == "bsc":
-                                        print(f"🚫 [{tag}] {sym}: ошибка антискама ({type(_ve).__name__}) — блок входа (BSC).")
+                                    if chain in ("bsc", "robinhood", "base"):
+                                        print(f"🚫 [{tag}] {sym}: ошибка антискама ({type(_ve).__name__}) — блок входа ({tag}).")
                                         await asyncio.sleep(1.0)
                                         continue
                                 tracker.add_position(sym, addr, price, size, is_mature=True,

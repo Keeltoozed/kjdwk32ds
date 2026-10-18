@@ -144,11 +144,16 @@ class Analyzer:
             _ch_veto = str((pair_data or {}).get("chainId", "")).lower()
             if _ch_veto in ("robinhood", "base", "bsc", "ethereum"):
                 # На EVM скор ракеты калиброван иначе из-за специфики L2 (меньше объем, чем на Solana Pump.fun).
-                # Отсекаем только полностью пустые/мертвые стаканы (< 0.03, как в ACCUM)
+                # Для SCOUT (<15м) отсекаем мертвецов и бото-накрутку (< 0.12, кейсы RIOT 0.06, ROBINBOT 0.02)
+                # Для остальных входов отсекаем пустые стаканы (< 0.08)
                 self._rkt_tag(address, pair_data or {})
                 sc = self.rocket_scores.get(address)
-                if sc is not None and sc < 0.03:
-                    return f"RKT-вето {sc:.2f}: пустой стакан"
+                if "SCOUT" in s:
+                    if sc is not None and sc < 0.12:
+                        return f"RKT-вето {sc:.2f}: слабый скор для EVM SCOUT (< 0.12, бото-стакан)"
+                else:
+                    if sc is not None and sc < 0.08:
+                        return f"RKT-вето {sc:.2f}: пустой/мертвый стакан EVM (< 0.08)"
                 return None
 
             if "SCOUT" in s:
@@ -746,6 +751,8 @@ class Analyzer:
         self.last_signal = ""
         self.last_score = 0.0
         self.signals.pop(mint, None)
+        self._last_top10 = 0.0
+        self._last_dev = 0.0
         
         if mint in ["So11111111111111111111111111111111111111112", 
                     "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", 
@@ -814,8 +821,8 @@ class Analyzer:
                 if 0 < _fdv_pre < 46000:
                     print(f"🚫 [POST-MIGRATION-DUMP] {mint[:8]}: AMM FDV ${_fdv_pre:,.0f} < $46k (ниже цены миграции Pump.fun) — слитый токен.")
                     return False
-                if _h1_pre < -5.0 or _h6_pre < -5.0:
-                    print(f"🚫 [POST-MIGRATION-DUMP] {mint[:8]}: часовой/6ч тренд в сливе (h1 {_h1_pre:+.1f}%, h6 {_h6_pre:+.1f}%) — отскок дохлой кошки.")
+                if _h1_pre < -15.0 or _h6_pre < -35.0:
+                    print(f"🚫 [POST-MIGRATION-DUMP] {mint[:8]}: часовой/6ч тренд в глубоком сливе (h1 {_h1_pre:+.1f}%, h6 {_h6_pre:+.1f}%) — отскок дохлой кошки.")
                     return False
         if not is_vip and pair_data:
             _pc = pair_data.get("priceChange") or {}
@@ -1373,36 +1380,19 @@ class Analyzer:
             "symbol": symbol, "chain": chain, "price": _px_now,
             "liq": liq, "m5": m5, "source": tag
         }
-        # BSC, Robinhood & Base: адаптивный возрастной барьер.
-        # Для пулов $15k+ порог 1.0м; для пулов $5k+ (кейсы REDOC +236% на 1.9м, YOUTUBE на 1.4м) порог 1.2м;
-        # для пулов $3.5k-$5k порог 1.6м; для микро-пулов <$3.5k сохраняем 2.5м.
-        _cfg_age = float(getattr(config, f"{chain.upper()}_MIN_AGE_MIN", 2.0))
-        if chain in ("robinhood", "base", "bsc"):
-            if liq >= 15000.0:
-                _min_age_thr = 1.0
-            elif liq >= 5000.0:
-                _min_age_thr = 1.2
-            elif liq >= 3500.0:
-                _min_age_thr = 1.6
-            else:
-                _min_age_thr = _cfg_age
-        else:
-            _min_age_thr = _cfg_age
-        if chain in ("bsc", "robinhood", "base") and _age_min < _min_age_thr:
-            return self._deny(address, f"{chain}-age {_age_min:.1f}m",
-                              f"🚫 [{tag}] {symbol}: возраст {_age_min:.1f}м < {_min_age_thr:.1f}м — ранняя {tag} flash-rug зона.")
-
-        # Ранний Scout-режим для свежих ракет (<10 мин):
-        _scout_min_liq = max(3500.0, float(min_liq))
-        if (_age_min < 12.0 and 0.8 <= m5 <= 350.0 and 0.0 <= h1 <= 800.0
-                and (b5 + s5) >= 10 and liq >= _scout_min_liq
-                and s5 >= 1 and s >= 1 and b5 >= int(s5 * 1.15) and (b5 / max(s5, 1)) <= 7.0):
+        # Ранний Scout-режим для свежих ракет (<15 мин):
+        # Ловит стартовые импульсы ракет (USEMATH, FINI, MUCRON, LPL, INFLUENCE, TORTUE, ZDOG) от 0.3 мин (18 сек)
+        # при подтверждённых продажах (honeypot исключён) и ликвидности >= min_liq ($2.5k)
+        _scout_min_liq = float(min_liq)
+        if (0.3 <= _age_min < 15.0 and 0.8 <= m5 <= 450.0 and 0.0 <= h1 <= 1200.0
+                and (b5 + s5) >= 6 and liq >= _scout_min_liq
+                and s5 >= 1 and s >= 1 and b5 >= int(s5 * 1.25) and (b5 - s5) >= 2 and (b5 / max(s5, 1)) <= 8.0):
             if not self._evm_brand_ok(symbol, tag):
                 return False
             if not await self._evm_clone_ok(symbol, address, pair_data, chain, tag):
                 return False
-            # 1. Защита от покупки вершины 1м свечи и падающего ножа (кейс WETH)
-            if m1 > 24.0:
+            # 1. Защита от покупки вершины 1м свечи и падающего ножа
+            if m1 > 25.0:
                 return self._deny(address, f"scout-m1-spike {m1:+.1f}%",
                                   f"🚫 [{tag}-SCOUT] {symbol}: m1 {m1:+.1f}% — верхушка 1м импульса, вход = вершина.")
             if m1 < -7.0:
@@ -1415,9 +1405,13 @@ class Analyzer:
                                   f"🚫 [{tag}-SCOUT] {symbol}: FDV ${_fdv_scout:,.0f} vs Liq ${liq:,.0f} — картонный пул.")
             # 3. Защита от микро-чеков ботов (накрутка объёма)
             _vm5_scout = float((pair_data.get("volume") or {}).get("m5", 0) or 0)
-            if (b5 + s5) >= 15 and (_vm5_scout / max(b5 + s5, 1)) < 18.0:
+            if (b5 + s5) >= 15 and (_vm5_scout / max(b5 + s5, 1)) < 15.0:
                 return self._deny(address, "wash-bot",
-                                  f"🚫 [{tag}-SCOUT] {symbol}: средний чек ${_vm5_scout / max(b5 + s5, 1):.1f} < $18 — накрутка ботов.")
+                                  f"🚫 [{tag}-SCOUT] {symbol}: средний чек ${_vm5_scout / max(b5 + s5, 1):.1f} < $15 — накрутка ботов.")
+            # 3.5. Защита от топтания и накрутки ботов (CHURN)
+            if self.is_churn(b5, s5, m5, n_min=10, liq=liq, vol5=_vm5_scout):
+                return self._deny(address, f"scout-churn {b5}/{s5}",
+                                  f"🚫 [{tag}-SCOUT] {symbol}: накрутка {b5}b/{s5}s без реального FOMO — churn-ловушка.")
             # 4. Антискам аудит (GoPlus + Honeypot.is + On-Chain V4 PoolManager)
             if chain in ("robinhood", "bsc", "base", "ethereum"):
                 try:
@@ -1432,9 +1426,35 @@ class Analyzer:
                                           f"🚫 [{tag}] {symbol}: ошибка антискама ({type(_e).__name__}) — {tag} риск.")
             if not await self.verify_1m_candles_not_dumping(address, pair_data, chain):
                 return self._deny(address, "1m-candle-dump", f"🚫 [{tag}-SCOUT] {symbol}: 1м свеча в сливе / вершина пройдена.")
-            print(f"🔭 [{tag}-SCOUT] {symbol}: возраст {_age_min:.1f}м, m5 {m5:+.1f}%, liq ${liq:,.0f} — ранний билет.")
-            self._set_sig(address, f"{tag} SCOUT {_age_min:.0f}m" + self._rkt_tag(address, pair_data) + await self.meme_tag(address, symbol, pair_data, chain))
+            # Защита от бото-накрутки и скамов с околонулевым скором ракеты (RIOT 0.06, ROBINBOT 0.02)
+            _rkt_tag_str = self._rkt_tag(address, pair_data)
+            _sc_val = self.rocket_scores.get(address)
+            if _sc_val is not None and _sc_val < 0.12:
+                return self._deny(address, f"scout-low-rkt {_sc_val:.2f}",
+                                  f"🚫 [{tag}-SCOUT] {symbol}: скор ракеты {_sc_val:.2f} < 0.12 — накрутка ботов/слабый интерес.")
+            print(f"🔭 [{tag}-SCOUT] {symbol}: возраст {_age_min:.1f}м, m5 {m5:+.1f}%, liq ${liq:,.0f} — ранний билет!")
+            self._set_sig(address, f"{tag} SCOUT {_age_min:.0f}m" + _rkt_tag_str + await self.meme_tag(address, symbol, pair_data, chain))
             return True
+
+        # BSC, Robinhood & Base: адаптивный возрастной барьер (если не подошёл под Scout):
+        _cfg_age = float(getattr(config, f"{chain.upper()}_MIN_AGE_MIN", 1.5))
+        if chain in ("robinhood", "base", "bsc"):
+            if liq >= 15000.0:
+                _min_age_thr = 0.8
+            elif liq >= 5000.0:
+                _min_age_thr = 1.0
+            elif liq >= 3000.0:
+                _min_age_thr = 1.2
+            else:
+                _min_age_thr = _cfg_age
+        else:
+            _min_age_thr = _cfg_age
+        if chain in ("bsc", "robinhood", "base") and _age_min < _min_age_thr:
+            if _age_min < 1.0:
+                print(f"⏳ [{tag}] {symbol}: возраст {_age_min:.1f}м < {_min_age_thr:.1f}м — созревает, перепроверим.")
+                return None
+            return self._deny(address, f"{chain}-age {_age_min:.1f}m",
+                              f"🚫 [{tag}] {symbol}: возраст {_age_min:.1f}м < {_min_age_thr:.1f}м — ранняя {tag} flash-rug зона.")
 
         if liq < min_liq:
             return self._deny(address, "micro-liq", f"🚫 [{tag}] {symbol}: ликва ${liq:,.0f} < ${min_liq:,.0f} — микро-пул.")
@@ -1823,8 +1843,8 @@ class Analyzer:
         if 0 < _fdv_check < 46000:
             print(f"🚫 [RAYDIUM] {mint[:8]}: FDV ${_fdv_check:,.0f} < $46,000 (ниже цены миграции Pump.fun) — слитый после миграции токен.")
             return False
-        if _h1 < -5.0 or _h6 < -5.0:
-            print(f"🚫 [RAYDIUM] {mint[:8]}: часовой/6ч тренд в сливе (h1 {_h1:+.1f}%, h6 {_h6:+.1f}%) — отскок дохлой кошки.")
+        if _h1 < -15.0 or _h6 < -35.0:
+            print(f"🚫 [RAYDIUM] {mint[:8]}: часовой/6ч тренд в глубоком сливе (h1 {_h1:+.1f}%, h6 {_h6:+.1f}%) — отскок дохлой кошки.")
             return False
         if _m1 < -3.5:
             print(f"🚫 [RAYDIUM] {mint[:8]}: m1 {_m1:+.1f}% — активный сброс в моменте (падающий нож).")

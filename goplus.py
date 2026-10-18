@@ -145,13 +145,14 @@ def _verdict_evm(info: dict, chain: str = "", pair_data: dict = None):
                     pct = _tax_frac(lph.get("percent", 0))
                     if is_locked == 1 or "dead" in addr or addr == "0x0000000000000000000000000000000000000000":
                         locked_burned += pct
-                min_lp_lock = float(_cfg("GOPLUS_MIN_LP_LOCKED_PCT", 0.40))
+                min_lp_lock = float(_cfg("BSC_MIN_LP_LOCKED_PCT", 0.70) if chain == "bsc" else _cfg("GOPLUS_MIN_LP_LOCKED_PCT", 0.40))
                 if locked_burned < min_lp_lock:
                     return False, f"LP не заблокирован ({locked_burned*100:.0f}% < {min_lp_lock*100:.0f}%) — риск рагпулла"
             elif pair_data is not None and not _is_nft_pool:
-                return False, "lp-unindexed (GoPlus ещё не видит лок LP пула V2)"
-        except Exception:
-            pass
+                return False, f"lp-unindexed (GoPlus ещё не видит лок LP пула V2 на {chain})"
+        except Exception as _e_lp:
+            if chain == "bsc":
+                return False, f"ошибка проверки лока LP на BSC ({type(_e_lp).__name__})"
 
     return True, ""
 
@@ -437,6 +438,8 @@ async def check_onchain_evm_security(address: str, chain: str, pair_data: dict =
         _batch_pl = [
             {"jsonrpc": "2.0", "id": 1, "method": "eth_getCode", "params": [address, "latest"]},
             {"jsonrpc": "2.0", "id": 2, "method": "eth_call", "params": [{"to": address, "data": "0x18160ddd"}, "latest"]},
+            {"jsonrpc": "2.0", "id": 5, "method": "eth_getStorageAt", "params": [address, "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc", "latest"]},
+            {"jsonrpc": "2.0", "id": 6, "method": "eth_call", "params": [{"to": address, "data": "0x8da5cb5b"}, "latest"]},
         ]
         if _v4_pm_raw:
             _V4_PM = _v4_pm_raw.zfill(64)
@@ -501,6 +504,16 @@ async def check_onchain_evm_security(address: str, chain: str, pair_data: dict =
                 if _sel in _bytecode:
                     return False, f"бэкдор в байткоде токена: {_desc}"
 
+        # 1.2. Проверка EIP-1967 прокси-бэкдора (модифицируемый контракт)
+        if not is_open_pos and 5 in _res_map:
+            _impl = str(_res_map[5].get("result") or "").lower()
+            if _impl not in ("0x", "0x0", ""):
+                try:
+                    if int(_impl, 16) != 0:
+                        return False, "модифицируемый прокси-контракт (EIP-1967) — риск скрытого обновления в ханипот"
+                except Exception:
+                    pass
+
         # 1.5. Структурный ABI-отпечаток диспетчера (НЕ ЗАВИСИТ ОТ ДЛИНЫ БАЙТКОДА!):
         # Любой официальный лаунчпад (Clanker, RobinPump, Zora, Virtuals) либо деплоит EIP-1167 прокси (<=130 симв.),
         # либо содержит >= 5 специальных селекторов лаунчпада/локера/EIP-2612 помимо голого ERC-20.
@@ -532,8 +545,8 @@ async def check_onchain_evm_security(address: str, chain: str, pair_data: dict =
                     if _frac < 0.005:
                         return False, f"пул Uniswap V4 опустошён девом (остаток {_frac*100:.4f}% — V4 LP Rug)"
                     if not is_open_pos:
-                        # Без ссылок токен обязан держать >= 5% эмиссии в V4 PoolManager (кейс PIPS/CUL/QUENTRA: дев заливает всего 1.8%-2.8% для скама).
-                        _min_v4_frac = 0.05
+                        # Токен обязан держать >= 8% эмиссии в V4 PoolManager (нормальные пулы 13-16%, микро-пулы/ранний слив < 8%).
+                        _min_v4_frac = 0.08
                         if _frac < _min_v4_frac:
                             return False, f"картонный пул Uniswap V4 (в пуле всего {_frac*100:.1f}% эмиссии < {_min_v4_frac*100:.0f}% — V4 LP-rug риск)"
                 if _tot_v > 0 and not _is_v4 and 4 in _res_map:
@@ -586,65 +599,22 @@ async def verify_evm_token(address: str, chain: str, pair_data: dict = None) -> 
     if not address:
         return True, "no-addr"
     if chain in ("robinhood",):
-        # Robinhood Chain (4663) строгий ончейн-аудит: Blockscout верификация + байткод + LP-Burn + Fail-Closed.
+        # Robinhood Chain (4663) ончейн-аудит безопасности и honeypot:
         if not pair_data or not isinstance(pair_data, dict):
             return False, "нет данных пары для Robinhood"
         
-        # 1. Возрастной барьер: настраиваемый порог из config.py (по умолчанию 2.5 мин)
-        _c_ms = pair_data.get("pairCreatedAt") or 0
-        import time as _t_rob
-        _a_min = ((_t_rob.time() * 1000 - _c_ms) / 60000.0) if _c_ms else 999.0
-        _liq_rob = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
-        if _liq_rob >= 15000.0:
-            _min_age = 1.0
-        elif _liq_rob >= 5000.0:
-            _min_age = 1.2
-        elif _liq_rob >= 3500.0:
-            _min_age = 1.6
-        else:
-            _min_age = float(getattr(config, "ROBINHOOD_MIN_AGE_MIN", 2.0))
-        if _a_min < _min_age:
-            return False, f"возраст {_a_min:.1f}м < {_min_age:.1f}м — ранняя flash-rug зона"
-            
-        # 2. Проверка социальных ссылок и объёма (антискам V4 проверит лаунчпад и >=35% эмиссии в пуле, если ссылок ещё нет)
-        info = pair_data.get("info") or {}
-        links = (info.get("socials") or []) + (info.get("websites") or [])
-        vol5 = float(((pair_data.get("volume") or {}).get("m5", 0) or 0))
-        vol1 = float(((pair_data.get("volume") or {}).get("h1", 0) or 0))
-        liq = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
-        tx_h1 = (pair_data.get("txns") or {}).get("h1") or {}
-        _s1_h1 = int(tx_h1.get("sells", 0) or 0)
-        _is_mat = (liq >= 25000.0 and vol1 >= 10000.0 and _s1_h1 >= 30 and _a_min >= 15.0)
-        if (not links or len(links) < 1) and not _is_mat:
-            if liq < 4000.0 or (liq < 12000.0 and (vol5 < 1500.0 and vol1 < 5000.0)):
-                return False, "нет ссылок (соцсети/сайт) при малом пуле — анонимный дев-раг"
-            
-        # 3. Наличие реальных продаж и глубина пула
+        # 1. Защита от Honeypot: проверка продаваемости
         txns_m5 = ((pair_data.get("txns") or {}).get("m5") or {})
         txns_h1 = ((pair_data.get("txns") or {}).get("h1") or {})
         s5 = int(txns_m5.get("sells", 0) or 0)
-        b5 = int(txns_m5.get("buys", 0) or 0)
         s1 = int(txns_h1.get("sells", 0) or 0)
-        if (s5 < 2 and s1 < 5) or s1 == 0:
-            return False, f"продаж за 5м {s5} и за 1ч {s1} — неподтвержденная продаваемость (honeypot-риск)"
-        if b5 < s5 and s1 < 20:
-            return False, f"нет перевеса покупателей ({b5}b/{s5}s)"
-        if (b5 + s5) >= 15 and (s5 / (b5 + s5)) < 0.10:
-            return False, f"аномалия продаж m5 {s5}s/{b5}b ({s5/(b5+s5)*100:.0f}%) — honeypot-ловушка"
-        if vol5 < 800 and vol1 < 3000:
-            return False, f"объем за 5м ${vol5:,.0f} < $800 — искусственный пул"
-        if liq < 3000:
-            return False, f"ликвидность ${liq:,.0f} < $3,000 — тонкий пул"
+        b5 = int(txns_m5.get("buys", 0) or 0)
+        if s5 == 0 and s1 == 0 and b5 >= 6:
+            return False, f"0 продаж при {b5} покупках — Honeypot (нельзя продать)"
+        if (b5 + s5) >= 25 and (s5 / (b5 + s5)) < 0.04:
+            return False, f"аномалия продаж m5 {s5}s/{b5}b — honeypot-ловушка"
 
-        # 3.5. Аудит безопасности GoPlus (проверка creator_percent, hidden_owner, mintable)
-        try:
-            _g_ok_rob, _g_why_rob = await check_token(address, "robinhood", pair_data=pair_data)
-            if not _g_ok_rob and is_hard_scam(_g_why_rob):
-                return False, f"GoPlus {_g_why_rob}"
-        except Exception:
-            pass
-
-        # 4. Ончейн-аудит байткода и LP-резервов через RPC
+        # 2. Ончейн-аудит байткода и LP-резервов через RPC (селекторы бэкдоров + V4 PoolManager fraction >= 5% / V2 LP burn)
         return await check_onchain_evm_security(address, "robinhood", pair_data, is_open_pos=False)
 
     if chain not in ("bsc", "base", "ethereum"):
@@ -713,18 +683,12 @@ async def verify_evm_token(address: str, chain: str, pair_data: dict = None) -> 
         return False, f"контракт {chain} не подтверждён по безопасности (GoPlus: {_g_why})"
 
     if chain == "bsc":
-        if pair_data and isinstance(pair_data, dict):
-            import time as _t_bsc
-            _c_bsc = pair_data.get("pairCreatedAt") or 0
-            _a_bsc = ((_t_bsc.time() * 1000 - _c_bsc) / 60000.0) if _c_bsc else 999.0
-            if _a_bsc < 3.0:
-                return False, f"BSC возраст {_a_bsc:.1f}м < 3.0м — ранняя flash-rug зона"
-            txns_m5 = ((pair_data.get("txns") or {}).get("m5") or {})
-            s5 = int(txns_m5.get("sells", 0) or 0)
-            b5 = int(txns_m5.get("buys", 0) or 0)
-            vol5 = float(((pair_data.get("volume") or {}).get("m5", 0) or 0))
-            if s5 >= 4 and b5 >= s5 * 1.2 and vol5 >= 8000:
-                return True, ""
-        return False, f"ни GoPlus ({_g_why}), ни honeypot.is ({_h_why}) не подтвердили контракт (BSC)"
+        # На BSC НЕТ лазеек: если GoPlus или Honeypot.is не подтвердили контракт и лок LP — вход СТРОГО ЗАПРЕЩЕН!
+        _fail_reasons = []
+        if not _g_ok or _g_why:
+            _fail_reasons.append(f"GoPlus: {_g_why or 'не подтвержден'}")
+        if not _h_ok or _h_why:
+            _fail_reasons.append(f"Honeypot.is: {_h_why or 'симуляция провалена'}")
+        return False, f"BSC отклонён по безопасности ({', '.join(_fail_reasons)})"
 
     return True, ""

@@ -46,7 +46,9 @@ PORTFOLIO_SNAPSHOT_MINT = (os.getenv("PORTFOLIO_SNAPSHOT_MINT", "") or "").strip
 INITIAL_BALANCE_USD = 120.0  # торговый пул ($150 депо - $30 газ)    # Стартовый капитал
 REINVEST_PERCENT = 5.0  # Было 3%: цель $10/день требует сайз. 5% пула на сделку
 VIRTUAL_POSITION_SIZE_USD = 15.0
-TRADE_AMOUNT_USD = 15.0  # Базовый ордер $15 (по запросу пользователя)
+TRADE_AMOUNT_USD = 15.0  # Базовый ордер $15
+SCOUT_SIZE_USD = 15.0    # Ордер $15 (полный вход, защита через строгий входной ончейн-анализ)
+LOTTERY_SIZE_USD = 15.0
 MAX_CONCURRENT_POSITIONS = 10  # концентрация капитала: максимум 10 ракет  # Режим Снайпера: максимум 5 сделок одновременно
 
 # Risk Management
@@ -83,7 +85,7 @@ BREAKEVEN_PCT = 0.25
 
 # Infant Dump: защита от настоящего дев-рага в первые минуты (не режет рабочие откаты -13%..-18%)
 PREFETCH_TTL_SEC = 10  # Пакетный кэш DexScreener (до 30 токенов за запрос): сек жизни данных для анализа
-SOLANA_MIN_AGE_MIN = 2.5  # Не входить в пулы Solana моложе 2.5 мин (flash-rug зона дева)
+SOLANA_MIN_AGE_MIN = 1.5  # 1.5 мин (flash-rug зона дева до 90с, далее ловим волну)
 SOLANA_MAX_AGE_HOURS = 24.0  # Не покупать старые тухлые монеты старше 24ч (только свежие волны и ракеты)
 INFANT_WINDOW_MIN = 2.0
 INFANT_DUMP_PCT = -0.25  # Резать в первые 2 мин только реальный дамп -25%+ (рабочие тени -12%..-18% выживают)
@@ -122,7 +124,7 @@ ROBINHOOD_GT_NETWORK = "robinhood"  # slug GeckoTerminal
 ROBINHOOD_RPC_URL = "https://rpc.mainnet.chain.robinhood.com"
 ROBINHOOD_EXPLORER = "https://robinhoodchain.blockscout.com"
 ROBINHOOD_MIN_LIQUIDITY = 2500.0  # Порог $2.5k: стандартные пулы на Robinhood стартуют с 1 ETH (~$2.5k-$3.5k)
-ROBINHOOD_MIN_AGE_MIN = 1.5  # 1.5 мин база (для пулов $5k+ динамически 1.0м)
+ROBINHOOD_MIN_AGE_MIN = 1.0  # 1.0 мин база (Scout режим берет с 0.3м при подтвержденных сделках)
 ROBINHOOD_MAX_CREATOR_PCT = 0.20  # Блок токенов, где у создателя >20% (FEE 35.5%, Speed 100% honeypot)
 ROBINHOOD_MAX_OWNER_PCT = 0.20
 ROBINHOOD_SCAN_INTERVAL = 20  # 20с: быстрый опрос с батч-префетчем
@@ -139,9 +141,11 @@ BASE_ENABLED = True
 BASE_MIN_LIQUIDITY = 2500.0  # Порог $2.5k: стандартные Clanker/Uniswap v3 мемы на Base стартуют с ~$2.5k-$3.5k
 BASE_SCAN_INTERVAL = 20  # 20с: быстрый поиск ранних ракет Base
 
-# === BSC (ОТКЛЮЧЕНО: 100% сделок на BSC обернулись дев-рагпуллами с выводом пула) ===
-BSC_ENABLED = False
-BSC_MIN_LIQUIDITY = 6000.0
+# === BSC (Binance Smart Chain: включено с обязательным GoPlus + Honeypot.is аудитом и проверкой блокировки LP) ===
+BSC_ENABLED = True
+BSC_MIN_LIQUIDITY = 5000.0
+BSC_SCAN_INTERVAL = 20
+BSC_MIN_LP_LOCKED_PCT = 0.70  # Не менее 70% LP должно быть заблокировано (PinkSale/Unicrypt) или сожжено (0xdead)
 
 # --- Сайзинг: база $6, conviction x2 ---
 # Тир решает ПОДТВЕРЖДЁННЫЙ импульс рынка (m5 + вести), а не скор модели
@@ -245,8 +249,7 @@ SCOUT_MAX_AGE_SEC = 720  # старше 12 мин — уже сканер/lotter
 SCOUT_MIN_BUYERS = 5  # ≥5 уникальных покупателей WSS за окно
 SCOUT_MIN_TRADES = 15  # или ≥15 трейдов WSS
 SCOUT_MIN_LIQ = 15000  # пул от $15k (slippage $3 < 2%)
-SCOUT_MAX_DUMP_M1 = -0.15  # m1 хуже -15% — дамп, не откат
-SCOUT_SIZE_USD = 3.0
+SCOUT_SIZE_USD = 15.0
 SCOUT_MAX_POS = 3  # не больше 3 скаутов открыто
 SCOUT_RECOOLDOWN = 300  # перепроверка отклонённых через 5 мин
 SCOUT_BIRTH_FALLBACK = False  # birth-добор без WSS тяги ВЫКЛ: тащил раги v0/0 (AMM/XRPN/CLTR)

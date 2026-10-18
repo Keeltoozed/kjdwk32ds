@@ -530,27 +530,41 @@ async def get_trending() -> list:
 
     out, seen = [], set()
 
-    def add(mint):
-        if mint and mint not in seen and len(mint) > 30:
-            seen.add(mint)
-            out.append({"tokenAddress": mint, "chainId": "solana"})
+    def add(item):
+        if not item or not isinstance(item, dict):
+            return
+        mint = _base_mint(item)
+        if not mint or mint in seen or len(mint) <= 30:
+            return
+        attrs = item.get("attributes") or {}
+        # Защита от старых трупов: если пулу > 48ч и 0 сделок в m5 — не засоряем очередь!
+        created_ms = _parse_ms(attrs.get("pool_created_at"))
+        if created_ms:
+            age_h = (time.time() * 1000 - created_ms) / 3600000.0
+            tx = attrs.get("transactions") or {}
+            m5_tx = int((tx.get("m5") or {}).get("buys", 0) or 0) + int((tx.get("m5") or {}).get("sells", 0) or 0)
+            if age_h > 48.0 and m5_tx == 0:
+                return  # Мертвый старый пул (кейс AFbX8oGj 4 года, LASocYgQ 106 дней)
+        seen.add(mint)
+        out.append({"tokenAddress": mint, "chainId": "solana"})
 
-    # Сканируем ТОП-150 трендов
+    # 1. Сканируем ТОП-150 трендов
     for page in range(1, 3):
         d = await _gt_get(f"/networks/solana/trending_pools?page={page}")
         for item in (d.get("data") or []):
-            add(_base_mint(item))
+            add(item)
 
-    # Свежие Pump.fun (2 страницы) + Raydium (2 страницы): шире невод для ракет
+    # 2. Свежие пулы (new_pools) — ловит новые Raydium/Meteora/Pump ракеты первыми!
     for page in range(1, 3):
-        d2 = await _gt_get(f"/networks/solana/dexes/pump-fun/pools?page={page}")
+        d2 = await _gt_get(f"/networks/solana/new_pools?page={page}")
         for item in (d2.get("data") or []):
-            add(_base_mint(item))
+            add(item)
 
-    for page in range(1, 3):
-        d3 = await _gt_get(f"/networks/solana/dexes/raydium/pools?page={page}")
+    # 3. Свежие Pump.fun
+    for page in (1,):
+        d3 = await _gt_get(f"/networks/solana/dexes/pump-fun/pools?page={page}")
         for item in (d3.get("data") or []):
-            add(_base_mint(item))
+            add(item)
 
     # Кэш реально записываем (раньше только читался — 6 запросов GT каждые 20 сек = 429)
     _trending_cache = out
