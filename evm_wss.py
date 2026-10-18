@@ -18,6 +18,19 @@ TOPIC_V2_PAIR_CREATED = "0x0d3648bd0f6ba80134a33ba9275ac585d9d315f0ad8355cddefde
 V3_FACTORY = "0x1F98431c8aD98523631D114a775f6886A8e1957b6"
 V2_FACTORY = "0x5C69bEe701ef814a2B6a3EDD4B1652CB9cc5aA6f"
 
+# Реальные фабрики по сетям (PancakeSwap на BSC, Uniswap+Aerodrome на Base)
+FACTORIES_PER_CHAIN = {
+    "base": [
+        ("0x33128a8fC17869897dcE68Ed026d694621f6FDfD", "v3"),  # Uniswap V3 Base
+        ("0x420DD381b31aEf6683db6B902084cB0FFECe40Da", "v2"),  # Aerodrome Base
+        ("0x8909Dc15e40173Ff4699343b6eB8132c65e18eC6", "v2"),  # Uniswap V2 Base
+    ],
+    "bsc": [
+        ("0xcA143Ce32Fe78f1f7019d7d551a6402fC5350c73", "v2"),  # PancakeSwap V2 Factory BSC
+        ("0x0BFbCF9fa4f9C56B0F40a671Ad40E0805A091865", "v3"),  # PancakeSwap V3 Factory BSC
+    ],
+}
+
 # chain -> (wss_url, quote-токены, для которых второй адрес = новый мем)
 CHAINS_WSS = {
     "base": ("wss://base-rpc.publicnode.com", {
@@ -174,13 +187,15 @@ async def _listen_chain(chain: str, url: str, quotes: set):
     while True:
         try:
             print(f"🔌 EVM-WSS {chain}: подключаюсь...")
+            factories = FACTORIES_PER_CHAIN.get(chain, [(V3_FACTORY, "v3"), (V2_FACTORY, "v2")])
             async with websockets.connect(url, max_size=10 ** 6, ping_interval=30, ping_timeout=60) as ws:
-                for i, (factory, topic) in enumerate(((V3_FACTORY, v3), (V2_FACTORY, v2))):
+                for i, (factory, v_type) in enumerate(factories):
+                    topic = v3 if v_type == "v3" else v2
                     await ws.send(json.dumps({
                         "jsonrpc": "2.0", "id": 10 + i, "method": "eth_subscribe",
                         "params": ["logs", {"address": factory, "topics": [topic]}]}))
                     await ws.recv()
-                print(f"✅ EVM-WSS {chain}: слушаю фабрики V2+V3")
+                print(f"✅ EVM-WSS {chain}: слушаю фабрики ({len(factories)} шт)")
                 async for message in ws:
                     try:
                         d = json.loads(message)
