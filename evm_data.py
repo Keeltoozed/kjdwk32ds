@@ -401,6 +401,18 @@ async def fetch_dex_search_tokens(chain: str = SLUG) -> list:
             addr = (p.get("baseToken") or {}).get("address", "")
             if not addr or addr.lower() in seen:
                 continue
+            sym = str((p.get("baseToken") or {}).get("symbol") or "").upper()
+            _stock_symbols = {"SPY", "QQQ", "SGOV", "GLD", "AAPL", "MSFT", "NVDA", "INTC", "META", "GOOGL", "GOOG", "PLTR", "MU", "TSLA", "AMZN", "CBBTC", "WETH", "USDT", "USDC", "DAI"}
+            if sym in _stock_symbols or any(s in sym for s in ("XMAX", "1L", "2L", "3L")):
+                continue
+            _px = float(p.get("priceUsd", 0) or 0)
+            if _px > 50.0:  # Мемы не стоят $50+ (это синтетические акции или обертки)
+                continue
+            _created = p.get("pairCreatedAt") or 0
+            _age_h = (time.time() * 1000 - _created) / 3600000.0 if _created else 999.0
+            _v1 = float((p.get("volume") or {}).get("h1", 0) or 0)
+            if _age_h > 48.0 and _v1 < 3000.0:
+                continue
             liq = float((p.get("liquidity") or {}).get("usd", 0) or 0)
             if liq < 2500:
                 continue

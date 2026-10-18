@@ -79,6 +79,26 @@ async def fetch_jup_tokens() -> list:
             seen.add(m)
             ranked.append((-1.0, 0.0, sym, m, "volume"))
             
+    if not ranked:
+        # Fallback для датацентров (Render), если Jupiter API вернул 401/403/пусто без ключа:
+        # добираем тренды Solana через GeckoTerminal
+        try:
+            from market_data import _gt_get
+            gt_data = await _gt_get("/networks/solana/trending_pools", retries=1)
+            for item in ((gt_data or {}).get("data") or []):
+                bid = item.get("relationships", {}).get("base_token", {}).get("data", {}).get("id", "")
+                addr = bid.split("_", 1)[1] if "_" in bid else ""
+                attrs = item.get("attributes") or {}
+                sym = str(attrs.get("name") or "").upper().strip()
+                if not addr or addr in seen or any(s in sym for s in SKIP_SYMBOLS):
+                    continue
+                seen.add(addr)
+                pc = attrs.get("price_change_percentage") or {}
+                m5_c = float(pc.get("m5") or 0)
+                ranked.append((m5_c, 0.0, sym, addr, "gt_trending"))
+        except Exception:
+            pass
+
     out = [m for _, _, _, m, _ in ranked][:120]
     _cache, _cache_time = out, time.time()
     return out
