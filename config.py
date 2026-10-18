@@ -121,8 +121,8 @@ ROBINHOOD_DS_SLUG = "robinhood"  # slug DexScreener (НЕ 4663 - тот верн
 ROBINHOOD_GT_NETWORK = "robinhood"  # slug GeckoTerminal
 ROBINHOOD_RPC_URL = "https://rpc.mainnet.chain.robinhood.com"
 ROBINHOOD_EXPLORER = "https://robinhoodchain.blockscout.com"
-ROBINHOOD_MIN_LIQUIDITY = 4500.0  # Порог $4.5k: отсекает пустые ловушки ($1k-$2.5k), пропуская живые ракеты (REDOC, YOUTUBE, PawPilot)
-ROBINHOOD_MIN_AGE_MIN = 2.0  # 2.0 мин база (для пулов $5k+ динамически 1.2м)
+ROBINHOOD_MIN_LIQUIDITY = 2500.0  # Порог $2.5k: стандартные пулы на Robinhood стартуют с 1 ETH (~$2.5k-$3.5k)
+ROBINHOOD_MIN_AGE_MIN = 1.5  # 1.5 мин база (для пулов $5k+ динамически 1.0м)
 ROBINHOOD_MAX_CREATOR_PCT = 0.20  # Блок токенов, где у создателя >20% (FEE 35.5%, Speed 100% honeypot)
 ROBINHOOD_MAX_OWNER_PCT = 0.20
 ROBINHOOD_SCAN_INTERVAL = 20  # 20с: быстрый опрос с батч-префетчем
@@ -136,7 +136,7 @@ EVM_MAX_MINTS = 120  # Лимит активных кандидатов за ц�
 # === BASE (EVM L2, там сидят мемы с fomo.family: musebook, DELTA...) ===
 # Тот же EVM-движок, slug DexScreener "base".
 BASE_ENABLED = True
-BASE_MIN_LIQUIDITY = 3500.0  # Порог $3.5k: стандартные Clanker/Uniswap v3 мемы на Base стартуют с ~$3.5k
+BASE_MIN_LIQUIDITY = 2500.0  # Порог $2.5k: стандартные Clanker/Uniswap v3 мемы на Base стартуют с ~$2.5k-$3.5k
 BASE_SCAN_INTERVAL = 20  # 20с: быстрый поиск ранних ракет Base
 
 # === BSC (ОТКЛЮЧЕНО: 100% сделок на BSC обернулись дев-рагпуллами с выводом пула) ===

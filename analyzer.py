@@ -1549,24 +1549,24 @@ class Analyzer:
             return self._deny(address, f"m5-no-pressure {b5}/{s5}", f"🚫 [{tag}] {symbol}: m5 buys {b5} / sells {s5} — продавцы давят в моменте.")
         
         if chain == "robinhood":
-            _evm_tx_min = 12 if _age_min < 30 else 16
-            _evm_vol_min = 2500 if _age_min < 30 else 5000
+            _evm_tx_min = 8 if _age_min < 30 else 12
+            _evm_vol_min = 1500 if _age_min < 30 else 3000
         elif liq >= 15000.0 and b5 > s5 and m5 >= 2.0:
-            # На глубоком пуле ($15k+) органические ракеты стартуют с 8-12 крупными покупками (кейсы DNA +1493%, 1 +1150%, FTR +115%)
-            _evm_tx_min = 8
-            _evm_vol_min = 2000 if _age_min < 30 else 4500
+            # На глубоком пуле ($15k+) органические ракеты стартуют с 6-8 крупными покупками
+            _evm_tx_min = 6
+            _evm_vol_min = 1500 if _age_min < 30 else 3000
         else:
-            _evm_tx_min = 10 if _age_min < 30 else 14
-            _evm_vol_min = 2000 if _age_min < 30 else 6000
+            _evm_tx_min = 8 if _age_min < 30 else 10
+            _evm_vol_min = 1500 if _age_min < 30 else 3000
         if (b5 + s5) < _evm_tx_min or vol24 < _evm_vol_min:
             return self._deny(address, "quiet", f"🚫 [{tag}] {symbol}: тихо (tx5 {(b5+s5)}, vol24 ${vol24:,.0f}).")
-        # Соцсети DexScreener требуют $300 и ручной модерации (для безссылочных токенов goplus.verify_evm_token проверит лаунчпад и >=35% эмиссии в пуле).
+        # Соцсети DexScreener требуют $300 и ручной модерации (для безссылочных токенов goplus.verify_evm_token проверит лаунчпад и >=5% эмиссии в пуле).
         if not links:
-            _min_unlinked_tx = 10 if chain == "robinhood" else 8
+            _min_unlinked_tx = 8 if chain == "robinhood" else 6
             if (b5 + s5) < _min_unlinked_tx:
                 return self._deny(address, "no-links-inactive", f"🚫 [{tag}] {symbol}: нет ссылок и мало сделок (tx5 {b5+s5} < {_min_unlinked_tx}).")
-            if _age_min >= 20.0 and liq < 12000:
-                return self._deny(address, "no-links", f"🚫 [{tag}] {symbol}: токену {_age_min:.0f}м, нет ссылок при пуле <$12k — скам-риск.")
+            if _age_min >= 45.0 and liq < 4000:
+                return self._deny(address, "no-links", f"🚫 [{tag}] {symbol}: токену {_age_min:.0f}м, нет ссылок при пуле <$4k — скам-риск.")
 
         _up = symbol.upper()
         _scam_kw = ["AAPL", "MSFT", "TSLA", "NVDA", "GOOG", "AMZN", "META", "NFLX",

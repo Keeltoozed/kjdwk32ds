@@ -532,9 +532,8 @@ async def check_onchain_evm_security(address: str, chain: str, pair_data: dict =
                     if _frac < 0.005:
                         return False, f"пул Uniswap V4 опустошён девом (остаток {_frac*100:.4f}% — V4 LP Rug)"
                     if not is_open_pos:
-                        # Без ссылок токен обязан держать >= 25% эмиссии в V4 PoolManager (кейс PIPS: 0 ссылок, в пуле 2% -> слив в 0.005%).
-                        # Ссылочным проектам требуется минимум 5% эмиссии в V4 пуле.
-                        _min_v4_frac = 0.25 if not _links_pd else 0.05
+                        # Без ссылок токен обязан держать >= 5% эмиссии в V4 PoolManager (кейс PIPS/CUL/QUENTRA: дев заливает всего 1.8%-2.8% для скама).
+                        _min_v4_frac = 0.05
                         if _frac < _min_v4_frac:
                             return False, f"картонный пул Uniswap V4 (в пуле всего {_frac*100:.1f}% эмиссии < {_min_v4_frac*100:.0f}% — V4 LP-rug риск)"
                 if _tot_v > 0 and not _is_v4 and 4 in _res_map:
@@ -544,8 +543,8 @@ async def check_onchain_evm_security(address: str, chain: str, pair_data: dict =
                     if _p_frac < 0.005:
                         return False, f"пул V2/V3 опустошён девом (остаток {_p_frac*100:.4f}% — LP Rug)"
                     if not is_open_pos and not _has_reputation and chain in ("robinhood", "base"):
-                        if _p_frac < 0.25:
-                            return False, f"картонный пул V2/V3 (в пуле всего {_p_frac*100:.1f}% эмиссии < 25% без соцсетей — схема LP-rug)"
+                        if _p_frac < 0.05:
+                            return False, f"картонный пул V2/V3 (в пуле всего {_p_frac*100:.1f}% эмиссии < 5% без соцсетей — схема LP-rug)"
         if len(_pair_addr) == 42 and chain in ("robinhood", "base", "bsc"):
             _DEAD = "000000000000000000000000000000000000dead".zfill(64)
             _ZERO = "0000000000000000000000000000000000000000".zfill(64)
