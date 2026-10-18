@@ -204,6 +204,7 @@ async def position_manager_loop(analyzer, tracker):
                     if max_pnl_pct >= _tp1_sol_thr and not getattr(position, "tp1_done", False):
                         tracker.partial_close_position(mint, current_price, _tp1_sell, f"Take Profit +{_tp1_sol_thr*100:.0f}% (Tier-1 {int(_tp1_sell*100)}%)")
                         position.tp1_done = True
+                        position.is_moonbag = True
                         continue
                     # TIER-2: на +120% продаём 25% остатка (60% исходного ордера в рынке!)
                     if max_pnl_pct >= _tp2 and not getattr(position, "tp2_done", False):
@@ -238,6 +239,7 @@ async def position_manager_loop(analyzer, tracker):
                 if max_pnl_pct >= _tp1_sol_thr and not getattr(position, "tp1_done", False):
                     tracker.partial_close_position(mint, current_price, _tp1_sell, f"Take Profit +{_tp1_sol_thr*100:.0f}% (Tier-1 {int(_tp1_sell*100)}%)")
                     position.tp1_done = True
+                    position.is_moonbag = True
                     continue
                 if max_pnl_pct >= _tp2 and not getattr(position, "tp2_done", False):
                     tracker.partial_close_position(mint, current_price, _tp2_sell, f"Take Profit +{_tp2*100:.0f}% (2.2x Free Ride)")
@@ -1121,6 +1123,7 @@ async def _evm_track_once(tracker, chain: str, tag: str, emoji: str):
                 if maxp >= _tp1_evm_thr and not getattr(pos, "tp1_done", False):
                     tracker.partial_close_position(mint, cur, _tp1_sell, f"{tag} Take Profit +{_tp1_evm_thr*100:.0f}% (Tier-1 {int(_tp1_sell*100)}%)")
                     pos.tp1_done = True
+                    pos.is_moonbag = True
                     pos.price_checked_at = _t.time()
                     continue
                 _tp2_thr = float(getattr(config, "TP2_TRIGGER_PCT", 1.20))

@@ -107,7 +107,7 @@ async def jup_loop(analyzer, tracker):
                         _exit_t = getattr(_old_pos, "exit_time", 0.0) or 0.0
                         if _exit_t and (_t.time() - _exit_t) < 7200:
                             continue
-                    if _t.time() - processed.get(mint, 0.0) < 90:
+                    if _t.time() - processed.get(mint, 0.0) < 45:
                         continue
                     td = await analyzer.fetch_token_data(mint)
                     if not td:

@@ -182,6 +182,62 @@ async def close_session():
         await _session.close()
 
 
+import os
+import random
+
+_BROWSER_PROFILES = [
+    {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
+        "sec-ch-ua": '"Chromium";v="130", "Google Chrome";v="130", "Not?A_Brand";v="99"',
+        "sec-ch-ua-mobile": "?0",
+        "sec-ch-ua-platform": '"macOS"',
+    },
+    {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
+        "sec-ch-ua": '"Chromium";v="130", "Google Chrome";v="130", "Not?A_Brand";v="99"',
+        "sec-ch-ua-mobile": "?0",
+        "sec-ch-ua-platform": '"Windows"',
+    },
+    {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15",
+        "sec-ch-ua-mobile": "?0",
+        "sec-ch-ua-platform": '"macOS"',
+    },
+    {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:131.0) Gecko/20100101 Firefox/131.0",
+        "sec-ch-ua-mobile": "?0",
+    }
+]
+
+def _browser_headers_for(host: str) -> dict:
+    profile = random.choice(_BROWSER_PROFILES).copy()
+    profile.update({
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "en-US,en;q=0.9",
+        "sec-fetch-dest": "empty",
+        "sec-fetch-mode": "cors",
+        "sec-fetch-site": "same-site",
+    })
+    h_low = (host or "").lower()
+    if "dexscreener.com" in h_low:
+        profile["Referer"] = "https://dexscreener.com/"
+        profile["Origin"] = "https://dexscreener.com"
+    elif "geckoterminal.com" in h_low:
+        profile["Referer"] = "https://www.geckoterminal.com/"
+        profile["Origin"] = "https://www.geckoterminal.com"
+    elif "jup.ag" in h_low:
+        profile["Referer"] = "https://jup.ag/"
+        profile["Origin"] = "https://jup.ag"
+    elif "pump.fun" in h_low:
+        profile["Referer"] = "https://pump.fun/"
+        profile["Origin"] = "https://pump.fun"
+    elif "birdeye.so" in h_low:
+        profile["Referer"] = "https://birdeye.so/"
+    return profile
+
+_OPTIONAL_PROXY = os.getenv("PROXY_URL") or os.getenv("HTTPS_PROXY") or os.getenv("HTTP_PROXY") or None
+
+
 async def fetch_json(url: str, params=None, headers=None, timeout: int = 12,
                      retries: int = 3, method: str = "GET", json_payload=None):
     """GET/POST JSON через ГЛОБАЛЬНЫЙ семафор + троттлинг + backoff на 429/5xx.
@@ -195,10 +251,7 @@ async def fetch_json(url: str, params=None, headers=None, timeout: int = 12,
     except Exception:
         host = "?"
     session = await get_session()
-    hdrs = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
-        "Accept": "application/json",
-    }
+    hdrs = _browser_headers_for(host)
     if headers:
         hdrs.update(headers)
     sem = _sem_for(host)
@@ -209,11 +262,13 @@ async def fetch_json(url: str, params=None, headers=None, timeout: int = 12,
             if wait > 0:
                 await asyncio.sleep(wait)
             try:
+                # Если задан прокси — пробуем на 1-й попытке. При ошибке автоматически идём напрямую (fail-open)
+                cur_proxy = _OPTIONAL_PROXY if (attempt == 0 and _OPTIONAL_PROXY) else None
                 if method == "POST":
                     ctx = session.post(url, params=params, headers=hdrs,
-                                       json=json_payload, timeout=timeout)
+                                       json=json_payload, timeout=timeout, proxy=cur_proxy)
                 else:
-                    ctx = session.get(url, params=params, headers=hdrs, timeout=timeout)
+                    ctx = session.get(url, params=params, headers=hdrs, timeout=timeout, proxy=cur_proxy)
                 async with ctx as r:
                     last_status = r.status
                     if r.status == 200:

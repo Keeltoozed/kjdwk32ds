@@ -59,13 +59,13 @@ VIP_ENTRIES_ENABLED = True  # ВКЛЮЧЕНО: защищено 1м свечн�
 TIME_EXIT_MINUTES = 60  # Если за 30 минут нет пампа - выходим
 TIME_EXIT_PROFIT_REQ = 0.0
 
-# Take-Profit Ladder (Сбалансированная лестница: 80% едет после TP1, 60% после TP2, 42% на параболике!)
-TP1_TRIGGER_PCT = 0.50   # +50%: фиксируем 20% позиции и переводим в безубыток (80% тела продолжает рост!)
-TP1_SELL_FRAC = 0.20
-TP2_TRIGGER_PCT = 1.20   # +120% (2.2x): фиксируем 25% остатка (60% исходного ордера едет дальше!)
-TP2_SELL_FRAC = 0.25
-MOONBAG_TRIGGER_PCT = 2.50 # +250% (3.5x): фиксируем 30% остатка (42% исходного ордера ловит верхушку пика!)
-MOONBAG_SELL_FRAC = 0.30
+# Take-Profit (True Runner / PawPilot Mode: 80% позиции едет в ракету без ранних сбросов!)
+TP1_TRIGGER_PCT = 1.00   # +100% (2x): первая и единственная фиксация (забираем вложенное)
+TP1_SELL_FRAC = 0.20     # продаём всего 20% позиции (забираем вложенное), 80% остаётся лететь в ракету!
+TP2_TRIGGER_PCT = 99.0   # Выключено: не режем ракету на +120%, 80% едет целиком
+TP2_SELL_FRAC = 0.0
+MOONBAG_TRIGGER_PCT = 99.0 # Выключено: позиция уже летит как чистый 80% раннер
+MOONBAG_SELL_FRAC = 0.0
 
 # Trailing Stop & Profit Protection (Сужающийся параболический трейлинг: чем выше пик, тем плотнее зажимаем профит!)
 TRAILING_ACTIVATION_PCT = 0.45  # Включаем трейлинг от +45%
@@ -121,7 +121,7 @@ ROBINHOOD_DS_SLUG = "robinhood"  # slug DexScreener (НЕ 4663 - тот верн
 ROBINHOOD_GT_NETWORK = "robinhood"  # slug GeckoTerminal
 ROBINHOOD_RPC_URL = "https://rpc.mainnet.chain.robinhood.com"
 ROBINHOOD_EXPLORER = "https://robinhoodchain.blockscout.com"
-ROBINHOOD_MIN_LIQUIDITY = 3000.0  # Порог $3.0k: пулы GIGALAUDIA ($3.3k) и NIHILISM ($3.4k) забирают ракеты x2.5
+ROBINHOOD_MIN_LIQUIDITY = 6000.0  # Порог $6.0k: отсекает пустые ловушки ($3k TRN/Tortue), оставляя живые ракеты (PawPilot $40k+, MINTER $18k+)
 ROBINHOOD_MIN_AGE_MIN = 2.5  # 2.5 мин (как Solana, не пропускает ранние импульсы)
 ROBINHOOD_MAX_CREATOR_PCT = 0.20  # Блок токенов, где у создателя >20% (FEE 35.5%, Speed 100% honeypot)
 ROBINHOOD_MAX_OWNER_PCT = 0.20
@@ -179,7 +179,7 @@ GROWTH_TRAIL_DIST = 0.12  # дистанция 12%
 GROWTH_STAGNANT_MIN = 120  # флет режем через 2 часа, не 7 минут
 GROWTH_MAX_POS = 3  # не больше 3 трендовых позиций
 GROWTH_SIZE_USD = 15.0  # Ордер $15 (по запросу пользователя, было 6.0)
-GROWTH_INTERVAL = 300  # опрос вотчлиста каждые 5 мин
+GROWTH_INTERVAL = 75  # 75 сек: оперативный опрос откатов вместо 5 мин (в окне 5 мин кэша пулов)
 
 SNIPER_MIN_UNIQUE_BUYERS = 10
 SNIPER_BUYERS_WINDOW_MIN = 5
@@ -203,7 +203,7 @@ FAST_EARLY_MAX_AGE_SEC = 180  # early-микро-вход только если 
 # === ДОП. ИСТОЧНИКИ (портировано из прим; фильтры режут мусор, как раньше) ===
 # Jupiter Tokens API v2 (free key: portal.jup.ag). Без ключа jup_loop спит.
 JUP_API_KEY = (os.getenv("JUPITER_API") or os.getenv("JUP_API_KEY") or os.getenv("JUPITER_API_KEY") or "").strip().strip('"').strip("'")
-JUP_INTERVAL = 45
+JUP_INTERVAL = 30  # 30 сек: более частый скан трендов Jupiter
 
 # TG-превью коллов: ОТКЛЮЧЕНО (защита от скам-коллов и дев-дампов)
 TG_PREVIEW_ENABLED = False
