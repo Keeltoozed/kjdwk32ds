@@ -139,7 +139,7 @@ class Analyzer:
             if not getattr(_c, "ROCKET_VETO_ENABLED", False):
                 return None
             s = (sig or "").upper()
-            if any(k in s for k in ("LOTTERY", "DIPBUY", "COPY", "VIP", "VIP-RAY", "XGB 9")):
+            if any(k in s for k in ("LOTTERY", "DIPBUY", "COPY")):
                 return None
             if "SCOUT" in s:
                 # Для SCOUT не пускаем падающие ножи со скором ниже 0.45 (кейс Animates 0.38)
@@ -1523,8 +1523,8 @@ class Analyzer:
             return self._deny(address, f"m5-no-pressure {b5}/{s5}", f"🚫 [{tag}] {symbol}: m5 buys {b5} / sells {s5} — продавцы давят в моменте.")
         
         if chain == "robinhood":
-            _evm_tx_min = 6 if _age_min < 30 else 8
-            _evm_vol_min = 1200 if _age_min < 30 else 3000
+            _evm_tx_min = 12 if _age_min < 30 else 16
+            _evm_vol_min = 2500 if _age_min < 30 else 5000
         elif liq >= 15000.0 and b5 > s5 and m5 >= 2.0:
             # На глубоком пуле ($15k+) органические ракеты стартуют с 8-12 крупными покупками (кейсы DNA +1493%, 1 +1150%, FTR +115%)
             _evm_tx_min = 8
@@ -1536,7 +1536,7 @@ class Analyzer:
             return self._deny(address, "quiet", f"🚫 [{tag}] {symbol}: тихо (tx5 {(b5+s5)}, vol24 ${vol24:,.0f}).")
         # Соцсети DexScreener требуют $300 и ручной модерации (для безссылочных токенов goplus.verify_evm_token проверит лаунчпад и >=35% эмиссии в пуле).
         if not links:
-            _min_unlinked_tx = 6 if chain == "robinhood" else 8
+            _min_unlinked_tx = 10 if chain == "robinhood" else 8
             if (b5 + s5) < _min_unlinked_tx:
                 return self._deny(address, "no-links-inactive", f"🚫 [{tag}] {symbol}: нет ссылок и мало сделок (tx5 {b5+s5} < {_min_unlinked_tx}).")
             if _age_min >= 20.0 and liq < 12000:
@@ -1552,17 +1552,17 @@ class Analyzer:
         if not await self._evm_clone_ok(symbol, address, pair_data, chain, tag):
             return False
 
-        score = 50.0
-        score += min(m5, 60.0) * 0.4
+        score = 30.0
+        score += min(m5, 60.0) * 0.5
         if s > 0:
-            score += min(b / s, 3.0) * 6.0
+            score += min(b / s, 3.0) * 8.0
         score += min(liq / 50000.0, 1.0) * 8.0
         if len(links) >= 2:
             score += 5.0
         score = min(score, 100.0)
         self.last_score = float(score)
-        print(f"📊 [{tag}] {symbol}: финальный score {score:.1f} (порог 60), m5 {m5:+.1f}%, m1 {m1:+.1f}%")
-        if score >= 60.0:
+        print(f"📊 [{tag}] {symbol}: финальный score {score:.1f} (порог 65), m5 {m5:+.1f}%, m1 {m1:+.1f}%")
+        if score >= 65.0:
             if chain in ("robinhood", "bsc", "base", "ethereum"):
                 try:
                     import goplus as _gp
@@ -1834,9 +1834,9 @@ class Analyzer:
             print(f"📉 [RAYDIUM] {mint[:8]}: реальная ликвидность пула ${liquidity:,.0f} < $12,000 — микро-пул с риском мгновенного слива.")
             return False
 
-        # 2. Защита от картонных пулов (FDV / Liquidity > 120x — 1 кит продает и пул схлопывается)
-        if liquidity > 0 and fdv > 0 and (fdv / liquidity) > 120.0:
-            print(f"🚫 [HOLLOW-POOL] {mint[:8]}: FDV ${fdv:,.0f} vs Liq ${liquidity:,.0f} ({fdv/liquidity:.0f}x > 120x) — картонная ликвидность.")
+        # 2. Защита от картонных пулов (FDV / Liquidity > 40x — 1 кит продает и пул схлопывается)
+        if liquidity > 0 and fdv > 0 and (fdv / liquidity) > 40.0:
+            print(f"🚫 [HOLLOW-POOL] {mint[:8]}: FDV ${fdv:,.0f} vs Liq ${liquidity:,.0f} ({fdv/liquidity:.0f}x > 40x) — картонная ликвидность.")
             return False
 
         # 3. Защита от кругового wash-churn (350% оборота за 5м без движения цены)

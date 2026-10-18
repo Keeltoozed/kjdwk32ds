@@ -151,8 +151,8 @@ CONVICTION_MAX_M5_PCT = 0.60  # m5 до +60% (выше - вершина)
 CONVICTION_MIN_BUYSELL = 2.0  # покупки >= продаж x2
 CONVICTION_MIN_LIQ = 30000  # пул от $30к
 MAX_DEPLOYED_PCT = 0.60  # суммарно в рынке не больше 60% капитала (сдерживает тиринг)
-ROCKET_VETO_ENABLED = True  # Включено вето с безопасным низким порогом 0.03: режет мертвечину и скамы 0.00-0.02, пропуская BELIEVE (0.04), WORM (0.15), HOOKR (0.23)
-ROCKET_VETO_MIN = 0.03
+ROCKET_VETO_ENABLED = True  # Включено вето RKT >= 0.35: режет мертвечину и затухающие пулы (ROBINCAT 0.06, HYPURRT 0.10, COVENANT 0.14, BELIEVE 0.16)
+ROCKET_VETO_MIN = 0.35
 
 # === GROWTH MODE (тренд старых токенов, пока нет ракет) ===
 # Логика: ракеты ловятся импульсом m5, а зрелые капы едут часами. Отдельный режим:
