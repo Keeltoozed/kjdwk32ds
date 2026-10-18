@@ -777,8 +777,8 @@ class Analyzer:
             if _m5 > getattr(config, "VIP_MAX_M5_PCT", 0.40) * 100:
                 print(f"🚫 [VIP OVERHEAT] {mint}: m5 {_m5:+.0f}% — вертикаль уже прошла, вход = вершина.")
                 return False
-            if _m1 < 0:
-                print(f"🚫 [VIP REVERSAL] {mint}: m1 {_m1:+.1f}% — всплеск откатывает, ждём pullback.")
+            if _m1 < -3.5:
+                print(f"🚫 [VIP REVERSAL] {mint}: m1 {_m1:+.1f}% — резкий откат за 1м, ждём pullback.")
                 return False
             if _m1 > 15.0:
                 print(f"🚫 [VIP SPIKE] {mint}: m1 {_m1:+.1f}% — свеча-spike в моменте, вход = вершина. Ждём.")
@@ -1192,8 +1192,8 @@ class Analyzer:
             low_5m = min(lows_5m) if lows_5m else 0.0
             drawdown_5m_pct = ((eff_close - high_5m) / high_5m * 100.0) if high_5m > 0 else 0.0
 
-            # А) Активная красная свеча прямо сейчас (слив >= -3.5% за текущую минуту)
-            if c0_pct <= -3.5:
+            # А) Активная красная свеча прямо сейчас (реальный слив >= -7.5% за текущую минуту)
+            if c0_pct <= -7.5:
                 print(f"🚫 [1M-DUMP] {symbol} ({address[:8]}): текущая 1м свеча летит вниз ({c0_pct:+.1f}%) — падающий нож, отмена входа.")
                 return False
 
@@ -1816,12 +1816,9 @@ class Analyzer:
             print(f"🚫 [FRESH] {mint[:8]}: слабый поток (b/s {_b5}/{_s5}, vol ${_vm5:,.0f}) — нет покупателей.")
             return False
 
-        # Защита от лавины продаж (сброс позиций на хаях)
-        if _s5 >= 40 and _b5 < _s5 * 1.35:
-            print(f"🚫 [SELL-AVALANCHE] {mint[:8]}: лавина продаж ({_s5} продаж vs {_b5} покупок за 5м) — риск дампа.")
-            return False
-        if _s5 >= 80 and _b5 < _s5 * 1.50:
-            print(f"🚫 [SELL-AVALANCHE] {mint[:8]}: критический сброс ({_s5} продаж vs {_b5} покупок за 5м) — риск дампа.")
+        # Защита от реальной лавины продаж (продавцов больше, чем покупателей)
+        if _s5 >= 40 and _b5 < _s5 * 1.05:
+            print(f"🚫 [SELL-AVALANCHE] {mint[:8]}: лавина продаж ({_s5} продаж vs {_b5} покупок за 5м) — продавцы сильнее.")
             return False
 
         # 1. Защита от микро-чеков ботов (накрутка объёма и транзакций)
