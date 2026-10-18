@@ -755,7 +755,8 @@ class Analyzer:
             print(f"🚫 [PRICE-SPLIT] {symbol} ({mint[:8]}): рассинхрон цен между пулами {_div_r:.1f}x (миграция/гэп) — блок входа.")
             return False
         
-        scam_keywords = ["AAPL", "S&P", "SP500", "MSFT", "TSLA", "NVDA", "GOOG", "AMZN", "META", "NFLX", 
+        scam_keywords = ["AAPL", "S&P", "SP500", "MSFT", "TSLA", "TESLA", "SPACEX", "STARLINK", "XAI", "NEURALINK", "PAYPAL",
+                         "NVDA", "GOOG", "AMZN", "META", "NFLX", 
                          "PEPE", "SHIB", "DOGE", "FLOKI", "BONK", "WIF", "BOME", "POPCAT", "TRUMP", "BIDEN",
                          "ANTHROPIC", "CLAUDE", "OPENAI", "CHATGPT", "DEEPSEEK", "GROK", "GEMINI", "PERPLEXITY"]
                          
@@ -1241,7 +1242,8 @@ class Analyzer:
             pass
         return True
 
-    _EVM_SCAM_KW = ["AAPL", "MSFT", "TSLA", "NVDA", "GOOG", "AMZN", "META", "NFLX",
+    _EVM_SCAM_KW = ["AAPL", "MSFT", "TSLA", "TESLA", "SPACEX", "STARLINK", "XAI", "NEURALINK", "PAYPAL",
+                    "NVDA", "GOOG", "AMZN", "META", "NFLX",
                     "PEPE", "SHIB", "DOGE", "FLOKI", "BONK", "WIF", "BOME", "POPCAT", "TRUMP", "BIDEN",
                     "ANTHROPIC", "CLAUDE", "OPENAI", "CHATGPT", "DEEPSEEK", "GROK", "GEMINI", "PERPLEXITY"]
 
@@ -1361,9 +1363,9 @@ class Analyzer:
             "symbol": symbol, "chain": chain, "price": _px_now,
             "liq": liq, "m5": m5, "source": tag
         }
-        # BSC & Robinhood: токены младше 2.5 минут — зона мгновенных flash-рагов и дев-дампов (ORRIS/BATONA)
+        # BSC, Robinhood & Base: токены младше 2.5 минут — зона мгновенных flash-рагов и дев-дампов (ORRIS/BATONA)
         _min_age_thr = float(getattr(config, f"{chain.upper()}_MIN_AGE_MIN", 2.5))
-        if chain in ("bsc", "robinhood") and _age_min < _min_age_thr:
+        if chain in ("bsc", "robinhood", "base") and _age_min < _min_age_thr:
             return self._deny(address, f"{chain}-age {_age_min:.1f}m",
                               f"🚫 [{tag}] {symbol}: возраст {_age_min:.1f}м < {_min_age_thr:.1f}м — ранняя {tag} flash-rug зона.")
 
@@ -1422,25 +1424,25 @@ class Analyzer:
             if not _accum_on:
                 return self._deny(address, f"flat m5 {m5:+.1f}%", f"· [{tag}] {symbol}: флет m5 {m5:+.1f}% < {_evm_min_m5:.1f}% (ACCUM выключен, нет импульса)")
             # === ПРОВЕРКА НАКОПЛЕНИЯ В ТРЕНДЕ (ACCUMULATION / CONTINUATION) vs МЕРТВЫЙ ФЛЭТ ===
-            # Ловит ракеты в фазе 5м-паузы на растущем часовом тренде (WOLFPACK +4350%, HDONNI +2024%, SGAGE +1306%, NET +867%, INVR, GNEX)
+            # Ловит ракеты в фазе 5м-паузы на растущем часовом тренде ТОЛЬКО на устоявшихся глубоких пулах (>=30м, liq >= $25k).
+            # Запрещает покупку послестартовых разворотов (SEXLA, Wheel Smith, BOOMER, hi), где свежий токен сдулся в минус по m5.
             _tx1 = ((pair_data.get("txns") or {}).get("h1") or {})
             _b1 = int(_tx1.get("buys", 0) or 0)
             _s1 = int(_tx1.get("sells", 0) or 0)
             _v1 = float(((pair_data.get("volume") or {}).get("h1", 0) or 0))
             _vm5 = float(((pair_data.get("volume") or {}).get("m5", 0) or 0))
 
-            # 1. Мертвые пулы (нет сделок за час или нет реальной активности в m5) — жесткий отсев
-            # Защита от кейсов VRAX, BANKHAUS, ROBINCAT: 1-2 сделки за 5м — это не накопление, а затухающий/замороженный пул.
-            if (_b1 + _s1) < 12 or _v1 < 1200.0 or (b5 + s5) < 5 or s5 < 2 or b5 < 3 or _vm5 < 250.0:
-                return self._deny(address, f"dead-flat m5 {m5:+.1f}%", f"· [{tag}] {symbol}: мертвый флет (m5 txns: {b5}b/{s5}s, vol5m: ${_vm5:.0f}, vol1h: ${_v1:.0f})")
+            # 1. Только зрелые глубокие пулы (>= 30 мин, liq >= $25,000) с живым потоком сделок (m5 >= 12 сделок, >= $1,000 объём)
+            if _age_min < 30.0 or liq < 25000.0 or (_b1 + _s1) < 35 or _v1 < 5000.0 or (b5 + s5) < 12 or s5 < 3 or b5 < 7 or _vm5 < 1000.0:
+                return self._deny(address, f"dead-flat m5 {m5:+.1f}%", f"· [{tag}] {symbol}: флет/остывание (age: {_age_min:.0f}m, liq: ${liq:,.0f}, m5: {m5:+.1f}%, tx5m: {b5}b/{s5}s, vol5m: ${_vm5:.0f})")
 
             # 2. Мамонты / стейблкоины / utility (AERO, USDC, PAPER, VELVET)
             if liq > 350000.0 or any(sb in symbol.upper() for sb in ("USDC", "USDT", "DAI")):
                 return self._deny(address, "dex-giant", f"· [{tag}] {symbol}: тяжелый пул (${liq:,.0f}) или стейблкоин — не мем-ракета")
 
-            # 3. Накопление на растущем тренде (h1 от +3% до +350%, m5 >= -6%, покупатели сильнее продавцов)
-            if (-6.0 <= m5 < _evm_min_m5 and 3.0 <= h1 <= 350.0 and m1 >= -3.0
-                    and (_b1 + _s1) >= 12 and _b1 >= _s1 * 1.15 and b5 >= s5 * 1.15
+            # 3. Накопление на растущем тренде (h1 от +10% до +250%, m5 >= -2.0%, m1 >= 0%, покупатели >= 1.35x продавцов)
+            if (-2.0 <= m5 < _evm_min_m5 and 10.0 <= h1 <= 250.0 and m1 >= 0.0
+                    and (_b1 + _s1) >= 35 and _b1 >= _s1 * 1.25 and b5 >= int(s5 * 1.35)
                     and not self.is_churn(b5, s5, m5, liq=liq)):
                 if not self._evm_brand_ok(symbol, tag):
                     return False

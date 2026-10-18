@@ -125,22 +125,16 @@ async def position_manager_loop(analyzer, tracker):
                 # 1-тиковый фильтр аномального провала котировки (>45% за 1 тик при наличии прибыли >=15%):
                 # защищает от ложного тика побочного пула (кейс MAKERS +213% -> -100.0% на 1 тик),
                 # НЕ перезаписывая prev_price и НЕ пуская тик в Early Fade Cut до проверки 2-м тиком!
-                if prev_price > 0 and current_price <= prev_price * 0.55 and max_pnl_pct >= 0.15:
-                    _cg_n = int(getattr(position, "crash_confirm_n", 0) or 0) + 1
-                    position.crash_confirm_n = _cg_n
-                    if _cg_n < 2:
-                        print(f"⚠️ [SOL-TICK-VERIFY] {position.symbol} ({mint[:8]}): аномальный 1-тик {pnl_pct*100:+.1f}% после пика +{max_pnl_pct*100:.0f}% — ждём 2-й тик подтверждения.")
-                        position.price_checked_at = time.time()
-                        continue
-
                 if prev_ts > 0 and (time.time() - prev_ts) < 60 and prev_price > 0 \
                         and current_price <= prev_price * 0.78:
                     _cg_n = int(getattr(position, "crash_confirm_n", 0) or 0) + 1
                     position.crash_confirm_n = _cg_n
-                    if _cg_n >= 2 or max_pnl_pct < 0.15:
-                        tracker.close_position(mint, current_price,
-                                               f"Crash Guard (-{(1 - current_price/prev_price)*100:.0f}% за {(time.time()-prev_ts):.0f} сек)")
+                    if _cg_n < 2:
+                        print(f"⚠️ [SOL-TICK-VERIFY] {position.symbol} ({mint[:8]}): резкий 1-тик {pnl_pct*100:+.1f}% (-{(1 - current_price/prev_price)*100:.0f}%) — ждём 2-й тик подтверждения.")
                         continue
+                    tracker.close_position(mint, current_price,
+                                           f"Crash Guard (-{(1 - current_price/prev_price)*100:.0f}% за {(time.time()-prev_ts):.0f} сек)")
+                    continue
                 else:
                     position.crash_confirm_n = 0
                 position.price_checked_at = time.time()
@@ -159,15 +153,17 @@ async def position_manager_loop(analyzer, tracker):
                 _hold_min = getattr(config, "STAGNANT_HOLD_MIN", 25)
                 _loss_min = (float(getattr(config, "STAGNANT_LOSS_MIN", 15))
                              if max_pnl_pct >= 0.05 else
-                             float(getattr(config, "STAGNANT_LOSS_MIN_FAST", 7)))
-                if minutes_held >= _loss_min and pnl_pct < 0 and max_pnl_pct < 0.05:
+                             float(getattr(config, "STAGNANT_LOSS_MIN_FAST", 10)))
+                if minutes_held >= _loss_min and pnl_pct <= -0.05 and max_pnl_pct < 0.05:
                     # ЖИВОЙ ФЛЕТ НЕ РЕЖЕМ: консолидация 5-15 мин перед выстрелом выглядит
                     # как -2%. Проверяем сделки за 5 мин: есть buys = пул жив, даём +5 мин
                     # (макс 2 грейса). Нет сделок = труп, режем. Ошибка API = пропуск цикла.
                     _graces = getattr(position, "stagnant_graces", 0)
                     try:
                         _td = await analyzer.fetch_token_data(mint)
-                        _tx5 = ((_td.get("txns") or {}).get("m5", {}) or {}) if _td else {}
+                        if not _td:
+                            continue
+                        _tx5 = ((_td.get("txns") or {}).get("m5", {}) or {})
                         _alive = ((_tx5.get("buys", 0) or 0) + (_tx5.get("sells", 0) or 0)) >= 3
                     except Exception:
                         continue
@@ -1136,23 +1132,30 @@ async def _evm_track_once(tracker, chain: str, tag: str, emoji: str):
                     pos.price_checked_at = _t.time()
                     continue
 
-                # Защита раннера ТОЛЬКО от аномального 1-тикового глюка побочного пула (>45% провал за 1 тик или прыжок из +40%+ в минус):
-                # не задерживает штатный трейлинг-стоп на пиках (чтобы не раздувать откат с 10% до 36%, как в PAPERV)!
+                # 2-тиковое подтверждение резкого провала за 1 тик (>=22% за тик или обвал с пика +35%+ в минус):
+                # защищает ракеты (кейс TSI: прокол -33% за 3с перед ростом +400% / 5x на пуле $275k) от 1-секундных теней и побочных пулов.
+                # На 1-м тике откатываем pos.current_price_usd = prev, чтобы на 2-м тике (через 3с) сравнение шло с реальной до-прокольной ценой!
                 _w_guard = float(getattr(config, "WHALE_DUMP_GUARD_PCT", 0.22))
-                _sudden_tick_drop = (prev > 0 and cur <= prev * 0.55) or (maxp >= 0.40 and pnl <= -0.05)
-                if _sudden_tick_drop and maxp >= 0.15:
+                _min_guard_drop = min(_w_guard, _crash_drop)
+                _sudden_tick_drop = (
+                    (prev > 0 and cur <= prev * (1.0 - _min_guard_drop))
+                    or (maxp >= 0.35 and pnl <= -0.05)
+                )
+                if _sudden_tick_drop:
                     pos.crash_confirm_n = int(getattr(pos, "crash_confirm_n", 0) or 0) + 1
                     if pos.crash_confirm_n < 2:
-                        print(f"⚠️ [{tag}-TICK-VERIFY] {pos.symbol} ({mint[:10]}): резкий тик {pnl*100:+.1f}% после пика +{maxp*100:.0f}% — ждём 2-й тик подтверждения.")
-                        pos.price_checked_at = _t.time()
+                        pos.current_price_usd = prev
+                        if pos.entry_price_usd:
+                            pos.current_pnl_usd = pos.amount_usd * ((prev - pos.entry_price_usd) / pos.entry_price_usd)
+                        print(f"⚠️ [{tag}-TICK-VERIFY] {pos.symbol} ({mint[:10]}): резкий прокол за 1 тик ({(1 - cur / prev)*100 if prev > 0 else 0:.0f}% -> {pnl*100:+.1f}%) — ждём 2-й тик подтверждения (3с).")
                         continue
                 else:
                     pos.crash_confirm_n = 0
 
-                if not reason and prev_ts and (_t.time() - prev_ts) < 15 and prev > 0 and cur <= prev * (1 - _w_guard) and maxp >= 0.35:
-                    reason = f"{tag} Whale Dump Guard ({(1 - cur / prev) * 100:.0f}% за {_t.time() - prev_ts:.0f}с)"
+                if not reason and prev_ts and (_t.time() - prev_ts) < 20 and prev > 0 and cur <= prev * (1 - _w_guard) and maxp >= 0.35:
+                    reason = f"{tag} Whale Dump Guard ({(1 - cur / prev) * 100:.0f}% за {_t.time() - prev_ts:.0f}с, 2 тика)"
                 elif not reason and prev_ts and (_t.time() - prev_ts) < 60 and prev > 0 and cur <= prev * (1 - _crash_drop):
-                    reason = f"{tag} Crash Guard ({(1 - cur / prev) * 100:.0f}% за {_t.time() - prev_ts:.0f}с)"
+                    reason = f"{tag} Crash Guard ({(1 - cur / prev) * 100:.0f}% за {_t.time() - prev_ts:.0f}с, 2 тика)"
                 elif _floor_pnl is not None and pnl <= _floor_pnl:
                     if pnl >= 0:
                         reason = f"{tag} Profit Floor (+{_floor_pnl*100:.0f}% locked after peak +{maxp*100:.0f}%)"
@@ -1915,4 +1918,13 @@ with tab2:
 if st.checkbox("Включить автообновление (каждые 5 сек)", value=False):
     time.sleep(5)
     st.rerun()
+
+if __name__ == "__main__":
+    # Если запущен напрямую (python3 main.py), держим процесс активным для терминала/демона
+    import time
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        pass
 

@@ -141,13 +141,13 @@ class MatureExitManager:
         if minutes_held >= 1.5 and hasattr(config, 'STOP_LOSS_PCT') and pnl_pct <= config.STOP_LOSS_PCT:
             return f"Mature Stop Loss ({config.STOP_LOSS_PCT*100:.0f}%)"
 
-        # Time exit - Stagnant: минус режем быстро (он тянет вниз),
-        # мелкий плюс держим до STAGNANT_HOLD_MIN - даём ракете время (раньше резали и его)
-        _loss_min = getattr(config, 'STAGNANT_LOSS_MIN', 7)
+        # Time exit - Stagnant: не перекрываем проверку живого стакана из main.py раньше 15 минут,
+        # и режем только реальную просадку <= -5% без импульса (_maxp < +5%), чтобы не убивать консолидацию перед пампом (кейс Chaton +62%)
+        _loss_min = getattr(config, 'STAGNANT_LOSS_MIN', 15)
         _hold_min = getattr(config, 'STAGNANT_HOLD_MIN', 25)
-        if minutes_held >= _loss_min and pnl_pct < 0:
-            return f"Stagnant Loss Cut ({minutes_held:.0f}m)"
-        if minutes_held >= _hold_min and pnl_pct < 0.05:
+        if minutes_held >= max(_loss_min, 15) and pnl_pct <= -0.05 and _maxp < 0.05:
+            return f"Stagnant Loss Cut ({minutes_held:.0f}m, {pnl_pct*100:.1f}%)"
+        if minutes_held >= _hold_min and pnl_pct < 0.05 and _maxp < 0.15:
             return f"Stagnant Cut ({minutes_held:.0f}m)"
             
         # Old fallback

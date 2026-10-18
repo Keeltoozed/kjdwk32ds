@@ -88,8 +88,9 @@ SOLANA_MAX_AGE_HOURS = 24.0  # Не покупать старые тухлые �
 INFANT_WINDOW_MIN = 2.0
 INFANT_DUMP_PCT = -0.25  # Резать в первые 2 мин только реальный дамп -25%+ (рабочие тени -12%..-18% выживают)
 
-# Stagnant: минус режем на N-й минуте, мелкий плюс держим до M-й (бектест-свип)
-STAGNANT_LOSS_MIN = 7
+# Stagnant: живым пулам даём 15 мин на раскачку (кейс Chaton: консолидация 15м -> рост +62%), мёртвые режем на 10-й минуте
+STAGNANT_LOSS_MIN = 15
+STAGNANT_LOSS_MIN_FAST = 10
 STAGNANT_HOLD_MIN = 25
 
 # Filtering
