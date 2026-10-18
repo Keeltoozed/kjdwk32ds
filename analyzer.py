@@ -1363,8 +1363,11 @@ class Analyzer:
             "symbol": symbol, "chain": chain, "price": _px_now,
             "liq": liq, "m5": m5, "source": tag
         }
-        # BSC, Robinhood & Base: токены младше 2.5 минут — зона мгновенных flash-рагов и дев-дампов (ORRIS/BATONA)
-        _min_age_thr = float(getattr(config, f"{chain.upper()}_MIN_AGE_MIN", 2.5))
+        # BSC, Robinhood & Base: токены младше порога — зона мгновенных flash-рагов и дев-дампов.
+        # Для пулов с живым капиталом (liq >= $15k) порог снижен до 1.5м (кейсы SCRAFT +648% на 2.2м, INFLUENCE +950% на 2.4м),
+        # для тонких пулов (< $15k) сохраняем безопасные 2.5м.
+        _cfg_age = float(getattr(config, f"{chain.upper()}_MIN_AGE_MIN", 2.5))
+        _min_age_thr = 1.5 if (chain in ("robinhood", "base", "bsc") and liq >= 15000.0) else _cfg_age
         if chain in ("bsc", "robinhood", "base") and _age_min < _min_age_thr:
             return self._deny(address, f"{chain}-age {_age_min:.1f}m",
                               f"🚫 [{tag}] {symbol}: возраст {_age_min:.1f}м < {_min_age_thr:.1f}м — ранняя {tag} flash-rug зона.")
@@ -1373,9 +1376,9 @@ class Analyzer:
         # Жёстко ограничен по перегреву (0.8% <= m5 <= 75%, h1 <= 250%), чтобы не покупать хаи 5x-свечей (кейсы DMN +433%, detected +559%).
         # Антискам verify_evm_token пропускает без ссылок ТОЛЬКО официальные лаунчпад-контракты с >=35% эмиссии в пуле, а ручные ERC20 без ссылок блокирует.
         _scout_min_liq = max(5000.0, float(min_liq))
-        if (_age_min < 10.0 and 0.8 <= m5 <= 75.0 and 0.0 <= h1 <= 250.0
+        if (_age_min < 10.0 and 0.8 <= m5 <= 150.0 and 0.0 <= h1 <= 450.0
                 and (b5 + s5) >= 15 and liq >= _scout_min_liq
-                and s5 >= 3 and s >= 3 and b5 >= int(s5 * 1.25) and (b5 / max(s5, 1)) <= 5.0):
+                and s5 >= 2 and s >= 2 and b5 >= int(s5 * 1.25) and (b5 / max(s5, 1)) <= 5.0):
             if not self._evm_brand_ok(symbol, tag):
                 return False
             if not await self._evm_clone_ok(symbol, address, pair_data, chain, tag):
@@ -1471,12 +1474,12 @@ class Analyzer:
 
             return self._deny(address, f"flat m5 {m5:+.1f}%", f"· [{tag}] {symbol}: флет m5 {m5:+.1f}%")
         _max_m5 = 65.0
-        # При органическом перевесе покупателей расширяем коридор до 135% на глубоких пулах ($25k+),
-        # чтобы забирать мощные ракеты (NOM +434%, CAP +319%, DOPE)
-        if chain in ("robinhood", "base", "bsc") and liq >= 25000.0 and s5 > 0 and (b5 / s5) >= 1.35 and m1 <= 15.0 and not self.is_churn(b5, s5, m5, liq=liq):
-            _max_m5 = 135.0
-        elif chain in ("robinhood", "base", "bsc") and liq >= min_liq and s5 > 0 and (b5 / s5) >= 1.25 and m1 <= 12.0 and not self.is_churn(b5, s5, m5, liq=liq):
-            _max_m5 = 95.0
+        # При органическом перевесе покупателей расширяем коридор m5, чтобы забирать супер-ракеты
+        # (кейсы INFLUENCE +159% -> +950%, USEMATH +385% -> +108%, ZDOG +327% -> +177%, FINI +268%, PEPÉ +256%)
+        if chain in ("robinhood", "base", "bsc") and liq >= 20000.0 and s5 > 0 and (b5 / s5) >= 1.35 and m1 <= 16.0 and not self.is_churn(b5, s5, m5, liq=liq):
+            _max_m5 = 450.0  # Мощное ралли на глубоком пуле ($20k+): вход на 2-й ступени ракеты
+        elif chain in ("robinhood", "base", "bsc") and liq >= min_liq and s5 > 0 and (b5 / s5) >= 1.25 and m1 <= 14.0 and not self.is_churn(b5, s5, m5, liq=liq):
+            _max_m5 = 200.0  # Умеренный пул (от $6k): коридор до +200% (кейсы BWIGITTE +108%, 1649AC +111%)
 
         if m5 > _max_m5:
             return self._deny(address, f"top m5 {m5:+.0f}%", f"🚫 [{tag}-OVERHEAT] {symbol}: m5 {m5:+.1f}% — вертикаль уже прошла, вход = вершина.")
@@ -1496,7 +1499,7 @@ class Analyzer:
         if h1 < 0.0:
             if not (m5 >= 1.5 and s5 > 0 and b5 >= s5 * 1.15):
                 return self._deny(address, f"h1-red {h1:+.1f}%", f"🚫 [{tag}] {symbol}: h1 {h1:+.1f}% — часовой тренд вниз без разворота.")
-        _max_h1 = 800.0 if (liq >= 12000.0 and s5 > 0 and b5 >= s5 * 1.15 and m5 <= 85.0) else 350.0
+        _max_h1 = 1200.0 if (liq >= 20000.0 and s5 > 0 and b5 >= s5 * 1.20) else (800.0 if (liq >= 12000.0 and s5 > 0 and b5 >= s5 * 1.15) else 350.0)
         if h1 > _max_h1:
             return self._deny(address, "gone", f"🚫 [{tag}] {symbol}: h1 {h1:+.0f}% > +{_max_h1:.0f}% — параболик уже улетел, вершина.")
         

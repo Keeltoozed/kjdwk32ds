@@ -610,7 +610,8 @@ async def verify_evm_token(address: str, chain: str, pair_data: dict = None) -> 
         _c_ms = pair_data.get("pairCreatedAt") or 0
         import time as _t_rob
         _a_min = ((_t_rob.time() * 1000 - _c_ms) / 60000.0) if _c_ms else 999.0
-        _min_age = float(getattr(config, "ROBINHOOD_MIN_AGE_MIN", 2.5))
+        _liq_rob = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
+        _min_age = 1.5 if _liq_rob >= 15000.0 else float(getattr(config, "ROBINHOOD_MIN_AGE_MIN", 2.5))
         if _a_min < _min_age:
             return False, f"возраст {_a_min:.1f}м < {_min_age:.1f}м — ранняя flash-rug зона"
             
