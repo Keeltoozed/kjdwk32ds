@@ -545,11 +545,11 @@ async def check_onchain_evm_security(address: str, chain: str, pair_data: dict =
                         # А) Анонимный (без соцсетей и не зрелый) + ручной голый ERC-20 на V4 (без лаунчпада) = 100% V4 LP-rug (detected, DMN, FEE, Base 3256)
                         if _is_bare_manual_erc20 and not _has_reputation and chain in ("robinhood", "base"):
                             return False, f"анонимный ручной V4 ERC20 без лаунчпада и соцсетей (len={len(_bytecode)}, в пуле {_frac*100:.1f}% — схема V4 LP-rug)"
-                        # Б) Если репутации ещё нет (свежий токен с лаунчпада вроде WHEELLOW/BONKY/PACKD), требуем минимум 35% эмиссии в V4 PoolManager.
-                        # Если репутация ЕСТЬ (соцсети или зрелый пул вроде DOPE, GRGKO, WORM, BELIEVE), то даже на стандартном ERC20 пропускаем при остатке >= 1% в пуле!
-                        _min_v4_frac = 0.35 if not _has_reputation else 0.01
+                        # Без ссылок анонимный токен обязан держать >= 25% эмиссии в V4 PoolManager (кейс PIPS: 0 ссылок, в пуле 2% -> слив в 0.005%).
+                        # Ссылочным нормальным проектам требуется минимум 5% эмиссии в V4 пуле.
+                        _min_v4_frac = 0.25 if not _links_pd else 0.05
                         if _frac < _min_v4_frac:
-                            return False, f"картонный пул Uniswap V4 (в пуле всего {_frac*100:.1f}% эмиссии < {_min_v4_frac*100:.0f}% без соцсетей — схема V4 LP-rug)"
+                            return False, f"картонный пул Uniswap V4 (в пуле всего {_frac*100:.1f}% эмиссии < {_min_v4_frac*100:.0f}% — V4 LP-rug риск)"
                 if _tot_v > 0 and not _is_v4 and 4 in _res_map:
                     _pair_h = _res_map[4].get("result", "0x")
                     _pair_v = int(_pair_h, 16) if _pair_h and _pair_h != "0x" else 0
