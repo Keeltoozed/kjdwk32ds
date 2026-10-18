@@ -404,7 +404,9 @@ class Analyzer:
         # Ни при каких условиях не возвращаемся к замороженному мёртвому пулу pumpfun ($43k FDV, кейс DUMB -99%).
         amm_pairs = [p for p in sol_pairs if p.get("dexId") not in ("pump", "pumpfun")]
         real_pairs = [p for p in amm_pairs if float(((p.get("liquidity") or {}).get("usd", 0) or 0)) >= 500]
-        if amm_pairs:
+        if real_pairs:
+            best_pair = sorted(real_pairs, key=lambda p: float(((p.get("liquidity") or {}).get("usd", 0) or 0)), reverse=True)[0]
+        elif amm_pairs:
             best_pair = sorted(amm_pairs, key=lambda p: float(((p.get("liquidity") or {}).get("usd", 0) or 0)), reverse=True)[0]
         else:
             # 2. Если AMM-пулов вообще нет — токен ещё на bonding curve pump.fun

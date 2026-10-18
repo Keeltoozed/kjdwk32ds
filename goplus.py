@@ -193,10 +193,17 @@ def _verdict_sol(info: dict):
     if not isinstance(info, dict) or not info:
         return True, "no-data"
     
-    # 1. Прямой Honeypot
+    # 1. Прямой Honeypot & Token-2022 бэкдоры
     for k in ("is_honeypot", "honeypot"):
         if str(info.get(k, "0")) == "1":
             return False, "honeypot"
+    if str(info.get("default_account_state", "0")) in ("1", "frozen"):
+        return False, "default_account_frozen (Token-2022 счета покупателей заморожены)"
+    if str(info.get("non_transferable", "0")) in ("1", "true"):
+        return False, "non_transferable (Token-2022 запрет передачи)"
+    th = info.get("transfer_hook")
+    if isinstance(th, dict) and (str(th.get("status", "0")) == "1" or len(th.get("authority", []) or []) > 0):
+        return False, "transfer_hook (Token-2022 перехват трансферов)"
 
     # 2. Mintable (права бесконечного довыпуска токенов девом для дампа)
     mintable = info.get("mintable")
@@ -271,7 +278,8 @@ def is_hard_scam(reason: str) -> bool:
     for danger in ("honeypot", "cannot_sell", "cannot_buy", "blacklist", "cooldown",
                    "mintable", "ownership", "hidden_owner", "selfdestruct",
                    "external_call", "tax", "creator_pct", "owner_pct", "lp", "рагпулл",
-                   "кит", "дамп", "freezable", "closable", "balance_mutable", "кабал"):
+                   "кит", "дамп", "freezable", "closable", "balance_mutable", "кабал",
+                   "frozen", "non_transferable", "transfer_hook", "default_account"):
         if danger in r:
             return True
     return False
@@ -614,8 +622,17 @@ async def verify_evm_token(address: str, chain: str, pair_data: dict = None) -> 
         if (b5 + s5) >= 25 and (s5 / (b5 + s5)) < 0.04:
             return False, f"аномалия продаж m5 {s5}s/{b5}b — honeypot-ловушка"
 
-        # 2. Ончейн-аудит байткода и LP-резервов через RPC (селекторы бэкдоров + V4 PoolManager fraction >= 5% / V2 LP burn)
-        return await check_onchain_evm_security(address, "robinhood", pair_data, is_open_pos=False)
+        # 2. Ончейн-аудит байткода и LP-резервов через RPC (селекторы бэкдоров + V4 PoolManager fraction >= 8% / V2 LP burn)
+        _oc_ok, _oc_why = await check_onchain_evm_security(address, "robinhood", pair_data, is_open_pos=False)
+        if not _oc_ok:
+            return False, _oc_why
+
+        # 3. GoPlus Security API (проверка creator_pct, налогов, honeypot ДО входа!)
+        _g_ok, _g_why = await check_token(address, "robinhood", pair_data=pair_data)
+        if not _g_ok and is_hard_scam(_g_why):
+            return False, f"GoPlus {_g_why}"
+
+        return True, ""
 
     if chain not in ("bsc", "base", "ethereum"):
         return True, "unsupported"

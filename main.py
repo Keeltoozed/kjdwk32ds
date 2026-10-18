@@ -101,7 +101,7 @@ async def position_manager_loop(analyzer, tracker):
                         import goplus as _gp
                         _g_ok, _g_why = await _gp.check_solana(mint)
                         _w_low = str(_g_why or "").lower()
-                        if not _g_ok and any(k in _w_low for k in ("honeypot", "cannot_sell", "freezable", "closable", "balance_mutable")):
+                        if not _g_ok and any(k in _w_low for k in ("honeypot", "cannot_sell", "freezable", "closable", "balance_mutable", "frozen", "non_transferable", "transfer_hook", "default_account")):
                             print(f"🚨 [SOL-HONEYPOT] {position.symbol} ({mint[:10]}): {_g_why} — токен непродаваем, списание в -100%.")
                             tracker.close_position(mint, 0.0, f"SOL Honeypot / Unsellable ({_g_why})")
                             continue
