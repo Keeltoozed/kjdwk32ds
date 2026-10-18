@@ -250,8 +250,10 @@ async def position_manager_loop(analyzer, tracker):
 
                 # 1.5 ГАРАНТИРОВАННЫЙ НЕСНИЖАЕМЫЙ ПОРОГ ПРИБЫЛИ (PROFIT FLOOR LOCK)
                 _floor_pnl = None
-                if max_pnl_pct >= 3.00:       # Пик +300%+ (4x) -> гарантируем минимум +235%
-                    _floor_pnl = 2.35
+                if max_pnl_pct >= 5.00:       # Гипер-ракета (+500%+): держим 75% прибыли (пик +692% -> пол +519%)
+                    _floor_pnl = round(max_pnl_pct * 0.75, 2)
+                elif max_pnl_pct >= 3.00:     # Мега-ракета (+300%..+500%): держим 72% прибыли (пик +400% -> пол +288%)
+                    _floor_pnl = max(2.35, round(max_pnl_pct * 0.72, 2))
                 elif max_pnl_pct >= 2.00:     # Пик +200%+ (3x) -> гарантируем минимум +150%
                     _floor_pnl = 1.50
                 elif max_pnl_pct >= 1.50:     # Пик +150%+ (2.5x) -> гарантируем минимум +110%
@@ -1084,8 +1086,10 @@ async def _evm_track_once(tracker, chain: str, tag: str, emoji: str):
                 
                 # 1. ГАРАНТИРОВАННЫЙ НЕСНИЖАЕМЫЙ ПОРОГ ПРИБЫЛИ (PROFIT FLOOR LOCK)
                 _floor_pnl = None
-                if maxp >= 3.00:       # Пик +300%+ (4x) -> гарантируем минимум +235%
-                    _floor_pnl = 2.35
+                if maxp >= 5.00:       # Гипер-ракета (+500%+): держим 75% прибыли (пик +692% -> пол +519%)
+                    _floor_pnl = round(maxp * 0.75, 2)
+                elif maxp >= 3.00:     # Мега-ракета (+300%..+500%): держим 72% прибыли (пик +400% -> пол +288%)
+                    _floor_pnl = max(2.35, round(maxp * 0.72, 2))
                 elif maxp >= 2.00:     # Пик +200%+ (3x) -> гарантируем минимум +150%
                     _floor_pnl = 1.50
                 elif maxp >= 1.50:     # Пик +150%+ (2.5x) -> гарантируем минимум +110%

@@ -48,8 +48,10 @@ class MatureExitManager:
         # фиксация пола включается только от +35% (после TP1 30%) с запасом ~20% на рабочую коррекцию.
         max_pnl_pct = (position.max_price_usd - position.entry_price_usd) / position.entry_price_usd if position.entry_price_usd else 0
         _floor_pnl = None
-        if max_pnl_pct >= 3.00:       # Пик +300%+ (4x) -> гарантируем минимум +235%
-            _floor_pnl = 2.35
+        if max_pnl_pct >= 5.00:       # Гипер-ракета (+500%+): держим 75% прибыли (пик +692% -> пол +519%)
+            _floor_pnl = round(max_pnl_pct * 0.75, 2)
+        elif max_pnl_pct >= 3.00:     # Мега-ракета (+300%..+500%): держим 72% прибыли (пик +400% -> пол +288%)
+            _floor_pnl = max(2.35, round(max_pnl_pct * 0.72, 2))
         elif max_pnl_pct >= 2.00:     # Пик +200%+ (3x) -> гарантируем минимум +150%
             _floor_pnl = 1.50
         elif max_pnl_pct >= 1.50:     # Пик +150%+ (2.5x) -> гарантируем минимум +110%
