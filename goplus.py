@@ -576,7 +576,9 @@ async def check_onchain_evm_security(address: str, chain: str, pair_data: dict =
                     if not is_open_pos and not _has_reputation and chain in ("robinhood", "base"):
                         if _p_frac < 0.05:
                             return False, f"картонный пул V2/V3 (в пуле всего {_p_frac*100:.1f}% эмиссии < 5% без соцсетей — схема LP-rug)"
-        if len(_pair_addr) == 42 and chain in ("robinhood", "base", "bsc"):
+        # 3. Проверка сжигания ликвидности (LP Burn / Lock) — ТОЛЬКО ПЕРЕД ВХОДОМ В СДЕЛКУ (not is_open_pos):
+        # Предотвращает ложное списание открытых позиций и строго блокирует незалоченные токены на всех EVM-сетях
+        if not is_open_pos and len(_pair_addr) == 42 and chain in ("robinhood", "base", "bsc"):
             _DEAD = "000000000000000000000000000000000000dead".zfill(64)
             _ZERO = "0000000000000000000000000000000000000000".zfill(64)
             _pl_lp = [
@@ -596,12 +598,12 @@ async def check_onchain_evm_security(address: str, chain: str, pair_data: dict =
                     _zero_lp = int(_zero_lp_h, 16) if _zero_lp_h and _zero_lp_h != "0x" else 0
                     if _tot_lp > 0:
                         _burnt_pct = ((_dead_lp + _zero_lp) / _tot_lp) * 100.0
-                        if _burnt_pct < 80.0 and (chain == "robinhood" or not _has_reputation):
+                        # Строгая защита для ВСЕХ сетей (BSC, Base, Robinhood): не менее 80% LP сожжено
+                        if _burnt_pct < 80.0:
                             return False, f"ликва пула V2 не сожжена ({_burnt_pct:.1f}% < 80%) — риск вывода ликвидности девом"
-                elif not is_open_pos and not _has_reputation:
+                elif not _has_reputation:
                     # Если totalSupply() выдает revert (error), это Uniswap V3 или кастомный пул с NFT-позициями.
-                    # На Robinhood у таких пулов нет блокировки/сжигания LP — 100% риск выдергивания ликвидности (KEN LP-rug).
-                    if chain == "robinhood" or (_res_lp and isinstance(_res_lp[0], dict) and "error" in _res_lp[0]):
+                    if chain in ("robinhood", "bsc", "base") or (_res_lp and isinstance(_res_lp[0], dict) and "error" in _res_lp[0]):
                         return False, f"пул не имеет сжигаемого V2 LP ({chain}: V3/ручной пул без доказательства блокировки) — риск LP-rug"
     except Exception as _e_oc:
         if chain == "robinhood":
