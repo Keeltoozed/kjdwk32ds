@@ -598,6 +598,11 @@ async def check_onchain_evm_security(address: str, chain: str, pair_data: dict =
                         _burnt_pct = ((_dead_lp + _zero_lp) / _tot_lp) * 100.0
                         if _burnt_pct < 80.0 and (chain == "robinhood" or not _has_reputation):
                             return False, f"ликва пула V2 не сожжена ({_burnt_pct:.1f}% < 80%) — риск вывода ликвидности девом"
+                elif not is_open_pos and not _has_reputation:
+                    # Если totalSupply() выдает revert (error), это Uniswap V3 или кастомный пул с NFT-позициями.
+                    # На Robinhood у таких пулов нет блокировки/сжигания LP — 100% риск выдергивания ликвидности (KEN LP-rug).
+                    if chain == "robinhood" or (_res_lp and isinstance(_res_lp[0], dict) and "error" in _res_lp[0]):
+                        return False, f"пул не имеет сжигаемого V2 LP ({chain}: V3/ручной пул без доказательства блокировки) — риск LP-rug"
     except Exception as _e_oc:
         if chain == "robinhood":
             return False, f"ошибка ончейн-аудита Robinhood ({type(_e_oc).__name__}) — блок по безопасности"
