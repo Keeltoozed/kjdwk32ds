@@ -1382,6 +1382,11 @@ class Analyzer:
             "symbol": symbol, "chain": chain, "price": _px_now,
             "liq": liq, "m5": m5, "source": tag
         }
+        # Защита от мульти-пулов с гигантским рассинхроном цен (кейс CABAL на Robinhood: $0.0023 vs $0.000096)
+        if pair_data.get("_price_divergence"):
+            _div_r = float(pair_data.get("_price_divergence_ratio", 0.0) or 0.0)
+            return self._deny(address, "price-split",
+                              f"🚫 [{tag}] {symbol}: рассинхрон цен между пулами {_div_r:.1f}x — ловушка арбитража/мультипул.")
         # Ранний Scout-режим для свежих ракет (<15 мин):
         # Ловит стартовые импульсы ракет (USEMATH, FINI, MUCRON, WISDOM, MUSEBOT, AMIRI100X, AICELL) от 0.3 мин (18 сек)
         # при подтверждённых продажах (honeypot исключён) и ликвидности >= min_liq ($2.5k)
@@ -1410,18 +1415,21 @@ class Analyzer:
             _q_amt = float((pair_data.get("liquidity") or {}).get("quote", 0) or 0)
             _q_sym = str((pair_data.get("quoteToken") or {}).get("symbol", "")).upper()
             if chain in ("robinhood", "base", "ethereum"):
-                if ("ETH" in _q_sym or "WETH" in _q_sym) and _q_amt < 0.35:
+                if ("ETH" in _q_sym or "WETH" in _q_sym) and 0 < _q_amt < 0.35:
                     return self._deny(address, "ghost-pool-quote",
                                       f"🚫 [{tag}-SCOUT] {symbol}: фантомный пул (в пуле всего {_q_amt:.6f} ETH < 0.35 ETH — нет реальных денег, ловушка).")
+                elif "USD" in _q_sym and 0 < _q_amt < 800.0:
+                    return self._deny(address, "ghost-pool-quote",
+                                      f"🚫 [{tag}-SCOUT] {symbol}: фантомный пул (в пуле всего ${_q_amt:.0f} USDT/C < $800).")
             elif chain == "bsc":
-                if ("BNB" in _q_sym or "WBNB" in _q_sym) and _q_amt < 1.2:
+                if ("BNB" in _q_sym or "WBNB" in _q_sym) and 0 < _q_amt < 1.2:
                     return self._deny(address, "ghost-pool-quote",
                                       f"🚫 [{tag}-SCOUT] {symbol}: фантомный пул (в пуле всего {_q_amt:.4f} BNB < 1.2 BNB).")
-                elif "USD" in _q_sym and _q_amt < 800.0:
+                elif "USD" in _q_sym and 0 < _q_amt < 800.0:
                     return self._deny(address, "ghost-pool-quote",
                                       f"🚫 [{tag}-SCOUT] {symbol}: фантомный пул (в пуле всего ${_q_amt:.0f} USDT/C < $800).")
             elif chain == "solana":
-                if "SOL" in _q_sym and _q_amt < 5.0:
+                if "SOL" in _q_sym and 0 < _q_amt < 5.0:
                     return self._deny(address, "ghost-pool-quote",
                                       f"🚫 [{tag}-SCOUT] {symbol}: фантомный пул (в пуле всего {_q_amt:.2f} SOL < 5 SOL).")
             # 3. Защита от микро-чеков ботов (накрутка объёма)
@@ -1484,17 +1492,17 @@ class Analyzer:
         _q_amt_evm = float((pair_data.get("liquidity") or {}).get("quote", 0) or 0)
         _q_sym_evm = str((pair_data.get("quoteToken") or {}).get("symbol", "")).upper()
         if chain in ("robinhood", "base", "ethereum"):
-            if ("ETH" in _q_sym_evm or "WETH" in _q_sym_evm) and _q_amt_evm < 0.35:
+            if ("ETH" in _q_sym_evm or "WETH" in _q_sym_evm) and 0 < _q_amt_evm < 0.35:
                 return self._deny(address, "ghost-pool-quote",
                                   f"🚫 [{tag}] {symbol}: фантомный пул (в пуле всего {_q_amt_evm:.6f} ETH < 0.35 ETH — нет реальных денег).")
-            elif "USD" in _q_sym_evm and _q_amt_evm < 800.0:
+            elif "USD" in _q_sym_evm and 0 < _q_amt_evm < 800.0:
                 return self._deny(address, "ghost-pool-quote",
                                   f"🚫 [{tag}] {symbol}: фантомный пул (в пуле всего ${_q_amt_evm:.0f} USDT/C < $800).")
         elif chain == "bsc":
-            if ("BNB" in _q_sym_evm or "WBNB" in _q_sym_evm) and _q_amt_evm < 1.2:
+            if ("BNB" in _q_sym_evm or "WBNB" in _q_sym_evm) and 0 < _q_amt_evm < 1.2:
                 return self._deny(address, "ghost-pool-quote",
                                   f"🚫 [{tag}] {symbol}: фантомный пул (в пуле всего {_q_amt_evm:.4f} BNB < 1.2 BNB).")
-            elif "USD" in _q_sym_evm and _q_amt_evm < 800.0:
+            elif "USD" in _q_sym_evm and 0 < _q_amt_evm < 800.0:
                 return self._deny(address, "ghost-pool-quote",
                                   f"🚫 [{tag}] {symbol}: фантомный пул (в пуле всего ${_q_amt_evm:.0f} USDT/C < $800).")
         

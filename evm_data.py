@@ -163,7 +163,7 @@ async def prefetch_token_data(addresses: list, chain: str = SLUG, ttl: float = 1
             if status != 200 or not data:
                 continue
             pairs = data if isinstance(data, list) else data.get("pairs") or []
-            by_addr = {}
+            pools_by_addr = {}
             for p in pairs:
                 if (p.get("chainId") or "").lower() != chain.lower():
                     continue
@@ -171,11 +171,26 @@ async def prefetch_token_data(addresses: list, chain: str = SLUG, ttl: float = 1
                 if not addr:
                     continue
                 al = addr.lower()
-                liq = float((p.get("liquidity") or {}).get("usd", 0) or 0)
-                prev = by_addr.get(al)
-                if prev is None or liq > float((prev.get("liquidity") or {}).get("usd", 0) or 0):
-                    by_addr[al] = p
-            for al, best in by_addr.items():
+                pools_by_addr.setdefault(al, []).append(p)
+
+            for al, p_list in pools_by_addr.items():
+                best = sorted(p_list, key=lambda x: (x.get("liquidity") or {}).get("usd", 0) or 0, reverse=True)[0]
+                if len(p_list) >= 2:
+                    top_l = float((best.get("liquidity") or {}).get("usd", 0) or 0)
+                    _active = []
+                    for p in p_list:
+                        _l = float((p.get("liquidity") or {}).get("usd", 0) or 0)
+                        _v5 = float(((p.get("volume") or {}).get("m5", 0) or 0))
+                        _tx5 = int(((p.get("txns") or {}).get("m5", {}).get("buys", 0) or 0)) + int(((p.get("txns") or {}).get("m5", {}).get("sells", 0) or 0))
+                        if _l >= max(3000.0, top_l * 0.20) or _v5 >= 100.0 or _tx5 >= 3:
+                            _active.append(p)
+                    if len(_active) >= 2:
+                        _prices = [float(p.get("priceUsd", 0) or 0) for p in _active if float(p.get("priceUsd", 0) or 0) > 0]
+                        if len(_prices) >= 2:
+                            max_p, min_p = max(_prices), min(_prices)
+                            if min_p > 0 and (max_p / min_p) >= 1.50:
+                                best["_price_divergence"] = True
+                                best["_price_divergence_ratio"] = max_p / min_p
                 addr_orig = ((best.get("baseToken") or {}).get("address") or al)
                 _cache_evm_pair(chain, addr_orig, best)
                 out[al] = best
@@ -202,8 +217,24 @@ async def get_token_data(address: str, chain: str = SLUG) -> dict:
              and ((p.get("baseToken") or {}).get("address") or "").lower() == address.lower()]
     if not pools:
         return {}
-    best = sorted(pools, key=lambda x: (x.get("liquidity") or {}).get("usd", 0),
+    best = sorted(pools, key=lambda x: (x.get("liquidity") or {}).get("usd", 0) or 0,
                   reverse=True)[0]
+    if len(pools) >= 2:
+        top_l = float((best.get("liquidity") or {}).get("usd", 0) or 0)
+        _active = []
+        for p in pools:
+            _l = float((p.get("liquidity") or {}).get("usd", 0) or 0)
+            _v5 = float(((p.get("volume") or {}).get("m5", 0) or 0))
+            _tx5 = int(((p.get("txns") or {}).get("m5", {}).get("buys", 0) or 0)) + int(((p.get("txns") or {}).get("m5", {}).get("sells", 0) or 0))
+            if _l >= max(3000.0, top_l * 0.20) or _v5 >= 100.0 or _tx5 >= 3:
+                _active.append(p)
+        if len(_active) >= 2:
+            _prices = [float(p.get("priceUsd", 0) or 0) for p in _active if float(p.get("priceUsd", 0) or 0) > 0]
+            if len(_prices) >= 2:
+                max_p, min_p = max(_prices), min(_prices)
+                if min_p > 0 and (max_p / min_p) >= 1.50:
+                    best["_price_divergence"] = True
+                    best["_price_divergence_ratio"] = max_p / min_p
     _cache_evm_pair(chain, address, best)
     return best
 

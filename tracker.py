@@ -666,14 +666,21 @@ class PaperTracker:
             reverse=True
         )
 
+        # Если прямо сейчас открыта прибыльная позиция (например, CALL +$23.91):
+        # общий портфель в плюсе, торговля не блокируется!
+        _open_pnl = sum(getattr(p, "current_pnl_usd", 0.0) or 0.0 for p in self.positions.values() if p.status == "open")
+        if _open_pnl > 3.0:
+            return False, ""
+
         loss_streak = 0
         last_loss_exit_time = 0.0
         for p in sorted_closed:
-            if p.pnl_usd < 0:
+            # Учитываем только реальные минусы (микро-скретчи вроде Starman -$0.32 не являются скам-волной)
+            if p.pnl_usd <= -1.50:
                 loss_streak += 1
                 if last_loss_exit_time == 0.0:
                     last_loss_exit_time = getattr(p, "exit_time", 0.0) or getattr(p, "entry_time", 0.0) or time.time()
-            else:
+            elif p.pnl_usd > 0.50:
                 break
 
         if loss_streak >= max_losses:

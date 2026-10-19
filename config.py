@@ -65,7 +65,7 @@ STOP_LOSS_PCT = -0.16  # Стоп -16% после 90с (не выбивает р
 # === ЗАЩИТА ОТ СЕРИИ МИНУСОВ (STREAK CIRCUIT BREAKER) ===
 STREAK_COOLDOWN_ENABLED = True       # Включить паузу после серии минусов
 STREAK_MAX_CONSECUTIVE_LOSSES = 3    # Сколько минусов подряд активируют паузу
-STREAK_COOLDOWN_MINUTES = 30.0       # Длительность паузы (30 минут)
+STREAK_COOLDOWN_MINUTES = 12.0       # Длительность паузы (12 минут вместо 30)
 
 SNIPER_ENTRIES_ENABLED = False
 VIP_ENTRIES_ENABLED = True  # ВКЛЮЧЕНО: защищено 1м свечным фильтром, анти-клоном и пост-миграционным фильтром

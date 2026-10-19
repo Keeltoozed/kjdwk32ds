@@ -1247,7 +1247,7 @@ async def _evm_track_once(tracker, chain: str, tag: str, emoji: str):
                     reason = f"{tag} Stagnant ({held:.0f}m)"
                 # DEAD POOL GUARD (ловит застрявшие/замороженные пулы вроде BRML: 0 сделок, цена застыла)
                 # Не убивает прибыльные сделки (GRASS кейс: +1.26% закрыло из-за временной 7.5с задержки API)
-                if not reason and held >= 10 and pnl <= 0.02:
+                if not reason and held >= 10:
                     try:
                         _td_pool = await evm_data.get_token_data(mint, chain)
                         if _td_pool:
@@ -1261,7 +1261,10 @@ async def _evm_track_once(tracker, chain: str, tag: str, emoji: str):
                                 _z_cyc = int(getattr(pos, "zero_vol_cycles", 0) or 0) + 1
                                 pos.zero_vol_cycles = _z_cyc
                                 if _z_cyc >= 12:  # ~30 сек подтвержденной тишины в пуле (было 3 цикла = 7.5с)
-                                    reason = f"{tag} Dead Pool (0 txns in pool, frozen)"
+                                    if pnl > 0.08:
+                                        reason = f"{tag} Stagnant Pool TP (+{pnl*100:.1f}%, 0 txns in pool)"
+                                    elif pnl <= 0.02:
+                                        reason = f"{tag} Dead Pool (0 txns in pool, frozen)"
                             else:
                                 pos.zero_vol_cycles = 0
                     except Exception:
