@@ -1383,10 +1383,10 @@ class Analyzer:
             "liq": liq, "m5": m5, "source": tag
         }
         # Ранний Scout-режим для свежих ракет (<15 мин):
-        # Ловит стартовые импульсы ракет (USEMATH, FINI, MUCRON, LPL, INFLUENCE, TORTUE, ZDOG) от 0.3 мин (18 сек)
+        # Ловит стартовые импульсы ракет (USEMATH, FINI, MUCRON, WISDOM, MUSEBOT, AMIRI100X, AICELL) от 0.3 мин (18 сек)
         # при подтверждённых продажах (honeypot исключён) и ликвидности >= min_liq ($2.5k)
-        _scout_min_liq = float(min_liq)
-        if (0.3 <= _age_min < 15.0 and 0.8 <= m5 <= 450.0 and 0.0 <= h1 <= 1200.0
+        _scout_min_liq = 2500.0 if chain in ("bsc", "robinhood", "base") else float(min_liq)
+        if (0.3 <= _age_min < 15.0 and 0.8 <= m5 <= 1200.0 and 0.0 <= h1 <= 2500.0
                 and (b5 + s5) >= 6 and liq >= _scout_min_liq
                 and s5 >= 1 and s >= 1 and b5 >= int(s5 * 1.25) and (b5 - s5) >= 2 and (b5 / max(s5, 1)) <= 8.0):
             if not self._evm_brand_ok(symbol, tag):
@@ -1394,7 +1394,8 @@ class Analyzer:
             if not await self._evm_clone_ok(symbol, address, pair_data, chain, tag):
                 return False
             # 1. Защита от покупки вершины 1м свечи и падающего ножа
-            if m1 > 25.0:
+            # Ракеты при старте пробивают 1м свечой +25%..+55% (кейсы WISDOM +477%, MUSEBOT +266%, AMIRI100X +151%).
+            if m1 > 65.0:
                 return self._deny(address, f"scout-m1-spike {m1:+.1f}%",
                                   f"🚫 [{tag}-SCOUT] {symbol}: m1 {m1:+.1f}% — верхушка 1м импульса, вход = вершина.")
             if m1 < -7.0:
@@ -1477,6 +1478,9 @@ class Analyzer:
 
             # 1. Только зрелые глубокие пулы (>= 30 мин, liq >= $25,000) с живым потоком сделок (m5 >= 12 сделок, >= $1,000 объём)
             if _age_min < 30.0 or liq < 25000.0 or (_b1 + _s1) < 35 or _v1 < 5000.0 or (b5 + s5) < 12 or s5 < 3 or b5 < 7 or _vm5 < 1000.0:
+                if _age_min < 10.0:
+                    print(f"⏳ [{tag}] {symbol}: возраст {_age_min:.1f}м, m5 {m5:+.1f}% — токен только родился, перепроверим через 20с.")
+                    return None
                 return self._deny(address, f"dead-flat m5 {m5:+.1f}%", f"· [{tag}] {symbol}: флет/остывание (age: {_age_min:.0f}m, liq: ${liq:,.0f}, m5: {m5:+.1f}%, tx5m: {b5}b/{s5}s, vol5m: ${_vm5:.0f})")
 
             # 2. Мамонты / стейблкоины / utility (AERO, USDC, PAPER, VELVET)
@@ -1515,12 +1519,14 @@ class Analyzer:
             return self._deny(address, f"flat m5 {m5:+.1f}%", f"· [{tag}] {symbol}: флет m5 {m5:+.1f}%")
         _max_m5 = 350.0 if chain in ("robinhood", "base", "bsc") else 85.0
         # При органическом перевесе покупателей расширяем коридор m5, чтобы забирать супер-ракеты
-        # (кейсы INFLUENCE +159% -> +950%, VERDIS +289%, KAIDA +270%, BRIVON +393%, NULL +375%, PIKA +72%, JEVO +125%, OBC +163%)
+        # (кейсы 特斯拉能飞 +994% -> +3023%, INFLUENCE +159% -> +950%, VERDIS +289%, KAIDA +270%, BRIVON +393%, NULL +375%)
         if chain in ("robinhood", "base", "bsc"):
-            if liq >= 15000.0 and s5 > 0 and b5 >= s5 and not self.is_churn(b5, s5, m5, liq=liq):
-                _max_m5 = 500.0  # Мощное ралли на глубоком пуле ($15k+): вход на 2-й ступени ракеты
+            if _age_min < 15.0 and s5 > 0 and b5 >= int(s5 * 1.5) and not self.is_churn(b5, s5, m5, liq=liq):
+                _max_m5 = 1200.0  # Свежая супер-ракета на старте: вход на импульсе (кейс 特斯拉能飞 m5 +994%)
+            elif liq >= 15000.0 and s5 > 0 and b5 >= s5 and not self.is_churn(b5, s5, m5, liq=liq):
+                _max_m5 = 600.0   # Мощное ралли на глубоком пуле ($15k+): вход на 2-й ступени ракеты
             elif s5 > 0 and b5 >= s5 and not self.is_churn(b5, s5, m5, liq=liq):
-                _max_m5 = 350.0  # Умеренный пул: коридор до +350%
+                _max_m5 = 450.0   # Умеренный пул
             else:
                 _max_m5 = 150.0
 
@@ -1531,7 +1537,7 @@ class Analyzer:
             return self._deny(address, f"churn {b5}/{s5} m5 {m5:+.1f}%",
                               f"🚫 [{tag}-CHURN] {symbol}: {b5 + s5} сделок без перевеса (b/s {b5 / (s5+1):.2f}) — накрутка, не FOMO.")
         # Ослабление m1-green: мощные ракеты пробивают импульсом без отката.
-        _max_m1 = 25.0 if (s5 > 0 and b5 >= 1.5 * s5 and (b5 + s5) >= 8) else (18.0 if (s5 > 0 and b5 >= 1.2 * s5) else 12.0)
+        _max_m1 = 45.0 if (s5 > 0 and b5 >= 1.5 * s5 and (b5 + s5) >= 8) else (25.0 if (s5 > 0 and b5 >= 1.2 * s5) else 15.0)
         if m1 > _max_m1:
             return self._deny(address, f"m1-green {m1:+.1f}%", f"🚫 [{tag}] {symbol}: m1 {m1:+.1f}% > +{_max_m1:.0f}% — вершина в моменте, ждём.")
         if m1 < -5.0:

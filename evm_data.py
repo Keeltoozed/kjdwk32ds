@@ -34,7 +34,7 @@ def _store(key: str, val: list):
 CHAINS = {
     "robinhood": {"min_liq": float(getattr(config, "ROBINHOOD_MIN_LIQUIDITY", 3000.0)), "tag": "ROBINHOOD"},
     "base": {"min_liq": float(getattr(config, "BASE_MIN_LIQUIDITY", 3000.0)), "tag": "BASE"},
-    "bsc": {"min_liq": float(getattr(config, "BSC_MIN_LIQUIDITY", 12000.0)), "tag": "BSC"},
+    "bsc": {"min_liq": float(getattr(config, "BSC_MIN_LIQUIDITY", 3000.0)), "tag": "BSC"},
     "ethereum": {"min_liq": float(getattr(config, "ETHEREUM_MIN_LIQUIDITY", 15000.0)), "tag": "ETHEREUM"},
 }
 

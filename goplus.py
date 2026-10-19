@@ -541,6 +541,16 @@ async def check_onchain_evm_security(address: str, chain: str, pair_data: dict =
             if len(_found_sels) >= 6 and len(_found_sels - _BARE_ERC20_SELS) <= 2:
                 _is_bare_manual_erc20 = True
 
+        # 1.6. Защита от серийных LP-rug фабрик на Uniswap V4:
+        # Серийный скамер на Robinhood использует шаблон байткода 9312 (10 млрд supply, ручной V4-пул).
+        # Дев закидывает 15% в PoolManager, ждёт покупок ботов и через modifyLiquidity выкачивает ликвидность в 0.
+        if not is_open_pos and _is_v4:
+            if len(_bytecode) == 9312:
+                return False, "серийный скам-шаблон 9312 на Uniswap V4 — 100% риск вывода ликвидности через modifyLiquidity"
+            if not _has_reputation:
+                if _is_bare_manual_erc20 or (chain == "robinhood" and len(_bytecode) not in (7710,) and len(_bytecode) < 15000):
+                    return False, "ручной V4-пул без соцсетей и блокировки LP — риск modifyLiquidity LP-rug"
+
         # 2. Проверка реальной ликвидности пула (Uniswap V4 PoolManager vs V2/V3 Pair & LP Burn)
         if 2 in _res_map and 3 in _res_map:
             _tot_h = _res_map[2].get("result", "0x")
