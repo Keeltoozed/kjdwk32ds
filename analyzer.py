@@ -149,8 +149,8 @@ class Analyzer:
                 self._rkt_tag(address, pair_data or {})
                 sc = self.rocket_scores.get(address)
                 if "SCOUT" in s:
-                    if sc is not None and sc < 0.12:
-                        return f"RKT-вето {sc:.2f}: слабый скор для EVM SCOUT (< 0.12, бото-стакан)"
+                    if sc is not None and sc < 0.25:
+                        return f"RKT-вето {sc:.2f}: слабый скор для EVM SCOUT (< 0.25, бото-стакан)"
                 else:
                     if sc is not None and sc < 0.08:
                         return f"RKT-вето {sc:.2f}: пустой/мертвый стакан EVM (< 0.08)"
@@ -1406,6 +1406,24 @@ class Analyzer:
             if liq > 0 and _fdv_scout > 0 and (_fdv_scout / liq) > 80.0:
                 return self._deny(address, "hollow-pool",
                                   f"🚫 [{tag}-SCOUT] {symbol}: FDV ${_fdv_scout:,.0f} vs Liq ${liq:,.0f} — картонный пул.")
+            # 2.1. Защита от фантомных пулов (Ghost Pools: в пуле $20k фантиков, но реального ETH < 0.35, кейс UHI)
+            _q_amt = float((pair_data.get("liquidity") or {}).get("quote", 0) or 0)
+            _q_sym = str((pair_data.get("quoteToken") or {}).get("symbol", "")).upper()
+            if chain in ("robinhood", "base", "ethereum"):
+                if ("ETH" in _q_sym or "WETH" in _q_sym) and _q_amt < 0.35:
+                    return self._deny(address, "ghost-pool-quote",
+                                      f"🚫 [{tag}-SCOUT] {symbol}: фантомный пул (в пуле всего {_q_amt:.6f} ETH < 0.35 ETH — нет реальных денег, ловушка).")
+            elif chain == "bsc":
+                if ("BNB" in _q_sym or "WBNB" in _q_sym) and _q_amt < 1.2:
+                    return self._deny(address, "ghost-pool-quote",
+                                      f"🚫 [{tag}-SCOUT] {symbol}: фантомный пул (в пуле всего {_q_amt:.4f} BNB < 1.2 BNB).")
+                elif "USD" in _q_sym and _q_amt < 800.0:
+                    return self._deny(address, "ghost-pool-quote",
+                                      f"🚫 [{tag}-SCOUT] {symbol}: фантомный пул (в пуле всего ${_q_amt:.0f} USDT/C < $800).")
+            elif chain == "solana":
+                if "SOL" in _q_sym and _q_amt < 5.0:
+                    return self._deny(address, "ghost-pool-quote",
+                                      f"🚫 [{tag}-SCOUT] {symbol}: фантомный пул (в пуле всего {_q_amt:.2f} SOL < 5 SOL).")
             # 3. Защита от микро-чеков ботов (накрутка объёма)
             _vm5_scout = float((pair_data.get("volume") or {}).get("m5", 0) or 0)
             if (b5 + s5) >= 15 and (_vm5_scout / max(b5 + s5, 1)) < 15.0:
@@ -1429,12 +1447,12 @@ class Analyzer:
                                           f"🚫 [{tag}] {symbol}: ошибка антискама ({type(_e).__name__}) — {tag} риск.")
             if not await self.verify_1m_candles_not_dumping(address, pair_data, chain):
                 return self._deny(address, "1m-candle-dump", f"🚫 [{tag}-SCOUT] {symbol}: 1м свеча в сливе / вершина пройдена.")
-            # Защита от бото-накрутки и скамов с околонулевым скором ракеты (RIOT 0.06, ROBINBOT 0.02)
+            # Защита от бото-накрутки и скамов с околонулевым скором ракеты (RIOT 0.06, ROBINBOT 0.02, VAULTLINGS 0.23)
             _rkt_tag_str = self._rkt_tag(address, pair_data)
             _sc_val = self.rocket_scores.get(address)
-            if _sc_val is not None and _sc_val < 0.12:
+            if _sc_val is not None and _sc_val < 0.25:
                 return self._deny(address, f"scout-low-rkt {_sc_val:.2f}",
-                                  f"🚫 [{tag}-SCOUT] {symbol}: скор ракеты {_sc_val:.2f} < 0.12 — накрутка ботов/слабый интерес.")
+                                  f"🚫 [{tag}-SCOUT] {symbol}: скор ракеты {_sc_val:.2f} < 0.25 — накрутка ботов/слабый интерес.")
             print(f"🔭 [{tag}-SCOUT] {symbol}: возраст {_age_min:.1f}м, m5 {m5:+.1f}%, liq ${liq:,.0f} — ранний билет!")
             self._set_sig(address, f"{tag} SCOUT {_age_min:.0f}m" + _rkt_tag_str + await self.meme_tag(address, symbol, pair_data, chain))
             return True
@@ -1461,6 +1479,24 @@ class Analyzer:
 
         if liq < min_liq:
             return self._deny(address, "micro-liq", f"🚫 [{tag}] {symbol}: ликва ${liq:,.0f} < ${min_liq:,.0f} — микро-пул.")
+        
+        # Защита от фантомных пулов (Ghost Pools: $20k накрученных фантиков, но реального ETH < 0.35)
+        _q_amt_evm = float((pair_data.get("liquidity") or {}).get("quote", 0) or 0)
+        _q_sym_evm = str((pair_data.get("quoteToken") or {}).get("symbol", "")).upper()
+        if chain in ("robinhood", "base", "ethereum"):
+            if ("ETH" in _q_sym_evm or "WETH" in _q_sym_evm) and _q_amt_evm < 0.35:
+                return self._deny(address, "ghost-pool-quote",
+                                  f"🚫 [{tag}] {symbol}: фантомный пул (в пуле всего {_q_amt_evm:.6f} ETH < 0.35 ETH — нет реальных денег).")
+            elif "USD" in _q_sym_evm and _q_amt_evm < 800.0:
+                return self._deny(address, "ghost-pool-quote",
+                                  f"🚫 [{tag}] {symbol}: фантомный пул (в пуле всего ${_q_amt_evm:.0f} USDT/C < $800).")
+        elif chain == "bsc":
+            if ("BNB" in _q_sym_evm or "WBNB" in _q_sym_evm) and _q_amt_evm < 1.2:
+                return self._deny(address, "ghost-pool-quote",
+                                  f"🚫 [{tag}] {symbol}: фантомный пул (в пуле всего {_q_amt_evm:.4f} BNB < 1.2 BNB).")
+            elif "USD" in _q_sym_evm and _q_amt_evm < 800.0:
+                return self._deny(address, "ghost-pool-quote",
+                                  f"🚫 [{tag}] {symbol}: фантомный пул (в пуле всего ${_q_amt_evm:.0f} USDT/C < $800).")
         
         _evm_min_m5 = 0.8 if (s5 > 0 and b5 > s5) else float(getattr(config, "EVM_MIN_M5_PCT", 1.2))
         if m5 < _evm_min_m5:
