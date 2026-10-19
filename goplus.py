@@ -557,21 +557,22 @@ async def check_onchain_evm_security(address: str, chain: str, pair_data: dict =
                 _pm_v = int(_pm_h, 16) if _pm_h and _pm_h != "0x" else 0
                 if _tot_v > 0 and _is_v4:
                     _frac = _pm_v / _tot_v
-                    if _frac < 0.005:
-                        return False, f"пул Uniswap V4 опустошён девом (остаток {_frac*100:.4f}% — V4 LP Rug)"
                     if not is_open_pos:
+                        if _frac < 0.005:
+                            if _liq_pd < 3000:
+                                return False, f"пул Uniswap V4 опустошён девом (остаток {_frac*100:.4f}% — V4 LP Rug)"
                         # Токен обязан держать >= 8% эмиссии в V4 PoolManager (нормальные пулы 13-16%, микро-пулы/ранний слив < 8%).
                         _min_v4_frac = 0.08
-                        if _frac < _min_v4_frac:
+                        if _frac < _min_v4_frac and _liq_pd < 3000:
                             return False, f"картонный пул Uniswap V4 (в пуле всего {_frac*100:.1f}% эмиссии < {_min_v4_frac*100:.0f}% — V4 LP-rug риск)"
                 if _tot_v > 0 and not _is_v4 and 4 in _res_map:
                     _pair_h = _res_map[4].get("result", "0x")
                     _pair_v = int(_pair_h, 16) if _pair_h and _pair_h != "0x" else 0
                     _p_frac = _pair_v / _tot_v
-                    if _p_frac < 0.005:
+                    if not is_open_pos and _p_frac < 0.005 and _liq_pd < 3000:
                         return False, f"пул V2/V3 опустошён девом (остаток {_p_frac*100:.4f}% — LP Rug)"
                     if not is_open_pos and not _has_reputation and chain in ("robinhood", "base"):
-                        if _p_frac < 0.05:
+                        if _p_frac < 0.05 and _liq_pd < 3000:
                             return False, f"картонный пул V2/V3 (в пуле всего {_p_frac*100:.1f}% эмиссии < 5% без соцсетей — схема LP-rug)"
         # 3. Проверка сжигания ликвидности (LP Burn / Lock) — ТОЛЬКО ПЕРЕД ВХОДОМ В СДЕЛКУ (not is_open_pos):
         # Предотвращает ложное списание открытых позиций и строго блокирует незалоченные токены на всех EVM-сетях

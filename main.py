@@ -1076,9 +1076,20 @@ async def _evm_track_once(tracker, chain: str, tag: str, emoji: str):
                             mint, chain, {"pairAddress": getattr(pos, "pair_address", "")}, is_open_pos=True
                         )
                         if not _oc_ok:
-                            print(f"🚨 [{tag}-V4-RUG/HONEYPOT] {pos.symbol} ({mint[:10]}): {_oc_why} — пул осушен или контракт заблокирован, списание в -100%.")
-                            tracker.close_position(mint, 0.0, f"{tag} Honeypot / V4 LP Rug ({_oc_why})")
-                            continue
+                            _is_live_trading = False
+                            try:
+                                _live_td = await evm_data.get_token_data(mint, chain)
+                                _live_liq = float(((_live_td or {}).get("liquidity") or {}).get("usd", 0) or 0)
+                                if _live_liq >= 2500 and cur > 0:
+                                    _is_live_trading = True
+                            except Exception:
+                                pass
+                            if _is_live_trading:
+                                print(f"⚠️ [{tag}] Предупреждение ончейна: {_oc_why}, но токен активно торгуется (ликва ${_live_liq:.0f}, цена ${cur:.8f}) — игнорируем ложное списание.")
+                            else:
+                                print(f"🚨 [{tag}-V4-RUG/HONEYPOT] {pos.symbol} ({mint[:10]}): {_oc_why} — пул осушен или контракт заблокирован, списание в -100%.")
+                                tracker.close_position(mint, 0.0, f"{tag} Honeypot / V4 LP Rug ({_oc_why})")
+                                continue
                         # 2. Свежая проверка GoPlus в обход 1-часового кеша (force_refresh=True)
                         _g_ok, _g_why = await _gp.check_token(mint, chain, force_refresh=True)
                         _w_low = str(_g_why or "").lower()
