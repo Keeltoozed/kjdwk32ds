@@ -187,13 +187,18 @@ async def jup_loop(analyzer, tracker):
                             if _veto:
                                 print(f"🚫 [JUP-VETO] {_sym_tmp} ({mint[:8]}): {_veto}")
                                 continue
-                            fixed = float(getattr(config, "TRADE_AMOUNT_USD", 0.0) or 0.0)
-                            if fixed > 0:
-                                size = fixed
+                            if getattr(config, "DYNAMIC_REINVEST_ENABLED", True):
+                                size = tracker.calculate_dynamic_position_size(td or {}, chain="solana")
+                                if size <= 0:
+                                    continue
                             else:
-                                cap = tracker.get_total_capital()
-                                size = max(4.0, min(100.0, cap * (config.REINVEST_PERCENT / 100.0))) if cap > 0 else 4.0
-                                size *= analyzer.conviction_size_mult(td or {})
+                                fixed = float(getattr(config, "TRADE_AMOUNT_USD", 0.0) or 0.0)
+                                if fixed > 0:
+                                    size = fixed
+                                else:
+                                    cap = tracker.get_total_capital()
+                                    size = max(4.0, min(100.0, cap * (config.REINVEST_PERCENT / 100.0))) if cap > 0 else 4.0
+                                    size *= analyzer.conviction_size_mult(td or {})
                             _base_tok = (td or {}).get("baseToken", {}) or {}
                             _sym = str(_base_tok.get("symbol") or mint[:6]).strip().upper()
                             tracker.add_position(

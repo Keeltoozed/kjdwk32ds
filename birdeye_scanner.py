@@ -88,12 +88,17 @@ async def birdeye_loop(analyzer, tracker):
                             if _veto:
                                 print(f"🚫 [BIRDEYE-VETO] {sym} [{ch}]: {_veto}")
                                 continue
-                            fixed = float(getattr(config, "TRADE_AMOUNT_USD", 0.0) or 0.0)
-                            if fixed > 0:
-                                size = fixed
+                            if getattr(config, "DYNAMIC_REINVEST_ENABLED", True):
+                                size = tracker.calculate_dynamic_position_size(td or {}, chain=ch)
+                                if size <= 0:
+                                    continue
                             else:
-                                cap = tracker.get_total_capital()
-                                size = max(4.0, min(100.0, cap * (config.REINVEST_PERCENT / 100.0))) if cap > 0 else 4.0
+                                fixed = float(getattr(config, "TRADE_AMOUNT_USD", 0.0) or 0.0)
+                                if fixed > 0:
+                                    size = fixed
+                                else:
+                                    cap = tracker.get_total_capital()
+                                    size = max(4.0, min(100.0, cap * (config.REINVEST_PERCENT / 100.0))) if cap > 0 else 4.0
                             tracker.add_position(
                                 sym, addr, price, min(size, 100.0), is_mature=True,
                                 ml_features=analyzer.pack_features(td or {}),

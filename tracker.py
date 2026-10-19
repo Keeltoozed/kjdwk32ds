@@ -300,6 +300,88 @@ class PaperTracker:
         
         return real_capital
 
+    def calculate_dynamic_position_size(self, pair_data: dict = None, chain: str = "base") -> float:
+        """
+        Умный ступенчатый реинвест прибыли с защитой от сдвига цены (Price Impact Guard):
+        1. Проверка свободного кэша:
+           Свободный кэш = Общий капитал - Стоимость открытых позиций.
+           Если свободного кэша меньше базового входа ($15) -> 0.0 (не открываем).
+        2. Базовый пол: $15.0.
+        3. Жесткий потолок: $25.0 (не более $25 в один мемкоин).
+        4. Ступени от чистой прибыли (не рискуем всей прибылью!):
+           - Прибыль < $20: $15
+           - Прибыль $20..$39: $17 (риск из прибыли всего +$2)
+           - Прибыль $40..$69: $19 (риск из прибыли всего +$4)
+           - Прибыль $70..$99: $22 (риск из прибыли всего +$7)
+           - Прибыль >= $100: $25 (риск из прибыли всего +$10)
+        5. Защита ликвидности пула:
+           - Если пул < $15,000 USD -> сайз строго залочен на базовые $15.0 (защита от сдвига цены).
+           - Если пул >= $15,000 USD -> разрешен увеличенный сайз ($17-$25).
+           - В любом случае сайз не может превышать 0.5% ликвидности пула (liq * 0.0025).
+        6. Округление: строго целое число долларов (int(round(...))). Никаких бесконечных копеек!
+        """
+        base_size = float(getattr(config, "BASE_TRADE_AMOUNT_USD", 15.0) or 15.0)
+        hard_cap = float(getattr(config, "MAX_POSITION_SIZE_USD", 25.0) or 25.0)
+        min_liq = float(getattr(config, "REINVEST_MIN_POOL_LIQ_USD", 15000.0) or 15000.0)
+
+        capital = self.get_total_capital()
+        if capital < 5.0:
+            return 0.0
+
+        open_positions = self.get_open_positions()
+        open_cost = sum(p.amount_usd for p in open_positions.values())
+        free_cash = max(0.0, capital - open_cost)
+
+        if free_cash < base_size:
+            print(f"⚠️ [REINVEST] Недостаточно свободного кэша: ${free_cash:.1f} < базового входа ${base_size:.1f}")
+            return 0.0
+
+        initial_balance = float(getattr(config, "INITIAL_BALANCE_USD", 120.0) or 120.0)
+        net_profit = capital - initial_balance
+
+        if net_profit < 20.0:
+            target = 15.0
+        elif net_profit < 40.0:
+            target = 17.0
+        elif net_profit < 70.0:
+            target = 19.0
+        elif net_profit < 100.0:
+            target = 22.0
+        else:
+            target = 25.0
+
+        liq_usd = 0.0
+        if isinstance(pair_data, dict):
+            liq_usd = float((pair_data.get("liquidity") or {}).get("usd", 0.0) or 0.0)
+
+        if liq_usd > 0 and liq_usd < min_liq:
+            if target > base_size:
+                print(f"💧 [REINVEST] Пул ${liq_usd:,.0f} < ${min_liq:,.0f}: сброс сайза с ${target:.0f} на базовые ${base_size:.0f} (защита цены)")
+            target = base_size
+        elif liq_usd > 0:
+            max_by_pool = max(base_size, liq_usd * 0.0025)
+            if target > max_by_pool:
+                target = max_by_pool
+
+        target = min(target, hard_cap)
+
+        if target > free_cash:
+            target = free_cash
+
+        final_size = float(int(round(target)))
+        if final_size < base_size:
+            final_size = base_size if free_cash >= base_size else 0.0
+
+        if chain == "robinhood":
+            rob_cap = float(getattr(config, "ROB_MAX_SIZE_USD", hard_cap) or hard_cap)
+            final_size = min(final_size, rob_cap)
+        elif chain == "bsc":
+            bsc_cap = float(getattr(config, "BSC_MAX_SIZE_USD", hard_cap) or hard_cap)
+            final_size = min(final_size, bsc_cap)
+
+        print(f"💰 [REINVEST] Вход: ${final_size:.0f} (профит: +${net_profit:.1f}, пул: ${liq_usd:,.0f}, свободно: ${free_cash:.1f})")
+        return final_size
+
     def add_position(self, symbol, mint, entry_price, amount_usd=5.0, ml_features=None, ml_confidence=0.0, is_mature=False, source="", chain="solana", pair_address=""):
         # Валидация входа: мусорный entry ~0 давал фантомы +586М% и $1.6M.
         try:
@@ -577,4 +659,15 @@ class PaperTracker:
     def can_open_new_position(self, max_concurrent: int) -> bool:
         if not self.is_trading_allowed():
             return False
-        return len(self.get_open_positions()) < max_concurrent
+        if len(self.get_open_positions()) >= max_concurrent:
+            return False
+        # Проверка свободного кэша: если осталось меньше базового ордера ($15),
+        # блокируем открытие новой позиции (защита от входа на деньги, которых нет)
+        capital = self.get_total_capital()
+        open_cost = sum(p.amount_usd for p in self.get_open_positions().values())
+        free_cash = capital - open_cost
+        base_size = float(getattr(config, "BASE_TRADE_AMOUNT_USD", 15.0) or 15.0)
+        if free_cash < base_size:
+            print(f"🛑 [CASH GUARD] Свободный кэш ${free_cash:.1f} < базового входа ${base_size:.1f}. Вход заблокирован.")
+            return False
+        return True

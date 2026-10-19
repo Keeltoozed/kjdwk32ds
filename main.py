@@ -543,16 +543,25 @@ async def scanner_loop(analyzer, tracker):
                                                       getattr(analyzer, "last_score", 0.0))
                                     await asyncio.sleep(1.5)
                                     continue
-                                fixed = float(getattr(config, "TRADE_AMOUNT_USD", 0.0) or 0.0)
-                                if fixed > 0:
-                                    position_size = fixed
+                                if getattr(config, "DYNAMIC_REINVEST_ENABLED", True):
+                                    position_size = tracker.calculate_dynamic_position_size(pair_data, chain="solana")
+                                    if position_size <= 0:
+                                        print(f"🚫 [SCANNER] {actual_symbol}: недостаточно свободного кэша для входа.")
+                                        await asyncio.sleep(1.0)
+                                        continue
                                     _is_lot = False
                                     _is_vipsig = False
                                 else:
-                                    capital = tracker.get_total_capital()
-                                    base_position = capital * (config.REINVEST_PERCENT / 100.0)
-                                    max_allowed_by_pool = liq_usd * 0.01 if liq_usd > 0 else 99999.0  
-                                    position_size = max(4.0, min(base_position, max_allowed_by_pool, 100.0))
+                                    fixed = float(getattr(config, "TRADE_AMOUNT_USD", 0.0) or 0.0)
+                                    if fixed > 0:
+                                        position_size = fixed
+                                        _is_lot = False
+                                        _is_vipsig = False
+                                    else:
+                                        capital = tracker.get_total_capital()
+                                        base_position = capital * (config.REINVEST_PERCENT / 100.0)
+                                        max_allowed_by_pool = liq_usd * 0.01 if liq_usd > 0 else 99999.0  
+                                        position_size = max(4.0, min(base_position, max_allowed_by_pool, 100.0))
                                     
                                     _lot_m5 = ((pair_data.get("priceChange") or {}).get("m5", 0) or 0)
                                     _is_lot = _lot_m5 >= getattr(config, "LOTTERY_MIN_M5_PCT", 1.0) * 100
@@ -885,7 +894,12 @@ async def growth_loop(analyzer, tracker):
                         if price > 0:
                             td = await analyzer.fetch_token_data(mint)
                             sym = ((td.get("baseToken") or {}).get("symbol", mint[:4]) if td else mint[:4]) or mint[:4]
-                            _gw_sz = float(getattr(config, "TRADE_AMOUNT_USD", 0.0) or getattr(config, "GROWTH_SIZE_USD", 15.0))
+                            if getattr(config, "DYNAMIC_REINVEST_ENABLED", True):
+                                _gw_sz = tracker.calculate_dynamic_position_size(td or {}, chain="solana")
+                                if _gw_sz <= 0:
+                                    continue
+                            else:
+                                _gw_sz = float(getattr(config, "TRADE_AMOUNT_USD", 0.0) or getattr(config, "GROWTH_SIZE_USD", 15.0))
                             tracker.add_position(sym, mint, price, _gw_sz,
                                                  is_mature=True,
                                                  ml_features=analyzer.pack_features(td) if td else {},
@@ -1400,36 +1414,43 @@ async def _evm_chain_loop(analyzer, tracker, chain: str):
                                                       getattr(analyzer, "last_score", 0.0))
                                     await asyncio.sleep(1.0)
                                     continue
-                                fixed = float(getattr(config, "TRADE_AMOUNT_USD", 0.0) or 0.0)
-                                if fixed > 0:
-                                    size = fixed  # Строго заданный ордер пользователя ($15)
-                                    if "LOTTERY" in _sig or "SCOUT" in _sig:
-                                        _scout_cap = float(getattr(config, "SCOUT_SIZE_USD", getattr(config, "LOTTERY_SIZE_USD", 5.0)) or 5.0)
-                                        size = min(size, _scout_cap)
+                                if getattr(config, "DYNAMIC_REINVEST_ENABLED", True):
+                                    size = tracker.calculate_dynamic_position_size(td, chain=chain)
+                                    if size <= 0:
+                                        print(f"🚫 [{tag}] {sym}: нулевой сайз / нет свободного кэша.")
+                                        await asyncio.sleep(1.0)
+                                        continue
                                 else:
-                                    cap = tracker.get_total_capital()
-                                    size = max(4.0, min(100.0, cap * (config.REINVEST_PERCENT / 100.0))) if cap > 0 else 4.0
-                                    if "LOTTERY" in _sig or "SCOUT" in _sig:
-                                        _scout_cap = float(getattr(config, "SCOUT_SIZE_USD", getattr(config, "LOTTERY_SIZE_USD", 5.0)) or 5.0)
-                                        size = min(size, _scout_cap)
+                                    fixed = float(getattr(config, "TRADE_AMOUNT_USD", 0.0) or 0.0)
+                                    if fixed > 0:
+                                        size = fixed  # Строго заданный ордер пользователя ($15)
+                                        if "LOTTERY" in _sig or "SCOUT" in _sig:
+                                            _scout_cap = float(getattr(config, "SCOUT_SIZE_USD", getattr(config, "LOTTERY_SIZE_USD", 5.0)) or 5.0)
+                                            size = min(size, _scout_cap)
                                     else:
-                                        size *= analyzer.conviction_size_mult(td)
-                                        if "DIPBUY" not in _sig:
-                                            try:
-                                                _rm = analyzer.rocket_size_mult(addr)
-                                                size *= _rm
-                                            except Exception:
-                                                pass
-                                        size = min(size, 100.0)
-                                        if chain == "robinhood":
-                                            size = min(size, float(getattr(config, "ROB_MAX_SIZE_USD", 15.0) or 15.0))
-                                        if chain == "bsc":
-                                            _bsc_cap = float(getattr(config, "BSC_MAX_SIZE_USD", 15.0) or 15.0)
-                                            size = min(size, _bsc_cap)
-                                            _rkt_s = analyzer.rocket_scores.get(addr, 0.0)
-                                            if _rkt_s < 0.65:
-                                                _w_sz = float(getattr(config, "BSC_WEAK_SIZE_USD", 15.0))
-                                                size = min(size, _w_sz)
+                                        cap = tracker.get_total_capital()
+                                        size = max(4.0, min(100.0, cap * (config.REINVEST_PERCENT / 100.0))) if cap > 0 else 4.0
+                                        if "LOTTERY" in _sig or "SCOUT" in _sig:
+                                            _scout_cap = float(getattr(config, "SCOUT_SIZE_USD", getattr(config, "LOTTERY_SIZE_USD", 5.0)) or 5.0)
+                                            size = min(size, _scout_cap)
+                                        else:
+                                            size *= analyzer.conviction_size_mult(td)
+                                            if "DIPBUY" not in _sig:
+                                                try:
+                                                    _rm = analyzer.rocket_size_mult(addr)
+                                                    size *= _rm
+                                                except Exception:
+                                                    pass
+                                            size = min(size, 100.0)
+                                            if chain == "robinhood":
+                                                size = min(size, float(getattr(config, "ROB_MAX_SIZE_USD", 25.0) or 25.0))
+                                            if chain == "bsc":
+                                                _bsc_cap = float(getattr(config, "BSC_MAX_SIZE_USD", 25.0) or 25.0)
+                                                size = min(size, _bsc_cap)
+                                                _rkt_s = analyzer.rocket_scores.get(addr, 0.0)
+                                                if _rkt_s < 0.65:
+                                                    _w_sz = float(getattr(config, "BSC_WEAK_SIZE_USD", 15.0))
+                                                    size = min(size, _w_sz)
                                 if chain == "ethereum":
                                     # L1-газ $2-6 за круг: микро-сайз $4-6 гарантирует минус.
                                     # Меньше минимума — скип входа (а не враньё в плюс).

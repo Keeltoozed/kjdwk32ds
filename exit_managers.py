@@ -48,22 +48,22 @@ class MatureExitManager:
         # фиксация пола включается только от +35% (после TP1 30%) с запасом ~20% на рабочую коррекцию.
         max_pnl_pct = (position.max_price_usd - position.entry_price_usd) / position.entry_price_usd if position.entry_price_usd else 0
         _floor_pnl = None
-        if max_pnl_pct >= 5.00:       # Гипер-ракета (+500%+): держим 78% прибыли
-            _floor_pnl = round(max_pnl_pct * 0.78, 2)
-        elif max_pnl_pct >= 3.00:     # Мега-ракета (+300%..+500%): держим 75% прибыли
-            _floor_pnl = max(2.40, round(max_pnl_pct * 0.75, 2))
-        elif max_pnl_pct >= 2.00:     # Пик +200%+ (3x) -> гарантируем минимум +160%
-            _floor_pnl = 1.60
-        elif max_pnl_pct >= 1.50:     # Пик +150%+ (2.5x) -> гарантируем минимум +118%
-            _floor_pnl = 1.18
-        elif max_pnl_pct >= 1.00:     # Пик +100%+ (2x) -> гарантируем минимум +78%
-            _floor_pnl = 0.78
-        elif max_pnl_pct >= 0.70:     # Пик +70%+ -> гарантируем минимум +52%
-            _floor_pnl = 0.52
-        elif max_pnl_pct >= 0.50:     # Пик +50%+ -> гарантируем минимум +36%
-            _floor_pnl = 0.36
-        elif max_pnl_pct >= 0.35:     # Пик +35%+ -> гарантируем безубыток +18%
-            _floor_pnl = 0.18
+        if max_pnl_pct >= 5.00:       # Гипер-ракета (+500%+): держим 75% прибыли (пик +692% -> пол +519%)
+            _floor_pnl = round(max_pnl_pct * 0.75, 2)
+        elif max_pnl_pct >= 3.00:     # Мега-ракета (+300%..+500%): держим 72% прибыли (пик +400% -> пол +288%)
+            _floor_pnl = max(2.35, round(max_pnl_pct * 0.72, 2))
+        elif max_pnl_pct >= 2.00:     # Пик +200%+ (3x) -> гарантируем минимум +150%
+            _floor_pnl = 1.50
+        elif max_pnl_pct >= 1.50:     # Пик +150%+ (2.5x) -> гарантируем минимум +110%
+            _floor_pnl = 1.10
+        elif max_pnl_pct >= 1.00:     # Пик +100%+ (2x) -> гарантируем минимум +70%
+            _floor_pnl = 0.70
+        elif max_pnl_pct >= 0.70:     # Пик +70%+ -> гарантируем минимум +45%
+            _floor_pnl = 0.45
+        elif max_pnl_pct >= 0.50:     # Пик +50%+ -> гарантируем минимум +28%
+            _floor_pnl = 0.28
+        elif max_pnl_pct >= 0.35:     # Пик +35%+ -> гарантируем безубыток +8%
+            _floor_pnl = 0.08
         if _floor_pnl is not None and pnl_pct <= _floor_pnl:
             # Защита ТОЛЬКО от 1-тикового глюка вторичного пула (когда из плюса +40%+ цена за 1 тик падает в минус):
             if max_pnl_pct >= 0.40 and pnl_pct <= -0.05:
@@ -79,17 +79,15 @@ class MatureExitManager:
 
         # 2. СУЖАЮЩИЙСЯ ПАРАБОЛИЧЕСКИЙ ТРЕЙЛИНГ-СТОП (Чем выше пик, тем плотнее зажимаем профит у вершины!)
         if hasattr(config, 'TRAILING_ACTIVATION_PCT'):
-            if max_pnl_pct >= getattr(config, 'TRAILING_ACTIVATION_PCT', 0.40):
+            if max_pnl_pct >= getattr(config, 'TRAILING_ACTIVATION_PCT', 0.45):
                 if max_pnl_pct >= 2.50:
-                    _trail_dist = 0.08  # На гипер-пиках (+250%+) режем откат уже на 8% от макушки!
+                    _trail_dist = 0.09  # На гипер-пиках (+250%+) режем откат уже на 9% от макушки!
                 elif max_pnl_pct >= 1.50:
-                    _trail_dist = 0.09  # На +150..+250% держим плотный стоп 9%
-                elif max_pnl_pct >= 0.70:
-                    _trail_dist = 0.11  # На +70..+150% стоп 11%
-                elif max_pnl_pct >= 0.40 or getattr(position, "is_moonbag", False):
-                    _trail_dist = float(getattr(config, "TRAILING_RUNNER_DISTANCE_PCT", 0.11))
+                    _trail_dist = 0.10  # На +150..+250% держим плотный стоп 10%
+                elif max_pnl_pct >= 0.80 or getattr(position, "is_moonbag", False):
+                    _trail_dist = float(getattr(config, "TRAILING_RUNNER_DISTANCE_PCT", 0.12))
                 else:
-                    _trail_dist = float(getattr(config, "TRAILING_DISTANCE_PCT", 0.14))
+                    _trail_dist = float(getattr(config, "TRAILING_DISTANCE_PCT", 0.16))
 
                 drop_from_max = (position.max_price_usd - current_price) / position.max_price_usd
                 if drop_from_max >= _trail_dist:
