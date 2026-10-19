@@ -1,7 +1,7 @@
 import json
 import os
 import time
-from typing import Dict
+from typing import Dict, Tuple
 from pydantic import BaseModel, ConfigDict
 import config
 
@@ -324,6 +324,12 @@ class PaperTracker:
         hard_cap = float(getattr(config, "MAX_POSITION_SIZE_USD", 25.0) or 25.0)
         min_liq = float(getattr(config, "REINVEST_MIN_POOL_LIQ_USD", 15000.0) or 15000.0)
 
+        # 0. Проверка защиты от серии минусов
+        is_cooling, reason = self.is_streak_cooldown_active()
+        if is_cooling:
+            print(reason)
+            return 0.0
+
         capital = self.get_total_capital()
         if capital < 5.0:
             return 0.0
@@ -395,6 +401,11 @@ class PaperTracker:
             return
         if not (0.5 <= amount_usd <= 100.0):
             print(f"🚫 Отказ: сайз ${amount_usd:.2f} вне [0.5, 100] для {symbol}.")
+            return
+        # Защита от серии минусов (Streak Circuit Breaker)
+        is_cooling, reason = self.is_streak_cooldown_active()
+        if is_cooling:
+            print(f"🚫 Отказ входа {symbol}: {reason}")
             return
         # СИМВОЛЬНЫЙ КУЛДАУН (кейс VRAX: +5% → перезаход в клона → -32%).
         # Все старые гарды keyed by mint (адрес), а клоны выходят под тем же
@@ -632,8 +643,55 @@ class PaperTracker:
             except Exception as e:
                 print(f"⚠️ Ошибка сохранения опыта: {e}")
 
+    def is_streak_cooldown_active(self) -> Tuple[bool, str]:
+        """
+        Проверка защиты от серии минусов (Streak Circuit Breaker):
+        Если последние N закрытых сделок (по умолчанию 3) были в минус,
+        активируется пауза на STREAK_COOLDOWN_MINUTES (по умолчанию 30 минут)
+        с момента закрытия последнего минуса.
+        """
+        if not getattr(config, "STREAK_COOLDOWN_ENABLED", True):
+            return False, ""
+
+        max_losses = int(getattr(config, "STREAK_MAX_CONSECUTIVE_LOSSES", 3) or 3)
+        cooldown_min = float(getattr(config, "STREAK_COOLDOWN_MINUTES", 30.0) or 30.0)
+
+        closed = [p for p in self.positions.values() if p.status == "closed" and not self._is_suspicious_pnl(p)]
+        if not closed:
+            return False, ""
+
+        sorted_closed = sorted(
+            closed,
+            key=lambda p: getattr(p, "exit_time", 0.0) or getattr(p, "entry_time", 0.0),
+            reverse=True
+        )
+
+        loss_streak = 0
+        last_loss_exit_time = 0.0
+        for p in sorted_closed:
+            if p.pnl_usd < 0:
+                loss_streak += 1
+                if last_loss_exit_time == 0.0:
+                    last_loss_exit_time = getattr(p, "exit_time", 0.0) or getattr(p, "entry_time", 0.0) or time.time()
+            else:
+                break
+
+        if loss_streak >= max_losses:
+            elapsed_min = (time.time() - last_loss_exit_time) / 60.0
+            if elapsed_min < cooldown_min:
+                rem = cooldown_min - elapsed_min
+                msg = f"🛑 [STREAK COOLDOWN] Серия из {loss_streak} минусов подряд! Пауза на {rem:.1f} мин для защиты от скам-волны."
+                return True, msg
+
+        return False, ""
+
     def is_trading_allowed(self) -> bool:
-        """Проверка глобального Kill-Switch"""
+        """Проверка глобального Kill-Switch и кулдауна серии минусов"""
+        is_cooling, reason = self.is_streak_cooldown_active()
+        if is_cooling:
+            print(reason)
+            return False
+
         if not getattr(config, "KILL_SWITCH_ENABLED", True):
             return True
         if not hasattr(config, "MAX_DAILY_LOSS_USD"):

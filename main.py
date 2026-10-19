@@ -398,7 +398,7 @@ async def scanner_loop(analyzer, tracker):
                 print(f"🛑 KILL-SWITCH: дневной PnL ${day_pnl:.2f} <= -${config.MAX_DAILY_LOSS_USD}. Входы на паузе 5мин.")
                 await asyncio.sleep(int(getattr(config, "KILL_SWITCH_PAUSE", 300)))
                 continue
-            if open_count < config.MAX_CONCURRENT_POSITIONS:
+            if tracker.can_open_new_position(config.MAX_CONCURRENT_POSITIONS):
                 print(f"🔎 Сканируем монеты... (Открыто: {open_count}/{config.MAX_CONCURRENT_POSITIONS})")
                 
                 mints_to_scan = []
@@ -1311,7 +1311,7 @@ async def _evm_chain_loop(analyzer, tracker, chain: str):
                     await asyncio.sleep(int(getattr(config, "KILL_SWITCH_PAUSE", 300)))
                     continue
                 # --- Скан новых: WSS-свежатина + свежие пулы GT ПЕРВЫЕ, потом бусты/профили/тренды/топ/поиск ---
-                if len(tracker.get_open_positions()) < config.MAX_CONCURRENT_POSITIONS:
+                if tracker.can_open_new_position(config.MAX_CONCURRENT_POSITIONS):
                     import time as _t
                     import evm_wss as _evm_wss
                     try:
@@ -1394,7 +1394,7 @@ async def _evm_chain_loop(analyzer, tracker, chain: str):
                             processed[addr] = _t.time()
                         analyzer.log_scan(addr[:8], addr, tag,
                                           ok, getattr(analyzer, "last_score", 0.0))
-                        if ok is True and len(tracker.get_open_positions()) < config.MAX_CONCURRENT_POSITIONS:
+                        if ok is True and tracker.can_open_new_position(config.MAX_CONCURRENT_POSITIONS):
                             td = await evm_data.get_token_data(addr, chain)
                             price = float(td.get("priceUsd", 0) or 0) if td else 0
                             sym = ((td.get("baseToken") or {}).get("symbol", tag) if td else tag) or tag

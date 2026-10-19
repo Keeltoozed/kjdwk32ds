@@ -61,6 +61,12 @@ MAX_DAILY_LOSS_USD = 18.0
 KILL_SWITCH_ENABLED = False  # ОТКЛЮЧЕНО для тестов (не ставить торговлю на паузу при дневном минусе)
 MAX_DAILY_LOSS_PCT = 0.25
 STOP_LOSS_PCT = -0.16  # Стоп -16% после 90с (не выбивает ракеты вроде Chameleon +788% на первой теневой свече -13%)
+
+# === ЗАЩИТА ОТ СЕРИИ МИНУСОВ (STREAK CIRCUIT BREAKER) ===
+STREAK_COOLDOWN_ENABLED = True       # Включить паузу после серии минусов
+STREAK_MAX_CONSECUTIVE_LOSSES = 3    # Сколько минусов подряд активируют паузу
+STREAK_COOLDOWN_MINUTES = 30.0       # Длительность паузы (30 минут)
+
 SNIPER_ENTRIES_ENABLED = False
 VIP_ENTRIES_ENABLED = True  # ВКЛЮЧЕНО: защищено 1м свечным фильтром, анти-клоном и пост-миграционным фильтром
 TIME_EXIT_MINUTES = 60  # Если за 30 минут нет пампа - выходим
