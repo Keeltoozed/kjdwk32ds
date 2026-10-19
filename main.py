@@ -1198,7 +1198,7 @@ async def _evm_track_once(tracker, chain: str, tag: str, emoji: str):
                 elif held >= 6.0 and maxp >= 0.18 and pnl <= -0.08:
                     # Мягкий стоп только после 6+ минут (не режем стартовые свечи в первые минуты):
                     reason = f"{tag} Soft Guard (был пик +{maxp * 100:.0f}%, слив до {pnl * 100:.1f}%)"
-                elif held >= 4.0 and maxp >= float(getattr(config, "BREAKEVEN_PCT", 0.25)) and pnl <= 0.01:
+                elif held >= 0.5 and maxp >= float(getattr(config, "BREAKEVEN_PCT", 0.22)) and pnl <= 0.01:
                     reason = f"{tag} Breakeven (был пик +{maxp * 100:.0f}%)"
                 elif held < float(getattr(config, "INFANT_WINDOW_MIN", 2.0)) and pnl <= float(getattr(config, "INFANT_DUMP_PCT", -0.25)):
                     reason = f"{tag} Infant Dump ({pnl * 100:.1f}%)"
