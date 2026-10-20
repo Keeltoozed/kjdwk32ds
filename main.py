@@ -101,8 +101,8 @@ async def position_manager_loop(analyzer, tracker):
                         import goplus as _gp
                         _g_ok, _g_why = await _gp.check_solana(mint)
                         _w_low = str(_g_why or "").lower()
-                        if not _g_ok and any(k in _w_low for k in ("honeypot", "cannot_sell", "freezable", "closable", "balance_mutable", "frozen", "non_transferable", "transfer_hook", "default_account")):
-                            print(f"🚨 [SOL-HONEYPOT] {position.symbol} ({mint[:10]}): {_g_why} — токен непродаваем, списание в -100%.")
+                        if not _g_ok and any(k in _w_low for k in ("honeypot", "cannot_sell", "freeze", "freezable", "closable", "balance_mutable", "frozen", "non_transferable", "transfer_hook", "default_account")):
+                            print(f"🚨 [SOL-HONEYPOT] {position.symbol} ({mint[:10]}): {_g_why} — токен непродаваем/заморожен, списание в -100%.")
                             tracker.close_position(mint, 0.0, f"SOL Honeypot / Unsellable ({_g_why})")
                             continue
                     except Exception:
@@ -440,8 +440,9 @@ async def scanner_loop(analyzer, tracker):
                     if _w and _w not in mints_to_scan:
                         mints_to_scan.append(_w)
 
-                # Удаляем дубликаты, порядок сохраняем (миграции остаются первыми)
-                mints_to_scan = list(dict.fromkeys(m for m in mints_to_scan if m))
+                # Удаляем дубликаты, отсекаем уже открытые позиции, порядок сохраняем (миграции остаются первыми)
+                _open_mints_set = set(tracker.positions.keys())
+                mints_to_scan = list(dict.fromkeys(m.strip() for m in mints_to_scan if m and m.strip() and m.strip() not in _open_mints_set))
 
                 # ⚡ Пакетный префетч: вся очередь за ceil(N/30) запросов к DexScreener
                 # вместо N одиночных. analyze_token() дальше читает из кэша без сети.
@@ -678,10 +679,17 @@ async def fomo_signal_loop(analyzer, tracker):
                     # Очищаем файл после прочтения
                     with open('fomo_signals.txt', 'w') as f:
                         f.write('')
-                    # Бёрст-контроль: очередь могла копиться пока петля спала —
-                    # старые коллы = чужие вершины. Берём 3 самых свежих.
+                    # Бёрст-контроль и дедупликация: очередь могла копиться пока петля спала —
+                    # очищаем дубликаты, сохраняя самые свежие сигналы
                     _maxpass = int(getattr(config, "MAX_FOMO_BUYS_PER_PASS", 3) or 3)
-                    mints = [m for m in mints if (m or "").strip()][-25:]
+                    _seen_fomo = set()
+                    _deduped_fomo = []
+                    for m in reversed(mints):
+                        m_clean = str(m or "").strip()
+                        if m_clean and m_clean not in _seen_fomo:
+                            _seen_fomo.add(m_clean)
+                            _deduped_fomo.append(m_clean)
+                    mints = list(reversed(_deduped_fomo))[-25:]
                     _buys = 0
 
                     for raw in mints:
@@ -1356,13 +1364,24 @@ async def _evm_chain_loop(analyzer, tracker, chain: str):
                         for _s in _sources:
                             if _i < len(_s):
                                 _interleaved.append(_s[_i])
-                    _all_candidates = list(dict.fromkeys(a for a in _interleaved if a))
+                    
+                    # Полная нормализация и удаление дубликатов (lowercase для EVM адресов)
+                    _all_candidates = []
+                    _seen_candidates = set()
+                    for a in _interleaved:
+                        if not a:
+                            continue
+                        a_norm = a.strip().lower() if a.strip().startswith("0x") else a.strip()
+                        if a_norm not in _seen_candidates:
+                            _seen_candidates.add(a_norm)
+                            _all_candidates.append(a_norm)
 
                     # Фильтруем кулдаун ДО среза _cap, чтобы остывающие токены не вытесняли активные кандидаты!
                     _now_scan = _t.time()
                     mints = []
+                    open_pos_addrs = {str(m).strip().lower() for m in tracker.positions.keys()}
                     for addr in _all_candidates:
-                        if not addr or addr in tracker.positions:
+                        if not addr or addr in open_pos_addrs:
                             continue
                         _prev = tracker.last_loss_pct(addr)
                         if _prev is not None and _prev <= getattr(config, "RUG_REBUY_MAX_LOSS", -0.15):
@@ -1374,8 +1393,6 @@ async def _evm_chain_loop(analyzer, tracker, chain: str):
                             if _c_at and (_t.time() * 1000 - _c_at) > 86400000:  # старше 24 часов
                                 continue
 
-                        # ДОБАВИТЬ ЭТОТ БЛОК: отсекаем старые пулы (мамонтов), освобождая очередь для свежака
-                        # (не тратим цикл на TIBBIR 900k минут и FLOWER 700k минут)
                         _cached_td = getattr(analyzer, "_eval_ctx", {}).get(addr, {})
                         # Пропускаем монеты, если в кеше они уже определены как древний флет
                         if "dead-flat" in str(analyzer.signals.get(addr, "")):
@@ -1573,7 +1590,8 @@ async def async_main():
               f"VETO {getattr(config, 'ROCKET_VETO_MIN', '?')}@{getattr(config, 'ROCKET_VETO_ENABLED', '?')} "
               f"TG_MAX {getattr(config, 'TG_MAX_SIZE_USD', '?')}/VIP {getattr(config, 'TG_VIP_SIZE_USD', '?')} "
               f"ROB_MAX {getattr(config, 'ROB_MAX_SIZE_USD', '?')} "
-              f"FOMO {getattr(config, 'USE_FOMO_SIGNALS', '?')} COPY {getattr(config, 'USE_COPYTRADE', '?')}")
+              f"FOMO {getattr(config, 'USE_FOMO_SIGNALS', '?')} COPY {getattr(config, 'USE_COPYTRADE', '?')} "
+              f"STREAM {getattr(config, 'SNIPER_ENTRIES_ENABLED', '?')}")
     except Exception as _e:
         print(f"⚠️ regime line err: {_e}")
 
@@ -1653,7 +1671,7 @@ async def async_main():
         fomo_api_loop(analyzer, tracker),  # 📡 fomoapi.io: покупки топов fomo.family -> очередь сигналов
         gmgn_bridge_loop(analyzer, tracker),  # 🟢 GMGN trenches: create-сигналы (нужен GMGN_ENABLED+chromium)
         growth_loop(analyzer, tracker),  # 🌱 тренды капов, пока нет ракет
-        sniper.connect_and_listen(),  # ENABLED — с AI фильтром — sniper entry kills capital (-85.8%), mature +162.5%
+        sniper.connect_and_listen(),  # ⚡ IN-MEMORY STREAMING: RAM фильтр (>10 buyers / 20s) + RugCheck/GoPlus аудит
         trade_logger.post_trade_watcher_loop(),
         shadow_tracker.price_watcher_loop(),
         rugpull_feeder_loop(),

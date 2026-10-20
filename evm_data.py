@@ -426,9 +426,18 @@ async def fetch_dex_search_tokens(chain: str = SLUG) -> list:
     scored = []
     seen = set()
     # Внимание: /search требует q длиной 2+ (без него/1 символ = 400).
-    for q in ("an", "er", "in", "on", "ar", "es", "ai", "el"):
+    if chain == "base":
+        queries = ("base", "clanker", "virtual", "aero", "virtuals", "base meme", "ai base", "farcaster", "degen", "aerodrome", "bswap", "higher", "base ai")
+    elif chain == "bsc":
+        queries = ("bsc", "pancakeswap", "bnb", "bsc meme", "cake", "four.meme", "four", "biswap", "baby", "bsc gem")
+    elif chain == "robinhood":
+        queries = ("robinhood", "rh", "orbit")
+    else:
+        queries = ("an", "er", "in", "on", "ar", "es", "ai", "el")
+
+    for q in queries:
         status, data = await fetch_json(
-            f"{DS}/latest/dex/search?q={q}&chainIds={chain}&order=desc",
+            f"{DS}/latest/dex/search?q={q}",
             timeout=10, retries=1)
         if status != 200 or not data:
             continue

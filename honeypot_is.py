@@ -70,7 +70,7 @@ def is_hard_scam(reason: str) -> bool:
         return False
     if r.startswith("error") or r.startswith("hp-status-") or r.startswith("hp-err-"):
         return False
-    for danger in ("honeypot", "cannot-sell", "sim-failed", "tax"):
+    for danger in ("honeypot", "cannot-sell", "sim-failed", "tax", "freeze", "blacklist"):
         if danger in r:
             return True
     return False

@@ -67,7 +67,18 @@ STREAK_COOLDOWN_ENABLED = True       # Включить паузу после с
 STREAK_MAX_CONSECUTIVE_LOSSES = 3    # Сколько минусов подряд активируют паузу
 STREAK_COOLDOWN_MINUTES = 12.0       # Длительность паузы (12 минут вместо 30)
 
-SNIPER_ENTRIES_ENABLED = False
+# === IN-MEMORY STREAMING SNIPER (RAM FILTER + AUDIT) ===
+SNIPER_ENTRIES_ENABLED = True             # Активировать вход по In-Memory стриму (без задержек DexScreener)
+STREAM_WINDOW_SEC = 20                   # Скользящее окно скорости в RAM (20 секунд)
+STREAM_MIN_UNIQUE_BUYERS = 10            # Минимум 10 уникальных покупателей за 20 сек
+STREAM_MIN_BUY_SOL = 4.0                 # Минимум 4.0 SOL реального объема покупок
+STREAM_MAX_TOP_BUYER_RATIO = 0.35        # Доля крупнейшего покупателя <= 35% (защита от одного кита / wash-trade)
+STREAM_MIN_BS_RATIO = 2.0                # Соотношение Buy/Sell volume >= 2.0 (покупки в 2+ раза превышают продажи)
+STREAM_MAX_CURVE_PROGRESS = 65.0         # Не входить если кривая > 65% (защита от покупки прямо перед стеной миграции)
+STREAM_ENTRY_SIZE_USD = 10.0             # Размер билета на раннем входе ($10)
+STREAM_SLIPPAGE = 0.02                   # 2% проскальзывание на входе
+STREAM_MAX_AGE_SEC = 120                 # Очистка из RAM токенов без активности старше 2 минут
+
 VIP_ENTRIES_ENABLED = True  # ВКЛЮЧЕНО: защищено 1м свечным фильтром, анти-клоном и пост-миграционным фильтром
 TIME_EXIT_MINUTES = 60  # Если за 30 минут нет пампа - выходим
 TIME_EXIT_PROFIT_REQ = 0.0

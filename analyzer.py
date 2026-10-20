@@ -929,11 +929,22 @@ class Analyzer:
             
         current_created_at = pair_data.get("pairCreatedAt", 0)
         current_fdv = pair_data.get("fdv", 0)
-# СТАЛО: если в монете мощный независимый объем (b5 >= 60 и b5 > s5 * 1.3), не блокируем как клон:
         _tx5_cl = (pair_data.get("txns") or {}).get("m5", {}) or {}
         _b5_cl = int(_tx5_cl.get("buys", 0) or 0)
         _s5_cl = int(_tx5_cl.get("sells", 0) or 0)
-        _strong_fomo = (_b5_cl >= 50 and _b5_cl >= _s5_cl * 1.25)
+        _vol5_cl = float((pair_data.get("volume") or {}).get("m5", 0) or 0)
+        _vol1_cl = float((pair_data.get("volume") or {}).get("m1", 0) or 0)
+        _m5_cl = float((pair_data.get("priceChange") or {}).get("m5", 0) or 0)
+
+        # Ослабление клон-фильтра при мощном органическом FOMO (объем, число покупателей или VIP-моментум):
+        _strong_fomo = (
+            (_b5_cl >= 40 and _b5_cl >= _s5_cl * 1.2) or
+            (_vol5_cl >= 20000.0 and _b5_cl > _s5_cl) or
+            (_vol1_cl >= 8000.0 and _m5_cl >= 15.0) or
+            (is_vip and _b5_cl >= 30)
+        )
+        if _strong_fomo:
+            print(f"🔥 [STRONG FOMO] {symbol}: мощный органический моментум (b/s {_b5_cl}/{_s5_cl}, vol5 ${_vol5_cl:.0f}) — клон-фильтр ослаблен.")
 
         if not _strong_fomo and await self.is_clone(symbol, mint, current_created_at, current_fdv):
             print(f"🚫 Мусор: Токен {symbol} является клоном! На DexScreener найден более старый/крупный оригинал.")
@@ -1101,7 +1112,11 @@ class Analyzer:
                             return False
                         print(f"🛡️ [GOPLUS] RugCheck 404, но GoPlus подтвердил безопасность {mint[:8]} (Топ-10: {self._last_top10:.1f}%, Дев: {self._last_dev:.1f}%).")
                     else:
-                        print(f"🛡️ [GOPLUS] RugCheck 404, GoPlus подтвердил отсутствие ловушек у {mint[:8]}.")
+                        _is_pump = pair_data and pair_data.get("dexId") in ("pump", "pumpfun")
+                        if not _is_pump:
+                            print(f"🚫 [NO-AUDIT] {symbol} ({mint[:8]}): Ни RugCheck, ни GoPlus не имеют данных холдеров — блок входа по безопасности.")
+                            return False
+                        print(f"🛡️ [GOPLUS] RugCheck 404, GoPlus подтвердил отсутствие ловушек у {mint[:8]} (Pump.fun кривая).")
                 except Exception as _ge:
                     print(f"⚠️ Не удалось проверить через RugCheck и GoPlus ({_ge}). Блокируем вход.")
                     return False
@@ -1122,14 +1137,33 @@ class Analyzer:
             print(f"⚠️ Ошибка Jito-bundle: {e}")
             return False
 
+        # 1. Прямой ончейн-аудит Solana (Freeze Authority, Mint Authority, Token-2022) через RPC
         try:
             import goplus as _gp
+            _sol_onchain_ok, _sol_onchain_why = await _gp.check_onchain_solana_security(mint)
+            if not _sol_onchain_ok:
+                print(f"🚫 [АНТИСКАМ-FREEZE] {symbol} ({mint[:8]}): {_sol_onchain_why} — блок входа.")
+                return False
             _g_ok, _g_why = await _gp.check_solana(mint)
             if not _g_ok:
                 print(f"🚫 [GOPLUS] {symbol} ({mint[:8]}): {_g_why} — блок входа.")
                 return False
         except Exception as e:
-            print(f"⚠️ GoPlus err: {type(e).__name__} (fail-open, вход разрешён).")
+            print(f"🚫 [АНТИСКАМ] Ошибка аудита безопасности ({type(e).__name__}) — блок по безопасности (fail-closed).")
+            return False
+
+        # 2. Защита от Honeypot на Solana (0 продаж при 5+ покупках — нельзя продать)
+        txns_m5 = (pair_data.get("txns") or {}).get("m5") or {}
+        txns_h1 = (pair_data.get("txns") or {}).get("h1") or {}
+        s5 = int(txns_m5.get("sells", 0) or 0)
+        s1 = int(txns_h1.get("sells", 0) or 0)
+        b5 = int(txns_m5.get("buys", 0) or 0)
+        if s5 == 0 and s1 == 0 and b5 >= 5:
+            print(f"🚫 [HONEYPOT] {symbol} ({mint[:8]}): 0 продаж при {b5} покупках — Honeypot (нельзя продать).")
+            return False
+        if (b5 + s5) >= 20 and (s5 / (b5 + s5)) < 0.05:
+            print(f"🚫 [HONEYPOT] {symbol} ({mint[:8]}): аномалия продаж m5 {s5}s/{b5}b (<5% продаж) — скрытый honeypot.")
+            return False
 
         if is_vip or _lottery:
             print(f"🚀 [FAST TRACK] {symbol}: гейты пройдены, передаем на проверку холдеров (Снайперы/Бандлы).")
@@ -1224,8 +1258,15 @@ class Analyzer:
                 return False
 
             # А2) Перегрев текущей 1м свечи (вход на макушке аномального прострела)
-            if c0_pct > 28.0:
-                print(f"🚫 [1M-OVERHEAT] {symbol} ({address[:8]}): текущая 1м свеча +{c0_pct:.1f}% > +28% — вертикальный прострел, вход = вершина.")
+            tx_5m = (pair_data.get("txns") or {}).get("m5") or {}
+            b5_val = int(tx_5m.get("buys", 0) or 0)
+            s5_val = int(tx_5m.get("sells", 0) or 0)
+            m5_pct = float((pair_data.get("priceChange") or {}).get("m5", 0) or 0)
+            is_strong_trend = (m5_pct >= 20.0 and b5_val >= max(int(s5_val * 1.2), 5))
+
+            max_m1_overheat = 38.0 if is_strong_trend else 28.0
+            if c0_pct > max_m1_overheat:
+                print(f"🚫 [1M-OVERHEAT] {symbol} ({address[:8]}): текущая 1м свеча +{c0_pct:.1f}% > +{max_m1_overheat:.0f}% — вертикальный прострел, вход = вершина.")
                 return False
 
             # Б) Прошлая минутная свеча обвалилась, идут 2 красные свечи подряд или экстремальный blow-off
@@ -1237,8 +1278,10 @@ class Analyzer:
                     print(f"🚫 [1M-CRASH] {symbol} ({address[:8]}): прошлая 1м свеча слилась на {c1_pct:+.1f}% без откупа (сейчас {c0_pct:+.1f}%) — обвал в процессе.")
                     return False
                 if c1_pct <= -1.5 and c0_pct <= -1.0 and eff_close <= c1_close:
-                    print(f"🚫 [2-RED-1M] {symbol} ({address[:8]}): 2 красные минутные свечи подряд ({c1_pct:+.1f}%, {c0_pct:+.1f}%) — импульс сломлен.")
-                    return False
+                    # Если сильный 5м-тренд (m5 >= 20% и покупатели доминируют), откат на -1..-2% суммарно до -5.5% — это здоровая консолидация
+                    if not (is_strong_trend and (c0_pct + c1_pct) > -5.5):
+                        print(f"🚫 [2-RED-1M] {symbol} ({address[:8]}): 2 красные минутные свечи подряд ({c1_pct:+.1f}%, {c0_pct:+.1f}%) — импульс сломлен.")
+                        return False
                 if c1_pct > 60.0 or (c0_pct + c1_pct) > 75.0:
                     print(f"🚫 [1M-BLOWOFF] {symbol} ({address[:8]}): вертикальный памп за 2 мин ({c1_pct:+.1f}%, {c0_pct:+.1f}%) — риск мгновенного дампа.")
                     return False
@@ -1282,9 +1325,29 @@ class Analyzer:
         except Exception:
             return False
 
-    def _evm_brand_ok(self, symbol: str, tag: str) -> bool:
+    def _evm_brand_ok(self, symbol: str, tag: str, pair_data: dict = None) -> bool:
         """Блэклист мимикрии под бренды. Бесплатно, без сети."""
-        if any(k in symbol.upper() for k in self._EVM_SCAM_KW):
+        s_up = symbol.upper()
+        # Акции / корпорации — всегда 100% скам на блокчейне
+        stocks = ["AAPL", "MSFT", "TSLA", "TESLA", "SPACEX", "STARLINK", "XAI", "NEURALINK", "PAYPAL",
+                  "NVDA", "GOOG", "AMZN", "META", "NFLX", "ANTHROPIC", "OPENAI", "PERPLEXITY"]
+        if any(k in s_up for k in stocks):
+            print(f"🚫 [{tag}] {symbol}: мимикрия под корпоративный бренд — 100% скам.")
+            return False
+
+        # Популярные мем-имена: если есть мощный органический FOMO — разрешаем!
+        meme_names = ["PEPE", "SHIB", "DOGE", "FLOKI", "BONK", "WIF", "BOME", "POPCAT", "TRUMP", "BIDEN",
+                      "CLAUDE", "DEEPSEEK", "GROK", "GEMINI"]
+        if any(k in s_up for k in meme_names):
+            if pair_data:
+                _tx5 = (pair_data.get("txns") or {}).get("m5", {}) or {}
+                _b5 = int(_tx5.get("buys", 0) or 0)
+                _s5 = int(_tx5.get("sells", 0) or 0)
+                _v5 = float((pair_data.get("volume") or {}).get("m5", 0) or 0)
+                _lq = float((pair_data.get("liquidity", {}) or {}).get("usd", 0) or 0)
+                if (_b5 >= 30 and _b5 >= _s5) or _v5 >= 12000.0 or _lq >= 20000.0:
+                    print(f"🔥 [{tag}] {symbol}: мощный органический FOMO мем-бренда (b/s {_b5}/{_s5}, vol5 ${_v5:.0f}) — пропуск.")
+                    return True
             print(f"🚫 [{tag}] {symbol}: мимикрия под бренд/мем — 100% скам.")
             return False
         return True
@@ -1294,6 +1357,18 @@ class Analyzer:
         if len(symbol) <= 2:
             return True
         try:
+            _tx5_m = (pair_data.get("txns") or {}).get("m5", {}) or {}
+            _b5_m = int(_tx5_m.get("buys", 0) or 0)
+            _s5_m = int(_tx5_m.get("sells", 0) or 0)
+            _v5_m = float((pair_data.get("volume") or {}).get("m5", 0) or 0)
+            _mine_liq = float((pair_data.get("liquidity", {}) or {}).get("usd", 0) or 0)
+            _mine_fdv = float(pair_data.get("fdv", 0) or 0)
+
+            # Ослабление клон-фильтра при мощном органическом FOMO:
+            _strong_fomo = (_b5_m >= 35 and _b5_m >= _s5_m * 1.2) or _v5_m >= 15000.0 or (_mine_liq >= 25000.0 and _b5_m >= 25)
+            if _strong_fomo:
+                print(f"🔥 [{tag}] {symbol}: мощный органический FOMO (b/s {_b5_m}/{_s5_m}, vol5 ${_v5_m:.0f}) — клон-фильтр ослаблен.")
+
             from http_client import fetch_json as _fj
             _now = time.time()
             if not hasattr(self, "_dex_search_cache"):
@@ -1312,8 +1387,6 @@ class Analyzer:
             _mine_addr = ((pair_data.get("baseToken") or {}).get("address") or "").lower()
             _mine_pair = (pair_data.get("pairAddress") or "").lower()
             _mine_created = pair_data.get("pairCreatedAt", 0) or 0
-            _mine_fdv = float(pair_data.get("fdv", 0) or 0)
-            _mine_liq = float((pair_data.get("liquidity", {}) or {}).get("usd", 0) or 0)
             _mine_info = pair_data.get("info") or {}
             _mine_links = (_mine_info.get("socials") or []) + (_mine_info.get("websites") or [])
             dead_clones = 0
@@ -1338,15 +1411,15 @@ class Analyzer:
                     _p_b5 = int(_p_tx5.get("buys", 0) or 0)
                     _p_s5 = int(_p_tx5.get("sells", 0) or 0)
                     _is_older = bool(_pc_at and _mine_created and _pc_at < (_mine_created - 300000))
-                    # Клон, если старший оригинал на этой же сети очевидно крупнее
-                    if _is_older and _p_liq >= 25000.0 and _pf >= 100000.0 and (_pf > _mine_fdv * 2.0 or _p_liq > _mine_liq * 1.5):
+                    # Клон, если старший оригинал на этой же сети очевидно крупнее И у текущего нет мощного FOMO
+                    if not _strong_fomo and _is_older and _p_liq >= 25000.0 and _pf >= 100000.0 and (_pf > _mine_fdv * 2.0 or _p_liq > _mine_liq * 1.5):
                         print(f"🚫 [{tag}] {symbol}: клон (оригинал {_pa[:10]} старше/жирнее).")
                         return False
-                    # Серийный раггер (мёртвые пулы-двойники): проверяется ТОЛЬКО для анонимных токенов без ссылок или микро-пулов
-                    if not _mine_links or _mine_liq < 15000.0:
+                    # Серийный раггер (мёртвые пулы-двойники): проверяется ТОЛЬКО для анонимных токенов без ссылок или микро-пулов и без FOMO
+                    if not _strong_fomo and (not _mine_links or _mine_liq < 15000.0):
                         if float(_p_pc.get("h24", 0) or 0) <= -65.0 or ((_p_b5 + _p_s5) == 0 and _p_liq < 3000.0):
                             dead_clones += 1
-            if dead_clones >= 2 and (not _mine_links or _mine_liq < 15000.0):
+            if not _strong_fomo and dead_clones >= 2 and (not _mine_links or _mine_liq < 15000.0):
                 print(f"🚫 [{tag}] {symbol}: обнаружено {dead_clones} обвалившихся пулов-двойников на {chain} — серийный раггер!")
                 return False
         except Exception:
@@ -1402,7 +1475,7 @@ class Analyzer:
         if (0.5 <= _age_min < 15.0 and 0.8 <= m5 <= 800.0 and 0.0 <= h1 <= 1500.0
                 and (b5 + s5) >= 8 and liq >= _scout_min_liq
                 and s5 >= 2 and s >= 2 and b5 >= int(s5 * 1.15) and (b5 / max(s5, 1)) <= 7.0):
-            if not self._evm_brand_ok(symbol, tag):
+            if not self._evm_brand_ok(symbol, tag, pair_data):
                 return False
             if not await self._evm_clone_ok(symbol, address, pair_data, chain, tag):
                 return False
@@ -1472,9 +1545,12 @@ class Analyzer:
             # Защита от бото-накрутки и скамов с околонулевым скором ракеты (RIOT 0.06, ROBINBOT 0.02, VAULTLINGS 0.23)
             _rkt_tag_str = self._rkt_tag(address, pair_data)
             _sc_val = self.rocket_scores.get(address)
-            if _sc_val is not None and _sc_val < 0.25:
+            # Для свежих Scout-токенов с реальными органическими покупателями (ASH +611%, POGO +164%, INU +72%)
+            # не блокируем скором 0.25, если b5 >= 8, b5 >= 1.3*s5 и объем >= $2500
+            _min_rkt_scout = 0.05 if (b5 >= 8 and s5 > 0 and b5 >= 1.3 * s5 and _vm5_scout >= 2500.0) else 0.25
+            if _sc_val is not None and _sc_val < _min_rkt_scout:
                 return self._deny(address, f"scout-low-rkt {_sc_val:.2f}",
-                                  f"🚫 [{tag}-SCOUT] {symbol}: скор ракеты {_sc_val:.2f} < 0.25 — накрутка ботов/слабый интерес.")
+                                  f"🚫 [{tag}-SCOUT] {symbol}: скор ракеты {_sc_val:.2f} < {_min_rkt_scout:.2f} — накрутка ботов/слабый интерес.")
             print(f"🔭 [{tag}-SCOUT] {symbol}: возраст {_age_min:.1f}м, m5 {m5:+.1f}%, liq ${liq:,.0f} — ранний билет!")
             self._set_sig(address, f"{tag} SCOUT {_age_min:.0f}m" + _rkt_tag_str + await self.meme_tag(address, symbol, pair_data, chain))
             return True
@@ -1549,7 +1625,7 @@ class Analyzer:
             if (-2.0 <= m5 < _evm_min_m5 and 10.0 <= h1 <= 250.0 and m1 >= 0.0
                     and (_b1 + _s1) >= 35 and _b1 >= _s1 * 1.25 and b5 >= int(s5 * 1.35)
                     and not self.is_churn(b5, s5, m5, liq=liq)):
-                if not self._evm_brand_ok(symbol, tag):
+                if not self._evm_brand_ok(symbol, tag, pair_data):
                     return False
                 if not await self._evm_clone_ok(symbol, address, pair_data, chain, tag):
                     return False
@@ -1594,8 +1670,8 @@ class Analyzer:
         if self.is_churn(b5, s5, m5, liq=liq):
             return self._deny(address, f"churn {b5}/{s5} m5 {m5:+.1f}%",
                               f"🚫 [{tag}-CHURN] {symbol}: {b5 + s5} сделок без перевеса (b/s {b5 / (s5+1):.2f}) — накрутка, не FOMO.")
-        # Ослабление m1-green: мощные ракеты пробивают импульсом без отката.
-        _max_m1 = 45.0 if (s5 > 0 and b5 >= 1.5 * s5 and (b5 + s5) >= 8) else (25.0 if (s5 > 0 and b5 >= 1.2 * s5) else 15.0)
+        # Ослабление m1-green: мощные ракеты пробивают импульсом без отката (кейсы BEC +663%, ORVA +237%).
+        _max_m1 = 60.0 if (s5 > 0 and b5 >= 2.0 * s5 and (b5 + s5) >= 12) else (45.0 if (s5 > 0 and b5 >= 1.5 * s5 and (b5 + s5) >= 8) else (25.0 if (s5 > 0 and b5 >= 1.2 * s5) else 15.0))
         if m1 > _max_m1:
             return self._deny(address, f"m1-green {m1:+.1f}%", f"🚫 [{tag}] {symbol}: m1 {m1:+.1f}% > +{_max_m1:.0f}% — вершина в моменте, ждём.")
         if m1 < -5.0:
@@ -1654,11 +1730,7 @@ class Analyzer:
             if _age_min >= 45.0 and liq < 4000:
                 return self._deny(address, "no-links", f"🚫 [{tag}] {symbol}: токену {_age_min:.0f}м, нет ссылок при пуле <$4k — скам-риск.")
 
-        _up = symbol.upper()
-        _scam_kw = ["AAPL", "MSFT", "TSLA", "NVDA", "GOOG", "AMZN", "META", "NFLX",
-                    "PEPE", "SHIB", "DOGE", "FLOKI", "BONK", "WIF", "BOME", "POPCAT", "TRUMP", "BIDEN"]
-        if any(k in _up for k in _scam_kw) and not self._brand_whitelisted(address):
-            print(f"🚫 [{tag}] {symbol}: мимикрия под бренд/мем — 100% скам.")
+        if not self._evm_brand_ok(symbol, tag, pair_data):
             return False
 
         if not await self._evm_clone_ok(symbol, address, pair_data, chain, tag):

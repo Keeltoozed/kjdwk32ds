@@ -158,9 +158,19 @@ async def jup_loop(analyzer, tracker):
                             print(f"🚫 [JUP-PRICE-SPLIT] {_sym_tmp} ({mint[:8]}): рассинхрон пулов {_div_r:.1f}x — блок.")
                             continue
                         import goplus as _gp
+                        _sol_onchain_ok, _sol_onchain_why = await _gp.check_onchain_solana_security(mint)
+                        if not _sol_onchain_ok:
+                            print(f"🚫 [JUP-FREEZE] {_sym_tmp} ({mint[:8]}): {_sol_onchain_why} — блок входа.")
+                            continue
                         _g_ok, _g_why = await _gp.check_solana(mint)
                         if not _g_ok:
                             print(f"🚫 [JUP-GOPLUS] {_sym_tmp} ({mint[:8]}): {_g_why} — блок входа.")
+                            continue
+                        _tx5_j = ((td or {}).get("txns") or {}).get("m5") or {}
+                        _b5_j = int(_tx5_j.get("buys", 0) or 0)
+                        _s5_j = int(_tx5_j.get("sells", 0) or 0)
+                        if _s5_j == 0 and _b5_j >= 5:
+                            print(f"🚫 [JUP-HONEYPOT] {_sym_tmp} ({mint[:8]}): 0 продаж при {_b5_j} покупках — Honeypot (нельзя продать).")
                             continue
                         from jupiter import JupiterAPI
                         ds_price = float((td or {}).get("priceUsd", 0) or 0.0)

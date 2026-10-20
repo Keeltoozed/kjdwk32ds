@@ -127,14 +127,9 @@ def _verdict_evm(info: dict, chain: str = "", pair_data: dict = None):
         pass
 
     # 5. Проверка блокировки / сжигания LP (защита от вывода ликвидности девом на EVM)
-    # На Robinhood GoPlus не индексирует PoolManager LP.
-    # На Base: проверяем LP для стандартных Uniswap V2 пулов (защита от рагпулла CHUBBY).
-    # Исключение только для V3/V4 / Aerodrome Slipstream / Clanker NFT-пулов.
-    _dex = str((pair_data or {}).get("dexId", "")).lower()
-    _labels = [str(lb).lower() for lb in ((pair_data or {}).get("labels") or [])]
-    _p_addr_v = str((pair_data or {}).get("pairAddress") or "")
-    _is_nft_pool = any(v in _dex for v in ("v3", "v4", "slipstream")) or any("v3" in lb or "v4" in lb or "slipstream" in lb for lb in _labels) or len(_p_addr_v) > 42
-    if chain not in ("robinhood",) and (chain != "base" or not _is_nft_pool):
+    # 5. Проверка блокировки LP (для сетей с внешними локерами — BSC)
+    # На Robinhood и Base GoPlus не индексирует локальные протокольные локеры/NFT-пулы (Clanker, Virtuals, Aerodrome, PoolManager).
+    if chain in ("bsc",):
         try:
             lp_holders = info.get("lp_holders") or []
             if lp_holders and isinstance(lp_holders, list) and len(lp_holders) > 0:
@@ -145,14 +140,13 @@ def _verdict_evm(info: dict, chain: str = "", pair_data: dict = None):
                     pct = _tax_frac(lph.get("percent", 0))
                     if is_locked == 1 or "dead" in addr or addr == "0x0000000000000000000000000000000000000000":
                         locked_burned += pct
-                min_lp_lock = float(_cfg("BSC_MIN_LP_LOCKED_PCT", 0.70) if chain == "bsc" else _cfg("GOPLUS_MIN_LP_LOCKED_PCT", 0.40))
+                min_lp_lock = float(_cfg("BSC_MIN_LP_LOCKED_PCT", 0.70))
                 if locked_burned < min_lp_lock:
                     return False, f"LP не заблокирован ({locked_burned*100:.0f}% < {min_lp_lock*100:.0f}%) — риск рагпулла"
-            elif pair_data is not None and not _is_nft_pool:
+            elif pair_data is not None:
                 return False, f"lp-unindexed (GoPlus ещё не видит лок LP пула V2 на {chain})"
         except Exception as _e_lp:
-            if chain == "bsc":
-                return False, f"ошибка проверки лока LP на BSC ({type(_e_lp).__name__})"
+            return False, f"ошибка проверки лока LP на BSC ({type(_e_lp).__name__})"
 
     return True, ""
 
@@ -278,8 +272,8 @@ def is_hard_scam(reason: str) -> bool:
     for danger in ("honeypot", "cannot_sell", "cannot_buy", "blacklist", "cooldown",
                    "mintable", "ownership", "hidden_owner", "selfdestruct",
                    "external_call", "tax", "creator_pct", "owner_pct", "lp", "рагпулл",
-                   "кит", "дамп", "freezable", "closable", "balance_mutable", "кабал",
-                   "frozen", "non_transferable", "transfer_hook", "default_account"):
+                   "кит", "дамп", "freeze", "freezable", "closable", "balance_mutable", "кабал",
+                   "frozen", "non_transferable", "transfer_hook", "default_account", "заморозка"):
         if danger in r:
             return True
     return False
@@ -360,12 +354,118 @@ async def check_token(address: str, chain: str, force_refresh: bool = False, pai
     return verdict
 
 
+SOLANA_RPC_URLS = [
+    "https://api.mainnet-beta.solana.com",
+    "https://solana-rpc.publicnode.com",
+    "https://rpc.ankr.com/solana",
+]
+
+
+async def check_onchain_solana_security(mint: str) -> tuple:
+    """Прямой ончейн-аудит Solana через RPC getAccountInfo(mint, jsonParsed).
+    
+    Защищает от скрытой заморозки (Freeze Authority), бесконечного минта (Mint Authority)
+    и вредоносных Token-2022 расширений (Transfer Hook / Permanent Delegate / Frozen Default).
+    Не зависит от сторонних API (GoPlus, RugCheck) и лимитов 429.
+    
+    Возвращает (ok: bool, reason: str).
+    """
+    if not mint or len(mint) < 32 or mint.startswith("0x"):
+        return True, ""
+    
+    # Исключаем системные токены (WSOL, USDC, USDT)
+    if mint in ("So11111111111111111111111111111111111111112",
+                "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+                "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB"):
+        return True, ""
+
+    try:
+        from http_client import get_session
+        import aiohttp
+        session = await get_session()
+        
+        rpcs = list(SOLANA_RPC_URLS)
+        try:
+            import config as _c
+            _h_rpc = getattr(_c, "HELIUS_RPC_URL", "")
+            if _h_rpc and _h_rpc not in rpcs:
+                rpcs.append(_h_rpc)
+        except Exception:
+            pass
+
+        payload = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "getAccountInfo",
+            "params": [mint, {"encoding": "jsonParsed"}]
+        }
+        
+        account_info = None
+        for rpc in rpcs:
+            try:
+                async with session.post(rpc, json=payload, timeout=aiohttp.ClientTimeout(total=3.5)) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        val = (data.get("result") or {}).get("value")
+                        if val is not None:
+                            account_info = val
+                            break
+            except Exception:
+                continue
+
+        if not account_info:
+            return True, ""
+
+        data_obj = account_info.get("data") or {}
+        parsed = data_obj.get("parsed") or {}
+        info = parsed.get("info") or {}
+        
+        # 1. Проверка Freeze Authority (права заморозки токенов покупателей девом — скрытый honeypot)
+        freeze_auth = info.get("freezeAuthority")
+        PUMPFUN_PROGRAM = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"
+        SYSTEM_PROGRAM = "11111111111111111111111111111111"
+        SAFE_FREEZE = {None, "", SYSTEM_PROGRAM}
+        if freeze_auth and freeze_auth not in SAFE_FREEZE:
+            return False, f"Freeze Authority активна у кошелька {freeze_auth[:8]} — 100% риск заморозки токена девом!"
+
+        # 2. Проверка Mint Authority (права бесконечного минта девом для дампа)
+        mint_auth = info.get("mintAuthority")
+        SAFE_MINT = {None, "", SYSTEM_PROGRAM, PUMPFUN_PROGRAM}
+        if mint_auth and mint_auth not in SAFE_MINT:
+            return False, f"Mint Authority активна у кошелька {mint_auth[:8]} — риск бесконечного довыпуска токенов девом!"
+
+        # 3. Проверка вредоносных Token-2022 расширений
+        extensions = info.get("extensions") or []
+        for ext in extensions:
+            ext_type = str((ext or {}).get("extension") or "").lower()
+            if "transferhook" in ext_type:
+                return False, "Token-2022 Transfer Hook (перехват трансфера — скрытый honeypot)"
+            if "permanentdelegate" in ext_type:
+                return False, "Token-2022 Permanent Delegate (дев может сжечь/украсть токены с кошелька)"
+            if "defaultaccountstate" in ext_type:
+                state_val = str(((ext or {}).get("state") or {}).get("accountState") or "").lower()
+                if state_val == "frozen":
+                    return False, "Token-2022 DefaultAccountState: Frozen (все счета покупателей заморожены)"
+            if "confidentialtransfer" in ext_type:
+                return False, "Token-2022 Confidential Transfer (скрытый баланс)"
+
+        return True, ""
+    except Exception:
+        return True, ""
+
+
 async def check_solana(mint: str):
     """Solana-гейт: (True, '') — можно брать; (False, причина) — блок."""
     if not _cfg("GOPLUS_ENABLED", True):
         return True, "off"
     if not mint:
         return True, "no-addr"
+
+    # 0. Мгновенный ончейн-аудит Solana (Freeze Authority, Mint Authority, Token-2022) через прямой RPC
+    _onchain_ok, _onchain_why = await check_onchain_solana_security(mint)
+    if not _onchain_ok:
+        return False, _onchain_why
+
     key = ("solana", mint)
     ttl = float(_cfg("GOPLUS_CACHE_SEC", 3600) or 0)
     hit = _CACHE.get(key)
@@ -504,9 +604,20 @@ async def check_onchain_evm_security(address: str, chain: str, pair_data: dict =
                 "40c10f19": "скрытый минт mint(address,uint256)",
                 "a0712d68": "скрытый минт mint(uint256)",
                 "42f21696": "блэклист blacklist(address)",
-                "83e2007e": "isBlacklisted",
+                "83e2007e": "isBlacklisted(address)",
                 "8456cb59": "пауза торговли pause()",
                 "03a118d5": "пауза торговли pause(bool)",
+                "0f34085f": "заморозка freeze(address)",
+                "b3555543": "заморозка freezeAccount(address,bool)",
+                "9e6027a4": "заморозка freeze(address,bool)",
+                "2e08c6a5": "заморозка setFreeze(address,bool)",
+                "6a17b35f": "блэклист setBlacklist(address,bool)",
+                "12b184ea": "блэклист setBlackList(address,bool)",
+                "16c38b34": "пауза setPaused(bool)",
+                "bedb86fb": "пауза setPause(bool)",
+                "2f3277bb": "пауза setTrading(bool)",
+                "5140f09a": "пауза setTradingEnabled(bool)",
+                "cb5f1f77": "пауза enableTrading(bool)",
             }
             for _sel, _desc in _dangerous_selectors.items():
                 if _sel in _bytecode:
@@ -575,8 +686,8 @@ async def check_onchain_evm_security(address: str, chain: str, pair_data: dict =
                         if _p_frac < 0.05 and _liq_pd < 3000:
                             return False, f"картонный пул V2/V3 (в пуле всего {_p_frac*100:.1f}% эмиссии < 5% без соцсетей — схема LP-rug)"
         # 3. Проверка сжигания ликвидности (LP Burn / Lock) — ТОЛЬКО ПЕРЕД ВХОДОМ В СДЕЛКУ (not is_open_pos):
-        # Предотвращает ложное списание открытых позиций и строго блокирует незалоченные токены на всех EVM-сетях
-        if not is_open_pos and len(_pair_addr) == 42 and chain in ("robinhood", "base", "bsc"):
+        # Предотвращает ложное списание открытых позиций и строго блокирует незалоченные токены на Robinhood и BSC
+        if not is_open_pos and len(_pair_addr) == 42 and chain in ("robinhood", "bsc"):
             _DEAD = "000000000000000000000000000000000000dead".zfill(64)
             _ZERO = "0000000000000000000000000000000000000000".zfill(64)
             _pl_lp = [
@@ -596,12 +707,12 @@ async def check_onchain_evm_security(address: str, chain: str, pair_data: dict =
                     _zero_lp = int(_zero_lp_h, 16) if _zero_lp_h and _zero_lp_h != "0x" else 0
                     if _tot_lp > 0:
                         _burnt_pct = ((_dead_lp + _zero_lp) / _tot_lp) * 100.0
-                        # Строгая защита для ВСЕХ сетей (BSC, Base, Robinhood): не менее 80% LP сожжено
-                        if _burnt_pct < 80.0:
+                        # Строгая защита для Robinhood и BSC (не менее 80% LP сожжено)
+                        if _burnt_pct < 80.0 and (chain == "robinhood" or not _has_reputation):
                             return False, f"ликва пула V2 не сожжена ({_burnt_pct:.1f}% < 80%) — риск вывода ликвидности девом"
-                elif not _has_reputation:
-                    # Если totalSupply() выдает revert (error), это Uniswap V3 или кастомный пул с NFT-позициями.
-                    if chain in ("robinhood", "bsc", "base") or (_res_lp and isinstance(_res_lp[0], dict) and "error" in _res_lp[0]):
+                elif not _has_reputation and chain in ("robinhood", "bsc"):
+                    # Если totalSupply() выдает revert (error), это V3 или кастомный пул.
+                    if _res_lp and isinstance(_res_lp[0], dict) and "error" in _res_lp[0]:
                         return False, f"пул не имеет сжигаемого V2 LP ({chain}: V3/ручной пул без доказательства блокировки) — риск LP-rug"
     except Exception as _e_oc:
         if chain == "robinhood":
@@ -621,21 +732,23 @@ async def verify_evm_token(address: str, chain: str, pair_data: dict = None) -> 
     address = (address or "").strip()
     if not address:
         return True, "no-addr"
-    if chain in ("robinhood",):
-        # Robinhood Chain (4663) ончейн-аудит безопасности и honeypot:
-        if not pair_data or not isinstance(pair_data, dict):
-            return False, "нет данных пары для Robinhood"
-        
-        # 1. Защита от Honeypot: проверка продаваемости
+
+    # 0. Защита от Honeypot для ВСЕХ сетей: проверка реальной продаваемости (нельзя продать токен)
+    if pair_data and isinstance(pair_data, dict):
         txns_m5 = ((pair_data.get("txns") or {}).get("m5") or {})
         txns_h1 = ((pair_data.get("txns") or {}).get("h1") or {})
         s5 = int(txns_m5.get("sells", 0) or 0)
         s1 = int(txns_h1.get("sells", 0) or 0)
         b5 = int(txns_m5.get("buys", 0) or 0)
-        if s5 == 0 and s1 == 0 and b5 >= 6:
-            return False, f"0 продаж при {b5} покупках — Honeypot (нельзя продать)"
-        if (b5 + s5) >= 25 and (s5 / (b5 + s5)) < 0.04:
-            return False, f"аномалия продаж m5 {s5}s/{b5}b — honeypot-ловушка"
+        if s5 == 0 and s1 == 0 and b5 >= 5:
+            return False, f"0 продаж при {b5} покупках — Honeypot (токен заморожен/нельзя продать)"
+        if (b5 + s5) >= 20 and (s5 / (b5 + s5)) < 0.05:
+            return False, f"аномалия продаж m5 {s5}s/{b5}b (менее 5% продаж) — honeypot-ловушка"
+
+    if chain in ("robinhood",):
+        # Robinhood Chain (4663) ончейн-аудит безопасности и honeypot:
+        if not pair_data or not isinstance(pair_data, dict):
+            return False, "нет данных пары для Robinhood"
 
         # 2. Ончейн-аудит байткода и LP-резервов через RPC (селекторы бэкдоров + V4 PoolManager fraction >= 8% / V2 LP burn)
         _oc_ok, _oc_why = await check_onchain_evm_security(address, "robinhood", pair_data, is_open_pos=False)
