@@ -42,7 +42,7 @@ PAPER_PORTFOLIO_FILE = "portfolio.json"
 # Ключ слепка в Supabase. ВАЖНО: у каждого бота свой, иначе два бота на одной
 # базе перезаписывают друг друга (сделки появляются и пропадают).
 # Задай в Render → Environment: первый бот PF_IDEBOT, второй PF_QYO7.
-PORTFOLIO_SNAPSHOT_MINT = (os.getenv("PORTFOLIO_SNAPSHOT_MINT", "") or "").strip().strip('"').strip("'") or "PORTFOLIO_STATE_V4"
+PORTFOLIO_SNAPSHOT_MINT = (os.getenv("PORTFOLIO_SNAPSHOT_MINT", "") or "").strip().strip('"').strip("'") or "PORTFOLIO_STATE_V1.4"
 INITIAL_BALANCE_USD = 120.0  # торговый пул ($150 депо - $30 газ)    # Стартовый капитал
 REINVEST_PERCENT = 5.0  # Было 3%: цель $10/день требует сайз. 5% пула на сделку
 VIRTUAL_POSITION_SIZE_USD = 15.0
