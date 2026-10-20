@@ -108,7 +108,7 @@ STAGNANT_HOLD_MIN = 25
 
 # Filtering
 AI_MODE = "degen" # "sniper" (строго 80-90% уверенности) или "degen"
-MIN_LIQUIDITY = 20000  # Снижено для скальпинга обычных монет
+MIN_LIQUIDITY = 12000  # Снижено для скальпинга обычных монет
 MAX_LIQUIDITY = 50000000
 
 # AI Аналитика
