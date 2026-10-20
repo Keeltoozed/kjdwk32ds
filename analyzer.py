@@ -929,9 +929,16 @@ class Analyzer:
             
         current_created_at = pair_data.get("pairCreatedAt", 0)
         current_fdv = pair_data.get("fdv", 0)
-        if await self.is_clone(symbol, mint, current_created_at, current_fdv):
+# СТАЛО: если в монете мощный независимый объем (b5 >= 60 и b5 > s5 * 1.3), не блокируем как клон:
+        _tx5_cl = (pair_data.get("txns") or {}).get("m5", {}) or {}
+        _b5_cl = int(_tx5_cl.get("buys", 0) or 0)
+        _s5_cl = int(_tx5_cl.get("sells", 0) or 0)
+        _strong_fomo = (_b5_cl >= 50 and _b5_cl >= _s5_cl * 1.25)
+
+        if not _strong_fomo and await self.is_clone(symbol, mint, current_created_at, current_fdv):
             print(f"🚫 Мусор: Токен {symbol} является клоном! На DexScreener найден более старый/крупный оригинал.")
             return False
+
 
         if is_vip:
             print(f"🚀 [VIP] {symbol}: Пропуск проверок соцсетей из-за гипер-моментума (проверка клонов пройдена)!")
