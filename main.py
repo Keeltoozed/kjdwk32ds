@@ -1362,10 +1362,19 @@ async def _evm_chain_loop(analyzer, tracker, chain: str):
                         _prev = tracker.last_loss_pct(addr)
                         if _prev is not None and _prev <= getattr(config, "RUG_REBUY_MAX_LOSS", -0.15):
                             continue
+
+                        # ДОБАВИТЬ ЭТОТ БЛОК: отсекаем старые пулы (мамонтов), освобождая очередь для свежака
+                        # (не тратим цикл на TIBBIR 900k минут и FLOWER 700k минут)
+                        _cached_td = getattr(analyzer, "_eval_ctx", {}).get(addr, {})
+                        # Пропускаем монеты, если в кеше они уже определены как древний флет
+                        if "dead-flat" in str(analyzer.signals.get(addr, "")):
+                            continue
+                            
                         _is_wss = addr in _wss_fresh
                         _cd = 20 if _is_wss else _recooldown
                         if _now_scan - processed.get(addr, 0.0) < _cd:
                             continue
+                            
                         mints.append(addr)
                         if len(mints) >= _cap:
                             break
