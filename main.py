@@ -1089,16 +1089,20 @@ async def _evm_track_once(tracker, chain: str, tag: str, emoji: str):
                             mint, chain, {"pairAddress": getattr(pos, "pair_address", "")}, is_open_pos=True
                         )
                         if not _oc_ok:
+                            _is_drained = any(w in _oc_why.lower() for w in ("опустошён", "rug", "нет байткода", "бэкдор", "блэклист", "заморозка", "пауза"))
                             _is_live_trading = False
-                            try:
-                                _live_td = await evm_data.get_token_data(mint, chain)
-                                _live_liq = float(((_live_td or {}).get("liquidity") or {}).get("usd", 0) or 0)
-                                if _live_liq >= 2500 and cur > 0:
-                                    _is_live_trading = True
-                            except Exception:
-                                pass
+                            if not _is_drained:
+                                try:
+                                    _live_td = await evm_data.get_token_data(mint, chain)
+                                    _tx5 = (_live_td.get("txns") or {}).get("m5", {}) or {}
+                                    _live_txs = int(_tx5.get("buys", 0) or 0) + int(_tx5.get("sells", 0) or 0)
+                                    _live_liq = float(((_live_td or {}).get("liquidity") or {}).get("usd", 0) or 0)
+                                    if _live_liq >= 2500 and _live_txs >= 3 and cur > 0:
+                                        _is_live_trading = True
+                                except Exception:
+                                    pass
                             if _is_live_trading:
-                                print(f"⚠️ [{tag}] Предупреждение ончейна: {_oc_why}, но токен активно торгуется (ликва ${_live_liq:.0f}, цена ${cur:.8f}) — игнорируем ложное списание.")
+                                print(f"⚠️ [{tag}] Предупреждение ончейна: {_oc_why}, но токен активно торгуется (ликва ${_live_liq:.0f}, сделок 5м: {_live_txs}) — игнорируем ложное списание.")
                             else:
                                 print(f"🚨 [{tag}-V4-RUG/HONEYPOT] {pos.symbol} ({mint[:10]}): {_oc_why} — пул осушен или контракт заблокирован, списание в -100%.")
                                 tracker.close_position(mint, 0.0, f"{tag} Honeypot / V4 LP Rug ({_oc_why})")
@@ -1258,9 +1262,9 @@ async def _evm_track_once(tracker, chain: str, tag: str, emoji: str):
                         pos.price_checked_at = _t.time()
                         continue
                     reason = f"{tag} Stagnant ({held:.0f}m)"
-                # DEAD POOL GUARD (ловит застрявшие/замороженные пулы вроде BRML: 0 сделок, цена застыла)
+                # DEAD POOL GUARD (ловит застрявшие/замороженные пулы вроде BRML/P2L/JEET: 0 сделок, цена застыла)
                 # Не убивает прибыльные сделки (GRASS кейс: +1.26% закрыло из-за временной 7.5с задержки API)
-                if not reason and held >= 10:
+                if not reason and held >= 3.0:
                     try:
                         _td_pool = await evm_data.get_token_data(mint, chain)
                         if _td_pool:
@@ -1273,7 +1277,7 @@ async def _evm_track_once(tracker, chain: str, tag: str, emoji: str):
                             if (_bh1_p + _sh1_p) == 0 or ((_b5_p + _s5_p) == 0 and float(((_td_pool.get("volume") or {}).get("m5", 0)) or 0) <= 0.01):
                                 _z_cyc = int(getattr(pos, "zero_vol_cycles", 0) or 0) + 1
                                 pos.zero_vol_cycles = _z_cyc
-                                if _z_cyc >= 12:  # ~30 сек подтвержденной тишины в пуле (было 3 цикла = 7.5с)
+                                if _z_cyc >= 8:  # ~20 сек подтвержденной тишины в пуле
                                     if pnl > 0.08:
                                         reason = f"{tag} Stagnant Pool TP (+{pnl*100:.1f}%, 0 txns in pool)"
                                     elif pnl <= 0.02:
