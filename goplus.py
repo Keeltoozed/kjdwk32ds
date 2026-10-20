@@ -811,17 +811,28 @@ async def verify_evm_token(address: str, chain: str, pair_data: dict = None) -> 
                 if not _g_ok or _g_why != "":
                     return False, f"пул V2 на {chain} не верифицирован GoPlus по LP-локу ({_g_why or 'no-data'}) — защита от LP-рагпулла"
 
-# СТАЛО (ИСПРАВЛЕНО):
             # Для проверенных NFT-пулов (V3/V4/Aerodrome Slipstream/Clanker):
             if _is_nft_p:
                 if not _g_ok and is_hard_scam(_g_why):
                     return False, f"пул {chain}: GoPlus {_g_why}"
-                if not _h_ok and _h_why:
-                    return False, f"пул {chain}: Honeypot.is {_h_why}"
-                if s5 >= 3 and b5 >= int(s5 * 1.1) and _h_ok and (_g_ok or _g_why == ""):
+                try:
+                    import honeypot_is as _hp
+                    if not _h_ok and _hp.is_hard_scam(_h_why):
+                        return False, f"пул {chain}: Honeypot.is {_h_why}"
+                except Exception:
+                    pass
+                if s5 >= 3 and b5 >= int(s5 * 1.1) and not is_hard_scam(_g_why):
                     return True, ""
 
             if _age_min < 15.0:
+                if not _g_ok and is_hard_scam(_g_why):
+                    return False, f"контракт {chain}: GoPlus {_g_why}"
+                try:
+                    import honeypot_is as _hp
+                    if not _h_ok and _hp.is_hard_scam(_h_why):
+                        return False, f"контракт {chain}: Honeypot.is {_h_why}"
+                except Exception:
+                    pass
                 if s5 < 4 or b5 < s5 * 1.2 or vol5 < 3000:
                     return False, f"контракт {chain} не верифицирован (GoPlus: {_g_why}, Honeypot: {_h_why}) и слабый стакан — ждём проверки"
                 return True, ""
