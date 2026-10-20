@@ -653,11 +653,15 @@ async def check_onchain_evm_security(address: str, chain: str, pair_data: dict =
                 _is_bare_manual_erc20 = True
 
         # 1.6. Защита от серийных LP-rug фабрик на Uniswap V4:
-        # Серийный скамер на Robinhood использует шаблон байткода 9312 (10 млрд supply, ручной V4-пул).
-        # Дев закидывает 15% в PoolManager, ждёт покупок ботов и через modifyLiquidity выкачивает ликвидность в 0.
+        # В Uniswap V4 любой создатель может вызвать modifyLiquidity и выкачать 100% токенов из PoolManager.
+        # Легитимные токены на Base (TRENCHER, Basecat, SPIKE) запускаются через протокол Clanker (адрес токена 0xb20000000000...).
+        # Ручные V4-пулы (DOAN, DADOGE, FINUL, SXSI, P2L, JEET) — это 100% серийные рагпуллы скамеров!
         if not is_open_pos and _is_v4:
-            if len(_bytecode) == 9312:
-                return False, "серийный скам-шаблон 9312 на Uniswap V4 — 100% риск вывода ликвидности через modifyLiquidity"
+            if chain == "robinhood":
+                return False, "неверифицированный пул Uniswap V4 на Robinhood Chain — 100% риск вывода ликвидности через modifyLiquidity"
+            _is_clanker_v4 = address.lower().startswith("0xb20000000000")
+            if not _is_clanker_v4 and not _has_reputation:
+                return False, "ручной неверифицированный пул Uniswap V4 (не Clanker) — 100% риск вывода ликвидности через modifyLiquidity"
 
         # 2. Проверка реальной ликвидности пула (Uniswap V4 PoolManager vs V2/V3 Pair & LP Burn)
         if 2 in _res_map and 3 in _res_map:
@@ -803,8 +807,7 @@ async def verify_evm_token(address: str, chain: str, pair_data: dict = None) -> 
             # Нельзя пускать пул, пока GoPlus не подтвердил блокировку/сжигание LP (защита от CHUBBY и ANTHROPIC LP-rug)!
             _dex_id = str((pair_data or {}).get("dexId", "")).lower()
             _lbls = [str(x).lower() for x in (pair_data.get("labels") or [])]
-            _p_addr = str(pair_data.get("pairAddress") or "")
-            _is_nft_p = any(v in _dex_id for v in ("v3", "v4", "slipstream")) or any("v3" in lb or "slipstream" in lb for lb in _lbls) or len(_p_addr) > 42
+            _is_nft_p = any(v in _dex_id for v in ("v3", "slipstream")) or any("v3" in lb or "slipstream" in lb for lb in _lbls) or address.lower().startswith("0xb20000000000")
             
             if not _is_nft_p:
                 if not _g_ok or _g_why != "":
