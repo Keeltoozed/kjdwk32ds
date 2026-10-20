@@ -1362,6 +1362,12 @@ async def _evm_chain_loop(analyzer, tracker, chain: str):
                         _prev = tracker.last_loss_pct(addr)
                         if _prev is not None and _prev <= getattr(config, "RUG_REBUY_MAX_LOSS", -0.15):
                             continue
+                         # Отсекаем монеты старше 24 часов, чтобы не сканировать мамонтов вроде DEGEN (1.4 млн минут):
+                        _cached_data = getattr(analyzer, "_prefetch_cache", {}).get(addr, (0, {}))[1]
+                        if _cached_data:
+                            _c_at = _cached_data.get("pairCreatedAt", 0)
+                            if _c_at and (_t.time() * 1000 - _c_at) > 86400000:  # старше 24 часов
+                                continue
 
                         # ДОБАВИТЬ ЭТОТ БЛОК: отсекаем старые пулы (мамонтов), освобождая очередь для свежака
                         # (не тратим цикл на TIBBIR 900k минут и FLOWER 700k минут)
