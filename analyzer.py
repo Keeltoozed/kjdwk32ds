@@ -1435,6 +1435,12 @@ class Analyzer:
                                       f"🚫 [{tag}-SCOUT] {symbol}: фантомный пул (в пуле всего {_q_amt:.2f} SOL < 5 SOL).")
             # 3. Защита от микро-чеков ботов (накрутка объёма)
             _vm5_scout = float((pair_data.get("volume") or {}).get("m5", 0) or 0)
+
+            # Защита от wash-trading крупными чеками скамера ($497 x N сделок):
+            if (b5 + s5) <= 15 and _vm5_scout >= 8000:
+                return self._deny(address, "wash-volume",
+                                  f"🚫 [{tag}-SCOUT] {symbol}: аномальный объём ${_vm5_scout:,.0f} при всего {b5+s5} сделках — накрутка одним кошельком.")
+
             if (b5 + s5) >= 15 and (_vm5_scout / max(b5 + s5, 1)) < 15.0:
                 return self._deny(address, "wash-bot",
                                   f"🚫 [{tag}-SCOUT] {symbol}: средний чек ${_vm5_scout / max(b5 + s5, 1):.1f} < $15 — накрутка ботов.")
