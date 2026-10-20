@@ -143,24 +143,32 @@ class Analyzer:
                 return None
             _ch_veto = str((pair_data or {}).get("chainId", "")).lower()
             if _ch_veto in ("robinhood", "base", "bsc", "ethereum"):
-                # На EVM скор ракеты калиброван иначе из-за специфики L2 (меньше объем, чем на Solana Pump.fun).
-                # Для SCOUT (<15м) отсекаем мертвецов и бото-накрутку (< 0.12, кейсы RIOT 0.06, ROBINBOT 0.02)
-                # Для остальных входов отсекаем пустые стаканы (< 0.08)
                 self._rkt_tag(address, pair_data or {})
                 sc = self.rocket_scores.get(address)
                 if "SCOUT" in s:
-                    if sc is not None and sc < 0.25:
-                        return f"RKT-вето {sc:.2f}: слабый скор для EVM SCOUT (< 0.25, бото-стакан)"
+                    _tx5 = ((pair_data or {}).get("txns") or {}).get("m5") or {}
+                    _b5 = int(_tx5.get("buys", 0) or 0)
+                    _s5 = int(_tx5.get("sells", 0) or 0)
+                    _vm5 = float(((pair_data or {}).get("volume") or {}).get("m5", 0) or 0)
+                    if _b5 >= 8 and _s5 >= 1 and _b5 >= _s5 and _vm5 >= 2000.0:
+                        return None
+                    if sc is not None and sc < 0.15:
+                        return f"RKT-вето {sc:.2f}: слабый скор для EVM SCOUT (< 0.15, бото-стакан)"
                 else:
                     if sc is not None and sc < 0.08:
                         return f"RKT-вето {sc:.2f}: пустой/мертвый стакан EVM (< 0.08)"
                 return None
 
             if "SCOUT" in s:
-                # Для SCOUT не пускаем падающие ножи со скором ниже 0.45 (кейс Animates 0.38)
                 self._rkt_tag(address, pair_data or {})
                 sc = self.rocket_scores.get(address)
-                if sc is not None and sc < 0.45:
+                _tx5 = ((pair_data or {}).get("txns") or {}).get("m5") or {}
+                _b5 = int(_tx5.get("buys", 0) or 0)
+                _s5 = int(_tx5.get("sells", 0) or 0)
+                _vm5 = float(((pair_data or {}).get("volume") or {}).get("m5", 0) or 0)
+                if _b5 >= 12 and _s5 >= 2 and _b5 >= _s5 and _vm5 >= 3000.0:
+                    return None
+                if sc is not None and sc < 0.35:
                     return f"RKT-вето {sc:.2f}: слабый скор для SCOUT (падающий нож)"
                 return None
             if not pair_data:
@@ -1542,15 +1550,16 @@ class Analyzer:
                                           f"🚫 [{tag}] {symbol}: ошибка антискама ({type(_e).__name__}) — {tag} риск.")
             if not await self.verify_1m_candles_not_dumping(address, pair_data, chain):
                 return self._deny(address, "1m-candle-dump", f"🚫 [{tag}-SCOUT] {symbol}: 1м свеча в сливе / вершина пройдена.")
-            # Защита от бото-накрутки и скамов с околонулевым скором ракеты (RIOT 0.06, ROBINBOT 0.02, VAULTLINGS 0.23)
+            # Защита от бото-накрутки и скамов: для пулов с подтверждённым ончейн-рынком
+            # (например, fun b/s 61/49 vol $10k, ASH +611%, POGO +164%)
+            # XGBoost скор ракеты (~0.01 из-за отсутствия 24ч истории) НЕ должен ветировать вход!
             _rkt_tag_str = self._rkt_tag(address, pair_data)
             _sc_val = self.rocket_scores.get(address)
-            # Для свежих Scout-токенов с реальными органическими покупателями (ASH +611%, POGO +164%, INU +72%)
-            # не блокируем скором 0.25, если b5 >= 8, b5 >= 1.3*s5 и объем >= $2500
-            _min_rkt_scout = 0.05 if (b5 >= 8 and s5 > 0 and b5 >= 1.3 * s5 and _vm5_scout >= 2500.0) else 0.25
-            if _sc_val is not None and _sc_val < _min_rkt_scout:
-                return self._deny(address, f"scout-low-rkt {_sc_val:.2f}",
-                                  f"🚫 [{tag}-SCOUT] {symbol}: скор ракеты {_sc_val:.2f} < {_min_rkt_scout:.2f} — накрутка ботов/слабый интерес.")
+            _is_live_organic_market = (b5 >= 8 and s5 >= 1 and b5 >= s5 and _vm5_scout >= 2000.0)
+            if not _is_live_organic_market:
+                if _sc_val is not None and _sc_val < 0.15:
+                    return self._deny(address, f"scout-low-rkt {_sc_val:.2f}",
+                                      f"🚫 [{tag}-SCOUT] {symbol}: скор ракеты {_sc_val:.2f} < 0.15 — накрутка ботов/слабый интерес.")
             print(f"🔭 [{tag}-SCOUT] {symbol}: возраст {_age_min:.1f}м, m5 {m5:+.1f}%, liq ${liq:,.0f} — ранний билет!")
             self._set_sig(address, f"{tag} SCOUT {_age_min:.0f}m" + _rkt_tag_str + await self.meme_tag(address, symbol, pair_data, chain))
             return True
