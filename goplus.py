@@ -698,14 +698,14 @@ async def verify_evm_token(address: str, chain: str, pair_data: dict = None) -> 
                 if not _g_ok or _g_why != "":
                     return False, f"пул V2 на {chain} не верифицирован GoPlus по LP-локу ({_g_why or 'no-data'}) — защита от LP-рагпулла"
 
+# СТАЛО (ИСПРАВЛЕНО):
             # Для проверенных NFT-пулов (V3/V4/Aerodrome Slipstream/Clanker):
             if _is_nft_p:
-                if "v4" in _lbls or len(_p_addr) > 42:
-                    if not _g_ok and is_hard_scam(_g_why):
-                        return False, f"пул Uniswap V4 на {chain}: {_g_why}"
-                if _h_ok and _h_why == "" and s5 >= 2:
-                    return True, ""
-                if s5 >= 2 and b5 >= s5:
+                if not _g_ok and is_hard_scam(_g_why):
+                    return False, f"пул {chain}: GoPlus {_g_why}"
+                if not _h_ok and _h_why:
+                    return False, f"пул {chain}: Honeypot.is {_h_why}"
+                if s5 >= 3 and b5 >= int(s5 * 1.1) and _h_ok and (_g_ok or _g_why == ""):
                     return True, ""
 
             if _age_min < 15.0:
