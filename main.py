@@ -470,7 +470,12 @@ async def scanner_loop(analyzer, tracker):
                     # Держим память в чистоте
                     if len(processed_mints) > 1000:
                         processed_mints.clear()
-                        
+                    # Не тратить квоту на токены старше 48 часов
+                    _c_pre = getattr(analyzer, "_prefetch_cache", {}).get(mint, (0, {}))[1]
+                    if _c_pre and _c_pre.get("pairCreatedAt"):
+                        if (time.time() * 1000 - _c_pre["pairCreatedAt"]) > 172800000:
+                            continue
+        
                     try:
                         # Используем умный маршрутизатор (сам выберет XGBoost или Raydium модель)
                         is_good = await analyzer.analyze_token(mint)
