@@ -882,7 +882,7 @@ class Analyzer:
                 print(f"🚫 [ENTRY] {mint}: vol24h ${_v24:,.0f} < ${_v24_min:,.0f} — совсем нет объёма.")
                 return False
 
-            tx_min = 8 if (_m5 >= 20.0 or _lottery or is_vip) else (10 if _age_min_pre < 60 else 15)
+            _tx_min = 8 if (_m5 >= 20.0 or _lottery or is_vip) else (10 if _age_min_pre < 60 else 15)
             if (_b5 + _s5) < _tx_min:
                 print(f"🚫 [VELOCITY] {mint}: txns m5 {_b5 + _s5} < {_tx_min} — слишком медленно, нет органического FOMO.")
                 return False

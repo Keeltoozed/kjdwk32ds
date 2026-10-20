@@ -71,7 +71,7 @@ async def birdeye_loop(analyzer, tracker):
                             ok = await analyzer.analyze_robinhood_token(addr, ch)
                             td = await evm_data.get_token_data(addr, ch) if ok else None
                     except Exception as e:
-                        print(f"🦅 Birdeye analyze err {addr[:8]}: {type(e).__name__}")
+                        print(f"🦅 Birdeye analyze err {addr[:8]}: {type(e).__name__} ({e})")
                         continue
                     if ok is None:
                         continue
