@@ -1390,10 +1390,11 @@ class Analyzer:
         # Ранний Scout-режим для свежих ракет (<15 мин):
         # Ловит стартовые импульсы ракет (USEMATH, FINI, MUCRON, WISDOM, MUSEBOT, AMIRI100X, AICELL) от 0.3 мин (18 сек)
         # при подтверждённых продажах (honeypot исключён) и ликвидности >= min_liq ($2.5k)
-        _scout_min_liq = 2500.0 if chain in ("bsc", "robinhood", "base") else float(min_liq)
-        if (0.3 <= _age_min < 15.0 and 0.8 <= m5 <= 1200.0 and 0.0 <= h1 <= 2500.0
-                and (b5 + s5) >= 6 and liq >= _scout_min_liq
-                and s5 >= 1 and s >= 1 and b5 >= int(s5 * 1.25) and (b5 - s5) >= 2 and (b5 / max(s5, 1)) <= 8.0):
+# СТАЛО (ИСПРАВЛЕНО):
+        _scout_min_liq = 3500.0 if chain in ("bsc", "robinhood", "base") else float(min_liq)
+        if (0.5 <= _age_min < 15.0 and 0.8 <= m5 <= 600.0 and 0.0 <= h1 <= 1500.0
+                and (b5 + s5) >= 12 and liq >= _scout_min_liq
+                and s5 >= 3 and s >= 4 and b5 >= int(s5 * 1.25) and (b5 - s5) >= 2 and (b5 / max(s5, 1)) <= 6.0):
             if not self._evm_brand_ok(symbol, tag):
                 return False
             if not await self._evm_clone_ok(symbol, address, pair_data, chain, tag):
