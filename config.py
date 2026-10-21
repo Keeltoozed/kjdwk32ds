@@ -57,15 +57,15 @@ LOTTERY_SIZE_USD = 15.0
 MAX_CONCURRENT_POSITIONS = 10  # концентрация капитала: максимум 10 ракет  # Режим Снайпера: максимум 5 сделок одновременно
 
 # Risk Management
-MAX_DAILY_LOSS_USD = 18.0
+MAX_DAILY_LOSS_USD = 50.0
 KILL_SWITCH_ENABLED = False  # ОТКЛЮЧЕНО для тестов (не ставить торговлю на паузу при дневном минусе)
-MAX_DAILY_LOSS_PCT = 0.25
+MAX_DAILY_LOSS_PCT = 0.35
 STOP_LOSS_PCT = -0.16  # Стоп -16% после 90с (не выбивает ракеты вроде Chameleon +788% на первой теневой свече -13%)
 
 # === ЗАЩИТА ОТ СЕРИИ МИНУСОВ (STREAK CIRCUIT BREAKER) ===
 STREAK_COOLDOWN_ENABLED = True       # Включить паузу после серии минусов
-STREAK_MAX_CONSECUTIVE_LOSSES = 3    # Сколько минусов подряд активируют паузу
-STREAK_COOLDOWN_MINUTES = 12.0       # Длительность паузы (12 минут вместо 30)
+STREAK_MAX_CONSECUTIVE_LOSSES = 4    # 4 минуса подряд
+STREAK_COOLDOWN_MINUTES = 3.0        # Длительность паузы: 3 минуты вместо 12, чтобы бот не засыпал на полдня
 
 # === IN-MEMORY STREAMING SNIPER (RAM FILTER + AUDIT) ===
 SNIPER_ENTRIES_ENABLED = True             # Активировать вход по In-Memory стриму (без задержек DexScreener)

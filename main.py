@@ -1084,25 +1084,19 @@ async def _evm_track_once(tracker, chain: str, tag: str, emoji: str):
                     pos.last_security_check_ts = _t.time()
                     try:
                         import goplus as _gp
-                        # 1. Прямая On-Chain RPC проверка контракта + баланса Uniswap V4 PoolManager (ловит 15-мин V4 LP Rug на Base)
+                        # 1. Живые данные пула: передаём полный pair_data, чтобы не выбивать ложный $0 LP Rug
+                        _live_td = await evm_data.get_token_data(mint, chain)
+                        _live_liq = float(((_live_td or {}).get("liquidity") or {}).get("usd", 0) or 0)
+                        _tx5 = ((_live_td or {}).get("txns") or {}).get("m5", {}) or {}
+                        _live_txs = int(_tx5.get("buys", 0) or 0) + int(_tx5.get("sells", 0) or 0)
+                        
                         _oc_ok, _oc_why = await _gp.check_onchain_evm_security(
-                            mint, chain, {"pairAddress": getattr(pos, "pair_address", "")}, is_open_pos=True
+                            mint, chain, _live_td or {"pairAddress": getattr(pos, "pair_address", "")}, is_open_pos=True
                         )
                         if not _oc_ok:
-                            _is_drained = any(w in _oc_why.lower() for w in ("опустошён", "rug", "нет байткода", "бэкдор", "блэклист", "заморозка", "пауза"))
-                            _is_live_trading = False
-                            if not _is_drained:
-                                try:
-                                    _live_td = await evm_data.get_token_data(mint, chain)
-                                    _tx5 = (_live_td.get("txns") or {}).get("m5", {}) or {}
-                                    _live_txs = int(_tx5.get("buys", 0) or 0) + int(_tx5.get("sells", 0) or 0)
-                                    _live_liq = float(((_live_td or {}).get("liquidity") or {}).get("usd", 0) or 0)
-                                    if _live_liq >= 2500 and _live_txs >= 3 and cur > 0:
-                                        _is_live_trading = True
-                                except Exception:
-                                    pass
-                            if _is_live_trading:
-                                print(f"⚠️ [{tag}] Предупреждение ончейна: {_oc_why}, но токен активно торгуется (ликва ${_live_liq:.0f}, сделок 5м: {_live_txs}) — игнорируем ложное списание.")
+                            # Защита от ложного списания: если токен торгуется (есть ликва >= $1,500 и сделки), не списываем в 0!
+                            if _live_liq >= 1500.0 and _live_txs >= 2 and cur > 0:
+                                print(f"⚠️ [{tag}] Предупреждение ончейна: {_oc_why}, но токен активно торгуется (ликва ${_live_liq:.0f}, сделок 5м: {_live_txs}) — ложное списание предотвращено.")
                             else:
                                 print(f"🚨 [{tag}-V4-RUG/HONEYPOT] {pos.symbol} ({mint[:10]}): {_oc_why} — пул осушен или контракт заблокирован, списание в -100%.")
                                 tracker.close_position(mint, 0.0, f"{tag} Honeypot / V4 LP Rug ({_oc_why})")

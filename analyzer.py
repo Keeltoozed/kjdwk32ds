@@ -1569,7 +1569,9 @@ class Analyzer:
             # XGBoost скор ракеты (~0.01 из-за отсутствия 24ч истории) НЕ должен ветировать вход!
             _rkt_tag_str = self._rkt_tag(address, pair_data)
             _sc_val = self.rocket_scores.get(address)
-            _is_live_organic_market = (b5 >= 8 and s5 >= 1 and b5 >= s5 and _vm5_scout >= 2000.0)
+            # Для свежих монет (<15м) XGBoost скор занижен (~0.01-0.03) из-за отсутствия 24ч истории.
+            # Если есть активный живой рынок (b5 >= 10, s5 >= 2, b5 >= s5, vol5 >= $2000), скор не ветирует вход!
+            _is_live_organic_market = (b5 >= 10 and s5 >= 2 and b5 >= s5 and _vm5_scout >= 2000.0)
             if not _is_live_organic_market:
                 if _sc_val is not None and _sc_val < 0.15:
                     return self._deny(address, f"scout-low-rkt {_sc_val:.2f}",

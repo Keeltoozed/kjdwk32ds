@@ -674,12 +674,13 @@ async def check_onchain_evm_security(address: str, chain: str, pair_data: dict =
         _is_clanker_v4 = address.lower().startswith("0xb20000000000")
 
         if not is_open_pos and _is_v4:
-            if chain == "base" and not _is_clanker_v4 and not _has_reputation:
-                return False, "ручной неверифицированный пул Uniswap V4 на Base (не Clanker) — 100% риск вывода ликвидности через modifyLiquidity"
             # На всех сетях перед входом в V4 требуем реальный объем quote-актива (ETH >= 0.15 для Clanker, >= 0.35 для остальных)
+            # Это фильтрует фантомные V4 пулы дева (0.00001 ETH) и разрешает реальные ракеты (FROPE, STARMIND, QUENTRA с 1.8+ ETH)
             _min_v4_q = 0.15 if _is_clanker_v4 else 0.35
             if ("ETH" in _q_sym_pd or "WETH" in _q_sym_pd) and 0 < _q_amt_pd < _min_v4_q:
                 return False, f"фантомный пул Uniswap V4 (в пуле всего {_q_amt_pd:.4f} ETH < {_min_v4_q:.2f} ETH — ловушка)"
+            elif "USD" in _q_sym_pd and 0 < _q_amt_pd < 800.0:
+                return False, f"фантомный пул Uniswap V4 (в пуле всего ${_q_amt_pd:.0f} USD < $800 — ловушка)"
 
         # 2. Проверка реальной ликвидности пула (Uniswap V4 PoolManager vs V2/V3 Pair & LP Burn)
         if 2 in _res_map and 3 in _res_map:
@@ -687,10 +688,9 @@ async def check_onchain_evm_security(address: str, chain: str, pair_data: dict =
             if _tot_h and _tot_h != "0x":
                 _tot_v = int(_tot_h, 16)
                 if _tot_v > 0 and _is_v4:
-                    # В Uniswap V4 при пампе (ракете) покупатели выкупают base-токены, поэтому base-баланс падает до 0.01%,
-                    # а quote (ETH) растет до небес (кейс EMBER +731%, SEASON +241%).
                     # Раг — это когда дев выдергивает ETH, и ликвидность падает в 0!
-                    if is_open_pos:
+                    # Проверяем ТОЛЬКО если в _pd реально переданы данные ликвидности (> 0):
+                    if is_open_pos and "liquidity" in _pd and _liq_pd > 0:
                         if _liq_pd < 400.0 or (0 < _q_amt_pd < 0.08):
                             return False, f"пул Uniswap V4 опустошён девом (остаток ликвидности ${_liq_pd:.0f}, quote {_q_amt_pd:.4f} ETH — V4 LP Rug)"
                 if _tot_v > 0 and not _is_v4 and 4 in _res_map:
@@ -806,8 +806,14 @@ async def verify_evm_token(address: str, chain: str, pair_data: dict = None) -> 
     except Exception:
         _h_ok, _h_why = False, "hp-exception"
 
-    # Если GoPlus подтвердил токен И Honeypot.is подтвердил (или unsupported) — чистый вход
-    if _g_ok and _g_why == "" and _h_ok:
+    # Если GoPlus подтвердил токен И Honeypot.is не нашёл скама (чисто или нет данных / 404) — чистый вход
+    try:
+        import honeypot_is as _hp
+        _h_scam = _hp.is_hard_scam(_h_why)
+    except Exception:
+        _h_scam = False
+
+    if _g_ok and _g_why == "" and not _h_scam:
         return True, ""
 
     # Уровень 3: Ончейн-валидация пула DEX (если внешний сервис ещё не успел проиндексировать токен)
