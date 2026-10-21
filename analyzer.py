@@ -1012,13 +1012,30 @@ class Analyzer:
                     return False
 
                 # Проверка критических рисков RugCheck (незаблокированный LP, мёртвая ликвидность, 1 кит с контрольным пакетом)
+                _rc_score = float(rc_data.get("score") or 0.0)
+                if _rc_score >= 1000:
+                    print(f"🚫 [АНТИСКАМ] RugCheck Score {_rc_score:.0f} >= 1000 (высокий риск скама/рага) у {mint[:8]} → СКАМ")
+                    return False
+
                 for rk in (rc_data.get("risks") or []):
                     _rk_name = str(rk.get("name") or "").lower()
                     _rk_lvl = str(rk.get("level") or "").lower()
                     if _rk_lvl == "danger":
-                        if any(k in _rk_name for k in ("unlocked lp", "low liquidity", "single holder ownership")):
-                            print(f"🚫 [АНТИСКАМ] Критический риск RugCheck: '{rk.get('name')}' ({rk.get('description')}) у {mint[:8]} → СКАМ")
-                            return False
+                        print(f"🚫 [АНТИСКАМ] Критический риск RugCheck [danger]: '{rk.get('name')}' ({rk.get('description')}) у {mint[:8]} → СКАМ")
+                        return False
+                    if "unlocked" in _rk_name and "lp" in _rk_name:
+                        print(f"🚫 [АНТИСКАМ] Незаблокированный LP пула '{rk.get('name')}' у {mint[:8]} → СКАМ")
+                        return False
+
+                for _mkt in (rc_data.get("markets") or []):
+                    if isinstance(_mkt, dict):
+                        _lp_info = _mkt.get("lp") or {}
+                        if isinstance(_lp_info, dict):
+                            _lp_unlocked = float(_lp_info.get("lpUnlocked") or 0.0)
+                            _lp_locked_pct = float(_lp_info.get("lpLockedPct") or 0.0)
+                            if _lp_unlocked > 0 and _lp_locked_pct < 80.0:
+                                print(f"🚫 [АНТИСКАМ] LP не заблокирован ({_lp_locked_pct:.1f}% locked) у {mint[:8]} → СКАМ")
+                                return False
                     
                 holders = rc_data.get("topHolders", [])
                 if not holders:
