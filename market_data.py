@@ -537,14 +537,16 @@ async def get_trending() -> list:
         if not mint or mint in seen or len(mint) <= 30:
             return
         attrs = item.get("attributes") or {}
-        # Защита от старых трупов: если пулу > 48ч и 0 сделок в m5 — не засоряем очередь!
+        # Защита от старых трупов: если пулу > 24ч и < 5 сделок в m5, либо старше 72ч — не засоряем очередь!
         created_ms = _parse_ms(attrs.get("pool_created_at"))
         if created_ms:
             age_h = (time.time() * 1000 - created_ms) / 3600000.0
             tx = attrs.get("transactions") or {}
             m5_tx = int((tx.get("m5") or {}).get("buys", 0) or 0) + int((tx.get("m5") or {}).get("sells", 0) or 0)
-            if age_h > 48.0 and m5_tx == 0:
+            if age_h > 24.0 and m5_tx < 5:
                 return  # Мертвый старый пул (кейс AFbX8oGj 4 года, LASocYgQ 106 дней)
+            if age_h > 72.0:
+                return  # Древний мамонт
         seen.add(mint)
         out.append({"tokenAddress": mint, "chainId": "solana"})
 

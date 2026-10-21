@@ -45,6 +45,7 @@ class Analyzer:
         self.last_score = 0.0  # Скор последнего решения (для радара)
         self.signals = {}  # Метки по mint: НЕ делит состояние между параллельными петлями (иначе FOMO:? в дашборде)
         self._dip_watch = {}  # OVERHEAT-пики для dip-buy: {address: (peak_price, ts)}
+        self._prefetch_cache = {}  # mint -> (ts, best_pair) кэш пакетного префетча DexScreener
 
         # Предзагрузка моделей в память один раз при старте
         try:
@@ -859,6 +860,7 @@ class Analyzer:
                         birth_tracker.remove_token(mint)
                     except Exception:
                         pass
+                    self._deny(mint, "dead-token", f"💀 {mint}: мёртвый токен")
                     return False
             if _m5 >= getattr(config, "LOTTERY_MIN_M5_PCT", 1.0) * 100:
                 if _m1 < 0:
@@ -1641,7 +1643,7 @@ class Analyzer:
 
             # 1. Только зрелые глубокие пулы (>= 30 мин, liq >= $25,000) с живым потоком сделок (m5 >= 12 сделок, >= $1,000 объём)
             if _age_min < 30.0 or liq < 25000.0 or (_b1 + _s1) < 35 or _v1 < 5000.0 or (b5 + s5) < 12 or s5 < 3 or b5 < 7 or _vm5 < 1000.0:
-                if _age_min < 10.0:
+                if _age_min < 10.0 and liq >= 5000.0 and (b5 + s5) >= 6:
                     print(f"⏳ [{tag}] {symbol}: возраст {_age_min:.1f}м, m5 {m5:+.1f}% — токен только родился, перепроверим через 20с.")
                     return None
                 return self._deny(address, f"dead-flat m5 {m5:+.1f}%", f"· [{tag}] {symbol}: флет/остывание (age: {_age_min:.0f}m, liq: ${liq:,.0f}, m5: {m5:+.1f}%, tx5m: {b5}b/{s5}s, vol5m: ${_vm5:.0f})")

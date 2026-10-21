@@ -776,9 +776,14 @@ async def check_onchain_evm_security(address: str, chain: str, pair_data: dict =
                     _zero_lp = int(_zero_lp_h, 16) if _zero_lp_h and _zero_lp_h != "0x" else 0
                     if _tot_lp > 0:
                         _burnt_pct = ((_dead_lp + _zero_lp) / _tot_lp) * 100.0
-                        # Строгая защита для Base, Robinhood и BSC (не менее 80% LP сожжено)
-                        if _burnt_pct < 80.0 and (chain in ("robinhood", "base") or not _has_reputation):
-                            return False, f"ликва пула V2 не сожжена ({_burnt_pct:.1f}% < 80%) — риск вывода ликвидности девом"
+                        # Строгая защита для Base и Robinhood (не менее 80% LP сожжено без подтверждённых соцсетей)
+                        if _burnt_pct < 80.0:
+                            if chain in ("robinhood", "base") and not _has_reputation:
+                                return False, f"ликва пула V2 не сожжена ({_burnt_pct:.1f}% < 80%) — риск вывода ликвидности девом"
+                            elif chain == "bsc":
+                                # На BSC легитимные проекты блокируют LP через PinkSale/Unicrypt/TeamFinance (не 0xdead).
+                                # Лок строго проверяется через GoPlus lp_holders (is_locked == 1) на Уровне 1 (min 70%).
+                                pass
     except Exception as _e_oc:
         if chain == "robinhood":
             return False, f"ошибка ончейн-аудита Robinhood ({type(_e_oc).__name__}) — блок по безопасности"

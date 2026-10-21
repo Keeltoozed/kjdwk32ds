@@ -455,6 +455,44 @@ async def scanner_loop(analyzer, tracker):
                 except Exception as _pfe:
                     print(f"⚠️ prefetch err: {type(_pfe).__name__}")
                 
+                # ⚡ Сортировка по импульсу и фильтрация мертвых/старых токенов
+                _ranked_mints = []
+                for mint in mints_to_scan:
+                    if not mint or mint in tracker.positions:
+                        continue
+                    _c_pre = getattr(analyzer, "_prefetch_cache", {}).get(mint, (0, {}))[1]
+                    if _c_pre and isinstance(_c_pre, dict):
+                        _c_at = _c_pre.get("pairCreatedAt") or 0
+                        _c_age_m = (time.time() * 1000 - _c_at) / 60000.0 if _c_at else 999.0
+                        _c_pc = _c_pre.get("priceChange") or {}
+                        _c_m5 = float(_c_pc.get("m5", 0) or 0)
+                        _c_tx = (_c_pre.get("txns") or {}).get("m5", {}) or {}
+                        _c_trades = int(_c_tx.get("buys", 0) or 0) + int(_c_tx.get("sells", 0) or 0)
+                        _c_vol5 = float((_c_pre.get("volume") or {}).get("m5", 0) or 0)
+
+                        # Древний токен старше 24ч без гипер-пампа: скип на 24 часа
+                        if _c_age_m > 1440.0 and _c_m5 < 15.0:
+                            processed_mints[mint] = time.time() + 86400
+                            continue
+
+                        # Мертвый токен старше 10 минут с 0 сделок в m5: скип на 1 час
+                        if _c_age_m > 10.0 and _c_trades == 0 and _c_vol5 == 0:
+                            processed_mints[mint] = time.time() + 3600
+                            continue
+
+                        # Слив/флет (m5 < 0.5%) не из миграций: кулдаун 2 мин
+                        if _c_m5 < 0.5 and mint not in _graduated_set and _c_age_m > 5.0:
+                            processed_mints[mint] = time.time() + 120
+                            continue
+
+                        _score_rank = (1000.0 if mint in _graduated_set else 0.0) + _c_m5
+                        _ranked_mints.append((_score_rank, mint))
+                    else:
+                        _ranked_mints.append((0.0, mint))
+
+                _ranked_mints.sort(key=lambda x: x[0], reverse=True)
+                mints_to_scan = [m for _, m in _ranked_mints]
+
                 for mint in mints_to_scan:
                     if not mint or mint in tracker.positions:
                         continue
@@ -471,11 +509,6 @@ async def scanner_loop(analyzer, tracker):
                     # Держим память в чистоте
                     if len(processed_mints) > 1000:
                         processed_mints.clear()
-                    # Не тратить квоту на токены старше 48 часов
-                    _c_pre = getattr(analyzer, "_prefetch_cache", {}).get(mint, (0, {}))[1]
-                    if _c_pre and _c_pre.get("pairCreatedAt"):
-                        if (time.time() * 1000 - _c_pre["pairCreatedAt"]) > 172800000:
-                            continue
         
                     try:
                         # Используем умный маршрутизатор (сам выберет XGBoost или Raydium модель)
@@ -508,6 +541,8 @@ async def scanner_loop(analyzer, tracker):
                             _sig = str(analyzer.get_signal(mint) or "")
                             if "откат" in _sig or "вертикаль" in _sig or mint in _graduated_set:
                                 processed_mints[mint] = time.time() - _cd + 35  # Перепроверить через 35с
+                            elif "dead-token" in _sig or "мёртвый токен" in _sig:
+                                processed_mints[mint] = time.time() + 3600      # Мертвый токен: скип на 1 час
                             else:
                                 processed_mints[mint] = time.time()
                         else:
@@ -1443,16 +1478,38 @@ async def _evm_chain_loop(analyzer, tracker, chain: str):
                         _cached_data = getattr(evm_data, "_EVM_PREFETCH_CACHE", {}).get((chain.lower(), addr.lower()), (0, {}))[1]
                         if _cached_data:
                             _c_at = _cached_data.get("pairCreatedAt", 0)
-                            if _c_at and (_t.time() * 1000 - _c_at) > 172800000:
+                            _c_age_h = (_t.time() * 1000 - _c_at) / 3600000.0 if _c_at else 999.0
+                            if _c_at and _c_age_h > 48.0:
                                 processed[addr] = _t.time() + 86400  # Древний мамонт: скип на сутки
                                 continue
+                            _c_liq = float((_cached_data.get("liquidity") or {}).get("usd", 0) or 0)
+                            _c_q_amt = float((_cached_data.get("liquidity") or {}).get("quote", 0) or 0)
+                            _c_q_sym = str((_cached_data.get("quoteToken") or {}).get("symbol", "")).upper()
+
+                            # Быстрый фильтр пустых/фантомных пулов без реальной ликвидности (<$2k или <0.15 ETH / 0.5 BNB)
+                            _is_empty = False
+                            if 0 < _c_liq < 2000.0:
+                                _is_empty = True
+                            elif chain in ("base", "robinhood", "ethereum") and ("ETH" in _c_q_sym or "WETH" in _c_q_sym) and 0 < _c_q_amt < 0.15:
+                                _is_empty = True
+                            elif chain == "bsc" and ("BNB" in _c_q_sym or "WBNB" in _c_q_sym) and 0 < _c_q_amt < 0.5:
+                                _is_empty = True
+
+                            if _is_empty:
+                                processed[addr] = _t.time() + 3600  # Пустышка без ликвидности: скип на 1 час
+                                continue
+
                         try:
                             ok = await analyzer.analyze_robinhood_token(addr, chain)
                         except Exception as e:
                             print(f"{emoji} {tag} analyze err {addr[:10]}: {type(e).__name__} {e}")
                             continue
                         if ok is None:
-                            processed[addr] = _t.time() - _recooldown + 20
+                            _lq_tmp = float((getattr(analyzer, "_eval_ctx", {}).get(addr, {}) or {}).get("liq", 0.0) or 0.0)
+                            if _lq_tmp >= 5000.0:
+                                processed[addr] = _t.time() - _recooldown + 20
+                            else:
+                                processed[addr] = _t.time() + 300
                             continue
                         _sig = str(analyzer.get_signal(addr) or "")
                         if ok is False:
