@@ -817,7 +817,7 @@ class Analyzer:
         
         scam_keywords = ["AAPL", "S&P", "SP500", "MSFT", "TSLA", "TESLA", "SPACEX", "STARLINK", "XAI", "NEURALINK", "PAYPAL",
                          "NVDA", "GOOG", "AMZN", "META", "NFLX", 
-                         "PEPE", "SHIB", "DOGE", "FLOKI", "BONK", "WIF", "BOME", "POPCAT", "TRUMP", "BIDEN",
+                         "PEPE", "SHIB", "DOGE", "FLOKI", "BONK", "WIF", "BOME", "POPCAT", "TRUMP", "BIDEN", "ELON", "MUSK",
                          "ANTHROPIC", "CLAUDE", "OPENAI", "CHATGPT", "DEEPSEEK", "GROK", "GEMINI", "PERPLEXITY"]
                          
         if any(keyword in symbol for keyword in scam_keywords) or any(keyword in name for keyword in scam_keywords):
@@ -1030,22 +1030,22 @@ class Analyzer:
             return False
 
 
+        info = pair_data.get("info", {}) or {}
+        socials = info.get("socials", []) or []
+        websites = info.get("websites", []) or []
+        
+        has_twitter = any("twitter" in s.get("type", "").lower() or "x.com" in s.get("url", "").lower() for s in socials)
+        has_tg = any("telegram" in s.get("type", "").lower() or "t.me" in s.get("url", "").lower() for s in socials)
+        has_website = len(websites) > 0
+        has_socials = bool(has_twitter or has_tg or has_website)
+        
+        _socials_unknown = bool(pair_data.get("_socials_unknown", False))
+        if not _socials_unknown and not has_socials and liquidity < 100000:
+            print(f"🚫 Мусор: У {symbol} ({mint[:8]}) вообще нет ни одной соцсети или сайта (Twitter/TG/Web). Это анонимный дев-раг (кейс Hodlon).")
+            return False
+            
         if is_vip:
-            print(f"🚀 [VIP] {symbol}: Пропуск проверок соцсетей из-за гипер-моментума (проверка клонов пройдена)!")
-        else:
-            info = pair_data.get("info", {})
-            socials = info.get("socials", [])
-            websites = info.get("websites", [])
-            
-            has_twitter = any("twitter" in s.get("type", "").lower() or "x.com" in s.get("url", "").lower() for s in socials)
-            has_tg = any("telegram" in s.get("type", "").lower() or "t.me" in s.get("url", "").lower() for s in socials)
-            has_website = len(websites) > 0
-            
-            _socials_unknown = bool(pair_data.get("_socials_unknown", False))
-            if not _socials_unknown and not _lottery and liquidity < 25000:
-                if not (has_twitter or has_tg or has_website):
-                    print(f"🚫 Мусор: У {mint} вообще нет ни одной соцсети или сайта.")
-                    return False
+            print(f"🚀 [VIP] {symbol}: Проверка клонов и соцсетей пройдена!")
             
         try:
             import aiohttp
@@ -1292,6 +1292,14 @@ class Analyzer:
             _floor_liq = 8000 if (age_minutes < 60 or _lottery or is_vip) else (12000 if (pair_data.get("chainId") or "").lower() == "solana" else 5000)
         if liq < _floor_liq:
             print(f"🚫 [ANTI-RUG] {symbol} ({mint[:8]}): Ликвидность всего ${liq:,.0f} < ${_floor_liq}. Слишком опасно.")
+            return False
+
+        # Защита от фантомных пулов с мизерным остатком реального SOL (кейс Hodlon -$14.91: в пуле всего 1.17 SOL):
+        _quote_info = pair_data.get("liquidity", {}) or {}
+        _quote_amt = float(_quote_info.get("quote", 0) or 0)
+        _quote_sym = str((pair_data.get("quoteToken") or {}).get("symbol", "")).upper()
+        if "SOL" in _quote_sym and 0 < _quote_amt < 10.0 and dex_id not in ("pump", "pumpfun"):
+            print(f"🚫 [AMM-GHOST-POOL] {symbol} ({mint[:8]}): в пуле всего {_quote_amt:.2f} SOL < 10 SOL — микро-резерв, риск 100% слива девом.")
             return False
 
         if dex_id in ("pump", "pumpfun"):
