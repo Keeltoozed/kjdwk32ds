@@ -1010,6 +1010,15 @@ class Analyzer:
                 if freeze_authority and freeze_authority not in SAFE_AUTHORITIES:
                     print(f"🚫 [АНТИСКАМ] Freeze Authority у ДЕВ-кошелька {freeze_authority[:8]} у {mint[:8]} → СКАМ")
                     return False
+
+                # Проверка критических рисков RugCheck (незаблокированный LP, мёртвая ликвидность, 1 кит с контрольным пакетом)
+                for rk in (rc_data.get("risks") or []):
+                    _rk_name = str(rk.get("name") or "").lower()
+                    _rk_lvl = str(rk.get("level") or "").lower()
+                    if _rk_lvl == "danger":
+                        if any(k in _rk_name for k in ("unlocked lp", "low liquidity", "single holder ownership")):
+                            print(f"🚫 [АНТИСКАМ] Критический риск RugCheck: '{rk.get('name')}' ({rk.get('description')}) у {mint[:8]} → СКАМ")
+                            return False
                     
                 holders = rc_data.get("topHolders", [])
                 if not holders:

@@ -450,7 +450,7 @@ async def _ds_bulk_prices(mints: list) -> dict:
                     continue
                 px = float(p.get("priceUsd", 0) or 0)
                 liq = float((p.get("liquidity") or {}).get("usd", 0) or 0)
-                if not px:
+                if not px or liq < 50.0:
                     continue
                 if liq > _liq.get(addr, -1):
                     _liq[addr] = liq

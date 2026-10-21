@@ -199,6 +199,17 @@ async def jup_loop(analyzer, tracker):
                         if _s5_j == 0 and _b5_j >= 5:
                             print(f"🚫 [JUP-HONEYPOT] {_sym_tmp} ({mint[:8]}): 0 продаж при {_b5_j} покупках — Honeypot (нельзя продать).")
                             continue
+                        _liq_j = float(((td or {}).get("liquidity") or {}).get("usd", 0) or 0)
+                        _dex_j = str((td or {}).get("dexId", "")).lower()
+                        if _dex_j in ("pump", "pumpfun"):
+                            _fdv_j = float((td or {}).get("fdv", 0) or (td or {}).get("marketCap", 0) or 0)
+                            _liq_j = max(_liq_j, _fdv_j * 0.40)
+                        if _liq_j < 8000:
+                            print(f"🚫 [JUP-LOW-LIQ] {_sym_tmp} ({mint[:8]}): ликвидность ${_liq_j:.0f} < $8,000 — микро-пул/риск слива.")
+                            continue
+                        if (_b5_j + _s5_j) < 6:
+                            print(f"🚫 [JUP-LOW-TXNS] {_sym_tmp} ({mint[:8]}): всего {_b5_j + _s5_j} сделок в m5 — нет активности.")
+                            continue
                         from jupiter import JupiterAPI
                         ds_price = float((td or {}).get("priceUsd", 0) or 0.0)
                         jup_price = await JupiterAPI.get_price(mint)

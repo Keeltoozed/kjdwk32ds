@@ -108,11 +108,11 @@ class MatureExitManager:
             _peak_age_min = 0
 
         _dd_peak = (position.max_price_usd - current_price) / position.max_price_usd if position.max_price_usd else 0
-        if max_pnl_pct >= 0.35 and _peak_age_min >= 25 and pnl_pct > 0.05 and _dd_peak >= 0.08:
+        if max_pnl_pct >= 0.35 and _peak_age_min >= 15 and pnl_pct > 0.05 and (_dd_peak >= 0.06 or _peak_age_min >= 20):
             return f"Mature Runner Stagnation (+{pnl_pct*100:.1f}% locked after peak +{max_pnl_pct*100:.0f}%, {_peak_age_min:.0f}m no ATH)"
 
-        if minutes_held >= 30 and _peak_age_min >= 25:
-            if pnl_pct > 0.10:
+        if minutes_held >= 20 and _peak_age_min >= 15:
+            if pnl_pct > 0.05:
                 return f"Mature Inactive Pool TP (+{pnl_pct*100:.1f}%, {minutes_held:.0f}m)"
             elif pnl_pct < -0.05:
                 return f"Mature Inactive Pool Cut ({pnl_pct*100:.1f}%, {minutes_held:.0f}m)"

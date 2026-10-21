@@ -191,6 +191,43 @@ async def position_manager_loop(analyzer, tracker):
                 # чтобы не делать N записей в Supabase каждые 3 секунды)
                 position.current_price_usd = current_price
                 position.current_pnl_usd = position.amount_usd * pnl_pct
+                position.price_updated_at = time.time()
+
+                # === DEAD POOL & LIQUIDITY DRAIN GUARD (SOLANA) ===
+                # Защита от замороженных/умерших пулов и фантомной прибыли (кейс DCA / NEX AI: ликва $0.02, 0 сделок в m5)
+                _now_t = time.time()
+                if (_now_t - getattr(position, "last_liq_chk", 0.0)) > 20:
+                    position.last_liq_chk = _now_t
+                    try:
+                        import market_data as _md
+                        _td_sol = await _md.get_token_data(mint)
+                        if _td_sol:
+                            _sol_liq = float(((_td_sol.get("liquidity") or {}).get("usd", 0) or 0))
+                            _sol_tx5 = (_td_sol.get("txns") or {}).get("m5", {}) or {}
+                            _sol_txs = int(_sol_tx5.get("buys", 0) or 0) + int(_sol_tx5.get("sells", 0) or 0)
+                            _sol_v5 = float(((_td_sol.get("volume") or {}).get("m5", 0) or 0))
+                            _dex_id = str(_td_sol.get("dexId", "")).lower()
+
+                            # 1. Ликвидность выведена/слита (< $500 на AMM/pumpswap/raydium после 2 минут жизни)
+                            if minutes_held >= 2.0 and _sol_liq < 500 and _dex_id not in ("pump", "pumpfun"):
+                                print(f"🚨 [SOL-DEAD-POOL] {position.symbol} ({mint[:8]}): ликвидность ${_sol_liq:.0f} < $500 — пул высушен/умер, мгновенный выход.")
+                                tracker.close_position(mint, 0.0, f"SOL Liquidity Drained (${_sol_liq:.0f} liq, pool dead)")
+                                continue
+
+                            # 2. Торги замерли: 0 сделок в m5 и объём 0 (застрявшая цена)
+                            if minutes_held >= 3.0 and _sol_txs == 0 and _sol_v5 <= 0.01:
+                                _z_cyc = int(getattr(position, "zero_vol_cycles", 0) or 0) + 1
+                                position.zero_vol_cycles = _z_cyc
+                                if _z_cyc >= 3:  # ~60-70 сек подтвержденной тишины в пуле
+                                    if pnl_pct > 0.02:
+                                        tracker.close_position(mint, current_price, f"Inactive Pool TP (+{pnl_pct*100:.1f}%, 0 txns in pool)")
+                                    else:
+                                        tracker.close_position(mint, current_price, f"Dead Pool (0 txns in pool, frozen)")
+                                    continue
+                            else:
+                                position.zero_vol_cycles = 0
+                    except Exception as _e:
+                        pass
                 
                 # === ИНТЕГРАЦИЯ МАТЕМАТИКИ ДЛЯ ЗРЕЛЫХ МОНЕТ (SWING TRADING) ===
                 _tp1_sol_thr = float(getattr(config, "TP1_TRIGGER_PCT", 0.50))
@@ -1321,9 +1358,9 @@ async def _evm_track_once(tracker, chain: str, tag: str, emoji: str):
                                     _oc_chk_ok, _oc_chk_why = await _gp.check_onchain_evm_security(mint, chain, _td_pool, is_open_pos=True)
                                     if not _oc_chk_ok:
                                         reason = f"{tag} Dead Pool Rug ({_oc_chk_why})"
-                                    elif pnl > 0.08:
+                                    elif pnl > 0.02:
                                         reason = f"{tag} Stagnant Pool TP (+{pnl*100:.1f}%, 0 txns in pool)"
-                                    elif pnl <= 0.02:
+                                    else:
                                         reason = f"{tag} Dead Pool (0 txns in pool, frozen)"
                             else:
                                 pos.zero_vol_cycles = 0
@@ -1891,6 +1928,12 @@ with tab1:
                                   if _blind else
                                   f"<h3 style='margin:0; color: {color};'>{sign}${pnl_usd:.2f} ({sign}{pnl_pct:.2f}%)</h3>")
 
+                        _orig_amt = float(row.get('original_amount_usd') or row.get('amount_usd') or 0.0)
+                        _cur_amt = float(row.get('amount_usd') or 0.0)
+                        _is_mb = bool(row.get('is_moonbag', False) or row.get('partial_tp1_done', False) or (_cur_amt < _orig_amt * 0.9))
+                        _mb_html = " <span style='background:#6f42c1; color:white; padding:2px 7px; border-radius:4px; font-size:0.75em; font-weight:bold;'>🚀 Moonbag (Фиксация TP)</span>" if _is_mb else ""
+                        _size_html = f"<div><span style='color:#888;'>Ордер:</span> <b>${_orig_amt:.1f}</b>" + (f" (В рынке: <b>${_cur_amt:.1f}</b>)" if _is_mb else "") + f"{_mb_html}</div>"
+
                         st.markdown(f"""
                         <div style='background-color: #1E1E1E; padding: 15px; border-radius: 8px; border-left: 5px solid {color}; margin-bottom: 10px; font-family: sans-serif;'>
                             <div style='display: flex; justify-content: space-between; align-items: center;'>
@@ -1898,6 +1941,7 @@ with tab1:
                                 {_right}
                             </div>
                             <div style='margin-top: 6px; font-size: 0.75em; color: #888;'>🔖 {row.get('source', '') if str(row.get('source', '')).strip() else '—'} {chain_badge(row.get('chain', 'solana'), True)}</div>
+                            <div style='margin-top: 6px; font-size: 0.85em; color: #DDD;'>{_size_html}</div>
                             <div style='display: flex; justify-content: space-between; margin-top: 10px; font-size: 0.85em; color: #BBB;'>
                                 <div><span style='color:#888;'>Вход:</span><br>${row['entry_price_usd']:.8f}</div>
                                 <div><span style='color:#888;'>Сейчас:</span><br>${row['current_price_usd']:.8f}</div>
