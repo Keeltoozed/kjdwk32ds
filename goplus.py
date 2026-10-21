@@ -682,33 +682,69 @@ async def check_onchain_evm_security(address: str, chain: str, pair_data: dict =
             elif "USD" in _q_sym_pd and 0 < _q_amt_pd < 800.0:
                 return False, f"фантомный пул Uniswap V4 (в пуле всего ${_q_amt_pd:.0f} USD < $800 — ловушка)"
 
-        # 2. Проверка реальной ликвидности пула (Uniswap V4 PoolManager vs V2/V3 Pair & LP Burn)
-        if 2 in _res_map and 3 in _res_map:
+        _is_v3 = ("v3" in _labels) or ("v3" in _dex_id) or ("slipstream" in _dex_id)
+
+        # 2. Проверка реальной ликвидности пула (Uniswap V4 PoolManager vs V3 vs V2)
+        _tot_v = 0
+        if 2 in _res_map:
             _tot_h = _res_map[2].get("result", "0x")
             if _tot_h and _tot_h != "0x":
-                _tot_v = int(_tot_h, 16)
-                if _tot_v > 0 and _is_v4:
-                    # Раг — это когда дев выдергивает ETH, и ликвидность падает в 0!
-                    # Проверяем ТОЛЬКО если в _pd реально переданы данные ликвидности (> 0):
-                    if is_open_pos and "liquidity" in _pd and _liq_pd > 0:
-                        if _liq_pd < 400.0 or (0 < _q_amt_pd < 0.08):
-                            return False, f"пул Uniswap V4 опустошён девом (остаток ликвидности ${_liq_pd:.0f}, quote {_q_amt_pd:.4f} ETH — V4 LP Rug)"
-                if _tot_v > 0 and not _is_v4 and 4 in _res_map:
-                    _pair_h = _res_map[4].get("result", "0x")
-                    _pair_v = int(_pair_h, 16) if _pair_h and _pair_h != "0x" else 0
-                    _p_frac = _pair_v / _tot_v
-                    if _p_frac < 0.005:
-                        return False, f"пул V2/V3 опустошён девом (остаток {_p_frac*100:.4f}% — LP Rug)"
-                    if not is_open_pos and not _has_reputation and chain in ("robinhood", "base"):
-                        if _p_frac < 0.05:
-                            return False, f"картонный пул V2/V3 (в пуле всего {_p_frac*100:.1f}% эмиссии < 5% без соцсетей — схема LP-rug)"
-                        # Проверка фантомного пула V2 (кейсы .AI 0.00000003 ETH)
-                        if ("ETH" in _q_sym_pd or "WETH" in _q_sym_pd) and 0 < _q_amt_pd < 0.35:
-                            return False, f"фантомный пул V2 (в пуле всего {_q_amt_pd:.8f} ETH < 0.35 ETH — скам-ловушка)"
+                try:
+                    _tot_v = int(_tot_h, 16)
+                except Exception:
+                    _tot_v = 0
 
-        # 3. Проверка сжигания ликвидности (LP Burn / Lock) — ТОЛЬКО ПЕРЕД ВХОДОМ В СДЕЛКУ (not is_open_pos):
-        # Предотвращает ложное списание открытых позиций и строго блокирует незалоченные токены на Base, Robinhood и BSC
-        if not is_open_pos and len(_pair_addr) == 42 and chain in ("robinhood", "bsc", "base", "ethereum"):
+        # 2.1. Uniswap V4 PoolManager аудит (on-chain)
+        if _is_v4:
+            _pm_h = _res_map.get(3, {}).get("result", "0x")
+            _pm_v = int(_pm_h, 16) if _pm_h and _pm_h != "0x" else 0
+            _pm_frac = (_pm_v / _tot_v) if _tot_v > 0 else 0.0
+
+            # Если пул уже опустошён (modifyLiquidity rugpull):
+            if _tot_v > 0 and (_pm_v == 0 or _pm_frac < 0.002):
+                return False, f"пул Uniswap V4 опустошён девом ({_pm_frac*100:.5f}% в пуле, {_pm_v/1e18:,.1f} токенов — V4 LP Rug)"
+
+            # Защита перед входом (not is_open_pos):
+            if not is_open_pos:
+                # На Base: ручные V4 пулы без Clanker и без соцсетей — 100% 15-минутная серийная раг-фабрика
+                if chain == "base" and not _is_clanker_v4 and not _has_reputation:
+                    if _is_bare_manual_erc20 or _pm_frac < 0.20:
+                        return False, f"ручной картонный пул Uniswap V4 на Base (в пуле всего {_pm_frac*100:.1f}% эмиссии < 20% без Clanker/соцсетей — схема LP-rug)"
+
+                # На Robinhood: пул должен иметь минимум 2.5% эмиссии
+                if chain == "robinhood" and not _has_reputation and _tot_v > 0:
+                    if _pm_frac < 0.025:
+                        return False, f"картонный пул Uniswap V4 на Robinhood (в пуле всего {_pm_frac*100:.2f}% эмиссии < 2.5% без соцсетей — схема LP-rug)"
+
+        # 2.2. Uniswap V3 / Aerodrome Slipstream аудит
+        elif _is_v3:
+            _pair_h = _res_map.get(4, {}).get("result", "0x")
+            _pair_v = int(_pair_h, 16) if _pair_h and _pair_h != "0x" else 0
+            _p_frac = (_pair_v / _tot_v) if _tot_v > 0 else 0.0
+
+            if _tot_v > 0 and len(_pair_addr) == 42:
+                if is_open_pos and _pair_v == 0:
+                    return False, f"пул Uniswap V3 опустошён девом (0 токенов в пуле — V3 LP Rug)"
+                if not is_open_pos and not _has_reputation and _pair_v > 0 and _p_frac < 0.025:
+                    return False, f"картонный пул V3 (в пуле всего {_p_frac*100:.2f}% эмиссии < 2.5% без соцсетей — схема LP-rug)"
+
+        # 2.3. Uniswap V2 стандартный аудит
+        else:
+            if 4 in _res_map and _tot_v > 0:
+                _pair_h = _res_map[4].get("result", "0x")
+                _pair_v = int(_pair_h, 16) if _pair_h and _pair_h != "0x" else 0
+                _p_frac = _pair_v / _tot_v
+                if _p_frac < 0.005:
+                    return False, f"пул V2 опустошён девом (остаток {_p_frac*100:.4f}% — LP Rug)"
+                if not is_open_pos and not _has_reputation and chain in ("robinhood", "base"):
+                    if _p_frac < 0.05:
+                        return False, f"картонный пул V2 (в пуле всего {_p_frac*100:.1f}% эмиссии < 5% без соцсетей — схема LP-rug)"
+                    if ("ETH" in _q_sym_pd or "WETH" in _q_sym_pd) and 0 < _q_amt_pd < 0.35:
+                        return False, f"фантомный пул V2 (в пуле всего {_q_amt_pd:.8f} ETH < 0.35 ETH — скам-ловушка)"
+
+        # 3. Проверка сжигания ликвидности (LP Burn / Lock) — ТОЛЬКО ДЛЯ СТАНДАРТНЫХ V2 ПУЛОВ!
+        # (Никогда не запускаем для V3 или V4, у которых нет ERC-20 LP токена!)
+        if not is_open_pos and not _is_v4 and not _is_v3 and len(_pair_addr) == 42 and chain in ("robinhood", "bsc", "base", "ethereum"):
             _DEAD = "000000000000000000000000000000000000dead".zfill(64)
             _ZERO = "0000000000000000000000000000000000000000".zfill(64)
             _pl_lp = [
@@ -731,10 +767,6 @@ async def check_onchain_evm_security(address: str, chain: str, pair_data: dict =
                         # Строгая защита для Base, Robinhood и BSC (не менее 80% LP сожжено)
                         if _burnt_pct < 80.0 and (chain in ("robinhood", "base") or not _has_reputation):
                             return False, f"ликва пула V2 не сожжена ({_burnt_pct:.1f}% < 80%) — риск вывода ликвидности девом"
-                elif not _has_reputation and chain in ("robinhood", "bsc", "base", "ethereum"):
-                    # Если totalSupply() выдает revert (error), это V3 или кастомный пул.
-                    if _res_lp and isinstance(_res_lp[0], dict) and "error" in _res_lp[0]:
-                        return False, f"пул не имеет сжигаемого V2 LP ({chain}: V3/ручной пул без доказательства блокировки) — риск LP-rug"
     except Exception as _e_oc:
         if chain == "robinhood":
             return False, f"ошибка ончейн-аудита Robinhood ({type(_e_oc).__name__}) — блок по безопасности"

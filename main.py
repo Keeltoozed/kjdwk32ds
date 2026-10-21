@@ -1094,8 +1094,13 @@ async def _evm_track_once(tracker, chain: str, tag: str, emoji: str):
                             mint, chain, _live_td or {"pairAddress": getattr(pos, "pair_address", "")}, is_open_pos=True
                         )
                         if not _oc_ok:
-                            # Защита от ложного списания: если токен торгуется (есть ликва >= $1,500 и сделки), не списываем в 0!
-                            if _live_liq >= 1500.0 and _live_txs >= 2 and cur > 0:
+                            # Если это реальный LP Rug (пул опустошён) или бэкдор/заморозка — списываем немедленно, даже если DexScreener залип!
+                            _is_hard_drain = any(k in _oc_why for k in ("LP Rug", "опустошён", "бэкдор", "заморозка", "пауза", "блэклист"))
+                            if _is_hard_drain:
+                                print(f"🚨 [{tag}-ONCHAIN-RUG] {pos.symbol} ({mint[:10]}): {_oc_why} — подтверждён ончейн вывод ликвидности/бэкдор, мгновенное списание.")
+                                tracker.close_position(mint, 0.0, f"{tag} On-Chain Rug ({_oc_why})")
+                                continue
+                            elif _live_liq >= 1500.0 and _live_txs >= 2 and cur > 0:
                                 print(f"⚠️ [{tag}] Предупреждение ончейна: {_oc_why}, но токен активно торгуется (ликва ${_live_liq:.0f}, сделок 5м: {_live_txs}) — ложное списание предотвращено.")
                             else:
                                 print(f"🚨 [{tag}-V4-RUG/HONEYPOT] {pos.symbol} ({mint[:10]}): {_oc_why} — пул осушен или контракт заблокирован, списание в -100%.")
@@ -1277,7 +1282,11 @@ async def _evm_track_once(tracker, chain: str, tag: str, emoji: str):
                                 _z_cyc = int(getattr(pos, "zero_vol_cycles", 0) or 0) + 1
                                 pos.zero_vol_cycles = _z_cyc
                                 if _z_cyc >= 8:  # ~20 сек подтвержденной тишины в пуле
-                                    if pnl > 0.08:
+                                    # Проверяем ончейн перед тем как засчитывать "TP": если ликва выведена девом — это раг (-100%), а не прибыль!
+                                    _oc_chk_ok, _oc_chk_why = await _gp.check_onchain_evm_security(mint, chain, _td_pool, is_open_pos=True)
+                                    if not _oc_chk_ok:
+                                        reason = f"{tag} Dead Pool Rug ({_oc_chk_why})"
+                                    elif pnl > 0.08:
                                         reason = f"{tag} Stagnant Pool TP (+{pnl*100:.1f}%, 0 txns in pool)"
                                     elif pnl <= 0.02:
                                         reason = f"{tag} Dead Pool (0 txns in pool, frozen)"

@@ -1649,7 +1649,9 @@ class Analyzer:
                 return self._deny(address, "dex-giant", f"· [{tag}] {symbol}: тяжелый пул (${liq:,.0f}) или стейблкоин — не мем-ракета")
 
             # 3. Накопление на растущем тренде (h1 от +10% до +250%, m5 >= -2.0%, m1 >= 0%, покупатели >= 1.35x продавцов)
-            if (-2.0 <= m5 < _evm_min_m5 and 10.0 <= h1 <= 250.0 and m1 >= 0.0
+            # Ограничиваем возраст токена до 4 часов (<= 240м) и требуем растущий 6h тренд (h6 >= 0%), чтобы исключить древние затухающие монеты (кейс Pepina 769м)
+            _h6_pc = float((pair_data.get("priceChange") or {}).get("h6", 0) or 0)
+            if (_age_min <= 240.0 and _h6_pc >= 0.0 and -2.0 <= m5 < _evm_min_m5 and 10.0 <= h1 <= 250.0 and m1 >= 0.0
                     and (_b1 + _s1) >= 35 and _b1 >= _s1 * 1.25 and b5 >= int(s5 * 1.35)
                     and not self.is_churn(b5, s5, m5, liq=liq)):
                 if not self._evm_brand_ok(symbol, tag, pair_data):
@@ -1777,8 +1779,8 @@ class Analyzer:
         if len(links) >= 2:
             score += 5.0
         score = min(score, 100.0)
-        _is_live_organic = (b5 >= 12 and s5 >= 1 and b5 >= int(s5 * 1.3) and float((pair_data.get("volume") or {}).get("m5", 0) or 0) >= 1500.0)
-        _min_score_thr = 55.0 if (chain == "base" or _is_live_organic) else 65.0
+        _is_live_organic = (b5 >= 10 and s5 >= 1 and b5 >= int(s5 * 1.2) and float((pair_data.get("volume") or {}).get("m5", 0) or 0) >= 1200.0)
+        _min_score_thr = 55.0 if (chain in ("base", "bsc", "robinhood") and (liq >= 10000.0 or _is_live_organic)) else 65.0
         self.last_score = float(score)
         print(f"📊 [{tag}] {symbol}: финальный score {score:.1f} (порог {_min_score_thr:.0f}), m5 {m5:+.1f}%, m1 {m1:+.1f}%")
         if score >= _min_score_thr:
