@@ -556,10 +556,11 @@ async def get_trending() -> list:
         for item in (d.get("data") or []):
             add(item)
 
-    # 1.1 Свежие 5-минутные импульсы (duration=5m)
-    d5 = await _gt_get("/networks/solana/trending_pools?duration=5m&page=1")
-    for item in (d5.get("data") or []):
-        add(item)
+    # 1.1 Свежие 5-минутные импульсы (duration=5m — точно как во вкладке DexScreener Gainers 5M)
+    for page in range(1, 3):
+        d5 = await _gt_get(f"/networks/solana/trending_pools?duration=5m&page={page}")
+        for item in (d5.get("data") or []):
+            add(item)
 
     # 2. Свежие пулы (new_pools) — ловит новые Raydium/Meteora/Pump ракеты первыми!
     for page in range(1, 3):
@@ -602,3 +603,82 @@ async def search_symbol(symbol: str) -> list:
         except Exception:
             continue
     return res
+
+
+_gainers_cache: dict = {}
+
+
+async def fetch_dexscreener_gainers(timeframe: str = "5m", network: str = "all") -> list:
+    """Возвращает список топ-гейнеров (New Pairs / Gainers 5M или 1H).
+    Использует защищённый лимитер _gt_get с кэшем на 25 секунд.
+    """
+    global _gainers_cache
+    tf = "5m" if str(timeframe).lower().startswith("5") else "1h"
+    net = (network or "all").lower()
+    cache_key = f"{tf}:{net}"
+    now = time.time()
+    hit = _gainers_cache.get(cache_key)
+    if hit and (now - hit[0]) < 25.0:
+        return hit[1]
+
+    if net == "all":
+        path = f"/networks/trending_pools?duration={tf}&page=1"
+    else:
+        gt_net = {"solana": "solana", "base": "base", "robinhood": "robinhood", "bsc": "bsc", "ethereum": "eth"}.get(net, net)
+        path = f"/networks/{gt_net}/trending_pools?duration={tf}&page=1"
+
+    data = await _gt_get(path, retries=1)
+    if not data or not isinstance(data, dict):
+        return hit[1] if hit else []
+
+    pools = data.get("data") or []
+    out = []
+    rank = 1
+    for p in pools:
+        try:
+            attr = p.get("attributes") or {}
+            net_id = p.get("relationships", {}).get("network", {}).get("data", {}).get("id", "") or (net if net != "all" else "solana")
+            base_id = p.get("relationships", {}).get("base_token", {}).get("data", {}).get("id", "")
+            mint = base_id.split("_", 1)[1] if "_" in base_id else base_id
+            pair_addr = p.get("attributes", {}).get("address") or ""
+            name = str(attr.get("name") or "Unknown")
+            chg = attr.get("price_change_percentage") or {}
+            m5 = float(chg.get("m5", 0) or 0)
+            h1 = float(chg.get("h1", 0) or 0)
+            liq = float(attr.get("reserve_in_usd", 0) or 0)
+            vol = float(attr.get("volume_usd", {}).get("h24", 0) or 0)
+            price = float(attr.get("base_token_price_usd", 0) or 0)
+            tx = attr.get("transactions", {}).get("m5", {}) or {}
+            buys = int(tx.get("buys", 0) or 0)
+            sells = int(tx.get("sells", 0) or 0)
+
+            created_str = attr.get("pool_created_at") or ""
+            created_ms = _parse_ms(created_str)
+            age_m = (now * 1000 - created_ms) / 60000.0 if created_ms else 0
+            if age_m < 60:
+                age_str = f"{int(age_m)}m"
+            else:
+                age_str = f"{int(age_m // 60)}h {int(age_m % 60)}m"
+
+            out.append({
+                "rank": rank,
+                "network": net_id,
+                "name": name,
+                "mint": mint,
+                "pair_address": pair_addr,
+                "price": price,
+                "age_str": age_str,
+                "age_m": age_m,
+                "m5": m5,
+                "h1": h1,
+                "buys": buys,
+                "sells": sells,
+                "volume": vol,
+                "liquidity": liq,
+            })
+            rank += 1
+        except Exception:
+            continue
+
+    _gainers_cache[cache_key] = (now, out)
+    return out

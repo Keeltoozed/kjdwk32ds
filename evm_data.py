@@ -384,18 +384,27 @@ def _filter_and_rank_gt_items(items: list, min_liq: float = 2000.0) -> list:
 
 
 async def get_trending_pools_gt(chain: str = SLUG) -> list:
-    """Запасной дискавери: трендовые пулы GeckoTerminal сети chain.
-    Ловит лидеров по объему (ARCHIBROWN/Agrippa-типа) раньше, чем бусты.
+    """Запасной дискавери: трендовые пулы GeckoTerminal сети chain (1h и 5m).
+    Ловит лидеров по объему и моментуму (вкладки Gainers 1H и 5M) раньше, чем бусты.
     Идёт через общий лимитер market_data._gt_get (единая квота GT на процесс)."""
     hit = _cached(f"trend:{chain}", 90)
     if hit is not None:
         return hit
     from market_data import _gt_get as _g
     gt_net = _gt_net(chain)
-    data = await _g(f"/networks/{gt_net}/trending_pools", retries=1)
-    if not data:
+    raw_items = []
+    # 1. Топ-1H тренды (соответствует вкладке Gainers 1H)
+    for page in (1, 2):
+        d1 = await _g(f"/networks/{gt_net}/trending_pools?duration=1h&page={page}", retries=1)
+        if d1 and d1.get("data"):
+            raw_items.extend(d1.get("data") or [])
+    # 2. Топ-5M тренды (соответствует вкладке Gainers 5M)
+    d5 = await _g(f"/networks/{gt_net}/trending_pools?duration=5m&page=1", retries=1)
+    if d5 and d5.get("data"):
+        raw_items.extend(d5.get("data") or [])
+    if not raw_items:
         return []
-    out = _filter_and_rank_gt_items(data.get("data") or [], min_liq=2000.0)
+    out = _filter_and_rank_gt_items(raw_items, min_liq=2000.0)
     return _store(f"trend:{chain}", out)
 
 

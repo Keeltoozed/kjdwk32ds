@@ -380,6 +380,22 @@ class Analyzer:
                     tokens.extend(data)
             except Exception as e:
                 print(f"Dexscreener profiles fetch error: {e}")
+
+            # 3. Сканируем недавно обновлённые профили (recent-updates)
+            try:
+                status, data = await fetch_json("https://api.dexscreener.com/token-profiles/recent-updates/v1", timeout=8, retries=1)
+                if status == 200 and isinstance(data, list):
+                    tokens.extend(data)
+            except Exception as e:
+                print(f"Dexscreener recent updates fetch error: {e}")
+
+            # 4. Сканируем свежие Community Takeovers (CTO)
+            try:
+                status, data = await fetch_json("https://api.dexscreener.com/community-takeovers/latest/v1", timeout=8, retries=1)
+                if status == 200 and isinstance(data, list):
+                    tokens.extend(data)
+            except Exception as e:
+                print(f"Dexscreener CTO fetch error: {e}")
                 
         # Возвращаем уникальные токены (по tokenAddress)
         seen = set()

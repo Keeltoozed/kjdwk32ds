@@ -456,6 +456,13 @@ async def scanner_loop(analyzer, tracker):
                     trending_pools = await market_data.get_trending()
                     if trending_pools:
                         mints_to_scan.extend([p.get("tokenAddress") for p in trending_pools if p.get("tokenAddress")])
+                    # Также опрашиваем топ-гейнеров 5M и 1H (соответствует вкладкам New Pairs Gainers 5M и 1H)
+                    gainers_5m = await market_data.fetch_dexscreener_gainers("5m", "solana")
+                    if gainers_5m:
+                        mints_to_scan.extend([g.get("mint") for g in gainers_5m if g.get("mint")])
+                    gainers_1h = await market_data.fetch_dexscreener_gainers("1h", "solana")
+                    if gainers_1h:
+                        mints_to_scan.extend([g.get("mint") for g in gainers_1h if g.get("mint")])
                 except Exception as _e:
                     pass
 
