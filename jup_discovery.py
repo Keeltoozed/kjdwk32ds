@@ -164,8 +164,8 @@ async def jup_loop(analyzer, tracker):
                     if _age_min > 120.0 and _m5_tmp < 15.0:
                         processed[mint] = _t.time() + 3600  # Древний токен: скип на 1 час
                         continue
-                    if _m5_tmp < 2.0:
-                        processed[mint] = _t.time() + 180   # Флет m5 < 2%: скип на 3 мин
+                    if _m5_tmp < 2.5:
+                        processed[mint] = _t.time() + 180   # Флет m5 < 2.5%: скип на 3 мин
                         continue
                         
                     print(f"🪐 [JUP] Анализирую {_sym_tmp} ({mint[:8]}): возраст {_age_min:.1f}м, m5 {_m5_tmp:+.1f}%...")

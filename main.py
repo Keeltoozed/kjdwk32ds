@@ -1345,6 +1345,10 @@ async def _evm_chain_loop(analyzer, tracker, chain: str):
                     # BSC: только ведём существующие открытые сделки, новых не открываем
                     await asyncio.sleep(interval)
                     continue
+                if chain == "robinhood" and not getattr(config, "ROBINHOOD_ENTRIES_ENABLED", False):
+                    # Robinhood: отключены входы из-за 100% V4 рагпуллов дева
+                    await asyncio.sleep(interval)
+                    continue
                 if _evm_killed(tracker):
                     print(f"🛑 {tag} KILL-SWITCH: входы на паузе 5мин (выходы работают).")
                     await asyncio.sleep(int(getattr(config, "KILL_SWITCH_PAUSE", 300)))
@@ -1569,7 +1573,8 @@ async def _evm_chain_loop(analyzer, tracker, chain: str):
 
 
 async def robinhood_loop(analyzer, tracker):
-    if not getattr(config, "ROBINHOOD_ENABLED", True):
+    has_open_rh = any(getattr(p, "chain", "") == "robinhood" for p in tracker.get_open_positions().values())
+    if not getattr(config, "ROBINHOOD_ENABLED", False) and not has_open_rh:
         print("🟣 Robinhood отключён в config (ROBINHOOD_ENABLED=False).")
         return
     await _evm_chain_loop(analyzer, tracker, "robinhood")

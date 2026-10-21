@@ -1439,13 +1439,15 @@ class Analyzer:
         return True
 
     async def analyze_robinhood_token(self, address: str, chain: str = "robinhood") -> bool:
+        if chain == "robinhood" or not getattr(config, f"{chain.upper()}_ENABLED", True):
+            return self._deny(address, f"{chain}-disabled", f"🚫 [{chain.upper()}] Сеть {chain} отключена в config.")
         import evm_data
         self.last_signal = ""
         self.last_score = 0.0
         self.signals.pop(address, None)
         tag = (evm_data.CHAINS.get(chain) or {}).get("tag", chain.upper())
         min_liq = (evm_data.CHAINS.get(chain) or {}).get("min_liq",
-                  getattr(config, "ROBINHOOD_MIN_LIQUIDITY", 8000))
+                  getattr(config, f"{chain.upper()}_MIN_LIQUIDITY", 3000.0))
         pair_data = await evm_data.get_token_data(address, chain)
         if not pair_data:
             return None
@@ -1483,7 +1485,7 @@ class Analyzer:
         # Ловит стартовые импульсы ракет (USEMATH, FINI, MUCRON, WISDOM, MUSEBOT, AMIRI100X, AICELL) от 0.3 мин (18 сек)
         # при подтверждённых продажах (honeypot исключён) и ликвидности >= min_liq ($2.5k)
 # СТАЛО (ИСПРАВЛЕНО):
-        _scout_min_liq = 2500.0 if chain in ("bsc", "robinhood", "base") else float(min_liq)
+        _scout_min_liq = 2500.0 if chain in ("bsc", "base") else float(min_liq)
         if (0.5 <= _age_min < 15.0 and 0.8 <= m5 <= 800.0 and 0.0 <= h1 <= 1500.0
                 and (b5 + s5) >= 8 and liq >= _scout_min_liq
                 and s5 >= 2 and s >= 2 and b5 >= int(s5 * 1.15) and (b5 / max(s5, 1)) <= 7.0):
@@ -1922,7 +1924,9 @@ class Analyzer:
         created_at = pair_data.get("pairCreatedAt")
         if created_at and not is_vip:
             age_minutes = (time.time() * 1000 - created_at) / (1000 * 60)
-            if age_minutes > 15:  
+            _max_pump_age = float(getattr(config, "PUMP_MAX_AGE_MIN", 120.0))
+            if age_minutes > _max_pump_age:  
+                print(f"🚫 [PUMP-AGE] {mint[:8]}: возраст {age_minutes:.1f}м > {_max_pump_age:.0f}м — затухающий кёрв.")
                 return False
                 
         import pandas as pd
@@ -1994,17 +1998,18 @@ class Analyzer:
         if (pair_data.get("dexId") or "").lower() in ("pump", "pumpfun"):
             return False
 
-        _ray_liq = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
-        if _ray_liq < 15000:
-            print(f"🚫 [RAYDIUM] {mint[:8]}: реальная ликвидность AMM ${_ray_liq:,.0f} < $15,000.")
-            return False
-
         _c_ms = pair_data.get("pairCreatedAt") or 0
         import time as _t
         _age_min = ((_t.time() * 1000 - _c_ms) / 60000.0) if _c_ms else 999.0
         _sol_min_age = float(getattr(config, "SOLANA_MIN_AGE_MIN", 2.5))
         if _age_min < _sol_min_age:
             print(f"⏳ [RAYDIUM] {mint[:8]}: возраст {_age_min:.1f}м < {_sol_min_age}м — ранняя flash-rug зона.")
+            return False
+
+        _ray_liq = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
+        _min_ray_liq = 8000.0 if (_age_min < 60) else 12000.0
+        if _ray_liq < _min_ray_liq:
+            print(f"🚫 [RAYDIUM] {mint[:8]}: реальная ликвидность AMM ${_ray_liq:,.0f} < ${_min_ray_liq:,.0f}.")
             return False
 
         _pc = pair_data.get("priceChange") or {}
@@ -2028,8 +2033,9 @@ class Analyzer:
             print(f"🚫 [RAYDIUM] {mint[:8]}: m5 {_m5:+.1f}% < +2.5% — нет импульса.")
             return False
 
+        _vm5 = float(((pair_data.get("volume") or {}).get("m5", 0) or 0))
         _txm5 = (pair_data.get("txns") or {}).get("m5", {}) or {}
-        _b5, _s5 = _txm5.get("buys", 0) or 0, _txm5.get("sells", 0) or 0
+        _b5, _s5 = int(_txm5.get("buys", 0) or 0), int(_txm5.get("sells", 0) or 0)
         _min_bs = 1.05 if (_vm5 >= 5000 and _m5 >= 5.0) else 1.12
         if (_b5 + _s5) < 15 or _vm5 < 1500 or (_s5 > 0 and _b5 < _s5 * _min_bs):
             print(f"🚫 [FRESH] {mint[:8]}: слабый поток (b/s {_b5}/{_s5}, vol ${_vm5:,.0f}) — нет покупателей.")
@@ -2048,8 +2054,8 @@ class Analyzer:
 
         liquidity = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
         fdv = float(pair_data.get("fdv", 0) or 0)
-        if liquidity < 12000:
-            print(f"📉 [RAYDIUM] {mint[:8]}: реальная ликвидность пула ${liquidity:,.0f} < $12,000 — микро-пул с риском мгновенного слива.")
+        if liquidity < _min_ray_liq:
+            print(f"📉 [RAYDIUM] {mint[:8]}: реальная ликвидность пула ${liquidity:,.0f} < ${_min_ray_liq:,.0f} — микро-пул с риском мгновенного слива.")
             return False
 
         # 2. Защита от картонных пулов (FDV / Liquidity > 40x — 1 кит продает и пул схлопывается)

@@ -103,7 +103,7 @@ def _verdict_evm(info: dict, chain: str = "", pair_data: dict = None):
     # 4. Концентрация у создателя / владельца (защита от дев-дампов вроде 1KTO100M/ORRIS/FEE/Speed)
     try:
         creator_pct = _tax_frac(info.get("creator_percent", 0))
-        max_creator = float(_cfg("ROBINHOOD_MAX_CREATOR_PCT", 0.20) if chain == "robinhood" else _cfg("GOPLUS_MAX_CREATOR_PCT", 0.08))
+        max_creator = float(_cfg("ROBINHOOD_MAX_CREATOR_PCT", 0.20) if chain == "robinhood" else _cfg("GOPLUS_MAX_CREATOR_PCT", 0.10))
         if creator_pct > max_creator:
             return False, f"creator_pct {creator_pct * 100:.1f}% (>{max_creator*100:.0f}%)"
     except Exception:

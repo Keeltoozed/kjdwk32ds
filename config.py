@@ -75,7 +75,7 @@ STREAM_MIN_BUY_SOL = 4.0                 # Минимум 4.0 SOL реально
 STREAM_MAX_TOP_BUYER_RATIO = 0.35        # Доля крупнейшего покупателя <= 35% (защита от одного кита / wash-trade)
 STREAM_MIN_BS_RATIO = 2.0                # Соотношение Buy/Sell volume >= 2.0 (покупки в 2+ раза превышают продажи)
 STREAM_MAX_CURVE_PROGRESS = 65.0         # Не входить если кривая > 65% (защита от покупки прямо перед стеной миграции)
-STREAM_ENTRY_SIZE_USD = 10.0             # Размер билета на раннем входе ($10)
+STREAM_ENTRY_SIZE_USD = 15.0             # Размер билета на раннем входе ($15)
 STREAM_SLIPPAGE = 0.02                   # 2% проскальзывание на входе
 STREAM_MAX_AGE_SEC = 120                 # Очистка из RAM токенов без активности старше 2 минут
 
@@ -136,10 +136,9 @@ JITO_TIP_AMOUNT_SOL = 0.0005 # Чаевые валидатору (минимум
 JITO_TIP_ACCOUNT = "96gYZGLnJYVFmbjzopPSU6QiCRK4rPdTuQ8hB1aP442b" # Официальный Jito Tip Account
 LUNARCRUSH_API_KEY = "syvh43mkvrzrw54sor6kc5r6dmtyj5fhi4jd38ht"
 
-# === ROBINHOOD CHAIN (EVM мемы, Arbitrum Orbit L2) ===
-# Chain ID 4663, slug DexScreener/GeckoTerminal: "robinhood". Проверено живьём 2026-09-21:
-# boosts/profiles DexScreener отдают chainId=robinhood, RPC отвечает 0x1237.
-ROBINHOOD_ENABLED = True
+# === ROBINHOOD CHAIN (ОТКЛЮЧЕНО: 100% скам Uniswap V4 без локеров/аудита) ===
+ROBINHOOD_ENABLED = False
+ROBINHOOD_ENTRIES_ENABLED = False
 ROBINHOOD_CHAIN_ID = 4663
 ROBINHOOD_DS_SLUG = "robinhood"  # slug DexScreener (НЕ 4663 - тот вернёт пусто!)
 ROBINHOOD_GT_NETWORK = "robinhood"  # slug GeckoTerminal
