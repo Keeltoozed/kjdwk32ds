@@ -1987,7 +1987,6 @@ class Analyzer:
         conf = float(prob) * 100
         self.last_score = conf
         print(f"🤖 XGBoost [DEX Poller]: {mint} | Score: {conf:.1f}%")
-        import config
         threshold = 35.0  
         if is_vip:
             threshold = 45.0  
