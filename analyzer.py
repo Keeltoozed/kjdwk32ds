@@ -631,6 +631,10 @@ class Analyzer:
                             if p_symbol == symbol.upper() and p_mint != current_mint:
                                 p_created_at = p.get("pairCreatedAt", float('inf'))
                                 p_fdv = p.get("fdv", 0)
+                                p_liq = float((p.get("liquidity") or {}).get("usd", 0) or 0)
+                                p_vol24 = float((p.get("volume") or {}).get("h24", 0) or 0)
+                                if p_liq < 10000 and p_vol24 < 5000:
+                                    continue  # Мертвый/заброшенный пул, не активный оригинал
 
                                 if p_created_at < current_created_at and p_fdv > 250000:
                                     return True
@@ -836,7 +840,7 @@ class Analyzer:
                 if 0 < _fdv_pre < 15000:
                     print(f"🚫 [POST-MIGRATION-DUMP] {mint[:8]}: AMM FDV ${_fdv_pre:,.0f} < $15k — слитый токен.")
                     return False
-                if (_fdv_pre < 35000 and _h1_pre < -5.0) or (_h1_pre < -15.0 or _h6_pre < -35.0):
+                if _age_min_pre > 60.0 and ((_fdv_pre < 35000 and _h1_pre < -5.0) or (_h1_pre < -15.0 or _h6_pre < -35.0)):
                     print(f"🚫 [POST-MIGRATION-DUMP] {mint[:8]}: часовой/6ч тренд в глубоком сливе (h1 {_h1_pre:+.1f}%, h6 {_h6_pre:+.1f}%) — отскок дохлой кошки.")
                     return False
         if not is_vip and pair_data:
@@ -862,12 +866,16 @@ class Analyzer:
                         pass
                     self._deny(mint, "dead-token", f"💀 {mint}: мёртвый токен")
                     return False
-            if _m5 >= getattr(config, "LOTTERY_MIN_M5_PCT", 1.0) * 100:
+            _lottery_enabled = getattr(config, "LOTTERY_ENABLED", False)
+            if _lottery_enabled and _m5 >= getattr(config, "LOTTERY_MIN_M5_PCT", 1.0) * 100:
                 if _m1 < 0:
                     print(f"🚫 [LOTTERY] {mint}: m5 {_m5:+.0f}%, но m1 {_m1:+.1f}% — вертикаль откатывает, это вершина.")
                     return False
                 print(f"🎰 [LOTTERY] {mint}: вертикаль m5 {_m5:+.0f}%, m1 {_m1:+.1f}% — кандидат на вход уменьшенным сайзом.")
                 _lottery = True
+            elif not _lottery_enabled and _m5 >= getattr(config, "LOTTERY_MIN_M5_PCT", 1.0) * 100:
+                print(f"🚫 [LOTTERY-DISABLED] {mint}: лотерейный вход отключен (m5 {_m5:+.0f}% — риск мгновенного дампа дева).")
+                return False
             else:
                 if _m5 < getattr(config, "PULLBACK_MIN_M5_PCT", 0.025) * 100:
                     print(f"🚫 [ENTRY] {mint}: m5 {_m5:+.1f}% < импульса не было, пропуск.")
@@ -1027,15 +1035,19 @@ class Analyzer:
                         print(f"🚫 [АНТИСКАМ] Незаблокированный LP пула '{rk.get('name')}' у {mint[:8]} → СКАМ")
                         return False
 
+                _target_pair = str(pair_data.get("pairAddress") or "").strip()
                 for _mkt in (rc_data.get("markets") or []):
                     if isinstance(_mkt, dict):
+                        _mkt_pubkey = str(_mkt.get("pubkey") or "").strip()
                         _lp_info = _mkt.get("lp") or {}
                         if isinstance(_lp_info, dict):
-                            _lp_unlocked = float(_lp_info.get("lpUnlocked") or 0.0)
-                            _lp_locked_pct = float(_lp_info.get("lpLockedPct") or 0.0)
-                            if _lp_unlocked > 0 and _lp_locked_pct < 80.0:
-                                print(f"🚫 [АНТИСКАМ] LP не заблокирован ({_lp_locked_pct:.1f}% locked) у {mint[:8]} → СКАМ")
-                                return False
+                            _mkt_quote_usd = float(_lp_info.get("quoteUSD") or 0.0)
+                            if (_target_pair and _mkt_pubkey == _target_pair) or (not _target_pair and _mkt_quote_usd >= 5000):
+                                _lp_unlocked = float(_lp_info.get("lpUnlocked") or 0.0)
+                                _lp_locked_pct = float(_lp_info.get("lpLockedPct") or 0.0)
+                                if _lp_unlocked > 0 and _lp_locked_pct < 80.0:
+                                    print(f"🚫 [АНТИСКАМ] LP основного пула не заблокирован ({_lp_locked_pct:.1f}% locked) у {mint[:8]} → СКАМ")
+                                    return False
                     
                 holders = rc_data.get("topHolders", [])
                 if not holders:
@@ -1121,9 +1133,9 @@ class Analyzer:
                     print(f"🚫 [АНТИСКАМ] Создатель (Dev) держит {dev_holding_pct:.1f}% (Лимит 10%). Блокируем.")
                     return False
                 
-                # Защита от скрытого второго кошелька дева: ни один кит не должен держать > 10%
+                # Защита от скрытого второго кошелька дева: ни один кит не должен держать > 15%
                 largest_whale_pct = top_10[0][1] if top_10 else 0.0
-                max_single_whale = 10.0
+                max_single_whale = 15.0
                 if largest_whale_pct > max_single_whale:
                     print(f"🚫 [АНТИСКАМ] Кит держит {largest_whale_pct:.1f}% > {max_single_whale:.0f}% (риск скрытого дева/дампа). Блокируем.")
                     return False

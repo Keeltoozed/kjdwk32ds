@@ -18,22 +18,16 @@ async def position_manager_loop(analyzer, tracker):
             open_positions = tracker.get_open_positions()
             
             # ОПТИМИЗАЦИЯ СКОРОСТИ: Запрашиваем цены для ВСЕХ позиций ОДНИМ запросом.
-            # Только Solana-позиции этого менеджера (0x и GROWTH ведут свои петли).
             mints_to_fetch = [m for m, p in open_positions.items()
                               if not m.startswith("0x")
-                              and getattr(p, "chain", "solana") == "solana"
-                              and not str(getattr(p, "source", "")).startswith("GROWTH")
-                              and not str(getattr(p, "source", "")).startswith("EARLY")]
+                              and getattr(p, "chain", "solana") == "solana"]
             bulk_prices = await JupiterAPI.get_prices(mints_to_fetch) if mints_to_fetch else {}
             
             for mint, position in list(open_positions.items()):
                 # Robinhood (0x...) ведёт отдельный robinhood_loop со своими ценами DS
                 if mint.startswith("0x") or getattr(position, "chain", "solana") != "solana":
                     continue
-                # GROWTH-позиции ведёт growth_loop (медленные выходы) - пропускаем
-                if str(getattr(position, "source", "")).startswith("GROWTH") or str(getattr(position, "source", "")).startswith("EARLY"):
-                    continue
-                # 1. Берем цену из Raydium/Gecko (запросили разом для всех)
+                # 1. Берем цену из Raydium/Gecko/DS (запросили разом для всех)
                 api_price = bulk_prices.get(mint, 0.0)
                 # 1b. Добор слепых: Jupiter не знает свежий/тонкий пул — дёргаем DS
                 # напрямую, иначе цена встаёт ($0.00 в дашборде) и глохнут выходы.
@@ -44,6 +38,19 @@ async def position_manager_loop(analyzer, tracker):
                         api_price = float((_td0.get("priceUsd", 0) or 0)) if _td0 else 0.0
                     except Exception:
                         pass
+                
+                # Обновляем живую цену для GROWTH/EARLY-позиций прямо здесь (каждую секунду),
+                # а исполнение медленных стопов/стагнантов оставляет growth_loop
+                if str(getattr(position, "source", "")).startswith("GROWTH") or str(getattr(position, "source", "")).startswith("EARLY"):
+                    if api_price > 0.0:
+                        position.current_price_usd = api_price
+                        position.price_updated_at = time.time()
+                        if api_price > position.max_price_usd:
+                            position.max_price_usd = api_price
+                        if position.entry_price_usd > 0:
+                            _pnl_pct = (api_price - position.entry_price_usd) / position.entry_price_usd
+                            position.current_pnl_usd = position.amount_usd * _pnl_pct
+                    continue
                 
                 # 2. Берем цену из WebSocket (если она СВЕЖАЯ, а не записанная этим же циклом)
                 ws_price = position.current_price_usd if hasattr(position, 'current_price_usd') else 0.0
@@ -391,8 +398,8 @@ async def position_manager_loop(analyzer, tracker):
         except Exception as e:
             print(f"Ошибка в менеджере позиций: {e}")
         # Балк-цены Jupiter+DS: 1 запрос на все позиции за цикл, квоту не жрёт.
-        # 2 сек вместо 3: стоп -20% исполнялся как -59% (INFERENCE) из-за проскока между тиками.
-        await asyncio.sleep(2.0)
+        # 1.0 сек: максимальная скорость трекинга открытых позиций (без лагов на стопах и пиках).
+        await asyncio.sleep(1.0)
 from birth_tracker import BirthTracker, birth_tracker
 
 async def birth_wss_loop(analyzer, tracker):
@@ -2134,7 +2141,7 @@ with tab2:
     except Exception as e:
         st.info("Ожидание данных от сканера...")
 
-# Автообновление (если включено)
+# Автообновление интерфейса (по умолчанию выключено, чтобы не мерцал экран)
 if st.checkbox("Включить автообновление (каждые 5 сек)", value=False):
     time.sleep(5)
     st.rerun()
