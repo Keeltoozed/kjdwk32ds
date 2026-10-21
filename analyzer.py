@@ -365,6 +365,14 @@ class Analyzer:
             except Exception as e:
                 print(f"Dexscreener boosts fetch error: {e}")
 
+            # 1.1 Сканируем самые свежие бусты (token-boosts/latest/v1) — ловит новые ⚡-бусты сразу
+            try:
+                status, data = await fetch_json("https://api.dexscreener.com/token-boosts/latest/v1", timeout=8, retries=1)
+                if status == 200 and isinstance(data, list):
+                    tokens.extend(data)
+            except Exception as e:
+                print(f"Dexscreener latest boosts fetch error: {e}")
+
             # 2. Сканируем новые профили, чтобы не пропускать свежие ракеты
             try:
                 status, data = await fetch_json(config.DEXSCREENER_PROFILES, timeout=8, retries=1)
@@ -810,13 +818,16 @@ class Analyzer:
             _pc = pair_data.get("priceChange") or {}
             _m5 = _pc.get("m5", 0) or 0
             _m1 = _pc.get("m1", 0) or 0
-            if _m5 > getattr(config, "VIP_MAX_M5_PCT", 0.40) * 100:
-                print(f"🚫 [VIP OVERHEAT] {mint}: m5 {_m5:+.0f}% — вертикаль уже прошла, вход = вершина.")
+            _liq_v = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
+            _vol_v = float((pair_data.get("volume") or {}).get("m5", 0) or 0)
+            _max_vip_m5 = 200.0 if (_liq_v >= 25000 and _vol_v >= 25000) else (getattr(config, "VIP_MAX_M5_PCT", 0.60) * 100)
+            if _m5 > _max_vip_m5:
+                print(f"🚫 [VIP OVERHEAT] {mint}: m5 {_m5:+.0f}% > +{_max_vip_m5:.0f}% — вертикаль уже прошла, вход = вершина.")
                 return False
-            if _m1 < -3.5:
+            if _m1 < -4.0:
                 print(f"🚫 [VIP REVERSAL] {mint}: m1 {_m1:+.1f}% — резкий откат за 1м, ждём pullback.")
                 return False
-            if _m1 > 15.0:
+            if _m1 > 20.0:
                 print(f"🚫 [VIP SPIKE] {mint}: m1 {_m1:+.1f}% — свеча-spike в моменте, вход = вершина. Ждём.")
                 return False
             if _m5 < getattr(config, "VIP_MIN_M5_PCT", 5.0):
@@ -866,16 +877,46 @@ class Analyzer:
                         pass
                     self._deny(mint, "dead-token", f"💀 {mint}: мёртвый токен")
                     return False
+            _cur_liq_pre = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
+            if _cur_liq_pre == 0 and str(pair_data.get("dexId", "")).lower() in ("pump", "pumpfun"):
+                _cur_liq_pre = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0) * 0.40
+            _b5_pre = int(_txm5_pre.get("buys", 0) or 0)
+            _s5_pre = int(_txm5_pre.get("sells", 0) or 0)
+            _is_runner = (
+                _cur_liq_pre >= 20000 and 
+                _vm5_pre >= 15000 and 
+                (_b5_pre + _s5_pre) >= 15 and 
+                (_b5_pre >= _s5_pre * 1.05 or _vm5_pre >= 35000)
+            )
+
             _lottery_enabled = getattr(config, "LOTTERY_ENABLED", False)
-            if _lottery_enabled and _m5 >= getattr(config, "LOTTERY_MIN_M5_PCT", 1.0) * 100:
-                if _m1 < 0:
-                    print(f"🚫 [LOTTERY] {mint}: m5 {_m5:+.0f}%, но m1 {_m1:+.1f}% — вертикаль откатывает, это вершина.")
+            if _m5 >= getattr(config, "LOTTERY_MIN_M5_PCT", 0.60) * 100:
+                if _is_runner:
+                    # Настоящая ракета с высокой ликвидностью и объемом (не микро-лотерейный раг)
+                    _m1_max = getattr(config, "PULLBACK_M1_MAX_PCT", 0.20) * 100
+                    if _m1 > _m1_max:
+                        print(f"🚫 [RUNNER-SPIKE] {mint}: m1 {_m1:+.1f}% > +{_m1_max:.0f}% — свеча-прострел в моменте, ждём откат.")
+                        return False
+                    if _m1 < getattr(config, "PULLBACK_M1_MIN_PCT", -0.15) * 100:
+                        print(f"🚫 [RUNNER-DUMP] {mint}: m1 {_m1:+.1f}% — импульс схлопнулся, это дамп.")
+                        return False
+                    if _m5 > 250.0:
+                        print(f"🚫 [RUNNER-EXHAUSTION] {mint}: m5 {_m5:+.0f}% > +250% — экстремальный перегрев 5м свечи.")
+                        return False
+                    _max_h1_pct = getattr(config, "PULLBACK_MAX_H1_PCT", 25.0) * 100
+                    if _h1 > _max_h1_pct:
+                        print(f"🚫 [ENTRY] {mint}: h1 {_h1:+.0f}% — уже улетел, поздно.")
+                        return False
+                    print(f"🚀 [RUNNER-MOMENTUM] {mint}: мощный импульс m5 {_m5:+.0f}%, m1 {_m1:+.1f}%, liq ${_cur_liq_pre:,.0f}, vol5 ${_vm5_pre:,.0f} — ракета допущена к отбору.")
+                elif _lottery_enabled:
+                    if _m1 < 0:
+                        print(f"🚫 [LOTTERY] {mint}: m5 {_m5:+.0f}%, но m1 {_m1:+.1f}% — вертикаль откатывает, это вершина.")
+                        return False
+                    print(f"🎰 [LOTTERY] {mint}: вертикаль m5 {_m5:+.0f}%, m1 {_m1:+.1f}% — кандидат на вход уменьшенным сайзом.")
+                    _lottery = True
+                else:
+                    print(f"🚫 [LOTTERY-BLOCKED] {mint}: тонкая монета (liq ${_cur_liq_pre:,.0f}, vol5 ${_vm5_pre:,.0f}) при m5 {_m5:+.0f}% — микро-лотерея отключена.")
                     return False
-                print(f"🎰 [LOTTERY] {mint}: вертикаль m5 {_m5:+.0f}%, m1 {_m1:+.1f}% — кандидат на вход уменьшенным сайзом.")
-                _lottery = True
-            elif not _lottery_enabled and _m5 >= getattr(config, "LOTTERY_MIN_M5_PCT", 1.0) * 100:
-                print(f"🚫 [LOTTERY-DISABLED] {mint}: лотерейный вход отключен (m5 {_m5:+.0f}% — риск мгновенного дампа дева).")
-                return False
             else:
                 if _m5 < getattr(config, "PULLBACK_MIN_M5_PCT", 0.025) * 100:
                     print(f"🚫 [ENTRY] {mint}: m5 {_m5:+.1f}% < импульса не было, пропуск.")

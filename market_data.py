@@ -550,11 +550,16 @@ async def get_trending() -> list:
         seen.add(mint)
         out.append({"tokenAddress": mint, "chainId": "solana"})
 
-    # 1. Сканируем ТОП-150 трендов
+    # 1. Сканируем ТОП часовых трендов (1h тренды — точно как во вкладке DexScreener Trending 1H)
     for page in range(1, 3):
-        d = await _gt_get(f"/networks/solana/trending_pools?page={page}")
+        d = await _gt_get(f"/networks/solana/trending_pools?duration=1h&page={page}")
         for item in (d.get("data") or []):
             add(item)
+
+    # 1.1 Свежие 5-минутные импульсы (duration=5m)
+    d5 = await _gt_get("/networks/solana/trending_pools?duration=5m&page=1")
+    for item in (d5.get("data") or []):
+        add(item)
 
     # 2. Свежие пулы (new_pools) — ловит новые Raydium/Meteora/Pump ракеты первыми!
     for page in range(1, 3):

@@ -52,18 +52,22 @@ class MatureExitManager:
             _floor_pnl = round(max_pnl_pct * 0.78, 2)
         elif max_pnl_pct >= 3.00:     # Мега-ракета (+300%..+500%): держим 75% прибыли
             _floor_pnl = max(2.40, round(max_pnl_pct * 0.75, 2))
-        elif max_pnl_pct >= 2.00:     # Пик +200%+ (3x) -> гарантируем минимум +160%
-            _floor_pnl = 1.60
-        elif max_pnl_pct >= 1.50:     # Пик +150%+ (2.5x) -> гарантируем минимум +118%
-            _floor_pnl = 1.18
-        elif max_pnl_pct >= 1.00:     # Пик +100%+ (2x) -> гарантируем минимум +78%
-            _floor_pnl = 0.78
-        elif max_pnl_pct >= 0.70:     # Пик +70%+ -> гарантируем минимум +52%
-            _floor_pnl = 0.52
-        elif max_pnl_pct >= 0.50:     # Пик +50%+ -> гарантируем минимум +36%
-            _floor_pnl = 0.36
-        elif max_pnl_pct >= 0.35:     # Пик +35%+ -> гарантируем безубыток +18%
-            _floor_pnl = 0.18
+        elif max_pnl_pct >= 2.00:     # Пик +200%+ (3x) -> гарантируем минимум +165%
+            _floor_pnl = 1.65
+        elif max_pnl_pct >= 1.50:     # Пик +150%+ (2.5x) -> гарантируем минимум +122%
+            _floor_pnl = 1.22
+        elif max_pnl_pct >= 1.00:     # Пик +100%+ (2x) -> гарантируем минимум +80%
+            _floor_pnl = 0.80
+        elif max_pnl_pct >= 0.70:     # Пик +70%+ -> гарантируем минимум +55%
+            _floor_pnl = 0.55
+        elif max_pnl_pct >= 0.50:     # Пик +50%+ -> гарантируем минимум +38%
+            _floor_pnl = 0.38
+        elif max_pnl_pct >= 0.35:     # Пик +35%+ -> гарантируем минимум +24%
+            _floor_pnl = 0.24
+        elif max_pnl_pct >= 0.25:     # Пик +25%+ -> гарантируем минимум +15% (мунбэга нет — забираем целиком)
+            _floor_pnl = 0.15
+        elif max_pnl_pct >= 0.20:     # Пик +20%+ -> гарантируем минимум +10%
+            _floor_pnl = 0.10
         if _floor_pnl is not None and pnl_pct <= _floor_pnl:
             # Защита ТОЛЬКО от 1-тикового глюка вторичного пула (когда из плюса +40%+ цена за 1 тик падает в минус):
             if max_pnl_pct >= 0.40 and pnl_pct <= -0.05:
