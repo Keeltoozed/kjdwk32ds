@@ -1192,7 +1192,7 @@ class Analyzer:
                 liq = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0) * 0.40
             _floor_liq = 3500
         else:
-            _floor_liq = 15000 if (pair_data.get("chainId") or "").lower() == "solana" else 5000
+            _floor_liq = 8000 if (age_minutes < 60 or _lottery or is_vip) else (12000 if (pair_data.get("chainId") or "").lower() == "solana" else 5000)
         if liq < _floor_liq:
             print(f"🚫 [ANTI-RUG] {symbol} ({mint[:8]}): Ликвидность всего ${liq:,.0f} < ${_floor_liq}. Слишком опасно.")
             return False
@@ -2030,8 +2030,8 @@ class Analyzer:
 
         _txm5 = (pair_data.get("txns") or {}).get("m5", {}) or {}
         _b5, _s5 = _txm5.get("buys", 0) or 0, _txm5.get("sells", 0) or 0
-        _vm5 = (pair_data.get("volume") or {}).get("m5", 0) or 0
-        if (_b5 + _s5) < 20 or _vm5 < 2000 or (_s5 > 0 and _b5 < _s5 * 1.15):
+        _min_bs = 1.05 if (_vm5 >= 5000 and _m5 >= 5.0) else 1.12
+        if (_b5 + _s5) < 15 or _vm5 < 1500 or (_s5 > 0 and _b5 < _s5 * _min_bs):
             print(f"🚫 [FRESH] {mint[:8]}: слабый поток (b/s {_b5}/{_s5}, vol ${_vm5:,.0f}) — нет покупателей.")
             return False
 

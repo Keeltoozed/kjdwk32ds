@@ -55,10 +55,13 @@ async def fetch_jup_tokens() -> list:
             sym = str(t.get("symbol") or "").upper().strip()
             if not m or m in seen or sym in SKIP_SYMBOLS:
                 continue
-            seen.add(m)
             st = t.get("stats5m") or {}
             pc = float(st.get("priceChange") or 0.0)
             vol = float(st.get("buyVolume") or 0.0) + float(st.get("sellVolume") or 0.0)
+            # Отсекаем шум: если за 5м рост < +2.5% или объем < $1500 — это не ракета
+            if pc < 2.5 or vol < 1500.0:
+                continue
+            seen.add(m)
             ranked.append((pc, vol, sym, m, "trending"))
     # Сортируем топ-тренды по максимальному 5м импульсу цены:
     ranked.sort(key=lambda x: x[0], reverse=True)
@@ -73,7 +76,7 @@ async def fetch_jup_tokens() -> list:
             seen.add(m)
             ranked.append((0.0, 0.0, sym, m, "recent"))
             
-    # 3. Топ по объему за 1 час (только с положительным 5м импульсом!)
+    # 3. Топ по объему за 1 час (только с подтвержденным 5м импульсом!)
     if s3 == 200 and isinstance(d3, list):
         for t in d3:
             m = t.get("id", "")
@@ -82,7 +85,8 @@ async def fetch_jup_tokens() -> list:
                 continue
             st = t.get("stats5m") or {}
             pc = float(st.get("priceChange") or 0.0)
-            if pc < 1.0:
+            vol = float(st.get("buyVolume") or 0.0) + float(st.get("sellVolume") or 0.0)
+            if pc < 3.0 or vol < 3000.0:
                 continue
             seen.add(m)
             ranked.append((pc, 0.0, sym, m, "volume"))
@@ -125,6 +129,12 @@ async def jup_loop(analyzer, tracker):
                 mints = await fetch_jup_tokens()
                 if mints:
                     print(f"🪐 [JUPITER] Получено {len(mints)} кандидатов (toptrending + recent). Сканирую...")
+                    try:
+                        _to_pf = [m for m in mints if m not in tracker.positions and (_t.time() - processed.get(m, 0.0)) >= 40]
+                        if _to_pf:
+                            await analyzer.prefetch_token_data(_to_pf)
+                    except Exception:
+                        pass
                 for mint in mints:
                     if not mint or mint in tracker.positions:
                         continue
@@ -144,12 +154,21 @@ async def jup_loop(analyzer, tracker):
                     _age_min = (_t.time() * 1000 - _created) / 60000.0 if _created else 999.0
                     _min_age = float(getattr(config, "SOLANA_MIN_AGE_MIN", 2.5))
                     _sym_tmp = str(((td.get("baseToken") or {}).get("symbol") or mint[:6])).upper()
+                    _m5_tmp = float(((td.get("priceChange") or {}).get("m5", 0) or 0))
                     
                     if _age_min < _min_age:
                         print(f"⏳ [JUP] {_sym_tmp} ({mint[:8]}): возраст {_age_min:.1f}м < {_min_age}м — flash-rug зона дева, ждём.")
                         continue
+                    
+                    # Отсекаем древние мамонты (старше 120 мин без гипер-пампа) и флет (m5 < 2.0%):
+                    if _age_min > 120.0 and _m5_tmp < 15.0:
+                        processed[mint] = _t.time() + 3600  # Древний токен: скип на 1 час
+                        continue
+                    if _m5_tmp < 2.0:
+                        processed[mint] = _t.time() + 180   # Флет m5 < 2%: скип на 3 мин
+                        continue
                         
-                    print(f"🪐 [JUP] Анализирую {_sym_tmp} ({mint[:8]}): возраст {_age_min:.1f}м...")
+                    print(f"🪐 [JUP] Анализирую {_sym_tmp} ({mint[:8]}): возраст {_age_min:.1f}м, m5 {_m5_tmp:+.1f}%...")
                     try:
                         ok = await analyzer.analyze_token(mint)
                     except Exception as e:
