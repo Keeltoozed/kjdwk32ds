@@ -56,11 +56,15 @@ def _verdict_evm(info: dict, chain: str = "", pair_data: dict = None):
     if str(info.get("cannot_buy", "0")) == "1":
         return False, "cannot_buy"
     if str(info.get("is_blacklisted", "0")) == "1":
-        return False, "blacklist"
+        return False, "blacklist (черный список / блокировка кошельков)"
+    if str(info.get("transfer_pausable", "0")) == "1":
+        return False, "transfer_pausable (заморозка / пауза переводов владельцем)"
+    if str(info.get("is_whitelisted", "0")) == "1":
+        return False, "whitelist (белый список — продажа запрещена покупателям)"
     if str(info.get("trading_cooldown", "0")) == "1":
         return False, "trading_cooldown"
 
-    # 2. Бэкдоры владельца и бесконечный минт
+    # 2. Бэкдоры владельца, бесконечный минт и манипуляции лимитами
     if str(info.get("is_mintable", "0")) == "1":
         return False, "mintable"
     if str(info.get("can_take_back_ownership", "0")) == "1":
@@ -71,6 +75,14 @@ def _verdict_evm(info: dict, chain: str = "", pair_data: dict = None):
         return False, "selfdestruct"
     if str(info.get("external_call", "0")) == "1":
         return False, "external_call"
+    if str(info.get("anti_whale_modifiable", "0")) == "1":
+        return False, "anti_whale_modifiable (риск обнуления лимита продажи девом)"
+    if str(info.get("slippage_modifiable", "0")) == "1":
+        return False, "slippage_modifiable (риск установки 100% налога девом)"
+    if str(info.get("personal_slippage_modifiable", "0")) == "1":
+        return False, "personal_slippage_modifiable (персональный налог на покупателей)"
+    if str(info.get("is_open_source", "1")) == "0":
+        return False, "closed_source (закрытый код контракта — невозможно проверить на скрытую заморозку)"
 
     # 3. Налоги
     buy = _tax_frac(info.get("buy_tax", 0))
@@ -273,7 +285,8 @@ def is_hard_scam(reason: str) -> bool:
                    "mintable", "ownership", "hidden_owner", "selfdestruct",
                    "external_call", "tax", "creator_pct", "owner_pct", "lp", "рагпулл",
                    "кит", "дамп", "freeze", "freezable", "closable", "balance_mutable", "кабал",
-                   "frozen", "non_transferable", "transfer_hook", "default_account", "заморозка"):
+                   "frozen", "non_transferable", "transfer_hook", "default_account", "заморозка",
+                   "pause", "transfer_pausable", "whitelist", "anti_whale", "slippage", "closed_source"):
         if danger in r:
             return True
     return False
@@ -653,32 +666,33 @@ async def check_onchain_evm_security(address: str, chain: str, pair_data: dict =
                 _is_bare_manual_erc20 = True
 
         # 1.6. Защита от серийных LP-rug фабрик на Uniswap V4:
-        # В Uniswap V4 любой создатель может вызвать modifyLiquidity и выкачать 100% токенов из PoolManager.
-        # Легитимные токены на Base (TRENCHER, Basecat, SPIKE) запускаются через протокол Clanker (адрес токена 0xb20000000000...).
-        # Ручные V4-пулы (DOAN, DADOGE, FINUL, SXSI, P2L, JEET) — это 100% серийные рагпуллы скамеров!
+        # На Base легитимные мем-ракеты запускаются исключительно через Clanker (0xb20000000000...).
+        # Ручные V4-пулы на Base (DOAN, DADOGE, FINUL, SXSI, P2L, JEET) — это 100% серийные рагпуллы скамеров!
+        # На Robinhood Chain Uniswap V4 — это основной DEX (EMBER, SEASON, KIMCHI), его блокировать нельзя!
+        _q_amt_pd = float((_pd.get("liquidity") or {}).get("quote", 0.0) or 0.0)
+        _q_sym_pd = str((_pd.get("quoteToken") or {}).get("symbol", "")).upper()
+        _is_clanker_v4 = address.lower().startswith("0xb20000000000")
+
         if not is_open_pos and _is_v4:
-            if chain == "robinhood":
-                return False, "неверифицированный пул Uniswap V4 на Robinhood Chain — 100% риск вывода ликвидности через modifyLiquidity"
-            _is_clanker_v4 = address.lower().startswith("0xb20000000000")
-            if not _is_clanker_v4 and not _has_reputation:
-                return False, "ручной неверифицированный пул Uniswap V4 (не Clanker) — 100% риск вывода ликвидности через modifyLiquidity"
+            if chain == "base" and not _is_clanker_v4 and not _has_reputation:
+                return False, "ручной неверифицированный пул Uniswap V4 на Base (не Clanker) — 100% риск вывода ликвидности через modifyLiquidity"
+            # На всех сетях перед входом в V4 требуем реальный объем quote-актива (ETH >= 0.15 для Clanker, >= 0.35 для остальных)
+            _min_v4_q = 0.15 if _is_clanker_v4 else 0.35
+            if ("ETH" in _q_sym_pd or "WETH" in _q_sym_pd) and 0 < _q_amt_pd < _min_v4_q:
+                return False, f"фантомный пул Uniswap V4 (в пуле всего {_q_amt_pd:.4f} ETH < {_min_v4_q:.2f} ETH — ловушка)"
 
         # 2. Проверка реальной ликвидности пула (Uniswap V4 PoolManager vs V2/V3 Pair & LP Burn)
         if 2 in _res_map and 3 in _res_map:
             _tot_h = _res_map[2].get("result", "0x")
-            _pm_h = _res_map[3].get("result", "0x")
             if _tot_h and _tot_h != "0x":
                 _tot_v = int(_tot_h, 16)
-                _pm_v = int(_pm_h, 16) if _pm_h and _pm_h != "0x" else 0
                 if _tot_v > 0 and _is_v4:
-                    _frac = _pm_v / _tot_v
-                    if _frac < 0.005:
-                        return False, f"пул Uniswap V4 опустошён девом (остаток {_frac*100:.4f}% — V4 LP Rug)"
-                    if not is_open_pos:
-                        # Токен обязан держать >= 10% эмиссии в V4 PoolManager (легитимные лаунчпады Clanker/Virtuals держат 25-50%, TRENCHER 49.3%).
-                        _min_v4_frac = 0.10
-                        if _frac < _min_v4_frac and not _has_reputation:
-                            return False, f"картонный пул Uniswap V4 (в пуле всего {_frac*100:.1f}% эмиссии < {_min_v4_frac*100:.0f}% — V4 LP-rug риск)"
+                    # В Uniswap V4 при пампе (ракете) покупатели выкупают base-токены, поэтому base-баланс падает до 0.01%,
+                    # а quote (ETH) растет до небес (кейс EMBER +731%, SEASON +241%).
+                    # Раг — это когда дев выдергивает ETH, и ликвидность падает в 0!
+                    if is_open_pos:
+                        if _liq_pd < 400.0 or (0 < _q_amt_pd < 0.08):
+                            return False, f"пул Uniswap V4 опустошён девом (остаток ликвидности ${_liq_pd:.0f}, quote {_q_amt_pd:.4f} ETH — V4 LP Rug)"
                 if _tot_v > 0 and not _is_v4 and 4 in _res_map:
                     _pair_h = _res_map[4].get("result", "0x")
                     _pair_v = int(_pair_h, 16) if _pair_h and _pair_h != "0x" else 0
@@ -688,9 +702,13 @@ async def check_onchain_evm_security(address: str, chain: str, pair_data: dict =
                     if not is_open_pos and not _has_reputation and chain in ("robinhood", "base"):
                         if _p_frac < 0.05:
                             return False, f"картонный пул V2/V3 (в пуле всего {_p_frac*100:.1f}% эмиссии < 5% без соцсетей — схема LP-rug)"
+                        # Проверка фантомного пула V2 (кейсы .AI 0.00000003 ETH)
+                        if ("ETH" in _q_sym_pd or "WETH" in _q_sym_pd) and 0 < _q_amt_pd < 0.35:
+                            return False, f"фантомный пул V2 (в пуле всего {_q_amt_pd:.8f} ETH < 0.35 ETH — скам-ловушка)"
+
         # 3. Проверка сжигания ликвидности (LP Burn / Lock) — ТОЛЬКО ПЕРЕД ВХОДОМ В СДЕЛКУ (not is_open_pos):
-        # Предотвращает ложное списание открытых позиций и строго блокирует незалоченные токены на Robinhood и BSC
-        if not is_open_pos and len(_pair_addr) == 42 and chain in ("robinhood", "bsc"):
+        # Предотвращает ложное списание открытых позиций и строго блокирует незалоченные токены на Base, Robinhood и BSC
+        if not is_open_pos and len(_pair_addr) == 42 and chain in ("robinhood", "bsc", "base", "ethereum"):
             _DEAD = "000000000000000000000000000000000000dead".zfill(64)
             _ZERO = "0000000000000000000000000000000000000000".zfill(64)
             _pl_lp = [
@@ -710,10 +728,10 @@ async def check_onchain_evm_security(address: str, chain: str, pair_data: dict =
                     _zero_lp = int(_zero_lp_h, 16) if _zero_lp_h and _zero_lp_h != "0x" else 0
                     if _tot_lp > 0:
                         _burnt_pct = ((_dead_lp + _zero_lp) / _tot_lp) * 100.0
-                        # Строгая защита для Robinhood и BSC (не менее 80% LP сожжено)
-                        if _burnt_pct < 80.0 and (chain == "robinhood" or not _has_reputation):
+                        # Строгая защита для Base, Robinhood и BSC (не менее 80% LP сожжено)
+                        if _burnt_pct < 80.0 and (chain in ("robinhood", "base") or not _has_reputation):
                             return False, f"ликва пула V2 не сожжена ({_burnt_pct:.1f}% < 80%) — риск вывода ликвидности девом"
-                elif not _has_reputation and chain in ("robinhood", "bsc"):
+                elif not _has_reputation and chain in ("robinhood", "bsc", "base", "ethereum"):
                     # Если totalSupply() выдает revert (error), это V3 или кастомный пул.
                     if _res_lp and isinstance(_res_lp[0], dict) and "error" in _res_lp[0]:
                         return False, f"пул не имеет сжигаемого V2 LP ({chain}: V3/ручной пул без доказательства блокировки) — риск LP-rug"

@@ -1110,8 +1110,13 @@ async def _evm_track_once(tracker, chain: str, tag: str, emoji: str):
                         # 2. Свежая проверка GoPlus в обход 1-часового кеша (force_refresh=True)
                         _g_ok, _g_why = await _gp.check_token(mint, chain, force_refresh=True)
                         _w_low = str(_g_why or "").lower()
-                        if not _g_ok and any(k in _w_low for k in ("honeypot", "cannot_sell", "creator_pct", "owner_pct", "blacklist", "cooldown", "tax", "pause", "transfer_pausable")):
-                            print(f"🚨 [{tag}-HONEYPOT] {pos.symbol} ({mint[:10]}): {_g_why} — токен непродаваем, списание в -100%.")
+                        if not _g_ok and any(k in _w_low for k in (
+                            "honeypot", "cannot_sell", "creator_pct", "owner_pct", "blacklist", "cooldown",
+                            "tax", "pause", "transfer_pausable", "freeze", "freezable", "frozen",
+                            "non_transferable", "transfer_hook", "default_account", "closable",
+                            "balance_mutable", "whitelist", "anti_whale", "slippage", "closed_source", "заморозка"
+                        )):
+                            print(f"🚨 [{tag}-HONEYPOT] {pos.symbol} ({mint[:10]}): {_g_why} — токен непродаваем/заморожен, списание в -100%.")
                             tracker.close_position(mint, 0.0, f"{tag} Honeypot / Unsellable ({_g_why})")
                             continue
                     except Exception:
@@ -1382,6 +1387,8 @@ async def _evm_chain_loop(analyzer, tracker, chain: str):
 
                     # Фильтруем кулдаун ДО среза _cap, чтобы остывающие токены не вытесняли активные кандидаты!
                     _now_scan = _t.time()
+                    if len(processed) > 1500:
+                        processed.clear()
                     mints = []
                     open_pos_addrs = {str(m).strip().lower() for m in tracker.positions.keys()}
                     for addr in _all_candidates:
@@ -1390,18 +1397,13 @@ async def _evm_chain_loop(analyzer, tracker, chain: str):
                         _prev = tracker.last_loss_pct(addr)
                         if _prev is not None and _prev <= getattr(config, "RUG_REBUY_MAX_LOSS", -0.15):
                             continue
-                         # Отсекаем монеты старше 24 часов, чтобы не сканировать мамонтов вроде DEGEN (1.4 млн минут):
+                        # Отсекаем монеты старше 48 часов, чтобы не сканировать древних мамонтов вроде DEGEN (1.4 млн минут):
                         _cached_data = getattr(analyzer, "_prefetch_cache", {}).get(addr, (0, {}))[1]
                         if _cached_data:
                             _c_at = _cached_data.get("pairCreatedAt", 0)
-                            if _c_at and (_t.time() * 1000 - _c_at) > 86400000:  # старше 24 часов
+                            if _c_at and (_t.time() * 1000 - _c_at) > 172800000:  # старше 48 часов
                                 continue
 
-                        _cached_td = getattr(analyzer, "_eval_ctx", {}).get(addr, {})
-                        # Пропускаем монеты, если в кеше они уже определены как древний флет
-                        if "dead-flat" in str(analyzer.signals.get(addr, "")):
-                            continue
-                            
                         _is_wss = addr in _wss_fresh
                         _cd = 20 if _is_wss else _recooldown
                         if _now_scan - processed.get(addr, 0.0) < _cd:
@@ -1433,18 +1435,22 @@ async def _evm_chain_loop(analyzer, tracker, chain: str):
                                 processed[addr] = _t.time() - _recooldown + 20  # Дев может залить ликвидность через 20с
                             elif "age" in _sig:
                                 processed[addr] = _t.time() - _recooldown + 20  # Ждем созревания 20с
-                            elif "m1-green" in _sig or "вершина" in _sig:
+                            elif "m1-green" in _sig or "вершина" in _sig or "scout-m1" in _sig:
                                 processed[addr] = _t.time() - _recooldown + 20  # Ждем отката 1м импульса 20с
-                            elif "flat" in _sig or "m5-no-pressure" in _sig or "quiet" in _sig:
+                            elif "flat" in _sig or "m5-no-pressure" in _sig or "quiet" in _sig or "dead-flat" in _sig:
                                 _lq_tmp = float((getattr(analyzer, "_eval_ctx", {}).get(addr, {}) or {}).get("liq", 0.0) or 0.0)
-                                if "dead-flat" in _sig or _lq_tmp > 500000.0:
-                                    processed[addr] = _t.time() - _recooldown + 1800  # Мертвый флет / мамонты (SPY, QQQ, AAPL): пауза 30 минут
-                                elif _lq_tmp >= 2500:
-                                    processed[addr] = _t.time() - _recooldown + 20  # Живой мем-пул перепроверить через 20с
+                                if _lq_tmp > 350000.0 or "dex-giant" in _sig:
+                                    processed[addr] = _t.time() - _recooldown + 300  # Мамонты / стейблы: пауза 5 минут
+                                elif _lq_tmp >= 2000:
+                                    processed[addr] = _t.time() - _recooldown + 25   # Живой мем-пул перепроверить через 25с
                                 else:
-                                    processed[addr] = _t.time()
+                                    processed[addr] = _t.time() - _recooldown + 60
+                            elif "antiscam-" in _sig or "honeypot" in _sig or "ghost-pool" in _sig:
+                                processed[addr] = _t.time() - _recooldown + 600      # Подтверждённый скам: пауза 10 минут, не тратить квоту
+                            elif "rkt-low" in _sig or "scout-low-rkt" in _sig:
+                                processed[addr] = _t.time() - _recooldown + 45
                             else:
-                                processed[addr] = _t.time()
+                                processed[addr] = _t.time() - _recooldown + 25       # Перепроверка через 25с (например, score подрастёт)
                         else:
                             processed[addr] = _t.time()
                         analyzer.log_scan(addr[:8], addr, tag,
@@ -1479,14 +1485,11 @@ async def _evm_chain_loop(analyzer, tracker, chain: str):
                                     fixed = float(getattr(config, "TRADE_AMOUNT_USD", 0.0) or 0.0)
                                     if fixed > 0:
                                         size = fixed  # Строго заданный ордер пользователя ($15)
-                                        if "LOTTERY" in _sig or "SCOUT" in _sig:
-                                            _scout_cap = float(getattr(config, "SCOUT_SIZE_USD", getattr(config, "LOTTERY_SIZE_USD", 5.0)) or 5.0)
-                                            size = min(size, _scout_cap)
                                     else:
                                         cap = tracker.get_total_capital()
                                         size = max(4.0, min(100.0, cap * (config.REINVEST_PERCENT / 100.0))) if cap > 0 else 4.0
                                         if "LOTTERY" in _sig or "SCOUT" in _sig:
-                                            _scout_cap = float(getattr(config, "SCOUT_SIZE_USD", getattr(config, "LOTTERY_SIZE_USD", 5.0)) or 5.0)
+                                            _scout_cap = float(getattr(config, "SCOUT_SIZE_USD", getattr(config, "LOTTERY_SIZE_USD", 15.0)) or 15.0)
                                             size = min(size, _scout_cap)
                                         else:
                                             size *= analyzer.conviction_size_mult(td)

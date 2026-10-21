@@ -240,9 +240,11 @@ class Analyzer:
         return False
 
     @staticmethod
-    def is_churn(b5, s5, m5, n_min: int = 18, liq: float = 0.0, vol5: float = 0.0) -> bool:
+    def is_churn(b5, s5, m5, n_min: int = 18, liq: float = 0.0, vol5: float = 0.0, is_clanker: bool = False) -> bool:
         """CHURN/WASH (анализ паттернов накрутки): высокий оборот без перевеса покупателей,
         микро-сделки ботов или аномальный оборот к ликвидности."""
+        if is_clanker and vol5 >= 2000.0 and (b5 + s5) < 40:
+            return False
         if liq >= 60000.0 and vol5 < liq * 2:
             return False
         try:
@@ -257,6 +259,8 @@ class Analyzer:
         r = b5 / s5
         # 1. Топтание без перевеса
         if (r < 1.2 and abs(m5) < 15.0) or (r < 1.15 and abs(m5) < 60.0):
+            if is_clanker and abs(m5) >= 20.0:
+                return False
             return True
         # 2. Аномальный оборот без импульса (wash-trading ботов)
         if liq > 0 and vol5 > 0 and (vol5 / liq) > 3.0 and abs(m5) < 10.0:
@@ -1495,6 +1499,14 @@ class Analyzer:
             if m1 < -7.0:
                 return self._deny(address, f"scout-m1-drop {m1:+.1f}%",
                                   f"🚫 [{tag}-SCOUT] {symbol}: m1 {m1:+.1f}% — падающий нож.")
+            # Защита от покупки вершины уже выдохшегося пампа (кейс DATAEXPORT +474%)
+            _h6_scout = float((pair_data.get("priceChange") or {}).get("h6", 0) or 0)
+            if _h6_scout > 250.0 and m5 < 15.0:
+                return self._deny(address, f"scout-h6-overheated {_h6_scout:+.1f}%",
+                                  f"🚫 [{tag}-SCOUT] {symbol}: h6 +{_h6_scout:.1f}% — пик пампа уже пройден, риск фиксации китами.")
+            if h1 > 180.0 and m5 < 10.0:
+                return self._deny(address, f"scout-h1-overheated {h1:+.1f}%",
+                                  f"🚫 [{tag}-SCOUT] {symbol}: h1 +{h1:.1f}% — токен уже взлетел на 2.8х+, риск фиксации китами.")
             # 2. Защита от картонных пулов (FDV / Liq > 80x)
             _fdv_scout = float(pair_data.get("fdv", 0) or 0)
             if liq > 0 and _fdv_scout > 0 and (_fdv_scout / liq) > 80.0:
@@ -1503,10 +1515,12 @@ class Analyzer:
             # 2.1. Защита от фантомных пулов (Ghost Pools: в пуле $20k фантиков, но реального ETH < 0.35, кейс UHI)
             _q_amt = float((pair_data.get("liquidity") or {}).get("quote", 0) or 0)
             _q_sym = str((pair_data.get("quoteToken") or {}).get("symbol", "")).upper()
+            _is_clanker = address.lower().startswith("0xb20000000000")
             if chain in ("robinhood", "base", "ethereum"):
-                if ("ETH" in _q_sym or "WETH" in _q_sym) and 0 < _q_amt < 0.35:
+                _min_eth_quote = 0.15 if _is_clanker else 0.35
+                if ("ETH" in _q_sym or "WETH" in _q_sym) and 0 < _q_amt < _min_eth_quote:
                     return self._deny(address, "ghost-pool-quote",
-                                      f"🚫 [{tag}-SCOUT] {symbol}: фантомный пул (в пуле всего {_q_amt:.6f} ETH < 0.35 ETH — нет реальных денег, ловушка).")
+                                      f"🚫 [{tag}-SCOUT] {symbol}: фантомный пул (в пуле всего {_q_amt:.6f} ETH < {_min_eth_quote:.2f} ETH — нет реальных денег, ловушка).")
                 elif "USD" in _q_sym and 0 < _q_amt < 800.0:
                     return self._deny(address, "ghost-pool-quote",
                                       f"🚫 [{tag}-SCOUT] {symbol}: фантомный пул (в пуле всего ${_q_amt:.0f} USDT/C < $800).")
@@ -1590,10 +1604,12 @@ class Analyzer:
         # Защита от фантомных пулов (Ghost Pools: $20k накрученных фантиков, но реального ETH < 0.35)
         _q_amt_evm = float((pair_data.get("liquidity") or {}).get("quote", 0) or 0)
         _q_sym_evm = str((pair_data.get("quoteToken") or {}).get("symbol", "")).upper()
+        _is_clanker_evm = address.lower().startswith("0xb20000000000")
         if chain in ("robinhood", "base", "ethereum"):
-            if ("ETH" in _q_sym_evm or "WETH" in _q_sym_evm) and 0 < _q_amt_evm < 0.35:
+            _min_eth_quote = 0.15 if _is_clanker_evm else 0.35
+            if ("ETH" in _q_sym_evm or "WETH" in _q_sym_evm) and 0 < _q_amt_evm < _min_eth_quote:
                 return self._deny(address, "ghost-pool-quote",
-                                  f"🚫 [{tag}] {symbol}: фантомный пул (в пуле всего {_q_amt_evm:.6f} ETH < 0.35 ETH — нет реальных денег).")
+                                  f"🚫 [{tag}] {symbol}: фантомный пул (в пуле всего {_q_amt_evm:.6f} ETH < {_min_eth_quote:.2f} ETH — нет реальных денег).")
             elif "USD" in _q_sym_evm and 0 < _q_amt_evm < 800.0:
                 return self._deny(address, "ghost-pool-quote",
                                   f"🚫 [{tag}] {symbol}: фантомный пул (в пуле всего ${_q_amt_evm:.0f} USDT/C < $800).")
@@ -1659,24 +1675,30 @@ class Analyzer:
                 self._set_sig(address, f"{tag} ACCUM" + _rkt + await self.meme_tag(address, symbol, pair_data, chain))
                 return True
 
+            if _is_clanker_evm and -22.0 <= m5 <= 0.0 and (b5 + s5) >= 8 and float((pair_data.get("volume") or {}).get("m5", 0) or 0) >= 2000.0:
+                print(f"🚀 [BASE-CLANKER-DIP] {symbol}: откат m5 {m5:+.1f}%, liq ${liq:,.0f}, tx5m {b5}b/{s5}s — вход на откате перед взлётом.")
+                self._set_sig(address, f"{tag} CLANKER-DIP" + self._rkt_tag(address, pair_data) + await self.meme_tag(address, symbol, pair_data, chain))
+                return True
             return self._deny(address, f"flat m5 {m5:+.1f}%", f"· [{tag}] {symbol}: флет m5 {m5:+.1f}%")
-        _max_m5 = 350.0 if chain in ("robinhood", "base", "bsc") else 85.0
+        _max_m5 = 350.0 if (chain in ("robinhood", "base", "bsc") or _is_clanker_evm) else 85.0
         # При органическом перевесе покупателей расширяем коридор m5, чтобы забирать супер-ракеты
         # (кейсы 特斯拉能飞 +994% -> +3023%, INFLUENCE +159% -> +950%, VERDIS +289%, KAIDA +270%, BRIVON +393%, NULL +375%)
         if chain in ("robinhood", "base", "bsc"):
-            if _age_min < 15.0 and s5 > 0 and b5 >= int(s5 * 1.5) and not self.is_churn(b5, s5, m5, liq=liq):
+            if (_age_min < 15.0 or _is_clanker_evm) and s5 > 0 and b5 >= int(s5 * 1.1) and not self.is_churn(b5, s5, m5, liq=liq, is_clanker=_is_clanker_evm):
                 _max_m5 = 1200.0  # Свежая супер-ракета на старте: вход на импульсе (кейс 特斯拉能飞 m5 +994%)
-            elif liq >= 15000.0 and s5 > 0 and b5 >= s5 and not self.is_churn(b5, s5, m5, liq=liq):
+            elif liq >= 15000.0 and s5 > 0 and b5 >= s5 and not self.is_churn(b5, s5, m5, liq=liq, is_clanker=_is_clanker_evm):
                 _max_m5 = 600.0   # Мощное ралли на глубоком пуле ($15k+): вход на 2-й ступени ракеты
-            elif s5 > 0 and b5 >= s5 and not self.is_churn(b5, s5, m5, liq=liq):
+            elif s5 > 0 and b5 >= s5:
                 _max_m5 = 450.0   # Умеренный пул
+            elif _is_clanker_evm:
+                _max_m5 = 350.0   # Clanker ракета
             else:
                 _max_m5 = 150.0
 
         if m5 > _max_m5:
             return self._deny(address, f"top m5 {m5:+.0f}%", f"🚫 [{tag}-OVERHEAT] {symbol}: m5 {m5:+.1f}% — вертикаль уже прошла, вход = вершина.")
         
-        if self.is_churn(b5, s5, m5, liq=liq):
+        if self.is_churn(b5, s5, m5, liq=liq, is_clanker=_is_clanker_evm):
             return self._deny(address, f"churn {b5}/{s5} m5 {m5:+.1f}%",
                               f"🚫 [{tag}-CHURN] {symbol}: {b5 + s5} сделок без перевеса (b/s {b5 / (s5+1):.2f}) — накрутка, не FOMO.")
         # Ослабление m1-green: мощные ракеты пробивают импульсом без отката (кейсы BEC +663%, ORVA +237%).
@@ -1753,10 +1775,10 @@ class Analyzer:
         if len(links) >= 2:
             score += 5.0
         score = min(score, 100.0)
+        _is_live_organic = (b5 >= 12 and s5 >= 1 and b5 >= int(s5 * 1.3) and float((pair_data.get("volume") or {}).get("m5", 0) or 0) >= 1500.0)
+        _min_score_thr = 55.0 if (chain == "base" or _is_live_organic) else 65.0
         self.last_score = float(score)
-        print(f"📊 [{tag}] {symbol}: финальный score {score:.1f} (порог 65), m5 {m5:+.1f}%, m1 {m1:+.1f}%")
-        # СТАЛО:
-        _min_score_thr = 55.0 if chain == "base" else 65.0
+        print(f"📊 [{tag}] {symbol}: финальный score {score:.1f} (порог {_min_score_thr:.0f}), m5 {m5:+.1f}%, m1 {m1:+.1f}%")
         if score >= _min_score_thr:
             if chain in ("robinhood", "bsc", "base", "ethereum"):
                 try:
@@ -1773,7 +1795,7 @@ class Analyzer:
                 return self._deny(address, "1m-candle-dump", f"🚫 [{tag}] {symbol}: 1м свеча в сливе / вершина пройдена.")
             self._set_sig(address, f"{tag} rule {score:.0f}%" + self._rkt_tag(address, pair_data) + await self.meme_tag(address, symbol, pair_data, chain))
             return True
-        return False
+        return self._deny(address, f"low-score {score:.1f}", f"· [{tag}] {symbol}: score {score:.1f} < {_min_score_thr:.0f} — недостаточно импульса.")
         
     async def analyze_growth_token(self, mint: str) -> bool:
         import config as _c
