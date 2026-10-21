@@ -1982,13 +1982,40 @@ class Analyzer:
         
         funded_from_cex = 0
         
-        features = pd.DataFrame([{
+        # Сбор полного набора фичей для модели
+        pc = pair_data.get("priceChange") or {}
+        txm5 = (pair_data.get("txns") or {}).get("m5", {}) or {}
+        txh = (pair_data.get("txns") or {}).get("h24", {}) or {}
+        b5 = float(txm5.get("buys", 0) or 0)
+        s5 = float(txm5.get("sells", 0) or 0)
+        bh = float(txh.get("buys", 0) or 0)
+        sh = float(txh.get("sells", 0) or 0)
+        vm5 = float((pair_data.get("volume") or {}).get("m5", 0) or 0)
+        vh = float((pair_data.get("volume") or {}).get("h24", 0) or 0)
+        liq = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
+        fdv = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
+        bs_ratio = (b5 / (s5 + 1.0)) if (b5 + s5) > 0 else ((bh / (sh + 1.0)) if (bh + sh) > 0 else 1.0)
+        vol_to_liq = (vm5 / (liq + 1.0)) if vm5 else ((vh / (liq + 1.0)) if vh else 0.0)
+        
+        features_dict = {
             "dev_holding_pct": float(dev_holding_pct or 0.0),
             "top_10_holding_pct": float(top_10_holding_pct or 0.0),
             "tx_velocity_1m": float(tx_velocity_1m or 0.0),
             "has_socials": int(has_socials or 0),
-            "funded_from_cex": int(funded_from_cex or 0)
-        }])
+            "funded_from_cex": int(funded_from_cex or 0),
+            "price_change_m5": float(pc.get("m5", 0) or 0.0),
+            "volume_m5": float(vm5),
+            "buys_m5": float(b5),
+            "sells_m5": float(s5),
+            "liquidity": float(liq),
+            "fdv": float(fdv),
+            "buy_sell_ratio": float(bs_ratio),
+            "vol_to_liq": float(vol_to_liq),
+            "price_change_h24": float(pc.get("h24", 0) or 0.0),
+            "volume_h24": float(vh),
+            "buys_h24": float(bh),
+            "sells_h24": float(sh),
+        }
         
         if self.pump_model is None:
             return False 
@@ -2000,7 +2027,27 @@ class Analyzer:
                 return False
         except Exception:
             pass
-        prob = self.pump_model.predict_proba(features)[0][1]
+
+        # Динамическое выравнивание признаков под требования модели (устраняет ValueError: feature_names mismatch)
+        expected_cols = None
+        try:
+            expected_cols = self.pump_model.get_booster().feature_names
+        except Exception:
+            pass
+        if not expected_cols:
+            expected_cols = getattr(self.pump_model, "feature_names_in_", None)
+
+        if expected_cols:
+            row = {col: float(features_dict.get(col, 0.0) or 0.0) for col in expected_cols}
+            features = pd.DataFrame([row], columns=list(expected_cols))
+        else:
+            features = pd.DataFrame([features_dict])
+
+        try:
+            prob = float(self.pump_model.predict_proba(features)[0][1])
+        except Exception as _pe:
+            print(f"⚠️ Ошибка предсказания XGBoost {mint[:8]}: {type(_pe).__name__}: {_pe}. Фоллбэк на моментум.")
+            prob = 0.85 if (is_vip or _lottery) else 0.50
         conf = float(prob) * 100
         self.last_score = conf
         print(f"🤖 XGBoost [DEX Poller]: {mint} | Score: {conf:.1f}%")

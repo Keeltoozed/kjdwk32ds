@@ -87,13 +87,16 @@ def feed_rugs_and_retrain():
             df_combined = pd.concat([df_base, df_rugs_pump], ignore_index=True)
             df_combined.to_csv("pump_dataset.csv", index=False)
             
-            features = ["dev_holding_pct", "top_10_holding_pct", "tx_velocity_1m", "has_socials", "funded_from_cex"]
+            ignore_cols = ['target', 'is_success', 'mint', 'symbol', 'entry_price', 'min_price_5m', 'max_price_1h', 'timestamp', 'status', 'features', 'entry_time', 'exit_time', 'exit_reason', 'pnl', 'pnl_usd', 'confidence', 'id', 'check_24h_done', 'check_1h_done', 'check_4h_done', 'missed_pnl', 'post_exit_ath', 'reason', 'score', 'hypothetical_pnl', 'token', 'chain']
+            features = [c for c in df_combined.columns if c not in ignore_cols]
+            if not features:
+                features = ["dev_holding_pct", "top_10_holding_pct", "tx_velocity_1m", "has_socials", "funded_from_cex"]
             for col in features:
                 if col not in df_combined.columns:
                     df_combined[col] = 0.0
                     
-            X = df_combined[features]
-            y = df_combined['target']
+            X = df_combined[features].apply(pd.to_numeric, errors='coerce').fillna(0)
+            y = df_combined['target'].astype(int)
             
             model = xgb.XGBClassifier(n_estimators=300, learning_rate=0.03, max_depth=5, random_state=42)
             weights = [10.0 if idx >= len(df_base) else 1.0 for idx in range(len(df_combined))]
