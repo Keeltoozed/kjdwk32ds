@@ -1392,16 +1392,28 @@ async def _evm_chain_loop(analyzer, tracker, chain: str):
                     _now_scan = _t.time()
                     if len(processed) > 1500:
                         processed.clear()
+                    _EVM_STATIC_SKIP = {
+                        "0x4200000000000000000000000000000000000006", "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+                        "0x50c5725949a6f0c72e6c4a641f24049a917db0cb", "0xd9aaec86b65d86f6a7b5b1b0c42ffa531710b6ca",
+                        "0x940181a94a35a4569e4529a3cdfb74e38fd98631", "0x4ed4e862860bed51a9570b96d89af5e1b0efefed",
+                        "0x532f27101965dd16442e59d40670faf5ebb142e4", "0xcbb7c0000ab88b473b1f5afd9ef808440eed33bf",
+                        "0x0b3e328455c4059eeb9e3f84b5543f74e24e7e1b", "0xa4a2e2ca3fbfe21aed83471d28b6f65a233c6e00",
+                        "0x3e12b9d6a4d12cd9b4a6d613872d0eb32f68b380", "0xef5997c2cf2f6c138196f8a6203afc335206b3c1",
+                        "0x6985884c4392d348587b19cb9eaaf157f13271cd", "0x9eadbe35f3ee3bf3e28180070c429298a1b02f93",
+                        "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c", "0x55d398326f99059f775485246999027b3197955c",
+                        "0xe9e7cea3dedca5984780bafc599bd69add087d56", "0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d",
+                        "0x0e09fabb73bd3ade0a17ecc321fd13a19e81ce82"
+                    }
                     mints = []
                     open_pos_addrs = {str(m).strip().lower() for m in tracker.positions.keys()}
                     for addr in _all_candidates:
-                        if not addr or addr in open_pos_addrs:
+                        if not addr or addr in open_pos_addrs or addr.lower() in _EVM_STATIC_SKIP:
                             continue
                         _prev = tracker.last_loss_pct(addr)
                         if _prev is not None and _prev <= getattr(config, "RUG_REBUY_MAX_LOSS", -0.15):
                             continue
-                        # Отсекаем монеты старше 48 часов, чтобы не сканировать древних мамонтов вроде DEGEN (1.4 млн минут):
-                        _cached_data = getattr(analyzer, "_prefetch_cache", {}).get(addr, (0, {}))[1]
+                        # Отсекаем монеты старше 48 часов из кэша EVM
+                        _cached_data = getattr(evm_data, "_EVM_PREFETCH_CACHE", {}).get((chain.lower(), addr.lower()), (0, {}))[1]
                         if _cached_data:
                             _c_at = _cached_data.get("pairCreatedAt", 0)
                             if _c_at and (_t.time() * 1000 - _c_at) > 172800000:  # старше 48 часов
@@ -1424,6 +1436,12 @@ async def _evm_chain_loop(analyzer, tracker, chain: str):
 
                     for addr in mints:
                         _is_wss = addr in _wss_fresh
+                        _cached_data = getattr(evm_data, "_EVM_PREFETCH_CACHE", {}).get((chain.lower(), addr.lower()), (0, {}))[1]
+                        if _cached_data:
+                            _c_at = _cached_data.get("pairCreatedAt", 0)
+                            if _c_at and (_t.time() * 1000 - _c_at) > 172800000:
+                                processed[addr] = _t.time() + 86400  # Древний мамонт: скип на сутки
+                                continue
                         try:
                             ok = await analyzer.analyze_robinhood_token(addr, chain)
                         except Exception as e:

@@ -333,9 +333,27 @@ def _filter_and_rank_gt_items(items: list, min_liq: float = 2000.0) -> list:
                 continue
             attrs = item.get("attributes") or {}
             name = str(attrs.get("name") or "").upper()
-            _stock_tickers = ("SGOV", "SPY", "QQQ", "META", "INTC", "MU", "NVDA", "AAPL", "GOOGL", "MSFT", "GLD", "HXMAX", "STANDARD")
+            _stock_tickers = ("SGOV", "SPY", "QQQ", "META", "INTC", "MU", "NVDA", "AAPL", "GOOGL", "MSFT", "GLD", "HXMAX", "STANDARD", "WETH", "USDC", "USDT", "DAI", "CBBTC", "WBTC", "AERO", "BRETT", "DEGEN", "VIRTUAL")
             if any(name.startswith(st + " ") or name.startswith(st + "/") or name == st or f"/{st}" in name for st in _stock_tickers):
                 continue
+            
+            # 1. Отсекаем древние пулы старше 48 часов прямо в GeckoTerminal
+            pca_str = attrs.get("pool_created_at")
+            if pca_str:
+                try:
+                    from datetime import datetime, timezone
+                    pca_dt = datetime.fromisoformat(pca_str.replace("Z", "+00:00"))
+                    age_sec = (datetime.now(timezone.utc) - pca_dt).total_seconds()
+                    if age_sec > 172800.0:  # старше 48 часов
+                        continue
+                except Exception:
+                    pass
+
+            # 2. Отсекаем мамонтов с FDV > $5M
+            fdv_usd = float(attrs.get("fdv_usd") or 0)
+            if fdv_usd > 5000000.0:
+                continue
+
             liq = float(attrs.get("reserve_in_usd") or 0)
             if liq > 0 and liq < min_liq:
                 continue
@@ -348,6 +366,8 @@ def _filter_and_rank_gt_items(items: list, min_liq: float = 2000.0) -> list:
             s5 = int(m5_tx.get("sells") or 0)
             b1 = int(h1_tx.get("buys") or 0)
             s1 = int(h1_tx.get("sells") or 0)
+            if (b5 + s5) == 0 and (b1 + s1) == 0:
+                continue
             if (b5 + s5) == 0 and (b1 + s1) < 3 and liq < 5000:
                 continue
             pc = attrs.get("price_change_percentage") or {}

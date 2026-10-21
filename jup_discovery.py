@@ -18,7 +18,11 @@ BASE = "https://api.jup.ag/tokens/v2"
 _cache = []
 _cache_time = 0.0
 CACHE_TTL = 30
-SKIP_SYMBOLS = {"SOL", "WSOL", "USDC", "USDT", "USDG", "EURC", "CBBTC", "WBTC", "WETH", "JLP", "PYTH", "JUP", "NEAR"}
+SKIP_SYMBOLS = {
+    "SOL", "WSOL", "USDC", "USDT", "USDG", "EURC", "CBBTC", "WBTC", "WETH", "JLP", "PYTH", "JUP", "NEAR",
+    "ZEC", "WNEAR", "CARDS", "PUMP", "HYPE", "ZEREBRO", "TTWO", "SPCX", "SPYX", "TSLAX", "NVDAX", "GROKIUS",
+    "OREO", "RENDER", "BONK", "WIF", "POPCAT", "MEW", "BOME", "DRIFT", "RAY", "ORCA", "JTO", "KMNO"
+}
 
 
 def _headers():
@@ -69,15 +73,19 @@ async def fetch_jup_tokens() -> list:
             seen.add(m)
             ranked.append((0.0, 0.0, sym, m, "recent"))
             
-    # 3. Топ по объему за 1 час
+    # 3. Топ по объему за 1 час (только с положительным 5м импульсом!)
     if s3 == 200 and isinstance(d3, list):
         for t in d3:
             m = t.get("id", "")
             sym = str(t.get("symbol") or "").upper().strip()
             if not m or m in seen or sym in SKIP_SYMBOLS:
                 continue
+            st = t.get("stats5m") or {}
+            pc = float(st.get("priceChange") or 0.0)
+            if pc < 1.0:
+                continue
             seen.add(m)
-            ranked.append((-1.0, 0.0, sym, m, "volume"))
+            ranked.append((pc, 0.0, sym, m, "volume"))
             
     if not ranked:
         # Fallback для датацентров (Render), если Jupiter API вернул 401/403/пусто без ключа:

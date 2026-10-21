@@ -203,8 +203,16 @@ def _verdict_sol(info: dict):
     for k in ("is_honeypot", "honeypot"):
         if str(info.get(k, "0")) == "1":
             return False, "honeypot"
-    if str(info.get("default_account_state", "0")) in ("1", "frozen"):
-        return False, "default_account_frozen (Token-2022 счета покупателей заморожены)"
+    # В Solana Token-2022: 0 = Uninitialized, 1 = Initialized (нормальный рабочий токен!), 2 = Frozen (заморожен).
+    # Ошибка 'in ("1", "frozen")' блокировала 100% живых токенов Solana!
+    if str(info.get("default_account_state", "0")) in ("2", "frozen"):
+        return False, "default_account_frozen (Token-2022 счета покупателей заморожены по умолчанию)"
+    dasu = info.get("default_account_state_upgradable")
+    if isinstance(dasu, dict):
+        if str(dasu.get("status", "0")) == "1" or len(dasu.get("authority", []) or []) > 0:
+            return False, "default_account_state_upgradable (дев может заморозить счета)"
+    elif str(dasu) in ("1", "true"):
+        return False, "default_account_state_upgradable"
     if str(info.get("non_transferable", "0")) in ("1", "true"):
         return False, "non_transferable (Token-2022 запрет передачи)"
     th = info.get("transfer_hook")
@@ -231,7 +239,11 @@ def _verdict_sol(info: dict):
     closable = info.get("closable")
     if isinstance(closable, dict) and str(closable.get("status", "0")) == "1":
         return False, "closable (дев может закрыть токен-аккаунт)"
-    if str(info.get("balance_mutable_authority", "0")) in ("1", "true"):
+    bma = info.get("balance_mutable_authority")
+    if isinstance(bma, dict):
+        if str(bma.get("status", "0")) == "1" or len(bma.get("authority", []) or []) > 0:
+            return False, "balance_mutable (дев может изменить баланс)"
+    elif str(bma) in ("1", "true"):
         return False, "balance_mutable (дев может изменить баланс)"
 
     # 5. Налоги и скрытые комиссии transfer_fee

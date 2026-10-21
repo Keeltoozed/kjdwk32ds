@@ -832,10 +832,10 @@ class Analyzer:
                 _pc_pre = pair_data.get("priceChange") or {}
                 _h1_pre = float(_pc_pre.get("h1", 0) or 0)
                 _h6_pre = float(_pc_pre.get("h6", 0) or 0)
-                if 0 < _fdv_pre < 46000:
-                    print(f"🚫 [POST-MIGRATION-DUMP] {mint[:8]}: AMM FDV ${_fdv_pre:,.0f} < $46k (ниже цены миграции Pump.fun) — слитый токен.")
+                if 0 < _fdv_pre < 15000:
+                    print(f"🚫 [POST-MIGRATION-DUMP] {mint[:8]}: AMM FDV ${_fdv_pre:,.0f} < $15k — слитый токен.")
                     return False
-                if _h1_pre < -15.0 or _h6_pre < -35.0:
+                if (_fdv_pre < 35000 and _h1_pre < -5.0) or (_h1_pre < -15.0 or _h6_pre < -35.0):
                     print(f"🚫 [POST-MIGRATION-DUMP] {mint[:8]}: часовой/6ч тренд в глубоком сливе (h1 {_h1_pre:+.1f}%, h6 {_h6_pre:+.1f}%) — отскок дохлой кошки.")
                     return False
         if not is_vip and pair_data:
@@ -894,7 +894,7 @@ class Analyzer:
                 print(f"🚫 [ENTRY] {mint}: vol24h ${_v24:,.0f} < ${_v24_min:,.0f} — совсем нет объёма.")
                 return False
 
-            _tx_min = 8 if (_m5 >= 20.0 or _lottery or is_vip) else (10 if _age_min_pre < 60 else 15)
+            _tx_min = 6 if (_m5 >= 15.0 or _lottery or is_vip or _age_min_pre < 30) else (10 if _age_min_pre < 60 else 15)
             if (_b5 + _s5) < _tx_min:
                 print(f"🚫 [VELOCITY] {mint}: txns m5 {_b5 + _s5} < {_tx_min} — слишком медленно, нет органического FOMO.")
                 return False
@@ -933,7 +933,7 @@ class Analyzer:
             _min_liq = 2000  # Для закрытого Pump.fun кёрва $2k ликвы достаточно для ордера $15
         else:
             liquidity = raw_liq
-            _min_liq = 12000 if _age_min_pre < 30 else getattr(config, "MIN_LIQUIDITY", 20000)
+            _min_liq = 8000 if (_age_min_pre < 30 or _m5 >= 15.0 or _lottery or is_vip) else getattr(config, "MIN_LIQUIDITY", 15000)
 
         if liquidity < _min_liq:
             print(f"📉 Изоляция: {symbol} имеет микро-пул (${liquidity:.0f} < ${_min_liq//1000}k). Риск 100% проскальзывания.")
@@ -1066,12 +1066,12 @@ class Analyzer:
                 top_10 = non_curve_accounts[:10]
                 
                 # Защита от Jito-бандлов (Сивил-атака дева):
-                bundle_suspects = [round(pct, 1) for (amt, pct, owner) in top_10 if pct >= 1.5]
-                if len(bundle_suspects) >= 3:
+                bundle_suspects = [round(pct, 1) for (amt, pct, owner) in top_10 if pct >= 2.5]
+                if len(bundle_suspects) >= 4:
                     from collections import Counter
                     counts = Counter(bundle_suspects)
                     most_common_pct, count = counts.most_common(1)[0]
-                    if count >= 3 and (most_common_pct * count) >= 6.0:
+                    if count >= 4 and most_common_pct >= 2.5 and (most_common_pct * count) >= 12.0:
                         print(f"🚫 [АНТИСКАМ] Обнаружен Jito-бандл (Сивил атака: {count} кошельков по ~{most_common_pct:.1f}%) у {mint}. Блокируем.")
                         return False
                 
@@ -2015,10 +2015,10 @@ class Analyzer:
         _fdv_check = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
         # Защита от пост-миграционных трупов (Gemma -$4.12, sBTC -$0.49):
         # Pump.fun мигрирует при ~$42k-$69k MC. Если токен на AMM уже упал ниже $46k или имеет красный часовой/6ч тренд — это слитый токен!
-        if 0 < _fdv_check < 46000:
-            print(f"🚫 [RAYDIUM] {mint[:8]}: FDV ${_fdv_check:,.0f} < $46,000 (ниже цены миграции Pump.fun) — слитый после миграции токен.")
+        if 0 < _fdv_check < 15000:
+            print(f"🚫 [RAYDIUM] {mint[:8]}: FDV ${_fdv_check:,.0f} < $15,000 — слитый после миграции токен.")
             return False
-        if _h1 < -15.0 or _h6 < -35.0:
+        if (_fdv_check < 35000 and _h1 < -5.0) or (_h1 < -15.0 or _h6 < -35.0):
             print(f"🚫 [RAYDIUM] {mint[:8]}: часовой/6ч тренд в глубоком сливе (h1 {_h1:+.1f}%, h6 {_h6:+.1f}%) — отскок дохлой кошки.")
             return False
         if _m1 < -3.5:
