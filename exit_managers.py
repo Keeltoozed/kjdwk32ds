@@ -4,7 +4,13 @@ import config
 
 
 class MatureExitManager:
-    """Exit-логика для зрелых монет (swing). Возвращает причину выхода или None."""
+    """Exit-логика для зрелых монет (swing). Возвращает причину выхода или None.
+
+    RIDE-режим (RIDE_RUNNERS_ENABLED, по умолчанию True): для позиций с меткой "RUNNER-" в source
+    (маленькие билеты CURVE-RUNNER) пол прибыли и трейлинг расширены. Обычные пороги ($6 сканер) душили
+    любую ракету: пол +24% при пике +35%, +80% при +100%, +165% при +200% = просадка от пика всего 8-12%,
+    а у мем-ракет откаты 20-40% посреди пути — бот выходил с +50..100% вместо x5-x20.
+    Остальные позиции работают по-старому."""
 
     @staticmethod
     def evaluate_exit(position, current_price):
@@ -31,6 +37,10 @@ class MatureExitManager:
         except Exception:
             minutes_held = 0
 
+        # RIDE-режим только для билетов-ракет
+        _src = str(getattr(position, 'source', '') or '')
+        _ride = bool(getattr(config, 'RIDE_RUNNERS_ENABLED', True)) and ('RUNNER-' in _src)
+
         # Аварийный кэп ПЕРВЫМ: гэпы типа FIBONACCI -68% проскакивают обычный стоп
         if pnl_pct <= -0.30:
             return f"Mature Emergency Cap ({pnl_pct*100:.0f}%)"
@@ -48,7 +58,19 @@ class MatureExitManager:
         # фиксация пола включается только от +35% (после TP1 30%) с запасом ~20% на рабочую коррекцию.
         max_pnl_pct = (position.max_price_usd - position.entry_price_usd) / position.entry_price_usd if position.entry_price_usd else 0
         _floor_pnl = None
-        if max_pnl_pct >= 5.00:       # Гипер-ракета (+500%+): держим 78% прибыли
+        if _ride:
+            # RIDE: пол = доля от пика, допускает откат 25-50% от макушки (ракеты шатает)
+            if max_pnl_pct >= 5.00:       # +500%+: держим 65% прибыли
+                _floor_pnl = round(max_pnl_pct * 0.65, 2)
+            elif max_pnl_pct >= 3.00:     # +300%..+500%: 60%
+                _floor_pnl = round(max_pnl_pct * 0.60, 2)
+            elif max_pnl_pct >= 1.50:     # +150%..+300%: 50%
+                _floor_pnl = round(max_pnl_pct * 0.50, 2)
+            elif max_pnl_pct >= 1.00:     # +100%..+150%: 40% (пик +100% -> пол +40%)
+                _floor_pnl = round(max_pnl_pct * 0.40, 2)
+            elif max_pnl_pct >= 0.60:     # +60%..+100%: 20% (пик +60% -> пол +12%)
+                _floor_pnl = round(max_pnl_pct * 0.20, 2)
+        elif max_pnl_pct >= 5.00:       # Гипер-ракета (+500%+): держим 78% прибыли
             _floor_pnl = round(max_pnl_pct * 0.78, 2)
         elif max_pnl_pct >= 3.00:     # Мега-ракета (+300%..+500%): держим 75% прибыли
             _floor_pnl = max(2.40, round(max_pnl_pct * 0.75, 2))
@@ -83,7 +105,14 @@ class MatureExitManager:
 
         # 2. СУЖАЮЩИЙСЯ ПАРАБОЛИЧЕСКИЙ ТРЕЙЛИНГ-СТОП (Чем выше пик, тем плотнее зажимаем профит у вершины!)
         if hasattr(config, 'TRAILING_ACTIVATION_PCT'):
-            if max_pnl_pct >= getattr(config, 'TRAILING_ACTIVATION_PCT', 0.40):
+            if _ride:
+                # RIDE: трейлинг с +60%, дистанция 28% (до +300%) и 22% выше — выдерживает рабочие откаты ракеты
+                if max_pnl_pct >= 0.60:
+                    _trail_dist = 0.22 if max_pnl_pct >= 3.00 else 0.28
+                    drop_from_max = (position.max_price_usd - current_price) / position.max_price_usd
+                    if drop_from_max >= _trail_dist:
+                        return f"Mature Trailing RIDE (+{max_pnl_pct*100:.0f}% peak, drop {drop_from_max*100:.0f}%)"
+            elif max_pnl_pct >= getattr(config, 'TRAILING_ACTIVATION_PCT', 0.40):
                 if max_pnl_pct >= 2.50:
                     _trail_dist = 0.08  # На гипер-пиках (+250%+) режем откат уже на 8% от макушки!
                 elif max_pnl_pct >= 1.50:
@@ -120,7 +149,7 @@ class MatureExitManager:
                 return f"Mature Inactive Pool TP (+{pnl_pct*100:.1f}%, {minutes_held:.0f}m)"
             elif pnl_pct < -0.05:
                 return f"Mature Inactive Pool Cut ({pnl_pct*100:.1f}%, {minutes_held:.0f}m)"
-                    
+
         # Scalp Trailing (для мелких профитов) - ВЫКЛЮЧЕН: не режем ракеты на первом 5% откате при пике +10%
         if getattr(config, 'SCALP_PROFIT_ENABLED', False) and hasattr(config, 'TRAILING_ACTIVATION_PCT'):
             max_pnl_pct = (position.max_price_usd - position.entry_price_usd) / position.entry_price_usd
@@ -157,7 +186,7 @@ class MatureExitManager:
             return f"Stagnant Loss Cut ({minutes_held:.0f}m, {pnl_pct*100:.1f}%)"
         if minutes_held >= _hold_min and pnl_pct < 0.05 and _maxp < 0.15:
             return f"Stagnant Cut ({minutes_held:.0f}m)"
-            
+
         # Old fallback
         if hasattr(config, 'TIME_EXIT_MINUTES') and hasattr(config, 'TIME_EXIT_PROFIT_REQ'):
             if minutes_held >= config.TIME_EXIT_MINUTES and pnl_pct < config.TIME_EXIT_PROFIT_REQ:
