@@ -1141,14 +1141,20 @@ class Analyzer:
 
                 # Проверка критических рисков RugCheck (незаблокированный LP, мёртвая ликвидность, 1 кит с контрольным пакетом)
                 _rc_score = float(rc_data.get("score") or 0.0)
-                if _rc_score >= 1000:
-                    return self._rej(mint, f"🚫 [АНТИСКАМ] RugCheck Score {_rc_score:.0f} >= 1000 (высокий риск скама/рага) у {mint[:8]} → СКАМ")
+                _rc_risks = rc_data.get("risks") or []
+                # Вычитаем синтетический штраф за 'Low Liquidity' (RugCheck дает 1500-2800 очков на любой ранний мем-пул < $50k)
+                _low_liq_penalty = sum(float(rk.get("score") or 0.0) for rk in _rc_risks if str(rk.get("name") or "").lower() == "low liquidity")
+                _eff_rc_score = max(0.0, _rc_score - _low_liq_penalty)
+                if _eff_rc_score >= 1000:
+                    return self._rej(mint, f"🚫 [АНТИСКАМ] RugCheck Score {_eff_rc_score:.0f} >= 1000 (высокий риск скама/рага) у {mint[:8]} → СКАМ")
 
-                for rk in (rc_data.get("risks") or []):
+                for rk in _rc_risks:
                     _rk_name = str(rk.get("name") or "").lower()
                     _rk_lvl = str(rk.get("level") or "").lower()
-                    if _rk_lvl == "danger":
-                        return self._rej(mint, f"🚫 [АНТИСКАМ] Критический риск RugCheck [danger]: '{rk.get('name')}' ({rk.get('description')}) у {mint[:8]} → СКАМ")
+                    if _rk_name == "low liquidity":
+                        continue
+                    if _rk_lvl in ("danger", "critical"):
+                        return self._rej(mint, f"🚫 [АНТИСКАМ] Критический риск RugCheck [{_rk_lvl}]: '{rk.get('name')}' ({rk.get('description')}) у {mint[:8]} → СКАМ")
                     if "unlocked" in _rk_name and "lp" in _rk_name:
                         return self._rej(mint, f"🚫 [АНТИСКАМ] Незаблокированный LP пула '{rk.get('name')}' у {mint[:8]} → СКАМ")
 

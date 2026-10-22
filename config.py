@@ -89,7 +89,7 @@ RUNNER_MIN_VOL5 = 3000.0      # Мин. объем m5 для раннера ($3k
 CURVE_RUNNER_SIZE_USD = 4.0   # Размер билета на бондинг-кривой pump.fun
 RIDE_RUNNERS_ENABLED = True   # Расширенный трейлинг для ракет (RUNNER-)
 
-VIP_ENTRIES_ENABLED = False  # ВЫКЛЮЧЕНО: VIP-входы без отката покупали вершины скамов (Hodlon -$15, MOGGERSHA -$15)
+VIP_ENTRIES_ENABLED = True   # ВКЛЮЧЕНО: VIP-полоса для супер-моментума (HUMANOID +141%, JEETJAK +60%), защищена ончейн-аудитом и 1м-фильтром отката
 TIME_EXIT_MINUTES = 60  # Если за 30 минут нет пампа - выходим
 TIME_EXIT_PROFIT_REQ = 0.0
 

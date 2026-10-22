@@ -526,10 +526,25 @@ async def check_solana(mint: str):
                 rc_status, rc_data = await fetch_json(rc_url, timeout=4, retries=1)
                 if rc_status == 200 and isinstance(rc_data, dict):
                     rc_score = rc_data.get("score", 0) or 0
-                    # Только катастрофический скам (кейсы Hodlon 2877, MOGGERSHA 2535):
-                    # Мелкие предупреждения (mutable metadata, top holders) дают 50-300 и НЕ блокируют нормальные ракеты!
-                    if rc_score >= 1000:
-                        verdict = (False, f"rugcheck-score {rc_score} >= 1000 (высокий риск скама/слива)")
+                    risks = rc_data.get("risks") or []
+                    # Вычитаем синтетический штраф за 'Low Liquidity' (RugCheck начисляет 1500-2800 очков на любой ранний мем-пул < $50k)
+                    low_liq_score = sum(int(rk.get("score", 0) or 0) for rk in risks if str(rk.get("name", "")).lower() == "low liquidity")
+                    eff_score = max(0, rc_score - low_liq_score)
+
+                    hard_risk = None
+                    for rk in risks:
+                        _rk_name = str(rk.get("name") or "").lower()
+                        _rk_lvl = str(rk.get("level") or "").lower()
+                        if _rk_name == "low liquidity":
+                            continue
+                        if _rk_lvl in ("danger", "critical"):
+                            hard_risk = rk.get("name")
+                            break
+
+                    if hard_risk:
+                        verdict = (False, f"rugcheck: критический риск {hard_risk}")
+                    elif eff_score >= 1000:
+                        verdict = (False, f"rugcheck-score {eff_score} >= 1000 (высокий риск скама/слива)")
                     elif rc_data.get("freezeAuthority"):
                         verdict = (False, "rugcheck: freeze authority не отозвана")
                     elif rc_data.get("mintAuthority"):
