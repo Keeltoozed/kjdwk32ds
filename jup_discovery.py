@@ -248,6 +248,9 @@ async def jup_loop(analyzer, tracker):
                                     size *= analyzer.conviction_size_mult(td or {})
                             if "VIP-" in _sig:
                                 size = min(size, float(getattr(config, "TG_VIP_SIZE_USD", 5.0) or 5.0))
+                            _sol_cap = float(getattr(config, "SOL_MAX_SIZE_USD", 15.0) or 0.0)
+                            if _sol_cap > 0 and size > _sol_cap:
+                                size = _sol_cap
                             _base_tok = (td or {}).get("baseToken", {}) or {}
                             _sym = str(_base_tok.get("symbol") or mint[:6]).strip().upper()
                             tracker.add_position(
