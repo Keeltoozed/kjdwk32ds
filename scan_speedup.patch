@@ -1,0 +1,293 @@
+diff --git a/analyzer.py b/analyzer.py
+index 3147570..6a6d4c9 100644
+--- a/analyzer.py
++++ b/analyzer.py
+@@ -5,6 +5,7 @@ import config
+ from sentiment import analyze_sentiment
+ from ta_tools import TATools
+ import math
++import contextvars
+ 
+ try:
+     import numpy as np
+@@ -34,7 +35,33 @@ except Exception as e:
+     print(f'AI Filter ошибка: {e}')
+ 
+ 
++def _ctx_attr(name, default=0.0):
++    """Task-local атрибут анализатора (по экземпляру).
++    analyze_token пишет last_score/_last_top10/_last_dev, а потом их читают дальше по коду
++    (xgboost/raydium-ветки, main.py). При параллельном разборе токенов (scan_pipeline) общий
++    атрибут перезаписывался бы соседними задачами -> скор/признаки одного токена уходили бы
++    в позицию другого. ContextVar даёт каждой asyncio-задаче свою копию."""
++    key = "_cv_" + name
++
++    def _get(self):
++        cv = self.__dict__.get(key)
++        return default if cv is None else cv.get()
++
++    def _set(self, value):
++        cv = self.__dict__.get(key)
++        if cv is None:
++            cv = contextvars.ContextVar(f"{name}_{id(self)}", default=default)
++            self.__dict__[key] = cv
++        cv.set(value)
++
++    return property(_get, _set)
++
++
+ class Analyzer:
++    last_score = _ctx_attr("last_score", 0.0)    # Скор последнего решения (для радара)
++    _last_top10 = _ctx_attr("_last_top10", 0.0)  # топ-10 холдеров % (последний разбор в этой задаче)
++    _last_dev = _ctx_attr("_last_dev", 0.0)      # доля дева % (последний разбор в этой задаче)
++
+     def __init__(self):
+         self._clone_cache = {}
+         self._clone_cache_time = {}
+diff --git a/http_client.py b/http_client.py
+index 5dece7c..3202f73 100644
+--- a/http_client.py
++++ b/http_client.py
+@@ -73,6 +73,11 @@ _last_call: dict = {}
+ _sems: dict = {}
+ _gap_locks: dict = {}
+ 
++# Диагностика узких мест: если запрос ждал слота хоста (семафор + троттлинг) дольше порога —
++# пишем в лог (не чаще раза в минуту на хост). Видно, какой API реально тормозит сканер.
++QUEUE_WARN_SEC = 15.0
++_queue_warn_at: dict = {}
++
+ 
+ def _host_of(url: str) -> str:
+     try:
+@@ -257,10 +262,16 @@ async def fetch_json(url: str, params=None, headers=None, timeout: int = 12,
+     sem = _sem_for(host)
+     last_status, last_err = 0, "?"
+     for attempt in range(retries + 1):
++        _t_q = time.monotonic()
+         async with sem:
+             wait = await _reserve_slot(url)
+             if wait > 0:
+                 await asyncio.sleep(wait)
++            _queued = time.monotonic() - _t_q
++            if _queued >= QUEUE_WARN_SEC and time.monotonic() - _queue_warn_at.get(host, -1e9) >= 60.0:
++                _queue_warn_at[host] = time.monotonic()
++                print(f"🐢 [HTTP-QUEUE] {host}: запрос ждал слота {_queued:.0f}с "
++                      f"(лимит {_limit_for(host):.0f}/мин, параллель {HOST_SEMAPHORES.get(host, DEFAULT_SEM)}) — узкое место сканера.")
+             try:
+                 # Если задан прокси — пробуем на 1-й попытке. При ошибке автоматически идём напрямую (fail-open)
+                 cur_proxy = _OPTIONAL_PROXY if (attempt == 0 and _OPTIONAL_PROXY) else None
+diff --git a/main.py b/main.py
+index 6f66af4..9925bbd 100644
+--- a/main.py
++++ b/main.py
+@@ -405,6 +405,7 @@ async def position_manager_loop(analyzer, tracker):
+         # 1.0 сек: максимальная скорость трекинга открытых позиций (без лагов на стопах и пиках).
+         await asyncio.sleep(1.0)
+ from birth_tracker import BirthTracker, birth_tracker
++from scan_pipeline import ScanWindow, MISSING as _SCAN_MISSING, apply_result as _scan_apply
+ 
+ async def birth_wss_loop(analyzer, tracker):
+     import websockets
+@@ -434,7 +435,14 @@ async def scanner_loop(analyzer, tracker):
+     print("🚀 Запуск PhantBot Scanner (Поиск новых монет)...")
+     processed_mints = {}
+     _grad_none = {}  # mint -> число None от DS (скам/нестандарт: после 3 — хороним, не жрём циклы)
++    _latest_cache = (0.0, [])   # (ts, tokens): кэш fetch_latest_tokens (5 запросов DS за вызов)
++    _last_idle_log = 0.0        # анти-спам лога "вход закрыт"
+     while True:
++        _scan_win = None        # окно параллельного разбора (закрывается в finally)
++        _entered = False        # был ли вход в этом цикле (для паузы после входа)
++        _cycle_t0 = time.time()
++        _n_analyzed = 0
++        _launch_n = 0
+         try:
+             open_count = len(tracker.get_open_positions())
+             # Дневной kill-switch: ВЫКЛЮЧЕН (KILL_SWITCH_ENABLED=False) - блок ниже не срабатывает
+@@ -466,8 +474,13 @@ async def scanner_loop(analyzer, tracker):
+                 except Exception as _e:
+                     pass
+ 
+-                # 2. DexScreener бусты и профили
+-                tokens = await analyzer.fetch_latest_tokens()
++                # 2. DexScreener бусты и профили (кэш: при коротком цикле не долбим 5 эндпоинтов каждые 8с)
++                _lt_ttl = float(getattr(config, "SCAN_LATEST_TTL_SEC", 20))
++                if _latest_cache[0] and time.time() - _latest_cache[0] < _lt_ttl:
++                    tokens = _latest_cache[1]
++                else:
++                    tokens = await analyzer.fetch_latest_tokens()
++                    _latest_cache = (time.time(), tokens)
+                 if tokens:
+                     mints_to_scan.extend([p.get("tokenAddress") for p in tokens if p.get("tokenAddress")])
+ 
+@@ -548,6 +561,26 @@ async def scanner_loop(analyzer, tracker):
+                 _ranked_mints.sort(key=lambda x: x[0], reverse=True)
+                 mints_to_scan = [m for _, m in _ranked_mints]
+ 
++                # ⚡ Параллельный разбор: кого реально будем разбирать (те же условия пропуска, что в цикле
++                # ниже, но без побочных эффектов), и запуск окна из SCAN_CONCURRENCY одновременных задач.
++                # Результаты забираются в порядке ранга; сетевые лимиты держит http_client.
++                _launch = []
++                _now_l = time.time()
++                for _m in mints_to_scan:
++                    if not _m or _m in tracker.positions:
++                        continue
++                    _pl_l = tracker.last_loss_pct(_m)
++                    if _pl_l is not None and _pl_l <= getattr(config, "RUG_REBUY_MAX_LOSS", -0.15):
++                        continue
++                    _cd_l = 60 if _m in _graduated_set else int(getattr(config, "SOLANA_RESCAN_COOLDOWN", 180))
++                    if _now_l - processed_mints.get(_m, 0.0) < _cd_l:
++                        continue
++                    _launch.append(_m)
++                _launch_n = len(_launch)
++                _scan_conc = int(getattr(config, "SCAN_CONCURRENCY", 4))
++                if _launch and _scan_conc > 1:
++                    _scan_win = ScanWindow(analyzer, _launch, _scan_conc)
++
+                 for mint in mints_to_scan:
+                     if not mint or mint in tracker.positions:
+                         continue
+@@ -566,8 +599,15 @@ async def scanner_loop(analyzer, tracker):
+                         processed_mints.clear()
+         
+                     try:
+-                        # Используем умный маршрутизатор (сам выберет XGBoost или Raydium модель)
+-                        is_good = await analyzer.analyze_token(mint)
++                        # Используем умный маршрутизатор (сам выберет XGBoost или Raydium модель).
++                        # Если токен в окне параллельного разбора — берём готовый/ждём его результат
++                        # (скор и холдер-метрики восстанавливаются в этом контексте), иначе — как раньше.
++                        _res = await _scan_win.get(mint) if _scan_win is not None else _SCAN_MISSING
++                        if _res is _SCAN_MISSING:
++                            is_good = await analyzer.analyze_token(mint)
++                        else:
++                            is_good = _scan_apply(analyzer, _res)
++                        _n_analyzed += 1
+                         if is_good is not None and mint in _graduated_set:
+                             # Метрика time_to_index: миграция → первый успешный разбор DS
+                             try:
+@@ -715,6 +755,7 @@ async def scanner_loop(analyzer, tracker):
+                                                      ml_confidence=float(getattr(analyzer, "last_score", 0.0)),
+                                                      source=f"SCANNER:{analyzer.get_signal(mint)}",
+                                                      pair_address=pair_data.get("pairAddress", ""))
++                                _entered = True
+                                 break # Ждем следующего цикла после покупки
+                             else:
+                                 print(f"⚠️ Ошибка: Не удалось получить цену для {mint} (entry_price=0). Возможно, Rate Limit (429).")
+@@ -723,9 +764,25 @@ async def scanner_loop(analyzer, tracker):
+                         await asyncio.sleep(0.05)
+                     except Exception as e:
+                         print(f"⚠️ Ошибка анализа {mint[:8]}: {type(e).__name__}: {e}. Сканирую дальше.")
++            else:
++                # Диагностика "тишины": сканер вообще не работает, пока вход закрыт (раньше — молча).
++                _now_i = time.time()
++                if _now_i - _last_idle_log >= 60:
++                    _last_idle_log = _now_i
++                    print(f"⏸ [SCANNER] вход закрыт: открыто {open_count}/{config.MAX_CONCURRENT_POSITIONS}, "
++                          f"trading_allowed={tracker.is_trading_allowed()} (лимит позиций / кэш / streak-пауза) — "
++                          f"сканирование приостановлено до освобождения слота.")
+         except Exception as e:
+             print(f"Ошибка в цикле сканера: {e}")
+-        await asyncio.sleep(30)
++        finally:
++            if _scan_win is not None:
++                await _scan_win.close()  # отменяем недоработанное (после входа/ошибки)
++        if _n_analyzed:
++            print(f"⏱ [SCANNER] цикл {time.time() - _cycle_t0:.1f}с: в очереди {_launch_n}, разобрано {_n_analyzed}"
++                  f"{', ВХОД' if _entered else ''} (параллель x{int(getattr(config, 'SCAN_CONCURRENCY', 4))}).")
++        # Было: всегда 30с. Теперь короче: окно "откат после импульса" у мемкоинов — минуты.
++        await asyncio.sleep(float(getattr(config, "SCAN_AFTER_ENTRY_SLEEP_SEC", 15) if _entered
++                                  else getattr(config, "SCAN_LOOP_SLEEP_SEC", 8)))
+ 
+ from copytrader import CopyTrader
+ import os
+diff --git a/scan_pipeline.py b/scan_pipeline.py
+new file mode 100644
+index 0000000..680530e
+--- /dev/null
++++ b/scan_pipeline.py
+@@ -0,0 +1,85 @@
++"""Параллельный разбор кандидатов сканера (ускорение scanner_loop).
++
++Было: scanner_loop разбирал токены СТРОГО по одному (await analyze_token в for),
++а каждый токен, прошедший дешёвые фильтры, ждёт RugCheck + Helius + GoPlus +
++GeckoTerminal-свечи подряд. Пока ждём сеть одного токена, остальные простаивали.
++
++Стало: до `concurrency` токенов анализируются одновременно. Лимиты API не нарушаются:
++все запросы идут через http_client.fetch_json, где уже стоят per-host семафоры и
++троттлинг (DS=3, GT=1, RugCheck=2, GoPlus=1...). Параллель только перекрывает
++ожидание РАЗНЫХ хостов; потолок пропускной способности задают самые узкие лимиты
++(RugCheck ~30/мин, GeckoTerminal ~25/мин), а не число воркеров.
++
++Порядок: результаты забираются В ПОРЯДКЕ РАНГА (миграции/импульс первыми).
++Опережение ограничено окном = concurrency: пока потребитель занят входом в сделку,
++воркеры не уходят далеко вперёд и не жгут лимиты на токены, которые будут отменены.
++
++Состояние: analyze_token пишет в атрибуты анализатора (last_score, _last_top10,
++_last_dev). В analyzer.py они сделаны task-local (ContextVar), а _analyze_one
++возвращает их значения кортежем из той же задачи; apply_result() восстанавливает их
++в контексте потребителя.
++"""
++import asyncio
++
++MISSING = object()  # токен не был поставлен в окно -> потребитель разбирает его сам
++
++
++async def _analyze_one(analyzer, mint, sem):
++    async with sem:
++        ok = await analyzer.analyze_token(mint)
++        # Снимок состояния ВНУТРИ задачи (её контекст) — в родителе оно не видно.
++        return (
++            ok,
++            float(getattr(analyzer, "last_score", 0.0) or 0.0),
++            float(getattr(analyzer, "_last_top10", 0.0) or 0.0),
++            float(getattr(analyzer, "_last_dev", 0.0) or 0.0),
++        )
++
++
++class ScanWindow:
++    def __init__(self, analyzer, mints, concurrency=4):
++        self.analyzer = analyzer
++        self.mints = list(dict.fromkeys(m for m in mints if m))
++        self.index = {m: i for i, m in enumerate(self.mints)}
++        self.conc = max(1, int(concurrency))
++        self.sem = asyncio.Semaphore(self.conc)
++        self.tasks = {}
++        self._next = 0
++        self._fill(self.conc)  # сразу стартуем первое окно
++
++    def _fill(self, limit):
++        limit = min(limit, len(self.mints))
++        while self._next < limit:
++            m = self.mints[self._next]
++            self.tasks[m] = asyncio.ensure_future(_analyze_one(self.analyzer, m, self.sem))
++            self._next += 1
++
++    def __len__(self):
++        return len(self.mints)
++
++    async def get(self, mint):
++        """Результат разбора `mint` (кортеж) либо MISSING, если его нет в окне.
++        Перед ожиданием двигает окно, чтобы воркеры были заняты следующими токенами."""
++        i = self.index.get(mint)
++        if i is None:
++            return MISSING
++        self._fill(i + self.conc + 1)
++        return await self.tasks[mint]
++
++    async def close(self):
++        """Отменяет недоработавшие задачи и забирает исключения (без 'never retrieved')."""
++        for t in self.tasks.values():
++            if not t.done():
++                t.cancel()
++        if self.tasks:
++            await asyncio.gather(*self.tasks.values(), return_exceptions=True)
++
++
++def apply_result(analyzer, result):
++    """Восстанавливает в ТЕКУЩЕМ контексте состояние, снятое внутри задачи.
++    Возвращает is_good (True/False/None)."""
++    ok, score, top10, dev = result
++    analyzer.last_score = score
++    analyzer._last_top10 = top10
++    analyzer._last_dev = dev
++    return ok
