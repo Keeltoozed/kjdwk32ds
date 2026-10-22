@@ -713,7 +713,7 @@ async def check_onchain_evm_security(address: str, chain: str, pair_data: dict =
             _pm_frac = (_pm_v / _tot_v) if _tot_v > 0 else 0.0
 
             # Если пул уже опустошён (modifyLiquidity rugpull):
-            if _tot_v > 0 and (_pm_v == 0 or _pm_frac < 0.002):
+            if not _is_clanker_v4 and _tot_v > 0 and (_pm_v == 0 or _pm_frac < 0.002):
                 return False, f"пул Uniswap V4 опустошён девом ({_pm_frac*100:.5f}% в пуле, {_pm_v/1e18:,.1f} токенов — V4 LP Rug)"
 
             # Защита перед входом (not is_open_pos):
@@ -896,6 +896,9 @@ async def verify_evm_token(address: str, chain: str, pair_data: dict = None) -> 
                         return False, f"пул {chain}: Honeypot.is {_h_why}"
                 except Exception:
                     pass
+                # Clanker фабрика (0xb20000000000...) — верифицированный immutable контракт, не блокируется при unindexed GoPlus
+                if address.lower().startswith("0xb20000000000") and (b5 + s5) >= 6 and vol5 >= 1500 and not is_hard_scam(_g_why):
+                    return True, ""
                 if s5 >= 3 and b5 >= int(s5 * 1.1) and not is_hard_scam(_g_why):
                     return True, ""
 

@@ -140,9 +140,11 @@ class Analyzer:
             if not getattr(_c, "ROCKET_VETO_ENABLED", False):
                 return None
             s = (sig or "").upper()
-            if any(k in s for k in ("LOTTERY", "DIPBUY", "COPY")):
+            if any(k in s for k in ("LOTTERY", "DIPBUY", "COPY", "VIP", "RAY-XGB", "PUMP-XGB", "GROWTH", "JUP")):
                 return None
             _ch_veto = str((pair_data or {}).get("chainId", "")).lower()
+            if _ch_veto == "solana":
+                return None
             if _ch_veto in ("robinhood", "base", "bsc", "ethereum"):
                 self._rkt_tag(address, pair_data or {})
                 sc = self.rocket_scores.get(address)
@@ -1591,9 +1593,13 @@ class Analyzer:
         # при подтверждённых продажах (honeypot исключён) и ликвидности >= min_liq ($2.5k)
 # СТАЛО (ИСПРАВЛЕНО):
         _scout_min_liq = 2500.0 if chain in ("bsc", "base") else float(min_liq)
+        _is_clanker_scout = address.lower().startswith("0xb20000000000")
+        _min_s5_req = 0 if _is_clanker_scout else 2
+        _min_s_req = 0 if _is_clanker_scout else 2
+        _bs_cond = (b5 >= int(s5 * 1.15)) if s5 > 0 else True
         if (0.5 <= _age_min < 15.0 and 0.8 <= m5 <= 800.0 and 0.0 <= h1 <= 1500.0
                 and (b5 + s5) >= 8 and liq >= _scout_min_liq
-                and s5 >= 2 and s >= 2 and b5 >= int(s5 * 1.15) and (b5 / max(s5, 1)) <= 7.0):
+                and s5 >= _min_s5_req and s >= _min_s_req and _bs_cond and (b5 / max(s5, 1)) <= 15.0):
             if not self._evm_brand_ok(symbol, tag, pair_data):
                 return False
             if not await self._evm_clone_ok(symbol, address, pair_data, chain, tag):
@@ -1829,12 +1835,14 @@ class Analyzer:
             return self._deny(address, "gone", f"🚫 [{tag}] {symbol}: h1 {h1:+.0f}% > +{_max_h1:.0f}% — параболик уже улетел, вершина.")
         
         # --- СТРОГАЯ ЗАЩИТА ОТ HONEYPOT (Проверка реальных сделок в пуле) ---
-        if s5 == 0:
-            return self._deny(address, "honeypot-zero-sells-5m", f"🚫 [{tag}] {symbol}: 0 продаж за 5м — Honeypot (нельзя продать).")
-        if s <= 1:
-            return self._deny(address, "honeypot-no-sells-h1", f"🚫 [{tag}] {symbol}: всего {s} продаж за 1ч — неподтвержденная продаваемость.")
-        if s5 <= 1 and b5 >= 6:
-            return self._deny(address, "honeypot-1sell-5m", f"🚫 [{tag}] {symbol}: {b5} покупок и всего {s5} продажа за 5м — ловушка Honeypot.")
+        _is_clanker_tok = address.lower().startswith("0xb20000000000")
+        if not _is_clanker_tok:
+            if s5 == 0:
+                return self._deny(address, "honeypot-zero-sells-5m", f"🚫 [{tag}] {symbol}: 0 продаж за 5м — Honeypot (нельзя продать).")
+            if s <= 1:
+                return self._deny(address, "honeypot-no-sells-h1", f"🚫 [{tag}] {symbol}: всего {s} продаж за 1ч — неподтвержденная продаваемость.")
+            if s5 <= 1 and b5 >= 6:
+                return self._deny(address, "honeypot-1sell-5m", f"🚫 [{tag}] {symbol}: {b5} покупок и всего {s5} продажа за 5м — ловушка Honeypot.")
         # Блокируем высокий b/s только когда продаж мало (s5 <= 2 или s <= 5).
         # Если в пуле уже прошло >= 4 продаж за 5м и >= 8 продаж за 1ч (и GoPlus/Honeypot.is подтвердил 0% tax), это живое FOMO (кейс ASI_AI +400%).
         if s5 > 0 and s5 <= 2 and (b5 / s5) > 6.0 and (b5 + s5) >= 15:
