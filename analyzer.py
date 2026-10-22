@@ -908,9 +908,9 @@ class Analyzer:
             return None
         # === SOL-GATES (по реальным сделкам): возраст AMM-пула, запрещённые DEX ===
         _dex_g = str(pair_data.get("dexId", "")).lower()
-        if _dex_g not in ("pump", "pumpfun"):
-            _gate_min = float(getattr(config, "SOL_MIN_AGE_GATE_MIN", 30.0))
-            _blk = tuple(str(x).lower() for x in (getattr(config, "SOL_BLOCK_DEXES", ("meteora",)) or ()))
+        if _dex_g not in ("pump", "pumpfun") and not mint.endswith("pump"):
+            _gate_min = float(getattr(config, "SOL_MIN_AGE_GATE_MIN", 3.0))
+            _blk = tuple(str(x).lower() for x in (getattr(config, "SOL_BLOCK_DEXES", ()) or ()))
             _gmsg = None
             if _dex_g in _blk:
                 _gmsg = f"🚫 [DEX-BLOCK] {mint[:8]}: пул {_dex_g} в чёрном списке (0 побед в истории)."
@@ -960,11 +960,13 @@ class Analyzer:
                 _cur_liq_pre = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0) * 0.40
             _b5_pre = int(_txm5_pre.get("buys", 0) or 0)
             _s5_pre = int(_txm5_pre.get("sells", 0) or 0)
+            _runner_min_liq = float(getattr(config, "RUNNER_MIN_LIQ", 8000.0))
+            _runner_min_vol5 = float(getattr(config, "RUNNER_MIN_VOL5", 3000.0))
             _is_runner = (
-                _cur_liq_pre >= 20000 and 
-                _vm5_pre >= 15000 and 
-                (_b5_pre + _s5_pre) >= 15 and 
-                (_b5_pre >= _s5_pre * 1.05 or _vm5_pre >= 35000)
+                _cur_liq_pre >= _runner_min_liq and 
+                _vm5_pre >= _runner_min_vol5 and 
+                (_b5_pre + _s5_pre) >= 12 and 
+                (_b5_pre >= _s5_pre * 1.05 or _vm5_pre >= 20000)
             )
             # === CURVE-RUNNER: ракеты на бондинг-кривой pump.fun ===
             # На кривой liq = fdv*0.4 (<= ~$13k): порог runner (liq>=20k, vol5>=15k) для неё недостижим,
@@ -972,12 +974,12 @@ class Analyzer:
             # Пускаем маленьким билетом при реальном перевесе покупателей и месте до миграции.
             _curve_runner = False
             if (not _is_runner and getattr(config, "CURVE_RUNNER_ENABLED", True)
-                    and str(pair_data.get("dexId", "")).lower() in ("pump", "pumpfun")):
+                    and (str(pair_data.get("dexId", "")).lower() in ("pump", "pumpfun") or mint.endswith("pump"))):
                 _fdv_cr = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
-                if (float(getattr(config, "CURVE_RUNNER_MIN_FDV", 9000.0)) <= _fdv_cr <= float(getattr(config, "CURVE_RUNNER_MAX_FDV", 26000.0))
-                        and _vm5_pre >= float(getattr(config, "CURVE_RUNNER_MIN_VOL5", 6000.0))
-                        and (_b5_pre + _s5_pre) >= int(getattr(config, "CURVE_RUNNER_MIN_TRADES", 25))
-                        and _s5_pre > 0 and _b5_pre >= _s5_pre * float(getattr(config, "CURVE_RUNNER_MIN_BS", 1.3))):
+                if (float(getattr(config, "CURVE_RUNNER_MIN_FDV", 7000.0)) <= _fdv_cr <= float(getattr(config, "CURVE_RUNNER_MAX_FDV", 35000.0))
+                        and _vm5_pre >= float(getattr(config, "CURVE_RUNNER_MIN_VOL5", 3000.0))
+                        and (_b5_pre + _s5_pre) >= int(getattr(config, "CURVE_RUNNER_MIN_TRADES", 15))
+                        and _s5_pre > 0 and _b5_pre >= _s5_pre * float(getattr(config, "CURVE_RUNNER_MIN_BS", 1.15))):
                     _curve_runner = True
                     _is_runner = True
                     pair_data["_curve_runner"] = True

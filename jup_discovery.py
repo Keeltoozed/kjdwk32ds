@@ -201,11 +201,24 @@ async def jup_loop(analyzer, tracker):
                             continue
                         _liq_j = float(((td or {}).get("liquidity") or {}).get("usd", 0) or 0)
                         _dex_j = str((td or {}).get("dexId", "")).lower()
-                        if _dex_j in ("pump", "pumpfun"):
+                        _is_pump_token = _dex_j in ("pump", "pumpfun") or mint.endswith("pump")
+                        if _is_pump_token:
                             _fdv_j = float((td or {}).get("fdv", 0) or (td or {}).get("marketCap", 0) or 0)
-                            _liq_j = max(_liq_j, _fdv_j * 0.40)
-                        if _liq_j < 8000:
-                            print(f"🚫 [JUP-LOW-LIQ] {_sym_tmp} ({mint[:8]}): ликвидность ${_liq_j:.0f} < $8,000 — микро-пул/риск слива.")
+                            if _fdv_j > 0:
+                                _liq_j = max(_liq_j, _fdv_j * 0.40)
+                        _is_cr = bool((td or {}).get("_curve_runner")) or "RUNNER-" in str(analyzer.get_signal(mint))
+                        _m5_j = float(((td or {}).get("priceChange") or {}).get("m5", 0) or 0)
+                        
+                        # Для pump-токенов/раннеров порог $2.5k (как в analyzer), для сильного моментума $5k, иначе $8k
+                        if _is_cr or _is_pump_token:
+                            _min_req_liq = float(getattr(config, "CURVE_RUNNER_MIN_LIQ", 2500.0))
+                        elif _m5_j >= 15.0:
+                            _min_req_liq = float(getattr(config, "MOMENTUM_MIN_LIQ", 5000.0))
+                        else:
+                            _min_req_liq = float(getattr(config, "JUP_MIN_LIQUIDITY", 8000.0))
+
+                        if _liq_j < _min_req_liq:
+                            print(f"🚫 [JUP-LOW-LIQ] {_sym_tmp} ({mint[:8]}): ликвидность ${_liq_j:.0f} < ${_min_req_liq:.0f} — микро-пул/риск слива.")
                             continue
                         if (_b5_j + _s5_j) < 6:
                             print(f"🚫 [JUP-LOW-TXNS] {_sym_tmp} ({mint[:8]}): всего {_b5_j + _s5_j} сделок в m5 — нет активности.")

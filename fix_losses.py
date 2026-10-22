@@ -48,9 +48,9 @@ def ind(block, pad):
 GATE_BLOCK = '''
 # === SOL-GATES (по реальным сделкам): возраст AMM-пула, запрещённые DEX ===
 _dex_g = str(pair_data.get("dexId", "")).lower()
-if _dex_g not in ("pump", "pumpfun"):
-    _gate_min = float(getattr(config, "SOL_MIN_AGE_GATE_MIN", 30.0))
-    _blk = tuple(str(x).lower() for x in (getattr(config, "SOL_BLOCK_DEXES", ("meteora",)) or ()))
+if _dex_g not in ("pump", "pumpfun") and not mint.endswith("pump"):
+    _gate_min = float(getattr(config, "SOL_MIN_AGE_GATE_MIN", 3.0))
+    _blk = tuple(str(x).lower() for x in (getattr(config, "SOL_BLOCK_DEXES", ()) or ()))
     _gmsg = None
     if _dex_g in _blk:
         _gmsg = f"🚫 [DEX-BLOCK] {mint[:8]}: пул {_dex_g} в чёрном списке (0 побед в истории)."
