@@ -298,7 +298,7 @@ def is_hard_scam(reason: str) -> bool:
                    "external_call", "tax", "creator_pct", "owner_pct", "lp", "рагпулл",
                    "кит", "дамп", "freeze", "freezable", "closable", "balance_mutable", "кабал",
                    "frozen", "non_transferable", "transfer_hook", "default_account", "заморозка",
-                   "pause", "transfer_pausable", "whitelist", "anti_whale", "slippage", "closed_source"):
+                   "pause", "transfer_pausable", "whitelist", "anti_whale", "slippage", "closed_source", "rugcheck"):
         if danger in r:
             return True
     return False
@@ -518,6 +518,24 @@ async def check_solana(mint: str):
                         break
             RAW_SOLANA_INFO[mint] = info
             verdict = _verdict_sol(info)
+
+        # 4. Аудит через RugCheck API (защита от скам-пулов и дампов дева):
+        if verdict[0]:
+            try:
+                rc_url = f"https://api.rugcheck.xyz/v1/tokens/{mint}/report/summary"
+                rc_status, rc_data = await fetch_json(rc_url, timeout=4, retries=1)
+                if rc_status == 200 and isinstance(rc_data, dict):
+                    rc_score = rc_data.get("score", 0) or 0
+                    # Только катастрофический скам (кейсы Hodlon 2877, MOGGERSHA 2535):
+                    # Мелкие предупреждения (mutable metadata, top holders) дают 50-300 и НЕ блокируют нормальные ракеты!
+                    if rc_score >= 1000:
+                        verdict = (False, f"rugcheck-score {rc_score} >= 1000 (высокий риск скама/слива)")
+                    elif rc_data.get("freezeAuthority"):
+                        verdict = (False, "rugcheck: freeze authority не отозвана")
+                    elif rc_data.get("mintAuthority"):
+                        verdict = (False, "rugcheck: mint authority не отозвана")
+            except Exception:
+                pass
     except Exception:
         verdict = (True, "error")
     if ttl > 0:

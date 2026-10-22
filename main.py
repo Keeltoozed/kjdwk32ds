@@ -688,7 +688,7 @@ async def scanner_loop(analyzer, tracker):
                                     position_size = min(position_size, 100.0)
 
                                     # VIP-ШИП = РАЗДАЧА (доказано метками: UNPEG/FIBONACCI/BackCat/Goblin).
-                                    _is_vipsig = analyzer.get_signal(mint).startswith("VIP-")
+                                    _is_vipsig = "VIP-" in analyzer.get_signal(mint)
                                     if _is_vipsig:
                                         _vip_cap = float(getattr(config, "TG_VIP_SIZE_USD", 5.0))
                                         position_size = min(position_size, _vip_cap)
@@ -846,7 +846,7 @@ async def fomo_signal_loop(analyzer, tracker):
                                 size = _fixed_sz if _fixed_sz > 0 else (max(4.0, min(100.0, cap * (config.REINVEST_PERCENT / 100.0))) if cap > 0 else 4.0)
                                 _tg_cap = float(getattr(config, "TG_MAX_SIZE_USD", 5.0) or 5.0)
                                 size = min(size, _tg_cap)
-                                if str(_esig).startswith("VIP-"):
+                                if "VIP-" in str(_esig):
                                     size = min(size, float(getattr(config, "TG_VIP_SIZE_USD", 5.0) or 5.0))
                                 if _ch == "robinhood":
                                     size = min(size, float(getattr(config, "ROB_MAX_SIZE_USD", 15.0) or 15.0))
@@ -890,7 +890,7 @@ async def fomo_signal_loop(analyzer, tracker):
                                 position_size = _fixed_sz if _fixed_sz > 0 else max(4.0, min(100.0, capital * (config.REINVEST_PERCENT / 100.0)))
                                 _tg_cap = float(getattr(config, "TG_MAX_SIZE_USD", 5.0) or 5.0)
                                 position_size = min(position_size, _tg_cap)
-                                if str(_ssig).startswith("VIP-"):
+                                if "VIP-" in str(_ssig):
                                     position_size = min(position_size, float(getattr(config, "TG_VIP_SIZE_USD", 5.0) or 5.0))
                                 _tg_src = f"TG-SIGNAL:{_src_ch}:{_ssig}" if _src_ch else f"TG-SIGNAL:{_ssig}"
                                 tracker.add_position(actual_symbol, mint, entry_price, position_size,

@@ -45,15 +45,15 @@ PAPER_PORTFOLIO_FILE = "portfolio.json"
 PORTFOLIO_SNAPSHOT_MINT = (os.getenv("PORTFOLIO_SNAPSHOT_MINT", "") or "").strip().strip('"').strip("'") or "PORTFOLIO_STATE_V1.4"
 INITIAL_BALANCE_USD = 120.0  # торговый пул ($150 депо - $30 газ)    # Стартовый капитал
 REINVEST_PERCENT = 5.0  # Было 3%: цель $10/день требует сайз. 5% пула на сделку
-VIRTUAL_POSITION_SIZE_USD = 15.0
-TRADE_AMOUNT_USD = 15.0  # Базовый ордер $15
+VIRTUAL_POSITION_SIZE_USD = 6.0
+TRADE_AMOUNT_USD = 6.0  # Безопасный базовый ордер $6 (защита от крупных сливов депозита)
 # === ДИНАМИЧЕСКИЙ СТУПЕНЧАТЫЙ РЕИНВЕСТ И ЗАЩИТА ЛИКВИДНОСТИ ===
 DYNAMIC_REINVEST_ENABLED = True      # Включить ступенчатый реинвест прибыли
-BASE_TRADE_AMOUNT_USD = 15.0         # Базовый размер сделки (минимальный пол $15)
-MAX_POSITION_SIZE_USD = 25.0         # Жесткий потолок на 1 сделку (не более $25 в один мемкоин)
-REINVEST_MIN_POOL_LIQ_USD = 15000.0  # Мин. ликвидность пула для входа > $15 (защита от сдвига цены)
-SCOUT_SIZE_USD = 15.0    # Ордер $15 (полный вход, защита через строгий входной ончейн-анализ)
-LOTTERY_SIZE_USD = 15.0
+BASE_TRADE_AMOUNT_USD = 6.0         # Базовый размер сделки (безопасный пол $6)
+MAX_POSITION_SIZE_USD = 15.0        # Жесткий потолок на 1 сделку (не более $15 в один мемкоин)
+REINVEST_MIN_POOL_LIQ_USD = 15000.0  # Мин. ликвидность пула для входа > $6 (защита от сдвига цены)
+SCOUT_SIZE_USD = 6.0    # Ордер $6
+LOTTERY_SIZE_USD = 4.0
 MAX_CONCURRENT_POSITIONS = 10  # концентрация капитала: максимум 10 ракет  # Режим Снайпера: максимум 5 сделок одновременно
 
 # Risk Management
@@ -79,7 +79,7 @@ STREAM_ENTRY_SIZE_USD = 15.0             # Размер билета на ран
 STREAM_SLIPPAGE = 0.02                   # 2% проскальзывание на входе
 STREAM_MAX_AGE_SEC = 120                 # Очистка из RAM токенов без активности старше 2 минут
 
-VIP_ENTRIES_ENABLED = True  # ВКЛЮЧЕНО: защищено 1м свечным фильтром, анти-клоном и пост-миграционным фильтром
+VIP_ENTRIES_ENABLED = False  # ВЫКЛЮЧЕНО: VIP-входы без отката покупали вершины скамов (Hodlon -$15, MOGGERSHA -$15)
 TIME_EXIT_MINUTES = 60  # Если за 30 минут нет пампа - выходим
 TIME_EXIT_PROFIT_REQ = 0.0
 
