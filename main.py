@@ -9,11 +9,331 @@ from analyzer import Analyzer
 from tracker import PaperTracker
 from fomo_scanner import fomo_loop
 
+
+# ======================================================================
+# ⚡ ANTI-LAG PATCH: быстрый ценовой фид, фоновые проверки, неблокирующее сохранение
+# ----------------------------------------------------------------------
+# Что чинит (почему бот "опаздывал" и Au слили с +369% до +131%):
+#  1. ws_fresh брал за "WSS-цену" значение, которое цикл сам записал секунду назад ->
+#     реальная цена из API подхватывалась раз в ~8-9 сек.
+#  2. Внутри цикла стояли await на GoPlus/ликвидность/fetch_token_data: пока они ждали,
+#     ВСЕ позиции оставались без проверки выходов.
+#  3. Ретраи DexScreener при 429 спали 8+12+16 сек прямо в цикле позиций.
+#  4. save_portfolio() делал синхронный запрос в Supabase (раз в секунду + на каждый
+#     WS-тик sniper) и вешал весь event loop.
+#  5. Фоллбэк-цена шла через кэш get_token_data на 90 сек.
+# ======================================================================
+import aiohttp as _aiohttp
+
+_FAST_SESSION = None
+_FAST_BACKOFF_UNTIL = 0.0
+_SLOW_PX = {}            # mint -> (ts, price): цены слепых минтов, обновляются в фоне
+_SLOW_LAST_TRY = {}      # mint -> ts последней попытки фонового добора
+_SLOW_INFLIGHT = set()
+_BG_TASKS = set()        # ссылки на фоновые задачи (иначе GC может их прибить)
+
+
+def _spawn(coro):
+    """create_task + удержание ссылки; исключения глотаем, чтобы не спамить логом."""
+    t = asyncio.ensure_future(coro)
+    _BG_TASKS.add(t)
+    t.add_done_callback(_BG_TASKS.discard)
+    return t
+
+
+async def _fast_session():
+    global _FAST_SESSION
+    if _FAST_SESSION is None or _FAST_SESSION.closed:
+        _FAST_SESSION = _aiohttp.ClientSession(
+            connector=_aiohttp.TCPConnector(limit=10, ttl_dns_cache=300),
+            timeout=_aiohttp.ClientTimeout(total=4, connect=2),
+        )
+    return _FAST_SESSION
+
+
+async def _fast_ds_prices(mints):
+    """Цены открытых позиций одним запросом к DexScreener, НАПРЯМУЮ (мимо общей очереди
+    сканеров), таймаут 4с, без ретраев и без сна на 429. Логика выбора цены та же, что в
+    market_data._ds_bulk_prices: пул с максимальной ликвидностью, пыль (<$50) игнорируем."""
+    global _FAST_BACKOFF_UNTIL
+    out = {}
+    if not mints or time.time() < _FAST_BACKOFF_UNTIL:
+        return out
+    try:
+        import market_data as _md
+        allowed_q = _md._ALLOWED_SOL_QUOTES
+        allowed_s = _md._ALLOWED_SOL_SYMBOLS
+    except Exception:
+        allowed_q = {"so11111111111111111111111111111111111111112"}
+        allowed_s = {"SOL", "WSOL", "USDC", "USDT"}
+    sess = await _fast_session()
+    liq_best = {}
+    mset = set(mints)
+    hdrs = {"User-Agent": "Mozilla/5.0", "Accept": "application/json",
+            "Referer": "https://dexscreener.com/"}
+    for i in range(0, len(mints), 30):
+        chunk = mints[i:i + 30]
+        url = "https://api.dexscreener.com/latest/dex/tokens/" + ",".join(chunk)
+        try:
+            async with sess.get(url, headers=hdrs) as r:
+                if r.status == 429:
+                    _FAST_BACKOFF_UNTIL = time.time() + 5.0   # короткая пауза только для быстрого фида
+                    return out
+                if r.status != 200:
+                    continue
+                data = await r.json(content_type=None)
+        except Exception:
+            continue
+        if not isinstance(data, dict):
+            continue
+        for p in (data.get("pairs") or []):
+            try:
+                if p.get("chainId") != "solana":
+                    continue
+                addr = (p.get("baseToken") or {}).get("address", "")
+                if not addr or addr not in mset:
+                    continue
+                q_addr = str((p.get("quoteToken") or {}).get("address") or "").lower()
+                q_sym = str((p.get("quoteToken") or {}).get("symbol") or "").upper()
+                if q_addr and q_addr not in allowed_q and q_sym not in allowed_s:
+                    continue
+                px = float(p.get("priceUsd", 0) or 0)
+                liq = float((p.get("liquidity") or {}).get("usd", 0) or 0)
+                if not px or liq < 50.0:
+                    continue
+                if liq > liq_best.get(addr, -1):
+                    liq_best[addr] = liq
+                    out[addr] = px
+            except Exception:
+                continue
+    return out
+
+
+async def _slow_price_refresh(mints):
+    """Фоновый добор цен для минтов, которых нет в быстром фиде (медленная цепочка
+    Llama/GT/DS-search). Никогда не блокирует цикл позиций."""
+    try:
+        import market_data as _md
+        got = {}
+        try:
+            got = await asyncio.wait_for(_md.get_bulk_prices(list(mints)), timeout=25) or {}
+        except Exception:
+            got = {}
+        now = time.time()
+        for m, p in got.items():
+            if p and float(p) > 0:
+                _SLOW_PX[m] = (now, float(p))
+        for m in mints:
+            if m in got:
+                continue
+            try:
+                td = await asyncio.wait_for(_md._ds_token_data(m), timeout=10)   # без кэша!
+                px = float((td or {}).get("priceUsd", 0) or 0)
+                if px > 0:
+                    _SLOW_PX[m] = (time.time(), px)
+            except Exception:
+                pass
+    finally:
+        for m in mints:
+            _SLOW_INFLIGHT.discard(m)
+
+
+async def _get_position_prices(mints):
+    """Цены для цикла позиций. Быстрый фид -> свежий кэш медленного добора.
+    Если быстрый фид не вернул минт — планируем фоновый добор (≤1 раз в 10с на минт)."""
+    prices = {}
+    try:
+        prices = await asyncio.wait_for(_fast_ds_prices(mints), timeout=4.5) or {}
+    except Exception:
+        prices = {}
+    now = time.time()
+    missing = [m for m in mints if m not in prices]
+    to_refresh = []
+    for m in missing:
+        hit = _SLOW_PX.get(m)
+        if hit and (now - hit[0]) < 20.0:
+            prices[m] = hit[1]
+        if m not in _SLOW_INFLIGHT and (now - _SLOW_LAST_TRY.get(m, 0.0)) > 10.0:
+            to_refresh.append(m)
+    if to_refresh:
+        for m in to_refresh:
+            _SLOW_INFLIGHT.add(m)
+            _SLOW_LAST_TRY[m] = now
+        _spawn(_slow_price_refresh(to_refresh))
+    return prices
+
+
+async def _bg_security_check(tracker, mint):
+    """GoPlus-аудит открытой позиции в фоне (раньше await внутри цикла вешал все позиции)."""
+    try:
+        pos = tracker.positions.get(mint)
+        if not pos or pos.status != "open":
+            return
+        import goplus as _gp
+        _g_ok, _g_why = await asyncio.wait_for(_gp.check_solana(mint), timeout=30)
+        _w_low = str(_g_why or "").lower()
+        if not _g_ok and any(k in _w_low for k in ("honeypot", "cannot_sell", "freeze", "freezable", "closable", "balance_mutable", "frozen", "non_transferable", "transfer_hook", "default_account")):
+            pos = tracker.positions.get(mint)
+            if pos and pos.status == "open":
+                print(f"🚨 [SOL-HONEYPOT] {pos.symbol} ({mint[:10]}): {_g_why} — токен непродаваем/заморожен, списание в -100%.")
+                tracker.close_position(mint, 0.0, f"SOL Honeypot / Unsellable ({_g_why})")
+    except Exception:
+        pass
+
+
+async def _bg_liq_check(tracker, mint):
+    """Dead Pool / Liquidity Drain guard в фоне. Логика та же, что была внутри цикла."""
+    try:
+        position = tracker.positions.get(mint)
+        if not position or position.status != "open":
+            return
+        import market_data as _md
+        _td_sol = await asyncio.wait_for(_md.get_token_data(mint), timeout=30)
+        position = tracker.positions.get(mint)
+        if not _td_sol or not position or position.status != "open":
+            return
+        _cur = float(position.current_price_usd or 0) or float(position.entry_price_usd or 0)
+        _ent = float(position.entry_price_usd or 0)
+        pnl_pct = ((_cur - _ent) / _ent) if _ent > 0 else 0.0
+        minutes_held = (time.time() - position.entry_time) / 60
+        _sol_liq = float(((_td_sol.get("liquidity") or {}).get("usd", 0) or 0))
+        _sol_tx5 = (_td_sol.get("txns") or {}).get("m5", {}) or {}
+        _sol_txs = int(_sol_tx5.get("buys", 0) or 0) + int(_sol_tx5.get("sells", 0) or 0)
+        _sol_v5 = float(((_td_sol.get("volume") or {}).get("m5", 0) or 0))
+        _dex_id = str(_td_sol.get("dexId", "")).lower()
+
+        # 1. Ликвидность выведена/слита
+        if minutes_held >= 2.0 and _sol_liq < 500 and _dex_id not in ("pump", "pumpfun"):
+            print(f"🚨 [SOL-DEAD-POOL] {position.symbol} ({mint[:8]}): ликвидность ${_sol_liq:.0f} < $500 — пул высушен/умер, мгновенный выход.")
+            tracker.close_position(mint, 0.0, f"SOL Liquidity Drained (${_sol_liq:.0f} liq, pool dead)")
+            return
+
+        # 2. Торги замерли: 0 сделок в m5 и объём 0
+        if minutes_held >= 3.0 and _sol_txs == 0 and _sol_v5 <= 0.01:
+            _z_cyc = int(getattr(position, "zero_vol_cycles", 0) or 0) + 1
+            position.zero_vol_cycles = _z_cyc
+            if _z_cyc >= 3:
+                if pnl_pct > 0.02:
+                    tracker.close_position(mint, _cur, f"Inactive Pool TP (+{pnl_pct*100:.1f}%, 0 txns in pool)")
+                else:
+                    tracker.close_position(mint, _cur, f"Dead Pool (0 txns in pool, frozen)")
+        else:
+            position.zero_vol_cycles = 0
+    except Exception:
+        pass
+
+
+async def _bg_stagnant_alive(analyzer, position, mint):
+    """«Живой флет?»-проверка (buys+sells за 5 мин >= 3) в фоне; результат кладём в position."""
+    try:
+        _td = await asyncio.wait_for(analyzer.fetch_token_data(mint), timeout=20)
+        if _td:
+            _tx5 = ((_td.get("txns") or {}).get("m5", {}) or {})
+            position.stag_alive = (time.time(), ((_tx5.get("buys", 0) or 0) + (_tx5.get("sells", 0) or 0)) >= 3)
+    except Exception:
+        pass
+    finally:
+        position.stag_inflight = False
+
+
+def _stagnant_alive_cached(analyzer, position, mint):
+    """True/False — если есть свежий (<30с) результат; None — данных нет (запросили в фоне)."""
+    hit = getattr(position, "stag_alive", None)
+    if hit and (time.time() - hit[0]) < 30:
+        return hit[1]
+    if not getattr(position, "stag_inflight", False):
+        position.stag_inflight = True
+        _spawn(_bg_stagnant_alive(analyzer, position, mint))
+    return None
+
+
+def _install_fast_saver(tracker):
+    """Неблокирующее сохранение портфеля.
+    Раньше tracker.save_portfolio() внутри event loop писал файл + синхронно апсертил
+    ВЕСЬ портфель в Supabase (раз в секунду из цикла позиций и на каждый WS-тик sniper) —
+    каждый такой вызов замораживал бота на сотни мс..секунды.
+    Теперь save_portfolio() только ставит флаг; отдельная задача раз в ~0.3с собирает
+    слепок, пишет файл атомарно (в потоке), а облако апсертится в другом потоке не чаще
+    раза в PORTFOLIO_CLOUD_MIN_INTERVAL_SEC (по умолчанию 2с), «последний слепок побеждает»."""
+    import os, concurrent.futures
+    loop = asyncio.get_running_loop()
+    local_ex = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="pf-local")
+    cloud_ex = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="pf-cloud")
+    st = {"dirty": False, "payload": None, "cloud_last": 0.0,
+          "wake": asyncio.Event(), "cloud_wake": asyncio.Event()}
+    LOCAL_COALESCE = 0.3
+    CLOUD_MIN = float(getattr(config, "PORTFOLIO_CLOUD_MIN_INTERVAL_SEC", 2.0) or 2.0)
+
+    def _fast_save():
+        st["dirty"] = True
+        st["wake"].set()
+
+    def _write_local(payload):
+        tmp = tracker.filename + ".tmp"
+        with open(tmp, "w") as f:
+            f.write(payload)
+        os.replace(tmp, tracker.filename)   # атомарно: дашборд не увидит половину файла
+
+    def _upsert_cloud(payload):
+        sb = tracker._supabase()
+        if sb is None:
+            return
+        _snap_key = getattr(config, "PORTFOLIO_SNAPSHOT_MINT", "PORTFOLIO_STATE_V3")
+        sb.table("trades_pump").upsert({
+            "mint": _snap_key, "features": payload, "confidence": 0, "status": "SYSTEM"
+        }).execute()
+
+    async def _local_worker():
+        while True:
+            await st["wake"].wait()
+            await asyncio.sleep(LOCAL_COALESCE)      # склеиваем пачку save() в один слепок
+            st["wake"].clear()
+            if not st["dirty"]:
+                continue
+            st["dirty"] = False
+            try:
+                data = {k: getattr(v, "model_dump", v.dict)() for k, v in list(tracker.positions.items())}
+                if not data:
+                    continue                          # пустой слепок никогда не пишем (анти-wipe)
+                payload = json.dumps(data, default=str)
+            except Exception as e:
+                print(f"⚠️ Ошибка сборки слепка портфеля: {e}")
+                continue
+            try:
+                await loop.run_in_executor(local_ex, _write_local, payload)
+            except Exception as e:
+                print(f"⚠️ Ошибка записи портфеля в файл: {e}")
+            st["payload"] = payload
+            st["cloud_wake"].set()
+
+    async def _cloud_worker():
+        while True:
+            await st["cloud_wake"].wait()
+            st["cloud_wake"].clear()
+            wait = CLOUD_MIN - (time.time() - st["cloud_last"])
+            if wait > 0:
+                await asyncio.sleep(wait)
+            payload = st["payload"]                   # к этому моменту уже самый свежий
+            if payload is None:
+                continue
+            try:
+                await loop.run_in_executor(cloud_ex, _upsert_cloud, payload)
+            except Exception as e:
+                print(f"⚠️ Ошибка сохранения портфеля в Supabase: {e}")
+            st["cloud_last"] = time.time()
+
+    tracker.save_portfolio = _fast_save               # инстанс-атрибут перекрывает метод класса
+    tracker._saver_tasks = [asyncio.ensure_future(_local_worker()),
+                            asyncio.ensure_future(_cloud_worker())]
+    print("💾 Fast saver: сохранение портфеля вынесено из event loop (файл ~0.3с, облако ~2с).")
+
+
 # === 1. ФОНОВЫЙ ТОРГОВЫЙ БОТ ===
 async def position_manager_loop(analyzer, tracker):
     from jupiter import JupiterAPI
     print("🛡️ Запуск менеджера позиций (быстрый трекинг Stop-Loss)...")
     while True:
+        _t_loop0 = time.monotonic()
         try:
             open_positions = tracker.get_open_positions()
             
@@ -21,7 +341,9 @@ async def position_manager_loop(analyzer, tracker):
             mints_to_fetch = [m for m, p in open_positions.items()
                               if not m.startswith("0x")
                               and getattr(p, "chain", "solana") == "solana"]
-            bulk_prices = await JupiterAPI.get_prices(mints_to_fetch) if mints_to_fetch else {}
+            # ⚡ быстрый фид: прямой запрос DS с таймаутом 4с (без очередей сканеров и сна на 429);
+            # слепые минты добираются в ФОНЕ и не тормозят остальные позиции.
+            bulk_prices = await _get_position_prices(mints_to_fetch) if mints_to_fetch else {}
             
             for mint, position in list(open_positions.items()):
                 # Robinhood (0x...) ведёт отдельный robinhood_loop со своими ценами DS
@@ -29,15 +351,8 @@ async def position_manager_loop(analyzer, tracker):
                     continue
                 # 1. Берем цену из Raydium/Gecko/DS (запросили разом для всех)
                 api_price = bulk_prices.get(mint, 0.0)
-                # 1b. Добор слепых: Jupiter не знает свежий/тонкий пул — дёргаем DS
-                # напрямую, иначе цена встаёт ($0.00 в дашборде) и глохнут выходы.
-                if not api_price:
-                    try:
-                        import market_data as _md
-                        _td0 = await _md.get_token_data(mint)
-                        api_price = float((_td0.get("priceUsd", 0) or 0)) if _td0 else 0.0
-                    except Exception:
-                        pass
+                # 1b. Слепые минты (нет в быстром фиде) добираются в фоне внутри _get_position_prices.
+                # Раньше тут был await get_token_data() с КЭШЕМ 90с: устаревшая цена + блокировка цикла.
                 
                 # Обновляем живую цену для GROWTH/EARLY-позиций прямо здесь (каждую секунду),
                 # а исполнение медленных стопов/стагнантов оставляет growth_loop
@@ -52,24 +367,34 @@ async def position_manager_loop(analyzer, tracker):
                             position.current_pnl_usd = position.amount_usd * _pnl_pct
                     continue
                 
-                # 2. Берем цену из WebSocket (если она СВЕЖАЯ, а не записанная этим же циклом)
+                # 2. Внешняя WSS-цена (pump.fun sniper пишет price_updated_at сам).
+                # БАГ БЫЛ ТУТ: цикл сам писал current_price_usd/price_updated_at в конце круга, и через
+                # секунду эта собственная запись считалась «свежей WSS-ценой» -> реальная цена из API
+                # игнорировалась ~8 сек. Теперь свои записи помечаются loop_price_ts и не считаются WSS.
                 ws_price = position.current_price_usd if hasattr(position, 'current_price_usd') else 0.0
                 ws_ts = getattr(position, "price_updated_at", 0.0)
-                ws_fresh = ws_price > 0.0 and (time.time() - ws_ts) < 8
+                _own_ts = getattr(position, "loop_price_ts", 0.0)
+                ws_external = ws_ts > (_own_ts + 1e-6)
+                ws_fresh = ws_price > 0.0 and ws_external and (time.time() - ws_ts) < 8
 
+                _real_px = True
                 if ws_fresh:
                     current_price = ws_price
                 elif api_price > 0.0:
                     current_price = api_price
                 else:
-                    # ОБА источника слепые: НЕ подставляем entry (иначе $0.00 0.00%
-                    # висит вечно как у KLIK: current==entry, stale-ветка недостижима).
-                    # Только свежая WS-цена (<120с) может прикрыть API-провал.
-                    _ws_age = time.time() - ws_ts if ws_ts else 1e9
+                    # ОБА источника слепые: НЕ подставляем entry. Последнюю известную цену держим
+                    # максимум 120с от ПОСЛЕДНЕГО РЕАЛЬНОГО обновления (раньше возраст считался от
+                    # собственной записи цикла и никогда не истекал).
+                    _real_px = False
+                    _last_real = getattr(position, "last_real_px_ts", 0.0) or ws_ts
+                    _ws_age = time.time() - _last_real if _last_real else 1e9
                     if ws_price > 0.0 and _ws_age < 120:
                         current_price = ws_price
                     else:
                         current_price = 0.0
+                if _real_px:
+                    position.last_real_px_ts = time.time()
 
                 prev_price = position.current_price_usd
                 if current_price <= 0.0:
@@ -104,16 +429,7 @@ async def position_manager_loop(analyzer, tracker):
                 _last_sol_sec_chk = getattr(position, "last_security_check_ts", 0.0)
                 if (time.time() - _last_sol_sec_chk) > 120:
                     position.last_security_check_ts = time.time()
-                    try:
-                        import goplus as _gp
-                        _g_ok, _g_why = await _gp.check_solana(mint)
-                        _w_low = str(_g_why or "").lower()
-                        if not _g_ok and any(k in _w_low for k in ("honeypot", "cannot_sell", "freeze", "freezable", "closable", "balance_mutable", "frozen", "non_transferable", "transfer_hook", "default_account")):
-                            print(f"🚨 [SOL-HONEYPOT] {position.symbol} ({mint[:10]}): {_g_why} — токен непродаваем/заморожен, списание в -100%.")
-                            tracker.close_position(mint, 0.0, f"SOL Honeypot / Unsellable ({_g_why})")
-                            continue
-                    except Exception:
-                        pass
+                    _spawn(_bg_security_check(tracker, mint))   # в фоне: не держим цикл позиций
                 # Infant Dump (как в EVM): слив в первые минуты = дев, не шум.
                 # Раги идут -40..-96%, шум импульса -15..-18% переживаем.
                 try:
@@ -166,21 +482,18 @@ async def position_manager_loop(analyzer, tracker):
                     # как -2%. Проверяем сделки за 5 мин: есть buys = пул жив, даём +5 мин
                     # (макс 2 грейса). Нет сделок = труп, режем. Ошибка API = пропуск цикла.
                     _graces = getattr(position, "stagnant_graces", 0)
-                    try:
-                        _td = await analyzer.fetch_token_data(mint)
-                        if not _td:
+                    # Проверка «жив ли пул» идёт в фоне. Нет данных -> режем флет в следующих тиках,
+                    # а остальные проверки (стопы!) этого тика продолжают работать.
+                    _alive = _stagnant_alive_cached(analyzer, position, mint)
+                    if _alive is not None:
+                        if _alive and _graces < 2:
+                            position.stagnant_graces = _graces + 1
+                            position.entry_time = time.time() - 2 * 60
+                            position.stag_alive = None
+                            print(f"⏳ {mint[:8]}: живой флет ({pnl_pct*100:.1f}%), грейс {position.stagnant_graces}/2 — ждём выстрел.")
                             continue
-                        _tx5 = ((_td.get("txns") or {}).get("m5", {}) or {})
-                        _alive = ((_tx5.get("buys", 0) or 0) + (_tx5.get("sells", 0) or 0)) >= 3
-                    except Exception:
+                        tracker.close_position(mint, current_price, f"Stagnant Loss Cut ({minutes_held:.0f}m, {pnl_pct*100:.1f}%)")
                         continue
-                    if _alive and _graces < 2:
-                        position.stagnant_graces = _graces + 1
-                        position.entry_time = time.time() - 2 * 60
-                        print(f"⏳ {mint[:8]}: живой флет ({pnl_pct*100:.1f}%), грейс {position.stagnant_graces}/2 — ждём выстрел.")
-                        continue
-                    tracker.close_position(mint, current_price, f"Stagnant Loss Cut ({minutes_held:.0f}m, {pnl_pct*100:.1f}%)")
-                    continue
                 if minutes_held >= _hold_min and abs(pnl_pct) < 0.05 and max_pnl_pct < 0.05:
                     tracker.close_position(mint, current_price, f"Stagnant Near Zero ({_hold_min} min flat)")
                     continue
@@ -198,43 +511,16 @@ async def position_manager_loop(analyzer, tracker):
                 # чтобы не делать N записей в Supabase каждые 3 секунды)
                 position.current_price_usd = current_price
                 position.current_pnl_usd = position.amount_usd * pnl_pct
-                position.price_updated_at = time.time()
+                if _real_px:   # подставленную (устаревшую) цену не выдаём за свежую
+                    _now_w = time.time()
+                    position.price_updated_at = _now_w
+                    position.loop_price_ts = _now_w   # метка «это писал наш цикл, не WSS»
 
-                # === DEAD POOL & LIQUIDITY DRAIN GUARD (SOLANA) ===
-                # Защита от замороженных/умерших пулов и фантомной прибыли (кейс DCA / NEX AI: ликва $0.02, 0 сделок в m5)
+                # === DEAD POOL & LIQUIDITY DRAIN GUARD (SOLANA) — теперь в фоне ===
                 _now_t = time.time()
                 if (_now_t - getattr(position, "last_liq_chk", 0.0)) > 20:
                     position.last_liq_chk = _now_t
-                    try:
-                        import market_data as _md
-                        _td_sol = await _md.get_token_data(mint)
-                        if _td_sol:
-                            _sol_liq = float(((_td_sol.get("liquidity") or {}).get("usd", 0) or 0))
-                            _sol_tx5 = (_td_sol.get("txns") or {}).get("m5", {}) or {}
-                            _sol_txs = int(_sol_tx5.get("buys", 0) or 0) + int(_sol_tx5.get("sells", 0) or 0)
-                            _sol_v5 = float(((_td_sol.get("volume") or {}).get("m5", 0) or 0))
-                            _dex_id = str(_td_sol.get("dexId", "")).lower()
-
-                            # 1. Ликвидность выведена/слита (< $500 на AMM/pumpswap/raydium после 2 минут жизни)
-                            if minutes_held >= 2.0 and _sol_liq < 500 and _dex_id not in ("pump", "pumpfun"):
-                                print(f"🚨 [SOL-DEAD-POOL] {position.symbol} ({mint[:8]}): ликвидность ${_sol_liq:.0f} < $500 — пул высушен/умер, мгновенный выход.")
-                                tracker.close_position(mint, 0.0, f"SOL Liquidity Drained (${_sol_liq:.0f} liq, pool dead)")
-                                continue
-
-                            # 2. Торги замерли: 0 сделок в m5 и объём 0 (застрявшая цена)
-                            if minutes_held >= 3.0 and _sol_txs == 0 and _sol_v5 <= 0.01:
-                                _z_cyc = int(getattr(position, "zero_vol_cycles", 0) or 0) + 1
-                                position.zero_vol_cycles = _z_cyc
-                                if _z_cyc >= 3:  # ~60-70 сек подтвержденной тишины в пуле
-                                    if pnl_pct > 0.02:
-                                        tracker.close_position(mint, current_price, f"Inactive Pool TP (+{pnl_pct*100:.1f}%, 0 txns in pool)")
-                                    else:
-                                        tracker.close_position(mint, current_price, f"Dead Pool (0 txns in pool, frozen)")
-                                    continue
-                            else:
-                                position.zero_vol_cycles = 0
-                    except Exception as _e:
-                        pass
+                    _spawn(_bg_liq_check(tracker, mint))
                 
                 # === ИНТЕГРАЦИЯ МАТЕМАТИКИ ДЛЯ ЗРЕЛЫХ МОНЕТ (SWING TRADING) ===
                 _tp1_sol_thr = float(getattr(config, "TP1_TRIGGER_PCT", 0.50))
@@ -249,17 +535,17 @@ async def position_manager_loop(analyzer, tracker):
                         tracker.partial_close_position(mint, current_price, _tp1_sell, f"Take Profit +{_tp1_sol_thr*100:.0f}% (Tier-1 {int(_tp1_sell*100)}%)")
                         position.tp1_done = True
                         position.is_moonbag = True
-                        continue
+                        # (без continue: проверка выхода идёт в этом же тике, а не через следующий)
                     # TIER-2: на +120% продаём 25% остатка (60% исходного ордера в рынке!)
                     if max_pnl_pct >= _tp2 and not getattr(position, "tp2_done", False):
                         tracker.partial_close_position(mint, current_price, _tp2_sell, f"Take Profit +{_tp2*100:.0f}% (2.2x Free Ride)")
                         position.tp2_done = True
-                        continue
+                        # (без continue: проверка выхода идёт в этом же тике, а не через следующий)
                     # MOONBAG: на +250% продаём 30% остатка (42% исходного ордера ловит пик!)
                     if max_pnl_pct >= _mb and not getattr(position, "is_moonbag", False):
                         tracker.partial_close_position(mint, current_price, _mb_sell, f"Take Profit +{_mb*100:.0f}% (Risk Free)")
                         position.is_moonbag = True
-                        continue
+                        # (без continue: проверка выхода идёт в этом же тике, а не через следующий)
                     from exit_managers import MatureExitManager
                     mature_exit_reason = MatureExitManager.evaluate_exit(position, current_price)
                     if mature_exit_reason:
@@ -284,15 +570,15 @@ async def position_manager_loop(analyzer, tracker):
                     tracker.partial_close_position(mint, current_price, _tp1_sell, f"Take Profit +{_tp1_sol_thr*100:.0f}% (Tier-1 {int(_tp1_sell*100)}%)")
                     position.tp1_done = True
                     position.is_moonbag = True
-                    continue
+                    # (без continue: проверка выхода идёт в этом же тике)
                 if max_pnl_pct >= _tp2 and not getattr(position, "tp2_done", False):
                     tracker.partial_close_position(mint, current_price, _tp2_sell, f"Take Profit +{_tp2*100:.0f}% (2.2x Free Ride)")
                     position.tp2_done = True
-                    continue
+                    # (без continue: проверка выхода идёт в этом же тике)
                 if max_pnl_pct >= _mb and not getattr(position, "is_moonbag", False):
                     tracker.partial_close_position(mint, current_price, _mb_sell, f"Take Profit +{_mb*100:.0f}% (Risk Free)")
                     position.is_moonbag = True
-                    continue
+                    # (без continue: проверка выхода идёт в этом же тике)
 
                 # 1.5 ГАРАНТИРОВАННЫЙ НЕСНИЖАЕМЫЙ ПОРОГ ПРИБЫЛИ (PROFIT FLOOR LOCK)
                 _floor_pnl = None
@@ -402,8 +688,8 @@ async def position_manager_loop(analyzer, tracker):
         except Exception as e:
             print(f"Ошибка в менеджере позиций: {e}")
         # Балк-цены Jupiter+DS: 1 запрос на все позиции за цикл, квоту не жрёт.
-        # 1.0 сек: максимальная скорость трекинга открытых позиций (без лагов на стопах и пиках).
-        await asyncio.sleep(1.0)
+        # Целевой период цикла 1.0с ВКЛЮЧАЯ время запроса цен (раньше: время запроса + 1.0с сна).
+        await asyncio.sleep(max(0.25, 1.0 - (time.monotonic() - _t_loop0)))
 from birth_tracker import BirthTracker, birth_tracker
 
 async def birth_wss_loop(analyzer, tracker):
@@ -1787,6 +2073,7 @@ async def async_main():
     
     analyzer = Analyzer()
     tracker = PaperTracker()
+    _install_fast_saver(tracker)   # ⚡ сохранение портфеля вне event loop
     copy_trader = CopyTrader(tracker, analyzer)
     sniper = PumpFunSniper(tracker)
     
@@ -1952,6 +2239,12 @@ with tab1:
                         _mb_html = " <span style='background:#6f42c1; color:white; padding:2px 7px; border-radius:4px; font-size:0.75em; font-weight:bold;'>🚀 Moonbag (Фиксация TP)</span>" if _is_mb else ""
                         _size_html = f"<div><span style='color:#888;'>Ордер:</span> <b>${_orig_amt:.1f}</b>" + (f" (В рынке: <b>${_cur_amt:.1f}</b>)" if _is_mb else "") + f"{_mb_html}</div>"
 
+                        try:
+                            _age_s = max(0, int(time.time() - float(row.get('price_updated_at') or 0)))
+                            _age_html = (f"<span style='color:{'#FFBB33' if _age_s > 15 else '#666'}; font-size:0.75em;'>"
+                                         f"⏱ цена обновлена {_age_s} с назад</span>") if row.get('price_updated_at') else ""
+                        except Exception:
+                            _age_html = ""
                         st.markdown(f"""
                         <div style='background-color: #1E1E1E; padding: 15px; border-radius: 8px; border-left: 5px solid {color}; margin-bottom: 10px; font-family: sans-serif;'>
                             <div style='display: flex; justify-content: space-between; align-items: center;'>
@@ -1960,6 +2253,7 @@ with tab1:
                             </div>
                             <div style='margin-top: 6px; font-size: 0.75em; color: #888;'>🔖 {row.get('source', '') if str(row.get('source', '')).strip() else '—'} {chain_badge(row.get('chain', 'solana'), True)}</div>
                             <div style='margin-top: 6px; font-size: 0.85em; color: #DDD;'>{_size_html}</div>
+                            <div style='margin-top: 4px;'>{_age_html}</div>
                             <div style='display: flex; justify-content: space-between; margin-top: 10px; font-size: 0.85em; color: #BBB;'>
                                 <div><span style='color:#888;'>Вход:</span><br>${row['entry_price_usd']:.8f}</div>
                                 <div><span style='color:#888;'>Сейчас:</span><br>${row['current_price_usd']:.8f}</div>
