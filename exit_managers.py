@@ -37,9 +37,9 @@ class MatureExitManager:
         except Exception:
             minutes_held = 0
 
-        # RIDE-режим только для билетов-ракет
+        # RIDE-режим для ракет и супер-моментума (RUNNER, VIP, RAY-XGB, PUMP-XGB, SCOUT):
         _src = str(getattr(position, 'source', '') or '')
-        _ride = bool(getattr(config, 'RIDE_RUNNERS_ENABLED', True)) and ('RUNNER-' in _src)
+        _ride = bool(getattr(config, 'RIDE_RUNNERS_ENABLED', True)) and any(k in _src for k in ('RUNNER-', 'VIP-', 'XGB', 'RAY', 'PUMP', 'SCOUT'))
 
         # Аварийный кэп ПЕРВЫМ: гэпы типа FIBONACCI -68% проскакивают обычный стоп
         if pnl_pct <= -0.30:

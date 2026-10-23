@@ -5,6 +5,7 @@ import config
 from sentiment import analyze_sentiment
 from ta_tools import TATools
 import math
+import contextvars
 
 try:
     import numpy as np
@@ -34,7 +35,29 @@ except Exception as e:
     print(f'AI Filter ошибка: {e}')
 
 
+def _ctx_attr(name, default=0.0):
+    """Task-local атрибут анализатора для параллельного разбора токенов (ScanWindow)."""
+    key = "_cv_" + name
+
+    def _get(self):
+        cv = self.__dict__.get(key)
+        return default if cv is None else cv.get()
+
+    def _set(self, value):
+        cv = self.__dict__.get(key)
+        if cv is None:
+            cv = contextvars.ContextVar(f"{name}_{id(self)}", default=default)
+            self.__dict__[key] = cv
+        cv.set(value)
+
+    return property(_get, _set)
+
+
 class Analyzer:
+    last_score = _ctx_attr("last_score", 0.0)    # Скор последнего решения (для радара)
+    _last_top10 = _ctx_attr("_last_top10", 0.0)  # топ-10 холдеров % (последний разбор в этой задаче)
+    _last_dev = _ctx_attr("_last_dev", 0.0)      # доля дева % (последний разбор в этой задаче)
+
     def __init__(self):
         self._clone_cache = {}
         self._clone_cache_time = {}
@@ -838,7 +861,11 @@ class Analyzer:
             _m1 = _pc.get("m1", 0) or 0
             _liq_v = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
             _vol_v = float((pair_data.get("volume") or {}).get("m5", 0) or 0)
-            _max_vip_m5 = 200.0 if (_liq_v >= 25000 and _vol_v >= 25000) else (getattr(config, "VIP_MAX_M5_PCT", 0.60) * 100)
+            _tx_m5_v = (pair_data.get("txns") or {}).get("m5", {}) or {}
+            _b_v = int(_tx_m5_v.get("buys", 0) or 0)
+            _s_v = int(_tx_m5_v.get("sells", 0) or 0)
+            _has_strong_buyers = (_b_v >= int(_s_v * 1.15) and _b_v >= 30 and _vol_v >= 10000)
+            _max_vip_m5 = 200.0 if (_liq_v >= 25000 and _vol_v >= 25000) else (150.0 if _has_strong_buyers else (getattr(config, "VIP_MAX_M5_PCT", 0.60) * 100))
             if _m5 > _max_vip_m5:
                 print(f"🚫 [VIP OVERHEAT] {mint}: m5 {_m5:+.0f}% > +{_max_vip_m5:.0f}% — вертикаль уже прошла, вход = вершина.")
                 return False
