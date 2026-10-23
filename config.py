@@ -45,15 +45,15 @@ PAPER_PORTFOLIO_FILE = "portfolio.json"
 PORTFOLIO_SNAPSHOT_MINT = (os.getenv("PORTFOLIO_SNAPSHOT_MINT", "") or "").strip().strip('"').strip("'") or "PORTFOLIO_STATE_V2.4"
 INITIAL_BALANCE_USD = 120.0  # торговый пул ($150 депо - $30 газ)    # Стартовый капитал
 REINVEST_PERCENT = 5.0  # Было 3%: цель $10/день требует сайз. 5% пула на сделку
-VIRTUAL_POSITION_SIZE_USD = 15.0
-TRADE_AMOUNT_USD = 15.0  # Базовый ордер $15
+VIRTUAL_POSITION_SIZE_USD = 6.0
+TRADE_AMOUNT_USD = 6.0  # Безопасный базовый ордер $6 (защита от крупных сливов депозита)
 # === ДИНАМИЧЕСКИЙ СТУПЕНЧАТЫЙ РЕИНВЕСТ И ЗАЩИТА ЛИКВИДНОСТИ ===
 DYNAMIC_REINVEST_ENABLED = True      # Включить ступенчатый реинвест прибыли
-BASE_TRADE_AMOUNT_USD = 15.0         # Базовый размер сделки (минимальный пол $15)
-MAX_POSITION_SIZE_USD = 25.0         # Жесткий потолок на 1 сделку (не более $25 в один мемкоин)
-REINVEST_MIN_POOL_LIQ_USD = 15000.0  # Мин. ликвидность пула для входа > $15 (защита от сдвига цены)
-SCOUT_SIZE_USD = 15.0    # Ордер $15 (полный вход, защита через строгий входной ончейн-анализ)
-LOTTERY_SIZE_USD = 15.0
+BASE_TRADE_AMOUNT_USD = 6.0         # Базовый размер сделки (безопасный пол $6)
+MAX_POSITION_SIZE_USD = 15.0        # Жесткий потолок на 1 сделку (не более $15 в один мемкоин)
+REINVEST_MIN_POOL_LIQ_USD = 15000.0  # Мин. ликвидность пула для входа > $6 (защита от сдвига цены)
+SCOUT_SIZE_USD = 6.0    # Ордер $6
+LOTTERY_SIZE_USD = 4.0
 MAX_CONCURRENT_POSITIONS = 10  # концентрация капитала: максимум 10 ракет  # Режим Снайпера: максимум 5 сделок одновременно
 
 # Risk Management
@@ -67,28 +67,19 @@ STREAK_COOLDOWN_ENABLED = True       # Включить паузу после с
 STREAK_MAX_CONSECUTIVE_LOSSES = 4    # 4 минуса подряд
 STREAK_COOLDOWN_MINUTES = 3.0        # Длительность паузы: 3 минуты вместо 12, чтобы бот не засыпал на полдня
 
-# === СКОЛЬЗЯЩИЙ БРЕЙКЕР + ТРОТТЛИНГ ПО ПРОСАДКЕ ===
-ROLLING_BREAKER_ENABLED = False      # ОТКЛЮЧЕНО: 45-минутная пауза парализовала бота во время рыночных импульсов
-ROLLING_BREAKER_WINDOW = 8           # смотрим последние 8 закрытых сделок
-ROLLING_BREAKER_LOSS_USD = 8.0       # если их сумма <= -$8 -> пауза входов
-ROLLING_BREAKER_PAUSE_MIN = 5.0      # резервная пауза
-DD_THROTTLE_ENABLED = False          # ОТКЛЮЧЕНО: сохраняем полный размер сделки $15
-DD_THROTTLE_START_USD = 15.0         # просадка от пика
-
 # === IN-MEMORY STREAMING SNIPER (RAM FILTER + AUDIT) ===
 SNIPER_ENTRIES_ENABLED = True             # Активировать вход по In-Memory стриму (без задержек DexScreener)
-STREAM_WINDOW_SEC = 30                   # Скользящее окно скорости в RAM (30 секунд)
-STREAM_MIN_UNIQUE_BUYERS = 6             # Минимум 6 уникальных покупателей за окно (ранняя органика)
-STREAM_MIN_BUY_SOL = 2.5                 # Минимум 2.5 SOL реального объема покупок
-STREAM_MAX_TOP_BUYER_RATIO = 0.50        # Доля крупнейшего покупателя <= 50%
-STREAM_MIN_BS_RATIO = 1.8                # Соотношение Buy/Sell volume >= 1.8
-STREAM_MAX_CURVE_PROGRESS = 85.0         # Не входить если кривая > 85% (защита от покупки перед стеной миграции)
+STREAM_WINDOW_SEC = 20                   # Скользящее окно скорости в RAM (20 секунд)
+STREAM_MIN_UNIQUE_BUYERS = 10            # Минимум 10 уникальных покупателей за 20 сек
+STREAM_MIN_BUY_SOL = 4.0                 # Минимум 4.0 SOL реального объема покупок
+STREAM_MAX_TOP_BUYER_RATIO = 0.35        # Доля крупнейшего покупателя <= 35% (защита от одного кита / wash-trade)
+STREAM_MIN_BS_RATIO = 2.0                # Соотношение Buy/Sell volume >= 2.0 (покупки в 2+ раза превышают продажи)
+STREAM_MAX_CURVE_PROGRESS = 65.0         # Не входить если кривая > 65% (защита от покупки прямо перед стеной миграции)
 STREAM_ENTRY_SIZE_USD = 15.0             # Размер билета на раннем входе ($15)
 STREAM_SLIPPAGE = 0.02                   # 2% проскальзывание на входе
-STREAM_MAX_AGE_SEC = 300                 # Токены, не набравшие STREAM_GC_MIN_PROGRESS, чистим из RAM через 5 минут (было 2)
-STREAM_GC_MIN_PROGRESS = 10.0            # % кривой по РЕАЛЬНЫМ SOL, ниже которого токен чистится по возрасту (~8.5 SOL)
+STREAM_MAX_AGE_SEC = 120                 # Очистка из RAM токенов без активности старше 2 минут
 
-VIP_ENTRIES_ENABLED = True   # ВКЛЮЧЕНО: VIP-полоса для супер-моментума (HUMANOID +141%, JEETJAK +60%), защищена ончейн-аудитом и 1м-фильтром отката
+VIP_ENTRIES_ENABLED = False  # ВЫКЛЮЧЕНО: VIP-входы без отката покупали вершины скамов (Hodlon -$15, MOGGERSHA -$15)
 TIME_EXIT_MINUTES = 60  # Если за 30 минут нет пампа - выходим
 TIME_EXIT_PROFIT_REQ = 0.0
 
@@ -204,7 +195,7 @@ CONVICTION_MIN_M5_PCT = 0.20  # m5 от +20%
 CONVICTION_MAX_M5_PCT = 0.60  # m5 до +60% (выше - вершина)
 CONVICTION_MIN_BUYSELL = 2.0  # покупки >= продаж x2
 CONVICTION_MIN_LIQ = 30000  # пул от $30к
-MAX_DEPLOYED_PCT = 0.85  # суммарно в рынке до 85% капитала (до 6-7 позиций при балансе $120)
+MAX_DEPLOYED_PCT = 0.60  # суммарно в рынке не больше 60% капитала (сдерживает тиринг)
 ROCKET_VETO_ENABLED = True  # Включено вето RKT >= 0.25: режет мертвечину и затухающие пулы (ROBINCAT 0.06, HYPURRT 0.10, COVENANT 0.14)
 ROCKET_VETO_MIN = 0.25
 
@@ -308,11 +299,3 @@ SCOUT_BIRTH_FALLBACK = False  # birth-добор без WSS тяги ВЫКЛ: �
 GOPLUS_ENABLED = True
 GOPLUS_MAX_SELL_TAX = 0.10
 GOPLUS_CACHE_SEC = 3600
-
-# === SCANNER PIPELINE (Быстрый параллельный разбор кандидатов) ===
-SCAN_CONCURRENCY = 4              # Параллельный разбор токенов в окне (до 4 задач одновременно)
-SCAN_LOOP_SLEEP_SEC = 8           # Пауза между циклами сканера (8 секунд вместо 30)
-SCAN_AFTER_ENTRY_SLEEP_SEC = 15   # Пауза после входа в позицию (15 секунд)
-SCAN_LATEST_TTL_SEC = 20          # TTL кэша fetch_latest_tokens (20 секунд)
-SOLANA_RESCAN_COOLDOWN = 180      # Кулдаун пересканирования старых токенов (180 секунд)
-SOLANA_FRESH_RESCAN_COOLDOWN = 45 # Кулдаун для свежих токенов (<30 минут) и миграций (45 секунд)

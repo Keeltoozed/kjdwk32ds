@@ -405,7 +405,6 @@ async def position_manager_loop(analyzer, tracker):
         # 1.0 сек: максимальная скорость трекинга открытых позиций (без лагов на стопах и пиках).
         await asyncio.sleep(1.0)
 from birth_tracker import BirthTracker, birth_tracker
-from scan_pipeline import ScanWindow, MISSING as _SCAN_MISSING, apply_result as _scan_apply
 
 async def birth_wss_loop(analyzer, tracker):
     import websockets
@@ -435,14 +434,7 @@ async def scanner_loop(analyzer, tracker):
     print("🚀 Запуск PhantBot Scanner (Поиск новых монет)...")
     processed_mints = {}
     _grad_none = {}  # mint -> число None от DS (скам/нестандарт: после 3 — хороним, не жрём циклы)
-    _latest_cache = (0.0, [])   # (ts, tokens): кэш fetch_latest_tokens
-    _last_idle_log = 0.0
     while True:
-        _scan_win = None
-        _entered = False
-        _cycle_t0 = time.time()
-        _n_analyzed = 0
-        _launch_n = 0
         try:
             open_count = len(tracker.get_open_positions())
             # Дневной kill-switch: ВЫКЛЮЧЕН (KILL_SWITCH_ENABLED=False) - блок ниже не срабатывает
@@ -474,13 +466,8 @@ async def scanner_loop(analyzer, tracker):
                 except Exception as _e:
                     pass
 
-                # 2. DexScreener бусты и профили (кэш 20 сек)
-                _lt_ttl = float(getattr(config, "SCAN_LATEST_TTL_SEC", 20))
-                if _latest_cache[0] and time.time() - _latest_cache[0] < _lt_ttl:
-                    tokens = _latest_cache[1]
-                else:
-                    tokens = await analyzer.fetch_latest_tokens()
-                    _latest_cache = (time.time(), tokens)
+                # 2. DexScreener бусты и профили
+                tokens = await analyzer.fetch_latest_tokens()
                 if tokens:
                     mints_to_scan.extend([p.get("tokenAddress") for p in tokens if p.get("tokenAddress")])
 
@@ -561,30 +548,6 @@ async def scanner_loop(analyzer, tracker):
                 _ranked_mints.sort(key=lambda x: x[0], reverse=True)
                 mints_to_scan = [m for _, m in _ranked_mints]
 
-                # ⚡ Параллельный разбор: отбираем до 15 подходящих кандидатов в окно
-                _launch = []
-                _now_l = time.time()
-                for _m in mints_to_scan:
-                    if not _m or _m in tracker.positions:
-                        continue
-                    _pl_l = tracker.last_loss_pct(_m)
-                    if _pl_l is not None and _pl_l <= getattr(config, "RUG_REBUY_MAX_LOSS", -0.15):
-                        continue
-                    _pre_l = getattr(analyzer, "_prefetch_cache", {}).get(_m, (0, {}))[1]
-                    _ca_l = _pre_l.get("pairCreatedAt") or 0 if isinstance(_pre_l, dict) else 0
-                    _age_l = (time.time() * 1000 - _ca_l) / 60000.0 if _ca_l else 999.0
-                    _is_fresh_l = _m in _graduated_set or _age_l <= 30.0
-                    _cd_l = int(getattr(config, "SOLANA_FRESH_RESCAN_COOLDOWN", 45)) if _is_fresh_l else int(getattr(config, "SOLANA_RESCAN_COOLDOWN", 180))
-                    if _now_l - processed_mints.get(_m, 0.0) < _cd_l:
-                        continue
-                    _launch.append(_m)
-                    if len(_launch) >= 15:
-                        break
-                _launch_n = len(_launch)
-                _scan_conc = int(getattr(config, "SCAN_CONCURRENCY", 4))
-                if _launch and _scan_conc > 1:
-                    _scan_win = ScanWindow(analyzer, _launch, _scan_conc)
-
                 for mint in mints_to_scan:
                     if not mint or mint in tracker.positions:
                         continue
@@ -594,11 +557,7 @@ async def scanner_loop(analyzer, tracker):
                             print(f"🚫 SCANNER {mint[:8]}: прошлый лосс {_pl*100:.0f}% — второй раз не входим.")
                         processed_mints[mint] = time.time()
                         continue
-                    _pre_m = getattr(analyzer, "_prefetch_cache", {}).get(mint, (0, {}))[1]
-                    _ca_m = _pre_m.get("pairCreatedAt") or 0 if isinstance(_pre_m, dict) else 0
-                    _age_m = (time.time() * 1000 - _ca_m) / 60000.0 if _ca_m else 999.0
-                    _is_fresh_m = mint in _graduated_set or _age_m <= 30.0
-                    _cd = int(getattr(config, "SOLANA_FRESH_RESCAN_COOLDOWN", 45)) if _is_fresh_m else int(getattr(config, "SOLANA_RESCAN_COOLDOWN", 180))
+                    _cd = 60 if mint in _graduated_set else int(getattr(config, "SOLANA_RESCAN_COOLDOWN", 180))
                     if time.time() - processed_mints.get(mint, 0.0) < _cd:
                         continue
                     
@@ -608,12 +567,7 @@ async def scanner_loop(analyzer, tracker):
         
                     try:
                         # Используем умный маршрутизатор (сам выберет XGBoost или Raydium модель)
-                        _res = await _scan_win.get(mint) if _scan_win is not None else _SCAN_MISSING
-                        if _res is _SCAN_MISSING:
-                            is_good = await analyzer.analyze_token(mint)
-                        else:
-                            is_good = _scan_apply(analyzer, _res)
-                        _n_analyzed += 1
+                        is_good = await analyzer.analyze_token(mint)
                         if is_good is not None and mint in _graduated_set:
                             # Метрика time_to_index: миграция → первый успешный разбор DS
                             try:
@@ -665,24 +619,22 @@ async def scanner_loop(analyzer, tracker):
                                     _div_r = float(pair_data.get("_price_divergence_ratio", 0.0) or 0.0)
                                     print(f"🚫 [SCANNER-PRICE-SPLIT] {actual_symbol} ({mint[:8]}): рассинхрон пулов {_div_r:.1f}x — блок.")
                                     continue
-                                _dex_id = str((pair_data.get("dexId") or "")).lower()
-                                if _dex_id not in ("pump", "pumpfun", "pumpswap") and not mint.endswith("pump"):
-                                    from jupiter import JupiterAPI
-                                    _jup_chk = await JupiterAPI.get_price(mint)
-                                    if _jup_chk and _jup_chk > 0 and entry_price > 0:
-                                        if _jup_chk < entry_price * 0.90:
-                                            analyzer._deny(mint, "scanner-live-dump >10%", f"🚫 [LIVE-DUMP] {actual_symbol} ({mint[:8]}): живая цена Jupiter (${_jup_chk:.8f}) уже на {(1.0 - _jup_chk / entry_price) * 100:.1f}% ниже DexScreener (${entry_price:.8f}) [>10%] — токен обваливается прямо сейчас, блок входа!")
-                                            continue
-                                        _chk_r = max(_jup_chk, entry_price) / min(_jup_chk, entry_price)
-                                        if _chk_r > 1.25:
-                                            print(f"🚫 [SCANNER-PRICE-MISMATCH] {actual_symbol} ({mint[:8]}): Jupiter (${_jup_chk:.8f}) vs DS (${entry_price:.8f}) расхождение {_chk_r:.1f}x — блок.")
-                                            continue
-                                        entry_price = _jup_chk
+                                from jupiter import JupiterAPI
+                                _jup_chk = await JupiterAPI.get_price(mint)
+                                if _jup_chk and _jup_chk > 0 and entry_price > 0:
+                                    if _jup_chk < entry_price * 0.965:
+                                        print(f"🚫 [LIVE-DUMP] {actual_symbol} ({mint[:8]}): живая цена Jupiter (${_jup_chk:.8f}) уже на {(1.0 - _jup_chk / entry_price) * 100:.1f}% ниже DexScreener (${entry_price:.8f}) — токен обваливается прямо сейчас, блок входа!")
+                                        continue
+                                    _chk_r = max(_jup_chk, entry_price) / min(_jup_chk, entry_price)
+                                    if _chk_r > 1.25:
+                                        print(f"🚫 [SCANNER-PRICE-MISMATCH] {actual_symbol} ({mint[:8]}): Jupiter (${_jup_chk:.8f}) vs DS (${entry_price:.8f}) расхождение {_chk_r:.1f}x — блок.")
+                                        continue
+                                    entry_price = _jup_chk
                                 # RKT-вето дженерик-входов Solana (лотереи/VIP-билеты exempt).
                                 _ssig = analyzer.get_signal(mint)
                                 _sveto = analyzer.rocket_veto(mint, pair_data, _ssig)
                                 if _sveto:
-                                    analyzer._deny(mint, f"scanner-veto: {_sveto[:20]}", f"🚫 [SCANNER] {actual_symbol}: {_sveto}")
+                                    print(f"🚫 [SCANNER] {actual_symbol}: {_sveto}")
                                     analyzer.log_scan(actual_symbol, mint, "SCANNER", False,
                                                       getattr(analyzer, "last_score", 0.0))
                                     await asyncio.sleep(1.5)
@@ -763,7 +715,6 @@ async def scanner_loop(analyzer, tracker):
                                                      ml_confidence=float(getattr(analyzer, "last_score", 0.0)),
                                                      source=f"SCANNER:{analyzer.get_signal(mint)}",
                                                      pair_address=pair_data.get("pairAddress", ""))
-                                _entered = True
                                 break # Ждем следующего цикла после покупки
                             else:
                                 print(f"⚠️ Ошибка: Не удалось получить цену для {mint} (entry_price=0). Возможно, Rate Limit (429).")
@@ -772,24 +723,9 @@ async def scanner_loop(analyzer, tracker):
                         await asyncio.sleep(0.05)
                     except Exception as e:
                         print(f"⚠️ Ошибка анализа {mint[:8]}: {type(e).__name__}: {e}. Сканирую дальше.")
-            else:
-                # Диагностика "тишины": сканер вообще не работает, пока вход закрыт
-                _now_i = time.time()
-                if _now_i - _last_idle_log >= 60:
-                    _last_idle_log = _now_i
-                    print(f"⏸ [SCANNER] вход закрыт: открыто {open_count}/{config.MAX_CONCURRENT_POSITIONS}, "
-                          f"trading_allowed={tracker.is_trading_allowed()} (лимит позиций / кэш / streak-пауза) — "
-                          f"сканирование приостановлено до освобождения слота.")
         except Exception as e:
             print(f"Ошибка в цикле сканера: {e}")
-        finally:
-            if _scan_win is not None:
-                await _scan_win.close()  # отменяем недоработанное (после входа/ошибки)
-        if _n_analyzed:
-            print(f"⏱ [SCANNER] цикл {time.time() - _cycle_t0:.1f}с: в очереди {_launch_n}, разобрано {_n_analyzed}"
-                  f"{', ВХОД' if _entered else ''} (параллель x{int(getattr(config, 'SCAN_CONCURRENCY', 4))}).")
-        await asyncio.sleep(float(getattr(config, "SCAN_AFTER_ENTRY_SLEEP_SEC", 15) if _entered
-                                  else getattr(config, "SCAN_LOOP_SLEEP_SEC", 8)))
+        await asyncio.sleep(30)
 
 from copytrader import CopyTrader
 import os
@@ -938,8 +874,8 @@ async def fomo_signal_loop(analyzer, tracker):
                                 from jupiter import JupiterAPI
                                 _jup_chk = await JupiterAPI.get_price(mint)
                                 if _jup_chk and _jup_chk > 0:
-                                    if _jup_chk < entry_price * 0.90:
-                                        print(f"🚫 [TG-LIVE-DUMP] {actual_symbol} ({mint[:8]}): живая цена Jupiter (${_jup_chk:.8f}) уже на {(1.0 - _jup_chk / entry_price) * 100:.1f}% ниже DexScreener (${entry_price:.8f}) [>10%] — обвал в моменте, блок!")
+                                    if _jup_chk < entry_price * 0.965:
+                                        print(f"🚫 [TG-LIVE-DUMP] {actual_symbol} ({mint[:8]}): живая цена Jupiter (${_jup_chk:.8f}) уже на {(1.0 - _jup_chk / entry_price) * 100:.1f}% ниже DexScreener (${entry_price:.8f}) — обвал в моменте, блок!")
                                         continue
                                     if max(_jup_chk, entry_price) / min(_jup_chk, entry_price) > 1.25:
                                         continue
@@ -2229,3 +2165,4 @@ if __name__ == "__main__":
             time.sleep(1)
     except KeyboardInterrupt:
         pass
+

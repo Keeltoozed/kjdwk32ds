@@ -371,18 +371,6 @@ class PaperTracker:
 
         target = min(target, hard_cap)
 
-        # Троттлинг по просадке: чем глубже откат от пика реализованного PnL, тем меньше билет.
-        # >= START$ просадки -> половина размера, >= 2*START$ -> базовый (скаутский) билет.
-        if getattr(config, "DD_THROTTLE_ENABLED", True):
-            _dd = self.get_realized_drawdown()
-            _dd0 = float(getattr(config, "DD_THROTTLE_START_USD", 15.0))
-            if _dd >= 2 * _dd0:
-                target = base_size
-            elif _dd >= _dd0:
-                target = max(base_size, target * 0.5)
-            if _dd >= _dd0:
-                print(f"📉 [DD THROTTLE] просадка ${_dd:.1f} от пика -> сайз ${target:.0f}")
-
         if target > free_cash:
             target = free_cash
 
@@ -655,43 +643,6 @@ class PaperTracker:
             except Exception as e:
                 print(f"⚠️ Ошибка сохранения опыта: {e}")
 
-    def _closed_sorted(self):
-        """Закрытые сделки (без фантомного PnL) по времени выхода, старые первыми."""
-        closed = [p for p in self.positions.values()
-                  if p.status == "closed" and not self._is_suspicious_pnl(p)]
-        return sorted(closed, key=lambda p: getattr(p, "exit_time", 0.0) or getattr(p, "entry_time", 0.0))
-
-    def get_realized_drawdown(self) -> float:
-        """Просадка реализованного PnL от своего максимума, в $ (>= 0)."""
-        cum = peak = 0.0
-        for p in self._closed_sorted():
-            cum += float(p.pnl_usd or 0.0)
-            peak = max(peak, cum)
-        return max(0.0, peak - cum)
-
-    def is_rolling_breaker_active(self) -> Tuple[bool, str]:
-        """Пауза входов, если сумма PnL последних N закрытых сделок <= -LOSS_USD.
-        Пауза считается от выхода последней сделки. На данных 22.10: пик +67$ в 15:19,
-        дальше 13 минусов из 14 (-35$) при паузе стрик-брейкера всего 3 мин."""
-        if not getattr(config, "ROLLING_BREAKER_ENABLED", True):
-            return False, ""
-        n = int(getattr(config, "ROLLING_BREAKER_WINDOW", 8))
-        loss = float(getattr(config, "ROLLING_BREAKER_LOSS_USD", 8.0))
-        pause = float(getattr(config, "ROLLING_BREAKER_PAUSE_MIN", 45.0))
-        closed = self._closed_sorted()
-        if len(closed) < n:
-            return False, ""
-        last = closed[-n:]
-        total = sum(float(p.pnl_usd or 0.0) for p in last)
-        if total > -loss:
-            return False, ""
-        last_exit = getattr(last[-1], "exit_time", 0.0) or getattr(last[-1], "entry_time", 0.0) or 0.0
-        elapsed = (time.time() - last_exit) / 60.0
-        if elapsed < pause:
-            return True, (f"🛑 [ROLLING BREAKER] Последние {n} сделок: ${total:.2f}. "
-                          f"Пауза ещё {pause - elapsed:.0f} мин.")
-        return False, ""
-
     def is_streak_cooldown_active(self) -> Tuple[bool, str]:
         """
         Проверка защиты от серии минусов (Streak Circuit Breaker):
@@ -699,12 +650,6 @@ class PaperTracker:
         активируется пауза на STREAK_COOLDOWN_MINUTES (по умолчанию 30 минут)
         с момента закрытия последнего минуса.
         """
-        # Скользящий брейкер по сумме PnL (ловит «медленное кровотечение», которое серия
-        # из N крупных минусов подряд не видит): срабатывает раньше и держит паузу дольше.
-        _rb, _rb_msg = self.is_rolling_breaker_active()
-        if _rb:
-            return True, _rb_msg
-
         if not getattr(config, "STREAK_COOLDOWN_ENABLED", True):
             return False, ""
 
