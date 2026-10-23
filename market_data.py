@@ -318,7 +318,7 @@ async def get_token_data(mint: str, max_cache_age: float = TD_TTL) -> dict:
 
 _ALLOWED_SOL_QUOTES = {
     "so11111111111111111111111111111111111111112",
-    "epjfwdd5aufqssqem2qnxzybapc8g4weggkzwytdt1v",
+    "epjfwdd5aufqssqem2qn1xzybapc8g4weggkzwytdt1v",
     "es9vmfrzacerjmffrff4h2fyd4kconky11mcce8benwnyb",
 }
 _ALLOWED_SOL_SYMBOLS = {"SOL", "WSOL", "USDC", "USDT"}

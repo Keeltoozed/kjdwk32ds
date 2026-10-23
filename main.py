@@ -17,59 +17,65 @@ async def position_manager_loop(analyzer, tracker):
         try:
             open_positions = tracker.get_open_positions()
             
-            # ОПТИМИЗАЦИЯ СКОРОСТИ: Запрашиваем цены для ВСЕХ позиций ОДНИМ запросом.
+            # ОПТИМИЗАЦИЯ СКОРОСТИ: Запрашиваем цены для ВСЕХ позиций ОДНИМ запросом с жестким таймаутом.
             mints_to_fetch = [m for m, p in open_positions.items()
                               if not m.startswith("0x")
                               and getattr(p, "chain", "solana") == "solana"]
-            bulk_prices = await JupiterAPI.get_prices(mints_to_fetch) if mints_to_fetch else {}
+            bulk_prices = {}
+            if mints_to_fetch:
+                try:
+                    bulk_prices = await asyncio.wait_for(JupiterAPI.get_prices(mints_to_fetch), timeout=2.0)
+                except Exception:
+                    bulk_prices = {}
             
             for mint, position in list(open_positions.items()):
                 # Robinhood (0x...) ведёт отдельный robinhood_loop со своими ценами DS
                 if mint.startswith("0x") or getattr(position, "chain", "solana") != "solana":
                     continue
-                # 1. Берем цену из Raydium/Gecko/DS (запросили разом для всех)
-                api_price = bulk_prices.get(mint, 0.0)
-                # 1b. Добор слепых: Jupiter не знает свежий/тонкий пул — дёргаем DS
-                # напрямую, иначе цена встаёт ($0.00 в дашборде) и глохнут выходы.
-                if not api_price:
-                    try:
-                        import market_data as _md
-                        _td0 = await _md.get_token_data(mint, max_cache_age=5.0)
-                        api_price = float((_td0.get("priceUsd", 0) or 0)) if _td0 else 0.0
-                    except Exception:
-                        pass
+
+                # 1. Приоритет №1: Свежий WSS-стрим из PumpPortal (нулевая задержка, миллисекунды)
+                wss_px = float(getattr(position, "wss_price", 0.0) or 0.0)
+                wss_ts = float(getattr(position, "wss_price_ts", 0.0) or 0.0)
+                wss_fresh = wss_px > 0.0 and (time.time() - wss_ts) < 8.0
+
+                api_price = 0.0
+                if wss_fresh:
+                    current_price = wss_px
+                else:
+                    # 2. Берем цену из Raydium/Gecko/DS балка
+                    api_price = bulk_prices.get(mint, 0.0)
+                    if not api_price:
+                        # Добор только если нет цены и с жестким таймаутом 1.5с (не вешаем Stop-Loss луп!)
+                        try:
+                            import market_data as _md
+                            _td0 = await asyncio.wait_for(_md.get_token_data(mint, max_cache_age=5.0), timeout=1.5)
+                            api_price = float((_td0.get("priceUsd", 0) or 0)) if _td0 else 0.0
+                        except Exception:
+                            pass
+                    if api_price > 0.0:
+                        current_price = api_price
+                    else:
+                        # Если оба источника не дали цену в этом тике — держим последнюю известную (до 120 сек)
+                        _last_known = float(getattr(position, "current_price_usd", 0.0) or 0.0)
+                        _last_ts = float(getattr(position, "price_checked_at", 0.0) or getattr(position, "price_updated_at", 0.0) or 0.0)
+                        if _last_known > 0.0 and (time.time() - _last_ts) < 120:
+                            current_price = _last_known
+                        else:
+                            current_price = 0.0
                 
                 # Обновляем живую цену для GROWTH/EARLY-позиций прямо здесь (каждую секунду),
                 # а исполнение медленных стопов/стагнантов оставляет growth_loop
                 if str(getattr(position, "source", "")).startswith("GROWTH") or str(getattr(position, "source", "")).startswith("EARLY"):
-                    if api_price > 0.0:
-                        position.current_price_usd = api_price
+                    if current_price > 0.0:
+                        position.current_price_usd = current_price
                         position.price_updated_at = time.time()
-                        if api_price > position.max_price_usd:
-                            position.max_price_usd = api_price
+                        position.price_checked_at = time.time()
+                        if current_price > position.max_price_usd:
+                            position.max_price_usd = current_price
                         if position.entry_price_usd > 0:
-                            _pnl_pct = (api_price - position.entry_price_usd) / position.entry_price_usd
+                            _pnl_pct = (current_price - position.entry_price_usd) / position.entry_price_usd
                             position.current_pnl_usd = position.amount_usd * _pnl_pct
                     continue
-                
-                # 2. Определение текущей цены:
-                # А) Свежий WSS-стрим из PumpPortal (если токен ещё на pump.fun кривой и активно торгуется)
-                wss_px = float(getattr(position, "wss_price", 0.0) or 0.0)
-                wss_ts = float(getattr(position, "wss_price_ts", 0.0) or 0.0)
-                wss_fresh = wss_px > 0.0 and (time.time() - wss_ts) < 5.0
-
-                if wss_fresh:
-                    current_price = wss_px
-                elif api_price > 0.0:
-                    current_price = api_price
-                else:
-                    # Если оба источника не дали цену в этом тике — держим последнюю известную (до 120 сек)
-                    _last_known = float(getattr(position, "current_price_usd", 0.0) or 0.0)
-                    _last_ts = float(getattr(position, "price_checked_at", 0.0) or getattr(position, "price_updated_at", 0.0) or 0.0)
-                    if _last_known > 0.0 and (time.time() - _last_ts) < 120:
-                        current_price = _last_known
-                    else:
-                        current_price = 0.0
 
                 prev_price = position.current_price_usd
                 if current_price <= 0.0:
@@ -209,7 +215,7 @@ async def position_manager_loop(analyzer, tracker):
                     position.last_liq_chk = _now_t
                     try:
                         import market_data as _md
-                        _td_sol = await _md.get_token_data(mint, max_cache_age=10.0)
+                        _td_sol = await asyncio.wait_for(_md.get_token_data(mint, max_cache_age=10.0), timeout=1.5)
                         if _td_sol:
                             _sol_liq = float(((_td_sol.get("liquidity") or {}).get("usd", 0) or 0))
                             _sol_tx5 = (_td_sol.get("txns") or {}).get("m5", {}) or {}

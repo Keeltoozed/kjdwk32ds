@@ -400,7 +400,15 @@ class PumpFunSniper:
                             mint = data.get("mint")
                             state = self.trackers.get(mint)
                             if not state:
-                                continue
+                                # Если позиция открыта в портфеле (куплена сканером/ботом) — подключаем лайв-трекинг на лету
+                                p_tracker = self.tracker
+                                pos = p_tracker.positions.get(mint) if p_tracker else None
+                                if pos and getattr(pos, "status", "") == "open":
+                                    state = TokenTrackerState(mint, getattr(pos, "symbol", "") or "", "")
+                                    state.is_entered = True
+                                    self.trackers[mint] = state
+                                else:
+                                    continue
 
                             v_sol = float(data.get("vSolInBondingCurve") or 0.0)
                             if v_sol == 0.0:
@@ -451,11 +459,10 @@ class PumpFunSniper:
                                 await ws.send(json.dumps({"method": "unsubscribeTokenTrade", "keys": [mint]}))
                                 continue
 
-                            # Трансляция LIVE цен в позицию в реальном времени
-                            if state.is_entered:
-                                from tracker import PaperTracker
-                                p_tracker = self.tracker if self.tracker else PaperTracker()
-                                pos = p_tracker.positions.get(mint)
+                            # Трансляция LIVE цен в позицию в реальном времени (нулевая задержка по сокету)
+                            p_tracker = self.tracker if self.tracker else None
+                            pos = p_tracker.positions.get(mint) if p_tracker else None
+                            if state.is_entered or (pos and getattr(pos, "status", "") == "open"):
                                 if pos and getattr(pos, "status", "") == "open":
                                     sol_usd = get_sol_price_sync()
                                     live_px = (mc_sol / 1_000_000_000.0) * sol_usd if mc_sol > 0 else (v_sol / 1_000_000_000.0) * sol_usd
@@ -464,6 +471,7 @@ class PumpFunSniper:
                                         pos.wss_price = live_px
                                         pos.wss_price_ts = now
                                         pos.price_updated_at = now
+                                        pos.price_checked_at = now
                                         if live_px > float(getattr(pos, "max_price_usd", 0.0) or 0.0):
                                             pos.max_price_usd = live_px
                                             pos.peak_time = now

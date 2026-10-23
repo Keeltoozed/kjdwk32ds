@@ -2086,6 +2086,16 @@ class Analyzer:
         if _fdv_curve > 62000:
             print(f"🚫 [GRADUATION-CLIFF] {mint[:8]}: кривая Pump.fun у самого потолка миграции (FDV ${_fdv_curve:,.0f} > $62k) — риск сброса при выходе на AMM.")
             return False
+
+        # Защита от фантомных дев-дампов на старте (кейс 404: $3.1k cap, 5% кривой, мгновенный сброс дева)
+        if _fdv_curve < 7500:
+            print(f"🚫 [CURVE-TOO-EARLY] {mint[:8]}: капитализация ${_fdv_curve:,.0f} < $7.5k (~8% прогресса) — нет подушки ликвидности, зона мгновенного дев-дампа.")
+            return False
+
+        _vm5 = float((pair_data.get("volume") or {}).get("m5", 0) or 0)
+        if _vm5 < 800:
+            print(f"🚫 [PUMP-LOW-VOL] {mint[:8]}: объём 5m ${_vm5:,.0f} < $800 — фантомная активность, риск дев-дампа.")
+            return False
             
         is_vip = self.check_hyper_rocket_momentum(pair_data)
         if is_vip:

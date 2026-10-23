@@ -32,6 +32,8 @@ FACTORIES_PER_CHAIN = {
         ("0xc35DADB65012eC5796536bD9864eD8773aBc74C4", "v3"),         # SushiSwap V3 Base
         ("0xFDa619b6d20975be80A10332cD39b9a4b0FAa8BB", "v2"),         # BaseSwap V2
         ("0x04C9f118d21e8B767d2e50C946f0cC9F6C367300", "v2"),         # SwapBased V2
+        ("0xd238dd80C259a72e81d7e4664a9801593F98d1c5", "v2"),         # AlienBase V2 Base
+        ("0x526C8D890aebE1901B95B161B1B47A977e597148", "slipstream"), # AlienBase Degen CLFactory Base
     ],
     "bsc": [
         ("0xcA143Ce32Fe78f1f7019d7d551a6402fC5350c73", "v2"),         # PancakeSwap V2 Factory BSC
@@ -40,6 +42,9 @@ FACTORIES_PER_CHAIN = {
         ("0x86407bEa2078ea5f5EB5A52B2caA963bC1F889Da", "v2"),         # BabySwap V2 Factory BSC
         ("0xdB1d10011AD0Ff90774D0C6Bb92e5C5c8b4461F7", "v3"),         # Uniswap V3 Factory BSC
         ("0x0841BD0B734E4F5853f0dD8d7Ea041c241fb0Da6", "v2"),         # ApeSwap V2 Factory BSC
+        ("0x20a3041B5076CdDe6507E4161b5803EC09008eda", "v2"),         # Thena V2 Factory BSC
+        ("0x306b00b73c44249a2a901986429388df6ea880a6", "slipstream"), # Thena Fusion CL Factory BSC
+        ("0x8F8Dd7DB1bDA5eD3da8C9daf3bfa471c12d58486", "v2"),         # DODO V2 Factory BSC
     ],
 }
 
