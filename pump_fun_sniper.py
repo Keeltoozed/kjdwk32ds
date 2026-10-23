@@ -21,6 +21,7 @@ class TokenTrackerState:
         self.trades = collections.deque(maxlen=150)
         
         # Флаги жизненного цикла
+        self.first_buyers = []   # Кошельки первых покупателей для детекта инсайдерских бандлов
         self.is_auditing = False
         self.is_evaluated = False
         self.audit_failed = False
@@ -303,9 +304,10 @@ class PumpFunSniper:
 
                 # Условие очистки:
                 # 1) Аудит заблокировал токен как скам
-                # 2) Нет сделок более 40 секунд и прогресс кривой < 5%
+                # 2) Нет сделок более STREAM_GC_IDLE_SEC (180с) и прогресс кривой < 5%
                 # 3) Токену больше max_age (300с) и он не набрал импульс (STREAM_GC_MIN_PROGRESS = 10%)
-                if state.audit_failed or (idle_seconds > 40 and state.max_curve_progress < 5.0) or (age_seconds > max_age and state.max_curve_progress < _min_real_prog):
+                idle_limit = float(getattr(config, "STREAM_GC_IDLE_SEC", 180))
+                if state.audit_failed or (idle_seconds > idle_limit and state.max_curve_progress < 5.0) or (age_seconds > max_age and state.max_curve_progress < _min_real_prog):
                     to_remove.append(mint)
 
             for mint in to_remove:
@@ -374,9 +376,10 @@ class PumpFunSniper:
                             symbol = data.get("symbol", "UNKNOWN")
                             trader_pubkey = data.get("traderPublicKey", "")
                             initial_buy = float(data.get("initialBuy") or 0)
+                            max_dev_tokens = float(getattr(config, "STREAM_MAX_DEV_BUY_TOKENS", 100_000_000))
 
-                            if initial_buy > 200_000_000:
-                                continue  # Пропускаем явные мега-дампы
+                            if initial_buy > max_dev_tokens:
+                                continue  # Пропускаем явные мега-дампы (> 10% эмиссии у дева)
 
                             state = TokenTrackerState(mint, symbol, trader_pubkey, initial_buy)
                             self.trackers[mint] = state
@@ -425,6 +428,10 @@ class PumpFunSniper:
                             self.trades_total += 1
                             self._mark(state, 1)
 
+                            if tx_type == "buy" and trader and trader != state.trader_pubkey:
+                                if len(state.first_buyers) < 5 and trader not in state.first_buyers:
+                                    state.first_buyers.append(trader)
+
                             # Прогресс кривой связывания (Pump.fun стартует с 30 виртуальных SOL и финиширует при 85 реальных SOL)
                             real_sol = max(0.0, v_sol - 30.0)
                             progress = min(100.0, (real_sol / 85.0) * 100.0)
@@ -463,7 +470,23 @@ class PumpFunSniper:
                                         if pos.entry_price_usd and pos.entry_price_usd > 0:
                                             pnl_pct = (live_px - pos.entry_price_usd) / pos.entry_price_usd
                                             pos.current_pnl_usd = pos.amount_usd * pnl_pct
-                                        p_tracker.save_portfolio()
+
+                                    # === БЫСТРЫЙ PUMP.FUN SELL-DUMP ДЕТЕКТОР ===
+                                    # Если крупный слив (>= 3 SOL) за первые 90с после входа — мгновенный выход
+                                    _entry_t = getattr(pos, 'entry_time', None)
+                                    if _entry_t:
+                                        try:
+                                            _et_f = _entry_t.timestamp() if hasattr(_entry_t, 'timestamp') else float(_entry_t)
+                                        except Exception:
+                                            _et_f = now
+                                        _sec_since_entry = now - _et_f
+                                        if tx_type == "sell" and _sec_since_entry < 90 and sol_amount >= 3.0:
+                                            _dump_reason = f"STREAM Panic Sell: слив {sol_amount:.1f} SOL через {_sec_since_entry:.0f}с после входа"
+                                            print(f"🚨 [STREAM PANIC] {state.symbol}: {_dump_reason}")
+                                            p_tracker.close_position(mint, live_px if live_px > 0 else pos.current_price_usd, _dump_reason)
+                                            state.is_dead = True
+
+                                    p_tracker.save_portfolio()
 
                             # === ФАЗА 2: ФИЛЬТРАЦИЯ В ОПЕРАТИВНОЙ ПАМЯТИ (RAM BUFFER) ===
                             if (not state.is_evaluated and not state.is_auditing and not state.is_entered 
@@ -488,7 +511,15 @@ class PumpFunSniper:
                                     print(f"🚫 [STREAM DEV DUMP] {state.symbol} ({mint[:8]}): дев продавал в истории — мгновенный отсев.")
                                     continue
 
-                                win_sec = getattr(config, "STREAM_WINDOW_SEC", 30)
+                                # Слив раннего бандла / снайпера: если ранний покупатель из ТОП-5 слил крупный объём SOL
+                                if tx_type == "sell" and trader in getattr(state, "first_buyers", []) and sol_amount >= 1.5:
+                                    state.dev_dumped = True
+                                    state.is_evaluated = True
+                                    self._fail(state, "ранний бандл-слив")
+                                    print(f"🚫 [STREAM BUNDLE DUMP] {state.symbol} ({mint[:8]}): ранний инсайдер {trader[:6]} слил {sol_amount:.2f} SOL — мгновенный отсев.")
+                                    continue
+
+                                win_sec = getattr(config, "STREAM_WINDOW_SEC", 60)
                                 recent = [t for t in state.trades if (now - t['ts']) <= win_sec]
 
                                 buys = [t for t in recent if t['type'] == 'buy']
@@ -537,10 +568,24 @@ class PumpFunSniper:
                                             continue
                                         self._mark(state, 6)
 
-                                        # 6. Защита от нулевого блока (минимум 5 секунд жизни)
+                                        # 6. Минимальный прогресс кривой (токен должен набрать хотя бы 3% реального SOL)
+                                        min_entry_prog = float(getattr(config, "STREAM_MIN_ENTRY_PROGRESS", 3.0))
+                                        if progress < min_entry_prog:
+                                            self._fail(state, f"кривая < {min_entry_prog}%")
+                                            continue
+
+                                        # 7. Защита от нулевого блока (минимум 5 секунд жизни)
                                         time_alive = now - state.start_time
                                         if time_alive < 5.0:
                                             self._fail(state, "младше 5с")
+                                            continue
+
+                                        # 8. Проверка ускорения моментума (вторая половина окна должна иметь >= 40% объёма)
+                                        half_ts = now - (win_sec / 2)
+                                        first_half_sol = sum(t['sol'] for t in buys if t['ts'] < half_ts)
+                                        second_half_sol = sum(t['sol'] for t in buys if t['ts'] >= half_ts)
+                                        if (first_half_sol + second_half_sol) > 0 and second_half_sol < (first_half_sol + second_half_sol) * 0.40:
+                                            self._fail(state, "моментум затухает")
                                             continue
 
                                         # --- ТОКЕН СТАЛ ФИНАЛИСТОМ! ---

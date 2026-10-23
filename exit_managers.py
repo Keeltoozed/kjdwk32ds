@@ -37,9 +37,9 @@ class MatureExitManager:
         except Exception:
             minutes_held = 0
 
-        # RIDE-режим для ракет и супер-моментума (RUNNER, VIP, RAY-XGB, PUMP-XGB, SCOUT):
+        # RIDE-режим для ракет и супер-моментума (RUNNER, VIP, RAY-XGB, PUMP-XGB, SCOUT, STREAM):
         _src = str(getattr(position, 'source', '') or '')
-        _ride = bool(getattr(config, 'RIDE_RUNNERS_ENABLED', True)) and any(k in _src for k in ('RUNNER-', 'VIP-', 'XGB', 'RAY', 'PUMP', 'SCOUT'))
+        _ride = bool(getattr(config, 'RIDE_RUNNERS_ENABLED', True)) and any(k in _src for k in ('RUNNER-', 'VIP-', 'XGB', 'RAY', 'PUMP', 'SCOUT', 'STREAM'))
 
         # Аварийный кэп ПЕРВЫМ: гэпы типа FIBONACCI -68% проскакивают обычный стоп
         if pnl_pct <= -0.30:
@@ -66,10 +66,10 @@ class MatureExitManager:
                 _floor_pnl = round(max_pnl_pct * 0.60, 2)
             elif max_pnl_pct >= 1.50:     # +150%..+300%: 50%
                 _floor_pnl = round(max_pnl_pct * 0.50, 2)
-            elif max_pnl_pct >= 1.00:     # +100%..+150%: 40% (пик +100% -> пол +40%)
+            elif max_pnl_pct >= 1.00:     # +100%..+150%: 45% (пик +100% -> пол +45%)
+                _floor_pnl = round(max_pnl_pct * 0.45, 2)
+            elif max_pnl_pct >= 0.60:     # +60%..+100%: 40% (пик +60% -> пол +24%, пик +80% -> пол +32%)
                 _floor_pnl = round(max_pnl_pct * 0.40, 2)
-            elif max_pnl_pct >= 0.60:     # +60%..+100%: 20% (пик +60% -> пол +12%)
-                _floor_pnl = round(max_pnl_pct * 0.20, 2)
         elif max_pnl_pct >= 5.00:       # Гипер-ракета (+500%+): держим 78% прибыли
             _floor_pnl = round(max_pnl_pct * 0.78, 2)
         elif max_pnl_pct >= 3.00:     # Мега-ракета (+300%..+500%): держим 75% прибыли

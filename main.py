@@ -670,6 +670,22 @@ async def scanner_loop(analyzer, tracker):
                                     print(f"🚫 [SCANNER-PRICE-SPLIT] {actual_symbol} ({mint[:8]}): рассинхрон пулов {_div_r:.1f}x — блок.")
                                     continue
                                 _dex_id = str((pair_data.get("dexId") or "")).lower()
+
+                                # Защита от миграционного дампа Pump.fun (кейс paura)
+                                if mint.endswith("pump") and _dex_id in ("pumpswap", "raydium", "meteora", "orca"):
+                                    _c_ms_sc = pair_data.get("pairCreatedAt") or 0
+                                    _age_sc = ((time.time() * 1000 - _c_ms_sc) / 60000.0) if _c_ms_sc else 0.5
+                                    if _age_sc < 3.5:
+                                        print(f"⏳ [SCANNER-MIGRATION] {actual_symbol} ({mint[:8]}): AMM-пул создан {_age_sc:.1f}м назад (< 3.5м) — зона сброса снайперов.")
+                                        continue
+                                    _fdv_sc = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
+                                    if 0 < _fdv_sc < 42000.0:
+                                        print(f"🚫 [SCANNER-MIGRATION] {actual_symbol} ({mint[:8]}): FDV ${_fdv_sc:,.0f} < $42,000 — упал ниже выпуска pump.fun.")
+                                        continue
+                                    if liq_usd < 12000.0:
+                                        print(f"🚫 [SCANNER-MIGRATION] {actual_symbol} ({mint[:8]}): ликвидность ${liq_usd:,.0f} < $12,000 — риск слива.")
+                                        continue
+
                                 if _dex_id not in ("pump", "pumpfun", "pumpswap") and not mint.endswith("pump"):
                                     from jupiter import JupiterAPI
                                     _jup_chk = await JupiterAPI.get_price(mint)
@@ -2020,6 +2036,34 @@ with tab1:
                         _mb_html = " <span style='background:#6f42c1; color:white; padding:2px 7px; border-radius:4px; font-size:0.75em; font-weight:bold;'>🚀 Moonbag (Фиксация TP)</span>" if _is_mb else ""
                         _size_html = f"<div><span style='color:#888;'>Ордер:</span> <b>${_orig_amt:.1f}</b>" + (f" (В рынке: <b>${_cur_amt:.1f}</b>)" if _is_mb else "") + f"{_mb_html}</div>"
 
+                        # Подпись: сколько времени назад обновлялась цена токена
+                        try:
+                            _last_ts = max(
+                                float(row.get('price_checked_at') or 0.0),
+                                float(row.get('price_updated_at') or 0.0),
+                                float(row.get('wss_price_ts') or 0.0)
+                            )
+                            if _last_ts > 0:
+                                _diff = int(max(0, time.time() - _last_ts))
+                                if _diff < 60:
+                                    _age_str = f"{_diff} с назад"
+                                elif _diff < 3600:
+                                    _age_str = f"{_diff // 60}м {_diff % 60}с назад"
+                                else:
+                                    _age_str = f"{_diff // 3600}ч {(_diff % 3600) // 60}м назад"
+                                
+                                if _diff <= 15:
+                                    _age_color = "#00C851"
+                                elif _diff <= 60:
+                                    _age_color = "#FFA500"
+                                else:
+                                    _age_color = "#FF4444"
+                                _updated_badge = f"<div style='margin-top: 6px; font-size: 0.8em; color: {_age_color}; font-weight: 500;'>⏱ цена обновлена {_age_str}</div>"
+                            else:
+                                _updated_badge = "<div style='margin-top: 6px; font-size: 0.8em; color: #888;'>⏱ цена ещё не обновлялась</div>"
+                        except Exception:
+                            _updated_badge = ""
+
                         st.markdown(f"""
                         <div style='background-color: #1E1E1E; padding: 15px; border-radius: 8px; border-left: 5px solid {color}; margin-bottom: 10px; font-family: sans-serif;'>
                             <div style='display: flex; justify-content: space-between; align-items: center;'>
@@ -2028,7 +2072,8 @@ with tab1:
                             </div>
                             <div style='margin-top: 6px; font-size: 0.75em; color: #888;'>🔖 {row.get('source', '') if str(row.get('source', '')).strip() else '—'} {chain_badge(row.get('chain', 'solana'), True)}</div>
                             <div style='margin-top: 6px; font-size: 0.85em; color: #DDD;'>{_size_html}</div>
-                            <div style='display: flex; justify-content: space-between; margin-top: 10px; font-size: 0.85em; color: #BBB;'>
+                            {_updated_badge}
+                            <div style='display: flex; justify-content: space-between; margin-top: 8px; font-size: 0.85em; color: #BBB;'>
                                 <div><span style='color:#888;'>Вход:</span><br>${row['entry_price_usd']:.8f}</div>
                                 <div><span style='color:#888;'>Сейчас:</span><br>${row['current_price_usd']:.8f}</div>
                                 <div><span style='color:#888;'>Пик:</span><br>${row['max_price_usd']:.8f}</div>

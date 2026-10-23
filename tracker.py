@@ -161,10 +161,10 @@ class PaperTracker:
         # чтобы случайно не затереть облачный слепок пустым словарём.
         print("🧹 Локальных и облачных данных нет — начинаем с чистого листа (в памяти, без записи).")
 
-    def save_portfolio(self):
+    def save_portfolio(self, force_cloud: bool = False):
         data = {k: getattr(v, "model_dump", v.dict)() for k, v in self.positions.items()}
         
-        # 1. Сохраняем локально (для Streamlit)
+        # 1. Сохраняем локально (для Streamlit) — мгновенно и без задержек
         try:
             with open(self.filename, 'w') as f:
                 json.dump(data, f, indent=4)
@@ -172,10 +172,15 @@ class PaperTracker:
             pass
             
         # 2. Сохраняем в Supabase (Render-proof).
-        # ЗАЩИТА ОТ WIPE: пустой словарь в облако никогда не пишем —
-        # пустая память + живой слепок в облаке = не трогаем облако.
+        # Троттлинг: не спамим Supabase синхронными HTTP-запросами каждую секунду.
+        # В облако пишем немедленно при открытии/закрытии (force_cloud=True) или не чаще раза в 4 секунды.
         if not data:
             return
+        now = time.time()
+        last_sb = getattr(self, "_last_sb_save", 0.0)
+        if not force_cloud and (now - last_sb) < 4.0:
+            return
+        self._last_sb_save = now
         sb = self._supabase()
         if sb is None:
             return
@@ -246,7 +251,9 @@ class PaperTracker:
                 continue
             if cs == "open":
                 try:
-                    if float(cv.get("price_updated_at", 0) or 0) > float(lv.get("price_updated_at", 0) or 0):
+                    cv_t = max(float(cv.get("price_checked_at", 0) or 0), float(cv.get("price_updated_at", 0) or 0))
+                    lv_t = max(float(lv.get("price_checked_at", 0) or 0), float(lv.get("price_updated_at", 0) or 0))
+                    if cv_t > lv_t:
                         out[k] = cv
                 except Exception:
                     pass
@@ -445,10 +452,14 @@ class PaperTracker:
                     return
                 if _p.status == "closed" and _cd > 0:
                     _xt = float(getattr(_p, "exit_time", 0) or 0)
-                    if _xt and (_now - _xt) < _cd:
-                        _left = (_cd - (_now - _xt)) / 3600
+                    _pnl = float(getattr(_p, "pnl_usd", 0.0) or 0.0)
+                    _was_profitable = _pnl > 0 and not any(k in str(getattr(_p, "exit_reason", "")).upper() for k in ("CRASH", "RUG", "HONEYPOT", "EMERGENCY"))
+                    _eff_cd = (5 * 60) if _was_profitable else _cd
+                    if _xt and (_now - _xt) < _eff_cd:
+                        _left = (_eff_cd - (_now - _xt)) / 60 if _was_profitable else (_eff_cd - (_now - _xt)) / 3600
+                        _unit = "м" if _was_profitable else "ч"
                         print(f"⏳ Символьный кулдаун: {symbol} закрыт {_p.pnl_usd:+.2f}$ недавно ({getattr(_p, 'exit_reason', '')}). "
-                              f"Повтор через {_left:.1f}ч — не покупаем свой же выход.")
+                              f"Повтор через {_left:.1f}{_unit} — не покупаем свой же выход.")
                         return
         # БЛОКИРОВКА ПОВТОРНОГО ВХОДА С УМНЫМ КУЛДАУНОМ
         if mint in self.positions:
@@ -457,16 +468,29 @@ class PaperTracker:
                 print(f"⚠️ Позиция {symbol} уже открыта. Отмена повторного входа.")
                 return
                 
-            # Если позиция закрыта, проверяем кулдаун (4 часа)
-            time_since_entry = time.time() - pos.entry_time
-            if time_since_entry < (4 * 3600):
-                print(f"⏳ Кулдаун: {symbol} уже торговался недавно. Ждем еще {(4*3600 - time_since_entry)/3600:.1f}ч перед входом.")
+            # Умный кулдаун:
+            # 1. Если сделка закрылась в плюс (TP / Trailing) и это не скам/раг:
+            #    даём 5 минут на окончание первого отката. Если монета снова растёт и сканер
+            #    подтверждает импульс — разрешаем повторный вход на вторую волну!
+            # 2. Если сделка закрылась в минус (Stop-Loss / Cut / Crash) — кулдаун 4 часа,
+            #    чтобы гарантированно не ловить падающий нож в умирающем токене.
+            _pnl = float(getattr(pos, "pnl_usd", 0.0) or 0.0)
+            _exit_time = float(getattr(pos, "exit_time", 0.0) or pos.entry_time)
+            time_since_exit = time.time() - _exit_time
+            _was_profitable = _pnl > 0 and not any(k in str(getattr(pos, "exit_reason", "")).upper() for k in ("CRASH", "RUG", "HONEYPOT", "EMERGENCY"))
+            
+            _req_cd = (5 * 60) if _was_profitable else (4 * 3600)
+            if time_since_exit < _req_cd:
+                if _was_profitable:
+                    print(f"⏳ Кулдаун профитной монеты: {symbol} закрыт в +${_pnl:.2f}. Ждем еще {int(_req_cd - time_since_exit)}с перед возможным перезаходом во 2-ю волну.")
+                else:
+                    print(f"⏳ Кулдаун: {symbol} закрыт с минусом. Ждем еще {(4*3600 - time_since_exit)/3600:.1f}ч перед входом.")
                 return
                 
             # Если кулдаун прошел, архивируем старую сделку, чтобы не потерять ее из истории PnL
             archive_key = f"{mint}_old_{int(time.time())}"
             self.positions[archive_key] = pos
-            print(f"🔄 Кулдаун прошел! Разрешен повторный вход в {symbol} (CTO/Вторая волна).")
+            print(f"🔄 Кулдаун прошел! Разрешен повторный вход в {symbol} ({'Вторая волна профитного токена' if _was_profitable else 'CTO'}).")
 
         print(f"✅ Открыта PAPER сделка: {symbol} по цене ${entry_price} [{chain}|{source}]")
         

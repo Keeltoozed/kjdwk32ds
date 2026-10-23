@@ -77,7 +77,7 @@ DD_THROTTLE_START_USD = 15.0         # просадка от пика
 
 # === IN-MEMORY STREAMING SNIPER (RAM FILTER + AUDIT) ===
 SNIPER_ENTRIES_ENABLED = True             # Активировать вход по In-Memory стриму (без задержек DexScreener)
-STREAM_WINDOW_SEC = 30                   # Скользящее окно скорости в RAM (30 секунд)
+STREAM_WINDOW_SEC = 60                   # Скользящее окно скорости в RAM (60 секунд — больше времени набрать уникальных покупателей)
 STREAM_MIN_UNIQUE_BUYERS = 6             # Минимум 6 уникальных покупателей за окно (ранняя органика)
 STREAM_MIN_BUY_SOL = 2.5                 # Минимум 2.5 SOL реального объема покупок
 STREAM_MAX_TOP_BUYER_RATIO = 0.50        # Доля крупнейшего покупателя <= 50%
@@ -87,6 +87,11 @@ STREAM_ENTRY_SIZE_USD = 15.0             # Размер билета на ран
 STREAM_SLIPPAGE = 0.02                   # 2% проскальзывание на входе
 STREAM_MAX_AGE_SEC = 300                 # Токены, не набравшие STREAM_GC_MIN_PROGRESS, чистим из RAM через 5 минут (было 2)
 STREAM_GC_MIN_PROGRESS = 10.0            # % кривой по РЕАЛЬНЫМ SOL, ниже которого токен чистится по возрасту (~8.5 SOL)
+STREAM_GC_IDLE_SEC = 180                 # Если ноль трейдов 180с (3 мин) и прогресс < 5% — чистим (было 40с!)
+STREAM_DEV_DUMP_RATIO = 0.30             # Если кошельки первых 3 транзакций продали > 30% общего объёма — скам
+STREAM_MAX_DEV_BUY_TOKENS = 100_000_000  # Максимум 10% supply (100M из 1B) на выкупе дева при создании (защита от дев-дампа)
+STREAM_MIN_ENTRY_PROGRESS = 3.0          # Минимум 3% кривой перед входом (~2.5 SOL реального объёма — доказательство интереса)
+STREAM_MOMENTUM_MIN_RATIO = 0.40         # Вторая половина окна должна содержать >= 40% объёма (моментум не затухает)
 
 VIP_ENTRIES_ENABLED = True   # ВКЛЮЧЕНО: VIP-полоса для супер-моментума (HUMANOID +141%, JEETJAK +60%), защищена ончейн-аудитом и 1м-фильтром отката
 TIME_EXIT_MINUTES = 60  # Если за 30 минут нет пампа - выходим
@@ -272,8 +277,8 @@ FOMO_MIN_USD = 100
 FOMO_BOARDS_INTERVAL = 7200
 USE_FOMO_SIGNALS = False  # ОТКЛЮЧЕНО: исключает попадание любых токсичных памп-энд-дамп коллов в бота
 MAX_FOMO_BUYS_PER_PASS = 3  # бёрст-контроль: не больше 3 входов за проход очереди
-TG_MAX_SIZE_USD = 5.0  # кэп TG/FOMO-входа: $5 (защита от памп-энд-дампа каналов)
-TG_VIP_SIZE_USD = 5.0
+TG_MAX_SIZE_USD = 15.0  # кэп TG/FOMO-входа: $15 (на уровне Base/BSC)
+TG_VIP_SIZE_USD = 15.0  # размер входа для VIP-сигналов (Solana) увеличен до $15
 ROB_MAX_SIZE_USD = 25.0  # Robinhood: потолок до $25 при реинвесте прибыли
 BSC_MAX_SIZE_USD = 25.0  # BSC: потолок до $25 при реинвесте прибыли
 BSC_MIN_LIQUIDITY = 3000.0  # Пулы от $3к на BSC (вместо $6к/$12к)

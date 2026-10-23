@@ -177,6 +177,22 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
     if (_b5_j + _s5_j) < 6:
         print(f"🚫 [{source_tag}-LOW-TXNS] {_sym_tmp} ({mint[:8]}): всего {_b5_j + _s5_j} сделок в m5 — нет активности.")
         return False
+
+    # Защита от миграционного дампа Pump.fun
+    if mint.endswith("pump") and _dex_j in ("pumpswap", "raydium", "meteora", "orca"):
+        _c_ms_j = (td or {}).get("pairCreatedAt") or 0
+        import time as _t
+        _age_j = ((_t.time() * 1000 - _c_ms_j) / 60000.0) if _c_ms_j else 0.5
+        if _age_j < 3.5:
+            print(f"⏳ [{source_tag}-MIGRATION-DUMP] {_sym_tmp} ({mint[:8]}): AMM-пул создан {_age_j:.1f}м назад (< 3.5м) — зона сброса снайперов pump.fun.")
+            return False
+        _fdv_j = float((td or {}).get("fdv", 0) or (td or {}).get("marketCap", 0) or 0)
+        if 0 < _fdv_j < 42000.0:
+            print(f"🚫 [{source_tag}-MIGRATION-LOW-FDV] {_sym_tmp} ({mint[:8]}): FDV ${_fdv_j:,.0f} < $42,000 — токен упал ниже уровня выпуска pump.fun.")
+            return False
+        if _liq_j < 12000.0:
+            print(f"🚫 [{source_tag}-MIGRATION-LOW-LIQ] {_sym_tmp} ({mint[:8]}): ликвидность ${_liq_j:,.0f} < $12,000 — дев/снайперы высосали SOL.")
+            return False
         
     from jupiter import JupiterAPI
     ds_price = float((td or {}).get("priceUsd", 0) or 0.0)
@@ -221,7 +237,7 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
                 cap = tracker.get_total_capital()
                 size *= analyzer.conviction_size_mult(td or {})
         if "VIP-" in _sig:
-            size = min(size, float(getattr(config, "TG_VIP_SIZE_USD", 5.0) or 5.0))
+            size = min(size, float(getattr(config, "TG_VIP_SIZE_USD", 15.0) or 15.0))
         tracker.add_position(
             _sym_tmp, mint, price, min(size, 100.0),
             is_mature=True,

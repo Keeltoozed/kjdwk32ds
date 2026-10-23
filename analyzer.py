@@ -2214,9 +2214,31 @@ class Analyzer:
         if (pair_data.get("dexId") or "").lower() in ("pump", "pumpfun"):
             return False
 
+        _dex_low = (pair_data.get("dexId") or "").lower()
+        _is_migrated_pump = mint.endswith("pump") and _dex_low in ("pumpswap", "raydium", "meteora", "orca")
+
         _c_ms = pair_data.get("pairCreatedAt") or 0
         import time as _t
-        _age_min = ((_t.time() * 1000 - _c_ms) / 60000.0) if _c_ms else 999.0
+        _age_min = ((_t.time() * 1000 - _c_ms) / 60000.0) if _c_ms else (0.5 if _is_migrated_pump else 999.0)
+
+        # === ЗАЩИТА ОТ ДАМПА МИГРАЦИИ PUMP.FUN (кейс paura -$13.84: дамп -92% на 1-й минуте AMM) ===
+        if _is_migrated_pump:
+            # 1. Запрет входа в первые 3.5 минуты жизни AMM-пула:
+            # В это окно дев и снайперы pump.fun выгружают свои миллионы токенов.
+            if _age_min < 3.5:
+                return self._deny(mint, "post-migration-dump-zone",
+                                  f"⏳ [POST-MIGRATION] {mint[:8]}: пул миграции создан всего {_age_min:.1f}м назад (< 3.5м) — зона сброса снайперов pump.fun.")
+
+            _ray_liq = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
+            if _ray_liq < 12000.0:
+                return self._deny(mint, "migrated-drained-liq",
+                                  f"🚫 [POST-MIGRATION] {mint[:8]}: ликвидность ${_ray_liq:,.0f} < $12,000 — снайперы высосали SOL на миграции.")
+
+            _fdv_check = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
+            if 0 < _fdv_check < 42000.0:
+                return self._deny(mint, "migrated-below-graduation",
+                                  f"🚫 [POST-MIGRATION] {mint[:8]}: FDV ${_fdv_check:,.0f} < $42,000 — токен упал ниже уровня выпуска pump.fun.")
+
         _sol_min_age = float(getattr(config, "SOLANA_MIN_AGE_MIN", 1.5))
         if _age_min < _sol_min_age:
             return self._deny(mint, "ray-young", f"⏳ [RAYDIUM] {mint[:8]}: возраст {_age_min:.1f}м < {_sol_min_age}м — ранняя flash-rug зона.")
