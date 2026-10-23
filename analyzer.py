@@ -1042,7 +1042,7 @@ class Analyzer:
         has_socials = bool(has_twitter or has_tg or has_website)
         
         _socials_unknown = bool(pair_data.get("_socials_unknown", False))
-        if not _socials_unknown and not has_socials and liquidity < 100000:
+        if not _socials_unknown and not has_socials and liquidity < 25000 and not _strong_fomo:
             print(f"🚫 Мусор: У {symbol} ({mint[:8]}) вообще нет ни одной соцсети или сайта (Twitter/TG/Web). Это анонимный дев-раг (кейс Hodlon).")
             return False
             
@@ -1078,15 +1078,23 @@ class Analyzer:
                     print(f"🚫 [АНТИСКАМ] Freeze Authority у ДЕВ-кошелька {freeze_authority[:8]} у {mint[:8]} → СКАМ")
                     return False
 
-                # Проверка критических рисков RugCheck (незаблокированный LP, мёртвая ликвидность, 1 кит с контрольным пакетом)
-                _rc_score = float(rc_data.get("score") or 0.0)
+                # Проверка критических рисков RugCheck с вычетом штрафа за Low Liquidity (ловит реальный скам, но не режет молодые пулы):
+                _rc_raw_score = float(rc_data.get("score") or 0.0)
+                _rc_low_liq_penalty = sum(
+                    float(rk.get("score", 0) or 0)
+                    for rk in (rc_data.get("risks") or [])
+                    if "low liquidity" in str(rk.get("name", "")).lower()
+                )
+                _rc_score = max(0.0, _rc_raw_score - _rc_low_liq_penalty)
                 if _rc_score >= 1000:
-                    print(f"🚫 [АНТИСКАМ] RugCheck Score {_rc_score:.0f} >= 1000 (высокий риск скама/рага) у {mint[:8]} → СКАМ")
+                    print(f"🚫 [АНТИСКАМ] RugCheck Очищенный Score {_rc_score:.0f} >= 1000 (высокий риск скама/рага) у {mint[:8]} → СКАМ")
                     return False
 
                 for rk in (rc_data.get("risks") or []):
                     _rk_name = str(rk.get("name") or "").lower()
                     _rk_lvl = str(rk.get("level") or "").lower()
+                    if "low liquidity" in _rk_name:
+                        continue
                     if _rk_lvl == "danger":
                         print(f"🚫 [АНТИСКАМ] Критический риск RugCheck [danger]: '{rk.get('name')}' ({rk.get('description')}) у {mint[:8]} → СКАМ")
                         return False
