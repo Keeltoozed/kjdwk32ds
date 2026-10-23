@@ -56,20 +56,25 @@ class TradeLogger:
         
         def _insert():
             if self.use_supabase:
-                data = {
-                    "mint": mint,
-                    "features": json.dumps(features),
-                    "confidence": confidence,
-                    "status": "OPEN",
-                    "entry_time": datetime.utcnow().isoformat()
-                }
-                self.supabase.table(table_name).upsert(data).execute()
-            else:
+                try:
+                    data = {
+                        "mint": mint,
+                        "features": json.dumps(features),
+                        "confidence": confidence,
+                        "status": "OPEN",
+                        "entry_time": datetime.utcnow().isoformat()
+                    }
+                    self.supabase.table(table_name).upsert(data).execute()
+                except Exception as sb_err:
+                    print(f"⚠️ [TradeLogger] Supabase log_entry error: {sb_err}")
+            try:
                 with sqlite3.connect(self.db_path) as conn:
                     conn.execute(
                         f"INSERT OR REPLACE INTO {table_name} (mint, features, confidence) VALUES (?, ?, ?)",
                         (mint, json.dumps(features), confidence)
                     )
+            except Exception as sql_e:
+                print(f"⚠️ [TradeLogger] SQLite log_entry error: {sql_e}")
         await asyncio.to_thread(_insert)
         print(f"🧠 [TradeLogger] Записан опыт входа для {mint} (Conf: {confidence}%) в {table_name}")
 
@@ -81,19 +86,24 @@ class TradeLogger:
         
         def _update():
             if self.use_supabase:
-                data = {
-                    "pnl": pnl_pct,
-                    "exit_reason": exit_reason,
-                    "status": "CLOSED",
-                    "exit_time": datetime.utcnow().isoformat()
-                }
-                self.supabase.table(table_name).update(data).eq("mint", mint).execute()
-            else:
+                try:
+                    data = {
+                        "pnl": pnl_pct,
+                        "exit_reason": exit_reason,
+                        "status": "CLOSED",
+                        "exit_time": datetime.utcnow().isoformat()
+                    }
+                    self.supabase.table(table_name).update(data).eq("mint", mint).execute()
+                except Exception as sb_err:
+                    print(f"⚠️ [TradeLogger] Supabase log_exit error: {sb_err}")
+            try:
                 with sqlite3.connect(self.db_path) as conn:
                     conn.execute(
                         f"UPDATE {table_name} SET pnl = ?, exit_reason = ?, status = 'CLOSED', exit_time = ? WHERE mint = ?",
                         (pnl_pct, exit_reason, datetime.utcnow().isoformat(), mint)
                     )
+            except Exception as sql_e:
+                print(f"⚠️ [TradeLogger] SQLite log_exit error: {sql_e}")
         await asyncio.to_thread(_update)
         print(f"🧠 [TradeLogger] Опыт закрыт для {mint}. PnL: {pnl_pct}% | {table_name}")
 
@@ -219,14 +229,17 @@ class TradeLogger:
                                 pass
                                 
                             if self.use_supabase:
-                                data = {
-                                    "post_exit_ath": new_ath,
-                                    "check_1h_done": update["check_1h"],
-                                    "check_4h_done": update["check_4h"],
-                                    "check_24h_done": update["check_24h"]
-                                }
-                                self.supabase.table(table).update(data).eq("mint", mint).execute()
-                            else:
+                                try:
+                                    data = {
+                                        "post_exit_ath": new_ath,
+                                        "check_1h_done": update["check_1h"],
+                                        "check_4h_done": update["check_4h"],
+                                        "check_24h_done": update["check_24h"]
+                                    }
+                                    self.supabase.table(table).update(data).eq("mint", mint).execute()
+                                except Exception:
+                                    pass
+                            try:
                                 with sqlite3.connect(self.db_path) as conn:
                                     conn.execute(f'''
                                         UPDATE {table} SET 
@@ -235,6 +248,8 @@ class TradeLogger:
                                     ''', (
                                         new_ath, update["check_1h"], update["check_4h"], update["check_24h"], mint
                                     ))
+                            except Exception:
+                                pass
 
             except Exception as e:
                 print(f"Ошибка в цикле Post-Trade Watcher: {e}")

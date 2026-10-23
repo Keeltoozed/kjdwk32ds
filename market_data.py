@@ -32,35 +32,55 @@ _TD_CACHE = {}  # mint -> (timestamp_monotonic, data)
 TD_TTL = 90.0  # секунд свежие данные считаются годными
 
 
-async def _gt_get(path: str, retries: int = 2):
+_gt_consecutive_fails = 0
+_gt_breaker_until = 0.0
+
+
+async def _gt_get(path: str, retries: int = 0, timeout: int = 6):
     """GET к GeckoTerminal через ГЛОБАЛЬНЫЙ семафор http_client (Sem=1).
-    ВАЖНО: 429 НЕ ретраится (повторный долбёж усугубляет бан) — сразу {}.
-    Ретраи только на 5xx/таймауты. Возвращает dict или {}."""
+    ВАЖНО:
+    - Circuit Breaker: при 3 сбоях подряд (таймауты/5xx/429) пауза 45с (fail-fast, не забиваем очередь).
+    - default retries=0 и timeout=6 для быстрого дискавери.
+    - 429 НЕ ретраится (повторный долбёж усугубляет бан). Возвращает dict или {}."""
+    global _gt_consecutive_fails, _gt_breaker_until
     from http_client import fetch_json
-    # fetch_json уже держит Sem=1 + интервал 2.4с + штраф за 429.
-    # retries=0 внутри, чтобы не долбить 429: один проход, снаружи добьём только 5xx.
-    status, data = await fetch_json(BASE + path, headers=HEADERS, timeout=12, retries=0)
+    now_m = time.monotonic()
+    if now_m < _gt_breaker_until:
+        return {}  # Circuit breaker open: fail-fast
+
+    status, data = await fetch_json(BASE + path, headers=HEADERS, timeout=timeout, retries=0)
     if status == 200 and isinstance(data, dict):
+        _gt_consecutive_fails = 0
         return data
     if status == 404:
         return {}  # токен/пул ещё не проиндексирован — ретраи бессмысленны
     if status == 429:
-        pass
+        _gt_consecutive_fails += 1
+        if _gt_consecutive_fails >= 3:
+            _gt_breaker_until = time.monotonic() + 45.0
+            print("⚡ [GT-BREAKER] GeckoTerminal 429/сбои -> пауза запросов на 45с (fail-fast).")
         return {}
-    # 5xx/таймаут: максимум `retries` доборов с паузой (не впритык к бану)
+
+    # 5xx / timeout:
+    _gt_consecutive_fails += 1
+    if _gt_consecutive_fails >= 3:
+        _gt_breaker_until = time.monotonic() + 45.0
+        print(f"⚡ [GT-BREAKER] GeckoTerminal {_gt_consecutive_fails} сбоя подряд -> пауза запросов на 45с.")
+
     last_err = f"HTTP {status}"
     for attempt in range(retries):
-        await asyncio.sleep(2 + 3 * attempt)
-        status, data = await fetch_json(BASE + path, headers=HEADERS, timeout=12, retries=0)
+        await asyncio.sleep(2 + 2 * attempt)
+        status, data = await fetch_json(BASE + path, headers=HEADERS, timeout=timeout, retries=0)
         if status == 200 and isinstance(data, dict):
+            _gt_consecutive_fails = 0
             return data
         if status in (404, 429):
             break
         last_err = f"HTTP {status}"
-    if status != 200:
-        if status != 429:
-            print(f"🔎 GT fail {path.split('?')[0][:60]}: {last_err}")
-    return {} if status != 200 else (data if isinstance(data, dict) else {})
+
+    if status != 200 and status != 429:
+        print(f"🔎 GT fail {path.split('?')[0][:60]}: {last_err}")
+    return {}
 
 
 def _parse_ms(ts) -> int:
@@ -89,7 +109,11 @@ def _dex_id_from_pool(item: dict) -> str:
 def _base_mint(item: dict) -> str:
     try:
         bid = item.get("relationships", {}).get("base_token", {}).get("data", {}).get("id", "")
-        return bid.split("_", 1)[1] if "_" in bid else ""
+        mint = bid.split("_", 1)[1] if "_" in bid else ""
+        # Solana-адреса base58 (32-44 символа) и не начинаются с 0x
+        if not mint or mint.startswith("0x") or len(mint) < 32 or len(mint) > 44:
+            return ""
+        return mint
     except Exception:
         return ""
 
@@ -534,7 +558,7 @@ async def get_trending() -> list:
         if not item or not isinstance(item, dict):
             return
         mint = _base_mint(item)
-        if not mint or mint in seen or len(mint) <= 30:
+        if not mint or mint in seen or mint.startswith("0x") or len(mint) < 32 or len(mint) > 44:
             return
         attrs = item.get("attributes") or {}
         # Защита от старых трупов: если пулу > 24ч и < 5 сделок в m5, либо старше 72ч — не засоряем очередь!
@@ -552,31 +576,35 @@ async def get_trending() -> list:
 
     # 1. Сканируем ТОП часовых трендов (1h тренды — точно как во вкладке DexScreener Trending 1H)
     for page in range(1, 3):
-        d = await _gt_get(f"/networks/solana/trending_pools?duration=1h&page={page}")
+        d = await _gt_get(f"/networks/solana/trending_pools?duration=1h&page={page}", retries=0, timeout=6)
         for item in (d.get("data") or []):
             add(item)
 
     # 1.1 Свежие 5-минутные импульсы (duration=5m — точно как во вкладке DexScreener Gainers 5M)
     for page in range(1, 3):
-        d5 = await _gt_get(f"/networks/solana/trending_pools?duration=5m&page={page}")
+        d5 = await _gt_get(f"/networks/solana/trending_pools?duration=5m&page={page}", retries=0, timeout=6)
         for item in (d5.get("data") or []):
             add(item)
 
     # 2. Свежие пулы (new_pools) — ловит новые Raydium/Meteora/Pump ракеты первыми!
     for page in range(1, 3):
-        d2 = await _gt_get(f"/networks/solana/new_pools?page={page}")
+        d2 = await _gt_get(f"/networks/solana/new_pools?page={page}", retries=0, timeout=6)
         for item in (d2.get("data") or []):
             add(item)
 
     # 3. Свежие Pump.fun
     for page in (1,):
-        d3 = await _gt_get(f"/networks/solana/dexes/pump-fun/pools?page={page}")
+        d3 = await _gt_get(f"/networks/solana/dexes/pump-fun/pools?page={page}", retries=0, timeout=6)
         for item in (d3.get("data") or []):
             add(item)
 
-    # Кэш реально записываем (раньше только читался — 6 запросов GT каждые 20 сек = 429)
-    _trending_cache = out
-    _trending_cache_time = time.time()
+    # Не кэшируем пустой get_trending на 180с (иначе бот слепнет на 3 минуты при сбое GT)
+    if out:
+        _trending_cache = out
+        _trending_cache_time = time.time()
+    else:
+        _trending_cache = []
+        _trending_cache_time = time.time() - 175  # даём повторить через 5с
     return out
 
 
