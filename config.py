@@ -85,7 +85,8 @@ STREAM_MIN_BS_RATIO = 1.8                # Соотношение Buy/Sell volum
 STREAM_MAX_CURVE_PROGRESS = 85.0         # Не входить если кривая > 85% (защита от покупки перед стеной миграции)
 STREAM_ENTRY_SIZE_USD = 15.0             # Размер билета на раннем входе ($15)
 STREAM_SLIPPAGE = 0.02                   # 2% проскальзывание на входе
-STREAM_MAX_AGE_SEC = 120                 # Очистка из RAM токенов без активности старше 2 минут
+STREAM_MAX_AGE_SEC = 300                 # Токены, не набравшие STREAM_GC_MIN_PROGRESS, чистим из RAM через 5 минут (было 2)
+STREAM_GC_MIN_PROGRESS = 10.0            # % кривой по РЕАЛЬНЫМ SOL, ниже которого токен чистится по возрасту (~8.5 SOL)
 
 VIP_ENTRIES_ENABLED = True   # ВКЛЮЧЕНО: VIP-полоса для супер-моментума (HUMANOID +141%, JEETJAK +60%), защищена ончейн-аудитом и 1м-фильтром отката
 TIME_EXIT_MINUTES = 60  # Если за 30 минут нет пампа - выходим
@@ -315,4 +316,3 @@ SCAN_AFTER_ENTRY_SLEEP_SEC = 15   # Пауза после входа в пози
 SCAN_LATEST_TTL_SEC = 20          # TTL кэша fetch_latest_tokens (20 секунд)
 SOLANA_RESCAN_COOLDOWN = 180      # Кулдаун пересканирования старых токенов (180 секунд)
 SOLANA_FRESH_RESCAN_COOLDOWN = 45 # Кулдаун для свежих токенов (<30 минут) и миграций (45 секунд)
-

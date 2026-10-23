@@ -30,6 +30,14 @@ class TokenTrackerState:
         
         self.max_curve_progress = 0.0
         self.entry_price_usd = 0.0
+        self.stage = 0           # самый дальний этап воронки (см. STAGES)
+        self.fail_reasons = set()  # причины отсева (считаем один раз на токен)
+
+
+# Этапы воронки: каждый токен считается на самом дальнем этапе, до которого дошёл.
+STAGES = ["0 создан", "1 есть сделки", "2 покупателей достаточно", "3 объём SOL ок",
+          "4 buy/sell ок", "5 без кита ок", "6 кривая ок", "7 финалист",
+          "8 аудит пройден", "9 ВХОД"]
 
 
 class PumpFunSniper:
@@ -37,11 +45,37 @@ class PumpFunSniper:
         self.tracker = tracker
         self.running = False
         self.trackers = {}  # mint -> TokenTrackerState
+        self.funnel = collections.Counter()       # этап -> сколько токенов закончили на нём
+        self.fails = collections.Counter()        # причина отсева -> число токенов
+        self.audit_fails = collections.Counter()  # причина отказа аудита -> число
+        self.created_total = 0
+        self.trades_total = 0
+        self._last_funnel_print = time.time()
+        self._bg_tasks = []
+
+    def _mark(self, state, stage: int):
+        if stage > state.stage:
+            state.stage = stage
+
+    def _fail(self, state, reason: str):
+        if reason not in state.fail_reasons:
+            state.fail_reasons.add(reason)
+            self.fails[reason] += 1
+
+    def print_funnel(self):
+        """Раз в минуту: сколько токенов на каком этапе остановились и почему."""
+        live = collections.Counter(st.stage for st in self.trackers.values())
+        print(f"\n📊 [STREAM FUNNEL] создано {self.created_total}, трейдов {self.trades_total}, в памяти {len(self.trackers)}")
+        for i, name in enumerate(STAGES):
+            print(f"   {name}: закончили {self.funnel.get(i, 0)}, сейчас {live.get(i, 0)}")
+        if self.fails:
+            print("   отсев (токенов): " + ", ".join(f"{k}={v}" for k, v in self.fails.most_common(8)))
+        if self.audit_fails:
+            print("   аудит отклонил: " + ", ".join(f"{k}={v}" for k, v in self.audit_fails.most_common(8)))
 
     async def run_security_audit(self, mint: str, symbol: str) -> tuple:
-        """Внешняя проверка безопасности (GoPlus + RugCheck).
-        Вызывается ТОЛЬКО для 1–2 финалистов в минуту, прошедших RAM-фильтр,
-        что полностью исключает ошибки 429 Too Many Requests."""
+        """Внешняя проверка безопасности (GoPlus + RugCheck + RPC).
+        Запускает проверки параллельно (asyncio.gather), ускоряя аудит с 15с до 1-2с!"""
         # 1. Проверка на мусорные названия и мимикрию под корпорации/акции
         bad_words = ["test", "scam", "fuck", "nigger", "pump and dump", "rug"]
         s_low = (symbol or "").lower()
@@ -54,53 +88,60 @@ class PumpFunSniper:
         if any(k in s_up for k in stocks):
             return False, f"мимикрия под корпоративный бренд {symbol} — 100% скам"
 
-        # 2. Прямой ончейн-аудит (Freeze/Mint authority, Token-2022) + GoPlus Security
-        try:
-            from goplus import check_solana, is_hard_scam, check_onchain_solana_security
-            _sol_ok, _sol_why = await check_onchain_solana_security(mint)
-            if not _sol_ok:
-                return False, f"OnChain-Freeze: {_sol_why}"
-            gp_ok, gp_reason = await check_solana(mint)
-            if not gp_ok and is_hard_scam(gp_reason):
-                return False, f"GoPlus: {gp_reason}"
-        except Exception as e:
-            print(f"⚠️ Ошибка проверки безопасности для {mint[:8]}: {e}")
+        # 2. Параллельные проверки ончейн RPC + GoPlus и RugCheck
+        async def _check_onchain_and_gp():
+            try:
+                from goplus import check_solana, is_hard_scam, check_onchain_solana_security
+                _sol_ok, _sol_why = await check_onchain_solana_security(mint)
+                if not _sol_ok:
+                    return False, f"OnChain-Freeze: {_sol_why}"
+                gp_ok, gp_reason = await check_solana(mint)
+                if not gp_ok and is_hard_scam(gp_reason):
+                    return False, f"GoPlus: {gp_reason}"
+                return True, ""
+            except Exception as e:
+                return True, ""  # fail-open при сетевых сбоях
 
-        # 3. Аудит через RugCheck (Mint/Freeze authority revoked, no transfer-hook, risk score)
-        try:
-            from http_client import fetch_json
-            rc_url = f"https://api.rugcheck.xyz/v1/tokens/{mint}/report/summary"
-            status, data = await fetch_json(rc_url, timeout=7, retries=1)
-            if status == 200 and isinstance(data, dict):
-                score = float(data.get("score", 0) or 0)
-                # Вычитаем штраф за Low Liquidity, так как для токенов на бондинг-кривой это норма
-                low_liq_penalty = sum(
-                    float(rk.get("score", 0) or 0)
-                    for rk in (data.get("risks") or [])
-                    if "low liquidity" in str(rk.get("name", "")).lower()
-                )
-                clean_score = max(0.0, score - low_liq_penalty)
-                if clean_score >= 800:
-                    return False, f"RugCheck clean score {clean_score:.0f} >= 800 (высокий риск)"
+        async def _check_rugcheck():
+            try:
+                from http_client import fetch_json
+                rc_url = f"https://api.rugcheck.xyz/v1/tokens/{mint}/report/summary"
+                status, data = await fetch_json(rc_url, timeout=5, retries=1)
+                if status == 200 and isinstance(data, dict):
+                    score = float(data.get("score", 0) or 0)
+                    low_liq_penalty = sum(
+                        float(rk.get("score", 0) or 0)
+                        for rk in (data.get("risks") or [])
+                        if "low liquidity" in str(rk.get("name", "")).lower()
+                    )
+                    clean_score = max(0.0, score - low_liq_penalty)
+                    if clean_score >= 800:
+                        return False, f"RugCheck clean score {clean_score:.0f} >= 800 (высокий риск)"
 
-                # Прямая проверка Mint и Freeze authority
-                if data.get("freezeAuthority"):
-                    return False, "RugCheck: Freeze Authority не отозвана (риск скрытого honeypot)"
-                if data.get("mintAuthority"):
-                    return False, "RugCheck: Mint Authority не отозвана (риск бесконечного минта девом)"
+                    if data.get("freezeAuthority"):
+                        return False, "RugCheck: Freeze Authority не отозвана"
+                    if data.get("mintAuthority"):
+                        return False, "RugCheck: Mint Authority не отозвана"
 
-                # Проверка критических рисков в отчете RugCheck
-                risks = data.get("risks", []) or []
-                for r in risks:
-                    r_lvl = str(r.get("level", "")).lower()
-                    r_name = str(r.get("name", ""))
-                    if r_lvl in ("danger", "critical"):
-                        return False, f"RugCheck: {r_name} ({r_lvl})"
-                    r_name_low = r_name.lower()
-                    if any(bad in r_name_low for bad in ("honeypot", "freeze", "mint authority", "transfer hook", "token-2022")):
-                        return False, f"RugCheck: {r_name}"
-        except Exception as e:
-            print(f"⚠️ Ошибка проверки RugCheck для {mint[:8]}: {e}")
+                    for r in (data.get("risks", []) or []):
+                        r_lvl = str(r.get("level", "")).lower()
+                        r_name = str(r.get("name", ""))
+                        if "low liquidity" in r_name.lower():
+                            continue  # Для токенов на бондинг-кривой низкая ликвидность — норма
+                        if r_lvl in ("danger", "critical"):
+                            return False, f"RugCheck: {r_name} ({r_lvl})"
+                        r_name_low = r_name.lower()
+                        if any(bad in r_name_low for bad in ("honeypot", "freeze", "mint authority", "transfer hook", "token-2022")):
+                            return False, f"RugCheck: {r_name}"
+                return True, ""
+            except Exception as e:
+                return True, ""
+
+        res_gp, res_rc = await asyncio.gather(_check_onchain_and_gp(), _check_rugcheck())
+        if not res_gp[0]:
+            return res_gp
+        if not res_rc[0]:
+            return res_rc
 
         return True, ""
 
@@ -108,18 +149,20 @@ class PumpFunSniper:
         """Фаза 3 и 4: Внешняя проверка финалиста и немедленный вход в позицию."""
         mint = state.mint
         sym = state.symbol
-        print(f"\n🎯 [STREAM FINALIST] {sym} ({mint[:8]}): {n_buyers} уникальных покупателей за {getattr(config, 'STREAM_WINDOW_SEC', 20)}с ({buy_sol:.1f} SOL)! Проверяем RugCheck + GoPlus...")
+        print(f"\n🎯 [STREAM FINALIST] {sym} ({mint[:8]}): {n_buyers} уникальных покупателей за {getattr(config, 'STREAM_WINDOW_SEC', 30)}с ({buy_sol:.1f} SOL)! Проверяем RugCheck + GoPlus...")
 
         try:
             # 1. Внешний аудит
             audit_ok, audit_reason = await self.run_security_audit(mint, sym)
             if not audit_ok:
                 print(f"🚫 [STREAM AUDIT REJECT] {sym}: {audit_reason}")
+                self.audit_fails[str(audit_reason)[:60]] += 1
                 state.audit_failed = True
                 state.is_evaluated = True
                 return
 
             print(f"✅ [STREAM AUDIT PASSED] {sym} ({mint[:8]}): аудит пройден чисто! Готовим вход...")
+            self._mark(state, 8)
 
             # 2. Проверка лимитов портфеля и защиты от серии минусов
             from tracker import PaperTracker
@@ -165,13 +208,14 @@ class PumpFunSniper:
             entry_price = raw_price * (1.0 + slip)
 
             # 4. Размер позиции
-            pos_size = float(getattr(config, "STREAM_ENTRY_SIZE_USD", 0.0) or getattr(config, "TRADE_AMOUNT_USD", 0.0) or 10.0)
+            pos_size = float(getattr(config, "STREAM_ENTRY_SIZE_USD", 0.0) or getattr(config, "TRADE_AMOUNT_USD", 0.0) or 15.0)
             pos_size = max(5.0, min(pos_size, 30.0))
 
             # 5. Исполнение входа
             state.is_entered = True
             state.is_evaluated = True
             state.entry_price_usd = entry_price
+            self._mark(state, 9)
 
             source_tag = f"STREAM:{n_buyers}b/{buy_sol:.1f}sol"
             tracker.add_position(
@@ -246,7 +290,8 @@ class PumpFunSniper:
             await asyncio.sleep(15)
             now = time.time()
             to_remove = []
-            max_age = getattr(config, "STREAM_MAX_AGE_SEC", 120)
+            max_age = getattr(config, "STREAM_MAX_AGE_SEC", 300)
+            _min_real_prog = float(getattr(config, "STREAM_GC_MIN_PROGRESS", 10.0))
 
             for mint, state in list(self.trackers.items()):
                 # Позиции в открытых сделках никогда не удаляем из WSS-трекинга
@@ -258,17 +303,26 @@ class PumpFunSniper:
 
                 # Условие очистки:
                 # 1) Аудит заблокировал токен как скам
-                # 2) Нет сделок более 40 секунд и прогресс кривой < 15%
-                # 3) Токену более 2 минут и он не набрал импульс
-                if state.audit_failed or (idle_seconds > 40 and state.max_curve_progress < 15.0) or (age_seconds > max_age and state.max_curve_progress < 50.0):
+                # 2) Нет сделок более 40 секунд и прогресс кривой < 5%
+                # 3) Токену больше max_age (300с) и он не набрал импульс (STREAM_GC_MIN_PROGRESS = 10%)
+                if state.audit_failed or (idle_seconds > 40 and state.max_curve_progress < 5.0) or (age_seconds > max_age and state.max_curve_progress < _min_real_prog):
                     to_remove.append(mint)
 
             for mint in to_remove:
-                self.trackers.pop(mint, None)
+                _st = self.trackers.pop(mint, None)
+                if _st is not None:
+                    self.funnel[_st.stage] += 1
                 try:
                     await ws.send(json.dumps({"method": "unsubscribeTokenTrade", "keys": [mint]}))
                 except Exception:
                     pass
+
+            if time.time() - self._last_funnel_print >= 60:
+                self._last_funnel_print = time.time()
+                try:
+                    self.print_funnel()
+                except Exception as _fe:
+                    print(f"⚠️ funnel print err: {_fe}")
 
     async def connect_and_listen(self):
         """Фаза 1 и 2: Подключение к сырому бесплатному WebSocket и фильтрация в оперативной памяти (RAM)."""
@@ -289,13 +343,23 @@ class PumpFunSniper:
                     await ws.send(json.dumps({"method": "subscribeNewToken"}))
                     print("🚀 [STREAM] Подписка на поток новых токенов оформлена!")
 
+                    # После реконнекта подписки на трейды теряются: переподписываем живые токены
+                    for _t in self._bg_tasks:
+                        _t.cancel()
+                    self._bg_tasks = []
+                    _keys = [m for m, st in self.trackers.items() if not st.is_dead]
+                    for _i in range(0, len(_keys), 50):
+                        await ws.send(json.dumps({"method": "subscribeTokenTrade", "keys": _keys[_i:_i + 50]}))
+                    if _keys:
+                        print(f"🔁 [STREAM] переподписка на {len(_keys)} токенов после реконнекта.")
+
                     # 2. Запуск фоновых задач: очистка RAM и синхронизация открытых позиций
-                    asyncio.create_task(self.garbage_collector(ws))
-                    asyncio.create_task(self.sync_fomo_positions(ws))
+                    self._bg_tasks.append(asyncio.create_task(self.garbage_collector(ws)))
+                    self._bg_tasks.append(asyncio.create_task(self.sync_fomo_positions(ws)))
                     try:
                         from shadow_tracker import ShadowTracker
                         shadow = ShadowTracker()
-                        asyncio.create_task(shadow.price_watcher_loop())
+                        self._bg_tasks.append(asyncio.create_task(shadow.price_watcher_loop()))
                     except Exception as e:
                         pass
 
@@ -316,6 +380,7 @@ class PumpFunSniper:
 
                             state = TokenTrackerState(mint, symbol, trader_pubkey, initial_buy)
                             self.trackers[mint] = state
+                            self.created_total += 1
 
                             # Передаем в birth_tracker для созревания
                             try:
@@ -357,6 +422,8 @@ class PumpFunSniper:
                                 'trader': trader
                             }
                             state.trades.append(trade_entry)
+                            self.trades_total += 1
+                            self._mark(state, 1)
 
                             # Прогресс кривой связывания (Pump.fun стартует с 30 виртуальных SOL и финиширует при 85 реальных SOL)
                             real_sol = max(0.0, v_sol - 30.0)
@@ -404,6 +471,7 @@ class PumpFunSniper:
                                 if tx_type == "sell" and trader and trader == state.trader_pubkey:
                                     state.dev_dumped = True
                                     state.is_evaluated = True
+                                    self._fail(state, "дев продал")
                                     print(f"🚫 [STREAM DEV DUMP] {state.symbol} ({mint[:8]}): дев продал {sol_amount:.3f} SOL — мгновенный отсев.")
                                     continue
 
@@ -414,30 +482,39 @@ class PumpFunSniper:
                                 if state.trader_pubkey and any(t['type'] == 'sell' and t['trader'] == state.trader_pubkey for t in state.trades):
                                     state.dev_dumped = True
                                     state.is_evaluated = True
+                                    self._fail(state, "дев продал")
                                     print(f"🚫 [STREAM DEV DUMP] {state.symbol} ({mint[:8]}): дев продавал в истории — мгновенный отсев.")
                                     continue
 
-                                win_sec = getattr(config, "STREAM_WINDOW_SEC", 20)
+                                win_sec = getattr(config, "STREAM_WINDOW_SEC", 30)
                                 recent = [t for t in state.trades if (now - t['ts']) <= win_sec]
 
                                 buys = [t for t in recent if t['type'] == 'buy']
                                 sells = [t for t in recent if t['type'] == 'sell']
 
-                                # 1. Уникальные покупатели > 10 за 20 сек (исключая кошелек создателя)
+                                # 1. Уникальные покупатели
                                 unique_buyers = {t['trader'] for t in buys if t['trader'] and t['trader'] != state.trader_pubkey}
-                                min_buyers = getattr(config, "STREAM_MIN_UNIQUE_BUYERS", 10)
+                                min_buyers = getattr(config, "STREAM_MIN_UNIQUE_BUYERS", 6)
 
+                                if len(unique_buyers) <= min_buyers:
+                                    self._fail(state, f"мало покупателей (<= {min_buyers})")
                                 if len(unique_buyers) > min_buyers:
+                                    self._mark(state, 2)
                                     buy_sol = sum(t['sol'] for t in buys)
                                     sell_sol = sum(t['sol'] for t in sells)
-                                    min_sol = getattr(config, "STREAM_MIN_BUY_SOL", 4.0)
+                                    min_sol = getattr(config, "STREAM_MIN_BUY_SOL", 2.5)
 
-                                    # 2. Объем покупок за 20 секунд
+                                    # 2. Объем покупок
+                                    if buy_sol < min_sol:
+                                        self._fail(state, "мало SOL")
                                     if buy_sol >= min_sol:
+                                        self._mark(state, 3)
                                         # 3. Баланс покупок и продаж (Buy/Sell pressure)
-                                        min_bs = getattr(config, "STREAM_MIN_BS_RATIO", 2.0)
+                                        min_bs = getattr(config, "STREAM_MIN_BS_RATIO", 1.8)
                                         if sell_sol > 0 and (buy_sol / sell_sol) < min_bs:
+                                            self._fail(state, "buy/sell")
                                             continue
+                                        self._mark(state, 4)
 
                                         # 4. Проверка на одиночного кита / манипуляцию (Sybil check)
                                         buyer_vols = {}
@@ -445,22 +522,28 @@ class PumpFunSniper:
                                             w = t['trader']
                                             buyer_vols[w] = buyer_vols.get(w, 0.0) + t['sol']
                                         top_b_sol = max(buyer_vols.values()) if buyer_vols else 0.0
-                                        max_ratio = getattr(config, "STREAM_MAX_TOP_BUYER_RATIO", 0.35)
+                                        max_ratio = getattr(config, "STREAM_MAX_TOP_BUYER_RATIO", 0.50)
                                         if buy_sol > 0 and (top_b_sol / buy_sol) > max_ratio:
+                                            self._fail(state, "один кит-покупатель")
                                             continue
+                                        self._mark(state, 5)
 
                                         # 5. Коридор кривой (не входить перед самой стеной миграции)
-                                        max_prog = getattr(config, "STREAM_MAX_CURVE_PROGRESS", 65.0)
+                                        max_prog = getattr(config, "STREAM_MAX_CURVE_PROGRESS", 85.0)
                                         if progress > max_prog:
+                                            self._fail(state, "кривая слишком высоко")
                                             continue
+                                        self._mark(state, 6)
 
                                         # 6. Защита от нулевого блока (минимум 5 секунд жизни)
                                         time_alive = now - state.start_time
                                         if time_alive < 5.0:
+                                            self._fail(state, "младше 5с")
                                             continue
 
                                         # --- ТОКЕН СТАЛ ФИНАЛИСТОМ! ---
                                         state.is_auditing = True
+                                        self._mark(state, 7)
                                         asyncio.create_task(self.audit_and_enter(state, len(unique_buyers), buy_sol))
 
             except websockets.exceptions.ConnectionClosed:

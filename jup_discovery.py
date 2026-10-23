@@ -218,8 +218,8 @@ async def jup_loop(analyzer, tracker):
                             if ratio > 1.25:
                                 print(f"🚫 [JUP-PRICE-MISMATCH] {_sym_tmp} ({mint[:8]}): Jupiter (${jup_price:.8f}) vs Dex (${ds_price:.8f}) расхождение {ratio:.1f}x — блок.")
                                 continue
-                            if jup_price < ds_price * 0.965:
-                                print(f"🚫 [JUP-LIVE-DUMP] {_sym_tmp} ({mint[:8]}): живая котировка Jupiter (${jup_price:.8f}) уже ниже DexScreener (${ds_price:.8f}) на {(jup_price/ds_price - 1)*100:+.1f}% — слив в процессе!")
+                            if jup_price < ds_price * 0.90:
+                                analyzer._deny(mint, "jup-live-dump >10%", f"🚫 [JUP-LIVE-DUMP] {_sym_tmp} ({mint[:8]}): живая котировка Jupiter (${jup_price:.8f}) уже ниже DexScreener (${ds_price:.8f}) на {(1.0 - jup_price/ds_price)*100:.1f}% [>10%] — слив в процессе!")
                                 continue
                             price = jup_price
                         elif ds_price > 0:
@@ -233,7 +233,7 @@ async def jup_loop(analyzer, tracker):
                             _sig = analyzer.get_signal(mint)
                             _veto = analyzer.rocket_veto(mint, td or {}, _sig)
                             if _veto:
-                                print(f"🚫 [JUP-VETO] {_sym_tmp} ({mint[:8]}): {_veto}")
+                                analyzer._deny(mint, f"jup-veto: {_veto[:20]}", f"🚫 [JUP-VETO] {_sym_tmp} ({mint[:8]}): {_veto}")
                                 continue
                             if getattr(config, "DYNAMIC_REINVEST_ENABLED", True):
                                 size = tracker.calculate_dynamic_position_size(td or {}, chain="solana")

@@ -670,8 +670,8 @@ async def scanner_loop(analyzer, tracker):
                                     from jupiter import JupiterAPI
                                     _jup_chk = await JupiterAPI.get_price(mint)
                                     if _jup_chk and _jup_chk > 0 and entry_price > 0:
-                                        if _jup_chk < entry_price * 0.965:
-                                            print(f"🚫 [LIVE-DUMP] {actual_symbol} ({mint[:8]}): живая цена Jupiter (${_jup_chk:.8f}) уже на {(1.0 - _jup_chk / entry_price) * 100:.1f}% ниже DexScreener (${entry_price:.8f}) — токен обваливается прямо сейчас, блок входа!")
+                                        if _jup_chk < entry_price * 0.90:
+                                            analyzer._deny(mint, "scanner-live-dump >10%", f"🚫 [LIVE-DUMP] {actual_symbol} ({mint[:8]}): живая цена Jupiter (${_jup_chk:.8f}) уже на {(1.0 - _jup_chk / entry_price) * 100:.1f}% ниже DexScreener (${entry_price:.8f}) [>10%] — токен обваливается прямо сейчас, блок входа!")
                                             continue
                                         _chk_r = max(_jup_chk, entry_price) / min(_jup_chk, entry_price)
                                         if _chk_r > 1.25:
@@ -682,7 +682,7 @@ async def scanner_loop(analyzer, tracker):
                                 _ssig = analyzer.get_signal(mint)
                                 _sveto = analyzer.rocket_veto(mint, pair_data, _ssig)
                                 if _sveto:
-                                    print(f"🚫 [SCANNER] {actual_symbol}: {_sveto}")
+                                    analyzer._deny(mint, f"scanner-veto: {_sveto[:20]}", f"🚫 [SCANNER] {actual_symbol}: {_sveto}")
                                     analyzer.log_scan(actual_symbol, mint, "SCANNER", False,
                                                       getattr(analyzer, "last_score", 0.0))
                                     await asyncio.sleep(1.5)
@@ -938,8 +938,8 @@ async def fomo_signal_loop(analyzer, tracker):
                                 from jupiter import JupiterAPI
                                 _jup_chk = await JupiterAPI.get_price(mint)
                                 if _jup_chk and _jup_chk > 0:
-                                    if _jup_chk < entry_price * 0.965:
-                                        print(f"🚫 [TG-LIVE-DUMP] {actual_symbol} ({mint[:8]}): живая цена Jupiter (${_jup_chk:.8f}) уже на {(1.0 - _jup_chk / entry_price) * 100:.1f}% ниже DexScreener (${entry_price:.8f}) — обвал в моменте, блок!")
+                                    if _jup_chk < entry_price * 0.90:
+                                        print(f"🚫 [TG-LIVE-DUMP] {actual_symbol} ({mint[:8]}): живая цена Jupiter (${_jup_chk:.8f}) уже на {(1.0 - _jup_chk / entry_price) * 100:.1f}% ниже DexScreener (${entry_price:.8f}) [>10%] — обвал в моменте, блок!")
                                         continue
                                     if max(_jup_chk, entry_price) / min(_jup_chk, entry_price) > 1.25:
                                         continue

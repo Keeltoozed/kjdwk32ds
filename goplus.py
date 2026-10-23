@@ -266,7 +266,7 @@ def _verdict_sol(info: dict):
             tag = str(h.get("tag", "")).lower()
             if "raydium" in tag or "meteora" in tag or "orca" in tag or "pump" in tag or pct > 0.65:
                 continue
-            max_single = float(_cfg("SOLANA_MAX_SINGLE_WHALE_PCT", 0.08))
+            max_single = float(_cfg("SOLANA_MAX_SINGLE_WHALE_PCT", 0.15))
             if pct > max_single:
                 return False, f"кит держит {pct*100:.1f}% (>{max_single*100:.0f}%) — риск дампа"
             top10_sum += pct
