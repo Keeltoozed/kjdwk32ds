@@ -34,7 +34,7 @@ async def position_manager_loop(analyzer, tracker):
                 if not api_price:
                     try:
                         import market_data as _md
-                        _td0 = await _md.get_token_data(mint)
+                        _td0 = await _md.get_token_data(mint, max_cache_age=5.0)
                         api_price = float((_td0.get("priceUsd", 0) or 0)) if _td0 else 0.0
                     except Exception:
                         pass
@@ -52,22 +52,22 @@ async def position_manager_loop(analyzer, tracker):
                             position.current_pnl_usd = position.amount_usd * _pnl_pct
                     continue
                 
-                # 2. Берем цену из WebSocket (если она СВЕЖАЯ, а не записанная этим же циклом)
-                ws_price = position.current_price_usd if hasattr(position, 'current_price_usd') else 0.0
-                ws_ts = getattr(position, "price_updated_at", 0.0)
-                ws_fresh = ws_price > 0.0 and (time.time() - ws_ts) < 8
+                # 2. Определение текущей цены:
+                # А) Свежий WSS-стрим из PumpPortal (если токен ещё на pump.fun кривой и активно торгуется)
+                wss_px = float(getattr(position, "wss_price", 0.0) or 0.0)
+                wss_ts = float(getattr(position, "wss_price_ts", 0.0) or 0.0)
+                wss_fresh = wss_px > 0.0 and (time.time() - wss_ts) < 5.0
 
-                if ws_fresh:
-                    current_price = ws_price
+                if wss_fresh:
+                    current_price = wss_px
                 elif api_price > 0.0:
                     current_price = api_price
                 else:
-                    # ОБА источника слепые: НЕ подставляем entry (иначе $0.00 0.00%
-                    # висит вечно как у KLIK: current==entry, stale-ветка недостижима).
-                    # Только свежая WS-цена (<120с) может прикрыть API-провал.
-                    _ws_age = time.time() - ws_ts if ws_ts else 1e9
-                    if ws_price > 0.0 and _ws_age < 120:
-                        current_price = ws_price
+                    # Если оба источника не дали цену в этом тике — держим последнюю известную (до 120 сек)
+                    _last_known = float(getattr(position, "current_price_usd", 0.0) or 0.0)
+                    _last_ts = float(getattr(position, "price_checked_at", 0.0) or getattr(position, "price_updated_at", 0.0) or 0.0)
+                    if _last_known > 0.0 and (time.time() - _last_ts) < 120:
+                        current_price = _last_known
                     else:
                         current_price = 0.0
 
@@ -198,7 +198,9 @@ async def position_manager_loop(analyzer, tracker):
                 # чтобы не делать N записей в Supabase каждые 3 секунды)
                 position.current_price_usd = current_price
                 position.current_pnl_usd = position.amount_usd * pnl_pct
-                position.price_updated_at = time.time()
+                position.price_checked_at = time.time()
+                if current_price > 0:
+                    position.price_updated_at = time.time()
 
                 # === DEAD POOL & LIQUIDITY DRAIN GUARD (SOLANA) ===
                 # Защита от замороженных/умерших пулов и фантомной прибыли (кейс DCA / NEX AI: ликва $0.02, 0 сделок в m5)
@@ -207,7 +209,7 @@ async def position_manager_loop(analyzer, tracker):
                     position.last_liq_chk = _now_t
                     try:
                         import market_data as _md
-                        _td_sol = await _md.get_token_data(mint)
+                        _td_sol = await _md.get_token_data(mint, max_cache_age=10.0)
                         if _td_sol:
                             _sol_liq = float(((_td_sol.get("liquidity") or {}).get("usd", 0) or 0))
                             _sol_tx5 = (_td_sol.get("txns") or {}).get("m5", {}) or {}
@@ -312,10 +314,12 @@ async def position_manager_loop(analyzer, tracker):
                     _floor_pnl = 0.38
                 elif max_pnl_pct >= 0.35:     # Пик +35%+ -> гарантируем минимум +24%
                     _floor_pnl = 0.24
-                elif max_pnl_pct >= 0.25:     # Пик +25%+ -> гарантируем минимум +15%
-                    _floor_pnl = 0.15
-                elif max_pnl_pct >= 0.20:     # Пик +20%+ -> гарантируем минимум +10%
-                    _floor_pnl = 0.10
+                elif max_pnl_pct >= 0.28:     # Пик +28%+ -> гарантируем минимум +18% (кейс TC67: пик +34% -> фиксация +18%, а не слив в 0!)
+                    _floor_pnl = 0.18
+                elif max_pnl_pct >= 0.20:     # Пик +20%+ -> гарантируем минимум +12%
+                    _floor_pnl = 0.12
+                elif max_pnl_pct >= 0.15:     # Пик +15%+ -> гарантируем минимум +5% (безубыток + комиссии)
+                    _floor_pnl = 0.05
                 if _floor_pnl is not None and pnl_pct <= _floor_pnl:
                     if max_pnl_pct >= 0.40 and pnl_pct <= -0.05:
                         _fc_s = int(getattr(position, "floor_confirm_n", 0) or 0) + 1

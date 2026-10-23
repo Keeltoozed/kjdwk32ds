@@ -252,12 +252,12 @@ async def _jup_token_data(mint: str) -> dict:
         return {}
 
 
-async def get_token_data(mint: str) -> dict:
+async def get_token_data(mint: str, max_cache_age: float = TD_TTL) -> dict:
     """Jupiter Token API -> GeckoTerminal -> DexScreener fallback."""
     import time as _t
     now = _t.monotonic()
     hit = _TD_CACHE.get(mint)
-    if hit and (now - hit[0]) < TD_TTL:
+    if hit and (now - hit[0]) < max_cache_age:
         return hit[1]
     # 1. DexScreener первым: 300 зап/мин, самый надёжный, даёт m5/h1/h24 + соцсети.
     # (Jupiter Token API гаснет - старые хосты sunset, поэтому он теперь вторым.)

@@ -454,6 +454,8 @@ class PumpFunSniper:
                                     live_px = (mc_sol / 1_000_000_000.0) * sol_usd if mc_sol > 0 else (v_sol / 1_000_000_000.0) * sol_usd
                                     if live_px > 0:
                                         pos.current_price_usd = live_px
+                                        pos.wss_price = live_px
+                                        pos.wss_price_ts = now
                                         pos.price_updated_at = now
                                         if live_px > float(getattr(pos, "max_price_usd", 0.0) or 0.0):
                                             pos.max_price_usd = live_px

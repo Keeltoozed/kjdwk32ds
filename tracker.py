@@ -31,8 +31,10 @@ class VirtualPosition(BaseModel):
     is_moonbag: bool = False # Флаг, что мы уже зафиксировали 50% прибыли
     source: str = "" # Кто открыл: SCANNER VIP RAY-XGB 98%, FOMO, COPY_xxx, ROBINHOOD rule 72%...
     chain: str = "solana" # solana | robinhood
-    price_updated_at: float = 0.0 # Время свежего обновления цены из WSS
+    price_updated_at: float = 0.0 # Время свежего обновления цены
     price_checked_at: float = 0.0 # Для Crash Guard
+    wss_price: float = 0.0 # Лайв цена из WebSocket (pump.fun)
+    wss_price_ts: float = 0.0 # Время тика из WebSocket (pump.fun)
     exit_time: float = 0.0 # Для дневного kill-switch
     # --- поля трекинга (раньше их не было в модели → трек падал с
     # '"VirtualPosition" object has no field "price_stale_n"' и цены вставали) ---
