@@ -843,17 +843,7 @@ async def scanner_loop(analyzer, tracker):
                             print(f"🚫 SCANNER {mint[:8]}: прошлый лосс {_pl*100:.0f}% — второй раз не входим.")
                         processed_mints[mint] = time.time()
                         continue
-                    if mint in _graduated_set:
-                        _cd = 60
-                    else:
-                        _cd = int(getattr(config, "SOLANA_RESCAN_COOLDOWN", 180))
-                        try:
-                            _pc_cd = getattr(analyzer, "_prefetch_cache", {}).get(mint, (0, {}))[1] or {}
-                            _ca_cd = _pc_cd.get("pairCreatedAt") or 0
-                            if _ca_cd and (time.time() * 1000 - _ca_cd) / 60000.0 <= 30.0:
-                                _cd = min(_cd, int(getattr(config, "SOLANA_YOUNG_RESCAN_COOLDOWN", 45)))
-                        except Exception:
-                            pass
+                    _cd = 60 if mint in _graduated_set else int(getattr(config, "SOLANA_RESCAN_COOLDOWN", 180))
                     if time.time() - processed_mints.get(mint, 0.0) < _cd:
                         continue
                     
@@ -989,13 +979,6 @@ async def scanner_loop(analyzer, tracker):
                                         _vip_cap = float(getattr(config, "TG_VIP_SIZE_USD", 5.0))
                                         position_size = min(position_size, _vip_cap)
 
-                                _sig_cr = str(analyzer.get_signal(mint) or "")
-                                if "RUNNER-" in _sig_cr:
-                                    position_size = min(position_size, float(getattr(config, "CURVE_RUNNER_SIZE_USD", 4.0)))
-                                    _is_lot = True
-                                _sol_cap = float(getattr(config, "SOL_MAX_SIZE_USD", 15.0) or 0.0)
-                                if _sol_cap > 0 and position_size > _sol_cap:
-                                    position_size = _sol_cap
                                 if position_size < (1.0 if (_is_lot or _is_vipsig) else 4.0):
                                     print(f"🚫 Отказ (Ликвидность): Недостаточно ликвидности (${liq_usd}) для безопасного входа.")
                                     continue

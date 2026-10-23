@@ -210,44 +210,6 @@ class Analyzer:
             pass
         return None
 
-    def _rej(self, key: str, msg: str) -> bool:
-        """Отказ Solana-входа: печать + воронка причин (сводка раз в 10 мин в лог) +
-        shadow-лог через _deny (не чаще раза в 5 мин на токен). Никогда не бросает исключений."""
-        try:
-            import re as _re
-            _m = _re.search(r"\[([^\]]+)\]", msg)
-            _head = _m.group(1) if _m else ""
-            _rest = msg[_m.end():] if _m else msg
-            _words = _re.findall(r"[А-Яа-яЁё]{2,}", _rest)[:4]
-            tag = (_head + " " + " ".join(_words)).strip()[:48] or "misc"
-            _now = time.time()
-            _f = getattr(self, "_funnel", None)
-            if _f is None:
-                _f = self._funnel = {}
-                self._funnel_ts = _now
-            _f[tag] = _f.get(tag, 0) + 1
-            if _now - getattr(self, "_funnel_ts", _now) >= 600.0:
-                _top = sorted(_f.items(), key=lambda kv: kv[1], reverse=True)[:12]
-                print(f"📊 [ВОРОНКА-SOL 10м] отказов {sum(_f.values())}: " + " | ".join(f"{k}={v}" for k, v in _top))
-                _f.clear()
-                self._funnel_ts = _now
-            _seen = getattr(self, "_rej_seen", None)
-            if _seen is None:
-                _seen = self._rej_seen = {}
-            if len(_seen) > 3000:
-                _seen.clear()
-            if _now - _seen.get(key, 0.0) >= 300.0:
-                _seen[key] = _now
-                return self._deny(key, tag, msg)
-            print(msg)
-            self._set_sig(key, f"SKIP {tag}")
-        except Exception:
-            try:
-                print(msg)
-            except Exception:
-                pass
-        return False
-
     def _set_sig(self, key: str, text: str):
         """Метка решения для монеты. Per-mint словарь вместо общего поля:
         scanner/fomo/robinhood гоняют analyze параллельно на одном Analyzer."""
@@ -849,24 +811,11 @@ class Analyzer:
         base_token = pair_data.get("baseToken", {})
         name = base_token.get("name", "").upper()
         symbol = base_token.get("symbol", "").upper()
-        try:
-            if not hasattr(self, "_eval_ctx"):
-                self._eval_ctx = {}
-            if len(self._eval_ctx) > 3000:
-                self._eval_ctx.clear()
-            self._eval_ctx[mint] = {
-                "symbol": symbol or mint[:6], "chain": "solana",
-                "price": float(pair_data.get("priceUsd", 0) or 0),
-                "liq": float((pair_data.get("liquidity") or {}).get("usd", 0) or 0),
-                "m5": float((pair_data.get("priceChange") or {}).get("m5", 0) or 0),
-                "source": "SCANNER", "score": 0.0,
-            }
-        except Exception:
-            pass
 
         if pair_data.get("_price_divergence"):
             _div_r = float(pair_data.get("_price_divergence_ratio", 0.0) or 0.0)
-            return self._rej(mint, f"🚫 [PRICE-SPLIT] {symbol} ({mint[:8]}): рассинхрон цен между пулами {_div_r:.1f}x (миграция/гэп) — блок входа.")
+            print(f"🚫 [PRICE-SPLIT] {symbol} ({mint[:8]}): рассинхрон цен между пулами {_div_r:.1f}x (миграция/гэп) — блок входа.")
+            return False
         
         scam_keywords = ["AAPL", "S&P", "SP500", "MSFT", "TSLA", "TESLA", "SPACEX", "STARLINK", "XAI", "NEURALINK", "PAYPAL",
                          "NVDA", "GOOG", "AMZN", "META", "NFLX", 
@@ -877,7 +826,8 @@ class Analyzer:
             if self._brand_whitelisted(mint):
                 print(f"✅ Вайтлист: {symbol} — известный контракт, мимикри-фильтр пропущен.")
             else:
-                return self._rej(mint, f"🚫 Мусор: Токен {symbol} мимикрирует под известный бренд/мем. Это 100% scam.")
+                print(f"🚫 Мусор: Токен {symbol} мимикрирует под известный бренд/мем. Это 100% scam.")
+                return False
             
         is_vip = self.check_hyper_rocket_momentum(pair_data) and getattr(config, "VIP_ENTRIES_ENABLED", False)
 
@@ -890,37 +840,25 @@ class Analyzer:
             _vol_v = float((pair_data.get("volume") or {}).get("m5", 0) or 0)
             _max_vip_m5 = 200.0 if (_liq_v >= 25000 and _vol_v >= 25000) else (getattr(config, "VIP_MAX_M5_PCT", 0.60) * 100)
             if _m5 > _max_vip_m5:
-                return self._rej(mint, f"🚫 [VIP OVERHEAT] {mint}: m5 {_m5:+.0f}% > +{_max_vip_m5:.0f}% — вертикаль уже прошла, вход = вершина.")
+                print(f"🚫 [VIP OVERHEAT] {mint}: m5 {_m5:+.0f}% > +{_max_vip_m5:.0f}% — вертикаль уже прошла, вход = вершина.")
+                return False
             if _m1 < -4.0:
-                return self._rej(mint, f"🚫 [VIP REVERSAL] {mint}: m1 {_m1:+.1f}% — резкий откат за 1м, ждём pullback.")
+                print(f"🚫 [VIP REVERSAL] {mint}: m1 {_m1:+.1f}% — резкий откат за 1м, ждём pullback.")
+                return False
             if _m1 > 20.0:
-                return self._rej(mint, f"🚫 [VIP SPIKE] {mint}: m1 {_m1:+.1f}% — свеча-spike в моменте, вход = вершина. Ждём.")
+                print(f"🚫 [VIP SPIKE] {mint}: m1 {_m1:+.1f}% — свеча-spike в моменте, вход = вершина. Ждём.")
+                return False
             if _m5 < getattr(config, "VIP_MIN_M5_PCT", 5.0):
-                return self._rej(mint, f"🚫 [VIP FLAT] {mint}: объём есть, а импульса нет (m5 {_m5:+.1f}% < +10%) — флет съест комиссиями.")
+                print(f"🚫 [VIP FLAT] {mint}: объём есть, а импульса нет (m5 {_m5:+.1f}% < +10%) — флет съест комиссиями.")
+                return False
 
         _lottery = False
-        _flow_ok_soc = False
         _created_pre = pair_data.get("pairCreatedAt") or 0
         _age_min_pre = (time.time() * 1000 - _created_pre) / 60000.0 if _created_pre else 999
         _sol_min_age = float(getattr(config, "SOLANA_MIN_AGE_MIN", 2.5))
         if _age_min_pre < _sol_min_age:
             print(f"⏳ [ENTRY] {mint[:8]}: возраст {_age_min_pre:.1f}м < {_sol_min_age}м — flash-rug зона дева, ждём созревания.")
             return None
-        # === SOL-GATES (по реальным сделкам): возраст AMM-пула, запрещённые DEX ===
-        _dex_g = str(pair_data.get("dexId", "")).lower()
-        if _dex_g not in ("pump", "pumpfun") and not mint.endswith("pump"):
-            _gate_min = float(getattr(config, "SOL_MIN_AGE_GATE_MIN", 3.0))
-            _blk = tuple(str(x).lower() for x in (getattr(config, "SOL_BLOCK_DEXES", ()) or ()))
-            _gmsg = None
-            if _dex_g in _blk:
-                _gmsg = f"🚫 [DEX-BLOCK] {mint[:8]}: пул {_dex_g} в чёрном списке (0 побед в истории)."
-            elif _gate_min > 0 and _age_min_pre < _gate_min:
-                _gmsg = f"🚫 [AGE-GATE] {mint[:8]}: возраст {_age_min_pre:.0f}м < {_gate_min:.0f}м — рага-зона AMM-токенов, ждём."
-            if _gmsg:
-                if callable(getattr(self, "_rej", None)):
-                    return self._rej(mint, _gmsg)
-                print(_gmsg)
-                return False
         if pair_data:
             _dex_pre = str(pair_data.get("dexId", "")).lower()
             if _dex_pre not in ("pump", "pumpfun"):
@@ -929,9 +867,11 @@ class Analyzer:
                 _h1_pre = float(_pc_pre.get("h1", 0) or 0)
                 _h6_pre = float(_pc_pre.get("h6", 0) or 0)
                 if 0 < _fdv_pre < 15000:
-                    return self._rej(mint, f"🚫 [POST-MIGRATION-DUMP] {mint[:8]}: AMM FDV ${_fdv_pre:,.0f} < $15k — слитый токен.")
+                    print(f"🚫 [POST-MIGRATION-DUMP] {mint[:8]}: AMM FDV ${_fdv_pre:,.0f} < $15k — слитый токен.")
+                    return False
                 if _age_min_pre > 60.0 and ((_fdv_pre < 35000 and _h1_pre < -5.0) or (_h1_pre < -15.0 or _h6_pre < -35.0)):
-                    return self._rej(mint, f"🚫 [POST-MIGRATION-DUMP] {mint[:8]}: часовой/6ч тренд в глубоком сливе (h1 {_h1_pre:+.1f}%, h6 {_h6_pre:+.1f}%) — отскок дохлой кошки.")
+                    print(f"🚫 [POST-MIGRATION-DUMP] {mint[:8]}: часовой/6ч тренд в глубоком сливе (h1 {_h1_pre:+.1f}%, h6 {_h6_pre:+.1f}%) — отскок дохлой кошки.")
+                    return False
         if not is_vip and pair_data:
             _pc = pair_data.get("priceChange") or {}
             _m5 = _pc.get("m5", 0) or 0
@@ -960,29 +900,12 @@ class Analyzer:
                 _cur_liq_pre = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0) * 0.40
             _b5_pre = int(_txm5_pre.get("buys", 0) or 0)
             _s5_pre = int(_txm5_pre.get("sells", 0) or 0)
-            _runner_min_liq = float(getattr(config, "RUNNER_MIN_LIQ", 8000.0))
-            _runner_min_vol5 = float(getattr(config, "RUNNER_MIN_VOL5", 3000.0))
             _is_runner = (
-                _cur_liq_pre >= _runner_min_liq and 
-                _vm5_pre >= _runner_min_vol5 and 
-                (_b5_pre + _s5_pre) >= 12 and 
-                (_b5_pre >= _s5_pre * 1.05 or _vm5_pre >= 20000)
+                _cur_liq_pre >= 20000 and 
+                _vm5_pre >= 15000 and 
+                (_b5_pre + _s5_pre) >= 15 and 
+                (_b5_pre >= _s5_pre * 1.05 or _vm5_pre >= 35000)
             )
-            # === CURVE-RUNNER: ракеты на бондинг-кривой pump.fun ===
-            # На кривой liq = fdv*0.4 (<= ~$13k): порог runner (liq>=20k, vol5>=15k) для неё недостижим,
-            # а лотерея выключена -> любой m5>=60% на кривой резался как LOTTERY-BLOCKED.
-            # Пускаем маленьким билетом при реальном перевесе покупателей и месте до миграции.
-            _curve_runner = False
-            if (not _is_runner and getattr(config, "CURVE_RUNNER_ENABLED", True)
-                    and (str(pair_data.get("dexId", "")).lower() in ("pump", "pumpfun") or mint.endswith("pump"))):
-                _fdv_cr = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
-                if (float(getattr(config, "CURVE_RUNNER_MIN_FDV", 7000.0)) <= _fdv_cr <= float(getattr(config, "CURVE_RUNNER_MAX_FDV", 35000.0))
-                        and _vm5_pre >= float(getattr(config, "CURVE_RUNNER_MIN_VOL5", 3000.0))
-                        and (_b5_pre + _s5_pre) >= int(getattr(config, "CURVE_RUNNER_MIN_TRADES", 15))
-                        and _s5_pre > 0 and _b5_pre >= _s5_pre * float(getattr(config, "CURVE_RUNNER_MIN_BS", 1.15))):
-                    _curve_runner = True
-                    _is_runner = True
-                    pair_data["_curve_runner"] = True
 
             _lottery_enabled = getattr(config, "LOTTERY_ENABLED", False)
             if _m5 >= getattr(config, "LOTTERY_MIN_M5_PCT", 0.60) * 100:
@@ -990,68 +913,79 @@ class Analyzer:
                     # Настоящая ракета с высокой ликвидностью и объемом (не микро-лотерейный раг)
                     _m1_max = getattr(config, "PULLBACK_M1_MAX_PCT", 0.20) * 100
                     if _m1 > _m1_max:
-                        return self._rej(mint, f"🚫 [RUNNER-SPIKE] {mint}: m1 {_m1:+.1f}% > +{_m1_max:.0f}% — свеча-прострел в моменте, ждём откат.")
+                        print(f"🚫 [RUNNER-SPIKE] {mint}: m1 {_m1:+.1f}% > +{_m1_max:.0f}% — свеча-прострел в моменте, ждём откат.")
+                        return False
                     if _m1 < getattr(config, "PULLBACK_M1_MIN_PCT", -0.15) * 100:
-                        return self._rej(mint, f"🚫 [RUNNER-DUMP] {mint}: m1 {_m1:+.1f}% — импульс схлопнулся, это дамп.")
-                    if _m5 > 250.0 and not _curve_runner:
-                        return self._rej(mint, f"🚫 [RUNNER-EXHAUSTION] {mint}: m5 {_m5:+.0f}% > +250% — экстремальный перегрев 5м свечи.")
+                        print(f"🚫 [RUNNER-DUMP] {mint}: m1 {_m1:+.1f}% — импульс схлопнулся, это дамп.")
+                        return False
+                    if _m5 > 250.0:
+                        print(f"🚫 [RUNNER-EXHAUSTION] {mint}: m5 {_m5:+.0f}% > +250% — экстремальный перегрев 5м свечи.")
+                        return False
                     _max_h1_pct = getattr(config, "PULLBACK_MAX_H1_PCT", 25.0) * 100
                     if _h1 > _max_h1_pct:
-                        return self._rej(mint, f"🚫 [ENTRY] {mint}: h1 {_h1:+.0f}% — уже улетел, поздно.")
+                        print(f"🚫 [ENTRY] {mint}: h1 {_h1:+.0f}% — уже улетел, поздно.")
+                        return False
                     print(f"🚀 [RUNNER-MOMENTUM] {mint}: мощный импульс m5 {_m5:+.0f}%, m1 {_m1:+.1f}%, liq ${_cur_liq_pre:,.0f}, vol5 ${_vm5_pre:,.0f} — ракета допущена к отбору.")
                 elif _lottery_enabled:
                     if _m1 < 0:
-                        return self._rej(mint, f"🚫 [LOTTERY] {mint}: m5 {_m5:+.0f}%, но m1 {_m1:+.1f}% — вертикаль откатывает, это вершина.")
+                        print(f"🚫 [LOTTERY] {mint}: m5 {_m5:+.0f}%, но m1 {_m1:+.1f}% — вертикаль откатывает, это вершина.")
+                        return False
                     print(f"🎰 [LOTTERY] {mint}: вертикаль m5 {_m5:+.0f}%, m1 {_m1:+.1f}% — кандидат на вход уменьшенным сайзом.")
                     _lottery = True
                 else:
-                    return self._rej(mint, f"🚫 [LOTTERY-BLOCKED] {mint}: тонкая монета (liq ${_cur_liq_pre:,.0f}, vol5 ${_vm5_pre:,.0f}) при m5 {_m5:+.0f}% — микро-лотерея отключена.")
+                    print(f"🚫 [LOTTERY-BLOCKED] {mint}: тонкая монета (liq ${_cur_liq_pre:,.0f}, vol5 ${_vm5_pre:,.0f}) при m5 {_m5:+.0f}% — микро-лотерея отключена.")
+                    return False
             else:
                 if _m5 < getattr(config, "PULLBACK_MIN_M5_PCT", 0.025) * 100:
-                    return self._rej(mint, f"🚫 [ENTRY] {mint}: m5 {_m5:+.1f}% < импульса не было, пропуск.")
+                    print(f"🚫 [ENTRY] {mint}: m5 {_m5:+.1f}% < импульса не было, пропуск.")
+                    return False
                 _m1_max = getattr(config, "PULLBACK_M1_MAX_PCT", 0.20) * 100
                 if _m1 > _m1_max:
-                    return self._rej(mint, f"🚫 [ENTRY] {mint}: m1 {_m1:+.1f}% > +{_m1_max:.0f}% — вертикаль в процессе, купим вершину. Ждём откат.")
+                    print(f"🚫 [ENTRY] {mint}: m1 {_m1:+.1f}% > +{_m1_max:.0f}% — вертикаль в процессе, купим вершину. Ждём откат.")
+                    return False
                 if _m1 < getattr(config, "PULLBACK_M1_MIN_PCT", -0.15) * 100:
-                    return self._rej(mint, f"🚫 [ENTRY] {mint}: m1 {_m1:+.1f}% — импульс схлопнулся, это дамп, не откат.")
+                    print(f"🚫 [ENTRY] {mint}: m1 {_m1:+.1f}% — импульс схлопнулся, это дамп, не откат.")
+                    return False
                 _max_h1_pct = getattr(config, "PULLBACK_MAX_H1_PCT", 25.0) * 100
                 if _h1 > _max_h1_pct:
-                    return self._rej(mint, f"🚫 [ENTRY] {mint}: h1 {_h1:+.0f}% — уже улетел, поздно.")
+                    print(f"🚫 [ENTRY] {mint}: h1 {_h1:+.0f}% — уже улетел, поздно.")
+                    return False
             _txm5 = (pair_data.get("txns") or {}).get("m5", {}) or {}
             _b5, _s5 = _txm5.get("buys", 0) or 0, _txm5.get("sells", 0) or 0
             if _s > 0 and _b < _s * 1.1 and not (_m5 >= 3.0 and _s5 > 0 and _b5 >= _s5 * 1.2):
-                return self._rej(mint, f"🚫 [ENTRY] {mint}: buys {_b} / sells {_s} — нет давления покупателей.")
+                print(f"🚫 [ENTRY] {mint}: buys {_b} / sells {_s} — нет давления покупателей.")
+                return False
             if _s == 0 and _b > 10:
-                return self._rej(mint, f"🚫 [HONEYPOT] {mint}: {_b} покупок и 0 продаж! Очевидный скам/honeypot.")
+                print(f"🚫 [HONEYPOT] {mint}: {_b} покупок и 0 продаж! Очевидный скам/honeypot.")
+                return False
             _v24_min = 3000 if _age_min_pre < 30 else 10000
             if _v24 < _v24_min:
-                return self._rej(mint, f"🚫 [ENTRY] {mint}: vol24h ${_v24:,.0f} < ${_v24_min:,.0f} — совсем нет объёма.")
+                print(f"🚫 [ENTRY] {mint}: vol24h ${_v24:,.0f} < ${_v24_min:,.0f} — совсем нет объёма.")
+                return False
 
             _tx_min = 6 if (_m5 >= 15.0 or _lottery or is_vip or _age_min_pre < 30) else (10 if _age_min_pre < 60 else 15)
             if (_b5 + _s5) < _tx_min:
-                return self._rej(mint, f"🚫 [VELOCITY] {mint}: txns m5 {_b5 + _s5} < {_tx_min} — слишком медленно, нет органического FOMO.")
+                print(f"🚫 [VELOCITY] {mint}: txns m5 {_b5 + _s5} < {_tx_min} — слишком медленно, нет органического FOMO.")
+                return False
             if _s5 > 0:
                 mult = 1.0
                 if _b5 < _s5 * mult:
-                    return self._rej(mint, f"🚫 [VELOCITY] {mint}: buy/sell m5 {_b5}/{_s5} < {mult}x — {'(лотерея, ослаблено)' if _lottery else 'нет буфера покупателей'}")
+                    print(f"🚫 [VELOCITY] {mint}: buy/sell m5 {_b5}/{_s5} < {mult}x — {'(лотерея, ослаблено)' if _lottery else 'нет буфера покупателей'}")
+                    return False
             _cur_liq = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
             if _cur_liq == 0 and str(pair_data.get("dexId", "")).lower() in ("pump", "pumpfun"):
                 _cur_liq = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0) * 0.40
             if not _lottery and self.is_churn(_b5, _s5, _m5, liq=_cur_liq):
-                return self._rej(mint, f"🚫 [CHURN] {mint}: {_b5 + _s5} сделок, b/s {_b5 / _s5:.2f}, m5 {_m5:+.1f}% — накрутка, не FOMO.")
-            _flow_ok_soc = bool(
-                getattr(config, "SOCIALS_RELAX_FRESH", True)
-                and _age_min_pre < 90.0 and _s5 > 0 and _b5 >= _s5 * 1.3
-                and (_b5 + _s5) >= 25
-                and float((pair_data.get("volume") or {}).get("m5", 0) or 0) >= 5000.0
-            )
+                print(f"🚫 [CHURN] {mint}: {_b5 + _s5} сделок, b/s {_b5 / _s5:.2f}, m5 {_m5:+.1f}% — накрутка, не FOMO.")
+                return False
             _socials = (pair_data.get("info") or {}).get("socials") or []
             _socials_unknown = bool(pair_data.get("_socials_unknown", False))
             _created = pair_data.get("pairCreatedAt") or 0
             if _created and not _socials_unknown:
                 _age_h = (time.time() * 1000 - _created) / 3.6e6
-                if _age_h < 6 and isinstance(_socials, list) and len(_socials) == 0 and not _lottery and not _flow_ok_soc and _cur_liq < 25000:
-                    return self._rej(mint, f"🚫 [SOCIAL] {mint}: нет соцсетей при возрасте {_age_h:.1f}ч и ликве <$25k — высокий скам-риск.")
+                if _age_h < 6 and isinstance(_socials, list) and len(_socials) == 0 and not _lottery and _cur_liq < 25000:
+                    print(f"🚫 [SOCIAL] {mint}: нет соцсетей при возрасте {_age_h:.1f}ч и ликве <$25k — высокий скам-риск.")
+                    return False
             print(f"✅ [ENTRY-CANDIDATE] {mint}: PULLBACK — импульс m5 {_m5:+.1f}%, откат m1 {_m1:+.1f}%, h1 {_h1:+.0f}%, b/s {_b}/{_s}. Кандидат на вход.")
         
         # Защита от микро-пулов:
@@ -1071,7 +1005,8 @@ class Analyzer:
             _min_liq = 8000 if (_age_min_pre < 30 or _m5 >= 15.0 or _lottery or is_vip) else getattr(config, "MIN_LIQUIDITY", 15000)
 
         if liquidity < _min_liq:
-            return self._rej(mint, f"📉 Изоляция: {symbol} имеет микро-пул (${liquidity:.0f} < ${_min_liq//1000}k). Риск 100% проскальзывания.")
+            print(f"📉 Изоляция: {symbol} имеет микро-пул (${liquidity:.0f} < ${_min_liq//1000}k). Риск 100% проскальзывания.")
+            return False
             
         current_created_at = pair_data.get("pairCreatedAt", 0)
         current_fdv = pair_data.get("fdv", 0)
@@ -1093,7 +1028,8 @@ class Analyzer:
             print(f"🔥 [STRONG FOMO] {symbol}: мощный органический моментум (b/s {_b5_cl}/{_s5_cl}, vol5 ${_vol5_cl:.0f}) — клон-фильтр ослаблен.")
 
         if not _strong_fomo and await self.is_clone(symbol, mint, current_created_at, current_fdv):
-            return self._rej(mint, f"🚫 Мусор: Токен {symbol} является клоном! На DexScreener найден более старый/крупный оригинал.")
+            print(f"🚫 Мусор: Токен {symbol} является клоном! На DexScreener найден более старый/крупный оригинал.")
+            return False
 
 
         info = pair_data.get("info", {}) or {}
@@ -1106,8 +1042,9 @@ class Analyzer:
         has_socials = bool(has_twitter or has_tg or has_website)
         
         _socials_unknown = bool(pair_data.get("_socials_unknown", False))
-        if not _socials_unknown and not has_socials and liquidity < 100000 and not _flow_ok_soc:
-            return self._rej(mint, f"🚫 Мусор: У {symbol} ({mint[:8]}) вообще нет ни одной соцсети или сайта (Twitter/TG/Web). Это анонимный дев-раг (кейс Hodlon).")
+        if not _socials_unknown and not has_socials and liquidity < 100000:
+            print(f"🚫 Мусор: У {symbol} ({mint[:8]}) вообще нет ни одной соцсети или сайта (Twitter/TG/Web). Это анонимный дев-раг (кейс Hodlon).")
+            return False
             
         if is_vip:
             print(f"🚀 [VIP] {symbol}: Проверка клонов и соцсетей пройдена!")
@@ -1134,29 +1071,28 @@ class Analyzer:
                 SAFE_AUTHORITIES = {PUMPFUN_PROGRAM, SYSTEM_PROGRAM, None, ""}
                 
                 if mint_authority and mint_authority not in SAFE_AUTHORITIES:
-                    return self._rej(mint, f"🚫 [АНТИСКАМ] Mint Authority у ДЕВ-кошелька {mint_authority[:8]} у {mint[:8]} → СКАМ")
+                    print(f"🚫 [АНТИСКАМ] Mint Authority у ДЕВ-кошелька {mint_authority[:8]} у {mint[:8]} → СКАМ")
+                    return False
                 
                 if freeze_authority and freeze_authority not in SAFE_AUTHORITIES:
-                    return self._rej(mint, f"🚫 [АНТИСКАМ] Freeze Authority у ДЕВ-кошелька {freeze_authority[:8]} у {mint[:8]} → СКАМ")
+                    print(f"🚫 [АНТИСКАМ] Freeze Authority у ДЕВ-кошелька {freeze_authority[:8]} у {mint[:8]} → СКАМ")
+                    return False
 
                 # Проверка критических рисков RugCheck (незаблокированный LP, мёртвая ликвидность, 1 кит с контрольным пакетом)
                 _rc_score = float(rc_data.get("score") or 0.0)
-                _rc_risks = rc_data.get("risks") or []
-                # Вычитаем синтетический штраф за 'Low Liquidity' (RugCheck дает 1500-2800 очков на любой ранний мем-пул < $50k)
-                _low_liq_penalty = sum(float(rk.get("score") or 0.0) for rk in _rc_risks if str(rk.get("name") or "").lower() == "low liquidity")
-                _eff_rc_score = max(0.0, _rc_score - _low_liq_penalty)
-                if _eff_rc_score >= 1000:
-                    return self._rej(mint, f"🚫 [АНТИСКАМ] RugCheck Score {_eff_rc_score:.0f} >= 1000 (высокий риск скама/рага) у {mint[:8]} → СКАМ")
+                if _rc_score >= 1000:
+                    print(f"🚫 [АНТИСКАМ] RugCheck Score {_rc_score:.0f} >= 1000 (высокий риск скама/рага) у {mint[:8]} → СКАМ")
+                    return False
 
-                for rk in _rc_risks:
+                for rk in (rc_data.get("risks") or []):
                     _rk_name = str(rk.get("name") or "").lower()
                     _rk_lvl = str(rk.get("level") or "").lower()
-                    if _rk_name == "low liquidity":
-                        continue
-                    if _rk_lvl in ("danger", "critical"):
-                        return self._rej(mint, f"🚫 [АНТИСКАМ] Критический риск RugCheck [{_rk_lvl}]: '{rk.get('name')}' ({rk.get('description')}) у {mint[:8]} → СКАМ")
+                    if _rk_lvl == "danger":
+                        print(f"🚫 [АНТИСКАМ] Критический риск RugCheck [danger]: '{rk.get('name')}' ({rk.get('description')}) у {mint[:8]} → СКАМ")
+                        return False
                     if "unlocked" in _rk_name and "lp" in _rk_name:
-                        return self._rej(mint, f"🚫 [АНТИСКАМ] Незаблокированный LP пула '{rk.get('name')}' у {mint[:8]} → СКАМ")
+                        print(f"🚫 [АНТИСКАМ] Незаблокированный LP пула '{rk.get('name')}' у {mint[:8]} → СКАМ")
+                        return False
 
                 _target_pair = str(pair_data.get("pairAddress") or "").strip()
                 for _mkt in (rc_data.get("markets") or []):
@@ -1169,11 +1105,13 @@ class Analyzer:
                                 _lp_unlocked = float(_lp_info.get("lpUnlocked") or 0.0)
                                 _lp_locked_pct = float(_lp_info.get("lpLockedPct") or 0.0)
                                 if _lp_unlocked > 0 and _lp_locked_pct < 80.0:
-                                    return self._rej(mint, f"🚫 [АНТИСКАМ] LP основного пула не заблокирован ({_lp_locked_pct:.1f}% locked) у {mint[:8]} → СКАМ")
+                                    print(f"🚫 [АНТИСКАМ] LP основного пула не заблокирован ({_lp_locked_pct:.1f}% locked) у {mint[:8]} → СКАМ")
+                                    return False
                     
                 holders = rc_data.get("topHolders", [])
                 if not holders:
-                    return self._rej(mint, f"⚠️ Ошибка RugCheck (пустой список аккаунтов). Блокируем вход.")
+                    print(f"⚠️ Ошибка RugCheck (пустой список аккаунтов). Блокируем вход.")
+                    return False
                     
                 # Собираем все известные адреса пулов и маркеров ликвидности (DEX, AMM, Bonding curve, Lockers)
                 pool_accounts = set()
@@ -1233,7 +1171,8 @@ class Analyzer:
                     counts = Counter(bundle_suspects)
                     most_common_pct, count = counts.most_common(1)[0]
                     if count >= 4 and most_common_pct >= 2.5 and (most_common_pct * count) >= 12.0:
-                        return self._rej(mint, f"🚫 [АНТИСКАМ] Обнаружен Jito-бандл (Сивил атака: {count} кошельков по ~{most_common_pct:.1f}%) у {mint}. Блокируем.")
+                        print(f"🚫 [АНТИСКАМ] Обнаружен Jito-бандл (Сивил атака: {count} кошельков по ~{most_common_pct:.1f}%) у {mint}. Блокируем.")
+                        return False
                 
                 top_10_sum_pct = sum([x[1] for x in top_10])
                 
@@ -1250,40 +1189,48 @@ class Analyzer:
                 if top_10_sum_pct > 100:
                     print(f"⚠️ [HOLDERS] {mint[:8]}: топ-10 {top_10_sum_pct:.1f}% > 100% — битые данные сапплая.")
                 elif dev_holding_pct > 10.0:
-                    return self._rej(mint, f"🚫 [АНТИСКАМ] Создатель (Dev) держит {dev_holding_pct:.1f}% (Лимит 10%). Блокируем.")
+                    print(f"🚫 [АНТИСКАМ] Создатель (Dev) держит {dev_holding_pct:.1f}% (Лимит 10%). Блокируем.")
+                    return False
                 
                 # Защита от скрытого второго кошелька дева: ни один кит не должен держать > 15%
                 largest_whale_pct = top_10[0][1] if top_10 else 0.0
                 max_single_whale = 15.0
                 if largest_whale_pct > max_single_whale:
-                    return self._rej(mint, f"🚫 [АНТИСКАМ] Кит держит {largest_whale_pct:.1f}% > {max_single_whale:.0f}% (риск скрытого дева/дампа). Блокируем.")
+                    print(f"🚫 [АНТИСКАМ] Кит держит {largest_whale_pct:.1f}% > {max_single_whale:.0f}% (риск скрытого дева/дампа). Блокируем.")
+                    return False
                 elif top_10_sum_pct > max_allowed_pct:
-                    return self._rej(mint, f"🚫 [АНТИСКАМ] Топ-10 держат {top_10_sum_pct:.1f}% (Лимит {max_allowed_pct}%). Блокируем.")
+                    print(f"🚫 [АНТИСКАМ] Топ-10 держат {top_10_sum_pct:.1f}% (Лимит {max_allowed_pct}%). Блокируем.")
+                    return False
             else:
                 # Фоллбэк: если RugCheck временно недоступен (404/429), проводим полный аудит через GoPlus
                 try:
                     import goplus as _gp
                     _g_ok, _g_why = await _gp.check_solana(mint)
                     if not _g_ok:
-                        return self._rej(mint, f"🚫 [GOPLUS] {symbol} ({mint[:8]}): {_g_why} — блок входа.")
+                        print(f"🚫 [GOPLUS] {symbol} ({mint[:8]}): {_g_why} — блок входа.")
+                        return False
                     # Извлекаем и проверяем реальные метрики китов и создателя
                     _h_stats = _gp.get_solana_holder_stats(mint)
                     if _h_stats.get("has_data"):
                         self._last_top10 = _h_stats.get("top_10_pct", 0.0)
                         self._last_dev = _h_stats.get("dev_pct", 0.0)
                         if self._last_dev > 10.0:
-                            return self._rej(mint, f"🚫 [GOPLUS-DEV] {symbol} ({mint[:8]}): дев держит {self._last_dev:.1f}% > 10% — риск дампа.")
+                            print(f"🚫 [GOPLUS-DEV] {symbol} ({mint[:8]}): дев держит {self._last_dev:.1f}% > 10% — риск дампа.")
+                            return False
                         _max_top10 = 30.0 if (pair_data and pair_data.get("dexId") in ("pump", "pumpfun")) else 35.0
                         if self._last_top10 > _max_top10:
-                            return self._rej(mint, f"🚫 [GOPLUS-CABAL] {symbol} ({mint[:8]}): топ-10 держат {self._last_top10:.1f}% > {_max_top10:.0f}% — риск кабала.")
+                            print(f"🚫 [GOPLUS-CABAL] {symbol} ({mint[:8]}): топ-10 держат {self._last_top10:.1f}% > {_max_top10:.0f}% — риск кабала.")
+                            return False
                         print(f"🛡️ [GOPLUS] RugCheck 404, но GoPlus подтвердил безопасность {mint[:8]} (Топ-10: {self._last_top10:.1f}%, Дев: {self._last_dev:.1f}%).")
                     else:
                         _is_pump = pair_data and pair_data.get("dexId") in ("pump", "pumpfun")
                         if not _is_pump:
-                            return self._rej(mint, f"🚫 [NO-AUDIT] {symbol} ({mint[:8]}): Ни RugCheck, ни GoPlus не имеют данных холдеров — блок входа по безопасности.")
+                            print(f"🚫 [NO-AUDIT] {symbol} ({mint[:8]}): Ни RugCheck, ни GoPlus не имеют данных холдеров — блок входа по безопасности.")
+                            return False
                         print(f"🛡️ [GOPLUS] RugCheck 404, GoPlus подтвердил отсутствие ловушек у {mint[:8]} (Pump.fun кривая).")
                 except Exception as _ge:
-                    return self._rej(mint, f"⚠️ Не удалось проверить через RugCheck и GoPlus ({_ge}). Блокируем вход.")
+                    print(f"⚠️ Не удалось проверить через RugCheck и GoPlus ({_ge}). Блокируем вход.")
+                    return False
         except Exception as e:
             print(f"⚠️ Ошибка RugCheck: {str(e)[:50]}.")
             try:
@@ -1298,19 +1245,23 @@ class Analyzer:
             except Exception:
                 return False
         except Exception as e:
-            return self._rej(mint, f"⚠️ Ошибка Jito-bundle: {e}")
+            print(f"⚠️ Ошибка Jito-bundle: {e}")
+            return False
 
         # 1. Прямой ончейн-аудит Solana (Freeze Authority, Mint Authority, Token-2022) через RPC
         try:
             import goplus as _gp
             _sol_onchain_ok, _sol_onchain_why = await _gp.check_onchain_solana_security(mint)
             if not _sol_onchain_ok:
-                return self._rej(mint, f"🚫 [АНТИСКАМ-FREEZE] {symbol} ({mint[:8]}): {_sol_onchain_why} — блок входа.")
+                print(f"🚫 [АНТИСКАМ-FREEZE] {symbol} ({mint[:8]}): {_sol_onchain_why} — блок входа.")
+                return False
             _g_ok, _g_why = await _gp.check_solana(mint)
             if not _g_ok:
-                return self._rej(mint, f"🚫 [GOPLUS] {symbol} ({mint[:8]}): {_g_why} — блок входа.")
+                print(f"🚫 [GOPLUS] {symbol} ({mint[:8]}): {_g_why} — блок входа.")
+                return False
         except Exception as e:
-            return self._rej(mint, f"🚫 [АНТИСКАМ] Ошибка аудита безопасности ({type(e).__name__}) — блок по безопасности (fail-closed).")
+            print(f"🚫 [АНТИСКАМ] Ошибка аудита безопасности ({type(e).__name__}) — блок по безопасности (fail-closed).")
+            return False
 
         # 2. Защита от Honeypot на Solana (0 продаж при 5+ покупках — нельзя продать)
         txns_m5 = (pair_data.get("txns") or {}).get("m5") or {}
@@ -1319,9 +1270,11 @@ class Analyzer:
         s1 = int(txns_h1.get("sells", 0) or 0)
         b5 = int(txns_m5.get("buys", 0) or 0)
         if s5 == 0 and s1 == 0 and b5 >= 5:
-            return self._rej(mint, f"🚫 [HONEYPOT] {symbol} ({mint[:8]}): 0 продаж при {b5} покупках — Honeypot (нельзя продать).")
+            print(f"🚫 [HONEYPOT] {symbol} ({mint[:8]}): 0 продаж при {b5} покупках — Honeypot (нельзя продать).")
+            return False
         if (b5 + s5) >= 20 and (s5 / (b5 + s5)) < 0.05:
-            return self._rej(mint, f"🚫 [HONEYPOT] {symbol} ({mint[:8]}): аномалия продаж m5 {s5}s/{b5}b (<5% продаж) — скрытый honeypot.")
+            print(f"🚫 [HONEYPOT] {symbol} ({mint[:8]}): аномалия продаж m5 {s5}s/{b5}b (<5% продаж) — скрытый honeypot.")
+            return False
 
         if is_vip or _lottery:
             print(f"🚀 [FAST TRACK] {symbol}: гейты пройдены, передаем на проверку холдеров (Снайперы/Бандлы).")
@@ -1340,14 +1293,16 @@ class Analyzer:
         else:
             _floor_liq = 8000 if (age_minutes < 60 or _lottery or is_vip) else (12000 if (pair_data.get("chainId") or "").lower() == "solana" else 5000)
         if liq < _floor_liq:
-            return self._rej(mint, f"🚫 [ANTI-RUG] {symbol} ({mint[:8]}): Ликвидность всего ${liq:,.0f} < ${_floor_liq}. Слишком опасно.")
+            print(f"🚫 [ANTI-RUG] {symbol} ({mint[:8]}): Ликвидность всего ${liq:,.0f} < ${_floor_liq}. Слишком опасно.")
+            return False
 
         # Защита от фантомных пулов с мизерным остатком реального SOL (кейс Hodlon -$14.91: в пуле всего 1.17 SOL):
         _quote_info = pair_data.get("liquidity", {}) or {}
         _quote_amt = float(_quote_info.get("quote", 0) or 0)
         _quote_sym = str((pair_data.get("quoteToken") or {}).get("symbol", "")).upper()
         if "SOL" in _quote_sym and 0 < _quote_amt < 10.0 and dex_id not in ("pump", "pumpfun"):
-            return self._rej(mint, f"🚫 [AMM-GHOST-POOL] {symbol} ({mint[:8]}): в пуле всего {_quote_amt:.2f} SOL < 10 SOL — микро-резерв, риск 100% слива девом.")
+            print(f"🚫 [AMM-GHOST-POOL] {symbol} ({mint[:8]}): в пуле всего {_quote_amt:.2f} SOL < 10 SOL — микро-резерв, риск 100% слива девом.")
+            return False
 
         if dex_id in ("pump", "pumpfun"):
             ok = await self.analyze_token_xgboost(mint, pair_data, _lottery=_lottery)
@@ -1365,11 +1320,11 @@ class Analyzer:
         if not pair_data:
             return True
         symbol = ((pair_data.get("baseToken") or {}).get("symbol") or address[:8])
-        _cr = bool(pair_data.get("_curve_runner"))
         # 1. Проверяем просадку от уже виденного 5м-пика в памяти бота
         drop_seen = float(pair_data.get("_drop_from_peak_5m", 0.0) or 0.0)
         if drop_seen <= -12.0:
-            return self._rej(address, f"🚫 [PEAK-DUMP] {symbol} ({address[:8]}): цена уже упала на {drop_seen:.1f}% от недавнего пика — падающий нож.")
+            print(f"🚫 [PEAK-DUMP] {symbol} ({address[:8]}): цена уже упала на {drop_seen:.1f}% от недавнего пика — падающий нож.")
+            return False
 
         # 2. Запрашиваем последние 5 минутных свечей из GeckoTerminal (только для финальных кандидатов на вход)
         pair_addr = pair_data.get("pairAddress") or ""
@@ -1418,7 +1373,8 @@ class Analyzer:
 
             # А) Активная красная свеча прямо сейчас (реальный слив >= -7.5% за текущую минуту)
             if c0_pct <= -7.5:
-                return self._rej(address, f"🚫 [1M-DUMP] {symbol} ({address[:8]}): текущая 1м свеча летит вниз ({c0_pct:+.1f}%) — падающий нож, отмена входа.")
+                print(f"🚫 [1M-DUMP] {symbol} ({address[:8]}): текущая 1м свеча летит вниз ({c0_pct:+.1f}%) — падающий нож, отмена входа.")
+                return False
 
             # А2) Перегрев текущей 1м свечи (вход на макушке аномального прострела)
             tx_5m = (pair_data.get("txns") or {}).get("m5") or {}
@@ -1428,8 +1384,9 @@ class Analyzer:
             is_strong_trend = (m5_pct >= 20.0 and b5_val >= max(int(s5_val * 1.2), 5))
 
             max_m1_overheat = 38.0 if is_strong_trend else 28.0
-            if c0_pct > max_m1_overheat and not _cr:
-                return self._rej(address, f"🚫 [1M-OVERHEAT] {symbol} ({address[:8]}): текущая 1м свеча +{c0_pct:.1f}% > +{max_m1_overheat:.0f}% — вертикальный прострел, вход = вершина.")
+            if c0_pct > max_m1_overheat:
+                print(f"🚫 [1M-OVERHEAT] {symbol} ({address[:8]}): текущая 1м свеча +{c0_pct:.1f}% > +{max_m1_overheat:.0f}% — вертикальный прострел, вход = вершина.")
+                return False
 
             # Б) Прошлая минутная свеча обвалилась, идут 2 красные свечи подряд или экстремальный blow-off
             if len(ohlcv) >= 2:
@@ -1437,31 +1394,38 @@ class Analyzer:
                 c1_open, c1_high, c1_low, c1_close = float(c1[1] or 0), float(c1[2] or 0), float(c1[3] or 0), float(c1[4] or 0)
                 c1_pct = ((c1_close - c1_open) / c1_open * 100.0) if c1_open > 0 else 0.0
                 if c1_pct <= -6.0 and c0_pct < 2.0:
-                    return self._rej(address, f"🚫 [1M-CRASH] {symbol} ({address[:8]}): прошлая 1м свеча слилась на {c1_pct:+.1f}% без откупа (сейчас {c0_pct:+.1f}%) — обвал в процессе.")
+                    print(f"🚫 [1M-CRASH] {symbol} ({address[:8]}): прошлая 1м свеча слилась на {c1_pct:+.1f}% без откупа (сейчас {c0_pct:+.1f}%) — обвал в процессе.")
+                    return False
                 if c1_pct <= -1.5 and c0_pct <= -1.0 and eff_close <= c1_close:
                     # Если сильный 5м-тренд (m5 >= 20% и покупатели доминируют), откат на -1..-2% суммарно до -5.5% — это здоровая консолидация
                     if not (is_strong_trend and (c0_pct + c1_pct) > -5.5):
-                        return self._rej(address, f"🚫 [2-RED-1M] {symbol} ({address[:8]}): 2 красные минутные свечи подряд ({c1_pct:+.1f}%, {c0_pct:+.1f}%) — импульс сломлен.")
-                if (c1_pct > 60.0 or (c0_pct + c1_pct) > 75.0) and not _cr:
-                    return self._rej(address, f"🚫 [1M-BLOWOFF] {symbol} ({address[:8]}): вертикальный памп за 2 мин ({c1_pct:+.1f}%, {c0_pct:+.1f}%) — риск мгновенного дампа.")
+                        print(f"🚫 [2-RED-1M] {symbol} ({address[:8]}): 2 красные минутные свечи подряд ({c1_pct:+.1f}%, {c0_pct:+.1f}%) — импульс сломлен.")
+                        return False
+                if c1_pct > 60.0 or (c0_pct + c1_pct) > 75.0:
+                    print(f"🚫 [1M-BLOWOFF] {symbol} ({address[:8]}): вертикальный памп за 2 мин ({c1_pct:+.1f}%, {c0_pct:+.1f}%) — риск мгновенного дампа.")
+                    return False
 
             # В) Blow-off Top: цена уже упала на >= 16% от максимума последних 5 минут (кейс sBTC -20.9% от пика)
             if drawdown_5m_pct <= -16.0 and c0_pct < 3.0:
-                return self._rej(address, f"🚫 [BLOWOFF-TOP] {symbol} ({address[:8]}): цена уже упала на {drawdown_5m_pct:.1f}% от 5м-пика — вершина пройдена, идёт разгрузка.")
+                print(f"🚫 [BLOWOFF-TOP] {symbol} ({address[:8]}): цена уже упала на {drawdown_5m_pct:.1f}% от 5м-пика — вершина пройдена, идёт разгрузка.")
+                return False
 
             # В2) 5-минутное истощение (5m Exhaustion): если за последние 5 минут токен уже вырос в >= 3.8 раза от лоя (кейс DMN 5.3x за 4м -> Infant Dump -32.8%)
-            if low_5m > 0 and (high_5m / low_5m) >= 3.8 and not _cr:
-                return self._rej(address, f"🚫 [5M-EXHAUSTION] {symbol} ({address[:8]}): за 5м уже сделал {high_5m/low_5m:.1f}x от лоя — кульминация пройдена.")
+            if low_5m > 0 and (high_5m / low_5m) >= 3.8:
+                print(f"🚫 [5M-EXHAUSTION] {symbol} ({address[:8]}): за 5м уже сделал {high_5m/low_5m:.1f}x от лоя — кульминация пройдена.")
+                return False
 
             # Г) Верхний фитиль (Shooting Star): внутри текущей минуты токен кольнул верх и сложился на >= 12% при слабом закрытии (<=2%), либо резкий обвал >= 25%
             c0_wick_drop = ((c0_high - eff_close) / c0_high * 100.0) if c0_high > 0 else 0.0
             if (c0_wick_drop >= 12.0 and c0_pct <= 2.0) or c0_wick_drop >= 25.0:
-                return self._rej(address, f"🚫 [WICK-DUMP] {symbol} ({address[:8]}): слив от хая текущей свечи на -{c0_wick_drop:.1f}% — раздача в стакан.")
+                print(f"🚫 [WICK-DUMP] {symbol} ({address[:8]}): слив от хая текущей свечи на -{c0_wick_drop:.1f}% — раздача в стакан.")
+                return False
 
             # Г2) Спайк с откатом (Spike Reversal / кейс Mao -28%): свеча сделала резкий взлёт >= 15% и уже откатила сверху вниз на >= 8%
             c0_spike_pct = ((c0_high - c0_open) / c0_open * 100.0) if c0_open > 0 else 0.0
             if c0_spike_pct >= 15.0 and c0_wick_drop >= 8.0:
-                return self._rej(address, f"🚫 [SPIKE-REVERSAL] {symbol} ({address[:8]}): спайк +{c0_spike_pct:.1f}% уже откатил на -{c0_wick_drop:.1f}% от пика — раздача на хае.")
+                print(f"🚫 [SPIKE-REVERSAL] {symbol} ({address[:8]}): спайк +{c0_spike_pct:.1f}% уже откатил на -{c0_wick_drop:.1f}% от пика — раздача на хае.")
+                return False
         except Exception:
             pass
         return True
@@ -2063,7 +2027,8 @@ class Analyzer:
 
         _fdv_curve = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
         if _fdv_curve > 32000:
-            return self._rej(mint, f"🚫 [GRADUATION-CLIFF] {mint[:8]}: кривая Pump.fun у потолка миграции (FDV ${_fdv_curve:,.0f} > $32k) — риск мгновенного дампа при выходе на AMM.")
+            print(f"🚫 [GRADUATION-CLIFF] {mint[:8]}: кривая Pump.fun у потолка миграции (FDV ${_fdv_curve:,.0f} > $32k) — риск мгновенного дампа при выходе на AMM.")
+            return False
             
         is_vip = self.check_hyper_rocket_momentum(pair_data)
         if is_vip:
@@ -2074,7 +2039,8 @@ class Analyzer:
             age_minutes = (time.time() * 1000 - created_at) / (1000 * 60)
             _max_pump_age = float(getattr(config, "PUMP_MAX_AGE_MIN", 120.0))
             if age_minutes > _max_pump_age:  
-                return self._rej(mint, f"🚫 [PUMP-AGE] {mint[:8]}: возраст {age_minutes:.1f}м > {_max_pump_age:.0f}м — затухающий кёрв.")
+                print(f"🚫 [PUMP-AGE] {mint[:8]}: возраст {age_minutes:.1f}м > {_max_pump_age:.0f}м — затухающий кёрв.")
+                return False
                 
         import pandas as pd
         import joblib
@@ -2142,7 +2108,8 @@ class Analyzer:
             from shadow_score import pair_shadow_score, VETO_THRESHOLD
             _sh = pair_shadow_score(pair_data)
             if _sh < VETO_THRESHOLD:
-                return self._rej(mint, f"🚫 [SHADOW] {mint[:8]}: score {_sh:.2f} < {VETO_THRESHOLD}.")
+                print(f"🚫 [SHADOW] {mint[:8]}: score {_sh:.2f} < {VETO_THRESHOLD}.")
+                return False
         except Exception:
             pass
 
@@ -2179,7 +2146,7 @@ class Analyzer:
 
         ok = bool(conf >= threshold)
         if ok:
-            _sig_name = f"{'RUNNER-' if pair_data.get('_curve_runner') else ''}{'VIP-' if is_vip else ''}{'LOTTERY-' if _lottery else ''}PUMP-XGB {conf:.0f}%"
+            _sig_name = f"{'VIP-' if is_vip else ''}{'LOTTERY-' if _lottery else ''}PUMP-XGB {conf:.0f}%"
             self._set_sig(mint, _sig_name)
         return ok
 
@@ -2195,12 +2162,14 @@ class Analyzer:
         _age_min = ((_t.time() * 1000 - _c_ms) / 60000.0) if _c_ms else 999.0
         _sol_min_age = float(getattr(config, "SOLANA_MIN_AGE_MIN", 2.5))
         if _age_min < _sol_min_age:
-            return self._rej(mint, f"⏳ [RAYDIUM] {mint[:8]}: возраст {_age_min:.1f}м < {_sol_min_age}м — ранняя flash-rug зона.")
+            print(f"⏳ [RAYDIUM] {mint[:8]}: возраст {_age_min:.1f}м < {_sol_min_age}м — ранняя flash-rug зона.")
+            return False
 
         _ray_liq = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
         _min_ray_liq = 8000.0 if (_age_min < 60) else 12000.0
         if _ray_liq < _min_ray_liq:
-            return self._rej(mint, f"🚫 [RAYDIUM] {mint[:8]}: реальная ликвидность AMM ${_ray_liq:,.0f} < ${_min_ray_liq:,.0f}.")
+            print(f"🚫 [RAYDIUM] {mint[:8]}: реальная ликвидность AMM ${_ray_liq:,.0f} < ${_min_ray_liq:,.0f}.")
+            return False
 
         _pc = pair_data.get("priceChange") or {}
         _m5 = float(_pc.get("m5", 0) or 0)
@@ -2211,58 +2180,62 @@ class Analyzer:
         # Защита от пост-миграционных трупов (Gemma -$4.12, sBTC -$0.49):
         # Pump.fun мигрирует при ~$42k-$69k MC. Если токен на AMM уже упал ниже $46k или имеет красный часовой/6ч тренд — это слитый токен!
         if 0 < _fdv_check < 15000:
-            return self._rej(mint, f"🚫 [RAYDIUM] {mint[:8]}: FDV ${_fdv_check:,.0f} < $15,000 — слитый после миграции токен.")
+            print(f"🚫 [RAYDIUM] {mint[:8]}: FDV ${_fdv_check:,.0f} < $15,000 — слитый после миграции токен.")
+            return False
         if (_fdv_check < 35000 and _h1 < -5.0) or (_h1 < -15.0 or _h6 < -35.0):
-            return self._rej(mint, f"🚫 [RAYDIUM] {mint[:8]}: часовой/6ч тренд в глубоком сливе (h1 {_h1:+.1f}%, h6 {_h6:+.1f}%) — отскок дохлой кошки.")
+            print(f"🚫 [RAYDIUM] {mint[:8]}: часовой/6ч тренд в глубоком сливе (h1 {_h1:+.1f}%, h6 {_h6:+.1f}%) — отскок дохлой кошки.")
+            return False
         if _m1 < -3.5:
-            return self._rej(mint, f"🚫 [RAYDIUM] {mint[:8]}: m1 {_m1:+.1f}% — активный сброс в моменте (падающий нож).")
+            print(f"🚫 [RAYDIUM] {mint[:8]}: m1 {_m1:+.1f}% — активный сброс в моменте (падающий нож).")
+            return False
         if _m5 < 2.5:
-            return self._rej(mint, f"🚫 [RAYDIUM] {mint[:8]}: m5 {_m5:+.1f}% < +2.5% — нет импульса.")
+            print(f"🚫 [RAYDIUM] {mint[:8]}: m5 {_m5:+.1f}% < +2.5% — нет импульса.")
+            return False
 
         _vm5 = float(((pair_data.get("volume") or {}).get("m5", 0) or 0))
         _txm5 = (pair_data.get("txns") or {}).get("m5", {}) or {}
         _b5, _s5 = int(_txm5.get("buys", 0) or 0), int(_txm5.get("sells", 0) or 0)
         _min_bs = 1.05 if (_vm5 >= 5000 and _m5 >= 5.0) else 1.12
         if (_b5 + _s5) < 15 or _vm5 < 1500 or (_s5 > 0 and _b5 < _s5 * _min_bs):
-            return self._rej(mint, f"🚫 [FRESH] {mint[:8]}: слабый поток (b/s {_b5}/{_s5}, vol ${_vm5:,.0f}) — нет покупателей.")
-
-        # === BS-CAP (по реальным сделкам): b/s m5 > 2.5 = накрутка/кабал, 17% побед ===
-        _bs_cap = float(getattr(config, "SOL_MAX_BS_RATIO", 2.5))
-        if _bs_cap > 0 and _s5 > 0 and (_b5 / _s5) > _bs_cap:
-            _bmsg = f"🚫 [BS-CAP] {mint[:8]}: b/s {_b5}/{_s5} = {_b5 / _s5:.1f}x > {_bs_cap:.1f}x — односторонний стакан (накрутка)."
-            if callable(getattr(self, "_rej", None)):
-                return self._rej(mint, _bmsg)
-            print(_bmsg)
+            print(f"🚫 [FRESH] {mint[:8]}: слабый поток (b/s {_b5}/{_s5}, vol ${_vm5:,.0f}) — нет покупателей.")
             return False
+
         # Защита от реальной лавины продаж (продавцов больше, чем покупателей)
         if _s5 >= 40 and _b5 < _s5 * 1.05:
-            return self._rej(mint, f"🚫 [SELL-AVALANCHE] {mint[:8]}: лавина продаж ({_s5} продаж vs {_b5} покупок за 5м) — продавцы сильнее.")
+            print(f"🚫 [SELL-AVALANCHE] {mint[:8]}: лавина продаж ({_s5} продаж vs {_b5} покупок за 5м) — продавцы сильнее.")
+            return False
 
         # 1. Защита от микро-чеков ботов (накрутка объёма и транзакций)
         _avg_tx = _vm5 / max(_b5 + _s5, 1)
         if (_b5 + _s5) >= 20 and _avg_tx < 15.0:
-            return self._rej(mint, f"🚫 [WASH-BOT] {mint[:8]}: средний чек ${_avg_tx:.1f} < $15 при {_b5+_s5} сделках — микро-боты накручивают объём.")
+            print(f"🚫 [WASH-BOT] {mint[:8]}: средний чек ${_avg_tx:.1f} < $15 при {_b5+_s5} сделках — микро-боты накручивают объём.")
+            return False
 
         liquidity = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
         fdv = float(pair_data.get("fdv", 0) or 0)
         if liquidity < _min_ray_liq:
-            return self._rej(mint, f"📉 [RAYDIUM] {mint[:8]}: реальная ликвидность пула ${liquidity:,.0f} < ${_min_ray_liq:,.0f} — микро-пул с риском мгновенного слива.")
+            print(f"📉 [RAYDIUM] {mint[:8]}: реальная ликвидность пула ${liquidity:,.0f} < ${_min_ray_liq:,.0f} — микро-пул с риском мгновенного слива.")
+            return False
 
         # 2. Защита от картонных пулов (FDV / Liquidity > 40x — 1 кит продает и пул схлопывается)
         if liquidity > 0 and fdv > 0 and (fdv / liquidity) > 40.0:
-            return self._rej(mint, f"🚫 [HOLLOW-POOL] {mint[:8]}: FDV ${fdv:,.0f} vs Liq ${liquidity:,.0f} ({fdv/liquidity:.0f}x > 40x) — картонная ликвидность.")
+            print(f"🚫 [HOLLOW-POOL] {mint[:8]}: FDV ${fdv:,.0f} vs Liq ${liquidity:,.0f} ({fdv/liquidity:.0f}x > 40x) — картонная ликвидность.")
+            return False
 
         # 3. Защита от кругового wash-churn (350% оборота за 5м без движения цены)
         if liquidity > 0 and (_vm5 / liquidity) > 3.5 and abs(_m5) < 12.0:
-            return self._rej(mint, f"🚫 [CHURN] {mint[:8]}: оборот {_vm5 / liquidity:.1f}x от ликвидности за 5м без импульса (m5 {_m5:+.1f}%) — накрутка.")
+            print(f"🚫 [CHURN] {mint[:8]}: оборот {_vm5 / liquidity:.1f}x от ликвидности за 5м без импульса (m5 {_m5:+.1f}%) — накрутка.")
+            return False
 
         # 4. Проверка безопасности холдеров и создателя
         _t10 = getattr(self, '_last_top10', 0.0)
         _dev = getattr(self, '_last_dev', 0.0)
         if _dev > 10.0:
-            return self._rej(mint, f"🚫 [DEV-HOLD] {mint[:8]}: создатель держит {_dev:.1f}% > 10% — дамп-риск.")
+            print(f"🚫 [DEV-HOLD] {mint[:8]}: создатель держит {_dev:.1f}% > 10% — дамп-риск.")
+            return False
         if _t10 > 35.0:
-            return self._rej(mint, f"🚫 [TOP10-CABAL] {mint[:8]}: топ-10 держат {_t10:.1f}% > 35% — кабал/дамп-риск.")
+            print(f"🚫 [TOP10-CABAL] {mint[:8]}: топ-10 держат {_t10:.1f}% > 35% — кабал/дамп-риск.")
+            return False
 
         import pandas as pd
         import joblib
@@ -2331,7 +2304,8 @@ class Analyzer:
                 from shadow_score import pair_shadow_score, VETO_THRESHOLD
                 _sh = pair_shadow_score(pair_data)
                 if _sh < VETO_THRESHOLD:
-                    return self._rej(mint, f"🚫 [SHADOW] {mint[:8]}: score {_sh:.2f} < {VETO_THRESHOLD} — обучено на истории лузеров.")
+                    print(f"🚫 [SHADOW] {mint[:8]}: score {_sh:.2f} < {VETO_THRESHOLD} — обучено на истории лузеров.")
+                    return False
             except Exception:
                 pass
             threshold = float(getattr(config, "RAYDIUM_BUY_THRESHOLD", 55.0))  
@@ -2358,7 +2332,8 @@ class Analyzer:
                     
             return is_buy
         except Exception as e:
-            return self._rej(mint, f"⚠️ Ошибка XGBoost (analyze_token_raydium) для {mint}: {e}")
+            print(f"⚠️ Ошибка XGBoost (analyze_token_raydium) для {mint}: {e}")
+            return False
 
     async def analyze_token_ws(self, ws_data: dict) -> bool:
         mint = ws_data.get("mint")

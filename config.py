@@ -45,15 +45,15 @@ PAPER_PORTFOLIO_FILE = "portfolio.json"
 PORTFOLIO_SNAPSHOT_MINT = (os.getenv("PORTFOLIO_SNAPSHOT_MINT", "") or "").strip().strip('"').strip("'") or "PORTFOLIO_STATE_V2.4"
 INITIAL_BALANCE_USD = 120.0  # торговый пул ($150 депо - $30 газ)    # Стартовый капитал
 REINVEST_PERCENT = 5.0  # Было 3%: цель $10/день требует сайз. 5% пула на сделку
-VIRTUAL_POSITION_SIZE_USD = 15.0
-TRADE_AMOUNT_USD = 15.0  # Базовый ордер $15
+VIRTUAL_POSITION_SIZE_USD = 6.0
+TRADE_AMOUNT_USD = 6.0  # Безопасный базовый ордер $6 (защита от крупных сливов депозита)
 # === ДИНАМИЧЕСКИЙ СТУПЕНЧАТЫЙ РЕИНВЕСТ И ЗАЩИТА ЛИКВИДНОСТИ ===
 DYNAMIC_REINVEST_ENABLED = True      # Включить ступенчатый реинвест прибыли
-BASE_TRADE_AMOUNT_USD = 15.0         # Базовый размер сделки (минимальный пол $15)
-MAX_POSITION_SIZE_USD = 25.0         # Жесткий потолок на 1 сделку (не более $25 в один мемкоин)
-REINVEST_MIN_POOL_LIQ_USD = 15000.0  # Мин. ликвидность пула для входа > $15 (защита от сдвига цены)
-SCOUT_SIZE_USD = 15.0    # Ордер $15 (полный вход, защита через строгий входной ончейн-анализ)
-LOTTERY_SIZE_USD = 15.0
+BASE_TRADE_AMOUNT_USD = 15.0         # Базовый размер сделки (безопасный пол $6)
+MAX_POSITION_SIZE_USD = 15.0        # Жесткий потолок на 1 сделку (не более $15 в один мемкоин)
+REINVEST_MIN_POOL_LIQ_USD = 15000.0  # Мин. ликвидность пула для входа > $6 (защита от сдвига цены)
+SCOUT_SIZE_USD = 6.0    # Ордер $6
+LOTTERY_SIZE_USD = 4.0
 MAX_CONCURRENT_POSITIONS = 10  # концентрация капитала: максимум 10 ракет  # Режим Снайпера: максимум 5 сделок одновременно
 
 # Risk Management
@@ -67,8 +67,16 @@ STREAK_COOLDOWN_ENABLED = True       # Включить паузу после с
 STREAK_MAX_CONSECUTIVE_LOSSES = 4    # 4 минуса подряд
 STREAK_COOLDOWN_MINUTES = 3.0        # Длительность паузы: 3 минуты вместо 12, чтобы бот не засыпал на полдня
 
+# === СКОЛЬЗЯЩИЙ БРЕЙКЕР + ТРОТТЛИНГ ПО ПРОСАДКЕ (добавлено после слива +67$ -> +28$ 22-23.10) ===
+ROLLING_BREAKER_ENABLED = True
+ROLLING_BREAKER_WINDOW = 8           # смотрим последние 8 закрытых сделок
+ROLLING_BREAKER_LOSS_USD = 8.0       # если их сумма <= -$8 -> пауза входов
+ROLLING_BREAKER_PAUSE_MIN = 45.0     # пауза от выхода последней сделки
+DD_THROTTLE_ENABLED = True
+DD_THROTTLE_START_USD = 15.0         # просадка от пика >= $15 -> билет x0.5; >= $30 -> базовый $6
+
 # === IN-MEMORY STREAMING SNIPER (RAM FILTER + AUDIT) ===
-SNIPER_ENTRIES_ENABLED = False            # ВЫКЛЮЧЕНО: стрим по кривой дал 0 из 5 побед (-188)
+SNIPER_ENTRIES_ENABLED = True             # Активировать вход по In-Memory стриму (без задержек DexScreener)
 STREAM_WINDOW_SEC = 20                   # Скользящее окно скорости в RAM (20 секунд)
 STREAM_MIN_UNIQUE_BUYERS = 10            # Минимум 10 уникальных покупателей за 20 сек
 STREAM_MIN_BUY_SOL = 4.0                 # Минимум 4.0 SOL реального объема покупок
@@ -79,17 +87,7 @@ STREAM_ENTRY_SIZE_USD = 15.0             # Размер билета на ран
 STREAM_SLIPPAGE = 0.02                   # 2% проскальзывание на входе
 STREAM_MAX_AGE_SEC = 120                 # Очистка из RAM токенов без активности старше 2 минут
 
-# === ЗАЩИТА ОТ РАГОВ И УБЫТКОВ (FIX_LOSSES & FIX_ROCKETS) ===
-SOL_MIN_AGE_GATE_MIN = 3.0    # Токены Solana моложе 3 мин не покупаем (flash-rug зона; 10/30 резали ракеты)
-SOL_BLOCK_DEXES = ()          # Разрешены все DEX (Meteora разблокирована, бан резал 36% рынка)
-SOL_MAX_BS_RATIO = 4.0        # b/s m5 выше 4.0 = накрутка/кабал (было 2.5 — резало нормальные ракеты с сильным потоком покупок)
-SOL_MAX_SIZE_USD = 15.0       # Потолок билета Solana ($15 по запросу)
-RUNNER_MIN_LIQ = 8000.0       # Мин. ликвидность для признания моментум-ракетой ($8k вместо $20k)
-RUNNER_MIN_VOL5 = 3000.0      # Мин. объем m5 для раннера ($3k вместо $15k)
-CURVE_RUNNER_SIZE_USD = 4.0   # Размер билета на бондинг-кривой pump.fun
-RIDE_RUNNERS_ENABLED = True   # Расширенный трейлинг для ракет (RUNNER-)
-
-VIP_ENTRIES_ENABLED = True   # ВКЛЮЧЕНО: VIP-полоса для супер-моментума (HUMANOID +141%, JEETJAK +60%), защищена ончейн-аудитом и 1м-фильтром отката
+VIP_ENTRIES_ENABLED = False  # ВЫКЛЮЧЕНО: VIP-входы без отката покупали вершины скамов (Hodlon -$15, MOGGERSHA -$15)
 TIME_EXIT_MINUTES = 60  # Если за 30 минут нет пампа - выходим
 TIME_EXIT_PROFIT_REQ = 0.0
 
