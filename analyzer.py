@@ -810,6 +810,10 @@ class Analyzer:
         _pc = pair_data.get("priceChange") or {}
         _m5 = float(_pc.get("m5", 0) or 0)
         _m1 = float(_pc.get("m1", 0) or 0)
+        _h1 = float(_pc.get("h1", 0) or 0)
+        _h6 = float(_pc.get("h6", 0) or 0)
+        if _h1 < -8.0 or _h6 < -15.0:
+            return False
         if (buys_m5 >= _min_tx and volume_m5 >= _min_vol and liquidity >= 12000 
                 and sells_m5 > 0 and buys_m5 >= sells_m5 * 1.2 and _m5 >= 3.0 and _m1 >= -2.0):
             return True
@@ -834,6 +838,17 @@ class Analyzer:
         base_token = pair_data.get("baseToken", {})
         name = base_token.get("name", "").upper()
         symbol = base_token.get("symbol", "").upper()
+
+        if not hasattr(self, "_eval_ctx"):
+            self._eval_ctx = {}
+        self._eval_ctx[mint] = {
+            "symbol": symbol,
+            "chain": "solana",
+            "price": float(pair_data.get("priceUsd", 0) or 0),
+            "liq": float((pair_data.get("liquidity") or {}).get("usd", 0) or 0),
+            "m5": float((pair_data.get("priceChange") or {}).get("m5", 0) or 0),
+            "source": "SOLANA_SCAN"
+        }
 
         if pair_data.get("_price_divergence"):
             _div_r = float(pair_data.get("_price_divergence_ratio", 0.0) or 0.0)
@@ -872,8 +887,9 @@ class Analyzer:
             if _m1 < -4.0:
                 print(f"🚫 [VIP REVERSAL] {mint}: m1 {_m1:+.1f}% — резкий откат за 1м, ждём pullback.")
                 return False
-            if _m1 > 20.0:
-                print(f"🚫 [VIP SPIKE] {mint}: m1 {_m1:+.1f}% — свеча-spike в моменте, вход = вершина. Ждём.")
+            _max_vip_m1 = 45.0 if _has_strong_buyers else 25.0
+            if _m1 > _max_vip_m1:
+                print(f"🚫 [VIP SPIKE] {mint}: m1 {_m1:+.1f}% > +{_max_vip_m1:.0f}% — свеча-spike в моменте, вход = вершина. Ждём.")
                 return False
             if _m5 < getattr(config, "VIP_MIN_M5_PCT", 5.0):
                 print(f"🚫 [VIP FLAT] {mint}: объём есть, а импульса нет (m5 {_m5:+.1f}% < +10%) — флет съест комиссиями.")
@@ -882,7 +898,7 @@ class Analyzer:
         _lottery = False
         _created_pre = pair_data.get("pairCreatedAt") or 0
         _age_min_pre = (time.time() * 1000 - _created_pre) / 60000.0 if _created_pre else 999
-        _sol_min_age = float(getattr(config, "SOLANA_MIN_AGE_MIN", 2.5))
+        _sol_min_age = float(getattr(config, "SOLANA_MIN_AGE_MIN", 1.5))
         if _age_min_pre < _sol_min_age:
             print(f"⏳ [ENTRY] {mint[:8]}: возраст {_age_min_pre:.1f}м < {_sol_min_age}м — flash-rug зона дева, ждём созревания.")
             return None
@@ -896,7 +912,7 @@ class Analyzer:
                 if 0 < _fdv_pre < 15000:
                     print(f"🚫 [POST-MIGRATION-DUMP] {mint[:8]}: AMM FDV ${_fdv_pre:,.0f} < $15k — слитый токен.")
                     return False
-                if _age_min_pre > 60.0 and ((_fdv_pre < 35000 and _h1_pre < -5.0) or (_h1_pre < -15.0 or _h6_pre < -35.0)):
+                if (_fdv_pre < 35000 and _h1_pre < -5.0) or (_h1_pre < -12.0 or _h6_pre < -25.0):
                     print(f"🚫 [POST-MIGRATION-DUMP] {mint[:8]}: часовой/6ч тренд в глубоком сливе (h1 {_h1_pre:+.1f}%, h6 {_h6_pre:+.1f}%) — отскок дохлой кошки.")
                     return False
         if not is_vip and pair_data:
@@ -922,14 +938,18 @@ class Analyzer:
                         pass
                     self._deny(mint, "dead-token", f"💀 {mint}: мёртвый токен")
                     return False
+            _dex_lower = str(pair_data.get("dexId", "")).lower()
+            _is_pump_curve = _dex_lower in ("pump", "pumpfun")
             _cur_liq_pre = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
-            if _cur_liq_pre == 0 and str(pair_data.get("dexId", "")).lower() in ("pump", "pumpfun"):
+            if _cur_liq_pre == 0 and _is_pump_curve:
                 _cur_liq_pre = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0) * 0.40
             _b5_pre = int(_txm5_pre.get("buys", 0) or 0)
             _s5_pre = int(_txm5_pre.get("sells", 0) or 0)
+            _min_run_liq = 4000 if _is_pump_curve else 20000
+            _min_run_vol = 5000 if _is_pump_curve else 15000
             _is_runner = (
-                _cur_liq_pre >= 20000 and 
-                _vm5_pre >= 15000 and 
+                _cur_liq_pre >= _min_run_liq and 
+                _vm5_pre >= _min_run_vol and 
                 (_b5_pre + _s5_pre) >= 15 and 
                 (_b5_pre >= _s5_pre * 1.05 or _vm5_pre >= 35000)
             )
@@ -966,7 +986,12 @@ class Analyzer:
                 if _m5 < getattr(config, "PULLBACK_MIN_M5_PCT", 0.025) * 100:
                     print(f"🚫 [ENTRY] {mint}: m5 {_m5:+.1f}% < импульса не было, пропуск.")
                     return False
-                _m1_max = getattr(config, "PULLBACK_M1_MAX_PCT", 0.20) * 100
+                _tx_m5_p = (pair_data.get("txns") or {}).get("m5", {}) or {}
+                _b5_p = int(_tx_m5_p.get("buys", 0) or 0)
+                _s5_p = int(_tx_m5_p.get("sells", 0) or 0)
+                _vol5_p = float((pair_data.get("volume") or {}).get("m5", 0) or 0)
+                _strong_breakout = (_b5_p >= int(_s5_p * 1.15) and _b5_p >= 15 and _vol5_p >= 8000)
+                _m1_max = 45.0 if _strong_breakout else (getattr(config, "PULLBACK_M1_MAX_PCT", 0.20) * 100)
                 if _m1 > _m1_max:
                     print(f"🚫 [ENTRY] {mint}: m1 {_m1:+.1f}% > +{_m1_max:.0f}% — вертикаль в процессе, купим вершину. Ждём откат.")
                     return False
@@ -976,6 +1001,9 @@ class Analyzer:
                 _max_h1_pct = getattr(config, "PULLBACK_MAX_H1_PCT", 25.0) * 100
                 if _h1 > _max_h1_pct:
                     print(f"🚫 [ENTRY] {mint}: h1 {_h1:+.0f}% — уже улетел, поздно.")
+                    return False
+                if _h1 < -10.0:
+                    print(f"🚫 [ENTRY] {mint}: h1 {_h1:+.1f}% — глубокий часовой слив, падающий нож.")
                     return False
             _txm5 = (pair_data.get("txns") or {}).get("m5", {}) or {}
             _b5, _s5 = _txm5.get("buys", 0) or 0, _txm5.get("sells", 0) or 0
@@ -2061,8 +2089,8 @@ class Analyzer:
             return False
 
         _fdv_curve = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
-        if _fdv_curve > 32000:
-            print(f"🚫 [GRADUATION-CLIFF] {mint[:8]}: кривая Pump.fun у потолка миграции (FDV ${_fdv_curve:,.0f} > $32k) — риск мгновенного дампа при выходе на AMM.")
+        if _fdv_curve > 62000:
+            print(f"🚫 [GRADUATION-CLIFF] {mint[:8]}: кривая Pump.fun у самого потолка миграции (FDV ${_fdv_curve:,.0f} > $62k) — риск сброса при выходе на AMM.")
             return False
             
         is_vip = self.check_hyper_rocket_momentum(pair_data)
@@ -2195,7 +2223,7 @@ class Analyzer:
         _c_ms = pair_data.get("pairCreatedAt") or 0
         import time as _t
         _age_min = ((_t.time() * 1000 - _c_ms) / 60000.0) if _c_ms else 999.0
-        _sol_min_age = float(getattr(config, "SOLANA_MIN_AGE_MIN", 2.5))
+        _sol_min_age = float(getattr(config, "SOLANA_MIN_AGE_MIN", 1.5))
         if _age_min < _sol_min_age:
             print(f"⏳ [RAYDIUM] {mint[:8]}: возраст {_age_min:.1f}м < {_sol_min_age}м — ранняя flash-rug зона.")
             return False

@@ -77,12 +77,12 @@ DD_THROTTLE_START_USD = 15.0         # просадка от пика
 
 # === IN-MEMORY STREAMING SNIPER (RAM FILTER + AUDIT) ===
 SNIPER_ENTRIES_ENABLED = True             # Активировать вход по In-Memory стриму (без задержек DexScreener)
-STREAM_WINDOW_SEC = 20                   # Скользящее окно скорости в RAM (20 секунд)
-STREAM_MIN_UNIQUE_BUYERS = 10            # Минимум 10 уникальных покупателей за 20 сек
-STREAM_MIN_BUY_SOL = 4.0                 # Минимум 4.0 SOL реального объема покупок
-STREAM_MAX_TOP_BUYER_RATIO = 0.35        # Доля крупнейшего покупателя <= 35% (защита от одного кита / wash-trade)
-STREAM_MIN_BS_RATIO = 2.0                # Соотношение Buy/Sell volume >= 2.0 (покупки в 2+ раза превышают продажи)
-STREAM_MAX_CURVE_PROGRESS = 65.0         # Не входить если кривая > 65% (защита от покупки прямо перед стеной миграции)
+STREAM_WINDOW_SEC = 30                   # Скользящее окно скорости в RAM (30 секунд)
+STREAM_MIN_UNIQUE_BUYERS = 6             # Минимум 6 уникальных покупателей за окно (ранняя органика)
+STREAM_MIN_BUY_SOL = 2.5                 # Минимум 2.5 SOL реального объема покупок
+STREAM_MAX_TOP_BUYER_RATIO = 0.50        # Доля крупнейшего покупателя <= 50%
+STREAM_MIN_BS_RATIO = 1.8                # Соотношение Buy/Sell volume >= 1.8
+STREAM_MAX_CURVE_PROGRESS = 85.0         # Не входить если кривая > 85% (защита от покупки перед стеной миграции)
 STREAM_ENTRY_SIZE_USD = 15.0             # Размер билета на раннем входе ($15)
 STREAM_SLIPPAGE = 0.02                   # 2% проскальзывание на входе
 STREAM_MAX_AGE_SEC = 120                 # Очистка из RAM токенов без активности старше 2 минут
@@ -203,7 +203,7 @@ CONVICTION_MIN_M5_PCT = 0.20  # m5 от +20%
 CONVICTION_MAX_M5_PCT = 0.60  # m5 до +60% (выше - вершина)
 CONVICTION_MIN_BUYSELL = 2.0  # покупки >= продаж x2
 CONVICTION_MIN_LIQ = 30000  # пул от $30к
-MAX_DEPLOYED_PCT = 0.60  # суммарно в рынке не больше 60% капитала (сдерживает тиринг)
+MAX_DEPLOYED_PCT = 0.85  # суммарно в рынке до 85% капитала (до 6-7 позиций при балансе $120)
 ROCKET_VETO_ENABLED = True  # Включено вето RKT >= 0.25: режет мертвечину и затухающие пулы (ROBINCAT 0.06, HYPURRT 0.10, COVENANT 0.14)
 ROCKET_VETO_MIN = 0.25
 

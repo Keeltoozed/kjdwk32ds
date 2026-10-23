@@ -72,9 +72,16 @@ class PumpFunSniper:
             rc_url = f"https://api.rugcheck.xyz/v1/tokens/{mint}/report/summary"
             status, data = await fetch_json(rc_url, timeout=7, retries=1)
             if status == 200 and isinstance(data, dict):
-                score = data.get("score", 0)
-                if score >= 400:
-                    return False, f"RugCheck score {score} >= 400 (высокий риск)"
+                score = float(data.get("score", 0) or 0)
+                # Вычитаем штраф за Low Liquidity, так как для токенов на бондинг-кривой это норма
+                low_liq_penalty = sum(
+                    float(rk.get("score", 0) or 0)
+                    for rk in (data.get("risks") or [])
+                    if "low liquidity" in str(rk.get("name", "")).lower()
+                )
+                clean_score = max(0.0, score - low_liq_penalty)
+                if clean_score >= 800:
+                    return False, f"RugCheck clean score {clean_score:.0f} >= 800 (высокий риск)"
 
                 # Прямая проверка Mint и Freeze authority
                 if data.get("freezeAuthority"):
@@ -120,12 +127,13 @@ class PumpFunSniper:
 
             if not tracker.can_open_new_position(config.MAX_CONCURRENT_POSITIONS):
                 print(f"⏳ [STREAM SKIP] {sym}: лимит открытых позиций ({len(tracker.get_open_positions())}/{config.MAX_CONCURRENT_POSITIONS})")
-                state.is_evaluated = True
+                state.is_auditing = False
                 return
 
-            if tracker.is_streak_cooldown_active():
-                print(f"🛑 [STREAM COOLDOWN] {sym}: активна пауза streak cooldown.")
-                state.is_evaluated = True
+            cooling, cool_reason = tracker.is_streak_cooldown_active()
+            if cooling:
+                print(f"🛑 [STREAM COOLDOWN] {sym}: активна пауза streak cooldown ({cool_reason}).")
+                state.is_auditing = False
                 return
 
             last_loss = tracker.last_loss_pct(mint)
@@ -350,8 +358,9 @@ class PumpFunSniper:
                             }
                             state.trades.append(trade_entry)
 
-                            # Прогресс кривой связывания (Pump.fun завершается при ~85 SOL)
-                            progress = (v_sol / 85.0) * 100.0
+                            # Прогресс кривой связывания (Pump.fun стартует с 30 виртуальных SOL и финиширует при 85 реальных SOL)
+                            real_sol = max(0.0, v_sol - 30.0)
+                            progress = min(100.0, (real_sol / 85.0) * 100.0)
                             if progress > state.max_curve_progress:
                                 state.max_curve_progress = progress
 
