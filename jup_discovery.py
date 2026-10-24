@@ -44,7 +44,7 @@ async def fetch_jup_tokens() -> list:
     
     trending_url = f"{BASE}/toptrending/5m?limit=100"
     recent_url = f"{BASE}/recent"
-    top_vol_url = f"{BASE}/toptraded/1h?limit=50"
+    top_vol_url = f"{BASE}/toptraded/1h?limit=100"
     
     headers = _headers()
     s1, d1 = await fetch_json(trending_url, headers=headers, timeout=10)
@@ -54,7 +54,7 @@ async def fetch_jup_tokens() -> list:
     ranked = []
     seen = set()
     
-    # 1. Топ-тренды по росту за 5 минут — самые горячие взрывные ракеты первыми!
+    # 1. Топ-тренды по росту за 5 минут — собираем всю сотню трендовых монет (не режем их заранее!)
     if s1 == 200 and isinstance(d1, list):
         for t in d1:
             m = t.get("id", "")
@@ -64,25 +64,15 @@ async def fetch_jup_tokens() -> list:
             st = t.get("stats5m") or {}
             pc = float(st.get("priceChange") or 0.0)
             vol = float(st.get("buyVolume") or 0.0) + float(st.get("sellVolume") or 0.0)
-            # Отсекаем шум: если за 5м рост < +2.5% или объем < $1500 — это не ракета
-            if pc < 2.5 or vol < 1500.0:
+            # Отсекаем только явный нулевой спам без торгов, остальное передаём в batch-анализ
+            if pc < 0.0 and vol < 500.0:
                 continue
             seen.add(m)
             ranked.append((pc, vol, sym, m, "trending"))
     # Сортируем топ-тренды по максимальному 5м импульсу цены:
     ranked.sort(key=lambda x: x[0], reverse=True)
     
-    # 2. Свежие листинги с пулом (recent)
-    if s2 == 200 and isinstance(d2, list):
-        for t in d2:
-            m = t.get("id", "")
-            sym = str(t.get("symbol") or "").upper().strip()
-            if not m or m.startswith("0x") or len(m) < 32 or len(m) > 44 or m in seen or sym in SKIP_SYMBOLS:
-                continue
-            seen.add(m)
-            ranked.append((0.0, 0.0, sym, m, "recent"))
-            
-    # 3. Топ по объему за 1 час (только с подтвержденным 5м импульсом!)
+    # 2. Топ по объему за 1 час (toptraded)
     if s3 == 200 and isinstance(d3, list):
         for t in d3:
             m = t.get("id", "")
@@ -92,10 +82,36 @@ async def fetch_jup_tokens() -> list:
             st = t.get("stats5m") or {}
             pc = float(st.get("priceChange") or 0.0)
             vol = float(st.get("buyVolume") or 0.0) + float(st.get("sellVolume") or 0.0)
-            if pc < 3.0 or vol < 3000.0:
+            seen.add(m)
+            ranked.append((pc, vol, sym, m, "volume"))
+
+    # 3. Свежие листинги (recent) — берём до 15 штук, чтобы пустые минтинги без пулов не вытесняли живые монеты
+    if s2 == 200 and isinstance(d2, list):
+        for t in d2[:15]:
+            m = t.get("id", "")
+            sym = str(t.get("symbol") or "").upper().strip()
+            if not m or m.startswith("0x") or len(m) < 32 or len(m) > 44 or m in seen or sym in SKIP_SYMBOLS:
                 continue
             seen.add(m)
-            ranked.append((pc, 0.0, sym, m, "volume"))
+            ranked.append((0.0, 0.0, sym, m, "recent"))
+
+    # 4. Добор свежих пулов GeckoTerminal (GT 5m trending), чтобы всегда была полная пачка из 100+ реальных пулов
+    try:
+        from market_data import _gt_get
+        gt_data5 = await _gt_get("/networks/solana/trending_pools?duration=5m", retries=0, timeout=6)
+        for item in ((gt_data5 or {}).get("data") or []):
+            bid = item.get("relationships", {}).get("base_token", {}).get("data", {}).get("id", "")
+            addr = bid.split("_", 1)[1] if "_" in bid else ""
+            attrs = item.get("attributes") or {}
+            sym = str(attrs.get("name") or "").upper().strip()
+            if not addr or addr.startswith("0x") or len(addr) < 32 or len(addr) > 44 or addr in seen or any(s in sym for s in SKIP_SYMBOLS):
+                continue
+            seen.add(addr)
+            pc = attrs.get("price_change_percentage") or {}
+            m5_c = float(pc.get("m5") or 0)
+            ranked.append((m5_c, 0.0, sym, addr, "gt_trending_5m"))
+    except Exception:
+        pass
             
     if not ranked:
         # Fallback для датацентров (Render), если Jupiter API вернул 401/403/пусто без ключа:
