@@ -60,7 +60,7 @@ MAX_CONCURRENT_POSITIONS = 10  # концентрация капитала: ма
 MAX_DAILY_LOSS_USD = 50.0
 KILL_SWITCH_ENABLED = False  # ОТКЛЮЧЕНО для тестов (не ставить торговлю на паузу при дневном минусе)
 MAX_DAILY_LOSS_PCT = 0.35
-STOP_LOSS_PCT = -0.16  # Стоп -16% после 90с (не выбивает ракеты вроде Chameleon +788% на первой теневой свече -13%)
+STOP_LOSS_PCT = -0.30  # Стоп -30% после 90с (не выбивает ракеты вроде Chameleon +788% на первой теневой свече -13%)
 
 # === ЗАЩИТА ОТ СЕРИИ МИНУСОВ (STREAK CIRCUIT BREAKER) ===
 STREAK_COOLDOWN_ENABLED = True       # Включить паузу после серии минусов
@@ -78,11 +78,11 @@ DD_THROTTLE_START_USD = 15.0         # просадка от пика
 # === IN-MEMORY STREAMING SNIPER (RAM FILTER + AUDIT) ===
 SNIPER_ENTRIES_ENABLED = True             # Активировать вход по In-Memory стриму (без задержек DexScreener)
 STREAM_WINDOW_SEC = 60                   # Скользящее окно скорости в RAM (60 секунд — больше времени набрать уникальных покупателей)
-STREAM_MIN_UNIQUE_BUYERS = 6             # Минимум 6 уникальных покупателей за окно (ранняя органика)
-STREAM_MIN_BUY_SOL = 2.5                 # Минимум 2.5 SOL реального объема покупок
-STREAM_MAX_TOP_BUYER_RATIO = 0.50        # Доля крупнейшего покупателя <= 50%
-STREAM_MIN_BS_RATIO = 1.8                # Соотношение Buy/Sell volume >= 1.8
-STREAM_MAX_CURVE_PROGRESS = 85.0         # Не входить если кривая > 85% (защита от покупки перед стеной миграции)
+STREAM_MIN_UNIQUE_BUYERS = 3             # Минимум 6 уникальных покупателей за окно (ранняя органика)
+STREAM_MIN_BUY_SOL = 0.8                 # Минимум 2.5 SOL реального объема покупок
+STREAM_MAX_TOP_BUYER_RATIO = 0.75        # Доля крупнейшего покупателя <= 50%
+STREAM_MIN_BS_RATIO = 1.1                # Соотношение Buy/Sell volume >= 1.8
+STREAM_MAX_CURVE_PROGRESS = 40.0         # Не входить если кривая > 85% (защита от покупки перед стеной миграции)
 STREAM_ENTRY_SIZE_USD = 15.0             # Размер билета на раннем входе ($15)
 STREAM_SLIPPAGE = 0.02                   # 2% проскальзывание на входе
 STREAM_MAX_AGE_SEC = 300                 # Токены, не набравшие STREAM_GC_MIN_PROGRESS, чистим из RAM через 5 минут (было 2)
@@ -90,7 +90,7 @@ STREAM_GC_MIN_PROGRESS = 10.0            # % кривой по РЕАЛЬНЫМ 
 STREAM_GC_IDLE_SEC = 180                 # Если ноль трейдов 180с (3 мин) и прогресс < 5% — чистим (было 40с!)
 STREAM_DEV_DUMP_RATIO = 0.30             # Если кошельки первых 3 транзакций продали > 30% общего объёма — скам
 STREAM_MAX_DEV_BUY_TOKENS = 100_000_000  # Максимум 10% supply (100M из 1B) на выкупе дева при создании (защита от дев-дампа)
-STREAM_MIN_ENTRY_PROGRESS = 3.0          # Минимум 3% кривой перед входом (~2.5 SOL реального объёма — доказательство интереса)
+STREAM_MIN_ENTRY_PROGRESS = 0.5          # Минимум 3% кривой перед входом (~2.5 SOL реального объёма — доказательство интереса)
 STREAM_MOMENTUM_MIN_RATIO = 0.40         # Вторая половина окна должна содержать >= 40% объёма (моментум не затухает)
 
 VIP_ENTRIES_ENABLED = True   # ВКЛЮЧЕНО: VIP-полоса для супер-моментума (HUMANOID +141%, JEETJAK +60%), защищена ончейн-аудитом и 1м-фильтром отката
@@ -100,17 +100,17 @@ TIME_EXIT_PROFIT_REQ = 0.0
 # Take-Profit: частичные продажи и мунбэг ОТКЛЮЧЕНЫ — позиция закрывается целиком (100%)
 # по лестнице Profit Floor / трейлингу. Раньше TP1 продавал 40% на +30%, а остаток 60%
 # часто отдавал профит обратно (HUMANOID: пик +141%, итог всего +36.8%).
-TP1_TRIGGER_PCT = 99.0   # Выключено (мунбэг убран)
-TP1_SELL_FRAC = 0.0
-TP2_TRIGGER_PCT = 99.0   # Выключено: не режем ракету на +120%, 80% едет целиком
-TP2_SELL_FRAC = 0.0
+TP1_TRIGGER_PCT = 0.40   # Выключено (мунбэг убран)
+TP1_SELL_FRAC = 0.50
+TP2_TRIGGER_PCT = 1.00   # Выключено: не режем ракету на +120%, 80% едет целиком
+TP2_SELL_FRAC = 0.25
 MOONBAG_TRIGGER_PCT = 99.0 # Выключено: позиция уже летит как чистый 80% раннер
 MOONBAG_SELL_FRAC = 0.0
 
 # Trailing Stop & Profit Protection (Сужающийся параболический трейлинг: чем выше пик, тем плотнее зажимаем профит!)
-TRAILING_ACTIVATION_PCT = 0.20  # Трейлинг с +20% (раньше +25%)
-TRAILING_DISTANCE_PCT = 0.12    # 12% на разгоне (+20..+40%)
-TRAILING_RUNNER_DISTANCE_PCT = 0.12 # 12% на раннерах (+80%..+150%)
+TRAILING_ACTIVATION_PCT = 0.50  # Трейлинг с +20% (раньше +25%)
+TRAILING_DISTANCE_PCT = 0.20    # 12% на разгоне (+20..+40%)
+TRAILING_RUNNER_DISTANCE_PCT = 0.25 # 12% на раннерах (+80%..+150%)
 SCALP_PROFIT_ENABLED = False    # Скальп-срез +5% выключен
 
 # Whale Dump Guard & Crash Protection
@@ -123,10 +123,11 @@ BREAKEVEN_PCT = 0.22
 
 # Infant Dump: защита от настоящего дев-рага в первые минуты (не режет рабочие откаты -13%..-18%)
 PREFETCH_TTL_SEC = 10  # Пакетный кэш DexScreener (до 30 токенов за запрос): сек жизни данных для анализа
-SOLANA_MIN_AGE_MIN = 1.5  # 1.5 мин (flash-rug зона дева до 90с, далее ловим волну)
-SOLANA_MAX_AGE_HOURS = 24.0  # Не покупать старые тухлые монеты старше 24ч (только свежие волны и ракеты)
+SOLANA_MIN_AGE_MIN = 2.0  # 1.5 мин (flash-rug зона дева до 90с, далее ловим волну)
+SOLANA_MAX_AGE_HOURS = 24.0
+SOLANA_MAX_AGE_MIN = 180.0      # Максимум 3 часа входа  # Не покупать старые тухлые монеты старше 24ч (только свежие волны и ракеты)
 INFANT_WINDOW_MIN = 2.0
-INFANT_DUMP_PCT = -0.25  # Резать в первые 2 мин только реальный дамп -25%+ (рабочие тени -12%..-18% выживают)
+INFANT_DUMP_PCT = -0.40  # Резать в первые 2 мин только реальный дамп -25%+ (рабочие тени -12%..-18% выживают)
 
 # Stagnant: живым пулам даём 15 мин на раскачку (кейс Chaton: консолидация 15м -> рост +62%), мёртвые режем на 10-й минуте
 STAGNANT_LOSS_MIN = 15
@@ -135,7 +136,7 @@ STAGNANT_HOLD_MIN = 25
 
 # Filtering
 AI_MODE = "degen" # "sniper" (строго 80-90% уверенности) или "degen"
-MIN_LIQUIDITY = 12000  # Снижено для скальпинга обычных монет
+MIN_LIQUIDITY = 20000  # Снижено для скальпинга обычных монет
 MAX_LIQUIDITY = 50000000
 
 # AI Аналитика
@@ -160,7 +161,7 @@ ROBINHOOD_DS_SLUG = "robinhood"  # slug DexScreener (НЕ 4663 - тот верн
 ROBINHOOD_GT_NETWORK = "robinhood"  # slug GeckoTerminal
 ROBINHOOD_RPC_URL = "https://rpc.mainnet.chain.robinhood.com"
 ROBINHOOD_EXPLORER = "https://robinhoodchain.blockscout.com"
-ROBINHOOD_MIN_LIQUIDITY = 2500.0  # Порог $2.5k: стандартные пулы на Robinhood стартуют с 1 ETH (~$2.5k-$3.5k)
+ROBINHOOD_MIN_LIQUIDITY = 10000.0  # Порог $2.5k: стандартные пулы на Robinhood стартуют с 1 ETH (~$2.5k-$3.5k)
 ROBINHOOD_MIN_AGE_MIN = 1.0  # 1.0 мин база (Scout режим берет с 0.3м при подтвержденных сделках)
 ROBINHOOD_MAX_CREATOR_PCT = 0.20  # Блок токенов, где у создателя >20% (FEE 35.5%, Speed 100% honeypot)
 ROBINHOOD_MAX_OWNER_PCT = 0.20
@@ -175,12 +176,12 @@ EVM_MAX_MINTS = 120  # Лимит активных кандидатов за ц�
 # === BASE (EVM L2, там сидят мемы с fomo.family: musebook, DELTA...) ===
 # Тот же EVM-движок, slug DexScreener "base".
 BASE_ENABLED = True
-BASE_MIN_LIQUIDITY = 2500.0  # Порог $2.5k: стандартные Clanker/Uniswap v3 мемы на Base стартуют с ~$2.5k-$3.5k
+BASE_MIN_LIQUIDITY = 15000.0  # Порог $2.5k: стандартные Clanker/Uniswap v3 мемы на Base стартуют с ~$2.5k-$3.5k
 BASE_SCAN_INTERVAL = 20  # 20с: быстрый поиск ранних ракет Base
 
 # === BSC (Binance Smart Chain: включено с обязательным GoPlus + Honeypot.is аудитом и проверкой блокировки LP) ===
 BSC_ENABLED = True
-BSC_MIN_LIQUIDITY = 3000.0
+BSC_MIN_LIQUIDITY = 30000.0
 BSC_SCAN_INTERVAL = 20
 BSC_MIN_LP_LOCKED_PCT = 0.70  # Не менее 70% LP должно быть заблокировано (PinkSale/Unicrypt) или сожжено (0xdead)
 
@@ -210,7 +211,7 @@ CONVICTION_MAX_M5_PCT = 0.60  # m5 до +60% (выше - вершина)
 CONVICTION_MIN_BUYSELL = 2.0  # покупки >= продаж x2
 CONVICTION_MIN_LIQ = 30000  # пул от $30к
 MAX_DEPLOYED_PCT = 0.85  # суммарно в рынке до 85% капитала (до 6-7 позиций при балансе $120)
-ROCKET_VETO_ENABLED = True  # Включено вето RKT >= 0.25: режет мертвечину и затухающие пулы (ROBINCAT 0.06, HYPURRT 0.10, COVENANT 0.14)
+ROCKET_VETO_ENABLED = False  # Включено вето RKT >= 0.25: режет мертвечину и затухающие пулы (ROBINCAT 0.06, HYPURRT 0.10, COVENANT 0.14)
 ROCKET_VETO_MIN = 0.25
 
 # === GROWTH MODE (тренд старых токенов, пока нет ракет) ===
@@ -242,10 +243,14 @@ GROWTH_INTERVAL = 75  # 75 сек: оперативный опрос откат�
 SNIPER_MIN_UNIQUE_BUYERS = 10
 SNIPER_BUYERS_WINDOW_MIN = 5
 VIP_MAX_M5_PCT = 0.60  # Было 1.00 - брали вершину +100%. 60% - компромисс: ракеты пропускаем, вертикали нет
-PULLBACK_MIN_M5_PCT = 0.025  # Было 0.05: не отсекаем зарождающийся импульс (+2.5%..+4.9%) как флет
-PULLBACK_M1_MIN_PCT = -0.15  # Но и не летим в падающий нож (максимум -15% за минуту)
-PULLBACK_M1_MAX_PCT = 0.20  # Поднято до 20%: позволяет заходить в реальный пробойный импульс (breakout), а не ждать затухания
-PULLBACK_MAX_H1_PCT = 25.00  # До +2500% за час (выпускники Pump.fun имеют +400%..+2000% от цены создания кривой)
+PULLBACK_MIN_M5_PCT = 0.05  # Было 0.05: не отсекаем зарождающийся импульс (+2.5%..+4.9%) как флет
+PULLBACK_M1_MIN_PCT = -0.05  # Но и не летим в падающий нож (максимум -15% за минуту)
+PULLBACK_M1_MAX_PCT = 0.40  # Поднято до 20%: позволяет заходить в реальный пробойный импульс (breakout), а не ждать затухания
+PULLBACK_MAX_H1_PCT = 250.0
+PULLBACK_MAX_M5_PCT = 0.70
+MIN_VOLUME_M5 = 2500
+MIN_TXNS_M5 = 12
+MIN_BUY_SELL_RATIO = 1.15        # НОВЫЙ: выше +70% не входим (вершина)  # До +2500% за час (выпускники Pump.fun имеют +400%..+2000% от цены создания кривой)
 LOTTERY_ENABLED = False  # Отключено: лотерея на вертикалях m5>60% вела в мгновенные дампы девов (SI, pablo)
 LOTTERY_MIN_M5_PCT = 0.60  # Было 0.80: закрываем мертвую зону m5 60-80% (VIP_MAX 60% + лотерея от 60%)
 LOTTERY_SIZE_MULT = 0.30  # $10 * 0.30 = $3.0 билет (было 0.25 = $2.5)
@@ -281,7 +286,7 @@ TG_MAX_SIZE_USD = 15.0  # кэп TG/FOMO-входа: $15 (на уровне Base
 TG_VIP_SIZE_USD = 15.0  # размер входа для VIP-сигналов (Solana) увеличен до $15
 ROB_MAX_SIZE_USD = 25.0  # Robinhood: потолок до $25 при реинвесте прибыли
 BSC_MAX_SIZE_USD = 25.0  # BSC: потолок до $25 при реинвесте прибыли
-BSC_MIN_LIQUIDITY = 3000.0  # Пулы от $3к на BSC (вместо $6к/$12к)
+BSC_MIN_LIQUIDITY = 30000.0  # Пулы от $3к на BSC (вместо $6к/$12к)
 BSC_WEAK_SIZE_USD = 15.0   # Сайз $15 по запросу пользователя (ставка не снижается)
 
 # EVM tracking intervals (адаптивный опрос открытых позиций без 429)

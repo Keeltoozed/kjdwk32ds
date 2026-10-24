@@ -142,8 +142,8 @@ async def position_manager_loop(analyzer, tracker):
                         and current_price <= prev_price * 0.78:
                     _cg_n = int(getattr(position, "crash_confirm_n", 0) or 0) + 1
                     position.crash_confirm_n = _cg_n
-                    if _cg_n < 2:
-                        print(f"⚠️ [SOL-TICK-VERIFY] {position.symbol} ({mint[:8]}): резкий 1-тик {pnl_pct*100:+.1f}% (-{(1 - current_price/prev_price)*100:.0f}%) — ждём 2-й тик подтверждения.")
+                    if _cg_n < 3:
+                        print(f"⚠️ [SOL-TICK-VERIFY] {position.symbol} ({mint[:8]}): резкий 1-тик {pnl_pct*100:+.1f}% (-{(1 - current_price/prev_price)*100:.0f}%) — ждём 3-й тик подтверждения.")
                         continue
                     tracker.close_position(mint, current_price,
                                            f"Crash Guard (-{(1 - current_price/prev_price)*100:.0f}% за {(time.time()-prev_ts):.0f} сек)")
@@ -1380,15 +1380,15 @@ async def _evm_track_once(tracker, chain: str, tag: str, emoji: str):
                         pos.current_price_usd = prev
                         if pos.entry_price_usd:
                             pos.current_pnl_usd = pos.amount_usd * ((prev - pos.entry_price_usd) / pos.entry_price_usd)
-                        print(f"⚠️ [{tag}-TICK-VERIFY] {pos.symbol} ({mint[:10]}): резкий прокол за 1 тик ({(1 - cur / prev)*100 if prev > 0 else 0:.0f}% -> {pnl*100:+.1f}%) — ждём 2-й тик подтверждения (3с).")
+                        print(f"⚠️ [{tag}-TICK-VERIFY] {pos.symbol} ({mint[:10]}): резкий прокол за 1 тик ({(1 - cur / prev)*100 if prev > 0 else 0:.0f}% -> {pnl*100:+.1f}%) — ждём 3-й тик подтверждения (3с).")
                         continue
                 else:
                     pos.crash_confirm_n = 0
 
                 if not reason and prev_ts and (_t.time() - prev_ts) < 20 and prev > 0 and cur <= prev * (1 - _w_guard) and maxp >= 0.35:
-                    reason = f"{tag} Whale Dump Guard ({(1 - cur / prev) * 100:.0f}% за {_t.time() - prev_ts:.0f}с, 2 тика)"
+                    reason = f"{tag} Whale Dump Guard ({(1 - cur / prev) * 100:.0f}% за {_t.time() - prev_ts:.0f}с, 3 тика)"
                 elif not reason and prev_ts and (_t.time() - prev_ts) < 60 and prev > 0 and cur <= prev * (1 - _crash_drop):
-                    reason = f"{tag} Crash Guard ({(1 - cur / prev) * 100:.0f}% за {_t.time() - prev_ts:.0f}с, 2 тика)"
+                    reason = f"{tag} Crash Guard ({(1 - cur / prev) * 100:.0f}% за {_t.time() - prev_ts:.0f}с, 3 тика)"
                 elif _floor_pnl is not None and pnl <= _floor_pnl:
                     if pnl >= 0:
                         reason = f"{tag} Profit Floor (+{_floor_pnl*100:.0f}% locked after peak +{maxp*100:.0f}%)"

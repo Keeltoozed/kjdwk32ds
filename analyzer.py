@@ -931,6 +931,11 @@ class Analyzer:
             _m5 = _pc.get("m5", 0) or 0
             _m1 = _pc.get("m1", 0) or 0
             _h1 = _pc.get("h1", 0) or 0
+            # Жесткий запрет покупки вершины: вход только на начале импульса, а не после +50% за 5м
+            _chain_ae = str((pair_data or {}).get("chainId", "solana")).lower()
+            _max_m5_entry = 50.0 if _chain_ae in ("bsc", "robinhood", "base") else 35.0
+            if _m5 > _max_m5_entry:
+                return self._deny(mint, f"m5-late {_m5:+.0f}%", f"🚫 [LATE ENTRY] {mint[:8]}: m5 {_m5:+.1f}% > {_max_m5_entry:.0f}%. Опоздание на памп — риск дампа ~90%.")
             _tx = (pair_data.get("txns") or {}).get("h1", {}) or {}
             _b, _s = _tx.get("buys", 0) or 0, _tx.get("sells", 0) or 0
             _v24 = (pair_data.get("volume") or {}).get("h24", 0) or 0
@@ -951,6 +956,13 @@ class Analyzer:
                     return False
             _dex_lower = str(pair_data.get("dexId", "")).lower()
             _is_pump_curve = _dex_lower in ("pump", "pumpfun")
+            # Защита от зомби: токены старше 1 часа со слабым импульсом не растут
+            if not _is_pump_curve and _age_min_pre > 60.0 and _m5 < 15.0:
+                return self._deny(mint, "too-old-slow", f"🚫 [ZOMBIE] {mint[:8]}: возраст {_age_min_pre:.0f}м > 60м, но импульс слабый ({_m5:+.1f}%)")
+            # Глобальный возрастной лимит: не входим в токены старше 3 часов (если не гипер-памп)
+            _max_age = getattr(config, "SOLANA_MAX_AGE_MIN", 180.0)
+            if _age_min_pre > _max_age and _m5 < 50.0:
+                return self._deny(mint, "zombie-age", f"🚫 [ZOMBIE-AGE] {mint[:8]}: возраст {_age_min_pre:.0f}м > {_max_age:.0f}м, m5 {_m5:+.1f}% — труп.")
             _cur_liq_pre = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
             if _cur_liq_pre == 0 and _is_pump_curve:
                 _cur_liq_pre = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0) * 0.40
@@ -988,23 +1000,47 @@ class Analyzer:
                 else:
                     return self._deny(mint, "lottery-blocked", f"🚫 [LOTTERY-BLOCKED] {mint}: тонкая монета (liq ${_cur_liq_pre:,.0f}, vol5 ${_vm5_pre:,.0f}) при m5 {_m5:+.0f}% — микро-лотерея отключена.")
             else:
-                if _m5 < getattr(config, "PULLBACK_MIN_M5_PCT", 0.025) * 100:
-                    return self._deny(mint, f"m5-flat {_m5:+.1f}%", f"🚫 [ENTRY] {mint}: m5 {_m5:+.1f}% < импульса не было, пропуск.")
+                # === РЕАЛИСТИЧНЫЕ ФИЛЬТРЫ ДЛЯ DEXSCREENER (золотая середина импульса) ===
+                # 1. Минимальный импульс m5 (не входим в мертвые токены)
+                _min_m5 = getattr(config, "PULLBACK_MIN_M5_PCT", 0.05) * 100
+                if _m5 < _min_m5:
+                    return self._deny(mint, f"m5-flat {_m5:+.1f}%", f"🚫 [ENTRY] {mint}: m5 {_m5:+.1f}% < {_min_m5:.0f}% — импульса нет.")
+                # 2. Максимальный импульс m5 (НЕ ВХОДИМ НА ВЕРШИНЕ!)
+                _max_m5 = getattr(config, "PULLBACK_MAX_M5_PCT", 0.70) * 100
+                if _m5 > _max_m5:
+                    return self._deny(mint, f"m5-late {_m5:+.0f}%", f"🚫 [LATE] {mint}: m5 {_m5:+.1f}% > +{_max_m5:.0f}% — ракета уже улетела, ждем откат.")
+                # 3. Минутный импульс (если DexScreener отдал m1)
+                if _m1 != 0:
+                    _m1_max = getattr(config, "PULLBACK_M1_MAX_PCT", 0.40) * 100
+                    if _m1 > _m1_max:
+                        return self._deny(mint, f"m1-vertical {_m1:+.1f}%", f"🚫 [ENTRY] {mint}: m1 {_m1:+.1f}% > +{_m1_max:.0f}% — вертикаль в моменте, вход = вершина.")
+                    if _m1 < getattr(config, "PULLBACK_M1_MIN_PCT", -0.05) * 100:
+                        return self._deny(mint, f"m1-dump {_m1:+.1f}%", f"🚫 [ENTRY] {mint}: m1 {_m1:+.1f}% — падающий нож.")
+                # 4. Часовой тренд (не входить в уже улетевшие или падающие)
+                _max_h1 = getattr(config, "PULLBACK_MAX_H1_PCT", 250.0)
+                if _h1 > _max_h1:
+                    return self._deny(mint, f"h1-gone {_h1:+.0f}%", f"🚫 [ENTRY] {mint}: h1 {_h1:+.0f}% > +{_max_h1:.0f}% — уже улетел.")
+                if _h1 < -15.0:
+                    return self._deny(mint, f"h1-dump {_h1:+.1f}%", f"🚫 [ENTRY] {mint}: h1 {_h1:+.1f}% — глубокий слив.")
+                # 5. Объем и сделки в m5 (не входим в тихие пулы/накрутку)
                 _tx_m5_p = (pair_data.get("txns") or {}).get("m5", {}) or {}
                 _b5_p = int(_tx_m5_p.get("buys", 0) or 0)
                 _s5_p = int(_tx_m5_p.get("sells", 0) or 0)
                 _vol5_p = float((pair_data.get("volume") or {}).get("m5", 0) or 0)
-                _strong_breakout = (_b5_p >= int(_s5_p * 1.15) and _b5_p >= 15 and _vol5_p >= 8000)
-                _m1_max = 45.0 if _strong_breakout else (getattr(config, "PULLBACK_M1_MAX_PCT", 0.20) * 100)
-                if _m1 > _m1_max:
-                    return self._deny(mint, f"m1-vertical {_m1:+.1f}%", f"🚫 [ENTRY] {mint}: m1 {_m1:+.1f}% > +{_m1_max:.0f}% — вертикаль в процессе, купим вершину. Ждём откат.")
-                if _m1 < getattr(config, "PULLBACK_M1_MIN_PCT", -0.15) * 100:
-                    return self._deny(mint, f"m1-dump {_m1:+.1f}%", f"🚫 [ENTRY] {mint}: m1 {_m1:+.1f}% — импульс схлопнулся, это дамп, не откат.")
-                _max_h1_pct = getattr(config, "PULLBACK_MAX_H1_PCT", 25.0) * 100
-                if _h1 > _max_h1_pct:
-                    return self._deny(mint, f"h1-gone {_h1:+.0f}%", f"🚫 [ENTRY] {mint}: h1 {_h1:+.0f}% — уже улетел, поздно.")
-                if _h1 < -10.0:
-                    return self._deny(mint, f"h1-dump {_h1:+.1f}%", f"🚫 [ENTRY] {mint}: h1 {_h1:+.1f}% — глубокий часовой слив, падающий нож.")
+                _min_vol = getattr(config, "MIN_VOLUME_M5", 2500)
+                _min_tx = getattr(config, "MIN_TXNS_M5", 12)
+                _min_ratio = getattr(config, "MIN_BUY_SELL_RATIO", 1.15)
+                if _vol5_p < _min_vol:
+                    return self._deny(mint, f"vol5-low ${_vol5_p:.0f}", f"🚫 [ENTRY] {mint}: объем m5 ${_vol5_p:.0f} < ${_min_vol} — интерес угас.")
+                if (_b5_p + _s5_p) < _min_tx:
+                    return self._deny(mint, f"tx5-low {_b5_p+_s5_p}<{_min_tx}", f"🚫 [ENTRY] {mint}: сделок m5 {_b5_p+_s5_p} < {_min_tx} — слишком тихо.")
+                if _s5_p > 0 and (_b5_p / _s5_p) < _min_ratio:
+                    return self._deny(mint, f"bs-low {_b5_p}/{_s5_p}", f"🚫 [ENTRY] {mint}: покупки/продажи m5 {_b5_p}/{_s5_p} < {_min_ratio}x — продавцы давят.")
+                # 6. Защита от накрутки (средний чек < $10 — боты)
+                _avg_tx = _vol5_p / max(_b5_p + _s5_p, 1)
+                if (_b5_p + _s5_p) >= 20 and _avg_tx < 10.0:
+                    return self._deny(mint, "wash-bot", f"🚫 [WASH] {mint}: средний чек ${_avg_tx:.1f} < $10 — накрутка ботов.")
+                print(f"✅ [ENTRY-CANDIDATE] {mint}: m5 {_m5:+.1f}%, m1 {_m1:+.1f}%, h1 {_h1:+.0f}%, b/s {_b5_p}/{_s5_p}, vol5 ${_vol5_p:.0f}")
             _txm5 = (pair_data.get("txns") or {}).get("m5", {}) or {}
             _b5, _s5 = _txm5.get("buys", 0) or 0, _txm5.get("sells", 0) or 0
             if _s > 0 and _b < _s * 1.1 and not (_m5 >= 3.0 and _s5 > 0 and _b5 >= _s5 * 1.2):
