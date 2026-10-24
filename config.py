@@ -181,7 +181,7 @@ BASE_SCAN_INTERVAL = 20  # 20с: быстрый поиск ранних раке
 
 # === BSC (Binance Smart Chain: включено с обязательным GoPlus + Honeypot.is аудитом и проверкой блокировки LP) ===
 BSC_ENABLED = True
-BSC_MIN_LIQUIDITY = 30000.0
+BSC_MIN_LIQUIDITY = 4000.0  # Пулы от $4k (раньше стояла опечатка 30000.0, которая блокировала все ракеты BTW/IRYS!)
 BSC_SCAN_INTERVAL = 20
 BSC_MIN_LP_LOCKED_PCT = 0.70  # Не менее 70% LP должно быть заблокировано (PinkSale/Unicrypt) или сожжено (0xdead)
 
@@ -286,7 +286,7 @@ TG_MAX_SIZE_USD = 15.0  # кэп TG/FOMO-входа: $15 (на уровне Base
 TG_VIP_SIZE_USD = 15.0  # размер входа для VIP-сигналов (Solana) увеличен до $15
 ROB_MAX_SIZE_USD = 25.0  # Robinhood: потолок до $25 при реинвесте прибыли
 BSC_MAX_SIZE_USD = 25.0  # BSC: потолок до $25 при реинвесте прибыли
-BSC_MIN_LIQUIDITY = 30000.0  # Пулы от $3к на BSC (вместо $6к/$12к)
+BSC_MIN_LIQUIDITY = 4000.0  # Пулы от $4k на BSC (раньше стояла опечатка 30000.0)
 BSC_WEAK_SIZE_USD = 15.0   # Сайз $15 по запросу пользователя (ставка не снижается)
 
 # EVM tracking intervals (адаптивный опрос открытых позиций без 429)

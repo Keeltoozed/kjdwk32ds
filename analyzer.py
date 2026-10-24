@@ -924,8 +924,12 @@ class Analyzer:
                 _pc_pre = pair_data.get("priceChange") or {}
                 _h1_pre = float(_pc_pre.get("h1", 0) or 0)
                 _h6_pre = float(_pc_pre.get("h6", 0) or 0)
-                if 0 < _fdv_pre < 15000:
-                    return self._deny(mint, "post-migration-dump-fdv", f"🚫 [POST-MIGRATION-DUMP] {mint[:8]}: AMM FDV ${_fdv_pre:,.0f} < $15k — слитый токен.")
+                _vm5_check = float((pair_data.get("volume") or {}).get("m5", 0) or 0)
+                _m5_check = float(_pc_pre.get("m5", 0) or 0)
+                if 0 < _fdv_pre < 3500:
+                    return self._deny(mint, "post-migration-dump-fdv", f"🚫 [POST-MIGRATION-DUMP] {mint[:8]}: AMM FDV ${_fdv_pre:,.0f} < $3.5k — пустой пул.")
+                elif 0 < _fdv_pre < 15000 and not (_m5_check >= 3.0 and _vm5_check >= 1500.0):
+                    return self._deny(mint, "post-migration-dump-fdv", f"🚫 [POST-MIGRATION-DUMP] {mint[:8]}: AMM FDV ${_fdv_pre:,.0f} < $15k без импульса — слитый токен.")
                 if _age_min_pre >= 60.0 and ((_fdv_pre < 35000 and _h1_pre < -5.0) or (_h1_pre < -12.0 or _h6_pre < -25.0)):
                     return self._deny(mint, "post-migration-dump-trend", f"🚫 [POST-MIGRATION-DUMP] {mint[:8]}: часовой/6ч тренд в глубоком сливе (h1 {_h1_pre:+.1f}%, h6 {_h6_pre:+.1f}%) — отскок дохлой кошки.")
                 elif _age_min_pre < 60.0 and (_h1_pre < -65.0 or (_h1_pre < -30.0 and float((_pc_pre.get("m5", 0) or 0)) < 5.0)):
@@ -1042,10 +1046,15 @@ class Analyzer:
                     return self._deny(mint, f"tx5-low {_b5_p+_s5_p}<{_min_tx}", f"🚫 [ENTRY] {mint}: сделок m5 {_b5_p+_s5_p} < {_min_tx} — слишком тихо.")
                 if _s5_p > 0 and (_b5_p / _s5_p) < _min_ratio:
                     return self._deny(mint, f"bs-low {_b5_p}/{_s5_p}", f"🚫 [ENTRY] {mint}: покупки/продажи m5 {_b5_p}/{_s5_p} < {_min_ratio}x — продавцы давят.")
-                # 6. Защита от накрутки (средний чек < $10 — боты)
+                # 6. Защита от накрутки (средний чек < $10 — боты, либо аномальный wash-churn)
                 _avg_tx = _vol5_p / max(_b5_p + _s5_p, 1)
                 if (_b5_p + _s5_p) >= 20 and _avg_tx < 10.0:
                     return self._deny(mint, "wash-bot", f"🚫 [WASH] {mint}: средний чек ${_avg_tx:.1f} < $10 — накрутка ботов.")
+                _cur_liq_cand = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
+                if _cur_liq_cand > 0 and (_vol5_p / _cur_liq_cand) > 4.5 and _age_min_pre < 30.0:
+                    return self._deny(mint, "wash-churn", f"🚫 [WASH-CHURN] {mint[:8]}: оборот {_vol5_p / _cur_liq_cand:.1f}x ликвидности за 5м в молодом токене ({_age_min_pre:.1f}м) — ловушка накрутки дева.")
+                if _s5_p >= 35 and (_b5_p / _s5_p) > 3.8 and _vol5_p >= 40000 and _age_min_pre < 30.0:
+                    return self._deny(mint, "fake-buy-wall", f"🚫 [FAKE-BUY-WALL] {mint[:8]}: аномальный перекос b/s {_b5_p / _s5_p:.1f}x при объёме ${_vol5_p:,.0f} — ловушка дева.")
                 print(f"✅ [ENTRY-CANDIDATE] {mint}: m5 {_m5:+.1f}%, m1 {_m1:+.1f}%, h1 {_h1:+.0f}%, b/s {_b5_p}/{_s5_p}, vol5 ${_vol5_p:.0f}")
             _txm5 = (pair_data.get("txns") or {}).get("m5", {}) or {}
             _b5, _s5 = _txm5.get("buys", 0) or 0, _txm5.get("sells", 0) or 0
@@ -2368,9 +2377,13 @@ class Analyzer:
         if liquidity > 0 and fdv > 0 and (fdv / liquidity) > 40.0:
             return self._deny(mint, "ray-hollow-pool", f"🚫 [HOLLOW-POOL] {mint[:8]}: FDV ${fdv:,.0f} vs Liq ${liquidity:,.0f} ({fdv/liquidity:.0f}x > 40x) — картонная ликвидность.")
 
-        # 3. Защита от кругового wash-churn (350% оборота за 5м без движения цены)
+        # 3. Защита от кругового wash-churn и дев-бандлов (накрутка объёма ботами перед сливом)
         if liquidity > 0 and (_vm5 / liquidity) > 3.5 and abs(_m5) < 12.0:
             return self._deny(mint, "ray-churn", f"🚫 [CHURN] {mint[:8]}: оборот {_vm5 / liquidity:.1f}x от ликвидности за 5м без импульса (m5 {_m5:+.1f}%) — накрутка.")
+        if liquidity > 0 and (_vm5 / liquidity) > 4.5 and _age_min < 30.0:
+            return self._deny(mint, "ray-fake-churn", f"🚫 [WASH-CHURN] {mint[:8]}: экстремальный оборот {_vm5 / liquidity:.1f}x от ликвидности в молодом токене ({_age_min:.1f}м) — ловушка накрутки дева.")
+        if _s5 >= 40 and (_b5 / _s5) > 3.8 and _vm5 >= 45000 and _age_min < 30.0:
+            return self._deny(mint, "ray-fake-wall", f"🚫 [FAKE-BUY-WALL] {mint[:8]}: аномальный перекос b/s {_b5 / _s5:.1f}x при объёме ${_vm5:,.0f} — боты дева имитируют органику перед дампом.")
 
         # 4. Проверка безопасности холдеров и создателя
         _t10 = getattr(self, '_last_top10', 0.0)
