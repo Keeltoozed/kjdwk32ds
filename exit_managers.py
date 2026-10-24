@@ -59,7 +59,7 @@ class MatureExitManager:
         max_pnl_pct = (position.max_price_usd - position.entry_price_usd) / position.entry_price_usd if position.entry_price_usd else 0
         _floor_pnl = None
         if _ride:
-            # RIDE: пол = доля от пика, допускает откат 25-50% от макушки (ракеты шатает)
+            # RIDE: пол = доля от пика, допускает откат для полета ракет, но защищает профит на пиках от +18%
             if max_pnl_pct >= 5.00:       # +500%+: держим 65% прибыли
                 _floor_pnl = round(max_pnl_pct * 0.65, 2)
             elif max_pnl_pct >= 3.00:     # +300%..+500%: 60%
@@ -70,6 +70,12 @@ class MatureExitManager:
                 _floor_pnl = round(max_pnl_pct * 0.45, 2)
             elif max_pnl_pct >= 0.60:     # +60%..+100%: 40% (пик +60% -> пол +24%, пик +80% -> пол +32%)
                 _floor_pnl = round(max_pnl_pct * 0.40, 2)
+            elif max_pnl_pct >= 0.35:     # +35%..+60%: держим минимум +18% (не отдаём пик +35%..+37% обратно в минус/безубыток!)
+                _floor_pnl = 0.18
+            elif max_pnl_pct >= 0.25:     # +25%..+35%: держим минимум +10%
+                _floor_pnl = 0.10
+            elif max_pnl_pct >= 0.18:     # +18%..+25%: держим минимум +4% (гарантия чистой прибыли с учетом комиссий DEX)
+                _floor_pnl = 0.04
         elif max_pnl_pct >= 5.00:       # Гипер-ракета (+500%+): держим 78% прибыли
             _floor_pnl = round(max_pnl_pct * 0.78, 2)
         elif max_pnl_pct >= 3.00:     # Мега-ракета (+300%..+500%): держим 75% прибыли
@@ -165,10 +171,10 @@ class MatureExitManager:
         # Мягкий стоп (только после 6 минут в рынке, чтобы не резать 1-2 минутные свечи на старте!):
         if minutes_held >= 6.0 and _maxp >= 0.18 and pnl_pct <= -0.08:
             return f"Mature Soft Guard (был пик +{_maxp*100:.0f}%, слив до {pnl_pct*100:.1f}%)"
-        # Breakeven: если был пик +25%+ и спустя 4+ мин цена вернулась ко входу — выходим в безубыток
+        # Breakeven: если был пик +22%+ и цена вернулась ко входу — выходим с запасом +3.5% на комиссии/проскальзывание
         _be = float(getattr(config, 'BREAKEVEN_PCT', 0.22))
-        if minutes_held >= 0.5 and _maxp >= _be and pnl_pct <= 0.01:
-            return f"Mature Breakeven (был пик +{_maxp*100:.0f}%)"
+        if minutes_held >= 0.5 and _maxp >= _be and pnl_pct <= 0.035:
+            return f"Mature Breakeven (был пик +{_maxp*100:.0f}%, фикс {pnl_pct*100:+.1f}%)"
 
         # Zero-Momentum Cut: монета за 3.5+ мин ни разу не дала даже +1.5% и ушла в -10%
         if _maxp < 0.015 and pnl_pct <= -0.10 and minutes_held >= 3.5:

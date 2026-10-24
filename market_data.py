@@ -547,9 +547,8 @@ async def get_trending() -> list:
     Формат как у DexScreener boosts: [{'tokenAddress','chainId'}]."""
     global _trending_cache, _trending_cache_time
     
-    # Кэшируем результаты на 180 секунд, чтобы можно было сканировать по 150 монет
-    # без бана по Rate Limit (HTTP 429), так как fomo_scanner опрашивает каждые 20 сек.
-    if time.time() - _trending_cache_time < 180:
+    # Кэшируем результаты на 45 секунд (было 180с): находим новые импульсы и пулы в 4 раза быстрее
+    if time.time() - _trending_cache_time < 45:
         return _trending_cache
 
     out, seen = [], set()

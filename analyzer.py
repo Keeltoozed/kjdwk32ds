@@ -931,9 +931,11 @@ class Analyzer:
             _m5 = _pc.get("m5", 0) or 0
             _m1 = _pc.get("m1", 0) or 0
             _h1 = _pc.get("h1", 0) or 0
-            # Жесткий запрет покупки вершины: вход только на начале импульса, а не после +50% за 5м
+            # Запрет покупки вершины: отсекаем перегретые свечи, но даем взлететь сильным ракетам с доминированием покупателей
             _chain_ae = str((pair_data or {}).get("chainId", "solana")).lower()
-            _max_m5_entry = 50.0 if _chain_ae in ("bsc", "robinhood", "base") else 35.0
+            _txm5_tmp = (pair_data.get("txns") or {}).get("m5", {}) or {}
+            _b5_tmp, _s5_tmp = int(_txm5_tmp.get("buys", 0) or 0), int(_txm5_tmp.get("sells", 0) or 0)
+            _max_m5_entry = 65.0 if (_b5_tmp >= 25 and _b5_tmp > _s5_tmp * 1.25) else 50.0
             if _m5 > _max_m5_entry:
                 return self._deny(mint, f"m5-late {_m5:+.0f}%", f"🚫 [LATE ENTRY] {mint[:8]}: m5 {_m5:+.1f}% > {_max_m5_entry:.0f}%. Опоздание на памп — риск дампа ~90%.")
             _tx = (pair_data.get("txns") or {}).get("h1", {}) or {}

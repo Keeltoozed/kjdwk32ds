@@ -43,7 +43,7 @@ class ShadowTracker:
         self.init_db()
 
     def init_db(self):
-        """Создает локальную SQLite таблицу как гарантированный fallback."""
+        """Создает локальную SQLite таблицу как гарантированный fallback и применяет миграции колонок."""
         try:
             with sqlite3.connect(self.db_path) as conn:
                 conn.execute('''
@@ -62,13 +62,32 @@ class ShadowTracker:
                         ath_price REAL DEFAULT 0.0,
                         hypothetical_pnl REAL DEFAULT 0.0,
                         is_missed_rocket INTEGER DEFAULT 0,
+                        check_5m_done INTEGER DEFAULT 0,
+                        check_15m_done INTEGER DEFAULT 0,
                         check_1h_done INTEGER DEFAULT 0,
                         check_4h_done INTEGER DEFAULT 0,
                         check_24h_done INTEGER DEFAULT 0,
+                        time_to_ath_min REAL DEFAULT 0.0,
+                        current_pnl REAL DEFAULT 0.0,
+                        outcome TEXT DEFAULT 'PENDING',
                         features TEXT DEFAULT '{}',
                         last_checked_at TIMESTAMP
                     )
                 ''')
+                # Безопасная миграция колонок для существующей таблицы
+                existing_cols = {col[1] for col in conn.execute("PRAGMA table_info(rejected_tokens)").fetchall()}
+                for col_name, col_type in [
+                    ("check_5m_done", "INTEGER DEFAULT 0"),
+                    ("check_15m_done", "INTEGER DEFAULT 0"),
+                    ("time_to_ath_min", "REAL DEFAULT 0.0"),
+                    ("current_pnl", "REAL DEFAULT 0.0"),
+                    ("outcome", "TEXT DEFAULT 'PENDING'")
+                ]:
+                    if col_name not in existing_cols:
+                        try:
+                            conn.execute(f"ALTER TABLE rejected_tokens ADD COLUMN {col_name} {col_type}")
+                        except Exception:
+                            pass
         except Exception as e:
             print(f"⚠️ [ShadowTracker] SQLite init err: {e}")
 
@@ -83,9 +102,10 @@ class ShadowTracker:
         if not mint:
             return
             
-        # Защита от спама: если этот токен уже логировали за последние 30 минут — скип
+        # Защита от спама: если этот токен уже логировали за последние 10 минут (было 30м) — скип.
+        # 10 минут достаточно, чтобы не спамить, но не упустить монету, если через 10-15м в ней начался памп.
         now_ts = time.time()
-        if mint in self._cooldown and (now_ts - self._cooldown[mint]) < 1800:
+        if mint in self._cooldown and (now_ts - self._cooldown[mint]) < 600:
             return
             
         # Не логируем нулевые пустышки без ликвидности (спам ботов)
@@ -121,40 +141,34 @@ class ShadowTracker:
                 "ath_price": native_price,
                 "hypothetical_pnl": 0.0,
                 "is_missed_rocket": False,
+                "check_5m_done": 0,
+                "check_15m_done": 0,
                 "check_1h_done": 0,
                 "check_4h_done": 0,
                 "check_24h_done": 0,
+                "time_to_ath_min": 0.0,
+                "current_pnl": 0.0,
+                "outcome": "PENDING",
                 "features": json.dumps(features_dict) if isinstance(features_dict, dict) else str(features_dict)
             }
 
             if self.use_supabase and self.supabase:
                 try:
-                    # Пытаемся записать в rejected_tokens
+                    # Пытаемся записать в rejected_tokens со всеми новыми колонками
                     self.supabase.table(self._target_table).upsert(data).execute()
                 except Exception as sb_err:
                     err_str = str(sb_err).lower()
                     if "rejected_tokens" in err_str and ("does not exist" in err_str or "not found" in err_str or "relation" in err_str):
-                        # Фолбэк на старую таблицу shadow_log, если rejected_tokens еще не создана
                         self._target_table = "shadow_log"
-                        legacy_data = {
-                            "mint": mint,
-                            "rejected_at": data["rejected_at"],
-                            "reason": f"[{clean_chain.upper()}] {clean_reason}",
-                            "score": native_score,
-                            "price_at_rejection": native_price,
-                            "features": data["features"],
-                            "ath_price": native_price,
-                            "hypothetical_pnl": 0.0,
-                            "check_1h_done": 0,
-                            "check_4h_done": 0,
-                            "check_24h_done": 0
-                        }
+                    else:
+                        # Если в Supabase еще не созданы колонки (check_5m_done и т.д.), фолбэк на базовую схему
                         try:
-                            self.supabase.table("shadow_log").upsert(legacy_data).execute()
+                            compat_data = dict(data)
+                            for k in ["check_5m_done", "check_15m_done", "time_to_ath_min", "current_pnl", "outcome"]:
+                                compat_data.pop(k, None)
+                            self.supabase.table(self._target_table).upsert(compat_data).execute()
                         except Exception:
                             pass
-                    else:
-                        print(f"⚠️ [ShadowTracker] Supabase upsert err: {sb_err}")
 
             # Локальная запись в SQLite (всегда работает независимо от сети)
             try:
@@ -163,13 +177,14 @@ class ShadowTracker:
                         INSERT OR REPLACE INTO rejected_tokens (
                             mint, symbol, chain, rejected_at, reason, score, rkt_score,
                             m5_pct, price_at_rejection, liquidity, source, ath_price,
-                            hypothetical_pnl, is_missed_rocket, check_1h_done, check_4h_done,
-                            check_24h_done, features
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            hypothetical_pnl, is_missed_rocket, check_5m_done, check_15m_done,
+                            check_1h_done, check_4h_done, check_24h_done, time_to_ath_min,
+                            current_pnl, outcome, features
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ''', (
                         mint, clean_sym, clean_chain, data["rejected_at"], clean_reason,
                         native_score, native_rkt, native_m5, native_price, native_liq,
-                        clean_source, native_price, 0.0, 0, 0, 0, 0, data["features"]
+                        clean_source, native_price, 0.0, 0, 0, 0, 0, 0, 0, 0.0, 0.0, "PENDING", data["features"]
                     ))
             except Exception as sql_e:
                 pass
@@ -218,12 +233,13 @@ class ShadowTracker:
 
     async def price_watcher_loop(self):
         """
-        Фоновый цикл проверки цен отклонённых токенов (Price Watcher).
-        Раз в 5 минут проверяет монеты на 1h, 4h, 24h отметках.
-        Если монета дала +50% и выше от отказа — помечает как упущенную ракету (is_missed_rocket=True).
+        Фоновый цикл проверки цен отклонённых токенов (Missed Rockets & Flash Pump Tracker).
+        Проверяет монеты на отметках 5m, 15m, 1h, 4h, 24h и ведет непрерывный трекинг
+        свежих токенов (< 60 минут), чтобы точно знать: дала ли монета ракету через 5 минут,
+        а затем ушла в 0 через час.
         """
-        print("👁️ [Shadow Watcher] Запущен фоновый мониторинг отклонённых токенов (Missed Rockets Tracker)...")
-        await asyncio.sleep(60)  # Даём боту 1 минуту на старт
+        print("👁️ [Shadow Watcher] Запущен фоновый мониторинг отклонённых токенов (5m/15m/1h/4h/24h + Flash Rockets)...")
+        await asyncio.sleep(30)  # Даём боту 30 секунд на старт
         
         while True:
             try:
@@ -235,12 +251,12 @@ class ShadowTracker:
                 rows = []
                 if self.use_supabase and self.supabase:
                     try:
-                        res = self.supabase.table(table_to_use).select("*").eq("check_24h_done", 0).execute()
+                        res = self.supabase.table(table_to_use).select("*").eq("check_24h_done", 0).order("rejected_at", desc=True).limit(200).execute()
                         rows = res.data or []
                     except Exception as e:
                         if table_to_use != "shadow_log":
                             try:
-                                res = self.supabase.table("shadow_log").select("*").eq("check_24h_done", 0).execute()
+                                res = self.supabase.table("shadow_log").select("*").eq("check_24h_done", 0).order("rejected_at", desc=True).limit(200).execute()
                                 rows = res.data or []
                                 table_to_use = "shadow_log"
                             except Exception:
@@ -251,7 +267,7 @@ class ShadowTracker:
                         with sqlite3.connect(self.db_path) as conn:
                             conn.row_factory = sqlite3.Row
                             c = conn.cursor()
-                            c.execute("SELECT * FROM rejected_tokens WHERE check_24h_done = 0 LIMIT 150")
+                            c.execute("SELECT * FROM rejected_tokens WHERE check_24h_done = 0 ORDER BY rejected_at DESC LIMIT 200")
                             rows = [dict(r) for r in c.fetchall()]
                     except Exception:
                         rows = []
@@ -264,7 +280,10 @@ class ShadowTracker:
                         rej_clean = rej_str.split(".")[0].replace("Z", "")
                         rejected_at = datetime.fromisoformat(rej_clean)
                         elapsed = now - rejected_at
+                        elapsed_min = elapsed.total_seconds() / 60.0
                         
+                        check_5m = row.get("check_5m_done", 0)
+                        check_15m = row.get("check_15m_done", 0)
                         check_1h = row.get("check_1h_done", 0)
                         check_4h = row.get("check_4h_done", 0)
                         check_24h = row.get("check_24h_done", 0)
@@ -276,6 +295,23 @@ class ShadowTracker:
                             needs_check, check_4h = True, 1
                         elif elapsed > timedelta(hours=1) and not check_1h:
                             needs_check, check_1h = True, 1
+                        elif elapsed > timedelta(minutes=15) and not check_15m:
+                            needs_check, check_15m = True, 1
+                        elif elapsed > timedelta(minutes=5) and not check_5m:
+                            needs_check, check_5m = True, 1
+                        elif elapsed_min < 60.0:
+                            # Для токенов в первый час жизни: мониторим в реальном времени,
+                            # чтобы поймать всплеск на 3-й, 5-й или 10-й минуте до слива в 0!
+                            last_chk = row.get("last_checked_at")
+                            if not last_chk:
+                                needs_check = True
+                            else:
+                                try:
+                                    last_dt = datetime.fromisoformat(last_chk.split(".")[0].replace("Z", ""))
+                                    if (now - last_dt).total_seconds() >= 60.0:
+                                        needs_check = True
+                                except Exception:
+                                    needs_check = True
 
                         if needs_check:
                             m = row.get("mint")
@@ -284,15 +320,19 @@ class ShadowTracker:
                                 "mint": m,
                                 "price_at_rejection": float(row.get("price_at_rejection", 0) or 0),
                                 "old_ath": float(row.get("ath_price", 0) or 0),
+                                "old_time_to_ath": float(row.get("time_to_ath_min", 0.0) or 0.0),
+                                "check_5m": check_5m,
+                                "check_15m": check_15m,
                                 "check_1h": check_1h,
                                 "check_4h": check_4h,
                                 "check_24h": check_24h,
-                                "symbol": row.get("symbol", m[:6])
+                                "symbol": row.get("symbol", m[:6]),
+                                "elapsed_min": elapsed_min
                             })
                     except Exception:
                         continue
 
-                # Батч-проверка цен через DexScreener
+                # Батч-проверка цен через DexScreener (до 30 токенов за запрос)
                 for i in range(0, len(mints_to_check), 30):
                     batch_mints = mints_to_check[i:i+30]
                     cur_prices = await self._fetch_prices_batch(batch_mints)
@@ -303,28 +343,69 @@ class ShadowTracker:
                             p_now = cur_prices.get(m, 0) or cur_prices.get(m.lower(), 0)
                             p_entry = upd["price_at_rejection"]
                             old_ath = upd["old_ath"]
-                            new_ath = max(old_ath, p_now)
-                            
-                            pnl_pct = ((new_ath - p_entry) / p_entry * 100.0) if p_entry > 0 and new_ath > 0 else 0.0
-                            is_rocket = bool(pnl_pct >= 50.0)
-                            
-                            if is_rocket:
-                                print(f"🚀 [MISSED ROCKET!] {upd['symbol']}: вырос на +{pnl_pct:.0f}% (ATH ${new_ath:.6f} vs вход ${p_entry:.6f}) после отсева!")
+                            old_time = upd["old_time_to_ath"]
+                            elapsed_m = upd["elapsed_min"]
+
+                            # Если токен дал новый пик цены — фиксируем новый ATH и точную минуту
+                            if p_now > old_ath:
+                                new_ath = p_now
+                                time_to_ath = round(elapsed_m, 1)
+                            else:
+                                new_ath = old_ath if old_ath > 0 else p_now
+                                time_to_ath = old_time
+
+                            ath_pnl = ((new_ath - p_entry) / p_entry * 100.0) if p_entry > 0 and new_ath > 0 else 0.0
+                            cur_pnl = ((p_now - p_entry) / p_entry * 100.0) if p_entry > 0 and p_now > 0 else (-100.0 if p_now == 0 else 0.0)
+                            is_rocket = bool(ath_pnl >= 50.0)
+
+                            # Категоризация исхода монеты:
+                            if ath_pnl >= 50.0 and cur_pnl <= 0.0:
+                                outcome = f"🚀 Ракета +{ath_pnl:.0f}% на {time_to_ath:.0f}м -> Слив в 0 ({cur_pnl:.0f}%)"
+                            elif ath_pnl >= 50.0 and cur_pnl > 0.0:
+                                outcome = f"💎 Ракета летит (пик +{ath_pnl:.0f}%, сейчас {cur_pnl:+.0f}%)"
+                            elif ath_pnl < 15.0 and cur_pnl <= -40.0:
+                                outcome = "☠️ Мгновенный раг (фильтр спас депозит)"
+                            elif ath_pnl >= 20.0 and cur_pnl <= 0.0:
+                                outcome = f"⚠️ Памп +{ath_pnl:.0f}% на {time_to_ath:.0f}м -> Откат в {cur_pnl:.0f}%"
+                            else:
+                                outcome = "😴 Флет / Без движения"
+
+                            if is_rocket and ath_pnl > (upd.get("old_ath_pnl", 0) or 0):
+                                print(f"🚀 [MISSED ROCKET!] {upd['symbol']}: {outcome} (ATH ${new_ath:.6f} vs вход ${p_entry:.6f})")
 
                             # Обновляем в Supabase
                             if self.use_supabase and self.supabase:
                                 try:
                                     update_payload = {
                                         "ath_price": new_ath,
-                                        "hypothetical_pnl": round(pnl_pct, 1),
+                                        "hypothetical_pnl": round(ath_pnl, 1),
+                                        "check_5m_done": upd["check_5m"],
+                                        "check_15m_done": upd["check_15m"],
                                         "check_1h_done": upd["check_1h"],
                                         "check_4h_done": upd["check_4h"],
                                         "check_24h_done": upd["check_24h"],
+                                        "time_to_ath_min": time_to_ath,
+                                        "current_pnl": round(cur_pnl, 1),
+                                        "outcome": outcome,
                                         "last_checked_at": datetime.utcnow().isoformat()
                                     }
                                     if table_to_use == "rejected_tokens":
                                         update_payload["is_missed_rocket"] = is_rocket
-                                    self.supabase.table(table_to_use).update(update_payload).eq("mint", m).execute()
+                                    try:
+                                        self.supabase.table(table_to_use).update(update_payload).eq("mint", m).execute()
+                                    except Exception as col_err:
+                                        # Если колонки check_5m_done/outcome еще не созданы в Supabase, шлем базовый payload
+                                        base_payload = {
+                                            "ath_price": new_ath,
+                                            "hypothetical_pnl": round(ath_pnl, 1),
+                                            "check_1h_done": upd["check_1h"],
+                                            "check_4h_done": upd["check_4h"],
+                                            "check_24h_done": upd["check_24h"],
+                                            "last_checked_at": datetime.utcnow().isoformat()
+                                        }
+                                        if table_to_use == "rejected_tokens":
+                                            base_payload["is_missed_rocket"] = is_rocket
+                                        self.supabase.table(table_to_use).update(base_payload).eq("mint", m).execute()
                                 except Exception as u_err:
                                     pass
                                     
@@ -334,23 +415,27 @@ class ShadowTracker:
                                     conn.execute('''
                                         UPDATE rejected_tokens 
                                         SET ath_price = ?, hypothetical_pnl = ?, is_missed_rocket = ?,
+                                            check_5m_done = ?, check_15m_done = ?,
                                             check_1h_done = ?, check_4h_done = ?, check_24h_done = ?,
+                                            time_to_ath_min = ?, current_pnl = ?, outcome = ?,
                                             last_checked_at = ?
                                         WHERE mint = ?
                                     ''', (
-                                        new_ath, round(pnl_pct, 1), 1 if is_rocket else 0,
+                                        new_ath, round(ath_pnl, 1), 1 if is_rocket else 0,
+                                        upd["check_5m"], upd["check_15m"],
                                         upd["check_1h"], upd["check_4h"], upd["check_24h"],
+                                        time_to_ath, round(cur_pnl, 1), outcome,
                                         datetime.utcnow().isoformat(), m
                                     ))
                             except Exception:
                                 pass
 
-                    await asyncio.sleep(1.0)
+                    await asyncio.sleep(0.5)
 
             except Exception as e:
                 print(f"⚠️ Ошибка Shadow Watcher: {e}")
                 
-            await asyncio.sleep(300)  # Пауза 5 минут
+            await asyncio.sleep(60)  # Быстрая проверка раз в минуту для отслеживания 5m/15m ракет
 
 
 # Глобальный синглтон для простого импорта
