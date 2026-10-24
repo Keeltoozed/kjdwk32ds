@@ -587,15 +587,19 @@ class Analyzer:
                 if best:
                     self._prefetch_cache[m] = (ts, best)
                     got += 1
+                else:
+                    self._prefetch_cache[m] = (ts, {})  # Негативный кэш: пустой пул не спамит одиночными запросами
         if len(self._prefetch_cache) > 3000:
             cutoff = time.time() - 120
             self._prefetch_cache = {k: v for k, v in self._prefetch_cache.items() if v[0] >= cutoff}
         return got
 
     async def fetch_token_data(self, mint: str) -> dict:
-        # 1. Свежий пакетный кэш (prefetch_token_data) — без сетевого запроса
+        # 1. Свежий пакетный кэш (prefetch_token_data) — мгновенно из памяти без сети
         _hit = getattr(self, "_prefetch_cache", {}).get(mint)
-        if _hit and time.time() - _hit[0] < float(getattr(config, "PREFETCH_TTL_SEC", 10)):
+        if _hit and time.time() - _hit[0] < float(getattr(config, "PREFETCH_TTL_SEC", 60)):
+            if not _hit[1]:
+                return {}
             return dict(_hit[1])
         url = f"https://api.dexscreener.com/latest/dex/tokens/{mint}"
         from http_client import fetch_json

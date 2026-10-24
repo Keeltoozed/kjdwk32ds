@@ -317,105 +317,114 @@ async def jup_loop(analyzer, tracker):
                 import time as _t
                 mints = await fetch_jup_tokens()
                 if mints:
-                    print(f"🪐 [JUPITER] Получено {len(mints)} кандидатов (toptrending + recent). Сканирую...")
+                    print(f"🪐 [JUPITER] Получено {len(mints)} кандидатов (toptrending + recent). Пакетный анализ...")
                     try:
-                        _to_pf = [m for m in mints if m not in tracker.positions and (_t.time() - processed.get(m, 0.0)) >= 40]
+                        _to_pf = [m for m in mints if m not in tracker.positions and (_t.time() - processed.get(m, 0.0)) >= 35]
                         if _to_pf:
-                            await analyzer.prefetch_token_data(_to_pf)
+                            await analyzer.prefetch_token_data(_to_pf, ttl=60.0)
                     except Exception:
                         pass
 
-                    # ⚡ Приоритизация очереди: токены с возрастом <= 10 мин или m5 >= 10% идут первыми!
-                    def _prio(m):
+                    # ⚡ ПАКЕТНЫЙ СКРИНИНГ В ПАМЯТИ (Batch Triage):
+                    # Отсеиваем весь мусор пачкой за 0.01 сек без спама в лог и без лишних сетевых запросов!
+                    hot_candidates = []
+                    skipped_flat = 0
+                    skipped_ancient = 0
+                    skipped_nodata = 0
+                    immature_count = 0
+                    _now_t = _t.time()
+                    _min_age = float(getattr(config, "SOLANA_MIN_AGE_MIN", 2.0))
+
+                    for m in mints:
+                        if not m or m in tracker.positions:
+                            continue
+                        if _now_t - processed.get(m, 0.0) < 35:
+                            continue
+
                         hit = getattr(analyzer, "_prefetch_cache", {}).get(m)
-                        if hit and hit[1]:
-                            p = hit[1]
-                            cr = p.get("pairCreatedAt") or 0
-                            ag = (_t.time() * 1000 - cr) / 60000.0 if cr else 999.0
-                            m5_val = float((p.get("priceChange") or {}).get("m5") or 0.0)
-                            if ag <= 10.0 or m5_val >= 10.0:
-                                return (2, m5_val, -ag)
-                            elif m5_val >= 2.5:
-                                return (1, m5_val, -ag)
-                            return (0, m5_val, -ag)
-                        return (0, 0.0, 0.0)
-
-                    mints.sort(key=_prio, reverse=True)
-
-                async def _process_one(mint):
-                    async with sem:
-                        if not mint or mint in tracker.positions:
-                            return
-                        if len(tracker.get_open_positions()) >= config.MAX_CONCURRENT_POSITIONS:
-                            return
-                        # Кулдаун на повторный вход после жесткого стопа (-15%+):
-                        _prev = tracker.last_loss_pct(mint)
-                        if _prev is not None and _prev <= getattr(config, "RUG_REBUY_MAX_LOSS", -0.15):
-                            _old_pos = tracker.positions.get(mint) or tracker.positions.get(mint + "_old_1")
-                            _exit_t = getattr(_old_pos, "exit_time", 0.0) or 0.0
-                            if _exit_t and (_t.time() - _exit_t) < 7200:
-                                print(f"⏭ [JUP-SKIP] {mint[:8]}: недавний убыток {_prev*100:.1f}%, пауза 2ч (loss_cooldown)")
-                                return
-                        if _t.time() - processed.get(mint, 0.0) < 45:
-                            return
-
-                        td = await analyzer.fetch_token_data(mint)
+                        td = hit[1] if (hit and hit[1]) else None
                         if not td:
-                            print(f"⏭ [JUP-SKIP] {mint[:8]}: нет данных рынка (no_td)")
-                            return
+                            skipped_nodata += 1
+                            continue
 
-                        _created = td.get("pairCreatedAt") or 0
-                        _age_min = (_t.time() * 1000 - _created) / 60000.0 if _created else 999.0
-                        _min_age = float(getattr(config, "SOLANA_MIN_AGE_MIN", 2.5))
-                        _sym_tmp = str(((td.get("baseToken") or {}).get("symbol") or mint[:6])).upper()
-                        _m5_tmp = float(((td.get("priceChange") or {}).get("m5", 0) or 0))
+                        _cr = td.get("pairCreatedAt") or 0
+                        _ag = (_now_t * 1000 - _cr) / 60000.0 if _cr else 999.0
+                        _m5 = float(((td.get("priceChange") or {}).get("m5", 0) or 0))
+                        _sym = str(((td.get("baseToken") or {}).get("symbol") or m[:6])).upper()
 
-                        # Зона созревания: отправляем в быстрый чекер, а не заставляем ждать 13 минут!
-                        if _age_min < _min_age:
-                            created_sec = (_created / 1000.0) if _created else (_t.time() - _age_min * 60.0)
+                        # Зона созревания: отправляем в быстрый чекер
+                        if _ag < _min_age:
+                            immature_count += 1
+                            created_sec = (_cr / 1000.0) if _cr else (_now_t - _ag * 60.0)
                             ready_at = created_sec + (_min_age * 60.0) + 5.0
-                            wait_s = max(1.0, ready_at - _t.time())
-                            _immature_registry[mint] = {
+                            _immature_registry[m] = {
                                 "ready_at": ready_at,
-                                "sym": _sym_tmp,
+                                "sym": _sym,
                                 "min_age": _min_age,
-                                "added_at": _t.time()
+                                "added_at": _now_t
                             }
-                            print(f"⏳ [JUP-WAIT] {_sym_tmp} ({mint[:8]}): возраст {_age_min:.1f}м < {_min_age}м — созреет через {wait_s:.0f}с (добавлен в быстрый чекер).")
-                            return
+                            continue
 
-                        # Отсекаем древние мамонты (старше 120 мин без гипер-пампа) и флет (m5 < 2.5%):
-                        if _age_min > 120.0 and _m5_tmp < 15.0:
-                            processed[mint] = _t.time() + 3600  # Древний токен: скип на 1 час
-                            print(f"⏭ [JUP-SKIP] {_sym_tmp} ({mint[:8]}): древний токен {_age_min:.0f}м без пампа (ancient)")
-                            return
-                        if _m5_tmp < 2.5:
-                            processed[mint] = _t.time() + 180   # Флет m5 < 2.5%: скип на 3 мин
-                            print(f"⏭ [JUP-SKIP] {_sym_tmp} ({mint[:8]}): m5 {_m5_tmp:+.1f}% < +2.5% (flat_m5)")
-                            return
+                        # Отсекаем древние мамонты без пампа
+                        if _ag > 120.0 and _m5 < 15.0:
+                            skipped_ancient += 1
+                            processed[m] = _now_t + 1800
+                            continue
 
-                        print(f"🪐 [JUP] Анализирую {_sym_tmp} ({mint[:8]}): возраст {_age_min:.1f}м, m5 {_m5_tmp:+.1f}%...")
-                        try:
-                            ok = await analyzer.analyze_token(mint)
-                        except Exception as e:
-                            print(f"🪐 JUP analyze err {mint[:8]}: {type(e).__name__}")
-                            return
+                        # Отсекаем флет m5 < 2.5%
+                        if _m5 < 2.5:
+                            skipped_flat += 1
+                            processed[m] = _now_t + 120
+                            continue
 
-                        if ok is None:
-                            print(f"⏭ [JUP-SKIP] {_sym_tmp} ({mint[:8]}): анализ не дал решения (eval_none)")
-                            return
+                        hot_candidates.append((_m5, _ag, _sym, m, td))
 
-                        processed[mint] = _t.time()
-                        analyzer.log_scan(mint[:8], mint, "JUP", ok, getattr(analyzer, "last_score", 0.0))
+                    # Сортируем по максимальному импульсу m5 (самые мощные ракеты первыми)
+                    hot_candidates.sort(key=lambda x: x[0], reverse=True)
 
-                        if ok is True:
-                            await _evaluate_and_buy(mint, td, analyzer, tracker, source_tag="JUP")
+                    total_skipped = skipped_flat + skipped_ancient + skipped_nodata
+                    print(f"📦 [JUP BATCH] {len(mints)} токенов: отсеяно пачкой {total_skipped} "
+                          f"({skipped_flat} флет, {skipped_ancient} старых, {skipped_nodata} без пула), "
+                          f"созревают {immature_count}. Отобрано ТОП-{len(hot_candidates)} кандидатов с импульсом!")
 
-                tasks = [_process_one(m) for m in mints]
-                await asyncio.gather(*tasks, return_exceptions=True)
+                    async def _process_hot_candidate(cand):
+                        async with sem:
+                            _m5_val, _ag_val, _sym_val, mint, td = cand
+                            if not mint or mint in tracker.positions:
+                                return
+                            if len(tracker.get_open_positions()) >= config.MAX_CONCURRENT_POSITIONS:
+                                return
 
-                if len(processed) > 1000:
-                    processed.clear()
+                            # Кулдаун на повторный вход после жесткого стопа (-15%+):
+                            _prev = tracker.last_loss_pct(mint)
+                            if _prev is not None and _prev <= getattr(config, "RUG_REBUY_MAX_LOSS", -0.15):
+                                _old_pos = tracker.positions.get(mint) or tracker.positions.get(mint + "_old_1")
+                                _exit_t = getattr(_old_pos, "exit_time", 0.0) or 0.0
+                                if _exit_t and (_t.time() - _exit_t) < 7200:
+                                    return
+
+                            print(f"🪐 [JUP] Анализирую {_sym_val} ({mint[:8]}): возраст {_ag_val:.1f}м, m5 {_m5_val:+.1f}%...")
+                            try:
+                                ok = await analyzer.analyze_token(mint)
+                            except Exception as e:
+                                print(f"🪐 JUP analyze err {mint[:8]}: {type(e).__name__}")
+                                return
+
+                            if ok is None:
+                                return
+
+                            processed[mint] = _t.time()
+                            analyzer.log_scan(mint[:8], mint, "JUP", ok, getattr(analyzer, "last_score", 0.0))
+
+                            if ok is True:
+                                await _evaluate_and_buy(mint, td, analyzer, tracker, source_tag="JUP")
+
+                    tasks = [_process_hot_candidate(c) for c in hot_candidates]
+                    if tasks:
+                        await asyncio.gather(*tasks, return_exceptions=True)
+
+                    if len(processed) > 1000:
+                        processed.clear()
         except Exception as e:
             print(f"Ошибка в jup_loop: {e}")
         await asyncio.sleep(interval)
