@@ -677,32 +677,39 @@ async def scanner_loop(analyzer, tracker):
                                     continue
                                 _dex_id = str((pair_data.get("dexId") or "")).lower()
 
-                                # Защита от миграционного дампа Pump.fun (кейс paura)
+                                # Защита от миграционного дампа Pump.fun: отсекаем только реальные сливы в 0, но пропускаем ракеты от $3.5k FDV
                                 if mint.endswith("pump") and _dex_id in ("pumpswap", "raydium", "meteora", "orca"):
                                     _c_ms_sc = pair_data.get("pairCreatedAt") or 0
                                     _age_sc = ((time.time() * 1000 - _c_ms_sc) / 60000.0) if _c_ms_sc else 0.5
-                                    if _age_sc < 3.5:
-                                        print(f"⏳ [SCANNER-MIGRATION] {actual_symbol} ({mint[:8]}): AMM-пул создан {_age_sc:.1f}м назад (< 3.5м) — зона сброса снайперов.")
+                                    if _age_sc < 2.0:
+                                        print(f"⏳ [SCANNER-MIGRATION] {actual_symbol} ({mint[:8]}): AMM-пул создан {_age_sc:.1f}м назад (< 2м) — ранняя зона сброса снайперов.")
                                         continue
                                     _fdv_sc = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
-                                    if 0 < _fdv_sc < 42000.0:
-                                        print(f"🚫 [SCANNER-MIGRATION] {actual_symbol} ({mint[:8]}): FDV ${_fdv_sc:,.0f} < $42,000 — упал ниже выпуска pump.fun.")
+                                    _m5_sc = float((pair_data.get("priceChange") or {}).get("m5", 0) or 0)
+                                    _vm5_sc = float((pair_data.get("volume") or {}).get("m5", 0) or 0)
+                                    if 0 < _fdv_sc < 3500.0:
+                                        print(f"🚫 [SCANNER-MIGRATION] {actual_symbol} ({mint[:8]}): FDV ${_fdv_sc:,.0f} < $3,500 — пустой пул.")
                                         continue
-                                    if liq_usd < 12000.0:
-                                        print(f"🚫 [SCANNER-MIGRATION] {actual_symbol} ({mint[:8]}): ликвидность ${liq_usd:,.0f} < $12,000 — риск слива.")
+                                    if liq_usd < 3500.0:
+                                        print(f"🚫 [SCANNER-MIGRATION] {actual_symbol} ({mint[:8]}): ликвидность ${liq_usd:,.0f} < $3,500 — микро-пул.")
+                                        continue
+                                    if _m5_sc < -15.0:
+                                        print(f"🚫 [SCANNER-MIGRATION] {actual_symbol} ({mint[:8]}): обвал на миграции (m5 {_m5_sc:+.1f}%) — падающий нож.")
                                         continue
 
-                                if _dex_id not in ("pump", "pumpfun", "pumpswap") and not mint.endswith("pump"):
+                                # Живая проверка цены Jupiter для ЛЮБЫХ токенов на AMM (включая pump на Raydium/PumpSwap)
+                                if _dex_id not in ("pump", "pumpfun"):
                                     from jupiter import JupiterAPI
                                     _jup_chk = await JupiterAPI.get_price(mint)
                                     if _jup_chk and _jup_chk > 0 and entry_price > 0:
-                                        if _jup_chk < entry_price * 0.90:
-                                            analyzer._deny(mint, "scanner-live-dump >10%", f"🚫 [LIVE-DUMP] {actual_symbol} ({mint[:8]}): живая цена Jupiter (${_jup_chk:.8f}) уже на {(1.0 - _jup_chk / entry_price) * 100:.1f}% ниже DexScreener (${entry_price:.8f}) [>10%] — токен обваливается прямо сейчас, блок входа!")
+                                        if _jup_chk < entry_price * 0.93:
+                                            analyzer._deny(mint, "scanner-live-dump >7%", f"🚫 [LIVE-DUMP] {actual_symbol} ({mint[:8]}): живая цена Jupiter (${_jup_chk:.8f}) уже на {(1.0 - _jup_chk / entry_price) * 100:.1f}% ниже DexScreener (${entry_price:.8f}) [>7%] — токен обваливается прямо сейчас, блок входа!")
                                             continue
                                         _chk_r = max(_jup_chk, entry_price) / min(_jup_chk, entry_price)
                                         if _chk_r > 1.25:
                                             print(f"🚫 [SCANNER-PRICE-MISMATCH] {actual_symbol} ({mint[:8]}): Jupiter (${_jup_chk:.8f}) vs DS (${entry_price:.8f}) расхождение {_chk_r:.1f}x — блок.")
                                             continue
+                                        entry_price = _jup_chk
                                         entry_price = _jup_chk
                                 # RKT-вето дженерик-входов Solana (лотереи/VIP-билеты exempt).
                                 _ssig = analyzer.get_signal(mint)

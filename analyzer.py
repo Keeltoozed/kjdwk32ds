@@ -898,11 +898,14 @@ class Analyzer:
             _tx_m5_v = (pair_data.get("txns") or {}).get("m5", {}) or {}
             _b_v = int(_tx_m5_v.get("buys", 0) or 0)
             _s_v = int(_tx_m5_v.get("sells", 0) or 0)
-            _has_strong_buyers = (_b_v >= int(_s_v * 1.15) and _b_v >= 30 and _vol_v >= 10000)
-            _max_vip_m5 = 200.0 if (_liq_v >= 25000 and _vol_v >= 25000) else (150.0 if _has_strong_buyers else (getattr(config, "VIP_MAX_M5_PCT", 0.60) * 100))
+            _has_strong_buyers = (_b_v >= int(_s_v * 1.35) and _b_v >= 30 and _vol_v >= 10000)
+            _max_vip_m5 = 80.0 if (_has_strong_buyers and _liq_v >= 25000) else 65.0
             if _m5 > _max_vip_m5:
                 return self._deny(mint, "vip-overheat", f"🚫 [VIP OVERHEAT] {mint}: m5 {_m5:+.0f}% > +{_max_vip_m5:.0f}% — вертикаль уже прошла, вход = вершина.")
-            if _m1 < -4.0:
+            _h1_vip = float(_pc.get("h1", 0) or 0)
+            if _h1_vip > 450.0 and _m5 > 15.0:
+                return self._deny(mint, "vip-h1-exhausted", f"🚫 [VIP EXHAUSTION] {mint}: h1 {_h1_vip:+.0f}% > +450% — памп уже завершается, риск отката.")
+            if _m1 < -2.5:
                 return self._deny(mint, "vip-reversal", f"🚫 [VIP REVERSAL] {mint}: m1 {_m1:+.1f}% — резкий откат за 1м, ждём pullback.")
             _max_vip_m1 = 45.0 if _has_strong_buyers else 25.0
             if _m1 > _max_vip_m1:
@@ -2282,30 +2285,29 @@ class Analyzer:
         import time as _t
         _age_min = ((_t.time() * 1000 - _c_ms) / 60000.0) if _c_ms else (0.5 if _is_migrated_pump else 999.0)
 
-        # === ЗАЩИТА ОТ ДАМПА МИГРАЦИИ PUMP.FUN (кейс paura -$13.84: дамп -92% на 1-й минуте AMM) ===
+        # === ЗАЩИТА ОТ ДАМПА МИГРАЦИИ PUMP.FUN ===
         if _is_migrated_pump:
-            # 1. Запрет входа в первые 3.5 минуты жизни AMM-пула:
-            # В это окно дев и снайперы pump.fun выгружают свои миллионы токенов.
-            if _age_min < 3.5:
+            # 1. Запрет входа в первые 2 минуты жизни AMM-пула (сброс instant-ботов)
+            if _age_min < 2.0:
                 return self._deny(mint, "post-migration-dump-zone",
-                                  f"⏳ [POST-MIGRATION] {mint[:8]}: пул миграции создан всего {_age_min:.1f}м назад (< 3.5м) — зона сброса снайперов pump.fun.")
+                                  f"⏳ [POST-MIGRATION] {mint[:8]}: пул миграции создан всего {_age_min:.1f}м назад (< 2м) — ранняя зона сброса снайперов pump.fun.")
 
             _ray_liq = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
-            if _ray_liq < 12000.0:
+            if _ray_liq < 3500.0:
                 return self._deny(mint, "migrated-drained-liq",
-                                  f"🚫 [POST-MIGRATION] {mint[:8]}: ликвидность ${_ray_liq:,.0f} < $12,000 — снайперы высосали SOL на миграции.")
+                                  f"🚫 [POST-MIGRATION] {mint[:8]}: ликвидность ${_ray_liq:,.0f} < $3,500 — снайперы высосали SOL на миграции.")
 
             _fdv_check = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
-            if 0 < _fdv_check < 42000.0:
+            if 0 < _fdv_check < 3500.0:
                 return self._deny(mint, "migrated-below-graduation",
-                                  f"🚫 [POST-MIGRATION] {mint[:8]}: FDV ${_fdv_check:,.0f} < $42,000 — токен упал ниже уровня выпуска pump.fun.")
+                                  f"🚫 [POST-MIGRATION] {mint[:8]}: FDV ${_fdv_check:,.0f} < $3,500 — пустой пул.")
 
         _sol_min_age = float(getattr(config, "SOLANA_MIN_AGE_MIN", 1.5))
         if _age_min < _sol_min_age:
             return self._deny(mint, "ray-young", f"⏳ [RAYDIUM] {mint[:8]}: возраст {_age_min:.1f}м < {_sol_min_age}м — ранняя flash-rug зона.")
 
         _ray_liq = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
-        _min_ray_liq = 8000.0 if (_age_min < 60) else 12000.0
+        _min_ray_liq = 3500.0 if (_age_min < 60) else 6000.0
         if _ray_liq < _min_ray_liq:
             return self._deny(mint, "ray-low-liq", f"🚫 [RAYDIUM] {mint[:8]}: реальная ликвидность AMM ${_ray_liq:,.0f} < ${_min_ray_liq:,.0f}.")
 
@@ -2315,10 +2317,12 @@ class Analyzer:
         _h1 = float(_pc.get("h1", 0) or 0)
         _h6 = float(_pc.get("h6", 0) or 0)
         _fdv_check = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
-        # Защита от пост-миграционных трупов (Gemma -$4.12, sBTC -$0.49):
-        # Pump.fun мигрирует при ~$42k-$69k MC. Если токен на AMM уже упал ниже $46k или имеет красный часовой/6ч тренд — это слитый токен!
-        if 0 < _fdv_check < 15000:
-            return self._deny(mint, "ray-fdv-cliff", f"🚫 [RAYDIUM] {mint[:8]}: FDV ${_fdv_check:,.0f} < $15,000 — слитый после миграции токен.")
+        
+        # Разрешаем разворотные ракеты с $3.5k FDV (кейсы JOHN +1004%, SURILI +905%, MEMEGLE +736%):
+        if 0 < _fdv_check < 3500:
+            return self._deny(mint, "ray-fdv-cliff", f"🚫 [RAYDIUM] {mint[:8]}: FDV ${_fdv_check:,.0f} < $3,500 — пустой пул.")
+        if 3500 <= _fdv_check < 15000 and _m5 < -15.0:
+            return self._deny(mint, "ray-fdv-dumping", f"🚫 [RAYDIUM] {mint[:8]}: FDV ${_fdv_check:,.0f} при m5 {_m5:+.1f}% — падающий нож.")
         if _age_min >= 60.0:
             if (_fdv_check < 35000 and _h1 < -5.0):
                 return self._deny(mint, "ray-deadcat-trend", f"🚫 [RAYDIUM] {mint[:8]}: FDV ${_fdv_check:,.0f} < $35,000 при h1 {_h1:+.1f}% — слитый после миграции.")
@@ -2347,7 +2351,7 @@ class Analyzer:
                     print(f"⚡ [RAY-PULLBACK] {mint[:8]}: молодой токен ({_age_min:.1f}м) h1 {_h1:+.1f}%, отскок m5 {_m5:+.1f}% — дохлая кошка пропущена, пишется в shadow.")
                 except Exception:
                     pass
-        if _m1 < -3.5:
+        if _m1 < -2.5:
             return self._deny(mint, "ray-m1-drop", f"🚫 [RAYDIUM] {mint[:8]}: m1 {_m1:+.1f}% — активный сброс в моменте (падающий нож).")
         if _m5 < 2.5:
             return self._deny(mint, "ray-m5-flat", f"🚫 [RAYDIUM] {mint[:8]}: m5 {_m5:+.1f}% < +2.5% — нет импульса.")
@@ -2355,6 +2359,14 @@ class Analyzer:
         _vm5 = float(((pair_data.get("volume") or {}).get("m5", 0) or 0))
         _txm5 = (pair_data.get("txns") or {}).get("m5", {}) or {}
         _b5, _s5 = int(_txm5.get("buys", 0) or 0), int(_txm5.get("sells", 0) or 0)
+
+        # Защита от покупки макушки пампа на Raydium/DEX (кейсы 2JVY -46% при m5 +164%, MAYA -41% при h1 +1595%, BTC -4% при m5 +72%)
+        _max_ray_m5 = 65.0 if (_b5 >= 25 and _b5 > _s5 * 1.35) else 50.0
+        if _m5 > _max_ray_m5:
+            return self._deny(mint, f"ray-m5-late {_m5:+.0f}%", f"🚫 [RAYDIUM] {mint[:8]}: m5 {_m5:+.1f}% > {_max_ray_m5:.0f}% — опоздание на памп, вход на макушке.")
+        if _h1 > 450.0 and _m5 > 15.0:
+            return self._deny(mint, f"ray-h1-exhausted {_h1:+.0f}%", f"🚫 [RAYDIUM] {mint[:8]}: h1 {_h1:+.0f}% > +450% — гипер-памп завершается, покупатели истощены.")
+
         _min_bs = 1.05 if (_vm5 >= 5000 and _m5 >= 5.0) else 1.12
         if (_b5 + _s5) < 15 or _vm5 < 1500 or (_s5 > 0 and _b5 < _s5 * _min_bs):
             return self._deny(mint, "ray-weak-flow", f"🚫 [FRESH] {mint[:8]}: слабый поток (b/s {_b5}/{_s5}, vol ${_vm5:,.0f}) — нет покупателей.")
@@ -2382,8 +2394,10 @@ class Analyzer:
             return self._deny(mint, "ray-churn", f"🚫 [CHURN] {mint[:8]}: оборот {_vm5 / liquidity:.1f}x от ликвидности за 5м без импульса (m5 {_m5:+.1f}%) — накрутка.")
         if liquidity > 0 and (_vm5 / liquidity) > 4.5 and _age_min < 30.0:
             return self._deny(mint, "ray-fake-churn", f"🚫 [WASH-CHURN] {mint[:8]}: экстремальный оборот {_vm5 / liquidity:.1f}x от ликвидности в молодом токене ({_age_min:.1f}м) — ловушка накрутки дева.")
-        if _s5 >= 40 and (_b5 / _s5) > 3.8 and _vm5 >= 45000 and _age_min < 30.0:
+        if _s5 >= 30 and (_b5 / max(_s5, 1)) > 3.8 and _vm5 >= 25000 and _age_min < 30.0:
             return self._deny(mint, "ray-fake-wall", f"🚫 [FAKE-BUY-WALL] {mint[:8]}: аномальный перекос b/s {_b5 / _s5:.1f}x при объёме ${_vm5:,.0f} — боты дева имитируют органику перед дампом.")
+        if (_b5 + _s5) >= 800 and (_b5 / max(_s5, 1)) > 3.5:
+            return self._deny(mint, "ray-fake-wall", f"🚫 [FAKE-BUY-WALL] {mint[:8]}: накрутка {_b5}b/{_s5}s (b/s {_b5 / _s5:.1f}x) — ловушка дева.")
 
         # 4. Проверка безопасности холдеров и создателя
         _t10 = getattr(self, '_last_top10', 0.0)
