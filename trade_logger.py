@@ -66,7 +66,13 @@ class TradeLogger:
                     }
                     self.supabase.table(table_name).upsert(data).execute()
                 except Exception as sb_err:
-                    print(f"⚠️ [TradeLogger] Supabase log_entry error: {sb_err}")
+                    err_str = str(sb_err)
+                    if "exceed_egress_quota" in err_str or "402" in err_str:
+                        if not getattr(self, "_entry_quota_warned", False):
+                            print(f"🚨 [SUPABASE QUOTA] Проект заблокирован (402 exceed_egress_quota). Сделка {mint[:8]} сохранена локально в SQLite.")
+                            self._entry_quota_warned = True
+                    else:
+                        print(f"⚠️ [TradeLogger] Supabase log_entry error: {sb_err}")
             try:
                 with sqlite3.connect(self.db_path) as conn:
                     conn.execute(
@@ -95,7 +101,13 @@ class TradeLogger:
                     }
                     self.supabase.table(table_name).update(data).eq("mint", mint).execute()
                 except Exception as sb_err:
-                    print(f"⚠️ [TradeLogger] Supabase log_exit error: {sb_err}")
+                    err_str = str(sb_err)
+                    if "exceed_egress_quota" in err_str or "402" in err_str:
+                        if not getattr(self, "_exit_quota_warned", False):
+                            print(f"🚨 [SUPABASE QUOTA] Проект заблокирован (402 exceed_egress_quota). Выход {mint[:8]} сохранен локально в SQLite.")
+                            self._exit_quota_warned = True
+                    else:
+                        print(f"⚠️ [TradeLogger] Supabase log_exit error: {sb_err}")
             try:
                 with sqlite3.connect(self.db_path) as conn:
                     conn.execute(
@@ -154,14 +166,20 @@ class TradeLogger:
                 for table in ["trades_pump", "trades_raydium"]:
                     rows = []
                     if self.use_supabase:
-                        response = self.supabase.table(table).select("*").eq("status", "CLOSED").eq("check_24h_done", 0).execute()
-                        rows = response.data
-                    else:
-                        with sqlite3.connect(self.db_path) as conn:
-                            conn.row_factory = sqlite3.Row
-                            c = conn.cursor()
-                            c.execute(f"SELECT * FROM {table} WHERE status = 'CLOSED' AND check_24h_done = 0")
-                            rows = [dict(r) for r in c.fetchall()]
+                        try:
+                            response = self.supabase.table(table).select("mint, exit_time, post_exit_ath, check_1h_done, check_4h_done, check_24h_done").eq("status", "CLOSED").eq("check_24h_done", 0).execute()
+                            rows = response.data or []
+                        except Exception:
+                            rows = []
+                    if not rows:
+                        try:
+                            with sqlite3.connect(self.db_path) as conn:
+                                conn.row_factory = sqlite3.Row
+                                c = conn.cursor()
+                                c.execute(f"SELECT * FROM {table} WHERE status = 'CLOSED' AND check_24h_done = 0")
+                                rows = [dict(r) for r in c.fetchall()]
+                        except Exception:
+                            rows = []
 
                     for row in rows:
                         if not row.get("exit_time"):

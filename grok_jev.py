@@ -145,16 +145,28 @@ class GrokJevEngine:
         # 0. Защита от фейковых клонов брендов и системных тикеров
         FAKE_BRAND_BLACKLIST = {
             "BASE", "SP500", "S&P500", "USDC", "USDT", "SOL", "ETH", "BTC", "SOLANA",
-            "BINANCE", "COINBASE", "TESLA", "APPLE", "NVDA", "AMAZON", "GOOGLE", "MICROSOFT"
+            "BINANCE", "COINBASE", "TESLA", "APPLE", "NVDA", "AMAZON", "GOOGLE", "MICROSOFT",
+            "NINTENDO", "PLAYSTATION", "SONY", "DISNEY", "MARVEL", "POKEMON", "SEGA", "XBOX",
+            "STEAM", "VALVE", "ROBLOX", "TIKTOK", "NETFLIX", "SPOTIFY", "PEPSI", "COCACOLA", "MCDONALDS"
         }
-        if symbol in FAKE_BRAND_BLACKLIST:
+        if symbol in FAKE_BRAND_BLACKLIST or any(b in symbol for b in ("NINTENDO", "POKEMON", "PLAYSTATION", "DISNEY")):
             return False, f"fake-brand-clone {symbol}"
 
-        # 1. Ликвидность (с защитой от гигантских не-мем пулов)
+        # 1. Ликвидность (с защитой от гигантских не-мем пулов и фантомной ликвидности)
         raw_liq = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
         fdv_mc = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
         eff_liq = max(raw_liq, fdv_mc * 0.40) if is_pump else raw_liq
         
+        # ЗАЩИТА ОТ ФАНТОМНОЙ ЛИКВИДНОСТИ (КЕЙС NINTENDO / GHOST POOL):
+        # В DEX-пулах мошенники надувают цену токена, и DexScreener показывает фейковые $15k+ liquidity.usd.
+        # Проверяем РЕАЛЬНЫЙ резерв SOL (quote currency):
+        liq_dict = pair_data.get("liquidity") or {}
+        quote_token_symbol = str((pair_data.get("quoteToken") or {}).get("symbol", "")).upper()
+        quote_amount = float(liq_dict.get("quote", 0.0) or 0.0)
+        if quote_token_symbol in ("SOL", "WSOL"):
+            if not is_pump and quote_amount > 0 and quote_amount < 20.0:
+                return False, f"phantom-liq-trap: real pool SOL {quote_amount:.2f} < 20.0 SOL (ghost pool scam like Nintendo)"
+
         min_liq = 6000.0 if is_pump else float(getattr(_c, "JEV_MIN_LIQUIDITY_USD", 12000.0))
         if eff_liq < min_liq:
             return False, f"liq-depth-low ${eff_liq:.0f} < ${min_liq:.0f}"
@@ -219,6 +231,12 @@ class GrokJevEngine:
                 return False, f"vol-h1-low ${vol_h1:,.0f} < ${min_vol_h1:,.0f}"
             if (bh1 + sh1) < min_trades_h1:
                 return False, f"trades-h1-low {bh1+sh1} < {min_trades_h1}"
+
+        # 4.1. Wash Trading Check (накрутка объёма ботами копеечными сделками)
+        if (bh1 + sh1) >= 400 and vol_h1 > 0:
+            avg_trade = vol_h1 / (bh1 + sh1)
+            if avg_trade < 12.0:
+                return False, f"wash-trading-trap (avg trade ${avg_trade:.1f} < $12 across {bh1+sh1} txns)"
 
         # 5. Рыночная капитализация (MCap / FDV)
         mcap = fdv_mc
@@ -780,14 +798,18 @@ class GrokJevEngine:
                     if freeze_auth and freeze_auth not in SAFE_AUTHORITIES:
                         return False, f"rugcheck: freeze authority active ({freeze_auth[:8]})", _h_stats
 
-                    # Очищенный score RugCheck
+                    # Очищенный score RugCheck: для pump.fun бондинг-кривой вычитаем штраф за ликвидность,
+                    # но для мигрировавших DEX токенов низкая ликвидность — это смертельный признак рагпулла!
                     raw_score = float(rc_data.get("score") or 0.0)
-                    low_liq_penalty = sum(
-                        float(rk.get("score", 0) or 0)
-                        for rk in (rc_data.get("risks") or [])
-                        if "low liquidity" in str(rk.get("name", "")).lower()
-                    )
-                    clean_score = max(0.0, raw_score - low_liq_penalty)
+                    if is_pump:
+                        low_liq_penalty = sum(
+                            float(rk.get("score", 0) or 0)
+                            for rk in (rc_data.get("risks") or [])
+                            if "low liquidity" in str(rk.get("name", "")).lower()
+                        )
+                        clean_score = max(0.0, raw_score - low_liq_penalty)
+                    else:
+                        clean_score = raw_score
                     if clean_score >= 600:
                         return False, f"rugcheck: high risk score {clean_score:.0f} >= 600", _h_stats
 
@@ -795,7 +817,7 @@ class GrokJevEngine:
                     for rk in (rc_data.get("risks") or []):
                         rk_name = str(rk.get("name") or "").lower()
                         rk_lvl = str(rk.get("level") or "").lower()
-                        if "low liquidity" in rk_name:
+                        if is_pump and "low liquidity" in rk_name:
                             continue
                         if rk_lvl == "danger":
                             return False, f"rugcheck: critical danger risk '{rk.get('name')}'", _h_stats

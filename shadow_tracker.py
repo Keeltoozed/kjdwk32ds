@@ -301,12 +301,12 @@ class ShadowTracker:
                 rows = []
                 if self.use_supabase and self.supabase:
                     try:
-                        res = self.supabase.table(table_to_use).select("*").eq("check_24h_done", 0).order("rejected_at", desc=True).limit(200).execute()
+                        res = self.supabase.table(table_to_use).select("mint, rejected_at, initial_price, ath_price, check_5m_done, check_15m_done, check_1h_done, check_4h_done, check_24h_done").eq("check_24h_done", 0).order("rejected_at", desc=True).limit(50).execute()
                         rows = res.data or []
                     except Exception as e:
                         if table_to_use != "shadow_log":
                             try:
-                                res = self.supabase.table("shadow_log").select("*").eq("check_24h_done", 0).order("rejected_at", desc=True).limit(200).execute()
+                                res = self.supabase.table("shadow_log").select("mint, rejected_at, initial_price, ath_price, check_5m_done, check_15m_done, check_1h_done, check_4h_done, check_24h_done").eq("check_24h_done", 0).order("rejected_at", desc=True).limit(50).execute()
                                 rows = res.data or []
                                 table_to_use = "shadow_log"
                             except Exception:

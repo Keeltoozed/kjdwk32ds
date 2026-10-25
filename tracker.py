@@ -181,7 +181,7 @@ class PaperTracker:
             return
         now = time.time()
         last_sb = getattr(self, "_last_sb_save", 0.0)
-        if not force_cloud and (now - last_sb) < 1.5:
+        if not force_cloud and (now - last_sb) < 60.0:
             return
         self._last_sb_save = now
         sb = self._supabase()
@@ -196,7 +196,13 @@ class PaperTracker:
                 "status": "SYSTEM"
             }).execute()
         except Exception as e:
-            print(f"⚠️ Ошибка сохранения портфеля в Supabase: {e}")
+            err_str = str(e)
+            if "exceed_egress_quota" in err_str or "402" in err_str:
+                if not getattr(self, "_quota_warned", False):
+                    print("🚨 [SUPABASE QUOTA] Проект Supabase заблокирован (402 exceed_egress_quota). Портфель сохранён локально в portfolio.json.")
+                    self._quota_warned = True
+            else:
+                print(f"⚠️ Ошибка сохранения портфеля в Supabase: {e}")
 
     def get_open_positions(self) -> Dict[str, VirtualPosition]:
         return {k: v for k, v in self.positions.items() if v.status == "open"}
@@ -527,16 +533,30 @@ class PaperTracker:
             last_security_check_ts=time.time(),
             unsellable_strikes=0
         )
-        self.save_portfolio()
+        self.save_portfolio(force_cloud=True)
         print(f"📝 PAPER BUY: {symbol} ({mint}) | Amount: ${amount_usd} | Price: ${entry_price} | Src: {source} | Chain: {chain}")
         
         # === СОХРАНЕНИЕ В SUPABASE (ENTRY) ===
-        # Сохраняем опыт в базу
+        # Сохраняем опыт в базу с полными метаданными токена
         try:
             from trade_logger import TradeLogger
             import asyncio
             logger = TradeLogger()
-            asyncio.create_task(logger.log_entry(mint, ml_features_dict, ml_confidence, is_mature))
+            entry_features = {
+                "symbol": symbol,
+                "entry_price_usd": entry_price,
+                "amount_usd": amount_usd,
+                "source": source,
+                "chain": chain,
+                "pair_address": pair_address,
+                **(ml_features_dict if isinstance(ml_features_dict, dict) else {})
+            }
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(logger.log_entry(mint, entry_features, ml_confidence, is_mature))
+            except RuntimeError:
+                import threading
+                threading.Thread(target=lambda: asyncio.run(logger.log_entry(mint, entry_features, ml_confidence, is_mature)), daemon=True).start()
         except Exception as e:
             print(f"⚠️ Ошибка логирования входа: {e}")
 
@@ -579,7 +599,7 @@ class PaperTracker:
             pos.amount_usd = max(0.0, pos.amount_usd - amount_sold_usd)
             if "MOONBAG" in reason.upper() or "RISK FREE" in reason.upper() or "200%" in reason:
                 pos.is_moonbag = True
-            self.save_portfolio()
+            self.save_portfolio(force_cloud=True)
 
     def close_position(self, mint: str, exit_price: float, reason: str):
         pos = self.positions.get(mint)
@@ -666,7 +686,7 @@ class PaperTracker:
 
             pnl_pct = pos.pnl_usd / original_amount if original_amount > 0 else 0
             
-            self.save_portfolio()
+            self.save_portfolio(force_cloud=True)
             print(f"🔒 PAPER SELL: {pos.symbol} ({mint}) | Reason: {reason} | PnL: {pnl_pct*100:.2f}% (${pos.pnl_usd:.2f})")
             # Структурный лог сделки (JSONL): точная статистика по exit_reason без grep-гаданий
             try:
@@ -691,7 +711,12 @@ class PaperTracker:
                 from trade_logger import TradeLogger
                 import asyncio
                 logger = TradeLogger()
-                asyncio.create_task(logger.log_exit(pos.mint, pnl_pct * 100, pos.exit_reason, pos.is_mature))
+                try:
+                    loop = asyncio.get_running_loop()
+                    loop.create_task(logger.log_exit(pos.mint, pnl_pct * 100, pos.exit_reason, pos.is_mature))
+                except RuntimeError:
+                    import threading
+                    threading.Thread(target=lambda: asyncio.run(logger.log_exit(pos.mint, pnl_pct * 100, pos.exit_reason, pos.is_mature)), daemon=True).start()
             except Exception as e:
                 print(f"⚠️ Ошибка сохранения опыта: {e}")
 

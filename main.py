@@ -1,3 +1,16 @@
+import sys
+import os
+
+# Гарантируем немедленный вывод логов на Render / Docker (без задержек буферизации stdout)
+os.environ["PYTHONUNBUFFERED"] = "1"
+try:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(line_buffering=True)
+    if hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(line_buffering=True)
+except Exception:
+    pass
+
 import asyncio
 import threading
 import time
@@ -16,6 +29,14 @@ async def position_manager_loop(analyzer, tracker):
     while True:
         try:
             open_positions = tracker.get_open_positions()
+            
+            _now_sec = time.time()
+            if not hasattr(position_manager_loop, "_last_heartbeat"):
+                position_manager_loop._last_heartbeat = 0.0
+            if (_now_sec - position_manager_loop._last_heartbeat) >= 30.0:
+                position_manager_loop._last_heartbeat = _now_sec
+                _n_open = len(open_positions)
+                print(f"🛡️ [HEARTBEAT] Менеджер позиций активен: {_n_open} открытых позиций, баланс ${getattr(tracker, 'cash', 0.0):.2f}", flush=True)
             
             # ОПТИМИЗАЦИЯ СКОРОСТИ: Запрашиваем цены для ВСЕХ позиций ОДНИМ запросом с жестким таймаутом.
             mints_to_fetch = [m for m, p in open_positions.items()
@@ -60,19 +81,22 @@ async def position_manager_loop(analyzer, tracker):
                     else:
                         # Если оба источника не дали цену в этом тике — держим последнюю известную (до 120 сек)
                         _last_known = float(getattr(position, "current_price_usd", 0.0) or 0.0)
-                        _last_ts = float(getattr(position, "price_checked_at", 0.0) or getattr(position, "price_updated_at", 0.0) or 0.0)
-                        if _last_known > 0.0 and (time.time() - _last_ts) < 120:
+                        _last_upd = float(getattr(position, "price_updated_at", 0.0) or getattr(position, "entry_time", 0.0) or 0.0)
+                        if _last_known > 0.0 and (time.time() - _last_upd) < 120:
                             current_price = _last_known
                         else:
                             current_price = 0.0
                 
+                # Всегда фиксируем время активного мониторинга позиции менеджером
+                position.price_checked_at = time.time()
+                if api_price > 0.0 or wss_fresh:
+                    position.price_updated_at = time.time()
+
                 # Обновляем живую цену для GROWTH/EARLY-позиций прямо здесь (каждую секунду),
                 # а исполнение медленных стопов/стагнантов оставляет growth_loop
                 if str(getattr(position, "source", "")).startswith("GROWTH") or str(getattr(position, "source", "")).startswith("EARLY"):
                     if current_price > 0.0:
                         position.current_price_usd = current_price
-                        position.price_updated_at = time.time()
-                        position.price_checked_at = time.time()
                         if current_price > position.max_price_usd:
                             position.max_price_usd = current_price
                         if position.entry_price_usd > 0:
@@ -80,7 +104,7 @@ async def position_manager_loop(analyzer, tracker):
                             position.current_pnl_usd = position.amount_usd * _pnl_pct
                     continue
 
-                prev_price = position.current_price_usd
+                prev_price = float(getattr(position, "current_price_usd", 0.0) or 0.0)
                 if current_price <= 0.0:
                     minutes_held = (time.time() - position.entry_time) / 60
                     _fz = getattr(position, "first_zero_ts", 0.0) or time.time()
@@ -112,6 +136,16 @@ async def position_manager_loop(analyzer, tracker):
                 pnl_pct = (current_price - position.entry_price_usd) / position.entry_price_usd
                 max_pnl_pct = (position.max_price_usd - position.entry_price_usd) / position.entry_price_usd
                 minutes_held = (time.time() - position.entry_time) / 60
+
+                # Сразу обновляем текущие значения для дашборда и хранилища (чтобы continue ниже не морозили данные в UI)
+                position.current_price_usd = current_price
+                position.current_pnl_usd = position.amount_usd * pnl_pct
+
+                _last_pos_log = getattr(position, "_last_log_ts", 0.0)
+                if (_now_sec - _last_pos_log) >= 10.0:
+                    position._last_log_ts = _now_sec
+                    _pnl_str = f"{pnl_pct*100:+.1f}%" if position.entry_price_usd > 0 else "0%"
+                    print(f"🛡️ [TRACK] {position.symbol} ({mint[:8]}): цена ${current_price:.8f} ({_pnl_str}) | пик: ${position.max_price_usd:.8f} | держим {minutes_held:.1f}м", flush=True)
 
                 # --- АУДИТ БЕЗОПАСНОСТИ ОТКРЫТОЙ ПОЗИЦИИ (HONEYPOT / HARD SCAM GUARD) ---
                 # 1. Защита от ложного списания в первые 45 секунд: токен только что куплен и прошел пре-аудит
@@ -2116,37 +2150,76 @@ async def async_main():
             await get_sol_price()
             await asyncio.sleep(300)
     
+    async def _supervised(coro_fn, name: str):
+        while True:
+            try:
+                print(f"🟢 [SYSTEM-LOOP] Старт {name}...", flush=True)
+                await coro_fn()
+                print(f"ℹ️ [SYSTEM-LOOP] {name} штатно завершён.", flush=True)
+                break
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                print(f"🚨 [LOOP-CRASH] Ошибка в {name}: {e}. Авто-перезапуск через 5с...", flush=True)
+                import traceback
+                traceback.print_exc()
+                await asyncio.sleep(5)
+            except BaseException as be:
+                print(f"🚨 [LOOP-FATAL] Критический сбой в {name}: {be}. Авто-перезапуск через 5с...", flush=True)
+                import traceback
+                traceback.print_exc()
+                await asyncio.sleep(5)
+
     # Важно: PumpPortal WSS разрешает ТОЛЬКО ОДНО соединение с одного IP.
     # Второй сокет (early_scout_loop в shadow-режиме) перебивал подписки subscribeTokenTrade у PumpFunSniper!
     await asyncio.gather(
-        position_manager_loop(analyzer, tracker),
-        scanner_loop(analyzer, tracker),
-        copy_trader.listen(),
-        fomo_signal_loop(analyzer, tracker),
-        tg_listener_loop(analyzer, tracker),
-        tg_preview_loop(analyzer, tracker),  # 📡 TG-коллы без ключей (t.me/s превью)
-        fomo_loop(analyzer, tracker),
-        birdeye_loop(analyzer, tracker),  # 🦅 Birdeye trending (Solana и Base)
-        jup_loop(analyzer, tracker),  # 🪐 Jupiter recent + toptrending/5m (Solana)
-        base_loop(analyzer, tracker),  # 🟦 EVM-мемы Base (fomo.family)
-        evm_wss_loop(analyzer, tracker),  # ⚡ WSS фабрик Base: новые пулы за секунды
-        fomo_api_loop(analyzer, tracker),  # 📡 fomoapi.io: покупки топов fomo.family -> очередь сигналов
-        gmgn_bridge_loop(analyzer, tracker),  # 🟢 GMGN trenches: create-сигналы (нужен GMGN_ENABLED+chromium)
-        growth_loop(analyzer, tracker),  # 🌱 тренды капов, пока нет ракет
-        sniper.connect_and_listen(),  # ⚡ IN-MEMORY STREAMING: RAM фильтр (>10 buyers / 20s) + RugCheck/GoPlus аудит
-        smart_money_hunter_loop(analyzer, tracker),  # 🐋 Автономный охотник за смарт-кошельками (Solana & Base)
-        grok_bot_jev_loop(tracker, analyzer=analyzer),  # 🤖 GROKBOT x JEV: Автономная независимая система (JEV PICKS, GROK TRADES)
-        trade_logger.post_trade_watcher_loop(),
-        shadow_tracker.price_watcher_loop(),
-        rugpull_feeder_loop(),
-        sol_price_updater()
+        _supervised(lambda: position_manager_loop(analyzer, tracker), "position_manager_loop"),
+        _supervised(lambda: scanner_loop(analyzer, tracker), "scanner_loop"),
+        _supervised(lambda: copy_trader.listen(), "copy_trader"),
+        _supervised(lambda: fomo_signal_loop(analyzer, tracker), "fomo_signal_loop"),
+        _supervised(lambda: tg_listener_loop(analyzer, tracker), "tg_listener_loop"),
+        _supervised(lambda: tg_preview_loop(analyzer, tracker), "tg_preview_loop"),
+        _supervised(lambda: fomo_loop(analyzer, tracker), "fomo_loop"),
+        _supervised(lambda: birdeye_loop(analyzer, tracker), "birdeye_loop"),
+        _supervised(lambda: jup_loop(analyzer, tracker), "jup_loop"),
+        _supervised(lambda: base_loop(analyzer, tracker), "base_loop"),
+        _supervised(lambda: evm_wss_loop(analyzer, tracker), "evm_wss_loop"),
+        _supervised(lambda: fomo_api_loop(analyzer, tracker), "fomo_api_loop"),
+        _supervised(lambda: gmgn_bridge_loop(analyzer, tracker), "gmgn_bridge_loop"),
+        _supervised(lambda: growth_loop(analyzer, tracker), "growth_loop"),
+        _supervised(lambda: sniper.connect_and_listen(), "pump_fun_sniper"),
+        _supervised(lambda: smart_money_hunter_loop(analyzer, tracker), "smart_money_hunter_loop"),
+        _supervised(lambda: grok_bot_jev_loop(tracker, analyzer=analyzer), "grok_bot_jev_loop"),
+        _supervised(lambda: trade_logger.post_trade_watcher_loop(), "trade_logger"),
+        _supervised(lambda: shadow_tracker.price_watcher_loop(), "shadow_tracker"),
+        _supervised(lambda: rugpull_feeder_loop(), "rugpull_feeder_loop"),
+        _supervised(lambda: sol_price_updater(), "sol_price_updater"),
+        return_exceptions=True
     )
 
 def run_background_bot():
-    """Запускает асинхронный цикл в отдельном потоке"""
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    loop.run_until_complete(async_main())
+    """Запускает асинхронный цикл в отдельном потоке с вечным авто-перезапуском при любых сбоях"""
+    import traceback
+    while True:
+        loop = None
+        try:
+            print("🚀 [SYSTEM] Фоновый торговый бот запущен...", flush=True)
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(async_main())
+        except Exception as e:
+            print(f"🚨 [CRITICAL CRASH] Фоновый бот аварийно завершился: {e}. Перезапуск через 3с...", flush=True)
+            traceback.print_exc()
+        except BaseException as be:
+            print(f"🚨 [FATAL CRASH] Критический сбой потока бота: {be}. Перезапуск через 3с...", flush=True)
+            traceback.print_exc()
+        finally:
+            if loop and not loop.is_closed():
+                try:
+                    loop.close()
+                except Exception:
+                    pass
+        time.sleep(3)
 
 import os
 # === 2. ВЕБ-ИНТЕРФЕЙС STREAMLIT ===
@@ -2161,9 +2234,13 @@ def start_bot():
     thread.start()
     return thread
 
-# Автозапуск фонового бота только при работе под Streamlit (защита от дублирования при прямом импорте)
-import sys
-if "streamlit" in sys.argv[0] or any("streamlit" in str(arg) for arg in sys.argv):
+# Автозапуск фонового бота: под Streamlit или на сервере Render
+try:
+    _is_streamlit = st.runtime.exists()
+except Exception:
+    _is_streamlit = False
+
+if _is_streamlit or __name__ == "__main__" or os.environ.get("RENDER"):
     bot_thread = start_bot()
 
 def chain_badge(chain: str, long: bool = False) -> str:
@@ -2510,7 +2587,7 @@ with tab2:
     except Exception as e:
         st.info("Ожидание данных от сканера...")
 
-# Автообновление интерфейса (по умолчанию выключено, чтобы экран не перезагружался)
+# Автообновление интерфейса (по умолчанию выключено по запросу пользователя)
 if st.checkbox("Включить автообновление (каждые 5 сек)", value=False):
     time.sleep(5)
     st.rerun()
