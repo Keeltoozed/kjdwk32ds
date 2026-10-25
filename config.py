@@ -134,10 +134,10 @@ SOLANA_MAX_AGE_MIN = 180.0      # Максимум 3 часа входа  # Не
 INFANT_WINDOW_MIN = 2.0
 INFANT_DUMP_PCT = -0.40  # Резать в первые 2 мин только реальный дамп -25%+ (рабочие тени -12%..-18% выживают)
 
-# Stagnant: живым пулам даём 15 мин на раскачку (кейс Chaton: консолидация 15м -> рост +62%), мёртвые режем на 10-й минуте
-STAGNANT_LOSS_MIN = 15
-STAGNANT_LOSS_MIN_FAST = 10
-STAGNANT_HOLD_MIN = 25
+# Stagnant (Solana Memes): не маринуем мертвые деньги по 25-30 мин! Если монета за 8 мин не дала импульса — выходим.
+STAGNANT_LOSS_MIN = 6.0
+STAGNANT_LOSS_MIN_FAST = 4.0
+STAGNANT_HOLD_MIN = 8.0
 
 # Filtering
 AI_MODE = "degen" # "sniper" (строго 80-90% уверенности) или "degen"
@@ -176,9 +176,15 @@ JEV_DEFAULT_WICK_STOP_PCT = -0.06 # -6% дефолтный стоп под фи�
 
 # Birdeye API Key
 BIRDEYE_API_KEY = os.getenv("BIRDEYE_API_KEY", "")
-BIRDEYE_CHAINS = ["solana", "base"]  # Фокус только на Solana и Base
+BIRDEYE_CHAINS = ["solana"]  # Фокус строго на SOLANA (EVM/Base отключены по запросу)
 
-# === JITO BLOCK ENGINE (MEV Protection) ===
+# === РЕЖИМ SOLANA ONLY: 100% ресурсов, квот и капитала направлены на Solana ===
+SOLANA_ONLY = True
+BASE_ENABLED = False        # ОТКЛЮЧЕНО: полный фокус только на Solana
+EVM_WSS_ENABLED = False     # ОТКЛЮЧЕНО: WSS Base/EVM отключены для экономии ресурсов
+ROBINHOOD_ENABLED = False   # ОТКЛЮЧЕНО
+BSC_ENABLED = False         # ОТКЛЮЧЕНО
+ETHEREUM_ENABLED = False    # ОТКЛЮЧЕНО
 USE_JITO_EXECUTION = True # Поставь True, когда будешь готов торговать на реальные деньги
 JITO_ENGINE_URL = "https://mainnet.block-engine.jito.wtf/api/v1/bundles"
 JITO_TIP_AMOUNT_SOL = 0.0005 # Чаевые валидатору (минимум 0.0001)
@@ -205,11 +211,11 @@ EVM_RESCAN_COOLDOWN = 60  # Перепроверка через 60с
 EVM_MAX_MINTS = 120  # Лимит активных кандидатов за цикл скана
 
 
-# === BASE (EVM L2: активен, 100% фокус вместе с Solana) ===
-BASE_ENABLED = True
-BASE_MIN_LIQUIDITY = 4000.0  # Порог $4k: Clanker/Uniswap v3 мемы на Base стартуют с ~$3.5k-$12k ликвидности
-BASE_SCAN_INTERVAL = 15  # 15с: быстрый поиск ранних ракет Base
-BASE_MAX_SIZE_USD = 25.0  # Полноценный размер ордера для Base
+# === BASE (EVM L2: ОТКЛЮЧЕНО, фокус строго на Solana) ===
+BASE_ENABLED = False
+BASE_MIN_LIQUIDITY = 4000.0
+BASE_SCAN_INTERVAL = 15
+BASE_MAX_SIZE_USD = 25.0
 
 # === BSC (ОТКЛЮЧЕНО: фокус только на Solana и Base) ===
 BSC_ENABLED = False
@@ -325,8 +331,8 @@ BSC_WEAK_SIZE_USD = 15.0   # Сайз $15 по запросу пользоват
 EVM_TRACK_INTERVAL = 2.5  # Быстрый трекинг при открытых сделках (2.5с вместо 8с для мгновенных стопов)
 EVM_IDLE_TRACK_INTERVAL = 6.0  # Опрос в режиме ожидания (нет открытых позиций)
 
-# EVM factory WSS (новые пулы Base/BSC за секунды, без ключей, PublicNode)
-EVM_WSS_ENABLED = True
+# EVM factory WSS (ОТКЛЮЧЕНО: фокус только на Solana)
+EVM_WSS_ENABLED = False
 
 # CoinGecko trending -> Solana-минты для GROWTH (без ключей, кэш 30 мин)
 COINGECKO_ENABLED = True

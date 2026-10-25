@@ -239,7 +239,9 @@ class SmartMoneyHunter:
         
         try:
             sol_new = await self.scan_chain_for_smart_money("solana")
-            base_new = await self.scan_chain_for_smart_money("base")
+            base_new = 0
+            if getattr(config, "BASE_ENABLED", False):
+                base_new = await self.scan_chain_for_smart_money("base")
             
             total_wallets = len(self.db)
             tier1_count = sum(1 for d in self.db.values() if d.get("tier") == 1)

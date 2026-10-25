@@ -80,16 +80,20 @@ async def position_manager_loop(analyzer, tracker):
                 prev_price = position.current_price_usd
                 if current_price <= 0.0:
                     minutes_held = (time.time() - position.entry_time) / 60
-                    # Без цены позиция неуправляема: 5 мин — и выходим по последней
-                    # известной (а не маринуем $0.00 три часа). Мёртвый пул = cut.
-                    # (было 10 мин — KLIK-подобные висели на нуле; унифицировано с EVM 25 циклов ~5 мин)
                     _fz = getattr(position, "first_zero_ts", 0.0) or time.time()
                     position.first_zero_ts = _fz
-                    _last = ws_price if ws_price > 0 else position.entry_price_usd
-                    if time.time() - _fz > 300:
-                        tracker.close_position(mint, _last, f"Stale Price ({minutes_held:.0f} мин без цены)")
-                    elif minutes_held > 180:
-                        tracker.close_position(mint, 0.0, "Rug Pull / No Liquidity")
+                    # Если цена 0.0 больше 45 секунд — это рагпулл / слив ликвидности.
+                    # Проверяем продаваемость через Jupiter: если продать нельзя — списание в 0.0$ (-100%).
+                    if (time.time() - _fz) > 45:
+                        from jupiter import JupiterAPI
+                        _sell_ok, _sell_why = await JupiterAPI.is_token_sellable(mint)
+                        if not _sell_ok:
+                            print(f"🚨 [SOL-ZERO-RUG] {position.symbol} ({mint[:8]}): цена 0.00 и токен непродаваем ({_sell_why}) — списание в 0.0$ (-100%).")
+                            tracker.close_position(mint, 0.0, f"Rug Pull / Unsellable ({_sell_why})")
+                            continue
+                        elif (time.time() - _fz) > 180:
+                            tracker.close_position(mint, 0.0, "Rug Pull / No Liquidity")
+                            continue
                     continue
                 position.first_zero_ts = 0.0
                     
@@ -108,8 +112,17 @@ async def position_manager_loop(analyzer, tracker):
 
                 # --- АУДИТ БЕЗОПАСНОСТИ ОТКРЫТОЙ ПОЗИЦИИ (HONEYPOT / HARD SCAM GUARD) ---
                 _last_sol_sec_chk = getattr(position, "last_security_check_ts", 0.0)
-                if (time.time() - _last_sol_sec_chk) > 120:
+                if (time.time() - _last_sol_sec_chk) > 30:
                     position.last_security_check_ts = time.time()
+                    try:
+                        from jupiter import JupiterAPI
+                        _jup_ok, _jup_why = await JupiterAPI.is_token_sellable(mint)
+                        if not _jup_ok:
+                            print(f"🚨 [SOL-SELL-BLOCKED] {position.symbol} ({mint[:10]}): {_jup_why} — токен непродаваем/рагпулл, списание в 0.0$ (-100%).")
+                            tracker.close_position(mint, 0.0, f"SOL Rug Pull / Unsellable ({_jup_why})")
+                            continue
+                    except Exception:
+                        pass
                     try:
                         import goplus as _gp
                         _g_ok, _g_why = await _gp.check_solana(mint)
@@ -161,12 +174,11 @@ async def position_manager_loop(analyzer, tracker):
                     continue
 
                 # === STAGNANT EXIT (PRO: время по заслугам) ===
-                # Профи не маринуют мёртвые деньги: ни намёка на импульс
-                # (пик <5%) — кат на FAST-минуте; что-то показал — живёт до HOLD.
-                _hold_min = getattr(config, "STAGNANT_HOLD_MIN", 25)
-                _loss_min = (float(getattr(config, "STAGNANT_LOSS_MIN", 15))
+                # Не маринуем мертвые деньги на Solana: ни намёка на импульс за 4-8 мин — кат.
+                _hold_min = float(getattr(config, "STAGNANT_HOLD_MIN", 8.0) or 8.0)
+                _loss_min = (float(getattr(config, "STAGNANT_LOSS_MIN", 6.0) or 6.0)
                              if max_pnl_pct >= 0.05 else
-                             float(getattr(config, "STAGNANT_LOSS_MIN_FAST", 10)))
+                             float(getattr(config, "STAGNANT_LOSS_MIN_FAST", 4.0) or 4.0))
                 if minutes_held >= _loss_min and pnl_pct <= -0.05 and max_pnl_pct < 0.05:
                     # ЖИВОЙ ФЛЕТ НЕ РЕЖЕМ: консолидация 5-15 мин перед выстрелом выглядит
                     # как -2%. Проверяем сделки за 5 мин: есть buys = пул жив, даём +5 мин
@@ -185,10 +197,22 @@ async def position_manager_loop(analyzer, tracker):
                         position.entry_time = time.time() - 2 * 60
                         print(f"⏳ {mint[:8]}: живой флет ({pnl_pct*100:.1f}%), грейс {position.stagnant_graces}/2 — ждём выстрел.")
                         continue
-                    tracker.close_position(mint, current_price, f"Stagnant Loss Cut ({minutes_held:.0f}m, {pnl_pct*100:.1f}%)")
+                    from jupiter import JupiterAPI
+                    _j_ok, _j_why = await JupiterAPI.is_token_sellable(mint)
+                    if not _j_ok:
+                        print(f"🚨 [SOL-STAGNANT-RUG] {position.symbol} ({mint[:8]}): флет-убыток и непродаваем ({_j_why}) — списание в 0.0$ (-100%).")
+                        tracker.close_position(mint, 0.0, f"Stagnant RUG / Unsellable ({_j_why})")
+                    else:
+                        tracker.close_position(mint, current_price, f"Stagnant Loss Cut ({minutes_held:.0f}m, {pnl_pct*100:.1f}%)")
                     continue
                 if minutes_held >= _hold_min and abs(pnl_pct) < 0.05 and max_pnl_pct < 0.05:
-                    tracker.close_position(mint, current_price, f"Stagnant Near Zero ({_hold_min} min flat)")
+                    from jupiter import JupiterAPI
+                    _j_ok, _j_why = await JupiterAPI.is_token_sellable(mint)
+                    if not _j_ok:
+                        print(f"🚨 [SOL-STAGNANT-RUG] {position.symbol} ({mint[:8]}): флет и непродаваем ({_j_why}) — списание в 0.0$ (-100%).")
+                        tracker.close_position(mint, 0.0, f"Stagnant RUG / Unsellable ({_j_why})")
+                    else:
+                        tracker.close_position(mint, current_price, f"Stagnant Near Zero ({_hold_min:.0f} min flat)")
                     continue
                 # Profit lock удален, используется трейлинг-стоп из config.py
                 
@@ -223,19 +247,22 @@ async def position_manager_loop(analyzer, tracker):
                             _sol_v5 = float(((_td_sol.get("volume") or {}).get("m5", 0) or 0))
                             _dex_id = str(_td_sol.get("dexId", "")).lower()
 
-                            # 1. Ликвидность выведена/слита (< $500 на AMM/pumpswap/raydium после 2 минут жизни)
-                            if minutes_held >= 2.0 and _sol_liq < 500 and _dex_id not in ("pump", "pumpfun"):
-                                print(f"🚨 [SOL-DEAD-POOL] {position.symbol} ({mint[:8]}): ликвидность ${_sol_liq:.0f} < $500 — пул высушен/умер, мгновенный выход.")
+                            # 1. Ликвидность выведена/слита (< $800 в любом пуле после 1 минуты)
+                            if minutes_held >= 1.0 and _sol_liq < 800:
+                                print(f"🚨 [SOL-DEAD-POOL] {position.symbol} ({mint[:8]}): ликвидность ${_sol_liq:.0f} < $800 — пул высушен/умер, списание в 0.0$ (-100%).")
                                 tracker.close_position(mint, 0.0, f"SOL Liquidity Drained (${_sol_liq:.0f} liq, pool dead)")
                                 continue
 
                             # 2. Торги замерли: 0 сделок в m5 и объём 0 (застрявшая цена)
-                            if minutes_held >= 3.0 and _sol_txs == 0 and _sol_v5 <= 0.01:
+                            if minutes_held >= 2.5 and _sol_txs == 0 and _sol_v5 <= 0.01:
                                 _z_cyc = int(getattr(position, "zero_vol_cycles", 0) or 0) + 1
                                 position.zero_vol_cycles = _z_cyc
-                                if _z_cyc >= 3:  # ~60-70 сек подтвержденной тишины в пуле
-                                    if pnl_pct > 0.02:
-                                        tracker.close_position(mint, current_price, f"Inactive Pool TP (+{pnl_pct*100:.1f}%, 0 txns in pool)")
+                                if _z_cyc >= 2:  # ~40-50 сек подтвержденной тишины в пуле
+                                    from jupiter import JupiterAPI
+                                    _jup_ok, _jup_why = await JupiterAPI.is_token_sellable(mint)
+                                    if not _jup_ok:
+                                        print(f"🚨 [SOL-DEAD-RUG] {position.symbol} ({mint[:8]}): 0 сделок и непродаваем ({_jup_why}) — списание в 0.0$ (-100%).")
+                                        tracker.close_position(mint, 0.0, f"SOL Dead Pool / Unsellable Rug ({_jup_why})")
                                     else:
                                         tracker.close_position(mint, current_price, f"Dead Pool (0 txns in pool, frozen)")
                                     continue
@@ -394,18 +421,37 @@ async def position_manager_loop(analyzer, tracker):
 
                 # 3.5 ЖЕСТКИЙ Stop Loss из config.py (после 1.5 мин, чтобы пережить стартовый спред)
                 if minutes_held >= 1.5 and pnl_pct <= config.STOP_LOSS_PCT:
-                    tracker.close_position(mint, current_price, f"Hard Stop Loss ({config.STOP_LOSS_PCT*100:.0f}%)")
+                    from jupiter import JupiterAPI
+                    _j_ok, _j_why = await JupiterAPI.is_token_sellable(mint)
+                    if not _j_ok:
+                        print(f"🚨 [SOL-HARD-STOP-RUG] {position.symbol} ({mint[:8]}): слив {pnl_pct*100:.1f}% и токен непродаваем ({_j_why}) — списание в 0.0$ (-100%).")
+                        tracker.close_position(mint, 0.0, f"Hard Stop RUG / Unsellable (-100%)")
+                    else:
+                        tracker.close_position(mint, current_price, f"Hard Stop Loss ({config.STOP_LOSS_PCT*100:.0f}%)")
                     continue
                     
-                # 4. УМНЫЙ ВЫХОД ПО ВРЕМЕНИ (Stagnant / Bleeding cut)
-                # Ждем 30 минут, режем если минус уже больше 5% (чтобы не убивать комиссиями)
-                if minutes_held >= 30 and pnl_pct < -0.05:
-                    tracker.close_position(mint, current_price, f"Dead Coin Cut ({minutes_held:.0f}m, {pnl_pct*100:.1f}%)")
+                # 4. УМНЫЙ ВЫХОД ПО ВРЕМЕНИ (Stagnant / Dead Coin Cut для Solana)
+                # Не маринуем капитал по 25-30 минут! Если за 8 минут монета не стреляет — выходим.
+                _dead_hold = float(getattr(config, "STAGNANT_HOLD_MIN", 8.0) or 8.0)
+                if minutes_held >= _dead_hold and pnl_pct < -0.04:
+                    from jupiter import JupiterAPI
+                    _j_ok, _j_why = await JupiterAPI.is_token_sellable(mint)
+                    if not _j_ok:
+                        print(f"🚨 [SOL-DEAD-RUG] {position.symbol} ({mint[:8]}): 8 мин без пампа и непродаваем ({_j_why}) — списание в 0.0$ (-100%).")
+                        tracker.close_position(mint, 0.0, f"Dead Coin RUG / Unsellable (-100%)")
+                    else:
+                        tracker.close_position(mint, current_price, f"Dead Coin Cut ({minutes_held:.0f}m, {pnl_pct*100:.1f}%)")
                     continue
                     
-                # Если монета болтается около нуля больше 25 минут - выходим, освобождаем капитал
-                if minutes_held >= 25 and pnl_pct < 0.10:
-                    tracker.close_position(mint, current_price, f"Stagnant Cut ({minutes_held:.0f}m, {pnl_pct*100:.1f}%)")
+                # Если монета болтается во флете больше 8 минут - выходим, освобождаем капитал
+                if minutes_held >= _dead_hold and pnl_pct < 0.08:
+                    from jupiter import JupiterAPI
+                    _j_ok, _j_why = await JupiterAPI.is_token_sellable(mint)
+                    if not _j_ok:
+                        print(f"🚨 [SOL-STAGNANT-RUG] {position.symbol} ({mint[:8]}): флет и непродаваем ({_j_why}) — списание в 0.0$ (-100%).")
+                        tracker.close_position(mint, 0.0, f"Stagnant RUG / Unsellable (-100%)")
+                    else:
+                        tracker.close_position(mint, current_price, f"Stagnant Cut ({minutes_held:.0f}m, {pnl_pct*100:.1f}%)")
                     continue
                     
                 # Старый Time Exit (резервный)
@@ -793,13 +839,15 @@ async def scanner_loop(analyzer, tracker):
                                     await asyncio.sleep(1.5)
                                     continue
 
-                                # === GROK BOT x JEV ENGINE: HARD GATE ➔ JEV AI VET ➔ FILLS & RISK ===
+                                # === GROK BOT x JEV ENGINE: АНТИСКАМ-АУДИТ ➔ HARD GATE ➔ JEV AI VET ➔ FILLS & RISK ===
                                 from grok_jev import grok_jev
-                                _h_stats = {
-                                    "top1_pct": getattr(analyzer, "_last_dev", 0.0),
-                                    "top10_pct": getattr(analyzer, "_last_top10", 0.0),
-                                    "dev_pct": getattr(analyzer, "_last_dev", 0.0)
-                                }
+
+                                # 0. ПОЛНЫЙ АНТИСКАМ-АУДИТ ПЕРЕД ВХОДОМ (RUGCHECK + DEV + WHALE + LP + JUPITER + SOCIALS)
+                                _sec_ok, _sec_why, _h_stats = await grok_jev.full_anti_scam_audit(mint, actual_symbol, "solana", pair_data)
+                                if not _sec_ok:
+                                    print(f"🚫 [SCANNER-ANTI-SCAM] {actual_symbol} ({mint[:8]}): {_sec_why} — отказ входа.")
+                                    continue
+
                                 # 1. HARD GATE: "if it fails here, JEV never sees it"
                                 _jev_hard_ok, _jev_hard_why = grok_jev.hard_gate(mint, pair_data, "solana", _h_stats)
                                 if not _jev_hard_ok:
@@ -2059,7 +2107,7 @@ async def async_main():
         growth_loop(analyzer, tracker),  # 🌱 тренды капов, пока нет ракет
         sniper.connect_and_listen(),  # ⚡ IN-MEMORY STREAMING: RAM фильтр (>10 buyers / 20s) + RugCheck/GoPlus аудит
         smart_money_hunter_loop(analyzer, tracker),  # 🐋 Автономный охотник за смарт-кошельками (Solana & Base)
-        grok_bot_jev_loop(tracker),  # 🤖 GROKBOT x JEV: Автономная независимая система (JEV PICKS, GROK TRADES)
+        grok_bot_jev_loop(tracker, analyzer=analyzer),  # 🤖 GROKBOT x JEV: Автономная независимая система (JEV PICKS, GROK TRADES)
         trade_logger.post_trade_watcher_loop(),
         shadow_tracker.price_watcher_loop(),
         rugpull_feeder_loop(),
@@ -2431,7 +2479,7 @@ with tab2:
     except Exception as e:
         st.info("Ожидание данных от сканера...")
 
-# Автообновление интерфейса (по умолчанию выключено, чтобы не мерцал экран)
+# Автообновление интерфейса (по умолчанию выключено, чтобы экран не перезагружался)
 if st.checkbox("Включить автообновление (каждые 5 сек)", value=False):
     time.sleep(5)
     st.rerun()

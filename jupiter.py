@@ -34,33 +34,75 @@ class JupiterAPI:
         return prices.get(mint, 0.0)
 
     @staticmethod
-    async def check_taxes_and_simulate_swap(mint: str, input_amount_sol: float = 0.1) -> dict:
+    async def check_taxes_and_simulate_swap(mint: str, input_amount_sol: float = 0.05) -> dict:
         """
-        Симулирует маршрут через Jupiter. 
-        Если Price Impact аномален для маленькой суммы, значит пул пустой или это Honeypot с Tax-fee.
+        ДВУХСТОРОННЯЯ СИМУЛЯЦИЯ (BUY + SELL):
+        Проверяет, можно ли не только купить, но и ПРОДАТЬ токен обратно в SOL!
+        Защита от Honeypot (кейс RICK/CRACKED: купить можно, продать нельзя -> NO_ROUTES_FOUND).
         """
-        # 1 SOL = 1e9 lamports
         lamports_in = int(input_amount_sol * 1e9)
-        # Jupiter sunset quote-api.jup.ag/v6 -> Swap V1 на api.jup.ag
-        url = f"https://api.jup.ag/swap/v1/quote?inputMint=So11111111111111111111111111111111111111112&outputMint={mint}&amount={lamports_in}&slippageBps=300"
+        sol_mint = "So11111111111111111111111111111111111111112"
+        buy_url = f"https://api.jup.ag/swap/v1/quote?inputMint={sol_mint}&outputMint={mint}&amount={lamports_in}&slippageBps=300"
         
         from http_client import get_session
         session = await get_session()
         try:
-            async with session.get(url, timeout=5) as response:
+            # 1. Симуляция ПОКУПКИ (SOL -> Mint)
+            async with session.get(buy_url, timeout=5) as response:
                 if response.status != 200:
-                    return {"is_safe": False, "reason": "Jupiter routing failed (No liquidity or rug)"}
+                    return {"is_safe": False, "reason": "Jupiter buy routing failed (No liquidity or rug)"}
 
-                data = await response.json()
-                price_impact = float(data.get("priceImpactPct", 100))
+                buy_data = await response.json()
+                buy_impact = float(buy_data.get("priceImpactPct", 100) or 100)
+                if buy_impact > 6.0:
+                    return {"is_safe": False, "reason": f"High buy price impact: {buy_impact:.1f}% (empty pool or tax)"}
 
-                # Если impact > 5% на микрообъеме 0.1 SOL — в пуле нет денег, либо стоит заградительный налог
-                if price_impact > 5.0:
-                    return {"is_safe": False, "reason": f"High price impact: {price_impact}%"}
+                out_tokens = int(buy_data.get("outAmount", 0) or 0)
+                if out_tokens <= 0:
+                    return {"is_safe": False, "reason": "Zero tokens returned from buy quote"}
 
-                return {"is_safe": True, "data": data}
+            # 2. Симуляция ПРОДАЖИ (Mint -> SOL) на 50% полученных токенов
+            sell_amount = max(1, out_tokens // 2)
+            sell_url = f"https://api.jup.ag/swap/v1/quote?inputMint={mint}&outputMint={sol_mint}&amount={sell_amount}&slippageBps=500"
+            async with session.get(sell_url, timeout=5) as sell_resp:
+                if sell_resp.status != 200:
+                    try:
+                        sell_err = await sell_resp.json()
+                        err_code = sell_err.get("errorCode", sell_err.get("error", "NO_ROUTE"))
+                    except Exception:
+                        err_code = "NO_ROUTE"
+                    return {"is_safe": False, "reason": f"HONEYPOT: cannot sell token back to SOL ({err_code})"}
+
+                sell_data = await sell_resp.json()
+                if not sell_data or "outAmount" not in sell_data:
+                    return {"is_safe": False, "reason": "HONEYPOT: invalid sell quote from Jupiter"}
+
+                sell_impact = float(sell_data.get("priceImpactPct", 100) or 100)
+                if sell_impact > 15.0:
+                    return {"is_safe": False, "reason": f"High sell price impact: {sell_impact:.1f}% (liquidity drained)"}
+
+                out_sol_lamports = int(sell_data.get("outAmount", 0) or 0)
+                if out_sol_lamports <= 0:
+                    return {"is_safe": False, "reason": "HONEYPOT: 0 SOL returned when selling token"}
+
+                return {"is_safe": True, "buy_data": buy_data, "sell_data": sell_data}
         except Exception as e:
-             return {"is_safe": False, "reason": f"Error: {e}"}
+            return {"is_safe": False, "reason": f"Simulation error: {e}"}
+
+    @staticmethod
+    async def is_token_sellable(mint: str) -> tuple:
+        """
+        Оперативная проверка для открытой позиции: можно ли прямо сейчас продать токен в SOL.
+        Возвращает (is_sellable: bool, reason: str).
+        Если нельзя -> токен списывается в 0.0$ (-100% PnL, реальный скам/раг).
+        """
+        try:
+            res = await JupiterAPI.check_taxes_and_simulate_swap(mint, input_amount_sol=0.02)
+            if not res.get("is_safe", False):
+                return False, res.get("reason", "Cannot sell token on Jupiter")
+            return True, "OK"
+        except Exception as e:
+            return False, f"Check error: {e}"
 
     @staticmethod
     async def get_swap_transaction(mint: str, is_sell: bool = False, amount_lamports: int = 0, is_emergency: bool = False) -> dict:

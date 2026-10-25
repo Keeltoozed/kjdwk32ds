@@ -168,7 +168,7 @@ class GrokJevEngine:
         vol_h1 = float((pair_data.get("volume") or {}).get("h1", 0) or 0)
 
         is_breakout = (vol_m5 >= 6000.0 and b5 >= 20)
-        min_age = float(getattr(_c, "JEV_EARLY_MIN_AGE_MIN", 2.0)) if (is_pump or is_breakout) else float(getattr(_c, "JEV_MIN_AGE_MIN", 8.0))
+        min_age = float(getattr(_c, "JEV_EARLY_MIN_AGE_MIN", 3.5)) if (is_pump or is_breakout) else float(getattr(_c, "JEV_MIN_AGE_MIN", 8.0))
         if age_min < min_age:
             return False, f"too-young {age_min:.1f}m < {min_age:.1f}m (sniper flush zone)"
 
@@ -531,13 +531,11 @@ class GrokJevEngine:
         sym_lower = symbol.lower()
         soc_matched = any(sym_lower in str(s.get("url", "")).lower() for s in socials)
         if not has_soc:
-            # Если у токена высокий объем торгов ($8k+) — он подтвержден рынком
-            if vol5 >= 8000.0:
-                account_score = 0.85
-            elif liq >= 25000.0:
-                account_score = 0.78
+            # Если соцсетей нет, разрешаем только при глубокой ликвидности ($35k+) и мощном объеме
+            if liq >= 35000.0 and vol5 >= 12000.0:
+                account_score = 0.80
             else:
-                account_score = 0.40
+                account_score = 0.35  # Отказ JEV: анонимный контракт без соцсетей
         elif soc_matched:
             account_score = 0.90
         else:
@@ -617,7 +615,7 @@ class GrokJevEngine:
         except Exception:
             pass
 
-        # 2. DexScreener Latest & Top Boosts & Profiles (Solana & Base)
+        # 2. DexScreener Latest & Top Boosts & Profiles (Строго SOLANA)
         from http_client import fetch_json
         for url in [
             "https://api.dexscreener.com/token-boosts/top/v1",
@@ -630,18 +628,16 @@ class GrokJevEngine:
                     for item in data:
                         ch = str(item.get("chainId", "")).lower()
                         tok = str(item.get("tokenAddress", "")).strip()
-                        if ch in ("solana", "base") and tok and tok not in seen:
+                        if ch == "solana" and tok and tok not in seen:
                             seen.add(tok)
-                            candidates.append((tok, ch))
+                            candidates.append((tok, "solana"))
             except Exception:
                 pass
 
-        # 3. GeckoTerminal Solana & Base (Trending + New Pools)
+        # 3. GeckoTerminal Solana (Trending + New Pools) — 100% фокус на Solana
         for net, endp in [
             ("solana", "trending_pools"),
-            ("solana", "new_pools"),
-            ("base", "trending_pools"),
-            ("base", "new_pools")
+            ("solana", "new_pools")
         ]:
             try:
                 url_gt = f"https://api.geckoterminal.com/api/v2/networks/{net}/{endp}"
@@ -654,7 +650,7 @@ class GrokJevEngine:
                         tok_id = str(base_tok.get("id", "")).replace(f"{net}_", "").strip()
                         if tok_id and tok_id not in seen:
                             seen.add(tok_id)
-                            candidates.append((tok_id, net))
+                            candidates.append((tok_id, "solana"))
             except Exception:
                 pass
 
@@ -680,19 +676,264 @@ class GrokJevEngine:
         return None
 
     # =========================================================================
-    # 6. CONVEYOR: Полный цикл оценки и исполнения
+    # 6. ANTI-SCAM SUITE: Комплексный аудит на все типы скамов
+    # =========================================================================
+    async def full_anti_scam_audit(
+        self,
+        address: str,
+        symbol: str,
+        chain: str,
+        pair_data: dict
+    ) -> Tuple[bool, str, dict]:
+        """
+        Полный бескомпромиссный аудит на все виды скамов перед входом в сделку:
+        1. Запрещенные слова и фейковые бренды
+        2. Аудит соцсетей (защита от анонимных дев-бандлеров)
+        3. On-chain аудит через прямой RPC (Freeze / Mint Authority / Hooks)
+        4. GoPlus Security (Honeypot, blacklist, taxes)
+        5. Полный RugCheck аудит (Score, Danger-риски, Unlocked LP, Dev holding %, Whale %, Top 10 %, Jito Sybil Bundles)
+        6. AI ML Scam Filter (XGBoost)
+        7. Клон-фильтр (is_clone)
+        """
+        _h_stats = {"top1_pct": 0.0, "top10_pct": 0.0, "dev_pct": 0.0}
+        base_info = pair_data.get("baseToken", {}) or {}
+        name = str(base_info.get("name", "")).upper()
+        symbol_upper = symbol.upper().strip()
+
+        # 1. Запрещенные ключевые слова в названии / тикере
+        bad_words = ["test", "scam", "nigger", "fuck", "pump and dump", "rug", "airdrop", "presale", "honeypot", "drain"]
+        if any(w in name.lower() for w in bad_words) or any(w in symbol.lower() for w in bad_words):
+            return False, f"bad-word-scam in name/symbol ({name} / {symbol})", _h_stats
+
+        corporate_scam_keywords = ["AAPL", "S&P", "SP500", "MSFT", "TSLA", "TESLA", "SPACEX", "STARLINK", "XAI", "NEURALINK", "PAYPAL",
+                                  "NVDA", "GOOG", "AMZN", "META", "NFLX", "ANTHROPIC", "OPENAI", "PERPLEXITY"]
+        if any(k == symbol_upper for k in corporate_scam_keywords):
+            return False, f"corporate-brand-mimic {symbol_upper}", _h_stats
+
+        # 2. Аудит соцсетей и анонимности создателя
+        info = pair_data.get("info", {}) or {}
+        socials = info.get("socials", []) or []
+        websites = info.get("websites", []) or []
+        has_twitter = any("twitter" in s.get("type", "").lower() or "x.com" in s.get("url", "").lower() for s in socials)
+        has_tg = any("telegram" in s.get("type", "").lower() or "t.me" in s.get("url", "").lower() for s in socials)
+        has_website = len(websites) > 0
+        has_socials = bool(has_twitter or has_tg or has_website)
+
+        raw_liq = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
+        fdv = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
+        dex_id = str(pair_data.get("dexId", "")).lower()
+        is_pump = dex_id in ("pump", "pumpfun")
+        eff_liq = max(raw_liq, fdv * 0.40) if is_pump else raw_liq
+
+        # Анонимные токены без соцсетей при пуле < $35k — это 100% скам-бандлер (кейс ONLYTITTY)
+        if not has_socials and eff_liq < 35000.0:
+            return False, f"no-socials-anon-rug (0 socials with <$35k liq — 100% anon dev dump)", _h_stats
+
+        # 3. Аудит для сети SOLANA
+        if chain == "solana":
+            import goplus as _gp
+
+            # А) Мгновенный ончейн-аудит через RPC
+            onchain_ok, onchain_why = await _gp.check_onchain_solana_security(address)
+            if not onchain_ok:
+                return False, f"onchain-sol-reject {onchain_why}", _h_stats
+
+            # Б) GoPlus Security
+            sec_ok, sec_why = await _gp.check_solana(address)
+            if not sec_ok:
+                return False, f"goplus-sol-reject {sec_why}", _h_stats
+
+            # В) Полный отчет RugCheck API
+            try:
+                from http_client import fetch_json
+                rc_url = f"https://api.rugcheck.xyz/v1/tokens/{address}/report"
+                rc_status, rc_data = await fetch_json(rc_url, timeout=5, retries=1)
+                if rc_status == 200 and isinstance(rc_data, dict):
+                    token_info = rc_data.get("token", {}) or {}
+                    mint_auth = token_info.get("mintAuthority")
+                    freeze_auth = token_info.get("freezeAuthority")
+
+                    PUMPFUN_PROGRAM = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"
+                    SYSTEM_PROGRAM = "11111111111111111111111111111111"
+                    SAFE_AUTHORITIES = {PUMPFUN_PROGRAM, SYSTEM_PROGRAM, None, ""}
+
+                    if mint_auth and mint_auth not in SAFE_AUTHORITIES:
+                        return False, f"rugcheck: mint authority active ({mint_auth[:8]})", _h_stats
+                    if freeze_auth and freeze_auth not in SAFE_AUTHORITIES:
+                        return False, f"rugcheck: freeze authority active ({freeze_auth[:8]})", _h_stats
+
+                    # Очищенный score RugCheck
+                    raw_score = float(rc_data.get("score") or 0.0)
+                    low_liq_penalty = sum(
+                        float(rk.get("score", 0) or 0)
+                        for rk in (rc_data.get("risks") or [])
+                        if "low liquidity" in str(rk.get("name", "")).lower()
+                    )
+                    clean_score = max(0.0, raw_score - low_liq_penalty)
+                    if clean_score >= 600:
+                        return False, f"rugcheck: high risk score {clean_score:.0f} >= 600", _h_stats
+
+                    # Проверка критических рисков
+                    for rk in (rc_data.get("risks") or []):
+                        rk_name = str(rk.get("name") or "").lower()
+                        rk_lvl = str(rk.get("level") or "").lower()
+                        if "low liquidity" in rk_name:
+                            continue
+                        if rk_lvl == "danger":
+                            return False, f"rugcheck: critical danger risk '{rk.get('name')}'", _h_stats
+                        if "unlocked" in rk_name and "lp" in rk_name:
+                            return False, f"rugcheck: unlocked LP risk", _h_stats
+
+                    # Проверка пулов и блокировки LP для не-pump токенов
+                    target_pair = str(pair_data.get("pairAddress") or "").strip()
+                    has_verified_locked_lp = False
+                    for mkt in (rc_data.get("markets") or []):
+                        if isinstance(mkt, dict):
+                            mkt_pubkey = str(mkt.get("pubkey") or "").strip()
+                            lp_info = mkt.get("lp") or {}
+                            if isinstance(lp_info, dict):
+                                mkt_quote_usd = float(lp_info.get("quoteUSD") or 0.0)
+                                lp_unlocked = float(lp_info.get("lpUnlocked") or 0.0)
+                                lp_locked_pct = float(lp_info.get("lpLockedPct") or 0.0)
+                                if lp_locked_pct >= 80.0 and (mkt_quote_usd >= 2000 or (target_pair and mkt_pubkey == target_pair)):
+                                    has_verified_locked_lp = True
+                                if (target_pair and mkt_pubkey == target_pair) or mkt_quote_usd >= 2000:
+                                    if lp_unlocked > 0 and lp_locked_pct < 80.0:
+                                        return False, f"rugcheck: LP not locked ({lp_locked_pct:.1f}%)", _h_stats
+                    if not address.endswith("pump") and not has_verified_locked_lp:
+                        return False, "rugcheck: non-pump token without verified locked LP", _h_stats
+
+                    # Проверка держателей и дева (Holders & Sybil analysis)
+                    holders = rc_data.get("topHolders", []) or []
+                    pool_accounts = set()
+                    if pair_data.get("pairAddress"):
+                        pool_accounts.add(pair_data["pairAddress"])
+                    for p in (pair_data.get("pairs") or []):
+                        if isinstance(p, dict) and p.get("pairAddress"):
+                            pool_accounts.add(p["pairAddress"])
+                    for k_acc, v_acc in (rc_data.get("knownAccounts") or {}).items():
+                        if isinstance(v_acc, dict) and v_acc.get("type") in ("AMM", "LOCKER"):
+                            pool_accounts.add(k_acc)
+                    for mkt in (rc_data.get("markets") or []):
+                        if isinstance(mkt, dict):
+                            for m_field in ("pubkey", "liquidityA", "liquidityB"):
+                                if mkt.get(m_field):
+                                    pool_accounts.add(mkt[m_field])
+
+                    pool_keywords = ("raydium", "meteora", "pump", "orca", "pool", "vault", "locker", "amm", "pumpswap")
+                    real_creator = rc_data.get("creator") or ""
+                    dev_pct = 0.0
+                    if real_creator:
+                        for h in holders:
+                            if h.get("owner") == real_creator or h.get("address") == real_creator:
+                                dev_pct = float(h.get("pct", 0) or 0.0)
+                                break
+
+                    non_curve = []
+                    for h in holders:
+                        pct = float(h.get("pct", 0) or 0.0)
+                        amt = float(h.get("uiAmount", 0) or 0.0)
+                        owner = str(h.get("owner") or "")
+                        addr = str(h.get("address") or "")
+                        if owner in pool_accounts or addr in pool_accounts or owner == "5Q544fKrFoe6tsEbD7S8EmxGTJYAKtTVhAW5Q5pge4j1":
+                            continue
+                        if any(w in owner.lower() for w in pool_keywords):
+                            continue
+                        if pct > 80.0:
+                            continue
+                        non_curve.append((amt, pct, owner))
+
+                    top_10 = non_curve[:10]
+                    # Jito-бандл (Сивил-атака дева: 4+ кошельков с одинаковым %)
+                    bundle_suspects = [round(pct, 1) for (amt, pct, owner) in top_10 if pct >= 2.5]
+                    if len(bundle_suspects) >= 4:
+                        from collections import Counter
+                        counts = Counter(bundle_suspects)
+                        most_common_pct, count = counts.most_common(1)[0]
+                        if count >= 4 and most_common_pct >= 2.5 and (most_common_pct * count) >= 12.0:
+                            return False, f"jito-bundle sybil attack ({count} wallets with ~{most_common_pct:.1f}%)", _h_stats
+
+                    top_10_sum = sum(x[1] for x in top_10)
+                    largest_whale = top_10[0][1] if top_10 else 0.0
+                    if not real_creator and top_10:
+                        dev_pct = largest_whale
+
+                    _h_stats["top10_pct"] = top_10_sum
+                    _h_stats["dev_pct"] = dev_pct
+                    _h_stats["top1_pct"] = largest_whale
+
+                    if dev_pct > 10.0:
+                        return False, f"dev still loaded {dev_pct:.1f}% > 10.0% (dump risk)", _h_stats
+                    if largest_whale > 15.0:
+                        return False, f"whale concentration {largest_whale:.1f}% > 15.0%", _h_stats
+                    max_top10 = 30.0 if is_pump else 35.0
+                    if top_10_sum > max_top10:
+                        return False, f"top 10 concentration {top_10_sum:.1f}% > {max_top10:.0f}%", _h_stats
+
+            except Exception as e:
+                # Фоллбэк: если RugCheck недоступен, проверяем GoPlus holder stats
+                _h_raw = _gp.get_solana_holder_stats(address)
+                if _h_raw and _h_raw.get("has_data"):
+                    _h_stats["top10_pct"] = float(_h_raw.get("top_10_pct", 0.0) or 0.0)
+                    _h_stats["dev_pct"] = float(_h_raw.get("dev_pct", 0.0) or 0.0)
+                    _h_stats["top1_pct"] = _h_stats["dev_pct"]
+                    if _h_stats["dev_pct"] > 10.0:
+                        return False, f"dev loaded (GoPlus) {_h_stats['dev_pct']:.1f}% > 10%", _h_stats
+                    if _h_stats["top10_pct"] > 35.0:
+                        return False, f"top10 concentration (GoPlus) {_h_stats['top10_pct']:.1f}% > 35%", _h_stats
+
+            # Г) Двухсторонняя симуляция (BUY + SELL) через Jupiter
+            # Защита от Honeypot (кейс RICK / CRACKED: купить можно, продать нельзя -> 100% скам)
+            try:
+                from jupiter import JupiterAPI
+                jup_sim = await JupiterAPI.check_taxes_and_simulate_swap(address, input_amount_sol=0.05)
+                if not jup_sim.get("is_safe", False):
+                    # Если это AMM/Raydium/DEX или явный Honeypot от Jupiter — блокируем наглухо
+                    reason = jup_sim.get("reason", "no route / unsellable / honeypot")
+                    if dex_id not in ("pump", "pumpfun") or "HONEYPOT" in reason.upper() or "NO_ROUTE" in reason.upper():
+                        return False, f"jupiter-routing-failed ({reason})", _h_stats
+            except Exception:
+                pass
+
+        # 4. Аудит для других сетей (отключены)
+        elif chain != "solana":
+            return False, f"chain-disabled ({chain} отключен, 100% фокус на Solana)", _h_stats
+
+        # 5. Клон-фильтр (is_clone) из analyzer
+        try:
+            if hasattr(self, "analyzer") and self.analyzer:
+                created_at = pair_data.get("pairCreatedAt") or 0
+                tx5 = (pair_data.get("txns") or {}).get("m5", {}) or {}
+                b5 = int(tx5.get("buys", 0) or 0)
+                s5 = int(tx5.get("sells", 0) or 0)
+                vol5 = float((pair_data.get("volume") or {}).get("m5", 0) or 0)
+                is_org = (vol5 >= 3000.0 and b5 >= 20 and b5 >= s5 * 1.10)
+                if not is_org:
+                    is_cl = await self.analyzer.is_clone(symbol, address, created_at, fdv, current_liq=raw_liq, current_vol5=vol5, current_b5=b5)
+                    if is_cl:
+                        return False, f"clone-scam of an older/larger token", _h_stats
+        except Exception:
+            pass
+
+        return True, "PASSED_ALL_SCAM_CHECKS", _h_stats
+
+    # =========================================================================
+    # 7. CONVEYOR: Полный цикл оценки и исполнения
     # =========================================================================
     async def process_candidate(self, address: str, chain: str, tracker) -> Tuple[bool, str]:
         """
         Полный конвейер GROKBOT x JEV для одного токена:
-        1. HARD GATE (thresholds.py)
-        2. VET (JEV AI Gate: Groq / xAI / Gemini)
-        3. FILLS ("We bid the flush, not the candle")
-        4. RISK ("The stop lives under the wick")
-        5. CHIEF / GROK TRADES (Исполнение сделки)
+        1. ПОЛНЫЙ АНТИСКАМ-АУДИТ (RugCheck, GoPlus, Dev/Whale concentration, Jito Sybil, Socials, Clone)
+        2. HARD GATE (Математические пороги ликвидности, возраста, импульса)
+        3. VET (JEV AI Gate: Groq / xAI / Gemini)
+        4. FILLS ("We bid the flush, not the candle")
+        5. RISK ("The stop lives under the wick")
+        6. CHIEF / GROK TRADES (Исполнение сделки)
         """
         import config as _c
 
+        if chain != "solana":
+            return False, "non-solana-chain-disabled"
         if not address or address in tracker.positions:
             return False, "already-held"
         if len(tracker.get_open_positions()) >= getattr(_c, "MAX_CONCURRENT_POSITIONS", 10):
@@ -709,29 +950,11 @@ class GrokJevEngine:
         if price <= 0:
             return False, "invalid-price"
 
-        # 2. Проверка безопасности (On-Chain Guard)
-        import goplus as _gp
-        _h_stats = {"top1_pct": 0.0, "top10_pct": 0.0, "dev_pct": 0.0}
-        if chain == "solana":
-            onchain_ok, onchain_why = await _gp.check_onchain_solana_security(address)
-            if not onchain_ok:
-                return False, f"onchain-sol-reject {onchain_why}"
-            sec_ok, sec_why = await _gp.check_solana(address)
-            if not sec_ok:
-                return False, f"sec-sol-reject {sec_why}"
-            _h_raw = _gp.get_solana_holder_stats(address)
-            if _h_raw and _h_raw.get("has_data"):
-                _h_stats["top10_pct"] = float(_h_raw.get("top_10_pct", 0.0) or 0.0)
-                _h_stats["dev_pct"] = float(_h_raw.get("dev_pct", 0.0) or 0.0)
-                _h_stats["top1_pct"] = _h_stats["dev_pct"]
-        elif chain == "base":
-            onchain_ok, onchain_why = await _gp.check_onchain_evm_security(address, "base", pair_data=pair)
-            if not onchain_ok:
-                return False, f"onchain-evm-reject {onchain_why}"
-            gp_ok, gp_why = await _gp.check_token(address, "base", pair_data=pair)
-            if not gp_ok:
-                print(f"🚫 [GROK+JEV] {symbol} (base): GoPlus honeypot/tax reject ➔ {gp_why}")
-                return False, f"goplus-reject {gp_why}"
+        # 2. ПОЛНЫЙ АНТИСКАМ-АУДИТ (RUGCHECK + GOPLUS + ONCHAIN + DEV/WHALES + JITO-BUNDLE + SOCIALS + CLONE)
+        sec_ok, sec_why, _h_stats = await self.full_anti_scam_audit(address, symbol, chain, pair)
+        if not sec_ok:
+            print(f"🚫 [GROK+JEV-SCAM] {symbol} ({chain}): {sec_why}")
+            return False, f"anti-scam-reject {sec_why}"
 
         # 3. HARD GATE ("if it fails here, JEV never sees it")
         hard_ok, hard_why = self.hard_gate(address, pair, chain, _h_stats)
@@ -809,13 +1032,15 @@ class GrokJevEngine:
 grok_jev = GrokJevEngine()
 
 
-async def grok_bot_jev_loop(tracker):
+async def grok_bot_jev_loop(tracker, analyzer=None):
     """
     Автономный торговый конвейер GROKBOT + JEV (JEV PICKS, GROK TRADES).
     Работает полностью независимо от других сканеров.
-    Фокусируется строго на сетях Solana и Base.
+    Фокусируется строго на сети Solana (100% SOLANA ONLY).
     """
-    print("🤖 [GROKBOT x JEV] Автономный торговый движок запущен (Solana + Base, JEV PICKS, GROK TRADES)!")
+    if analyzer:
+        grok_jev.analyzer = analyzer
+    print("🤖 [GROKBOT x JEV] Автономный торговый движок запущен (100% SOLANA ONLY, JEV PICKS, GROK TRADES)!")
     last_funnel_print = 0.0
     evaluated_cooldown = {}
 

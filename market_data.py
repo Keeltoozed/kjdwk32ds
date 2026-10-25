@@ -464,10 +464,20 @@ async def _ds_bulk_prices(mints: list) -> dict:
     _mset = set(mints)
     for i in range(0, len(mints), 30):
         chunk = mints[i:i + 30]
-        status, data = await fetch_json(f"https://api.dexscreener.com/latest/dex/tokens/{','.join(chunk)}", timeout=10)
-        if status != 200 or not isinstance(data, dict):
+        # Сначала пробуем сверхбыстрый прямой endpoint tokens/v1/solana
+        pairs = []
+        try:
+            status, data = await fetch_json(f"https://api.dexscreener.com/tokens/v1/solana/{','.join(chunk)}", timeout=4)
+            if status == 200 and isinstance(data, list):
+                pairs = data
+        except Exception:
+            pairs = []
+        if not pairs:
+            status, data = await fetch_json(f"https://api.dexscreener.com/latest/dex/tokens/{','.join(chunk)}", timeout=6)
+            if status == 200 and isinstance(data, dict):
+                pairs = data.get("pairs") or []
+        if not pairs:
             continue
-        pairs = data.get("pairs") or []
         for p in pairs:
             if p.get("chainId") == "solana":
                 addr = (p.get("baseToken") or {}).get("address", "")
