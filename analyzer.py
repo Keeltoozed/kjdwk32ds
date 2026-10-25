@@ -1218,7 +1218,7 @@ class Analyzer:
             if _created and not _socials_unknown:
                 _age_h = (time.time() * 1000 - _created) / 3.6e6
                 # Для pump.fun токенов socials хостятся на pump.fun, DexScreener не всегда индексирует их в первые минуты
-                _is_organic_flow = (_b5 >= 25 and _b5 >= _s5 and _vm5 >= 3000.0)
+                _is_organic_flow = (_b5 >= 25 and _b5 >= _s5 and _vm5_pre >= 3000.0)
                 if not mint.endswith("pump") and not _is_organic_flow and _age_h < 6 and isinstance(_socials, list) and len(_socials) == 0 and len(_websites) == 0 and not _lottery and _cur_liq < 35000:
                     return self._deny(mint, "no-socials", f"🚫 [SOCIAL] {mint}: 0 соцсетей/сайта при возрасте {_age_h:.1f}ч и ликве ${_cur_liq:,.0f} (<$35k) — анонимный бандлер-раг.")
             print(f"✅ [ENTRY-CANDIDATE] {mint}: PULLBACK — импульс m5 {_m5:+.1f}%, откат m1 {_m1:+.1f}%, h1 {_h1:+.0f}%, b/s {_b}/{_s}. Кандидат на вход.")

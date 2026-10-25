@@ -75,26 +75,32 @@ class GrokJevEngine:
     """Движок конвейера фильтрации Grok Bot x JEV."""
 
     def __init__(self):
-        self._load_config()
+        pass
 
-    def _load_config(self):
+    @property
+    def groq_key(self) -> str:
         import config as _c
-        self.groq_key = (
+        return (
             os.getenv("GROQ_API_KEY") or
             getattr(_c, "GROQ_API_KEY", "") or
             os.getenv("GROK_API_KEY") or
-            os.getenv("XAI_API_KEY") or
             ""
         ).strip().strip('"').strip("'")
-        
-        self.xai_key = (
+
+    @property
+    def xai_key(self) -> str:
+        import config as _c
+        return (
             os.getenv("XAI_API_KEY") or
             os.getenv("GROK_API_KEY") or
             getattr(_c, "XAI_API_KEY", "") or
             ""
         ).strip().strip('"').strip("'")
-        
-        self.gemini_key = (
+
+    @property
+    def gemini_key(self) -> str:
+        import config as _c
+        return (
             os.getenv("GEMINI_API_KEY") or
             getattr(_c, "GEMINI_API_KEY", "") or
             ""
@@ -178,8 +184,14 @@ class GrokJevEngine:
         if holder_stats and isinstance(holder_stats, dict):
             top1_pct = float(holder_stats.get("top1_pct", 0.0) or 0.0)
             top10_pct = float(holder_stats.get("top10_pct", 0.0) or 0.0)
-            max_top1 = 0.08 if is_pump else float(getattr(_c, "JEV_MAX_TOP_WALLET", 0.05)) * 100.0
-            max_top10 = 0.32 if is_pump else float(getattr(_c, "JEV_MAX_TOP_10", 0.25)) * 100.0
+            # Нормализация: если передано в долях единицы (0.05 вместо 5.0), переводим в проценты
+            if 0 < top1_pct <= 1.0:
+                top1_pct *= 100.0
+            if 0 < top10_pct <= 1.0:
+                top10_pct *= 100.0
+
+            max_top1 = 8.0 if is_pump else float(getattr(_c, "JEV_MAX_TOP_WALLET", 0.05)) * 100.0
+            max_top10 = 32.0 if is_pump else float(getattr(_c, "JEV_MAX_TOP_10", 0.25)) * 100.0
             
             if top1_pct > max_top1:
                 return False, f"top-wallet-high {top1_pct:.1f}% > {max_top1:.1f}% (exit risk)"
@@ -417,12 +429,21 @@ class GrokJevEngine:
                 "temperature": 0.1,
                 "max_tokens": 250
             }
-            st, data = await fetch_json(url, method="POST", headers=headers, json_data=payload, timeout=4, retries=0)
+            st, data = await fetch_json(url, method="POST", headers=headers, json_payload=payload, timeout=4, retries=0)
             if st == 200 and isinstance(data, dict):
                 content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
                 parsed = json.loads(content)
                 parsed["source"] = "groq-llama-3.3"
                 return parsed
+            elif st == 429:
+                # Быстрый фоллбэк на более легкую модель 8b с отдельным лимитом
+                payload["model"] = "llama-3.1-8b-instant"
+                st8, data8 = await fetch_json(url, method="POST", headers=headers, json_payload=payload, timeout=3, retries=0)
+                if st8 == 200 and isinstance(data8, dict):
+                    content = data8.get("choices", [{}])[0].get("message", {}).get("content", "")
+                    parsed = json.loads(content)
+                    parsed["source"] = "groq-llama-3.1-8b"
+                    return parsed
 
         # 2. Попытка через xAI Grok
         if self.xai_key:
@@ -440,7 +461,7 @@ class GrokJevEngine:
                 "temperature": 0.1,
                 "max_tokens": 250
             }
-            st, data = await fetch_json(url, method="POST", headers=headers, json_data=payload, timeout=4, retries=0)
+            st, data = await fetch_json(url, method="POST", headers=headers, json_payload=payload, timeout=4, retries=0)
             if st == 200 and isinstance(data, dict):
                 content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
                 parsed = json.loads(content)
@@ -505,6 +526,256 @@ class GrokJevEngine:
             "reason": f"Algorithmic JEV verification (Liq ${liq:,.0f}, Vol5 ${vol5:,.0f}, Top1 {top1_pct:.1f}%)"
         }
 
+    # =========================================================================
+    # 5. CRAWLER: Автономный поиск кандидатов (Solana + Base)
+    # =========================================================================
+    async def crawl_universe(self) -> list:
+        """
+        CRAWLER: Автономный сбор токенов-кандидатов с Solana и Base.
+        Источники:
+        1. Solana: Jupiter trending & recent, DexScreener boosts & profiles
+        2. Base: GeckoTerminal Base trending pools, DexScreener Base boosts
+        """
+        candidates = []
+        seen = set()
+
+        # 1. Solana: Jupiter Discovery
+        try:
+            from jup_discovery import fetch_jup_tokens
+            jup_mints = await fetch_jup_tokens()
+            for m in (jup_mints or [])[:50]:
+                if m and m not in seen:
+                    seen.add(m)
+                    candidates.append((m, "solana"))
+        except Exception:
+            pass
+
+        # 2. DexScreener Latest Boosts & Profiles (Solana & Base)
+        from http_client import fetch_json
+        for url in [
+            "https://api.dexscreener.com/token-boosts/latest/v1",
+            "https://api.dexscreener.com/token-profiles/latest/v1"
+        ]:
+            try:
+                st, data = await fetch_json(url, timeout=5, retries=0)
+                if st == 200 and isinstance(data, list):
+                    for item in data:
+                        ch = str(item.get("chainId", "")).lower()
+                        tok = str(item.get("tokenAddress", "")).strip()
+                        if ch in ("solana", "base") and tok and tok not in seen:
+                            seen.add(tok)
+                            candidates.append((tok, ch))
+            except Exception:
+                pass
+
+        # 3. Base: GeckoTerminal Trending Pools
+        try:
+            url_base = "https://api.geckoterminal.com/api/v2/networks/base/trending_pools"
+            st_b, data_b = await fetch_json(url_base, headers={"Accept": "application/json"}, timeout=6, retries=0)
+            if st_b == 200 and isinstance(data_b, dict):
+                pools = data_b.get("data", []) or []
+                for p in pools[:25]:
+                    rel = p.get("relationships", {}) or {}
+                    base_tok = (rel.get("base_token", {}) or {}).get("data", {}) or {}
+                    tok_id = str(base_tok.get("id", "")).replace("base_", "").strip()
+                    if tok_id and tok_id.startswith("0x") and tok_id not in seen:
+                        seen.add(tok_id)
+                        candidates.append((tok_id, "base"))
+        except Exception:
+            pass
+
+        FUNNEL_STATS["universe"] += len(candidates)
+        return candidates
+
+    async def fetch_pair(self, address: str, chain: str) -> Optional[dict]:
+        """Прямой запрос рыночных данных пары из DexScreener без сторонних фильтров."""
+        from http_client import fetch_json
+        url = f"https://api.dexscreener.com/latest/dex/tokens/{address}"
+        try:
+            st, data = await fetch_json(url, timeout=6, retries=1)
+            if st == 200 and isinstance(data, dict):
+                pairs = data.get("pairs") or []
+                if not pairs:
+                    return None
+                matching = [p for p in pairs if str(p.get("chainId", "")).lower() == chain.lower()]
+                target = matching if matching else pairs
+                best = max(target, key=lambda p: float((p.get("liquidity") or {}).get("usd", 0) or 0))
+                return best
+        except Exception:
+            pass
+        return None
+
+    # =========================================================================
+    # 6. CONVEYOR: Полный цикл оценки и исполнения
+    # =========================================================================
+    async def process_candidate(self, address: str, chain: str, tracker) -> bool:
+        """
+        Полный конвейер GROKBOT x JEV для одного токена:
+        1. HARD GATE (thresholds.py)
+        2. VET (JEV AI Gate: Groq / xAI / Gemini)
+        3. FILLS ("We bid the flush, not the candle")
+        4. RISK ("The stop lives under the wick")
+        5. CHIEF / GROK TRADES (Исполнение сделки)
+        """
+        import config as _c
+
+        if not address or address in tracker.positions:
+            return False
+        if len(tracker.get_open_positions()) >= getattr(_c, "MAX_CONCURRENT_POSITIONS", 10):
+            return False
+
+        # 1. Получаем рыночные данные
+        pair = await self.fetch_pair(address, chain)
+        if not pair:
+            return False
+
+        base_info = pair.get("baseToken", {}) or {}
+        symbol = str(base_info.get("symbol", address[:6])).upper().strip()
+        price = float(pair.get("priceUsd", 0) or 0.0)
+        if price <= 0:
+            return False
+
+        # 2. Проверка безопасности (On-Chain Guard)
+        import goplus as _gp
+        _h_stats = {"top1_pct": 0.0, "top10_pct": 0.0, "dev_pct": 0.0}
+        if chain == "solana":
+            onchain_ok, onchain_why = await _gp.check_onchain_solana_security(address)
+            if not onchain_ok:
+                return False
+            sec_ok, sec_why = await _gp.check_solana(address)
+            if not sec_ok:
+                return False
+            _h_raw = _gp.get_solana_holder_stats(address)
+            if _h_raw and _h_raw.get("has_data"):
+                _h_stats["top10_pct"] = float(_h_raw.get("top_10_pct", 0.0) or 0.0)
+                _h_stats["dev_pct"] = float(_h_raw.get("dev_pct", 0.0) or 0.0)
+                _h_stats["top1_pct"] = _h_stats["dev_pct"]
+        elif chain == "base":
+            onchain_ok, onchain_why = await _gp.check_onchain_evm_security(address, "base", pair_data=pair)
+            if not onchain_ok:
+                return False
+
+        # 3. HARD GATE ("if it fails here, JEV never sees it")
+        hard_ok, hard_why = self.hard_gate(address, pair, chain, _h_stats)
+        if not hard_ok:
+            return False
+
+        # 4. VET (SOFT GATE: JEV AI Evaluation)
+        soft_ok, jev_data, soft_why = await self.jev_vet(address, symbol, pair, chain, _h_stats)
+        if not soft_ok:
+            print(f"🚫 [GROK+JEV] {symbol} ({chain}): JEV soft-reject ➔ {soft_why}")
+            return False
+
+        # 5. FILLS & RISK ("We bid the flush, not the candle" & "The stop lives under the wick")
+        flush_ok, wick_pct, wick_price, flush_msg = self.check_flush_and_wick(pair, price)
+        if not flush_ok:
+            print(f"⏳ [GROK+JEV] {symbol} ({chain}): FILLS ➔ {flush_msg}")
+            return False
+
+        # 6. CHIEF / GROK TRADES: Исполнение ордера
+        if len(tracker.get_open_positions()) >= getattr(_c, "MAX_CONCURRENT_POSITIONS", 10):
+            return False
+
+        # Расчет размера билета (Dynamic Sizing $15 - $25)
+        ticket_size = float(getattr(_c, "BASE_TRADE_AMOUNT_USD", 15.0) or 15.0)
+        if getattr(_c, "DYNAMIC_REINVEST_ENABLED", True):
+            try:
+                ticket_size = tracker.calculate_dynamic_position_size(pair, chain=chain)
+            except Exception:
+                pass
+        ticket_size = max(10.0, min(float(getattr(_c, "MAX_POSITION_SIZE_USD", 25.0)), ticket_size))
+
+        tracker.add_position(
+            symbol=symbol,
+            mint=address,
+            entry_price=price,
+            amount_usd=ticket_size,
+            is_mature=True,
+            source="GROK-JEV",
+            chain=chain,
+            pair_address=pair.get("pairAddress", ""),
+            stop_under_wick=wick_price,
+            wick_stop_loss_pct=wick_pct
+        )
+
+        FUNNEL_STATS["filled"] += 1
+
+        # Форматированный визуальный лог в стиле дашборда автора
+        pc = pair.get("priceChange", {}) or {}
+        m1 = float(pc.get("m1", 0) or 0)
+        m5 = float(pc.get("m5", 0) or 0)
+        h1 = float(pc.get("h1", 0) or 0)
+        liq = float((pair.get("liquidity") or {}).get("usd", 0) or 0)
+        mcap = float(pair.get("fdv", 0) or pair.get("marketCap", 0) or 0)
+        acc_s = float(jev_data.get("account_is_the_project", 0.0) or 0.0)
+        mom_s = float(jev_data.get("momentum_already_spent", 0.0) or 0.0)
+        conc_s = float(jev_data.get("concentration_is_exit_risk", 0.0) or 0.0)
+        provider = jev_data.get("source", "groq")
+
+        print(f"\n"
+              f"╔═══════════════════════════════════════════════════════════════════════════╗\n"
+              f"║ 🤖 GROKBOT + JEV ➔ TRADE EXECUTED (JEV PICKS, GROK TRADES)               ║\n"
+              f"╠═══════════════════════════════════════════════════════════════════════════╣\n"
+              f"║ Token:     ${symbol:<10} [{chain.upper()}] {address[:16]}...                 ║\n"
+              f"║ Price:     ${price:<15.8f} Ticket: ${ticket_size:<6.2f} (Bank Sized)           ║\n"
+              f"║ Risk/SL:   ${wick_price:<15.8f} Stop Under Wick ({wick_pct*100:+.1f}%)               ║\n"
+              f"║ Fills:     Bid the flush: m1 {m1:+.1f}%, m5 {m5:+.1f}%, h1 {h1:+.0f}%                    ║\n"
+              f"║ Depth:     Liq: ${liq:,.0f} | MCap: ${mcap:,.0f}                                ║\n"
+              f"║ JEV AI:    Acc:{acc_s:.2f} | Mom:{mom_s:.2f} | Conc:{conc_s:.2f} [{provider}] ➔ PASS     ║\n"
+              f"╚═══════════════════════════════════════════════════════════════════════════╝\n")
+        print(get_funnel_summary())
+        return True
+
 
 # Глобальный инстанс
 grok_jev = GrokJevEngine()
+
+
+async def grok_bot_jev_loop(tracker):
+    """
+    Автономный торговый конвейер GROKBOT + JEV (JEV PICKS, GROK TRADES).
+    Работает полностью независимо от других сканеров.
+    Фокусируется строго на сетях Solana и Base.
+    """
+    print("🤖 [GROKBOT x JEV] Автономный торговый движок запущен (Solana + Base, JEV PICKS, GROK TRADES)!")
+    last_funnel_print = 0.0
+    evaluated_cooldown = {}
+
+    while True:
+        try:
+            await asyncio.sleep(15.0)
+            now = time.time()
+
+            # Периодический отчет воронки THE FUNNEL (раз в 60 сек)
+            if now - last_funnel_print >= 60.0:
+                print(get_funnel_summary())
+                last_funnel_print = now
+
+            # Очистка кулдауна отработанных монет раз в 15 минут
+            if len(evaluated_cooldown) > 2000:
+                evaluated_cooldown = {k: ts for k, ts in evaluated_cooldown.items() if now - ts < 900.0}
+
+            # 1. CRAWLER: Сбор кандидатов (Solana + Base)
+            candidates = await grok_jev.crawl_universe()
+            if not candidates:
+                continue
+
+            for address, chain in candidates:
+                if not address or address in tracker.positions:
+                    continue
+                # Кулдаун: не спамить проверками отвергнутый токен 10 минут
+                if (address, chain) in evaluated_cooldown:
+                    if now - evaluated_cooldown[(address, chain)] < 600.0:
+                        continue
+
+                evaluated_cooldown[(address, chain)] = now
+
+                # 2. Обработка через независимый конвейер
+                try:
+                    await grok_jev.process_candidate(address, chain, tracker)
+                except Exception as e:
+                    print(f"⚠️ [GROKBOT+JEV] Ошибка обработки {address[:8]} ({chain}): {e}")
+
+        except Exception as e:
+            print(f"⚠️ [GROKBOT+JEV] Ошибка в цикле grok_bot_jev_loop: {e}")
+            await asyncio.sleep(10.0)

@@ -311,6 +311,33 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
         analyzer._deny(mint, f"jup-veto: {_veto[:20]}", f"🚫 [{source_tag}-VETO] {_sym_tmp} ({mint[:8]}): {_veto}")
         return False
 
+    # === GROK BOT x JEV ENGINE: HARD GATE ➔ JEV AI VET ➔ FILLS & RISK ===
+    from grok_jev import grok_jev
+    _h_stats = {
+        "top1_pct": getattr(analyzer, "_last_dev", 0.0),
+        "top10_pct": getattr(analyzer, "_last_top10", 0.0),
+        "dev_pct": getattr(analyzer, "_last_dev", 0.0)
+    }
+    # 1. HARD GATE: "if it fails here, JEV never sees it"
+    _jev_hard_ok, _jev_hard_why = grok_jev.hard_gate(mint, td or {}, "solana", _h_stats)
+    if not _jev_hard_ok:
+        print(f"🚫 [JEV-HARD-GATE] {_sym_tmp} ({mint[:8]}): {_jev_hard_why} — отказ входа.")
+        return False
+
+    # 2. SOFT GATE: JEV AI Evaluation (Groq / xAI / Gemini / Local)
+    _jev_soft_ok, _jev_data, _jev_soft_why = await grok_jev.jev_vet(mint, _sym_tmp, td or {}, "solana", _h_stats)
+    if not _jev_soft_ok:
+        print(f"🚫 [JEV-AI-GATE] {_sym_tmp} ({mint[:8]}): {_jev_soft_why} — отказ входа.")
+        return False
+
+    # 3. FILLS: "We bid the flush, not the candle" & RISK: "The stop lives under the wick"
+    _flush_ok, _wick_pct, _wick_stop_price, _flush_msg = grok_jev.check_flush_and_wick(td or {}, price)
+    if not _flush_ok:
+        print(f"⏳ [JEV-FILLS] {_sym_tmp} ({mint[:8]}): {_flush_msg}")
+        return False
+    else:
+        print(f"🎯 [JEV-FILLS] {_sym_tmp} ({mint[:8]}): {_flush_msg}")
+
     async with _buy_lock:
         if len(tracker.get_open_positions()) >= config.MAX_CONCURRENT_POSITIONS:
             return False
@@ -333,8 +360,12 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
             ml_features=analyzer.pack_features(td or {}),
             ml_confidence=float(getattr(analyzer, "last_score", 0.0)),
             source=f"{source_tag}:{analyzer.get_signal(mint)}",
-            pair_address=((td or {}).get("pairAddress", "") or ""))
-        print(f"🪐 {source_tag} BUY {_sym_tmp} ({mint[:8]}) @ ${price} [size: ${min(size, 100.0):.1f}]")
+            pair_address=((td or {}).get("pairAddress", "") or ""),
+            stop_under_wick=_wick_stop_price,
+            wick_stop_loss_pct=_wick_pct)
+        grok_jev.FUNNEL_STATS["filled"] += 1
+        print(grok_jev.get_funnel_summary())
+        print(f"🪐 {source_tag} BUY {_sym_tmp} ({mint[:8]}) @ ${price} [size: ${min(size, 100.0):.1f}] | Wick Stop: ${_wick_stop_price:.8f} ({_wick_pct*100:.1f}%)")
         return True
 
 

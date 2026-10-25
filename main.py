@@ -1976,7 +1976,7 @@ async def async_main():
         print(f"⚠️ regime line err: {_e}")
 
     try:
-        from grok_jev import grok_jev
+        from grok_jev import grok_jev, grok_bot_jev_loop
         _ai_provider = "Groq (llama-3.3-70b)" if grok_jev.groq_key else ("xAI (grok-beta)" if grok_jev.xai_key else ("Gemini" if grok_jev.gemini_key else "Local-JEV Algorithmic"))
         print(f"🤖 GROK BOT x JEV ENGINE: АКТИВЕН (AI Provider: {_ai_provider})")
         print(f"🎯 СЕТИ В РАБОТЕ: ТОЛЬКО SOLANA И BASE (100% концентрация капитала и лимитов позиций)")
@@ -2059,6 +2059,7 @@ async def async_main():
         growth_loop(analyzer, tracker),  # 🌱 тренды капов, пока нет ракет
         sniper.connect_and_listen(),  # ⚡ IN-MEMORY STREAMING: RAM фильтр (>10 buyers / 20s) + RugCheck/GoPlus аудит
         smart_money_hunter_loop(analyzer, tracker),  # 🐋 Автономный охотник за смарт-кошельками (Solana & Base)
+        grok_bot_jev_loop(tracker),  # 🤖 GROKBOT x JEV: Автономная независимая система (JEV PICKS, GROK TRADES)
         trade_logger.post_trade_watcher_loop(),
         shadow_tracker.price_watcher_loop(),
         rugpull_feeder_loop(),

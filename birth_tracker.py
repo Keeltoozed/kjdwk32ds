@@ -15,6 +15,17 @@ class BirthTracker:
         """Удалить мертвый или отсканированный токен из трекера, чтобы не опрашивать повторно."""
         with self.lock:
             self.tokens.pop(mint, None)
+
+    def get_age(self, mint: str):
+        """Возвращает возраст токена в минутах с момента появления (или None, если токен не отслеживается)."""
+        now = time.time()
+        with self.lock:
+            ts = self.tokens.get(mint)
+            if ts is None:
+                ts = self.graduated.get(mint)
+            if ts is not None:
+                return (now - ts) / 60.0
+            return None
     
     def get_mature_tokens(self, min_age_minutes: int, max_age_minutes: int):
         now = time.time()

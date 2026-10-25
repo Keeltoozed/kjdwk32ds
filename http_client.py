@@ -239,12 +239,14 @@ _OPTIONAL_PROXY = os.getenv("PROXY_URL") or os.getenv("HTTPS_PROXY") or os.geten
 
 
 async def fetch_json(url: str, params=None, headers=None, timeout: int = 12,
-                     retries: int = 3, method: str = "GET", json_payload=None):
+                     retries: int = 3, method: str = "GET", json_payload=None, json_data=None):
     """GET/POST JSON через ГЛОБАЛЬНЫЙ семафор + троттлинг + backoff на 429/5xx.
 
     Возвращает (status, data). data={} при неудаче. Никогда не кидает исключение.
     12 токенов встают в очередь семафора и идут по 3 (DS) / по 1 (GT).
     """
+    if json_payload is None and json_data is not None:
+        json_payload = json_data
     from urllib.parse import urlparse
     try:
         host = urlparse(url).hostname or "?"
