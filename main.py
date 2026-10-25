@@ -252,19 +252,19 @@ async def position_manager_loop(analyzer, tracker):
                 _mb = float(getattr(config, "MOONBAG_TRIGGER_PCT", 2.50))
                 _mb_sell = float(getattr(config, "MOONBAG_SELL_FRAC", 0.30))
                 if getattr(position, "is_mature", False):
-                    # TIER-1: на +50% продаём 20% позиции (80% продолжает рост!)
-                    if max_pnl_pct >= _tp1_sol_thr and not getattr(position, "tp1_done", False):
+                    # TIER-1: частичная фиксация (если включено в конфиге)
+                    if getattr(config, "PARTIAL_TP_ENABLED", False) and max_pnl_pct >= _tp1_sol_thr and not getattr(position, "tp1_done", False):
                         tracker.partial_close_position(mint, current_price, _tp1_sell, f"Take Profit +{_tp1_sol_thr*100:.0f}% (Tier-1 {int(_tp1_sell*100)}%)")
                         position.tp1_done = True
                         position.is_moonbag = True
                         continue
-                    # TIER-2: на +120% продаём 25% остатка (60% исходного ордера в рынке!)
-                    if max_pnl_pct >= _tp2 and not getattr(position, "tp2_done", False):
+                    # TIER-2: частичная фиксация (если включено в конфиге)
+                    if getattr(config, "PARTIAL_TP_ENABLED", False) and max_pnl_pct >= _tp2 and not getattr(position, "tp2_done", False):
                         tracker.partial_close_position(mint, current_price, _tp2_sell, f"Take Profit +{_tp2*100:.0f}% (2.2x Free Ride)")
                         position.tp2_done = True
                         continue
-                    # MOONBAG: на +250% продаём 30% остатка (42% исходного ордера ловит пик!)
-                    if max_pnl_pct >= _mb and not getattr(position, "is_moonbag", False):
+                    # MOONBAG: частичная фиксация (если включено в конфиге)
+                    if getattr(config, "PARTIAL_TP_ENABLED", False) and max_pnl_pct >= _mb and not getattr(position, "is_moonbag", False):
                         tracker.partial_close_position(mint, current_price, _mb_sell, f"Take Profit +{_mb*100:.0f}% (Risk Free)")
                         position.is_moonbag = True
                         continue
@@ -287,17 +287,17 @@ async def position_manager_loop(analyzer, tracker):
                         tracker.close_position(mint, current_price, f"Scalp Profit (peak +{max_pnl_pct*100:.0f}%)")
                         continue
                         
-                # === TAKE-PROFIT LADDER (Лестница фиксации прибыли) ===
-                if max_pnl_pct >= _tp1_sol_thr and not getattr(position, "tp1_done", False):
+                # === TAKE-PROFIT LADDER (Лестница фиксации прибыли — только если включено) ===
+                if getattr(config, "PARTIAL_TP_ENABLED", False) and max_pnl_pct >= _tp1_sol_thr and not getattr(position, "tp1_done", False):
                     tracker.partial_close_position(mint, current_price, _tp1_sell, f"Take Profit +{_tp1_sol_thr*100:.0f}% (Tier-1 {int(_tp1_sell*100)}%)")
                     position.tp1_done = True
                     position.is_moonbag = True
                     continue
-                if max_pnl_pct >= _tp2 and not getattr(position, "tp2_done", False):
+                if getattr(config, "PARTIAL_TP_ENABLED", False) and max_pnl_pct >= _tp2 and not getattr(position, "tp2_done", False):
                     tracker.partial_close_position(mint, current_price, _tp2_sell, f"Take Profit +{_tp2*100:.0f}% (2.2x Free Ride)")
                     position.tp2_done = True
                     continue
-                if max_pnl_pct >= _mb and not getattr(position, "is_moonbag", False):
+                if getattr(config, "PARTIAL_TP_ENABLED", False) and max_pnl_pct >= _mb and not getattr(position, "is_moonbag", False):
                     tracker.partial_close_position(mint, current_price, _mb_sell, f"Take Profit +{_mb*100:.0f}% (Risk Free)")
                     position.is_moonbag = True
                     continue
@@ -377,8 +377,8 @@ async def position_manager_loop(analyzer, tracker):
                     continue
 
                 # 3.2 GROK BOT x JEV: СТОП ПОД ФИТИЛЬ ("The stop lives under the wick")
-                _wick_stop = getattr(pos, "stop_under_wick", 0.0) or 0.0
-                _wick_pct = getattr(pos, "wick_stop_loss_pct", 0.0) or 0.0
+                _wick_stop = getattr(position, "stop_under_wick", 0.0) or 0.0
+                _wick_pct = getattr(position, "wick_stop_loss_pct", 0.0) or 0.0
                 if minutes_held >= 0.5:
                     if _wick_stop > 0 and current_price <= _wick_stop:
                         tracker.close_position(mint, current_price, f"JEV Wick Stop (${current_price:.6f} <= ${_wick_stop:.6f}, {pnl_pct*100:.1f}%)")
@@ -1457,7 +1457,7 @@ async def _evm_track_once(tracker, chain: str, tag: str, emoji: str):
                 _stag_min = int(getattr(config, "EVM_STAGNANT_MIN", 45))
                 _tp1_evm_thr = float(getattr(config, "TP1_TRIGGER_PCT", 0.50))
                 _tp1_sell = float(getattr(config, "TP1_SELL_FRAC", 0.20))
-                if maxp >= _tp1_evm_thr and not getattr(pos, "tp1_done", False):
+                if getattr(config, "PARTIAL_TP_ENABLED", False) and maxp >= _tp1_evm_thr and not getattr(pos, "tp1_done", False):
                     tracker.partial_close_position(mint, cur, _tp1_sell, f"{tag} Take Profit +{_tp1_evm_thr*100:.0f}% (Tier-1 {int(_tp1_sell*100)}%)")
                     pos.tp1_done = True
                     pos.is_moonbag = True
@@ -1465,12 +1465,12 @@ async def _evm_track_once(tracker, chain: str, tag: str, emoji: str):
                     continue
                 _tp2_thr = float(getattr(config, "TP2_TRIGGER_PCT", 1.20))
                 _tp2_sell = float(getattr(config, "TP2_SELL_FRAC", 0.25))
-                if maxp >= _tp2_thr and not getattr(pos, "tp2_done", False):
+                if getattr(config, "PARTIAL_TP_ENABLED", False) and maxp >= _tp2_thr and not getattr(pos, "tp2_done", False):
                     tracker.partial_close_position(mint, cur, _tp2_sell, f"{tag} Take Profit +{_tp2_thr*100:.0f}% (2.2x Free Ride)")
                     pos.tp2_done = True
                     pos.price_checked_at = _t.time()
                     continue
-                if maxp >= _mbr and not getattr(pos, "is_moonbag", False):
+                if getattr(config, "PARTIAL_TP_ENABLED", False) and maxp >= _mbr and not getattr(pos, "is_moonbag", False):
                     tracker.partial_close_position(mint, cur, _mb_sell, f"{tag} Take Profit +{_mbr*100:.0f}% (Risk Free)")
                     pos.is_moonbag = True # ИСПРАВЛЕН БАГ (бесконечные продажи)
                     pos.price_checked_at = _t.time()
