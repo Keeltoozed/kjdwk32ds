@@ -303,6 +303,7 @@ async def position_manager_loop(analyzer, tracker):
                     continue
 
                 # 1.5 ГАРАНТИРОВАННЫЙ НЕСНИЖАЕМЫЙ ПОРОГ ПРИБЫЛИ (PROFIT FLOOR LOCK)
+                # Включается только от +38% пика, чтобы не выбивать ракету на стартовом ретесте (+19% -> -1% -> +60% как у Chubby)
                 _floor_pnl = None
                 if max_pnl_pct >= 5.00:       # Гипер-ракета (+500%+): держим 75% прибыли (пик +692% -> пол +519%)
                     _floor_pnl = round(max_pnl_pct * 0.75, 2)
@@ -316,22 +317,15 @@ async def position_manager_loop(analyzer, tracker):
                     _floor_pnl = 0.80
                 elif max_pnl_pct >= 0.70:     # Пик +70%+ -> гарантируем минимум +55%
                     _floor_pnl = 0.55
-                elif max_pnl_pct >= 0.50:     # Пик +50%+ -> гарантируем минимум +38%
-                    _floor_pnl = 0.38
-                elif max_pnl_pct >= 0.35:     # Пик +35%+ -> гарантируем минимум +24%
-                    _floor_pnl = 0.24
-                elif max_pnl_pct >= 0.28:     # Пик +28%+ -> гарантируем минимум +18% (кейс TC67: пик +34% -> фиксация +18%, а не слив в 0!)
-                    _floor_pnl = 0.18
-                elif max_pnl_pct >= 0.20:     # Пик +20%+ -> гарантируем минимум +12%
-                    _floor_pnl = 0.12
-                elif max_pnl_pct >= 0.15:     # Пик +15%+ -> гарантируем минимум +5% (безубыток + комиссии)
-                    _floor_pnl = 0.05
+                elif max_pnl_pct >= 0.50:     # Пик +50%+ -> гарантируем минимум +32%
+                    _floor_pnl = 0.32
+                elif max_pnl_pct >= 0.38:     # Пик +38%+ -> гарантируем минимум +15%
+                    _floor_pnl = 0.15
                 if _floor_pnl is not None and pnl_pct <= _floor_pnl:
-                    if max_pnl_pct >= 0.40 and pnl_pct <= -0.05:
-                        _fc_s = int(getattr(position, "floor_confirm_n", 0) or 0) + 1
-                        position.floor_confirm_n = _fc_s
-                        if _fc_s < 2:
-                            continue
+                    _fc_s = int(getattr(position, "floor_confirm_n", 0) or 0) + 1
+                    position.floor_confirm_n = _fc_s
+                    if _fc_s < 2:
+                        continue
                     if pnl_pct >= 0:
                         tracker.close_position(mint, current_price, f"Profit Floor (+{_floor_pnl*100:.0f}% locked after peak +{max_pnl_pct*100:.0f}%)")
                     else:
@@ -368,12 +362,12 @@ async def position_manager_loop(analyzer, tracker):
                         tracker.close_position(mint, current_price, f"Inactive Pool Cut ({pnl_pct*100:.1f}%, {minutes_held:.0f}м)")
                         continue
 
-                # Breakeven / Soft Guard резерв (только после 4-6 минут, не режем стартовые свечи):
-                if minutes_held >= 6.0 and max_pnl_pct >= 0.18 and pnl_pct <= -0.08:
+                # Breakeven / Soft Guard резерв (только после 6 минут, не режем стартовые свечи ретеста):
+                if minutes_held >= 6.0 and max_pnl_pct >= 0.20 and pnl_pct <= -0.10:
                     tracker.close_position(mint, current_price, f"Soft Guard (был пик +{max_pnl_pct*100:.0f}%, слив до {pnl_pct*100:.1f}%)")
                     continue
-                _be_sol = float(getattr(config, "BREAKEVEN_PCT", 0.25))
-                if minutes_held >= 4.0 and max_pnl_pct >= _be_sol and pnl_pct <= 0.01:
+                _be_sol = float(getattr(config, "BREAKEVEN_PCT", 0.28))
+                if minutes_held >= 6.0 and max_pnl_pct >= _be_sol and pnl_pct <= 0.01:
                     tracker.close_position(mint, current_price, f"Breakeven (был пик +{max_pnl_pct*100:.0f}%)")
                     continue
 
@@ -1426,10 +1420,10 @@ async def _evm_track_once(tracker, chain: str, tag: str, emoji: str):
                         reason = f"{tag} Inactive Pool Cut ({pnl*100:.1f}%, {held:.0f}м)"
                 elif held >= 1.5 and pnl <= -0.30:
                     reason = f"{tag} Emergency Cap ({pnl * 100:.1f}%)"
-                elif held >= 6.0 and maxp >= 0.18 and pnl <= -0.08:
+                elif held >= 6.0 and maxp >= 0.20 and pnl <= -0.10:
                     # Мягкий стоп только после 6+ минут (не режем стартовые свечи в первые минуты):
                     reason = f"{tag} Soft Guard (был пик +{maxp * 100:.0f}%, слив до {pnl * 100:.1f}%)"
-                elif held >= 0.5 and maxp >= float(getattr(config, "BREAKEVEN_PCT", 0.22)) and pnl <= 0.01:
+                elif held >= 6.0 and maxp >= float(getattr(config, "BREAKEVEN_PCT", 0.28)) and pnl <= 0.01:
                     reason = f"{tag} Breakeven (был пик +{maxp * 100:.0f}%)"
                 elif held < float(getattr(config, "INFANT_WINDOW_MIN", 2.0)) and pnl <= float(getattr(config, "INFANT_DUMP_PCT", -0.25)):
                     reason = f"{tag} Infant Dump ({pnl * 100:.1f}%)"

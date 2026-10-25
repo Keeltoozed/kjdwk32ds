@@ -54,12 +54,12 @@ class MatureExitManager:
             return f"Mature Infant Dump ({pnl_pct*100:.0f}%)"
 
         # 1. ГАРАНТИРОВАННЫЙ НЕСНИЖАЕМЫЙ ПОРОГ ПРИБЫЛИ (PROFIT FLOOR LOCK)
-        # Не душим ракеты на старте (+15..+30%, кейсы ELON +184% и SEXCOIN +258%):
-        # фиксация пола включается только от +35% (после TP1 30%) с запасом ~20% на рабочую коррекцию.
+        # Не душим ракеты на старте (+15..+35%, кейсы Chubby +19% -> -1% -> +60%, ELON +184%, SEXCOIN +258%):
+        # фиксация пола включается только от +38% с запасом ~23% на рабочую 1-минутную коррекцию.
         max_pnl_pct = (position.max_price_usd - position.entry_price_usd) / position.entry_price_usd if position.entry_price_usd else 0
         _floor_pnl = None
         if _ride:
-            # RIDE: пол = доля от пика, допускает откат для полета ракет, но защищает профит на пиках от +18%
+            # RIDE: пол = доля от пика, допускает откат для полета ракет, включается только от пика +38%
             if max_pnl_pct >= 5.00:       # +500%+: держим 65% прибыли
                 _floor_pnl = round(max_pnl_pct * 0.65, 2)
             elif max_pnl_pct >= 3.00:     # +300%..+500%: 60%
@@ -70,12 +70,8 @@ class MatureExitManager:
                 _floor_pnl = round(max_pnl_pct * 0.45, 2)
             elif max_pnl_pct >= 0.60:     # +60%..+100%: 40% (пик +60% -> пол +24%, пик +80% -> пол +32%)
                 _floor_pnl = round(max_pnl_pct * 0.40, 2)
-            elif max_pnl_pct >= 0.35:     # +35%..+60%: держим минимум +18% (не отдаём пик +35%..+37% обратно в минус/безубыток!)
-                _floor_pnl = 0.18
-            elif max_pnl_pct >= 0.25:     # +25%..+35%: держим минимум +10%
-                _floor_pnl = 0.10
-            elif max_pnl_pct >= 0.18:     # +18%..+25%: держим минимум +4% (гарантия чистой прибыли с учетом комиссий DEX)
-                _floor_pnl = 0.04
+            elif max_pnl_pct >= 0.38:     # +38%..+60%: держим минимум +15% (даём ~23% запаса на ретест и не режем ракету на +19%!)
+                _floor_pnl = 0.15
         elif max_pnl_pct >= 5.00:       # Гипер-ракета (+500%+): держим 78% прибыли
             _floor_pnl = round(max_pnl_pct * 0.78, 2)
         elif max_pnl_pct >= 3.00:     # Мега-ракета (+300%..+500%): держим 75% прибыли
@@ -88,21 +84,16 @@ class MatureExitManager:
             _floor_pnl = 0.80
         elif max_pnl_pct >= 0.70:     # Пик +70%+ -> гарантируем минимум +55%
             _floor_pnl = 0.55
-        elif max_pnl_pct >= 0.50:     # Пик +50%+ -> гарантируем минимум +38%
-            _floor_pnl = 0.38
-        elif max_pnl_pct >= 0.35:     # Пик +35%+ -> гарантируем минимум +24%
-            _floor_pnl = 0.24
-        elif max_pnl_pct >= 0.25:     # Пик +25%+ -> гарантируем минимум +15% (мунбэга нет — забираем целиком)
-            _floor_pnl = 0.15
-        elif max_pnl_pct >= 0.20:     # Пик +20%+ -> гарантируем минимум +10%
-            _floor_pnl = 0.10
+        elif max_pnl_pct >= 0.50:     # Пик +50%+ -> гарантируем минимум +32%
+            _floor_pnl = 0.32
+        elif max_pnl_pct >= 0.38:     # Пик +38%+ -> гарантируем минимум +18% (ниже +38% пол не ставим — даём ракете взлететь!)
+            _floor_pnl = 0.18
         if _floor_pnl is not None and pnl_pct <= _floor_pnl:
-            # Защита ТОЛЬКО от 1-тикового глюка вторичного пула (когда из плюса +40%+ цена за 1 тик падает в минус):
-            if max_pnl_pct >= 0.40 and pnl_pct <= -0.05:
-                _fc = int(getattr(position, "floor_confirm_n", 0) or 0) + 1
-                position.floor_confirm_n = _fc
-                if _fc < 2:
-                    return None
+            # 2-тиковое подтверждение пробоя пола (защита от 1-секундных проколов и теней свечей):
+            _fc = int(getattr(position, "floor_confirm_n", 0) or 0) + 1
+            position.floor_confirm_n = _fc
+            if _fc < 2:
+                return None
             if pnl_pct >= 0:
                 return f"Mature Profit Floor (+{_floor_pnl*100:.0f}% locked after peak +{max_pnl_pct*100:.0f}%)"
             return f"Crash Dump after peak (+{max_pnl_pct*100:.0f}% -> {pnl_pct*100:.0f}%)"
@@ -168,12 +159,11 @@ class MatureExitManager:
             _maxp = (position.max_price_usd - position.entry_price_usd) / position.entry_price_usd
         except Exception:
             _maxp = 0
-        # Мягкий стоп (только после 6 минут в рынке, чтобы не резать 1-2 минутные свечи на старте!):
-        if minutes_held >= 6.0 and _maxp >= 0.18 and pnl_pct <= -0.08:
+        # Мягкий стоп и Breakeven (ТОЛЬКО после 6 минут в рынке, чтобы не резать 1-2 минутные свечи ретеста на старте как Chubby!):
+        if minutes_held >= 6.0 and _maxp >= 0.20 and pnl_pct <= -0.10:
             return f"Mature Soft Guard (был пик +{_maxp*100:.0f}%, слив до {pnl_pct*100:.1f}%)"
-        # Breakeven: если был пик +22%+ и цена вернулась ко входу — выходим с запасом +3.5% на комиссии/проскальзывание
-        _be = float(getattr(config, 'BREAKEVEN_PCT', 0.22))
-        if minutes_held >= 0.5 and _maxp >= _be and pnl_pct <= 0.035:
+        _be = float(getattr(config, 'BREAKEVEN_PCT', 0.28))
+        if minutes_held >= 6.0 and _maxp >= _be and pnl_pct <= 0.035:
             return f"Mature Breakeven (был пик +{_maxp*100:.0f}%, фикс {pnl_pct*100:+.1f}%)"
 
         # Zero-Momentum Cut: монета за 3.5+ мин ни разу не дала даже +1.5% и ушла в -10%

@@ -24,6 +24,24 @@ class ShadowTracker:
         self._rate_limit_lock = asyncio.Lock()
         self._cooldown = {}  # {mint: timestamp} — дедупликация, чтобы не спамить Supabase
         self._peak_memory = {}  # {mint: (max_price, max_liq, ts)} — память пиков для защиты от покупки слитых токенов
+        
+        self.use_supabase = bool(
+            getattr(config, 'SUPABASE_URL', None) and 
+            getattr(config, 'SUPABASE_KEY', None) and 
+            create_client is not None
+        )
+        self.supabase = None
+        self._target_table = "rejected_tokens"
+        
+        if self.use_supabase:
+            try:
+                self.supabase: Client = create_client(config.SUPABASE_URL, config.SUPABASE_KEY)
+                print("☁️ [ShadowTracker] Подключен к Supabase PostgreSQL (таблица rejected_tokens)")
+            except Exception as e:
+                print(f"⚠️ [ShadowTracker] Ошибка подключения к Supabase: {e}")
+                self.use_supabase = False
+        
+        self.init_db()
 
     def record_observation(self, mint: str, price: float = 0.0, liquidity: float = 0.0):
         """Обновляет максимальную виденную цену и ликвидность токена в оперативной памяти (TTL 90 мин)."""
@@ -53,24 +71,6 @@ class ShadowTracker:
         if not old or (time.time() - old[2]) > 5400.0:
             return 0.0, 0.0
         return old[0], old[1]
-        
-        self.use_supabase = bool(
-            getattr(config, 'SUPABASE_URL', None) and 
-            getattr(config, 'SUPABASE_KEY', None) and 
-            create_client is not None
-        )
-        self.supabase = None
-        self._target_table = "rejected_tokens"
-        
-        if self.use_supabase:
-            try:
-                self.supabase: Client = create_client(config.SUPABASE_URL, config.SUPABASE_KEY)
-                print("☁️ [ShadowTracker] Подключен к Supabase PostgreSQL (таблица rejected_tokens)")
-            except Exception as e:
-                print(f"⚠️ [ShadowTracker] Ошибка подключения к Supabase: {e}")
-                self.use_supabase = False
-        
-        self.init_db()
 
     def init_db(self):
         """Создает локальную SQLite таблицу как гарантированный fallback и применяет миграции колонок."""
