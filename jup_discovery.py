@@ -126,6 +126,9 @@ async def fetch_jup_tokens() -> list:
             for item in (gt_resp.get("data") or []):
                 bid = item.get("relationships", {}).get("base_token", {}).get("data", {}).get("id", "")
                 addr = bid.split("_", 1)[1] if "_" in bid else ""
+                dex_gt = str(((item.get("relationships") or {}).get("dex") or {}).get("data", {}).get("id") or "").lower()
+                if "pumpswap" in dex_gt and not addr.endswith("pump"):
+                    continue
                 attrs = item.get("attributes") or {}
                 sym = str(attrs.get("name") or "").split("/")[0].upper().strip()
                 if not addr or addr.startswith("0x") or len(addr) < 32 or len(addr) > 44 or addr in seen or any(s in sym for s in SKIP_SYMBOLS):
@@ -172,6 +175,9 @@ async def fetch_jup_tokens() -> list:
             for item in ((gt_data5 or {}).get("data") or []):
                 bid = item.get("relationships", {}).get("base_token", {}).get("data", {}).get("id", "")
                 addr = bid.split("_", 1)[1] if "_" in bid else ""
+                dex_gt = str(((item.get("relationships") or {}).get("dex") or {}).get("data", {}).get("id") or "").lower()
+                if "pumpswap" in dex_gt and not addr.endswith("pump"):
+                    continue
                 attrs = item.get("attributes") or {}
                 sym = str(attrs.get("name") or "").upper().strip()
                 if not addr or addr.startswith("0x") or len(addr) < 32 or len(addr) > 44 or addr in seen or any(s in sym for s in SKIP_SYMBOLS):
@@ -184,6 +190,9 @@ async def fetch_jup_tokens() -> list:
             for item in ((gt_data_new or {}).get("data") or []):
                 bid = item.get("relationships", {}).get("base_token", {}).get("data", {}).get("id", "")
                 addr = bid.split("_", 1)[1] if "_" in bid else ""
+                dex_gt = str(((item.get("relationships") or {}).get("dex") or {}).get("data", {}).get("id") or "").lower()
+                if "pumpswap" in dex_gt and not addr.endswith("pump"):
+                    continue
                 attrs = item.get("attributes") or {}
                 sym = str(attrs.get("name") or "").upper().strip()
                 if not addr or addr.startswith("0x") or len(addr) < 32 or len(addr) > 44 or addr in seen or any(s in sym for s in SKIP_SYMBOLS):
@@ -256,6 +265,11 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
     _lq_drop_j = float((td or {}).get("_liq_drop_from_peak", 0.0) or 0.0)
     if _pk_drop_j <= -18.0 or _lq_drop_j <= -18.0:
         print(f"🚫 [{source_tag}-POST-PEAK-CRASH] {_sym_tmp} ({mint[:8]}): токен уже слился от пика (цена {_pk_drop_j:+.1f}%, ликва {_lq_drop_j:+.1f}%) — дохлая кошка.")
+        return False
+
+    # Защита от кастомных фейк-пулов с разблокированным LP на PumpSwap (кейсы WHITEWHALE, MOE_fake)
+    if _dex_j == "pumpswap" and not mint.endswith("pump"):
+        print(f"🚫 [{source_tag}-FAKE-PUMPSWAP] {_sym_tmp} ({mint[:8]}): кастомный не-pump контракт на PumpSwap (100% разблокированный LP) — блок.")
         return False
 
     # Защита от миграционного дампа Pump.fun

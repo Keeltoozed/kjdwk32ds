@@ -688,6 +688,11 @@ async def scanner_loop(analyzer, tracker):
                                     print(f"🚫 [SCANNER-POST-PEAK] {actual_symbol} ({mint[:8]}): токен уже слился от пика (цена {_pk_drop_live:+.1f}%, ликва {_lq_drop_live:+.1f}%) — отмена!")
                                     continue
 
+                                # Блок кастомных не-pump контрактов на PumpSwap (100% разблокированный LP скамера, кейс WHITEWHALE -98.5%)
+                                if _dex_id == "pumpswap" and not mint.endswith("pump"):
+                                    print(f"🚫 [SCANNER-FAKE-PUMPSWAP] {actual_symbol} ({mint[:8]}): кастомный не-pump контракт на PumpSwap — отмена!")
+                                    continue
+
                                 # Защита от миграционного дампа Pump.fun: ждём выгрузку снайперов (5.5м) и требуем живой пул ($12k liq / $30k FDV)
                                 if mint.endswith("pump") and _dex_id in ("pumpswap", "raydium", "meteora", "orca"):
                                     _c_ms_sc = pair_data.get("pairCreatedAt") or 0

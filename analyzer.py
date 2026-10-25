@@ -704,33 +704,55 @@ class Analyzer:
 
 
 
-    async def is_clone(self, symbol: str, current_mint: str, current_created_at: int, current_fdv: float) -> bool:
-        """Проверяет, является ли этот токен дешевой копией (клоном) более старого или крупного оригинала."""
-        if not symbol or len(symbol) <= 2:
-            return False 
-            
+    async def is_clone(self, symbol: str, current_mint: str, current_created_at: int, current_fdv: float, current_liq: float = 0.0) -> bool:
+        """Проверяет, является ли этот токен фейковой копией (клоном) более старого/крупного оригинала или серийным спамом (кейсы WHITEWHALE, MOE)."""
+        if not symbol or len(symbol) < 2:
+            return False
+
         data = await self._fetch_dex_search(symbol)
-        if data:
-                    pairs = data.get("pairs") or []
+        if not data:
+            return False
 
-                    for p in pairs:
-                        if p.get("chainId") == "solana":
-                            p_symbol = p.get("baseToken", {}).get("symbol", "").upper()
-                            p_mint = p.get("baseToken", {}).get("address", "")
+        pairs = data.get("pairs") or []
+        sym_up = symbol.upper().strip()
+        active_other_mints = set()
+        oldest_other_ts = float("inf")
 
-                            if p_symbol == symbol.upper() and p_mint != current_mint:
-                                p_created_at = p.get("pairCreatedAt", float('inf'))
-                                p_fdv = p.get("fdv", 0)
-                                p_liq = float((p.get("liquidity") or {}).get("usd", 0) or 0)
-                                p_vol24 = float((p.get("volume") or {}).get("h24", 0) or 0)
-                                if p_liq < 10000 and p_vol24 < 5000:
-                                    continue  # Мертвый/заброшенный пул, не активный оригинал
+        for p in pairs:
+            if p.get("chainId") != "solana":
+                continue
+            p_symbol = str((p.get("baseToken") or {}).get("symbol") or "").upper().strip()
+            p_mint = str((p.get("baseToken") or {}).get("address") or "").strip()
+            if not p_mint or p_symbol != sym_up or p_mint == current_mint:
+                continue
 
-                                if p_created_at < current_created_at and p_fdv > 250000:
-                                    return True
+            p_dex = str(p.get("dexId") or "").lower()
+            # Игнорируем фейковые кастомные не-pump пулы на PumpSwap — они сами являются скам-клонами и не могут считаться оригиналом!
+            if p_dex == "pumpswap" and not p_mint.endswith("pump"):
+                continue
 
-                                if p_fdv > (current_fdv * 10) and p_fdv > 500000:
-                                    return True
+            p_created_at = float(p.get("pairCreatedAt") or float("inf"))
+            p_fdv = float(p.get("fdv") or p.get("marketCap") or 0.0)
+            p_liq = float((p.get("liquidity") or {}).get("usd", 0) or 0.0)
+            p_vol24 = float((p.get("volume") or {}).get("h24", 0) or 0.0)
+            if p_liq < 8000 and p_vol24 < 10000:
+                continue  # Мертвый/заброшенный пул, не активный оригинал
+
+            active_other_mints.add(p_mint)
+            if p_created_at < oldest_other_ts:
+                oldest_other_ts = p_created_at
+
+            # 1. Кастомный (не-pump) токен мимикрирует под существующий живой pump.fun токен (кейсы MOE 7oocXA2D, Chubby FaCjQic5, WHITEWHALE)
+            if not current_mint.endswith("pump") and p_mint.endswith("pump") and (p_liq >= 8000 or p_fdv >= 25000):
+                return True
+
+            # 2. Существует БОЛЕЕ СТАРЫЙ (>1 мин раньше) живой оригинал с ликвидностью >= $10k и FDV >= $35k
+            if current_created_at and p_created_at < (current_created_at - 60000) and p_liq >= 10000 and p_fdv >= 35000:
+                return True
+
+            # 3. Существует более старый и значительно более крупный оригинал (в 5x+ крупнее по FDV >= $250k)
+            if p_created_at < current_created_at and current_fdv > 0 and p_fdv > (current_fdv * 5) and p_fdv >= 250000:
+                return True
 
         return False
 
@@ -1147,6 +1169,12 @@ class Analyzer:
             liquidity = raw_liq
             _min_liq = 8000 if (_age_min_pre < 30 or _m5 >= 15.0 or _lottery or is_vip) else getattr(config, "MIN_LIQUIDITY", 15000)
 
+        # БЛОК КАСТОМНЫХ ФЕЙК-ПУЛОВ НА PUMPSWAP (кейсы WHITEWHALE -98.5% и MOE_fake):
+        # На PumpSwap (pump_fun_amm) заблокированный протоколом LP имеют ТОЛЬКО официальные токены с pump.fun (оканчивающиеся на 'pump').
+        # Любой кастомный минт (не 'pump') на PumpSwap имеет 100% РАЗБЛОКИРОВАННЫЙ LP в руках скамера!
+        if dex_id == "pumpswap" and not mint.endswith("pump"):
+            return self._deny(mint, "fake-pumpswap-unlocked-lp", f"🚫 [FAKE-PUMPSWAP] {symbol} ({mint[:8]}): кастомный не-pump контракт на PumpSwap (100% разблокированный LP скамера) — блок!")
+
         if liquidity < _min_liq:
             print(f"📉 Изоляция: {symbol} имеет микро-пул (${liquidity:.0f} < ${_min_liq//1000}k). Риск 100% проскальзывания.")
             return False
@@ -1160,19 +1188,16 @@ class Analyzer:
         _vol1_cl = float((pair_data.get("volume") or {}).get("m1", 0) or 0)
         _m5_cl = float((pair_data.get("priceChange") or {}).get("m5", 0) or 0)
 
-        # Ослабление клон-фильтра при мощном органическом FOMO (объем, число покупателей или VIP-моментум):
         _strong_fomo = (
             (_b5_cl >= 40 and _b5_cl >= _s5_cl * 1.2) or
             (_vol5_cl >= 20000.0 and _b5_cl > _s5_cl) or
             (_vol1_cl >= 8000.0 and _m5_cl >= 15.0) or
             (is_vip and _b5_cl >= 30)
         )
-        if _strong_fomo:
-            print(f"🔥 [STRONG FOMO] {symbol}: мощный органический моментум (b/s {_b5_cl}/{_s5_cl}, vol5 ${_vol5_cl:.0f}) — клон-фильтр ослаблен.")
 
-        if not _strong_fomo and await self.is_clone(symbol, mint, current_created_at, current_fdv):
-            print(f"🚫 Мусор: Токен {symbol} является клоном! На DexScreener найден более старый/крупный оригинал.")
-            return False
+        # Клон-фильтр работает ВСЕГДА (даже при _strong_fomo), т.к. скам-клоны WHITEWHALE и MOE специально накручивают объём ботами!
+        if await self.is_clone(symbol, mint, current_created_at, current_fdv, current_liq=liquidity):
+            return self._deny(mint, "clone-scam", f"🚫 [CLONE-SCAM] Токен {symbol} ({mint[:8]}) является фейковым клоном более старого/крупного оригинала!")
 
 
         info = pair_data.get("info", {}) or {}
@@ -1246,18 +1271,24 @@ class Analyzer:
                         return False
 
                 _target_pair = str(pair_data.get("pairAddress") or "").strip()
+                _has_verified_locked_lp = False
                 for _mkt in (rc_data.get("markets") or []):
                     if isinstance(_mkt, dict):
                         _mkt_pubkey = str(_mkt.get("pubkey") or "").strip()
                         _lp_info = _mkt.get("lp") or {}
                         if isinstance(_lp_info, dict):
                             _mkt_quote_usd = float(_lp_info.get("quoteUSD") or 0.0)
-                            if (_target_pair and _mkt_pubkey == _target_pair) or (not _target_pair and _mkt_quote_usd >= 5000):
-                                _lp_unlocked = float(_lp_info.get("lpUnlocked") or 0.0)
-                                _lp_locked_pct = float(_lp_info.get("lpLockedPct") or 0.0)
+                            _lp_unlocked = float(_lp_info.get("lpUnlocked") or 0.0)
+                            _lp_locked_pct = float(_lp_info.get("lpLockedPct") or 0.0)
+                            if _lp_locked_pct >= 80.0 and (_mkt_quote_usd >= 2000 or (_target_pair and _mkt_pubkey == _target_pair)):
+                                _has_verified_locked_lp = True
+                            if (_target_pair and _mkt_pubkey == _target_pair) or _mkt_quote_usd >= 2000:
                                 if _lp_unlocked > 0 and _lp_locked_pct < 80.0:
-                                    print(f"🚫 [АНТИСКАМ] LP основного пула не заблокирован ({_lp_locked_pct:.1f}% locked) у {mint[:8]} → СКАМ")
+                                    print(f"🚫 [АНТИСКАМ] LP пула не заблокирован ({_lp_locked_pct:.1f}% locked) у {mint[:8]} → СКАМ")
                                     return False
+                if not mint.endswith("pump") and not _has_verified_locked_lp:
+                    print(f"🚫 [АНТИСКАМ] У кастомного не-pump токена {symbol} ({mint[:8]}) не подтвержден заблокированный LP в RugCheck → СКАМ")
+                    return False
                     
                 holders = rc_data.get("topHolders", [])
                 if not holders:
@@ -1353,14 +1384,17 @@ class Analyzer:
                     print(f"🚫 [АНТИСКАМ] Топ-10 держат {top_10_sum_pct:.1f}% (Лимит {max_allowed_pct}%). Блокируем.")
                     return False
             else:
-                # Фоллбэк: если RugCheck временно недоступен (404/429), проводим полный аудит через GoPlus
+                # Если это кастомный токен (не с pump.fun), без отчёта RugCheck вход СТРОГО ЗАПРЕЩЁН (иначе 100% риск разблокированного LP как у WHITEWHALE)
+                if not mint.endswith("pump"):
+                    print(f"🚫 [NO-RUGCHECK-CUSTOM] {symbol} ({mint[:8]}): кастомный не-pump токен без отчёта RugCheck — блок входа (риск разблокированного LP).")
+                    return False
+                # Фоллбэк только для официальных pump.fun токенов: если RugCheck временно 404/429, проводим аудит через GoPlus
                 try:
                     import goplus as _gp
                     _g_ok, _g_why = await _gp.check_solana(mint)
                     if not _g_ok:
                         print(f"🚫 [GOPLUS] {symbol} ({mint[:8]}): {_g_why} — блок входа.")
                         return False
-                    # Извлекаем и проверяем реальные метрики китов и создателя
                     _h_stats = _gp.get_solana_holder_stats(mint)
                     if _h_stats.get("has_data"):
                         self._last_top10 = _h_stats.get("top_10_pct", 0.0)
@@ -1383,16 +1417,21 @@ class Analyzer:
                     print(f"⚠️ Не удалось проверить через RugCheck и GoPlus ({_ge}). Блокируем вход.")
                     return False
         except Exception as e:
-            print(f"⚠️ Ошибка RugCheck: {str(e)[:50]}.")
+            print(f"⚠️ Ошибка RugCheck ({str(e)[:50]}). Fail-Closed для защиты от рагпула.")
+            if not mint.endswith("pump"):
+                return False
             try:
                 import goplus as _gp
                 _g_ok, _g_why = await _gp.check_solana(mint)
                 if not _g_ok:
                     return False
                 _h_stats = _gp.get_solana_holder_stats(mint)
-                if _h_stats.get("has_data"):
-                    self._last_top10 = _h_stats.get("top_10_pct", 0.0)
-                    self._last_dev = _h_stats.get("dev_pct", 0.0)
+                if not _h_stats.get("has_data"):
+                    return False
+                self._last_top10 = _h_stats.get("top_10_pct", 0.0)
+                self._last_dev = _h_stats.get("dev_pct", 0.0)
+                if self._last_dev > 10.0 or self._last_top10 > 35.0:
+                    return False
             except Exception:
                 return False
         except Exception as e:
