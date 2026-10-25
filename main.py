@@ -111,16 +111,24 @@ async def position_manager_loop(analyzer, tracker):
                 minutes_held = (time.time() - position.entry_time) / 60
 
                 # --- АУДИТ БЕЗОПАСНОСТИ ОТКРЫТОЙ ПОЗИЦИИ (HONEYPOT / HARD SCAM GUARD) ---
+                # 1. Защита от ложного списания в первые 45 секунд: токен только что куплен и прошел пре-аудит
                 _last_sol_sec_chk = getattr(position, "last_security_check_ts", 0.0)
-                if (time.time() - _last_sol_sec_chk) > 30:
+                if minutes_held >= 0.75 and (time.time() - _last_sol_sec_chk) > 35:
                     position.last_security_check_ts = time.time()
                     try:
                         from jupiter import JupiterAPI
                         _jup_ok, _jup_why = await JupiterAPI.is_token_sellable(mint)
                         if not _jup_ok:
-                            print(f"🚨 [SOL-SELL-BLOCKED] {position.symbol} ({mint[:10]}): {_jup_why} — токен непродаваем/рагпулл, списание в 0.0$ (-100%).")
-                            tracker.close_position(mint, 0.0, f"SOL Rug Pull / Unsellable ({_jup_why})")
-                            continue
+                            _strikes = getattr(position, "unsellable_strikes", 0) + 1
+                            position.unsellable_strikes = _strikes
+                            if _strikes >= 2:
+                                print(f"🚨 [SOL-SELL-BLOCKED] {position.symbol} ({mint[:10]}): {_jup_why} (подтверждено {_strikes}x) — токен непродаваем/рагпулл, списание в 0.0$ (-100%).")
+                                tracker.close_position(mint, 0.0, f"SOL Rug Pull / Unsellable ({_jup_why})")
+                                continue
+                            else:
+                                print(f"⚠️ [SOL-SELL-WARN] {position.symbol} ({mint[:10]}): {_jup_why} (страйк 1/2, проверка через 35с)")
+                        else:
+                            position.unsellable_strikes = 0
                     except Exception:
                         pass
                     try:

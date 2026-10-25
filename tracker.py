@@ -523,7 +523,9 @@ class PaperTracker:
             chain=chain,
             pair_address=pair_address,
             stop_under_wick=float(stop_under_wick or 0.0),
-            wick_stop_loss_pct=float(wick_stop_loss_pct or 0.0)
+            wick_stop_loss_pct=float(wick_stop_loss_pct or 0.0),
+            last_security_check_ts=time.time(),
+            unsellable_strikes=0
         )
         self.save_portfolio()
         print(f"📝 PAPER BUY: {symbol} ({mint}) | Amount: ${amount_usd} | Price: ${entry_price} | Src: {source} | Chain: {chain}")

@@ -47,62 +47,114 @@ class JupiterAPI:
         from http_client import get_session
         session = await get_session()
         try:
-            # 1. Симуляция ПОКУПКИ (SOL -> Mint)
-            async with session.get(buy_url, timeout=5) as response:
-                if response.status != 200:
-                    return {"is_safe": False, "reason": "Jupiter buy routing failed (No liquidity or rug)"}
+            # 1. Симуляция ПОКУПКИ (SOL -> Mint) с retry при 429
+            buy_data = None
+            for attempt in range(3):
+                async with session.get(buy_url, timeout=5) as response:
+                    if response.status == 429:
+                        await asyncio.sleep(0.4 * (attempt + 1))
+                        continue
+                    if response.status != 200:
+                        try:
+                            err_data = await response.json()
+                            err_code = err_data.get("errorCode", err_data.get("error", "NO_ROUTE"))
+                        except Exception:
+                            err_code = "NO_ROUTE"
+                        return {"is_safe": False, "reason": f"Jupiter buy routing failed ({err_code})"}
 
-                buy_data = await response.json()
-                buy_impact = float(buy_data.get("priceImpactPct", 100) or 100)
-                if buy_impact > 6.0:
-                    return {"is_safe": False, "reason": f"High buy price impact: {buy_impact:.1f}% (empty pool or tax)"}
+                    buy_data = await response.json()
+                    break
 
-                out_tokens = int(buy_data.get("outAmount", 0) or 0)
-                if out_tokens <= 0:
-                    return {"is_safe": False, "reason": "Zero tokens returned from buy quote"}
+            if not buy_data:
+                return {"is_safe": False, "reason": "Jupiter API rate limit (429) on buy"}
 
-            # 2. Симуляция ПРОДАЖИ (Mint -> SOL) на 50% полученных токенов
+            buy_impact = float(buy_data.get("priceImpactPct", 100) or 100)
+            if buy_impact > 6.0:
+                return {"is_safe": False, "reason": f"High buy price impact: {buy_impact:.1f}% (empty pool or tax)"}
+
+            out_tokens = int(buy_data.get("outAmount", 0) or 0)
+            if out_tokens <= 0:
+                return {"is_safe": False, "reason": "Zero tokens returned from buy quote"}
+
+            # 2. Симуляция ПРОДАЖИ (Mint -> SOL) на 50% полученных токенов с retry при 429
             sell_amount = max(1, out_tokens // 2)
             sell_url = f"https://api.jup.ag/swap/v1/quote?inputMint={mint}&outputMint={sol_mint}&amount={sell_amount}&slippageBps=500"
-            async with session.get(sell_url, timeout=5) as sell_resp:
-                if sell_resp.status != 200:
-                    try:
-                        sell_err = await sell_resp.json()
-                        err_code = sell_err.get("errorCode", sell_err.get("error", "NO_ROUTE"))
-                    except Exception:
-                        err_code = "NO_ROUTE"
-                    return {"is_safe": False, "reason": f"HONEYPOT: cannot sell token back to SOL ({err_code})"}
+            sell_data = None
+            for attempt in range(3):
+                async with session.get(sell_url, timeout=5) as sell_resp:
+                    if sell_resp.status == 429:
+                        await asyncio.sleep(0.4 * (attempt + 1))
+                        continue
+                    if sell_resp.status != 200:
+                        try:
+                            sell_err = await sell_resp.json()
+                            err_code = sell_err.get("errorCode", sell_err.get("error", "NO_ROUTE"))
+                        except Exception:
+                            err_code = "NO_ROUTE"
+                        return {"is_safe": False, "reason": f"HONEYPOT: cannot sell token back to SOL ({err_code})"}
 
-                sell_data = await sell_resp.json()
-                if not sell_data or "outAmount" not in sell_data:
-                    return {"is_safe": False, "reason": "HONEYPOT: invalid sell quote from Jupiter"}
+                    sell_data = await sell_resp.json()
+                    break
 
-                sell_impact = float(sell_data.get("priceImpactPct", 100) or 100)
-                if sell_impact > 15.0:
-                    return {"is_safe": False, "reason": f"High sell price impact: {sell_impact:.1f}% (liquidity drained)"}
+            if not sell_data:
+                return {"is_safe": False, "reason": "Jupiter API rate limit (429) on sell"}
 
-                out_sol_lamports = int(sell_data.get("outAmount", 0) or 0)
-                if out_sol_lamports <= 0:
-                    return {"is_safe": False, "reason": "HONEYPOT: 0 SOL returned when selling token"}
+            if not sell_data or "outAmount" not in sell_data:
+                return {"is_safe": False, "reason": "HONEYPOT: invalid sell quote from Jupiter"}
 
-                return {"is_safe": True, "buy_data": buy_data, "sell_data": sell_data}
+            sell_impact = float(sell_data.get("priceImpactPct", 100) or 100)
+            if sell_impact > 15.0:
+                return {"is_safe": False, "reason": f"High sell price impact: {sell_impact:.1f}% (liquidity drained)"}
+
+            out_sol_lamports = int(sell_data.get("outAmount", 0) or 0)
+            if out_sol_lamports <= 0:
+                return {"is_safe": False, "reason": "HONEYPOT: 0 SOL returned when selling token"}
+
+            return {"is_safe": True, "buy_data": buy_data, "sell_data": sell_data}
         except Exception as e:
             return {"is_safe": False, "reason": f"Simulation error: {e}"}
 
     @staticmethod
     async def is_token_sellable(mint: str) -> tuple:
         """
-        Оперативная проверка для открытой позиции: можно ли прямо сейчас продать токен в SOL.
+        Оперативная проверка для открытой позиции: можно ли прямо сейчас продать токен в SOL (Mint -> SOL).
         Возвращает (is_sellable: bool, reason: str).
-        Если нельзя -> токен списывается в 0.0$ (-100% PnL, реальный скам/раг).
+        Никогда не списывает в 0.0$ при 429 rate limit или сетевых таймаутах.
         """
-        try:
-            res = await JupiterAPI.check_taxes_and_simulate_swap(mint, input_amount_sol=0.02)
-            if not res.get("is_safe", False):
-                return False, res.get("reason", "Cannot sell token on Jupiter")
-            return True, "OK"
-        except Exception as e:
-            return False, f"Check error: {e}"
+        sol_mint = "So11111111111111111111111111111111111111112"
+        sell_url = f"https://api.jup.ag/swap/v1/quote?inputMint={mint}&outputMint={sol_mint}&amount=1000000000&slippageBps=1500"
+        
+        from http_client import get_session
+        session = await get_session()
+        for attempt in range(3):
+            try:
+                async with session.get(sell_url, timeout=5) as resp:
+                    if resp.status == 429:
+                        await asyncio.sleep(0.4 * (attempt + 1))
+                        continue
+                    if resp.status == 200:
+                        data = await resp.json()
+                        out_lamports = int(data.get("outAmount", 0) or 0)
+                        impact = float(data.get("priceImpactPct", 100) or 100)
+                        if out_lamports > 0 and impact < 35.0:
+                            return True, "OK"
+                        elif impact >= 35.0:
+                            return False, f"Extreme sell price impact: {impact:.1f}% (liquidity drained)"
+                        else:
+                            return False, "Zero SOL out on sell quote"
+                    elif resp.status == 400:
+                        try:
+                            err_data = await resp.json()
+                            err_code = err_data.get("errorCode", err_data.get("error", "NO_ROUTE"))
+                        except Exception:
+                            err_code = "NO_ROUTE"
+                        return False, f"HONEYPOT: cannot sell token back to SOL ({err_code})"
+                    else:
+                        # 5xx или временный сбой API — не считаем рагпуллом
+                        return True, f"Jupiter API temporary status {resp.status} (assumed sellable)"
+            except Exception as e:
+                return True, f"Network error during check ({e}) (assumed sellable)"
+        return True, "Jupiter rate limit 429 (assumed sellable)"
 
     @staticmethod
     async def get_swap_transaction(mint: str, is_sell: bool = False, amount_lamports: int = 0, is_emergency: bool = False) -> dict:
