@@ -155,21 +155,20 @@ class GrokJevEngine:
         # 1. Ликвидность (с защитой от гигантских не-мем пулов и фантомной ликвидности)
         raw_liq = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
         fdv_mc = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
-        eff_liq = max(raw_liq, fdv_mc * 0.40) if is_pump else raw_liq
+        eff_liq = raw_liq if raw_liq > 0 else (fdv_mc * 0.40 if is_pump else 0.0)
         
-        # ЗАЩИТА ОТ ФАНТОМНОЙ ЛИКВИДНОСТИ (КЕЙС NINTENDO / GHOST POOL):
-        # В DEX-пулах мошенники надувают цену токена, и DexScreener показывает фейковые $15k+ liquidity.usd.
-        # Проверяем РЕАЛЬНЫЙ резерв SOL (quote currency):
+        # ЗАЩИТА ОТ ФАНТОМНОЙ ЛИКВИДНОСТИ И ОДНОМИНУТНЫХ ДЕВ-ДАМПОВ:
+        # В пуле ОБЯЗАН быть реальный резерв SOL (>= 20 SOL), иначе это пустой рагпулл.
         liq_dict = pair_data.get("liquidity") or {}
         quote_token_symbol = str((pair_data.get("quoteToken") or {}).get("symbol", "")).upper()
         quote_amount = float(liq_dict.get("quote", 0.0) or 0.0)
-        if quote_token_symbol in ("SOL", "WSOL"):
-            if not is_pump and quote_amount > 0 and quote_amount < 20.0:
-                return False, f"phantom-liq-trap: real pool SOL {quote_amount:.2f} < 20.0 SOL (ghost pool scam like Nintendo)"
+        if quote_token_symbol in ("SOL", "WSOL") and quote_amount > 0 and quote_amount < 20.0:
+            return False, f"phantom-liq-trap: real pool SOL {quote_amount:.2f} < 20.0 SOL (dump risk like KAT/Nintendo)"
 
-        min_liq = 6000.0 if is_pump else float(getattr(_c, "JEV_MIN_LIQUIDITY_USD", 12000.0))
+        # Жесткий порог ликвидности: настоящие ракеты (GTA $51k, KIMCHI $35k, TRUMP $40k) имеют глубину >= $14,000!
+        min_liq = float(getattr(_c, "JEV_MIN_LIQUIDITY_USD", 14000.0))
         if eff_liq < min_liq:
-            return False, f"liq-depth-low ${eff_liq:.0f} < ${min_liq:.0f}"
+            return False, f"liq-depth-low ${eff_liq:.0f} < ${min_liq:.0f} (micro-cap dump trap)"
             
         max_liq = float(getattr(_c, "JEV_MAX_LIQUIDITY_USD", 350000.0))
         if eff_liq > max_liq:
@@ -177,7 +176,7 @@ class GrokJevEngine:
 
         FUNNEL_STATS["liquidity"] += 1
 
-        # 2. Возраст
+        # 2. Возраст: не входить в первые 3.5 минуты (зона дампа создателя, кейс KAT на 0m!)
         created_at = pair_data.get("pairCreatedAt") or 0
         age_min = (time.time() * 1000 - created_at) / 60000.0 if created_at else 999.0
         
@@ -190,10 +189,9 @@ class GrokJevEngine:
         vol_m5 = float((pair_data.get("volume") or {}).get("m5", 0) or 0)
         vol_h1 = float((pair_data.get("volume") or {}).get("h1", 0) or 0)
 
-        is_breakout = (vol_m5 >= 4000.0 and b5 >= 15)
-        min_age = float(getattr(_c, "JEV_EARLY_MIN_AGE_MIN", 1.5)) if (is_pump or is_breakout) else float(getattr(_c, "JEV_MIN_AGE_MIN", 3.0))
+        min_age = float(getattr(_c, "JEV_MIN_AGE_MIN", 3.5))
         if age_min < min_age:
-            return False, f"too-young {age_min:.1f}m < {min_age:.1f}m (sniper flush zone)"
+            return False, f"too-young {age_min:.1f}m < {min_age:.1f}m (dev sniper flush zone)"
 
         # 3. Живой импульс ракеты (LIVE ROCKET MOMENTUM)
         # Бот НЕ покупает стоячие, дохлые или падающие монеты!
@@ -238,11 +236,12 @@ class GrokJevEngine:
             if avg_trade < 12.0:
                 return False, f"wash-trading-trap (avg trade ${avg_trade:.1f} < $12 across {bh1+sh1} txns)"
 
-        # 5. Рыночная капитализация (MCap / FDV)
+        # 5. Рыночная капитализация (MCap / FDV): минимум $48,000 для всех токенов
+        # Отсекает микро-скамы pump.fun ($5k-$20k), где создатель держит 30% и сливает на входе (KAT)
         mcap = fdv_mc
-        min_mcap = float(getattr(_c, "JEV_MIN_MCAP_USD", 45000.0))
-        if mcap > 0 and mcap < min_mcap and not is_pump:
-            return False, f"mcap-low ${mcap:,.0f} < ${min_mcap:,.0f}"
+        min_mcap = float(getattr(_c, "JEV_MIN_MCAP_USD", 48000.0))
+        if mcap > 0 and mcap < min_mcap:
+            return False, f"mcap-low ${mcap:,.0f} < ${min_mcap:,.0f} (unproven micro-cap trap)"
 
         # 5. Распределение холдеров (Holder Spread)
         if holder_stats and isinstance(holder_stats, dict):
@@ -651,11 +650,10 @@ class GrokJevEngine:
         except Exception:
             pass
 
-        # 2. DexScreener Latest & Top Boosts & Profiles (Строго SOLANA)
+        # 2. DexScreener Top Boosts & Profiles (Строго SOLANA, без мусорных latest бустов)
         from http_client import fetch_json
         for url in [
             "https://api.dexscreener.com/token-boosts/top/v1",
-            "https://api.dexscreener.com/token-boosts/latest/v1",
             "https://api.dexscreener.com/token-profiles/latest/v1"
         ]:
             try:
@@ -670,10 +668,9 @@ class GrokJevEngine:
             except Exception:
                 pass
 
-        # 3. GeckoTerminal Solana (Trending + New Pools) — 100% фокус на Solana
+        # 3. GeckoTerminal Solana (Trending Pools) — 100% фокус на проверенных трендах
         for net, endp in [
-            ("solana", "trending_pools"),
-            ("solana", "new_pools")
+            ("solana", "trending_pools")
         ]:
             try:
                 url_gt = f"https://api.geckoterminal.com/api/v2/networks/{net}/{endp}"

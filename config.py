@@ -3,8 +3,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Dexscreener API (Только самые свежие бусты и профили, без старых мамонтов 2024 года)
-DEXSCREENER_LATEST = "https://api.dexscreener.com/token-boosts/latest/v1" 
+# Dexscreener API (Только топ-бусты и профили, без мусорных 1-минутных скамов)
+DEXSCREENER_LATEST = "https://api.dexscreener.com/token-boosts/top/v1" 
 DEXSCREENER_PROFILES = "https://api.dexscreener.com/token-profiles/latest/v1" 
 DEXSCREENER_SEARCH = "https://api.dexscreener.com/latest/dex/tokens/"
 
@@ -152,11 +152,11 @@ GEMINI_API_KEY = (os.getenv("GEMINI_API_KEY") or "").strip() # Получить 
 # === GROK BOT x JEV ENGINE (THE FUNNEL & THE LINE) ===
 JEV_ENABLED = True
 JEV_WICK_STOP_ENABLED = False     # ОТКЛЮЧЕНО: искусственный стоп по фитилю душил ракеты на -15%..-25% в первые 2-3 минуты (Goon, SPIDOGE)
-JEV_MIN_AGE_MIN = 3.0            # 3 минуты для AMM пулов (не пропускаем стартовый импульс 3-15м как у KIMCHI)
-JEV_EARLY_MIN_AGE_MIN = 1.5      # 1.5 минуты для pump.fun / пробойных ракет с объёмом
-JEV_MIN_LIQUIDITY_USD = 12000.0  # $12,000 минимальная ликвидность пула
+JEV_MIN_AGE_MIN = 3.5            # Минимум 3.5 минуты (отсекает снайпер-дампы на 0м вроде KAT)
+JEV_EARLY_MIN_AGE_MIN = 3.0      # Минимум 3.0 минуты для пробойных монет
+JEV_MIN_LIQUIDITY_USD = 15000.0  # $15,000 минимальная глубина пула (как у GTA $51k, KIMCHI $35k, TRUMP $40k)
 JEV_MIN_VOLUME_H1 = 40000.0      # $40,000 часовой объем
-JEV_MIN_MCAP_USD = 45000.0       # $45,000 рыночная капитализация
+JEV_MIN_MCAP_USD = 50000.0       # $50,000 минимальная капитализация (отсекает микро-скамы pump.fun)
 JEV_MIN_TRADES_H1 = 250          # 250 сделок в час
 JEV_MAX_TOP_WALLET = 0.15        # 15% лимит на крупнейший кошелек (за вычетом пула, согласовано с RugCheck/GoPlus)
 JEV_MAX_TOP_10 = 0.35            # 35% лимит на топ-10 кошельков (за вычетом пула, согласовано с RugCheck/GoPlus)
