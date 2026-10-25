@@ -552,8 +552,8 @@ async def get_trending() -> list:
     Формат как у DexScreener boosts: [{'tokenAddress','chainId'}]."""
     global _trending_cache, _trending_cache_time
     
-    # Кэшируем результаты на 45 секунд (было 180с): находим новые импульсы и пулы в 4 раза быстрее
-    if time.time() - _trending_cache_time < 45:
+    # Кэшируем результаты на 60 секунд (снижает нагрузку на GeckoTerminal API и защищает от 429)
+    if time.time() - _trending_cache_time < 60:
         return _trending_cache
 
     out, seen = [], set()
@@ -565,26 +565,22 @@ async def get_trending() -> list:
         if not mint or mint in seen or mint.startswith("0x") or len(mint) < 32 or len(mint) > 44:
             return
         attrs = item.get("attributes") or {}
-        # Защита от старых трупов: если пулу > 24ч и < 5 сделок в m5, либо старше 72ч — не засоряем очередь!
+        # Защита от старых трупов: если пулу > 24ч и < 5 сделок в m5, либо старше 48ч — не засоряем очередь!
         created_ms = _parse_ms(attrs.get("pool_created_at"))
         if created_ms:
             age_h = (time.time() * 1000 - created_ms) / 3600000.0
             tx = attrs.get("transactions") or {}
             m5_tx = int((tx.get("m5") or {}).get("buys", 0) or 0) + int((tx.get("m5") or {}).get("sells", 0) or 0)
             if age_h > 24.0 and m5_tx < 5:
-                return  # Мертвый старый пул (кейс AFbX8oGj 4 года, LASocYgQ 106 дней)
-            if age_h > 72.0:
-                return  # Древний мамонт
+                return  # Мертвый старый пул
+            if age_h > 48.0:
+                return  # Древний токен старше 48 часов
         seen.add(mint)
         out.append({"tokenAddress": mint, "chainId": "solana"})
 
-    # 1. Сканируем ТОП 5-минутных и часовых трендов (1 страница каждого, чтобы не выбивать лимит 30 req/min у GT)
+    # 1. Сканируем ТОП 5-минутных трендов (duration=5m)
     d5 = await _gt_get("/networks/solana/trending_pools?duration=5m&page=1", retries=0, timeout=6)
     for item in (d5.get("data") or []):
-        add(item)
-
-    d1 = await _gt_get("/networks/solana/trending_pools?duration=1h&page=1", retries=0, timeout=6)
-    for item in (d1.get("data") or []):
         add(item)
 
     # 2. Свежие пулы (new_pools) — ловит новые Raydium/Meteora/Pump ракеты первыми!

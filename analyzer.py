@@ -411,15 +411,7 @@ class Analyzer:
         tokens = []
         from http_client import fetch_json
         if True:
-            # 1. Сканируем топовые (Boosted) монеты — через ГЛОБАЛЬНЫЙ семафор DS (3)
-            try:
-                status, data = await fetch_json(config.DEXSCREENER_LATEST, timeout=8, retries=1)
-                if status == 200 and isinstance(data, list):
-                    tokens.extend(data)
-            except Exception as e:
-                print(f"Dexscreener boosts fetch error: {e}")
-
-            # 1.1 Сканируем самые свежие бусты (token-boosts/latest/v1) — ловит новые ⚡-бусты сразу
+            # 1. Сканируем САМЫЕ СВЕЖИЕ бусты (token-boosts/latest/v1) — ловит новые ⚡-бусты сразу
             try:
                 status, data = await fetch_json("https://api.dexscreener.com/token-boosts/latest/v1", timeout=8, retries=1)
                 if status == 200 and isinstance(data, list):
@@ -442,6 +434,14 @@ class Analyzer:
                     tokens.extend(data)
             except Exception as e:
                 print(f"Dexscreener recent updates fetch error: {e}")
+
+            # 4. Топовые (Boosted) монеты — в самый конец, чтобы не забивать очередь старыми мамонтами
+            try:
+                status, data = await fetch_json(config.DEXSCREENER_LATEST, timeout=8, retries=1)
+                if status == 200 and isinstance(data, list):
+                    tokens.extend(data)
+            except Exception as e:
+                print(f"Dexscreener boosts fetch error: {e}")
 
             # 4. Сканируем свежие Community Takeovers (CTO)
             try:
@@ -754,11 +754,18 @@ class Analyzer:
             if p_liq < 5000 and p_vol24 < 8000:
                 continue  # Мертвый/заброшенный пул, не активный оригинал
 
-            # Учитываем ВСЕ живые пулы с таким же тикером для детекта серийного клон-роя (кейс ARACH: 4 пула одновременно на PumpSwap)
-            swarm_mints.add(p_mint)
-            if len(swarm_mints) >= 2:
-                print(f"🚫 [CLONE-SWARM] {sym_up} ({current_mint[:8]}): обнаружена серийная атака клонов ({len(swarm_mints)+1}+ активных токенов {sym_up} одновременно) — блок!")
-                return True
+            # Если наш токен — явный доминант по ликвидности (>= $25k и крупнее соперника),
+            # мелкие копии скамеров не могут сделать нашего лидера "клоном" (кейс SWORDCAT $261k liq)
+            if current_liq >= 25000.0 and current_liq >= p_liq * 1.3:
+                continue
+
+            # Учитываем живые пулы с таким же тикером для детекта серийного клон-роя (кейс ARACH: 4 микро-пула одновременно на PumpSwap)
+            # Срабатывает только если наш токен еще мелкий (current_liq < $25k)
+            if current_liq < 25000.0:
+                swarm_mints.add(p_mint)
+                if len(swarm_mints) >= 2:
+                    print(f"🚫 [CLONE-SWARM] {sym_up} ({current_mint[:8]}): обнаружена серийная атака клонов ({len(swarm_mints)+1}+ активных токенов {sym_up} одновременно) — блок!")
+                    return True
 
             # Если другой живой пул с тем же тикером уже заметно крупнее по ликвидности (>= $15k и в 1.3x+ больше нашего)
             if p_liq >= 15000 and current_liq > 0 and p_liq > (current_liq * 1.3):
@@ -1054,8 +1061,12 @@ class Analyzer:
             _chain_ae = str((pair_data or {}).get("chainId", "solana")).lower()
             _txm5_tmp = (pair_data.get("txns") or {}).get("m5", {}) or {}
             _b5_tmp, _s5_tmp = int(_txm5_tmp.get("buys", 0) or 0), int(_txm5_tmp.get("sells", 0) or 0)
-            if _b5_tmp >= 12 and _b5_tmp >= _s5_tmp * 1.05 and _m1 <= 25.0:
-                # Здоровая структура покупок и нет спайка 1м свечи
+            if _age_min_pre <= 15.0 and _b5_tmp >= _s5_tmp:
+                # Молодая ракета на первичном старте (кейсы SOLCHAN +102%, 4AGENT +168%)
+                _max_m5_entry = 250.0
+            elif _age_min_pre <= 45.0 and _b5_tmp >= _s5_tmp * 1.05 and _m1 <= 25.0:
+                _max_m5_entry = 180.0
+            elif _b5_tmp >= 12 and _b5_tmp >= _s5_tmp * 1.05 and _m1 <= 25.0:
                 _max_m5_entry = 120.0
             elif _age_min_pre < 45.0 and _m1 <= 22.0:
                 _max_m5_entry = 95.0
@@ -1206,7 +1217,9 @@ class Analyzer:
             _created = pair_data.get("pairCreatedAt") or 0
             if _created and not _socials_unknown:
                 _age_h = (time.time() * 1000 - _created) / 3.6e6
-                if _age_h < 6 and isinstance(_socials, list) and len(_socials) == 0 and len(_websites) == 0 and not _lottery and _cur_liq < 35000:
+                # Для pump.fun токенов socials хостятся на pump.fun, DexScreener не всегда индексирует их в первые минуты
+                _is_organic_flow = (_b5 >= 25 and _b5 >= _s5 and _vm5 >= 3000.0)
+                if not mint.endswith("pump") and not _is_organic_flow and _age_h < 6 and isinstance(_socials, list) and len(_socials) == 0 and len(_websites) == 0 and not _lottery and _cur_liq < 35000:
                     return self._deny(mint, "no-socials", f"🚫 [SOCIAL] {mint}: 0 соцсетей/сайта при возрасте {_age_h:.1f}ч и ликве ${_cur_liq:,.0f} (<$35k) — анонимный бандлер-раг.")
             print(f"✅ [ENTRY-CANDIDATE] {mint}: PULLBACK — импульс m5 {_m5:+.1f}%, откат m1 {_m1:+.1f}%, h1 {_h1:+.0f}%, b/s {_b}/{_s}. Кандидат на вход.")
         
@@ -2518,7 +2531,11 @@ class Analyzer:
             return self._deny(mint, f"ray-h1-exhausted {_h1:+.0f}%", f"🚫 [RAYDIUM] {mint[:8]}: h1 {_h1:+.0f}% > +{_max_ray_h1:.0f}% — гипер-памп завершается, покупатели истощены.")
 
         # Пропуск первой волны пробоя для молодых ракет, но блок перегрева на поздних волнах
-        if _b5 >= 12 and _b5 >= _s5 * 1.05 and _m1 <= 25.0:
+        if _age_min <= 15.0 and _b5 >= _s5:
+            _max_ray_m5 = 250.0
+        elif _age_min <= 45.0 and _b5 >= _s5 * 1.05 and _m1 <= 25.0:
+            _max_ray_m5 = 180.0
+        elif _b5 >= 12 and _b5 >= _s5 * 1.05 and _m1 <= 25.0:
             _max_ray_m5 = 120.0
         elif _age_min < 45.0 and _m1 <= 22.0:
             _max_ray_m5 = 95.0

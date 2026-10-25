@@ -20,13 +20,26 @@ class CopyTrader:
     def load_wallets(self):
         import os
         wallets = {}
+        if os.path.exists("smart_wallets_db.json"):
+            try:
+                with open("smart_wallets_db.json", "r") as f:
+                    db = json.load(f)
+                    for w, data in db.items():
+                        if data.get("chain") == "solana":
+                            tier = data.get("tier", 3)
+                            pnl = data.get("total_pnl", 0)
+                            wallets[w] = f"@Tier{tier}_{w[:4]}_+${pnl:,.0f}"
+            except Exception:
+                pass
         if os.path.exists("smart_wallets.txt"):
-            with open("smart_wallets.txt", "r") as f:
-                for line in f:
-                    line = line.strip()
-                    if line and not line.startswith("#"):
-                        short_name = f"@Smart_{line[:4]}"
-                        wallets[line] = short_name
+            try:
+                with open("smart_wallets.txt", "r") as f:
+                    for line in f:
+                        line = line.strip()
+                        if line and not line.startswith("#") and line not in wallets:
+                            wallets[line] = f"@Smart_{line[:4]}"
+            except Exception:
+                pass
         
         if not wallets:
             wallets = {
@@ -200,6 +213,7 @@ class CopyTrader:
         endpoint_idx = 0
         
         while True:
+            self.wallets = self.load_wallets()
             current_wss = wss_endpoints[endpoint_idx % len(wss_endpoints)]
             try:
                 async with websockets.connect(current_wss) as ws:

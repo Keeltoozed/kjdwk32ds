@@ -35,17 +35,6 @@ FACTORIES_PER_CHAIN = {
         ("0xd238dd80C259a72e81d7e4664a9801593F98d1c5", "v2"),         # AlienBase V2 Base
         ("0x526C8D890aebE1901B95B161B1B47A977e597148", "slipstream"), # AlienBase Degen CLFactory Base
     ],
-    "bsc": [
-        ("0xcA143Ce32Fe78f1f7019d7d551a6402fC5350c73", "v2"),         # PancakeSwap V2 Factory BSC
-        ("0x0BFbCF9fa4f9C56B0F40a671Ad40E0805A091865", "v3"),         # PancakeSwap V3 Factory BSC
-        ("0x858E3312ed37354473981844faE290602524d799", "v2"),         # Biswap V2 Factory BSC
-        ("0x86407bEa2078ea5f5EB5A52B2caA963bC1F889Da", "v2"),         # BabySwap V2 Factory BSC
-        ("0xdB1d10011AD0Ff90774D0C6Bb92e5C5c8b4461F7", "v3"),         # Uniswap V3 Factory BSC
-        ("0x0841BD0B734E4F5853f0dD8d7Ea041c241fb0Da6", "v2"),         # ApeSwap V2 Factory BSC
-        ("0x20a3041B5076CdDe6507E4161b5803EC09008eda", "v2"),         # Thena V2 Factory BSC
-        ("0x306b00b73c44249a2a901986429388df6ea880a6", "slipstream"), # Thena Fusion CL Factory BSC
-        ("0x8F8Dd7DB1bDA5eD3da8C9daf3bfa471c12d58486", "v2"),         # DODO V2 Factory BSC
-    ],
 }
 
 # chain -> (wss_url, quote-токены, для которых второй адрес = новый мем)
@@ -60,13 +49,6 @@ CHAINS_WSS = {
         "0x0578d8a44db98b23bf096a382e016e29a5ce0ffe",  # HIGHER (Farcaster higher meme)
         "0xd9aaec86b65d86f6a7b5b1b0c42ffa531710b6ca",  # USDbC
         "0xcbb7c0000ab88b473b1f5afd9ef808440eed33bf",  # cbBTC
-    }),
-    "bsc": ("wss://bsc-rpc.publicnode.com", {
-        "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",  # WBNB
-        "0x55d398326f99059f775485246999027b3197955c",  # USDT
-        "0xe9e7cea3dedca5984780bafc599bd69add087d56",  # BUSD
-        "0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d",  # USDC
-        "0x0e09fabb73bd3ade0a17ecc321fd13a19e81ce82",  # CAKE
     }),
 }
 

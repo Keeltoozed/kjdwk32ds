@@ -43,7 +43,7 @@ async def birdeye_loop(analyzer, tracker):
     if not (getattr(config, "BIRDEYE_API_KEY", "") or ""):
         return
     chains = list(getattr(config, "BIRDEYE_CHAINS",
-                          ["solana", "robinhood", "base", "bsc"]))
+                          ["solana", "base"]))
     print(f"🦅 Birdeye Scanner запущен: ротация {chains}!")
     processed = {}
     tick = 0

@@ -46,6 +46,9 @@ class VirtualPosition(BaseModel):
     min_price_usd: float = 0.0 # минимальная цена с момента входа
     max_dd_pct: float = 0.0 # максимальная просадка от входа (0..-1, напр. -0.15)
     pair_address: str = "" # Адрес пула DexScreener для мгновенного балка без 429
+    # --- GROK BOT x JEV RISK ENGINE ("The stop lives under the wick") ---
+    stop_under_wick: float = 0.0 # Динамический стоп-уровень под фитиль отката
+    wick_stop_loss_pct: float = 0.0 # % стопа от входа (-0.05..-0.08)
 
 class PaperTracker:
     def __init__(self):
@@ -409,7 +412,7 @@ class PaperTracker:
         print(f"💰 [REINVEST] Вход: ${final_size:.0f} (профит: +${net_profit:.1f}, пул: ${liq_usd:,.0f}, свободно: ${free_cash:.1f})")
         return final_size
 
-    def add_position(self, symbol, mint, entry_price, amount_usd=5.0, ml_features=None, ml_confidence=0.0, is_mature=False, source="", chain="solana", pair_address=""):
+    def add_position(self, symbol, mint, entry_price, amount_usd=5.0, ml_features=None, ml_confidence=0.0, is_mature=False, source="", chain="solana", pair_address="", stop_under_wick=0.0, wick_stop_loss_pct=0.0):
         # Валидация входа: мусорный entry ~0 давал фантомы +586М% и $1.6M.
         try:
             entry_price = float(entry_price or 0)
@@ -511,7 +514,9 @@ class PaperTracker:
             is_mature=is_mature,
             source=source,
             chain=chain,
-            pair_address=pair_address
+            pair_address=pair_address,
+            stop_under_wick=float(stop_under_wick or 0.0),
+            wick_stop_loss_pct=float(wick_stop_loss_pct or 0.0)
         )
         self.save_portfolio()
         print(f"📝 PAPER BUY: {symbol} ({mint}) | Amount: ${amount_usd} | Price: ${entry_price} | Src: {source} | Chain: {chain}")

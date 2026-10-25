@@ -3,8 +3,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Dexscreener API (Оставляем для фоновых проверок портфеля, если нужно)
-DEXSCREENER_LATEST = "https://api.dexscreener.com/token-boosts/top/v1" 
+# Dexscreener API (Только самые свежие бусты и профили, без старых мамонтов 2024 года)
+DEXSCREENER_LATEST = "https://api.dexscreener.com/token-boosts/latest/v1" 
 DEXSCREENER_PROFILES = "https://api.dexscreener.com/token-profiles/latest/v1" 
 DEXSCREENER_SEARCH = "https://api.dexscreener.com/latest/dex/tokens/"
 
@@ -139,12 +139,39 @@ AI_MODE = "degen" # "sniper" (строго 80-90% уверенности) или
 MIN_LIQUIDITY = 20000  # Снижено для скальпинга обычных монет
 MAX_LIQUIDITY = 50000000
 
-# AI Аналитика
+# AI Аналитика: Groq (бесплатный сверхбыстрый API) + xAI Grok + Gemini
+GROQ_API_KEY = (os.getenv("GROQ_API_KEY") or os.getenv("GROK_API_KEY") or os.getenv("XAI_API_KEY") or "").strip().strip('"').strip("'")
+XAI_API_KEY = (os.getenv("XAI_API_KEY") or os.getenv("GROK_API_KEY") or "").strip().strip('"').strip("'")
 GEMINI_API_KEY = (os.getenv("GEMINI_API_KEY") or "").strip() # Получить бесплатно на https://aistudio.google.com/
+
+# === GROK BOT x JEV ENGINE (THE FUNNEL & THE LINE) ===
+JEV_ENABLED = True
+JEV_MIN_AGE_MIN = 15.0           # 15 минут для зрелых AMM пулов
+JEV_EARLY_MIN_AGE_MIN = 2.0      # 2-3 минуты для pump.fun / early scout
+JEV_MIN_LIQUIDITY_USD = 12000.0  # $12,000 минимальная ликвидность пула
+JEV_MIN_VOLUME_H1 = 40000.0      # $40,000 часовой объем
+JEV_MIN_MCAP_USD = 45000.0       # $45,000 рыночная капитализация
+JEV_MIN_TRADES_H1 = 250          # 250 сделок в час
+JEV_MAX_TOP_WALLET = 0.05        # 5% лимит на крупнейший кошелек (за вычетом пула)
+JEV_MAX_TOP_10 = 0.25            # 25% лимит на топ-10 кошельков (за вычетом пула)
+
+# SOFT AI Criteria (0.0 to 1.0)
+JEV_MIN_ACCOUNT_IS_PROJECT = 0.75
+JEV_MAX_RECYCLED_ACCOUNT = 0.30
+JEV_MAX_CONCENTRATION_RISK = 0.35
+JEV_MAX_MOMENTUM_SPENT = 0.60
+JEV_MIN_LIQUIDITY_FITS_TICKET = 0.70
+JEV_MAX_DEV_STILL_LOADED = 0.25
+
+# FILLS & RISK: "We bid the flush, not the candle" & "The stop lives under the wick"
+JEV_BID_THE_FLUSH_ENABLED = True
+JEV_STOP_UNDER_WICK_ENABLED = True
+JEV_MAX_M1_ENTRY_PCT = 3.5       # Не влетать в зеленую палку (m1 <= +3.5%)
+JEV_DEFAULT_WICK_STOP_PCT = -0.06 # -6% дефолтный стоп под фитиль отката
 
 # Birdeye API Key
 BIRDEYE_API_KEY = os.getenv("BIRDEYE_API_KEY", "")
-
+BIRDEYE_CHAINS = ["solana", "base"]  # Фокус только на Solana и Base
 
 # === JITO BLOCK ENGINE (MEV Protection) ===
 USE_JITO_EXECUTION = True # Поставь True, когда будешь готов торговать на реальные деньги
@@ -153,7 +180,7 @@ JITO_TIP_AMOUNT_SOL = 0.0005 # Чаевые валидатору (минимум
 JITO_TIP_ACCOUNT = "96gYZGLnJYVFmbjzopPSU6QiCRK4rPdTuQ8hB1aP442b" # Официальный Jito Tip Account
 LUNARCRUSH_API_KEY = "syvh43mkvrzrw54sor6kc5r6dmtyj5fhi4jd38ht"
 
-# === ROBINHOOD CHAIN (ОТКЛЮЧЕНО: 100% скам Uniswap V4 без локеров/аудита) ===
+# === ROBINHOOD CHAIN (ОТКЛЮЧЕНО: фокус только на Solana и Base) ===
 ROBINHOOD_ENABLED = False
 ROBINHOOD_ENTRIES_ENABLED = False
 ROBINHOOD_CHAIN_ID = 4663
@@ -173,19 +200,19 @@ EVM_RESCAN_COOLDOWN = 60  # Перепроверка через 60с
 EVM_MAX_MINTS = 120  # Лимит активных кандидатов за цикл скана
 
 
-# === BASE (EVM L2, там сидят мемы с fomo.family: musebook, DELTA...) ===
-# Тот же EVM-движок, slug DexScreener "base".
+# === BASE (EVM L2: активен, 100% фокус вместе с Solana) ===
 BASE_ENABLED = True
-BASE_MIN_LIQUIDITY = 4000.0  # Порог $4k (как на BSC): Clanker/Uniswap v3 мемы на Base стартуют с ~$3.5k-$12k ликвидности
-BASE_SCAN_INTERVAL = 20  # 20с: быстрый поиск ранних ракет Base
+BASE_MIN_LIQUIDITY = 4000.0  # Порог $4k: Clanker/Uniswap v3 мемы на Base стартуют с ~$3.5k-$12k ликвидности
+BASE_SCAN_INTERVAL = 15  # 15с: быстрый поиск ранних ракет Base
+BASE_MAX_SIZE_USD = 25.0  # Полноценный размер ордера для Base
 
-# === BSC (Binance Smart Chain: включено с обязательным GoPlus + Honeypot.is аудитом и проверкой блокировки LP) ===
-BSC_ENABLED = True
-BSC_MIN_LIQUIDITY = 4000.0  # Пулы от $4k (раньше стояла опечатка 30000.0, которая блокировала все ракеты BTW/IRYS!)
+# === BSC (ОТКЛЮЧЕНО: фокус только на Solana и Base) ===
+BSC_ENABLED = False
+BSC_MIN_LIQUIDITY = 4000.0
 BSC_SCAN_INTERVAL = 20
-BSC_MIN_LP_LOCKED_PCT = 0.70  # Не менее 70% LP должно быть заблокировано (PinkSale/Unicrypt) или сожжено (0xdead)
+BSC_MIN_LP_LOCKED_PCT = 0.70
 
-# === ETHEREUM (Отключено по запросу: газ $3-$15 съедает всю прибыль на скальпе) ===
+# === ETHEREUM (ОТКЛЮЧЕНО: фокус только на Solana и Base) ===
 ETHEREUM_ENABLED = False
 ETHEREUM_ENTRIES_ENABLED = False
 

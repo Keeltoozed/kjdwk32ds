@@ -375,8 +375,19 @@ async def position_manager_loop(analyzer, tracker):
                 if max_pnl_pct < 0.015 and pnl_pct <= -0.10 and minutes_held >= 3.5:
                     tracker.close_position(mint, current_price, f"Zero-Momentum Cut ({minutes_held:.0f}m, {pnl_pct*100:.1f}%)")
                     continue
+
+                # 3.2 GROK BOT x JEV: СТОП ПОД ФИТИЛЬ ("The stop lives under the wick")
+                _wick_stop = getattr(pos, "stop_under_wick", 0.0) or 0.0
+                _wick_pct = getattr(pos, "wick_stop_loss_pct", 0.0) or 0.0
+                if minutes_held >= 0.5:
+                    if _wick_stop > 0 and current_price <= _wick_stop:
+                        tracker.close_position(mint, current_price, f"JEV Wick Stop (${current_price:.6f} <= ${_wick_stop:.6f}, {pnl_pct*100:.1f}%)")
+                        continue
+                    elif _wick_pct < 0 and pnl_pct <= _wick_pct:
+                        tracker.close_position(mint, current_price, f"JEV Wick Stop ({pnl_pct*100:.1f}% <= {_wick_pct*100:.1f}%)")
+                        continue
                             
-                # 3. АВАРИЙНЫЙ КЭП ПЕРВЫМ: больше -30% одну сделку не держим.
+                # 3. АВАРИЙНЫЙ КЭП: больше -30% одну сделку не держим.
                 if pnl_pct <= -0.30:
                     tracker.close_position(mint, current_price, f"Emergency Cap ({pnl_pct*100:.0f}%)")
                     continue
@@ -415,6 +426,32 @@ async def birth_wss_loop(analyzer, tracker):
     import websockets
     import json
     print("👶 Запуск Роддома: сбор базы данных новых токенов для сканера (без авто-покупки на 0-секунде)...")
+
+    async def _fallback_poll_births():
+        """Фоновый сбор свежих токенов (страхует при сбоях PumpPortal WSS 502)."""
+        from http_client import fetch_json
+        while True:
+            try:
+                st, d = await fetch_json("https://api.dexscreener.com/token-profiles/latest/v1", timeout=6, retries=1)
+                if st == 200 and isinstance(d, list):
+                    for item in d:
+                        if item.get("chainId") == "solana":
+                            m = item.get("tokenAddress")
+                            if m and (m.endswith("pump") or len(m) > 32):
+                                birth_tracker.add_token(m)
+                st_b, d_b = await fetch_json("https://api.dexscreener.com/token-boosts/latest/v1", timeout=6, retries=1)
+                if st_b == 200 and isinstance(d_b, list):
+                    for item in d_b:
+                        if item.get("chainId") == "solana":
+                            m = item.get("tokenAddress")
+                            if m and (m.endswith("pump") or len(m) > 32):
+                                birth_tracker.add_token(m)
+            except Exception:
+                pass
+            await asyncio.sleep(6)
+
+    asyncio.create_task(_fallback_poll_births())
+
     uri = config.PUMPPORTAL_WSS
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
@@ -432,8 +469,8 @@ async def birth_wss_loop(analyzer, tracker):
                         # Просто сохраняем монету в базу для scanner_loop (чтобы она "настоялась" 5-20 мин)
                         birth_tracker.add_token(mint)
         except Exception as e:
-            print(f"Ошибка WSS Роддома: {e}. Переподключение через 5 секунд...")
-            await asyncio.sleep(5)
+            # Не спамим при 502, фоновый поллер подхватывает новые токены
+            await asyncio.sleep(15)
 
 async def scanner_loop(analyzer, tracker):
     print("🚀 Запуск PhantBot Scanner (Поиск новых монет)...")
@@ -521,12 +558,22 @@ async def scanner_loop(analyzer, tracker):
                     print(f"⚠️ prefetch err: {type(_pfe).__name__}")
                 
                 # ⚡ Сортировка по импульсу и фильтрация мертвых/старых токенов
+                _SKIP_ZOMBIE_SYMBOLS = {
+                    "RAY", "MSOL", "BSOL", "JITOSOL", "WBTC", "BTC", "WETH", "ETH",
+                    "USDC", "USDT", "USDH", "DAI", "SOL", "WSOL", "ORE", "NEET", "GYAT"
+                }
                 _ranked_mints = []
                 for mint in mints_to_scan:
                     if not mint or mint in tracker.positions:
                         continue
                     _c_pre = getattr(analyzer, "_prefetch_cache", {}).get(mint, (0, {}))[1]
                     if _c_pre and isinstance(_c_pre, dict):
+                        _base = _c_pre.get("baseToken", {}) or {}
+                        _sym = str(_base.get("symbol", "")).upper().strip()
+                        if _sym in _SKIP_ZOMBIE_SYMBOLS:
+                            processed_mints[mint] = time.time() + 86400
+                            continue
+
                         _c_at = _c_pre.get("pairCreatedAt") or 0
                         _c_age_m = (time.time() * 1000 - _c_at) / 60000.0 if _c_at else 999.0
                         _c_pc = _c_pre.get("priceChange") or {}
@@ -540,15 +587,14 @@ async def scanner_loop(analyzer, tracker):
                             processed_mints[mint] = time.time() + 86400
                             continue
 
-                        # Старый токен (>4ч) без импульса (<6%): скип на 30 мин
+                        # Старый токен (>4ч) без импульса (<6%): скип на 1 час
                         if _c_age_m > 240.0 and _c_m5 < 6.0 and mint not in _graduated_set:
-                            processed_mints[mint] = time.time() + 1800
+                            processed_mints[mint] = time.time() + 3600
                             continue
 
-                        # Токен старше 1ч со слабым импульсом (<4%): скип на 15 мин
-                        _c_dex = str(_c_pre.get("dexId", "")).lower()
-                        if _c_dex not in ("pump", "pumpfun") and _c_age_m > 60.0 and _c_m5 < 4.0 and mint not in _graduated_set:
-                            processed_mints[mint] = time.time() + 900
+                        # Токен старше 1ч со слабым импульсом (<4%): скип на 30 мин (ЛЮБОЙ DEX, включая pump.fun!)
+                        if _c_age_m > 60.0 and _c_m5 < 4.0 and mint not in _graduated_set:
+                            processed_mints[mint] = time.time() + 1800
                             continue
 
                         # Мертвый токен старше 3 минут с 0 сделок в m5: скип на 30 мин
@@ -564,7 +610,16 @@ async def scanner_loop(analyzer, tracker):
                         _score_rank = (1000.0 if mint in _graduated_set else 0.0) + _c_m5
                         _ranked_mints.append((_score_rank, mint))
                     else:
-                        _ranked_mints.append((0.0, mint))
+                        # Если данных в префетче нет: пускаем только свежие миграции, ручной вотчлист или молодой токен из роддома
+                        if mint in _graduated_set:
+                            _ranked_mints.append((1000.0, mint))
+                        elif mint in getattr(config, "USER_WATCHLIST", []):
+                            _ranked_mints.append((50.0, mint))
+                        elif mint.endswith("pump") and birth_tracker.get_age(mint) is not None and birth_tracker.get_age(mint) <= 30.0:
+                            _ranked_mints.append((10.0, mint))
+                        else:
+                            # Токен без данных префетча из бустов не спамит очередь одиночными запросами
+                            processed_mints[mint] = time.time() + 300
 
                 _ranked_mints.sort(key=lambda x: x[0], reverse=True)
                 mints_to_scan = [m for _, m in _ranked_mints]
@@ -737,6 +792,34 @@ async def scanner_loop(analyzer, tracker):
                                                       getattr(analyzer, "last_score", 0.0))
                                     await asyncio.sleep(1.5)
                                     continue
+
+                                # === GROK BOT x JEV ENGINE: HARD GATE ➔ JEV AI VET ➔ FILLS & RISK ===
+                                from grok_jev import grok_jev
+                                _h_stats = {
+                                    "top1_pct": getattr(analyzer, "_last_dev", 0.0),
+                                    "top10_pct": getattr(analyzer, "_last_top10", 0.0),
+                                    "dev_pct": getattr(analyzer, "_last_dev", 0.0)
+                                }
+                                # 1. HARD GATE: "if it fails here, JEV never sees it"
+                                _jev_hard_ok, _jev_hard_why = grok_jev.hard_gate(mint, pair_data, "solana", _h_stats)
+                                if not _jev_hard_ok:
+                                    print(f"🚫 [JEV-HARD-GATE] {actual_symbol} ({mint[:8]}): {_jev_hard_why} — отказ входа.")
+                                    continue
+
+                                # 2. SOFT GATE: JEV AI Evaluation (Groq / xAI Grok / Gemini / Local)
+                                _jev_soft_ok, _jev_data, _jev_soft_why = await grok_jev.jev_vet(mint, actual_symbol, pair_data, "solana", _h_stats)
+                                if not _jev_soft_ok:
+                                    print(f"🚫 [JEV-AI-GATE] {actual_symbol} ({mint[:8]}): {_jev_soft_why} — отказ входа.")
+                                    continue
+
+                                # 3. FILLS: "We bid the flush, not the candle" & RISK: "The stop lives under the wick"
+                                _flush_ok, _wick_pct, _wick_stop_price, _flush_msg = grok_jev.check_flush_and_wick(pair_data, entry_price)
+                                if not _flush_ok:
+                                    print(f"⏳ [JEV-FILLS] {actual_symbol} ({mint[:8]}): {_flush_msg}")
+                                    continue
+                                else:
+                                    print(f"🎯 [JEV-FILLS] {actual_symbol} ({mint[:8]}): {_flush_msg}")
+
                                 if getattr(config, "DYNAMIC_REINVEST_ENABLED", True):
                                     position_size = tracker.calculate_dynamic_position_size(pair_data, chain="solana")
                                     if position_size <= 0:
@@ -811,8 +894,12 @@ async def scanner_loop(analyzer, tracker):
                                 tracker.add_position(actual_symbol, mint, entry_price, position_size, is_mature=True,
                                                      ml_features=analyzer.pack_features(pair_data),
                                                      ml_confidence=float(getattr(analyzer, "last_score", 0.0)),
-                                                     source=f"SCANNER:{analyzer.get_signal(mint)}",
-                                                     pair_address=pair_data.get("pairAddress", ""))
+                                                     source=f"JEV:{_jev_data.get('source', 'grok')}:{analyzer.get_signal(mint)}",
+                                                     pair_address=pair_data.get("pairAddress", ""),
+                                                     stop_under_wick=_wick_stop_price,
+                                                     wick_stop_loss_pct=_wick_pct)
+                                grok_jev.FUNNEL_STATS["filled"] += 1
+                                print(grok_jev.get_funnel_summary())
                                 _entered = True
                                 break # Ждем следующего цикла после покупки
                             else:
@@ -1442,6 +1529,13 @@ async def _evm_track_once(tracker, chain: str, tag: str, emoji: str):
                     reason = f"{tag} Zero-Momentum Cut ({held:.0f}m, {pnl * 100:.1f}%)"
                 elif not _is_runner and maxp < 0.02 and pnl <= -0.18 and held >= 4:
                     reason = f"{tag} Fail Cut ({held:.0f}m, {pnl * 100:.1f}%)"
+                # JEV: СТОП ПОД ФИТИЛЬ ("The stop lives under the wick")
+                elif not reason and held >= 0.5 and (
+                    (getattr(pos, "stop_under_wick", 0.0) > 0 and cur <= getattr(pos, "stop_under_wick", 0.0)) or
+                    (getattr(pos, "wick_stop_loss_pct", 0.0) < 0 and pnl <= getattr(pos, "wick_stop_loss_pct", 0.0))
+                ):
+                    _ws = getattr(pos, "stop_under_wick", 0.0)
+                    reason = f"{tag} JEV Wick Stop ({pnl * 100:.1f}%)"
                 elif not _is_runner and held >= 1.5 and pnl <= config.STOP_LOSS_PCT:
                     reason = f"{tag} Stop ({pnl * 100:.1f}%)"
                 elif (not _is_runner and maxp < 0.05 and pnl < -0.05
@@ -1783,12 +1877,37 @@ async def _evm_chain_loop(analyzer, tracker, chain: str):
                                         print(f"🚫 [{tag}] {sym}: ошибка антискама ({type(_ve).__name__}) — блок входа ({tag}).")
                                         await asyncio.sleep(1.0)
                                         continue
+
+                                # === GROK BOT x JEV (Base) ===
+                                from grok_jev import grok_jev
+                                _jev_hard_ok, _jev_hard_why = grok_jev.hard_gate(addr, td, chain)
+                                if not _jev_hard_ok:
+                                    print(f"🚫 [JEV-HARD-GATE] {sym} ({addr[:8]}): {_jev_hard_why} — отказ входа.")
+                                    await asyncio.sleep(1.0)
+                                    continue
+                                _jev_soft_ok, _jev_data, _jev_soft_why = await grok_jev.jev_vet(addr, sym, td, chain)
+                                if not _jev_soft_ok:
+                                    print(f"🚫 [JEV-AI-GATE] {sym} ({addr[:8]}): {_jev_soft_why} — отказ входа.")
+                                    await asyncio.sleep(1.0)
+                                    continue
+                                _flush_ok, _wick_pct, _wick_stop_price, _flush_msg = grok_jev.check_flush_and_wick(td, price)
+                                if not _flush_ok:
+                                    print(f"⏳ [JEV-FILLS] {sym} ({addr[:8]}): {_flush_msg}")
+                                    await asyncio.sleep(1.0)
+                                    continue
+                                else:
+                                    print(f"🎯 [JEV-FILLS] {sym} ({addr[:8]}): {_flush_msg}")
+
                                 tracker.add_position(sym, addr, price, size, is_mature=True,
                                                  ml_features=analyzer.pack_features(td),
                                                  ml_confidence=float(getattr(analyzer, "last_score", 0.0)),
-                                                 source=(f"{tag}:COPY:{_sig}" if _evm_wss.is_copybuy(chain, addr) else f"{tag}:{_sig}"),
+                                                 source=(f"{tag}:JEV:{_sig}"),
                                                  chain=chain,
-                                                 pair_address=td.get("pairAddress", ""))
+                                                 pair_address=td.get("pairAddress", ""),
+                                                 stop_under_wick=_wick_stop_price,
+                                                 wick_stop_loss_pct=_wick_pct)
+                                grok_jev.FUNNEL_STATS["filled"] += 1
+                                print(grok_jev.get_funnel_summary())
                                 print(f"{emoji} {tag} BUY {sym} {addr[:10]} @ ${price}")
                             await asyncio.sleep(1.0)
                         if len(processed) > 1000:
@@ -1856,6 +1975,14 @@ async def async_main():
     except Exception as _e:
         print(f"⚠️ regime line err: {_e}")
 
+    try:
+        from grok_jev import grok_jev
+        _ai_provider = "Groq (llama-3.3-70b)" if grok_jev.groq_key else ("xAI (grok-beta)" if grok_jev.xai_key else ("Gemini" if grok_jev.gemini_key else "Local-JEV Algorithmic"))
+        print(f"🤖 GROK BOT x JEV ENGINE: АКТИВЕН (AI Provider: {_ai_provider})")
+        print(f"🎯 СЕТИ В РАБОТЕ: ТОЛЬКО SOLANA И BASE (100% концентрация капитала и лимитов позиций)")
+    except Exception as _jeve:
+        print(f"⚠️ jev banner err: {_jeve}")
+
     # Keep-Alive задача, чтобы Render не засыпал (работает в фоне)
     async def keep_alive():
         import aiohttp, os
@@ -1891,6 +2018,7 @@ async def async_main():
         async def tg_listener_loop(*_a, **_k):
             return
     from tg_preview import tg_preview_loop
+    from smart_money_hunter import smart_money_hunter_loop
     try:
         from gmgn_bridge import gmgn_bridge_loop
     except Exception as e:
@@ -1922,17 +2050,15 @@ async def async_main():
         tg_listener_loop(analyzer, tracker),
         tg_preview_loop(analyzer, tracker),  # 📡 TG-коллы без ключей (t.me/s превью)
         fomo_loop(analyzer, tracker),
-        birdeye_loop(analyzer, tracker),  # 🦅 Birdeye trending, ротация solana/robinhood/base/bsc
+        birdeye_loop(analyzer, tracker),  # 🦅 Birdeye trending (Solana и Base)
         jup_loop(analyzer, tracker),  # 🪐 Jupiter recent + toptrending/5m (Solana)
-        robinhood_loop(analyzer, tracker),  # 🟣 EVM-мемы Robinhood Chain 4663
         base_loop(analyzer, tracker),  # 🟦 EVM-мемы Base (fomo.family)
-        bsc_loop(analyzer, tracker),  # 🟨 BSC-мемы (GSTOCK и co)
-        ethereum_loop(analyzer, tracker),  # ⬜ Ethereum-мемы (KLIK висел без лупа)
-        evm_wss_loop(analyzer, tracker),  # ⚡ WSS фабрик Base+BSC: новые пулы за секунды
+        evm_wss_loop(analyzer, tracker),  # ⚡ WSS фабрик Base: новые пулы за секунды
         fomo_api_loop(analyzer, tracker),  # 📡 fomoapi.io: покупки топов fomo.family -> очередь сигналов
         gmgn_bridge_loop(analyzer, tracker),  # 🟢 GMGN trenches: create-сигналы (нужен GMGN_ENABLED+chromium)
         growth_loop(analyzer, tracker),  # 🌱 тренды капов, пока нет ракет
         sniper.connect_and_listen(),  # ⚡ IN-MEMORY STREAMING: RAM фильтр (>10 buyers / 20s) + RugCheck/GoPlus аудит
+        smart_money_hunter_loop(analyzer, tracker),  # 🐋 Автономный охотник за смарт-кошельками (Solana & Base)
         trade_logger.post_trade_watcher_loop(),
         shadow_tracker.price_watcher_loop(),
         rugpull_feeder_loop(),
