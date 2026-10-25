@@ -308,10 +308,10 @@ async def position_manager_loop(analyzer, tracker):
                     continue
 
                 # === STAGNANT EXIT (PRO: время по заслугам) ===
-                _hold_min = float(getattr(config, "STAGNANT_HOLD_MIN", 8.0) or 8.0)
-                _loss_min = (float(getattr(config, "STAGNANT_LOSS_MIN", 6.0) or 6.0)
+                _hold_min = float(getattr(config, "STAGNANT_HOLD_MIN", 25.0) or 25.0)
+                _loss_min = (float(getattr(config, "STAGNANT_LOSS_MIN", 15.0) or 15.0)
                              if max_pnl_pct >= 0.05 else
-                             float(getattr(config, "STAGNANT_LOSS_MIN_FAST", 4.0) or 4.0))
+                             float(getattr(config, "STAGNANT_LOSS_MIN_FAST", 10.0) or 10.0))
                 if minutes_held >= _loss_min and pnl_pct <= -0.05 and max_pnl_pct < 0.05:
                     _graces = getattr(position, "stagnant_graces", 0)
                     try:
@@ -441,29 +441,25 @@ async def position_manager_loop(analyzer, tracker):
                     tracker.close_position(mint, current_price, f"Breakeven (был пик +{max_pnl_pct*100:.0f}%)")
                     continue
 
-                # Zero-Momentum Cut: монета за 3.5+ мин ни разу не дала даже +1.5% и ушла в -10%
-                if max_pnl_pct < 0.015 and pnl_pct <= -0.10 and minutes_held >= 3.5:
-                    tracker.close_position(mint, current_price, f"Zero-Momentum Cut ({minutes_held:.0f}m, {pnl_pct*100:.1f}%)")
-                    continue
-
-                # 3.2 GROK BOT x JEV: СТОП ПОД ФИТИЛЬ ("The stop lives under the wick")
-                _wick_stop = float(getattr(position, "stop_under_wick", 0.0) or 0.0)
-                _wick_pct = float(getattr(position, "wick_stop_loss_pct", 0.0) or 0.0)
-                if minutes_held >= 1.5:
-                    _eff_wick_pct = min(-0.14, _wick_pct) if _wick_pct < 0 else -0.15
-                    _eff_wick_stop = min(_wick_stop, position.entry_price_usd * 0.86) if _wick_stop > 0 else 0.0
-                    if (_eff_wick_stop > 0 and current_price <= _eff_wick_stop) or pnl_pct <= _eff_wick_pct:
-                        _wc_s = int(getattr(position, "wick_confirm_n", 0) or 0) + 1
-                        position.wick_confirm_n = _wc_s
-                        if _wc_s >= 2:
-                            if _eff_wick_stop > 0 and current_price <= _eff_wick_stop:
-                                tracker.close_position(mint, current_price, f"JEV Wick Stop (${current_price:.6f} <= ${_eff_wick_stop:.6f}, {pnl_pct*100:.1f}%)")
-                            else:
-                                tracker.close_position(mint, current_price, f"JEV Wick Stop ({pnl_pct*100:.1f}% <= {_eff_wick_pct*100:.1f}%)")
-                            continue
-                    else:
-                        position.wick_confirm_n = 0
-                            
+                # 3.2 GROK BOT x JEV: СТОП ПОД ФИТИЛЬ (по умолчанию ОТКЛЮЧЕН для сохранения ракет)
+                if getattr(config, "JEV_WICK_STOP_ENABLED", False):
+                    _wick_stop = float(getattr(position, "stop_under_wick", 0.0) or 0.0)
+                    _wick_pct = float(getattr(position, "wick_stop_loss_pct", 0.0) or 0.0)
+                    if minutes_held >= 2.0:
+                        _eff_wick_pct = min(-0.16, _wick_pct) if _wick_pct < 0 else -0.18
+                        _eff_wick_stop = min(_wick_stop, position.entry_price_usd * 0.84) if _wick_stop > 0 else 0.0
+                        if (_eff_wick_stop > 0 and current_price <= _eff_wick_stop) or pnl_pct <= _eff_wick_pct:
+                            _wc_s = int(getattr(position, "wick_confirm_n", 0) or 0) + 1
+                            position.wick_confirm_n = _wc_s
+                            if _wc_s >= 2:
+                                if _eff_wick_stop > 0 and current_price <= _eff_wick_stop:
+                                    tracker.close_position(mint, current_price, f"JEV Wick Stop (${current_price:.6f} <= ${_eff_wick_stop:.6f}, {pnl_pct*100:.1f}%)")
+                                else:
+                                    tracker.close_position(mint, current_price, f"JEV Wick Stop ({pnl_pct*100:.1f}% <= {_eff_wick_pct*100:.1f}%)")
+                                continue
+                        else:
+                            position.wick_confirm_n = 0
+                                
                 # 3. АВАРИЙНЫЙ КЭП: больше -30% одну сделку не держим.
                 if pnl_pct <= -0.30:
                     tracker.close_position(mint, current_price, f"Emergency Cap ({pnl_pct*100:.0f}%)")
@@ -481,25 +477,25 @@ async def position_manager_loop(analyzer, tracker):
                     continue
                     
                 # 4. УМНЫЙ ВЫХОД ПО ВРЕМЕНИ (Stagnant / Dead Coin Cut для Solana)
-                # Не маринуем капитал по 25-30 минут! Если за 8 минут монета не стреляет — выходим.
-                _dead_hold = float(getattr(config, "STAGNANT_HOLD_MIN", 8.0) or 8.0)
-                if minutes_held >= _dead_hold and pnl_pct < -0.04:
+                # Даём ракетам 25 мин на консолидацию и раскачку (не режем живые пулы на 8-й минуте)
+                _dead_hold = float(getattr(config, "STAGNANT_HOLD_MIN", 25.0) or 25.0)
+                if minutes_held >= _dead_hold and pnl_pct < -0.05:
                     from jupiter import JupiterAPI
                     _j_ok, _j_why = await JupiterAPI.is_token_sellable(mint)
                     if not _j_ok:
-                        print(f"🚨 [SOL-DEAD-RUG] {position.symbol} ({mint[:8]}): 8 мин без пампа и непродаваем ({_j_why}) — списание в 0.0$ (-100%).")
+                        print(f"🚨 [SOL-DEAD-RUG] {position.symbol} ({mint[:8]}): 25 мин без пампа и непродаваем ({_j_why}) — списание в 0.0$ (-100%).")
                         tracker.close_position(mint, 0.0, f"Dead Coin RUG / Unsellable (-100%)")
                     else:
                         tracker.close_position(mint, current_price, f"Dead Coin Cut ({minutes_held:.0f}m, {pnl_pct*100:.1f}%)")
                     continue
                     
-                # Если монета болтается во флете больше 8 минут - выходим, освобождаем капитал
-                if minutes_held >= _dead_hold and pnl_pct < 0.08:
+                # Если монета болтается во флете больше 25 минут - выходим, освобождаем капитал
+                if minutes_held >= _dead_hold and pnl_pct < 0.05 and max_pnl_pct < 0.15:
                     from jupiter import JupiterAPI
                     _j_ok, _j_why = await JupiterAPI.is_token_sellable(mint)
                     if not _j_ok:
                         print(f"🚨 [SOL-STAGNANT-RUG] {position.symbol} ({mint[:8]}): флет и непродаваем ({_j_why}) — списание в 0.0$ (-100%).")
-                        tracker.close_position(mint, 0.0, f"Stagnant RUG / Unsellable (-100%)")
+                        tracker.close_position(mint, 0.0, f"Stagnant RUG / Unsellable ({_j_why})")
                     else:
                         tracker.close_position(mint, current_price, f"Stagnant Cut ({minutes_held:.0f}m, {pnl_pct*100:.1f}%)")
                     continue

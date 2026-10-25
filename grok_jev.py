@@ -1039,6 +1039,18 @@ class GrokJevEngine:
             print(f"🚫 [GROK+JEV] {symbol} ({chain}): JEV soft-reject ➔ {soft_why}")
             return False, f"jev-soft-reject {soft_why}"
 
+        # 5.5 XGBOOST ROCKET MODEL VERIFICATION
+        # Обязательная проверка по обученной модели ракет (Raydium XGBoost / Pump XGBoost):
+        # Бот не входит в случайные токены (как KIMBACK), если модель ракет не дала подтверждения!
+        if hasattr(self, "analyzer") and self.analyzer and hasattr(self.analyzer, "analyze_token"):
+            try:
+                ml_ok = await self.analyzer.analyze_token(address, chain=chain)
+                if not ml_ok:
+                    print(f"🚫 [GROK+JEV] {symbol} ({chain}): отклонён обученной моделью ракет (XGBoost)")
+                    return False, "xgb-rocket-model-reject"
+            except Exception as e:
+                pass
+
         # 6. CHIEF / GROK TRADES: Исполнение ордера
         if len(tracker.get_open_positions()) >= getattr(_c, "MAX_CONCURRENT_POSITIONS", 10):
             return False, "max-positions-reached"

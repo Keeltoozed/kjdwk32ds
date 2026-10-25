@@ -57,13 +57,13 @@ MAX_POSITION_SIZE_USD = 2500.0         # Масштабируемый потол
 REINVEST_MIN_POOL_LIQ_USD = 12000.0    # Мин. ликвидность пула для входа > $15 (защита от сдвига цены)
 SCOUT_SIZE_USD = 15.0                  # Ордер $15
 LOTTERY_SIZE_USD = 15.0
-MAX_CONCURRENT_POSITIONS = 5           # Режим Снайпера: максимум 5 сделок одновременно (5 x 20% = 100% капитала)
+MAX_CONCURRENT_POSITIONS = 10         # Режим ракет: до 10 позиций одновременно
 
 # Risk Management
 MAX_DAILY_LOSS_USD = 50.0
 KILL_SWITCH_ENABLED = False  # ОТКЛЮЧЕНО для тестов (не ставить торговлю на паузу при дневном минусе)
 MAX_DAILY_LOSS_PCT = 0.35
-STOP_LOSS_PCT = -0.30  # Стоп -30% после 90с (не выбивает ракеты вроде Chameleon +788% на первой теневой свече -13%)
+STOP_LOSS_PCT = -0.22  # Стоп -22% после 90с (безопасный запас для волатильности мемкоинов Solana, не режет ракеты на тенях)
 
 # === ЗАЩИТА ОТ СЕРИИ МИНУСОВ (STREAK CIRCUIT BREAKER) ===
 STREAK_COOLDOWN_ENABLED = True       # Включить паузу после серии минусов
@@ -132,16 +132,16 @@ SOLANA_MIN_AGE_MIN = 2.0  # 1.5 мин (flash-rug зона дева до 90с, �
 SOLANA_MAX_AGE_HOURS = 24.0
 SOLANA_MAX_AGE_MIN = 180.0      # Максимум 3 часа входа  # Не покупать старые тухлые монеты старше 24ч (только свежие волны и ракеты)
 INFANT_WINDOW_MIN = 2.0
-INFANT_DUMP_PCT = -0.40  # Резать в первые 2 мин только реальный дамп -25%+ (рабочие тени -12%..-18% выживают)
+INFANT_DUMP_PCT = -0.35  # Резать в первые 2 мин только реальный дамп -35%+ (рабочие тени -12%..-18% выживают)
 
-# Stagnant (Solana Memes): не маринуем мертвые деньги по 25-30 мин! Если монета за 8 мин не дала импульса — выходим.
-STAGNANT_LOSS_MIN = 6.0
-STAGNANT_LOSS_MIN_FAST = 4.0
-STAGNANT_HOLD_MIN = 8.0
+# Stagnant: живым пулам даём 25 мин на раскачку (кейс Chaton: консолидация 15-20м -> рост +62%), не режем на 8-й минуте как PRESIDENT
+STAGNANT_LOSS_MIN = 15.0
+STAGNANT_LOSS_MIN_FAST = 10.0
+STAGNANT_HOLD_MIN = 25.0
 
 # Filtering
 AI_MODE = "degen" # "sniper" (строго 80-90% уверенности) или "degen"
-MIN_LIQUIDITY = 20000  # Снижено для скальпинга обычных монет
+MIN_LIQUIDITY = 12000  # Снижено для скальпинга обычных монет
 MAX_LIQUIDITY = 50000000
 
 # AI Аналитика: Groq (бесплатный сверхбыстрый API) + xAI Grok + Gemini
@@ -151,6 +151,7 @@ GEMINI_API_KEY = (os.getenv("GEMINI_API_KEY") or "").strip() # Получить 
 
 # === GROK BOT x JEV ENGINE (THE FUNNEL & THE LINE) ===
 JEV_ENABLED = True
+JEV_WICK_STOP_ENABLED = False     # ОТКЛЮЧЕНО: искусственный стоп по фитилю душил ракеты на -15%..-25% в первые 2-3 минуты (Goon, SPIDOGE)
 JEV_MIN_AGE_MIN = 3.0            # 3 минуты для AMM пулов (не пропускаем стартовый импульс 3-15м как у KIMCHI)
 JEV_EARLY_MIN_AGE_MIN = 1.5      # 1.5 минуты для pump.fun / пробойных ракет с объёмом
 JEV_MIN_LIQUIDITY_USD = 12000.0  # $12,000 минимальная ликвидность пула

@@ -50,34 +50,32 @@ class MatureExitManager:
             return f"Mature Emergency Cap ({pnl_pct*100:.0f}%)"
 
         # Infant guard: дамп в первые минуты = дев сливает, не шум.
-        # Было held<3 / -12%: резало SWORDGUY/LAP (-15..-18% за 30-70с) с живым
-        # импульсом (m5 +16..+68%, 1000+ buys). Раги идут -40..-96% — их и -25% ловит.
+        # Режем только катастрофический сброс дева (-35%..-90%), рабочие тени и откаты не трогаем.
         _inf_win = float(getattr(config, "INFANT_WINDOW_MIN", 2.0))
-        _inf_pct = float(getattr(config, "INFANT_DUMP_PCT", -0.25))
+        _inf_pct = float(getattr(config, "INFANT_DUMP_PCT", -0.35))
         if minutes_held < _inf_win and pnl_pct <= _inf_pct:
             return f"Mature Infant Dump ({pnl_pct*100:.0f}%)"
 
-        # GROK BOT x JEV & JUPITER: СТОП ПОД ФИТИЛЬ ("The stop lives under the wick")
-        # Включается после 1.5 мин (не режем стартовый шум на 0м как TV/TENMUSU),
-        # не ближе -14% от входа и с 2-тиковым подтверждением (защита от 1-секундных проколов).
-        _wick_stop = float(getattr(position, "stop_under_wick", 0.0) or 0.0)
-        _wick_pct = float(getattr(position, "wick_stop_loss_pct", 0.0) or 0.0)
-        if minutes_held >= 1.5:
-            _eff_wick_pct = min(-0.14, _wick_pct) if _wick_pct < 0 else -0.15
-            _eff_wick_stop = min(_wick_stop, position.entry_price_usd * 0.86) if _wick_stop > 0 else 0.0
-            if (_eff_wick_stop > 0 and current_price <= _eff_wick_stop) or pnl_pct <= _eff_wick_pct:
-                _wc = int(getattr(position, "wick_confirm_n", 0) or 0) + 1
-                position.wick_confirm_n = _wc
-                if _wc >= 2:
-                    if _eff_wick_stop > 0 and current_price <= _eff_wick_stop:
-                        return f"JEV Wick Stop (${current_price:.6f} <= ${_eff_wick_stop:.6f}, {pnl_pct*100:.1f}%)"
-                    return f"JEV Wick Stop ({pnl_pct*100:.1f}% <= {_eff_wick_pct*100:.1f}%)"
-            else:
-                position.wick_confirm_n = 0
+        # GROK BOT x JEV: СТОП ПОД ФИТИЛЬ (по умолчанию ОТКЛЮЧЕН, чтобы не душить ракеты на -15%..-25% в первые минуты)
+        if getattr(config, "JEV_WICK_STOP_ENABLED", False):
+            _wick_stop = float(getattr(position, "stop_under_wick", 0.0) or 0.0)
+            _wick_pct = float(getattr(position, "wick_stop_loss_pct", 0.0) or 0.0)
+            if minutes_held >= 2.0:
+                _eff_wick_pct = min(-0.16, _wick_pct) if _wick_pct < 0 else -0.18
+                _eff_wick_stop = min(_wick_stop, position.entry_price_usd * 0.84) if _wick_stop > 0 else 0.0
+                if (_eff_wick_stop > 0 and current_price <= _eff_wick_stop) or pnl_pct <= _eff_wick_pct:
+                    _wc = int(getattr(position, "wick_confirm_n", 0) or 0) + 1
+                    position.wick_confirm_n = _wc
+                    if _wc >= 2:
+                        if _eff_wick_stop > 0 and current_price <= _eff_wick_stop:
+                            return f"JEV Wick Stop (${current_price:.6f} <= ${_eff_wick_stop:.6f}, {pnl_pct*100:.1f}%)"
+                        return f"JEV Wick Stop ({pnl_pct*100:.1f}% <= {_eff_wick_pct*100:.1f}%)"
+                else:
+                    position.wick_confirm_n = 0
 
         # 1. ГАРАНТИРОВАННЫЙ НЕСНИЖАЕМЫЙ ПОРОГ ПРИБЫЛИ (PROFIT FLOOR LOCK)
-        # Не душим ракеты на первой волне (+35..+65%, кейс KIMCHI +44% -> откат до +9% -> улетел на +104% / $196k MCap):
-        # На +40..+65% защищаем только безубыток (+5% после 2.5м), давая монете свободно дышать перед 2x-5x!
+        # Для ракет даём свободно дышать до +60% (никаких ранних фиксаций, рубящих взлёт),
+        # а далее защищаем солидный кусок прибыли:
         max_pnl_pct = (position.max_price_usd - position.entry_price_usd) / position.entry_price_usd if position.entry_price_usd else 0
         _floor_pnl = None
         if _ride:
@@ -87,12 +85,10 @@ class MatureExitManager:
                 _floor_pnl = round(max_pnl_pct * 0.62, 2)
             elif max_pnl_pct >= 1.60:     # +160%..+300% (2.6x-4x): держим 55% прибыли
                 _floor_pnl = round(max_pnl_pct * 0.55, 2)
-            elif max_pnl_pct >= 1.00:     # +100%..+160% (2x-2.6x): держим 48% прибыли (пик +100% -> пол +48%)
-                _floor_pnl = round(max_pnl_pct * 0.48, 2)
-            elif max_pnl_pct >= 0.65:     # +65%..+100%: гарантируем +28% (запас 37-55% на консолидацию перед 2x)
-                _floor_pnl = 0.28
-            elif max_pnl_pct >= 0.40 and minutes_held >= 2.5:  # +40%..+65%: мягкий безубыток +5% (не режет откат KIMCHI +44% -> +9% -> +104%!)
-                _floor_pnl = 0.05
+            elif max_pnl_pct >= 1.00:     # +100%..+160% (2x-2.6x): держим 45% прибыли
+                _floor_pnl = round(max_pnl_pct * 0.45, 2)
+            elif max_pnl_pct >= 0.60:     # +60%..+100%: гарантируем +20% (запас на консолидацию перед 2x-5x)
+                _floor_pnl = 0.20
         elif max_pnl_pct >= 5.00:       # Гипер-ракета (+500%+): держим 72% прибыли
             _floor_pnl = round(max_pnl_pct * 0.72, 2)
         elif max_pnl_pct >= 3.00:     # Мега-ракета (+300%..+500%): держим 65% прибыли
@@ -193,10 +189,6 @@ class MatureExitManager:
         _be = float(getattr(config, 'BREAKEVEN_PCT', 0.28))
         if minutes_held >= 6.0 and _maxp >= _be and pnl_pct <= 0.035:
             return f"Mature Breakeven (был пик +{_maxp*100:.0f}%, фикс {pnl_pct*100:+.1f}%)"
-
-        # Zero-Momentum Cut: монета за 3.5+ мин ни разу не дала даже +1.5% и ушла в -10%
-        if _maxp < 0.015 and pnl_pct <= -0.10 and minutes_held >= 3.5:
-            return f"Mature Zero-Momentum Cut ({minutes_held:.0f}m, {pnl_pct*100:.1f}%)"
 
         # Hard stop loss (после 1.5 мин, чтобы не выбивать ракету на стартовом спреде в 0м)
         if minutes_held >= 1.5 and hasattr(config, 'STOP_LOSS_PCT') and pnl_pct <= config.STOP_LOSS_PCT:
