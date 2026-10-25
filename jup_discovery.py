@@ -28,7 +28,17 @@ SKIP_SYMBOLS = {
 # Хранит mint -> {"ready_at": timestamp, "sym": str, "min_age": float, "added_at": float}
 # Быстрый чекер опрашивает их каждые 2с сразу по наступлению ready_at.
 _immature_registry: dict = {}
-_buy_lock = asyncio.Lock()
+_buy_locks: dict = {}
+
+def _get_buy_lock():
+    try:
+        loop = asyncio.get_running_loop()
+        k = id(loop)
+    except RuntimeError:
+        k = 0
+    if k not in _buy_locks:
+        _buy_locks[k] = asyncio.Lock()
+    return _buy_locks[k]
 
 
 def _headers():
@@ -338,7 +348,7 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
     else:
         print(f"🎯 [JEV-FILLS] {_sym_tmp} ({mint[:8]}): {_flush_msg}")
 
-    async with _buy_lock:
+    async with _get_buy_lock():
         if len(tracker.get_open_positions()) >= config.MAX_CONCURRENT_POSITIONS:
             return False
         if getattr(config, "DYNAMIC_REINVEST_ENABLED", True):

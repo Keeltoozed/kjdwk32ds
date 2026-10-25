@@ -53,6 +53,15 @@ class MatureExitManager:
         if minutes_held < _inf_win and pnl_pct <= _inf_pct:
             return f"Mature Infant Dump ({pnl_pct*100:.0f}%)"
 
+        # GROK BOT x JEV & JUPITER: СТОП ПОД ФИТИЛЬ ("The stop lives under the wick")
+        _wick_stop = float(getattr(position, "stop_under_wick", 0.0) or 0.0)
+        _wick_pct = float(getattr(position, "wick_stop_loss_pct", 0.0) or 0.0)
+        if minutes_held >= 0.5:
+            if _wick_stop > 0 and current_price <= _wick_stop:
+                return f"JEV Wick Stop (${current_price:.6f} <= ${_wick_stop:.6f}, {pnl_pct*100:.1f}%)"
+            elif _wick_pct < 0 and pnl_pct <= _wick_pct:
+                return f"JEV Wick Stop ({pnl_pct*100:.1f}% <= {_wick_pct*100:.1f}%)"
+
         # 1. ГАРАНТИРОВАННЫЙ НЕСНИЖАЕМЫЙ ПОРОГ ПРИБЫЛИ (PROFIT FLOOR LOCK)
         # Не душим ракеты на старте (+15..+35%, кейсы Chubby +19% -> -1% -> +60%, ELON +184%, SEXCOIN +258%):
         # фиксация пола включается только от +38% с запасом ~23% на рабочую 1-минутную коррекцию.

@@ -55,7 +55,18 @@ FUNNEL_STATS = {
 # Кэш оценок JEV (mint -> (timestamp, result_dict)) — TTL 15 минут
 _JEV_CACHE: Dict[str, Tuple[float, dict]] = {}
 _LAST_API_CALL_TS = 0.0
-_API_SEMAPHORE = asyncio.Semaphore(1)  # 1 запрос за раз для бесплатного API
+_api_sems: dict = {}
+
+def _get_api_semaphore():
+    try:
+        loop = asyncio.get_running_loop()
+        k = id(loop)
+    except RuntimeError:
+        k = 0
+    if k not in _api_sems:
+        _api_sems[k] = asyncio.Semaphore(1)
+    return _api_sems[k]
+
 _COOLDOWN_UNTIL = 0.0  # Пауза при 429 rate-limit
 
 
@@ -293,7 +304,7 @@ class GrokJevEngine:
         
         if now >= _COOLDOWN_UNTIL and (self.groq_key or self.xai_key or self.gemini_key):
             try:
-                async with _API_SEMAPHORE:
+                async with _get_api_semaphore():
                     # Соблюдаем интервал между вызовами для бесплатного API (мин 2.0с)
                     dt = now - _LAST_API_CALL_TS
                     if dt < 2.0:

@@ -18,11 +18,20 @@ from datetime import datetime, timezone
 BASE = "https://api.geckoterminal.com/api/v2"
 HEADERS = {"Accept": "application/json", "User-Agent": "Mozilla/5.0"}
 
-_lock = asyncio.Lock()
+_locks: dict = {}
+
+def _get_lock():
+    try:
+        loop = asyncio.get_running_loop()
+        k = id(loop)
+    except RuntimeError:
+        k = 0
+    if k not in _locks:
+        _locks[k] = asyncio.Lock()
+    return _locks[k]
+
 _last_call = 0.0
 MIN_INTERVAL = 2.5  # ~24/мин на весь процесс: квота GT ~30/мин, запас от 429
-
-_jlock = asyncio.Lock()
 _jlast = 0.0
 J_MIN_INTERVAL = 1.2  # пауза между Token API запросами к Jupiter
 
@@ -48,7 +57,7 @@ async def _gt_get(path: str, retries: int = 0, timeout: int = 6):
     if now_m < _gt_breaker_until:
         return {}  # Circuit breaker open: fail-fast
 
-    async with _lock:
+    async with _get_lock():
         wait_s = 1.1 - (time.monotonic() - _last_call)
         if wait_s > 0:
             await asyncio.sleep(wait_s)
@@ -325,8 +334,9 @@ _ALLOWED_SOL_QUOTES = {
     "so11111111111111111111111111111111111111112",
     "epjfwdd5aufqssqem2qn1xzybapc8g4weggkzwytdt1v",
     "es9vmfrzacerjmffrff4h2fyd4kconky11mcce8benwnyb",
+    "xs8s1uus1zvs2p7iwtsg3b6fkhpvmwz4gyu3gwamwhz",  # QQQx (Nasdaq xStock)
 }
-_ALLOWED_SOL_SYMBOLS = {"SOL", "WSOL", "USDC", "USDT"}
+_ALLOWED_SOL_SYMBOLS = {"SOL", "WSOL", "USDC", "USDT", "QQQX", "SPYX", "USD"}
 
 
 async def _ds_token_data(mint: str) -> dict:
@@ -476,9 +486,7 @@ async def _ds_bulk_prices(mints: list) -> dict:
             status, data = await fetch_json(f"https://api.dexscreener.com/latest/dex/tokens/{','.join(chunk)}", timeout=6)
             if status == 200 and isinstance(data, dict):
                 pairs = data.get("pairs") or []
-        if not pairs:
-            continue
-        for p in pairs:
+        for p in (pairs or []):
             if p.get("chainId") == "solana":
                 addr = (p.get("baseToken") or {}).get("address", "")
                 if not addr or addr not in _mset:
@@ -494,6 +502,30 @@ async def _ds_bulk_prices(mints: list) -> dict:
                 if liq > _liq.get(addr, -1):
                     _liq[addr] = liq
                     out[addr] = px
+        # Если часть токенов из чанка не получила цену (напр. редкий quoteToken или мультипул) — добираем через latest/dex/tokens
+        missing_chunk = [m for m in chunk if m not in out]
+        if missing_chunk:
+            try:
+                status, data = await fetch_json(f"https://api.dexscreener.com/latest/dex/tokens/{','.join(missing_chunk)}", timeout=6)
+                if status == 200 and isinstance(data, dict):
+                    for p in (data.get("pairs") or []):
+                        if p.get("chainId") == "solana":
+                            addr = (p.get("baseToken") or {}).get("address", "")
+                            if not addr or addr not in _mset:
+                                continue
+                            q_addr = str((p.get("quoteToken") or {}).get("address") or "").lower()
+                            q_sym = str((p.get("quoteToken") or {}).get("symbol") or "").upper()
+                            if q_addr and q_addr not in _ALLOWED_SOL_QUOTES and q_sym not in _ALLOWED_SOL_SYMBOLS:
+                                continue
+                            px = float(p.get("priceUsd", 0) or 0)
+                            liq = float((p.get("liquidity") or {}).get("usd", 0) or 0)
+                            if not px or liq < 50.0:
+                                continue
+                            if liq > _liq.get(addr, -1):
+                                _liq[addr] = liq
+                                out[addr] = px
+            except Exception:
+                pass
     return out
 
 

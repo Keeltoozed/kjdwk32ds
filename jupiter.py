@@ -1,3 +1,4 @@
+import asyncio
 import aiohttp
 
 class JupiterAPI:

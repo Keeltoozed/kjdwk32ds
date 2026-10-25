@@ -1298,8 +1298,9 @@ class Analyzer:
         has_socials = bool(has_twitter or has_tg or has_website)
         
         _socials_unknown = bool(pair_data.get("_socials_unknown", False))
-        # Анонимные токены вообще без соцсетей (0 Twitter/TG/Web) при ликвидности < $35k — это 100% автоматические бандлер-фермы (кейс ARACH $16k liq -> -66.9%), даже если они накрутили объём (_strong_fomo)!
-        if not _socials_unknown and not has_socials and liquidity < 35000 and not _lottery:
+        _is_pump_mint = mint.endswith("pump") or str(pair_data.get("dexId", "")).lower() in ("pump", "pumpfun")
+        # Анонимные токены вообще без соцсетей при ликвидности < $35k — это бандлер-фермы, ЕСЛИ это не pump.fun и нет органического потока!
+        if not _socials_unknown and not has_socials and liquidity < 35000 and not _lottery and not _is_pump_mint and not _is_organic_leader:
             return self._deny(mint, "no-socials-anon-rug", f"🚫 [NO-SOCIALS] У {symbol} ({mint[:8]}) 0 соцсетей/сайтов (Twitter/TG/Web) при ликвидности ${liquidity:,.0f} (<$35k) — анонимный дев-бандлер.")
             
         if is_vip:

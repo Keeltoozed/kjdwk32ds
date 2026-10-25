@@ -362,7 +362,10 @@ class PumpFunSniper:
                     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
                     "Origin": "https://pumpportal.fun"
                 }
-                async with websockets.connect(uri, extra_headers=headers, ping_interval=20, ping_timeout=20) as ws:
+                import inspect
+                _ws_kw = "additional_headers" if "additional_headers" in inspect.signature(websockets.connect).parameters else "extra_headers"
+                _ws_opts = {_ws_kw: headers, "ping_interval": 20, "ping_timeout": 20}
+                async with websockets.connect(uri, **_ws_opts) as ws:
                     backoff = 5.0  # Успешное подключение — сброс задержки
                     # 1. Подписка на создание новых токенов (InitializeMint)
                     await ws.send(json.dumps({"method": "subscribeNewToken"}))
@@ -486,7 +489,12 @@ class PumpFunSniper:
                             # Трансляция LIVE цен в позицию в реальном времени (нулевая задержка по сокету)
                             p_tracker = self.tracker if self.tracker else None
                             pos = p_tracker.positions.get(mint) if p_tracker else None
-                            if state.is_entered or (pos and getattr(pos, "status", "") == "open"):
+                            # ВАЖНО: Если токен уже MATURE / торгуется на DEX (Raydium, Meteora, Pumpswap) —
+                            # НИ В КОЕМ СЛУЧАЕ не используем формулу внутренней кривой pump.fun!
+                            # Иначе остаточные сообщения сокета с mc_sol=28-30 SOL сбивают DEX-цену $0.0003 до $0.000005,
+                            # вызывая ложный Crash Guard -100% (кейс NMS).
+                            _is_dex_pair = (pos and (getattr(pos, "is_mature", False) or bool(getattr(pos, "pair_address", "")))) or state.is_migrated
+                            if not _is_dex_pair and (state.is_entered or (pos and getattr(pos, "status", "") == "open")):
                                 if pos and getattr(pos, "status", "") == "open":
                                     sol_usd = get_sol_price_sync()
                                     # Защита от фантомных стопов: если в сообщении нет marketCapSol, НЕ используем v_sol (он в 3-8 раз меньше капы!)

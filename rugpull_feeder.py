@@ -35,7 +35,15 @@ def feed_rugs_and_retrain():
         print("Используем локальную SQLite базу...")
         if os.path.exists("trade_journal.db"):
             with sqlite3.connect("trade_journal.db") as conn:
-                df_trades = pd.read_sql_query("SELECT * FROM trades WHERE status='CLOSED'", conn)
+                try:
+                    df_pump = pd.read_sql_query("SELECT * FROM trades_pump WHERE status='CLOSED'", conn)
+                except Exception:
+                    df_pump = pd.DataFrame()
+                try:
+                    df_ray = pd.read_sql_query("SELECT * FROM trades_raydium WHERE status='CLOSED'", conn)
+                except Exception:
+                    df_ray = pd.DataFrame()
+                df_trades = pd.concat([df_pump, df_ray], ignore_index=True)
                 
     if df_trades.empty:
         print("Нет закрытых сделок.")

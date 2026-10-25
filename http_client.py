@@ -169,7 +169,12 @@ def _note_429(host: str, penalty: float = 8.0):
 
 async def get_session():
     global _session
-    if _session is None or _session.closed:
+    try:
+        curr_loop = asyncio.get_running_loop()
+    except RuntimeError:
+        curr_loop = None
+    sess_loop = getattr(_session, "_loop", None) if _session is not None else None
+    if _session is None or _session.closed or (curr_loop and sess_loop and sess_loop != curr_loop):
         connector = aiohttp.TCPConnector(limit=100, limit_per_host=20, ttl_dns_cache=300)
         timeout = aiohttp.ClientTimeout(total=15, connect=8)
         _session = aiohttp.ClientSession(connector=connector, timeout=timeout)

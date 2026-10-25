@@ -34,9 +34,12 @@ async def position_manager_loop(analyzer, tracker):
                     continue
 
                 # 1. Приоритет №1: Свежий WSS-стрим из PumpPortal (нулевая задержка, миллисекунды)
+                # ВАЖНО: WSS pump.fun актуален ТОЛЬКО для немигрировавших токенов на внутренней кривой.
+                # Для mature-токенов или токенов с DEX-парой (Raydium/Meteora/Pumpswap) цена ВСЕГДА из DEX/Jupiter/Gecko!
                 wss_px = float(getattr(position, "wss_price", 0.0) or 0.0)
                 wss_ts = float(getattr(position, "wss_price_ts", 0.0) or 0.0)
-                wss_fresh = wss_px > 0.0 and (time.time() - wss_ts) < 8.0
+                _is_dex_token = getattr(position, "is_mature", False) or bool(getattr(position, "pair_address", ""))
+                wss_fresh = (not _is_dex_token) and wss_px > 0.0 and (time.time() - wss_ts) < 8.0
 
                 api_price = 0.0
                 if wss_fresh:
@@ -166,6 +169,20 @@ async def position_manager_loop(analyzer, tracker):
                     if _cg_n < 3:
                         print(f"⚠️ [SOL-TICK-VERIFY] {position.symbol} ({mint[:8]}): резкий 1-тик {pnl_pct*100:+.1f}% (-{(1 - current_price/prev_price)*100:.0f}%) — ждём 3-й тик подтверждения.")
                         continue
+                    # ПЕРЕД ЗАКРЫТИЕМ ПО CRASH GUARD — ДВОЙНАЯ ПРОВЕРКА ЧЕРЕЗ JUPITER / DIRECT DEX:
+                    # Защита от кейса NMS (фантомный прокол / сбой котировок при реальном пампе):
+                    try:
+                        from jupiter import JupiterAPI
+                        _live_px_check = await JupiterAPI.get_price(mint)
+                        if _live_px_check and _live_px_check > prev_price * 0.78:
+                            print(f"🛡️ [CRASH-GUARD-RESCUED] {position.symbol} ({mint[:8]}): ложный краш-тик! Live DEX price ${_live_px_check:.6f} > prev ({(1 - _live_px_check/prev_price)*100:+.1f}%). Позиция спасена.")
+                            current_price = _live_px_check
+                            position.current_price_usd = _live_px_check
+                            position.crash_confirm_n = 0
+                            position.price_checked_at = time.time()
+                            continue
+                    except Exception:
+                        pass
                     tracker.close_position(mint, current_price,
                                            f"Crash Guard (-{(1 - current_price/prev_price)*100:.0f}% за {(time.time()-prev_ts):.0f} сек)")
                     continue
@@ -513,7 +530,10 @@ async def birth_wss_loop(analyzer, tracker):
     }
     while True:
         try:
-            async with websockets.connect(uri, extra_headers=headers) as ws:
+            import inspect
+            _ws_kw = "additional_headers" if "additional_headers" in inspect.signature(websockets.connect).parameters else "extra_headers"
+            _ws_opts = {_ws_kw: headers}
+            async with websockets.connect(uri, **_ws_opts) as ws:
                 payload = {"method": "subscribeNewToken"}
                 await ws.send(json.dumps(payload))
                 async for message in ws:
@@ -1287,10 +1307,10 @@ async def rugpull_feeder_loop():
         except Exception as e:
             print(f"Ошибка в rugpull_feeder: {e}")
         try:
-            # ROCKET-ретрейн там же (раз в 6ч, тихо, только если хватило данных).
-            # Новым сделкам нужны entry-фичи — их пишет pack_features при входе.
-            import train_rocket
-            await asyncio.to_thread(train_rocket.retrain_rocket_quiet)
+            import importlib.util
+            if importlib.util.find_spec("train_rocket"):
+                import train_rocket
+                await asyncio.to_thread(train_rocket.retrain_rocket_quiet)
         except Exception as e:
             print(f"Ошибка в rocket-retrain: {e}")
         await asyncio.sleep(6 * 60 * 60)  # Спим 6 часов
@@ -2141,7 +2161,10 @@ def start_bot():
     thread.start()
     return thread
 
-bot_thread = start_bot()
+# Автозапуск фонового бота только при работе под Streamlit (защита от дублирования при прямом импорте)
+import sys
+if "streamlit" in sys.argv[0] or any("streamlit" in str(arg) for arg in sys.argv):
+    bot_thread = start_bot()
 
 def chain_badge(chain: str, long: bool = False) -> str:
     """Бейдж сети для дашборда: 🟢 SOL / 🟣 ROB / 🟦 BASE."""

@@ -278,5 +278,115 @@
     ],
     "trade_count": 3,
     "tier": 3
+  },
+  "DPuYYbG1r8wZxgdTuwyThZudvg399LUPbZQ7BDaF7FYd": {
+    "chain": "solana",
+    "first_seen": 1792961272.6488059,
+    "total_pnl": 468.84,
+    "winning_tokens": [
+      "SWORDOPE / SOL"
+    ],
+    "trade_count": 3,
+    "tier": 3
+  },
+  "9zNEptBPzPkasPWVJainSqt5PzK11iHd3dR7s5HHzjwK": {
+    "chain": "solana",
+    "first_seen": 1792961272.6489348,
+    "total_pnl": 370.26,
+    "winning_tokens": [
+      "SWORDOPE / SOL"
+    ],
+    "trade_count": 1,
+    "tier": 3
+  },
+  "5Dg5rnQNGozFe2kCoEMnWzgtggsPjFyUBSgvCtR6kCTE": {
+    "chain": "solana",
+    "first_seen": 1792961272.648961,
+    "total_pnl": 354.92,
+    "winning_tokens": [
+      "SWORDOPE / SOL"
+    ],
+    "trade_count": 1,
+    "tier": 3
+  },
+  "7ZxSEkvu6G7en3TzpKDpCQJBgZkPPxus2yLZYL1VmaiG": {
+    "chain": "solana",
+    "first_seen": 1792961305.3752892,
+    "total_pnl": 808.64,
+    "winning_tokens": [
+      "Marvin / SOL"
+    ],
+    "trade_count": 2,
+    "tier": 3
+  },
+  "AiSn7ia6g5dP1jTSGw9gs26PN6Zt3Uv9s6NVweWvYVKs": {
+    "chain": "solana",
+    "first_seen": 1792961308.2452018,
+    "total_pnl": 379.7,
+    "winning_tokens": [
+      "CATTLEAXE / SOL"
+    ],
+    "trade_count": 2,
+    "tier": 3
+  },
+  "9hcovngJSkKjYsWJDe8Gv8nR16SNpogTuByN68zpdNaz": {
+    "chain": "solana",
+    "first_seen": 1792961310.8416462,
+    "total_pnl": 484.87,
+    "winning_tokens": [
+      "BTC / WBTC"
+    ],
+    "trade_count": 5,
+    "tier": 3
+  },
+  "6vCAZqmaZZL3ZYkg2yNNwLTS76XcBD7dwmYKFNTuWdKA": {
+    "chain": "solana",
+    "first_seen": 1792962269.2171578,
+    "total_pnl": 416.47,
+    "winning_tokens": [
+      "CATTLEAXE / SOL"
+    ],
+    "trade_count": 2,
+    "tier": 3
+  },
+  "DdS7eJ5FvyvLg7V3TqU2jEE46zUz4DfwQyHzhjXSdCVy": {
+    "chain": "solana",
+    "first_seen": 1792962269.217223,
+    "total_pnl": 624.6,
+    "winning_tokens": [
+      "CATTLEAXE / SOL"
+    ],
+    "trade_count": 3,
+    "tier": 3
+  },
+  "8ZxoLyNoA5jB3Fyi6AXLBhtcR54Apec8vqntbJ87k1MU": {
+    "chain": "solana",
+    "first_seen": 1792962269.2172852,
+    "total_pnl": 182.89,
+    "winning_tokens": [
+      "CATTLEAXE / SOL"
+    ],
+    "trade_count": 4,
+    "tier": 3
+  },
+  "GzHufLJsqyGaKRHbi8gDfzBfASUdarLq5j1PwEzoqop4": {
+    "chain": "solana",
+    "first_seen": 1792962269.2173371,
+    "total_pnl": 416.62,
+    "winning_tokens": [
+      "CATTLEAXE / SOL"
+    ],
+    "trade_count": 2,
+    "tier": 3
+  },
+  "E5RLEYSMYrZ1NpVhEpyLKPBfYA362rCMo9e5QTFGj8NW": {
+    "chain": "solana",
+    "first_seen": 1792962269.217345,
+    "total_pnl": 359.92,
+    "winning_tokens": [
+      "CATTLEAXE / SOL"
+    ],
+    "trade_count": 2,
+    "tier": 3
   }
 }
