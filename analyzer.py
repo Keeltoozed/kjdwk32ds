@@ -997,13 +997,16 @@ class Analyzer:
             _h1 = _pc.get("h1", 0) or 0
             if _h1 > 400.0:
                 return self._deny(mint, f"h1-exhausted {_h1:+.0f}%", f"🚫 [H1-EXHAUSTED] {mint[:8]}: h1 {_h1:+.0f}% > +400% — памп уже отработал, вход на хаях запрещён.")
-            # Запрет покупки вершины, но пропуск первой волны пробоя (h1 < 250%, возраст < 45м, m1 <= 20%)
+            # Запрет покупки вершины, но пропуск первой волны пробоя для молодых ракет
             _chain_ae = str((pair_data or {}).get("chainId", "solana")).lower()
             _txm5_tmp = (pair_data.get("txns") or {}).get("m5", {}) or {}
             _b5_tmp, _s5_tmp = int(_txm5_tmp.get("buys", 0) or 0), int(_txm5_tmp.get("sells", 0) or 0)
-            if _h1 < 250.0 and _age_min_pre < 45.0 and _m1 <= 20.0 and _b5_tmp >= 25 and _b5_tmp > _s5_tmp * 1.25:
+            if _age_min_pre <= 12.0 and _h1 < 280.0 and _m1 <= 25.0 and _b5_tmp >= 12 and _b5_tmp >= _s5_tmp * 1.10:
+                # Свежий токен (2-12м после создания / JUP-MATURE-READY): m5 отражает весь рост со старта пула
+                _max_m5_entry = 120.0
+            elif _h1 < 250.0 and _age_min_pre < 45.0 and _m1 <= 22.0 and _b5_tmp >= 15 and _b5_tmp >= _s5_tmp * 1.15:
                 _max_m5_entry = 95.0
-            elif _h1 < 250.0 and _b5_tmp >= 25 and _b5_tmp > _s5_tmp * 1.25:
+            elif _h1 < 250.0 and _b5_tmp >= 20 and _b5_tmp >= _s5_tmp * 1.20:
                 _max_m5_entry = 65.0
             else:
                 _max_m5_entry = 50.0
@@ -1041,20 +1044,20 @@ class Analyzer:
                 _cur_liq_pre = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0) * 0.40
             _b5_pre = int(_txm5_pre.get("buys", 0) or 0)
             _s5_pre = int(_txm5_pre.get("sells", 0) or 0)
-            _min_run_liq = 4000 if _is_pump_curve else 20000
-            _min_run_vol = 5000 if _is_pump_curve else 15000
+            _min_run_liq = 4000 if _is_pump_curve else (8000 if _age_min_pre < 45.0 else 15000)
+            _min_run_vol = 3500 if _is_pump_curve else (4000 if _age_min_pre < 45.0 else 10000)
             _is_runner = (
                 _cur_liq_pre >= _min_run_liq and 
                 _vm5_pre >= _min_run_vol and 
                 (_b5_pre + _s5_pre) >= 15 and 
-                (_b5_pre >= _s5_pre * 1.05 or _vm5_pre >= 35000)
+                (_b5_pre >= _s5_pre * 1.10 or _vm5_pre >= 25000)
             )
 
             _lottery_enabled = getattr(config, "LOTTERY_ENABLED", False)
             if _m5 >= getattr(config, "LOTTERY_MIN_M5_PCT", 0.60) * 100:
                 if _is_runner:
                     # Настоящая ракета с высокой ликвидностью и объемом (не микро-лотерейный раг)
-                    _m1_max = getattr(config, "PULLBACK_M1_MAX_PCT", 0.20) * 100
+                    _m1_max = min(25.0, getattr(config, "PULLBACK_M1_MAX_PCT", 0.25) * 100)
                     if _m1 > _m1_max:
                         return self._deny(mint, "runner-m1-spike", f"🚫 [RUNNER-SPIKE] {mint}: m1 {_m1:+.1f}% > +{_m1_max:.0f}% — свеча-прострел в моменте, ждём откат.")
                     if _m1 < getattr(config, "PULLBACK_M1_MIN_PCT", -0.15) * 100:
@@ -2446,10 +2449,12 @@ class Analyzer:
         if _h1 > 400.0:
             return self._deny(mint, f"ray-h1-exhausted {_h1:+.0f}%", f"🚫 [RAYDIUM] {mint[:8]}: h1 {_h1:+.0f}% > +400% — гипер-памп завершается, покупатели истощены.")
 
-        # Пропуск первой волны пробоя (h1 < 250%, возраст < 45м, m1 <= 20%), но блок перегрева на поздних волнах
-        if _h1 < 250.0 and _age_min < 45.0 and _m1 <= 20.0 and _b5 >= 25 and _b5 > _s5 * 1.25:
+        # Пропуск первой волны пробоя для молодых ракет, но блок перегрева на поздних волнах
+        if _age_min <= 12.0 and _h1 < 280.0 and _m1 <= 22.0 and _b5 >= 12 and _b5 >= _s5 * 1.10:
+            _max_ray_m5 = 120.0
+        elif _h1 < 250.0 and _age_min < 45.0 and _m1 <= 20.0 and _b5 >= 15 and _b5 >= _s5 * 1.15:
             _max_ray_m5 = 95.0
-        elif _h1 < 250.0 and _b5 >= 25 and _b5 > _s5 * 1.35:
+        elif _h1 < 250.0 and _b5 >= 20 and _b5 >= _s5 * 1.25:
             _max_ray_m5 = 65.0
         else:
             _max_ray_m5 = 50.0

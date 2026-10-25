@@ -605,6 +605,25 @@ async def scanner_loop(analyzer, tracker):
                     _cd = int(getattr(config, "SOLANA_FRESH_RESCAN_COOLDOWN", 45)) if _is_fresh_m else int(getattr(config, "SOLANA_RESCAN_COOLDOWN", 180))
                     if time.time() - processed_mints.get(mint, 0.0) < _cd:
                         continue
+
+                    # Предфильтр мёртвых/зомби-монет из бустов/профилей до вызова analyze_token и засорения ShadowLogger
+                    if isinstance(_pre_m, dict) and _pre_m and mint not in _graduated_set:
+                        _txm5_m = (_pre_m.get("txns") or {}).get("m5") or {}
+                        _b5_m = int(_txm5_m.get("buys", 0) or 0)
+                        _s5_m = int(_txm5_m.get("sells", 0) or 0)
+                        _vm5_m = float((_pre_m.get("volume") or {}).get("m5", 0) or 0)
+                        _m5_m = float((_pre_m.get("priceChange") or {}).get("m5", 0) or 0)
+                        _dex_m = str(_pre_m.get("dexId", "")).lower()
+                        _max_age_m = float(getattr(config, "SOLANA_MAX_AGE_MIN", 180.0))
+                        if _age_m >= 3.0 and (_b5_m + _s5_m) == 0 and _vm5_m == 0:
+                            processed_mints[mint] = time.time() + 1800
+                            continue
+                        if _dex_m not in ("pump", "pumpfun") and _age_m > 60.0 and _m5_m < 15.0:
+                            processed_mints[mint] = time.time() + 900
+                            continue
+                        if _age_m > _max_age_m and _m5_m < 50.0:
+                            processed_mints[mint] = time.time() + 1800
+                            continue
                     
                     # Держим память в чистоте
                     if len(processed_mints) > 1000:
@@ -1904,9 +1923,9 @@ async def async_main():
             await get_sol_price()
             await asyncio.sleep(300)
     
-    from early_scout import early_scout_loop
+    # Важно: PumpPortal WSS разрешает ТОЛЬКО ОДНО соединение с одного IP.
+    # Второй сокет (early_scout_loop в shadow-режиме) перебивал подписки subscribeTokenTrade у PumpFunSniper!
     await asyncio.gather(
-        early_scout_loop(analyzer, tracker),
         position_manager_loop(analyzer, tracker),
         scanner_loop(analyzer, tracker),
         copy_trader.listen(),

@@ -53,6 +53,8 @@ class PumpFunSniper:
         self.trades_total = 0
         self._last_funnel_print = time.time()
         self._bg_tasks = []
+        self._pending_sub = set()
+        self._pending_unsub = set()
 
     def _mark(self, state, stage: int):
         if stage > state.stage:
@@ -280,10 +282,26 @@ class PumpFunSniper:
                         st = TokenTrackerState(mint, pos.symbol, "")
                         st.is_entered = True
                         self.trackers[mint] = st
-                        await ws.send(json.dumps({"method": "subscribeTokenTrade", "keys": [mint]}))
+                        self._pending_sub.add(mint)
             except Exception as e:
                 print(f"Ошибка синхронизации WSS: {e}")
             await asyncio.sleep(3)
+
+    async def subscription_flusher(self, ws):
+        """Отправляет подписки/отписки батчами раз в 0.5 сек, чтобы PumpPortal WSS не дропал их по rate-limit."""
+        while self.running:
+            await asyncio.sleep(0.5)
+            try:
+                if self._pending_sub:
+                    batch = list(self._pending_sub)[:50]
+                    self._pending_sub.difference_update(batch)
+                    await ws.send(json.dumps({"method": "subscribeTokenTrade", "keys": batch}))
+                if self._pending_unsub:
+                    ubatch = list(self._pending_unsub)[:50]
+                    self._pending_unsub.difference_update(ubatch)
+                    await ws.send(json.dumps({"method": "unsubscribeTokenTrade", "keys": ubatch}))
+            except Exception:
+                pass
 
     async def garbage_collector(self, ws):
         """Очищает оперативную память (RAM) от остывших токенов каждые 15 сек и отписывается от WSS."""
@@ -314,10 +332,8 @@ class PumpFunSniper:
                 _st = self.trackers.pop(mint, None)
                 if _st is not None:
                     self.funnel[_st.stage] += 1
-                try:
-                    await ws.send(json.dumps({"method": "unsubscribeTokenTrade", "keys": [mint]}))
-                except Exception:
-                    pass
+                self._pending_sub.discard(mint)
+                self._pending_unsub.add(mint)
 
             if time.time() - self._last_funnel_print >= 60:
                 self._last_funnel_print = time.time()
@@ -355,15 +371,10 @@ class PumpFunSniper:
                     if _keys:
                         print(f"🔁 [STREAM] переподписка на {len(_keys)} токенов после реконнекта.")
 
-                    # 2. Запуск фоновых задач: очистка RAM и синхронизация открытых позиций
+                    # 2. Запуск фоновых задач: батч-подписка, очистка RAM и синхронизация открытых позиций
+                    self._bg_tasks.append(asyncio.create_task(self.subscription_flusher(ws)))
                     self._bg_tasks.append(asyncio.create_task(self.garbage_collector(ws)))
                     self._bg_tasks.append(asyncio.create_task(self.sync_fomo_positions(ws)))
-                    try:
-                        from shadow_tracker import ShadowTracker
-                        shadow = ShadowTracker()
-                        self._bg_tasks.append(asyncio.create_task(shadow.price_watcher_loop()))
-                    except Exception as e:
-                        pass
 
                     while self.running:
                         message = await ws.recv()
@@ -376,12 +387,15 @@ class PumpFunSniper:
                             symbol = data.get("symbol", "UNKNOWN")
                             trader_pubkey = data.get("traderPublicKey", "")
                             initial_buy = float(data.get("initialBuy") or 0)
-                            max_dev_tokens = float(getattr(config, "STREAM_MAX_DEV_BUY_TOKENS", 100_000_000))
+                            max_dev_tokens = float(getattr(config, "STREAM_MAX_DEV_BUY_TOKENS", 180_000_000))
 
                             if initial_buy > max_dev_tokens:
-                                continue  # Пропускаем явные мега-дампы (> 10% эмиссии у дева)
+                                continue  # Пропускаем явные мега-дампы (> 18% эмиссии у дева)
 
                             state = TokenTrackerState(mint, symbol, trader_pubkey, initial_buy)
+                            _init_vsol = float(data.get("vSolInBondingCurve") or 0.0)
+                            if _init_vsol > 0:
+                                state.last_v_sol = _init_vsol
                             self.trackers[mint] = state
                             self.created_total += 1
 
@@ -392,8 +406,8 @@ class PumpFunSniper:
                             except Exception:
                                 pass
 
-                            # Мгновенно подписываемся на торги этого токена
-                            await ws.send(json.dumps({"method": "subscribeTokenTrade", "keys": [mint]}))
+                            # Добавляем в батч-подписку на торги этого токена (отправка каждые 0.5с без rate-limit)
+                            self._pending_sub.add(mint)
 
                         # --- СОБЫТИЕ: ПОКУПКА ИЛИ ПРОДАЖА (ТРЕЙД) ---
                         elif tx_type in ["buy", "sell"]:
@@ -456,7 +470,8 @@ class PumpFunSniper:
                                 except Exception:
                                     pass
                                 self.trackers.pop(mint, None)
-                                await ws.send(json.dumps({"method": "unsubscribeTokenTrade", "keys": [mint]}))
+                                self._pending_sub.discard(mint)
+                                self._pending_unsub.add(mint)
                                 continue
 
                             # Трансляция LIVE цен в позицию в реальном времени (нулевая задержка по сокету)
