@@ -197,6 +197,7 @@ async def _jup_token_data(mint: str) -> dict:
         if not exact:
             return {}
         t = exact[0]
+        s5 = t.get("stats5m", {}) or {}
         s1 = t.get("stats1h", {}) or {}
         s24 = t.get("stats24h", {}) or {}
         try:
@@ -226,6 +227,10 @@ async def _jup_token_data(mint: str) -> dict:
         if t.get("website"):
             websites.append({"url": t["website"]})
         try:
+            bv5 = float(s5.get("buyVolume", 0) or 0) + float(s5.get("sellVolume", 0) or 0)
+        except Exception:
+            bv5 = 0.0
+        try:
             bv1 = float(s1.get("buyVolume", 0) or 0) + float(s1.get("sellVolume", 0) or 0)
         except Exception:
             bv1 = 0.0
@@ -243,11 +248,12 @@ async def _jup_token_data(mint: str) -> dict:
                           "symbol": t.get("symbol", "")},
             "priceUsd": str(price),
             "liquidity": {"usd": liq},
-            "volume": {"m5": 0.0, "h24": bv24},
-            "txns": {"m5": {"buys": 0, "sells": 0},
+            "volume": {"m5": bv5, "h24": bv24},
+            "txns": {"m5": {"buys": int(s5.get("numBuys", 0) or 0),
+                            "sells": int(s5.get("numSells", 0) or 0)},
                      "h24": {"buys": int(s24.get("numBuys", 0) or 0),
                              "sells": int(s24.get("numSells", 0) or 0)}},
-            "priceChange": {"m5": 0.0,
+            "priceChange": {"m5": float(s5.get("priceChange", 0) or 0),
                             "h1": float(s1.get("priceChange", 0) or 0),
                             "h6": 0.0,
                             "h24": float(s24.get("priceChange", 0) or 0)},
@@ -426,28 +432,22 @@ async def get_price(mint: str) -> float:
     return prices.get(mint, 0.0)
 
 
-async def get_bulk_prices(mints: list) -> dict:
+async def get_bulk_prices(mints: list, pair_hints: dict = None) -> dict:
     """Балк-цены, цепочка fallback'ов (каждый бесплатный, со своей квотой):
-    Jupiter Price V3 -> CEX (Coinbase/Kraken, для SOL) -> DeFiLlama (без ключа) -> GeckoTerminal simple."""
+    DexScreener (с привязкой к пулу входа pair_hints) -> CEX (для SOL) -> GeckoTerminal simple."""
     from http_client import fetch_json
     out = {}
     if not mints:
         return out
     ms = [m for m in dict.fromkeys(mints) if m]
     try:
-        out = await _ds_bulk_prices(ms)
+        out = await _ds_bulk_prices(ms, pair_hints=pair_hints)
     except Exception as e:
         print(f"DS bulk error: {type(e).__name__} {e}")
     missing = [m for m in ms if m not in out]
     if missing:
         try:
             out.update(await _cex_prices(missing))
-        except Exception as e:
-            pass
-    missing = [m for m in ms if m not in out]
-    if missing:
-        try:
-            out.update(await _llama_prices(missing))
         except Exception as e:
             pass
     missing = [m for m in ms if m not in out]
@@ -464,13 +464,15 @@ async def get_bulk_prices(mints: list) -> dict:
     return out
 
 
-async def _ds_bulk_prices(mints: list) -> dict:
+async def _ds_bulk_prices(mints: list, pair_hints: dict = None) -> dict:
     """Балк-цены через DexScreener (работает и для Solana).
-    Цена — с пула макс. ликвидности, не макс. цена (иначе пыль с liq 0
-    даёт фантомные +1500% как AVOCADO на EVM)."""
+    Если передан pair_hints (mint -> pair_address), приоритет отдаётся ТОЧНОМУ пулу входа,
+    чтобы переключение между побочными пулами не давало ложных -20% стопов."""
     from http_client import fetch_json
     out = {}
     _liq = {}
+    _locked_exact = set()
+    _hints = pair_hints or {}
     _mset = set(mints)
     for i in range(0, len(mints), 30):
         chunk = mints[i:i + 30]
@@ -499,6 +501,15 @@ async def _ds_bulk_prices(mints: list) -> dict:
                 liq = float((p.get("liquidity") or {}).get("usd", 0) or 0)
                 if not px or liq < 50.0:
                     continue
+                p_addr = str(p.get("pairAddress") or "").strip()
+                target_pair = str(_hints.get(addr) or "").strip()
+                if target_pair and p_addr == target_pair:
+                    _locked_exact.add(addr)
+                    _liq[addr] = liq
+                    out[addr] = px
+                    continue
+                if addr in _locked_exact:
+                    continue
                 if liq > _liq.get(addr, -1):
                     _liq[addr] = liq
                     out[addr] = px
@@ -520,6 +531,15 @@ async def _ds_bulk_prices(mints: list) -> dict:
                             px = float(p.get("priceUsd", 0) or 0)
                             liq = float((p.get("liquidity") or {}).get("usd", 0) or 0)
                             if not px or liq < 50.0:
+                                continue
+                            p_addr = str(p.get("pairAddress") or "").strip()
+                            target_pair = str(_hints.get(addr) or "").strip()
+                            if target_pair and p_addr == target_pair:
+                                _locked_exact.add(addr)
+                                _liq[addr] = liq
+                                out[addr] = px
+                                continue
+                            if addr in _locked_exact:
                                 continue
                             if liq > _liq.get(addr, -1):
                                 _liq[addr] = liq

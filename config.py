@@ -151,8 +151,8 @@ GEMINI_API_KEY = (os.getenv("GEMINI_API_KEY") or "").strip() # Получить 
 
 # === GROK BOT x JEV ENGINE (THE FUNNEL & THE LINE) ===
 JEV_ENABLED = True
-JEV_MIN_AGE_MIN = 15.0           # 15 минут для зрелых AMM пулов
-JEV_EARLY_MIN_AGE_MIN = 2.0      # 2-3 минуты для pump.fun / early scout
+JEV_MIN_AGE_MIN = 3.0            # 3 минуты для AMM пулов (не пропускаем стартовый импульс 3-15м как у KIMCHI)
+JEV_EARLY_MIN_AGE_MIN = 1.5      # 1.5 минуты для pump.fun / пробойных ракет с объёмом
 JEV_MIN_LIQUIDITY_USD = 12000.0  # $12,000 минимальная ликвидность пула
 JEV_MIN_VOLUME_H1 = 40000.0      # $40,000 часовой объем
 JEV_MIN_MCAP_USD = 45000.0       # $45,000 рыночная капитализация
@@ -164,15 +164,15 @@ JEV_MAX_TOP_10 = 0.35            # 35% лимит на топ-10 кошельк�
 JEV_MIN_ACCOUNT_IS_PROJECT = 0.75
 JEV_MAX_RECYCLED_ACCOUNT = 0.30
 JEV_MAX_CONCENTRATION_RISK = 0.35
-JEV_MAX_MOMENTUM_SPENT = 0.60
+JEV_MAX_MOMENTUM_SPENT = 0.65
 JEV_MIN_LIQUIDITY_FITS_TICKET = 0.70
 JEV_MAX_DEV_STILL_LOADED = 0.25
 
 # FILLS & RISK: "We bid the flush, not the candle" & "The stop lives under the wick"
 JEV_BID_THE_FLUSH_ENABLED = True
 JEV_STOP_UNDER_WICK_ENABLED = True
-JEV_MAX_M1_ENTRY_PCT = 3.5       # Не влетать в зеленую палку (m1 <= +3.5%)
-JEV_DEFAULT_WICK_STOP_PCT = -0.06 # -6% дефолтный стоп под фитиль отката
+JEV_MAX_M1_ENTRY_PCT = 18.0      # Пускаем живой пробой ракеты (до +18% за 1м при перевесе покупателей), отсекая только экстремальные спайки
+JEV_DEFAULT_WICK_STOP_PCT = -0.15 # -15% рабочий стоп (не выбивает на секундном шуме -5%..-8% как TV/TENMUSU)
 
 # Birdeye API Key
 BIRDEYE_API_KEY = os.getenv("BIRDEYE_API_KEY", "")
@@ -236,7 +236,7 @@ EVM_CHAIN_FEES = {
     "base": (0.015, 0.025, 0.04, 0.005),
     "robinhood": (0.01, 0.02, 0.03, 0.005),
     "bsc": (0.10, 0.15, 0.25, 0.02),
-    "solana": (0.05, 0.10, 0.25, 0.03),
+    "solana": (0.02, 0.04, 0.08, 0.01),
     "ethereum": (2.0, 5.0, 12.0, 0.20),
 }
 

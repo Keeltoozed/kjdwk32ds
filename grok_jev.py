@@ -190,8 +190,8 @@ class GrokJevEngine:
         vol_m5 = float((pair_data.get("volume") or {}).get("m5", 0) or 0)
         vol_h1 = float((pair_data.get("volume") or {}).get("h1", 0) or 0)
 
-        is_breakout = (vol_m5 >= 6000.0 and b5 >= 20)
-        min_age = float(getattr(_c, "JEV_EARLY_MIN_AGE_MIN", 3.5)) if (is_pump or is_breakout) else float(getattr(_c, "JEV_MIN_AGE_MIN", 8.0))
+        is_breakout = (vol_m5 >= 4000.0 and b5 >= 15)
+        min_age = float(getattr(_c, "JEV_EARLY_MIN_AGE_MIN", 1.5)) if (is_pump or is_breakout) else float(getattr(_c, "JEV_MIN_AGE_MIN", 3.0))
         if age_min < min_age:
             return False, f"too-young {age_min:.1f}m < {min_age:.1f}m (sniper flush zone)"
 
@@ -206,10 +206,10 @@ class GrokJevEngine:
         if m5 < min_m5:
             return False, f"no-momentum m5 {m5:+.1f}% < +{min_m5:.1f}% (flat or dying coin)"
         
-        # Если m5 > 150%, разрешаем только если токен на здоровом откате/консолидации 1м (-8%..+2.5%) с мощным объемом
-        if m5 > 150.0:
-            if not (-8.0 <= m1 <= 2.5 and b5 >= s5 * 1.15 and vol_m5 >= 8000.0):
-                return False, f"overheated m5 {m5:+.0f}% > +150% (peak FOMO risk)"
+        # Если m5 > 180%, разрешаем только если идёт подтверждённый покупательский пробой (b5 >= s5 * 1.15 и vol5 >= $5k) без вертикального спайка m1 > +22%
+        if m5 > 180.0:
+            if not (-8.0 <= m1 <= 22.0 and b5 >= s5 * 1.15 and vol_m5 >= 5000.0 and m5 <= 300.0):
+                return False, f"overheated m5 {m5:+.0f}% > +180% (peak FOMO risk)"
         if h1 < -8.0:
             return False, f"hourly-downtrend h1 {h1:+.1f}% < -8.0% (dead-cat bounce)"
 
@@ -412,33 +412,39 @@ class GrokJevEngine:
         pc = pair_data.get("priceChange", {}) or {}
         m1 = float(pc.get("m1", 0) or 0)
         m5 = float(pc.get("m5", 0) or 0)
+        txns_m5 = (pair_data.get("txns") or {}).get("m5", {}) or {}
+        b5 = int(txns_m5.get("buys", 0) or 0)
+        s5 = int(txns_m5.get("sells", 0) or 0)
+        vol5 = float((pair_data.get("volume") or {}).get("m5", 0) or 0)
         
         # 1. Токен ОБЯЗАН быть в импульсе m5 (ракета растет прямо сейчас)!
         if m5 < 4.0:
-            return False, -0.05, 0.0, f"no-impulse (m5 {m5:+.1f}% < +4.0%) — wait for real rocket surge"
+            return False, -0.14, 0.0, f"no-impulse (m5 {m5:+.1f}% < +4.0%) — wait for real rocket surge"
 
-        # 2. "We bid the flush, not the candle"
-        # Если в моменте идет вертикальный прострел (m1 > +2.5%) — это зеленая свеча.
-        max_m1_entry = float(getattr(_c, "JEV_MAX_M1_ENTRY_PCT", 2.5))
+        # 2. Вход в откат ИЛИ подтверждённый пробой ракеты (Breakout + Pullback):
+        # При сильном потоке покупателей (b5 >= s5 * 1.20 и vol5 >= $3,500) пускаем живой пробой до +22% за 1м,
+        # чтобы не пропускать взлетающие ракеты в ожидании затухания!
+        is_strong_breakout = (vol5 >= 3500.0 and b5 >= max(12, int(s5 * 1.20)))
+        max_m1_entry = 22.0 if is_strong_breakout else float(getattr(_c, "JEV_MAX_M1_ENTRY_PCT", 12.0))
         if m1 > max_m1_entry:
-            return False, -0.05, 0.0, f"candle-spike (m1 {m1:+.1f}% > +{max_m1_entry:.1f}%) — we bid the flush, wait for pullback"
+            return False, -0.14, 0.0, f"candle-spike (m1 {m1:+.1f}% > +{max_m1_entry:.1f}%) — extreme vertical spike, wait for pullback"
 
         # 3. Если откат глубже -8.0% — это слом структуры / дамп
         if m1 < -8.0:
-            return False, -0.05, 0.0, f"flush-dump (m1 {m1:+.1f}% < -8.0%) — falling knife"
+            return False, -0.14, 0.0, f"flush-dump (m1 {m1:+.1f}% < -8.0%) — falling knife"
 
         # 4. Расчет стопа под фитиль отката ("The stop lives under the wick"):
-        # Если есть локальный откат m1 (например, -2.5%), wick находится чуть ниже.
-        # Ставим стоп на 1.5% ниже локального минимума свечи отката.
+        # На мем-коинах Solana минутный шум составляет 6-10%, поэтому ставим рабочий стоп -14%..-16%
+        # (вместо -5%..-7%, который выбивал ракеты на первой же секундной тени).
         dip_factor = min(0.0, m1 / 100.0)
-        wick_low_price = entry_price * (1.0 + dip_factor - 0.015)
+        wick_low_price = entry_price * (1.0 + dip_factor - 0.12)
         
-        # Динамический безопасный стоп под фитиль: от -5.0% до -8.5%
+        # Динамический безопасный стоп под фитиль: от -13.5% до -16.5%
         calculated_stop_pct = (wick_low_price - entry_price) / entry_price
-        wick_stop_loss_pct = max(-0.085, min(-0.050, calculated_stop_pct))
+        wick_stop_loss_pct = max(-0.165, min(-0.135, calculated_stop_pct))
         stop_under_wick_price = entry_price * (1.0 + wick_stop_loss_pct)
 
-        reason = f"Flush validated (m1 {m1:+.1f}%, m5 {m5:+.1f}%), stop under wick: {wick_stop_loss_pct*100:.1f}% (${stop_under_wick_price:.6f})"
+        reason = f"Entry validated (m1 {m1:+.1f}%, m5 {m5:+.1f}%), stop under wick: {wick_stop_loss_pct*100:.1f}% (${stop_under_wick_price:.6f})"
         return True, wick_stop_loss_pct, stop_under_wick_price, reason
 
     # =========================================================================
@@ -582,11 +588,11 @@ class GrokJevEngine:
         # Если m5 < 4.0% или h1 < -8.0% — импульса нет, токен дохлый или в сливе (риск 0.95 = REJECT!)
         if m5 < 4.0 or h1 < -8.0:
             mom_score = 0.95
-        elif m1 > 12.0:
+        elif m1 > 22.0:
             mom_score = 0.85  # Вертикальный прострел прямо сейчас в 1м свече (FOMO пик)
-        elif m5 >= 5.0 and m1 <= 2.5:
-            mom_score = 0.25  # Идеальный свежий импульс на откате / консолидации
-        elif m5 > 350.0 and m1 > 5.0:
+        elif m5 >= 5.0 and m1 <= 8.0:
+            mom_score = 0.25  # Идеальный свежий импульс на откате / консолидации / старте
+        elif m5 > 350.0 and m1 > 12.0:
             mom_score = 0.75  # Сильный перегрев
         else:
             mom_score = 0.40
@@ -688,7 +694,14 @@ class GrokJevEngine:
         return candidates
 
     async def fetch_pair(self, address: str, chain: str) -> Optional[dict]:
-        """Прямой запрос рыночных данных пары из DexScreener без сторонних фильтров."""
+        """Прямой запрос рыночных данных пары из DexScreener (с поддержкой пакетного кэша analyzer)."""
+        if hasattr(self, "analyzer") and self.analyzer and hasattr(self.analyzer, "get_token_data"):
+            try:
+                cached_or_pair = await self.analyzer.get_token_data(address, chain=chain)
+                if cached_or_pair and isinstance(cached_or_pair, dict) and float(cached_or_pair.get("priceUsd", 0) or 0) > 0:
+                    return cached_or_pair
+            except Exception:
+                pass
         from http_client import fetch_json
         url = f"https://api.dexscreener.com/latest/dex/tokens/{address}"
         try:
@@ -930,7 +943,15 @@ class GrokJevEngine:
                 jup_sim = await JupiterAPI.check_taxes_and_simulate_swap(address, input_amount_sol=0.05)
                 if not jup_sim.get("is_safe", False):
                     reason = jup_sim.get("reason", "no route / unsellable / honeypot")
-                    return False, f"jupiter-routing-failed ({reason})", _h_stats
+                    if jup_sim.get("rate_limited", False) or "429" in str(reason) or "rate limit" in str(reason).lower():
+                        # Если Jupiter временно вернул 429, НЕ клеймим токен скамом на 10 минут!
+                        # Если токен уже прошёл RPC On-Chain + GoPlus + RugCheck и имеет >= 8 реальных продаж за 5м — пул доказанно продаваем
+                        if (is_pump and _s5 >= 5 and _b5 >= 12) or (_s5 >= 8 and _b5 >= 15 and eff_liq >= 15000.0):
+                            print(f"⚠️ [JUPITER-429-FALLBACK] {symbol}: Jupiter 429, но токен прошёл RPC+RugCheck+GoPlus и имеет {_b5}b/{_s5}s за 5м — пропуск разрешён")
+                        else:
+                            return False, f"jupiter-rate-limit-429-retry ({reason})", _h_stats
+                    else:
+                        return False, f"jupiter-routing-failed ({reason})", _h_stats
             except Exception as e:
                 return False, f"jupiter-simulation-error ({e})", _h_stats
 
@@ -989,28 +1010,34 @@ class GrokJevEngine:
         if price <= 0:
             return False, "invalid-price"
 
-        # 2. ПОЛНЫЙ АНТИСКАМ-АУДИТ (RUGCHECK + GOPLUS + ONCHAIN + DEV/WHALES + JITO-BUNDLE + SOCIALS + CLONE)
-        sec_ok, sec_why, _h_stats = await self.full_anti_scam_audit(address, symbol, chain, pair)
-        if not sec_ok:
-            print(f"🚫 [GROK+JEV-SCAM] {symbol} ({chain}): {sec_why}")
-            return False, f"anti-scam-reject {sec_why}"
-
-        # 3. HARD GATE ("if it fails here, JEV never sees it")
-        hard_ok, hard_why = self.hard_gate(address, pair, chain, _h_stats)
+        # 2. HARD GATE ПЕРВЫМ ("if it fails here, JEV and Jupiter never see it")
+        # Мгновенный математический отсев (0 сетевых запросов!) — отсекает 95% пустых/стоячих монет ДО вызовов Jupiter/RugCheck/GoPlus
+        hard_ok, hard_why = self.hard_gate(address, pair, chain, None)
         if not hard_ok:
             return False, f"hard-gate-reject {hard_why}"
 
-        # 4. VET (SOFT GATE: JEV AI Evaluation)
-        soft_ok, jev_data, soft_why = await self.jev_vet(address, symbol, pair, chain, _h_stats)
-        if not soft_ok:
-            print(f"🚫 [GROK+JEV] {symbol} ({chain}): JEV soft-reject ➔ {soft_why}")
-            return False, f"jev-soft-reject {soft_why}"
-
-        # 5. FILLS & RISK ("We bid the flush, not the candle" & "The stop lives under the wick")
+        # 3. FILLS & RISK ВТОРЫМ ("We bid the flush, not the candle" & "The stop lives under the wick")
+        # Также 0 сетевых запросов — если сейчас экстремальная свеча и нужно подождать отката 25с, не сжигаем лимит Jupiter API
         flush_ok, wick_pct, wick_price, flush_msg = self.check_flush_and_wick(pair, price)
         if not flush_ok:
             print(f"⏳ [GROK+JEV] {symbol} ({chain}): FILLS ➔ {flush_msg}")
             return False, f"fills-flush-wait {flush_msg}"
+
+        # 4. ПОЛНЫЙ АНТИСКАМ-АУДИТ (RUGCHECK + GOPLUS + ONCHAIN + DEV/WHALES + JITO-BUNDLE + JUPITER SIM + CLONE)
+        # Выполняется ТОЛЬКО для тех 2-5% живых ракет, которые уже прошли Hard Gate и Fills!
+        sec_ok, sec_why, _h_stats = await self.full_anti_scam_audit(address, symbol, chain, pair)
+        if not sec_ok:
+            if "rate-limit-429-retry" in sec_why:
+                print(f"⏳ [GROK+JEV] {symbol} ({chain}): Jupiter API busy (429), retry in 20s")
+                return False, f"rate-limit-retry {sec_why}"
+            print(f"🚫 [GROK+JEV-SCAM] {symbol} ({chain}): {sec_why}")
+            return False, f"anti-scam-reject {sec_why}"
+
+        # 5. VET (SOFT GATE: JEV AI Evaluation)
+        soft_ok, jev_data, soft_why = await self.jev_vet(address, symbol, pair, chain, _h_stats)
+        if not soft_ok:
+            print(f"🚫 [GROK+JEV] {symbol} ({chain}): JEV soft-reject ➔ {soft_why}")
+            return False, f"jev-soft-reject {soft_why}"
 
         # 6. CHIEF / GROK TRADES: Исполнение ордера
         if len(tracker.get_open_positions()) >= getattr(_c, "MAX_CONCURRENT_POSITIONS", 10):
@@ -1102,6 +1129,17 @@ async def grok_bot_jev_loop(tracker, analyzer=None):
             if not candidates:
                 continue
 
+            # Пакетная предзагрузка пар (по 30 адресов за 1 запрос вместо 120 одиночных запросов)
+            active_batch = [
+                addr for addr, ch in candidates
+                if addr and addr not in tracker.positions and now >= evaluated_cooldown.get((addr, ch), 0.0)
+            ]
+            if active_batch and grok_jev.analyzer and hasattr(grok_jev.analyzer, "prefetch_token_data"):
+                try:
+                    await grok_jev.analyzer.prefetch_token_data(active_batch, chain="solana")
+                except Exception:
+                    pass
+
             for address, chain in candidates:
                 if not address or address in tracker.positions:
                     continue
@@ -1116,6 +1154,8 @@ async def grok_bot_jev_loop(tracker, analyzer=None):
                     why_low = str(why).lower()
                     if ok:
                         evaluated_cooldown[(address, chain)] = now + 3600.0  # Куплен, не дергать
+                    elif "rate-limit" in why_low or "429" in why_low:
+                        evaluated_cooldown[(address, chain)] = now + 20.0    # Повтор через 20с при 429
                     elif "candle-spike" in why_low or "flush" in why_low or "pullback" in why_low:
                         evaluated_cooldown[(address, chain)] = now + 25.0    # Ждем откат 25 секунд!
                     elif "vol5-low" in why_low or "tx5-low" in why_low or "no-momentum" in why_low:

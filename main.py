@@ -38,14 +38,15 @@ async def position_manager_loop(analyzer, tracker):
                 _n_open = len(open_positions)
                 print(f"🛡️ [HEARTBEAT] Менеджер позиций активен: {_n_open} открытых позиций, баланс ${getattr(tracker, 'cash', 0.0):.2f}", flush=True)
             
-            # ОПТИМИЗАЦИЯ СКОРОСТИ: Запрашиваем цены для ВСЕХ позиций ОДНИМ запросом с жестким таймаутом.
+            # ОПТИМИЗАЦИЯ СКОРОСТИ: Запрашиваем цены для ВСЕХ позиций ОДНИМ запросом с жестким таймаутом и привязкой к пулу входа.
             mints_to_fetch = [m for m, p in open_positions.items()
                               if not m.startswith("0x")
                               and getattr(p, "chain", "solana") == "solana"]
+            pair_hints = {m: getattr(p, "pair_address", "") for m, p in open_positions.items() if getattr(p, "pair_address", "")}
             bulk_prices = {}
             if mints_to_fetch:
                 try:
-                    bulk_prices = await asyncio.wait_for(JupiterAPI.get_prices(mints_to_fetch), timeout=2.0)
+                    bulk_prices = await asyncio.wait_for(JupiterAPI.get_prices(mints_to_fetch, pair_hints=pair_hints), timeout=2.5)
                 except Exception:
                     bulk_prices = {}
             
@@ -189,7 +190,7 @@ async def position_manager_loop(analyzer, tracker):
                 except Exception:
                     pass
                 
-                peak_ts = getattr(position, "peak_time", position.entry_time)
+                peak_ts = getattr(position, "peak_time", 0.0) or position.entry_time
                 minutes_since_peak = (time.time() - peak_ts) / 60 if peak_ts else 0
 
                 prev_ts = getattr(position, "price_checked_at", 0.0)
@@ -224,7 +225,81 @@ async def position_manager_loop(analyzer, tracker):
                     position.crash_confirm_n = 0
                 position.price_checked_at = time.time()
                 
-                # === ТАЙМАУТ ПОСЛЕ ИМПУЛЬСА (только для малых пиков +18..+35%, выше +35% ведёт Profit Floor и Trailing!) ===
+                # Обновляем текущие значения для отображения в интерфейсе
+                position.current_price_usd = current_price
+                position.current_pnl_usd = position.amount_usd * pnl_pct
+                position.price_checked_at = time.time()
+                if current_price > 0:
+                    position.price_updated_at = time.time()
+
+                # === DEAD POOL & LIQUIDITY DRAIN GUARD (SOLANA) ===
+                # Защита от высушенных/умерших пулов (без ложного закрытия живых монет при переключении фоллбэков API)
+                _now_t = time.time()
+                if (_now_t - getattr(position, "last_liq_chk", 0.0)) > 20:
+                    position.last_liq_chk = _now_t
+                    try:
+                        import market_data as _md
+                        _td_sol = await asyncio.wait_for(_md.get_token_data(mint, max_cache_age=10.0), timeout=1.5)
+                        if _td_sol:
+                            _sol_liq = float(((_td_sol.get("liquidity") or {}).get("usd", 0) or 0))
+                            _sol_tx5 = (_td_sol.get("txns") or {}).get("m5", {}) or {}
+                            _sol_txs = int(_sol_tx5.get("buys", 0) or 0) + int(_sol_tx5.get("sells", 0) or 0)
+                            _sol_v5 = float(((_td_sol.get("volume") or {}).get("m5", 0) or 0))
+                            _td_src = str(_td_sol.get("_source", ""))
+
+                            # 1. Ликвидность выведена/слита (< $800 в любом пуле после 1 минуты)
+                            if minutes_held >= 1.0 and 0 < _sol_liq < 800:
+                                print(f"🚨 [SOL-DEAD-POOL] {position.symbol} ({mint[:8]}): ликвидность ${_sol_liq:.0f} < $800 — пул высушен/умер, списание в 0.0$ (-100%).")
+                                tracker.close_position(mint, 0.0, f"SOL Liquidity Drained (${_sol_liq:.0f} liq, pool dead)")
+                                continue
+
+                            # 2. Торги замерли: проверяем ТОЛЬКО по прямому ответу DexScreener после 12 мин, если нет профита
+                            if minutes_held >= 12.0 and _td_src == "dexscreener" and _sol_txs == 0 and _sol_v5 <= 0.01 and pnl_pct < 0.03:
+                                _z_cyc = int(getattr(position, "zero_vol_cycles", 0) or 0) + 1
+                                position.zero_vol_cycles = _z_cyc
+                                if _z_cyc >= 6:  # ~2 минуты подтвержденной полной тишины в пуле
+                                    from jupiter import JupiterAPI
+                                    _jup_ok, _jup_why = await JupiterAPI.is_token_sellable(mint)
+                                    if not _jup_ok:
+                                        print(f"🚨 [SOL-DEAD-RUG] {position.symbol} ({mint[:8]}): 0 сделок и непродаваем ({_jup_why}) — списание в 0.0$ (-100%).")
+                                        tracker.close_position(mint, 0.0, f"SOL Dead Pool / Unsellable Rug ({_jup_why})")
+                                    else:
+                                        tracker.close_position(mint, current_price, f"Dead Pool (0 txns in pool, frozen)")
+                                    continue
+                            else:
+                                position.zero_vol_cycles = 0
+                    except Exception as _e:
+                        pass
+
+                # === ИНТЕГРАЦИЯ МАТЕМАТИКИ ДЛЯ ЗРЕЛЫХ МОНЕТ (SWING TRADING / RIDE RUNNERS) ===
+                # Исполняется ДО скальперских Early Fade / Stagnant срезов, чтобы ракеты ехали по MatureExitManager!
+                _tp1_sol_thr = float(getattr(config, "TP1_TRIGGER_PCT", 0.50))
+                _tp1_sell = float(getattr(config, "TP1_SELL_FRAC", 0.20))
+                _tp2 = float(getattr(config, "TP2_TRIGGER_PCT", 1.20))
+                _tp2_sell = float(getattr(config, "TP2_SELL_FRAC", 0.25))
+                _mb = float(getattr(config, "MOONBAG_TRIGGER_PCT", 2.50))
+                _mb_sell = float(getattr(config, "MOONBAG_SELL_FRAC", 0.30))
+                if getattr(position, "is_mature", False):
+                    if getattr(config, "PARTIAL_TP_ENABLED", False) and max_pnl_pct >= _tp1_sol_thr and not getattr(position, "tp1_done", False):
+                        tracker.partial_close_position(mint, current_price, _tp1_sell, f"Take Profit +{_tp1_sol_thr*100:.0f}% (Tier-1 {int(_tp1_sell*100)}%)")
+                        position.tp1_done = True
+                        position.is_moonbag = True
+                        continue
+                    if getattr(config, "PARTIAL_TP_ENABLED", False) and max_pnl_pct >= _tp2 and not getattr(position, "tp2_done", False):
+                        tracker.partial_close_position(mint, current_price, _tp2_sell, f"Take Profit +{_tp2*100:.0f}% (2.2x Free Ride)")
+                        position.tp2_done = True
+                        continue
+                    if getattr(config, "PARTIAL_TP_ENABLED", False) and max_pnl_pct >= _mb and not getattr(position, "is_moonbag", False):
+                        tracker.partial_close_position(mint, current_price, _mb_sell, f"Take Profit +{_mb*100:.0f}% (Risk Free)")
+                        position.is_moonbag = True
+                        continue
+                    from exit_managers import MatureExitManager
+                    mature_exit_reason = MatureExitManager.evaluate_exit(position, current_price)
+                    if mature_exit_reason:
+                        tracker.close_position(mint, current_price, mature_exit_reason)
+                    continue # Если это mature монета, скальперская логика ниже к ней не применяется!
+
+                # === ТАЙМАУТ ПОСЛЕ ИМПУЛЬСА (только для не-mature скальпов +18..+35%) ===
                 if minutes_held >= 6.0 and 0.18 <= max_pnl_pct < 0.35 and pnl_pct <= -0.08:
                     tracker.close_position(mint, current_price, f"Early Fade Cut (был пик +{max_pnl_pct*100:.0f}%, слив до {pnl_pct*100:.1f}%)")
                     continue
@@ -233,15 +308,11 @@ async def position_manager_loop(analyzer, tracker):
                     continue
 
                 # === STAGNANT EXIT (PRO: время по заслугам) ===
-                # Не маринуем мертвые деньги на Solana: ни намёка на импульс за 4-8 мин — кат.
                 _hold_min = float(getattr(config, "STAGNANT_HOLD_MIN", 8.0) or 8.0)
                 _loss_min = (float(getattr(config, "STAGNANT_LOSS_MIN", 6.0) or 6.0)
                              if max_pnl_pct >= 0.05 else
                              float(getattr(config, "STAGNANT_LOSS_MIN_FAST", 4.0) or 4.0))
                 if minutes_held >= _loss_min and pnl_pct <= -0.05 and max_pnl_pct < 0.05:
-                    # ЖИВОЙ ФЛЕТ НЕ РЕЖЕМ: консолидация 5-15 мин перед выстрелом выглядит
-                    # как -2%. Проверяем сделки за 5 мин: есть buys = пул жив, даём +5 мин
-                    # (макс 2 грейса). Нет сделок = труп, режем. Ошибка API = пропуск цикла.
                     _graces = getattr(position, "stagnant_graces", 0)
                     try:
                         _td = await analyzer.fetch_token_data(mint)
@@ -273,92 +344,6 @@ async def position_manager_loop(analyzer, tracker):
                     else:
                         tracker.close_position(mint, current_price, f"Stagnant Near Zero ({_hold_min:.0f} min flat)")
                     continue
-                # Profit lock удален, используется трейлинг-стоп из config.py
-                
-                # === СКАЛЬП-ТРЕЙЛИНГ (Забираем мелкие плюсы, если включено) ===
-                if getattr(config, "SCALP_PROFIT_ENABLED", False) and max_pnl_pct >= 0.10 and max_pnl_pct < getattr(config, "TRAILING_ACTIVATION_PCT", 0.45):
-                    drop_from_max = (position.max_price_usd - current_price) / position.max_price_usd
-                    if drop_from_max >= 0.05:
-                        tracker.close_position(mint, current_price, f"Scalp Profit (peak +{max_pnl_pct*100:.0f}%)")
-                        continue
-                
-                # Обновляем текущие значения для отображения в интерфейсе
-                # (сохраняем один раз за цикл ниже, а не на каждой позиции,
-                # чтобы не делать N записей в Supabase каждые 3 секунды)
-                position.current_price_usd = current_price
-                position.current_pnl_usd = position.amount_usd * pnl_pct
-                position.price_checked_at = time.time()
-                if current_price > 0:
-                    position.price_updated_at = time.time()
-
-                # === DEAD POOL & LIQUIDITY DRAIN GUARD (SOLANA) ===
-                # Защита от замороженных/умерших пулов и фантомной прибыли (кейс DCA / NEX AI: ликва $0.02, 0 сделок в m5)
-                _now_t = time.time()
-                if (_now_t - getattr(position, "last_liq_chk", 0.0)) > 20:
-                    position.last_liq_chk = _now_t
-                    try:
-                        import market_data as _md
-                        _td_sol = await asyncio.wait_for(_md.get_token_data(mint, max_cache_age=10.0), timeout=1.5)
-                        if _td_sol:
-                            _sol_liq = float(((_td_sol.get("liquidity") or {}).get("usd", 0) or 0))
-                            _sol_tx5 = (_td_sol.get("txns") or {}).get("m5", {}) or {}
-                            _sol_txs = int(_sol_tx5.get("buys", 0) or 0) + int(_sol_tx5.get("sells", 0) or 0)
-                            _sol_v5 = float(((_td_sol.get("volume") or {}).get("m5", 0) or 0))
-                            _dex_id = str(_td_sol.get("dexId", "")).lower()
-
-                            # 1. Ликвидность выведена/слита (< $800 в любом пуле после 1 минуты)
-                            if minutes_held >= 1.0 and _sol_liq < 800:
-                                print(f"🚨 [SOL-DEAD-POOL] {position.symbol} ({mint[:8]}): ликвидность ${_sol_liq:.0f} < $800 — пул высушен/умер, списание в 0.0$ (-100%).")
-                                tracker.close_position(mint, 0.0, f"SOL Liquidity Drained (${_sol_liq:.0f} liq, pool dead)")
-                                continue
-
-                            # 2. Торги замерли: 0 сделок в m5 и объём 0 (застрявшая цена)
-                            if minutes_held >= 2.5 and _sol_txs == 0 and _sol_v5 <= 0.01:
-                                _z_cyc = int(getattr(position, "zero_vol_cycles", 0) or 0) + 1
-                                position.zero_vol_cycles = _z_cyc
-                                if _z_cyc >= 2:  # ~40-50 сек подтвержденной тишины в пуле
-                                    from jupiter import JupiterAPI
-                                    _jup_ok, _jup_why = await JupiterAPI.is_token_sellable(mint)
-                                    if not _jup_ok:
-                                        print(f"🚨 [SOL-DEAD-RUG] {position.symbol} ({mint[:8]}): 0 сделок и непродаваем ({_jup_why}) — списание в 0.0$ (-100%).")
-                                        tracker.close_position(mint, 0.0, f"SOL Dead Pool / Unsellable Rug ({_jup_why})")
-                                    else:
-                                        tracker.close_position(mint, current_price, f"Dead Pool (0 txns in pool, frozen)")
-                                    continue
-                            else:
-                                position.zero_vol_cycles = 0
-                    except Exception as _e:
-                        pass
-                
-                # === ИНТЕГРАЦИЯ МАТЕМАТИКИ ДЛЯ ЗРЕЛЫХ МОНЕТ (SWING TRADING) ===
-                _tp1_sol_thr = float(getattr(config, "TP1_TRIGGER_PCT", 0.50))
-                _tp1_sell = float(getattr(config, "TP1_SELL_FRAC", 0.20))
-                _tp2 = float(getattr(config, "TP2_TRIGGER_PCT", 1.20))
-                _tp2_sell = float(getattr(config, "TP2_SELL_FRAC", 0.25))
-                _mb = float(getattr(config, "MOONBAG_TRIGGER_PCT", 2.50))
-                _mb_sell = float(getattr(config, "MOONBAG_SELL_FRAC", 0.30))
-                if getattr(position, "is_mature", False):
-                    # TIER-1: частичная фиксация (если включено в конфиге)
-                    if getattr(config, "PARTIAL_TP_ENABLED", False) and max_pnl_pct >= _tp1_sol_thr and not getattr(position, "tp1_done", False):
-                        tracker.partial_close_position(mint, current_price, _tp1_sell, f"Take Profit +{_tp1_sol_thr*100:.0f}% (Tier-1 {int(_tp1_sell*100)}%)")
-                        position.tp1_done = True
-                        position.is_moonbag = True
-                        continue
-                    # TIER-2: частичная фиксация (если включено в конфиге)
-                    if getattr(config, "PARTIAL_TP_ENABLED", False) and max_pnl_pct >= _tp2 and not getattr(position, "tp2_done", False):
-                        tracker.partial_close_position(mint, current_price, _tp2_sell, f"Take Profit +{_tp2*100:.0f}% (2.2x Free Ride)")
-                        position.tp2_done = True
-                        continue
-                    # MOONBAG: частичная фиксация (если включено в конфиге)
-                    if getattr(config, "PARTIAL_TP_ENABLED", False) and max_pnl_pct >= _mb and not getattr(position, "is_moonbag", False):
-                        tracker.partial_close_position(mint, current_price, _mb_sell, f"Take Profit +{_mb*100:.0f}% (Risk Free)")
-                        position.is_moonbag = True
-                        continue
-                    from exit_managers import MatureExitManager
-                    mature_exit_reason = MatureExitManager.evaluate_exit(position, current_price)
-                    if mature_exit_reason:
-                        tracker.close_position(mint, current_price, mature_exit_reason)
-                    continue # Если это mature монета, скальперская логика ниже к ней не применяется!
                 
                 # === ЖЕСТКИЙ RISK MANAGEMENT (CRO LEVEL) ===
                 
@@ -389,24 +374,20 @@ async def position_manager_loop(analyzer, tracker):
                     continue
 
                 # 1.5 ГАРАНТИРОВАННЫЙ НЕСНИЖАЕМЫЙ ПОРОГ ПРИБЫЛИ (PROFIT FLOOR LOCK)
-                # Включается только от +38% пика, чтобы не выбивать ракету на стартовом ретесте (+19% -> -1% -> +60% как у Chubby)
+                # На +40..+65% защищаем только безубыток (+5% после 2.5м), давая монете свободно дышать перед 2x-5x!
                 _floor_pnl = None
-                if max_pnl_pct >= 5.00:       # Гипер-ракета (+500%+): держим 75% прибыли (пик +692% -> пол +519%)
-                    _floor_pnl = round(max_pnl_pct * 0.75, 2)
-                elif max_pnl_pct >= 3.00:     # Мега-ракета (+300%..+500%): держим 72% прибыли (пик +400% -> пол +288%)
-                    _floor_pnl = max(2.35, round(max_pnl_pct * 0.72, 2))
-                elif max_pnl_pct >= 2.00:     # Пик +200%+ (3x) -> гарантируем минимум +165%
-                    _floor_pnl = 1.65
-                elif max_pnl_pct >= 1.50:     # Пик +150%+ (2.5x) -> гарантируем минимум +122%
-                    _floor_pnl = 1.22
-                elif max_pnl_pct >= 1.00:     # Пик +100%+ (2x) -> гарантируем минимум +80%
-                    _floor_pnl = 0.80
-                elif max_pnl_pct >= 0.70:     # Пик +70%+ -> гарантируем минимум +55%
-                    _floor_pnl = 0.55
-                elif max_pnl_pct >= 0.50:     # Пик +50%+ -> гарантируем минимум +32%
-                    _floor_pnl = 0.32
-                elif max_pnl_pct >= 0.38:     # Пик +38%+ -> гарантируем минимум +15%
-                    _floor_pnl = 0.15
+                if max_pnl_pct >= 5.00:       # Гипер-ракета (+500%+): держим 68% прибыли
+                    _floor_pnl = round(max_pnl_pct * 0.68, 2)
+                elif max_pnl_pct >= 3.00:     # Мега-ракета (+300%..+500%): держим 62% прибыли
+                    _floor_pnl = round(max_pnl_pct * 0.62, 2)
+                elif max_pnl_pct >= 1.60:     # Пик +160%+ -> 55%
+                    _floor_pnl = round(max_pnl_pct * 0.55, 2)
+                elif max_pnl_pct >= 1.00:     # Пик +100%+ (2x) -> 48%
+                    _floor_pnl = round(max_pnl_pct * 0.48, 2)
+                elif max_pnl_pct >= 0.65:     # Пик +65%+ -> гарантируем +28%
+                    _floor_pnl = 0.28
+                elif max_pnl_pct >= 0.40 and minutes_held >= 2.5:  # Пик +40%+ -> мягкий безубыток +5%
+                    _floor_pnl = 0.05
                 if _floor_pnl is not None and pnl_pct <= _floor_pnl:
                     _fc_s = int(getattr(position, "floor_confirm_n", 0) or 0) + 1
                     position.floor_confirm_n = _fc_s
@@ -420,20 +401,23 @@ async def position_manager_loop(analyzer, tracker):
                 else:
                     position.floor_confirm_n = 0
 
-                # 2. СУЖАЮЩИЙСЯ ПАРАБОЛИЧЕСКИЙ ТРЕЙЛИНГ-СТОП (Чем выше пик, тем плотнее зажимаем профит у вершины!)
+                # 2. СУЖАЮЩИЙСЯ ПАРАБОЛИЧЕСКИЙ ТРЕЙЛИНГ-СТОП (Включается от +75% пика с 2-тиковым подтверждением!)
                 drop_from_max = (position.max_price_usd - current_price) / position.max_price_usd
-                if max_pnl_pct >= 2.50:
-                    trail_distance = 0.09
-                elif max_pnl_pct >= 1.50:
-                    trail_distance = 0.10
-                elif max_pnl_pct >= 0.80 or getattr(position, "is_moonbag", False):
-                    trail_distance = float(getattr(config, "TRAILING_RUNNER_DISTANCE_PCT", 0.12))
+                if max_pnl_pct >= 4.00:
+                    trail_distance = 0.16
+                elif max_pnl_pct >= 2.00:
+                    trail_distance = 0.20
                 else:
-                    trail_distance = float(getattr(config, "TRAILING_DISTANCE_PCT", 0.16))
-                if max_pnl_pct >= getattr(config, "TRAILING_ACTIVATION_PCT", 0.45):
+                    trail_distance = 0.25
+                if max_pnl_pct >= 0.75:
                     if drop_from_max >= trail_distance:
-                        tracker.close_position(mint, current_price, f"Trailing Stop (peak +{max_pnl_pct*100:.0f}%, drop {drop_from_max*100:.0f}%)")
-                        continue
+                        _tc_s = int(getattr(position, "trail_confirm_n", 0) or 0) + 1
+                        position.trail_confirm_n = _tc_s
+                        if _tc_s >= 2:
+                            tracker.close_position(mint, current_price, f"Trailing Stop (peak +{max_pnl_pct*100:.0f}%, drop {drop_from_max*100:.0f}%)")
+                            continue
+                    else:
+                        position.trail_confirm_n = 0
 
                 _pt_sol = getattr(position, "peak_time", 0.0) or getattr(position, "entry_time", 0.0) or time.time()
                 _peak_age_sol = (time.time() - _pt_sol) / 60
@@ -463,15 +447,22 @@ async def position_manager_loop(analyzer, tracker):
                     continue
 
                 # 3.2 GROK BOT x JEV: СТОП ПОД ФИТИЛЬ ("The stop lives under the wick")
-                _wick_stop = getattr(position, "stop_under_wick", 0.0) or 0.0
-                _wick_pct = getattr(position, "wick_stop_loss_pct", 0.0) or 0.0
-                if minutes_held >= 0.5:
-                    if _wick_stop > 0 and current_price <= _wick_stop:
-                        tracker.close_position(mint, current_price, f"JEV Wick Stop (${current_price:.6f} <= ${_wick_stop:.6f}, {pnl_pct*100:.1f}%)")
-                        continue
-                    elif _wick_pct < 0 and pnl_pct <= _wick_pct:
-                        tracker.close_position(mint, current_price, f"JEV Wick Stop ({pnl_pct*100:.1f}% <= {_wick_pct*100:.1f}%)")
-                        continue
+                _wick_stop = float(getattr(position, "stop_under_wick", 0.0) or 0.0)
+                _wick_pct = float(getattr(position, "wick_stop_loss_pct", 0.0) or 0.0)
+                if minutes_held >= 1.5:
+                    _eff_wick_pct = min(-0.14, _wick_pct) if _wick_pct < 0 else -0.15
+                    _eff_wick_stop = min(_wick_stop, position.entry_price_usd * 0.86) if _wick_stop > 0 else 0.0
+                    if (_eff_wick_stop > 0 and current_price <= _eff_wick_stop) or pnl_pct <= _eff_wick_pct:
+                        _wc_s = int(getattr(position, "wick_confirm_n", 0) or 0) + 1
+                        position.wick_confirm_n = _wc_s
+                        if _wc_s >= 2:
+                            if _eff_wick_stop > 0 and current_price <= _eff_wick_stop:
+                                tracker.close_position(mint, current_price, f"JEV Wick Stop (${current_price:.6f} <= ${_eff_wick_stop:.6f}, {pnl_pct*100:.1f}%)")
+                            else:
+                                tracker.close_position(mint, current_price, f"JEV Wick Stop ({pnl_pct*100:.1f}% <= {_eff_wick_pct*100:.1f}%)")
+                            continue
+                    else:
+                        position.wick_confirm_n = 0
                             
                 # 3. АВАРИЙНЫЙ КЭП: больше -30% одну сделку не держим.
                 if pnl_pct <= -0.30:

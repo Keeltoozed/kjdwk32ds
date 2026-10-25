@@ -67,7 +67,7 @@ class PaperTracker:
                 return tuple(fees[chain])
         except Exception:
             pass
-        return (0.075, 0.45, 0.75, 0.05)
+        return (0.02, 0.04, 0.08, 0.01)
 
     def _supabase(self):
         """Возвращает Supabase-клиент или None, если нет настроек."""
@@ -519,6 +519,7 @@ class PaperTracker:
             amount_usd=amount_usd,
             original_amount_usd=amount_usd,
             entry_time=time.time(),
+            peak_time=time.time(),
             max_price_usd=entry_price,
             min_price_usd=entry_price,
             current_price_usd=entry_price,
@@ -575,8 +576,8 @@ class PaperTracker:
             if not getattr(pos, "original_amount_usd", 0):
                 pos.original_amount_usd = pos.amount_usd
             amount_sold_usd = pos.amount_usd * sell_pct
-            real_entry_price = pos.entry_price_usd * 1.01
-            real_exit_price = exit_price * 0.99
+            real_entry_price = pos.entry_price_usd * 1.003
+            real_exit_price = exit_price * 0.997
 
             price_diff_pct = (real_exit_price - real_entry_price) / real_entry_price if real_entry_price > 0 else 0
             # Защита от фантома единиц цены: +5000% на partial = битые данные, не фиксируем
@@ -634,9 +635,9 @@ class PaperTracker:
             pos.exit_reason = reason
             pos.exit_time = time.time()
 
-            # РЕАЛЬНЫЙ РАСЧЕТ PnL С УЧЕТОМ КОМИССИЙ (1% вход, 1% выход + 0.003 SOL сеть)
-            real_entry_price = pos.entry_price_usd * 1.01
-            real_exit_price = exit_price * 0.99
+            # РЕАЛЬНЫЙ РАСЧЕТ PnL С УЧЕТОМ КОМИССИЙ DEX SOLANA (0.3% вход, 0.3% выход + приоритетная комиссия сети)
+            real_entry_price = pos.entry_price_usd * 1.003
+            real_exit_price = exit_price * 0.997
 
             # Считаем изменение цены актива (процент)
             price_diff_pct = (real_exit_price - real_entry_price) / real_entry_price if real_entry_price > 0 else 0

@@ -1,9 +1,35 @@
 import asyncio
+import time
 import aiohttp
+import config
+
+# Кэш успешных двухсторонних симуляций (mint -> (ts, res_dict)) для защиты от 429
+_SIM_CACHE: dict = {}
+_SIM_LOCKS: dict = {}
+_LAST_SIM_TS: float = 0.0
+
+
+def _get_sim_lock():
+    try:
+        loop = asyncio.get_running_loop()
+        k = id(loop)
+    except RuntimeError:
+        k = 0
+    if k not in _SIM_LOCKS:
+        _SIM_LOCKS[k] = asyncio.Lock()
+    return _SIM_LOCKS[k]
+
+
+def _jup_headers(host: str) -> dict:
+    if "lite-api.jup.ag" in host:
+        return {"Accept": "application/json"}
+    key = (getattr(config, "JUP_API_KEY", "") or "").strip()
+    return {"x-api-key": key, "Accept": "application/json"} if key else {"Accept": "application/json"}
+
 
 class JupiterAPI:
     @staticmethod
-    async def get_prices(mints: list) -> dict:
+    async def get_prices(mints: list, pair_hints: dict = None) -> dict:
         """
         Балк-запрос цен: Jupiter Lite первым (своя квота), GeckoTerminal как fallback.
         Значительно ускоряет цикл трекинга позиций, избавляя от последовательных HTTP-запросов.
@@ -12,7 +38,7 @@ class JupiterAPI:
             return {}
         import market_data
         try:
-            return await market_data.get_bulk_prices(mints)
+            return await market_data.get_bulk_prices(mints, pair_hints=pair_hints)
         except Exception:
             pass
         addresses = ",".join(mints)
@@ -40,78 +66,108 @@ class JupiterAPI:
         ДВУХСТОРОННЯЯ СИМУЛЯЦИЯ (BUY + SELL):
         Проверяет, можно ли не только купить, но и ПРОДАТЬ токен обратно в SOL!
         Защита от Honeypot (кейс RICK/CRACKED: купить можно, продать нельзя -> NO_ROUTES_FOUND).
+        Использует x-api-key + автоматический фоллбэк на lite-api.jup.ag + кэш 180с против 429!
         """
+        global _LAST_SIM_TS
+        now = time.time()
+        cached = _SIM_CACHE.get(mint)
+        if cached and (now - cached[0]) < (180.0 if cached[1].get("is_safe") else 45.0):
+            return cached[1]
+
         lamports_in = int(input_amount_sol * 1e9)
         sol_mint = "So11111111111111111111111111111111111111112"
-        buy_url = f"https://api.jup.ag/swap/v1/quote?inputMint={sol_mint}&outputMint={mint}&amount={lamports_in}&slippageBps=300"
-        
+        hosts = ["https://api.jup.ag", "https://lite-api.jup.ag"]
+
         from http_client import get_session
         session = await get_session()
         try:
-            # 1. Симуляция ПОКУПКИ (SOL -> Mint) с retry при 429
-            buy_data = None
-            for attempt in range(3):
-                async with session.get(buy_url, timeout=5) as response:
-                    if response.status == 429:
-                        await asyncio.sleep(0.4 * (attempt + 1))
-                        continue
-                    if response.status != 200:
-                        try:
-                            err_data = await response.json()
-                            err_code = err_data.get("errorCode", err_data.get("error", "NO_ROUTE"))
-                        except Exception:
-                            err_code = "NO_ROUTE"
-                        return {"is_safe": False, "reason": f"Jupiter buy routing failed ({err_code})"}
+            async with _get_sim_lock():
+                wait_s = 0.25 - (time.time() - _LAST_SIM_TS)
+                if wait_s > 0:
+                    await asyncio.sleep(wait_s)
+                _LAST_SIM_TS = time.time()
 
-                    buy_data = await response.json()
-                    break
+                # 1. Симуляция ПОКУПКИ (SOL -> Mint) с переключением хостов при 429/401/5xx
+                buy_data = None
+                for attempt in range(3):
+                    host = hosts[attempt % len(hosts)]
+                    buy_url = f"{host}/swap/v1/quote?inputMint={sol_mint}&outputMint={mint}&amount={lamports_in}&slippageBps=300"
+                    async with session.get(buy_url, headers=_jup_headers(host), timeout=5) as response:
+                        if response.status in (429, 401, 403, 500, 502, 503, 504):
+                            await asyncio.sleep(0.35 * (attempt + 1))
+                            continue
+                        if response.status != 200:
+                            try:
+                                err_data = await response.json()
+                                err_code = err_data.get("errorCode", err_data.get("error", "NO_ROUTE"))
+                            except Exception:
+                                err_code = "NO_ROUTE"
+                            res = {"is_safe": False, "reason": f"Jupiter buy routing failed ({err_code})"}
+                            _SIM_CACHE[mint] = (time.time(), res)
+                            return res
 
-            if not buy_data:
-                return {"is_safe": False, "reason": "Jupiter API rate limit (429) on buy"}
+                        buy_data = await response.json()
+                        break
 
-            buy_impact = float(buy_data.get("priceImpactPct", 100) or 100)
-            if buy_impact > 6.0:
-                return {"is_safe": False, "reason": f"High buy price impact: {buy_impact:.1f}% (empty pool or tax)"}
+                if not buy_data:
+                    return {"is_safe": False, "rate_limited": True, "reason": "Jupiter API rate limit (429) on buy"}
 
-            out_tokens = int(buy_data.get("outAmount", 0) or 0)
-            if out_tokens <= 0:
-                return {"is_safe": False, "reason": "Zero tokens returned from buy quote"}
+                buy_impact = float(buy_data.get("priceImpactPct", 100) or 100)
+                if buy_impact > 6.0:
+                    res = {"is_safe": False, "reason": f"High buy price impact: {buy_impact:.1f}% (empty pool or tax)"}
+                    _SIM_CACHE[mint] = (time.time(), res)
+                    return res
 
-            # 2. Симуляция ПРОДАЖИ (Mint -> SOL) на 50% полученных токенов с retry при 429
-            sell_amount = max(1, out_tokens // 2)
-            sell_url = f"https://api.jup.ag/swap/v1/quote?inputMint={mint}&outputMint={sol_mint}&amount={sell_amount}&slippageBps=500"
-            sell_data = None
-            for attempt in range(3):
-                async with session.get(sell_url, timeout=5) as sell_resp:
-                    if sell_resp.status == 429:
-                        await asyncio.sleep(0.4 * (attempt + 1))
-                        continue
-                    if sell_resp.status != 200:
-                        try:
-                            sell_err = await sell_resp.json()
-                            err_code = sell_err.get("errorCode", sell_err.get("error", "NO_ROUTE"))
-                        except Exception:
-                            err_code = "NO_ROUTE"
-                        return {"is_safe": False, "reason": f"HONEYPOT: cannot sell token back to SOL ({err_code})"}
+                out_tokens = int(buy_data.get("outAmount", 0) or 0)
+                if out_tokens <= 0:
+                    return {"is_safe": False, "reason": "Zero tokens returned from buy quote"}
 
-                    sell_data = await sell_resp.json()
-                    break
+                # 2. Симуляция ПРОДАЖИ (Mint -> SOL) на 50% полученных токенов с переключением хостов при 429
+                sell_amount = max(1, out_tokens // 2)
+                sell_data = None
+                for attempt in range(3):
+                    host = hosts[(attempt + 1) % len(hosts)]
+                    sell_url = f"{host}/swap/v1/quote?inputMint={mint}&outputMint={sol_mint}&amount={sell_amount}&slippageBps=500"
+                    async with session.get(sell_url, headers=_jup_headers(host), timeout=5) as sell_resp:
+                        if sell_resp.status in (429, 401, 403, 500, 502, 503, 504):
+                            await asyncio.sleep(0.35 * (attempt + 1))
+                            continue
+                        if sell_resp.status != 200:
+                            try:
+                                sell_err = await sell_resp.json()
+                                err_code = sell_err.get("errorCode", sell_err.get("error", "NO_ROUTE"))
+                            except Exception:
+                                err_code = "NO_ROUTE"
+                            res = {"is_safe": False, "reason": f"HONEYPOT: cannot sell token back to SOL ({err_code})"}
+                            _SIM_CACHE[mint] = (time.time(), res)
+                            return res
 
-            if not sell_data:
-                return {"is_safe": False, "reason": "Jupiter API rate limit (429) on sell"}
+                        sell_data = await sell_resp.json()
+                        break
 
-            if not sell_data or "outAmount" not in sell_data:
-                return {"is_safe": False, "reason": "HONEYPOT: invalid sell quote from Jupiter"}
+                if not sell_data:
+                    return {"is_safe": False, "rate_limited": True, "reason": "Jupiter API rate limit (429) on sell"}
 
-            sell_impact = float(sell_data.get("priceImpactPct", 100) or 100)
-            if sell_impact > 15.0:
-                return {"is_safe": False, "reason": f"High sell price impact: {sell_impact:.1f}% (liquidity drained)"}
+                if not sell_data or "outAmount" not in sell_data:
+                    return {"is_safe": False, "reason": "HONEYPOT: invalid sell quote from Jupiter"}
 
-            out_sol_lamports = int(sell_data.get("outAmount", 0) or 0)
-            if out_sol_lamports <= 0:
-                return {"is_safe": False, "reason": "HONEYPOT: 0 SOL returned when selling token"}
+                sell_impact = float(sell_data.get("priceImpactPct", 100) or 100)
+                if sell_impact > 15.0:
+                    res = {"is_safe": False, "reason": f"High sell price impact: {sell_impact:.1f}% (liquidity drained)"}
+                    _SIM_CACHE[mint] = (time.time(), res)
+                    return res
 
-            return {"is_safe": True, "buy_data": buy_data, "sell_data": sell_data}
+                out_sol_lamports = int(sell_data.get("outAmount", 0) or 0)
+                if out_sol_lamports <= 0:
+                    res = {"is_safe": False, "reason": "HONEYPOT: 0 SOL returned when selling token"}
+                    _SIM_CACHE[mint] = (time.time(), res)
+                    return res
+
+                res = {"is_safe": True, "buy_data": buy_data, "sell_data": sell_data}
+                if len(_SIM_CACHE) > 1500:
+                    _SIM_CACHE.clear()
+                _SIM_CACHE[mint] = (time.time(), res)
+                return res
         except Exception as e:
             return {"is_safe": False, "reason": f"Simulation error: {e}"}
 
@@ -123,14 +179,16 @@ class JupiterAPI:
         Никогда не списывает в 0.0$ при 429 rate limit или сетевых таймаутах.
         """
         sol_mint = "So11111111111111111111111111111111111111112"
-        sell_url = f"https://api.jup.ag/swap/v1/quote?inputMint={mint}&outputMint={sol_mint}&amount=1000000000&slippageBps=1500"
+        hosts = ["https://api.jup.ag", "https://lite-api.jup.ag"]
         
         from http_client import get_session
         session = await get_session()
         for attempt in range(3):
+            host = hosts[attempt % len(hosts)]
+            sell_url = f"{host}/swap/v1/quote?inputMint={mint}&outputMint={sol_mint}&amount=1000000000&slippageBps=1500"
             try:
-                async with session.get(sell_url, timeout=5) as resp:
-                    if resp.status == 429:
+                async with session.get(sell_url, headers=_jup_headers(host), timeout=5) as resp:
+                    if resp.status in (429, 401, 403):
                         await asyncio.sleep(0.4 * (attempt + 1))
                         continue
                     if resp.status == 200:
