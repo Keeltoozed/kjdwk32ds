@@ -520,27 +520,47 @@ class Analyzer:
                             best_pair["_price_divergence"] = True
                             best_pair["_price_divergence_ratio"] = max_px / min_px
 
-        # Обогащаем реальным изменением за 1 минуту (DexScreener не отдает m1 в priceChange!)
+        # Обогащаем реальным изменением за 1 минуту и глобальной памятью пиков (цена + ликвидность)
         try:
             px = float(best_pair.get("priceUsd", 0) or 0)
+            cur_liq_obs = float(((best_pair.get("liquidity") or {}).get("usd", 0) or 0))
             if px > 0 and mint:
                 now = time.time()
                 if not hasattr(Analyzer, "_sol_price_obs"):
                     Analyzer._sol_price_obs = {}
                 hist = Analyzer._sol_price_obs.setdefault(mint, [])
-                hist.append((now, px))
-                if len(hist) > 40:
-                    hist[:] = [x for x in hist if now - x[0] <= 600.0]
+                hist.append((now, px, cur_liq_obs))
+                if len(hist) > 80:
+                    hist[:] = [x for x in hist if now - x[0] <= 2700.0]
                 if len(Analyzer._sol_price_obs) > 4000:
                     Analyzer._sol_price_obs.clear()
 
-                recent_5m = [p for ts, p in hist if now - ts <= 300.0 and p > 0]
-                if recent_5m:
-                    peak_5m = max(recent_5m)
-                    if peak_5m > 0:
-                        best_pair["_drop_from_peak_5m"] = (px - peak_5m) / peak_5m * 100.0
+                # Синхронизируемся с ShadowTracker (хранит пики отклонённых токенов с 60с точностью до 90 минут)
+                sh_peak_px, sh_peak_liq = 0.0, 0.0
+                try:
+                    from shadow_tracker import shadow_tracker
+                    sh_peak_px, sh_peak_liq = shadow_tracker.get_peak(mint)
+                    shadow_tracker.record_observation(mint, px, cur_liq_obs)
+                except Exception:
+                    pass
 
-                cands = [(abs((now - ts) - 60.0), ts, p) for ts, p in hist if 12.0 <= (now - ts) <= 150.0 and p > 0]
+                recent_px = [x[1] for x in hist if now - x[0] <= 2700.0 and x[1] > 0]
+                if sh_peak_px > 0:
+                    recent_px.append(sh_peak_px)
+                if recent_px:
+                    peak_px = max(recent_px)
+                    if peak_px > 0:
+                        best_pair["_drop_from_peak_5m"] = (px - peak_px) / peak_px * 100.0
+
+                recent_liq = [x[2] for x in hist if len(x) >= 3 and now - x[0] <= 2700.0 and x[2] > 0]
+                if sh_peak_liq > 0:
+                    recent_liq.append(sh_peak_liq)
+                if recent_liq and cur_liq_obs > 0:
+                    peak_liq = max(recent_liq)
+                    if peak_liq > 0:
+                        best_pair["_liq_drop_from_peak"] = (cur_liq_obs - peak_liq) / peak_liq * 100.0
+
+                cands = [(abs((now - x[0]) - 60.0), x[0], x[1]) for x in hist if 12.0 <= (now - x[0]) <= 150.0 and x[1] > 0]
                 if cands:
                     cands.sort(key=lambda x: x[0])
                     old_px = cands[0][2]
@@ -874,6 +894,14 @@ class Analyzer:
         if pair_data.get("_price_divergence"):
             _div_r = float(pair_data.get("_price_divergence_ratio", 0.0) or 0.0)
             return self._deny(mint, "price-split", f"🚫 [PRICE-SPLIT] {symbol} ({mint[:8]}): рассинхрон цен между пулами {_div_r:.1f}x (миграция/гэп) — блок входа.")
+
+        # === PEAK-MEMORY GUARD: запрет покупки после слива с уже виденного пика (HOBBES -51%, BUGMAGEDDON -20%, CHUNKEE -16%) ===
+        _drop_from_peak = float(pair_data.get("_drop_from_peak_5m", 0.0) or 0.0)
+        _liq_drop_peak = float(pair_data.get("_liq_drop_from_peak", 0.0) or 0.0)
+        if _drop_from_peak <= -18.0:
+            return self._deny(mint, f"post-peak-crash {_drop_from_peak:.0f}%", f"🚫 [POST-PEAK-CRASH] {symbol} ({mint[:8]}): цена уже упала на {_drop_from_peak:.1f}% от виденного ботом пика — отскок дохлой кошки после дампа.")
+        if _liq_drop_peak <= -18.0:
+            return self._deny(mint, f"post-peak-liq-drain {_liq_drop_peak:.0f}%", f"🚫 [LIQ-DRAIN] {symbol} ({mint[:8]}): ликвидность пула уже сдулась на {_liq_drop_peak:.1f}% от пика — снайперы/дев выводят SOL.")
         
         scam_keywords = ["AAPL", "S&P", "SP500", "MSFT", "TSLA", "TESLA", "SPACEX", "STARLINK", "XAI", "NEURALINK", "PAYPAL",
                          "NVDA", "GOOG", "AMZN", "META", "NFLX", 
@@ -888,26 +916,29 @@ class Analyzer:
             
         is_vip = self.check_hyper_rocket_momentum(pair_data) and getattr(config, "VIP_ENTRIES_ENABLED", False)
 
-        # === VIP OVERHEAT GUARD: не покупаем вершину вертикали ===
+        # === VIP OVERHEAT GUARD: не покупаем вершину вертикали, но пускаем первую волну (h1 < 250%) ===
         if is_vip and pair_data:
             _pc = pair_data.get("priceChange") or {}
             _m5 = _pc.get("m5", 0) or 0
             _m1 = _pc.get("m1", 0) or 0
+            _h1_vip = float(_pc.get("h1", 0) or 0)
             _liq_v = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
             _vol_v = float((pair_data.get("volume") or {}).get("m5", 0) or 0)
             _tx_m5_v = (pair_data.get("txns") or {}).get("m5", {}) or {}
             _b_v = int(_tx_m5_v.get("buys", 0) or 0)
             _s_v = int(_tx_m5_v.get("sells", 0) or 0)
-            _has_strong_buyers = (_b_v >= int(_s_v * 1.35) and _b_v >= 30 and _vol_v >= 10000)
-            _max_vip_m5 = 80.0 if (_has_strong_buyers and _liq_v >= 25000) else 65.0
+            if _h1_vip > 400.0:
+                return self._deny(mint, "vip-h1-exhausted", f"🚫 [VIP EXHAUSTION] {mint}: h1 {_h1_vip:+.0f}% > +400% — памп уже отработал, вход = вершина (кейс MARVIN +1467%).")
+            _has_strong_buyers = (_b_v >= int(_s_v * 1.30) and _b_v >= 28 and _vol_v >= 10000)
+            if _h1_vip < 250.0 and _m1 <= 20.0 and _has_strong_buyers:
+                _max_vip_m5 = 95.0  # Первая волна пробоя (SXSI +581%, US STOCKS +159%)
+            else:
+                _max_vip_m5 = 50.0
             if _m5 > _max_vip_m5:
                 return self._deny(mint, "vip-overheat", f"🚫 [VIP OVERHEAT] {mint}: m5 {_m5:+.0f}% > +{_max_vip_m5:.0f}% — вертикаль уже прошла, вход = вершина.")
-            _h1_vip = float(_pc.get("h1", 0) or 0)
-            if _h1_vip > 450.0 and _m5 > 15.0:
-                return self._deny(mint, "vip-h1-exhausted", f"🚫 [VIP EXHAUSTION] {mint}: h1 {_h1_vip:+.0f}% > +450% — памп уже завершается, риск отката.")
             if _m1 < -2.5:
                 return self._deny(mint, "vip-reversal", f"🚫 [VIP REVERSAL] {mint}: m1 {_m1:+.1f}% — резкий откат за 1м, ждём pullback.")
-            _max_vip_m1 = 45.0 if _has_strong_buyers else 25.0
+            _max_vip_m1 = 22.0
             if _m1 > _max_vip_m1:
                 return self._deny(mint, "vip-spike", f"🚫 [VIP SPIKE] {mint}: m1 {_m1:+.1f}% > +{_max_vip_m1:.0f}% — свеча-spike в моменте, вход = вершина. Ждём.")
             if _m5 < getattr(config, "VIP_MIN_M5_PCT", 5.0):
@@ -929,9 +960,9 @@ class Analyzer:
                 _h6_pre = float(_pc_pre.get("h6", 0) or 0)
                 _vm5_check = float((pair_data.get("volume") or {}).get("m5", 0) or 0)
                 _m5_check = float(_pc_pre.get("m5", 0) or 0)
-                if 0 < _fdv_pre < 3500:
-                    return self._deny(mint, "post-migration-dump-fdv", f"🚫 [POST-MIGRATION-DUMP] {mint[:8]}: AMM FDV ${_fdv_pre:,.0f} < $3.5k — пустой пул.")
-                elif 0 < _fdv_pre < 15000 and not (_m5_check >= 3.0 and _vm5_check >= 1500.0):
+                if mint.endswith("pump") and 0 < _fdv_pre < 30000:
+                    return self._deny(mint, "post-migration-dump-fdv", f"🚫 [POST-MIGRATION-DUMP] {mint[:8]}: мигрировавший токен FDV ${_fdv_pre:,.0f} < $30k — слит ниже уровня миграции.")
+                elif 0 < _fdv_pre < 15000 and not (_m5_check >= 5.0 and _vm5_check >= 2500.0):
                     return self._deny(mint, "post-migration-dump-fdv", f"🚫 [POST-MIGRATION-DUMP] {mint[:8]}: AMM FDV ${_fdv_pre:,.0f} < $15k без импульса — слитый токен.")
                 if _age_min_pre >= 60.0 and ((_fdv_pre < 35000 and _h1_pre < -5.0) or (_h1_pre < -12.0 or _h6_pre < -25.0)):
                     return self._deny(mint, "post-migration-dump-trend", f"🚫 [POST-MIGRATION-DUMP] {mint[:8]}: часовой/6ч тренд в глубоком сливе (h1 {_h1_pre:+.1f}%, h6 {_h6_pre:+.1f}%) — отскок дохлой кошки.")
@@ -942,11 +973,18 @@ class Analyzer:
             _m5 = _pc.get("m5", 0) or 0
             _m1 = _pc.get("m1", 0) or 0
             _h1 = _pc.get("h1", 0) or 0
-            # Запрет покупки вершины: отсекаем перегретые свечи, но даем взлететь сильным ракетам с доминированием покупателей
+            if _h1 > 400.0:
+                return self._deny(mint, f"h1-exhausted {_h1:+.0f}%", f"🚫 [H1-EXHAUSTED] {mint[:8]}: h1 {_h1:+.0f}% > +400% — памп уже отработал, вход на хаях запрещён.")
+            # Запрет покупки вершины, но пропуск первой волны пробоя (h1 < 250%, возраст < 45м, m1 <= 20%)
             _chain_ae = str((pair_data or {}).get("chainId", "solana")).lower()
             _txm5_tmp = (pair_data.get("txns") or {}).get("m5", {}) or {}
             _b5_tmp, _s5_tmp = int(_txm5_tmp.get("buys", 0) or 0), int(_txm5_tmp.get("sells", 0) or 0)
-            _max_m5_entry = 65.0 if (_b5_tmp >= 25 and _b5_tmp > _s5_tmp * 1.25) else 50.0
+            if _h1 < 250.0 and _age_min_pre < 45.0 and _m1 <= 20.0 and _b5_tmp >= 25 and _b5_tmp > _s5_tmp * 1.25:
+                _max_m5_entry = 95.0
+            elif _h1 < 250.0 and _b5_tmp >= 25 and _b5_tmp > _s5_tmp * 1.25:
+                _max_m5_entry = 65.0
+            else:
+                _max_m5_entry = 50.0
             if _m5 > _max_m5_entry:
                 return self._deny(mint, f"m5-late {_m5:+.0f}%", f"🚫 [LATE ENTRY] {mint[:8]}: m5 {_m5:+.1f}% > {_max_m5_entry:.0f}%. Опоздание на памп — риск дампа ~90%.")
             _tx = (pair_data.get("txns") or {}).get("h1", {}) or {}
@@ -1089,8 +1127,8 @@ class Analyzer:
             _created = pair_data.get("pairCreatedAt") or 0
             if _created and not _socials_unknown:
                 _age_h = (time.time() * 1000 - _created) / 3.6e6
-                if _age_h < 6 and isinstance(_socials, list) and len(_socials) == 0 and not _lottery and _cur_liq < 25000:
-                    return self._deny(mint, "no-socials", f"🚫 [SOCIAL] {mint}: нет соцсетей при возрасте {_age_h:.1f}ч и ликве <$25k — высокий скам-риск.")
+                if _age_h < 6 and isinstance(_socials, list) and len(_socials) == 0 and not _lottery and _cur_liq < 14000:
+                    return self._deny(mint, "no-socials", f"🚫 [SOCIAL] {mint}: нет соцсетей при возрасте {_age_h:.1f}ч и ликве <$14k — высокий скам-риск.")
             print(f"✅ [ENTRY-CANDIDATE] {mint}: PULLBACK — импульс m5 {_m5:+.1f}%, откат m1 {_m1:+.1f}%, h1 {_h1:+.0f}%, b/s {_b}/{_s}. Кандидат на вход.")
         
         # Защита от микро-пулов:
@@ -1147,8 +1185,8 @@ class Analyzer:
         has_socials = bool(has_twitter or has_tg or has_website)
         
         _socials_unknown = bool(pair_data.get("_socials_unknown", False))
-        if not _socials_unknown and not has_socials and liquidity < 25000 and not _strong_fomo:
-            print(f"🚫 Мусор: У {symbol} ({mint[:8]}) вообще нет ни одной соцсети или сайта (Twitter/TG/Web). Это анонимный дев-раг (кейс Hodlon).")
+        if not _socials_unknown and not has_socials and liquidity < 14000 and not _strong_fomo:
+            print(f"🚫 Мусор: У {symbol} ({mint[:8]}) вообще нет ни одной соцсети или сайта (Twitter/TG/Web) при ликвидности <$14k. Это анонимный дев-раг.")
             return False
             
         if is_vip:
@@ -2137,14 +2175,18 @@ class Analyzer:
             return False
 
         _fdv_curve = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
-        if _fdv_curve > 62000:
-            print(f"🚫 [GRADUATION-CLIFF] {mint[:8]}: кривая Pump.fun у самого потолка миграции (FDV ${_fdv_curve:,.0f} > $62k) — риск сброса при выходе на AMM.")
-            return False
+        if _fdv_curve > 24000:
+            return self._deny(mint, "pump-graduation-cliff", f"🚫 [GRADUATION-CLIFF] {mint[:8]}: кривая Pump.fun (FDV ${_fdv_curve:,.0f} > $24k) в зоне разгрузки снайперов перед миграцией — ждём выхода на AMM.")
 
         # Защита от фантомных дев-дампов на старте (кейс 404: $3.1k cap, 5% кривой, мгновенный сброс дева)
         if _fdv_curve < 7500:
-            print(f"🚫 [CURVE-TOO-EARLY] {mint[:8]}: капитализация ${_fdv_curve:,.0f} < $7.5k (~8% прогресса) — нет подушки ликвидности, зона мгновенного дев-дампа.")
-            return False
+            return self._deny(mint, "pump-curve-too-early", f"🚫 [CURVE-TOO-EARLY] {mint[:8]}: капитализация ${_fdv_curve:,.0f} < $7.5k (~8% прогресса) — нет подушки ликвидности, зона мгновенного дев-дампа.")
+
+        created_at = pair_data.get("pairCreatedAt")
+        age_minutes = ((time.time() * 1000 - created_at) / (1000 * 60)) if created_at else 0.0
+        # Защита от застрявших мёртвых кривых (кейсы B1DPPH -40% при 20м/$11.5k и TIMECHAIN -16.5% при 79м/$17.3k):
+        if age_minutes > 15.0 and _fdv_curve < 18000:
+            return self._deny(mint, "pump-stale-curve", f"🚫 [CURVE-STALE-FAIL] {mint[:8]}: возраст {age_minutes:.1f}м > 15м при FDV ${_fdv_curve:,.0f} < $18k — токен не смог выйти из кривой, 100% слив.")
 
         _vm5 = float((pair_data.get("volume") or {}).get("m5", 0) or 0)
         if _vm5 < 800:
@@ -2155,10 +2197,8 @@ class Analyzer:
         if is_vip:
             print(f"🚀🚀🚀 [HYPER-ROCKET BYPASS] Токен {mint} летит в космос! Игнорируем карантин возраста и соцсетей.")
             
-        created_at = pair_data.get("pairCreatedAt")
         if created_at and not is_vip:
-            age_minutes = (time.time() * 1000 - created_at) / (1000 * 60)
-            _max_pump_age = float(getattr(config, "PUMP_MAX_AGE_MIN", 120.0))
+            _max_pump_age = float(getattr(config, "PUMP_MAX_AGE_MIN", 45.0))
             if age_minutes > _max_pump_age:  
                 print(f"🚫 [PUMP-AGE] {mint[:8]}: возраст {age_minutes:.1f}м > {_max_pump_age:.0f}м — затухающий кёрв.")
                 return False
@@ -2287,27 +2327,27 @@ class Analyzer:
 
         # === ЗАЩИТА ОТ ДАМПА МИГРАЦИИ PUMP.FUN ===
         if _is_migrated_pump:
-            # 1. Запрет входа в первые 2 минуты жизни AMM-пула (сброс instant-ботов)
-            if _age_min < 2.0:
+            # 1. Запрет входа в первые 5.5 минут жизни AMM-пула (сброс instant-ботов и снайперов кривой)
+            if _age_min < 5.5:
                 return self._deny(mint, "post-migration-dump-zone",
-                                  f"⏳ [POST-MIGRATION] {mint[:8]}: пул миграции создан всего {_age_min:.1f}м назад (< 2м) — ранняя зона сброса снайперов pump.fun.")
+                                  f"⏳ [POST-MIGRATION] {mint[:8]}: пул миграции создан всего {_age_min:.1f}м назад (< 5.5м) — зона сброса снайперов pump.fun.")
 
             _ray_liq = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
-            if _ray_liq < 3500.0:
+            if _ray_liq < 12000.0:
                 return self._deny(mint, "migrated-drained-liq",
-                                  f"🚫 [POST-MIGRATION] {mint[:8]}: ликвидность ${_ray_liq:,.0f} < $3,500 — снайперы высосали SOL на миграции.")
+                                  f"🚫 [POST-MIGRATION] {mint[:8]}: ликвидность ${_ray_liq:,.0f} < $12,000 — снайперы высосали SOL на миграции.")
 
             _fdv_check = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
-            if 0 < _fdv_check < 3500.0:
+            if 0 < _fdv_check < 30000.0:
                 return self._deny(mint, "migrated-below-graduation",
-                                  f"🚫 [POST-MIGRATION] {mint[:8]}: FDV ${_fdv_check:,.0f} < $3,500 — пустой пул.")
+                                  f"🚫 [POST-MIGRATION] {mint[:8]}: FDV ${_fdv_check:,.0f} < $30,000 — слит ниже уровня миграции.")
 
         _sol_min_age = float(getattr(config, "SOLANA_MIN_AGE_MIN", 1.5))
         if _age_min < _sol_min_age:
             return self._deny(mint, "ray-young", f"⏳ [RAYDIUM] {mint[:8]}: возраст {_age_min:.1f}м < {_sol_min_age}м — ранняя flash-rug зона.")
 
         _ray_liq = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
-        _min_ray_liq = 3500.0 if (_age_min < 60) else 6000.0
+        _min_ray_liq = 8000.0 if (_age_min < 60) else 12000.0
         if _ray_liq < _min_ray_liq:
             return self._deny(mint, "ray-low-liq", f"🚫 [RAYDIUM] {mint[:8]}: реальная ликвидность AMM ${_ray_liq:,.0f} < ${_min_ray_liq:,.0f}.")
 
@@ -2318,11 +2358,8 @@ class Analyzer:
         _h6 = float(_pc.get("h6", 0) or 0)
         _fdv_check = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
         
-        # Разрешаем разворотные ракеты с $3.5k FDV (кейсы JOHN +1004%, SURILI +905%, MEMEGLE +736%):
-        if 0 < _fdv_check < 3500:
-            return self._deny(mint, "ray-fdv-cliff", f"🚫 [RAYDIUM] {mint[:8]}: FDV ${_fdv_check:,.0f} < $3,500 — пустой пул.")
-        if 3500 <= _fdv_check < 15000 and _m5 < -15.0:
-            return self._deny(mint, "ray-fdv-dumping", f"🚫 [RAYDIUM] {mint[:8]}: FDV ${_fdv_check:,.0f} при m5 {_m5:+.1f}% — падающий нож.")
+        if 0 < _fdv_check < 15000:
+            return self._deny(mint, "ray-fdv-cliff", f"🚫 [RAYDIUM] {mint[:8]}: FDV ${_fdv_check:,.0f} < $15,000 — слишком мелкий пул.")
         if _age_min >= 60.0:
             if (_fdv_check < 35000 and _h1 < -5.0):
                 return self._deny(mint, "ray-deadcat-trend", f"🚫 [RAYDIUM] {mint[:8]}: FDV ${_fdv_check:,.0f} < $35,000 при h1 {_h1:+.1f}% — слитый после миграции.")
@@ -2353,6 +2390,8 @@ class Analyzer:
                     pass
         if _m1 < -2.5:
             return self._deny(mint, "ray-m1-drop", f"🚫 [RAYDIUM] {mint[:8]}: m1 {_m1:+.1f}% — активный сброс в моменте (падающий нож).")
+        if _m1 > 22.0:
+            return self._deny(mint, "ray-m1-blowoff", f"🚫 [RAYDIUM] {mint[:8]}: m1 {_m1:+.1f}% > +22% — вертикальный прострел за 1м, вход = вершина.")
         if _m5 < 2.5:
             return self._deny(mint, "ray-m5-flat", f"🚫 [RAYDIUM] {mint[:8]}: m5 {_m5:+.1f}% < +2.5% — нет импульса.")
 
@@ -2360,12 +2399,23 @@ class Analyzer:
         _txm5 = (pair_data.get("txns") or {}).get("m5", {}) or {}
         _b5, _s5 = int(_txm5.get("buys", 0) or 0), int(_txm5.get("sells", 0) or 0)
 
-        # Защита от покупки макушки пампа на Raydium/DEX (кейсы 2JVY -46% при m5 +164%, MAYA -41% при h1 +1595%, BTC -4% при m5 +72%)
-        _max_ray_m5 = 65.0 if (_b5 >= 25 and _b5 > _s5 * 1.35) else 50.0
+        # Защита от накрутки дев-ботами на PumpSwap (11 из 13 исторических сливов имели b/s >= 2.3x при buys >= 250)
+        if _dex_low == "pumpswap" and (_b5 / max(_s5, 1)) >= 2.3 and _b5 >= 250:
+            return self._deny(mint, "pumpswap-buybot-wall", f"🚫 [PUMPSWAP-BOT-WALL] {mint[:8]}: аномальный перекос покупок {_b5}b/{_s5}s ({_b5/max(_s5,1):.1f}x) — боты дева рисуют стенку перед сливом.")
+
+        # Безусловный запрет входа на перегретом часовом тренде (кейс MARVIN h1 +1467%, m5 +9.95% -> -13.2%)
+        if _h1 > 400.0:
+            return self._deny(mint, f"ray-h1-exhausted {_h1:+.0f}%", f"🚫 [RAYDIUM] {mint[:8]}: h1 {_h1:+.0f}% > +400% — гипер-памп завершается, покупатели истощены.")
+
+        # Пропуск первой волны пробоя (h1 < 250%, возраст < 45м, m1 <= 20%), но блок перегрева на поздних волнах
+        if _h1 < 250.0 and _age_min < 45.0 and _m1 <= 20.0 and _b5 >= 25 and _b5 > _s5 * 1.25:
+            _max_ray_m5 = 95.0
+        elif _h1 < 250.0 and _b5 >= 25 and _b5 > _s5 * 1.35:
+            _max_ray_m5 = 65.0
+        else:
+            _max_ray_m5 = 50.0
         if _m5 > _max_ray_m5:
             return self._deny(mint, f"ray-m5-late {_m5:+.0f}%", f"🚫 [RAYDIUM] {mint[:8]}: m5 {_m5:+.1f}% > {_max_ray_m5:.0f}% — опоздание на памп, вход на макушке.")
-        if _h1 > 450.0 and _m5 > 15.0:
-            return self._deny(mint, f"ray-h1-exhausted {_h1:+.0f}%", f"🚫 [RAYDIUM] {mint[:8]}: h1 {_h1:+.0f}% > +450% — гипер-памп завершается, покупатели истощены.")
 
         _min_bs = 1.05 if (_vm5 >= 5000 and _m5 >= 5.0) else 1.12
         if (_b5 + _s5) < 15 or _vm5 < 1500 or (_s5 > 0 and _b5 < _s5 * _min_bs):

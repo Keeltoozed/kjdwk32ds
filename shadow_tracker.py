@@ -23,6 +23,36 @@ class ShadowTracker:
         self.db_path = db_path
         self._rate_limit_lock = asyncio.Lock()
         self._cooldown = {}  # {mint: timestamp} — дедупликация, чтобы не спамить Supabase
+        self._peak_memory = {}  # {mint: (max_price, max_liq, ts)} — память пиков для защиты от покупки слитых токенов
+
+    def record_observation(self, mint: str, price: float = 0.0, liquidity: float = 0.0):
+        """Обновляет максимальную виденную цену и ликвидность токена в оперативной памяти (TTL 90 мин)."""
+        if not mint:
+            return
+        try:
+            now_t = time.time()
+            px = float(price or 0.0)
+            lq = float(liquidity or 0.0)
+            old = self._peak_memory.get(mint)
+            if old and (now_t - old[2]) <= 5400.0:
+                px = max(px, old[0])
+                lq = max(lq, old[1])
+            if px > 0 or lq > 0:
+                self._peak_memory[mint] = (px, lq, now_t)
+            if len(self._peak_memory) > 4000:
+                cutoff = now_t - 5400.0
+                self._peak_memory = {k: v for k, v in self._peak_memory.items() if v[2] >= cutoff}
+        except Exception:
+            pass
+
+    def get_peak(self, mint: str) -> tuple:
+        """Возвращает (max_price, max_liq), виденные ботом за последние 90 минут."""
+        if not mint:
+            return 0.0, 0.0
+        old = self._peak_memory.get(mint)
+        if not old or (time.time() - old[2]) > 5400.0:
+            return 0.0, 0.0
+        return old[0], old[1]
         
         self.use_supabase = bool(
             getattr(config, 'SUPABASE_URL', None) and 
@@ -101,6 +131,7 @@ class ShadowTracker:
         """
         if not mint:
             return
+        self.record_observation(mint, price, liquidity)
             
         # Защита от спама: если этот токен уже логировали за последние 10 минут (было 30м) — скип.
         # 10 минут достаточно, чтобы не спамить, но не упустить монету, если через 10-15м в ней начался памп.
@@ -209,17 +240,36 @@ class ShadowTracker:
         try:
             status, data = await fetch_json(url, timeout=8, retries=1)
             if status == 200 and data:
-                for pair in data.get("pairs") or []:
+                all_pairs = data.get("pairs") or []
+                # Если токен уже мигрировал на AMM (pumpswap/raydium/meteora/orca),
+                # его старый bonding curve на pumpfun заморожен на $0.000042 ($42k FDV) — игнорируем его!
+                migrated_mints = set()
+                for pair in all_pairs:
+                    base = pair.get("baseToken", {}) or {}
+                    m = (base.get("address") or "").lower()
+                    dex_id = str(pair.get("dexId") or "").lower()
+                    raw_liq = float((pair.get("liquidity") or {}).get("usd", 0) or 0.0)
+                    if m and dex_id not in ("pump", "pumpfun") and raw_liq >= 100.0:
+                        migrated_mints.add(m)
+
+                for pair in all_pairs:
                     base = pair.get("baseToken", {}) or {}
                     m = (base.get("address") or "").lower()
                     p = float(pair.get("priceUsd", 0) or 0.0)
                     liq = float((pair.get("liquidity") or {}).get("usd", 0) or 0.0)
+                    fdv = float(pair.get("fdv", 0) or 0.0)
                     dex_id = str(pair.get("dexId") or "").lower()
-                    if liq == 0 and dex_id in ("pump", "pumpfun"):
-                        liq = float(pair.get("fdv", 0) or 0.0) * 0.40
+                    if dex_id in ("pump", "pumpfun"):
+                        if m in migrated_mints:
+                            continue  # Никогда не берём замороженную кривую pumpfun для мигрировавших монет!
+                        if liq == 0:
+                            liq = fdv * 0.40
+                    # Игнорируем эксплойты с раздутым supply (FDV > $500M при микро-ликвидности, кейсы IRYS/BTW)
+                    if fdv > 500_000_000 and liq < 250_000:
+                        continue
                     tx24 = ((pair.get("txns") or {}).get("h24") or {})
                     sells24 = int(tx24.get("sells", 0) or 0)
-                    if not m or p <= 0 or liq < 2500.0 or sells24 < 2:
+                    if not m or p <= 0 or liq < 2500.0 or sells24 < 5:
                         continue
                     if liq > max_liq.get(m, -1.0):
                         max_liq[m] = liq
@@ -353,6 +403,8 @@ class ShadowTracker:
                             else:
                                 new_ath = old_ath if old_ath > 0 else p_now
                                 time_to_ath = old_time
+                            if new_ath > 0:
+                                self.record_observation(m, new_ath, 0.0)
 
                             ath_pnl = ((new_ath - p_entry) / p_entry * 100.0) if p_entry > 0 and new_ath > 0 else 0.0
                             cur_pnl = ((p_now - p_entry) / p_entry * 100.0) if p_entry > 0 and p_now > 0 else (-100.0 if p_now == 0 else 0.0)

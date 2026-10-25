@@ -36,82 +36,131 @@ def _headers():
     return {"x-api-key": key} if key else {}
 
 
+def _parse_jup_age_min(t: dict) -> float:
+    """Вычисляет возраст пула в минутах из graduatedAt (если мигрировал) или firstPool.createdAt ответа Jupiter API v2."""
+    try:
+        ca = (t.get("graduatedAt") or (t.get("firstPool") or {}).get("createdAt") or "").strip()
+        if not ca:
+            return 30.0
+        from datetime import datetime
+        dt = datetime.fromisoformat(ca.replace("Z", "+00:00"))
+        return max(0.0, (time.time() - dt.timestamp()) / 60.0)
+    except Exception:
+        return 30.0
+
+
 async def fetch_jup_tokens() -> list:
-    """Возвращает [mint, ...] Solana: приоритет взрывным ракетам (toptrending m5) + свежим пулам (recent)."""
+    """Возвращает [mint, ...] Solana: приоритет органическим ракетам (toporganicscore/5m + toptrending/5m + GT 5m).
+    Предварительно отсекает древние мамонты (>60-180м без пампа) и пустые пулы (<$4k ликвидности) прямо по полям Jupiter,
+    чтобы они не забивали лимит пачки и не отрезали живые пулы GeckoTerminal.
+    """
     global _cache, _cache_time
     if time.time() - _cache_time < CACHE_TTL and _cache:
         return _cache
     
     trending_url = f"{BASE}/toptrending/5m?limit=100"
+    organic_url = f"{BASE}/toporganicscore/5m?limit=100"
+    top_vol_url = f"{BASE}/toptraded/5m?limit=100"
     recent_url = f"{BASE}/recent"
-    top_vol_url = f"{BASE}/toptraded/1h?limit=100"
     
     headers = _headers()
-    s1, d1 = await fetch_json(trending_url, headers=headers, timeout=10)
-    s2, d2 = await fetch_json(recent_url, headers=headers, timeout=10)
-    s3, d3 = await fetch_json(top_vol_url, headers=headers, timeout=10)
+    (s1, d1), (s_org, d_org), (s3, d3), (s2, d2) = await asyncio.gather(
+        fetch_json(trending_url, headers=headers, timeout=8),
+        fetch_json(organic_url, headers=headers, timeout=8),
+        fetch_json(top_vol_url, headers=headers, timeout=8),
+        fetch_json(recent_url, headers=headers, timeout=8),
+    )
     
     ranked = []
     seen = set()
-    
-    # 1. Топ-тренды по росту за 5 минут — собираем всю сотню трендовых монет (не режем их заранее!)
-    if s1 == 200 and isinstance(d1, list):
-        for t in d1:
-            m = t.get("id", "")
-            sym = str(t.get("symbol") or "").upper().strip()
-            if not m or m.startswith("0x") or len(m) < 32 or len(m) > 44 or m in seen or sym in SKIP_SYMBOLS:
-                continue
-            st = t.get("stats5m") or {}
-            pc = float(st.get("priceChange") or 0.0)
-            vol = float(st.get("buyVolume") or 0.0) + float(st.get("sellVolume") or 0.0)
-            # Отсекаем только явный нулевой спам без торгов, остальное передаём в batch-анализ
-            if pc < 0.0 and vol < 500.0:
-                continue
-            seen.add(m)
-            ranked.append((pc, vol, sym, m, "trending"))
-    # Сортируем топ-тренды по максимальному 5м импульсу цены:
-    ranked.sort(key=lambda x: x[0], reverse=True)
-    
-    # 2. Топ по объему за 1 час (toptraded)
-    if s3 == 200 and isinstance(d3, list):
-        for t in d3:
-            m = t.get("id", "")
-            sym = str(t.get("symbol") or "").upper().strip()
-            if not m or m.startswith("0x") or len(m) < 32 or len(m) > 44 or m in seen or sym in SKIP_SYMBOLS:
-                continue
-            st = t.get("stats5m") or {}
-            pc = float(st.get("priceChange") or 0.0)
-            vol = float(st.get("buyVolume") or 0.0) + float(st.get("sellVolume") or 0.0)
-            seen.add(m)
-            ranked.append((pc, vol, sym, m, "volume"))
 
-    # 3. Свежие листинги (recent) — берём до 15 штук, чтобы пустые минтинги без пулов не вытесняли живые монеты
-    if s2 == 200 and isinstance(d2, list):
-        for t in d2[:15]:
+    def _add_jup_list(items, tag: str, min_pc5: float = 2.5):
+        if not isinstance(items, list):
+            return
+        for t in items:
             m = t.get("id", "")
             sym = str(t.get("symbol") or "").upper().strip()
             if not m or m.startswith("0x") or len(m) < 32 or len(m) > 44 or m in seen or sym in SKIP_SYMBOLS:
                 continue
+            liq = float(t.get("liquidity") or 0.0)
+            if liq < 4000.0:
+                continue
+            st5 = t.get("stats5m") or {}
+            st1h = t.get("stats1h") or {}
+            pc5 = float(st5.get("priceChange") or 0.0)
+            pc1h = float(st1h.get("priceChange") or 0.0)
+            vol5 = float(st5.get("buyVolume") or 0.0) + float(st5.get("sellVolume") or 0.0)
+            age_m = _parse_jup_age_min(t)
+            # Отсекаем древние мамонты и перегретые хаи ДО формирования пачки:
+            if age_m > 180.0 and pc5 < 15.0:
+                continue
+            if age_m > 60.0 and pc5 < 8.0:
+                continue
+            if pc1h > 400.0 or pc1h < -35.0:
+                continue
+            if pc5 < min_pc5 or vol5 < 800.0:
+                continue
             seen.add(m)
-            ranked.append((0.0, 0.0, sym, m, "recent"))
+            ranked.append((pc5, vol5, sym, m, tag))
 
-    # 4. Добор свежих пулов GeckoTerminal (GT 5m trending), чтобы всегда была полная пачка из 100+ реальных пулов
+    # 1. Органические 5м-ракеты и топ-тренды 5м (без древнего мусора)
+    if s_org == 200:
+        _add_jup_list(d_org, "organic_5m", min_pc5=2.5)
+    if s1 == 200:
+        _add_jup_list(d1, "trending_5m", min_pc5=2.5)
+    if s3 == 200:
+        _add_jup_list(d3, "traded_5m", min_pc5=2.5)
+
+    # 2. Добор живых трендов и свежих пулов GeckoTerminal (5m + 1h + new_pools — никогда не обрезаются старыми монетами)
     try:
         from market_data import _gt_get
-        gt_data5 = await _gt_get("/networks/solana/trending_pools?duration=5m", retries=0, timeout=6)
-        for item in ((gt_data5 or {}).get("data") or []):
-            bid = item.get("relationships", {}).get("base_token", {}).get("data", {}).get("id", "")
-            addr = bid.split("_", 1)[1] if "_" in bid else ""
-            attrs = item.get("attributes") or {}
-            sym = str(attrs.get("name") or "").upper().strip()
-            if not addr or addr.startswith("0x") or len(addr) < 32 or len(addr) > 44 or addr in seen or any(s in sym for s in SKIP_SYMBOLS):
+        gt_data5, gt_data1h, gt_new = await asyncio.gather(
+            _gt_get("/networks/solana/trending_pools?duration=5m", retries=0, timeout=6),
+            _gt_get("/networks/solana/trending_pools?duration=1h", retries=0, timeout=6),
+            _gt_get("/networks/solana/new_pools", retries=0, timeout=6),
+            return_exceptions=True,
+        )
+        for tag_gt, gt_resp in (("gt_trending_5m", gt_data5), ("gt_trending_1h", gt_data1h), ("gt_new_pools", gt_new)):
+            if not isinstance(gt_resp, dict):
                 continue
-            seen.add(addr)
-            pc = attrs.get("price_change_percentage") or {}
-            m5_c = float(pc.get("m5") or 0)
-            ranked.append((m5_c, 0.0, sym, addr, "gt_trending_5m"))
+            for item in (gt_resp.get("data") or []):
+                bid = item.get("relationships", {}).get("base_token", {}).get("data", {}).get("id", "")
+                addr = bid.split("_", 1)[1] if "_" in bid else ""
+                attrs = item.get("attributes") or {}
+                sym = str(attrs.get("name") or "").split("/")[0].upper().strip()
+                if not addr or addr.startswith("0x") or len(addr) < 32 or len(addr) > 44 or addr in seen or any(s in sym for s in SKIP_SYMBOLS):
+                    continue
+                liq_gt = float(attrs.get("reserve_in_usd") or 0.0)
+                if 0 < liq_gt < 3500.0:
+                    continue
+                pc = attrs.get("price_change_percentage") or {}
+                m5_c = float(pc.get("m5") or 0)
+                h1_c = float(pc.get("h1") or 0)
+                if tag_gt != "gt_new_pools" and (m5_c < 2.5 or h1_c > 400.0 or h1_c < -35.0):
+                    continue
+                seen.add(addr)
+                ranked.append((m5_c, 0.0, sym, addr, tag_gt))
     except Exception:
         pass
+
+    # Сортируем все импульсные монеты по силе 5м движения:
+    ranked.sort(key=lambda x: x[0], reverse=True)
+
+    # 3. Свежие листинги (recent) — берём те, у которых уже есть пул >= $2,000 (для отправки в реестр созревания)
+    if s2 == 200 and isinstance(d2, list):
+        for t in d2:
+            m = t.get("id", "")
+            sym = str(t.get("symbol") or "").upper().strip()
+            if not m or m.startswith("0x") or len(m) < 32 or len(m) > 44 or m in seen or sym in SKIP_SYMBOLS:
+                continue
+            liq = float(t.get("liquidity") or 0.0)
+            mcap = float(t.get("mcap") or t.get("fdv") or 0.0)
+            if liq < 2000.0 and mcap < 6000.0:
+                continue
+            st5 = t.get("stats5m") or {}
+            pc5 = float(st5.get("priceChange") or 0.0)
+            seen.add(m)
+            ranked.append((pc5, 0.0, sym, m, "recent"))
             
     if not ranked:
         # Fallback для датацентров (Render), если Jupiter API вернул 401/403/пусто без ключа:
@@ -119,7 +168,6 @@ async def fetch_jup_tokens() -> list:
         print(f"⚠️ [JUPITER] API вернул статусы ({s1}, {s2}, {s3}). Включаю fallback GT duration=5m + new_pools...")
         try:
             from market_data import _gt_get
-            # Свежие 5m импульсы GT (ловят пампы вроде zonki)
             gt_data5 = await _gt_get("/networks/solana/trending_pools?duration=5m", retries=0, timeout=6)
             for item in ((gt_data5 or {}).get("data") or []):
                 bid = item.get("relationships", {}).get("base_token", {}).get("data", {}).get("id", "")
@@ -132,7 +180,6 @@ async def fetch_jup_tokens() -> list:
                 pc = attrs.get("price_change_percentage") or {}
                 m5_c = float(pc.get("m5") or 0)
                 ranked.append((m5_c, 0.0, sym, addr, "gt_trending_5m"))
-            # Свежие пулы
             gt_data_new = await _gt_get("/networks/solana/new_pools", retries=0, timeout=6)
             for item in ((gt_data_new or {}).get("data") or []):
                 bid = item.get("relationships", {}).get("base_token", {}).get("data", {}).get("id", "")
@@ -194,17 +241,34 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
         print(f"🚫 [{source_tag}-LOW-TXNS] {_sym_tmp} ({mint[:8]}): всего {_b5_j + _s5_j} сделок в m5 — нет активности.")
         return False
 
+    # Защита от перегретого хая, падающего ножа и слива от пика
+    _pc_j = (td or {}).get("priceChange") or {}
+    _m5_j = float(_pc_j.get("m5", 0) or 0)
+    _m1_j = float(_pc_j.get("m1", 0) or 0)
+    _h1_j = float(_pc_j.get("h1", 0) or 0)
+    if _h1_j > 400.0:
+        print(f"🚫 [{source_tag}-H1-EXHAUSTED] {_sym_tmp} ({mint[:8]}): h1 {_h1_j:+.0f}% > +400% — памп уже отработал, вход = вершина.")
+        return False
+    if _m5_j < 2.5 or _m1_j < -2.5:
+        print(f"🚫 [{source_tag}-MOMENTUM-LOST] {_sym_tmp} ({mint[:8]}): импульс пропал (m5 {_m5_j:+.1f}%, m1 {_m1_j:+.1f}%) — отмена входа.")
+        return False
+    _pk_drop_j = float((td or {}).get("_drop_from_peak_5m", 0.0) or 0.0)
+    _lq_drop_j = float((td or {}).get("_liq_drop_from_peak", 0.0) or 0.0)
+    if _pk_drop_j <= -18.0 or _lq_drop_j <= -18.0:
+        print(f"🚫 [{source_tag}-POST-PEAK-CRASH] {_sym_tmp} ({mint[:8]}): токен уже слился от пика (цена {_pk_drop_j:+.1f}%, ликва {_lq_drop_j:+.1f}%) — дохлая кошка.")
+        return False
+
     # Защита от миграционного дампа Pump.fun
     if mint.endswith("pump") and _dex_j in ("pumpswap", "raydium", "meteora", "orca"):
         _c_ms_j = (td or {}).get("pairCreatedAt") or 0
         import time as _t
         _age_j = ((_t.time() * 1000 - _c_ms_j) / 60000.0) if _c_ms_j else 0.5
-        if _age_j < 3.5:
-            print(f"⏳ [{source_tag}-MIGRATION-DUMP] {_sym_tmp} ({mint[:8]}): AMM-пул создан {_age_j:.1f}м назад (< 3.5м) — зона сброса снайперов pump.fun.")
+        if _age_j < 5.5:
+            print(f"⏳ [{source_tag}-MIGRATION-DUMP] {_sym_tmp} ({mint[:8]}): AMM-пул создан {_age_j:.1f}м назад (< 5.5м) — зона сброса снайперов pump.fun.")
             return False
         _fdv_j = float((td or {}).get("fdv", 0) or (td or {}).get("marketCap", 0) or 0)
-        if 0 < _fdv_j < 42000.0:
-            print(f"🚫 [{source_tag}-MIGRATION-LOW-FDV] {_sym_tmp} ({mint[:8]}): FDV ${_fdv_j:,.0f} < $42,000 — токен упал ниже уровня выпуска pump.fun.")
+        if 0 < _fdv_j < 30000.0:
+            print(f"🚫 [{source_tag}-MIGRATION-LOW-FDV] {_sym_tmp} ({mint[:8]}): FDV ${_fdv_j:,.0f} < $30,000 — токен слит ниже уровня миграции pump.fun.")
             return False
         if _liq_j < 12000.0:
             print(f"🚫 [{source_tag}-MIGRATION-LOW-LIQ] {_sym_tmp} ({mint[:8]}): ликвидность ${_liq_j:,.0f} < $12,000 — дев/снайперы высосали SOL.")
