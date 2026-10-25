@@ -43,18 +43,21 @@ PAPER_PORTFOLIO_FILE = "portfolio.json"
 # базе перезаписывают друг друга (сделки появляются и пропадают).
 # Задай в Render → Environment: первый бот PF_IDEBOT, второй PF_QYO7.
 PORTFOLIO_SNAPSHOT_MINT = (os.getenv("PORTFOLIO_SNAPSHOT_MINT", "") or "").strip().strip('"').strip("'") or "PORTFOLIO_STATE_V2.4"
-INITIAL_BALANCE_USD = 120.0  # торговый пул ($150 депо - $30 газ)    # Стартовый капитал
-REINVEST_PERCENT = 5.0  # Было 3%: цель $10/день требует сайз. 5% пула на сделку
-VIRTUAL_POSITION_SIZE_USD = 15.0
-TRADE_AMOUNT_USD = 15.0  # Базовый ордер $15
-# === ДИНАМИЧЕСКИЙ СТУПЕНЧАТЫЙ РЕИНВЕСТ И ЗАЩИТА ЛИКВИДНОСТИ ===
-DYNAMIC_REINVEST_ENABLED = True      # Включить ступенчатый реинвест прибыли
-BASE_TRADE_AMOUNT_USD = 15.0         # Базовый размер сделки (минимальный пол $15)
-MAX_POSITION_SIZE_USD = 25.0         # Жесткий потолок на 1 сделку (не более $25 в один мемкоин)
-REINVEST_MIN_POOL_LIQ_USD = 15000.0  # Мин. ликвидность пула для входа > $15 (защита от сдвига цены)
-SCOUT_SIZE_USD = 15.0    # Ордер $15 (полный вход, защита через строгий входной ончейн-анализ)
+INITIAL_BALANCE_USD = 100.0  # Стартовый депозит для разгона ($100 -> $8,000+)
+REINVEST_PERCENT = 20.0  # 20% пула на сделку по стратегии автора (@savipww)
+VIRTUAL_POSITION_SIZE_USD = 20.0
+TRADE_AMOUNT_USD = 20.0  # Базовый ордер $20
+# === ЭКСПОНЕНЦИАЛЬНЫЙ РАЗГОН ДЕПОЗИТА (COMPOUNDING $100 -> $8,000+) ===
+COMPOUNDING_ENABLED = True             # Разгон депозита по стратегии автора (@savipww)
+COMPOUNDING_PCT = 0.22                 # 22% от текущего капитала в сделку (20-25% риск/билет)
+MAX_COMPOUNDING_SIZE_USD = 2500.0      # Динамический потолок (масштабируется с ростом баланса)
+DYNAMIC_REINVEST_ENABLED = True        # Включить ступенчатый реинвест прибыли
+BASE_TRADE_AMOUNT_USD = 15.0           # Базовый размер сделки (минимальный пол $15)
+MAX_POSITION_SIZE_USD = 2500.0         # Масштабируемый потолок для разгона
+REINVEST_MIN_POOL_LIQ_USD = 12000.0    # Мин. ликвидность пула для входа > $15 (защита от сдвига цены)
+SCOUT_SIZE_USD = 15.0                  # Ордер $15
 LOTTERY_SIZE_USD = 15.0
-MAX_CONCURRENT_POSITIONS = 10  # концентрация капитала: максимум 10 ракет  # Режим Снайпера: максимум 5 сделок одновременно
+MAX_CONCURRENT_POSITIONS = 5           # Режим Снайпера: максимум 5 сделок одновременно (5 x 20% = 100% капитала)
 
 # Risk Management
 MAX_DAILY_LOSS_USD = 50.0

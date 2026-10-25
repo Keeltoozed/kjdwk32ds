@@ -724,7 +724,7 @@ class Analyzer:
 
 
 
-    async def is_clone(self, symbol: str, current_mint: str, current_created_at: int, current_fdv: float, current_liq: float = 0.0) -> bool:
+    async def is_clone(self, symbol: str, current_mint: str, current_created_at: int, current_fdv: float, current_liq: float = 0.0, current_vol5: float = 0.0, current_b5: int = 0) -> bool:
         """Проверяет, является ли этот токен фейковой копией (клоном) более старого/крупного оригинала или серийным спамом (кейсы WHITEWHALE, MOE)."""
         if not symbol or len(symbol) < 2:
             return False
@@ -739,6 +739,11 @@ class Analyzer:
         swarm_mints = set()
         oldest_other_ts = float("inf")
 
+        is_pump = current_mint.endswith("pump")
+        # Если наш токен имеет активный подтвержденный объем (vol5 >= $3,000 и b5 >= 20) —
+        # он является органическим лидером текущего хайпа/нарратива (кейс DIG +531%, BLUEBALLS +122%).
+        is_organic_hot = (current_vol5 >= 3000.0 and current_b5 >= 20)
+
         for p in pairs:
             if p.get("chainId") != "solana":
                 continue
@@ -751,8 +756,13 @@ class Analyzer:
             p_fdv = float(p.get("fdv") or p.get("marketCap") or 0.0)
             p_liq = float((p.get("liquidity") or {}).get("usd", 0) or 0.0)
             p_vol24 = float((p.get("volume") or {}).get("h24", 0) or 0.0)
+            p_vol5 = float(((p.get("volume") or {}).get("m5", 0) or 0.0))
             if p_liq < 5000 and p_vol24 < 8000:
                 continue  # Мертвый/заброшенный пул, не активный оригинал
+
+            # Если наш токен имеет сильный текущий объем, а соперник не торгуется — наш лидер
+            if is_organic_hot and current_vol5 >= p_vol5 * 1.5:
+                continue
 
             # Если наш токен — явный доминант по ликвидности (>= $25k и крупнее соперника),
             # мелкие копии скамеров не могут сделать нашего лидера "клоном" (кейс SWORDCAT $261k liq)
@@ -760,15 +770,15 @@ class Analyzer:
                 continue
 
             # Учитываем живые пулы с таким же тикером для детекта серийного клон-роя (кейс ARACH: 4 микро-пула одновременно на PumpSwap)
-            # Срабатывает только если наш токен еще мелкий (current_liq < $25k)
-            if current_liq < 25000.0:
+            # Срабатывает только если наш токен еще мелкий (current_liq < $25k) и не имеет органического объема
+            if current_liq < 25000.0 and not is_organic_hot:
                 swarm_mints.add(p_mint)
                 if len(swarm_mints) >= 2:
                     print(f"🚫 [CLONE-SWARM] {sym_up} ({current_mint[:8]}): обнаружена серийная атака клонов ({len(swarm_mints)+1}+ активных токенов {sym_up} одновременно) — блок!")
                     return True
 
             # Если другой живой пул с тем же тикером уже заметно крупнее по ликвидности (>= $15k и в 1.3x+ больше нашего)
-            if p_liq >= 15000 and current_liq > 0 and p_liq > (current_liq * 1.3):
+            if p_liq >= 15000 and current_liq > 0 and p_liq > (current_liq * 1.3) and not (is_organic_hot and current_vol5 > p_vol5):
                 return True
 
             p_dex = str(p.get("dexId") or "").lower()
@@ -788,12 +798,15 @@ class Analyzer:
                 return True
 
             # 2. Существует БОЛЕЕ СТАРЫЙ (>1 мин раньше) живой оригинал с ликвидностью >= $10k и FDV >= $35k
+            # (Но если наш токен — свежий pump.fun раннер с активными покупателями, не режем его из-за старых тикеров)
             if current_created_at and p_created_at < (current_created_at - 60000) and p_liq >= 10000 and p_fdv >= 35000:
-                return True
+                if not (is_organic_hot and current_vol5 > p_vol5):
+                    return True
 
             # 3. Существует более старый и значительно более крупный оригинал (в 5x+ крупнее по FDV >= $250k)
             if p_created_at < current_created_at and current_fdv > 0 and p_fdv > (current_fdv * 5) and p_fdv >= 250000:
-                return True
+                if not (is_organic_hot and current_vol5 > p_vol5 * 2.0):
+                    return True
 
         return False
 
@@ -919,7 +932,7 @@ class Analyzer:
         if _h1 < -8.0 or _h6 < -15.0:
             return False
         if (buys_m5 >= _min_tx and volume_m5 >= _min_vol and liquidity >= 12000 
-                and sells_m5 > 0 and buys_m5 >= sells_m5 * 1.2 and _m5 >= 3.0 and _m1 >= -2.0):
+                and sells_m5 > 0 and buys_m5 >= sells_m5 * 1.2 and _m5 >= 3.0 and _m1 >= -8.0):
             return True
         return False
         
@@ -1012,15 +1025,17 @@ class Analyzer:
             if _h1_vip > _max_vip_h1:
                 return self._deny(mint, "vip-h1-exhausted", f"🚫 [VIP EXHAUSTION] {mint}: h1 {_h1_vip:+.0f}% > +{_max_vip_h1:.0f}% — памп уже отработал, вход = вершина.")
             _has_strong_buyers = (_b_v >= int(_s_v * 1.05) and _b_v >= 20 and _vol_v >= 10000)
-            if _m1 <= 22.0 and _has_strong_buyers:
-                _max_vip_m5 = 120.0  # Пробой ракеты
+            if _has_strong_buyers and _vol_v >= 5000.0:
+                _max_vip_m5 = 500.0  # Пробой ракеты (не режем супер-раннеров вроде BARRON +869%)
+            elif _m1 <= 22.0 and _has_strong_buyers:
+                _max_vip_m5 = 250.0
             else:
-                _max_vip_m5 = 70.0
+                _max_vip_m5 = 120.0
             if _m5 > _max_vip_m5:
                 return self._deny(mint, "vip-overheat", f"🚫 [VIP OVERHEAT] {mint}: m5 {_m5:+.0f}% > +{_max_vip_m5:.0f}% — вертикаль уже прошла, вход = вершина.")
-            if _m1 < -2.5:
-                return self._deny(mint, "vip-reversal", f"🚫 [VIP REVERSAL] {mint}: m1 {_m1:+.1f}% — резкий откат за 1м, ждём pullback.")
-            _max_vip_m1 = 22.0
+            if _m1 < -8.0:
+                return self._deny(mint, "vip-reversal", f"🚫 [VIP REVERSAL] {mint}: m1 {_m1:+.1f}% — глубокий дамп за 1м, отмена.")
+            _max_vip_m1 = 28.0
             if _m1 > _max_vip_m1:
                 return self._deny(mint, "vip-spike", f"🚫 [VIP SPIKE] {mint}: m1 {_m1:+.1f}% > +{_max_vip_m1:.0f}% — свеча-spike в моменте, вход = вершина. Ждём.")
             _min_vip_m5 = 2.5 if _liq_v >= 25000.0 else float(getattr(config, "VIP_MIN_M5_PCT", 3.0))
@@ -1118,16 +1133,16 @@ class Analyzer:
 
             _lottery_enabled = getattr(config, "LOTTERY_ENABLED", False)
             if _m5 >= getattr(config, "LOTTERY_MIN_M5_PCT", 0.60) * 100:
-                if _is_runner:
+                if _is_runner or (_vm5_pre >= 2500.0 and _b5_pre >= 15 and _b5_pre >= _s5_pre * 1.05):
                     # Настоящая ракета с высокой ликвидностью и объемом (не микро-лотерейный раг)
-                    _m1_max = min(25.0, getattr(config, "PULLBACK_M1_MAX_PCT", 0.25) * 100)
+                    _m1_max = min(28.0, getattr(config, "PULLBACK_M1_MAX_PCT", 0.28) * 100)
                     if _m1 > _m1_max:
                         return self._deny(mint, "runner-m1-spike", f"🚫 [RUNNER-SPIKE] {mint}: m1 {_m1:+.1f}% > +{_m1_max:.0f}% — свеча-прострел в моменте, ждём откат.")
                     if _m1 < getattr(config, "PULLBACK_M1_MIN_PCT", -0.15) * 100:
                         return self._deny(mint, "runner-m1-dump", f"🚫 [RUNNER-DUMP] {mint}: m1 {_m1:+.1f}% — импульс схлопнулся, это дамп.")
-                    if _m5 > 250.0:
-                        return self._deny(mint, "runner-m5-overheat", f"🚫 [RUNNER-EXHAUSTION] {mint}: m5 {_m5:+.0f}% > +250% — экстремальный перегрев 5м свечи.")
-                    _max_h1_pct = getattr(config, "PULLBACK_MAX_H1_PCT", 25.0) * 100
+                    if _m5 > 450.0:
+                        return self._deny(mint, "runner-m5-overheat", f"🚫 [RUNNER-EXHAUSTION] {mint}: m5 {_m5:+.0f}% > +450% — экстремальный перегрев 5м свечи.")
+                    _max_h1_pct = getattr(config, "PULLBACK_MAX_H1_PCT", 35.0) * 100
                     if _h1 > _max_h1_pct:
                         return self._deny(mint, "runner-h1-gone", f"🚫 [ENTRY] {mint}: h1 {_h1:+.0f}% — уже улетел, поздно.")
                     print(f"🚀 [RUNNER-MOMENTUM] {mint}: мощный импульс m5 {_m5:+.0f}%, m1 {_m1:+.1f}%, liq ${_cur_liq_pre:,.0f}, vol5 ${_vm5_pre:,.0f} — ракета допущена к отбору.")
@@ -1144,8 +1159,8 @@ class Analyzer:
                 _min_m5 = getattr(config, "PULLBACK_MIN_M5_PCT", 0.025) * 100
                 if _m5 < _min_m5:
                     return self._deny(mint, f"m5-flat {_m5:+.1f}%", f"🚫 [ENTRY] {mint}: m5 {_m5:+.1f}% < {_min_m5:.1f}% — импульса нет.")
-                # 2. Максимальный импульс m5 (НЕ ВХОДИМ НА ВЕРШИНЕ!)
-                _max_m5 = getattr(config, "PULLBACK_MAX_M5_PCT", 1.20) * 100
+                # 2. Максимальный импульс m5 (НЕ ВХОДИМ НА ВЕРШИНЕ, но пускаем подтвержденные ракеты!)
+                _max_m5 = 350.0 if (_vm5_pre >= 3500.0 and _b5_pre >= 18 and _b5_pre >= _s5_pre * 1.10) else (getattr(config, "PULLBACK_MAX_M5_PCT", 1.20) * 100)
                 if _m5 > _max_m5:
                     return self._deny(mint, f"m5-late {_m5:+.0f}%", f"🚫 [LATE] {mint}: m5 {_m5:+.1f}% > +{_max_m5:.0f}% — ракета уже улетела, ждем откат.")
                 # 3. Минутный импульс (если DexScreener отдал m1)
@@ -1265,8 +1280,11 @@ class Analyzer:
             (is_vip and _b5_cl >= 30)
         )
 
-        # Клон-фильтр работает ВСЕГДА (даже при _strong_fomo), т.к. скам-клоны WHITEWHALE и MOE специально накручивают объём ботами!
-        if await self.is_clone(symbol, mint, current_created_at, current_fdv, current_liq=liquidity):
+        # Клон-фильтр: защищает от скам-подделок, но пропускает подтвержденных органических лидеров
+        _is_organic_leader = (_vol5_cl >= 3000.0 and _b5_cl >= 20 and _b5_cl >= _s5_cl * 1.10)
+        if _is_organic_leader:
+            print(f"🔥 [ORGANIC-RUNNER] {symbol} ({mint[:8]}): подтвержден живой покупательский поток ({_b5_cl}b/{_s5_cl}s, vol5 ${_vol5_cl:,.0f}) — пропуск клон-фильтра!")
+        elif await self.is_clone(symbol, mint, current_created_at, current_fdv, current_liq=liquidity, current_vol5=_vol5_cl, current_b5=_b5_cl):
             return self._deny(mint, "clone-scam", f"🚫 [CLONE-SCAM] Токен {symbol} ({mint[:8]}) является фейковым клоном более старого/крупного оригинала!")
 
 

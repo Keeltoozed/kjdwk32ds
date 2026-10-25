@@ -157,25 +157,7 @@ class GrokJevEngine:
         # 2. Возраст
         created_at = pair_data.get("pairCreatedAt") or 0
         age_min = (time.time() * 1000 - created_at) / 60000.0 if created_at else 999.0
-        min_age = float(getattr(_c, "JEV_EARLY_MIN_AGE_MIN", 2.0)) if is_pump else float(getattr(_c, "JEV_MIN_AGE_MIN", 15.0))
-        if age_min < min_age:
-            return False, f"too-young {age_min:.1f}m < {min_age:.1f}m (sniper flush zone)"
-
-        # 3. Живой импульс ракеты (LIVE ROCKET MOMENTUM)
-        # Бот НЕ покупает стоячие, дохлые или падающие монеты!
-        pc = pair_data.get("priceChange", {}) or {}
-        m5 = float(pc.get("m5", 0) or 0)
-        h1 = float(pc.get("h1", 0) or 0)
-
-        min_m5 = float(getattr(_c, "JEV_MIN_M5_PCT", 4.0))
-        if m5 < min_m5:
-            return False, f"no-momentum m5 {m5:+.1f}% < +{min_m5:.1f}% (flat or dying coin)"
-        if m5 > 150.0:
-            return False, f"overheated m5 {m5:+.0f}% > +150% (peak FOMO risk)"
-        if h1 < -8.0:
-            return False, f"hourly-downtrend h1 {h1:+.1f}% < -8.0% (dead-cat bounce)"
-
-        # 4. Объем и давление покупателей (LIVE 5M ACTIVITY)
+        
         txns_m5 = (pair_data.get("txns") or {}).get("m5", {}) or {}
         txns_h1 = (pair_data.get("txns") or {}).get("h1", {}) or {}
         b5 = int(txns_m5.get("buys", 0) or 0)
@@ -184,7 +166,31 @@ class GrokJevEngine:
         sh1 = int(txns_h1.get("sells", 0) or 0)
         vol_m5 = float((pair_data.get("volume") or {}).get("m5", 0) or 0)
         vol_h1 = float((pair_data.get("volume") or {}).get("h1", 0) or 0)
+
+        is_breakout = (vol_m5 >= 6000.0 and b5 >= 20)
+        min_age = float(getattr(_c, "JEV_EARLY_MIN_AGE_MIN", 2.0)) if (is_pump or is_breakout) else float(getattr(_c, "JEV_MIN_AGE_MIN", 8.0))
+        if age_min < min_age:
+            return False, f"too-young {age_min:.1f}m < {min_age:.1f}m (sniper flush zone)"
+
+        # 3. Живой импульс ракеты (LIVE ROCKET MOMENTUM)
+        # Бот НЕ покупает стоячие, дохлые или падающие монеты!
+        pc = pair_data.get("priceChange", {}) or {}
+        m1 = float(pc.get("m1", 0) or 0)
+        m5 = float(pc.get("m5", 0) or 0)
+        h1 = float(pc.get("h1", 0) or 0)
+
+        min_m5 = float(getattr(_c, "JEV_MIN_M5_PCT", 4.0))
+        if m5 < min_m5:
+            return False, f"no-momentum m5 {m5:+.1f}% < +{min_m5:.1f}% (flat or dying coin)"
         
+        # Если m5 > 150%, разрешаем только если токен на здоровом откате/консолидации 1м (-8%..+2.5%) с мощным объемом
+        if m5 > 150.0:
+            if not (-8.0 <= m1 <= 2.5 and b5 >= s5 * 1.15 and vol_m5 >= 8000.0):
+                return False, f"overheated m5 {m5:+.0f}% > +150% (peak FOMO risk)"
+        if h1 < -8.0:
+            return False, f"hourly-downtrend h1 {h1:+.1f}% < -8.0% (dead-cat bounce)"
+
+        # 4. Объем и давление покупателей (LIVE 5M ACTIVITY)
         # В 5-минутном окне ВСЕГДА должна быть живая активность
         if vol_m5 < 2000.0:
             return False, f"vol5-low ${vol_m5:.0f} < $2,000 (inactive dead pool)"
@@ -247,13 +253,16 @@ class GrokJevEngine:
         """
         import config as _c
         
-        # Проверяем кэш (TTL 15 мин)
+        # Проверяем кэш (TTL: 180с для успешных, 35с для отклоненных)
         now = time.time()
         ck = (chain, mint.lower())
         hit = _JEV_CACHE.get(str(ck))
-        if hit and (now - hit[0]) < 900.0:
-            res = hit[1]
-            return res.get("passed", False), res, f"cached ({res.get('reason', '')})"
+        if hit:
+            hit_passed = hit[1].get("passed", False)
+            cache_ttl = 180.0 if hit_passed else 35.0
+            if (now - hit[0]) < cache_ttl:
+                res = hit[1]
+                return res.get("passed", False), res, f"cached ({res.get('reason', '')})"
 
         # Собираем контекст токена
         info = pair_data.get("info", {}) or {}
@@ -267,8 +276,11 @@ class GrokJevEngine:
         m5 = float(pc.get("m5", 0) or 0)
         h1 = float(pc.get("h1", 0) or 0)
         
-        liq = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
+        dex_id = str(pair_data.get("dexId", "")).lower()
+        is_pump = dex_id in ("pump", "pumpfun") or mint.endswith("pump")
+        raw_liq = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
         mcap = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
+        liq = max(raw_liq, mcap * 0.40) if is_pump else raw_liq
         vol5 = float((pair_data.get("volume") or {}).get("m5", 0) or 0)
         
         top1_pct = float((holder_stats or {}).get("top1_pct", 4.0))
@@ -313,7 +325,7 @@ class GrokJevEngine:
         max_recycled = float(getattr(_c, "JEV_MAX_RECYCLED_ACCOUNT", 0.30))
         max_conc = float(getattr(_c, "JEV_MAX_CONCENTRATION_RISK", 0.35))
         max_mspent = float(getattr(_c, "JEV_MAX_MOMENTUM_SPENT", 0.60))
-        min_liq_ticket = float(getattr(_c, "JEV_MIN_LIQUIDITY_FITS_TICKET", 0.70))
+        min_liq_ticket = float(getattr(_c, "JEV_MIN_LIQUIDITY_FITS_TICKET", 0.65))
         max_dev = float(getattr(_c, "JEV_MAX_DEV_STILL_LOADED", 0.25))
 
         p_acc = float(llm_res.get("account_is_the_project", 0.8)) >= min_acc
@@ -377,24 +389,24 @@ class GrokJevEngine:
             return False, -0.05, 0.0, f"no-impulse (m5 {m5:+.1f}% < +4.0%) — wait for real rocket surge"
 
         # 2. "We bid the flush, not the candle"
-        # Если в моменте идет вертикальный прострел (m1 > +3.0%) — это зеленая свеча.
-        max_m1_entry = float(getattr(_c, "JEV_MAX_M1_ENTRY_PCT", 3.0))
+        # Если в моменте идет вертикальный прострел (m1 > +2.5%) — это зеленая свеча.
+        max_m1_entry = float(getattr(_c, "JEV_MAX_M1_ENTRY_PCT", 2.5))
         if m1 > max_m1_entry:
             return False, -0.05, 0.0, f"candle-spike (m1 {m1:+.1f}% > +{max_m1_entry:.1f}%) — we bid the flush, wait for pullback"
 
-        # 3. Если откат глубже -4.5% — это не микро-откат, а падающий нож
-        if m1 < -4.5:
-            return False, -0.05, 0.0, f"flush-dump (m1 {m1:+.1f}% < -4.5%) — falling knife"
+        # 3. Если откат глубже -8.0% — это слом структуры / дамп
+        if m1 < -8.0:
+            return False, -0.05, 0.0, f"flush-dump (m1 {m1:+.1f}% < -8.0%) — falling knife"
 
         # 4. Расчет стопа под фитиль отката ("The stop lives under the wick"):
-        # Если есть локальный откат m1 (например, -1.8%), wick находится чуть ниже.
-        # Ставим стоп на 1.2% ниже локального минимума.
+        # Если есть локальный откат m1 (например, -2.5%), wick находится чуть ниже.
+        # Ставим стоп на 1.5% ниже локального минимума свечи отката.
         dip_factor = min(0.0, m1 / 100.0)
-        wick_low_price = entry_price * (1.0 + dip_factor - 0.012)
+        wick_low_price = entry_price * (1.0 + dip_factor - 0.015)
         
-        # Динамический безопасный стоп под фитиль: от -4.5% до -7.5%
+        # Динамический безопасный стоп под фитиль: от -5.0% до -8.5%
         calculated_stop_pct = (wick_low_price - entry_price) / entry_price
-        wick_stop_loss_pct = max(-0.075, min(-0.045, calculated_stop_pct))
+        wick_stop_loss_pct = max(-0.085, min(-0.050, calculated_stop_pct))
         stop_under_wick_price = entry_price * (1.0 + wick_stop_loss_pct)
 
         reason = f"Flush validated (m1 {m1:+.1f}%, m5 {m5:+.1f}%), stop under wick: {wick_stop_loss_pct*100:.1f}% (${stop_under_wick_price:.6f})"
@@ -424,11 +436,11 @@ class GrokJevEngine:
             "You are JEV, an expert quantitative on-chain risk engine and trading bot AI. "
             "Evaluate meme breakout candidates that already passed HARD math gates. "
             "Output strictly valid JSON with 6 float metrics (0.0 to 1.0) and short reason:\n"
-            "1. account_is_the_project (0.0-1.0): Social is genuinely created for this token (not impersonating Elon Musk/media/celebrity).\n"
+            "1. account_is_the_project (0.0-1.0): Social is genuinely created for this token (not impersonating Elon Musk/celebrity). If socials are 'None' but 5m volume > $8k with active buyers, score >= 0.80 (market validated).\n"
             "2. recycled_account (0.0-1.0): 0.0=fresh project, 1.0=reused old rug account.\n"
             "3. concentration_is_exit_risk (0.0-1.0): Risk top holders/whales dump on us.\n"
-            "4. momentum_already_spent (0.0-1.0): 0.0=early breakout with upside, 1.0=exhausted peak.\n"
-            "5. liquidity_fits_ticket (0.0-1.0): Liquidity depth vs small $15-$25 ticket size.\n"
+            "4. momentum_already_spent (0.0-1.0): 0.0=fresh momentum or consolidation on 1m, 1.0=exhausted peak vertical blow-off.\n"
+            "5. liquidity_fits_ticket (0.0-1.0): Liquidity depth vs small ticket size.\n"
             "6. dev_still_loaded (0.0-1.0): Dev holding undisclosed hidden supply.\n\n"
             "Format:\n"
             "{\"account_is_the_project\": 0.85, \"recycled_account\": 0.10, \"concentration_is_exit_risk\": 0.25, "
@@ -519,7 +531,13 @@ class GrokJevEngine:
         sym_lower = symbol.lower()
         soc_matched = any(sym_lower in str(s.get("url", "")).lower() for s in socials)
         if not has_soc:
-            account_score = 0.50 if liq >= 30000.0 else 0.20
+            # Если у токена высокий объем торгов ($8k+) — он подтвержден рынком
+            if vol5 >= 8000.0:
+                account_score = 0.85
+            elif liq >= 25000.0:
+                account_score = 0.78
+            else:
+                account_score = 0.40
         elif soc_matched:
             account_score = 0.90
         else:
@@ -533,19 +551,21 @@ class GrokJevEngine:
         conc_score = min(1.0, max(0.1, (top1_pct / 8.0) * 0.25 + (top10_pct / 30.0) * 0.25))
 
         # 4. momentum_already_spent
-        # Если m5 < 4.0% или h1 < -5.0% — импульса нет, токен дохлый или в сливе (риск 0.95 = REJECT!)
-        if m5 < 4.0 or h1 < -5.0:
+        # Если m5 < 4.0% или h1 < -8.0% — импульса нет, токен дохлый или в сливе (риск 0.95 = REJECT!)
+        if m5 < 4.0 or h1 < -8.0:
             mom_score = 0.95
-        elif m5 > 120.0 or h1 > 400.0:
-            mom_score = 0.80  # Выдохся
-        elif m5 >= 5.0 and m1 <= 3.0:
-            mom_score = 0.25  # Идеальный свежий импульс на откате
+        elif m1 > 12.0:
+            mom_score = 0.85  # Вертикальный прострел прямо сейчас в 1м свече (FOMO пик)
+        elif m5 >= 5.0 and m1 <= 2.5:
+            mom_score = 0.25  # Идеальный свежий импульс на откате / консолидации
+        elif m5 > 350.0 and m1 > 5.0:
+            mom_score = 0.75  # Сильный перегрев
         else:
-            mom_score = 0.45
+            mom_score = 0.40
 
         # 5. liquidity_fits_ticket
-        # Для ордера $15 ликвидность >= $12k дает оценку 0.85+
-        liq_score = min(1.0, max(0.3, liq / 20000.0))
+        # Для ордера $15-$50 ликвидность >= $7k дает оценку 0.70+ (глубина пула полностью достаточна)
+        liq_score = min(1.0, max(0.4, liq / 10000.0))
 
         # 6. dev_still_loaded
         dev_score = min(1.0, max(0.05, dev_pct / 10.0))
@@ -574,20 +594,33 @@ class GrokJevEngine:
         candidates = []
         seen = set()
 
-        # 1. Solana: Jupiter Discovery
+        # 1. Solana: Jupiter Discovery (весь пул, без искусственной обрезки)
         try:
             from jup_discovery import fetch_jup_tokens
             jup_mints = await fetch_jup_tokens()
-            for m in (jup_mints or [])[:50]:
+            for m in (jup_mints or []):
                 if m and m not in seen:
                     seen.add(m)
                     candidates.append((m, "solana"))
         except Exception:
             pass
 
-        # 2. DexScreener Latest Boosts & Profiles (Solana & Base)
+        # 1.1 Solana: Market Data Organic Trending
+        try:
+            import market_data
+            tr_pools = await market_data.get_trending()
+            for item in (tr_pools or []):
+                m = item.get("tokenAddress")
+                if m and m not in seen:
+                    seen.add(m)
+                    candidates.append((m, "solana"))
+        except Exception:
+            pass
+
+        # 2. DexScreener Latest & Top Boosts & Profiles (Solana & Base)
         from http_client import fetch_json
         for url in [
+            "https://api.dexscreener.com/token-boosts/top/v1",
             "https://api.dexscreener.com/token-boosts/latest/v1",
             "https://api.dexscreener.com/token-profiles/latest/v1"
         ]:
@@ -603,21 +636,27 @@ class GrokJevEngine:
             except Exception:
                 pass
 
-        # 3. Base: GeckoTerminal Trending Pools
-        try:
-            url_base = "https://api.geckoterminal.com/api/v2/networks/base/trending_pools"
-            st_b, data_b = await fetch_json(url_base, headers={"Accept": "application/json"}, timeout=6, retries=0)
-            if st_b == 200 and isinstance(data_b, dict):
-                pools = data_b.get("data", []) or []
-                for p in pools[:25]:
-                    rel = p.get("relationships", {}) or {}
-                    base_tok = (rel.get("base_token", {}) or {}).get("data", {}) or {}
-                    tok_id = str(base_tok.get("id", "")).replace("base_", "").strip()
-                    if tok_id and tok_id.startswith("0x") and tok_id not in seen:
-                        seen.add(tok_id)
-                        candidates.append((tok_id, "base"))
-        except Exception:
-            pass
+        # 3. GeckoTerminal Solana & Base (Trending + New Pools)
+        for net, endp in [
+            ("solana", "trending_pools"),
+            ("solana", "new_pools"),
+            ("base", "trending_pools"),
+            ("base", "new_pools")
+        ]:
+            try:
+                url_gt = f"https://api.geckoterminal.com/api/v2/networks/{net}/{endp}"
+                st_gt, data_gt = await fetch_json(url_gt, headers={"Accept": "application/json"}, timeout=5, retries=0)
+                if st_gt == 200 and isinstance(data_gt, dict):
+                    pools = data_gt.get("data", []) or []
+                    for p in pools:
+                        rel = p.get("relationships", {}) or {}
+                        base_tok = (rel.get("base_token", {}) or {}).get("data", {}) or {}
+                        tok_id = str(base_tok.get("id", "")).replace(f"{net}_", "").strip()
+                        if tok_id and tok_id not in seen:
+                            seen.add(tok_id)
+                            candidates.append((tok_id, net))
+            except Exception:
+                pass
 
         FUNNEL_STATS["universe"] += len(candidates)
         return candidates
@@ -643,7 +682,7 @@ class GrokJevEngine:
     # =========================================================================
     # 6. CONVEYOR: Полный цикл оценки и исполнения
     # =========================================================================
-    async def process_candidate(self, address: str, chain: str, tracker) -> bool:
+    async def process_candidate(self, address: str, chain: str, tracker) -> Tuple[bool, str]:
         """
         Полный конвейер GROKBOT x JEV для одного токена:
         1. HARD GATE (thresholds.py)
@@ -655,20 +694,20 @@ class GrokJevEngine:
         import config as _c
 
         if not address or address in tracker.positions:
-            return False
+            return False, "already-held"
         if len(tracker.get_open_positions()) >= getattr(_c, "MAX_CONCURRENT_POSITIONS", 10):
-            return False
+            return False, "max-positions-reached"
 
         # 1. Получаем рыночные данные
         pair = await self.fetch_pair(address, chain)
         if not pair:
-            return False
+            return False, "no-pair-data"
 
         base_info = pair.get("baseToken", {}) or {}
         symbol = str(base_info.get("symbol", address[:6])).upper().strip()
         price = float(pair.get("priceUsd", 0) or 0.0)
         if price <= 0:
-            return False
+            return False, "invalid-price"
 
         # 2. Проверка безопасности (On-Chain Guard)
         import goplus as _gp
@@ -676,10 +715,10 @@ class GrokJevEngine:
         if chain == "solana":
             onchain_ok, onchain_why = await _gp.check_onchain_solana_security(address)
             if not onchain_ok:
-                return False
+                return False, f"onchain-sol-reject {onchain_why}"
             sec_ok, sec_why = await _gp.check_solana(address)
             if not sec_ok:
-                return False
+                return False, f"sec-sol-reject {sec_why}"
             _h_raw = _gp.get_solana_holder_stats(address)
             if _h_raw and _h_raw.get("has_data"):
                 _h_stats["top10_pct"] = float(_h_raw.get("top_10_pct", 0.0) or 0.0)
@@ -688,41 +727,41 @@ class GrokJevEngine:
         elif chain == "base":
             onchain_ok, onchain_why = await _gp.check_onchain_evm_security(address, "base", pair_data=pair)
             if not onchain_ok:
-                return False
+                return False, f"onchain-evm-reject {onchain_why}"
             gp_ok, gp_why = await _gp.check_token(address, "base", pair_data=pair)
             if not gp_ok:
                 print(f"🚫 [GROK+JEV] {symbol} (base): GoPlus honeypot/tax reject ➔ {gp_why}")
-                return False
+                return False, f"goplus-reject {gp_why}"
 
         # 3. HARD GATE ("if it fails here, JEV never sees it")
         hard_ok, hard_why = self.hard_gate(address, pair, chain, _h_stats)
         if not hard_ok:
-            return False
+            return False, f"hard-gate-reject {hard_why}"
 
         # 4. VET (SOFT GATE: JEV AI Evaluation)
         soft_ok, jev_data, soft_why = await self.jev_vet(address, symbol, pair, chain, _h_stats)
         if not soft_ok:
             print(f"🚫 [GROK+JEV] {symbol} ({chain}): JEV soft-reject ➔ {soft_why}")
-            return False
+            return False, f"jev-soft-reject {soft_why}"
 
         # 5. FILLS & RISK ("We bid the flush, not the candle" & "The stop lives under the wick")
         flush_ok, wick_pct, wick_price, flush_msg = self.check_flush_and_wick(pair, price)
         if not flush_ok:
             print(f"⏳ [GROK+JEV] {symbol} ({chain}): FILLS ➔ {flush_msg}")
-            return False
+            return False, f"fills-flush-wait {flush_msg}"
 
         # 6. CHIEF / GROK TRADES: Исполнение ордера
         if len(tracker.get_open_positions()) >= getattr(_c, "MAX_CONCURRENT_POSITIONS", 10):
-            return False
+            return False, "max-positions-reached"
 
-        # Расчет размера билета (Dynamic Sizing $15 - $25)
+        # Расчет размера билета (Dynamic Sizing / Compounding)
         ticket_size = float(getattr(_c, "BASE_TRADE_AMOUNT_USD", 15.0) or 15.0)
-        if getattr(_c, "DYNAMIC_REINVEST_ENABLED", True):
+        if getattr(_c, "DYNAMIC_REINVEST_ENABLED", True) or getattr(_c, "COMPOUNDING_ENABLED", True):
             try:
                 ticket_size = tracker.calculate_dynamic_position_size(pair, chain=chain)
             except Exception:
                 pass
-        ticket_size = max(10.0, min(float(getattr(_c, "MAX_POSITION_SIZE_USD", 25.0)), ticket_size))
+        ticket_size = max(10.0, ticket_size)
 
         tracker.add_position(
             symbol=symbol,
@@ -763,7 +802,7 @@ class GrokJevEngine:
               f"║ JEV AI:    Acc:{acc_s:.2f} | Mom:{mom_s:.2f} | Conc:{conc_s:.2f} [{provider}] ➔ PASS     ║\n"
               f"╚═══════════════════════════════════════════════════════════════════════════╝\n")
         print(get_funnel_summary())
-        return True
+        return True, "FILLED"
 
 
 # Глобальный инстанс
@@ -790,9 +829,9 @@ async def grok_bot_jev_loop(tracker):
                 print(get_funnel_summary())
                 last_funnel_print = now
 
-            # Очистка кулдауна отработанных монет раз в 15 минут
+            # Очистка устаревших кулдаунов
             if len(evaluated_cooldown) > 2000:
-                evaluated_cooldown = {k: ts for k, ts in evaluated_cooldown.items() if now - ts < 900.0}
+                evaluated_cooldown = {k: ts for k, ts in evaluated_cooldown.items() if ts > now}
 
             # 1. CRAWLER: Сбор кандидатов (Solana + Base)
             candidates = await grok_jev.crawl_universe()
@@ -802,18 +841,28 @@ async def grok_bot_jev_loop(tracker):
             for address, chain in candidates:
                 if not address or address in tracker.positions:
                     continue
-                # Кулдаун: не спамить проверками отвергнутый токен 10 минут
-                if (address, chain) in evaluated_cooldown:
-                    if now - evaluated_cooldown[(address, chain)] < 600.0:
-                        continue
-
-                evaluated_cooldown[(address, chain)] = now
+                # Адаптивный кулдаун
+                retry_until = evaluated_cooldown.get((address, chain), 0.0)
+                if now < retry_until:
+                    continue
 
                 # 2. Обработка через независимый конвейер
                 try:
-                    await grok_jev.process_candidate(address, chain, tracker)
+                    ok, why = await grok_jev.process_candidate(address, chain, tracker)
+                    why_low = str(why).lower()
+                    if ok:
+                        evaluated_cooldown[(address, chain)] = now + 3600.0  # Куплен, не дергать
+                    elif "candle-spike" in why_low or "flush" in why_low or "pullback" in why_low:
+                        evaluated_cooldown[(address, chain)] = now + 25.0    # Ждем откат 25 секунд!
+                    elif "vol5-low" in why_low or "tx5-low" in why_low or "no-momentum" in why_low:
+                        evaluated_cooldown[(address, chain)] = now + 45.0    # Набор объема, проверка через 45с
+                    elif "max-positions" in why_low:
+                        evaluated_cooldown[(address, chain)] = now + 30.0    # Ждем слота 30с
+                    else:
+                        evaluated_cooldown[(address, chain)] = now + 600.0   # Скамы/непроход - 10 мин
                 except Exception as e:
                     print(f"⚠️ [GROKBOT+JEV] Ошибка обработки {address[:8]} ({chain}): {e}")
+                    evaluated_cooldown[(address, chain)] = now + 60.0
 
         except Exception as e:
             print(f"⚠️ [GROKBOT+JEV] Ошибка в цикле grok_bot_jev_loop: {e}")

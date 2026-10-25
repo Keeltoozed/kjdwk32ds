@@ -354,19 +354,25 @@ class PaperTracker:
             print(f"⚠️ [REINVEST] Недостаточно свободного кэша: ${free_cash:.1f} < базового входа ${base_size:.1f}")
             return 0.0
 
-        initial_balance = float(getattr(config, "INITIAL_BALANCE_USD", 120.0) or 120.0)
+        initial_balance = float(getattr(config, "INITIAL_BALANCE_USD", 100.0) or 100.0)
         net_profit = capital - initial_balance
 
-        if net_profit < 20.0:
-            target = 15.0
-        elif net_profit < 40.0:
-            target = 17.0
-        elif net_profit < 70.0:
-            target = 19.0
-        elif net_profit < 100.0:
-            target = 22.0
+        # Стратегия экспоненциального разгона (@savipww):
+        # 20-25% от текущего капитала в одну сделку (фиксированная доля капитала).
+        if getattr(config, "COMPOUNDING_ENABLED", True):
+            comp_pct = float(getattr(config, "COMPOUNDING_PCT", 0.22) or 0.22)
+            target = max(base_size, capital * comp_pct)
         else:
-            target = 25.0
+            if net_profit < 20.0:
+                target = 15.0
+            elif net_profit < 40.0:
+                target = 17.0
+            elif net_profit < 70.0:
+                target = 19.0
+            elif net_profit < 100.0:
+                target = 22.0
+            else:
+                target = 25.0
 
         liq_usd = 0.0
         if isinstance(pair_data, dict):
@@ -377,7 +383,8 @@ class PaperTracker:
                 print(f"💧 [REINVEST] Пул ${liq_usd:,.0f} < ${min_liq:,.0f}: сброс сайза с ${target:.0f} на базовые ${base_size:.0f} (защита цены)")
             target = base_size
         elif liq_usd > 0:
-            max_by_pool = max(base_size, liq_usd * 0.0025)
+            # Не более 1.0% от пула (для глубоких пулов $100k+ ордер может быть $1,000 без проскальзывания)
+            max_by_pool = max(base_size, liq_usd * 0.010)
             if target > max_by_pool:
                 target = max_by_pool
 
@@ -409,7 +416,7 @@ class PaperTracker:
             bsc_cap = float(getattr(config, "BSC_MAX_SIZE_USD", hard_cap) or hard_cap)
             final_size = min(final_size, bsc_cap)
 
-        print(f"💰 [REINVEST] Вход: ${final_size:.0f} (профит: +${net_profit:.1f}, пул: ${liq_usd:,.0f}, свободно: ${free_cash:.1f})")
+        print(f"💰 [COMPOUNDING] Вход: ${final_size:.0f} (Капитал: ${capital:.1f}, Свободно: ${free_cash:.1f}, Профит: {net_profit:+.1f}, Пул: ${liq_usd:,.0f})")
         return final_size
 
     def add_position(self, symbol, mint, entry_price, amount_usd=5.0, ml_features=None, ml_confidence=0.0, is_mature=False, source="", chain="solana", pair_address="", stop_under_wick=0.0, wick_stop_loss_pct=0.0):
@@ -423,8 +430,8 @@ class PaperTracker:
         if not (entry_price > 0) or entry_price > 1e6:
             print(f"🚫 Отказ: entry_price ${entry_price} вне диапазона для {symbol}.")
             return
-        if not (0.5 <= amount_usd <= 100.0):
-            print(f"🚫 Отказ: сайз ${amount_usd:.2f} вне [0.5, 100] для {symbol}.")
+        if not (0.5 <= amount_usd <= 50000.0):
+            print(f"🚫 Отказ: сайз ${amount_usd:.2f} вне [0.5, 50000] для {symbol}.")
             return
         # Защита от серии минусов (Streak Circuit Breaker)
         is_cooling, reason = self.is_streak_cooldown_active()
