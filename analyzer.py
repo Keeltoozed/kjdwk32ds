@@ -959,16 +959,26 @@ class Analyzer:
         if _liq_drop_peak <= -18.0:
             return self._deny(mint, f"post-peak-liq-drain {_liq_drop_peak:.0f}%", f"🚫 [LIQ-DRAIN] {symbol} ({mint[:8]}): ликвидность пула уже сдулась на {_liq_drop_peak:.1f}% от пика — снайперы/дев выводят SOL.")
         
-        scam_keywords = ["AAPL", "S&P", "SP500", "MSFT", "TSLA", "TESLA", "SPACEX", "STARLINK", "XAI", "NEURALINK", "PAYPAL",
-                         "NVDA", "GOOG", "AMZN", "META", "NFLX", 
-                         "PEPE", "SHIB", "DOGE", "FLOKI", "BONK", "WIF", "BOME", "POPCAT", "TRUMP", "BIDEN", "ELON", "MUSK",
-                         "ANTHROPIC", "CLAUDE", "OPENAI", "CHATGPT", "DEEPSEEK", "GROK", "GEMINI", "PERPLEXITY"]
-                         
-        if any(keyword in symbol for keyword in scam_keywords) or any(keyword in name for keyword in scam_keywords):
-            if self._brand_whitelisted(mint):
-                print(f"✅ Вайтлист: {symbol} — известный контракт, мимикри-фильтр пропущен.")
-            else:
-                return self._deny(mint, "mimic-scam", f"🚫 Мусор: Токен {symbol} мимикрирует под известный бренд/мем. Это 100% scam.")
+        corporate_scam_keywords = ["AAPL", "S&P", "SP500", "MSFT", "TSLA", "TESLA", "SPACEX", "STARLINK", "XAI", "NEURALINK", "PAYPAL",
+                                  "NVDA", "GOOG", "AMZN", "META", "NFLX", "ANTHROPIC", "OPENAI", "PERPLEXITY"]
+        if any(keyword in symbol for keyword in corporate_scam_keywords) or any(keyword in name for keyword in corporate_scam_keywords):
+            if not self._brand_whitelisted(mint):
+                return self._deny(mint, "mimic-corp-scam", f"🚫 Мусор: Токен {symbol} мимикрирует под корпоративный бренд. Это 100% scam.")
+
+        meme_keywords = ["PEPE", "SHIB", "DOGE", "FLOKI", "BONK", "WIF", "BOME", "POPCAT", "TRUMP", "BIDEN", "ELON", "MUSK",
+                         "CLAUDE", "CHATGPT", "DEEPSEEK", "GROK", "GEMINI"]
+        if any(keyword in symbol for keyword in meme_keywords) or any(keyword in name for keyword in meme_keywords):
+            if not self._brand_whitelisted(mint):
+                _tx5_mc = (pair_data.get("txns") or {}).get("m5", {}) or {}
+                _b5_mc = int(_tx5_mc.get("buys", 0) or 0)
+                _s5_mc = int(_tx5_mc.get("sells", 0) or 0)
+                _v5_mc = float((pair_data.get("volume") or {}).get("m5", 0) or 0)
+                _lq_mc = float((pair_data.get("liquidity", {}) or {}).get("usd", 0) or 0)
+                # Если у мем-токена есть мощная органика — это вирусный тренд, разрешаем вход!
+                if (_b5_mc >= 20 and _b5_mc >= _s5_mc) or _v5_mc >= 8000.0 or _lq_mc >= 15000.0:
+                    print(f"🔥 [MIMIC-FOMO] {symbol} ({mint[:8]}): мощный органический FOMO мем-бренда (b/s {_b5_mc}/{_s5_mc}, vol5 ${_v5_mc:.0f}, liq ${_lq_mc:.0f}) — пропуск.")
+                else:
+                    return self._deny(mint, "mimic-scam", f"🚫 Мусор: Токен {symbol} мимикрирует под известный мем без органики (b/s {_b5_mc}/{_s5_mc}, vol5 ${_v5_mc:.0f}).")
             
         _created_pre = pair_data.get("pairCreatedAt") or 0
         _age_min_pre = (time.time() * 1000 - _created_pre) / 60000.0 if _created_pre else 999
@@ -1680,6 +1690,12 @@ class Analyzer:
     def _evm_brand_ok(self, symbol: str, tag: str, pair_data: dict = None) -> bool:
         """Блэклист мимикрии под бренды. Бесплатно, без сети."""
         s_up = symbol.upper()
+        # Базовые нативные криптовалюты и стейблы — 100% скам-имитация на L2
+        majors = {"ETH", "WETH", "BTC", "WBTC", "CBBTC", "SOL", "WSOL", "BNB", "WBNB", "USDC", "USDT", "DAI", "TETHER", "BITCOIN", "ETHEREUM", "SOLANA"}
+        if s_up in majors:
+            print(f"🚫 [{tag}] {symbol}: имитация базовой криптовалюты/стейбла — 100% скам/ханипот.")
+            return False
+
         # Акции / корпорации — всегда 100% скам на блокчейне
         stocks = ["AAPL", "MSFT", "TSLA", "TESLA", "SPACEX", "STARLINK", "XAI", "NEURALINK", "PAYPAL",
                   "NVDA", "GOOG", "AMZN", "META", "NFLX", "ANTHROPIC", "OPENAI", "PERPLEXITY"]
@@ -2411,15 +2427,15 @@ class Analyzer:
 
         # === ЗАЩИТА ОТ ДАМПА МИГРАЦИИ PUMP.FUN ===
         if _is_migrated_pump:
-            # 1. Запрет входа в первые 5.5 минут жизни AMM-пула (сброс instant-ботов и снайперов кривой)
-            if _age_min < 5.5:
+            # 1. Запрет входа в первые 1.5 минуты жизни AMM-пула (сброс instant-ботов и снайперов кривой)
+            if _age_min < 1.5:
                 return self._deny(mint, "post-migration-dump-zone",
-                                  f"⏳ [POST-MIGRATION] {mint[:8]}: пул миграции создан всего {_age_min:.1f}м назад (< 5.5м) — зона сброса снайперов pump.fun.")
+                                  f"⏳ [POST-MIGRATION] {mint[:8]}: пул миграции создан всего {_age_min:.1f}м назад (< 1.5м) — зона сброса снайперов pump.fun.")
 
             _ray_liq = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
-            if _ray_liq < 12000.0:
+            if _ray_liq < 10000.0:
                 return self._deny(mint, "migrated-drained-liq",
-                                  f"🚫 [POST-MIGRATION] {mint[:8]}: ликвидность ${_ray_liq:,.0f} < $12,000 — снайперы высосали SOL на миграции.")
+                                  f"🚫 [POST-MIGRATION] {mint[:8]}: ликвидность ${_ray_liq:,.0f} < $10,000 — снайперы высосали SOL на миграции.")
 
             _fdv_check = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
             if 0 < _fdv_check < 30000.0:
@@ -2435,11 +2451,11 @@ class Analyzer:
         if _ray_liq < _min_ray_liq:
             return self._deny(mint, "ray-low-liq", f"🚫 [RAYDIUM] {mint[:8]}: реальная ликвидность AMM ${_ray_liq:,.0f} < ${_min_ray_liq:,.0f}.")
 
-        # Защита от анонимных бандлер-ферм без единой соцсети (кейс ARACH -66.9%: 0 соцсетей, $16k ликвы на PumpSwap)
+        # Защита от анонимных бандлер-ферм без единой соцсети (не-pump токены с низкой ликвидностью)
         _ray_info = pair_data.get("info") or {}
         _ray_soc = _ray_info.get("socials") or []
         _ray_web = _ray_info.get("websites") or []
-        if not pair_data.get("_socials_unknown", False) and len(_ray_soc) == 0 and len(_ray_web) == 0 and _ray_liq < 35000.0:
+        if not mint.endswith("pump") and not pair_data.get("_socials_unknown", False) and len(_ray_soc) == 0 and len(_ray_web) == 0 and _ray_liq < 35000.0:
             return self._deny(mint, "ray-no-socials-anon", f"🚫 [RAY-NO-SOCIALS] {mint[:8]}: 0 соцсетей/сайтов при ликвидности ${_ray_liq:,.0f} (<$35k) — анонимный бандлер-раг.")
 
         _pc = pair_data.get("priceChange") or {}
@@ -2529,9 +2545,10 @@ class Analyzer:
         if liquidity < _min_ray_liq:
             return self._deny(mint, "ray-micro-liq", f"📉 [RAYDIUM] {mint[:8]}: реальная ликвидность пула ${liquidity:,.0f} < ${_min_ray_liq:,.0f} — микро-пул с риском мгновенного слива.")
 
-        # 2. Защита от картонных пулов (FDV / Liquidity > 40x — 1 кит продает и пул схлопывается)
-        if liquidity > 0 and fdv > 0 and (fdv / liquidity) > 40.0:
-            return self._deny(mint, "ray-hollow-pool", f"🚫 [HOLLOW-POOL] {mint[:8]}: FDV ${fdv:,.0f} vs Liq ${liquidity:,.0f} ({fdv/liquidity:.0f}x > 40x) — картонная ликвидность.")
+        # 2. Защита от картонных пулов: для молодых ракет / pump.fun ($12k liq при росте до $600k+ FDV) лимит до 85x
+        _max_hollow_ratio = 85.0 if (_is_fresh_ray and _b5 >= _s5 * 1.15) else 45.0
+        if liquidity > 0 and fdv > 0 and (fdv / liquidity) > _max_hollow_ratio:
+            return self._deny(mint, "ray-hollow-pool", f"🚫 [HOLLOW-POOL] {mint[:8]}: FDV ${fdv:,.0f} vs Liq ${liquidity:,.0f} ({fdv/liquidity:.0f}x > {_max_hollow_ratio:.0f}x) — картонная ликвидность.")
 
         # 3. Защита от кругового wash-churn и дев-бандлов (накрутка объёма ботами перед сливом)
         if liquidity > 0 and (_vm5 / liquidity) > 3.5 and abs(_m5) < 12.0:
@@ -2539,9 +2556,11 @@ class Analyzer:
         if liquidity > 0 and (_vm5 / liquidity) > 4.5 and _age_min < 30.0:
             return self._deny(mint, "ray-fake-churn", f"🚫 [WASH-CHURN] {mint[:8]}: экстремальный оборот {_vm5 / liquidity:.1f}x от ликвидности в молодом токене ({_age_min:.1f}м) — ловушка накрутки дева.")
         if _s5 >= 30 and (_b5 / max(_s5, 1)) > 3.8 and _vm5 >= 25000 and _age_min < 30.0:
-            return self._deny(mint, "ray-fake-wall", f"🚫 [FAKE-BUY-WALL] {mint[:8]}: аномальный перекос b/s {_b5 / _s5:.1f}x при объёме ${_vm5:,.0f} — боты дева имитируют органику перед дампом.")
+            if _avg_tx < 15.0:
+                return self._deny(mint, "ray-fake-wall", f"🚫 [FAKE-BUY-WALL] {mint[:8]}: аномальный перекос b/s {_b5 / _s5:.1f}x при чеке ${_avg_tx:.1f} — боты дева.")
         if (_b5 + _s5) >= 800 and (_b5 / max(_s5, 1)) > 3.5:
-            return self._deny(mint, "ray-fake-wall", f"🚫 [FAKE-BUY-WALL] {mint[:8]}: накрутка {_b5}b/{_s5}s (b/s {_b5 / _s5:.1f}x) — ловушка дева.")
+            if _avg_tx < 15.0:
+                return self._deny(mint, "ray-fake-wall", f"🚫 [FAKE-BUY-WALL] {mint[:8]}: накрутка {_b5}b/{_s5}s (b/s {_b5 / _s5:.1f}x) — ловушка дева.")
 
         # 4. Проверка безопасности холдеров и создателя
         _t10 = getattr(self, '_last_top10', 0.0)
@@ -2607,10 +2626,27 @@ class Analyzer:
             # Многофакторная калибровка скора (защита от слепых 100%):
             if _s5 > 0 and (_b5 / _s5) > 6.0 and (_b5 + _s5) >= 20:
                 conf -= 15.0  # аномально однобокий стакан (риск honeypot/фальш-стенки)
-            if liquidity > 0 and (fdv / liquidity) > 50.0:
-                conf -= 10.0  # штраф за повышенную надутость капитализации
+            if liquidity > 0 and (fdv / liquidity) > 55.0 and not _is_fresh_ray:
+                conf -= 10.0  # штраф за повышенную надутость капитализации для старых монет
             if _avg_tx < 25.0 and (_b5 + _s5) >= 30:
                 conf -= 10.0  # штраф за подозрительно мелкие чеки
+
+            # Защита от сонных старых токенов с огромным 24h объёмом (кейс CHUBBY: 24h vol $700k даёт 100% XGBoost, но токен спит/падает)
+            if _age_min > 45.0 and _m5 < 5.0:
+                conf -= 40.0
+                print(f"💤 [RAYDIUM-MOMENTUM] {mint[:8]}: токен старше 45м с вялым импульсом (m5 {_m5:+.1f}% < +5.0%) — штраф -40% к XGBoost.")
+
+            # Проверка 5-минутного оборота к ликвидности (активность в моменте)
+            if liquidity > 0:
+                _m5_turnover = _vm5 / liquidity
+                if _m5_turnover < 0.08 and _age_min > 20.0:
+                    conf -= 30.0
+                    print(f"💤 [RAYDIUM-TURNOVER] {mint[:8]}: оборот 5м всего {_m5_turnover*100:.1f}% от ликвидности (< 8%) — нет активных торгов, штраф -30%.")
+
+            # Буст для реальных ракет на взлете (мощный 5м импульс и приток покупателей)
+            if _m5 >= 15.0 and _b5 >= _s5 * 1.15 and _vm5 >= 5000:
+                conf += 20.0
+                print(f"🚀 [ROCKET-BOOST] {mint[:8]}: мощный 5м импульс (+{_m5:.1f}%, vol5 ${_vm5:,.0f}) — буст +20% к Score!")
             
             print(f"🧠 Raydium XGBoost: {mint} | Score: {conf:.1f}%")
             self.last_score = float(conf)

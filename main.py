@@ -685,8 +685,10 @@ async def scanner_loop(analyzer, tracker):
                                 if _m5_live < 2.5 or _m1_live < -2.5:
                                     print(f"🚫 [SCANNER-LIVE-REVERSAL] {actual_symbol} ({mint[:8]}): на живом графике импульс сломан (m5 {_m5_live:+.1f}%, m1 {_m1_live:+.1f}%) — отмена покупки!")
                                     continue
-                                if _h1_live > 400.0:
-                                    print(f"🚫 [SCANNER-LIVE-EXHAUSTED] {actual_symbol} ({mint[:8]}): живой h1 {_h1_live:+.0f}% > +400% — перегретая вершина, отмена!")
+                                _is_fresh_live = mint.endswith("pump") or _age_m <= 90.0
+                                _max_h1_live = 3500.0 if (_is_fresh_live and _m5_live >= 2.5) else 400.0
+                                if _h1_live > _max_h1_live:
+                                    print(f"🚫 [SCANNER-LIVE-EXHAUSTED] {actual_symbol} ({mint[:8]}): живой h1 {_h1_live:+.0f}% > +{_max_h1_live:.0f}% — перегретая вершина, отмена!")
                                     continue
                                 if _pk_drop_live <= -18.0 or _lq_drop_live <= -18.0:
                                     print(f"🚫 [SCANNER-POST-PEAK] {actual_symbol} ({mint[:8]}): токен уже слился от пика (цена {_pk_drop_live:+.1f}%, ликва {_lq_drop_live:+.1f}%) — отмена!")
@@ -697,19 +699,19 @@ async def scanner_loop(analyzer, tracker):
                                     print(f"🚫 [SCANNER-FAKE-PUMPSWAP] {actual_symbol} ({mint[:8]}): кастомный не-pump контракт на PumpSwap — отмена!")
                                     continue
 
-                                # Защита от миграционного дампа Pump.fun: ждём выгрузку снайперов (5.5м) и требуем живой пул ($12k liq / $30k FDV)
+                                # Защита от миграционного дампа Pump.fun: первые 90с на сброс instant-ботов, затем свободный вход
                                 if mint.endswith("pump") and _dex_id in ("pumpswap", "raydium", "meteora", "orca"):
                                     _c_ms_sc = pair_data.get("pairCreatedAt") or 0
                                     _age_sc = ((time.time() * 1000 - _c_ms_sc) / 60000.0) if _c_ms_sc else 0.5
-                                    if _age_sc < 5.5:
-                                        print(f"⏳ [SCANNER-MIGRATION] {actual_symbol} ({mint[:8]}): AMM-пул создан {_age_sc:.1f}м назад (< 5.5м) — зона сброса снайперов.")
+                                    if _age_sc < 1.5:
+                                        print(f"⏳ [SCANNER-MIGRATION] {actual_symbol} ({mint[:8]}): AMM-пул создан {_age_sc:.1f}м назад (< 1.5м) — зона сброса снайперов.")
                                         continue
                                     _fdv_sc = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
                                     if 0 < _fdv_sc < 30000.0:
                                         print(f"🚫 [SCANNER-MIGRATION] {actual_symbol} ({mint[:8]}): FDV ${_fdv_sc:,.0f} < $30,000 — слит ниже уровня миграции.")
                                         continue
-                                    if liq_usd < 12000.0:
-                                        print(f"🚫 [SCANNER-MIGRATION] {actual_symbol} ({mint[:8]}): ликвидность ${liq_usd:,.0f} < $12,000 — микро-пул.")
+                                    if liq_usd < 10000.0:
+                                        print(f"🚫 [SCANNER-MIGRATION] {actual_symbol} ({mint[:8]}): ликвидность ${liq_usd:,.0f} < $10,000 — микро-пул.")
                                         continue
 
                                 # Живая проверка цены Jupiter для ЛЮБЫХ токенов на AMM (включая pump на Raydium/PumpSwap)

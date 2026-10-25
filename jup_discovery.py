@@ -100,7 +100,9 @@ async def fetch_jup_tokens() -> list:
                 continue
             if age_m > 60.0 and pc5 < 2.5:
                 continue
-            if pc1h > 400.0 or pc1h < -35.0:
+            _is_fresh_jup = m.endswith("pump") or age_m < 90.0
+            _max_pc1h = 3500.0 if (_is_fresh_jup and pc5 >= 2.0) else 400.0
+            if pc1h > _max_pc1h or pc1h < -35.0:
                 continue
             if pc5 < min_pc5 or vol5 < 350.0:
                 continue
@@ -239,7 +241,9 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
     _m5_j = float(_pc_j.get("m5", 0) or 0)
     _m1_j = float(_pc_j.get("m1", 0) or 0)
     _h1_j = float(_pc_j.get("h1", 0) or 0)
-    _is_fresh_j = mint.endswith("pump")
+    _c_ms_j = (td or {}).get("pairCreatedAt") or 0
+    _age_j = ((time.time() * 1000 - _c_ms_j) / 60000.0) if _c_ms_j else 0.5
+    _is_fresh_j = mint.endswith("pump") or _age_j <= 90.0
     _max_h1_j = 3500.0 if (_is_fresh_j and _m5_j >= 2.5) else 400.0
     if _h1_j > _max_h1_j:
         print(f"🚫 [{source_tag}-H1-EXHAUSTED] {_sym_tmp} ({mint[:8]}): h1 {_h1_j:+.0f}% > +{_max_h1_j:.0f}% — памп уже отработал, вход = вершина.")
@@ -262,24 +266,21 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
     _info_j = (td or {}).get("info") or {}
     _soc_j = _info_j.get("socials") or []
     _web_j = _info_j.get("websites") or []
-    if not (td or {}).get("_socials_unknown", False) and len(_soc_j) == 0 and len(_web_j) == 0 and _liq_j < 35000:
+    if not mint.endswith("pump") and not (td or {}).get("_socials_unknown", False) and len(_soc_j) == 0 and len(_web_j) == 0 and _liq_j < 35000:
         print(f"🚫 [{source_tag}-NO-SOCIALS] {_sym_tmp} ({mint[:8]}): 0 соцсетей/сайтов при ликвидности ${_liq_j:,.0f} (<$35k) — анонимный бандлер-раг.")
         return False
 
-    # Защита от миграционного дампа Pump.fun
+    # Защита от миграционного дампа Pump.fun: первые 90с на отстрел instant-снайперов, затем свободный вход
     if mint.endswith("pump") and _dex_j in ("pumpswap", "raydium", "meteora", "orca"):
-        _c_ms_j = (td or {}).get("pairCreatedAt") or 0
-        import time as _t
-        _age_j = ((_t.time() * 1000 - _c_ms_j) / 60000.0) if _c_ms_j else 0.5
-        if _age_j < 5.5:
-            print(f"⏳ [{source_tag}-MIGRATION-DUMP] {_sym_tmp} ({mint[:8]}): AMM-пул создан {_age_j:.1f}м назад (< 5.5м) — зона сброса снайперов pump.fun.")
+        if _age_j < 1.5:
+            print(f"⏳ [{source_tag}-MIGRATION-DUMP] {_sym_tmp} ({mint[:8]}): AMM-пул создан {_age_j:.1f}м назад (< 1.5м) — зона сброса снайперов pump.fun.")
             return False
         _fdv_j = float((td or {}).get("fdv", 0) or (td or {}).get("marketCap", 0) or 0)
         if 0 < _fdv_j < 30000.0:
             print(f"🚫 [{source_tag}-MIGRATION-LOW-FDV] {_sym_tmp} ({mint[:8]}): FDV ${_fdv_j:,.0f} < $30,000 — токен слит ниже уровня миграции pump.fun.")
             return False
-        if _liq_j < 12000.0:
-            print(f"🚫 [{source_tag}-MIGRATION-LOW-LIQ] {_sym_tmp} ({mint[:8]}): ликвидность ${_liq_j:,.0f} < $12,000 — дев/снайперы высосали SOL.")
+        if _liq_j < 10000.0:
+            print(f"🚫 [{source_tag}-MIGRATION-LOW-LIQ] {_sym_tmp} ({mint[:8]}): ликвидность ${_liq_j:,.0f} < $10,000 — дев/снайперы высосали SOL.")
             return False
         
     from jupiter import JupiterAPI
@@ -465,9 +466,14 @@ async def jup_loop(analyzer, tracker):
                             processed[m] = _now_t + 90
                             continue
 
-                        hot_candidates.append((_m5, _ag, _sym, m, td))
+                        _lq_cand = float((td.get("liquidity") or {}).get("usd", 0) or 0)
+                        _v5_cand = float((td.get("volume") or {}).get("m5", 0) or 0)
+                        _turnover = (_v5_cand / max(_lq_cand, 1.0))
+                        # Комплексный скор ракеты: 5м рост + оборот + бонус молодым/миграциям
+                        _rkt_score = (_m5 * 1.5) + min(_turnover * 30.0, 60.0) + (35.0 if m.endswith('pump') or _ag < 45.0 else 0.0)
+                        hot_candidates.append((_rkt_score, _m5, _ag, _sym, m, td))
 
-                    # Сортируем по максимальному импульсу m5 (самые мощные ракеты первыми)
+                    # Сортируем по максимальному импульсу ракеты (скорость, оборот, свежесть)
                     hot_candidates.sort(key=lambda x: x[0], reverse=True)
 
                     total_skipped = skipped_flat + skipped_ancient + skipped_nodata
@@ -477,7 +483,7 @@ async def jup_loop(analyzer, tracker):
 
                     async def _process_hot_candidate(cand):
                         async with sem:
-                            _m5_val, _ag_val, _sym_val, mint, td = cand
+                            _score, _m5_val, _ag_val, _sym_val, mint, td = cand
                             if not mint or mint in tracker.positions:
                                 return
                             if len(tracker.get_open_positions()) >= config.MAX_CONCURRENT_POSITIONS:

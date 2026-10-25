@@ -341,7 +341,7 @@ def _filter_and_rank_gt_items(items: list, min_liq: float = 2000.0, chain: str =
             name = str(attrs.get("name") or "").upper()
             base_sym = name.split("/")[0].strip().split()[0] if name else ""
             quote_sym = name.split("/")[1].strip().split()[0] if "/" in name else "WETH"
-            _stock_tickers = ("SGOV", "SPY", "QQQ", "META", "INTC", "MU", "NVDA", "AAPL", "GOOGL", "MSFT", "GLD", "HXMAX", "STANDARD", "WETH", "USDC", "USDT", "DAI", "CBBTC", "WBTC", "AERO", "BRETT", "DEGEN", "VIRTUAL")
+            _stock_tickers = ("SGOV", "SPY", "QQQ", "META", "INTC", "MU", "NVDA", "AAPL", "GOOGL", "MSFT", "GLD", "HXMAX", "STANDARD", "ETH", "WETH", "BTC", "WBTC", "CBBTC", "SOL", "WSOL", "BNB", "WBNB", "USDC", "USDT", "DAI", "TETHER", "BITCOIN", "ETHEREUM", "SOLANA", "AERO", "BRETT", "DEGEN", "VIRTUAL")
             if base_sym in _stock_tickers:
                 continue
 
@@ -526,7 +526,7 @@ async def fetch_dex_search_tokens(chain: str = SLUG) -> list:
             if not addr or addr.lower() in seen:
                 continue
             sym = str((p.get("baseToken") or {}).get("symbol") or "").upper()
-            _stock_symbols = {"SPY", "QQQ", "SGOV", "GLD", "AAPL", "MSFT", "NVDA", "INTC", "META", "GOOGL", "GOOG", "PLTR", "MU", "TSLA", "AMZN", "CBBTC", "WETH", "USDT", "USDC", "DAI"}
+            _stock_symbols = {"SPY", "QQQ", "SGOV", "GLD", "AAPL", "MSFT", "NVDA", "INTC", "META", "GOOGL", "GOOG", "PLTR", "MU", "TSLA", "AMZN", "ETH", "WETH", "BTC", "WBTC", "CBBTC", "SOL", "WSOL", "BNB", "WBNB", "USDT", "USDC", "DAI", "TETHER", "BITCOIN", "ETHEREUM", "SOLANA", "AERO", "BRETT", "DEGEN", "VIRTUAL"}
             if sym in _stock_symbols or any(s in sym for s in ("XMAX", "1L", "2L", "3L")):
                 continue
             _px = float(p.get("priceUsd", 0) or 0)
