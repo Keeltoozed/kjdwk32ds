@@ -783,7 +783,7 @@ async def scanner_loop(analyzer, tracker):
                                 _lq_drop_live = float(pair_data.get("_liq_drop_from_peak", 0.0) or 0.0)
 
                                 # Повторная проверка живых метрик после сброса prefetch-кэша (защита от кейса CHUNKEE: кэш +m5, а живой рынок m5 -1.6%, m1 -8.8%)
-                                if _m5_live < 2.5 or _m1_live < -2.5:
+                                if _m5_live < 2.5 or _m1_live < -8.0:
                                     print(f"🚫 [SCANNER-LIVE-REVERSAL] {actual_symbol} ({mint[:8]}): на живом графике импульс сломан (m5 {_m5_live:+.1f}%, m1 {_m1_live:+.1f}%) — отмена покупки!")
                                     continue
                                 _is_fresh_live = mint.endswith("pump") or _age_m <= 90.0

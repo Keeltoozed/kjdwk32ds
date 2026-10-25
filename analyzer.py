@@ -2526,7 +2526,7 @@ class Analyzer:
                     print(f"⚡ [RAY-PULLBACK] {mint[:8]}: молодой токен ({_age_min:.1f}м) h1 {_h1:+.1f}%, отскок m5 {_m5:+.1f}% — дохлая кошка пропущена, пишется в shadow.")
                 except Exception:
                     pass
-        if _m1 < -2.5:
+        if _m1 < -8.0:
             return self._deny(mint, "ray-m1-drop", f"🚫 [RAYDIUM] {mint[:8]}: m1 {_m1:+.1f}% — активный сброс в моменте (падающий нож).")
         if _m1 > 22.0:
             return self._deny(mint, "ray-m1-blowoff", f"🚫 [RAYDIUM] {mint[:8]}: m1 {_m1:+.1f}% > +22% — вертикальный прострел за 1м, вход = вершина.")

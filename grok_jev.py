@@ -225,8 +225,8 @@ class GrokJevEngine:
             if 0 < top10_pct <= 1.0:
                 top10_pct *= 100.0
 
-            max_top1 = 8.0 if is_pump else float(getattr(_c, "JEV_MAX_TOP_WALLET", 0.05)) * 100.0
-            max_top10 = 32.0 if is_pump else float(getattr(_c, "JEV_MAX_TOP_10", 0.25)) * 100.0
+            max_top1 = 12.0 if is_pump else float(getattr(_c, "JEV_MAX_TOP_WALLET", 0.15)) * 100.0
+            max_top10 = 32.0 if is_pump else float(getattr(_c, "JEV_MAX_TOP_10", 0.35)) * 100.0
             
             if top1_pct > max_top1:
                 return False, f"top-wallet-high {top1_pct:.1f}% > {max_top1:.1f}% (exit risk)"
@@ -317,7 +317,7 @@ class GrokJevEngine:
         # Если LLM не вернула ответ — используем детерминированный локальный скоринг JEV
         if not llm_res:
             llm_res = self._deterministic_jev_eval(
-                symbol, name, socials, websites, m1, m5, h1, liq, mcap, vol5, top1_pct, top10_pct, dev_pct
+                symbol, name, socials, websites, m1, m5, h1, liq, mcap, vol5, top1_pct, top10_pct, dev_pct, is_pump=is_pump
             )
 
         # Проверка порогов SOFT GATE из thresholds.py:
@@ -520,7 +520,8 @@ class GrokJevEngine:
         socials: list, websites: list,
         m1: float, m5: float, h1: float,
         liq: float, mcap: float, vol5: float,
-        top1_pct: float, top10_pct: float, dev_pct: float
+        top1_pct: float, top10_pct: float, dev_pct: float,
+        is_pump: bool = False
     ) -> dict:
         """
         Детерминированный алгоритмический скоринг по формулам JEV
@@ -531,11 +532,11 @@ class GrokJevEngine:
         sym_lower = symbol.lower()
         soc_matched = any(sym_lower in str(s.get("url", "")).lower() for s in socials)
         if not has_soc:
-            # Если соцсетей нет, разрешаем только при глубокой ликвидности ($35k+) и мощном объеме
-            if liq >= 35000.0 and vol5 >= 12000.0:
+            # Для pump.fun токенов и монет с подтвержденной органикой аккаунт валиден (pump.fun native launch)
+            if is_pump or (liq >= 35000.0 and vol5 >= 12000.0) or (vol5 >= 3000.0):
                 account_score = 0.80
             else:
-                account_score = 0.35  # Отказ JEV: анонимный контракт без соцсетей
+                account_score = 0.35  # Отказ JEV: анонимный контракт без соцсетей и органики
         elif soc_matched:
             account_score = 0.90
         else:
@@ -725,8 +726,14 @@ class GrokJevEngine:
         is_pump = dex_id in ("pump", "pumpfun")
         eff_liq = max(raw_liq, fdv * 0.40) if is_pump else raw_liq
 
-        # Анонимные токены без соцсетей при пуле < $35k — это 100% скам-бандлер (кейс ONLYTITTY)
-        if not has_socials and eff_liq < 35000.0:
+        # Анонимные токены без соцсетей при пуле < $35k — это скам-бандлер, если нет подтвержденного органического потока или pump.fun
+        _tx5 = (pair_data.get("txns") or {}).get("m5", {}) or {}
+        _b5 = int(_tx5.get("buys", 0) or 0)
+        _s5 = int(_tx5.get("sells", 0) or 0)
+        _vol5 = float((pair_data.get("volume") or {}).get("m5", 0) or 0)
+        _is_organic_flow = (_b5 >= 20 and _b5 >= _s5 and _vol5 >= 3000.0)
+        _is_pump_token = is_pump or address.endswith("pump")
+        if not has_socials and eff_liq < 35000.0 and not _is_pump_token and not _is_organic_flow:
             return False, f"no-socials-anon-rug (0 socials with <$35k liq — 100% anon dev dump)", _h_stats
 
         # 3. Аудит для сети SOLANA
@@ -883,17 +890,16 @@ class GrokJevEngine:
                         return False, f"top10 concentration (GoPlus) {_h_stats['top10_pct']:.1f}% > 35%", _h_stats
 
             # Г) Двухсторонняя симуляция (BUY + SELL) через Jupiter
-            # Защита от Honeypot (кейс RICK / CRACKED: купить можно, продать нельзя -> 100% скам)
+            # ЖЕСТКАЯ ЗАЩИТА: токен ОБЯЗАН успешно проходить и покупку, и продажу!
+            # Никаких поблажек для pump.fun (кейс LAUNCH / RICK / CRACKED — без обратного маршрута вход ЗАПРЕЩЕН)
             try:
                 from jupiter import JupiterAPI
                 jup_sim = await JupiterAPI.check_taxes_and_simulate_swap(address, input_amount_sol=0.05)
                 if not jup_sim.get("is_safe", False):
-                    # Если это AMM/Raydium/DEX или явный Honeypot от Jupiter — блокируем наглухо
                     reason = jup_sim.get("reason", "no route / unsellable / honeypot")
-                    if dex_id not in ("pump", "pumpfun") or "HONEYPOT" in reason.upper() or "NO_ROUTE" in reason.upper():
-                        return False, f"jupiter-routing-failed ({reason})", _h_stats
-            except Exception:
-                pass
+                    return False, f"jupiter-routing-failed ({reason})", _h_stats
+            except Exception as e:
+                return False, f"jupiter-simulation-error ({e})", _h_stats
 
         # 4. Аудит для других сетей (отключены)
         elif chain != "solana":
