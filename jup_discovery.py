@@ -59,13 +59,15 @@ async def fetch_jup_tokens() -> list:
         return _cache
     
     trending_url = f"{BASE}/toptrending/5m?limit=100"
+    trending_1h_url = f"{BASE}/toptrending/1h?limit=100"
     organic_url = f"{BASE}/toporganicscore/5m?limit=100"
     top_vol_url = f"{BASE}/toptraded/5m?limit=100"
     recent_url = f"{BASE}/recent"
     
     headers = _headers()
-    (s1, d1), (s_org, d_org), (s3, d3), (s2, d2) = await asyncio.gather(
+    (s1, d1), (s1h, d1h), (s_org, d_org), (s3, d3), (s2, d2) = await asyncio.gather(
         fetch_json(trending_url, headers=headers, timeout=8),
+        fetch_json(trending_1h_url, headers=headers, timeout=8),
         fetch_json(organic_url, headers=headers, timeout=8),
         fetch_json(top_vol_url, headers=headers, timeout=8),
         fetch_json(recent_url, headers=headers, timeout=8),
@@ -74,7 +76,7 @@ async def fetch_jup_tokens() -> list:
     ranked = []
     seen = set()
 
-    def _add_jup_list(items, tag: str, min_pc5: float = 2.5):
+    def _add_jup_list(items, tag: str, min_pc5: float = 2.0):
         if not isinstance(items, list):
             return
         for t in items:
@@ -83,7 +85,7 @@ async def fetch_jup_tokens() -> list:
             if not m or m.startswith("0x") or len(m) < 32 or len(m) > 44 or m in seen or sym in SKIP_SYMBOLS:
                 continue
             liq = float(t.get("liquidity") or 0.0)
-            if liq < 4000.0:
+            if liq < 3500.0:
                 continue
             st5 = t.get("stats5m") or {}
             st1h = t.get("stats1h") or {}
@@ -92,57 +94,39 @@ async def fetch_jup_tokens() -> list:
             vol5 = float(st5.get("buyVolume") or 0.0) + float(st5.get("sellVolume") or 0.0)
             age_m = _parse_jup_age_min(t)
             # Отсекаем древние мамонты и перегретые хаи ДО формирования пачки:
-            if age_m > 180.0 and pc5 < 15.0:
+            if age_m > 1440.0 and pc5 < 8.0:
                 continue
-            if age_m > 60.0 and pc5 < 8.0:
+            if age_m > 240.0 and pc5 < 4.0:
+                continue
+            if age_m > 60.0 and pc5 < 2.5:
                 continue
             if pc1h > 400.0 or pc1h < -35.0:
                 continue
-            if pc5 < min_pc5 or vol5 < 800.0:
+            if pc5 < min_pc5 or vol5 < 350.0:
                 continue
             seen.add(m)
             ranked.append((pc5, vol5, sym, m, tag))
 
-    # 1. Органические 5м-ракеты и топ-тренды 5м (без древнего мусора)
+    # 1. Органические 5м-ракеты и топ-тренды 5м/1ч (без древнего мусора)
     if s_org == 200:
-        _add_jup_list(d_org, "organic_5m", min_pc5=2.5)
+        _add_jup_list(d_org, "organic_5m", min_pc5=2.0)
     if s1 == 200:
-        _add_jup_list(d1, "trending_5m", min_pc5=2.5)
+        _add_jup_list(d1, "trending_5m", min_pc5=2.0)
+    if s1h == 200:
+        _add_jup_list(d1h, "trending_1h", min_pc5=2.5)
     if s3 == 200:
-        _add_jup_list(d3, "traded_5m", min_pc5=2.5)
+        _add_jup_list(d3, "traded_5m", min_pc5=2.0)
 
-    # 2. Добор живых трендов и свежих пулов GeckoTerminal (5m + 1h + new_pools — никогда не обрезаются старыми монетами)
+    # 2. Добор живых трендов и свежих пулов GeckoTerminal из общего кэша market_data (без дублирования запросов и 429)
     try:
-        from market_data import _gt_get
-        gt_data5, gt_data1h, gt_new = await asyncio.gather(
-            _gt_get("/networks/solana/trending_pools?duration=5m", retries=0, timeout=6),
-            _gt_get("/networks/solana/trending_pools?duration=1h", retries=0, timeout=6),
-            _gt_get("/networks/solana/new_pools", retries=0, timeout=6),
-            return_exceptions=True,
-        )
-        for tag_gt, gt_resp in (("gt_trending_5m", gt_data5), ("gt_trending_1h", gt_data1h), ("gt_new_pools", gt_new)):
-            if not isinstance(gt_resp, dict):
+        import market_data
+        gt_items = await market_data.get_trending()
+        for item in (gt_items or []):
+            addr = item.get("tokenAddress") or ""
+            if not addr or addr.startswith("0x") or len(addr) < 32 or len(addr) > 44 or addr in seen:
                 continue
-            for item in (gt_resp.get("data") or []):
-                bid = item.get("relationships", {}).get("base_token", {}).get("data", {}).get("id", "")
-                addr = bid.split("_", 1)[1] if "_" in bid else ""
-                dex_gt = str(((item.get("relationships") or {}).get("dex") or {}).get("data", {}).get("id") or "").lower()
-                if "pumpswap" in dex_gt and not addr.endswith("pump"):
-                    continue
-                attrs = item.get("attributes") or {}
-                sym = str(attrs.get("name") or "").split("/")[0].upper().strip()
-                if not addr or addr.startswith("0x") or len(addr) < 32 or len(addr) > 44 or addr in seen or any(s in sym for s in SKIP_SYMBOLS):
-                    continue
-                liq_gt = float(attrs.get("reserve_in_usd") or 0.0)
-                if 0 < liq_gt < 3500.0:
-                    continue
-                pc = attrs.get("price_change_percentage") or {}
-                m5_c = float(pc.get("m5") or 0)
-                h1_c = float(pc.get("h1") or 0)
-                if tag_gt != "gt_new_pools" and (m5_c < 2.5 or h1_c > 400.0 or h1_c < -35.0):
-                    continue
-                seen.add(addr)
-                ranked.append((m5_c, 0.0, sym, addr, tag_gt))
+            seen.add(addr)
+            ranked.append((5.0, 0.0, addr[:6], addr, "gt_trending"))
     except Exception:
         pass
 
@@ -384,7 +368,7 @@ async def jup_fast_mature_loop(analyzer, tracker):
                 if ok is None:
                     print(f"⏭ [JUP-SKIP] {sym} ({mint[:8]}): анализ созревшего токена не дал сигнала (eval_none)")
                     continue
-                analyzer.log_scan(mint[:8], mint, "JUP-MATURE", ok, getattr(analyzer, "last_score", 0.0))
+                analyzer.log_scan(sym, mint, "JUP-MATURE", ok, getattr(analyzer, "last_score", 0.0))
                 if ok is True:
                     await _evaluate_and_buy(mint, td, analyzer, tracker, source_tag="JUP-MATURE")
         except Exception as e:
@@ -460,9 +444,9 @@ async def jup_loop(analyzer, tracker):
                             continue
 
                         # Отсекаем древние мамонты без пампа
-                        if _ag > 120.0 and _m5 < 15.0:
+                        if (_ag > 240.0 and _m5 < 6.0) or (_ag > 1440.0 and _m5 < 12.0) or (_ag > 60.0 and _m5 < 4.0):
                             skipped_ancient += 1
-                            processed[m] = _now_t + 1800
+                            processed[m] = _now_t + 900
                             continue
 
                         # Отсекаем флет m5 < 2.5%
@@ -508,7 +492,7 @@ async def jup_loop(analyzer, tracker):
                                 return
 
                             processed[mint] = _t.time()
-                            analyzer.log_scan(mint[:8], mint, "JUP", ok, getattr(analyzer, "last_score", 0.0))
+                            analyzer.log_scan(_sym_val, mint, "JUP", ok, getattr(analyzer, "last_score", 0.0))
 
                             if ok is True:
                                 await _evaluate_and_buy(mint, td, analyzer, tracker, source_tag="JUP")

@@ -37,18 +37,23 @@ _gt_breaker_until = 0.0
 
 
 async def _gt_get(path: str, retries: int = 0, timeout: int = 6):
-    """GET к GeckoTerminal через ГЛОБАЛЬНЫЙ семафор http_client (Sem=1).
+    """GET к GeckoTerminal через ГЛОБАЛЬНЫЙ семафор http_client (Sem=1) и локальный пейсер.
     ВАЖНО:
-    - Circuit Breaker: при 3 сбоях подряд (таймауты/5xx/429) пауза 45с (fail-fast, не забиваем очередь).
+    - Circuit Breaker: при 4 сбоях подряд (таймауты/5xx/429) пауза 25с (fail-fast, не забиваем очередь).
     - default retries=0 и timeout=6 для быстрого дискавери.
     - 429 НЕ ретраится (повторный долбёж усугубляет бан). Возвращает dict или {}."""
-    global _gt_consecutive_fails, _gt_breaker_until
+    global _gt_consecutive_fails, _gt_breaker_until, _last_call
     from http_client import fetch_json
     now_m = time.monotonic()
     if now_m < _gt_breaker_until:
         return {}  # Circuit breaker open: fail-fast
 
-    status, data = await fetch_json(BASE + path, headers=HEADERS, timeout=timeout, retries=0)
+    async with _lock:
+        wait_s = 1.1 - (time.monotonic() - _last_call)
+        if wait_s > 0:
+            await asyncio.sleep(wait_s)
+        _last_call = time.monotonic()
+        status, data = await fetch_json(BASE + path, headers=HEADERS, timeout=timeout, retries=0)
     if status == 200 and isinstance(data, dict):
         _gt_consecutive_fails = 0
         return data
@@ -56,16 +61,16 @@ async def _gt_get(path: str, retries: int = 0, timeout: int = 6):
         return {}  # токен/пул ещё не проиндексирован — ретраи бессмысленны
     if status == 429:
         _gt_consecutive_fails += 1
-        if _gt_consecutive_fails >= 3:
-            _gt_breaker_until = time.monotonic() + 45.0
-            print("⚡ [GT-BREAKER] GeckoTerminal 429/сбои -> пауза запросов на 45с (fail-fast).")
+        if _gt_consecutive_fails >= 4:
+            _gt_breaker_until = time.monotonic() + 25.0
+            print("⚡ [GT-BREAKER] GeckoTerminal 429/сбои -> пауза запросов на 25с (fail-fast).")
         return {}
 
     # 5xx / timeout:
     _gt_consecutive_fails += 1
-    if _gt_consecutive_fails >= 3:
-        _gt_breaker_until = time.monotonic() + 45.0
-        print(f"⚡ [GT-BREAKER] GeckoTerminal {_gt_consecutive_fails} сбоя подряд -> пауза запросов на 45с.")
+    if _gt_consecutive_fails >= 4:
+        _gt_breaker_until = time.monotonic() + 25.0
+        print(f"⚡ [GT-BREAKER] GeckoTerminal {_gt_consecutive_fails} сбоя подряд -> пауза запросов на 25с.")
 
     last_err = f"HTTP {status}"
     for attempt in range(retries):
@@ -573,29 +578,24 @@ async def get_trending() -> list:
         seen.add(mint)
         out.append({"tokenAddress": mint, "chainId": "solana"})
 
-    # 1. Сканируем ТОП часовых трендов (1h тренды — точно как во вкладке DexScreener Trending 1H)
-    for page in range(1, 3):
-        d = await _gt_get(f"/networks/solana/trending_pools?duration=1h&page={page}", retries=0, timeout=6)
-        for item in (d.get("data") or []):
-            add(item)
+    # 1. Сканируем ТОП 5-минутных и часовых трендов (1 страница каждого, чтобы не выбивать лимит 30 req/min у GT)
+    d5 = await _gt_get("/networks/solana/trending_pools?duration=5m&page=1", retries=0, timeout=6)
+    for item in (d5.get("data") or []):
+        add(item)
 
-    # 1.1 Свежие 5-минутные импульсы (duration=5m — точно как во вкладке DexScreener Gainers 5M)
-    for page in range(1, 3):
-        d5 = await _gt_get(f"/networks/solana/trending_pools?duration=5m&page={page}", retries=0, timeout=6)
-        for item in (d5.get("data") or []):
-            add(item)
+    d1 = await _gt_get("/networks/solana/trending_pools?duration=1h&page=1", retries=0, timeout=6)
+    for item in (d1.get("data") or []):
+        add(item)
 
     # 2. Свежие пулы (new_pools) — ловит новые Raydium/Meteora/Pump ракеты первыми!
-    for page in range(1, 3):
-        d2 = await _gt_get(f"/networks/solana/new_pools?page={page}", retries=0, timeout=6)
-        for item in (d2.get("data") or []):
-            add(item)
+    d2 = await _gt_get("/networks/solana/new_pools?page=1", retries=0, timeout=6)
+    for item in (d2.get("data") or []):
+        add(item)
 
     # 3. Свежие Pump.fun
-    for page in (1,):
-        d3 = await _gt_get(f"/networks/solana/dexes/pump-fun/pools?page={page}", retries=0, timeout=6)
-        for item in (d3.get("data") or []):
-            add(item)
+    d3 = await _gt_get("/networks/solana/dexes/pump-fun/pools?page=1", retries=0, timeout=6)
+    for item in (d3.get("data") or []):
+        add(item)
 
     # Не кэшируем пустой get_trending на 180с (иначе бот слепнет на 3 минуты при сбое GT)
     if out:

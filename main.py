@@ -462,19 +462,12 @@ async def scanner_loop(analyzer, tracker):
                 print(f"🔎 Сканируем монеты... (Открыто: {open_count}/{config.MAX_CONCURRENT_POSITIONS})")
                 
                 mints_to_scan = []
-                # 1. Органика Solana ПЕРВЫМИ: GeckoTerminal Trending + свежие живые пулы с объемом
+                # 1. Органика Solana ПЕРВЫМИ: GeckoTerminal Trending (5m + 1h + new_pools + pump.fun)
                 try:
                     import market_data
                     trending_pools = await market_data.get_trending()
                     if trending_pools:
                         mints_to_scan.extend([p.get("tokenAddress") for p in trending_pools if p.get("tokenAddress")])
-                    # Также опрашиваем топ-гейнеров 5M и 1H (соответствует вкладкам New Pairs Gainers 5M и 1H)
-                    gainers_5m = await market_data.fetch_dexscreener_gainers("5m", "solana")
-                    if gainers_5m:
-                        mints_to_scan.extend([g.get("mint") for g in gainers_5m if g.get("mint")])
-                    gainers_1h = await market_data.fetch_dexscreener_gainers("1h", "solana")
-                    if gainers_1h:
-                        mints_to_scan.extend([g.get("mint") for g in gainers_1h if g.get("mint")])
                 except Exception as _e:
                     pass
 
@@ -542,18 +535,29 @@ async def scanner_loop(analyzer, tracker):
                         _c_trades = int(_c_tx.get("buys", 0) or 0) + int(_c_tx.get("sells", 0) or 0)
                         _c_vol5 = float((_c_pre.get("volume") or {}).get("m5", 0) or 0)
 
-                        # Древний токен старше 24ч без гипер-пампа: скип на 24 часа
-                        if _c_age_m > 1440.0 and _c_m5 < 15.0:
+                        # Древний токен старше 24ч без пробоя: скип на 24 часа
+                        if _c_age_m > 1440.0 and _c_m5 < 12.0:
                             processed_mints[mint] = time.time() + 86400
                             continue
 
-                        # Мертвый токен старше 10 минут с 0 сделок в m5: скип на 1 час
-                        if _c_age_m > 10.0 and _c_trades == 0 and _c_vol5 == 0:
-                            processed_mints[mint] = time.time() + 3600
+                        # Старый токен (>4ч) без импульса (<6%): скип на 30 мин
+                        if _c_age_m > 240.0 and _c_m5 < 6.0 and mint not in _graduated_set:
+                            processed_mints[mint] = time.time() + 1800
                             continue
 
-                        # Слив/флет (m5 < 0.5%) не из миграций: кулдаун 2 мин
-                        if _c_m5 < 0.5 and mint not in _graduated_set and _c_age_m > 5.0:
+                        # Токен старше 1ч со слабым импульсом (<4%): скип на 15 мин
+                        _c_dex = str(_c_pre.get("dexId", "")).lower()
+                        if _c_dex not in ("pump", "pumpfun") and _c_age_m > 60.0 and _c_m5 < 4.0 and mint not in _graduated_set:
+                            processed_mints[mint] = time.time() + 900
+                            continue
+
+                        # Мертвый токен старше 3 минут с 0 сделок в m5: скип на 30 мин
+                        if _c_age_m >= 3.0 and _c_trades == 0 and _c_vol5 == 0 and mint not in _graduated_set:
+                            processed_mints[mint] = time.time() + 1800
+                            continue
+
+                        # Слив/флет (m5 < 2.0%) не из миграций: кулдаун 2 мин
+                        if _c_m5 < 2.0 and mint not in _graduated_set and _c_age_m > 3.0:
                             processed_mints[mint] = time.time() + 120
                             continue
 
@@ -605,25 +609,6 @@ async def scanner_loop(analyzer, tracker):
                     _cd = int(getattr(config, "SOLANA_FRESH_RESCAN_COOLDOWN", 45)) if _is_fresh_m else int(getattr(config, "SOLANA_RESCAN_COOLDOWN", 180))
                     if time.time() - processed_mints.get(mint, 0.0) < _cd:
                         continue
-
-                    # Предфильтр мёртвых/зомби-монет из бустов/профилей до вызова analyze_token и засорения ShadowLogger
-                    if isinstance(_pre_m, dict) and _pre_m and mint not in _graduated_set:
-                        _txm5_m = (_pre_m.get("txns") or {}).get("m5") or {}
-                        _b5_m = int(_txm5_m.get("buys", 0) or 0)
-                        _s5_m = int(_txm5_m.get("sells", 0) or 0)
-                        _vm5_m = float((_pre_m.get("volume") or {}).get("m5", 0) or 0)
-                        _m5_m = float((_pre_m.get("priceChange") or {}).get("m5", 0) or 0)
-                        _dex_m = str(_pre_m.get("dexId", "")).lower()
-                        _max_age_m = float(getattr(config, "SOLANA_MAX_AGE_MIN", 180.0))
-                        if _age_m >= 3.0 and (_b5_m + _s5_m) == 0 and _vm5_m == 0:
-                            processed_mints[mint] = time.time() + 1800
-                            continue
-                        if _dex_m not in ("pump", "pumpfun") and _age_m > 60.0 and _m5_m < 15.0:
-                            processed_mints[mint] = time.time() + 900
-                            continue
-                        if _age_m > _max_age_m and _m5_m < 50.0:
-                            processed_mints[mint] = time.time() + 1800
-                            continue
                     
                     # Держим память в чистоте
                     if len(processed_mints) > 1000:
@@ -2270,11 +2255,18 @@ with tab2:
                 else:
                     _badge = ""
                 
+                _src_up = str(t.get('source', '')).upper()
+                if str(_mint).startswith("0x"):
+                    _ch_lbl = "🟨 BSC" if "BSC" in _src_up else ("🟣 ROB" if "ROB" in _src_up else "🟦 BASE")
+                    _addr_lbl = f"{_mint[:10]}..."
+                else:
+                    _ch_lbl = "🟢 SOL"
+                    _addr_lbl = f"{_mint[:8]}...{'pump' if str(_mint).endswith('pump') else ''}"
                 with st.container():
                     st.markdown(f"""
                     <div style='background-color: #1E1E1E; padding: 15px; border-radius: 10px; border-left: 5px solid {"#00C851" if score >= 70 else "#FF8800"}; margin-bottom: 10px;'>
                         <div style='display: flex; justify-content: space-between;'>
-                            <h3 style='margin:0; color: #FFF;'>{t['symbol']} <span style='font-size: 0.6em; color: #888;'>{t['mint'][:8]}...pump {t.get('age_mins', 'New')}</span></h3>
+                            <h3 style='margin:0; color: #FFF;'>{t['symbol']} <span style='font-size: 0.6em; color: #888;'>{_ch_lbl} · {_addr_lbl}</span></h3>
                             <h3 style='margin:0; color: {"#00C851" if t.get("m5_change",0) > 0 else "#FF4444"};'>
                                 {'+' if t.get("m5_change",0) > 0 else ''}{t.get('m5_change', 0):.1f}%
                             </h3>

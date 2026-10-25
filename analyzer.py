@@ -331,8 +331,12 @@ class Analyzer:
                     data = _json.load(f) or []
             data = [t for t in data if t.get("mint") != entry.get("mint")]
             data.insert(0, entry)
+            # Гарантируем, что частые батчи BASE/BSC не вытесняют Solana из радара дашборда
+            sol_items = [t for t in data if not str(t.get("mint", "")).startswith("0x")][:90]
+            evm_items = [t for t in data if str(t.get("mint", "")).startswith("0x")][:60]
+            merged = sorted(sol_items + evm_items, key=lambda x: float(x.get("time", 0) or 0), reverse=True)
             with open("scanned_tokens.json", "w") as f:
-                _json.dump(data[:150], f)
+                _json.dump(merged[:150], f)
         except Exception:
             pass
 
@@ -358,9 +362,10 @@ class Analyzer:
                             break
                 except Exception:
                     pass
-            if isinstance(pd, dict):
-                if not symbol:
-                    symbol = ((pd.get("baseToken") or {}).get("symbol")) or ""
+            if isinstance(pd, dict) and pd:
+                real_sym = ((pd.get("baseToken") or {}).get("symbol")) or ""
+                if real_sym and (not symbol or symbol == mint[:8] or symbol == mint[:6] or symbol == mint[:10]):
+                    symbol = real_sym
                 if not liquidity:
                     liquidity = float((pd.get("liquidity") or {}).get("usd", 0) or 0)
                 if not m5_change:
@@ -371,6 +376,13 @@ class Analyzer:
                 if not sells:
                     sells = int(tx_m5.get("sells", 0) or 0)
                 vol_24h = float((pd.get("volume") or {}).get("h24", 0) or 0)
+            elif isinstance(ctx, dict) and ctx:
+                if ctx.get("symbol") and (not symbol or symbol == mint[:8] or symbol == mint[:6]):
+                    symbol = ctx.get("symbol")
+                if not liquidity:
+                    liquidity = float(ctx.get("liq", 0) or 0)
+                if not m5_change:
+                    m5_change = float(ctx.get("m5", 0) or 0)
             self._save_scanned_token({
                 "symbol": symbol or (mint[:6] + "..."),
                 "mint": mint,
@@ -586,18 +598,28 @@ class Analyzer:
         todo = [m for m in dict.fromkeys(mints or []) if m and not m.startswith("0x")
                 and now - self._prefetch_cache.get(m, (0, None))[0] >= ttl]
         got = 0
-        for i in range(0, len(todo), 30):
-            chunk = todo[i:i + 30]
+        # Запрашиваем пачками по 15 минтов через /tokens/v1/solana/ (чтобы не упираться в лимит 30 пар у /latest/dex/tokens/)
+        for i in range(0, len(todo), 15):
+            chunk = todo[i:i + 15]
+            pairs_list = []
             try:
                 status, data = await fetch_json(
-                    "https://api.dexscreener.com/latest/dex/tokens/" + ",".join(chunk),
+                    "https://api.dexscreener.com/tokens/v1/solana/" + ",".join(chunk),
                     timeout=10, retries=1)
+                if status == 200 and isinstance(data, list):
+                    pairs_list = data
+                else:
+                    status2, data2 = await fetch_json(
+                        "https://api.dexscreener.com/latest/dex/tokens/" + ",".join(chunk),
+                        timeout=10, retries=1)
+                    if status2 == 200 and isinstance(data2, dict):
+                        pairs_list = data2.get("pairs") or []
             except Exception:
                 continue
-            if status != 200 or not data:
+            if not pairs_list:
                 continue
             by_mint = {}
-            for p in (data.get("pairs") or []):
+            for p in pairs_list:
                 a = (p.get("baseToken") or {}).get("address")
                 if a:
                     by_mint.setdefault(a, []).append(p)
@@ -607,8 +629,6 @@ class Analyzer:
                 if best:
                     self._prefetch_cache[m] = (ts, best)
                     got += 1
-                else:
-                    self._prefetch_cache[m] = (ts, {})  # Негативный кэш: пустой пул не спамит одиночными запросами
         if len(self._prefetch_cache) > 3000:
             cutoff = time.time() - 120
             self._prefetch_cache = {k: v for k, v in self._prefetch_cache.items() if v[0] >= cutoff}
@@ -1032,13 +1052,14 @@ class Analyzer:
                     return False
             _dex_lower = str(pair_data.get("dexId", "")).lower()
             _is_pump_curve = _dex_lower in ("pump", "pumpfun")
-            # Защита от зомби: токены старше 1 часа со слабым импульсом не растут
-            if not _is_pump_curve and _age_min_pre > 60.0 and _m5 < 15.0:
-                return self._deny(mint, "too-old-slow", f"🚫 [ZOMBIE] {mint[:8]}: возраст {_age_min_pre:.0f}м > 60м, но импульс слабый ({_m5:+.1f}%)")
-            # Глобальный возрастной лимит: не входим в токены старше 3 часов (если не гипер-памп)
-            _max_age = getattr(config, "SOLANA_MAX_AGE_MIN", 180.0)
-            if _age_min_pre > _max_age and _m5 < 50.0:
-                return self._deny(mint, "zombie-age", f"🚫 [ZOMBIE-AGE] {mint[:8]}: возраст {_age_min_pre:.0f}м > {_max_age:.0f}м, m5 {_m5:+.1f}% — труп.")
+            # Защита от зомби: отсекаем только реально стоячие старые монеты без импульса
+            if not _is_pump_curve and _age_min_pre > 60.0 and _m5 < 4.0:
+                return self._deny(mint, "too-old-slow", f"🚫 [ZOMBIE] {mint[:8]}: возраст {_age_min_pre:.0f}м > 60м, но импульс слабый ({_m5:+.1f}% < +4%)")
+            _max_age = getattr(config, "SOLANA_MAX_AGE_MIN", 240.0)
+            if _age_min_pre > _max_age and _m5 < 6.0:
+                return self._deny(mint, "zombie-age", f"🚫 [ZOMBIE-AGE] {mint[:8]}: возраст {_age_min_pre:.0f}м > {_max_age:.0f}м, m5 {_m5:+.1f}% < +6% — слабый импульс для старого токена.")
+            if _age_min_pre > 1440.0 and _m5 < 12.0:
+                return self._deny(mint, "zombie-ancient", f"🚫 [ZOMBIE-ANCIENT] {mint[:8]}: возраст {_age_min_pre:.0f}м (>24ч), m5 {_m5:+.1f}% < +12% — старый токен без пробоя.")
             _cur_liq_pre = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
             if _cur_liq_pre == 0 and _is_pump_curve:
                 _cur_liq_pre = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0) * 0.40
