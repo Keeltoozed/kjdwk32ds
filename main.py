@@ -1618,11 +1618,12 @@ async def _evm_chain_loop(analyzer, tracker, chain: str):
                         _prev = tracker.last_loss_pct(addr)
                         if _prev is not None and _prev <= getattr(config, "RUG_REBUY_MAX_LOSS", -0.15):
                             continue
-                        # Отсекаем монеты старше 48 часов из кэша EVM
+                        # Отсекаем монеты старше 48 часов из кэша EVM, если у них нет активного пробоя (m5 < 3%)
                         _cached_data = getattr(evm_data, "_EVM_PREFETCH_CACHE", {}).get((chain.lower(), addr.lower()), (0, {}))[1]
                         if _cached_data:
                             _c_at = _cached_data.get("pairCreatedAt", 0)
-                            if _c_at and (_t.time() * 1000 - _c_at) > 172800000:  # старше 48 часов
+                            _c_m5 = float((_cached_data.get("priceChange") or {}).get("m5", 0) or 0)
+                            if _c_at and (_t.time() * 1000 - _c_at) > 172800000 and _c_m5 < 3.0:  # старше 48 часов без импульса
                                 continue
 
                         _is_wss = addr in _wss_fresh
@@ -1646,8 +1647,9 @@ async def _evm_chain_loop(analyzer, tracker, chain: str):
                         if _cached_data:
                             _c_at = _cached_data.get("pairCreatedAt", 0)
                             _c_age_h = (_t.time() * 1000 - _c_at) / 3600000.0 if _c_at else 999.0
-                            if _c_at and _c_age_h > 48.0:
-                                processed[addr] = _t.time() + 86400  # Древний мамонт: скип на сутки
+                            _c_m5 = float((_cached_data.get("priceChange") or {}).get("m5", 0) or 0)
+                            if _c_at and _c_age_h > 48.0 and _c_m5 < 3.0:
+                                processed[addr] = _t.time() + 1800  # Старый токен без импульса: пауза 30 мин
                                 continue
                             _c_liq = float((_cached_data.get("liquidity") or {}).get("usd", 0) or 0)
                             _c_q_amt = float((_cached_data.get("liquidity") or {}).get("quote", 0) or 0)

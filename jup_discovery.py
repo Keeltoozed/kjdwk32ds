@@ -239,8 +239,10 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
     _m5_j = float(_pc_j.get("m5", 0) or 0)
     _m1_j = float(_pc_j.get("m1", 0) or 0)
     _h1_j = float(_pc_j.get("h1", 0) or 0)
-    if _h1_j > 400.0:
-        print(f"🚫 [{source_tag}-H1-EXHAUSTED] {_sym_tmp} ({mint[:8]}): h1 {_h1_j:+.0f}% > +400% — памп уже отработал, вход = вершина.")
+    _is_fresh_j = mint.endswith("pump")
+    _max_h1_j = 3500.0 if (_is_fresh_j and _m5_j >= 2.5) else 400.0
+    if _h1_j > _max_h1_j:
+        print(f"🚫 [{source_tag}-H1-EXHAUSTED] {_sym_tmp} ({mint[:8]}): h1 {_h1_j:+.0f}% > +{_max_h1_j:.0f}% — памп уже отработал, вход = вершина.")
         return False
     if _m5_j < 2.5 or _m1_j < -2.5:
         print(f"🚫 [{source_tag}-MOMENTUM-LOST] {_sym_tmp} ({mint[:8]}): импульс пропал (m5 {_m5_j:+.1f}%, m1 {_m1_j:+.1f}%) — отмена входа.")
@@ -254,6 +256,14 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
     # Защита от кастомных фейк-пулов с разблокированным LP на PumpSwap (кейсы WHITEWHALE, MOE_fake)
     if _dex_j == "pumpswap" and not mint.endswith("pump"):
         print(f"🚫 [{source_tag}-FAKE-PUMPSWAP] {_sym_tmp} ({mint[:8]}): кастомный не-pump контракт на PumpSwap (100% разблокированный LP) — блок.")
+        return False
+
+    # Защита от анонимных бандлер-пулов без единой соцсети (кейс ARACH -66.9%: 0 соцсетей, $16k ликвы на PumpSwap)
+    _info_j = (td or {}).get("info") or {}
+    _soc_j = _info_j.get("socials") or []
+    _web_j = _info_j.get("websites") or []
+    if not (td or {}).get("_socials_unknown", False) and len(_soc_j) == 0 and len(_web_j) == 0 and _liq_j < 35000:
+        print(f"🚫 [{source_tag}-NO-SOCIALS] {_sym_tmp} ({mint[:8]}): 0 соцсетей/сайтов при ликвидности ${_liq_j:,.0f} (<$35k) — анонимный бандлер-раг.")
         return False
 
     # Защита от миграционного дампа Pump.fun
@@ -444,15 +454,15 @@ async def jup_loop(analyzer, tracker):
                             continue
 
                         # Отсекаем древние мамонты без пампа
-                        if (_ag > 240.0 and _m5 < 6.0) or (_ag > 1440.0 and _m5 < 12.0) or (_ag > 60.0 and _m5 < 4.0):
+                        if (_ag > 240.0 and _m5 < 3.5) or (_ag > 1440.0 and _m5 < 5.0) or (_ag > 60.0 and _m5 < 2.5):
                             skipped_ancient += 1
-                            processed[m] = _now_t + 900
+                            processed[m] = _now_t + 120
                             continue
 
-                        # Отсекаем флет m5 < 2.5%
-                        if _m5 < 2.5:
+                        # Отсекаем флет m5 < 2.0%
+                        if _m5 < 2.0:
                             skipped_flat += 1
-                            processed[m] = _now_t + 120
+                            processed[m] = _now_t + 90
                             continue
 
                         hot_candidates.append((_m5, _ag, _sym, m, td))

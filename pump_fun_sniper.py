@@ -22,6 +22,7 @@ class TokenTrackerState:
         
         # Флаги жизненного цикла
         self.first_buyers = []   # Кошельки первых покупателей для детекта инсайдерских бандлов
+        self.first_2s_buyers = set()  # Кошельки, купившие за первые 2.5 сек (детект Jito-бандлов)
         self.is_auditing = False
         self.is_evaluated = False
         self.audit_failed = False
@@ -109,7 +110,7 @@ class PumpFunSniper:
             try:
                 from http_client import fetch_json
                 rc_url = f"https://api.rugcheck.xyz/v1/tokens/{mint}/report/summary"
-                status, data = await fetch_json(rc_url, timeout=5, retries=1)
+                status, data = await fetch_json(rc_url, timeout=4, retries=0)
                 if status == 200 and isinstance(data, dict):
                     score = float(data.get("score", 0) or 0)
                     low_liq_penalty = sum(
@@ -136,9 +137,16 @@ class PumpFunSniper:
                         r_name_low = r_name.lower()
                         if any(bad in r_name_low for bad in ("honeypot", "freeze", "mint authority", "transfer hook", "token-2022")):
                             return False, f"RugCheck: {r_name}"
-                return True, ""
+                    return True, ""
+                elif status == 404:
+                    # Токен только создан (<10 сек) и ещё не проиндексирован RugCheck — полагаемся на RPC
+                    return True, ""
+                elif status == 429:
+                    return False, "RugCheck: rate-limit (429) — вход заблокирован (защита от слепого входа)"
+                else:
+                    return False, f"RugCheck: HTTP {status} — ошибка аудита"
             except Exception as e:
-                return True, ""
+                return False, f"RugCheck таймаут/сбой: {type(e).__name__} — вход заблокирован"
 
         res_gp, res_rc = await asyncio.gather(_check_onchain_and_gp(), _check_rugcheck())
         if not res_gp[0]:
@@ -192,12 +200,11 @@ class PumpFunSniper:
             sol_usd = get_sol_price_sync()
             last_trade = state.trades[-1] if state.trades else {}
             mc_sol = last_trade.get("mc_sol", 0.0)
-            v_sol = last_trade.get("v_sol", 0.0)
+            if mc_sol <= 0:
+                mc_sol = next((t.get("mc_sol", 0.0) for t in reversed(state.trades) if t.get("mc_sol", 0.0) > 0), 0.0)
 
             if mc_sol > 0:
                 raw_price = (mc_sol / 1_000_000_000.0) * sol_usd
-            elif v_sol > 0:
-                raw_price = (v_sol / 1_000_000_000.0) * sol_usd
             else:
                 raw_price = 0.0
 
@@ -453,6 +460,8 @@ class PumpFunSniper:
                             if tx_type == "buy" and trader and trader != state.trader_pubkey:
                                 if len(state.first_buyers) < 5 and trader not in state.first_buyers:
                                     state.first_buyers.append(trader)
+                                if (now - state.start_time) <= 2.5:
+                                    state.first_2s_buyers.add(trader)
 
                             # Прогресс кривой связывания (Pump.fun стартует с 30 виртуальных SOL и финиширует при 85 реальных SOL)
                             real_sol = max(0.0, v_sol - 30.0)
@@ -480,7 +489,8 @@ class PumpFunSniper:
                             if state.is_entered or (pos and getattr(pos, "status", "") == "open"):
                                 if pos and getattr(pos, "status", "") == "open":
                                     sol_usd = get_sol_price_sync()
-                                    live_px = (mc_sol / 1_000_000_000.0) * sol_usd if mc_sol > 0 else (v_sol / 1_000_000_000.0) * sol_usd
+                                    # Защита от фантомных стопов: если в сообщении нет marketCapSol, НЕ используем v_sol (он в 3-8 раз меньше капы!)
+                                    live_px = (mc_sol / 1_000_000_000.0) * sol_usd if mc_sol > 0 else float(getattr(pos, "current_price_usd", 0.0) or 0.0)
                                     if live_px > 0:
                                         pos.current_price_usd = live_px
                                         pos.wss_price = live_px
@@ -493,6 +503,14 @@ class PumpFunSniper:
                                         if pos.entry_price_usd and pos.entry_price_usd > 0:
                                             pnl_pct = (live_px - pos.entry_price_usd) / pos.entry_price_usd
                                             pos.current_pnl_usd = pos.amount_usd * pnl_pct
+                                            # Аварийный стоп по живому тику WSS (мгновенный сброс без ожидания цикла)
+                                            if pnl_pct <= -0.30:
+                                                _stop_reason = f"STREAM Tick Stop: просадка {pnl_pct*100:.1f}% по тику"
+                                                print(f"🚨 [STREAM TICK STOP] {state.symbol}: {_stop_reason}")
+                                                p_tracker.close_position(mint, live_px * 0.90, _stop_reason)
+                                                state.is_dead = True
+                                                p_tracker.save_portfolio()
+                                                continue
 
                                     # === БЫСТРЫЙ PUMP.FUN SELL-DUMP ДЕТЕКТОР ===
                                     # Если крупный слив (>= 3 SOL) за первые 90с после входа — мгновенный выход
@@ -540,6 +558,14 @@ class PumpFunSniper:
                                     state.is_evaluated = True
                                     self._fail(state, "ранний бандл-слив")
                                     print(f"🚫 [STREAM BUNDLE DUMP] {state.symbol} ({mint[:8]}): ранний инсайдер {trader[:6]} слил {sol_amount:.2f} SOL — мгновенный отсев.")
+                                    continue
+
+                                # Защита от мульти-кошелькового Jito-бандла дева (4+ кошельков выкупили в первые 2.5 секунды)
+                                if len(getattr(state, "first_2s_buyers", set())) >= 4:
+                                    state.dev_dumped = True
+                                    state.is_evaluated = True
+                                    self._fail(state, "ранний бандл (4+ кошелька за 2с)")
+                                    print(f"🚫 [STREAM JITO BUNDLE] {state.symbol} ({mint[:8]}): обнаружен Jito-бандл ({len(state.first_2s_buyers)} кошельков за первые 2.5с) — мгновенный отсев.")
                                     continue
 
                                 win_sec = getattr(config, "STREAM_WINDOW_SEC", 60)

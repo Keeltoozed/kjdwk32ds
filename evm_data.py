@@ -209,13 +209,14 @@ async def get_token_data(address: str, chain: str = SLUG) -> dict:
         return hit[1]
     status, data = await fetch_json(
         f"{DS}/token-pairs/v1/{chain}/{address}", timeout=10, retries=2)
-    if status != 200 or not data:
-        return {}
-    # ВАЖНО: этот эндпоинт возвращает голый массив, не {pairs:[...]}
-    pairs = data if isinstance(data, list) else data.get("pairs") or []
+    pairs = (data if isinstance(data, list) else data.get("pairs") or []) if (status == 200 and data) else []
     pools = [p for p in pairs if p.get("chainId") == chain
              and ((p.get("baseToken") or {}).get("address") or "").lower() == address.lower()]
     if not pools:
+        gt_fb = _GT_EVM_FALLBACK_CACHE.get((chain.lower(), address.lower()))
+        if gt_fb and (time.time() - gt_fb[0]) <= 300.0:
+            _cache_evm_pair(chain, address, gt_fb[1])
+            return gt_fb[1]
         return {}
     best = sorted(pools, key=lambda x: (x.get("liquidity") or {}).get("usd", 0) or 0,
                   reverse=True)[0]
@@ -320,11 +321,16 @@ async def resolve_ds_pair(pair: str, chain: str) -> str:
         return ""
 
 
-def _filter_and_rank_gt_items(items: list, min_liq: float = 2000.0) -> list:
-    """Отсеивает мёртвые пулы ($0 ликвидности / 0 сделок) сразу на этапе GeckoTerminal
+_GT_EVM_FALLBACK_CACHE = {}
+
+
+def _filter_and_rank_gt_items(items: list, min_liq: float = 2000.0, chain: str = "base") -> list:
+    """Отсеивает мёртвые пулы ($0 ликвидности / 0 сделок) сразу на этапе GeckoTerminal,
+    кэширует пул как фоллбэк (для свежих Uniswap v4/Clanker пулов, которых ещё нет в DexScreener)
     и сортирует живые ракеты по m5-импульсу и объёму."""
     scored = []
     seen = set()
+    now_ts = time.time()
     for item in (items or []):
         try:
             bid = item.get("relationships", {}).get("base_token", {}).get("data", {}).get("id", "")
@@ -333,35 +339,48 @@ def _filter_and_rank_gt_items(items: list, min_liq: float = 2000.0) -> list:
                 continue
             attrs = item.get("attributes") or {}
             name = str(attrs.get("name") or "").upper()
+            base_sym = name.split("/")[0].strip().split()[0] if name else ""
+            quote_sym = name.split("/")[1].strip().split()[0] if "/" in name else "WETH"
             _stock_tickers = ("SGOV", "SPY", "QQQ", "META", "INTC", "MU", "NVDA", "AAPL", "GOOGL", "MSFT", "GLD", "HXMAX", "STANDARD", "WETH", "USDC", "USDT", "DAI", "CBBTC", "WBTC", "AERO", "BRETT", "DEGEN", "VIRTUAL")
-            if any(name.startswith(st + " ") or name.startswith(st + "/") or name == st or f"/{st}" in name for st in _stock_tickers):
+            if base_sym in _stock_tickers:
                 continue
+
+            pc = attrs.get("price_change_percentage") or {}
+            m5_chg = float(pc.get("m5") or 0)
+            m15_chg = float(pc.get("m15") or 0)
+            h1_chg = float(pc.get("h1") or 0)
+            h6_chg = float(pc.get("h6") or 0)
+            h24_chg = float(pc.get("h24") or 0)
             
-            # 1. Отсекаем древние пулы старше 48 часов прямо в GeckoTerminal
             pca_str = attrs.get("pool_created_at")
+            created_ms = 0
+            age_sec = 3600.0
             if pca_str:
                 try:
                     from datetime import datetime, timezone
                     pca_dt = datetime.fromisoformat(pca_str.replace("Z", "+00:00"))
+                    created_ms = int(pca_dt.timestamp() * 1000)
                     age_sec = (datetime.now(timezone.utc) - pca_dt).total_seconds()
-                    if age_sec > 172800.0:  # старше 48 часов
+                    # Для старых пулов (>48ч) требуем хотя бы минимальную живую зелёную динамику
+                    if age_sec > 172800.0 and m5_chg < 0.3 and h1_chg < 1.5:
                         continue
                 except Exception:
                     pass
 
-            # 2. Отсекаем мамонтов с FDV > $5M
-            fdv_usd = float(attrs.get("fdv_usd") or 0)
-            if fdv_usd > 5000000.0:
+            fdv_usd = float(attrs.get("fdv_usd") or attrs.get("market_cap_usd") or 0)
+            if fdv_usd > 100000000.0:
                 continue
 
             liq = float(attrs.get("reserve_in_usd") or 0)
             if liq > 0 and liq < min_liq:
                 continue
-            if liq > 500000.0:
+            if liq > 3000000.0:
                 continue
             tx = attrs.get("transactions") or {}
             m5_tx = tx.get("m5") or {}
+            m15_tx = tx.get("m15") or {}
             h1_tx = tx.get("h1") or {}
+            h24_tx = tx.get("h24") or {}
             b5 = int(m5_tx.get("buys") or 0)
             s5 = int(m5_tx.get("sells") or 0)
             b1 = int(h1_tx.get("buys") or 0)
@@ -370,9 +389,39 @@ def _filter_and_rank_gt_items(items: list, min_liq: float = 2000.0) -> list:
                 continue
             if (b5 + s5) == 0 and (b1 + s1) < 3 and liq < 5000:
                 continue
-            pc = attrs.get("price_change_percentage") or {}
-            m5_chg = float(pc.get("m5") or 0)
-            h1_chg = float(pc.get("h1") or 0)
+
+            vol = attrs.get("volume_usd") or {}
+            dex_id = str(((item.get("relationships") or {}).get("dex") or {}).get("data", {}).get("id") or "uniswap")
+            pool_addr = str(attrs.get("address") or "")
+            gt_pair = {
+                "chainId": chain,
+                "dexId": dex_id,
+                "pairAddress": pool_addr,
+                "baseToken": {"address": addr, "symbol": base_sym or addr[:6], "name": base_sym or addr[:6]},
+                "quoteToken": {"symbol": quote_sym},
+                "priceUsd": str(attrs.get("base_token_price_usd") or "0"),
+                "priceChange": {"m5": m5_chg, "m15": m15_chg, "h1": h1_chg, "h6": h6_chg, "h24": h24_chg},
+                "txns": {
+                    "m5": {"buys": b5, "sells": s5},
+                    "m15": {"buys": int(m15_tx.get("buys") or 0), "sells": int(m15_tx.get("sells") or 0)},
+                    "h1": {"buys": b1, "sells": s1},
+                    "h24": {"buys": int(h24_tx.get("buys") or 0), "sells": int(h24_tx.get("sells") or 0)},
+                },
+                "volume": {
+                    "m5": float(vol.get("m5") or 0),
+                    "h1": float(vol.get("h1") or 0),
+                    "h6": float(vol.get("h6") or 0),
+                    "h24": float(vol.get("h24") or 0),
+                },
+                "liquidity": {"usd": liq},
+                "fdv": fdv_usd,
+                "marketCap": fdv_usd,
+                "pairCreatedAt": created_ms,
+                "_socials_unknown": True,
+                "_chain": chain,
+            }
+            _GT_EVM_FALLBACK_CACHE[(chain.lower(), addr.lower())] = (now_ts, gt_pair)
+
             # Приоритет живым зелёным пулам с покупками
             score = m5_chg * 2.0 + min(h1_chg, 100.0) * 0.2 + (b5 - s5) * 1.5
             seen.add(addr.lower())
@@ -404,7 +453,7 @@ async def get_trending_pools_gt(chain: str = SLUG) -> list:
         raw_items.extend(d5.get("data") or [])
     if not raw_items:
         return []
-    out = _filter_and_rank_gt_items(raw_items, min_liq=2000.0)
+    out = _filter_and_rank_gt_items(raw_items, min_liq=2000.0, chain=chain)
     return _store(f"trend:{chain}", out)
 
 
@@ -424,7 +473,7 @@ async def get_new_pools_gt(chain: str = SLUG, pages: int = 0) -> list:
         if not data:
             continue
         raw_items.extend(data.get("data") or [])
-    out = _filter_and_rank_gt_items(raw_items, min_liq=2000.0)
+    out = _filter_and_rank_gt_items(raw_items, min_liq=2000.0, chain=chain)
     return _store(f"new:{chain}:{pages}", out)
 
 
@@ -442,7 +491,7 @@ async def get_top_volume_pools_gt(chain: str = SLUG) -> list:
         if not data:
             continue
         raw_items.extend(data.get("data") or [])
-    out = _filter_and_rank_gt_items(raw_items, min_liq=2500.0)
+    out = _filter_and_rank_gt_items(raw_items, min_liq=2500.0, chain=chain)
     return _store(f"topvol:{chain}", out)
 
 
@@ -503,6 +552,8 @@ async def fetch_dex_search_tokens(chain: str = SLUG) -> list:
             pc = p.get("priceChange") or {}
             m5_chg = float(pc.get("m5") or 0)
             h1_chg = float(pc.get("h1") or 0)
+            if _age_h > 48.0 and (m5_chg < 1.5 and h1_chg < 8.0):
+                continue
             if m5_chg < -8.0 and h1_chg < 0:
                 continue
             _cache_evm_pair(chain, addr, p)
