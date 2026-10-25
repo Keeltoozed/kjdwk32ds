@@ -127,11 +127,19 @@ class GrokJevEngine:
             return False, "no-pair-data"
             
         base = pair_data.get("baseToken", {}) or {}
-        symbol = str(base.get("symbol", "")).upper()
+        symbol = str(base.get("symbol", "")).upper().strip()
         dex_id = str(pair_data.get("dexId", "")).lower()
         is_pump = dex_id in ("pump", "pumpfun")
         
-        # 1. Ликвидность
+        # 0. Защита от фейковых клонов брендов и системных тикеров
+        FAKE_BRAND_BLACKLIST = {
+            "BASE", "SP500", "S&P500", "USDC", "USDT", "SOL", "ETH", "BTC", "SOLANA",
+            "BINANCE", "COINBASE", "TESLA", "APPLE", "NVDA", "AMAZON", "GOOGLE", "MICROSOFT"
+        }
+        if symbol in FAKE_BRAND_BLACKLIST:
+            return False, f"fake-brand-clone {symbol}"
+
+        # 1. Ликвидность (с защитой от гигантских не-мем пулов)
         raw_liq = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
         fdv_mc = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
         eff_liq = max(raw_liq, fdv_mc * 0.40) if is_pump else raw_liq
@@ -140,6 +148,10 @@ class GrokJevEngine:
         if eff_liq < min_liq:
             return False, f"liq-depth-low ${eff_liq:.0f} < ${min_liq:.0f}"
             
+        max_liq = float(getattr(_c, "JEV_MAX_LIQUIDITY_USD", 350000.0))
+        if eff_liq > max_liq:
+            return False, f"liq-giant ${eff_liq:,.0f} > ${max_liq:,.0f} (stagnant giant pool, not a meme rocket)"
+
         FUNNEL_STATS["liquidity"] += 1
 
         # 2. Возраст
@@ -148,8 +160,22 @@ class GrokJevEngine:
         min_age = float(getattr(_c, "JEV_EARLY_MIN_AGE_MIN", 2.0)) if is_pump else float(getattr(_c, "JEV_MIN_AGE_MIN", 15.0))
         if age_min < min_age:
             return False, f"too-young {age_min:.1f}m < {min_age:.1f}m (sniper flush zone)"
-            
-        # 3. Объем и сделки
+
+        # 3. Живой импульс ракеты (LIVE ROCKET MOMENTUM)
+        # Бот НЕ покупает стоячие, дохлые или падающие монеты!
+        pc = pair_data.get("priceChange", {}) or {}
+        m5 = float(pc.get("m5", 0) or 0)
+        h1 = float(pc.get("h1", 0) or 0)
+
+        min_m5 = float(getattr(_c, "JEV_MIN_M5_PCT", 4.0))
+        if m5 < min_m5:
+            return False, f"no-momentum m5 {m5:+.1f}% < +{min_m5:.1f}% (flat or dying coin)"
+        if m5 > 150.0:
+            return False, f"overheated m5 {m5:+.0f}% > +150% (peak FOMO risk)"
+        if h1 < -8.0:
+            return False, f"hourly-downtrend h1 {h1:+.1f}% < -8.0% (dead-cat bounce)"
+
+        # 4. Объем и давление покупателей (LIVE 5M ACTIVITY)
         txns_m5 = (pair_data.get("txns") or {}).get("m5", {}) or {}
         txns_h1 = (pair_data.get("txns") or {}).get("h1", {}) or {}
         b5 = int(txns_m5.get("buys", 0) or 0)
@@ -159,22 +185,25 @@ class GrokJevEngine:
         vol_m5 = float((pair_data.get("volume") or {}).get("m5", 0) or 0)
         vol_h1 = float((pair_data.get("volume") or {}).get("h1", 0) or 0)
         
+        # В 5-минутном окне ВСЕГДА должна быть живая активность
+        if vol_m5 < 2000.0:
+            return False, f"vol5-low ${vol_m5:.0f} < $2,000 (inactive dead pool)"
+        if (b5 + s5) < 12:
+            return False, f"tx5-low {b5+s5} < 12 (no live trading)"
+        if b5 < 8:
+            return False, f"buys5-low {b5} < 8 (no buyers)"
+        if s5 > 0 and (b5 / s5) < 1.15:
+            return False, f"sellers-dominating {b5}b/{s5}s (ratio {b5/s5:.2f} < 1.15)"
+
         min_vol_h1 = float(getattr(_c, "JEV_MIN_VOLUME_H1", 40000.0))
         min_trades_h1 = int(getattr(_c, "JEV_MIN_TRADES_H1", 250))
-        
-        # Для свежих пулов (<30 мин) пропорционально смотрим на 5-минутку
-        if age_min < 30.0:
-            if vol_m5 < 3000.0 and vol_h1 < 20000.0:
-                return False, f"vol-low (vol5 ${vol_m5:.0f} < $3k)"
-            if (b5 + s5) < 15 and (bh1 + sh1) < 80:
-                return False, f"trades-low (tx5 {b5+s5} < 15)"
-        else:
+        if age_min >= 30.0:
             if vol_h1 < min_vol_h1:
                 return False, f"vol-h1-low ${vol_h1:,.0f} < ${min_vol_h1:,.0f}"
             if (bh1 + sh1) < min_trades_h1:
                 return False, f"trades-h1-low {bh1+sh1} < {min_trades_h1}"
 
-        # 4. Рыночная капитализация (MCap / FDV)
+        # 5. Рыночная капитализация (MCap / FDV)
         mcap = fdv_mc
         min_mcap = float(getattr(_c, "JEV_MIN_MCAP_USD", 45000.0))
         if mcap > 0 and mcap < min_mcap and not is_pump:
@@ -343,25 +372,29 @@ class GrokJevEngine:
         m1 = float(pc.get("m1", 0) or 0)
         m5 = float(pc.get("m5", 0) or 0)
         
-        # Если в моменте идет вертикальный спайк свечи (m1 > +8%..+15%) — это зеленая свеча.
-        # "We bid the flush, not the candle" ➔ Ждем откат!
-        max_m1_entry = float(getattr(_c, "JEV_MAX_M1_ENTRY_PCT", 3.5))
-        if m1 > max_m1_entry and m5 > 15.0:
-            return False, -0.06, 0.0, f"candle-spike (m1 {m1:+.1f}% > +{max_m1_entry:.1f}%) — wait for flush"
+        # 1. Токен ОБЯЗАН быть в импульсе m5 (ракета растет прямо сейчас)!
+        if m5 < 4.0:
+            return False, -0.05, 0.0, f"no-impulse (m5 {m5:+.1f}% < +4.0%) — wait for real rocket surge"
 
-        # Если 1м свеча в глубоком краше (m1 < -8%) — это не откат, а нож
-        if m1 < -8.0:
-            return False, -0.06, 0.0, f"flush-dump (m1 {m1:+.1f}% < -8.0%) — falling knife"
+        # 2. "We bid the flush, not the candle"
+        # Если в моменте идет вертикальный прострел (m1 > +3.0%) — это зеленая свеча.
+        max_m1_entry = float(getattr(_c, "JEV_MAX_M1_ENTRY_PCT", 3.0))
+        if m1 > max_m1_entry:
+            return False, -0.05, 0.0, f"candle-spike (m1 {m1:+.1f}% > +{max_m1_entry:.1f}%) — we bid the flush, wait for pullback"
 
-        # Расчет стопа под фитиль отката ("The stop lives under the wick"):
-        # Если есть локальный откат m1 (например, -2.5%), wick находится чуть ниже.
-        # Ставим стоп на 1.5% ниже локального минимума.
+        # 3. Если откат глубже -4.5% — это не микро-откат, а падающий нож
+        if m1 < -4.5:
+            return False, -0.05, 0.0, f"flush-dump (m1 {m1:+.1f}% < -4.5%) — falling knife"
+
+        # 4. Расчет стопа под фитиль отката ("The stop lives under the wick"):
+        # Если есть локальный откат m1 (например, -1.8%), wick находится чуть ниже.
+        # Ставим стоп на 1.2% ниже локального минимума.
         dip_factor = min(0.0, m1 / 100.0)
-        wick_low_price = entry_price * (1.0 + dip_factor - 0.015)
+        wick_low_price = entry_price * (1.0 + dip_factor - 0.012)
         
-        # Ограничиваем стоп диапазоном от -4.5% до -8.5% (динамический безопасный диапазон)
+        # Динамический безопасный стоп под фитиль: от -4.5% до -7.5%
         calculated_stop_pct = (wick_low_price - entry_price) / entry_price
-        wick_stop_loss_pct = max(-0.085, min(-0.045, calculated_stop_pct))
+        wick_stop_loss_pct = max(-0.075, min(-0.045, calculated_stop_pct))
         stop_under_wick_price = entry_price * (1.0 + wick_stop_loss_pct)
 
         reason = f"Flush validated (m1 {m1:+.1f}%, m5 {m5:+.1f}%), stop under wick: {wick_stop_loss_pct*100:.1f}% (${stop_under_wick_price:.6f})"
@@ -500,13 +533,15 @@ class GrokJevEngine:
         conc_score = min(1.0, max(0.1, (top1_pct / 8.0) * 0.25 + (top10_pct / 30.0) * 0.25))
 
         # 4. momentum_already_spent
-        # Если m1 < 3% и m5 от 5% до 40% — самое начало импульса (0.25..0.35)
-        if m5 > 120.0 or h1 > 400.0:
-            mom_score = 0.75  # Выдохся
+        # Если m5 < 4.0% или h1 < -5.0% — импульса нет, токен дохлый или в сливе (риск 0.95 = REJECT!)
+        if m5 < 4.0 or h1 < -5.0:
+            mom_score = 0.95
+        elif m5 > 120.0 or h1 > 400.0:
+            mom_score = 0.80  # Выдохся
         elif m5 >= 5.0 and m1 <= 3.0:
-            mom_score = 0.30  # Свежий откат
+            mom_score = 0.25  # Идеальный свежий импульс на откате
         else:
-            mom_score = 0.40
+            mom_score = 0.45
 
         # 5. liquidity_fits_ticket
         # Для ордера $15 ликвидность >= $12k дает оценку 0.85+
@@ -653,6 +688,10 @@ class GrokJevEngine:
         elif chain == "base":
             onchain_ok, onchain_why = await _gp.check_onchain_evm_security(address, "base", pair_data=pair)
             if not onchain_ok:
+                return False
+            gp_ok, gp_why = await _gp.check_token(address, "base", pair_data=pair)
+            if not gp_ok:
+                print(f"🚫 [GROK+JEV] {symbol} (base): GoPlus honeypot/tax reject ➔ {gp_why}")
                 return False
 
         # 3. HARD GATE ("if it fails here, JEV never sees it")
