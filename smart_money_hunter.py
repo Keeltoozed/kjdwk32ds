@@ -23,6 +23,8 @@ import time
 import asyncio
 from typing import Dict, List, Any, Optional
 
+import config
+
 DB_FILE = "smart_wallets_db.json"
 SOLANA_WALLETS_TXT = "smart_wallets.txt"
 
