@@ -386,7 +386,7 @@ async def position_manager_loop(analyzer, tracker):
                     _floor_pnl = round(max_pnl_pct * 0.48, 2)
                 elif max_pnl_pct >= 0.65:     # Пик +65%+ -> гарантируем +28%
                     _floor_pnl = 0.28
-                elif max_pnl_pct >= 0.40 and minutes_held >= 2.5:  # Пик +40%+ -> мягкий безубыток +5%
+                elif max_pnl_pct >= 0.40 and minutes_held >= 4.0:  # Пик +40%+ -> мягкий безубыток +5%
                     _floor_pnl = 0.05
                 if _floor_pnl is not None and pnl_pct <= _floor_pnl:
                     _fc_s = int(getattr(position, "floor_confirm_n", 0) or 0) + 1
@@ -466,7 +466,7 @@ async def position_manager_loop(analyzer, tracker):
                     continue
 
                 # 3.5 ЖЕСТКИЙ Stop Loss из config.py (после 1.5 мин, чтобы пережить стартовый спред)
-                if minutes_held >= 1.5 and pnl_pct <= config.STOP_LOSS_PCT:
+                if minutes_held >= 5.0 and pnl_pct <= config.STOP_LOSS_PCT:
                     from jupiter import JupiterAPI
                     _j_ok, _j_why = await JupiterAPI.is_token_sellable(mint)
                     if not _j_ok:
