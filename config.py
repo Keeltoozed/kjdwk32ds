@@ -159,9 +159,10 @@ JEV_MIN_VOLUME_H1 = 10000.0      # $40,000 часовой объем
 JEV_MIN_MCAP_USD = 60000.0 # $50,000 минимальная капитализация (отсекает микро-скамы pump.fun)
 JEV_MIN_VOLUME_H24 = 40000.0
 JEV_MIN_TRADES_H24 = 150
-JEV_MIN_TRADES_H1 = 40          # 250 сделок в час
+JEV_MIN_TRADES_H1 = 40
+JEV_MIN_HOLDERS = 80
 JEV_MAX_TOP_WALLET = 0.05        # 15% лимит на крупнейший кошелек (за вычетом пула, согласовано с RugCheck/GoPlus)
-JEV_MAX_TOP_10 = 0.35            # 35% лимит на топ-10 кошельков (за вычетом пула, согласовано с RugCheck/GoPlus)
+JEV_MAX_TOP_10 = 0.60            # 35% лимит на топ-10 кошельков (за вычетом пула, согласовано с RugCheck/GoPlus)
 
 # SOFT AI Criteria (0.0 to 1.0)
 JEV_MIN_ACCOUNT_IS_PROJECT = 0.75
