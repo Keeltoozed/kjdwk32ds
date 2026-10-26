@@ -193,7 +193,7 @@ class MatureExitManager:
             return f"Mature Breakeven (был пик +{_maxp*100:.0f}%, фикс {pnl_pct*100:+.1f}%)"
 
         # Hard stop loss (после 1.5 мин, чтобы не выбивать ракету на стартовом спреде в 0м)
-        if minutes_held >= 1.5 and hasattr(config, 'STOP_LOSS_PCT') and pnl_pct <= config.STOP_LOSS_PCT:
+        if minutes_held >= 4.0 and hasattr(config, 'STOP_LOSS_PCT') and pnl_pct <= config.STOP_LOSS_PCT:
             return f"Mature Stop Loss ({config.STOP_LOSS_PCT*100:.0f}%)"
 
         # Time exit - Stagnant: даём ракетам 25-35 минут на раскачку (кейс CATTLEAXE +23% на 37м, NIO +67% на 20м),
