@@ -192,7 +192,7 @@ class MatureExitManager:
             return f"Mature Breakeven (был пик +{_maxp*100:.0f}%, фикс {pnl_pct*100:+.1f}%)"
 
         # Hard stop loss: стоп ВСЕГДА отрицательный (-20%), чтобы не резать сделки с прибылью
-        _sl = -abs(float(getattr(config, 'STOP_LOSS_PCT', 0.50)))
+        _sl = -abs(float(getattr(config, 'STOP_LOSS_PCT', 0.20)))
         if minutes_held >= 3.0 and pnl_pct <= _sl:
             return f"Mature Stop Loss ({_sl*100:.0f}%)"
 
