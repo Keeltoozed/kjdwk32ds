@@ -4,7 +4,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Dexscreener API (Только топ-бусты и профили, без мусорных 1-минутных скамов)
-DEXSCREENER_LATEST = "https://api.dexscreener.com/token-boosts/top/v1" 
+DEXSCREENER_LATEST = "https://api.dexscreener.com/token-boosts/latest/v1" 
 DEXSCREENER_PROFILES = "https://api.dexscreener.com/token-profiles/latest/v1" 
 DEXSCREENER_SEARCH = "https://api.dexscreener.com/latest/dex/tokens/"
 
