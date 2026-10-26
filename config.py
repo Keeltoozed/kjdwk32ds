@@ -293,7 +293,7 @@ MIN_BUY_SELL_RATIO = 1.15  # Преобладание покупателей н�
 LOTTERY_ENABLED = False  # Отключено: лотерея на вертикалях m5>60% вела в мгновенные дампы девов (SI, pablo)
 LOTTERY_MIN_M5_PCT = 0.60  # Было 0.80: закрываем мертвую зону m5 60-80% (VIP_MAX 60% + лотерея от 60%)
 LOTTERY_SIZE_MULT = 0.30  # $10 * 0.30 = $3.0 билет (было 0.25 = $2.5)
-WHALE_CONSENSUS = 2  # вход на 2-м ките (3-й = уже поздно)
+WHALE_CONSENSUS = 1  # вход на 2-м ките (3-й = уже поздно)
 WHALE_MAX_RUNUP = 1.35  # цена не должна вырасти >35% с момента покупки первого кита
 
 # === FAST STREAM (0-сек discovery, идея DoradoDevs/solana-pumpfun-sniper-bot) ===
