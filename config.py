@@ -152,13 +152,15 @@ GEMINI_API_KEY = (os.getenv("GEMINI_API_KEY") or "").strip() # Получить 
 # === GROK BOT x JEV ENGINE (THE FUNNEL & THE LINE) ===
 JEV_ENABLED = True
 JEV_WICK_STOP_ENABLED = False     # ОТКЛЮЧЕНО: искусственный стоп по фитилю душил ракеты на -15%..-25% в первые 2-3 минуты (Goon, SPIDOGE)
-JEV_MIN_AGE_MIN = 0.8            # Минимум 3.5 минуты (отсекает снайпер-дампы на 0м вроде KAT)
-JEV_EARLY_MIN_AGE_MIN = 2.0      # Минимум 3.0 минуты для пробойных монет
-JEV_MIN_LIQUIDITY_USD = 8000.0  # $15,000 минимальная глубина пула (как у GTA $51k, KIMCHI $35k, TRUMP $40k)
+JEV_MIN_AGE_MIN = 15.0            # Минимум 3.5 минуты (отсекает снайпер-дампы на 0м вроде KAT)
+JEV_EARLY_MIN_AGE_MIN = 5.0      # Минимум 3.0 минуты для пробойных монет
+JEV_MIN_LIQUIDITY_USD = 12000.0  # $15,000 минимальная глубина пула (как у GTA $51k, KIMCHI $35k, TRUMP $40k)
 JEV_MIN_VOLUME_H1 = 10000.0      # $40,000 часовой объем
-JEV_MIN_MCAP_USD = 18000.0       # $50,000 минимальная капитализация (отсекает микро-скамы pump.fun)
+JEV_MIN_MCAP_USD = 60000.0 # $50,000 минимальная капитализация (отсекает микро-скамы pump.fun)
+JEV_MIN_VOLUME_H24 = 40000.0
+JEV_MIN_TRADES_H24 = 150
 JEV_MIN_TRADES_H1 = 40          # 250 сделок в час
-JEV_MAX_TOP_WALLET = 0.15        # 15% лимит на крупнейший кошелек (за вычетом пула, согласовано с RugCheck/GoPlus)
+JEV_MAX_TOP_WALLET = 0.05        # 15% лимит на крупнейший кошелек (за вычетом пула, согласовано с RugCheck/GoPlus)
 JEV_MAX_TOP_10 = 0.35            # 35% лимит на топ-10 кошельков (за вычетом пула, согласовано с RugCheck/GoPlus)
 
 # SOFT AI Criteria (0.0 to 1.0)
@@ -376,5 +378,4 @@ JEV_MIN_H6_PCT = -10.0
 # === ЗАЩИТА ПРИБЫЛИ (ЧТОБЫ PHOOK +42% НЕ ЗАКРЫВАЛСЯ В МИНУС) ===
 TRAILING_ACTIVATION_PCT = 0.20     # Трейлинг включается с +20% (а не ждет заоблачных +50%)
 TRAILING_DISTANCE_PCT = 0.10       # Срез при откате на 10% от пика
-BREAKEVEN_PCT = 0.15               # При +15% стоп сразу в безубыток (+2%)
-SOLANA_MAX_AGE_MIN = 60.0          # Игнорировать токены старше 60 мин (убирает древний мусор из сканера)
+BREAKEVEN_PCT = 0.15               # При +15% стоп сразу в безубыток (+2%)        
