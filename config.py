@@ -113,8 +113,8 @@ MOONBAG_TRIGGER_PCT = 999.0    # Отключено
 MOONBAG_SELL_FRAC = 0.0
 
 # Trailing Stop & Profit Protection (Сужающийся параболический трейлинг: чем выше пик, тем плотнее зажимаем профит!)
-TRAILING_ACTIVATION_PCT = 0.50  # Трейлинг с +20% (раньше +25%)
-TRAILING_DISTANCE_PCT = 0.20    # 12% на разгоне (+20..+40%)
+TRAILING_ACTIVATION_PCT = 0.25  # Трейлинг с +20% (раньше +25%)
+TRAILING_DISTANCE_PCT = 0.10    # 12% на разгоне (+20..+40%)
 TRAILING_RUNNER_DISTANCE_PCT = 0.25 # 12% на раннерах (+80%..+150%)
 SCALP_PROFIT_ENABLED = False    # Скальп-срез +5% выключен
 
@@ -124,7 +124,7 @@ EVM_RUNNER_CRASH = 0.25         # Сброс на 30% за 60с (требует 
 EVM_NORMAL_CRASH = 0.22         # Сброс на 30%
 
 # Breakeven: пик был +28%+, а после 6 минут цена вернулась ко входу — выходим в безубыток
-BREAKEVEN_PCT = 0.28
+BREAKEVEN_PCT = 0.15
 
 # Infant Dump: защита от настоящего дев-рага в первые минуты (не режет рабочие откаты -13%..-18%)
 PREFETCH_TTL_SEC = 60  # Пакетный кэш DexScreener (до 30 токенов за запрос): 60с жизни для быстрого разбора пачки в RAM
