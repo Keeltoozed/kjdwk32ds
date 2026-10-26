@@ -52,8 +52,7 @@ class MatureExitManager:
 
         # Infant guard: дамп в первые минуты = дев сливает, не шум.
         # Режем только катастрофический сброс дева (-35%..-90%), рабочие тени и откаты не трогаем.
-        _inf_win = float(getattr(config, "INFANT_WINDOW_MIN", 2.0))
-        _inf_pct = float(getattr(config, "INFANT_DUMP_PCT", -0.35))
+        _inf_pct = float(getattr(config, "INFANT_DUMP_PCT", -0.18))
         if minutes_held < _inf_win and pnl_pct <= _inf_pct:
             return f"Mature Infant Dump ({pnl_pct*100:.0f}%)"
 
