@@ -63,7 +63,7 @@ MAX_CONCURRENT_POSITIONS = 10         # Режим ракет: до 10 пози�
 MAX_DAILY_LOSS_USD = 50.0
 KILL_SWITCH_ENABLED = False  # ОТКЛЮЧЕНО для тестов (не ставить торговлю на паузу при дневном минусе)
 MAX_DAILY_LOSS_PCT = 0.35
-STOP_LOSS_PCT = -0.22  # Стоп -22% после 90с (безопасный запас для волатильности мемкоинов Solana, не режет ракеты на тенях)
+STOP_LOSS_PCT = -0.30  # Стоп -22% после 90с (безопасный запас для волатильности мемкоинов Solana, не режет ракеты на тенях)
 
 # === ЗАЩИТА ОТ СЕРИИ МИНУСОВ (STREAK CIRCUIT BREAKER) ===
 STREAK_COOLDOWN_ENABLED = True       # Включить паузу после серии минусов
@@ -119,9 +119,9 @@ TRAILING_RUNNER_DISTANCE_PCT = 0.25 # 12% на раннерах (+80%..+150%)
 SCALP_PROFIT_ENABLED = False    # Скальп-срез +5% выключен
 
 # Whale Dump Guard & Crash Protection
-WHALE_DUMP_GUARD_PCT = 0.22     # Резкий слив >22% за <15с (защита от ложных срабатываний на обычной волатильности)
-EVM_RUNNER_CRASH = 0.25         # Сброс на 25% за 60с (требует подтверждения тика для раннеров)
-EVM_NORMAL_CRASH = 0.22         # Сброс на 22%
+WHALE_DUMP_GUARD_PCT = 0.22     # Резкий слив >30% за <15с (защита от ложных срабатываний на обычной волатильности)
+EVM_RUNNER_CRASH = 0.25         # Сброс на 30% за 60с (требует подтверждения тика для раннеров)
+EVM_NORMAL_CRASH = 0.22         # Сброс на 30%
 
 # Breakeven: пик был +28%+, а после 6 минут цена вернулась ко входу — выходим в безубыток
 BREAKEVEN_PCT = 0.28
@@ -152,11 +152,11 @@ GEMINI_API_KEY = (os.getenv("GEMINI_API_KEY") or "").strip() # Получить 
 # === GROK BOT x JEV ENGINE (THE FUNNEL & THE LINE) ===
 JEV_ENABLED = True
 JEV_WICK_STOP_ENABLED = False     # ОТКЛЮЧЕНО: искусственный стоп по фитилю душил ракеты на -15%..-25% в первые 2-3 минуты (Goon, SPIDOGE)
-JEV_MIN_AGE_MIN = 3.5            # Минимум 3.5 минуты (отсекает снайпер-дампы на 0м вроде KAT)
-JEV_EARLY_MIN_AGE_MIN = 3.0      # Минимум 3.0 минуты для пробойных монет
-JEV_MIN_LIQUIDITY_USD = 15000.0  # $15,000 минимальная глубина пула (как у GTA $51k, KIMCHI $35k, TRUMP $40k)
+JEV_MIN_AGE_MIN = 2.0            # Минимум 3.5 минуты (отсекает снайпер-дампы на 0м вроде KAT)
+JEV_EARLY_MIN_AGE_MIN = 2.0      # Минимум 3.0 минуты для пробойных монет
+JEV_MIN_LIQUIDITY_USD = 12000.0  # $15,000 минимальная глубина пула (как у GTA $51k, KIMCHI $35k, TRUMP $40k)
 JEV_MIN_VOLUME_H1 = 40000.0      # $40,000 часовой объем
-JEV_MIN_MCAP_USD = 50000.0       # $50,000 минимальная капитализация (отсекает микро-скамы pump.fun)
+JEV_MIN_MCAP_USD = 45000.0       # $50,000 минимальная капитализация (отсекает микро-скамы pump.fun)
 JEV_MIN_TRADES_H1 = 250          # 250 сделок в час
 JEV_MAX_TOP_WALLET = 0.15        # 15% лимит на крупнейший кошелек (за вычетом пула, согласовано с RugCheck/GoPlus)
 JEV_MAX_TOP_10 = 0.35            # 35% лимит на топ-10 кошельков (за вычетом пула, согласовано с RugCheck/GoPlus)
