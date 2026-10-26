@@ -230,10 +230,11 @@ class GrokJevEngine:
             return False, f"trades-h24-low {trades_h24} < {min_trades_h24}"
 
         # 4.1. Wash Trading Check (накрутка объёма ботами копеечными сделками)
-        if (bh1 + sh1) >= 400 and vol_h1 > 0:
-            avg_trade = vol_h1 / (bh1 + sh1)
+        # 4.1. Wash Trading Check (накрутка объёма ботами копеечными сделками по h24)
+        if trades_h24 >= 400 and vol_h24 > 0:
+            avg_trade = vol_h24 / trades_h24
             if avg_trade < 12.0:
-                return False, f"wash-trading-trap (avg trade ${avg_trade:.1f} < $12 across {bh1+sh1} txns)"
+                return False, f"wash-trading-trap (avg trade ${avg_trade:.1f} < $12 across {trades_h24} txns)"
 
         # 5. Рыночная капитализация (MCap / FDV): минимум $48,000 для всех токенов
         # Отсекает микро-скамы pump.fun ($5k-$20k), где создатель держит 30% и сливает на входе (KAT)
