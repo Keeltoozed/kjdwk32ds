@@ -176,22 +176,22 @@ class GrokJevEngine:
 
         FUNNEL_STATS["liquidity"] += 1
 
-        # 2. Возраст: не входить в первые 3.5 минуты (зона дампа создателя, кейс KAT на 0m!)
+        # 2. Возраст: не входить в первые 3.5 минуты (зона дампа создателя, кейс KAT на 0m!)        # 2. Возраст: строго 15 мин - 72 ч (как у savipww)
         created_at = pair_data.get("pairCreatedAt") or 0
         age_min = (time.time() * 1000 - created_at) / 60000.0 if created_at else 999.0
-        
+
+        min_age = float(getattr(_c, "JEV_MIN_AGE_MIN", 15.0))
+        max_age = float(getattr(_c, "JEV_MAX_AGE_MIN", 72.0 * 60.0))  # 72 часа
+        if not (min_age <= age_min <= max_age):
+            return False, f"age-out-of-bounds {age_min:.1f}m not in [{min_age:.0f}m, {max_age:.0f}m]"
+
         txns_m5 = (pair_data.get("txns") or {}).get("m5", {}) or {}
-        txns_h1 = (pair_data.get("txns") or {}).get("h1", {}) or {}
+        txns_h24 = (pair_data.get("txns") or {}).get("h24", {}) or {}
         b5 = int(txns_m5.get("buys", 0) or 0)
         s5 = int(txns_m5.get("sells", 0) or 0)
-        bh1 = int(txns_h1.get("buys", 0) or 0)
-        sh1 = int(txns_h1.get("sells", 0) or 0)
         vol_m5 = float((pair_data.get("volume") or {}).get("m5", 0) or 0)
-        vol_h1 = float((pair_data.get("volume") or {}).get("h1", 0) or 0)
-
-        min_age = float(getattr(_c, "JEV_MIN_AGE_MIN", 3.5))
-        if age_min < min_age:
-            return False, f"too-young {age_min:.1f}m < {min_age:.1f}m (dev sniper flush zone)"
+        vol_h24 = float((pair_data.get("volume") or {}).get("h24", 0) or 0)
+        trades_h24 = int(txns_h24.get("buys", 0) or 0) + int(txns_h24.get("sells", 0) or 0)
 
         # 3. Живой импульс ракеты (LIVE ROCKET MOMENTUM)
         # Бот НЕ покупает стоячие, дохлые или падающие монеты!
@@ -200,11 +200,10 @@ class GrokJevEngine:
         m5 = float(pc.get("m5", 0) or 0)
         h1 = float(pc.get("h1", 0) or 0)
 
-        min_m5 = float(getattr(_c, "JEV_MIN_M5_PCT", 4.0))
-        if m5 < min_m5:
-            return False, f"no-momentum m5 {m5:+.1f}% < +{min_m5:.1f}% (flat or dying coin)"
-        
-        # Если m5 > 180%, разрешаем только если идёт подтверждённый покупательский пробой (b5 >= s5 * 1.15 и vol5 >= $5k) без вертикального спайка m1 > +22%
+        # Убрано требование m5 >= 4.0%: берем откаты на устоявшихся монетах, а не хаи
+        if m5 > 180.0:
+            return False, f"overheated-m5 {m5:+.0f}% > +180% (peak FOMO risk)"
+
         if m5 > 180.0:
             if not (-8.0 <= m1 <= 22.0 and b5 >= s5 * 1.15 and vol_m5 >= 5000.0 and m5 <= 300.0):
                 return False, f"overheated m5 {m5:+.0f}% > +180% (peak FOMO risk)"
@@ -222,13 +221,13 @@ class GrokJevEngine:
         if s5 > 0 and (b5 / s5) < 1.15:
             return False, f"sellers-dominating {b5}b/{s5}s (ratio {b5/s5:.2f} < 1.15)"
 
-        min_vol_h1 = float(getattr(_c, "JEV_MIN_VOLUME_H1", 40000.0))
-        min_trades_h1 = int(getattr(_c, "JEV_MIN_TRADES_H1", 250))
-        if age_min >= 30.0:
-            if vol_h1 < min_vol_h1:
-                return False, f"vol-h1-low ${vol_h1:,.0f} < ${min_vol_h1:,.0f}"
-            if (bh1 + sh1) < min_trades_h1:
-                return False, f"trades-h1-low {bh1+sh1} < {min_trades_h1}"
+        # Проверка суточной активности h24 вместо h1 (vol >= $40k, trades >= 150)
+        min_vol_h24 = float(getattr(_c, "JEV_MIN_VOLUME_H24", 40000.0))
+        min_trades_h24 = int(getattr(_c, "JEV_MIN_TRADES_H24", 150))
+        if vol_h24 < min_vol_h24:
+            return False, f"vol-h24-low ${vol_h24:,.0f} < ${min_vol_h24:,.0f}"
+        if trades_h24 < min_trades_h24:
+            return False, f"trades-h24-low {trades_h24} < {min_trades_h24}"
 
         # 4.1. Wash Trading Check (накрутка объёма ботами копеечными сделками)
         if (bh1 + sh1) >= 400 and vol_h1 > 0:
@@ -238,23 +237,28 @@ class GrokJevEngine:
 
         # 5. Рыночная капитализация (MCap / FDV): минимум $48,000 для всех токенов
         # Отсекает микро-скамы pump.fun ($5k-$20k), где создатель держит 30% и сливает на входе (KAT)
+        # Капитализация строго в коридоре $60,000 - $8,000,000
         mcap = fdv_mc
-        min_mcap = float(getattr(_c, "JEV_MIN_MCAP_USD", 48000.0))
-        if mcap > 0 and mcap < min_mcap:
-            return False, f"mcap-low ${mcap:,.0f} < ${min_mcap:,.0f} (unproven micro-cap trap)"
+        min_mcap = float(getattr(_c, "JEV_MIN_MCAP_USD", 60000.0))
+        max_mcap = float(getattr(_c, "JEV_MAX_MCAP_USD", 8000000.0))
+        if mcap > 0 and not (min_mcap <= mcap <= max_mcap):
+            return False, f"mcap-out-of-bounds ${mcap:,.0f} not in [${min_mcap:,.0f}, ${max_mcap:,.0f}]"
 
-        # 5. Распределение холдеров (Holder Spread)
+        # Распределение холдеров (savipww: >= 80 холдеров, Топ-1 <= 5%, Топ-10 <= 60%)
         if holder_stats and isinstance(holder_stats, dict):
+            holders_count = int(holder_stats.get("holders_count", 0) or 0)
+            if holders_count > 0 and holders_count < getattr(_c, "JEV_MIN_HOLDERS", 80):
+                return False, f"holders-low {holders_count} < 80"
+
             top1_pct = float(holder_stats.get("top1_pct", 0.0) or 0.0)
             top10_pct = float(holder_stats.get("top10_pct", 0.0) or 0.0)
-            # Нормализация: если передано в долях единицы (0.05 вместо 5.0), переводим в проценты
             if 0 < top1_pct <= 1.0:
                 top1_pct *= 100.0
             if 0 < top10_pct <= 1.0:
                 top10_pct *= 100.0
 
-            max_top1 = 12.0 if is_pump else float(getattr(_c, "JEV_MAX_TOP_WALLET", 0.15)) * 100.0
-            max_top10 = 32.0 if is_pump else float(getattr(_c, "JEV_MAX_TOP_10", 0.35)) * 100.0
+            max_top1 = float(getattr(_c, "JEV_MAX_TOP_WALLET", 0.05)) * 100.0   # <= 5%
+            max_top10 = float(getattr(_c, "JEV_MAX_TOP_10", 0.60)) * 100.0       # <= 60%
             
             if top1_pct > max_top1:
                 return False, f"top-wallet-high {top1_pct:.1f}% > {max_top1:.1f}% (exit risk)"
@@ -349,12 +353,13 @@ class GrokJevEngine:
             )
 
         # Проверка порогов SOFT GATE из thresholds.py:
-        min_acc = float(getattr(_c, "JEV_MIN_ACCOUNT_IS_PROJECT", 0.75))
-        max_recycled = float(getattr(_c, "JEV_MAX_RECYCLED_ACCOUNT", 0.30))
-        max_conc = float(getattr(_c, "JEV_MAX_CONCENTRATION_RISK", 0.35))
-        max_mspent = float(getattr(_c, "JEV_MAX_MOMENTUM_SPENT", 0.60))
-        min_liq_ticket = float(getattr(_c, "JEV_MIN_LIQUIDITY_FITS_TICKET", 0.65))
-        max_dev = float(getattr(_c, "JEV_MAX_DEV_STILL_LOADED", 0.25))
+        # Точные пороги из окна thresholds.py и soft-правил savipww:
+        min_acc = float(getattr(_c, "JEV_MIN_ACCOUNT_IS_PROJECT", 0.70))      # >= 0.70
+        max_recycled = float(getattr(_c, "JEV_MAX_RECYCLED_ACCOUNT", 0.50))  # <= 0.50
+        max_conc = float(getattr(_c, "JEV_MAX_CONCENTRATION_RISK", 0.55))    # <= 0.55
+        max_mspent = float(getattr(_c, "JEV_MAX_MOMENTUM_SPENT", 0.60))      # <= 0.60
+        min_liq_ticket = float(getattr(_c, "JEV_MIN_LIQUIDITY_FITS_TICKET", 0.60)) # >= 0.60
+        max_dev = float(getattr(_c, "JEV_MAX_DEV_STILL_LOADED", 0.55))       # <= 0.55
 
         p_acc = float(llm_res.get("account_is_the_project", 0.8)) >= min_acc
         p_rec = float(llm_res.get("recycled_account", 0.1)) <= max_recycled
@@ -363,9 +368,14 @@ class GrokJevEngine:
         p_liq = float(llm_res.get("liquidity_fits_ticket", 0.8)) >= min_liq_ticket
         p_dev = float(llm_res.get("dev_still_loaded", 0.1)) <= max_dev
 
-        is_passed = all([p_acc, p_rec, p_conc, p_msp, p_liq, p_dev])
-        llm_res["passed"] = is_passed
-        
+        # Дополнительные soft-пороги из сводки savipww:
+        p_aud = float(llm_res.get("audience_real", 0.8)) >= 0.45
+        p_crowd = float(llm_res.get("crowd", 0.8)) >= 0.55
+        p_worth = float(llm_res.get("pick_worth_trading", 0.8)) >= 0.60
+        p_conf = float(llm_res.get("confidence", 0.8)) >= 0.55
+
+        is_passed = all([p_acc, p_rec, p_conc, p_msp, p_liq, p_dev, p_aud, p_crowd, p_worth, p_conf])
+
         # Кэшируем результат
         _JEV_CACHE[str(ck)] = (now, llm_res)
 
@@ -416,17 +426,13 @@ class GrokJevEngine:
         s5 = int(txns_m5.get("sells", 0) or 0)
         vol5 = float((pair_data.get("volume") or {}).get("m5", 0) or 0)
         
-        # 1. Токен ОБЯЗАН быть в импульсе m5 (ракета растет прямо сейчас)!
-        if m5 < 4.0:
-            return False, -0.14, 0.0, f"no-impulse (m5 {m5:+.1f}% < +4.0%) — wait for real rocket surge"
+        # 1. Запрет покупать зеленую свечу на пике: вход ТОЛЬКО в откат или консолидацию m1
+        if m1 > 1.5:
+            return False, -0.12, 0.0, f"candle-spike (m1 {m1:+.1f}% > +1.5%) — bid the flush, wait for pullback"
 
-        # 2. Вход в откат ИЛИ подтверждённый пробой ракеты (Breakout + Pullback):
-        # При сильном потоке покупателей (b5 >= s5 * 1.20 и vol5 >= $3,500) пускаем живой пробой до +22% за 1м,
-        # чтобы не пропускать взлетающие ракеты в ожидании затухания!
-        is_strong_breakout = (vol5 >= 3500.0 and b5 >= max(12, int(s5 * 1.20)))
-        max_m1_entry = 22.0 if is_strong_breakout else float(getattr(_c, "JEV_MAX_M1_ENTRY_PCT", 12.0))
-        if m1 > max_m1_entry:
-            return False, -0.14, 0.0, f"candle-spike (m1 {m1:+.1f}% > +{max_m1_entry:.1f}%) — extreme vertical spike, wait for pullback"
+        # 2. Откат не должен быть ножом падения (падение глубже -8% отсекается)
+        if m1 < -8.0:
+            return False, -0.12, 0.0, f"flush-dump (m1 {m1:+.1f}% < -8.0%) — falling knife"
 
         # 3. Если откат глубже -8.0% — это слом структуры / дамп
         if m1 < -8.0:
