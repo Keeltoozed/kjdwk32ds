@@ -962,13 +962,10 @@ class GrokJevEngine:
                 created_at = pair_data.get("pairCreatedAt") or 0
                 tx5 = (pair_data.get("txns") or {}).get("m5", {}) or {}
                 b5 = int(tx5.get("buys", 0) or 0)
-                s5 = int(tx5.get("sells", 0) or 0)
                 vol5 = float((pair_data.get("volume") or {}).get("m5", 0) or 0)
-                is_org = (vol5 >= 3000.0 and b5 >= 20 and b5 >= s5 * 1.10)
-                if not is_org:
-                    is_cl = await self.analyzer.is_clone(symbol, address, created_at, fdv, current_liq=raw_liq, current_vol5=vol5, current_b5=b5)
-                    if is_cl:
-                        return False, f"clone-scam of an older/larger token", _h_stats
+                is_cl = await self.analyzer.is_clone(symbol, address, created_at, fdv, current_liq=raw_liq, current_vol5=vol5, current_b5=b5)
+                if is_cl:
+                    return False, f"clone-scam of an older/larger token", _h_stats
         except Exception:
             pass
 

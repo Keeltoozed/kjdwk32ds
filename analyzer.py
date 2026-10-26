@@ -769,9 +769,8 @@ class Analyzer:
             if current_liq >= 25000.0 and current_liq >= p_liq * 1.3:
                 continue
 
-            # Учитываем живые пулы с таким же тикером для детекта серийного клон-роя (кейс ARACH: 4 микро-пула одновременно на PumpSwap)
-            # Срабатывает только если наш токен еще мелкий (current_liq < $25k) и не имеет органического объема
-            if current_liq < 25000.0 and not is_organic_hot:
+            # Учитываем живые пулы с таким же тикером для детекта серийного клон-роя (кейс ARACH, MAXXING: серийный спам клонов)
+            if current_liq < 35000.0:
                 swarm_mints.add(p_mint)
                 if len(swarm_mints) >= 2:
                     print(f"🚫 [CLONE-SWARM] {sym_up} ({current_mint[:8]}): обнаружена серийная атака клонов ({len(swarm_mints)+1}+ активных токенов {sym_up} одновременно) — блок!")

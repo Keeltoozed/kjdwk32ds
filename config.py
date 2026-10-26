@@ -134,10 +134,10 @@ SOLANA_MAX_AGE_MIN = 180.0      # Максимум 3 часа входа  # Не
 INFANT_WINDOW_MIN = 2.0
 INFANT_DUMP_PCT = -0.35  # Резать в первые 2 мин только реальный дамп -35%+ (рабочие тени -12%..-18% выживают)
 
-# Stagnant: живым пулам даём 25 мин на раскачку (кейс Chaton: консолидация 15-20м -> рост +62%), не режем на 8-й минуте как PRESIDENT
-STAGNANT_LOSS_MIN = 15.0
-STAGNANT_LOSS_MIN_FAST = 10.0
-STAGNANT_HOLD_MIN = 25.0
+# Stagnant: даём ракетам 25-35 мин на раскачку и набор базы (кейсы CATTLEAXE 37м, NIO 20м+), не режем на 15-й минуте прямо перед пампом!
+STAGNANT_LOSS_MIN = 25.0
+STAGNANT_LOSS_MIN_FAST = 20.0
+STAGNANT_HOLD_MIN = 35.0
 
 # Filtering
 AI_MODE = "degen" # "sniper" (строго 80-90% уверенности) или "degen"

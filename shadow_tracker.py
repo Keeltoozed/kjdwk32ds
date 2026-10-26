@@ -139,8 +139,8 @@ class ShadowTracker:
         if mint in self._cooldown and (now_ts - self._cooldown[mint]) < 600:
             return
             
-        # Не логируем нулевые пустышки без ликвидности (спам ботов)
-        if liquidity > 0 and liquidity < 3000:
+        # Не логируем нулевые пустышки без ликвидности и токены до миграции с фейковыми ценами 5e-12
+        if liquidity < 3000 or native_price < 1e-7:
             return
             
         self._cooldown[mint] = now_ts
@@ -406,8 +406,8 @@ class ShadowTracker:
                             if new_ath > 0:
                                 self.record_observation(m, new_ath, 0.0)
 
-                            ath_pnl = ((new_ath - p_entry) / p_entry * 100.0) if p_entry > 0 and new_ath > 0 else 0.0
-                            cur_pnl = ((p_now - p_entry) / p_entry * 100.0) if p_entry > 0 and p_now > 0 else (-100.0 if p_now == 0 else 0.0)
+                            ath_pnl = ((new_ath - p_entry) / p_entry * 100.0) if p_entry >= 1e-7 and new_ath > 0 else 0.0
+                            cur_pnl = ((p_now - p_entry) / p_entry * 100.0) if p_entry >= 1e-7 and p_now > 0 else (-100.0 if p_now == 0 else 0.0)
                             is_rocket = bool(ath_pnl >= 50.0)
 
                             # Категоризация исхода монеты:

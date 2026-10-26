@@ -46,7 +46,8 @@ class MatureExitManager:
         )
 
         # Аварийный кэп ПЕРВЫМ: гэпы типа FIBONACCI -68% проскакивают обычный стоп
-        if pnl_pct <= -0.30:
+        # Не режет рабочие 1-минутные тени на старте (-30%..-38%), а ловит только реальные раг-гэпы (-48%+):
+        if pnl_pct <= -0.48:
             return f"Mature Emergency Cap ({pnl_pct*100:.0f}%)"
 
         # Infant guard: дамп в первые минуты = дев сливает, не шум.
@@ -109,10 +110,13 @@ class MatureExitManager:
         elif max_pnl_pct >= 0.38:     # Пик +38%+ -> гарантируем минимум +18% (ниже +38% пол не ставим — даём ракете взлететь!)
             _floor_pnl = 0.18
         if _floor_pnl is not None and pnl_pct <= _floor_pnl:
-            # 2-тиковое подтверждение пробоя пола (защита от 1-секундных проколов и теней свечей):
+            # 2-тиковое подтверждение пробоя пола (защита от 1-секундных проколов и теней свечей),
+            # НО если это жесткий сброс (слив профита к нулю pnl_pct <= 0.08 при пике >= +38% или откат от хая >= 30%), выходим МГНОВЕННО без ожидания:
             _fc = int(getattr(position, "floor_confirm_n", 0) or 0) + 1
             position.floor_confirm_n = _fc
-            if _fc < 2:
+            _drop_from_max = (position.max_price_usd - current_price) / position.max_price_usd if position.max_price_usd else 0
+            _fast_exit = (pnl_pct <= 0.08 and max_pnl_pct >= 0.38) or (_drop_from_max >= 0.30 and max_pnl_pct >= 0.50)
+            if _fc < 2 and not _fast_exit:
                 return None
             if pnl_pct >= 0:
                 return f"Mature Profit Floor (+{_floor_pnl*100:.0f}% locked after peak +{max_pnl_pct*100:.0f}%)"
@@ -163,10 +167,10 @@ class MatureExitManager:
         if max_pnl_pct >= 0.35 and _peak_age_min >= 15 and pnl_pct > 0.05 and (_dd_peak >= 0.06 or _peak_age_min >= 20):
             return f"Mature Runner Stagnation (+{pnl_pct*100:.1f}% locked after peak +{max_pnl_pct*100:.0f}%, {_peak_age_min:.0f}m no ATH)"
 
-        if minutes_held >= 20 and _peak_age_min >= 15:
+        if minutes_held >= 30 and _peak_age_min >= 20:
             if pnl_pct > 0.05:
                 return f"Mature Inactive Pool TP (+{pnl_pct*100:.1f}%, {minutes_held:.0f}m)"
-            elif pnl_pct < -0.05:
+            elif pnl_pct < -0.15:
                 return f"Mature Inactive Pool Cut ({pnl_pct*100:.1f}%, {minutes_held:.0f}m)"
 
         # Scalp Trailing (для мелких профитов) - ВЫКЛЮЧЕН: не режем ракеты на первом 5% откате при пике +10%
@@ -192,11 +196,11 @@ class MatureExitManager:
         if minutes_held >= 1.5 and hasattr(config, 'STOP_LOSS_PCT') and pnl_pct <= config.STOP_LOSS_PCT:
             return f"Mature Stop Loss ({config.STOP_LOSS_PCT*100:.0f}%)"
 
-        # Time exit - Stagnant: не перекрываем проверку живого стакана из main.py раньше 15 минут,
-        # и режем только реальную просадку <= -5% без импульса (_maxp < +5%), чтобы не убивать консолидацию перед пампом (кейс Chaton +62%)
-        _loss_min = getattr(config, 'STAGNANT_LOSS_MIN', 15)
-        _hold_min = getattr(config, 'STAGNANT_HOLD_MIN', 25)
-        if minutes_held >= max(_loss_min, 15) and pnl_pct <= -0.05 and _maxp < 0.05:
+        # Time exit - Stagnant: даём ракетам 25-35 минут на раскачку (кейс CATTLEAXE +23% на 37м, NIO +67% на 20м),
+        # и режем только реальную просадку <= -10% без импульса (_maxp < +5%), не убивая консолидацию на 15-й минуте прямо перед пампом
+        _loss_min = getattr(config, 'STAGNANT_LOSS_MIN', 25)
+        _hold_min = getattr(config, 'STAGNANT_HOLD_MIN', 35)
+        if minutes_held >= max(_loss_min, 25) and pnl_pct <= -0.10 and _maxp < 0.05:
             return f"Stagnant Loss Cut ({minutes_held:.0f}m, {pnl_pct*100:.1f}%)"
         if minutes_held >= _hold_min and pnl_pct < 0.05 and _maxp < 0.15:
             return f"Stagnant Cut ({minutes_held:.0f}m)"
