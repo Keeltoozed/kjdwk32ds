@@ -530,7 +530,7 @@ class GrokJevEngine:
             if tag == "70b" and _BUDGET["n70"] >= DAILY_70B:
                 continue
             payload = {
-                "model": model, "temperature": 0.1, "max_tokens": 220,
+                "model": model, "temperature": 0.1, "max_tokens": 300,
                 "response_format": {"type": "json_object"},
                 "messages": [{"role": "system", "content": system_prompt},
                              {"role": "user", "content": user_content}],
@@ -789,11 +789,11 @@ class GrokJevEngine:
             if not onchain_ok:
                 return False, f"onchain-sol-reject {onchain_why}", _h_stats
 
-            # Б) GoPlus Security
+            # Б) GoPlus Security (пропускаем сырой rugcheck-score из goplus.py, т.к. ниже идёт детальный разбор RugCheck)
             sec_ok, sec_why = await _gp.check_solana(address)
-            if not sec_ok:
+            if not sec_ok and "rugcheck-score" not in str(sec_why).lower():
                 return False, f"goplus-sol-reject {sec_why}", _h_stats
-
+              
             # В) Полный отчет RugCheck API
             try:
                 from http_client import fetch_json
