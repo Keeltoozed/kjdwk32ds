@@ -98,8 +98,16 @@ _BUDGET = {"day": None, "n70": 0}
 _CD = {"70b": 0.0, "8b": 0.0}
 # Llama на бесплатном Groq отключены (404). ID берутся из env, чтобы менять без правки кода:
 # JEV_MODEL_PRIMARY / JEV_MODEL_FALLBACK. Теги "70b"/"8b" - только внутренние метки (основная/запасная).
-_MODELS = [(os.getenv("JEV_MODEL_PRIMARY", "openai/gpt-oss-120b").strip(), "70b"),
-           (os.getenv("JEV_MODEL_FALLBACK", "openai/gpt-oss-20b").strip(), "8b")]
+def _model_env(name: str, default: str) -> str:
+    """ID модели из env. Если туда по ошибке вставили API-ключ (gsk_...) или пробелы - берём дефолт."""
+    v = (os.getenv(name) or "").strip().strip('"').strip("'")
+    if not v or v.startswith("gsk_") or " " in v or len(v) > 60:
+        return default
+    return v
+
+
+_MODELS = [(_model_env("JEV_MODEL_PRIMARY", "openai/gpt-oss-120b"), "70b"),
+           (_model_env("JEV_MODEL_FALLBACK", "openai/gpt-oss-20b"), "8b")]
 DAILY_70B = 150          # лимит бесплатного тарифа 200k токенов/сутки на модель, ~1.2k на вызов
 
 # --- Пороги ответа JEV (any null / нет ключа = отказ) ---
@@ -118,6 +126,7 @@ _GROQ_LOG_TS = {}
 
 def _log_groq(msg: str) -> None:
     """Печатает причину отказа Groq не чаще раза в 30с на одинаковое сообщение."""
+    msg = re.sub(r"gsk_\w+|xai-[\w-]+", "***KEY***", msg)   # ключи никогда не пишем в лог
     now = time.time()
     if now - _GROQ_LOG_TS.get(msg[:40], 0.0) >= 30.0:
         _GROQ_LOG_TS[msg[:40]] = now
@@ -290,7 +299,7 @@ class GrokJevEngine:
 
         # 2. Возраст: не входить в первые 3.5 минуты (зона дампа создателя, кейс KAT на 0m!)        # 2. Возраст: строго 15 мин - 72 ч (как у savipww)
         created_at = pair_data.get("pairCreatedAt") or 0
-        age_min = (time.time() * 1000 - created_at) / 60000.0 if created_at else 0.0
+        age_min = (time.time() * 1000 - created_at) / 60000.0 if created_at else 999.0
 
         min_age = float(getattr(_c, "JEV_MIN_AGE_MIN", 15.0))
         max_age = float(getattr(_c, "JEV_MAX_AGE_MIN", 72.0 * 60.0))  # 72 часа
@@ -1101,7 +1110,32 @@ class GrokJevEngine:
     # =========================================================================
     # 7. CONVEYOR: Полный цикл оценки и исполнения
     # =========================================================================
+    _SHADOW_SKIP = ("no-pair-data", "invalid-price", "already-held", "max-positions", "llm-unavailable",
+                    "non-solana", "fake-brand", "rate-limit-retry")
+
     async def process_candidate(self, address: str, chain: str, tracker) -> Tuple[bool, str]:
+        """Обёртка: каждый отказ воронки пишется в теневой журнал (rejected_tokens, source=GROK-JEV),
+        чтобы потом видеть, какой фильтр режет токены, которые позже выросли."""
+        ok, why = await self._process_candidate_inner(address, chain, tracker)
+        pair = getattr(self, "_pair_seen", {}).pop(address, None)
+        if not ok and pair:
+            try:
+                import config as _c
+                low = str(why).lower()
+                if getattr(_c, "JEV_SHADOW_LOG_REJECTS", True) and not any(k in low for k in self._SHADOW_SKIP):
+                    from shadow_tracker import shadow_tracker
+                    base = pair.get("baseToken", {}) or {}
+                    shadow_tracker.log_rejection(
+                        mint=address, reason=str(why)[:140], symbol=base.get("symbol", address[:6]), chain="solana",
+                        price=float(pair.get("priceUsd", 0) or 0),
+                        liquidity=float((pair.get("liquidity") or {}).get("usd", 0) or 0),
+                        m5_pct=float((pair.get("priceChange") or {}).get("m5", 0) or 0),
+                        source="GROK-JEV")
+            except Exception:
+                pass
+        return ok, why
+
+    async def _process_candidate_inner(self, address: str, chain: str, tracker) -> Tuple[bool, str]:
         """
         Полный конвейер GROKBOT x JEV для одного токена:
         1. ПОЛНЫЙ АНТИСКАМ-АУДИТ (RugCheck, GoPlus, Dev/Whale concentration, Jito Sybil, Socials, Clone)
@@ -1128,6 +1162,11 @@ class GrokJevEngine:
         base_info = pair.get("baseToken", {}) or {}
         symbol = str(base_info.get("symbol", address[:6])).upper().strip()
         price = float(pair.get("priceUsd", 0) or 0.0)
+        if not hasattr(self, "_pair_seen"):
+            self._pair_seen = {}
+        if len(self._pair_seen) > 500:
+            self._pair_seen.clear()
+        self._pair_seen[address] = pair
         if price <= 0:
             return False, "invalid-price"
 
@@ -1173,6 +1212,11 @@ class GrokJevEngine:
             print(f"🚫 [GROK+JEV-SCAM] {symbol} ({chain}): {sec_why}")
             return False, f"anti-scam-reject {sec_why}"
 
+        # 4.5. Нет данных о холдерах (RugCheck/GoPlus молчат) -> не входим вслепую: все сливы за сутки прошли именно так
+        if getattr(_c, "JEV_REQUIRE_HOLDER_DATA", True):
+            if not (float((_h_stats or {}).get("top1_pct", 0) or 0) > 0 or float((_h_stats or {}).get("top10_pct", 0) or 0) > 0):
+                return False, "anti-scam-reject holders-no-data (нет данных о холдерах)"
+
         # 5. VET (SOFT GATE: JEV AI Evaluation)
         soft_ok, jev_data, soft_why = await self.jev_vet(address, symbol, pair, chain, _h_stats)
         if not soft_ok:
@@ -1191,6 +1235,9 @@ class GrokJevEngine:
             except Exception:
                 pass
         ticket_size = max(10.0, ticket_size)
+        _cap = float(getattr(_c, "JEV_MAX_TICKET_USD", 15.0) or 0.0)
+        if _cap > 0:
+            ticket_size = min(ticket_size, _cap)   # растущий билет ($31) умножал убыток на каждом сливе
 
         tracker.add_position(
             symbol=symbol,
@@ -1206,6 +1253,22 @@ class GrokJevEngine:
         )
 
         FUNNEL_STATS["filled"] += 1
+
+        # Запись входа для разбора (победители vs проигравшие) + замер Smart Money (не блокирует сделку)
+        _sm = "NA"
+        try:
+            if getattr(_c, "JEV_LOG_SMART_AT_ENTRY", True) and getattr(self, "analyzer", None):
+                _ub, _si = await asyncio.wait_for(self.analyzer.get_helius_transaction_metrics(address), timeout=6.0)
+                _sm = f"buyers30={_ub},smart={_si}"
+        except Exception as _e:
+            _sm = f"err:{type(_e).__name__}"
+        try:
+            print("📝 [ENTRY] " + json.dumps({
+                "sym": symbol, "mint": address, "ticket": round(ticket_size, 2), "smart": _sm,
+                "data": _data_line(pair, _h_stats or {}, ticket_size),
+                "judge": {k: jev_data.get(k) for k in _NEED}, "src": jev_data.get("source")}, ensure_ascii=False))
+        except Exception:
+            pass
 
         # Форматированный визуальный лог в стиле дашборда автора
         pc = pair.get("priceChange", {}) or {}
