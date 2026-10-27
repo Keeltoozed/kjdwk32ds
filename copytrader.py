@@ -70,6 +70,43 @@ class CopyTrader:
             }
         return wallets
 
+    def _handle_ws_message(self, message) -> None:
+        """Одно сообщение WSS. Проваленные транзакции (у ботов их много) и перегруз очереди отбрасываем,
+        иначе на каждую запись уходит 1-3 запроса getTransaction -> 429 у Helius и разрывы соединения."""
+        try:
+            data = json.loads(message)
+        except Exception:
+            return
+        if data.get("method") != "logsNotification":
+            return
+        try:
+            val = data["params"]["result"]["value"]
+        except Exception:
+            return
+        if val.get("err"):
+            return                      # транзакция провалилась - покупки не было
+        sig = val.get("signature")
+        if not sig or sig in self.processed_sigs:
+            return
+        if getattr(self, "_pending", 0) >= 120:
+            self._dropped = getattr(self, "_dropped", 0) + 1
+            if self._dropped % 200 == 1:
+                print(f"⚠️ Копитрейдер: очередь перегружена, пропущено {self._dropped} транзакций")
+            return
+        self._pending = getattr(self, "_pending", 0) + 1
+        asyncio.create_task(self._guarded_process(sig))
+
+    async def _guarded_process(self, sig: str) -> None:
+        if not hasattr(self, "_sem"):
+            self._sem = asyncio.Semaphore(4)
+        try:
+            async with self._sem:
+                await self.process_transaction(sig)
+        except Exception as e:
+            print(f"⚠️ Копитрейдер: ошибка обработки {sig[:8]}: {type(e).__name__}")
+        finally:
+            self._pending = max(0, getattr(self, "_pending", 1) - 1)
+
     async def _subscribe_new(self, ws, subscribed: set) -> int:
         """Подписывается на кошельки, на которые ещё нет подписки (в т.ч. найденные охотником уже после старта)."""
         n = 0
@@ -82,6 +119,7 @@ class CopyTrader:
                 "params": [{"mentions": [wallet]}, {"commitment": "processed"}]}))
             subscribed.add(wallet)
             n += 1
+            await asyncio.sleep(0.05)   # не заливаем сервер сотней подписок за один миг
         return n
 
     async def _refresh_loop(self, ws, subscribed: set):
@@ -290,7 +328,7 @@ class CopyTrader:
             self.wallets = self.load_wallets()
             current_wss = wss_endpoints[endpoint_idx % len(wss_endpoints)]
             try:
-                async with websockets.connect(current_wss) as ws:
+                async with websockets.connect(current_wss, ping_interval=20, ping_timeout=60, close_timeout=5, max_size=2 ** 22) as ws:
                     print(f"👥 Копитрейдер: Подключен к {current_wss.split('.')[0]}... Слушаем {len(self.wallets)} китов")
                     
                     subscribed = set()
@@ -298,20 +336,13 @@ class CopyTrader:
                     _refresher = asyncio.create_task(self._refresh_loop(ws, subscribed))
                     try:
                         async for message in ws:
-                            data = json.loads(message)
-                            if "method" in data and data["method"] == "logsNotification":
-                                result = data["params"]["result"]
-                                signature = result["value"]["signature"]
-                                asyncio.create_task(self.process_transaction(signature))
+                            self._handle_ws_message(message)
                     finally:
                         _refresher.cancel()
                                 
             except Exception as e:
                 err_msg = str(e)
-                if "429" in err_msg:
-                    print(f"⚠️ Лимит запросов 429 на {current_wss}. Переключаемся на следующий сервер...")
-                    endpoint_idx += 1
-                    await asyncio.sleep(2)
-                else:
-                    print(f"Ошибка Копитрейдера ({current_wss}): {err_msg}. Переподключение...")
-                    await asyncio.sleep(5)
+                _name = current_wss.split("?")[0]            # ключ из адреса в лог не пишем
+                print(f"⚠️ Копитрейдер: обрыв {_name}: {err_msg[:90] or type(e).__name__}. Следующий сервер...")
+                endpoint_idx += 1
+                await asyncio.sleep(3)
