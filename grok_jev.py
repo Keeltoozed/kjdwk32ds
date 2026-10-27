@@ -174,7 +174,22 @@ class GrokJevEngine:
     """Движок конвейера фильтрации Grok Bot x JEV."""
 
     def __init__(self):
-        pass
+        # mint -> [(ts, price), ...] за последние 30 мин: нужна, чтобы отличать растущую монету от падающей
+        self._px_hist: Dict[str, list] = {}
+
+    def _record_px(self, mint: str, price: float) -> list:
+        """Запоминает цену, которую мы видели на этом скане. Возвращает историю mint."""
+        now = time.time()
+        h = self._px_hist.setdefault(mint, [])
+        if not h or now - h[-1][0] >= 5.0:
+            h.append((now, float(price)))
+        cutoff = now - 1800.0
+        while h and h[0][0] < cutoff:
+            h.pop(0)
+        if len(self._px_hist) > 3000:
+            for k in sorted(self._px_hist, key=lambda k: self._px_hist[k][-1][0] if self._px_hist[k] else 0)[:1000]:
+                self._px_hist.pop(k, None)
+        return h
 
     @property
     def groq_key(self) -> str:
@@ -304,8 +319,14 @@ class GrokJevEngine:
         if m5 > 180.0:
             if not (-8.0 <= m1 <= 22.0 and b5 >= s5 * 1.15 and vol_m5 >= 5000.0 and m5 <= 300.0):
                 return False, f"overheated m5 {m5:+.0f}% > +180% (peak FOMO risk)"
-        if h1 < -8.0:
-            return False, f"hourly-downtrend h1 {h1:+.1f}% < -8.0% (dead-cat bounce)"
+        _min_h1 = float(getattr(_c, "JEV_MIN_H1_PCT", -8.0))
+        if h1 < _min_h1:
+            return False, f"hourly-downtrend h1 {h1:+.1f}% < {_min_h1:+.1f}% (dead-cat bounce)"
+        _h6_raw = pc.get("h6")
+        if _h6_raw is not None:
+            _min_h6 = float(getattr(_c, "JEV_MIN_H6_PCT", -1000.0))
+            if float(_h6_raw or 0) < _min_h6:
+                return False, f"h6-downtrend {float(_h6_raw or 0):+.1f}% < {_min_h6:+.1f}% (monet is bleeding)"
 
         # 4. Объем и давление покупателей (LIVE 5M ACTIVITY)
         # В 5-минутном окне ВСЕГДА должна быть живая активность
@@ -513,6 +534,33 @@ class GrokJevEngine:
         # 3. Если откат глубже -8.0% — это слом структуры / дамп
         if m1 < -8.0:
             return False, -0.14, 0.0, f"flush-dump (m1 {m1:+.1f}% < -8.0%) — falling knife"
+
+        # 3.1. НЕ ПОКУПАЕМ КРАСНУЮ МИНУТУ: раньше пускало до m1 -8% ("bid the flush"), и бот входил в падающий нож.
+        _m1_floor = float(getattr(_c, "JEV_MIN_M1_ENTRY_FLOOR_PCT", -8.0))
+        if m1 < _m1_floor:
+            return False, -0.14, 0.0, f"flush-wait red-minute (m1 {m1:+.1f}% < {_m1_floor:+.1f}%) — price is falling right now"
+
+        # 3.2. ПОДТВЕРЖДЕНИЕ ТРЕНДА ПО СОБСТВЕННОЙ ИСТОРИИ ЦЕН (DexScreener m1/m5 запаздывают на минуту и больше)
+        if getattr(_c, "JEV_TREND_CONFIRM_ENABLED", False):
+            _mint = str(((pair_data.get("baseToken") or {}).get("address")) or "")
+            if _mint:
+                _now = time.time()
+                _h = self._record_px(_mint, entry_price)
+                # (а) уже слили с недавнего максимума — это откат после пика, а не вход в рост
+                _win = float(getattr(_c, "JEV_DD_WINDOW_MIN", 30.0)) * 60.0
+                _hi = max([p for t, p in _h if _now - t <= _win] or [0.0])
+                _max_dd = float(getattr(_c, "JEV_MAX_DD_FROM_HIGH", 0.12))
+                if _hi > 0 and entry_price < _hi * (1.0 - _max_dd):
+                    return False, -0.14, 0.0, f"flush-wait post-peak-fade (price {(entry_price/_hi-1)*100:+.1f}% from {int(_win/60)}m high)"
+                # (б) цена должна быть ВЫШЕ, чем 20-300 секунд назад (растём, а не падаем / стоим)
+                _rmin = float(getattr(_c, "JEV_RISE_REF_MIN_SEC", 20.0))
+                _rmax = float(getattr(_c, "JEV_RISE_REF_MAX_SEC", 300.0))
+                _ref = [p for t, p in _h if _rmin <= _now - t <= _rmax]
+                if not _ref:
+                    return False, -0.14, 0.0, "flush-wait no-trend-history (first sight, need a second price)"
+                _eps = float(getattr(_c, "JEV_RISE_EPS", 0.002))
+                if entry_price < _ref[-1] * (1.0 + _eps):
+                    return False, -0.14, 0.0, f"flush-wait not-rising ({(entry_price/_ref[-1]-1)*100:+.2f}% vs earlier scan)"
 
         # 4. Расчет стопа под фитиль отката ("The stop lives under the wick"):
         # На мем-коинах Solana минутный шум составляет 6-10%, поэтому ставим рабочий стоп -14%..-16%
@@ -777,6 +825,19 @@ class GrokJevEngine:
                 target = matching if matching else pairs
                 best = max(target, key=lambda p: float((p.get("liquidity") or {}).get("usd", 0) or 0))
                 return best
+        except Exception:
+            pass
+        return None
+
+    async def fetch_pair_fresh(self, address: str, chain: str) -> Optional[dict]:
+        """Свежие данные DexScreener в обход кэша analyzer (кэш держит данные до 60 секунд и дольше)."""
+        from http_client import fetch_json
+        try:
+            st, data = await fetch_json(f"https://api.dexscreener.com/latest/dex/tokens/{address}", timeout=5, retries=1)
+            if st == 200 and isinstance(data, dict):
+                pairs = [p for p in (data.get("pairs") or []) if str(p.get("chainId", "")).lower() == chain.lower()]
+                if pairs:
+                    return max(pairs, key=lambda p: float((p.get("liquidity") or {}).get("usd", 0) or 0))
         except Exception:
             pass
         return None
@@ -1083,6 +1144,21 @@ class GrokJevEngine:
             print(f"⏳ [GROK+JEV] {symbol} ({chain}): FILLS ➔ {flush_msg}")
             return False, f"fills-flush-wait {flush_msg}"
 
+        # 3.5. ПЕРЕПРОВЕРКА НА СВЕЖИХ ДАННЫХ: цена из кэша могла устареть на минуту, пока монета уже падает
+        if getattr(_c, "JEV_FRESH_RECHECK_ENABLED", False):
+            _fresh = await self.fetch_pair_fresh(address, chain)
+            if _fresh:
+                _fp = float(_fresh.get("priceUsd", 0) or 0)
+                if _fp > 0:
+                    pair, price = _fresh, _fp
+                    _hard2_ok, _hard2_why = self.hard_gate(address, pair, chain, None)
+                    if not _hard2_ok:
+                        return False, f"fills-flush-wait fresh-recheck {_hard2_why}"
+                    flush_ok, wick_pct, wick_price, flush_msg = self.check_flush_and_wick(pair, price)
+                    if not flush_ok:
+                        print(f"⏳ [GROK+JEV] {symbol} ({chain}): FRESH RECHECK ➔ {flush_msg}")
+                        return False, f"fills-flush-wait fresh {flush_msg}"
+
         # 3.5. Судья недоступен (нет ключа / 429 / бюджет) -> не жжём RugCheck/Jupiter впустую
         if getattr(_c, "JEV_LLM_ENFORCE", True) and not self.llm_ready():
             return False, "llm-unavailable-wait"
@@ -1226,7 +1302,7 @@ async def grok_bot_jev_loop(tracker, analyzer=None):
                         evaluated_cooldown[(address, chain)] = now + 20.0    # Повтор через 20с при 429
                     elif "candle-spike" in why_low or "flush" in why_low or "pullback" in why_low:
                         evaluated_cooldown[(address, chain)] = now + 25.0    # Ждем откат 25 секунд!
-                    elif "vol5-low" in why_low or "tx5-low" in why_low or "no-momentum" in why_low:
+                    elif "vol5-low" in why_low or "tx5-low" in why_low or "no-momentum" in why_low or "downtrend" in why_low:
                         evaluated_cooldown[(address, chain)] = now + 45.0    # Набор объема, проверка через 45с
                     elif "max-positions" in why_low:
                         evaluated_cooldown[(address, chain)] = now + 30.0    # Ждем слота 30с
