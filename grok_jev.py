@@ -290,7 +290,7 @@ class GrokJevEngine:
 
         # 2. Возраст: не входить в первые 3.5 минуты (зона дампа создателя, кейс KAT на 0m!)        # 2. Возраст: строго 15 мин - 72 ч (как у savipww)
         created_at = pair_data.get("pairCreatedAt") or 0
-        age_min = (time.time() * 1000 - created_at) / 60000.0 if created_at else 999.0
+        age_min = (time.time() * 1000 - created_at) / 60000.0 if created_at else 0.0
 
         min_age = float(getattr(_c, "JEV_MIN_AGE_MIN", 15.0))
         max_age = float(getattr(_c, "JEV_MAX_AGE_MIN", 72.0 * 60.0))  # 72 часа
