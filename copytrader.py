@@ -9,7 +9,8 @@ class CopyTrader:
         self.tracker = tracker
         self.analyzer = analyzer
         self.wallets = self.load_wallets()
-        self.HELIUS_API_KEY = "9efda6f4-fddb-42d3-a2b1-098bbbecd299"
+        import os as _os, config as _cfg
+        self.HELIUS_API_KEY = _os.getenv("HELIUS_API_KEY") or getattr(_cfg, "HELIUS_API_KEY", "")
         self.rpc_url = f"https://mainnet.helius-rpc.com/?api-key={self.HELIUS_API_KEY}"
         self.wss_url = f"wss://mainnet.helius-rpc.com/?api-key={self.HELIUS_API_KEY}"
         self.processed_sigs = set()
@@ -18,36 +19,84 @@ class CopyTrader:
         self.whale_first_price = {}  # mint -> цена в момент покупки ПЕРВОГО кита
         
     def load_wallets(self):
+        """Кошельки для копирования. Источники по порядку:
+        1) smart_money_hunter.db — база В ПАМЯТИ, которую охотник пополняет раз в 15 мин (самые свежие данные);
+        2) smart_wallets_db.json — файл, который охотник пишет рядом с ботом (пропадает при рестарте Render, если не закоммичен);
+        3) smart_wallets.txt — список (ручные + tier 1-2 из охотника).
+        Из базы берутся только tier <= COPY_MIN_TIER (по умолчанию 2)."""
         import os
+        import config as _cf
+        min_tier = int(getattr(_cf, "COPY_MIN_TIER", 2))
         wallets = {}
+
+        def _add_db(db):
+            for w, data in (db or {}).items():
+                if not isinstance(data, dict) or data.get("chain") != "solana" or w in wallets:
+                    continue
+                tier = int(data.get("tier", 3) or 3)
+                if tier > min_tier:
+                    continue   # слабые кошельки (tier-3: 1 удачный токен) не копируем
+                pnl = float(data.get("total_pnl", 0) or 0)
+                wallets[w] = f"@Tier{tier}_{w[:4]}_+${pnl:,.0f}"
+
+        # 1) живая база охотника (тот же процесс)
+        try:
+            from smart_money_hunter import smart_money_hunter as _smh
+            _add_db(_smh.db)
+        except Exception:
+            pass
+        # 2) файл базы
         if os.path.exists("smart_wallets_db.json"):
             try:
-                with open("smart_wallets_db.json", "r") as f:
-                    db = json.load(f)
-                    for w, data in db.items():
-                        if data.get("chain") == "solana":
-                            tier = data.get("tier", 3)
-                            pnl = data.get("total_pnl", 0)
-                            wallets[w] = f"@Tier{tier}_{w[:4]}_+${pnl:,.0f}"
+                with open("smart_wallets_db.json", "r", encoding="utf-8") as f:
+                    _add_db(json.load(f))
             except Exception:
                 pass
+        # 3) txt (ручные и синхронизированные tier 1-2)
         if os.path.exists("smart_wallets.txt"):
             try:
-                with open("smart_wallets.txt", "r") as f:
+                with open("smart_wallets.txt", "r", encoding="utf-8") as f:
                     for line in f:
                         line = line.strip()
                         if line and not line.startswith("#") and line not in wallets:
                             wallets[line] = f"@Smart_{line[:4]}"
             except Exception:
                 pass
-        
+
         if not wallets:
             wallets = {
                 "5FGoPPj1nL8LCnfVnpTmreqQtqLuMXXAwuS1uahMrp8V": "@DumbCrayon",
                 "2yXwy5Dsa1XtEXcsrkFVRJeyuWD3qKkMN3pP3p5VTW3V": "@Salem1299"
             }
         return wallets
-        
+
+    async def _subscribe_new(self, ws, subscribed: set) -> int:
+        """Подписывается на кошельки, на которые ещё нет подписки (в т.ч. найденные охотником уже после старта)."""
+        n = 0
+        for wallet in list(self.wallets.keys()):
+            if wallet in subscribed:
+                continue
+            self._req_id = getattr(self, "_req_id", 0) + 1
+            await ws.send(json.dumps({
+                "jsonrpc": "2.0", "id": self._req_id, "method": "logsSubscribe",
+                "params": [{"mentions": [wallet]}, {"commitment": "processed"}]}))
+            subscribed.add(wallet)
+            n += 1
+        return n
+
+    async def _refresh_loop(self, ws, subscribed: set):
+        """Раз в 2 минуты перечитывает базу охотника и подписывается на новых китов, не переподключаясь."""
+        while True:
+            await asyncio.sleep(120)
+            try:
+                self.wallets = self.load_wallets()
+                added = await self._subscribe_new(ws, subscribed)
+                if added:
+                    print(f"👥 Копитрейдер: подписался на {added} новых китов (всего {len(subscribed)})")
+            except Exception as e:
+                print(f"⚠️ Копитрейдер: ошибка обновления базы китов: {e}")
+                return
+
     async def get_token_price(self, mint):
         try:
             import market_data
@@ -161,7 +210,7 @@ class CopyTrader:
                         print(f"👁️ WHALE WATCH: {trader_name} купил {mint[:12]}... слежу за ценой (вход на 2-м ките).")
                     print(f"🚨 COPYTRADE: {trader_name} купил {mint[:12]}... (китов за 10 мин: {n_whales}/{getattr(config, 'WHALE_CONSENSUS', 2)})")
                     if n_whales < getattr(config, 'WHALE_CONSENSUS', 2) or mint in self.consensus_done:
-                        return  # ждём раннего консенсуса
+                        continue  # ждём раннего консенсуса
                     self.consensus_done.add(mint)
                     # Guard от опоздания: цена не должна улететь от точки входа первого кита
                     cur_price = await self.get_token_price(mint)
@@ -188,9 +237,34 @@ class CopyTrader:
                         
                     price_usd = await self.get_token_price(mint)
                     symbol = f"COPY_{trader_name[1:5].upper()}"
+
+                    # Защита: инсайдеры тоже сливают на копирующих. Полный антискам Grok-JEV (RugCheck/GoPlus/холдеры/Jupiter).
+                    if getattr(config, "COPY_USE_ANTISCAM", True):
+                        try:
+                            from grok_jev import grok_jev as _gj
+                            _pair = await _gj.fetch_pair(mint, "solana")
+                            if not _pair:
+                                print(f"🚫 [COPY] {mint[:12]}: нет данных пары, не копируем вслепую")
+                                continue
+                            _ok, _why, _hs = await _gj.full_anti_scam_audit(mint, symbol, "solana", _pair)
+                            if not _ok:
+                                print(f"🚫 [COPY-SCAM] {trader_name} {mint[:12]}: {_why}")
+                                continue
+                            if getattr(config, "JEV_REQUIRE_HOLDER_DATA", True) and not (
+                                    float(_hs.get("top1_pct", 0) or 0) > 0 or float(_hs.get("top10_pct", 0) or 0) > 0):
+                                print(f"🚫 [COPY] {mint[:12]}: нет данных о холдерах")
+                                continue
+                            _px = float(_pair.get("priceUsd", 0) or 0)
+                            if _px > 0:
+                                price_usd = _px
+                            symbol = str((_pair.get("baseToken") or {}).get("symbol") or symbol)
+                        except Exception as _e:
+                            print(f"⚠️ [COPY] антискам недоступен ({type(_e).__name__}), не копируем")
+                            continue
                     
                     capital = self.tracker.get_total_capital()
                     position_size = max(4.0, min(100.0, capital * (config.REINVEST_PERCENT / 100.0)))
+                    position_size = min(position_size, float(getattr(config, "COPY_MAX_TICKET_USD", 15.0)))
                     
                     self.tracker.add_position(symbol, mint, price_usd, amount_usd=position_size,
                                                 source=f"COPY:{trader_name}")
@@ -219,23 +293,18 @@ class CopyTrader:
                 async with websockets.connect(current_wss) as ws:
                     print(f"👥 Копитрейдер: Подключен к {current_wss.split('.')[0]}... Слушаем {len(self.wallets)} китов")
                     
-                    req_id = 1
-                    for wallet in self.wallets.keys():
-                        payload = {
-                            "jsonrpc": "2.0",
-                            "id": req_id,
-                            "method": "logsSubscribe",
-                            "params": [{"mentions": [wallet]}, {"commitment": "processed"}]
-                        }
-                        await ws.send(json.dumps(payload))
-                        req_id += 1
-                        
-                    async for message in ws:
-                        data = json.loads(message)
-                        if "method" in data and data["method"] == "logsNotification":
-                            result = data["params"]["result"]
-                            signature = result["value"]["signature"]
-                            asyncio.create_task(self.process_transaction(signature))
+                    subscribed = set()
+                    await self._subscribe_new(ws, subscribed)
+                    _refresher = asyncio.create_task(self._refresh_loop(ws, subscribed))
+                    try:
+                        async for message in ws:
+                            data = json.loads(message)
+                            if "method" in data and data["method"] == "logsNotification":
+                                result = data["params"]["result"]
+                                signature = result["value"]["signature"]
+                                asyncio.create_task(self.process_transaction(signature))
+                    finally:
+                        _refresher.cancel()
                                 
             except Exception as e:
                 err_msg = str(e)
