@@ -96,8 +96,11 @@ def get_reject_summary(reset: bool = True) -> str:
 # --- Groq free tier: бюджет и пер-модельные паузы ---
 _BUDGET = {"day": None, "n70": 0}
 _CD = {"70b": 0.0, "8b": 0.0}
-_MODELS = [("llama-3.3-70b-versatile", "70b"), ("llama-3.1-8b-instant", "8b")]
-DAILY_70B = 150          # ~360 токенов на вызов -> ~54k из 100k токенов/сутки
+# Llama на бесплатном Groq отключены (404). ID берутся из env, чтобы менять без правки кода:
+# JEV_MODEL_PRIMARY / JEV_MODEL_FALLBACK. Теги "70b"/"8b" - только внутренние метки (основная/запасная).
+_MODELS = [(os.getenv("JEV_MODEL_PRIMARY", "openai/gpt-oss-120b").strip(), "70b"),
+           (os.getenv("JEV_MODEL_FALLBACK", "openai/gpt-oss-20b").strip(), "8b")]
+DAILY_70B = 150          # лимит бесплатного тарифа 200k токенов/сутки на модель, ~1.2k на вызов
 
 # --- Пороги ответа JEV (any null / нет ключа = отказ) ---
 _NEED = {
@@ -580,11 +583,13 @@ class GrokJevEngine:
             if tag == "70b" and _BUDGET["n70"] >= DAILY_70B:
                 continue
             payload = {
-                "model": model, "temperature": 0.1, "max_tokens": 300,
+                "model": model, "temperature": 0.1, "max_tokens": 700,
                 "response_format": {"type": "json_object"},
                 "messages": [{"role": "system", "content": system_prompt},
                              {"role": "user", "content": user_content}],
             }
+            if model.startswith("openai/gpt-oss"):
+                payload["reasoning_effort"] = "low"   # reasoning-модель: иначе размышления съедят max_tokens
             st, data = await fetch_json(
                 "https://api.groq.com/openai/v1/chat/completions", method="POST",
                 headers={"Authorization": f"Bearer {self.groq_key}", "Content-Type": "application/json"},
