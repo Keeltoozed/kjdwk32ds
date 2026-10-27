@@ -40,6 +40,8 @@ import os
 import json
 import time
 import asyncio
+import re
+from collections import Counter
 from typing import Dict, Any, Tuple, Optional
 
 # Глобальная статистика воронки (THE FUNNEL)
@@ -68,6 +70,28 @@ def _get_api_semaphore():
     return _api_sems[k]
 
 _COOLDOWN_UNTIL = 0.0  # Пауза при 429 rate-limit
+
+# --- Диагностика: почему бот не покупает (счётчик причин отказа за окно ~60с) ---
+REJECT_STATS = Counter()
+
+
+def _reason_key(why: str) -> str:
+    """'hard-gate-reject sellers-dominating 5b/9s ...' -> 'hard-gate-reject sellers-dominating'."""
+    out = []
+    for t in str(why).split()[:4]:
+        if re.search(r"[\d$%(\[]", t):
+            break
+        out.append(t.rstrip(":,"))
+    return " ".join(out)[:60] or "other"
+
+
+def get_reject_summary(reset: bool = True) -> str:
+    if not REJECT_STATS:
+        return "🔎 [REJECTS/60s] нет оценённых кандидатов (пустая вселенная или все на кулдауне)"
+    top = ", ".join(f"{k}={v}" for k, v in REJECT_STATS.most_common(8))
+    if reset:
+        REJECT_STATS.clear()
+    return f"🔎 [REJECTS/60s] {top}"
 
 # --- Groq free tier: бюджет и пер-модельные паузы ---
 _BUDGET = {"day": None, "n70": 0}
@@ -170,6 +194,15 @@ class GrokJevEngine:
     # =========================================================================
     # 1. HARD GATE: "if it fails here, JEV never sees it"
     # =========================================================================
+    def llm_ready(self) -> bool:
+        """Есть ли шанс получить ответ судьи прямо сейчас (ключ, пауза 429, дневной бюджет)."""
+        now = time.time()
+        if not self.groq_key or now < _COOLDOWN_UNTIL:
+            return False
+        fresh_day = _BUDGET["day"] != time.strftime("%Y-%m-%d", time.gmtime())
+        ok70 = now >= _CD["70b"] and (fresh_day or _BUDGET["n70"] < DAILY_70B)
+        return ok70 or now >= _CD["8b"]
+
     def hard_gate(
         self,
         mint: str,
@@ -401,7 +434,10 @@ class GrokJevEngine:
 
         # LLM не ответила -> отказ (fail-closed). "rate-limit" в причине: цикл повторит через 20с.
         if not llm_res:
-            return False, {}, "llm-rate-limit-429-retry"
+            if not getattr(_c, "JEV_LLM_ENFORCE", True):
+                print(f"👻 [JEV-SHADOW] {symbol}: судья молчит -> пропуск (shadow)")
+                return True, {}, "shadow-no-llm"
+            return False, {}, "llm-unavailable-retry"
 
         failed = _jev_failed(llm_res)
         is_passed = not failed
@@ -417,6 +453,9 @@ class GrokJevEngine:
                   f"mom={llm_res.get('momentum_already_spent')} worth={llm_res.get('pick_worth_trading')} "
                   f"conf={llm_res.get('confidence')} [{llm_res.get('source', 'llm')}]")
             return True, llm_res, "PASS"
+        if not getattr(_c, "JEV_LLM_ENFORCE", True):
+            print(f"👻 [JEV-SHADOW] {symbol}: судья отказал бы ({', '.join(failed)}) -> пропуск (shadow)")
+            return True, llm_res, "shadow-pass"
         return False, llm_res, "JEV soft-reject: " + ", ".join(failed)
 
     # =========================================================================
@@ -1022,6 +1061,10 @@ class GrokJevEngine:
             print(f"⏳ [GROK+JEV] {symbol} ({chain}): FILLS ➔ {flush_msg}")
             return False, f"fills-flush-wait {flush_msg}"
 
+        # 3.5. Судья недоступен (нет ключа / 429 / бюджет) -> не жжём RugCheck/Jupiter впустую
+        if getattr(_c, "JEV_LLM_ENFORCE", True) and not self.llm_ready():
+            return False, "llm-unavailable-wait"
+
         # 4. ПОЛНЫЙ АНТИСКАМ-АУДИТ (RUGCHECK + GOPLUS + ONCHAIN + DEV/WHALES + JITO-BUNDLE + JUPITER SIM + CLONE)
         # Выполняется ТОЛЬКО для тех 2-5% живых ракет, которые уже прошли Hard Gate и Fills!
         sec_ok, sec_why, _h_stats = await self.full_anti_scam_audit(address, symbol, chain, pair)
@@ -1117,6 +1160,7 @@ async def grok_bot_jev_loop(tracker, analyzer=None):
             # Периодический отчет воронки THE FUNNEL (раз в 60 сек)
             if now - last_funnel_print >= 60.0:
                 print(get_funnel_summary())
+                print(get_reject_summary())
                 last_funnel_print = now
 
             # Очистка устаревших кулдаунов
@@ -1151,8 +1195,11 @@ async def grok_bot_jev_loop(tracker, analyzer=None):
                 try:
                     ok, why = await grok_jev.process_candidate(address, chain, tracker)
                     why_low = str(why).lower()
+                    REJECT_STATS["BOUGHT" if ok else _reason_key(why)] += 1
                     if ok:
                         evaluated_cooldown[(address, chain)] = now + 3600.0  # Куплен, не дергать
+                    elif "llm-unavailable" in why_low:
+                        evaluated_cooldown[(address, chain)] = now + 60.0    # Судья недоступен: не долбим аудит
                     elif "rate-limit" in why_low or "429" in why_low:
                         evaluated_cooldown[(address, chain)] = now + 20.0    # Повтор через 20с при 429
                     elif "candle-spike" in why_low or "flush" in why_low or "pullback" in why_low:
