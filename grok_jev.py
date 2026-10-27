@@ -69,6 +69,56 @@ def _get_api_semaphore():
 
 _COOLDOWN_UNTIL = 0.0  # Пауза при 429 rate-limit
 
+# --- Groq free tier: бюджет и пер-модельные паузы ---
+_BUDGET = {"day": None, "n70": 0}
+_CD = {"70b": 0.0, "8b": 0.0}
+_MODELS = [("llama-3.3-70b-versatile", "70b"), ("llama-3.1-8b-instant", "8b")]
+DAILY_70B = 150          # ~360 токенов на вызов -> ~54k из 100k токенов/сутки
+
+# --- Пороги ответа JEV (any null / нет ключа = отказ) ---
+_NEED = {
+    "concentration_is_exit_risk": ("max", 0.55),
+    "momentum_already_spent": ("max", 0.60),
+    "liquidity_fits_ticket": ("min", 0.60),
+    "dev_still_loaded": ("max", 0.55),
+    "pick_worth_trading": ("min", 0.60),
+    "confidence": ("min", 0.55),
+}
+
+
+def _jev_failed(res: dict) -> list:
+    """Список метрик, не прошедших пороги. Пустой список = PASS."""
+    bad = []
+    for k, (kind, th) in _NEED.items():
+        v = res.get(k)
+        if (not isinstance(v, (int, float)) or isinstance(v, bool)
+                or (kind == "max" and v > th) or (kind == "min" and v < th)):
+            bad.append(k)
+    return bad
+
+
+def _data_line(pair: dict, hs: dict, ticket: float) -> str:
+    """Одна компактная строка данных для LLM (NA = данных нет)."""
+    pc = pair.get("priceChange") or {}
+    vol = pair.get("volume") or {}
+    tx = pair.get("txns") or {}
+    t5, t24 = tx.get("m5") or {}, tx.get("h24") or {}
+    ca = pair.get("pairCreatedAt") or 0
+    age = round((time.time() * 1000 - ca) / 60000) if ca else "NA"
+    v24, v6 = float(vol.get("h24") or 0), float(vol.get("h6") or 0)
+    ratio = round(v6 / (v24 / 4), 2) if v24 > 0 else "NA"
+    top1 = hs.get("top1_pct") or "NA"       # 0.0 в _h_stats = данных нет
+    top10 = hs.get("top10_pct") or "NA"
+    hold = hs.get("holders_count") or "NA"
+    return (f"age={age}m liq={(pair.get('liquidity') or {}).get('usd', 'NA')} "
+            f"mcap={pair.get('fdv') or pair.get('marketCap') or 'NA'} holders={hold} "
+            f"top1={top1} top10={top10} dev={hs.get('dev_pct', 'NA')} "
+            f"vol=m5:{vol.get('m5', 'NA')},h1:{vol.get('h1', 'NA')},h6:{vol.get('h6', 'NA')},h24:{vol.get('h24', 'NA')} "
+            f"vol_ratio={ratio} trades24={(t24.get('buys') or 0) + (t24.get('sells') or 0)} "
+            f"b5={t5.get('buys', 'NA')} s5={t5.get('sells', 'NA')} "
+            f"pc=m1:{pc.get('m1', 'NA')},m5:{pc.get('m5', 'NA')},h1:{pc.get('h1', 'NA')},h6:{pc.get('h6', 'NA')},h24:{pc.get('h24', 'NA')} "
+            f"socials={'true' if (pair.get('info') or {}).get('socials') else 'false'} ticket={ticket:.0f}")
+
 
 def get_funnel_summary() -> str:
     """Возвращает форматированную строку воронки THE FUNNEL."""
@@ -292,7 +342,7 @@ class GrokJevEngine:
         hit = _JEV_CACHE.get(str(ck))
         if hit:
             hit_passed = hit[1].get("passed", False)
-            cache_ttl = 180.0 if hit_passed else 35.0
+            cache_ttl = 300.0 if hit_passed else 900.0
             if (now - hit[0]) < cache_ttl:
                 res = hit[1]
                 return res.get("passed", False), res, f"cached ({res.get('reason', '')})"
@@ -319,6 +369,8 @@ class GrokJevEngine:
         top1_pct = float((holder_stats or {}).get("top1_pct", 4.0))
         top10_pct = float((holder_stats or {}).get("top10_pct", 22.0))
         dev_pct = float((holder_stats or {}).get("dev_pct", 2.0))
+        ticket = float(getattr(_c, "BASE_TRADE_AMOUNT_USD", 15.0) or 15.0)
+        data_line = _data_line(pair_data, holder_stats or {}, ticket)
 
         # Попытка вызова LLM (Groq -> xAI Grok -> Gemini)
         llm_res = None
@@ -327,55 +379,33 @@ class GrokJevEngine:
         if now >= _COOLDOWN_UNTIL and (self.groq_key or self.xai_key or self.gemini_key):
             try:
                 async with _get_api_semaphore():
-                    # Соблюдаем интервал между вызовами для бесплатного API (мин 2.0с)
+                    # Соблюдаем интервал между вызовами для бесплатного API (мин 4.0с)
                     dt = now - _LAST_API_CALL_TS
-                    if dt < 2.0:
-                        await asyncio.sleep(2.0 - dt)
+                    if dt < 4.0:
+                        await asyncio.sleep(4.0 - dt)
                         
                     llm_res = await asyncio.wait_for(
-                        self._call_llm_jev(mint, symbol, name, chain, socials, websites, m1, m5, h1, liq, mcap, vol5, top1_pct, top10_pct, dev_pct),
-                        timeout=4.0
+                        self._call_llm_jev(mint, symbol, name, chain, socials, websites, m1, m5, h1, liq, mcap, vol5, top1_pct, top10_pct, dev_pct, data_line),
+                        timeout=10.0
                     )
                     _LAST_API_CALL_TS = time.time()
             except asyncio.TimeoutError:
-                print(f"⚠️ [JEV/GROK] LLM Timeout (4s) для {symbol} ({mint[:8]}) ➔ Переход на локальный скоринг.")
+                print(f"⚠️ [JEV/GROK] LLM Timeout (10s) для {symbol} ({mint[:8]}) ➔ отказ, повтор позже.")
             except Exception as e:
                 err_str = str(e).lower()
                 if "429" in err_str or "rate" in err_str or "quota" in err_str:
                     _COOLDOWN_UNTIL = time.time() + 60.0  # 1 мин пауза
-                    print(f"⏳ [JEV/GROK] Free API 429 Rate Limit. Пауза 60с, используем локальный движок.")
+                    print(f"⏳ [JEV/GROK] Free API 429 Rate Limit. Пауза 60с, токен повторим позже.")
                 else:
                     print(f"⚠️ [JEV/GROK] Ошибка вызова LLM ({type(e).__name__}): {e}")
 
-        # Если LLM не вернула ответ — используем детерминированный локальный скоринг JEV
+        # LLM не ответила -> отказ (fail-closed). "rate-limit" в причине: цикл повторит через 20с.
         if not llm_res:
-            llm_res = self._deterministic_jev_eval(
-                symbol, name, socials, websites, m1, m5, h1, liq, mcap, vol5, top1_pct, top10_pct, dev_pct, is_pump=is_pump
-            )
+            return False, {}, "llm-rate-limit-429-retry"
 
-        # Проверка порогов SOFT GATE из thresholds.py:
-        # Точные пороги из окна thresholds.py и soft-правил savipww:
-        min_acc = float(getattr(_c, "JEV_MIN_ACCOUNT_IS_PROJECT", 0.70))      # >= 0.70
-        max_recycled = float(getattr(_c, "JEV_MAX_RECYCLED_ACCOUNT", 0.50))  # <= 0.50
-        max_conc = float(getattr(_c, "JEV_MAX_CONCENTRATION_RISK", 0.55))    # <= 0.55
-        max_mspent = float(getattr(_c, "JEV_MAX_MOMENTUM_SPENT", 0.60))      # <= 0.60
-        min_liq_ticket = float(getattr(_c, "JEV_MIN_LIQUIDITY_FITS_TICKET", 0.60)) # >= 0.60
-        max_dev = float(getattr(_c, "JEV_MAX_DEV_STILL_LOADED", 0.55))       # <= 0.55
-
-        p_acc = float(llm_res.get("account_is_the_project", 0.8)) >= min_acc
-        p_rec = float(llm_res.get("recycled_account", 0.1)) <= max_recycled
-        p_conc = float(llm_res.get("concentration_is_exit_risk", 0.2)) <= max_conc
-        p_msp = float(llm_res.get("momentum_already_spent", 0.4)) <= max_mspent
-        p_liq = float(llm_res.get("liquidity_fits_ticket", 0.8)) >= min_liq_ticket
-        p_dev = float(llm_res.get("dev_still_loaded", 0.1)) <= max_dev
-
-        # Дополнительные soft-пороги из сводки savipww:
-        p_aud = float(llm_res.get("audience_real", 0.8)) >= 0.45
-        p_crowd = float(llm_res.get("crowd", 0.8)) >= 0.55
-        p_worth = float(llm_res.get("pick_worth_trading", 0.8)) >= 0.60
-        p_conf = float(llm_res.get("confidence", 0.8)) >= 0.55
-
-        is_passed = all([p_acc, p_rec, p_conc, p_msp, p_liq, p_dev, p_aud, p_crowd, p_worth, p_conf])
+        failed = _jev_failed(llm_res)
+        is_passed = not failed
+        llm_res["passed"] = is_passed          # кэш читает это поле
 
         # Кэшируем результат
         _JEV_CACHE[str(ck)] = (now, llm_res)
@@ -383,19 +413,11 @@ class GrokJevEngine:
         if is_passed:
             FUNNEL_STATS["jev_gate"] += 1
             FUNNEL_STATS["passed"] += 1
-            print(f"🤖 [JEV/GROK-PASS] {symbol} ({mint[:8]}): PASS! {llm_res.get('reason', '')} "
-                  f"(Acc:{llm_res.get('account_is_the_project', 0):.2f}, Mom:{llm_res.get('momentum_already_spent', 0):.2f}, Conc:{llm_res.get('concentration_is_exit_risk', 0):.2f})")
-            return True, llm_res, llm_res.get("reason", "PASS")
-        else:
-            fail_reasons = []
-            if not p_acc: fail_reasons.append("fake/unrelated account")
-            if not p_rec: fail_reasons.append("recycled account")
-            if not p_conc: fail_reasons.append("high concentration exit risk")
-            if not p_msp: fail_reasons.append("momentum exhausted (top)")
-            if not p_liq: fail_reasons.append("insufficient depth for ticket")
-            if not p_dev: fail_reasons.append("dev loaded")
-            why = ", ".join(fail_reasons)
-            return False, llm_res, f"JEV soft-reject: {why}"
+            print(f"🤖 [JEV/GROK-PASS] {symbol} ({mint[:8]}): conc={llm_res.get('concentration_is_exit_risk')} "
+                  f"mom={llm_res.get('momentum_already_spent')} worth={llm_res.get('pick_worth_trading')} "
+                  f"conf={llm_res.get('confidence')} [{llm_res.get('source', 'llm')}]")
+            return True, llm_res, "PASS"
+        return False, llm_res, "JEV soft-reject: " + ", ".join(failed)
 
     # =========================================================================
     # 3. FILLS: "We bid the flush, not the candle"
@@ -461,7 +483,8 @@ class GrokJevEngine:
         socials: list, websites: list,
         m1: float, m5: float, h1: float,
         liq: float, mcap: float, vol5: float,
-        top1_pct: float, top10_pct: float, dev_pct: float
+        top1_pct: float, top10_pct: float, dev_pct: float,
+        data_line: str = ""
     ) -> Optional[dict]:
         """Вызов LLM (Groq OpenAI-compatible или xAI или Gemini) с JSON Schema."""
         from http_client import fetch_json
@@ -474,86 +497,64 @@ class GrokJevEngine:
         socials_str = "; ".join(soc_text) if soc_text else "None"
 
         system_prompt = (
-            "You are JEV, an expert quantitative on-chain risk engine and trading bot AI. "
-            "Evaluate meme breakout candidates that already passed HARD math gates. "
-            "Output strictly valid JSON with 6 float metrics (0.0 to 1.0) and short reason:\n"
-            "1. account_is_the_project (0.0-1.0): Social is genuinely created for this token (not impersonating Elon Musk/celebrity). If socials are 'None' but 5m volume > $8k with active buyers, score >= 0.80 (market validated).\n"
-            "2. recycled_account (0.0-1.0): 0.0=fresh project, 1.0=reused old rug account.\n"
-            "3. concentration_is_exit_risk (0.0-1.0): Risk top holders/whales dump on us.\n"
-            "4. momentum_already_spent (0.0-1.0): 0.0=fresh momentum or consolidation on 1m, 1.0=exhausted peak vertical blow-off.\n"
-            "5. liquidity_fits_ticket (0.0-1.0): Liquidity depth vs small ticket size.\n"
-            "6. dev_still_loaded (0.0-1.0): Dev holding undisclosed hidden supply.\n\n"
-            "Format:\n"
-            "{\"account_is_the_project\": 0.85, \"recycled_account\": 0.10, \"concentration_is_exit_risk\": 0.25, "
-            "\"momentum_already_spent\": 0.35, \"liquidity_fits_ticket\": 0.90, \"dev_still_loaded\": 0.15, "
-            "\"reason\": \"one-sentence summary\"}"
+            "You are JEV, a risk judge for Solana memecoin trades. You never trade or size positions. "
+            "Answer ONLY from the data line. You cannot see social media, news or the web. "
+            "Do not assume the token is safe because it reached you. Missing data is shown as NA: "
+            "for any score that needs an NA field return null and list that field in \"missing\". "
+            "Never guess. If signals conflict, score toward risk. Use the full 0.0-1.0 range.\n"
+            "vol_ratio = h6 volume / (h24 volume / 4); below 1 means volume is fading.\n"
+            "Scores:\n"
+            "concentration_is_exit_risk: 0 = holders are spread, 1 = one or few wallets can dump the pool (top1, top10, liq; holders only if not NA).\n"
+            "momentum_already_spent: 0 = pullback or consolidation with volume intact, 1 = blow-off with fading volume (pc, vol_ratio).\n"
+            "liquidity_fits_ticket: ticket/liq <=0.5% -> >=0.9; 2% -> ~0.6; >=5% -> <=0.2.\n"
+            "dev_still_loaded: 0 = dev holds ~nothing, 1 = dev holds a lot (use dev only).\n"
+            "pick_worth_trading: probability that entering now beats ~5% round-trip costs.\n"
+            "confidence: completeness and consistency of the data.\n"
+            "Reply with ONE JSON object and no other text. Keys: concentration_is_exit_risk, "
+            "momentum_already_spent, liquidity_fits_ticket, dev_still_loaded, pick_worth_trading, "
+            "confidence (each a float 0-1 or null), missing (list of field names)."
         )
 
-        user_content = (
-            f"Token: {name} (${symbol}) on {chain}\n"
-            f"Mint/Address: {mint}\n"
-            f"Social Links: {socials_str}\n"
-            f"Price Action: m1 {m1:+.1f}%, m5 {m5:+.1f}%, h1 {h1:+.1f}%\n"
-            f"Liquidity: ${liq:,.0f} | MCap: ${mcap:,.0f} | 5m Volume: ${vol5:,.0f}\n"
-            f"Holders: Top-1 {top1_pct:.1f}%, Top-10 {top10_pct:.1f}%, Dev {dev_pct:.1f}%"
-        )
+        user_content = data_line
 
-        # 1. Попытка через Groq (OpenAI-compatible)
-        if self.groq_key:
-            url = "https://api.groq.com/openai/v1/chat/completions"
-            headers = {
-                "Authorization": f"Bearer {self.groq_key}",
-                "Content-Type": "application/json"
-            }
+        return await self._groq_judge(system_prompt, user_content)
+
+    async def _groq_judge(self, system_prompt: str, user_content: str) -> Optional[dict]:
+        """Groq free tier: 70B с дневным бюджетом -> 8B -> None (fail-closed в jev_vet)."""
+        from http_client import fetch_json
+        if not self.groq_key:
+            return None
+        today = time.strftime("%Y-%m-%d", time.gmtime())
+        if _BUDGET["day"] != today:
+            _BUDGET["day"], _BUDGET["n70"] = today, 0
+        for model, tag in _MODELS:
+            if time.time() < _CD[tag]:
+                continue
+            if tag == "70b" and _BUDGET["n70"] >= DAILY_70B:
+                continue
             payload = {
-                "model": "llama-3.3-70b-versatile",
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_content}
-                ],
+                "model": model, "temperature": 0, "max_tokens": 120,
                 "response_format": {"type": "json_object"},
-                "temperature": 0.1,
-                "max_tokens": 250
+                "messages": [{"role": "system", "content": system_prompt},
+                             {"role": "user", "content": user_content}],
             }
-            st, data = await fetch_json(url, method="POST", headers=headers, json_payload=payload, timeout=4, retries=0)
+            st, data = await fetch_json(
+                "https://api.groq.com/openai/v1/chat/completions", method="POST",
+                headers={"Authorization": f"Bearer {self.groq_key}", "Content-Type": "application/json"},
+                json_payload=payload, timeout=8, retries=0)
+            if tag == "70b":
+                _BUDGET["n70"] += 1
+            if st == 429:
+                _CD[tag] = time.time() + 60
+                continue
             if st == 200 and isinstance(data, dict):
-                content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
-                parsed = json.loads(content)
-                parsed["source"] = "groq-llama-3.3"
-                return parsed
-            elif st == 429:
-                # Быстрый фоллбэк на более легкую модель 8b с отдельным лимитом
-                payload["model"] = "llama-3.1-8b-instant"
-                st8, data8 = await fetch_json(url, method="POST", headers=headers, json_payload=payload, timeout=3, retries=0)
-                if st8 == 200 and isinstance(data8, dict):
-                    content = data8.get("choices", [{}])[0].get("message", {}).get("content", "")
-                    parsed = json.loads(content)
-                    parsed["source"] = "groq-llama-3.1-8b"
-                    return parsed
-
-        # 2. Попытка через xAI Grok
-        if self.xai_key:
-            url = "https://api.x.ai/v1/chat/completions"
-            headers = {
-                "Authorization": f"Bearer {self.xai_key}",
-                "Content-Type": "application/json"
-            }
-            payload = {
-                "model": "grok-beta",
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_content}
-                ],
-                "temperature": 0.1,
-                "max_tokens": 250
-            }
-            st, data = await fetch_json(url, method="POST", headers=headers, json_payload=payload, timeout=4, retries=0)
-            if st == 200 and isinstance(data, dict):
-                content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
-                parsed = json.loads(content)
-                parsed["source"] = "xai-grok"
-                return parsed
-
+                try:
+                    out = json.loads(data["choices"][0]["message"]["content"])
+                    if isinstance(out, dict):
+                        out["source"] = f"groq-{tag}"
+                        return out
+                except Exception:
+                    continue
         return None
 
     def _deterministic_jev_eval(
