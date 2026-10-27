@@ -4,6 +4,21 @@ import json
 import time
 import aiohttp
 
+# Программы бирж/агрегаторов. pump.fun и PumpSwap сверены с документацией, остальные - общеизвестные адреса.
+# Фильтр НЕ полагается только на адреса: проходит и по тексту лога (Swap/Buy/Sell), так что ошибка в адресе не выбросит биржу.
+DEX_PROGRAMS = (
+    "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P",   # pump.fun (bonding curve)
+    "pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA",   # PumpSwap
+    "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8",  # Raydium AMM v4
+    "CPMMoo8L3F4NbTegBCKVNunggL7H1ZpdTHKxQB5qKP1C",  # Raydium CPMM
+    "CAMMCzo5YL8w4VFF8KVHrK22GGUsp5VTaW7grrKgrWqK",  # Raydium CLMM
+    "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4",   # Jupiter v6
+    "whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc",   # Orca Whirlpool
+    "LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo",   # Meteora DLMM
+)
+SWAP_LOG_HINTS = ("Instruction: Buy", "Instruction: Sell", "Instruction: Swap", "SwapBaseIn", "SwapBaseOut", "ray_log", "Instruction: Route")
+
+
 class CopyTrader:
     def __init__(self, tracker, analyzer=None):
         self.tracker = tracker
@@ -14,6 +29,10 @@ class CopyTrader:
         self.rpc_url = f"https://mainnet.helius-rpc.com/?api-key={self.HELIUS_API_KEY}"
         self.wss_url = f"wss://mainnet.helius-rpc.com/?api-key={self.HELIUS_API_KEY}"
         self.processed_sigs = set()
+        self._req_wallet = {}   # id запроса подписки -> кошелёк
+        self._sub_wallet = {}   # id подписки -> кошелёк
+        self._rate = {}         # кошелёк -> времена последних уведомлений
+        self._muted = {}        # кошелёк -> до какого времени игнорируем
         self.whale_buys = {}      # mint -> {wallet: ts}
         self.consensus_done = set()
         self.whale_first_price = {}  # mint -> цена в момент покупки ПЕРВОГО кита
@@ -77,6 +96,12 @@ class CopyTrader:
             data = json.loads(message)
         except Exception:
             return
+        # ответ на подписку: запоминаем, какой id подписки принадлежит какому кошельку
+        if "id" in data and "result" in data and "method" not in data:
+            w = getattr(self, "_req_wallet", {}).pop(data["id"], None)
+            if w is not None:
+                self._sub_wallet[data["result"]] = w
+            return
         if data.get("method") != "logsNotification":
             return
         try:
@@ -88,10 +113,43 @@ class CopyTrader:
         sig = val.get("signature")
         if not sig or sig in self.processed_sigs:
             return
+
+        # 1) не своп/покупка (переводы, стейкинг, вотчдоги и т.п.) - выбрасываем по логам, без запросов к сети
+        logs = val.get("logs") or []
+        try:
+            import config as _cf
+            if getattr(_cf, "COPY_PREFILTER", True) and logs:
+                progs = tuple(getattr(_cf, "COPY_DEX_PROGRAMS", DEX_PROGRAMS))
+                if not any((p in l) for l in logs for p in progs) and not any((h in l) for l in logs for h in SWAP_LOG_HINTS):
+                    self._pre_dropped = getattr(self, "_pre_dropped", 0) + 1
+                    return
+        except Exception:
+            pass
+
+        # 2) кошелёк-спамер (MEV/бот): >N записей в минуту -> молчим 10 минут, копировать такого бессмысленно
+        now = time.time()
+        wallet = self._sub_wallet.get(data["params"].get("subscription"))
+        if wallet:
+            if now < self._muted.get(wallet, 0.0):
+                return
+            dq = self._rate.setdefault(wallet, [])
+            dq.append(now)
+            while dq and now - dq[0] > 60.0:
+                dq.pop(0)
+            try:
+                import config as _cf2
+                lim = int(getattr(_cf2, "COPY_MAX_TX_PER_MIN", 40))
+            except Exception:
+                lim = 40
+            if len(dq) > lim:
+                self._muted[wallet] = now + 600.0
+                dq.clear()
+                print(f"🔇 Копитрейдер: {self.wallets.get(wallet, wallet[:8])} шлёт >{lim} транзакций/мин (бот) - игнорируем 10 минут")
+                return
         if getattr(self, "_pending", 0) >= 120:
             self._dropped = getattr(self, "_dropped", 0) + 1
             if self._dropped % 200 == 1:
-                print(f"⚠️ Копитрейдер: очередь перегружена, пропущено {self._dropped} транзакций")
+                print(f"⚠️ Копитрейдер: очередь перегружена, пропущено {self._dropped} (отсеяно префильтром: {getattr(self, '_pre_dropped', 0)})")
             return
         self._pending = getattr(self, "_pending", 0) + 1
         asyncio.create_task(self._guarded_process(sig))
@@ -114,6 +172,7 @@ class CopyTrader:
             if wallet in subscribed:
                 continue
             self._req_id = getattr(self, "_req_id", 0) + 1
+            self._req_wallet[self._req_id] = wallet
             await ws.send(json.dumps({
                 "jsonrpc": "2.0", "id": self._req_id, "method": "logsSubscribe",
                 "params": [{"mentions": [wallet]}, {"commitment": "processed"}]}))
@@ -332,6 +391,7 @@ class CopyTrader:
                     print(f"👥 Копитрейдер: Подключен к {current_wss.split('.')[0]}... Слушаем {len(self.wallets)} китов")
                     
                     subscribed = set()
+                    self._req_wallet.clear(); self._sub_wallet.clear()
                     await self._subscribe_new(ws, subscribed)
                     _refresher = asyncio.create_task(self._refresh_loop(ws, subscribed))
                     try:
