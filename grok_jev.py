@@ -497,25 +497,22 @@ class GrokJevEngine:
         socials_str = "; ".join(soc_text) if soc_text else "None"
 
         system_prompt = (
-            "You are JEV, a risk judge for Solana memecoin trades. You never trade or size positions. "
-            "Answer ONLY from the data line. You cannot see social media, news or the web. "
-            "Do not assume the token is safe because it reached you. Missing data is shown as NA: "
-            "for any score that needs an NA field return null and list that field in \"missing\". "
-            "Never guess. If signals conflict, score toward risk. Use the full 0.0-1.0 range.\n"
-            "vol_ratio = h6 volume / (h24 volume / 4); below 1 means volume is fading.\n"
-            "Scores:\n"
-            "concentration_is_exit_risk: 0 = holders are spread, 1 = one or few wallets can dump the pool (top1, top10, liq; holders only if not NA).\n"
-            "momentum_already_spent: 0 = pullback or consolidation with volume intact, 1 = blow-off with fading volume (pc, vol_ratio).\n"
-            "liquidity_fits_ticket: ticket/liq <=0.5% -> >=0.9; 2% -> ~0.6; >=5% -> <=0.2.\n"
-            "dev_still_loaded: 0 = dev holds ~nothing, 1 = dev holds a lot (use dev only).\n"
-            "pick_worth_trading: probability that entering now beats ~5% round-trip costs.\n"
-            "confidence: completeness and consistency of the data.\n"
-            "Reply with ONE JSON object and no other text. Keys: concentration_is_exit_risk, "
-            "momentum_already_spent, liquidity_fits_ticket, dev_still_loaded, pick_worth_trading, "
-            "confidence (each a float 0-1 or null), missing (list of field names)."
+            "You are JEV, the lead AI trading analyst for a Solana memecoin desk ('We bid the flush, not the candle'). "
+            "Evaluate the token's meme narrative, social links, holder safety, and pullback timing.\n"
+            "CRITICAL RULE: NEVER return null. If a metric is 'NA', infer a reasonable score from the remaining data.\n\n"
+            "Scoring Rubric (all values MUST be floats between 0.0 and 1.0):\n"
+            "1. concentration_is_exit_risk (max 0.55 to pass): 0.15-0.35 if top1<=5% and top10<=50% with liq>=$15k; >0.60 if whales dominate.\n"
+            "2. momentum_already_spent (max 0.60 to pass): 0.20-0.45 if price is in a healthy pullback/consolidation (m1 between -8% and +5%) while h24/h6 volume is active (vol_ratio >= 0.7); >0.70 if m1 > +15% (vertical top) or volume died.\n"
+            "3. liquidity_fits_ticket (min 0.60 to pass): >=0.85 if ticket/liq <= 1%; ~0.65 if <= 2.5%; <=0.30 if > 4%.\n"
+            "4. dev_still_loaded (max 0.55 to pass): 0.05-0.25 if dev <= 3% or NA; >0.60 if dev >= 8%.\n"
+            "5. pick_worth_trading (min 0.60 to pass): Score 0.65-0.85 if the token has a catchy meme ticker/socials, solid liquidity, buyer support (b5 >= s5*0.8), and is not at an overheated m1 spike. Score <0.50 if it looks like a low-effort scam or dead chart.\n"
+            "6. confidence (min 0.55 to pass): 0.70-0.90 when core liquidity, volume, and price changes are present.\n\n"
+            "Reply with ONE valid JSON object only. Keys: concentration_is_exit_risk, momentum_already_spent, "
+            "liquidity_fits_ticket, dev_still_loaded, pick_worth_trading, confidence."
         )
 
-        user_content = data_line
+        user_content = f"token={name} (${symbol}) links=[{socials_str}] | {data_line}"
+
 
         return await self._groq_judge(system_prompt, user_content)
 
@@ -533,7 +530,7 @@ class GrokJevEngine:
             if tag == "70b" and _BUDGET["n70"] >= DAILY_70B:
                 continue
             payload = {
-                "model": model, "temperature": 0, "max_tokens": 120,
+                "model": model, "temperature": 0.1, "max_tokens": 220,
                 "response_format": {"type": "json_object"},
                 "messages": [{"role": "system", "content": system_prompt},
                              {"role": "user", "content": user_content}],
