@@ -200,40 +200,38 @@ class MatureExitManager:
         # =====================================================================
         # PRE-DUMP FRONT-RUNNER: Выход в плюс при затухании торгов (до слива толпы)
         # =====================================================================
-        # Достаем текущие метрики потока ордеров из pair_data
-        txns_m5 = (pair_data.get("txns") or {}).get("m5") or {}
-        b5 = int(txns_m5.get("buys", 0) or 0)
-        s5 = int(txns_m5.get("sells", 0) or 0)
-        vol_m5 = float((pair_data.get("volume") or {}).get("m5", 0) or 0)
-        pc = pair_data.get("priceChange") or {}
-        m1 = float(pc.get("m1", 0) or 0)
-        
-        bs_ratio = (b5 / s5) if s5 > 0 else 2.0
-        total_tx5 = b5 + s5
+        _pd = getattr(position, "pair_data", None) or getattr(position, "last_pair_data", None) or {}
+        if isinstance(_pd, dict) and _pd:
+            txns_m5 = (_pd.get("txns") or {}).get("m5") or {}
+            b5 = int(txns_m5.get("buys", 0) or 0)
+            s5 = int(txns_m5.get("sells", 0) or 0)
+            vol_m5 = float((_pd.get("volume") or {}).get("m5", 0) or 0)
+            pc = _pd.get("priceChange") or {}
+            m1 = float(pc.get("m1", 0) or 0)
+            bs_ratio = (b5 / s5) if s5 > 0 else 2.0
+            total_tx5 = b5 + s5
 
-        # СЦЕНАРИЙ 1: "Скрытая разгрузка кита" (Distribution Wall)
-        # Мы в плюсе (> +6%), продавцов стало больше чем покупателей (bs_ratio < 0.92),
-        # и минутная свеча перестала расти (m1 <= 0). Выходим в плюс ДО красной палки!
-        if pnl_pct >= 6.0 and bs_ratio < 0.92 and m1 <= 0.0:
-            return True, f"Front-Run Exit: Sellers dominating ({b5}b/{s5}s) while in profit (+{pnl_pct:.1f}%)"
+            # СЦЕНАРИЙ 1: "Скрытая разгрузка кита" (мы в плюсе >= +6%, продавцов больше, свеча встала)
+            if pnl_pct >= 0.06 and bs_ratio < 0.92 and m1 <= 0.0:
+                return f"Front-Run Exit: Sellers dominating ({b5}b/{s5}s) while in profit (+{pnl_pct*100:.1f}%)"
 
-        # СЦЕНАРИЙ 2: "Тишина на вершине" (Volume Drying Up in Profit)
-        # Мы держим позицию дольше 2.5 минут, есть любой плюс от +4% до +25%,
-        # но торги резко встали (меньше 10 сделок за 5м или объем упал < $1,500) и роста нет (-1.5% <= m1 <= 0.5%).
-        # Все ждут, кто продаст первым — продаем первыми мы!
-        if hold_time_sec >= 150 and (4.0 <= pnl_pct <= 25.0):
-            if (total_tx5 < 12 or vol_m5 < 1500.0) and (-2.0 <= m1 <= 0.5):
-                return True, f"Quiet Top Exit: Low volume (${vol_m5:.0f}, {total_tx5} tx) — taking +{pnl_pct:.1f}% before dump"
+            # СЦЕНАРИЙ 2: "Тишина на вершине" (в сделке >= 2.5м, плюс +4%..+35%, но объем или сделки упали)
+            if minutes_held >= 2.5 and (0.04 <= pnl_pct <= 0.35):
+                if (0 < total_tx5 < 12 or (0 < vol_m5 < 1500.0)) and (-2.0 <= m1 <= 0.5):
+                    return f"Quiet Top Exit: Low volume (${vol_m5:.0f}, {total_tx5} tx) — taking +{pnl_pct*100:.1f}%"
+
+        # СЦЕНАРИЙ 2Б: "Тишина на вершине по времени пика" (работает всегда, даже без pair_data!)
+        # Если мы в плюсе (+4%..+35%), но цена уже 3.5 минуты не может обновить максимум и начала сползать:
+        if minutes_held >= 3.5 and (0.04 <= pnl_pct <= 0.35) and _peak_age_min >= 3.0 and _dd_peak >= 0.04:
+            return f"Quiet Top Exit (+{pnl_pct*100:.1f}% locked, no new high for {_peak_age_min:.1f}m)"
 
         # СЦЕНАРИЙ 3: "Вялая ракета" (Micro-Rocket Scalp)
-        # Монета дала небольшой импульс (пик был +9%..+22%), но застряла и начала сползать.
-        # Не ждем 35 минут Stagnant Cut и ухода в минус (как было на PEAK, LAUNCH, CHICO)!
-        # Забираем +3.5%..+12% в карман сразу на затухании.
-        if 9.0 <= peak_pnl_pct < 25.0 and hold_time_sec >= 90:
-            # Если от локального микро-пика цена откатила на 35% своего роста (например с +12% до +7.5%) и m1 <= 0:
-            retain_floor = max(3.0, peak_pnl_pct * 0.62)
+        # Был пик +9%..+37% (до порога основного пола +38%), прошло >= 1.5 мин, ракета выдохлась и откатила:
+        # Забираем 60% от этого движения (минимум +3.5%), не дожидаясь Stagnant Cut и слива в минус!
+        if 0.09 <= max_pnl_pct < 0.38 and minutes_held >= 1.5 and _peak_age_min >= 1.0:
+            retain_floor = max(0.035, round(max_pnl_pct * 0.60, 3))
             if pnl_pct <= retain_floor:
-                return True, f"Slow Rocket Scalp: Locked +{pnl_pct:.1f}% after weak peak +{peak_pnl_pct:.1f}%"
+                return f"Slow Rocket Scalp (+{pnl_pct*100:.1f}% locked after peak +{max_pnl_pct*100:.0f}%)"
 
         # Time exit - Stagnant: даём ракетам 25-35 минут на раскачку (кейс CATTLEAXE +23% на 37м, NIO +67% на 20м),
         # и режем только реальную просадку <= -10% без импульса (_maxp < +5%), не убивая консолидацию на 15-й минуте прямо перед пампом
