@@ -79,7 +79,7 @@ def _reason_key(why: str) -> str:
     """'hard-gate-reject sellers-dominating 5b/9s ...' -> 'hard-gate-reject sellers-dominating'."""
     out = []
     for t in str(why).split()[:4]:
-        if re.search(r"[\d$%(\[]", t):
+        if re.match(r"^[\d$%(\[+\-]", t):
             break
         out.append(t.rstrip(":,"))
     return " ".join(out)[:60] or "other"
@@ -108,6 +108,17 @@ _NEED = {
     "pick_worth_trading": ("min", 0.60),
     "confidence": ("min", 0.55),
 }
+
+
+_GROQ_LOG_TS = {}
+
+
+def _log_groq(msg: str) -> None:
+    """Печатает причину отказа Groq не чаще раза в 30с на одинаковое сообщение."""
+    now = time.time()
+    if now - _GROQ_LOG_TS.get(msg[:40], 0.0) >= 30.0:
+        _GROQ_LOG_TS[msg[:40]] = now
+        print(f"🧪 [JEV/GROQ] {msg}")
 
 
 def _jev_failed(res: dict) -> list:
@@ -582,6 +593,7 @@ class GrokJevEngine:
                 _BUDGET["n70"] += 1
             if st == 429:
                 _CD[tag] = time.time() + 60
+                _log_groq(f"{model}: 429 (пауза 60с)")
                 continue
             if st == 200 and isinstance(data, dict):
                 try:
@@ -589,8 +601,13 @@ class GrokJevEngine:
                     if isinstance(out, dict):
                         out["source"] = f"groq-{tag}"
                         return out
-                except Exception:
+                    _log_groq(f"{model}: ответ не объект JSON: {str(out)[:80]}")
+                except Exception as e:
+                    _log_groq(f"{model}: 200, но разбор ответа не удался ({type(e).__name__}): {str(data)[:160]}")
                     continue
+            else:
+                # 401 = неверный ключ, 400 = плохой запрос, 404 = нет модели/адреса, 0 = сеть/таймаут
+                _log_groq(f"{model}: HTTP {st}, тело пустое (401=ключ, 400=запрос, 404=модель, 0=сеть)")
         return None
 
     def _deterministic_jev_eval(
