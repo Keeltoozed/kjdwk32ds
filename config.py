@@ -379,4 +379,9 @@ JEV_MIN_H6_PCT = -10.0
 # === ЗАЩИТА ПРИБЫЛИ (ЧТОБЫ PHOOK +42% НЕ ЗАКРЫВАЛСЯ В МИНУС) ===
 TRAILING_ACTIVATION_PCT = 0.20     # Трейлинг включается с +20% (а не ждет заоблачных +50%)
 TRAILING_DISTANCE_PCT = 0.10       # Срез при откате на 10% от пика
-BREAKEVEN_PCT = 0.15               # При +15% стоп сразу в безубыток (+2%)        
+BREAKEVEN_PCT = 0.15               # При +15% стоп сразу в безубыток (+2%)
+
+USE_COPYTRADE = True
+COPY_MIN_TIER = 2
+COPY_MAX_TICKET_USD = 15.0
+COPY_USE_ANTISCAM = True
