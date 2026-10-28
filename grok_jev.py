@@ -385,7 +385,7 @@ class GrokJevEngine:
 
         # КАТЕГОРИЧЕСКИЙ БЛОК: СМЕРТЕЛЬНАЯ ЗОНА МИГРАЦИИ (0 - 4.5 МИНУТЫ)
         # 98% токенов при миграции с pump.fun на PumpSwap/Raydium сливаются девом и снайперами в первые 0-4м (кейсы MIKE -97%, PLASTICINU -51%).
-        is_migrated_pump = (dex_id not in ("pump", "pumpfun")) and (address.endswith("pump") or "pump" in dex_id)
+        is_migrated_pump = (dex_id not in ("pump", "pumpfun")) and (mint.endswith("pump") or "pump" in dex_id)
         if is_migrated_pump:
             if age_min < 4.5:
                 return False, f"post-migration-dump-zone {age_min:.1f}m < 4.5m (wait for curve snipers to flush)"
