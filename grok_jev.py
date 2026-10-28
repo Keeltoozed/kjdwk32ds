@@ -133,6 +133,50 @@ def _log_groq(msg: str) -> None:
         print(f"🧪 [JEV/GROQ] {msg}")
 
 
+_SW = {"ts": 0.0, "set": set()}
+
+
+def _smart_wallets() -> set:
+    """Кошельки из smart_wallets.txt (их пишет smart_money_hunter), кэш 5 минут."""
+    if time.time() - _SW["ts"] < 300:
+        return _SW["set"]
+    s = set()
+    try:
+        with open("smart_wallets.txt", "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#"):
+                    s.add(line)
+    except Exception:
+        pass
+    _SW["ts"], _SW["set"] = time.time(), s
+    return s
+
+
+def _entry_features(pair: dict, hs: dict, jev: dict) -> dict:
+    """Признаки токена на момент входа: попадают в колонку features таблицы сделок,
+    чтобы потом сравнивать победителей и проигравших (раньше у GROK-JEV там были только символ и цена)."""
+    pc, vol = pair.get("priceChange") or {}, pair.get("volume") or {}
+    tx = pair.get("txns") or {}
+    t5, t24 = tx.get("m5") or {}, tx.get("h24") or {}
+    ca = pair.get("pairCreatedAt") or 0
+    f = {
+        "age_min": round((time.time() * 1000 - ca) / 60000, 1) if ca else None,
+        "liquidity": (pair.get("liquidity") or {}).get("usd"), "fdv": pair.get("fdv") or pair.get("marketCap"),
+        "dex": pair.get("dexId"),
+        "price_change_m1": pc.get("m1"), "price_change_m5": pc.get("m5"), "price_change_h1": pc.get("h1"),
+        "price_change_h6": pc.get("h6"), "price_change_h24": pc.get("h24"),
+        "volume_m5": vol.get("m5"), "volume_h1": vol.get("h1"), "volume_h6": vol.get("h6"), "volume_h24": vol.get("h24"),
+        "buys_m5": t5.get("buys"), "sells_m5": t5.get("sells"), "trades_h24": (t24.get("buys") or 0) + (t24.get("sells") or 0),
+        "socials": bool((pair.get("info") or {}).get("socials")),
+        "top1_pct": (hs or {}).get("top1_pct"), "top10_pct": (hs or {}).get("top10_pct"), "dev_pct": (hs or {}).get("dev_pct"),
+        "smart_n": (hs or {}).get("smart_n"),
+    }
+    for k in _NEED:
+        f["jev_" + k] = (jev or {}).get(k)
+    return f
+
+
 def _jev_failed(res: dict) -> list:
     """Список метрик, не прошедших пороги. Пустой список = PASS."""
     bad = []
@@ -164,7 +208,8 @@ def _data_line(pair: dict, hs: dict, ticket: float) -> str:
             f"vol_ratio={ratio} trades24={(t24.get('buys') or 0) + (t24.get('sells') or 0)} "
             f"b5={t5.get('buys', 'NA')} s5={t5.get('sells', 'NA')} "
             f"pc=m1:{pc.get('m1', 'NA')},m5:{pc.get('m5', 'NA')},h1:{pc.get('h1', 'NA')},h6:{pc.get('h6', 'NA')},h24:{pc.get('h24', 'NA')} "
-            f"socials={'true' if (pair.get('info') or {}).get('socials') else 'false'} ticket={ticket:.0f}")
+            f"socials={'true' if (pair.get('info') or {}).get('socials') else 'false'} ticket={ticket:.0f} "
+            f"smart_buyers={hs.get('smart_n', 'NA')}")
 
 
 def get_funnel_summary() -> str:
@@ -232,6 +277,27 @@ class GrokJevEngine:
     # =========================================================================
     # 1. HARD GATE: "if it fails here, JEV never sees it"
     # =========================================================================
+    async def smart_buyers(self, mint: str) -> tuple:
+        """(уникальных плательщиков за последние ~50 сделок, сколько из них смарт-кошельки) или (None, None).
+        Helius Parsed History: GET /v0/addresses/{mint}/transactions. Любая ошибка -> (None, None), торговлю не трогает."""
+        try:
+            import config as _c
+            from http_client import fetch_json
+            wallets = _smart_wallets()
+            key = (os.getenv("HELIUS_API_KEY") or getattr(_c, "HELIUS_API_KEY", "") or "").strip()
+            if not key or not wallets:
+                return None, None
+            st, data = await asyncio.wait_for(fetch_json(
+                f"https://api.helius.xyz/v0/addresses/{mint}/transactions",
+                params={"api-key": key, "limit": 50}, timeout=5, retries=0), timeout=7.0)
+            if st != 200 or not isinstance(data, list):
+                _log_groq(f"helius history {mint[:6]}: HTTP {st}")
+                return None, None
+            payers = {str(t.get("feePayer") or "") for t in data if isinstance(t, dict)} - {""}
+            return len(payers), len(payers & wallets)
+        except Exception:
+            return None, None
+
     def llm_ready(self) -> bool:
         """Есть ли шанс получить ответ судьи прямо сейчас (ключ, пауза 429, дневной бюджет)."""
         now = time.time()
@@ -1217,6 +1283,15 @@ class GrokJevEngine:
             if not (float((_h_stats or {}).get("top1_pct", 0) or 0) > 0 or float((_h_stats or {}).get("top10_pct", 0) or 0) > 0):
                 return False, "anti-scam-reject holders-no-data (нет данных о холдерах)"
 
+        # 4.6. SMART HUNTER: торговали ли этим токеном кошельки из базы. Фильтры НЕ обходит (инсайдеры тоже сливают на копирующих),
+        # результат идёт в data-line судьи и в запись входа, чтобы измерить, есть ли в этом сигнале польза.
+        _n, _s = await self.smart_buyers(address)
+        if _n is not None:
+            _h_stats = dict(_h_stats or {})
+            _h_stats["smart_n"] = _s
+            if _s:
+                print(f"💎 [SMART] {symbol} ({address[:8]}): {_s} смарт-кошельков среди {_n} последних плательщиков")
+
         # 5. VET (SOFT GATE: JEV AI Evaluation)
         soft_ok, jev_data, soft_why = await self.jev_vet(address, symbol, pair, chain, _h_stats)
         if not soft_ok:
@@ -1249,19 +1324,14 @@ class GrokJevEngine:
             chain=chain,
             pair_address=pair.get("pairAddress", ""),
             stop_under_wick=wick_price,
-            wick_stop_loss_pct=wick_pct
+            wick_stop_loss_pct=wick_pct,
+            ml_features=_entry_features(pair, _h_stats, jev_data)
         )
 
         FUNNEL_STATS["filled"] += 1
 
         # Запись входа для разбора (победители vs проигравшие) + замер Smart Money (не блокирует сделку)
-        _sm = "NA"
-        try:
-            if getattr(_c, "JEV_LOG_SMART_AT_ENTRY", True) and getattr(self, "analyzer", None):
-                _ub, _si = await asyncio.wait_for(self.analyzer.get_helius_transaction_metrics(address), timeout=6.0)
-                _sm = f"buyers30={_ub},smart={_si}"
-        except Exception as _e:
-            _sm = f"err:{type(_e).__name__}"
+        _sm = (_h_stats or {}).get("smart_n", "NA")
         try:
             print("📝 [ENTRY] " + json.dumps({
                 "sym": symbol, "mint": address, "ticket": round(ticket_size, 2), "smart": _sm,

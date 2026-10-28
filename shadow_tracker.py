@@ -43,6 +43,13 @@ class ShadowTracker:
         
         self.init_db()
 
+    def _sb_warn(self, msg: str) -> None:
+        """Ошибку Supabase печатаем не чаще раза в минуту (раньше она молча глоталась и таблица оставалась пустой)."""
+        now = time.time()
+        if now - getattr(self, "_sb_warn_ts", 0.0) >= 60.0:
+            self._sb_warn_ts = now
+            print(f"☁️ [Shadow] Supabase отказал в записи: {str(msg)[:260]}")
+
     def record_observation(self, mint: str, price: float = 0.0, liquidity: float = 0.0):
         """Обновляет максимальную виденную цену и ликвидность токена в оперативной памяти (TTL 90 мин)."""
         if not mint:
@@ -140,7 +147,12 @@ class ShadowTracker:
             return
             
         # Не логируем нулевые пустышки без ликвидности и токены до миграции с фейковыми ценами 5e-12
-        if liquidity < 3000 or native_price < 1e-7:
+        try:
+            _px_chk = float(price or 0.0)
+            _lq_chk = float(liquidity or 0.0)
+        except Exception:
+            return
+        if _lq_chk < 3000 or _px_chk < 1e-7:   # было: native_price до присвоения -> UnboundLocalError на каждом вызове
             return
             
         self._cooldown[mint] = now_ts
@@ -189,6 +201,7 @@ class ShadowTracker:
                     self.supabase.table(self._target_table).upsert(data).execute()
                 except Exception as sb_err:
                     err_str = str(sb_err).lower()
+                    self._sb_warn(sb_err)
                     if "rejected_tokens" in err_str and ("does not exist" in err_str or "not found" in err_str or "relation" in err_str):
                         self._target_table = "shadow_log"
                     else:
@@ -198,8 +211,8 @@ class ShadowTracker:
                             for k in ["check_5m_done", "check_15m_done", "time_to_ath_min", "current_pnl", "outcome"]:
                                 compat_data.pop(k, None)
                             self.supabase.table(self._target_table).upsert(compat_data).execute()
-                        except Exception:
-                            pass
+                        except Exception as sb_err2:
+                            self._sb_warn(f"(повтор без новых колонок) {sb_err2}")
 
             # Локальная запись в SQLite (всегда работает независимо от сети)
             try:
@@ -218,7 +231,7 @@ class ShadowTracker:
                         clean_source, native_price, 0.0, 0, 0, 0, 0, 0, 0, 0.0, 0.0, "PENDING", data["features"]
                     ))
             except Exception as sql_e:
-                pass
+                self._sb_warn(f"SQLite: {sql_e}")
 
             print(f"👻 [Shadow Logger] Отказ сохранён: {clean_sym} ({clean_chain}) | {clean_reason} | ${native_price:.6f}")
         except Exception as e:
