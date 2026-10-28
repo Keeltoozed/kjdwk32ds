@@ -383,14 +383,14 @@ class GrokJevEngine:
         m5 = float(pc.get("m5", 0) or 0)
         h1 = float(pc.get("h1", 0) or 0)
 
-        # КАТЕГОРИЧЕСКИЙ БЛОК: СМЕРТЕЛЬНАЯ ЗОНА МИГРАЦИИ (0 - 4.5 МИНУТЫ)
-        # 98% токенов при миграции с pump.fun на PumpSwap/Raydium сливаются девом и снайперами в первые 0-4м (кейсы MIKE -97%, PLASTICINU -51%).
+        # КАТЕГОРИЧЕСКИЙ БЛОК: СМЕРТЕЛЬНАЯ ЗОНА МИГРАЦИИ (0 - 7.0 МИНУТ)
+        # 98% токенов при миграции с pump.fun на PumpSwap/Raydium сливаются девом и снайперами в первые 0-7м (кейсы 25%, MIKE -97%, PLASTICINU -51%).
         is_migrated_pump = (dex_id not in ("pump", "pumpfun")) and (mint.endswith("pump") or "pump" in dex_id)
         if is_migrated_pump:
-            if age_min < 4.5:
-                return False, f"post-migration-dump-zone {age_min:.1f}m < 4.5m (wait for curve snipers to flush)"
-            # DIP RECLAIM: после 4.5м мигрировавший токен ОБЯЗАН показывать реальный разворот покупателей (как 大A +1156%, OMNI +986%)!
-            if m5 < 5.0 or (s5 > 0 and (b5 / s5) < 1.10) or vol_m5 < 4000.0:
+            if age_min < 7.0:
+                return False, f"post-migration-dump-zone {age_min:.1f}m < 7.0m (wait for curve snipers to flush, dump risk like 25%/MIKE)"
+            # DIP RECLAIM: после 7м мигрировавший токен ОБЯЗАН показывать реальный разворот покупателей (как 大A +1156%, OMNI +986%)!
+            if m5 < 5.0 or (s5 > 0 and (b5 / s5) < 1.15) or vol_m5 < 5000.0:
                 return False, f"post-migration-no-reclaim (m5 {m5:+.1f}%, vol5 ${vol_m5:,.0f}, {b5}b/{s5}s — need organic bounce)"
 
         # 2. Возраст: молодые пробои с перевесом покупок пускаем от 2.5м, стандарт от 4.0м
@@ -986,14 +986,18 @@ class GrokJevEngine:
         is_pump = dex_id in ("pump", "pumpfun")
         eff_liq = max(raw_liq, fdv * 0.40) if is_pump else raw_liq
 
-        # Анонимные токены без соцсетей при пуле < $35k — это скам-бандлер, если нет подтвержденного органического потока или pump.fun
+        # Токены на AMM (PumpSwap / Raydium / Meteora) ОБЯЗАНЫ иметь соцсети (Twitter/TG/Website).
+        # Анонимные токены без соцсетей на DEX — это 100% одноразовый сброс дева (кейсы 25% chance fine, MIKE, KAT)!
+        if not is_pump and not has_socials:
+            return False, f"no-socials-amm-scam (0 socials on DEX — 100% disposable dev dump like 25%)", _h_stats
+
+        # Анонимные токены без соцсетей при пуле < $35k — это скам-бандлер, если нет подтвержденного органического потока
         _tx5 = (pair_data.get("txns") or {}).get("m5", {}) or {}
         _b5 = int(_tx5.get("buys", 0) or 0)
         _s5 = int(_tx5.get("sells", 0) or 0)
         _vol5 = float((pair_data.get("volume") or {}).get("m5", 0) or 0)
-        _is_organic_flow = (_b5 >= 20 and _b5 >= _s5 and _vol5 >= 3000.0)
-        _is_pump_token = is_pump or address.endswith("pump")
-        if not has_socials and eff_liq < 35000.0 and not _is_pump_token and not _is_organic_flow:
+        _is_organic_flow = (_b5 >= 25 and _b5 >= _s5 * 1.2 and _vol5 >= 4000.0)
+        if not has_socials and eff_liq < 35000.0 and not _is_organic_flow:
             return False, f"no-socials-anon-rug (0 socials with <$35k liq — 100% anon dev dump)", _h_stats
 
         # 3. Аудит для сети SOLANA

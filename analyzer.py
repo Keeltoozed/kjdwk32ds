@@ -725,7 +725,18 @@ class Analyzer:
 
 
     async def is_clone(self, symbol: str, current_mint: str, current_created_at: int, current_fdv: float, current_liq: float = 0.0, current_vol5: float = 0.0, current_b5: int = 0) -> bool:
-        """Проверяет, является ли этот токен фейковой копией (клоном) более старого/крупного оригинала или серийным спамом (кейсы WHITEWHALE, MOE)."""
+        """Проверяет, является ли токен фейковым клоном или спам-атакой.
+        
+        КЛЮЧЕВАЯ ЛОГИКА (защита от ложных блокировок):
+        1. В крипте популярные тикеры (CAT, DOGE, PEPE, CHAD, AI, BULL) создаются сотнями за годы истории.
+           Старые заброшенные/мертвые токены (созданные более 48 часов назад с капой < $500k) ПОЛНОСТЬЮ ИГНОРИРУЮТСЯ!
+           Они не могут дисквалифицировать сегодняшнюю свежую ракету.
+        2. Сравнение идет ТОЛЬКО:
+           а) Против общепризнанных титанов/гигантов (FDV > $500k, liq > $60k) — защита от подделок под $WIF, $BONK, $POPCAT.
+           б) Внутри ТЕКУЩЕЙ ВОЛНЫ ХАЙПА (токены последних 48 часов) — поиск лидера против копий и спам-роев.
+        3. Если наш токен имеет сильный текущий импульс (vol5 >= $3,000, b5 >= 15) или является самым ранним в текущей волне —
+           он признается ОРИГИНАЛЬНЫМ ЛИДЕРОМ (Narrative King) и пропускается в покупку!
+        """
         if not symbol or len(symbol) < 2:
             return False
 
@@ -735,15 +746,10 @@ class Analyzer:
 
         pairs = data.get("pairs") or []
         sym_up = symbol.upper().strip()
-        active_other_mints = set()
-        swarm_mints = set()
-        oldest_other_ts = float("inf")
+        now_ms = time.time() * 1000
 
-        is_pump = current_mint.endswith("pump")
-        # Если наш токен имеет активный подтвержденный объем (vol5 >= $3,000 и b5 >= 20) —
-        # он является органическим лидером текущего хайпа/нарратива (кейс DIG +531%, BLUEBALLS +122%).
-        is_organic_hot = (current_vol5 >= 3000.0 and current_b5 >= 20)
-
+        # Сбор информации обо всех конкурирующих парах с таким же тикером на Solana
+        competitors = []
         for p in pairs:
             if p.get("chainId") != "solana":
                 continue
@@ -752,59 +758,111 @@ class Analyzer:
             if not p_mint or p_symbol != sym_up or p_mint == current_mint:
                 continue
 
-            p_created_at = float(p.get("pairCreatedAt") or float("inf"))
+            p_created_at = float(p.get("pairCreatedAt") or 0.0)
             p_fdv = float(p.get("fdv") or p.get("marketCap") or 0.0)
             p_liq = float((p.get("liquidity") or {}).get("usd", 0) or 0.0)
             p_vol24 = float((p.get("volume") or {}).get("h24", 0) or 0.0)
             p_vol5 = float(((p.get("volume") or {}).get("m5", 0) or 0.0))
-            if p_liq < 5000 and p_vol24 < 8000:
-                continue  # Мертвый/заброшенный пул, не активный оригинал
-
-            # Если наш токен имеет сильный текущий объем, а соперник не торгуется — наш лидер
-            if is_organic_hot and current_vol5 >= p_vol5 * 1.5:
-                continue
-
-            # Если наш токен — явный доминант по ликвидности (>= $25k и крупнее соперника),
-            # мелкие копии скамеров не могут сделать нашего лидера "клоном" (кейс SWORDCAT $261k liq)
-            if current_liq >= 25000.0 and current_liq >= p_liq * 1.3:
-                continue
-
-            # Учитываем живые пулы с таким же тикером для детекта серийного клон-роя (кейс ARACH, MAXXING: серийный спам клонов)
-            if current_liq < 35000.0:
-                swarm_mints.add(p_mint)
-                if len(swarm_mints) >= 2:
-                    print(f"🚫 [CLONE-SWARM] {sym_up} ({current_mint[:8]}): обнаружена серийная атака клонов ({len(swarm_mints)+1}+ активных токенов {sym_up} одновременно) — блок!")
-                    return True
-
-            # Если другой живой пул с тем же тикером уже заметно крупнее по ликвидности (>= $15k и в 1.3x+ больше нашего)
-            if p_liq >= 15000 and current_liq > 0 and p_liq > (current_liq * 1.3) and not (is_organic_hot and current_vol5 > p_vol5):
-                return True
-
             p_dex = str(p.get("dexId") or "").lower()
-            # Игнорируем фейковые кастомные не-pump пулы на PumpSwap как "оригинал" для одиночного сравнения, если они мельче
-            if p_dex == "pumpswap" and not p_mint.endswith("pump"):
-                continue
 
-            if p_liq < 8000 and p_vol24 < 10000:
-                continue
+            competitors.append({
+                "mint": p_mint,
+                "created_at": p_created_at,
+                "fdv": p_fdv,
+                "liq": p_liq,
+                "vol24": p_vol24,
+                "vol5": p_vol5,
+                "dex": p_dex,
+            })
 
-            active_other_mints.add(p_mint)
-            if p_created_at < oldest_other_ts:
-                oldest_other_ts = p_created_at
+        if not competitors:
+            return False
 
-            # 1. Кастомный (не-pump) токен мимикрирует под существующий живой pump.fun токен (кейсы MOE 7oocXA2D, Chubby FaCjQic5, WHITEWHALE)
-            if not current_mint.endswith("pump") and p_mint.endswith("pump") and (p_liq >= 8000 or p_fdv >= 25000):
-                return True
+        # =========================================================================
+        # 1. ЗАЩИТА ОТ ФЕЙКОВ ПОД КРУПНЫЕ СТОЯВШИЕСЯ БЛЮЧИПЫ (WIF, POPCAT, BONK)
+        # Если существует старый (>48ч) настоящий гигант с FDV > $500k и liq > $60k,
+        # а наш токен — свежая микро-капа с тем же именем, это фишинг-подделка.
+        # =========================================================================
+        for c in competitors:
+            c_age_hours = (now_ms - c["created_at"]) / (3600.0 * 1000.0) if c["created_at"] > 0 else 999.0
+            if c_age_hours > 48.0:
+                if c["fdv"] >= 500000.0 and c["liq"] >= 60000.0 and (c["vol24"] >= 25000.0 or c["liq"] >= 100000.0):
+                    if current_fdv < c["fdv"] * 0.15:
+                        print(f"🚫 [GIANT-IMPERSONATION] {sym_up} ({current_mint[:8]}): попытка мимикрировать под устоявшийся гигант {c['mint'][:8]} (FDV ${c['fdv']:,.0f}, liq ${c['liq']:,.0f}) — блок!")
+                        return True
 
-            # 2. Существует БОЛЕЕ СТАРЫЙ (>1 мин раньше) живой оригинал с ликвидностью >= $10k и FDV >= $35k
-            # (Но если наш токен — свежий pump.fun раннер с активными покупателями, не режем его из-за старых тикеров)
-            if current_created_at and p_created_at < (current_created_at - 60000) and p_liq >= 10000 and p_fdv >= 35000:
-                if not (is_organic_hot and current_vol5 > p_vol5):
+        # =========================================================================
+        # 2. РАБОТА С ТЕКУЩЕЙ ВОЛНОЙ (токены, созданные за последние 48 часов)
+        # Старые мертвые щиткоины из прошлого (без объемов) полностью отсекаются!
+        # =========================================================================
+        wave_comps = []
+        for c in competitors:
+            c_age_hours = (now_ms - c["created_at"]) / (3600.0 * 1000.0) if c["created_at"] > 0 else 999.0
+            # Учитываем конкурента только если он создан в последние 48 часов ИЛИ имеет активные торги прямо сейчас
+            if c_age_hours <= 48.0 or c["vol5"] >= 1000.0 or c["vol24"] >= 50000.0:
+                wave_comps.append(c)
+
+        if not wave_comps:
+            # Все конкуренты — это мертвые токены годичной давности без объемов. Наш токен свободен!
+            return False
+
+        max_wave_vol5 = max((c["vol5"] for c in wave_comps), default=0.0)
+        max_wave_liq = max((c["liq"] for c in wave_comps), default=0.0)
+        valid_wave_created = [c["created_at"] for c in wave_comps if c["created_at"] > 0 and (now_ms - c["created_at"]) <= (48.0 * 3600.0 * 1000.0)]
+        earliest_wave_created = min(valid_wave_created) if valid_wave_created else float("inf")
+        recent_2h_comps = [c for c in wave_comps if c["created_at"] and (now_ms - c["created_at"]) <= (120.0 * 60.0 * 1000.0)]
+
+        # =========================================================================
+        # 👑 ЗАЩИТА НАСТОЯЩИХ РАКЕТ ТЕКУЩЕЙ ВОЛНЫ (NARRATIVE KING)
+        # =========================================================================
+        # 1. Доминация по текущему импульсу: у нас есть активный объем (vol5 >= $3,000) и покупатели (b5 >= 15),
+        # и наш объем существенно выше любых клонов текущей волны
+        is_volume_king = (current_vol5 >= 3000.0 and current_b5 >= 15 and (max_wave_vol5 == 0 or current_vol5 >= max_wave_vol5 * 1.4))
+
+        # 2. Доминация по ликвидности в текущей волне: наш токен залочил ликвидность ($18k+), а клоны — мелочь
+        is_liq_king = (current_liq >= 18000.0 and (max_wave_liq == 0 or current_liq >= max_wave_liq * 1.3))
+
+        # 3. Genesis текущей волны: наш токен запущен ПЕРВЫМ среди монет этой темы (или в пределах 60 сек от первой)
+        is_genesis_first = (current_created_at > 0 and (current_created_at <= earliest_wave_created + 60000.0) and current_vol5 >= max_wave_vol5)
+
+        if is_volume_king or is_liq_king or is_genesis_first:
+            print(f"👑 [NARRATIVE-KING] {sym_up} ({current_mint[:8]}): оригинальный лидер текущей волны (vol5 ${current_vol5:,.0f} vs клоны max ${max_wave_vol5:,.0f}, liq ${current_liq:,.0f}) — разрешен к покупке!")
+            return False
+
+        # =========================================================================
+        # 🚫 ФИЛЬТРАЦИЯ ОТСТАЮЩИХ КЛОНОВ И СПАМ-ФЕРМ
+        # =========================================================================
+        # 1. Серийный спам-рой: создано 2+ клона за 2 часа, и наш токен не имеет лидерства
+        if len(recent_2h_comps) >= 2 and not (current_vol5 >= 4000.0 and current_b5 >= 20):
+            print(f"🚫 [CLONE-SWARM] {sym_up} ({current_mint[:8]}): серийный спам-рой ({len(recent_2h_comps)+1} токенов за 2ч без лидерства) — блок!")
+            return True
+
+        # 2. Кастомный пул мимикрирует под оригинальный pump.fun токен
+        if not current_mint.endswith("pump"):
+            for c in wave_comps:
+                if c["mint"].endswith("pump") and (c["liq"] >= 8000 or c["fdv"] >= 25000):
+                    print(f"🚫 [CLONE-SCAM] {sym_up} ({current_mint[:8]}): не-pump пул мимикрирует под живой pump {c['mint'][:8]}!")
                     return True
 
-            # 3. Существует более старый и значительно более крупный оригинал (в 5x+ крупнее по FDV >= $250k)
-            if p_created_at < current_created_at and current_fdv > 0 and p_fdv > (current_fdv * 5) and p_fdv >= 250000:
-                if not (is_organic_hot and current_vol5 > p_vol5 * 2.0):
+        # 3. Существует более крупный живой лидер текущей волны
+        for c in wave_comps:
+            p_liq = c["liq"]
+            p_vol5 = c["vol5"]
+            p_created_at = c["created_at"]
+            p_fdv = c["fdv"]
+
+            if p_liq < 5000 and c["vol24"] < 8000:
+                continue
+
+            # Другой токен текущей волны заметно крупнее по ликвидности и объему
+            if p_liq >= 15000 and current_liq > 0 and p_liq > (current_liq * 1.4) and current_vol5 < p_vol5:
+                print(f"🚫 [CLONE-SCAM] {sym_up} ({current_mint[:8]}): есть более крупный лидер текущей волны {c['mint'][:8]} (liq ${p_liq:,.0f} vs ${current_liq:,.0f})")
+                return True
+
+            # Был создан раньше (>1 мин) в этой волне и опережает по объемам
+            if current_created_at and p_created_at and p_created_at < (current_created_at - 60000) and p_liq >= 10000 and p_fdv >= 35000:
+                if current_vol5 < p_vol5 * 1.3:
+                    print(f"🚫 [CLONE-SCAM] {sym_up} ({current_mint[:8]}): создан позже оригинала текущей волны {c['mint'][:8]}")
                     return True
 
         return False
@@ -1051,8 +1109,8 @@ class Analyzer:
                 _h6_pre = float(_pc_pre.get("h6", 0) or 0)
                 _vm5_check = float((pair_data.get("volume") or {}).get("m5", 0) or 0)
                 _m5_check = float(_pc_pre.get("m5", 0) or 0)
-                if mint.endswith("pump") and _age_min_pre < 4.5:
-                    return self._deny(mint, "post-migration-dump-zone", f"🚫 [POST-MIGRATION-DUMP] {mint[:8]}: возраст {_age_min_pre:.1f}м < 4.5м — опасная зона сброса снайперов кривой.")
+                if mint.endswith("pump") and _age_min_pre < 7.0:
+                    return self._deny(mint, "post-migration-dump-zone", f"🚫 [POST-MIGRATION-DUMP] {mint[:8]}: возраст {_age_min_pre:.1f}м < 7.0м — опасная зона сброса снайперов кривой.")
                 if mint.endswith("pump") and 0 < _fdv_pre < 35000:
                     # DIP RECLAIM: Если токен после миграции просел, но активно выкупается (M5 > +8%, объем > $3k, покупателей >= продавцов) — это точка разворота ракеты (как 大A +1156%, OMNI +986%)!
                     _tx5_rc = (pair_data.get("txns") or {}).get("m5", {}) or {}
