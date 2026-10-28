@@ -415,12 +415,14 @@ class GrokJevEngine:
             return False, f"sellers-dominating {b5}b/{s5}s (ratio {b5/s5:.2f} < 1.15)"
 
         # Проверка суточной активности h24 вместо h1 (vol >= $40k, trades >= 150)
-        min_vol_h24 = float(getattr(_c, "JEV_MIN_VOLUME_H24", 40000.0))
-        min_trades_h24 = int(getattr(_c, "JEV_MIN_TRADES_H24", 150))
-        if vol_h24 < min_vol_h24:
-            return False, f"vol-h24-low ${vol_h24:,.0f} < ${min_vol_h24:,.0f}"
-        if trades_h24 < min_trades_h24:
-            return False, f"trades-h24-low {trades_h24} < {min_trades_h24}"
+# ЗАМЕНИ НА (для молодых токенов не требуем суточную историю):
+        if age_min >= 60.0:  # Проверяем h24 ТОЛЬКО для старых токенов старше 1 часа
+            min_vol_h24 = float(getattr(_c, "JEV_MIN_VOLUME_H24", 30000.0))
+            min_trades_h24 = int(getattr(_c, "JEV_MIN_TRADES_H24", 100))
+            if vol_h24 < min_vol_h24:
+                return False, f"vol-h24-low ${vol_h24:,.0f} < ${min_vol_h24:,.0f}"
+            if trades_h24 < min_trades_h24:
+                return False, f"trades-h24-low {trades_h24} < {min_trades_h24}"
 
         # 4.1. Wash Trading Check (накрутка объёма ботами копеечными сделками)
         # 4.1. Wash Trading Check (накрутка объёма ботами копеечными сделками по h24)
