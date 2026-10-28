@@ -49,14 +49,74 @@ class SmartMoneyHunter:
         self.db: Dict[str, dict] = self._load_db()
         self._last_scan_ts = 0.0
 
+    # --- Постоянное хранилище: таблица smart_wallets в Supabase (диск Render стирается при каждом деплое) ---
+    def _sb(self):
+        if getattr(self, "_sb_client", None) is None and not getattr(self, "_sb_failed", False):
+            try:
+                url = getattr(config, "SUPABASE_URL", None)
+                key = getattr(config, "SUPABASE_KEY", None)
+                if url and key:
+                    from supabase import create_client
+                    self._sb_client = create_client(url, key)
+                else:
+                    self._sb_failed = True
+            except Exception as e:
+                self._sb_failed = True
+                print(f"⚠️ [SMART-HUNTER] Supabase недоступен ({type(e).__name__}): база останется только на диске")
+        return getattr(self, "_sb_client", None)
+
+    def _load_from_supabase(self) -> Dict[str, dict]:
+        out: Dict[str, dict] = {}
+        sb = self._sb()
+        if not sb:
+            return out
+        try:
+            res = sb.table("smart_wallets").select("*").limit(5000).execute()
+            for r in (res.data or []):
+                try:
+                    wins = json.loads(r.get("winning_tokens") or "[]")
+                except Exception:
+                    wins = []
+                out[r["wallet"]] = {
+                    "chain": r.get("chain") or "solana", "tier": int(r.get("tier") or 3),
+                    "total_pnl": float(r.get("total_pnl") or 0.0), "trade_count": int(r.get("trade_count") or 0),
+                    "winning_tokens": wins, "first_seen": float(r.get("first_seen") or time.time()),
+                }
+            print(f"☁️ [SMART-HUNTER] Из Supabase загружено кошельков: {len(out)}")
+        except Exception as e:
+            print(f"⚠️ [SMART-HUNTER] Не удалось прочитать таблицу smart_wallets: {str(e)[:160]}")
+        return out
+
+    def _save_to_supabase(self):
+        sb = self._sb()
+        if not sb or not self.db:
+            return
+        rows = [{
+            "wallet": w, "chain": d.get("chain", "solana"), "tier": int(d.get("tier", 3)),
+            "total_pnl": float(d.get("total_pnl", 0.0)), "trade_count": int(d.get("trade_count", 0)),
+            "winning_tokens": json.dumps(d.get("winning_tokens", []), ensure_ascii=False),
+            "first_seen": float(d.get("first_seen", time.time())),
+        } for w, d in self.db.items()]
+        try:
+            for i in range(0, len(rows), 200):
+                sb.table("smart_wallets").upsert(rows[i:i + 200]).execute()
+        except Exception as e:
+            print(f"⚠️ [SMART-HUNTER] Не удалось записать в Supabase (таблица smart_wallets создана?): {str(e)[:160]}")
+
     def _load_db(self) -> Dict[str, dict]:
+        db: Dict[str, dict] = {}
         if os.path.exists(DB_FILE):
             try:
                 with open(DB_FILE, "r", encoding="utf-8") as f:
-                    return json.load(f)
+                    db = json.load(f)
             except Exception:
-                pass
-        return {}
+                db = {}
+        # объединяем с облаком: берём запись с большим числом побед/прибылью
+        for w, d in self._load_from_supabase().items():
+            cur = db.get(w)
+            if (not cur) or (len(d.get("winning_tokens", [])), d.get("total_pnl", 0)) > (len(cur.get("winning_tokens", [])), cur.get("total_pnl", 0)):
+                db[w] = d
+        return db
 
     def _save_db(self):
         try:
@@ -64,6 +124,7 @@ class SmartMoneyHunter:
                 json.dump(self.db, f, indent=2, ensure_ascii=False)
         except Exception as e:
             print(f"⚠️ Ошибка сохранения базы смарт-кошельков: {e}")
+        self._save_to_supabase()
 
     def sync_to_txt(self):
         """Синхронизирует топовые Solana-кошельки в smart_wallets.txt."""
@@ -267,6 +328,10 @@ async def smart_money_hunter_loop(analyzer=None, tracker=None):
     print("🐋 Запущен фоновый радар Smart Money Hunter (Solana & Base)...")
     # Даем боту запуститься 10 секунд перед первым сканом
     await asyncio.sleep(10)
+    try:
+        smart_money_hunter._save_to_supabase()   # сразу выгружаем всё, что есть в памяти/на диске (не ждём нового кита)
+    except Exception:
+        pass
     while True:
         try:
             await smart_money_hunter.run_discovery_cycle()
