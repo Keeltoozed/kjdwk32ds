@@ -47,7 +47,7 @@ class MatureExitManager:
 
         # Аварийный кэп ПЕРВЫМ: гэпы типа FIBONACCI -68% проскакивают обычный стоп
         # Не режет рабочие 1-минутные тени на старте (-30%..-38%), а ловит только реальные раг-гэпы (-48%+):
-        if pnl_pct <= -0.48:
+        if pnl_pct <= -0.75:
             return f"Mature Emergency Cap ({pnl_pct*100:.0f}%)"
 
         # Infant guard: дамп в первые минуты = дев сливает, не шум.
@@ -55,7 +55,7 @@ class MatureExitManager:
         # Infant guard: дамп в первые минуты = дев сливает, не шум.
         # Реальный сброс дева (rug) — это просадка глубже -30%..-35%
         _inf_win = float(getattr(config, "INFANT_WINDOW_MIN", 2.0))
-        _inf_pct = float(getattr(config, "INFANT_DUMP_PCT", -0.32)) # Было -0.18
+        _inf_pct = float(getattr(config, "INFANT_DUMP_PCT", -0.35)) # Было -0.18
         if minutes_held < _inf_win and pnl_pct <= _inf_pct:
             return f"Mature Infant Dump ({pnl_pct*100:.0f}%)"
 
