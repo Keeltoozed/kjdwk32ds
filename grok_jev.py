@@ -367,13 +367,6 @@ class GrokJevEngine:
         created_at = pair_data.get("pairCreatedAt") or 0
         age_min = (time.time() * 1000 - created_at) / 60000.0 if created_at else 999.0
 
-        _early_min_age = float(getattr(_c, "JEV_EARLY_MIN_AGE_MIN", 1.0))
-        _std_min_age = float(getattr(_c, "JEV_MIN_AGE_MIN", 1.5))
-        min_age = _early_min_age if (b5 >= s5 and m5 >= 5.0) else _std_min_age
-        max_age = float(getattr(_c, "JEV_MAX_AGE_MIN", 72.0 * 60.0))  # 72 часа
-        if not (min_age <= age_min <= max_age):
-            return False, f"age-out-of-bounds {age_min:.1f}m not in [{min_age:.1f}m, {max_age:.0f}m]"
-
         txns_m5 = (pair_data.get("txns") or {}).get("m5", {}) or {}
         txns_h24 = (pair_data.get("txns") or {}).get("h24", {}) or {}
         b5 = int(txns_m5.get("buys", 0) or 0)
@@ -383,11 +376,18 @@ class GrokJevEngine:
         trades_h24 = int(txns_h24.get("buys", 0) or 0) + int(txns_h24.get("sells", 0) or 0)
 
         # 3. Живой импульс ракеты (LIVE ROCKET MOMENTUM)
-        # Бот НЕ покупает стоячие, дохлые или падающие монеты!
         pc = pair_data.get("priceChange", {}) or {}
         m1 = float(pc.get("m1", 0) or 0)
         m5 = float(pc.get("m5", 0) or 0)
         h1 = float(pc.get("h1", 0) or 0)
+
+        # 2. Возраст: молодые пробои с перевесом покупок пускаем от 1.0м
+        _early_min_age = float(getattr(_c, "JEV_EARLY_MIN_AGE_MIN", 1.0))
+        _std_min_age = float(getattr(_c, "JEV_MIN_AGE_MIN", 1.5))
+        min_age = _early_min_age if (b5 >= s5 and m5 >= 5.0) else _std_min_age
+        max_age = float(getattr(_c, "JEV_MAX_AGE_MIN", 72.0 * 60.0))  # 72 часа
+        if not (min_age <= age_min <= max_age):
+            return False, f"age-out-of-bounds {age_min:.1f}m not in [{min_age:.1f}m, {max_age:.0f}m]"
 
         # Убрано требование m5 >= 4.0%: берем откаты на устоявшихся монетах, а не хаи
         if m5 > 180.0:
