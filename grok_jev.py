@@ -349,11 +349,13 @@ class GrokJevEngine:
         liq_dict = pair_data.get("liquidity") or {}
         quote_token_symbol = str((pair_data.get("quoteToken") or {}).get("symbol", "")).upper()
         quote_amount = float(liq_dict.get("quote", 0.0) or 0.0)
-        if quote_token_symbol in ("SOL", "WSOL") and quote_amount > 0 and quote_amount < 20.0:
-            return False, f"phantom-liq-trap: real pool SOL {quote_amount:.2f} < 20.0 SOL (dump risk like KAT/Nintendo)"
+        if quote_token_symbol in ("SOL", "WSOL") and quote_amount > 0:
+            _min_sol_req = 30.0 if dex_id == "pumpswap" else 20.0
+            if quote_amount < _min_sol_req:
+                return False, f"phantom-liq-trap: real pool SOL {quote_amount:.2f} < {_min_sol_req:.0f} SOL (dumped pool like MIKE/BRAVEGOY)"
 
-        # Жесткий порог ликвидности: настоящие ракеты (GTA $51k, KIMCHI $35k, TRUMP $40k) имеют глубину >= $14,000!
-        min_liq = float(getattr(_c, "JEV_MIN_LIQUIDITY_USD", 14000.0))
+        # Жесткий порог ликвидности: настоящие ракеты (GTA $51k, KIMCHI $35k, TRUMP $40k) имеют глубину >= $12,000!
+        min_liq = float(getattr(_c, "JEV_MIN_LIQUIDITY_USD", 12000.0))
         if eff_liq < min_liq:
             return False, f"liq-depth-low ${eff_liq:.0f} < ${min_liq:.0f} (micro-cap dump trap)"
             
@@ -363,9 +365,9 @@ class GrokJevEngine:
 
         FUNNEL_STATS["liquidity"] += 1
 
-        # 2. Возраст: не входить в первые 3.5 минуты (зона дампа создателя, кейс KAT на 0m!)        # 2. Возраст: строго 15 мин - 72 ч (как у savipww)
+        # 2. Возраст: если pairCreatedAt отсутствует (часто на первых секундах PumpSwap), не считаем токен старым!
         created_at = pair_data.get("pairCreatedAt") or 0
-        age_min = (time.time() * 1000 - created_at) / 60000.0 if created_at else 999.0
+        age_min = (time.time() * 1000 - created_at) / 60000.0 if created_at else 0.5
 
         txns_m5 = (pair_data.get("txns") or {}).get("m5", {}) or {}
         txns_h24 = (pair_data.get("txns") or {}).get("h24", {}) or {}
@@ -381,9 +383,19 @@ class GrokJevEngine:
         m5 = float(pc.get("m5", 0) or 0)
         h1 = float(pc.get("h1", 0) or 0)
 
-        # 2. Возраст: молодые пробои с перевесом покупок пускаем от 1.0м
-        _early_min_age = float(getattr(_c, "JEV_EARLY_MIN_AGE_MIN", 1.0))
-        _std_min_age = float(getattr(_c, "JEV_MIN_AGE_MIN", 1.5))
+        # КАТЕГОРИЧЕСКИЙ БЛОК: СМЕРТЕЛЬНАЯ ЗОНА МИГРАЦИИ (0 - 4.5 МИНУТЫ)
+        # 98% токенов при миграции с pump.fun на PumpSwap/Raydium сливаются девом и снайперами в первые 0-4м (кейсы MIKE -97%, PLASTICINU -51%).
+        is_migrated_pump = (dex_id not in ("pump", "pumpfun")) and (address.endswith("pump") or "pump" in dex_id)
+        if is_migrated_pump:
+            if age_min < 4.5:
+                return False, f"post-migration-dump-zone {age_min:.1f}m < 4.5m (wait for curve snipers to flush)"
+            # DIP RECLAIM: после 4.5м мигрировавший токен ОБЯЗАН показывать реальный разворот покупателей (как 大A +1156%, OMNI +986%)!
+            if m5 < 5.0 or (s5 > 0 and (b5 / s5) < 1.10) or vol_m5 < 4000.0:
+                return False, f"post-migration-no-reclaim (m5 {m5:+.1f}%, vol5 ${vol_m5:,.0f}, {b5}b/{s5}s — need organic bounce)"
+
+        # 2. Возраст: молодые пробои с перевесом покупок пускаем от 2.5м, стандарт от 4.0м
+        _early_min_age = float(getattr(_c, "JEV_EARLY_MIN_AGE_MIN", 2.5))
+        _std_min_age = float(getattr(_c, "JEV_MIN_AGE_MIN", 4.0))
         min_age = _early_min_age if (b5 >= s5 and m5 >= 5.0) else _std_min_age
         max_age = float(getattr(_c, "JEV_MAX_AGE_MIN", 72.0 * 60.0))  # 72 часа
         if not (min_age <= age_min <= max_age):
@@ -1121,11 +1133,11 @@ class GrokJevEngine:
                     _h_stats["dev_pct"] = dev_pct
                     _h_stats["top1_pct"] = largest_whale
 
-                    if dev_pct > 10.0:
-                        return False, f"dev still loaded {dev_pct:.1f}% > 10.0% (dump risk)", _h_stats
-                    if largest_whale > 15.0:
-                        return False, f"whale concentration {largest_whale:.1f}% > 15.0%", _h_stats
-                    max_top10 = 30.0 if is_pump else 35.0
+                    if dev_pct > 2.0:
+                        return False, f"dev still loaded {dev_pct:.1f}% > 2.0% (dump hazard: dev holds supply)", _h_stats
+                    if largest_whale > 12.0:
+                        return False, f"whale concentration {largest_whale:.1f}% > 12.0%", _h_stats
+                    max_top10 = 22.0 if is_pump else 28.0
                     if top_10_sum > max_top10:
                         return False, f"top 10 concentration {top_10_sum:.1f}% > {max_top10:.0f}%", _h_stats
 
@@ -1136,10 +1148,10 @@ class GrokJevEngine:
                     _h_stats["top10_pct"] = float(_h_raw.get("top_10_pct", 0.0) or 0.0)
                     _h_stats["dev_pct"] = float(_h_raw.get("dev_pct", 0.0) or 0.0)
                     _h_stats["top1_pct"] = _h_stats["dev_pct"]
-                    if _h_stats["dev_pct"] > 10.0:
-                        return False, f"dev loaded (GoPlus) {_h_stats['dev_pct']:.1f}% > 10%", _h_stats
-                    if _h_stats["top10_pct"] > 35.0:
-                        return False, f"top10 concentration (GoPlus) {_h_stats['top10_pct']:.1f}% > 35%", _h_stats
+                    if _h_stats["dev_pct"] > 2.0:
+                        return False, f"dev loaded (GoPlus) {_h_stats['dev_pct']:.1f}% > 2.0% (dump risk)", _h_stats
+                    if _h_stats["top10_pct"] > 28.0:
+                        return False, f"top10 concentration (GoPlus) {_h_stats['top10_pct']:.1f}% > 28%", _h_stats
 
             # Г) Двухсторонняя симуляция (BUY + SELL) через Jupiter
             # ЖЕСТКАЯ ЗАЩИТА: токен ОБЯЗАН успешно проходить и покупку, и продажу!

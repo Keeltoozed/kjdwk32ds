@@ -182,8 +182,8 @@ async def position_manager_loop(analyzer, tracker):
                 # Infant Dump (как в EVM): слив в первые минуты = дев, не шум.
                 # Раги идут -40..-96%, шум импульса -15..-18% переживаем.
                 try:
-                    _inf_w = float(getattr(config, "INFANT_WINDOW_MIN", 2.0))
-                    _inf_p = float(getattr(config, "INFANT_DUMP_PCT", -0.25))
+                    _inf_w = float(getattr(config, "INFANT_WINDOW_MIN", 3.5))
+                    _inf_p = float(getattr(config, "INFANT_DUMP_PCT", -0.18))
                     if minutes_held < _inf_w and pnl_pct <= _inf_p:
                         tracker.close_position(mint, current_price, f"Infant Dump ({pnl_pct*100:.0f}%)")
                         continue
@@ -194,11 +194,11 @@ async def position_manager_loop(analyzer, tracker):
                 minutes_since_peak = (time.time() - peak_ts) / 60 if peak_ts else 0
 
                 prev_ts = getattr(position, "price_checked_at", 0.0)
-                # 1-тиковый фильтр аномального провала котировки (>45% за 1 тик при наличии прибыли >=15%):
+                # 1-тиковый фильтр аномального провала котировки (>45% за 1 тик ТОЛЬКО при наличии прибыли >=15%):
                 # защищает от ложного тика побочного пула (кейс MAKERS +213% -> -100.0% на 1 тик),
-                # НЕ перезаписывая prev_price и НЕ пуская тик в Early Fade Cut до проверки 2-м тиком!
+                # НЕ задерживает стопы/дампы при реальном минусе!
                 if prev_ts > 0 and (time.time() - prev_ts) < 60 and prev_price > 0 \
-                        and current_price <= prev_price * 0.78:
+                        and current_price <= prev_price * 0.78 and max_pnl_pct >= 0.15 and pnl_pct > -0.20:
                     _cg_n = int(getattr(position, "crash_confirm_n", 0) or 0) + 1
                     position.crash_confirm_n = _cg_n
                     if _cg_n < 3:

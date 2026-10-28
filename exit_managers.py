@@ -45,15 +45,15 @@ class MatureExitManager:
             not _src or any(k in _src for k in ('GROK', 'JEV', 'JUP', 'RUNNER', 'VIP', 'XGB', 'RAY', 'PUMP', 'SCOUT', 'STREAM', 'FOMO', 'SMART'))
         )
 
-        # Аварийный кэп ПЕРВЫМ: гэпы типа раг-дампов дева режем мгновенно на -38% (не даем уйти в -99% / -100%)
-        _emerg_cap = float(getattr(config, "EMERGENCY_CAP_PCT", -0.38))
+        # Аварийный кэп ПЕРВЫМ: гэпы типа раг-дампов дева режем мгновенно на -25% (не даем уйти в -50%..-99%)
+        _emerg_cap = float(getattr(config, "EMERGENCY_CAP_PCT", -0.25))
         if pnl_pct <= _emerg_cap:
             return f"Mature Emergency Cap ({pnl_pct*100:.0f}%)"
 
         # Infant guard: дамп в первые минуты = дев сливает, не шум.
-        # Режем катастрофический сброс дева (-22%..-35%), спасая депозит от инста-рага.
-        _inf_win = float(getattr(config, "INFANT_WINDOW_MIN", 2.0))
-        _inf_pct = float(getattr(config, "INFANT_DUMP_PCT", -0.22))
+        # Режем сброс дева (-18%+), спасая депозит от инста-рага.
+        _inf_win = float(getattr(config, "INFANT_WINDOW_MIN", 3.5))
+        _inf_pct = float(getattr(config, "INFANT_DUMP_PCT", -0.18))
         if minutes_held < _inf_win and pnl_pct <= _inf_pct:
             return f"Mature Infant Dump ({pnl_pct*100:.0f}%)"
 
