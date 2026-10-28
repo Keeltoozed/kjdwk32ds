@@ -53,8 +53,9 @@ class MatureExitManager:
         # Infant guard: дамп в первые минуты = дев сливает, не шум.
         # Режем только катастрофический сброс дева (-35%..-90%), рабочие тени и откаты не трогаем.
         # Infant guard: дамп в первые минуты = дев сливает, не шум.
+        # Реальный сброс дева (rug) — это просадка глубже -30%..-35%
         _inf_win = float(getattr(config, "INFANT_WINDOW_MIN", 2.0))
-        _inf_pct = float(getattr(config, "INFANT_DUMP_PCT", -0.18))
+        _inf_pct = float(getattr(config, "INFANT_DUMP_PCT", -0.32)) # Было -0.18
         if minutes_held < _inf_win and pnl_pct <= _inf_pct:
             return f"Mature Infant Dump ({pnl_pct*100:.0f}%)"
 
@@ -215,22 +216,15 @@ class MatureExitManager:
             if pnl_pct >= 0.06 and bs_ratio < 0.92 and m1 <= 0.0:
                 return f"Front-Run Exit: Sellers dominating ({b5}b/{s5}s) while in profit (+{pnl_pct*100:.1f}%)"
 
-            # СЦЕНАРИЙ 2: "Тишина на вершине" (в сделке >= 2.5м, плюс +4%..+35%, но объем или сделки упали)
-            if minutes_held >= 2.5 and (0.04 <= pnl_pct <= 0.35):
-                if (0 < total_tx5 < 12 or (0 < vol_m5 < 1500.0)) and (-2.0 <= m1 <= 0.5):
-                    return f"Quiet Top Exit: Low volume (${vol_m5:.0f}, {total_tx5} tx) — taking +{pnl_pct*100:.1f}%"
-
-        # СЦЕНАРИЙ 2Б: "Тишина на вершине по времени пика" (работает всегда, даже без pair_data!)
-        # Если мы в плюсе (+4%..+35%), но цена уже 3.5 минуты не может обновить максимум и начала сползать:
-        if minutes_held >= 3.5 and (0.04 <= pnl_pct <= 0.35) and _peak_age_min >= 3.0 and _dd_peak >= 0.04:
+        # СЦЕНАРИЙ 2Б: Даем ракете время на консолидацию перед следующей ступенью
+        if minutes_held >= 8.0 and (0.20 <= pnl_pct <= 0.50) and _peak_age_min >= 7.0 and _dd_peak >= 0.12:
             return f"Quiet Top Exit (+{pnl_pct*100:.1f}% locked, no new high for {_peak_age_min:.1f}m)"
 
-        # СЦЕНАРИЙ 3: "Вялая ракета" (Micro-Rocket Scalp)
-        # Был пик +9%..+37% (до порога основного пола +38%), прошло >= 1.5 мин, ракета выдохлась и откатила:
-        # Забираем 60% от этого движения (минимум +3.5%), не дожидаясь Stagnant Cut и слива в минус!
-        if 0.09 <= max_pnl_pct < 0.38 and minutes_held >= 1.5 and _peak_age_min >= 1.0:
-            retain_floor = max(0.035, round(max_pnl_pct * 0.60, 3))
-            if pnl_pct <= retain_floor:
+        # СЦЕНАРИЙ 3: "Вялая ракета" (ОТКЛЮЧЕНО / СМЯГЧЕНО ДЛЯ РАКЕТ)
+        # Не срезаем волатильность на старте. Если хотите полностью отключить — просто закомментируйте.
+        # Оставляем только безубыток (+2%) после 5 минут стояния:
+        if 0.20 <= max_pnl_pct < 0.38 and minutes_held >= 5.0 and _peak_age_min >= 3.0:
+            if pnl_pct <= 0.02:
                 return f"Slow Rocket Scalp (+{pnl_pct*100:.1f}% locked after peak +{max_pnl_pct*100:.0f}%)"
 
         # Time exit - Stagnant: даём ракетам 25-35 минут на раскачку (кейс CATTLEAXE +23% на 37м, NIO +67% на 20м),
