@@ -405,14 +405,14 @@ class GrokJevEngine:
 
         # 4. Объем и давление покупателей (LIVE 5M ACTIVITY)
         # В 5-минутном окне ВСЕГДА должна быть живая активность
-        if vol_m5 < 2000.0:
-            return False, f"vol5-low ${vol_m5:.0f} < $2,000 (inactive dead pool)"
+        if vol_m5 < 4000.0:
+            return False, f"vol5-low ${vol_m5:.0f} < $4,000 (inactive dead pool)"
         if (b5 + s5) < 12:
             return False, f"tx5-low {b5+s5} < 12 (no live trading)"
         if b5 < 8:
             return False, f"buys5-low {b5} < 8 (no buyers)"
-        if s5 > 0 and (b5 / s5) < 1.15:
-            return False, f"sellers-dominating {b5}b/{s5}s (ratio {b5/s5:.2f} < 1.15)"
+        if s5 > 0 and (b5 / s5) < 1.3:
+            return False, f"sellers-dominating {b5}b/{s5}s (ratio {b5/s5:.2f} < 1.3)"
 
         # Проверка суточной активности h24 вместо h1 (vol >= $40k, trades >= 150)
 # ЗАМЕНИ НА (для молодых токенов не требуем суточную историю):
