@@ -34,6 +34,25 @@ class CopyTrader:
         self._rate = {}         # кошелёк -> времена последних уведомлений
         self._muted = {}        # кошелёк -> до какого времени игнорируем
         self.whale_buys = {}      # mint -> {wallet: ts}
+        self._copy_wallets = {}   # mint -> кошельки, чей сигнал мы скопировали
+        self._wstat = {}          # кошелёк -> [прибыльных копий, убыточных копий]
+        self._banned = set()      # кошельки-«фармеры»: копии не приносят прибыль
+        try:
+            _orig_close = self.tracker.close_position
+            def _hooked_close(mint, exit_price, reason, *a, **k):
+                try:
+                    _p = self.tracker.get_open_positions().get(mint)
+                    if _p is not None and str(getattr(_p, "source", "")).startswith("COPY") and mint in self._copy_wallets:
+                        _e = float(getattr(_p, "entry_price", 0) or 0)
+                        _x = float(exit_price or 0)
+                        if _e > 0:
+                            self._score_wallets(mint, (_x / _e - 1.0) * 100.0)
+                except Exception:
+                    pass
+                return _orig_close(mint, exit_price, reason, *a, **k)
+            self.tracker.close_position = _hooked_close
+        except Exception as _e:
+            print(f"⚠️ [COPY] не удалось повесить учёт результатов на кошельки: {_e}")
         self.consensus_done = set()
         self.whale_first_price = {}  # mint -> цена в момент покупки ПЕРВОГО кита
         
@@ -56,6 +75,14 @@ class CopyTrader:
                 if tier > min_tier:
                     continue   # слабые кошельки (tier-3: 1 удачный токен) не копируем
                 pnl = float(data.get("total_pnl", 0) or 0)
+                try:
+                    _wins = data.get("winning_tokens", [])
+                    if isinstance(_wins, str):
+                        _wins = json.loads(_wins or "[]")
+                    if len(_wins) < int(getattr(_cf, "COPY_MIN_WINS", 2)) or pnl < float(getattr(_cf, "COPY_MIN_PNL", 1000)):
+                        continue   # одиночная удача — не «умный» кошелёк
+                except Exception:
+                    pass
                 wallets[w] = f"@Tier{tier}_{w[:4]}_+${pnl:,.0f}"
 
         # 1) живая база охотника (тот же процесс)
@@ -88,6 +115,19 @@ class CopyTrader:
                 "2yXwy5Dsa1XtEXcsrkFVRJeyuWD3qKkMN3pP3p5VTW3V": "@Salem1299"
             }
         return wallets
+
+    def _score_wallets(self, mint, pnl_pct):
+        """Учёт результата КОПИИ по кошелькам. Кошелёк, чьи копии в основном убыточны, банится."""
+        import config as _c
+        min_n = int(getattr(_c, "COPY_BAN_MIN_COPIES", 3))
+        max_wr = float(getattr(_c, "COPY_BAN_WINRATE", 0.34))
+        for w in self._copy_wallets.get(mint, ()):
+            st = self._wstat.setdefault(w, [0, 0])
+            st[0 if pnl_pct > 3.0 else 1] += 1
+            n = st[0] + st[1]
+            if n >= min_n and st[0] / n < max_wr and w not in self._banned:
+                self._banned.add(w)
+                print(f"🚫 [COPY] кошелёк {w[:6]}… забанен: {st[0]}/{n} прибыльных копий (фармер/шум)")
 
     def _handle_ws_message(self, message) -> None:
         """Одно сообщение WSS. Проваленные транзакции (у ботов их много) и перегруз очереди отбрасываем,
@@ -286,18 +326,22 @@ class CopyTrader:
                 # 1. ОТСЛЕЖИВАНИЕ СБРОСА КИТА: если кит продаёт монету, которая у нас открыта — выходим вслед за ним!
                 if post_amt < pre_amt and pre_amt > 0:
                     open_pos = self.tracker.get_open_positions()
-                    if mint in open_pos:
+                    _own = str(getattr(open_pos.get(mint), "source", "")).startswith("COPY")
+                    import config as _cx
+                    if mint in open_pos and (_own or not getattr(_cx, "COPY_EXIT_ONLY_OWN", True)):
                         sell_pct = (pre_amt - post_amt) / pre_amt
                         cur_p = await self.get_token_price(mint)
                         print(f"🐋 [WHALE DUMP] {trader_name} продал {sell_pct*100:.0f}% доли {mint[:12]}! Срочно выходим вслед за китом...")
                         if sell_pct >= 0.70:
                             self.tracker.close_position(mint, cur_p, f"Whale Exit ({trader_name} dump {sell_pct*100:.0f}%)")
-                        else:
+                        elif getattr(_cx, "COPY_FRONTRUN_ENABLED", False):
                             self.tracker.partial_close_position(mint, cur_p, 0.50, f"Whale Frontrun ({trader_name} sold {sell_pct*100:.0f}%)")
 
                 elif post_amt > pre_amt: # Баланс вырос = ПОКУПКА
                     import config
                     now = time.time()
+                    if wallet in self._banned:
+                        continue
                     self.whale_buys.setdefault(mint, {})
                     self.whale_buys[mint][wallet] = now
                     self.whale_buys[mint] = {w: t for w, t in self.whale_buys[mint].items() if now - t <= 600}
@@ -363,6 +407,7 @@ class CopyTrader:
                     position_size = max(4.0, min(100.0, capital * (config.REINVEST_PERCENT / 100.0)))
                     position_size = min(position_size, float(getattr(config, "COPY_MAX_TICKET_USD", 15.0)))
                     
+                    self._copy_wallets[mint] = set(self.whale_buys.get(mint, {}).keys())
                     self.tracker.add_position(symbol, mint, price_usd, amount_usd=position_size,
                                                 source=f"COPY:{trader_name}")
                     print(f"✅ Успешно скопировали сделку {trader_name} на {position_size}$!")
