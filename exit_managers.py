@@ -45,17 +45,15 @@ class MatureExitManager:
             not _src or any(k in _src for k in ('GROK', 'JEV', 'JUP', 'RUNNER', 'VIP', 'XGB', 'RAY', 'PUMP', 'SCOUT', 'STREAM', 'FOMO', 'SMART'))
         )
 
-        # Аварийный кэп ПЕРВЫМ: гэпы типа FIBONACCI -68% проскакивают обычный стоп
-        # Не режет рабочие 1-минутные тени на старте (-30%..-38%), а ловит только реальные раг-гэпы (-48%+):
-        if pnl_pct <= -0.75:
+        # Аварийный кэп ПЕРВЫМ: гэпы типа раг-дампов дева режем мгновенно на -38% (не даем уйти в -99% / -100%)
+        _emerg_cap = float(getattr(config, "EMERGENCY_CAP_PCT", -0.38))
+        if pnl_pct <= _emerg_cap:
             return f"Mature Emergency Cap ({pnl_pct*100:.0f}%)"
 
         # Infant guard: дамп в первые минуты = дев сливает, не шум.
-        # Режем только катастрофический сброс дева (-35%..-90%), рабочие тени и откаты не трогаем.
-        # Infant guard: дамп в первые минуты = дев сливает, не шум.
-        # Реальный сброс дева (rug) — это просадка глубже -30%..-35%
+        # Режем катастрофический сброс дева (-22%..-35%), спасая депозит от инста-рага.
         _inf_win = float(getattr(config, "INFANT_WINDOW_MIN", 2.0))
-        _inf_pct = float(getattr(config, "INFANT_DUMP_PCT", -0.35)) # Было -0.18
+        _inf_pct = float(getattr(config, "INFANT_DUMP_PCT", -0.22))
         if minutes_held < _inf_win and pnl_pct <= _inf_pct:
             return f"Mature Infant Dump ({pnl_pct*100:.0f}%)"
 
@@ -194,9 +192,9 @@ class MatureExitManager:
         if minutes_held >= 6.0 and _maxp >= _be and pnl_pct <= 0.035:
             return f"Mature Breakeven (был пик +{_maxp*100:.0f}%, фикс {pnl_pct*100:+.1f}%)"
 
-        # Hard stop loss: стоп ВСЕГДА отрицательный (-20%), чтобы не резать сделки с прибылью
-        _sl = -abs(float(getattr(config, 'STOP_LOSS_PCT', 0.20)))
-        if minutes_held >= 3.0 and pnl_pct <= _sl:
+        # Hard stop loss: стоп ВСЕГДА отрицательный (-18%..-20%), защищает депозит от постепенного сползания
+        _sl = -abs(float(getattr(config, 'STOP_LOSS_PCT', 0.18)))
+        if minutes_held >= 1.0 and pnl_pct <= _sl:
             return f"Mature Stop Loss ({_sl*100:.0f}%)"
         # =====================================================================
         # PRE-DUMP FRONT-RUNNER: Выход в плюс при затухании торгов (до слива толпы)

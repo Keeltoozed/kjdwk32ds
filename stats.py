@@ -23,7 +23,8 @@ def _load():
         if url and key:
             from supabase import create_client
             sb = create_client(url, key)
-            res = sb.table("trades_pump").select("features").eq("mint", "PORTFOLIO_STATE_V3").execute()
+            snap_mint = getattr(config, 'PORTFOLIO_SNAPSHOT_MINT', 'PORTFOLIO_STATE_V2.4') if config else 'PORTFOLIO_STATE_V2.4'
+            res = sb.table("trades_pump").select("features").eq("mint", snap_mint).execute()
             if res.data and res.data[0].get("features"):
                 cloud = json.loads(res.data[0]["features"]) or {}
     except Exception as e:
@@ -57,10 +58,11 @@ def main():
     days = int(sys.argv[sys.argv.index('--days') + 1]) if '--days' in sys.argv else 0
     cutoff = time.time() - days * 86400 if days > 0 else 0
     data = _load()
+    snap_key = getattr(config, 'PORTFOLIO_SNAPSHOT_MINT', 'PORTFOLIO_STATE_V2.4') if 'config' in globals() else 'PORTFOLIO_STATE_V2.4'
     closed = [v for v in data.values()
               if isinstance(v, dict) and v.get('status') == 'closed'
               and float(v.get('exit_time') or 0) >= cutoff
-              and v.get('mint') != 'PORTFOLIO_STATE_V3']
+              and not str(v.get('mint', '')).startswith('PORTFOLIO_STATE')]
     # карантин/фантомы не считаем
     try:
         from tracker import PaperTracker as _T

@@ -63,12 +63,13 @@ MAX_CONCURRENT_POSITIONS = 10         # Режим ракет: до 10 пози�
 MAX_DAILY_LOSS_USD = 1000.0
 KILL_SWITCH_ENABLED = False  # ОТКЛЮЧЕНО для тестов (не ставить торговлю на паузу при дневном минусе)
 MAX_DAILY_LOSS_PCT = 0.35
-STOP_LOSS_PCT = 0.25  # Стоп -22% после 90с (безопасный запас для волатильности мемкоинов Solana, не режет ракеты на тенях)
+STOP_LOSS_PCT = 0.18  # Чёткий стоп -18% (без зависания в просадках, спасает баланс)
+EMERGENCY_CAP_PCT = -0.38  # Аварийный срез на -38% при любых раг-гэпах (вместо -75%)
 
 # === ЗАЩИТА ОТ СЕРИИ МИНУСОВ (STREAK CIRCUIT BREAKER) ===
 STREAK_COOLDOWN_ENABLED = True       # Включить паузу после серии минусов
 STREAK_MAX_CONSECUTIVE_LOSSES = 4    # 4 минуса подряд
-STREAK_COOLDOWN_MINUTES = 3.0        # Длительность паузы: 3 минуты вместо 12, чтобы бот не засыпал на полдня
+STREAK_COOLDOWN_MINUTES = 8.0        # 8 минут паузы после 4 минусов подряд
 
 # === СКОЛЬЗЯЩИЙ БРЕЙКЕР + ТРОТТЛИНГ ПО ПРОСАДКЕ ===
 ROLLING_BREAKER_ENABLED = False      # ОТКЛЮЧЕНО: 45-минутная пауза парализовала бота во время рыночных импульсов
@@ -81,41 +82,40 @@ DD_THROTTLE_START_USD = 15.0         # просадка от пика
 # === IN-MEMORY STREAMING SNIPER (RAM FILTER + AUDIT) ===
 SNIPER_ENTRIES_ENABLED = True             # Активировать вход по In-Memory стриму (без задержек DexScreener)
 STREAM_WINDOW_SEC = 60                   # Скользящее окно скорости в RAM (60 секунд)
-STREAM_MIN_UNIQUE_BUYERS = 6             # Минимум 6 уникальных покупателей за окно (ранняя органика, не 3 фейк-кошелька дева)
-STREAM_MIN_BUY_SOL = 2.5                 # Минимум 2.5 SOL реального объема покупок (не копейки 0.8 SOL)
-STREAM_MAX_TOP_BUYER_RATIO = 0.50        # Доля крупнейшего покупателя <= 50% (защита от одного кита-манипулятора)
-STREAM_MIN_BS_RATIO = 1.8                # Соотношение Buy/Sell volume >= 1.8 (мощный перевес покупателей)
-STREAM_MAX_CURVE_PROGRESS = 75.0         # Не входить перед самой миграцией (макс 75%, было зажато до 40%)
+STREAM_MIN_UNIQUE_BUYERS = 8             # Минимум 8 уникальных покупателей за окно (ранняя органика, не 3 фейк-кошелька дева)
+STREAM_MIN_BUY_SOL = 2.5                 # Минимум 2.5 SOL реального объема покупок
+STREAM_MAX_TOP_BUYER_RATIO = 0.50        # Доля крупнейшего покупателя <= 50%
+STREAM_MIN_BS_RATIO = 1.8                # Соотношение Buy/Sell volume >= 1.8
+STREAM_MAX_CURVE_PROGRESS = 85.0         # Пускаем токены вплоть до 85% перед миграцией
 STREAM_ENTRY_SIZE_USD = 15.0             # Размер билета на раннем входе ($15)
-STREAM_SLIPPAGE = 0.08                   # 8% реалистичное проскальзывание на быстром входе pump.fun (было нереалистичные 2%)
-STREAM_MAX_AGE_SEC = 900                 # Даем 15 минут органическим токенам набрать кривую (было 5 мин, из-за чего выкидывались хорошие медленные старты)
+STREAM_SLIPPAGE = 0.08                   # 8% реалистичное проскальзывание на быстром входе pump.fun
+STREAM_MAX_AGE_SEC = 900                 # Даем 15 минут органическим токенам набрать кривую
 STREAM_GC_MIN_PROGRESS = 4.0             # Чистим только если за 15 мин кривая < 4% (мертвый токен)
 STREAM_GC_IDLE_SEC = 180                 # Если ноль трейдов 180с (3 мин) и прогресс < 4% — чистим
 STREAM_DEV_DUMP_RATIO = 0.25             # Если кошельки первых транзакций продали > 25% общего объёма — скам
 STREAM_MAX_DEV_BUY_TOKENS = 100_000_000  # Максимум 10% supply (100M из 1B) на выкупе дева при создании
-STREAM_MIN_ENTRY_PROGRESS = 3.0          # Минимум 3% кривой перед входом (~2.5 SOL реального объёма — подтверждение интереса, а не фейк 0.5%)
-STREAM_MOMENTUM_MIN_RATIO = 0.40         # Вторая половина окна должна содержать >= 40% объёма (моментум не затухает)
+STREAM_MIN_ENTRY_PROGRESS = 25.0         # Вход от 25% кривой (отсекает 99% моментальных 0-минутных дев-рагов!)
+STREAM_MOMENTUM_MIN_RATIO = 0.40         # Вторая половина окна должна содержать >= 40% объёма
 
-VIP_ENTRIES_ENABLED = True   # ВКЛЮЧЕНО: VIP-полоса для супер-моментума (HUMANOID +141%, JEETJAK +60%), защищена ончейн-аудитом и 1м-фильтром отката
-TIME_EXIT_MINUTES = 60  # Если за 30 минут нет пампа - выходим
+VIP_ENTRIES_ENABLED = True   # ВКЛЮЧЕНО: VIP-полоса для супер-моментума
+TIME_EXIT_MINUTES = 60  # Если за 60 минут нет пампа - выходим
 TIME_EXIT_PROFIT_REQ = 0.0
 
-# Take-Profit: частичные продажи и мунбэг ПОЛНОСТЬЮ ОТКЛЮЧЕНЫ — позиция едет целиком (100%)
-# по лестнице Profit Floor и трейлингу прямо до вершины, как у автора (Grok Desk)!
-# Раньше TP1 продавал 50% на +40%, из-за чего позиция урезалась вдвое ($15 -> $7.5),
-# и на ракетах недополучалась львиная доля профита.
-PARTIAL_TP_ENABLED = False     # Полный запрет частичных фиксаций / мунбэгов
-TP1_TRIGGER_PCT = 999.0        # Отключено
-TP1_SELL_FRAC = 0.0
-TP2_TRIGGER_PCT = 999.0        # Отключено
-TP2_SELL_FRAC = 0.0
-MOONBAG_TRIGGER_PCT = 999.0    # Отключено
+# Take-Profit: СТРАТЕГИЯ FREE RIDE ИЗ X (Crypto Twitter)
+# На 2x (+90%..+100%) забираем 50% позиции: тело $15 полностью возвращается на баланс!
+# Оставшиеся 50% ("мунбэг") едут с нулевым риском по параболическому трейлингу до +500%..+2000%!
+PARTIAL_TP_ENABLED = True       # Включен Free Ride
+TP1_TRIGGER_PCT = 0.90          # На +90% фикс 50% позиции (тело входа в кармане)
+TP1_SELL_FRAC = 0.50            # Продать 50%
+TP2_TRIGGER_PCT = 2.50          # На +250% (3.5x) дополнительный срез 25%
+TP2_SELL_FRAC = 0.25
+MOONBAG_TRIGGER_PCT = 999.0     # Остаток 25-50% позиции едет в свободный полёт
 MOONBAG_SELL_FRAC = 0.0
 
-# Trailing Stop & Profit Protection (Сужающийся параболический трейлинг: чем выше пик, тем плотнее зажимаем профит!)
-TRAILING_ACTIVATION_PCT = 0.25  # Трейлинг с +20% (раньше +25%)
-TRAILING_DISTANCE_PCT = 0.10    # 12% на разгоне (+20..+40%)
-TRAILING_RUNNER_DISTANCE_PCT = 0.25 # 12% на раннерах (+80%..+150%)
+# Trailing Stop & Profit Protection
+TRAILING_ACTIVATION_PCT = 0.30  # Трейлинг активируется с +30% пика
+TRAILING_DISTANCE_PCT = 0.14    # 14% откат от пика
+TRAILING_RUNNER_DISTANCE_PCT = 0.25 # 25% широкий запас для мунбэгов и раннеров (не резать ракету на шуме)
 SCALP_PROFIT_ENABLED = False    # Скальп-срез +5% выключен
 
 # Whale Dump Guard & Crash Protection
@@ -132,7 +132,7 @@ SOLANA_MIN_AGE_MIN = 1.0  # 1.5 мин (flash-rug зона дева до 90с, �
 SOLANA_MAX_AGE_HOURS = 24.0
 SOLANA_MAX_AGE_MIN = 120.0      # Максимум 3 часа входа  # Не покупать старые тухлые монеты старше 24ч (только свежие волны и ракеты)
 INFANT_WINDOW_MIN = 2.0
-INFANT_DUMP_PCT = -0.30  # Резать в первые 2 мин только реальный дамп -35%+ (рабочие тени -12%..-18% выживают)
+INFANT_DUMP_PCT = -0.22  # Резать в первые 2 мин только сброс дева (-22%+), не давая уйти в -90%
 
 # Stagnant: даём ракетам 25-35 мин на раскачку и набор базы (кейсы CATTLEAXE 37м, NIO 20м+), не режем на 15-й минуте прямо перед пампом!
 STAGNANT_LOSS_MIN = 25.0
@@ -152,9 +152,9 @@ GEMINI_API_KEY = (os.getenv("GEMINI_API_KEY") or "").strip() # Получить 
 # === GROK BOT x JEV ENGINE (THE FUNNEL & THE LINE) ===
 JEV_ENABLED = True
 JEV_WICK_STOP_ENABLED = False     # ОТКЛЮЧЕНО: искусственный стоп по фитилю душил ракеты на -15%..-25% в первые 2-3 минуты (Goon, SPIDOGE)
-JEV_MIN_AGE_MIN = 2.0            # Минимум 3.5 минуты (отсекает снайпер-дампы на 0м вроде KAT)
-JEV_EARLY_MIN_AGE_MIN = 1.5      # Минимум 3.0 минуты для пробойных монет
-JEV_MIN_LIQUIDITY_USD = 6000.0  # $15,000 минимальная глубина пула (как у GTA $51k, KIMCHI $35k, TRUMP $40k)
+JEV_MIN_AGE_MIN = 1.2            # Минимум 1.2 минуты (не отсекает ракеты вроде 大A на 1.5м)
+JEV_EARLY_MIN_AGE_MIN = 1.0      # Минимум 1.0 минуты для пробойных монет с покупками
+JEV_MIN_LIQUIDITY_USD = 6000.0  # $6,000 минимальная глубина пула
 JEV_MIN_VOLUME_H1 = 10000.0      # $40,000 часовой объем
 JEV_MIN_MCAP_USD = 20000.0 # $50,000 минимальная капитализация (отсекает микро-скамы pump.fun)
 JEV_MIN_VOLUME_H24 = 40000.0
@@ -375,11 +375,6 @@ JEV_FRESH_RECHECK_ENABLED = True   # ВКЛЮЧЕНО: перед входом �
 JEV_MIN_M1_ENTRY_FLOOR_PCT = -3.0  # Пускать откат до -3% (ракета дышит), но резать дамп глубже -3%
 JEV_MIN_H1_PCT = -4.0
 JEV_MIN_H6_PCT = -10.0
-
-# === ЗАЩИТА ПРИБЫЛИ (ЧТОБЫ PHOOK +42% НЕ ЗАКРЫВАЛСЯ В МИНУС) ===
-TRAILING_ACTIVATION_PCT = 0.50     # Трейлинг включается с +20% (а не ждет заоблачных +50%)
-TRAILING_DISTANCE_PCT = 0.18       # Срез при откате на 10% от пика
-BREAKEVEN_PCT = 0.25               # При +15% стоп сразу в безубыток (+2%)
 
 USE_COPYTRADE = True
 COPY_MIN_TIER = 2

@@ -367,10 +367,12 @@ class GrokJevEngine:
         created_at = pair_data.get("pairCreatedAt") or 0
         age_min = (time.time() * 1000 - created_at) / 60000.0 if created_at else 999.0
 
-        min_age = float(getattr(_c, "JEV_MIN_AGE_MIN", 15.0))
+        _early_min_age = float(getattr(_c, "JEV_EARLY_MIN_AGE_MIN", 1.0))
+        _std_min_age = float(getattr(_c, "JEV_MIN_AGE_MIN", 1.5))
+        min_age = _early_min_age if (b5 >= s5 and m5 >= 5.0) else _std_min_age
         max_age = float(getattr(_c, "JEV_MAX_AGE_MIN", 72.0 * 60.0))  # 72 часа
         if not (min_age <= age_min <= max_age):
-            return False, f"age-out-of-bounds {age_min:.1f}m not in [{min_age:.0f}m, {max_age:.0f}m]"
+            return False, f"age-out-of-bounds {age_min:.1f}m not in [{min_age:.1f}m, {max_age:.0f}m]"
 
         txns_m5 = (pair_data.get("txns") or {}).get("m5", {}) or {}
         txns_h24 = (pair_data.get("txns") or {}).get("h24", {}) or {}
@@ -411,8 +413,11 @@ class GrokJevEngine:
             return False, f"tx5-low {b5+s5} < 12 (no live trading)"
         if b5 < 8:
             return False, f"buys5-low {b5} < 8 (no buyers)"
-        if s5 > 0 and (b5 / s5) < 1.3:
-            return False, f"sellers-dominating {b5}b/{s5}s (ratio {b5/s5:.2f} < 1.3)"
+        _req_bs = float(getattr(_c, "MIN_BUY_SELL_RATIO", 1.15))
+        if (b5 + s5) >= 60 or vol_m5 >= 15000.0:
+            _req_bs = 1.02
+        if s5 > 0 and (b5 / s5) < _req_bs:
+            return False, f"sellers-dominating {b5}b/{s5}s (ratio {b5/s5:.2f} < {_req_bs:.2f})"
 
         # Проверка суточной активности h24 вместо h1 (vol >= $40k, trades >= 150)
 # ЗАМЕНИ НА (для молодых токенов не требуем суточную историю):
