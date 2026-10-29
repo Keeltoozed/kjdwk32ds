@@ -1146,8 +1146,8 @@ class GrokJevEngine:
                     _h_stats["dev_pct"] = dev_pct
                     _h_stats["top1_pct"] = largest_whale
 
-                    if dev_pct > 10.0:
-                        return False, f"dev still loaded {dev_pct:.1f}% > 10.0% (dump hazard: dev holds supply)", _h_stats
+                    if dev_pct > 4.0:
+                        return False, f"dev still loaded {dev_pct:.1f}% > 4.0% (dump hazard: dev holds supply)", _h_stats
                     if largest_whale > 15.0:
                         return False, f"whale concentration {largest_whale:.1f}% > 15.0%", _h_stats
                     max_top10 = 30.0 if is_pump else 35.0
@@ -1161,8 +1161,8 @@ class GrokJevEngine:
                     _h_stats["top10_pct"] = float(_h_raw.get("top_10_pct", 0.0) or 0.0)
                     _h_stats["dev_pct"] = float(_h_raw.get("dev_pct", 0.0) or 0.0)
                     _h_stats["top1_pct"] = _h_stats["dev_pct"]
-                    if _h_stats["dev_pct"] > 10.0:
-                        return False, f"dev loaded (GoPlus) {_h_stats['dev_pct']:.1f}% > 10.0% (dump risk)", _h_stats
+                    if _h_stats["dev_pct"] > 4.0:
+                        return False, f"dev loaded (GoPlus) {_h_stats['dev_pct']:.1f}% > 4.0% (dump risk)", _h_stats
                     if _h_stats["top10_pct"] > 35.0:
                         return False, f"top10 concentration (GoPlus) {_h_stats['top10_pct']:.1f}% > 35%", _h_stats
 
