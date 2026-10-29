@@ -155,13 +155,15 @@ async def _reserve_slot(url: str) -> float:
         wait = gap - (now - last)
         if wait < 0:
             wait = 0.0
+        wait = min(wait, 3.0)  # Жесткий потолок ожидания: не копим очереди по 30с
         _last_call[host] = now + wait
         return wait
 
 
-def _note_429(host: str, penalty: float = 8.0):
+def _note_429(host: str, penalty: float = 3.0):
     """Штраф за 429: сдвигаем бронь вперёд, чтобы очередь не долбила забаненный хост."""
     try:
+        penalty = min(penalty, 4.0)
         _last_call[host] = max(_last_call.get(host, 0.0), time.monotonic() + penalty)
     except Exception:
         pass
@@ -264,10 +266,10 @@ async def fetch_json(url: str, params=None, headers=None, timeout: int = 12,
     sem = _sem_for(host)
     last_status, last_err = 0, "?"
     for attempt in range(retries + 1):
+        wait = await _reserve_slot(url)
+        if wait > 0:
+            await asyncio.sleep(wait)
         async with sem:
-            wait = await _reserve_slot(url)
-            if wait > 0:
-                await asyncio.sleep(wait)
             try:
                 # Если задан прокси — пробуем на 1-й попытке. При ошибке автоматически идём напрямую (fail-open)
                 cur_proxy = _OPTIONAL_PROXY if (attempt == 0 and _OPTIONAL_PROXY) else None
@@ -287,18 +289,17 @@ async def fetch_json(url: str, params=None, headers=None, timeout: int = 12,
                         return r.status, {}
                     last_err = f"HTTP {r.status}"
                     if r.status == 429:
-                        # 429 не долбим повторами впритык: штраф + длинный backoff
-                        _note_429(host, penalty=8.0 + 4.0 * attempt)
+                        # 429 не долбим повторами впритык: умеренный штраф
+                        _note_429(host, penalty=3.0)
             except asyncio.TimeoutError:
                 last_err = "timeout"
             except Exception as e:
                 last_err = f"{type(e).__name__}"
         if attempt < retries:
-            # 429: 8с -> 12с -> 16с; остальное: 2с -> 5с -> 8с
             if "429" in str(last_err):
-                await asyncio.sleep(8 + 4 * attempt)
+                await asyncio.sleep(2.0 + 1.0 * attempt)
             else:
-                await asyncio.sleep(2 + 3 * attempt)
+                await asyncio.sleep(1.0 + 1.0 * attempt)
     if last_status != 429:
         if last_status != 429:
             print(f"🔌 API fail {host}{urlparse(url).path[:50]}: {last_err} (status {last_status})")

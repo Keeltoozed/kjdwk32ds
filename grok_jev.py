@@ -968,16 +968,20 @@ class GrokJevEngine:
         else:
             best_pair = sorted(sol_pairs, key=lambda p: float(((p.get("liquidity") or {}).get("usd", 0) or 0)), reverse=True)[0]
 
-        # 2. Проверка рассинхрона цен между активными пулами (liq >= $1500):
-        # Если PumpSwap $0.000036, а pump.fun или Raydium $0.000046 -> рассинхрон >12% -> блок!
-        _active_pools = [p for p in sol_pairs if float(((p.get("liquidity") or {}).get("usd", 0) or 0)) >= 1500.0]
-        if len(_active_pools) >= 2:
-            _prices = [float(p.get("priceUsd", 0) or 0) for p in _active_pools if float(p.get("priceUsd", 0) or 0) > 0]
-            if len(_prices) >= 2:
-                _max_p, _min_p = max(_prices), min(_prices)
-                if _min_p > 0 and (_max_p / _min_p) > 1.12:
-                    best_pair["_price_divergence"] = True
-                    best_pair["_price_divergence_ratio"] = _max_p / _min_p
+        # 2. Проверка рассинхрона цен между КРУПНЫМИ AMM-пулами (Raydium / Meteora / Orca):
+        # ВАЖНО: исключаем мертвый пул bonding curve pump.fun, у которого цена застыла!
+        _amm_check = [p for p in sol_pairs if p.get("dexId") not in ("pump", "pumpfun")]
+        if _amm_check and len(_amm_check) >= 2:
+            _top_l = float(((best_pair.get("liquidity") or {}).get("usd", 0) or 0))
+            if _top_l >= 5000.0:
+                _comp = [p for p in _amm_check if float(((p.get("liquidity") or {}).get("usd", 0) or 0)) >= max(4000.0, _top_l * 0.25)]
+                if len(_comp) >= 2:
+                    _prices = [float(p.get("priceUsd", 0) or 0) for p in _comp if float(p.get("priceUsd", 0) or 0) > 0]
+                    if len(_prices) >= 2:
+                        _max_p, _min_p = max(_prices), min(_prices)
+                        if _min_p > 0 and (_max_p / _min_p) > 1.40:
+                            best_pair["_price_divergence"] = True
+                            best_pair["_price_divergence_ratio"] = _max_p / _min_p
 
         return best_pair
 

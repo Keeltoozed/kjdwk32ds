@@ -187,22 +187,28 @@ class PaperTracker:
         sb = self._supabase()
         if sb is None:
             return
-        try:
-            _snap_key = getattr(config, "PORTFOLIO_SNAPSHOT_MINT", "PORTFOLIO_STATE_V3")
-            sb.table("trades_pump").upsert({
-                "mint": _snap_key,
-                "features": json.dumps(data),
-                "confidence": 0,
-                "status": "SYSTEM"
-            }).execute()
-        except Exception as e:
-            err_str = str(e)
-            if "exceed_egress_quota" in err_str or "402" in err_str:
-                if not getattr(self, "_quota_warned", False):
-                    print("🚨 [SUPABASE QUOTA] Проект Supabase заблокирован (402 exceed_egress_quota). Портфель сохранён локально в portfolio.json.")
-                    self._quota_warned = True
-            else:
-                print(f"⚠️ Ошибка сохранения портфеля в Supabase: {e}")
+        _snap_key = getattr(config, "PORTFOLIO_SNAPSHOT_MINT", "PORTFOLIO_STATE_V3")
+        payload = {
+            "mint": _snap_key,
+            "features": json.dumps(data),
+            "confidence": 0,
+            "status": "SYSTEM"
+        }
+        # Выполняем запись в Supabase строго в фоновом потоке, чтобы сетевые задержки и таймауты Supabase никогда не блокировали event loop
+        def _bg_sb_save(sb_inst, p_load):
+            try:
+                sb_inst.table("trades_pump").upsert(p_load).execute()
+            except Exception as e:
+                err_str = str(e)
+                if "exceed_egress_quota" in err_str or "402" in err_str:
+                    if not getattr(self, "_quota_warned", False):
+                        print("🚨 [SUPABASE QUOTA] Проект Supabase заблокирован (402 exceed_egress_quota). Портфель сохранён локально в portfolio.json.")
+                        self._quota_warned = True
+                else:
+                    print(f"⚠️ Ошибка сохранения портфеля в Supabase: {e}")
+
+        import threading as _th
+        _th.Thread(target=_bg_sb_save, args=(sb, payload), daemon=True).start()
 
     def get_open_positions(self) -> Dict[str, VirtualPosition]:
         return {k: v for k, v in self.positions.items() if v.status == "open"}

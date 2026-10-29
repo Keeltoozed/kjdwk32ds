@@ -518,16 +518,20 @@ class Analyzer:
                         best_pair["liquidity"] = {}
                     best_pair["liquidity"]["usd"] = eff
 
-        # Проверка рассинхрона цен между активными пулами (включая pump.fun и AMM):
-        # Если между пулами с liq >= $1500 цена расходится >12%, вход блокируется (защита от ложного стоп-лосса)
-        _active_pools = [p for p in sol_pairs if float(((p.get("liquidity") or {}).get("usd", 0) or 0)) >= 1500.0]
-        if len(_active_pools) >= 2:
-            _c_prices = [float(p.get("priceUsd", 0) or 0) for p in _active_pools if float(p.get("priceUsd", 0) or 0) > 0]
-            if len(_c_prices) >= 2:
-                max_px, min_px = max(_c_prices), min(_c_prices)
-                if min_px > 0 and (max_px / min_px) > 1.12:
-                    best_pair["_price_divergence"] = True
-                    best_pair["_price_divergence_ratio"] = max_px / min_px
+        # Проверка рассинхрона цен между КРУПНЫМИ AMM пулами (Raydium / Meteora / Orca):
+        # ВАЖНО: исключаем заброшенный пул bonding curve pump.fun, у которого цена застыла на миграции!
+        _amm_pools = [p for p in sol_pairs if p.get("dexId") not in ("pump", "pumpfun")]
+        if _amm_pools and len(_amm_pools) >= 2:
+            _top_liq = float(((best_pair.get("liquidity") or {}).get("usd", 0) or 0))
+            if _top_liq >= 5000.0:
+                _comp_pools = [p for p in _amm_pools if float(((p.get("liquidity") or {}).get("usd", 0) or 0)) >= max(4000.0, _top_liq * 0.25)]
+                if len(_comp_pools) >= 2:
+                    _c_prices = [float(p.get("priceUsd", 0) or 0) for p in _comp_pools if float(p.get("priceUsd", 0) or 0) > 0]
+                    if len(_c_prices) >= 2:
+                        max_px, min_px = max(_c_prices), min(_c_prices)
+                        if min_px > 0 and (max_px / min_px) > 1.40:
+                            best_pair["_price_divergence"] = True
+                            best_pair["_price_divergence_ratio"] = max_px / min_px
 
         # Обогащаем реальным изменением за 1 минуту и глобальной памятью пиков (цена + ликвидность)
         try:
@@ -1109,15 +1113,15 @@ class Analyzer:
                 if mint.endswith("pump") and _age_min_pre < 7.0:
                     return self._deny(mint, "post-migration-dump-zone", f"🚫 [POST-MIGRATION-DUMP] {mint[:8]}: возраст {_age_min_pre:.1f}м < 7.0м — опасная зона сброса снайперов кривой.")
                 if mint.endswith("pump") and 0 < _fdv_pre < 35000:
-                    # DIP RECLAIM: Если токен после миграции просел, но активно выкупается (M5 > +8%, объем > $3k, покупателей >= продавцов) — это точка разворота ракеты (как 大A +1156%, OMNI +986%)!
+                    # DIP RECLAIM: Если токен после миграции просел, но активно выкупается (M5 > +4%, объем > $1.5k, покупателей >= продавцов) — это точка разворота ракеты (как 大A +1156%, OMNI +986%)!
                     _tx5_rc = (pair_data.get("txns") or {}).get("m5", {}) or {}
                     _b5_rc, _s5_rc = int(_tx5_rc.get("buys", 0) or 0), int(_tx5_rc.get("sells", 0) or 0)
-                    _is_reclaim = (_fdv_pre >= 11000 and _m5_check >= 6.0 and _vm5_check >= 3000.0 and _b5_rc >= _s5_rc)
+                    _is_reclaim = (_fdv_pre >= 6000 and _m5_check >= 4.0 and _vm5_check >= 1500.0 and _b5_rc >= _s5_rc)
                     if _is_reclaim:
                         print(f"🚀 [DIP RECLAIM] {symbol} ({mint[:8]}): FDV ${_fdv_pre:,.0f}, m5 +{_m5_check:.1f}%, vol5 ${_vm5_check:,.0f}, {_b5_rc}b/{_s5_rc}s — разворот после миграции разрешён!")
                     else:
                         return self._deny(mint, "post-migration-dump-fdv", f"🚫 [POST-MIGRATION-DUMP] {mint[:8]}: мигрировавший токен FDV ${_fdv_pre:,.0f} < $35k без подтверждённого отскока.")
-                elif 0 < _fdv_pre < 15000 and not (_m5_check >= 5.0 and _vm5_check >= 2500.0):
+                elif 0 < _fdv_pre < 15000 and not (_m5_check >= 4.0 and _vm5_check >= 1500.0):
                     return self._deny(mint, "post-migration-dump-fdv", f"🚫 [POST-MIGRATION-DUMP] {mint[:8]}: AMM FDV ${_fdv_pre:,.0f} < $15k без импульса — слитый токен.")
                 if _age_min_pre >= 60.0 and ((_fdv_pre < 35000 and _h1_pre < -5.0) or (_h1_pre < -12.0 or _h6_pre < -25.0)):
                     return self._deny(mint, "post-migration-dump-trend", f"🚫 [POST-MIGRATION-DUMP] {mint[:8]}: часовой/6ч тренд в глубоком сливе (h1 {_h1_pre:+.1f}%, h6 {_h6_pre:+.1f}%) — отскок дохлой кошки.")
@@ -1139,17 +1143,20 @@ class Analyzer:
             _chain_ae = str((pair_data or {}).get("chainId", "solana")).lower()
             _txm5_tmp = (pair_data.get("txns") or {}).get("m5", {}) or {}
             _b5_tmp, _s5_tmp = int(_txm5_tmp.get("buys", 0) or 0), int(_txm5_tmp.get("sells", 0) or 0)
-            if _age_min_pre <= 15.0 and _b5_tmp >= _s5_tmp:
-                # Молодая ракета на первичном старте (кейсы SOLCHAN +102%, 4AGENT +168%)
+            if _age_min_pre <= 30.0 and _b5_tmp >= _s5_tmp:
+                # Молодая ракета на первичном старте (кейсы SOLCHAN +102%, 4AGENT +168%, 10/29 +146%)
                 _max_m5_entry = 250.0
-            elif _age_min_pre <= 45.0 and _b5_tmp >= _s5_tmp * 1.05 and _m1 <= 25.0:
+            elif _vm5_pre >= 4000.0 and _b5_tmp >= _s5_tmp * 0.95 and _m1 <= 25.0:
+                # Мощный подтвержденный объем покупателей — ракета в полете
+                _max_m5_entry = 220.0
+            elif _age_min_pre <= 60.0 and _b5_tmp >= _s5_tmp * 1.05 and _m1 <= 25.0:
                 _max_m5_entry = 180.0
-            elif _b5_tmp >= 12 and _b5_tmp >= _s5_tmp * 1.05 and _m1 <= 25.0:
-                _max_m5_entry = 140.0
-            elif _age_min_pre < 45.0 and _m1 <= 22.0:
+            elif _b5_tmp >= 12 and _b5_tmp >= _s5_tmp * 1.02 and _m1 <= 25.0:
+                _max_m5_entry = 150.0
+            elif _age_min_pre < 60.0 and _m1 <= 22.0:
                 _max_m5_entry = 120.0
             else:
-                _max_m5_entry = 85.0
+                _max_m5_entry = 90.0
             if _m5 > _max_m5_entry:
                 return self._deny(mint, f"m5-late {_m5:+.0f}%", f"🚫 [LATE ENTRY] {mint[:8]}: m5 {_m5:+.1f}% > {_max_m5_entry:.0f}%. Опоздание на памп — риск дампа ~90%.")
             _tx = (pair_data.get("txns") or {}).get("h1", {}) or {}
@@ -1244,22 +1251,22 @@ class Analyzer:
                 _b5_p = int(_tx_m5_p.get("buys", 0) or 0)
                 _s5_p = int(_tx_m5_p.get("sells", 0) or 0)
                 _vol5_p = float((pair_data.get("volume") or {}).get("m5", 0) or 0)
-                _min_vol = getattr(config, "MIN_VOLUME_M5", 2500)
-                _min_tx = getattr(config, "MIN_TXNS_M5", 12)
-                _min_ratio = getattr(config, "MIN_BUY_SELL_RATIO", 1.15)
+                _min_vol = getattr(config, "MIN_VOLUME_M5", 1200)
+                _min_tx = getattr(config, "MIN_TXNS_M5", 8)
+                _min_ratio = getattr(config, "MIN_BUY_SELL_RATIO", 1.05)
                 if _vol5_p < _min_vol:
                     return self._deny(mint, f"vol5-low ${_vol5_p:.0f}", f"🚫 [ENTRY] {mint}: объем m5 ${_vol5_p:.0f} < ${_min_vol} — интерес угас.")
                 if (_b5_p + _s5_p) < _min_tx:
                     return self._deny(mint, f"tx5-low {_b5_p+_s5_p}<{_min_tx}", f"🚫 [ENTRY] {mint}: сделок m5 {_b5_p+_s5_p} < {_min_tx} — слишком тихо.")
-                _eff_min_ratio = 1.02 if (_vol5_p >= 20000.0 or _cur_liq_pre >= 40000.0) else _min_ratio
+                _eff_min_ratio = 1.02 if (_vol5_p >= 15000.0 or _cur_liq_pre >= 30000.0) else _min_ratio
                 if _s5_p > 0 and (_b5_p / _s5_p) < _eff_min_ratio:
                     return self._deny(mint, f"bs-low {_b5_p}/{_s5_p}", f"🚫 [ENTRY] {mint}: покупки/продажи m5 {_b5_p}/{_s5_p} < {_eff_min_ratio:.2f}x — продавцы давят.")
-                # 6. Защита от накрутки (средний чек < $10 — боты, либо аномальный wash-churn)
+                # 6. Защита от накрутки (средний чек < $8 — боты, либо аномальный wash-churn)
                 _avg_tx = _vol5_p / max(_b5_p + _s5_p, 1)
-                if (_b5_p + _s5_p) >= 20 and _avg_tx < 10.0:
-                    return self._deny(mint, "wash-bot", f"🚫 [WASH] {mint}: средний чек ${_avg_tx:.1f} < $10 — накрутка ботов.")
+                if (_b5_p + _s5_p) >= 20 and _avg_tx < 8.0:
+                    return self._deny(mint, "wash-bot", f"🚫 [WASH] {mint}: средний чек ${_avg_tx:.1f} < $8 — накрутка ботов.")
                 _cur_liq_cand = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
-                _churn_cap = 2.5 if _age_min_pre < 15.0 else 4.5
+                _churn_cap = 2.5 if _age_min_pre < 15.0 else 10.0
                 if _cur_liq_cand > 0 and (_vol5_p / _cur_liq_cand) > _churn_cap and _age_min_pre < 30.0:
                     return self._deny(mint, "wash-churn", f"🚫 [WASH-CHURN] {mint[:8]}: оборот {_vol5_p / _cur_liq_cand:.1f}x ликвидности за 5м в молодом токене ({_age_min_pre:.1f}м) — ловушка накрутки дева.")
                 if _s5_p >= 35 and (_b5_p / _s5_p) > 3.8 and _vol5_p >= 40000 and _age_min_pre < 30.0:
@@ -1318,11 +1325,11 @@ class Analyzer:
             liquidity = raw_liq
             _min_liq = 8000 if (_age_min_pre < 30 or _m5 >= 15.0 or _lottery or is_vip) else getattr(config, "MIN_LIQUIDITY", 15000)
 
-        # БЛОК КАСТОМНЫХ ФЕЙК-ПУЛОВ НА PUMPSWAP (кейсы WHITEWHALE -98.5% и MOE_fake):
-        # На PumpSwap (pump_fun_amm) заблокированный протоколом LP имеют ТОЛЬКО официальные токены с pump.fun (оканчивающиеся на 'pump').
-        # Любой кастомный минт (не 'pump') на PumpSwap имеет 100% РАЗБЛОКИРОВАННЫЙ LP в руках скамера!
-        if dex_id == "pumpswap" and not mint.endswith("pump"):
-            return self._deny(mint, "fake-pumpswap-unlocked-lp", f"🚫 [FAKE-PUMPSWAP] {symbol} ({mint[:8]}): кастомный не-pump контракт на PumpSwap (100% разблокированный LP скамера) — блок!")
+        # БЛОК КАСТОМНЫХ ФЕЙК-ПУЛОВ НА PUMPSWAP:
+        # Блокируем только микро-пулы скамеров (< $6,000 ликвидности),
+        # но НЕ режем органические ракеты с реальной ликвой (10/29 +114%, AISI +222%, GTA AI +205%, PODCAT +196%, GANG +176%, CPU +118%)
+        if dex_id == "pumpswap" and not mint.endswith("pump") and liquidity < 6000.0:
+            return self._deny(mint, "fake-pumpswap-unlocked-lp", f"🚫 [FAKE-PUMPSWAP] {symbol} ({mint[:8]}): кастомный не-pump контракт на PumpSwap с микро-пулом (${liquidity:.0f} < $6k) — блок!")
 
         if liquidity < _min_liq:
             print(f"📉 Изоляция: {symbol} имеет микро-пул (${liquidity:.0f} < ${_min_liq//1000}k). Риск 100% проскальзывания.")

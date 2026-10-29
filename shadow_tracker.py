@@ -196,23 +196,25 @@ class ShadowTracker:
             }
 
             if self.use_supabase and self.supabase:
-                try:
-                    # Пытаемся записать в rejected_tokens со всеми новыми колонками
-                    self.supabase.table(self._target_table).upsert(data).execute()
-                except Exception as sb_err:
-                    err_str = str(sb_err).lower()
-                    self._sb_warn(sb_err)
-                    if "rejected_tokens" in err_str and ("does not exist" in err_str or "not found" in err_str or "relation" in err_str):
-                        self._target_table = "shadow_log"
-                    else:
-                        # Если в Supabase еще не созданы колонки (check_5m_done и т.д.), фолбэк на базовую схему
-                        try:
-                            compat_data = dict(data)
-                            for k in ["check_5m_done", "check_15m_done", "time_to_ath_min", "current_pnl", "outcome"]:
-                                compat_data.pop(k, None)
-                            self.supabase.table(self._target_table).upsert(compat_data).execute()
-                        except Exception as sb_err2:
-                            self._sb_warn(f"(повтор без новых колонок) {sb_err2}")
+                def _bg_sb_upsert(sb_client, target_tbl, d_copy):
+                    try:
+                        sb_client.table(target_tbl).upsert(d_copy).execute()
+                    except Exception as sb_err:
+                        err_str = str(sb_err).lower()
+                        self._sb_warn(sb_err)
+                        if "rejected_tokens" in err_str and ("does not exist" in err_str or "not found" in err_str or "relation" in err_str):
+                            self._target_table = "shadow_log"
+                        else:
+                            try:
+                                compat_data = dict(d_copy)
+                                for k in ["check_5m_done", "check_15m_done", "time_to_ath_min", "current_pnl", "outcome"]:
+                                    compat_data.pop(k, None)
+                                sb_client.table(self._target_table).upsert(compat_data).execute()
+                            except Exception as sb_err2:
+                                self._sb_warn(f"(повтор без новых колонок) {sb_err2}")
+
+                import threading as _th
+                _th.Thread(target=_bg_sb_upsert, args=(self.supabase, self._target_table, dict(data)), daemon=True).start()
 
             # Локальная запись в SQLite (всегда работает независимо от сети)
             try:
@@ -313,17 +315,20 @@ class ShadowTracker:
                 
                 rows = []
                 if self.use_supabase and self.supabase:
+                    def _fetch_sb():
+                        try:
+                            return self.supabase.table(table_to_use).select("mint, rejected_at, initial_price, ath_price, check_5m_done, check_15m_done, check_1h_done, check_4h_done, check_24h_done").eq("check_24h_done", 0).order("rejected_at", desc=True).limit(50).execute().data or []
+                        except Exception:
+                            if table_to_use != "shadow_log":
+                                try:
+                                    return self.supabase.table("shadow_log").select("mint, rejected_at, initial_price, ath_price, check_5m_done, check_15m_done, check_1h_done, check_4h_done, check_24h_done").eq("check_24h_done", 0).order("rejected_at", desc=True).limit(50).execute().data or []
+                                except Exception:
+                                    return []
+                            return []
                     try:
-                        res = self.supabase.table(table_to_use).select("mint, rejected_at, initial_price, ath_price, check_5m_done, check_15m_done, check_1h_done, check_4h_done, check_24h_done").eq("check_24h_done", 0).order("rejected_at", desc=True).limit(50).execute()
-                        rows = res.data or []
-                    except Exception as e:
-                        if table_to_use != "shadow_log":
-                            try:
-                                res = self.supabase.table("shadow_log").select("mint, rejected_at, initial_price, ath_price, check_5m_done, check_15m_done, check_1h_done, check_4h_done, check_24h_done").eq("check_24h_done", 0).order("rejected_at", desc=True).limit(50).execute()
-                                rows = res.data or []
-                                table_to_use = "shadow_log"
-                            except Exception:
-                                rows = []
+                        rows = await asyncio.wait_for(asyncio.to_thread(_fetch_sb), timeout=5.0)
+                    except Exception:
+                        rows = []
                 
                 if not rows:
                     try:
@@ -443,39 +448,42 @@ class ShadowTracker:
 
                             # Обновляем в Supabase
                             if self.use_supabase and self.supabase:
-                                try:
-                                    update_payload = {
-                                        "ath_price": new_ath,
-                                        "hypothetical_pnl": round(ath_pnl, 1),
-                                        "check_5m_done": upd["check_5m"],
-                                        "check_15m_done": upd["check_15m"],
-                                        "check_1h_done": upd["check_1h"],
-                                        "check_4h_done": upd["check_4h"],
-                                        "check_24h_done": upd["check_24h"],
-                                        "time_to_ath_min": time_to_ath,
-                                        "current_pnl": round(cur_pnl, 1),
-                                        "outcome": outcome,
-                                        "last_checked_at": datetime.utcnow().isoformat()
-                                    }
-                                    if table_to_use == "rejected_tokens":
-                                        update_payload["is_missed_rocket"] = is_rocket
+                                def _bg_update_sb(tbl, m_addr, u_load, b_load, is_rkt):
                                     try:
-                                        self.supabase.table(table_to_use).update(update_payload).eq("mint", m).execute()
-                                    except Exception as col_err:
-                                        # Если колонки check_5m_done/outcome еще не созданы в Supabase, шлем базовый payload
-                                        base_payload = {
-                                            "ath_price": new_ath,
-                                            "hypothetical_pnl": round(ath_pnl, 1),
-                                            "check_1h_done": upd["check_1h"],
-                                            "check_4h_done": upd["check_4h"],
-                                            "check_24h_done": upd["check_24h"],
-                                            "last_checked_at": datetime.utcnow().isoformat()
-                                        }
-                                        if table_to_use == "rejected_tokens":
-                                            base_payload["is_missed_rocket"] = is_rocket
-                                        self.supabase.table(table_to_use).update(base_payload).eq("mint", m).execute()
-                                except Exception as u_err:
-                                    pass
+                                        if tbl == "rejected_tokens":
+                                            u_load["is_missed_rocket"] = is_rkt
+                                        try:
+                                            self.supabase.table(tbl).update(u_load).eq("mint", m_addr).execute()
+                                        except Exception:
+                                            if tbl == "rejected_tokens":
+                                                b_load["is_missed_rocket"] = is_rkt
+                                            self.supabase.table(tbl).update(b_load).eq("mint", m_addr).execute()
+                                    except Exception:
+                                        pass
+
+                                update_payload = {
+                                    "ath_price": new_ath,
+                                    "hypothetical_pnl": round(ath_pnl, 1),
+                                    "check_5m_done": upd["check_5m"],
+                                    "check_15m_done": upd["check_15m"],
+                                    "check_1h_done": upd["check_1h"],
+                                    "check_4h_done": upd["check_4h"],
+                                    "check_24h_done": upd["check_24h"],
+                                    "time_to_ath_min": time_to_ath,
+                                    "current_pnl": round(cur_pnl, 1),
+                                    "outcome": outcome,
+                                    "last_checked_at": datetime.utcnow().isoformat()
+                                }
+                                base_payload = {
+                                    "ath_price": new_ath,
+                                    "hypothetical_pnl": round(ath_pnl, 1),
+                                    "check_1h_done": upd["check_1h"],
+                                    "check_4h_done": upd["check_4h"],
+                                    "check_24h_done": upd["check_24h"],
+                                    "last_checked_at": datetime.utcnow().isoformat()
+                                }
+                                import threading as _th
+                                _th.Thread(target=_bg_update_sb, args=(table_to_use, m, update_payload, base_payload, is_rocket), daemon=True).start()
                                     
                             # Обновляем в SQLite
                             try:

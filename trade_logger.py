@@ -167,7 +167,9 @@ class TradeLogger:
                     rows = []
                     if self.use_supabase:
                         try:
-                            response = self.supabase.table(table).select("mint, exit_time, post_exit_ath, check_1h_done, check_4h_done, check_24h_done").eq("status", "CLOSED").eq("check_24h_done", 0).execute()
+                            def _fetch_sb(tbl):
+                                return self.supabase.table(tbl).select("mint, exit_time, post_exit_ath, check_1h_done, check_4h_done, check_24h_done").eq("status", "CLOSED").eq("check_24h_done", 0).execute()
+                            response = await asyncio.wait_for(asyncio.to_thread(_fetch_sb, table), timeout=6.0)
                             rows = response.data or []
                         except Exception:
                             rows = []
@@ -247,16 +249,19 @@ class TradeLogger:
                                 pass
                                 
                             if self.use_supabase:
-                                try:
-                                    data = {
-                                        "post_exit_ath": new_ath,
-                                        "check_1h_done": update["check_1h"],
-                                        "check_4h_done": update["check_4h"],
-                                        "check_24h_done": update["check_24h"]
-                                    }
-                                    self.supabase.table(table).update(data).eq("mint", mint).execute()
-                                except Exception:
-                                    pass
+                                data = {
+                                    "post_exit_ath": new_ath,
+                                    "check_1h_done": update["check_1h"],
+                                    "check_4h_done": update["check_4h"],
+                                    "check_24h_done": update["check_24h"]
+                                }
+                                def _bg_update(tbl, m, d):
+                                    try:
+                                        self.supabase.table(tbl).update(d).eq("mint", m).execute()
+                                    except Exception:
+                                        pass
+                                import threading as _th
+                                _th.Thread(target=_bg_update, args=(table, mint, data), daemon=True).start()
                             try:
                                 with sqlite3.connect(self.db_path) as conn:
                                     conn.execute(f'''

@@ -751,10 +751,10 @@ async def scanner_loop(analyzer, tracker):
                     if _now_l - processed_mints.get(_m, 0.0) < _cd_l:
                         continue
                     _launch.append(_m)
-                    if len(_launch) >= 15:
+                    if len(_launch) >= 60:
                         break
                 _launch_n = len(_launch)
-                _scan_conc = int(getattr(config, "SCAN_CONCURRENCY", 4))
+                _scan_conc = int(getattr(config, "SCAN_CONCURRENCY", 6))
                 if _launch and _scan_conc > 1:
                     _scan_win = ScanWindow(analyzer, _launch, _scan_conc)
 
@@ -781,9 +781,16 @@ async def scanner_loop(analyzer, tracker):
         
                     try:
                         # Используем умный маршрутизатор (сам выберет XGBoost или Raydium модель)
-                        _res = await _scan_win.get(mint) if _scan_win is not None else _SCAN_MISSING
+                        try:
+                            _res = await asyncio.wait_for(_scan_win.get(mint), timeout=25.0) if _scan_win is not None else _SCAN_MISSING
+                        except asyncio.TimeoutError:
+                            _res = _SCAN_MISSING
                         if _res is _SCAN_MISSING:
-                            is_good = await analyzer.analyze_token(mint)
+                            try:
+                                is_good = await asyncio.wait_for(analyzer.analyze_token(mint), timeout=22.0)
+                            except asyncio.TimeoutError:
+                                print(f"⏱️ [SCAN-TIMEOUT] {mint[:8]}: анализ превысил 22с, пропуск")
+                                is_good = None
                         else:
                             is_good = _scan_apply(analyzer, _res)
                         _n_analyzed += 1
@@ -1339,7 +1346,7 @@ async def rugpull_feeder_loop():
     while True:
         try:
             import rugpull_feeder
-            rugpull_feeder.feed_rugs_and_retrain()
+            await asyncio.to_thread(rugpull_feeder.feed_rugs_and_retrain)
         except Exception as e:
             print(f"Ошибка в rugpull_feeder: {e}")
         try:

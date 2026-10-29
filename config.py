@@ -361,7 +361,7 @@ GOPLUS_MAX_SELL_TAX = 0.10
 GOPLUS_CACHE_SEC = 3600
 
 # === SCANNER PIPELINE (Быстрый параллельный разбор кандидатов) ===
-SCAN_CONCURRENCY = 4              # Параллельный разбор токенов в окне (до 4 задач одновременно)
+SCAN_CONCURRENCY = 6              # Параллельный разбор токенов в окне (до 6 задач одновременно)
 SCAN_LOOP_SLEEP_SEC = 8           # Пауза между циклами сканера (8 секунд вместо 30)
 SCAN_AFTER_ENTRY_SLEEP_SEC = 15   # Пауза после входа в позицию (15 секунд)
 SCAN_LATEST_TTL_SEC = 20          # TTL кэша fetch_latest_tokens (20 секунд)

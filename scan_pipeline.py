@@ -25,15 +25,22 @@ MISSING = object()  # токен не был поставлен в окно -> �
 
 
 async def _analyze_one(analyzer, mint, sem):
-    async with sem:
-        ok = await analyzer.analyze_token(mint)
-        # Снимок состояния ВНУТРИ задачи (её контекст) — в родителе оно не видно.
-        return (
-            ok,
-            float(getattr(analyzer, "last_score", 0.0) or 0.0),
-            float(getattr(analyzer, "_last_top10", 0.0) or 0.0),
-            float(getattr(analyzer, "_last_dev", 0.0) or 0.0),
-        )
+    try:
+        async with sem:
+            ok = await asyncio.wait_for(analyzer.analyze_token(mint), timeout=22.0)
+            # Снимок состояния ВНУТРИ задачи (её контекст) — в родителе оно не видно.
+            return (
+                ok,
+                float(getattr(analyzer, "last_score", 0.0) or 0.0),
+                float(getattr(analyzer, "_last_top10", 0.0) or 0.0),
+                float(getattr(analyzer, "_last_dev", 0.0) or 0.0),
+            )
+    except asyncio.TimeoutError:
+        print(f"⏱️ [SCAN-TIMEOUT] {mint[:8]}: анализ превысил 22с — пропуск.")
+        return (False, 0.0, 0.0, 0.0)
+    except Exception as e:
+        print(f"⚠️ [SCAN-ERR] {mint[:8]}: {e}")
+        return (False, 0.0, 0.0, 0.0)
 
 
 class ScanWindow:
@@ -64,7 +71,14 @@ class ScanWindow:
         if i is None:
             return MISSING
         self._fill(i + self.conc + 1)
-        return await self.tasks[mint]
+        task = self.tasks.get(mint)
+        if task is None:
+            return MISSING
+        try:
+            return await asyncio.wait_for(asyncio.shield(task), timeout=25.0)
+        except asyncio.TimeoutError:
+            print(f"⏱️ [SCAN-WIN-TIMEOUT] {mint[:8]}: ожидание задачи превысило 25с — пропуск.")
+            return (False, 0.0, 0.0, 0.0)
 
     async def close(self):
         """Отменяет недоработавшие задачи и забирает исключения (без 'never retrieved')."""

@@ -413,7 +413,10 @@ async def jup_fast_mature_loop(analyzer, tracker):
                     print(f"⏭ [JUP-SKIP] {sym} ({mint[:8]}): нет данных рынка при повторе (no_td)")
                     continue
                 try:
-                    ok = await analyzer.analyze_token(mint)
+                    ok = await asyncio.wait_for(analyzer.analyze_token(mint), timeout=20.0)
+                except asyncio.TimeoutError:
+                    print(f"⏱️ [JUP-MATURE-TIMEOUT] {mint[:8]}: анализ превысил 20с, пропуск")
+                    continue
                 except Exception as e:
                     print(f"🪐 JUP mature analyze err {mint[:8]}: {e}")
                     continue
@@ -540,7 +543,10 @@ async def jup_loop(analyzer, tracker):
 
                             print(f"🪐 [JUP] Анализирую {_sym_val} ({mint[:8]}): возраст {_ag_val:.1f}м, m5 {_m5_val:+.1f}%...")
                             try:
-                                ok = await analyzer.analyze_token(mint)
+                                ok = await asyncio.wait_for(analyzer.analyze_token(mint), timeout=20.0)
+                            except asyncio.TimeoutError:
+                                print(f"⏱️ [JUP-TIMEOUT] {mint[:8]}: анализ превысил 20с, пропуск")
+                                return
                             except Exception as e:
                                 print(f"🪐 JUP analyze err {mint[:8]}: {type(e).__name__} ({e})")
                                 return
@@ -556,7 +562,10 @@ async def jup_loop(analyzer, tracker):
 
                     tasks = [_process_hot_candidate(c) for c in hot_candidates]
                     if tasks:
-                        await asyncio.gather(*tasks, return_exceptions=True)
+                        try:
+                            await asyncio.wait_for(asyncio.gather(*tasks, return_exceptions=True), timeout=35.0)
+                        except asyncio.TimeoutError:
+                            print("⏱️ [JUP-BATCH-TIMEOUT] Пакетный анализ кандидатов превысил 35с!")
 
                     if len(processed) > 1000:
                         processed.clear()

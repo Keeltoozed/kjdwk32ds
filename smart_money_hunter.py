@@ -97,11 +97,14 @@ class SmartMoneyHunter:
             "winning_tokens": json.dumps(d.get("winning_tokens", []), ensure_ascii=False),
             "first_seen": float(d.get("first_seen", time.time())),
         } for w, d in self.db.items()]
-        try:
-            for i in range(0, len(rows), 200):
-                sb.table("smart_wallets").upsert(rows[i:i + 200]).execute()
-        except Exception as e:
-            print(f"⚠️ [SMART-HUNTER] Не удалось записать в Supabase (таблица smart_wallets создана?): {str(e)[:160]}")
+        def _bg_save(r_list):
+            try:
+                for i in range(0, len(r_list), 200):
+                    sb.table("smart_wallets").upsert(r_list[i:i + 200]).execute()
+            except Exception as e:
+                print(f"⚠️ [SMART-HUNTER] Не удалось записать в Supabase (таблица smart_wallets создана?): {str(e)[:160]}")
+        import threading as _th
+        _th.Thread(target=_bg_save, args=(rows,), daemon=True).start()
 
     def _load_db(self) -> Dict[str, dict]:
         db: Dict[str, dict] = {}
