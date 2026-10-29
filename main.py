@@ -80,13 +80,9 @@ async def position_manager_loop(analyzer, tracker):
                     if api_price > 0.0:
                         current_price = api_price
                     else:
-                        # Если оба источника не дали цену в этом тике — держим последнюю известную (до 120 сек)
-                        _last_known = float(getattr(position, "current_price_usd", 0.0) or 0.0)
-                        _last_upd = float(getattr(position, "price_updated_at", 0.0) or getattr(position, "entry_time", 0.0) or 0.0)
-                        if _last_known > 0.0 and (time.time() - _last_upd) < 120:
-                            current_price = _last_known
-                        else:
-                            current_price = 0.0
+                        # Если оба источника не дали цену в этом тике — держим последнюю известную, не сбрасываем в 0.0!
+                        _last_known = float(getattr(position, "current_price_usd", 0.0) or getattr(position, "entry_price_usd", 0.0) or 0.0)
+                        current_price = _last_known
                 
                 # Всегда фиксируем время активного мониторинга позиции менеджером
                 position.price_checked_at = time.time()
@@ -110,17 +106,27 @@ async def position_manager_loop(analyzer, tracker):
                     minutes_held = (time.time() - position.entry_time) / 60
                     _fz = getattr(position, "first_zero_ts", 0.0) or time.time()
                     position.first_zero_ts = _fz
-                    # Если цена 0.0 больше 45 секунд — это рагпулл / слив ликвидности.
-                    # Проверяем продаваемость через Jupiter: если продать нельзя — списание в 0.0$ (-100%).
+                    # Если цена 0.0 больше 45 секунд — проверяем продаваемость через Jupiter
                     if (time.time() - _fz) > 45:
                         from jupiter import JupiterAPI
                         _sell_ok, _sell_why = await JupiterAPI.is_token_sellable(mint)
                         if not _sell_ok:
-                            print(f"🚨 [SOL-ZERO-RUG] {position.symbol} ({mint[:8]}): цена 0.00 и токен непродаваем ({_sell_why}) — списание в 0.0$ (-100%).")
+                            print(f"🚨 [SOL-ZERO-RUG] {position.symbol} ({mint[:8]}): цена 0.00 и токен подтвержденно непродаваем ({_sell_why}) — списание в 0.0$ (-100%).")
                             tracker.close_position(mint, 0.0, f"Rug Pull / Unsellable ({_sell_why})")
                             continue
-                        elif (time.time() - _fz) > 180:
-                            tracker.close_position(mint, 0.0, "Rug Pull / No Liquidity")
+                        else:
+                            # Токен ПРОДАВАЕМ на Jupiter! Значит ликвидность ЕСТЬ, и это НЕ рагпулл!
+                            # Запрашиваем живую ончейн-цену Jupiter и восстанавливаем позицию
+                            _jup_px = await JupiterAPI.get_price(mint)
+                            if _jup_px > 0:
+                                current_price = _jup_px
+                                position.current_price_usd = _jup_px
+                                position.first_zero_ts = 0.0
+                                position.price_updated_at = time.time()
+                                print(f"🔄 [PRICE-RECOVERED] {position.symbol} ({mint[:8]}): цена восстановлена через Jupiter ончейн: ${_jup_px:.8f}")
+                            elif prev_price > 0:
+                                current_price = prev_price
+                                position.first_zero_ts = 0.0
                             continue
                     continue
                 position.first_zero_ts = 0.0

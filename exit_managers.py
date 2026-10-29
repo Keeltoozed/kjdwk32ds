@@ -189,12 +189,27 @@ class MatureExitManager:
             _maxp = (position.max_price_usd - position.entry_price_usd) / position.entry_price_usd
         except Exception:
             _maxp = 0
-        # Мягкий стоп и Breakeven (ТОЛЬКО после 6 минут в рынке, чтобы не резать 1-2 минутные свечи ретеста на старте как Chubby!):
-        if minutes_held >= 6.0 and _maxp >= 0.20 and pnl_pct <= -0.10:
-            return f"Mature Soft Guard (был пик +{_maxp*100:.0f}%, слив до {pnl_pct*100:.1f}%)"
-        _be = float(getattr(config, 'BREAKEVEN_PCT', 0.28))
-        if minutes_held >= 6.0 and _maxp >= _be and pnl_pct <= 0.035:
+
+        # 1. Breakeven Guard: если токен уже дал пик >= +10% (или config.BREAKEVEN_PCT),
+        # то при откате к +1.5%..0% не даём ему уйти в минус — фиксируем безубыток!
+        _be = float(getattr(config, 'BREAKEVEN_PCT', 0.10))
+        if _maxp >= _be and pnl_pct <= 0.015:
             return f"Mature Breakeven (был пик +{_maxp*100:.0f}%, фикс {pnl_pct*100:+.1f}%)"
+
+        # 2. Fade Cut: если токен дал импульс +8%..+14%, но развернулся и уходит в -5%,
+        # режем позицию на раннем этапе, не дожидаясь полного -18% стоп-лосса!
+        if _maxp >= 0.08 and pnl_pct <= -0.05:
+            return f"Mature Fade Cut (был пик +{_maxp*100:.0f}%, фикс на откате {pnl_pct*100:+.1f}%)"
+
+        # 3. Trailing Stop для умеренных профитов (+15%..+40%):
+        if _maxp >= 0.15 and _maxp < getattr(config, 'TRAILING_ACTIVATION_PCT', 0.40):
+            drop_from_max = (position.max_price_usd - current_price) / position.max_price_usd
+            if drop_from_max >= 0.07:
+                return f"Mature Trailing (+{_maxp*100:.0f}% peak, фикс +{pnl_pct*100:.1f}%)"
+
+        # 4. Мягкий стоп (после 4 минут):
+        if minutes_held >= 4.0 and _maxp >= 0.15 and pnl_pct <= -0.08:
+            return f"Mature Soft Guard (был пик +{_maxp*100:.0f}%, слив до {pnl_pct*100:.1f}%)"
 
         # Hard stop loss: стоп ВСЕГДА отрицательный (-18%..-20%), защищает депозит от постепенного сползания
         _sl = -abs(float(getattr(config, 'STOP_LOSS_PCT', 0.18)))
