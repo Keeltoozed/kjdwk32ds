@@ -1132,6 +1132,8 @@ class Analyzer:
             _m5 = _pc.get("m5", 0) or 0
             _m1 = _pc.get("m1", 0) or 0
             _h1 = _pc.get("h1", 0) or 0
+            _txm5_pre = (pair_data.get("txns") or {}).get("m5", {}) or {}
+            _vm5_pre = float((pair_data.get("volume") or {}).get("m5", 0) or 0)
             # h1-exhausted должен резать ТОЛЬКО старые токены (>90м) или монеты без импульса (m5 <= 0).
             # Для свежих выпускников pump.fun (<90м) h1 +500%..+3500% — это нормальный первичный памп кривой!
             _is_fresh_pump = mint.endswith("pump") or _age_min_pre < 90.0
@@ -1141,8 +1143,7 @@ class Analyzer:
 
             # Запрет покупки вершины, но пропуск реальных ракет и пробоев
             _chain_ae = str((pair_data or {}).get("chainId", "solana")).lower()
-            _txm5_tmp = (pair_data.get("txns") or {}).get("m5", {}) or {}
-            _b5_tmp, _s5_tmp = int(_txm5_tmp.get("buys", 0) or 0), int(_txm5_tmp.get("sells", 0) or 0)
+            _b5_tmp, _s5_tmp = int(_txm5_pre.get("buys", 0) or 0), int(_txm5_pre.get("sells", 0) or 0)
             if _age_min_pre <= 30.0 and _b5_tmp >= _s5_tmp:
                 # Молодая ракета на первичном старте (кейсы SOLCHAN +102%, 4AGENT +168%, 10/29 +146%)
                 _max_m5_entry = 250.0
