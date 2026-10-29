@@ -404,13 +404,14 @@ class GrokJevEngine:
             if not has_breakout_momentum and (m5 < 4.0 or (s5 > 0 and (b5 / s5) < 1.05) or vol_m5 < 2500.0):
                 return False, f"post-migration-no-reclaim (m5 {m5:+.1f}%, vol5 ${vol_m5:,.0f}, {b5}b/{s5}s — need organic bounce)"
 
-        # 2. Возраст: молодые пробои с перевесом покупок пускаем от 1.0м, стандарт от 2.0м
-        _early_min_age = float(getattr(_c, "JEV_EARLY_MIN_AGE_MIN", 1.0))
-        _std_min_age = float(getattr(_c, "JEV_MIN_AGE_MIN", 2.0))
-        min_age = _early_min_age if (b5 >= s5 and m5 >= 4.0) else _std_min_age
+        # 2. Возраст токена: категорически запрещено покупать младенцев (< 5-10 минут)!
+        # В первые 0-5 минут девы сливают свои запасы (кейсы BUG -31%, HYPERCAT -20%, EGG -19%).
+        _early_min_age = max(5.0, float(getattr(_c, "JEV_EARLY_MIN_AGE_MIN", 5.0)))
+        _std_min_age = max(10.0, float(getattr(_c, "JEV_MIN_AGE_MIN", 10.0)))
+        min_age = _early_min_age if (b5 >= s5 * 1.3 and m5 >= 8.0 and vol_m5 >= 5000.0) else _std_min_age
         max_age = float(getattr(_c, "JEV_MAX_AGE_MIN", 72.0 * 60.0))  # 72 часа
         if not (min_age <= age_min <= max_age):
-            return False, f"age-out-of-bounds {age_min:.1f}m not in [{min_age:.1f}m, {max_age:.0f}m]"
+            return False, f"age-out-of-bounds {age_min:.1f}m < {min_age:.1f}m (flash-rug dev dump zone, wait for maturation)"
 
         # 3. Живой импульс ракеты (LIVE ROCKET MOMENTUM)
         if m5 < 1.0 and h1 < 10.0:
@@ -1416,6 +1417,10 @@ async def grok_bot_jev_loop(tracker, analyzer=None):
 
     while True:
         try:
+            import config as _c
+            if not getattr(_c, "JEV_ENABLED", True):
+                await asyncio.sleep(30.0)
+                continue
             await asyncio.sleep(15.0)
             now = time.time()
 

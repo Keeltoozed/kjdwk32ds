@@ -152,11 +152,11 @@ GEMINI_API_KEY = (os.getenv("GEMINI_API_KEY") or "").strip() # Получить 
 # === GROK BOT x JEV ENGINE (THE FUNNEL & THE LINE) ===
 JEV_ENABLED = True
 JEV_WICK_STOP_ENABLED = False     # ОТКЛЮЧЕНО: искусственный стоп по фитилю душил ракеты на -15%..-25% в первые 2-3 минуты (Goon, SPIDOGE)
-JEV_EARLY_MIN_AGE_MIN = 1.0       # 1.0 минута для ранних импульсов (не отсекает супер-ракеты вроде DOGPOOP 1.9м и AI/SI 2.2м)
-JEV_MIN_AGE_MIN = 2.0             # 2.0 минуты стандартный минимум
-JEV_MIN_LIQUIDITY_USD = 6000.0    # $6,000 минимальная глубина пула (не пускает микро-пулы по 1.7 SOL, но пускает реальные ракеты от $6k)
-JEV_MIN_VOLUME_H1 = 8000.0        # $8,000 часовой объем
-JEV_MIN_MCAP_USD = 10000.0        # $10,000 минимальная капитализация (не отсекает ранний старт ракет на $12k-$16k: TRUMP, STEVE, WOW, LIQUITITTY)
+JEV_EARLY_MIN_AGE_MIN = 5.0       # 5.0 минут для мощных пробоев (блокирует инста-дампы девов вроде BUG -31% и HYPERCAT -20%)
+JEV_MIN_AGE_MIN = 10.0            # 10.0 минут стандартный минимум (монета обязана доказать устойчивость пула)
+JEV_MIN_LIQUIDITY_USD = 8000.0    # $8,000 минимальная глубина пула
+JEV_MIN_VOLUME_H1 = 12000.0       # $12,000 часовой объем
+JEV_MIN_MCAP_USD = 15000.0        # $15,000 минимальная капитализация
 JEV_MIN_VOLUME_H24 = 30000.0
 JEV_MIN_TRADES_H24 = 100
 JEV_MIN_TRADES_H1 = 30
