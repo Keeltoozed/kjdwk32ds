@@ -226,8 +226,12 @@ def get_funnel_summary() -> str:
 
 class GrokJevEngine:
     """Движок конвейера фильтрации Grok Bot x JEV."""
+    FUNNEL_STATS = FUNNEL_STATS
+    get_funnel_summary = staticmethod(get_funnel_summary)
 
     def __init__(self):
+        self.FUNNEL_STATS = FUNNEL_STATS
+        self.get_funnel_summary = get_funnel_summary
         # mint -> [(ts, price), ...] за последние 30 мин: нужна, чтобы отличать растущую монету от падающей
         self._px_hist: Dict[str, list] = {}
 
@@ -342,17 +346,23 @@ class GrokJevEngine:
         # 1. Ликвидность (с защитой от гигантских не-мем пулов и фантомной ликвидности)
         raw_liq = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
         fdv_mc = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
+
+        # Для немигрировавших токенов Pump.fun: кёрв обязан набрать хотя бы $50,000 FDV (>75% кривой),
+        # иначе дев сливает 100% пула за секунду (кейсы GARAGECOIN -74.9%, ZECP -99.99%)
+        if is_pump and fdv_mc < 50000.0:
+            return False, f"pump-curve-too-early: FDV ${fdv_mc:,.0f} < $50,000 (under 35 SOL in curve, dev dump risk)"
+
         eff_liq = raw_liq if raw_liq > 0 else (fdv_mc * 0.40 if is_pump else 0.0)
         
         # ЗАЩИТА ОТ ФАНТОМНОЙ ЛИКВИДНОСТИ И ОДНОМИНУТНЫХ ДЕВ-ДАМПОВ:
-        # В пуле ОБЯЗАН быть реальный резерв SOL (>= 10-12 SOL), чтобы не пускать пустышки по 1.5-2.9 SOL вроде MIKE/SLEGO.
+        # В пуле ОБЯЗАН быть реальный резерв SOL (>= 10-12 SOL), чтобы не пускать пустышки по 1.3-2.9 SOL вроде ZECP/MIKE/SLEGO.
         liq_dict = pair_data.get("liquidity") or {}
         quote_token_symbol = str((pair_data.get("quoteToken") or {}).get("symbol", "")).upper()
         quote_amount = float(liq_dict.get("quote", 0.0) or 0.0)
         if quote_token_symbol in ("SOL", "WSOL") and quote_amount > 0:
             _min_sol_req = 12.0 if dex_id == "pumpswap" else 10.0
             if quote_amount < _min_sol_req:
-                return False, f"phantom-liq-trap: real pool SOL {quote_amount:.2f} < {_min_sol_req:.0f} SOL (dumped pool like MIKE/SLEGO)"
+                return False, f"phantom-liq-trap: real pool SOL {quote_amount:.2f} < {_min_sol_req:.0f} SOL (dumped pool like ZECP/MIKE)"
 
         # Для мемкоинов и pump/meteora пулов порог $6,000 (пропускает NACRE $11k, RTROLL, CATCULUS)
         min_liq = 6000.0 if (is_pump or dex_id in ("pump", "pumpfun", "meteora")) else float(getattr(_c, "JEV_MIN_LIQUIDITY_USD", 8000.0))
