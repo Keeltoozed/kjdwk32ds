@@ -1106,10 +1106,12 @@ class Analyzer:
                 _fdv_pre = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
                 _pc_pre = pair_data.get("priceChange") or {}
                 _h1_pre = float(_pc_pre.get("h1", 0) or 0)
-                _h6_pre = float(_pc_pre.get("h6", 0) or 0)
+                _tx5_check = (pair_data.get("txns") or {}).get("m5", {}) or {}
+                _b5_check = int(_tx5_check.get("buys", 0) or 0)
+                _s5_check = int(_tx5_check.get("sells", 0) or 0)
                 _vm5_check = float((pair_data.get("volume") or {}).get("m5", 0) or 0)
                 _m5_check = float(_pc_pre.get("m5", 0) or 0)
-                if mint.endswith("pump") and _age_min_pre < 4.0 and not (_m5_check >= 5.0 and _b5_cl >= _s5_cl and _vol5_cl >= 5000.0):
+                if mint.endswith("pump") and _age_min_pre < 4.0 and not (_m5_check >= 5.0 and _b5_check >= _s5_check and _vm5_check >= 5000.0):
                     return self._deny(mint, "post-migration-dump-zone", f"🚫 [POST-MIGRATION-DUMP] {mint[:8]}: возраст {_age_min_pre:.1f}м < 4.0м — опасная зона сброса снайперов кривой.")
                 if mint.endswith("pump") and 0 < _fdv_pre < 35000:
                     # DIP RECLAIM: Если токен после миграции просел, но активно выкупается (M5 >= +4%, объем > $1.5k, покупателей >= продавцов) — это точка разворота ракеты (MBAPPE +1857%, HOLLY +1012%, SPOOK +587%, NIO +449%)!
