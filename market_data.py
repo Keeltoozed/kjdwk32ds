@@ -432,24 +432,69 @@ async def get_price(mint: str) -> float:
     return prices.get(mint, 0.0)
 
 
+async def _jup_v3_bulk_prices(mints: list) -> dict:
+    """Сверхбыстрые ончейн-цены через Jupiter Price API v3 (задержка ~150мс, уровень блока Solana).
+    Один запрос на пачку до 50 токенов, своя квота (до 600 зап/мин)."""
+    from http_client import fetch_json
+    import config
+    out = {}
+    if not mints:
+        return out
+    key = getattr(config, "JUP_API_KEY", "") or ""
+    headers = {"Accept": "application/json"}
+    if key:
+        headers["x-api-key"] = key
+    for i in range(0, len(mints), 50):
+        chunk = [m for m in mints[i:i + 50] if m and not m.startswith("0x")]
+        if not chunk:
+            continue
+        url = f"https://api.jup.ag/price/v3?ids={','.join(chunk)}"
+        try:
+            status, data = await fetch_json(url, headers=headers, timeout=2.5, retries=0)
+            if status == 200 and isinstance(data, dict):
+                for m in chunk:
+                    entry = data.get(m)
+                    if isinstance(entry, dict):
+                        px = float(entry.get("usdPrice") or entry.get("price") or 0.0)
+                        if px > 0.0:
+                            out[m] = px
+        except Exception:
+            pass
+    return out
+
+
 async def get_bulk_prices(mints: list, pair_hints: dict = None) -> dict:
     """Балк-цены, цепочка fallback'ов (каждый бесплатный, со своей квотой):
-    DexScreener (с привязкой к пулу входа pair_hints) -> CEX (для SOL) -> GeckoTerminal simple."""
-    from http_client import fetch_json
+    Jupiter Price v3 (ончейн ~150мс) -> DexScreener (с привязкой к pair_hints) -> CEX -> GeckoTerminal."""
     out = {}
     if not mints:
         return out
     ms = [m for m in dict.fromkeys(mints) if m]
+
+    # 1. Приоритет №1: Jupiter Price API v3 (прямой ончейн за 150мс, без 60с кэша DexScreener)
     try:
-        out = await _ds_bulk_prices(ms, pair_hints=pair_hints)
-    except Exception as e:
-        print(f"DS bulk error: {type(e).__name__} {e}")
+        out = await _jup_v3_bulk_prices(ms)
+    except Exception:
+        out = {}
+
+    # 2. Если какие-то токены не нашлись в Jupiter (например, bonding curve до миграции) -> DexScreener
+    missing = [m for m in ms if m not in out]
+    if missing:
+        try:
+            ds_res = await _ds_bulk_prices(missing, pair_hints=pair_hints)
+            out.update(ds_res)
+        except Exception as e:
+            print(f"DS bulk error: {type(e).__name__} {e}")
+
+    # 3. Fallback: CEX для SOL
     missing = [m for m in ms if m not in out]
     if missing:
         try:
             out.update(await _cex_prices(missing))
-        except Exception as e:
+        except Exception:
             pass
+
+    # 4. Fallback: GeckoTerminal
     missing = [m for m in ms if m not in out]
     for i in range(0, len(missing), 30):
         chunk = missing[i:i + 30]

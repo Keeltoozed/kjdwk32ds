@@ -594,7 +594,16 @@ async def scanner_loop(analyzer, tracker):
                 print(f"🔎 Сканируем монеты... (Открыто: {open_count}/{config.MAX_CONCURRENT_POSITIONS})")
                 
                 mints_to_scan = []
-                # 1. Органика Solana ПЕРВЫМИ: GeckoTerminal Trending (5m + 1h + new_pools + pump.fun)
+                # 0. Jupiter Discovery: свежие листинги, топ-5м тренды, органика и объем (80-100 живых ракет)
+                try:
+                    from jup_discovery import fetch_jup_tokens
+                    jup_tokens = await fetch_jup_tokens()
+                    if jup_tokens:
+                        mints_to_scan.extend(jup_tokens)
+                except Exception as _je:
+                    pass
+
+                # 1. Органика Solana: GeckoTerminal Trending (5m + 1h + new_pools + pump.fun)
                 try:
                     import market_data
                     trending_pools = await market_data.get_trending()
@@ -645,10 +654,10 @@ async def scanner_loop(analyzer, tracker):
                 # вместо N одиночных. analyze_token() дальше читает из кэша без сети.
                 try:
                     _pf_list = [m for m in mints_to_scan if m not in tracker.positions
-                                and time.time() - processed_mints.get(m, 0.0) >= 25]
+                                and time.time() - processed_mints.get(m, 0.0) >= 25][:60]
                     _pf_n = await analyzer.prefetch_token_data(_pf_list)
                     if _pf_list:
-                        print(f"⚡ Префетч: {_pf_n}/{len(_pf_list)} токенов за {(len(_pf_list) + 29) // 30} запрос(а) DS.")
+                        print(f"⚡ Префетч: {_pf_n}/{len(_pf_list)} токенов за {(len(_pf_list) + 14) // 15} запрос(а) DS.")
                 except Exception as _pfe:
                     print(f"⚠️ prefetch err: {type(_pfe).__name__}")
                 
@@ -844,9 +853,9 @@ async def scanner_loop(analyzer, tracker):
                                     print(f"🚫 [SCANNER-POST-PEAK] {actual_symbol} ({mint[:8]}): токен уже слился от пика (цена {_pk_drop_live:+.1f}%, ликва {_lq_drop_live:+.1f}%) — отмена!")
                                     continue
 
-                                # Блок кастомных не-pump контрактов на PumpSwap (100% разблокированный LP скамера, кейс WHITEWHALE -98.5%)
-                                if _dex_id == "pumpswap" and not mint.endswith("pump"):
-                                    print(f"🚫 [SCANNER-FAKE-PUMPSWAP] {actual_symbol} ({mint[:8]}): кастомный не-pump контракт на PumpSwap — отмена!")
+                                # Блок кастомных не-pump контрактов на PumpSwap только при микро-пуле (< $6k)
+                                if _dex_id == "pumpswap" and not mint.endswith("pump") and liq_usd < 6000.0:
+                                    print(f"🚫 [SCANNER-FAKE-PUMPSWAP] {actual_symbol} ({mint[:8]}): кастомный не-pump контракт на PumpSwap с микро-пулом (${liq_usd:,.0f} < $6k) — отмена!")
                                     continue
 
                                 # Защита от миграционного дампа Pump.fun: первые 90с на сброс instant-ботов, затем свободный вход

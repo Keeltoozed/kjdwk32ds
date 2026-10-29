@@ -267,9 +267,9 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
         print(f"🚫 [{source_tag}-POST-PEAK-CRASH] {_sym_tmp} ({mint[:8]}): токен уже слился от пика (цена {_pk_drop_j:+.1f}%, ликва {_lq_drop_j:+.1f}%) — дохлая кошка.")
         return False
 
-    # Защита от кастомных фейк-пулов с разблокированным LP на PumpSwap (кейсы WHITEWHALE, MOE_fake)
-    if _dex_j == "pumpswap" and not mint.endswith("pump"):
-        print(f"🚫 [{source_tag}-FAKE-PUMPSWAP] {_sym_tmp} ({mint[:8]}): кастомный не-pump контракт на PumpSwap (100% разблокированный LP) — блок.")
+    # Защита от кастомных фейк-пулов с разблокированным LP на PumpSwap (только при микро-ликве < $6k)
+    if _dex_j == "pumpswap" and not mint.endswith("pump") and _liq_j < 6000.0:
+        print(f"🚫 [{source_tag}-FAKE-PUMPSWAP] {_sym_tmp} ({mint[:8]}): кастомный не-pump контракт на PumpSwap с микро-ликвой ${_liq_j:,.0f} < $6k — блок.")
         return False
 
     # Защита от анонимных бандлер-пулов без единой соцсети (кейс ARACH -66.9%: 0 соцсетей, $16k ликвы на PumpSwap)

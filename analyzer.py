@@ -1109,18 +1109,18 @@ class Analyzer:
                 _h6_pre = float(_pc_pre.get("h6", 0) or 0)
                 _vm5_check = float((pair_data.get("volume") or {}).get("m5", 0) or 0)
                 _m5_check = float(_pc_pre.get("m5", 0) or 0)
-                if mint.endswith("pump") and _age_min_pre < 7.0:
-                    return self._deny(mint, "post-migration-dump-zone", f"🚫 [POST-MIGRATION-DUMP] {mint[:8]}: возраст {_age_min_pre:.1f}м < 7.0м — опасная зона сброса снайперов кривой.")
+                if mint.endswith("pump") and _age_min_pre < 4.0 and not (_m5_check >= 5.0 and _b5_cl >= _s5_cl and _vol5_cl >= 5000.0):
+                    return self._deny(mint, "post-migration-dump-zone", f"🚫 [POST-MIGRATION-DUMP] {mint[:8]}: возраст {_age_min_pre:.1f}м < 4.0м — опасная зона сброса снайперов кривой.")
                 if mint.endswith("pump") and 0 < _fdv_pre < 35000:
-                    # DIP RECLAIM: Если токен после миграции просел, но активно выкупается (M5 > +8%, объем > $3k, покупателей >= продавцов) — это точка разворота ракеты (как 大A +1156%, OMNI +986%)!
+                    # DIP RECLAIM: Если токен после миграции просел, но активно выкупается (M5 >= +4%, объем > $1.5k, покупателей >= продавцов) — это точка разворота ракеты (MBAPPE +1857%, HOLLY +1012%, SPOOK +587%, NIO +449%)!
                     _tx5_rc = (pair_data.get("txns") or {}).get("m5", {}) or {}
                     _b5_rc, _s5_rc = int(_tx5_rc.get("buys", 0) or 0), int(_tx5_rc.get("sells", 0) or 0)
-                    _is_reclaim = (_fdv_pre >= 11000 and _m5_check >= 6.0 and _vm5_check >= 3000.0 and _b5_rc >= _s5_rc)
+                    _is_reclaim = (_fdv_pre >= 6000 and _m5_check >= 4.0 and _vm5_check >= 1500.0 and _b5_rc >= _s5_rc)
                     if _is_reclaim:
                         print(f"🚀 [DIP RECLAIM] {symbol} ({mint[:8]}): FDV ${_fdv_pre:,.0f}, m5 +{_m5_check:.1f}%, vol5 ${_vm5_check:,.0f}, {_b5_rc}b/{_s5_rc}s — разворот после миграции разрешён!")
                     else:
                         return self._deny(mint, "post-migration-dump-fdv", f"🚫 [POST-MIGRATION-DUMP] {mint[:8]}: мигрировавший токен FDV ${_fdv_pre:,.0f} < $35k без подтверждённого отскока.")
-                elif 0 < _fdv_pre < 15000 and not (_m5_check >= 5.0 and _vm5_check >= 2500.0):
+                elif 0 < _fdv_pre < 15000 and not (_m5_check >= 4.0 and _vm5_check >= 1500.0):
                     return self._deny(mint, "post-migration-dump-fdv", f"🚫 [POST-MIGRATION-DUMP] {mint[:8]}: AMM FDV ${_fdv_pre:,.0f} < $15k без импульса — слитый токен.")
                 if _age_min_pre >= 60.0 and ((_fdv_pre < 35000 and _h1_pre < -5.0) or (_h1_pre < -12.0 or _h6_pre < -25.0)):
                     return self._deny(mint, "post-migration-dump-trend", f"🚫 [POST-MIGRATION-DUMP] {mint[:8]}: часовой/6ч тренд в глубоком сливе (h1 {_h1_pre:+.1f}%, h6 {_h6_pre:+.1f}%) — отскок дохлой кошки.")
@@ -1320,11 +1320,11 @@ class Analyzer:
             liquidity = raw_liq
             _min_liq = 8000 if (_age_min_pre < 30 or _m5 >= 15.0 or _lottery or is_vip) else getattr(config, "MIN_LIQUIDITY", 15000)
 
-        # БЛОК КАСТОМНЫХ ФЕЙК-ПУЛОВ НА PUMPSWAP (кейсы WHITEWHALE -98.5% и MOE_fake):
-        # На PumpSwap (pump_fun_amm) заблокированный протоколом LP имеют ТОЛЬКО официальные токены с pump.fun (оканчивающиеся на 'pump').
-        # Любой кастомный минт (не 'pump') на PumpSwap имеет 100% РАЗБЛОКИРОВАННЫЙ LP в руках скамера!
-        if dex_id == "pumpswap" and not mint.endswith("pump"):
-            return self._deny(mint, "fake-pumpswap-unlocked-lp", f"🚫 [FAKE-PUMPSWAP] {symbol} ({mint[:8]}): кастомный не-pump контракт на PumpSwap (100% разблокированный LP скамера) — блок!")
+        # БЛОК КАСТОМНЫХ ФЕЙК-ПУЛОВ НА PUMPSWAP:
+        # Блокируем только микро-пулы скамеров (< $6,000 ликвидности),
+        # но НЕ режем органические ракеты с реальной ликвой (AISI +222%, GTA AI +205%, PODCAT +196%, GANG +176%, CPU +118%)
+        if dex_id == "pumpswap" and not mint.endswith("pump") and liquidity < 6000.0:
+            return self._deny(mint, "fake-pumpswap-unlocked-lp", f"🚫 [FAKE-PUMPSWAP] {symbol} ({mint[:8]}): кастомный не-pump контракт на PumpSwap с микро-пулом (${liquidity:.0f} < $6k) — блок!")
 
         if liquidity < _min_liq:
             print(f"📉 Изоляция: {symbol} имеет микро-пул (${liquidity:.0f} < ${_min_liq//1000}k). Риск 100% проскальзывания.")

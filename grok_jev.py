@@ -345,17 +345,17 @@ class GrokJevEngine:
         eff_liq = raw_liq if raw_liq > 0 else (fdv_mc * 0.40 if is_pump else 0.0)
         
         # ЗАЩИТА ОТ ФАНТОМНОЙ ЛИКВИДНОСТИ И ОДНОМИНУТНЫХ ДЕВ-ДАМПОВ:
-        # В пуле ОБЯЗАН быть реальный резерв SOL (>= 20 SOL), иначе это пустой рагпулл.
+        # В пуле ОБЯЗАН быть реальный резерв SOL (>= 10-12 SOL), чтобы не пускать пустышки по 1.5-2.9 SOL вроде MIKE/SLEGO.
         liq_dict = pair_data.get("liquidity") or {}
         quote_token_symbol = str((pair_data.get("quoteToken") or {}).get("symbol", "")).upper()
         quote_amount = float(liq_dict.get("quote", 0.0) or 0.0)
         if quote_token_symbol in ("SOL", "WSOL") and quote_amount > 0:
-            _min_sol_req = 30.0 if dex_id == "pumpswap" else 20.0
+            _min_sol_req = 12.0 if dex_id == "pumpswap" else 10.0
             if quote_amount < _min_sol_req:
-                return False, f"phantom-liq-trap: real pool SOL {quote_amount:.2f} < {_min_sol_req:.0f} SOL (dumped pool like MIKE/BRAVEGOY)"
+                return False, f"phantom-liq-trap: real pool SOL {quote_amount:.2f} < {_min_sol_req:.0f} SOL (dumped pool like MIKE/SLEGO)"
 
-        # Жесткий порог ликвидности: настоящие ракеты (GTA $51k, KIMCHI $35k, TRUMP $40k) имеют глубину >= $12,000!
-        min_liq = float(getattr(_c, "JEV_MIN_LIQUIDITY_USD", 12000.0))
+        # Для мемкоинов и pump/meteora пулов порог $6,000 (пропускает NACRE $11k, RTROLL, CATCULUS)
+        min_liq = 6000.0 if (is_pump or dex_id in ("pump", "pumpfun", "meteora")) else float(getattr(_c, "JEV_MIN_LIQUIDITY_USD", 8000.0))
         if eff_liq < min_liq:
             return False, f"liq-depth-low ${eff_liq:.0f} < ${min_liq:.0f} (micro-cap dump trap)"
             
@@ -387,16 +387,17 @@ class GrokJevEngine:
         # 98% токенов при миграции с pump.fun на PumpSwap/Raydium сливаются девом и снайперами в первые 0-7м (кейсы 25%, MIKE -97%, PLASTICINU -51%).
         is_migrated_pump = (dex_id not in ("pump", "pumpfun")) and (mint.endswith("pump") or "pump" in dex_id)
         if is_migrated_pump:
-            if age_min < 7.0:
-                return False, f"post-migration-dump-zone {age_min:.1f}m < 7.0m (wait for curve snipers to flush, dump risk like 25%/MIKE)"
-            # DIP RECLAIM: после 7м мигрировавший токен ОБЯЗАН показывать реальный разворот покупателей (как 大A +1156%, OMNI +986%)!
-            if m5 < 5.0 or (s5 > 0 and (b5 / s5) < 1.15) or vol_m5 < 5000.0:
+            has_breakout_momentum = (vol_m5 >= 5000.0 and b5 >= 12 and m5 >= 5.0 and (s5 == 0 or b5 >= s5))
+            if age_min < 4.0 and not has_breakout_momentum:
+                return False, f"post-migration-dump-zone {age_min:.1f}m < 4.0m (wait for curve snipers to flush, dump risk like 25%/MIKE)"
+            # DIP RECLAIM: после 4м мигрировавший токен ОБЯЗАН показывать реальный разворот покупателей (как 大A +1156%, OMNI +986%)!
+            if not has_breakout_momentum and (m5 < 4.0 or (s5 > 0 and (b5 / s5) < 1.05) or vol_m5 < 2500.0):
                 return False, f"post-migration-no-reclaim (m5 {m5:+.1f}%, vol5 ${vol_m5:,.0f}, {b5}b/{s5}s — need organic bounce)"
 
-        # 2. Возраст: молодые пробои с перевесом покупок пускаем от 2.5м, стандарт от 4.0м
-        _early_min_age = float(getattr(_c, "JEV_EARLY_MIN_AGE_MIN", 2.5))
-        _std_min_age = float(getattr(_c, "JEV_MIN_AGE_MIN", 4.0))
-        min_age = _early_min_age if (b5 >= s5 and m5 >= 5.0) else _std_min_age
+        # 2. Возраст: молодые пробои с перевесом покупок пускаем от 1.0м, стандарт от 2.0м
+        _early_min_age = float(getattr(_c, "JEV_EARLY_MIN_AGE_MIN", 1.0))
+        _std_min_age = float(getattr(_c, "JEV_MIN_AGE_MIN", 2.0))
+        min_age = _early_min_age if (b5 >= s5 and m5 >= 4.0) else _std_min_age
         max_age = float(getattr(_c, "JEV_MAX_AGE_MIN", 72.0 * 60.0))  # 72 часа
         if not (min_age <= age_min <= max_age):
             return False, f"age-out-of-bounds {age_min:.1f}m not in [{min_age:.1f}m, {max_age:.0f}m]"
@@ -419,8 +420,8 @@ class GrokJevEngine:
 
         # 4. Объем и давление покупателей (LIVE 5M ACTIVITY)
         # В 5-минутном окне ВСЕГДА должна быть живая активность
-        if vol_m5 < 4000.0:
-            return False, f"vol5-low ${vol_m5:.0f} < $4,000 (inactive dead pool)"
+        if vol_m5 < 2000.0:
+            return False, f"vol5-low ${vol_m5:.0f} < $2,000 (inactive dead pool)"
         if (b5 + s5) < 12:
             return False, f"tx5-low {b5+s5} < 12 (no live trading)"
         if b5 < 8:
@@ -986,19 +987,16 @@ class GrokJevEngine:
         is_pump = dex_id in ("pump", "pumpfun")
         eff_liq = max(raw_liq, fdv * 0.40) if is_pump else raw_liq
 
-        # Токены на AMM (PumpSwap / Raydium / Meteora) ОБЯЗАНЫ иметь соцсети (Twitter/TG/Website).
-        # Анонимные токены без соцсетей на DEX — это 100% одноразовый сброс дева (кейсы 25% chance fine, MIKE, KAT)!
-        if not is_pump and not has_socials:
-            return False, f"no-socials-amm-scam (0 socials on DEX — 100% disposable dev dump like 25%)", _h_stats
-
-        # Анонимные токены без соцсетей при пуле < $35k — это скам-бандлер, если нет подтвержденного органического потока
+        # Токены на AMM (PumpSwap / Raydium / Meteora) без соцсетей пускаем ТОЛЬКО при наличии подтвержденного органического потока
+        # (в первые минуты миграции DexScreener часто еще не успел подтянуть Twitter/TG, кейсы LAUNCH +793%, JOCKEY +274%, MBAPPE +166%, SPERM +112%)
         _tx5 = (pair_data.get("txns") or {}).get("m5", {}) or {}
         _b5 = int(_tx5.get("buys", 0) or 0)
         _s5 = int(_tx5.get("sells", 0) or 0)
         _vol5 = float((pair_data.get("volume") or {}).get("m5", 0) or 0)
-        _is_organic_flow = (_b5 >= 25 and _b5 >= _s5 * 1.2 and _vol5 >= 4000.0)
-        if not has_socials and eff_liq < 35000.0 and not _is_organic_flow:
-            return False, f"no-socials-anon-rug (0 socials with <$35k liq — 100% anon dev dump)", _h_stats
+        _is_organic_flow = (_b5 >= 12 and _b5 >= _s5 and _vol5 >= 2500.0 and eff_liq >= 6000.0)
+
+        if not is_pump and not has_socials and not _is_organic_flow:
+            return False, f"no-socials-amm-scam (0 socials on DEX без органического объема — 100% disposable dev dump)", _h_stats
 
         # 3. Аудит для сети SOLANA
         if chain == "solana":
@@ -1137,11 +1135,11 @@ class GrokJevEngine:
                     _h_stats["dev_pct"] = dev_pct
                     _h_stats["top1_pct"] = largest_whale
 
-                    if dev_pct > 2.0:
-                        return False, f"dev still loaded {dev_pct:.1f}% > 2.0% (dump hazard: dev holds supply)", _h_stats
-                    if largest_whale > 12.0:
-                        return False, f"whale concentration {largest_whale:.1f}% > 12.0%", _h_stats
-                    max_top10 = 22.0 if is_pump else 28.0
+                    if dev_pct > 10.0:
+                        return False, f"dev still loaded {dev_pct:.1f}% > 10.0% (dump hazard: dev holds supply)", _h_stats
+                    if largest_whale > 15.0:
+                        return False, f"whale concentration {largest_whale:.1f}% > 15.0%", _h_stats
+                    max_top10 = 30.0 if is_pump else 35.0
                     if top_10_sum > max_top10:
                         return False, f"top 10 concentration {top_10_sum:.1f}% > {max_top10:.0f}%", _h_stats
 
@@ -1152,10 +1150,10 @@ class GrokJevEngine:
                     _h_stats["top10_pct"] = float(_h_raw.get("top_10_pct", 0.0) or 0.0)
                     _h_stats["dev_pct"] = float(_h_raw.get("dev_pct", 0.0) or 0.0)
                     _h_stats["top1_pct"] = _h_stats["dev_pct"]
-                    if _h_stats["dev_pct"] > 2.0:
-                        return False, f"dev loaded (GoPlus) {_h_stats['dev_pct']:.1f}% > 2.0% (dump risk)", _h_stats
-                    if _h_stats["top10_pct"] > 28.0:
-                        return False, f"top10 concentration (GoPlus) {_h_stats['top10_pct']:.1f}% > 28%", _h_stats
+                    if _h_stats["dev_pct"] > 10.0:
+                        return False, f"dev loaded (GoPlus) {_h_stats['dev_pct']:.1f}% > 10.0% (dump risk)", _h_stats
+                    if _h_stats["top10_pct"] > 35.0:
+                        return False, f"top10 concentration (GoPlus) {_h_stats['top10_pct']:.1f}% > 35%", _h_stats
 
             # Г) Двухсторонняя симуляция (BUY + SELL) через Jupiter
             # ЖЕСТКАЯ ЗАЩИТА: токен ОБЯЗАН успешно проходить и покупку, и продажу!
@@ -1458,12 +1456,14 @@ async def grok_bot_jev_loop(tracker, analyzer=None):
                         evaluated_cooldown[(address, chain)] = now + 20.0    # Повтор через 20с при 429
                     elif "candle-spike" in why_low or "flush" in why_low or "pullback" in why_low:
                         evaluated_cooldown[(address, chain)] = now + 25.0    # Ждем откат 25 секунд!
-                    elif "vol5-low" in why_low or "tx5-low" in why_low or "no-momentum" in why_low or "downtrend" in why_low:
-                        evaluated_cooldown[(address, chain)] = now + 45.0    # Набор объема, проверка через 45с
+                    elif any(k in why_low for k in ["vol5", "tx5", "buys5", "sellers", "momentum", "downtrend", "liq", "sol-reserve", "too-young", "mcap", "fills"]):
+                        evaluated_cooldown[(address, chain)] = now + 60.0    # Рыночная динамика: перепроверка через 60с (токен может набрать объем)
                     elif "max-positions" in why_low:
                         evaluated_cooldown[(address, chain)] = now + 30.0    # Ждем слота 30с
+                    elif any(k in why_low for k in ["rugcheck", "honeypot", "goplus", "freeze", "mint-auth", "clone", "impersonation", "dev-dump", "cabal", "top-wallet", "top-10"]):
+                        evaluated_cooldown[(address, chain)] = now + 1200.0  # Подтвержденный скам / опасный контракт — 20 минут бана
                     else:
-                        evaluated_cooldown[(address, chain)] = now + 600.0   # Скамы/непроход - 10 мин
+                        evaluated_cooldown[(address, chain)] = now + 90.0    # Остальные временные фильтры — 90 сек вместо 10 мин
                 except Exception as e:
                     print(f"⚠️ [GROKBOT+JEV] Ошибка обработки {address[:8]} ({chain}): {e}")
                     evaluated_cooldown[(address, chain)] = now + 60.0
