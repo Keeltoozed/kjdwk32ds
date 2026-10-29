@@ -518,19 +518,16 @@ class Analyzer:
                         best_pair["liquidity"] = {}
                     best_pair["liquidity"]["usd"] = eff
 
-        # Проверка рассинхрона цен между КРУПНЫМИ пулами (только пулы со сравнимой ликвидностью):
-        # Исключаем заброшенные/старые микро-пулы, сравниваем только живые пулы >= 25% от топа
-        if amm_pairs and len(amm_pairs) >= 2:
-            _top_liq = float(((best_pair.get("liquidity") or {}).get("usd", 0) or 0))
-            if _top_liq >= 5000.0:
-                _comp_pairs = [p for p in amm_pairs if float(((p.get("liquidity") or {}).get("usd", 0) or 0)) >= max(4000.0, _top_liq * 0.25)]
-                if len(_comp_pairs) >= 2:
-                    _c_prices = [float(p.get("priceUsd", 0) or 0) for p in _comp_pairs if float(p.get("priceUsd", 0) or 0) > 0]
-                    if len(_c_prices) >= 2:
-                        max_px, min_px = max(_c_prices), min(_c_prices)
-                        if min_px > 0 and (max_px / min_px) > 1.40:
-                            best_pair["_price_divergence"] = True
-                            best_pair["_price_divergence_ratio"] = max_px / min_px
+        # Проверка рассинхрона цен между активными пулами (включая pump.fun и AMM):
+        # Если между пулами с liq >= $1500 цена расходится >12%, вход блокируется (защита от ложного стоп-лосса)
+        _active_pools = [p for p in sol_pairs if float(((p.get("liquidity") or {}).get("usd", 0) or 0)) >= 1500.0]
+        if len(_active_pools) >= 2:
+            _c_prices = [float(p.get("priceUsd", 0) or 0) for p in _active_pools if float(p.get("priceUsd", 0) or 0) > 0]
+            if len(_c_prices) >= 2:
+                max_px, min_px = max(_c_prices), min(_c_prices)
+                if min_px > 0 and (max_px / min_px) > 1.12:
+                    best_pair["_price_divergence"] = True
+                    best_pair["_price_divergence_ratio"] = max_px / min_px
 
         # Обогащаем реальным изменением за 1 минуту и глобальной памятью пиков (цена + ликвидность)
         try:

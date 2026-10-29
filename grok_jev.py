@@ -918,11 +918,74 @@ class GrokJevEngine:
         FUNNEL_STATS["universe"] += len(candidates)
         return candidates
 
+    def _select_best_pair(self, address: str, pairs: list, chain: str = "solana") -> Optional[dict]:
+        """
+        Интеллектуальный выбор пула для Solana (синхронизирован с analyzer._best_solana_pair):
+        1. Отсекает пары, где токен является quoteToken (например FACEPALM/🖖).
+        2. Фильтрует разрешенные котировки (SOL, WSOL, USDC, USDT).
+        3. Если у токена уже есть живой AMM-пул (pumpswap, raydium, meteora, orca) с liq >= $500,
+           НИКОГДА не выбирает старый bonding curve pump.fun.
+        4. Защита от рассинхрона цен (Pool Price Divergence / Arbitrage Trap):
+           Если между пулами со сравнимой ликвидностью цена расходится >12%,
+           помечает _price_divergence = True для мгновенного отсева.
+        """
+        if not pairs:
+            return None
+        if chain.lower() != "solana":
+            matching = [p for p in pairs if str(p.get("chainId", "")).lower() == chain.lower()]
+            return max(matching if matching else pairs, key=lambda p: float((p.get("liquidity") or {}).get("usd", 0) or 0)) if (matching or pairs) else None
+
+        ALLOWED_SOL_QUOTES = {
+            "so11111111111111111111111111111111111111112",  # WSOL/SOL
+            "epjfwdd5aufqssqem2qnxzybapc8g4weggkzwytdt1v",  # USDC
+            "es9vmfrzacerjmffrff4h2fyd4kconky11mcce8benwnyb",  # USDT
+        }
+        ALLOWED_SOL_SYMBOLS = {"SOL", "WSOL", "USDC", "USDT"}
+        sol_pairs = []
+        for p in pairs:
+            if (p.get("chainId") or "").lower() != "solana":
+                continue
+            base_addr = str((p.get("baseToken") or {}).get("address") or "").strip()
+            if base_addr and base_addr != address:
+                continue
+            q_addr = str((p.get("quoteToken") or {}).get("address") or "").lower()
+            q_sym = str((p.get("quoteToken") or {}).get("symbol") or "").upper()
+            if q_addr and q_addr not in ALLOWED_SOL_QUOTES and q_sym not in ALLOWED_SOL_SYMBOLS:
+                continue
+            sol_pairs.append(p)
+
+        if not sol_pairs:
+            return None
+
+        # 1. Если есть AMM-пулы (pumpswap/raydium/meteora/orca) с ликвидностью >= $500,
+        # токен УЖЕ мигрировал, bonding curve pump.fun игнорируется!
+        amm_pairs = [p for p in sol_pairs if p.get("dexId") not in ("pump", "pumpfun")]
+        real_pairs = [p for p in amm_pairs if float(((p.get("liquidity") or {}).get("usd", 0) or 0)) >= 500]
+        if real_pairs:
+            best_pair = sorted(real_pairs, key=lambda p: float(((p.get("liquidity") or {}).get("usd", 0) or 0)), reverse=True)[0]
+        elif amm_pairs:
+            best_pair = sorted(amm_pairs, key=lambda p: float(((p.get("liquidity") or {}).get("usd", 0) or 0)), reverse=True)[0]
+        else:
+            best_pair = sorted(sol_pairs, key=lambda p: float(((p.get("liquidity") or {}).get("usd", 0) or 0)), reverse=True)[0]
+
+        # 2. Проверка рассинхрона цен между активными пулами (liq >= $1500):
+        # Если PumpSwap $0.000036, а pump.fun или Raydium $0.000046 -> рассинхрон >12% -> блок!
+        _active_pools = [p for p in sol_pairs if float(((p.get("liquidity") or {}).get("usd", 0) or 0)) >= 1500.0]
+        if len(_active_pools) >= 2:
+            _prices = [float(p.get("priceUsd", 0) or 0) for p in _active_pools if float(p.get("priceUsd", 0) or 0) > 0]
+            if len(_prices) >= 2:
+                _max_p, _min_p = max(_prices), min(_prices)
+                if _min_p > 0 and (_max_p / _min_p) > 1.12:
+                    best_pair["_price_divergence"] = True
+                    best_pair["_price_divergence_ratio"] = _max_p / _min_p
+
+        return best_pair
+
     async def fetch_pair(self, address: str, chain: str) -> Optional[dict]:
         """Прямой запрос рыночных данных пары из DexScreener (с поддержкой пакетного кэша analyzer)."""
-        if hasattr(self, "analyzer") and self.analyzer and hasattr(self.analyzer, "get_token_data"):
+        if hasattr(self, "analyzer") and self.analyzer and hasattr(self.analyzer, "fetch_token_data"):
             try:
-                cached_or_pair = await self.analyzer.get_token_data(address, chain=chain)
+                cached_or_pair = await self.analyzer.fetch_token_data(address)
                 if cached_or_pair and isinstance(cached_or_pair, dict) and float(cached_or_pair.get("priceUsd", 0) or 0) > 0:
                     return cached_or_pair
             except Exception:
@@ -933,12 +996,7 @@ class GrokJevEngine:
             st, data = await fetch_json(url, timeout=6, retries=1)
             if st == 200 and isinstance(data, dict):
                 pairs = data.get("pairs") or []
-                if not pairs:
-                    return None
-                matching = [p for p in pairs if str(p.get("chainId", "")).lower() == chain.lower()]
-                target = matching if matching else pairs
-                best = max(target, key=lambda p: float((p.get("liquidity") or {}).get("usd", 0) or 0))
-                return best
+                return self._select_best_pair(address, pairs, chain)
         except Exception:
             pass
         return None
@@ -949,9 +1007,8 @@ class GrokJevEngine:
         try:
             st, data = await fetch_json(f"https://api.dexscreener.com/latest/dex/tokens/{address}", timeout=5, retries=1)
             if st == 200 and isinstance(data, dict):
-                pairs = [p for p in (data.get("pairs") or []) if str(p.get("chainId", "")).lower() == chain.lower()]
-                if pairs:
-                    return max(pairs, key=lambda p: float((p.get("liquidity") or {}).get("usd", 0) or 0))
+                pairs = data.get("pairs") or []
+                return self._select_best_pair(address, pairs, chain)
         except Exception:
             pass
         return None
@@ -1276,6 +1333,12 @@ class GrokJevEngine:
         if price <= 0:
             return False, "invalid-price"
 
+        # 1.5. Проверка рассинхрона цен между пулами (миграция / арбитражная ловушка)
+        if pair.get("_price_divergence"):
+            _div_r = float(pair.get("_price_divergence_ratio", 0.0) or 0.0)
+            print(f"🚫 [PRICE-SPLIT] {symbol} ({address[:8]}): рассинхрон цен между пулами {_div_r:.2f}x — блок входа (защита от ложного стоп-лосса).")
+            return False, f"price-divergence-pool-split ({_div_r:.2f}x)"
+
         # 2. HARD GATE ПЕРВЫМ ("if it fails here, JEV and Jupiter never see it")
         # Мгновенный математический отсев (0 сетевых запросов!) — отсекает 95% пустых/стоячих монет ДО вызовов Jupiter/RugCheck/GoPlus
         hard_ok, hard_why = self.hard_gate(address, pair, chain, None)
@@ -1349,6 +1412,8 @@ class GrokJevEngine:
         _fm1 = float(((_fin.get("priceChange") or {}).get("m1", 0)) or 0)
         if _fpx <= 0:
             return False, "fills-flush-wait final-recheck invalid-price"
+        if _fin.get("_price_divergence"):
+            return False, "fills-flush-wait final-recheck price-divergence-pool-split"
         if _fpx < _scan_price * 0.985:
             return False, f"fills-flush-wait final-recheck price falling ({(_fpx/_scan_price-1)*100:+.1f}% since scan)"
         if _fpx > _scan_price * 1.06:
