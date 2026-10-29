@@ -436,7 +436,10 @@ class ShadowTracker:
                                 outcome = "😴 Флет / Без движения"
 
                             if is_rocket and ath_pnl > (upd.get("old_ath_pnl", 0) or 0):
-                                print(f"🚀 [MISSED ROCKET!] {upd['symbol']}: {outcome} (ATH ${new_ath:.6f} vs вход ${p_entry:.6f})")
+                                if cur_pnl <= 0.0:
+                                    print(f"🛡️ [DUMP AVOIDED] {upd['symbol']}: {outcome} (ATH ${new_ath:.6f} vs вход ${p_entry:.6f}) — фильтр спас от слива!")
+                                else:
+                                    print(f"🚀 [MISSED ROCKET!] {upd['symbol']}: {outcome} (ATH ${new_ath:.6f} vs вход ${p_entry:.6f})")
 
                             # Обновляем в Supabase
                             if self.use_supabase and self.supabase:

@@ -542,7 +542,7 @@ async def jup_loop(analyzer, tracker):
                             try:
                                 ok = await analyzer.analyze_token(mint)
                             except Exception as e:
-                                print(f"🪐 JUP analyze err {mint[:8]}: {type(e).__name__}")
+                                print(f"🪐 JUP analyze err {mint[:8]}: {type(e).__name__} ({e})")
                                 return
 
                             if ok is None:

@@ -412,7 +412,12 @@ class GrokJevEngine:
         if not (min_age <= age_min <= max_age):
             return False, f"age-out-of-bounds {age_min:.1f}m not in [{min_age:.1f}m, {max_age:.0f}m]"
 
-        # Убрано требование m5 >= 4.0%: берем откаты на устоявшихся монетах, а не хаи
+        # 3. Живой импульс ракеты (LIVE ROCKET MOMENTUM)
+        if m5 < 1.0 and h1 < 10.0:
+            return False, f"no-momentum m5 {m5:+.1f}% < +1.0%, h1 {h1:+.1f}% (dead coin without buying interest)"
+        if s5 > 6 and b5 < s5:
+            return False, f"sellers-dominating {b5}b/{s5}s (more sellers than buyers in m5)"
+
         if m5 > 180.0:
             return False, f"overheated-m5 {m5:+.0f}% > +180% (peak FOMO risk)"
 
@@ -628,22 +633,17 @@ class GrokJevEngine:
         s5 = int(txns_m5.get("sells", 0) or 0)
         vol5 = float((pair_data.get("volume") or {}).get("m5", 0) or 0)
         
-        # 1. Запрет покупать зеленую свечу на пике: вход ТОЛЬКО в откат или консолидацию m1
-        if m1 > 1.5:
-            return False, -0.12, 0.0, f"candle-spike (m1 {m1:+.1f}% > +1.5%) — bid the flush, wait for pullback"
+        # 1. Запрет покупать вертикальную палку на гипер-пике FOMO (но разрешаем нормальный разгон до +15%):
+        if m1 > 16.0 or (m5 > 60.0 and m1 > 8.0):
+            return False, -0.12, 0.0, f"candle-spike (m1 {m1:+.1f}%, m5 {m5:+.1f}%) — FOMO vertical spike, wait for consolidation"
 
-        # 2. Откат не должен быть ножом падения (падение глубже -8% отсекается)
-        if m1 < -8.0:
-            return False, -0.12, 0.0, f"flush-dump (m1 {m1:+.1f}% < -8.0%) — falling knife"
+        # 2. Откат не должен быть ножом падения (падение глубже -3.5% за 1 мин — это слив):
+        if m1 < -3.5:
+            return False, -0.12, 0.0, f"flush-dump (m1 {m1:+.1f}% < -3.5%) — falling knife, wait for stabilization"
 
-        # 3. Если откат глубже -8.0% — это слом структуры / дамп
-        if m1 < -8.0:
-            return False, -0.14, 0.0, f"flush-dump (m1 {m1:+.1f}% < -8.0%) — falling knife"
-
-        # 3.1. НЕ ПОКУПАЕМ КРАСНУЮ МИНУТУ: раньше пускало до m1 -8% ("bid the flush"), и бот входил в падающий нож.
-        _m1_floor = float(getattr(_c, "JEV_MIN_M1_ENTRY_FLOOR_PCT", -8.0))
-        if m1 < _m1_floor:
-            return False, -0.14, 0.0, f"flush-wait red-minute (m1 {m1:+.1f}% < {_m1_floor:+.1f}%) — price is falling right now"
+        # 3. Проверка давления продавцов: в m5 покупатели должны лидировать
+        if s5 > 5 and b5 < s5:
+            return False, -0.12, 0.0, f"sellers-dominating ({b5}b/{s5}s) — sellers active, wait for buyer absorption"
 
         # 3.2. ПОДТВЕРЖДЕНИЕ ТРЕНДА ПО СОБСТВЕННОЙ ИСТОРИИ ЦЕН (DexScreener m1/m5 запаздывают на минуту и больше)
         if getattr(_c, "JEV_TREND_CONFIRM_ENABLED", False):

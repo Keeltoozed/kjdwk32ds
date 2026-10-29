@@ -1106,6 +1106,7 @@ class Analyzer:
                 _fdv_pre = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
                 _pc_pre = pair_data.get("priceChange") or {}
                 _h1_pre = float(_pc_pre.get("h1", 0) or 0)
+                _h6_pre = float(_pc_pre.get("h6", 0) or 0)
                 _tx5_check = (pair_data.get("txns") or {}).get("m5", {}) or {}
                 _b5_check = int(_tx5_check.get("buys", 0) or 0)
                 _s5_check = int(_tx5_check.get("sells", 0) or 0)

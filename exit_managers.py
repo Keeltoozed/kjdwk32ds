@@ -93,6 +93,8 @@ class MatureExitManager:
                 _floor_pnl = round(max_pnl_pct * 0.40, 2)
             elif max_pnl_pct >= 0.38:     # +38%..+60%: держим минимум +15% (даём ~23% запаса на ретест и не режем ракету на +19%!)
                 _floor_pnl = 0.15
+            elif max_pnl_pct >= 0.22:     # +22%..+38%: держим минимум +10% (не отдаем прибыль рынку, как было с MULTI +28% -> +3%!)
+                _floor_pnl = 0.10
         elif max_pnl_pct >= 5.00:       # Гипер-ракета (+500%+): держим 78% прибыли
             _floor_pnl = round(max_pnl_pct * 0.78, 2)
         elif max_pnl_pct >= 3.00:     # Мега-ракета (+300%..+500%): держим 75% прибыли
@@ -109,13 +111,15 @@ class MatureExitManager:
             _floor_pnl = 0.32
         elif max_pnl_pct >= 0.38:     # Пик +38%+ -> гарантируем минимум +18% (ниже +38% пол не ставим — даём ракете взлететь!)
             _floor_pnl = 0.18
+        elif max_pnl_pct >= 0.22:     # Пик +22%..+38% -> гарантируем минимум +12% прибыли
+            _floor_pnl = 0.12
         if _floor_pnl is not None and pnl_pct <= _floor_pnl:
             # 2-тиковое подтверждение пробоя пола (защита от 1-секундных проколов и теней свечей),
             # НО если это жесткий сброс (слив профита к нулю pnl_pct <= 0.08 при пике >= +38% или откат от хая >= 30%), выходим МГНОВЕННО без ожидания:
             _fc = int(getattr(position, "floor_confirm_n", 0) or 0) + 1
             position.floor_confirm_n = _fc
             _drop_from_max = (position.max_price_usd - current_price) / position.max_price_usd if position.max_price_usd else 0
-            _fast_exit = (pnl_pct <= 0.08 and max_pnl_pct >= 0.38) or (_drop_from_max >= 0.30 and max_pnl_pct >= 0.50)
+            _fast_exit = (pnl_pct <= 0.08 and max_pnl_pct >= 0.22) or (_drop_from_max >= 0.30 and max_pnl_pct >= 0.50)
             if _fc < 2 and not _fast_exit:
                 return None
             if pnl_pct >= 0:
@@ -127,9 +131,9 @@ class MatureExitManager:
         # 2. СУЖАЮЩИЙСЯ ПАРАБОЛИЧЕСКИЙ ТРЕЙЛИНГ-СТОП (Чем выше пик, тем плотнее зажимаем профит у вершины!)
         if hasattr(config, 'TRAILING_ACTIVATION_PCT'):
             if _ride:
-                # RIDE: трейлинг с +60%, дистанция 28% (до +300%) и 22% выше — выдерживает рабочие откаты ракеты
-                if max_pnl_pct >= 0.60:
-                    _trail_dist = 0.22 if max_pnl_pct >= 3.00 else 0.28
+                # RIDE: трейлинг от +25% с адаптивной дистанцией (защищает +20..+35% пики, выдерживая ралли):
+                if max_pnl_pct >= 0.25:
+                    _trail_dist = 0.12 if max_pnl_pct < 0.60 else (0.22 if max_pnl_pct >= 3.00 else 0.28)
                     drop_from_max = (position.max_price_usd - current_price) / position.max_price_usd
                     if drop_from_max >= _trail_dist:
                         return f"Mature Trailing RIDE (+{max_pnl_pct*100:.0f}% peak, drop {drop_from_max*100:.0f}%)"
