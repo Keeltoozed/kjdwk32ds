@@ -1010,6 +1010,19 @@ class Analyzer:
         if not pair_data:
             return None
             
+        _pc = pair_data.get("priceChange") or {}
+        _m5 = float(_pc.get("m5", 0) or 0)
+        _m1 = float(_pc.get("m1", 0) or 0)
+        _h1 = float(_pc.get("h1", 0) or 0)
+        _vm5_pre = float((pair_data.get("volume") or {}).get("m5", 0) or 0)
+        _v24 = float((pair_data.get("volume") or {}).get("h24", 0) or 0)
+        _txm5_pre = (pair_data.get("txns") or {}).get("m5", {}) or {}
+        _b5_pre = int(_txm5_pre.get("buys", 0) or 0)
+        _s5_pre = int(_txm5_pre.get("sells", 0) or 0)
+        _tx_h1 = (pair_data.get("txns") or {}).get("h1", {}) or {}
+        _b = int(_tx_h1.get("buys", 0) or 0)
+        _s = int(_tx_h1.get("sells", 0) or 0)
+
         base_token = pair_data.get("baseToken", {})
         name = base_token.get("name", "").upper()
         symbol = base_token.get("symbol", "").upper()
