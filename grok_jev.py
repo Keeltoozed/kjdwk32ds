@@ -414,13 +414,11 @@ class GrokJevEngine:
             return False, f"age-out-of-bounds {age_min:.1f}m < {min_age:.1f}m (flash-rug dev dump zone, wait for maturation)"
 
         # 3. Живой импульс ракеты (LIVE ROCKET MOMENTUM)
-        if m5 < 1.0 and h1 < 10.0:
-            return False, f"no-momentum m5 {m5:+.1f}% < +1.0%, h1 {h1:+.1f}% (dead coin without buying interest)"
+        # Токен ОБЯЗАН РАСТИ прямо сейчас (m5 >= 3.5%), а не стоять на месте или остывать (как WALT/STANK)!
+        if m5 < 3.5:
+            return False, f"no-momentum m5 {m5:+.1f}% < +3.5% (coin is flat/standing still, not an active rocket)"
         if s5 > 6 and b5 < s5:
             return False, f"sellers-dominating {b5}b/{s5}s (more sellers than buyers in m5)"
-
-        if m5 > 180.0:
-            return False, f"overheated-m5 {m5:+.0f}% > +180% (peak FOMO risk)"
 
         if m5 > 180.0:
             if not (-8.0 <= m1 <= 22.0 and b5 >= s5 * 1.15 and vol_m5 >= 5000.0 and m5 <= 300.0):
@@ -435,14 +433,14 @@ class GrokJevEngine:
                 return False, f"h6-downtrend {float(_h6_raw or 0):+.1f}% < {_min_h6:+.1f}% (monet is bleeding)"
 
         # 4. Объем и давление покупателей (LIVE 5M ACTIVITY)
-        # В 5-минутном окне ВСЕГДА должна быть живая активность
-        if vol_m5 < 2000.0:
-            return False, f"vol5-low ${vol_m5:.0f} < $2,000 (inactive dead pool)"
-        if (b5 + s5) < 12:
-            return False, f"tx5-low {b5+s5} < 12 (no live trading)"
-        if b5 < 8:
-            return False, f"buys5-low {b5} < 8 (no buyers)"
-        _req_bs = float(getattr(_c, "MIN_BUY_SELL_RATIO", 1.15))
+        # В 5-минутном окне ВСЕГДА должна быть живая активность (не входим в спящие монеты)
+        if vol_m5 < 3000.0:
+            return False, f"vol5-low ${vol_m5:.0f} < $3,000 (inactive dead pool)"
+        if (b5 + s5) < 15:
+            return False, f"tx5-low {b5+s5} < 15 (too few transactions)"
+        if b5 < 10:
+            return False, f"buys5-low {b5} < 10 (no active buyers)"
+        _req_bs = float(getattr(_c, "MIN_BUY_SELL_RATIO", 1.05))
         if (b5 + s5) >= 60 or vol_m5 >= 15000.0:
             _req_bs = 1.02
         if s5 > 0 and (b5 / s5) < _req_bs:
@@ -469,6 +467,8 @@ class GrokJevEngine:
         # Отсекает микро-скамы pump.fun ($5k-$20k), где создатель держит 30% и сливает на входе (KAT)
         # Капитализация строго в коридоре $60,000 - $8,000,000
         mcap = fdv_mc
+        if is_pump and mcap > 0 and mcap < 30000.0:
+            return False, f"pump-curve-too-early mcap ${mcap:,.0f} < $30k (high dev dump trap risk)"
         min_mcap = float(getattr(_c, "JEV_MIN_MCAP_USD", 60000.0))
         max_mcap = float(getattr(_c, "JEV_MAX_MCAP_USD", 8000000.0))
         if mcap > 0 and not (min_mcap <= mcap <= max_mcap):
@@ -645,6 +645,11 @@ class GrokJevEngine:
         # 3. Проверка давления продавцов: в m5 покупатели должны лидировать
         if s5 > 5 and b5 < s5:
             return False, -0.12, 0.0, f"sellers-dominating ({b5}b/{s5}s) — sellers active, wait for buyer absorption"
+
+        # 4. Монета не должна стоять на месте (flat / frozen candle):
+        # Если в последнюю минуту нет покупок (m1 <= 0.0%) и 5м рост слабый (m5 < 5.0%), не входим в спящий токен (кейсы WALT/STANK)!
+        if m1 <= 0.0 and m5 < 5.0:
+            return False, -0.12, 0.0, f"flat-coin (m1 {m1:+.1f}%, m5 {m5:+.1f}%) — price standing still, waiting for live impulse"
 
         # 3.2. ПОДТВЕРЖДЕНИЕ ТРЕНДА ПО СОБСТВЕННОЙ ИСТОРИИ ЦЕН (DexScreener m1/m5 запаздывают на минуту и больше)
         if getattr(_c, "JEV_TREND_CONFIRM_ENABLED", False):
@@ -870,11 +875,10 @@ class GrokJevEngine:
         except Exception:
             pass
 
-        # 2. DexScreener Top Boosts & Profiles (Строго SOLANA, без мусорных latest бустов)
+        # 2. DexScreener Top Boosts (Строго проверенный топ SOLANA, исключая мусорные 0-минутные спам-профили)
         from http_client import fetch_json
         for url in [
-            "https://api.dexscreener.com/token-boosts/top/v1",
-            "https://api.dexscreener.com/token-profiles/latest/v1"
+            "https://api.dexscreener.com/token-boosts/top/v1"
         ]:
             try:
                 st, data = await fetch_json(url, timeout=5, retries=0)
