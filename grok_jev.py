@@ -406,8 +406,8 @@ class GrokJevEngine:
 
         # 2. Возраст токена: категорически запрещено покупать младенцев (< 5-10 минут)!
         # В первые 0-5 минут девы сливают свои запасы (кейсы BUG -31%, HYPERCAT -20%, EGG -19%).
-        _early_min_age = max(5.0, float(getattr(_c, "JEV_EARLY_MIN_AGE_MIN", 5.0)))
-        _std_min_age = max(10.0, float(getattr(_c, "JEV_MIN_AGE_MIN", 10.0)))
+        _early_min_age = max(3.0, float(getattr(_c, "JEV_EARLY_MIN_AGE_MIN", 3.0)))
+        _std_min_age = max(6.0, float(getattr(_c, "JEV_MIN_AGE_MIN", 6.0)))
         min_age = _early_min_age if (b5 >= s5 * 1.3 and m5 >= 8.0 and vol_m5 >= 5000.0) else _std_min_age
         max_age = float(getattr(_c, "JEV_MAX_AGE_MIN", 72.0 * 60.0))  # 72 часа
         if not (min_age <= age_min <= max_age):
@@ -434,12 +434,12 @@ class GrokJevEngine:
 
         # 4. Объем и давление покупателей (LIVE 5M ACTIVITY)
         # В 5-минутном окне ВСЕГДА должна быть живая активность (не входим в спящие монеты)
-        if vol_m5 < 3000.0:
-            return False, f"vol5-low ${vol_m5:.0f} < $3,000 (inactive dead pool)"
-        if (b5 + s5) < 15:
-            return False, f"tx5-low {b5+s5} < 15 (too few transactions)"
-        if b5 < 10:
-            return False, f"buys5-low {b5} < 10 (no active buyers)"
+        if vol_m5 < 2500.0:
+            return False, f"vol5-low ${vol_m5:.0f} < $2,500 (inactive dead pool)"
+        if (b5 + s5) < 12:
+            return False, f"tx5-low {b5+s5} < 12 (too few transactions)"
+        if b5 < 8:
+            return False, f"buys5-low {b5} < 8 (no active buyers)"
         _req_bs = float(getattr(_c, "MIN_BUY_SELL_RATIO", 1.05))
         if (b5 + s5) >= 60 or vol_m5 >= 15000.0:
             _req_bs = 1.02
@@ -467,8 +467,8 @@ class GrokJevEngine:
         # Отсекает микро-скамы pump.fun ($5k-$20k), где создатель держит 30% и сливает на входе (KAT)
         # Капитализация строго в коридоре $60,000 - $8,000,000
         mcap = fdv_mc
-        if is_pump and mcap > 0 and mcap < 30000.0:
-            return False, f"pump-curve-too-early mcap ${mcap:,.0f} < $30k (high dev dump trap risk)"
+        if is_pump and mcap > 0 and mcap < 15000.0:
+            return False, f"pump-curve-too-early mcap ${mcap:,.0f} < $15k (high dev dump trap risk)"
         min_mcap = float(getattr(_c, "JEV_MIN_MCAP_USD", 60000.0))
         max_mcap = float(getattr(_c, "JEV_MAX_MCAP_USD", 8000000.0))
         if mcap > 0 and not (min_mcap <= mcap <= max_mcap):
@@ -1333,6 +1333,28 @@ class GrokJevEngine:
         if not soft_ok:
             print(f"🚫 [GROK+JEV] {symbol} ({chain}): JEV soft-reject ➔ {soft_why}")
             return False, f"jev-soft-reject {soft_why}"
+
+        # 5.5. ФИНАЛЬНАЯ ПРОВЕРКА ПЕРЕД ИСПОЛНЕНИЕМ: аудит+LLM занимают секунды, цена в pair устарела.
+        # Все минусы (OREN/GTA/ELOOONG/HYPERCAT) куплены на пике входа (peak == entry) по устаревшим данным.
+        _scan_price, _scan_liq = price, float((pair.get("liquidity") or {}).get("usd", 0) or 0)
+        _fin = await self.fetch_pair_fresh(address, chain)
+        if not _fin:
+            return False, "fills-flush-wait final-recheck no-fresh-data"
+        _fpx = float(_fin.get("priceUsd", 0) or 0)
+        _fliq = float((_fin.get("liquidity") or {}).get("usd", 0) or 0)
+        _fm1 = float(((_fin.get("priceChange") or {}).get("m1", 0)) or 0)
+        if _fpx <= 0:
+            return False, "fills-flush-wait final-recheck invalid-price"
+        if _fpx < _scan_price * 0.985:
+            return False, f"fills-flush-wait final-recheck price falling ({(_fpx/_scan_price-1)*100:+.1f}% since scan)"
+        if _fpx > _scan_price * 1.06:
+            return False, f"fills-flush-wait final-recheck price ran away ({(_fpx/_scan_price-1)*100:+.1f}% since scan, no chase)"
+        if _scan_liq > 0 and _fliq > 0 and _fliq < _scan_liq * 0.85:
+            return False, f"fills-flush-wait final-recheck liquidity draining ({_scan_liq:,.0f}->{_fliq:,.0f})"
+        if _fm1 < -2.0:
+            return False, f"fills-flush-wait final-recheck m1 {_fm1:+.1f}% falling"
+        pair, price = _fin, _fpx
+        wick_price = price * (1.0 + wick_pct)
 
         # 6. CHIEF / GROK TRADES: Исполнение ордера
         if len(tracker.get_open_positions()) >= getattr(_c, "MAX_CONCURRENT_POSITIONS", 10):
