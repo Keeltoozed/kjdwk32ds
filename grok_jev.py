@@ -420,6 +420,10 @@ class GrokJevEngine:
         if s5 > 6 and b5 < s5:
             return False, f"sellers-dominating {b5}b/{s5}s (more sellers than buyers in m5)"
 
+        # Остывающий поздний памп: токен старше 30м со слабым m5 — вход на спаде (HOUSEWORM -25%, SENSE -52%, PAWS/HYPERCAT ~0)
+        if age_min >= 30.0 and m5 < 15.0:
+            return False, f"late-fade age {age_min:.0f}m m5 {m5:+.1f}% < +15% (old token cooling off, not a live rocket)"
+
         if m5 > 180.0:
             if not (-8.0 <= m1 <= 22.0 and b5 >= s5 * 1.15 and vol_m5 >= 5000.0 and m5 <= 300.0):
                 return False, f"overheated m5 {m5:+.0f}% > +180% (peak FOMO risk)"

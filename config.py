@@ -151,8 +151,8 @@ GEMINI_API_KEY = (os.getenv("GEMINI_API_KEY") or "").strip() # Получить 
 # === GROK BOT x JEV ENGINE (THE FUNNEL & THE LINE) ===
 JEV_ENABLED = True
 JEV_WICK_STOP_ENABLED = False     # ОТКЛЮЧЕНО: искусственный стоп по фитилю душил ракеты на -15%..-25% в первые 2-3 минуты (Goon, SPIDOGE)
-JEV_EARLY_MIN_AGE_MIN = 5.0       # 5.0 минут для мощных пробоев (блокирует инста-дампы девов вроде BUG -31% и HYPERCAT -20%)
-JEV_MIN_AGE_MIN = 10.0            # 10.0 минут стандартный минимум (монета обязана доказать устойчивость пула)
+JEV_EARLY_MIN_AGE_MIN = 3.0       # сильные пробои от 3м (79% ракет входили на 1-6м)
+JEV_MIN_AGE_MIN = 6.0            # стандартный минимум 6м
 JEV_MIN_LIQUIDITY_USD = 8000.0    # $8,000 минимальная глубина пула
 JEV_MIN_VOLUME_H1 = 12000.0       # $12,000 часовой объем
 JEV_MIN_MCAP_USD = 15000.0        # $15,000 минимальная капитализация
