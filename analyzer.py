@@ -1123,21 +1123,22 @@ class Analyzer:
                 _h6_pre = float(_pc_pre.get("h6", 0) or 0)
                 _vm5_check = float((pair_data.get("volume") or {}).get("m5", 0) or 0)
                 _m5_check = float(_pc_pre.get("m5", 0) or 0)
+                _tx5_rc = (pair_data.get("txns") or {}).get("m5", {}) or {}
+                _b5_rc = int(_tx5_rc.get("buys", 0) or 0)
+                _s5_rc = int(_tx5_rc.get("sells", 0) or 0)
                 if mint.endswith("pump") and _age_min_pre < 2.0:
-                    _has_launch_mom = (_vm5_check >= 4000.0 and _m5_check >= 5.0 and _b5_rc >= 10)
+                    _has_launch_mom = (_vm5_check >= 3000.0 and _m5_check >= 4.0 and _b5_rc >= 8)
                     if not _has_launch_mom:
                         return self._deny(mint, "post-migration-dump-zone", f"🚫 [POST-MIGRATION-DUMP] {mint[:8]}: возраст {_age_min_pre:.1f}м < 2.0м — опасная зона сброса снайперов кривой.")
                 if mint.endswith("pump") and 0 < _fdv_pre < 35000:
-                    # DIP RECLAIM: Если токен после миграции просел, но активно выкупается (M5 > +4%, объем > $1.5k, покупателей >= продавцов) — это точка разворота ракеты (как 大A +1156%, OMNI +986%)!
-                    _tx5_rc = (pair_data.get("txns") or {}).get("m5", {}) or {}
-                    _b5_rc, _s5_rc = int(_tx5_rc.get("buys", 0) or 0), int(_tx5_rc.get("sells", 0) or 0)
-                    _is_reclaim = (_fdv_pre >= 6000 and _m5_check >= 3.0 and _vm5_check >= 1500.0 and _b5_rc >= _s5_rc * 0.90)
+                    # DIP RECLAIM: Если токен после миграции просел, но активно выкупается (M5 > +2.5%, объем > $1k, покупателей >= продавцов) — это точка разворота ракеты (как 大A +1156%, OMNI +986%)!
+                    _is_reclaim = (_fdv_pre >= 5000 and _m5_check >= 2.5 and _vm5_check >= 1000.0 and _b5_rc >= _s5_rc * 0.85)
                     if _is_reclaim:
                         print(f"🚀 [DIP RECLAIM] {symbol} ({mint[:8]}): FDV ${_fdv_pre:,.0f}, m5 +{_m5_check:.1f}%, vol5 ${_vm5_check:,.0f}, {_b5_rc}b/{_s5_rc}s — разворот после миграции разрешён!")
                     else:
                         return self._deny(mint, "post-migration-dump-fdv", f"🚫 [POST-MIGRATION-DUMP] {mint[:8]}: мигрировавший токен FDV ${_fdv_pre:,.0f} < $35k без подтверждённого отскока.")
-                elif 0 < _fdv_pre < 12000 and not (_m5_check >= 4.0 and _vm5_check >= 1500.0):
-                    return self._deny(mint, "post-migration-dump-fdv", f"🚫 [POST-MIGRATION-DUMP] {mint[:8]}: AMM FDV ${_fdv_pre:,.0f} < $12k без импульса — слитый токен.")
+                elif 0 < _fdv_pre < 8000 and not (_m5_check >= 3.0 and _vm5_check >= 1000.0):
+                    return self._deny(mint, "post-migration-dump-fdv", f"🚫 [POST-MIGRATION-DUMP] {mint[:8]}: AMM FDV ${_fdv_pre:,.0f} < $8k без импульса — слитый токен.")
                 if _age_min_pre >= 60.0 and ((_fdv_pre < 35000 and _h1_pre < -5.0) or (_h1_pre < -12.0 or _h6_pre < -25.0)):
                     return self._deny(mint, "post-migration-dump-trend", f"🚫 [POST-MIGRATION-DUMP] {mint[:8]}: часовой/6ч тренд в глубоком сливе (h1 {_h1_pre:+.1f}%, h6 {_h6_pre:+.1f}%) — отскок дохлой кошки.")
                 elif _age_min_pre < 60.0 and (_h1_pre < -65.0 or (_h1_pre < -30.0 and float((_pc_pre.get("m5", 0) or 0)) < 5.0)):
@@ -2398,8 +2399,8 @@ class Analyzer:
             return False
 
         _fdv_curve = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
-        if _fdv_curve > 24000:
-            return self._deny(mint, "pump-graduation-cliff", f"🚫 [GRADUATION-CLIFF] {mint[:8]}: кривая Pump.fun (FDV ${_fdv_curve:,.0f} > $24k) в зоне разгрузки снайперов перед миграцией — ждём выхода на AMM.")
+        if _fdv_curve > 58000:
+            return self._deny(mint, "pump-graduation-cliff", f"🚫 [GRADUATION-CLIFF] {mint[:8]}: кривая Pump.fun (FDV ${_fdv_curve:,.0f} > $58k) в зоне разгрузки снайперов перед миграцией — ждём выхода на AMM.")
 
         # Защита от фантомных дев-дампов на старте (кейс 404: $3.1k cap, 5% кривой, мгновенный сброс дева)
         if _fdv_curve < 7500:

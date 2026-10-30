@@ -57,6 +57,14 @@ class MatureExitManager:
         if minutes_held < _inf_win and pnl_pct <= _inf_pct:
             return f"Mature Infant Dump ({pnl_pct*100:.0f}%)"
 
+        # STALL TIMER (DEAD MOMENTUM EXIT - CT / Reddit Best Practice)
+        # Если после входа токен в течение 90 секунд не развил моментум (max_pnl_pct < +6%)
+        # и сползает в минус (pnl_pct <= -0.06), выходим немедленно, не дожидаясь дампа -20%..-35%!
+        _stall_sec = float(getattr(config, "STALL_TIMER_SEC", 90.0))
+        _stall_loss = float(getattr(config, "STALL_MAX_LOSS_PCT", -0.06))
+        if minutes_held >= (_stall_sec / 60.0) and max_pnl_pct < 0.06 and pnl_pct <= _stall_loss:
+            return f"Dead Momentum Stall ({minutes_held*60:.0f}s no breakout, pnl {pnl_pct*100:.1f}%)"
+
         # GROK BOT x JEV: СТОП ПОД ФИТИЛЬ (по умолчанию ОТКЛЮЧЕН, чтобы не душить ракеты на -15%..-25% в первые минуты)
         if getattr(config, "JEV_WICK_STOP_ENABLED", False):
             _wick_stop = float(getattr(position, "stop_under_wick", 0.0) or 0.0)
@@ -190,11 +198,11 @@ class MatureExitManager:
         except Exception:
             _maxp = 0
 
-        # Мягкий стоп и Breakeven (ТОЛЬКО после 5-6 минут в рынке, чтобы не резать 1-2 минутные свечи ретеста на старте!):
-        if minutes_held >= 5.0 and _maxp >= 0.20 and pnl_pct <= -0.08:
+        # Мягкий стоп и Breakeven (после 2 минут в рынке, если был пик +18%+ и цена стекает к безубытку):
+        if minutes_held >= 2.0 and _maxp >= 0.20 and pnl_pct <= -0.05:
             return f"Mature Soft Guard (был пик +{_maxp*100:.0f}%, слив до {pnl_pct*100:.1f}%)"
-        _be = float(getattr(config, 'BREAKEVEN_PCT', 0.20))
-        if minutes_held >= 5.0 and _maxp >= _be and pnl_pct <= 0.03:
+        _be = float(getattr(config, 'BREAKEVEN_PCT', 0.18))
+        if minutes_held >= 2.0 and _maxp >= _be and pnl_pct <= 0.02:
             return f"Mature Breakeven (был пик +{_maxp*100:.0f}%, фикс {pnl_pct*100:+.1f}%)"
 
         # Hard stop loss: стоп ВСЕГДА отрицательный (-15%), защищает депозит от постепенного сползания

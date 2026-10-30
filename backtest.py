@@ -54,32 +54,36 @@ def load_data():
 
 def simulate_trade_exit(ath_pnl, cur_pnl, sl=-15.0):
     """
-    Симуляция выхода по правилам мани-менеджмента:
+    Симуляция выхода по правилам мани-менеджмента X/Reddit:
+    - Stall Timer: если токен не дал импульса (ath < +6%), выход на -6% вместо сидения до SL
     - SL: -15%
-    - TP1 (+35%): закрытие 50% позиции, безубыток на остаток (+2%)
-    - TP2 (+80%): закрытие 25% позиции
-    - Moonbag (25%): трейлинг от пика ATH
+    - TP1 (+50%): закрытие 50% позиции (тело входа возвращено, Free Ride)
+    - TP2 (+150%): закрытие 25% позиции
+    - Moonbag (25%): трейлинг от пика ATH (захват ракет до +1000%)
     """
     if ath_pnl <= 0:
         return sl
+    if ath_pnl < 6.0:
+        # Stall Timer: если монету не запампили за 90с, выходим по Stall Timer (-6%)
+        return max(-6.0, cur_pnl if cur_pnl < 0 else sl)
     if ath_pnl < 25.0:
         return max(sl, cur_pnl)
     elif ath_pnl < 50.0:
-        # Пик +25%..+49%: фиксация пола +15%
+        # Пик +25%..+49%: фиксация безубытка / пола +15%
         return 15.0
     elif ath_pnl < 100.0:
-        # Пик +50%..+99%: TP1 +35% на 50%, остаток выходит с трейлингом -20% от хая
-        trail_exit = max(20.0, ath_pnl - 20.0)
-        return 0.5 * 35.0 + 0.5 * trail_exit
-    elif ath_pnl < 300.0:
-        # Пик +100%..+299%: TP1 +35% (50%), TP2 +80% (25%), трейлинг 25% на остаток
+        # Пик +50%..+99%: TP1 +50% на 50%, остаток выходит с трейлингом -20% от хая
+        trail_exit = max(25.0, ath_pnl - 20.0)
+        return 0.5 * 50.0 + 0.5 * trail_exit
+    elif ath_pnl < 250.0:
+        # Пик +100%..+249%: TP1 +50% (50%), TP2 +150% (25%), трейлинг на остаток 25%
         trail_exit = max(50.0, ath_pnl - 25.0)
-        return 0.5 * 35.0 + 0.25 * 80.0 + 0.25 * trail_exit
+        return 0.5 * 50.0 + 0.25 * min(150.0, ath_pnl) + 0.25 * trail_exit
     else:
-        # Мега-ракета (+300%+): TP1 +35% (40%), TP2 +100% (30%), 30% трейлинг от хая
-        eff_ath = min(600.0, ath_pnl)
+        # Мега-ракета (+250%+): TP1 +50% (50%), TP2 +150% (25%), 25% мунбэг едет под трейлинг 70% от ATH
+        eff_ath = min(800.0, ath_pnl)
         trail_exit = eff_ath * 0.70
-        return 0.4 * 35.0 + 0.3 * 100.0 + 0.3 * trail_exit
+        return 0.5 * 50.0 + 0.25 * 150.0 + 0.25 * trail_exit
 
 
 def evaluate_candidate_filter(row):
@@ -103,24 +107,30 @@ def evaluate_candidate_filter(row):
     ]):
         return False, "scam_or_dead_pool"
 
-    # 2. Минимальный порог ликвидности
-    if liq < 6000.0:
+    # 2. Минимальный порог ликвидности (снижен до $4,000 для ранних запусков)
+    if liq < 4000.0 and "liq-depth-low" not in reason:
         return False, "low_liq"
 
     # 3. Разблокировка ракет с подтвержденным моментумом
-    if "no-socials" in reason and liq >= 12000.0 and m5 >= 12.0:
-        return True, "unblocked_no_socials"
-    if "post-migration-dump-zone" in reason and liq >= 15000.0 and m5 >= 15.0:
-        return True, "unblocked_migration_breakout"
-    if "age-out-of-bounds" in reason and liq >= 12000.0 and m5 >= 12.0:
+    if "age-out-of-bounds" in reason and liq >= 4000.0 and m5 >= 4.0:
         return True, "unblocked_early_ignite"
-    if "post-migration-no-reclaim" in reason and liq >= 20000.0 and m5 >= 5.0:
-        return True, "unblocked_reclaim"
-    if "post-migration-dump-fdv" in reason and liq >= 15000.0 and m5 >= 8.0:
+    if "post-migration-dump-fdv" in reason and liq >= 4000.0 and m5 >= 3.0:
         return True, "unblocked_fdv_dip"
-    if "lottery" in reason and liq >= 10000.0 and m5 >= 40.0:
+    if "pump-curve-too-early" in reason and liq >= 4000.0 and m5 >= 4.0:
+        return True, "unblocked_curve_momentum"
+    if "mcap-out-of-bounds" in reason and liq >= 4000.0 and m5 >= 4.0:
+        return True, "unblocked_mcap_bounds"
+    if "liq-depth-low" in reason and liq >= 3800.0 and m5 >= 5.0:
+        return True, "unblocked_micro_liq"
+    if "no-socials" in reason and liq >= 8000.0 and m5 >= 8.0:
+        return True, "unblocked_no_socials"
+    if "post-migration-dump-zone" in reason and liq >= 8000.0 and m5 >= 8.0:
+        return True, "unblocked_migration_breakout"
+    if "post-migration-no-reclaim" in reason and liq >= 10000.0 and m5 >= 4.0:
+        return True, "unblocked_reclaim"
+    if "lottery" in reason and liq >= 8000.0 and m5 >= 25.0:
         return True, "unblocked_lottery_momentum"
-    if "jev-soft-reject" in reason and liq >= 10000.0 and m5 >= 10.0:
+    if "jev-soft-reject" in reason and liq >= 8000.0 and m5 >= 6.0:
         return True, "unblocked_jev_soft"
 
     return False, "other_blocked"

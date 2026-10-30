@@ -305,6 +305,13 @@ async def position_manager_loop(analyzer, tracker):
                         tracker.close_position(mint, current_price, mature_exit_reason)
                     continue # Если это mature монета, скальперская логика ниже к ней не применяется!
 
+                # === STALL TIMER (DEAD MOMENTUM EXIT - CT / Reddit Strategy) ===
+                _stall_sec = float(getattr(config, "STALL_TIMER_SEC", 90.0))
+                _stall_loss = float(getattr(config, "STALL_MAX_LOSS_PCT", -0.06))
+                if minutes_held >= (_stall_sec / 60.0) and max_pnl_pct < 0.06 and pnl_pct <= _stall_loss:
+                    tracker.close_position(mint, current_price, f"Dead Momentum Stall ({minutes_held*60:.0f}s no breakout, pnl {pnl_pct*100:.1f}%)")
+                    continue
+
                 # === ТАЙМАУТ ПОСЛЕ ИМПУЛЬСА (только для не-mature скальпов +18..+35%) ===
                 if minutes_held >= 6.0 and 0.18 <= max_pnl_pct < 0.35 and pnl_pct <= -0.08:
                     tracker.close_position(mint, current_price, f"Early Fade Cut (был пик +{max_pnl_pct*100:.0f}%, слив до {pnl_pct*100:.1f}%)")

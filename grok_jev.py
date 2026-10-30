@@ -347,10 +347,10 @@ class GrokJevEngine:
         raw_liq = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
         fdv_mc = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
 
-        # Для немигрировавших токенов Pump.fun: кёрв обязан набрать хотя бы $50,000 FDV (>75% кривой),
-        # иначе дев сливает 100% пула за секунду (кейсы GARAGECOIN -74.9%, ZECP -99.99%)
-        if is_pump and fdv_mc < 50000.0:
-            return False, f"pump-curve-too-early: FDV ${fdv_mc:,.0f} < $50,000 (under 35 SOL in curve, dev dump risk)"
+        # Для немигрировавших токенов Pump.fun: кёрв обязан набрать хотя бы $12,000 FDV (>15% кривой),
+        # иначе дев сливает 100% пула за секунду
+        if is_pump and fdv_mc < 12000.0:
+            return False, f"pump-curve-too-early: FDV ${fdv_mc:,.0f} < $12,000 (under 8 SOL in curve, dev dump risk)"
 
         eff_liq = raw_liq if raw_liq > 0 else (fdv_mc * 0.40 if is_pump else 0.0)
         
@@ -364,8 +364,8 @@ class GrokJevEngine:
             if quote_amount < _min_sol_req:
                 return False, f"phantom-liq-trap: real pool SOL {quote_amount:.2f} < {_min_sol_req:.0f} SOL (dumped pool like ZECP/MIKE)"
 
-        # Для мемкоинов и pump/meteora пулов порог $6,000 (пропускает NACRE $11k, RTROLL, CATCULUS)
-        min_liq = 6000.0 if (is_pump or dex_id in ("pump", "pumpfun", "meteora")) else float(getattr(_c, "JEV_MIN_LIQUIDITY_USD", 8000.0))
+        # Для мемкоинов и pump/meteora пулов порог $4,000 (пропускает CHAMELEON $4.9k, NACRE $11k, RTROLL)
+        min_liq = 4000.0 if (is_pump or dex_id in ("pump", "pumpfun", "meteora")) else float(getattr(_c, "JEV_MIN_LIQUIDITY_USD", 5000.0))
         if eff_liq < min_liq:
             return False, f"liq-depth-low ${eff_liq:.0f} < ${min_liq:.0f} (micro-cap dump trap)"
             
@@ -404,10 +404,10 @@ class GrokJevEngine:
             if not has_breakout_momentum and (m5 < 2.5 or (s5 > 0 and (b5 / s5) < 0.95) or vol_m5 < 2000.0):
                 return False, f"post-migration-no-reclaim (m5 {m5:+.1f}%, vol5 ${vol_m5:,.0f}, {b5}b/{s5}s — need organic bounce)"
 
-        # 2. Возраст токена: пускаем ранние ракеты от 1 мин при подтвержденном объеме
-        _early_min_age = max(1.0, float(getattr(_c, "JEV_EARLY_MIN_AGE_MIN", 1.0)))
-        _std_min_age = max(2.5, float(getattr(_c, "JEV_MIN_AGE_MIN", 2.5)))
-        min_age = _early_min_age if (b5 >= s5 * 1.15 and m5 >= 6.0 and vol_m5 >= 3000.0) else _std_min_age
+        # 2. Возраст токена: пускаем ранние ракеты от 0.5 мин при подтвержденном объеме
+        _early_min_age = max(0.4, float(getattr(_c, "JEV_EARLY_MIN_AGE_MIN", 0.5)))
+        _std_min_age = max(1.0, float(getattr(_c, "JEV_MIN_AGE_MIN", 1.0)))
+        min_age = _early_min_age if (b5 >= s5 * 1.05 and m5 >= 4.0 and vol_m5 >= 2000.0) else _std_min_age
         max_age = float(getattr(_c, "JEV_MAX_AGE_MIN", 72.0 * 60.0))  # 72 часа
         if not (min_age <= age_min <= max_age):
             if age_min > max_age:
@@ -478,9 +478,9 @@ class GrokJevEngine:
         # Отсекает микро-скамы pump.fun ($5k-$20k), где создатель держит 30% и сливает на входе (KAT)
         # Капитализация строго в коридоре $60,000 - $8,000,000
         mcap = fdv_mc
-        if is_pump and mcap > 0 and mcap < 15000.0:
-            return False, f"pump-curve-too-early mcap ${mcap:,.0f} < $15k (high dev dump trap risk)"
-        min_mcap = float(getattr(_c, "JEV_MIN_MCAP_USD", 60000.0))
+        if is_pump and mcap > 0 and mcap < 8000.0:
+            return False, f"pump-curve-too-early mcap ${mcap:,.0f} < $8k (high dev dump trap risk)"
+        min_mcap = float(getattr(_c, "JEV_MIN_MCAP_USD", 8000.0))
         max_mcap = float(getattr(_c, "JEV_MAX_MCAP_USD", 8000000.0))
         if mcap > 0 and not (min_mcap <= mcap <= max_mcap):
             return False, f"mcap-out-of-bounds ${mcap:,.0f} not in [${min_mcap:,.0f}, ${max_mcap:,.0f}]"
