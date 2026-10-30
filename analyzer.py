@@ -1259,7 +1259,8 @@ class Analyzer:
                     if _m1 < getattr(config, "PULLBACK_M1_MIN_PCT", -0.05) * 100:
                         return self._deny(mint, f"m1-dump {_m1:+.1f}%", f"🚫 [ENTRY] {mint}: m1 {_m1:+.1f}% — падающий нож.")
                 # 4. Часовой тренд (не входить в уже улетевшие или падающие)
-                _max_h1 = getattr(config, "PULLBACK_MAX_H1_PCT", 3500.0)
+                _max_h1_cfg = getattr(config, "PULLBACK_MAX_H1_PCT", 2.50)
+                _max_h1 = (_max_h1_cfg * 100.0) if _max_h1_cfg <= 20.0 else float(_max_h1_cfg)
                 if _h1 > _max_h1:
                     return self._deny(mint, f"h1-gone {_h1:+.0f}%", f"🚫 [ENTRY] {mint}: h1 {_h1:+.0f}% > +{_max_h1:.0f}% — уже улетел.")
                 if _h1 < -15.0:
@@ -1279,12 +1280,12 @@ class Analyzer:
                 _eff_min_ratio = 1.02 if (_vol5_p >= 15000.0 or _cur_liq_pre >= 30000.0) else _min_ratio
                 if _s5_p > 0 and (_b5_p / _s5_p) < _eff_min_ratio:
                     return self._deny(mint, f"bs-low {_b5_p}/{_s5_p}", f"🚫 [ENTRY] {mint}: покупки/продажи m5 {_b5_p}/{_s5_p} < {_eff_min_ratio:.2f}x — продавцы давят.")
-                # 6. Защита от накрутки (средний чек < $8 — боты, либо аномальный wash-churn)
+                # 6. Защита от накрутки (средний чек < $4 — боты, либо аномальный wash-churn)
                 _avg_tx = _vol5_p / max(_b5_p + _s5_p, 1)
-                if (_b5_p + _s5_p) >= 20 and _avg_tx < 8.0:
-                    return self._deny(mint, "wash-bot", f"🚫 [WASH] {mint}: средний чек ${_avg_tx:.1f} < $8 — накрутка ботов.")
+                if (_b5_p + _s5_p) >= 20 and _avg_tx < 4.0:
+                    return self._deny(mint, "wash-bot", f"🚫 [WASH] {mint}: средний чек ${_avg_tx:.1f} < $4 — накрутка ботов.")
                 _cur_liq_cand = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
-                _churn_cap = 2.5 if _age_min_pre < 15.0 else 10.0
+                _churn_cap = 6.0 if _age_min_pre < 15.0 else 12.0
                 if _cur_liq_cand > 0 and (_vol5_p / _cur_liq_cand) > _churn_cap and _age_min_pre < 30.0:
                     return self._deny(mint, "wash-churn", f"🚫 [WASH-CHURN] {mint[:8]}: оборот {_vol5_p / _cur_liq_cand:.1f}x ликвидности за 5м в молодом токене ({_age_min_pre:.1f}м) — ловушка накрутки дева.")
                 if _s5_p >= 35 and (_b5_p / _s5_p) > 3.8 and _vol5_p >= 40000 and _age_min_pre < 30.0:

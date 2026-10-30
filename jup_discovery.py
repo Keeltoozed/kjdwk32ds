@@ -239,8 +239,9 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
     if _dex_j in ("pump", "pumpfun"):
         _fdv_j = float((td or {}).get("fdv", 0) or (td or {}).get("marketCap", 0) or 0)
         _liq_j = max(_liq_j, _fdv_j * 0.40)
-    if _liq_j < 8000:
-        print(f"🚫 [{source_tag}-LOW-LIQ] {_sym_tmp} ({mint[:8]}): ликвидность ${_liq_j:.0f} < $8,000 — микро-пул/риск слива.")
+    _min_liq_req = float(getattr(config, "JEV_MIN_LIQUIDITY_USD", 4000.0))
+    if _liq_j < _min_liq_req:
+        print(f"🚫 [{source_tag}-LOW-LIQ] {_sym_tmp} ({mint[:8]}): ликвидность ${_liq_j:.0f} < ${_min_liq_req:.0f} — микро-пул/риск слива.")
         return False
     if (_b5_j + _s5_j) < 6:
         print(f"🚫 [{source_tag}-LOW-TXNS] {_sym_tmp} ({mint[:8]}): всего {_b5_j + _s5_j} сделок в m5 — нет активности.")
@@ -267,9 +268,9 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
         print(f"🚫 [{source_tag}-POST-PEAK-CRASH] {_sym_tmp} ({mint[:8]}): токен уже слился от пика (цена {_pk_drop_j:+.1f}%, ликва {_lq_drop_j:+.1f}%) — дохлая кошка.")
         return False
 
-    # Защита от кастомных фейк-пулов с разблокированным LP на PumpSwap (только при микро-ликве < $6k)
-    if _dex_j == "pumpswap" and not mint.endswith("pump") and _liq_j < 6000.0:
-        print(f"🚫 [{source_tag}-FAKE-PUMPSWAP] {_sym_tmp} ({mint[:8]}): кастомный не-pump контракт на PumpSwap с микро-ликвой ${_liq_j:,.0f} < $6k — блок.")
+    # Защита от кастомных фейк-пулов с разблокированным LP на PumpSwap (только при микро-ликве < $4k)
+    if _dex_j == "pumpswap" and not mint.endswith("pump") and _liq_j < 4000.0:
+        print(f"🚫 [{source_tag}-FAKE-PUMPSWAP] {_sym_tmp} ({mint[:8]}): кастомный не-pump контракт на PumpSwap с микро-ликвой ${_liq_j:,.0f} < $4k — блок.")
         return False
 
     # Защита от анонимных бандлер-пулов без единой соцсети (кейс ARACH -66.9%: 0 соцсетей, $16k ликвы на PumpSwap)
@@ -282,15 +283,15 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
 
     # Защита от миграционного дампа Pump.fun: первые 90с на отстрел instant-снайперов, затем свободный вход
     if mint.endswith("pump") and _dex_j in ("pumpswap", "raydium", "meteora", "orca"):
-        if _age_j < 1.5:
-            print(f"⏳ [{source_tag}-MIGRATION-DUMP] {_sym_tmp} ({mint[:8]}): AMM-пул создан {_age_j:.1f}м назад (< 1.5м) — зона сброса снайперов pump.fun.")
+        if _age_j < 1.0:
+            print(f"⏳ [{source_tag}-MIGRATION-DUMP] {_sym_tmp} ({mint[:8]}): AMM-пул создан {_age_j:.1f}м назад (< 1.0м) — зона сброса снайперов pump.fun.")
             return False
         _fdv_j = float((td or {}).get("fdv", 0) or (td or {}).get("marketCap", 0) or 0)
-        if 0 < _fdv_j < 30000.0:
-            print(f"🚫 [{source_tag}-MIGRATION-LOW-FDV] {_sym_tmp} ({mint[:8]}): FDV ${_fdv_j:,.0f} < $30,000 — токен слит ниже уровня миграции pump.fun.")
+        if 0 < _fdv_j < 12000.0:
+            print(f"🚫 [{source_tag}-MIGRATION-LOW-FDV] {_sym_tmp} ({mint[:8]}): FDV ${_fdv_j:,.0f} < $12,000 — токен слит ниже уровня миграции pump.fun.")
             return False
-        if _liq_j < 10000.0:
-            print(f"🚫 [{source_tag}-MIGRATION-LOW-LIQ] {_sym_tmp} ({mint[:8]}): ликвидность ${_liq_j:,.0f} < $10,000 — дев/снайперы высосали SOL.")
+        if _liq_j < _min_liq_req:
+            print(f"🚫 [{source_tag}-MIGRATION-LOW-LIQ] {_sym_tmp} ({mint[:8]}): ликвидность ${_liq_j:,.0f} < ${_min_liq_req:.0f} — дев/снайперы высосали SOL.")
             return False
         
     from jupiter import JupiterAPI
