@@ -45,15 +45,15 @@ class MatureExitManager:
             not _src or any(k in _src for k in ('GROK', 'JEV', 'JUP', 'RUNNER', 'VIP', 'XGB', 'RAY', 'PUMP', 'SCOUT', 'STREAM', 'FOMO', 'SMART'))
         )
 
-        # Аварийный кэп ПЕРВЫМ: гэпы типа раг-дампов дева режем мгновенно на -25% (не даем уйти в -50%..-99%)
-        _emerg_cap = float(getattr(config, "EMERGENCY_CAP_PCT", -0.25))
+        # Аварийный кэп ПЕРВЫМ: гэпы типа раг-дампов дева режем мгновенно на -20% (не даем уйти в -35%..-50%)
+        _emerg_cap = float(getattr(config, "EMERGENCY_CAP_PCT", -0.20))
         if pnl_pct <= _emerg_cap:
             return f"Mature Emergency Cap ({pnl_pct*100:.0f}%)"
 
         # Infant guard: дамп в первые минуты = дев сливает, не шум.
-        # Режем сброс дева (-18%+), спасая депозит от инста-рага.
-        _inf_win = float(getattr(config, "INFANT_WINDOW_MIN", 3.5))
-        _inf_pct = float(getattr(config, "INFANT_DUMP_PCT", -0.18))
+        # Режем сброс дева (-16%+), спасая депозит от инста-рага.
+        _inf_win = float(getattr(config, "INFANT_WINDOW_MIN", 2.0))
+        _inf_pct = float(getattr(config, "INFANT_DUMP_PCT", -0.16))
         if minutes_held < _inf_win and pnl_pct <= _inf_pct:
             return f"Mature Infant Dump ({pnl_pct*100:.0f}%)"
 
@@ -89,12 +89,12 @@ class MatureExitManager:
                 _floor_pnl = round(max_pnl_pct * 0.50, 2)
             elif max_pnl_pct >= 1.00:     # +100%..+150%: 45% (пик +100% -> пол +45%)
                 _floor_pnl = round(max_pnl_pct * 0.45, 2)
-            elif max_pnl_pct >= 0.60:     # +60%..+100%: 40% (пик +60% -> пол +24%, пик +80% -> пол +32%)
-                _floor_pnl = round(max_pnl_pct * 0.40, 2)
-            elif max_pnl_pct >= 0.38:     # +38%..+60%: держим минимум +15% (даём ~23% запаса на ретест и не режем ракету на +19%!)
-                _floor_pnl = 0.15
-            elif max_pnl_pct >= 0.22:     # +22%..+38%: держим минимум +10% (не отдаем прибыль рынку, как было с MULTI +28% -> +3%!)
-                _floor_pnl = 0.10
+            elif max_pnl_pct >= 0.60:     # +60%..+100%: держим минимум 40% (пик +60% -> пол +25%, пик +80% -> пол +32%)
+                _floor_pnl = max(0.25, round(max_pnl_pct * 0.40, 2))
+            elif max_pnl_pct >= 0.38:     # +38%..+60%: держим минимум +18% (не отдаем прибыль рынку)
+                _floor_pnl = 0.18
+            elif max_pnl_pct >= 0.22:     # +22%..+38%: держим минимум +12%
+                _floor_pnl = 0.12
         elif max_pnl_pct >= 5.00:       # Гипер-ракета (+500%+): держим 78% прибыли
             _floor_pnl = round(max_pnl_pct * 0.78, 2)
         elif max_pnl_pct >= 3.00:     # Мега-ракета (+300%..+500%): держим 75% прибыли
@@ -197,9 +197,9 @@ class MatureExitManager:
         if minutes_held >= 5.0 and _maxp >= _be and pnl_pct <= 0.03:
             return f"Mature Breakeven (был пик +{_maxp*100:.0f}%, фикс {pnl_pct*100:+.1f}%)"
 
-        # Hard stop loss: стоп ВСЕГДА отрицательный (-18%..-20%), защищает депозит от постепенного сползания
-        _sl = -abs(float(getattr(config, 'STOP_LOSS_PCT', 0.18)))
-        if minutes_held >= 1.0 and pnl_pct <= _sl:
+        # Hard stop loss: стоп ВСЕГДА отрицательный (-15%), защищает депозит от постепенного сползания
+        _sl = -abs(float(getattr(config, 'STOP_LOSS_PCT', 0.15)))
+        if pnl_pct <= _sl:
             return f"Mature Stop Loss ({_sl*100:.0f}%)"
         # =====================================================================
         # PRE-DUMP FRONT-RUNNER: Выход в плюс при затухании торгов (до слива толпы)

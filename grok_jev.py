@@ -393,25 +393,32 @@ class GrokJevEngine:
         m5 = float(pc.get("m5", 0) or 0)
         h1 = float(pc.get("h1", 0) or 0)
 
-        # КАТЕГОРИЧЕСКИЙ БЛОК: СМЕРТЕЛЬНАЯ ЗОНА МИГРАЦИИ (0 - 7.0 МИНУТ)
-        # 98% токенов при миграции с pump.fun на PumpSwap/Raydium сливаются девом и снайперами в первые 0-7м (кейсы 25%, MIKE -97%, PLASTICINU -51%).
+        # КАТЕГОРИЧЕСКИЙ БЛОК: СМЕРТЕЛЬНАЯ ЗОНА МИГРАЦИИ (0 - 2.0 МИНУТ)
+        # Отсекаем только мгновенный сброс дева без объема, но пускаем реальные ракеты с объемом (MBAPPE, SAFU, OMNI)
         is_migrated_pump = (dex_id not in ("pump", "pumpfun")) and (mint.endswith("pump") or "pump" in dex_id)
         if is_migrated_pump:
-            has_breakout_momentum = (vol_m5 >= 5000.0 and b5 >= 12 and m5 >= 5.0 and (s5 == 0 or b5 >= s5))
-            if age_min < 4.0 and not has_breakout_momentum:
-                return False, f"post-migration-dump-zone {age_min:.1f}m < 4.0m (wait for curve snipers to flush, dump risk like 25%/MIKE)"
-            # DIP RECLAIM: после 4м мигрировавший токен ОБЯЗАН показывать реальный разворот покупателей (как 大A +1156%, OMNI +986%)!
-            if not has_breakout_momentum and (m5 < 4.0 or (s5 > 0 and (b5 / s5) < 1.05) or vol_m5 < 2500.0):
+            has_breakout_momentum = (vol_m5 >= 4000.0 and b5 >= 12 and m5 >= 4.0 and (s5 == 0 or b5 >= s5 * 0.90))
+            if age_min < 2.0 and not has_breakout_momentum:
+                return False, f"post-migration-dump-zone {age_min:.1f}m < 2.0m (wait for curve snipers to flush, dump risk like 25%/MIKE)"
+            # DIP RECLAIM: после 2м мигрировавший токен ОБЯЗАН показывать реальный разворот покупателей
+            if not has_breakout_momentum and (m5 < 2.5 or (s5 > 0 and (b5 / s5) < 0.95) or vol_m5 < 2000.0):
                 return False, f"post-migration-no-reclaim (m5 {m5:+.1f}%, vol5 ${vol_m5:,.0f}, {b5}b/{s5}s — need organic bounce)"
 
-        # 2. Возраст токена: категорически запрещено покупать младенцев (< 5-10 минут)!
-        # В первые 0-5 минут девы сливают свои запасы (кейсы BUG -31%, HYPERCAT -20%, EGG -19%).
-        _early_min_age = max(3.0, float(getattr(_c, "JEV_EARLY_MIN_AGE_MIN", 3.0)))
-        _std_min_age = max(6.0, float(getattr(_c, "JEV_MIN_AGE_MIN", 6.0)))
-        min_age = _early_min_age if (b5 >= s5 * 1.3 and m5 >= 8.0 and vol_m5 >= 5000.0) else _std_min_age
+        # 2. Возраст токена: пускаем ранние ракеты от 1 мин при подтвержденном объеме
+        _early_min_age = max(1.0, float(getattr(_c, "JEV_EARLY_MIN_AGE_MIN", 1.0)))
+        _std_min_age = max(2.5, float(getattr(_c, "JEV_MIN_AGE_MIN", 2.5)))
+        min_age = _early_min_age if (b5 >= s5 * 1.15 and m5 >= 6.0 and vol_m5 >= 3000.0) else _std_min_age
         max_age = float(getattr(_c, "JEV_MAX_AGE_MIN", 72.0 * 60.0))  # 72 часа
         if not (min_age <= age_min <= max_age):
-            return False, f"age-out-of-bounds {age_min:.1f}m < {min_age:.1f}m (flash-rug dev dump zone, wait for maturation)"
+            if age_min > max_age:
+                return False, f"age-out-of-bounds {age_min:.1f}m > {max_age:.1f}m (old token)"
+            return False, f"age-out-of-bounds {age_min:.1f}m < {min_age:.1f}m (wait for maturation)"
+
+        # 2.5. Exhaustion Guard: запрет входа на излете гигантского пампа (кейсы CYBER +4942%, BITCAT +657%, RETARD +382%)
+        if h1 > 250.0 and age_min >= 10.0:
+            return False, f"exhaustion-top-h1 h1 {h1:+.0f}% > +250% (late pump top, dump risk)"
+        if fdv_mc > 100000.0 and eff_liq < 0.02 * fdv_mc:
+            return False, f"fdv-liquidity-trap liq ${eff_liq:,.0f} < 2% of FDV ${fdv_mc:,.0f} (phantom valuation)"
 
         # 3. Живой импульс ракеты (LIVE ROCKET MOMENTUM)
         # Токен ОБЯЗАН РАСТИ прямо сейчас (m5 >= 3.5%), а не стоять на месте или остывать (как WALT/STANK)!
@@ -424,9 +431,9 @@ class GrokJevEngine:
         if age_min >= 30.0 and m5 < 15.0:
             return False, f"late-fade age {age_min:.0f}m m5 {m5:+.1f}% < +15% (old token cooling off, not a live rocket)"
 
-        if m5 > 180.0:
-            if not (-8.0 <= m1 <= 22.0 and b5 >= s5 * 1.15 and vol_m5 >= 5000.0 and m5 <= 300.0):
-                return False, f"overheated m5 {m5:+.0f}% > +180% (peak FOMO risk)"
+        if m5 > 120.0:
+            if not (-8.0 <= m1 <= 22.0 and b5 >= s5 * 1.15 and vol_m5 >= 5000.0 and m5 <= 200.0):
+                return False, f"overheated m5 {m5:+.0f}% > +120% (peak FOMO risk)"
         _min_h1 = float(getattr(_c, "JEV_MIN_H1_PCT", -8.0))
         if h1 < _min_h1:
             return False, f"hourly-downtrend h1 {h1:+.1f}% < {_min_h1:+.1f}% (dead-cat bounce)"
@@ -1180,11 +1187,15 @@ class GrokJevEngine:
                         for h in holders:
                             if h.get("owner") == real_creator or h.get("address") == real_creator:
                                 dev_pct = float(h.get("pct", 0) or 0.0)
+                                if 0 < dev_pct <= 1.0:
+                                    dev_pct *= 100.0
                                 break
 
                     non_curve = []
                     for h in holders:
                         pct = float(h.get("pct", 0) or 0.0)
+                        if 0 < pct <= 1.0:
+                            pct *= 100.0
                         amt = float(h.get("uiAmount", 0) or 0.0)
                         owner = str(h.get("owner") or "")
                         addr = str(h.get("address") or "")
