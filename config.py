@@ -168,6 +168,7 @@ JEV_MIN_TRADES_H1 = 30
 JEV_MIN_HOLDERS = 80
 JEV_MAX_TOP_WALLET = 0.05        # 15% лимит на крупнейший кошелек (за вычетом пула, согласовано с RugCheck/GoPlus)
 JEV_MAX_TOP_10 = 0.60            # 35% лимит на топ-10 кошельков (за вычетом пула, согласовано с RugCheck/GoPlus)
+JEV_LLM_ENFORCE = False          # False: использовать алгоритмический JEV-скоринг при отсутствии ключа/лимите LLM
 
 # SOFT AI Criteria (0.0 to 1.0)
 JEV_MIN_ACCOUNT_IS_PROJECT = 0.75

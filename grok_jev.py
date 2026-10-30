@@ -305,7 +305,8 @@ class GrokJevEngine:
     def llm_ready(self) -> bool:
         """Есть ли шанс получить ответ судьи прямо сейчас (ключ, пауза 429, дневной бюджет)."""
         now = time.time()
-        if not self.groq_key or now < _COOLDOWN_UNTIL:
+        has_key = bool(self.groq_key or self.xai_key or self.gemini_key)
+        if not has_key or now < _COOLDOWN_UNTIL:
             return False
         fresh_day = _BUDGET["day"] != time.strftime("%Y-%m-%d", time.gmtime())
         ok70 = now >= _CD["70b"] and (fresh_day or _BUDGET["n70"] < DAILY_70B)
@@ -397,11 +398,11 @@ class GrokJevEngine:
         # Отсекаем только мгновенный сброс дева без объема, но пускаем реальные ракеты с объемом (MBAPPE, SAFU, OMNI)
         is_migrated_pump = (dex_id not in ("pump", "pumpfun")) and (mint.endswith("pump") or "pump" in dex_id)
         if is_migrated_pump:
-            has_breakout_momentum = (vol_m5 >= 4000.0 and b5 >= 12 and m5 >= 4.0 and (s5 == 0 or b5 >= s5 * 0.90))
-            if age_min < 2.0 and not has_breakout_momentum:
-                return False, f"post-migration-dump-zone {age_min:.1f}m < 2.0m (wait for curve snipers to flush, dump risk like 25%/MIKE)"
-            # DIP RECLAIM: после 2м мигрировавший токен ОБЯЗАН показывать реальный разворот покупателей
-            if not has_breakout_momentum and (m5 < 2.5 or (s5 > 0 and (b5 / s5) < 0.95) or vol_m5 < 2000.0):
+            has_breakout_momentum = (vol_m5 >= 2000.0 and b5 >= 8 and m5 >= 3.0 and (s5 == 0 or b5 >= s5 * 0.90))
+            if age_min < 1.0 and not has_breakout_momentum:
+                return False, f"post-migration-dump-zone {age_min:.1f}m < 1.0m (wait for curve snipers to flush, dump risk like 25%/MIKE)"
+            # DIP RECLAIM: после 1м мигрировавший токен ОБЯЗАН показывать реальный разворот покупателей
+            if not has_breakout_momentum and (m5 < 2.0 or (s5 > 0 and (b5 / s5) < 0.85) or vol_m5 < 800.0):
                 return False, f"post-migration-no-reclaim (m5 {m5:+.1f}%, vol5 ${vol_m5:,.0f}, {b5}b/{s5}s — need organic bounce)"
 
         # 2. Возраст токена: пускаем ранние ракеты от 0.5 мин при подтвержденном объеме
@@ -589,12 +590,14 @@ class GrokJevEngine:
                 else:
                     print(f"⚠️ [JEV/GROK] Ошибка вызова LLM ({type(e).__name__}): {e}")
 
-        # LLM не ответила -> отказ (fail-closed). "rate-limit" в причине: цикл повторит через 20с.
+        # LLM не ответила (нет ключа / лимит) -> переключаемся на детерминированный скоринг JEV!
         if not llm_res:
-            if not getattr(_c, "JEV_LLM_ENFORCE", True):
-                print(f"👻 [JEV-SHADOW] {symbol}: судья молчит -> пропуск (shadow)")
-                return True, {}, "shadow-no-llm"
-            return False, {}, "llm-unavailable-retry"
+            llm_res = self._deterministic_jev_eval(
+                symbol, name, socials, websites,
+                m1, m5, h1, liq, mcap, vol5,
+                top1_pct, top10_pct, dev_pct, is_pump=is_pump
+            )
+            print(f"📊 [JEV-ALGO] {symbol}: детерминированный скоринг (LLM offline) ➔ {llm_res.get('reason')}")
 
         failed = _jev_failed(llm_res)
         is_passed = not failed
@@ -1382,8 +1385,8 @@ class GrokJevEngine:
                         print(f"⏳ [GROK+JEV] {symbol} ({chain}): FRESH RECHECK ➔ {flush_msg}")
                         return False, f"fills-flush-wait fresh {flush_msg}"
 
-        # 3.5. Судья недоступен (нет ключа / 429 / бюджет) -> не жжём RugCheck/Jupiter впустую
-        if getattr(_c, "JEV_LLM_ENFORCE", True) and not self.llm_ready():
+        # 3.5. Судья недоступен (нет ключа / 429 / бюджет) -> если не включен жесткий LLM enforcement, используем алгоритмический JEV
+        if getattr(_c, "JEV_LLM_ENFORCE", False) and not self.llm_ready():
             return False, "llm-unavailable-wait"
 
         # 4. ПОЛНЫЙ АНТИСКАМ-АУДИТ (RUGCHECK + GOPLUS + ONCHAIN + DEV/WHALES + JITO-BUNDLE + JUPITER SIM + CLONE)
