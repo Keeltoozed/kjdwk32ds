@@ -140,8 +140,8 @@ async def position_manager_loop(analyzer, tracker):
                     position.max_price_usd = current_price
                     position.peak_time = time.time()
 
-                pnl_pct = (current_price - position.entry_price_usd) / position.entry_price_usd
-                max_pnl_pct = (position.max_price_usd - position.entry_price_usd) / position.entry_price_usd
+                pnl_pct = (current_price - position.entry_price_usd) / position.entry_price_usd if position.entry_price_usd > 0 else 0.0
+                max_pnl_pct = (position.max_price_usd - position.entry_price_usd) / position.entry_price_usd if position.entry_price_usd > 0 else 0.0
                 minutes_held = (time.time() - position.entry_time) / 60
 
                 # Сразу обновляем текущие значения для дашборда и хранилища (чтобы continue ниже не морозили данные в UI)

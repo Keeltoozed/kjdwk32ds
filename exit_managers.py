@@ -26,6 +26,8 @@ class MatureExitManager:
             position.max_price_usd = current_price
             position.peak_time = time.time()
 
+        max_pnl_pct = (position.max_price_usd - position.entry_price_usd) / position.entry_price_usd if position.entry_price_usd else 0.0
+
         now_ts = time.time()
         et = getattr(position, 'entry_time', now_ts)
         # entry_time может быть float (live) или datetime/Timestamp (бектест)
