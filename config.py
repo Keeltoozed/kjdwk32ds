@@ -182,7 +182,7 @@ JEV_MAX_DEV_STILL_LOADED = 0.25
 # FILLS & RISK: "We bid the flush, not the candle" & "The stop lives under the wick"
 JEV_BID_THE_FLUSH_ENABLED = True
 JEV_STOP_UNDER_WICK_ENABLED = True
-JEV_MAX_M1_ENTRY_PCT = 12.0      # Режем свечи выше +12% за 1м (не покупать верхушки импульсов)
+JEV_MAX_M1_ENTRY_PCT = 18.0      # Режем свечи выше +18% за 1м (не покупать верхушки импульсов)
 JEV_DEFAULT_WICK_STOP_PCT = -0.15 # -15% рабочий стоп (не выбивает на секундном шуме -5%..-8% как TV/TENMUSU)
 
 # Birdeye API Key
@@ -377,7 +377,7 @@ SOLANA_RESCAN_COOLDOWN = 180      # Кулдаун пересканирован�
 SOLANA_FRESH_RESCAN_COOLDOWN = 45 # Кулдаун для свежих токенов (<30 минут) и миграций (45 секунд)
 
 # === НАСТРОЙКИ ДЛЯ GROK_JEV И ЗАЩИТЫ ОТ СЛИВОВ ===
-JEV_TREND_CONFIRM_ENABLED = True   # ВКЛЮЧЕНО: подтверждать рост цены и отсутствие слива с хая
+JEV_TREND_CONFIRM_ENABLED = False  # ОТКЛЮЧЕНО: не блокировать свежие токены на первом скане из-за отсутствия истории (no-trend-history)
 JEV_FRESH_RECHECK_ENABLED = True   # ВКЛЮЧЕНО: перед входом проверяет свежую цену DexScreener в обход кэша
 JEV_MIN_M1_ENTRY_FLOOR_PCT = -3.0  # Пускать откат до -3% (ракета дышит), но резать дамп глубже -3%
 JEV_MIN_H1_PCT = -4.0

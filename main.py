@@ -36,7 +36,8 @@ async def position_manager_loop(analyzer, tracker):
             if (_now_sec - position_manager_loop._last_heartbeat) >= 30.0:
                 position_manager_loop._last_heartbeat = _now_sec
                 _n_open = len(open_positions)
-                print(f"🛡️ [HEARTBEAT] Менеджер позиций активен: {_n_open} открытых позиций, баланс ${getattr(tracker, 'cash', 0.0):.2f}", flush=True)
+                _cap = tracker.get_total_capital() if hasattr(tracker, "get_total_capital") else getattr(tracker, 'cash', 0.0)
+                print(f"🛡️ [HEARTBEAT] Менеджер позиций активен: {_n_open} открытых позиций, капитал ${_cap:.2f}", flush=True)
             
             # ОПТИМИЗАЦИЯ СКОРОСТИ: Запрашиваем цены для ВСЕХ позиций ОДНИМ запросом с жестким таймаутом и привязкой к пулу входа.
             mints_to_fetch = [m for m, p in open_positions.items()

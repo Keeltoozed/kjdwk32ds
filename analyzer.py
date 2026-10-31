@@ -1388,7 +1388,7 @@ class Analyzer:
         has_socials = bool(has_twitter or has_tg or has_website)
         
         _socials_unknown = bool(pair_data.get("_socials_unknown", False))
-        _is_pump_mint = mint.endswith("pump") or str(pair_data.get("dexId", "")).lower() in ("pump", "pumpfun")
+        _is_pump_mint = mint.endswith("pump") or str(pair_data.get("dexId", "")).lower() in ("pump", "pumpfun", "pumpswap")
         # Анонимные токены вообще без соцсетей при ликвидности < $35k — это бандлер-фермы, ЕСЛИ это не pump.fun и нет органического потока!
         if not _socials_unknown and not has_socials and liquidity < 35000 and not _lottery and not _is_pump_mint and not _is_organic_leader:
             return self._deny(mint, "no-socials-anon-rug", f"🚫 [NO-SOCIALS] У {symbol} ({mint[:8]}) 0 соцсетей/сайтов (Twitter/TG/Web) при ликвидности ${liquidity:,.0f} (<$35k) — анонимный дев-бандлер.")
@@ -1465,7 +1465,7 @@ class Analyzer:
                                 if _lp_unlocked > 0 and _lp_locked_pct < 80.0:
                                     print(f"🚫 [АНТИСКАМ] LP пула не заблокирован ({_lp_locked_pct:.1f}% locked) у {mint[:8]} → СКАМ")
                                     return False
-                if not mint.endswith("pump") and not _has_verified_locked_lp:
+                if not _is_pump_mint and not _has_verified_locked_lp:
                     print(f"🚫 [АНТИСКАМ] У кастомного не-pump токена {symbol} ({mint[:8]}) не подтвержден заблокированный LP в RugCheck → СКАМ")
                     return False
                     
@@ -1563,11 +1563,22 @@ class Analyzer:
                     print(f"🚫 [АНТИСКАМ] Топ-10 держат {top_10_sum_pct:.1f}% (Лимит {max_allowed_pct}%). Блокируем.")
                     return False
             else:
-                # Если это кастомный токен (не с pump.fun), без отчёта RugCheck вход СТРОГО ЗАПРЕЩЁН (иначе 100% риск разблокированного LP как у WHITEWHALE)
-                if not mint.endswith("pump"):
-                    print(f"🚫 [NO-RUGCHECK-CUSTOM] {symbol} ({mint[:8]}): кастомный не-pump токен без отчёта RugCheck — блок входа (риск разблокированного LP).")
-                    return False
-                # Фоллбэк только для официальных pump.fun токенов: если RugCheck временно 404/429, проводим аудит через GoPlus
+                # rc_data is None (RugCheck 400, 404, 429, timeout)
+                if not _is_pump_mint:
+                    # Для не-pump токенов допускаем вход ТОЛЬКО если GoPlus подтверждает чистоту контракта и есть данные о холдерах и пул >= $10k
+                    _gp_can_fallback = False
+                    try:
+                        import goplus as _gp
+                        _g_ok, _g_why = await _gp.check_solana(mint)
+                        _h_stats = _gp.get_solana_holder_stats(mint)
+                        if _g_ok and _h_stats.get("has_data") and liquidity >= 10000.0:
+                            _gp_can_fallback = True
+                    except Exception:
+                        pass
+                    if not _gp_can_fallback:
+                        print(f"🚫 [NO-RUGCHECK-CUSTOM] {symbol} ({mint[:8]}): кастомный не-pump токен без отчёта RugCheck и без подтверждения GoPlus — блок входа (риск разблокированного LP).")
+                        return False
+                # Фоллбэк: если RugCheck временно 404/429/400, проводим аудит через GoPlus
                 try:
                     import goplus as _gp
                     _g_ok, _g_why = await _gp.check_solana(mint)
@@ -1581,23 +1592,22 @@ class Analyzer:
                         if self._last_dev > 10.0:
                             print(f"🚫 [GOPLUS-DEV] {symbol} ({mint[:8]}): дев держит {self._last_dev:.1f}% > 10% — риск дампа.")
                             return False
-                        _max_top10 = 30.0 if (pair_data and pair_data.get("dexId") in ("pump", "pumpfun")) else 35.0
+                        _max_top10 = 30.0 if _is_pump_mint else 35.0
                         if self._last_top10 > _max_top10:
                             print(f"🚫 [GOPLUS-CABAL] {symbol} ({mint[:8]}): топ-10 держат {self._last_top10:.1f}% > {_max_top10:.0f}% — риск кабала.")
                             return False
-                        print(f"🛡️ [GOPLUS] RugCheck 404, но GoPlus подтвердил безопасность {mint[:8]} (Топ-10: {self._last_top10:.1f}%, Дев: {self._last_dev:.1f}%).")
+                        print(f"🛡️ [GOPLUS] RugCheck недоступен, но GoPlus подтвердил безопасность {mint[:8]} (Топ-10: {self._last_top10:.1f}%, Дев: {self._last_dev:.1f}%).")
                     else:
-                        _is_pump = pair_data and pair_data.get("dexId") in ("pump", "pumpfun")
-                        if not _is_pump:
+                        if not _is_pump_mint:
                             print(f"🚫 [NO-AUDIT] {symbol} ({mint[:8]}): Ни RugCheck, ни GoPlus не имеют данных холдеров — блок входа по безопасности.")
                             return False
-                        print(f"🛡️ [GOPLUS] RugCheck 404, GoPlus подтвердил отсутствие ловушек у {mint[:8]} (Pump.fun кривая).")
+                        print(f"🛡️ [GOPLUS] RugCheck недоступен, GoPlus подтвердил отсутствие ловушек у {mint[:8]} (Pump.fun кривая).")
                 except Exception as _ge:
                     print(f"⚠️ Не удалось проверить через RugCheck и GoPlus ({_ge}). Блокируем вход.")
                     return False
         except Exception as e:
             print(f"⚠️ Ошибка RugCheck ({str(e)[:50]}). Fail-Closed для защиты от рагпула.")
-            if not mint.endswith("pump"):
+            if not _is_pump_mint:
                 return False
             try:
                 import goplus as _gp

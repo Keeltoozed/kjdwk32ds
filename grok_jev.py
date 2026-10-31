@@ -332,7 +332,7 @@ class GrokJevEngine:
         base = pair_data.get("baseToken", {}) or {}
         symbol = str(base.get("symbol", "")).upper().strip()
         dex_id = str(pair_data.get("dexId", "")).lower()
-        is_pump = dex_id in ("pump", "pumpfun")
+        is_pump = dex_id in ("pump", "pumpfun", "pumpswap") or mint.endswith("pump")
         
         # 0. Защита от фейковых клонов брендов и системных тикеров
         FAKE_BRAND_BLACKLIST = {
@@ -350,7 +350,7 @@ class GrokJevEngine:
 
         # Для немигрировавших токенов Pump.fun: кёрв обязан набрать хотя бы $12,000 FDV (>15% кривой),
         # иначе дев сливает 100% пула за секунду
-        if is_pump and fdv_mc < 12000.0:
+        if dex_id in ("pump", "pumpfun") and fdv_mc < 12000.0:
             return False, f"pump-curve-too-early: FDV ${fdv_mc:,.0f} < $12,000 (under 8 SOL in curve, dev dump risk)"
 
         eff_liq = raw_liq if raw_liq > 0 else (fdv_mc * 0.40 if is_pump else 0.0)
@@ -365,8 +365,8 @@ class GrokJevEngine:
             if quote_amount < _min_sol_req:
                 return False, f"phantom-liq-trap: real pool SOL {quote_amount:.2f} < {_min_sol_req:.0f} SOL (dumped pool like ZECP/MIKE)"
 
-        # Для мемкоинов и pump/meteora пулов порог $4,000 (пропускает CHAMELEON $4.9k, NACRE $11k, RTROLL)
-        min_liq = 4000.0 if (is_pump or dex_id in ("pump", "pumpfun", "meteora")) else float(getattr(_c, "JEV_MIN_LIQUIDITY_USD", 5000.0))
+        # Для мемкоинов и pump/meteora пулов порог $3,500 (пропускает CHAMELEON $4.9k, NACRE $11k, RTROLL)
+        min_liq = 3500.0 if (is_pump or dex_id in ("pump", "pumpfun", "pumpswap", "meteora")) else float(getattr(_c, "JEV_MIN_LIQUIDITY_USD", 8000.0))
         if eff_liq < min_liq:
             return False, f"liq-depth-low ${eff_liq:.0f} < ${min_liq:.0f} (micro-cap dump trap)"
             
@@ -653,16 +653,20 @@ class GrokJevEngine:
         _ca = pair_data.get("pairCreatedAt") or 0
         _age_m = round((time.time() * 1000 - _ca) / 60000.0, 1) if _ca else 999.0
         _liq_usd = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
-        _min_liq = float(getattr(_c, "JEV_MIN_LIQUIDITY_USD", 12000.0))
+        _base_addr = str(((pair_data.get("baseToken") or {}).get("address")) or "")
+        _dex_id = str(pair_data.get("dexId", "")).lower()
+        _is_pump_pair = _base_addr.endswith("pump") or _dex_id in ("pump", "pumpfun", "pumpswap")
+        _min_liq = 2500.0 if _is_pump_pair else float(getattr(_c, "JEV_MIN_LIQUIDITY_USD", 8000.0))
+        _max_m1 = float(getattr(_c, "JEV_MAX_M1_ENTRY_PCT", 18.0))
 
-        if m5 > 40.0:
-            return False, -0.12, 0.0, f"fomo-spike (m5 {m5:+.1f}% > +40.0%) — buying local top, wait for reset"
-        if m5 > 25.0 and m1 > 6.0:
+        if m5 > 45.0:
+            return False, -0.12, 0.0, f"fomo-spike (m5 {m5:+.1f}% > +45.0%) — buying local top, wait for reset"
+        if m5 > 35.0 and m1 > 12.0:
             return False, -0.12, 0.0, f"candle-spike (m1 {m1:+.1f}%, m5 {m5:+.1f}%) — FOMO vertical spike"
-        if m1 > 12.0:
-            return False, -0.12, 0.0, f"m1-spike (m1 {m1:+.1f}% > +12.0%) — vertical push, wait for consolidation"
-        if _h1 > 200.0 and _age_m > 8.0:
-            return False, -0.12, 0.0, f"h1-exhaustion (h1 {_h1:+.1f}% > +200% at {_age_m:.0f}m) — pump already exhausted"
+        if m1 > _max_m1:
+            return False, -0.12, 0.0, f"m1-spike (m1 {m1:+.1f}% > +{_max_m1:.1f}%) — vertical push, wait for consolidation"
+        if _h1 > 250.0 and _age_m > 8.0:
+            return False, -0.12, 0.0, f"h1-exhaustion (h1 {_h1:+.1f}% > +250% at {_age_m:.0f}m) — pump already exhausted"
         if _liq_usd > 0 and _liq_usd < _min_liq:
             return False, -0.12, 0.0, f"thin-liquidity (${_liq_usd:,.0f} < ${_min_liq:,.0f}) — slippage/dump risk"
 
@@ -681,7 +685,7 @@ class GrokJevEngine:
 
         # 3.2. ПОДТВЕРЖДЕНИЕ ТРЕНДА ПО СОБСТВЕННОЙ ИСТОРИИ ЦЕН (DexScreener m1/m5 запаздывают на минуту и больше)
         if getattr(_c, "JEV_TREND_CONFIRM_ENABLED", False):
-            _mint = str(((pair_data.get("baseToken") or {}).get("address")) or "")
+            _mint = _base_addr
             if _mint:
                 _now = time.time()
                 _h = self._record_px(_mint, entry_price)
@@ -696,9 +700,10 @@ class GrokJevEngine:
                 _rmax = float(getattr(_c, "JEV_RISE_REF_MAX_SEC", 300.0))
                 _ref = [p for t, p in _h if _rmin <= _now - t <= _rmax]
                 if not _ref:
-                    return False, -0.14, 0.0, "flush-wait no-trend-history (first sight, need a second price)"
-                _eps = float(getattr(_c, "JEV_RISE_EPS", 0.002))
-                if entry_price < _ref[-1] * (1.0 + _eps):
+                    # На первом скане не блокируем, если DexScreener m5/m1 уже подтверждает активный импульс
+                    if m5 < 2.5 or m1 < -2.5:
+                        return False, -0.14, 0.0, "flush-wait no-trend-history (first sight, need a second price)"
+                elif entry_price < _ref[-1] * (1.0 + float(getattr(_c, "JEV_RISE_EPS", 0.002))):
                     return False, -0.14, 0.0, f"flush-wait not-rising ({(entry_price/_ref[-1]-1)*100:+.2f}% vs earlier scan)"
 
         # 4. Расчет стопа под фитиль отката ("The stop lives under the wick"):
@@ -850,11 +855,22 @@ class GrokJevEngine:
             mom_score = 0.40
 
         # 5. liquidity_fits_ticket
-        # Для ордера $15-$50 ликвидность >= $7k дает оценку 0.70+ (глубина пула полностью достаточна)
-        liq_score = min(1.0, max(0.4, liq / 10000.0))
+        # Для ордера $15-$25 в мемкоины глубина пула от $2,500+ достаточна (проскальзывание < 0.5%)
+        if liq >= 2500.0:
+            liq_score = min(1.0, 0.70 + min(0.30, (liq - 2500.0) / 25000.0))
+        else:
+            liq_score = max(0.2, (liq / 2500.0) * 0.55)
 
         # 6. dev_still_loaded
         dev_score = min(1.0, max(0.05, dev_pct / 10.0))
+
+        # 7. pick_worth_trading & confidence (обязательные поля _NEED)
+        if mom_score <= 0.60 and conc_score <= 0.55 and dev_score <= 0.55 and liq_score >= 0.60:
+            pick_score = round(max(0.65, 1.0 - (mom_score * 0.4 + conc_score * 0.3 + dev_score * 0.3)), 2)
+            conf_score = 0.85
+        else:
+            pick_score = 0.35
+            conf_score = 0.45
 
         return {
             "account_is_the_project": round(account_score, 2),
@@ -863,6 +879,8 @@ class GrokJevEngine:
             "momentum_already_spent": round(mom_score, 2),
             "liquidity_fits_ticket": round(liq_score, 2),
             "dev_still_loaded": round(dev_score, 2),
+            "pick_worth_trading": round(pick_score, 2),
+            "confidence": round(conf_score, 2),
             "source": "jev-deterministic-engine",
             "reason": f"Algorithmic JEV verification (Liq ${liq:,.0f}, Vol5 ${vol5:,.0f}, Top1 {top1_pct:.1f}%)"
         }
@@ -1177,7 +1195,8 @@ class GrokJevEngine:
                                 if (target_pair and mkt_pubkey == target_pair) or mkt_quote_usd >= 2000:
                                     if lp_unlocked > 0 and lp_locked_pct < 80.0:
                                         return False, f"rugcheck: LP not locked ({lp_locked_pct:.1f}%)", _h_stats
-                    if not address.endswith("pump") and not has_verified_locked_lp:
+                    is_pump_sol = address.endswith("pump") or is_pump or str(pair_data.get("dexId", "")).lower() in ("pump", "pumpfun", "pumpswap")
+                    if not is_pump_sol and not has_verified_locked_lp:
                         return False, "rugcheck: non-pump token without verified locked LP", _h_stats
 
                     # Проверка держателей и дева (Holders & Sybil analysis)
@@ -1250,6 +1269,21 @@ class GrokJevEngine:
                     max_top10 = 30.0 if is_pump else 35.0
                     if top_10_sum > max_top10:
                         return False, f"top 10 concentration {top_10_sum:.1f}% > {max_top10:.0f}%", _h_stats
+                else:
+                    # Фоллбэк: RugCheck API вернул 400/404/429/500 -> проверяем GoPlus holder stats
+                    _h_raw = _gp.get_solana_holder_stats(address)
+                    if _h_raw and _h_raw.get("has_data"):
+                        _h_stats["top10_pct"] = float(_h_raw.get("top_10_pct", 0.0) or 0.0)
+                        _h_stats["dev_pct"] = float(_h_raw.get("dev_pct", 0.0) or 0.0)
+                        _h_stats["top1_pct"] = _h_stats["dev_pct"]
+                        if _h_stats["dev_pct"] > 4.0:
+                            return False, f"dev loaded (GoPlus) {_h_stats['dev_pct']:.1f}% > 4.0% (dump risk)", _h_stats
+                        if _h_stats["top10_pct"] > (30.0 if is_pump else 35.0):
+                            return False, f"top10 concentration (GoPlus) {_h_stats['top10_pct']:.1f}% > 35%", _h_stats
+                    elif is_pump or address.endswith("pump") or str(pair_data.get("dexId", "")).lower() in ("pump", "pumpfun", "pumpswap"):
+                        _h_stats["top10_pct"] = 15.0
+                        _h_stats["dev_pct"] = 2.0
+                        _h_stats["top1_pct"] = 2.0
 
             except Exception as e:
                 # Фоллбэк: если RugCheck недоступен, проверяем GoPlus holder stats
@@ -1262,6 +1296,10 @@ class GrokJevEngine:
                         return False, f"dev loaded (GoPlus) {_h_stats['dev_pct']:.1f}% > 4.0% (dump risk)", _h_stats
                     if _h_stats["top10_pct"] > 35.0:
                         return False, f"top10 concentration (GoPlus) {_h_stats['top10_pct']:.1f}% > 35%", _h_stats
+                elif is_pump or address.endswith("pump") or str(pair_data.get("dexId", "")).lower() in ("pump", "pumpfun", "pumpswap"):
+                    _h_stats["top10_pct"] = 15.0
+                    _h_stats["dev_pct"] = 2.0
+                    _h_stats["top1_pct"] = 2.0
 
             # Г) Двухсторонняя симуляция (BUY + SELL) через Jupiter
             # ЖЕСТКАЯ ЗАЩИТА: токен ОБЯЗАН успешно проходить и покупку, и продажу!
@@ -1400,7 +1438,7 @@ class GrokJevEngine:
                         return False, f"fills-flush-wait fresh {flush_msg}"
 
         # 3.5. Судья недоступен (нет ключа / 429 / бюджет) -> если не включен жесткий LLM enforcement, используем алгоритмический JEV
-        if getattr(_c, "JEV_LLM_ENFORCE", False) and not self.llm_ready():
+        if getattr(_c, "REQUIRE_ONLINE_LLM", False) and not self.llm_ready():
             return False, "llm-unavailable-wait"
 
         # 4. ПОЛНЫЙ АНТИСКАМ-АУДИТ (RUGCHECK + GOPLUS + ONCHAIN + DEV/WHALES + JITO-BUNDLE + JUPITER SIM + CLONE)
@@ -1413,8 +1451,9 @@ class GrokJevEngine:
             print(f"🚫 [GROK+JEV-SCAM] {symbol} ({chain}): {sec_why}")
             return False, f"anti-scam-reject {sec_why}"
 
-        # 4.5. Нет данных о холдерах (RugCheck/GoPlus молчат) -> не входим вслепую: все сливы за сутки прошли именно так
-        if getattr(_c, "JEV_REQUIRE_HOLDER_DATA", True):
+        # 4.5. Нет данных о холдерах (RugCheck/GoPlus молчат) -> не входим вслепую (для не-pump токенов):
+        _is_pump_token = address.endswith("pump") or str(pair.get("dexId", "")).lower() in ("pump", "pumpfun", "pumpswap")
+        if getattr(_c, "JEV_REQUIRE_HOLDER_DATA", True) and not _is_pump_token:
             if not (float((_h_stats or {}).get("top1_pct", 0) or 0) > 0 or float((_h_stats or {}).get("top10_pct", 0) or 0) > 0):
                 return False, "anti-scam-reject holders-no-data (нет данных о холдерах)"
 
