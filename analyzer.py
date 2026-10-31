@@ -1172,7 +1172,7 @@ class Analyzer:
         # =========================================================================
         if getattr(self, "rocket_xgb", None) is not None and getattr(config, "ROCKET_XGB_ENABLED", True):
             conf = self.score_rocket_xgb(mint, pair_data)
-            threshold = float(getattr(config, "ROCKET_XGB_THRESHOLD", 50.0))
+            threshold = float(getattr(config, "ROCKET_XGB_STAGE1_THRESHOLD", getattr(config, "ROCKET_XGB_THRESHOLD", 40.0)))
             self.last_score = conf
             if not hasattr(self, "rocket_scores"):
                 self.rocket_scores = {}
@@ -3051,7 +3051,7 @@ class Analyzer:
                 rkt_df = pd.DataFrame([rkt_features])[FEATURE_COLS]
                 prob = self.rocket_xgb.predict_proba(rkt_df)[0][1]
                 conf = float(prob * 100.0)
-                threshold = float(getattr(config, "ROCKET_XGB_THRESHOLD", 50.0))
+                threshold = float(getattr(config, "ROCKET_XGB_FINAL_THRESHOLD", getattr(config, "ROCKET_XGB_THRESHOLD", 50.0)))
                 self.last_score = conf
                 is_buy = bool(conf >= threshold)
                 print(f"🚀 [ROCKET-XGB v3] {mint[:8]} ({pair_data.get('baseToken', {}).get('symbol', '?')}): Score {conf:.1f}% (Порог {threshold:.0f}%) -> {'✅ BUY' if is_buy else '🚫 SKIP'}")
