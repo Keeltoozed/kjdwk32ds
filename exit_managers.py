@@ -205,11 +205,9 @@ class MatureExitManager:
         except Exception:
             _maxp = 0
 
-        # Мягкий стоп и Breakeven (если был пик +18%+ и цена стекает к безубытку):
-        if _maxp >= 0.18 and pnl_pct <= -0.02:
-            return f"Mature Soft Guard (был пик +{_maxp*100:.0f}%, слив до {pnl_pct*100:.1f}%)"
-        _be = float(getattr(config, 'BREAKEVEN_PCT', 0.18))
-        if _maxp >= _be and pnl_pct <= 0.02:
+        # Мягкий стоп и Breakeven (если был пик +10%+ и цена стекает к безубытку):
+        _be = float(getattr(config, 'BREAKEVEN_PCT', 0.10))
+        if _maxp >= _be and pnl_pct <= 0.015:
             return f"Mature Breakeven (был пик +{_maxp*100:.0f}%, фикс {pnl_pct*100:+.1f}%)"
 
         # Hard stop loss: стоп ВСЕГДА отрицательный (-15%), защищает депозит от постепенного сползания

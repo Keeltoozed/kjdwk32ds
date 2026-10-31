@@ -526,8 +526,11 @@ async def jup_loop(analyzer, tracker):
                         _lq_cand = float((td.get("liquidity") or {}).get("usd", 0) or 0)
                         _v5_cand = float((td.get("volume") or {}).get("m5", 0) or 0)
                         _turnover = (_v5_cand / max(_lq_cand, 1.0))
-                        # Комплексный скор ракеты: 5м рост + оборот + бонус молодым/миграциям
-                        _rkt_score = (_m5 * 1.5) + min(_turnover * 30.0, 60.0) + (35.0 if m.endswith('pump') or _ag < 45.0 else 0.0)
+                        # Оценка ракеты: если включена Rocket XGBoost v2, ранжируем строго по ML-скору
+                        if getattr(config, "ROCKET_XGB_ENABLED", True) and hasattr(analyzer, "score_rocket_xgb"):
+                            _rkt_score = analyzer.score_rocket_xgb(m, td)
+                        else:
+                            _rkt_score = (_m5 * 1.5) + min(_turnover * 30.0, 60.0) + (35.0 if m.endswith('pump') or _ag < 45.0 else 0.0)
                         hot_candidates.append((_rkt_score, _m5, _ag, _sym, m, td))
 
                     # Сортируем по максимальному импульсу ракеты (скорость, оборот, свежесть)

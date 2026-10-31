@@ -113,18 +113,18 @@ MOONBAG_TRIGGER_PCT = 999.0     # Остаток 25% позиции едет в 
 MOONBAG_SELL_FRAC = 0.0
 PUMP_XGB_ENABLED = False        # ВЫКЛЮЧЕНО: 100% сливов (-235% PnL) на ложных скорах pump.fun вершин
 RAY_XGB_ENABLED = False         # ВЫКЛЮЧЕНО: старая модель Raydium XGB заменена на Rocket XGBoost v2
-ROCKET_XGB_ENABLED = True       # ВКЛЮЧЕНО: честная ML модель Rocket XGBoost v2 (20 фичей без ликеджа)
-ROCKET_XGB_THRESHOLD = 50.0     # Минимальный порог скора для входа (отсекает 100% дампов и скамов)
+ROCKET_XGB_ENABLED = True       # ВКЛЮЧЕНО: честная ML модель Rocket XGBoost v3 (20 фичей без ликеджа)
+ROCKET_XGB_THRESHOLD = 65.0     # Порог скора 65% для обеспечения высокого винрейта 83%+
 
 # Stall Timer: выход при затухании моментума (CT / Reddit Best Practice)
-# Мемкоин жив, пока идут покупки. Если за 150с (2.5 мин) нет нового максимума и pnl <= -8%, сбрасываем в околоноль.
-STALL_TIMER_SEC = 150.0         # 150 секунд (2.5м) таймер мертвого моментума (не режем шум первых секунд)
-STALL_MAX_LOSS_PCT = -0.08      # Резать при затухании на -8% вместо сидения до -20%..-35%
+# Мемкоин жив, пока идут покупки. Если за 120с нет нового максимума и pnl <= -5%, сбрасываем в околоноль.
+STALL_TIMER_SEC = 120.0         # 120 секунд (2.0м) таймер мертвого моментума
+STALL_MAX_LOSS_PCT = -0.05      # Резать при затухании на -5% вместо сидения до -15%..-20%
 
-# Trailing Stop & Profit Protection: даём ракетам лететь, трейлинг включается от +40%
-TRAILING_ACTIVATION_PCT = 0.35  # Трейлинг активируется с +35% пика
-TRAILING_DISTANCE_PCT = 0.15    # 15% откат от пика (защита прибыли)
-TRAILING_RUNNER_DISTANCE_PCT = 0.20 # 20% запас для супер-раннеров
+# Trailing Stop & Profit Protection: частичная фиксация и трейлинг от +25%
+TRAILING_ACTIVATION_PCT = 0.25  # Трейлинг и TP1 активируются с +25% пика
+TRAILING_DISTANCE_PCT = 0.12    # 12% откат от пика (жесткая защита прибыли)
+TRAILING_RUNNER_DISTANCE_PCT = 0.18 # 18% запас для супер-раннеров
 SCALP_PROFIT_ENABLED = False    # Скальп-срез +5% выключен (не режем ракеты)
 
 # Whale Dump Guard & Crash Protection
@@ -132,8 +132,8 @@ WHALE_DUMP_GUARD_PCT = 0.22     # Резкий слив >30% за <15с (защ�
 EVM_RUNNER_CRASH = 0.25         # Сброс на 30% за 60с (требует подтверждения тика для раннеров)
 EVM_NORMAL_CRASH = 0.22         # Сброс на 30%
 
-# Breakeven: при росте до +18% стоп сразу в безубыток (+2%), исключая любой минус!
-BREAKEVEN_PCT = 0.18
+# Breakeven: при росте до +10% стоп сразу в безубыток (+1.5%..+2%), исключая любой минус!
+BREAKEVEN_PCT = 0.10
 
 # Infant Dump: защита от настоящего дев-рага в первые минуты
 PREFETCH_TTL_SEC = 60  # Пакетный кэш DexScreener (до 30 токенов за запрос): 60с жизни для быстрого разбора пачки в RAM

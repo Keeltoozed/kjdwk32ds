@@ -80,10 +80,13 @@ class Analyzer:
         
         try:
             import xgboost as xgb
+            import os as _os
+            _rkt_path = "rocket_xgb_v3.json" if _os.path.exists("rocket_xgb_v3.json") else "rocket_xgb_v2.json"
             self.rocket_xgb = xgb.XGBClassifier()
-            self.rocket_xgb.load_model("rocket_xgb_v2.json")
-            print("🚀 [ANALYZER] Rocket XGBoost v2 успешно загружена!")
-        except Exception:
+            self.rocket_xgb.load_model(_rkt_path)
+            print(f"🚀 [ANALYZER] Rocket XGBoost ({_rkt_path}) успешно загружена!")
+        except Exception as _e:
+            print(f"⚠️ [ANALYZER] Ошибка загрузки Rocket XGBoost: {_e}")
             self.rocket_xgb = None
 
         try:
@@ -146,6 +149,81 @@ class Analyzer:
         except Exception:
             pass
         return 1.0
+
+    def score_rocket_xgb(self, mint: str, pair_data: dict) -> float:
+        """Быстрая оценка токена моделью Rocket XGBoost v2 в памяти (0ms).
+        Извлекает 20 ключевых фичей без ликеджа и возвращает скор уверенности от 0.0 до 100.0%."""
+        if getattr(self, "rocket_xgb", None) is None or not pair_data:
+            return 0.0
+        try:
+            import time as _t
+            import pandas as _pd
+            _pc = pair_data.get("priceChange") or {}
+            _m5 = float(_pc.get("m5", 0) or 0)
+            _m1 = float(_pc.get("m1", 0) or 0)
+            _h1 = float(_pc.get("h1", 0) or 0)
+            _vm5 = float((pair_data.get("volume") or {}).get("m5", 0) or 0)
+            _txm5 = (pair_data.get("txns") or {}).get("m5", {}) or {}
+            _b5 = int(_txm5.get("buys", 0) or 0)
+            _s5 = int(_txm5.get("sells", 0) or 0)
+            _created = pair_data.get("pairCreatedAt") or 0
+            _now_ms = _t.time() * 1000.0
+            _age_min = (_now_ms - _created) / 60000.0 if _created else 999.0
+            _dex_low = str(pair_data.get("dexId", "")).lower()
+            _is_pump = 1 if (mint.endswith("pump") or _dex_low in ("pump", "pumpfun", "pumpswap")) else 0
+
+            raw_liq = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
+            fdv_val = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
+            liq_val = max(raw_liq, fdv_val * 0.40) if (_dex_low in ("pump", "pumpfun") and raw_liq == 0) else raw_liq
+
+            _info = pair_data.get("info", {}) or {}
+            _socs = _info.get("socials", []) or []
+            _webs = _info.get("websites", []) or []
+            _has_soc = 1 if (len(_socs) > 0 or len(_webs) > 0) else 0
+
+            _m1_exh = (_m1 / max(abs(_m5), 1.0)) if abs(_m5) > 0 else 0.0
+            _b_ratio = (_b5 / max(_b5 + _s5, 1.0)) if (_b5 + _s5) > 0 else 0.5
+            _net_b = _b5 - _s5
+            _v_to_l = (_vm5 / max(liq_val, 1.0)) if liq_val > 0 else 0.0
+            _avg_tx = (_vm5 / max(_b5 + _s5, 1.0)) if (_b5 + _s5) > 0 else 0.0
+            _f_to_l = (fdv_val / max(liq_val, 1.0)) if liq_val > 0 else 3.5
+
+            FEATURE_COLS = [
+                "m5_pct", "m1_pct", "h1_pct", "m1_to_m5",
+                "buys_m5", "sells_m5", "buy_ratio_m5", "net_buyers_m5",
+                "volume_m5", "vol_to_liq", "avg_tx_usd",
+                "liquidity", "fdv", "fdv_to_liq",
+                "age_min", "is_pump",
+                "top1_pct", "top10_pct", "dev_pct", "socials"
+            ]
+
+            rkt_features = {
+                "m5_pct": float(_m5),
+                "m1_pct": float(_m1),
+                "h1_pct": float(_h1),
+                "m1_to_m5": float(_m1_exh),
+                "buys_m5": float(_b5),
+                "sells_m5": float(_s5),
+                "buy_ratio_m5": float(_b_ratio),
+                "net_buyers_m5": float(_net_b),
+                "volume_m5": float(_vm5),
+                "vol_to_liq": float(_v_to_l),
+                "avg_tx_usd": float(_avg_tx),
+                "liquidity": float(liq_val),
+                "fdv": float(fdv_val),
+                "fdv_to_liq": float(_f_to_l),
+                "age_min": float(_age_min),
+                "is_pump": int(_is_pump),
+                "top1_pct": float(getattr(self, '_last_dev', 0.0)),
+                "top10_pct": float(getattr(self, '_last_top10', 0.0)),
+                "dev_pct": float(getattr(self, '_last_dev', 0.0)),
+                "socials": int(_has_soc)
+            }
+            df = _pd.DataFrame([rkt_features])[FEATURE_COLS]
+            prob = float(self.rocket_xgb.predict_proba(df)[0][1] * 100.0)
+            return prob
+        except Exception:
+            return 0.0
 
     async def meme_tag(self, address: str, symbol: str, pair_data: dict,
                        chain: str = "solana") -> str:
@@ -1081,10 +1159,196 @@ class Analyzer:
             
         _created_pre = pair_data.get("pairCreatedAt") or 0
         _age_min_pre = (time.time() * 1000 - _created_pre) / 60000.0 if _created_pre else 999
-        _sol_min_age = float(getattr(config, "SOLANA_MIN_AGE_MIN", 1.5))
+        _sol_min_age = float(getattr(config, "SOLANA_MIN_AGE_MIN", 1.0))
         if _age_min_pre < _sol_min_age:
             print(f"⏳ [ENTRY] {mint[:8]}: возраст {_age_min_pre:.1f}м < {_sol_min_age}м — flash-rug зона дева, ждём созревания.")
             return None
+
+        # =========================================================================
+        # 🚀 ЭТАП 1: ROCKET XGBOOST v2 — ПЕРВИЧНЫЙ ML-СКРИНЕР (0ms IN-MEMORY)
+        # Все монеты СРАЗУ прогоняются через ML. Модель оценивает комплекс параметров
+        # (m5, m1, h1, buy/sell ratio, объем, ликвидность, FDV, соцсети) БЕЗ отсева
+        # старыми жесткими эвристиками. Если скор < порога (50%), монета отсекается в 0мс.
+        # =========================================================================
+        if getattr(self, "rocket_xgb", None) is not None and getattr(config, "ROCKET_XGB_ENABLED", True):
+            conf = self.score_rocket_xgb(mint, pair_data)
+            threshold = float(getattr(config, "ROCKET_XGB_THRESHOLD", 50.0))
+            self.last_score = conf
+            if not hasattr(self, "rocket_scores"):
+                self.rocket_scores = {}
+            self.rocket_scores[mint] = conf
+
+            dex_id_low = str(pair_data.get("dexId", "")).lower()
+            is_pump_curve = dex_id_low in ("pump", "pumpfun")
+            raw_liq = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
+            fdv_val = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
+            liq_val = max(raw_liq, fdv_val * 0.40) if (is_pump_curve and raw_liq == 0) else raw_liq
+
+            if conf < threshold:
+                self._deny(mint, f"rocket-xgb {conf:.0f}%", f"· [ROCKET-XGB] {symbol} ({mint[:8]}): уверенность модели {conf:.1f}% < {threshold:.0f}% — отсеян до тяжелых проверок (0ms).")
+                try:
+                    from shadow_tracker import shadow_tracker
+                    shadow_tracker.log_rejection(
+                        mint=mint,
+                        reason=f"Rocket XGBoost low score: {conf:.1f}%",
+                        symbol=symbol,
+                        chain="solana",
+                        score=conf,
+                        rkt_score=conf,
+                        price=float(pair_data.get("priceUsd", 0) or 0.0),
+                        liquidity=liq_val,
+                        m5_pct=_m5,
+                        source="ROCKET_XGB_PRIMARY"
+                    )
+                except Exception:
+                    pass
+                return False
+
+            print(f"🚀 [ROCKET-XGB PASSED] {symbol} ({mint[:8]}): ML Score {conf:.1f}% >= {threshold:.0f}%! Запуск ончейн-аудита безопасности...")
+
+            # =========================================================================
+            # 🛡️ ЭТАП 2: ОНЧЕЙН-АУДИТ БЕЗОПАСНОСТИ И ЗАЩИТА ОТ СКАМА (ДЛЯ ML-КАНДИДАТОВ)
+            # =========================================================================
+
+            # 1. Защита от микрованночек и фейковых AMM-пулов
+            _min_liq = 2000 if is_pump_curve else (8000 if _age_min_pre < 60 else 12000)
+            if liq_val < _min_liq:
+                return self._deny(mint, f"low-liq ${liq_val:.0f}<{_min_liq}", f"🚫 [ANTI-RUG] {symbol} ({mint[:8]}): Ликвидность ${liq_val:,.0f} < ${_min_liq} — риск проскальзывания.")
+
+            # Блок кастомных не-pump токенов на PumpSwap с микропулом
+            if dex_id_low == "pumpswap" and not mint.endswith("pump") and liq_val < 6000.0:
+                return self._deny(mint, "fake-pumpswap-unlocked-lp", f"🚫 [FAKE-PUMPSWAP] {symbol} ({mint[:8]}): кастомный токен на PumpSwap с микропулом (${liq_val:.0f} < $6k) — блок!")
+
+            # Защита от фантомных пулов с мизерным остатком реального SOL
+            _quote_info = pair_data.get("liquidity", {}) or {}
+            _quote_amt = float(_quote_info.get("quote", 0) or 0)
+            _quote_sym = str((pair_data.get("quoteToken") or {}).get("symbol", "")).upper()
+            if "SOL" in _quote_sym and 0 < _quote_amt < 10.0 and not is_pump_curve:
+                return self._deny(mint, f"ghost-pool-sol {_quote_amt:.1f}<10", f"🚫 [AMM-GHOST-POOL] {symbol} ({mint[:8]}): в пуле всего {_quote_amt:.2f} SOL < 10 SOL — микро-резерв.")
+
+            # 2. Защита от Honeypot на Solana (0 продаж при 5+ покупках)
+            if _s5_pre == 0 and _b5_pre >= 5:
+                return self._deny(mint, "honeypot-zero-sells", f"🚫 [HONEYPOT] {symbol} ({mint[:8]}): 0 продаж при {_b5_pre} покупках — Honeypot.")
+            if (_b5_pre + _s5_pre) >= 20 and (_s5_pre / (_b5_pre + _s5_pre)) < 0.05:
+                return self._deny(mint, "honeypot-anomaly", f"🚫 [HONEYPOT] {symbol} ({mint[:8]}): аномалия продаж m5 {_s5_pre}s/{_b5_pre}b (<5% продаж) — скрытый honeypot.")
+
+            # 3. Ончейн-аудит: RugCheck & GoPlus
+            _is_pump_flag = 1 if (mint.endswith("pump") or dex_id_low in ("pump", "pumpfun", "pumpswap")) else 0
+            try:
+                import aiohttp
+                session = await self.get_session()
+                rc_data = None
+                rugcheck_url = f"https://api.rugcheck.xyz/v1/tokens/{mint}/report"
+                async with session.get(rugcheck_url, timeout=8) as resp:
+                    if resp.status == 200:
+                        rc_data = await resp.json(content_type=None)
+                    elif resp.status == 400:
+                        print(f"ℹ️ [RUGCHECK] {mint[:8]}: монета ещё не проиндексирована RugCheck (код 400) -> аудит через GoPlus...")
+                    else:
+                        print(f"⚠️ RugCheck API вернул {resp.status} для {mint[:8]}.")
+
+                if rc_data:
+                    token_info = rc_data.get("token", {})
+                    mint_authority = token_info.get("mintAuthority")
+                    freeze_authority = token_info.get("freezeAuthority")
+                    PUMPFUN_PROGRAM = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"
+                    SYSTEM_PROGRAM = "11111111111111111111111111111111"
+                    SAFE_AUTHORITIES = {PUMPFUN_PROGRAM, SYSTEM_PROGRAM, None, ""}
+                    if mint_authority and mint_authority not in SAFE_AUTHORITIES:
+                        return self._deny(mint, "mint-authority-scam", f"🚫 [АНТИСКАМ] Mint Authority у ДЕВ-кошелька {mint_authority[:8]} у {mint[:8]} → СКАМ")
+                    if freeze_authority and freeze_authority not in SAFE_AUTHORITIES:
+                        return self._deny(mint, "freeze-authority-scam", f"🚫 [АНТИСКАМ] Freeze Authority у ДЕВ-кошелька {freeze_authority[:8]} у {mint[:8]} → СКАМ")
+
+                    _rc_raw_score = float(rc_data.get("score") or 0.0)
+                    _rc_low_liq_penalty = sum(
+                        float(rk.get("score", 0) or 0)
+                        for rk in (rc_data.get("risks") or [])
+                        if "low liquidity" in str(rk.get("name", "")).lower()
+                    )
+                    _rc_score = max(0.0, _rc_raw_score - _rc_low_liq_penalty)
+                    if _rc_score >= 1000:
+                        return self._deny(mint, f"rugcheck-score {_rc_score:.0f}", f"🚫 [АНТИСКАМ] RugCheck Score {_rc_score:.0f} >= 1000 у {mint[:8]} → СКАМ")
+
+                    # Проверка холдеров RugCheck
+                    top_holders = rc_data.get("topHolders") or []
+                    dev_holding_pct = 0.0
+                    creator = rc_data.get("creator")
+                    pool_keywords = ["raydium", "pool", "vault", "pump", "amm", "meteora", "orca"]
+                    non_curve_accounts = []
+                    for h in top_holders:
+                        owner = str(h.get("address") or "")
+                        pct = float(h.get("pct", 0) or 0)
+                        amt = float(h.get("amount", 0) or 0)
+                        if creator and owner == creator:
+                            dev_holding_pct = pct
+                        if any(w in owner.lower() for w in pool_keywords):
+                            continue
+                        if pct > 80.0:
+                            continue
+                        non_curve_accounts.append((amt, pct, owner))
+                    top_10 = non_curve_accounts[:10]
+                    # Jito bundles sybil check
+                    bundle_suspects = [round(pct, 1) for (amt, pct, owner) in top_10 if pct >= 2.5]
+                    if len(bundle_suspects) >= 4:
+                        from collections import Counter
+                        counts = Counter(bundle_suspects)
+                        most_common_pct, count = counts.most_common(1)[0]
+                        if count >= 4 and most_common_pct >= 2.5 and (most_common_pct * count) >= 12.0:
+                            return self._deny(mint, "jito-bundle-sybil", f"🚫 [АНТИСКАМ] Jito-бандл ({count} кошельков по ~{most_common_pct:.1f}%) у {mint[:8]} → Блок.")
+                    top_10_sum_pct = sum([x[1] for x in top_10])
+                    if not dev_holding_pct and top_10:
+                        dev_holding_pct = top_10[0][1]
+                    self._last_top10 = top_10_sum_pct
+                    self._last_dev = dev_holding_pct
+
+                    if dev_holding_pct > 10.0:
+                        return self._deny(mint, f"dev-hold {dev_holding_pct:.1f}%", f"🚫 [АНТИСКАМ] Дев держит {dev_holding_pct:.1f}% > 10% у {mint[:8]} → Блок.")
+                    largest_whale_pct = top_10[0][1] if top_10 else 0.0
+                    if largest_whale_pct > 15.0:
+                        return self._deny(mint, f"whale-hold {largest_whale_pct:.1f}%", f"🚫 [АНТИСКАМ] Кит держит {largest_whale_pct:.1f}% > 15% у {mint[:8]} → Блок.")
+                    max_allowed_top10 = 30.0 if _is_pump_flag else 35.0
+                    if top_10_sum_pct > max_allowed_top10:
+                        return self._deny(mint, f"top10-hold {top_10_sum_pct:.1f}%", f"🚫 [АНТИСКАМ] Топ-10 держат {top_10_sum_pct:.1f}% > {max_allowed_top10}% у {mint[:8]} → Блок.")
+                else:
+                    # Фоллбэк на GoPlus если RugCheck не ответил
+                    try:
+                        import goplus as _gp
+                        _g_ok, _g_why = await _gp.check_solana(mint)
+                        if not _g_ok:
+                            return self._deny(mint, f"goplus-reject {_g_why}", f"🚫 [GOPLUS] {symbol} ({mint[:8]}): {_g_why} — блок входа.")
+                        _h_stats = _gp.get_solana_holder_stats(mint)
+                        if _h_stats.get("has_data"):
+                            self._last_top10 = _h_stats.get("top_10_pct", 0.0)
+                            self._last_dev = _h_stats.get("dev_pct", 0.0)
+                            if self._last_dev > 10.0:
+                                return self._deny(mint, f"dev-hold {self._last_dev:.1f}%", f"🚫 [GOPLUS-DEV] {symbol} ({mint[:8]}): дев {self._last_dev:.1f}% > 10%.")
+                            max_allowed_top10 = 30.0 if _is_pump_flag else 35.0
+                            if self._last_top10 > max_allowed_top10:
+                                return self._deny(mint, f"top10-hold {self._last_top10:.1f}%", f"🚫 [GOPLUS-CABAL] {symbol} ({mint[:8]}): топ-10 {self._last_top10:.1f}% > {max_allowed_top10}%.")
+                    except Exception as _ge:
+                        if not _is_pump_flag:
+                            return self._deny(mint, "audit-failed", f"🚫 [AUDIT-FAIL] Не удалось подтвердить безопасность {symbol} ({mint[:8]}).")
+
+                # Прямой ончейн RPC аудит
+                try:
+                    import goplus as _gp
+                    _sol_onchain_ok, _sol_onchain_why = await _gp.check_onchain_solana_security(mint)
+                    if not _sol_onchain_ok:
+                        return self._deny(mint, "onchain-freeze-mint-scam", f"🚫 [АНТИСКАМ-RPC] {symbol} ({mint[:8]}): {_sol_onchain_why} — блок входа.")
+                except Exception:
+                    pass
+            except Exception as e:
+                print(f"⚠️ Ошибка проверки безопасности ({e})")
+                if not _is_pump_flag:
+                    return False
+
+            # 4. Финальная проверка минутных свечей (защита от водопада в моменте)
+            if not await self.verify_1m_candles_not_dumping(mint, pair_data, "solana"):
+                return False
+
+            self._set_sig(mint, f"ROCKET-XGB {conf:.0f}%")
+            print(f"🚀 [ENTRY-APPROVED] {symbol} ({mint[:8]}): ML Score {conf:.1f}%, Безопасность подтверждена! Сигнал на покупку.")
+            return True
 
         is_vip = self.check_hyper_rocket_momentum(pair_data) and getattr(config, "VIP_ENTRIES_ENABLED", False)
 
@@ -2790,7 +3054,7 @@ class Analyzer:
                 threshold = float(getattr(config, "ROCKET_XGB_THRESHOLD", 50.0))
                 self.last_score = conf
                 is_buy = bool(conf >= threshold)
-                print(f"🚀 [ROCKET-XGB v2] {mint[:8]} ({pair_data.get('baseToken', {}).get('symbol', '?')}): Score {conf:.1f}% (Порог {threshold:.0f}%) -> {'✅ BUY' if is_buy else '🚫 SKIP'}")
+                print(f"🚀 [ROCKET-XGB v3] {mint[:8]} ({pair_data.get('baseToken', {}).get('symbol', '?')}): Score {conf:.1f}% (Порог {threshold:.0f}%) -> {'✅ BUY' if is_buy else '🚫 SKIP'}")
                 if is_buy:
                     self._set_sig(mint, f"ROCKET-XGB {conf:.0f}%")
                     return True

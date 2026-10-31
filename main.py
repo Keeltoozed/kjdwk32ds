@@ -450,8 +450,8 @@ async def position_manager_loop(analyzer, tracker):
                 if minutes_held >= 6.0 and max_pnl_pct >= 0.20 and pnl_pct <= -0.10:
                     tracker.close_position(mint, current_price, f"Soft Guard (был пик +{max_pnl_pct*100:.0f}%, слив до {pnl_pct*100:.1f}%)")
                     continue
-                _be_sol = float(getattr(config, "BREAKEVEN_PCT", 0.28))
-                if minutes_held >= 6.0 and max_pnl_pct >= _be_sol and pnl_pct <= 0.01:
+                _be_sol = float(getattr(config, "BREAKEVEN_PCT", 0.10))
+                if minutes_held >= 1.0 and max_pnl_pct >= _be_sol and pnl_pct <= 0.015:
                     tracker.close_position(mint, current_price, f"Breakeven (был пик +{max_pnl_pct*100:.0f}%)")
                     continue
 
@@ -1651,7 +1651,7 @@ async def _evm_track_once(tracker, chain: str, tag: str, emoji: str):
                 elif held >= 6.0 and maxp >= 0.20 and pnl <= -0.10:
                     # Мягкий стоп только после 6+ минут (не режем стартовые свечи в первые минуты):
                     reason = f"{tag} Soft Guard (был пик +{maxp * 100:.0f}%, слив до {pnl * 100:.1f}%)"
-                elif held >= 6.0 and maxp >= float(getattr(config, "BREAKEVEN_PCT", 0.28)) and pnl <= 0.01:
+                elif held >= 1.0 and maxp >= float(getattr(config, "BREAKEVEN_PCT", 0.10)) and pnl <= 0.015:
                     reason = f"{tag} Breakeven (был пик +{maxp * 100:.0f}%)"
                 elif held < float(getattr(config, "INFANT_WINDOW_MIN", 2.0)) and pnl <= float(getattr(config, "INFANT_DUMP_PCT", -0.25)):
                     reason = f"{tag} Infant Dump ({pnl * 100:.1f}%)"
