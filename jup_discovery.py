@@ -369,6 +369,12 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
         if "PUMP-XGB" in _sig and not getattr(config, "PUMP_XGB_ENABLED", False):
             print(f"🚫 [PUMP-XGB-BLOCKED] {_sym_tmp}: PUMP-XGB входы отключены в config.py.")
             return False
+        if "RAY-XGB" in _sig and not getattr(config, "RAY_XGB_ENABLED", False):
+            print(f"🚫 [RAY-XGB-BLOCKED] {_sym_tmp}: старые RAY-XGB входы отключены в config.py.")
+            return False
+        if "ROCKET-XGB" in _sig and not getattr(config, "ROCKET_XGB_ENABLED", True):
+            print(f"🚫 [ROCKET-XGB-BLOCKED] {_sym_tmp}: ROCKET-XGB отключен в config.py.")
+            return False
         if "VIP-" in _sig:
             size = min(size, float(getattr(config, "TG_VIP_SIZE_USD", 15.0) or 15.0))
         tracker.add_position(

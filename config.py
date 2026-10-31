@@ -112,6 +112,9 @@ TP2_SELL_FRAC = 0.25
 MOONBAG_TRIGGER_PCT = 999.0     # Остаток 25% позиции едет в свободный полёт под трейлинг
 MOONBAG_SELL_FRAC = 0.0
 PUMP_XGB_ENABLED = False        # ВЫКЛЮЧЕНО: 100% сливов (-235% PnL) на ложных скорах pump.fun вершин
+RAY_XGB_ENABLED = False         # ВЫКЛЮЧЕНО: старая модель Raydium XGB заменена на Rocket XGBoost v2
+ROCKET_XGB_ENABLED = True       # ВКЛЮЧЕНО: честная ML модель Rocket XGBoost v2 (20 фичей без ликеджа)
+ROCKET_XGB_THRESHOLD = 50.0     # Минимальный порог скора для входа (отсекает 100% дампов и скамов)
 
 # Stall Timer: выход при затухании моментума (CT / Reddit Best Practice)
 # Мемкоин жив, пока идут покупки. Если за 150с (2.5 мин) нет нового максимума и pnl <= -8%, сбрасываем в околоноль.

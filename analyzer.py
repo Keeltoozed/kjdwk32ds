@@ -80,6 +80,14 @@ class Analyzer:
         
         try:
             import xgboost as xgb
+            self.rocket_xgb = xgb.XGBClassifier()
+            self.rocket_xgb.load_model("rocket_xgb_v2.json")
+            print("🚀 [ANALYZER] Rocket XGBoost v2 успешно загружена!")
+        except Exception:
+            self.rocket_xgb = None
+
+        try:
+            import xgboost as xgb
             self.raydium_model = xgb.XGBClassifier()
             self.raydium_model.load_model("raydium_model_dex.json")
         except: 
@@ -1405,6 +1413,8 @@ class Analyzer:
             async with session.get(rugcheck_url, timeout=8) as resp:
                 if resp.status == 200:
                     rc_data = await resp.json(content_type=None)
+                elif resp.status == 400:
+                    print(f"ℹ️ [RUGCHECK] {mint[:8]}: монета ещё не проиндексирована RugCheck (код 400) -> аудит через GoPlus & On-Chain RPC...")
                 else:
                     print(f"⚠️ RugCheck API вернул {resp.status} для {mint[:8]}.")
                     
@@ -2723,7 +2733,90 @@ class Analyzer:
         if _t10 > 35.0:
             return self._deny(mint, "ray-top10-cabal", f"🚫 [TOP10-CABAL] {mint[:8]}: топ-10 держат {_t10:.1f}% > 35% — кабал/дамп-риск.")
 
+        # === ROCKET XGBOOST v2 INFERENCE (20 ФИЧЕЙ БЕЗ ЛИКЕДЖА) ===
         import pandas as pd
+        
+        # 1. Защита от покупки на макушке свечи (Exhaustion Guard из Reddit/CT)
+        if _m1 > 12.0 or (_m5 > 30.0 and _m1 > 8.0):
+            return self._deny(mint, "fomo-exhaustion", f"🚫 [EXHAUSTION] {mint[:8]}: 1m свеча +{_m1:.1f}% перегрета — ждём отката (bid the flush).")
+
+        _m1_exhaustion = (_m1 / max(abs(_m5), 1.0)) if abs(_m5) > 0 else 0.0
+        _buy_ratio_m5 = (_b5 / max(_b5 + _s5, 1.0)) if (_b5 + _s5) > 0 else 0.5
+        _net_buyers_m5 = _b5 - _s5
+        _vol_to_liq = (_vm5 / max(liquidity, 1.0)) if liquidity > 0 else 0.0
+        _avg_tx_usd = (_vm5 / max(_b5 + _s5, 1.0)) if (_b5 + _s5) > 0 else 0.0
+        _fdv_to_liq = (fdv / max(liquidity, 1.0)) if liquidity > 0 else 3.5
+        _is_pump = 1 if (mint.endswith("pump") or _dex_low in ("pump", "pumpswap")) else 0
+        _socials = 1 if len((pair_data.get("info") or {}).get("socials") or []) > 0 else 0
+
+        FEATURE_COLS = [
+            "m5_pct", "m1_pct", "h1_pct", "m1_to_m5",
+            "buys_m5", "sells_m5", "buy_ratio_m5", "net_buyers_m5",
+            "volume_m5", "vol_to_liq", "avg_tx_usd",
+            "liquidity", "fdv", "fdv_to_liq",
+            "age_min", "is_pump",
+            "top1_pct", "top10_pct", "dev_pct", "socials"
+        ]
+
+        rkt_features = {
+            "m5_pct": float(_m5),
+            "m1_pct": float(_m1),
+            "h1_pct": float(_h1),
+            "m1_to_m5": float(_m1_exhaustion),
+            "buys_m5": float(_b5),
+            "sells_m5": float(_s5),
+            "buy_ratio_m5": float(_buy_ratio_m5),
+            "net_buyers_m5": float(_net_buyers_m5),
+            "volume_m5": float(_vm5),
+            "vol_to_liq": float(_vol_to_liq),
+            "avg_tx_usd": float(_avg_tx_usd),
+            "liquidity": float(liquidity),
+            "fdv": float(fdv),
+            "fdv_to_liq": float(_fdv_to_liq),
+            "age_min": float(_age_min),
+            "is_pump": int(_is_pump),
+            "top1_pct": float(_dev),
+            "top10_pct": float(_t10),
+            "dev_pct": float(_dev),
+            "socials": int(_socials)
+        }
+
+        # Если доступна новая модель Rocket XGBoost v2, используем её
+        if getattr(self, "rocket_xgb", None) is not None and getattr(config, "ROCKET_XGB_ENABLED", True):
+            try:
+                rkt_df = pd.DataFrame([rkt_features])[FEATURE_COLS]
+                prob = self.rocket_xgb.predict_proba(rkt_df)[0][1]
+                conf = float(prob * 100.0)
+                threshold = float(getattr(config, "ROCKET_XGB_THRESHOLD", 50.0))
+                self.last_score = conf
+                is_buy = bool(conf >= threshold)
+                print(f"🚀 [ROCKET-XGB v2] {mint[:8]} ({pair_data.get('baseToken', {}).get('symbol', '?')}): Score {conf:.1f}% (Порог {threshold:.0f}%) -> {'✅ BUY' if is_buy else '🚫 SKIP'}")
+                if is_buy:
+                    self._set_sig(mint, f"ROCKET-XGB {conf:.0f}%")
+                    return True
+                else:
+                    self._deny(mint, f"rocket-xgb {conf:.0f}%", f"· [ROCKET-XGB] {mint[:8]}: уверенность модели {conf:.1f}% < {threshold:.0f}%")
+                    try:
+                        from shadow_tracker import ShadowTracker
+                        shadow = ShadowTracker()
+                        price = float(pair_data.get("priceUsd", 0))
+                        shadow.log_rejection(
+                            mint=mint,
+                            reason=f"Rocket XGBoost low score: {conf:.1f}%",
+                            score=conf,
+                            price=price,
+                            features=rkt_features
+                        )
+                    except Exception:
+                        pass
+                    return False
+            except Exception as e:
+                print(f"⚠️ Ошибка инференса Rocket XGBoost v2: {e}")
+
+        # Старая модель Raydium XGBoost: если явно не включена в config, блокируем вход
+        if not getattr(config, "RAY_XGB_ENABLED", False):
+            return self._deny(mint, "ray-xgb-disabled", f"🚫 [RAY-XGB] {mint[:8]}: старая модель Raydium XGB отключена в config.py.")
+
         import joblib
         
         txns_h24 = (pair_data.get("txns") or {}).get("h24") or {}
