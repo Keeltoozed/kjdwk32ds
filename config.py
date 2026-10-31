@@ -101,16 +101,17 @@ TIME_EXIT_MINUTES = 60  # Если за 60 минут нет пампа - вых
 TIME_EXIT_PROFIT_REQ = 0.0
 
 # Take-Profit: СТРАТЕГИЯ FREE RIDE ИЗ X (Crypto Twitter) & REDDIT
-# На +40% (1.4x) забираем 50% позиции: гарантированная прибыль в кармане!
+# На +22% (1.22x) забираем 50% позиции: гарантированная прибыль в кармане!
 # На +150% (2.5x) забираем еще 25% позиции.
 # Оставшиеся 25% ("мунбэг") едут с нулевым риском по параболическому трейлингу до +500%..+2000%!
 PARTIAL_TP_ENABLED = True       # Включен Free Ride
-TP1_TRIGGER_PCT = 0.40          # На +40% фикс 50% позиции (гарантированный профит $3.0 в кармане!)
+TP1_TRIGGER_PCT = 0.22          # На +22% фикс 50% позиции (ранний сброс до отката толпы!)
 TP1_SELL_FRAC = 0.50            # Продать 50%
 TP2_TRIGGER_PCT = 1.50          # На +150% (2.5x) дополнительный срез 25%
 TP2_SELL_FRAC = 0.25
 MOONBAG_TRIGGER_PCT = 999.0     # Остаток 25% позиции едет в свободный полёт под трейлинг
 MOONBAG_SELL_FRAC = 0.0
+PUMP_XGB_ENABLED = False        # ВЫКЛЮЧЕНО: 100% сливов (-235% PnL) на ложных скорах pump.fun вершин
 
 # Stall Timer: выход при затухании моментума (CT / Reddit Best Practice)
 # Мемкоин жив, пока идут покупки. Если за 150с (2.5 мин) нет нового максимума и pnl <= -8%, сбрасываем в околоноль.
@@ -118,9 +119,9 @@ STALL_TIMER_SEC = 150.0         # 150 секунд (2.5м) таймер мерт
 STALL_MAX_LOSS_PCT = -0.08      # Резать при затухании на -8% вместо сидения до -20%..-35%
 
 # Trailing Stop & Profit Protection: даём ракетам лететь, трейлинг включается от +40%
-TRAILING_ACTIVATION_PCT = 0.40  # Трейлинг активируется с +40% пика
-TRAILING_DISTANCE_PCT = 0.22    # 22% откат от пика (выдерживает шум минутных свечей)
-TRAILING_RUNNER_DISTANCE_PCT = 0.25 # 25% запас для супер-раннеров
+TRAILING_ACTIVATION_PCT = 0.35  # Трейлинг активируется с +35% пика
+TRAILING_DISTANCE_PCT = 0.15    # 15% откат от пика (защита прибыли)
+TRAILING_RUNNER_DISTANCE_PCT = 0.20 # 20% запас для супер-раннеров
 SCALP_PROFIT_ENABLED = False    # Скальп-срез +5% выключен (не режем ракеты)
 
 # Whale Dump Guard & Crash Protection
@@ -159,7 +160,7 @@ JEV_ENABLED = True
 JEV_WICK_STOP_ENABLED = False     # ОТКЛЮЧЕНО: искусственный стоп по фитилю душил ракеты на -15%..-25% в первые 2-3 минуты (Goon, SPIDOGE)
 JEV_EARLY_MIN_AGE_MIN = 0.5       # ранние ракеты ловим от 0.5м (30 сек) при подтвержденном потоке
 JEV_MIN_AGE_MIN = 1.0            # стандартный минимум 1.0м (не ждем 2.5-6 минут, когда ракета уже улетела)
-JEV_MIN_LIQUIDITY_USD = 4000.0    # $4,000 минимальная глубина пула (не отсекает ранние запуски)
+JEV_MIN_LIQUIDITY_USD = 12000.0    # $12,000 минимальная глубина пула (не пускает пулы $4k-$8k с мгновенным сбросом дева)
 JEV_MIN_VOLUME_H1 = 8000.0        # $8,000 часовой объем
 JEV_MIN_MCAP_USD = 8000.0         # $8,000 минимальная капитализация (не блокирует MCOWL/RAMP на старте)
 JEV_MIN_VOLUME_H24 = 30000.0
@@ -168,7 +169,7 @@ JEV_MIN_TRADES_H1 = 30
 JEV_MIN_HOLDERS = 80
 JEV_MAX_TOP_WALLET = 0.05        # 15% лимит на крупнейший кошелек (за вычетом пула, согласовано с RugCheck/GoPlus)
 JEV_MAX_TOP_10 = 0.60            # 35% лимит на топ-10 кошельков (за вычетом пула, согласовано с RugCheck/GoPlus)
-JEV_LLM_ENFORCE = False          # False: использовать алгоритмический JEV-скоринг при отсутствии ключа/лимите LLM
+JEV_LLM_ENFORCE = True           # True: строго отклонять токены, не прошедшие проверку JEV (momentum spent / concentration / dev dump)
 
 # SOFT AI Criteria (0.0 to 1.0)
 JEV_MIN_ACCOUNT_IS_PROJECT = 0.75
@@ -181,7 +182,7 @@ JEV_MAX_DEV_STILL_LOADED = 0.25
 # FILLS & RISK: "We bid the flush, not the candle" & "The stop lives under the wick"
 JEV_BID_THE_FLUSH_ENABLED = True
 JEV_STOP_UNDER_WICK_ENABLED = True
-JEV_MAX_M1_ENTRY_PCT = 35.0      # Пускаем живой пробой ракеты (до +18% за 1м при перевесе покупателей), отсекая только экстремальные спайки
+JEV_MAX_M1_ENTRY_PCT = 12.0      # Режем свечи выше +12% за 1м (не покупать верхушки импульсов)
 JEV_DEFAULT_WICK_STOP_PCT = -0.15 # -15% рабочий стоп (не выбивает на секундном шуме -5%..-8% как TV/TENMUSU)
 
 # Birdeye API Key
@@ -376,7 +377,7 @@ SOLANA_RESCAN_COOLDOWN = 180      # Кулдаун пересканирован�
 SOLANA_FRESH_RESCAN_COOLDOWN = 45 # Кулдаун для свежих токенов (<30 минут) и миграций (45 секунд)
 
 # === НАСТРОЙКИ ДЛЯ GROK_JEV И ЗАЩИТЫ ОТ СЛИВОВ ===
-JEV_TREND_CONFIRM_ENABLED = False  # ВЫКЛЮЧЕНО: чтобы бот брал ракету на 1-й секунде (без ожидания второго тика)
+JEV_TREND_CONFIRM_ENABLED = True   # ВКЛЮЧЕНО: подтверждать рост цены и отсутствие слива с хая
 JEV_FRESH_RECHECK_ENABLED = True   # ВКЛЮЧЕНО: перед входом проверяет свежую цену DexScreener в обход кэша
 JEV_MIN_M1_ENTRY_FLOOR_PCT = -3.0  # Пускать откат до -3% (ракета дышит), но резать дамп глубже -3%
 JEV_MIN_H1_PCT = -4.0

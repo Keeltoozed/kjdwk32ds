@@ -410,6 +410,9 @@ class ShadowTracker:
                         if m in batch_mints:
                             p_now = cur_prices.get(m, 0) or cur_prices.get(m.lower(), 0)
                             p_entry = upd["price_at_rejection"]
+                            # Защита от бага котировок DexScreener (когда возвращается цена SOL/BNB $200-$400 вместо мем-токена $0.000008)
+                            if p_now > 10.0 and p_entry > 0 and p_entry < 0.005:
+                                p_now = 0.0
                             old_ath = upd["old_ath"]
                             old_time = upd["old_time_to_ath"]
                             elapsed_m = upd["elapsed_min"]

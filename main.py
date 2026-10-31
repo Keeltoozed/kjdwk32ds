@@ -279,8 +279,8 @@ async def position_manager_loop(analyzer, tracker):
 
                 # === ИНТЕГРАЦИЯ МАТЕМАТИКИ ДЛЯ ЗРЕЛЫХ МОНЕТ (SWING TRADING / RIDE RUNNERS) ===
                 # Исполняется ДО скальперских Early Fade / Stagnant срезов, чтобы ракеты ехали по MatureExitManager!
-                _tp1_sol_thr = float(getattr(config, "TP1_TRIGGER_PCT", 0.50))
-                _tp1_sell = float(getattr(config, "TP1_SELL_FRAC", 0.20))
+                _tp1_sol_thr = float(getattr(config, "TP1_TRIGGER_PCT", 0.22))
+                _tp1_sell = float(getattr(config, "TP1_SELL_FRAC", 0.50))
                 _tp2 = float(getattr(config, "TP2_TRIGGER_PCT", 1.20))
                 _tp2_sell = float(getattr(config, "TP2_SELL_FRAC", 0.25))
                 _mb = float(getattr(config, "MOONBAG_TRIGGER_PCT", 2.50))
@@ -997,6 +997,9 @@ async def scanner_loop(analyzer, tracker):
                                     # VIP-ШИП = РАЗДАЧА (доказано метками: UNPEG/FIBONACCI/BackCat/Goblin).
                                     _is_vipsig = "VIP-" in analyzer.get_signal(mint)
                                     if _is_vipsig:
+                                        if not getattr(config, "VIP_ENTRIES_ENABLED", False):
+                                            print(f"🚫 [VIP-BLOCKED] {actual_symbol}: VIP входы отключены в config.py.")
+                                            continue
                                         _vip_cap = float(getattr(config, "TG_VIP_SIZE_USD", 5.0))
                                         position_size = min(position_size, _vip_cap)
 

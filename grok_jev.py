@@ -648,9 +648,23 @@ class GrokJevEngine:
         s5 = int(txns_m5.get("sells", 0) or 0)
         vol5 = float((pair_data.get("volume") or {}).get("m5", 0) or 0)
         
-        # 1. Запрет покупать вертикальную палку на гипер-пике FOMO (но разрешаем нормальный разгон до +15%):
-        if m1 > 16.0 or (m5 > 60.0 and m1 > 8.0):
-            return False, -0.12, 0.0, f"candle-spike (m1 {m1:+.1f}%, m5 {m5:+.1f}%) — FOMO vertical spike, wait for consolidation"
+        # 1. Запрет покупать вертикальную палку на гипер-пике FOMO:
+        _h1 = float(pc.get("h1", 0) or 0)
+        _ca = pair_data.get("pairCreatedAt") or 0
+        _age_m = round((time.time() * 1000 - _ca) / 60000.0, 1) if _ca else 999.0
+        _liq_usd = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
+        _min_liq = float(getattr(_c, "JEV_MIN_LIQUIDITY_USD", 12000.0))
+
+        if m5 > 40.0:
+            return False, -0.12, 0.0, f"fomo-spike (m5 {m5:+.1f}% > +40.0%) — buying local top, wait for reset"
+        if m5 > 25.0 and m1 > 6.0:
+            return False, -0.12, 0.0, f"candle-spike (m1 {m1:+.1f}%, m5 {m5:+.1f}%) — FOMO vertical spike"
+        if m1 > 12.0:
+            return False, -0.12, 0.0, f"m1-spike (m1 {m1:+.1f}% > +12.0%) — vertical push, wait for consolidation"
+        if _h1 > 200.0 and _age_m > 8.0:
+            return False, -0.12, 0.0, f"h1-exhaustion (h1 {_h1:+.1f}% > +200% at {_age_m:.0f}m) — pump already exhausted"
+        if _liq_usd > 0 and _liq_usd < _min_liq:
+            return False, -0.12, 0.0, f"thin-liquidity (${_liq_usd:,.0f} < ${_min_liq:,.0f}) — slippage/dump risk"
 
         # 2. Откат не должен быть ножом падения (падение глубже -3.5% за 1 мин — это слив):
         if m1 < -3.5:

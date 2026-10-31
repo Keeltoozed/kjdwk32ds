@@ -363,6 +363,12 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
             else:
                 cap = tracker.get_total_capital()
                 size *= analyzer.conviction_size_mult(td or {})
+        if "VIP-" in _sig and not getattr(config, "VIP_ENTRIES_ENABLED", False):
+            print(f"🚫 [VIP-BLOCKED] {_sym_tmp}: VIP входы отключены в config.py.")
+            return False
+        if "PUMP-XGB" in _sig and not getattr(config, "PUMP_XGB_ENABLED", False):
+            print(f"🚫 [PUMP-XGB-BLOCKED] {_sym_tmp}: PUMP-XGB входы отключены в config.py.")
+            return False
         if "VIP-" in _sig:
             size = min(size, float(getattr(config, "TG_VIP_SIZE_USD", 15.0) or 15.0))
         tracker.add_position(

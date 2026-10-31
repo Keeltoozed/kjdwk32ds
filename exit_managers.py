@@ -104,7 +104,9 @@ class MatureExitManager:
                 _floor_pnl = max(0.25, round(max_pnl_pct * 0.40, 2))
             elif max_pnl_pct >= 0.40:     # +40%..+60%: держим минимум +18%
                 _floor_pnl = 0.18
-            elif max_pnl_pct >= 0.22 and minutes_held >= 2.5:  # Пик +22%..+40%: безубыток +2% (не режем откаты 15%!)
+            elif max_pnl_pct >= 0.25:     # +25%..+40%: фиксируем минимум +10% профита
+                _floor_pnl = 0.10
+            elif max_pnl_pct >= 0.18:     # Пик +18%..+25%: безубыток +2% (не даем уйти в минус!)
                 _floor_pnl = 0.02
         elif max_pnl_pct >= 5.00:       # Гипер-ракета (+500%+): держим 78% прибыли
             _floor_pnl = round(max_pnl_pct * 0.78, 2)
@@ -122,15 +124,17 @@ class MatureExitManager:
             _floor_pnl = 0.32
         elif max_pnl_pct >= 0.40:     # Пик +40%+ -> гарантируем минимум +18%
             _floor_pnl = 0.18
-        elif max_pnl_pct >= 0.22 and minutes_held >= 2.5:  # Пик +22%..+40%: безубыток +2%
+        elif max_pnl_pct >= 0.25:     # Пик +25%..+40% -> гарантируем минимум +10%
+            _floor_pnl = 0.10
+        elif max_pnl_pct >= 0.18:     # Пик +18%..+25%: безубыток +2%
             _floor_pnl = 0.02
         if _floor_pnl is not None and pnl_pct <= _floor_pnl:
             # 2-тиковое подтверждение пробоя пола (защита от 1-секундных проколов и теней свечей),
-            # НО если это жесткий сброс (слив профита к нулю pnl_pct <= 0.08 при пике >= +38% или откат от хая >= 30%), выходим МГНОВЕННО без ожидания:
+            # НО если это жесткий сброс (слив профита к безубытку pnl_pct <= 0.03 при пике >= +18% или откат от хая >= 25%), выходим МГНОВЕННО:
             _fc = int(getattr(position, "floor_confirm_n", 0) or 0) + 1
             position.floor_confirm_n = _fc
             _drop_from_max = (position.max_price_usd - current_price) / position.max_price_usd if position.max_price_usd else 0
-            _fast_exit = (pnl_pct <= 0.08 and max_pnl_pct >= 0.40) or (_drop_from_max >= 0.30 and max_pnl_pct >= 0.50)
+            _fast_exit = (max_pnl_pct >= 0.18 and pnl_pct <= 0.03) or (pnl_pct <= 0.08 and max_pnl_pct >= 0.40) or (_drop_from_max >= 0.25 and max_pnl_pct >= 0.35)
             if _fc < 2 and not _fast_exit:
                 return None
             if pnl_pct >= 0:
@@ -201,11 +205,11 @@ class MatureExitManager:
         except Exception:
             _maxp = 0
 
-        # Мягкий стоп и Breakeven (после 2 минут в рынке, если был пик +18%+ и цена стекает к безубытку):
-        if minutes_held >= 2.0 and _maxp >= 0.20 and pnl_pct <= -0.05:
+        # Мягкий стоп и Breakeven (если был пик +18%+ и цена стекает к безубытку):
+        if _maxp >= 0.18 and pnl_pct <= -0.02:
             return f"Mature Soft Guard (был пик +{_maxp*100:.0f}%, слив до {pnl_pct*100:.1f}%)"
         _be = float(getattr(config, 'BREAKEVEN_PCT', 0.18))
-        if minutes_held >= 2.0 and _maxp >= _be and pnl_pct <= 0.02:
+        if _maxp >= _be and pnl_pct <= 0.02:
             return f"Mature Breakeven (был пик +{_maxp*100:.0f}%, фикс {pnl_pct*100:+.1f}%)"
 
         # Hard stop loss: стоп ВСЕГДА отрицательный (-15%), защищает депозит от постепенного сползания

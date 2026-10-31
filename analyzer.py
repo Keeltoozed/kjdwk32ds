@@ -2522,6 +2522,10 @@ class Analyzer:
         conf = float(prob) * 100
         self.last_score = conf
         print(f"🤖 XGBoost [DEX Poller]: {mint} | Score: {conf:.1f}%")
+
+        if not getattr(config, "PUMP_XGB_ENABLED", False):
+            return self._deny(mint, "pump-xgb-disabled", f"🚫 [PUMP-XGB] {mint[:8]}: PUMP-XGB отключен в config.py (100% сливов на вершинах).")
+
         threshold = 35.0  
         if is_vip:
             threshold = 45.0  
@@ -2589,6 +2593,16 @@ class Analyzer:
         _h1 = float(_pc.get("h1", 0) or 0)
         _h6 = float(_pc.get("h6", 0) or 0)
         _fdv_check = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
+
+        # Защита от покупки вершины вертикали (FOMO top)
+        if _m5 > 40.0:
+            return self._deny(mint, "m5-overheated", f"🚫 [FOMO-TOP] {mint[:8]}: m5 +{_m5:.1f}% > +40.0% — покупка локального хая.")
+        if _m5 > 25.0 and _m1 > 6.0:
+            return self._deny(mint, "candle-spike", f"🚫 [FOMO-TOP] {mint[:8]}: m5 +{_m5:.1f}%, m1 +{_m1:.1f}% — вертикальный спайк.")
+        if _m1 > 12.0:
+            return self._deny(mint, "m1-spike", f"🚫 [FOMO-TOP] {mint[:8]}: m1 +{_m1:.1f}% > +12.0% — резкий секундный памп.")
+        if _h1 > 200.0 and _age_min > 8.0:
+            return self._deny(mint, "h1-exhaustion", f"🚫 [FOMO-TOP] {mint[:8]}: h1 +{_h1:.1f}% > +200% (возраст {_age_min:.0f}м) — памп исчерпан.")
         
         if 0 < _fdv_check < 15000:
             return self._deny(mint, "ray-fdv-cliff", f"🚫 [RAYDIUM] {mint[:8]}: FDV ${_fdv_check:,.0f} < $15,000 — слишком мелкий пул.")
@@ -2787,7 +2801,7 @@ class Analyzer:
             except Exception:
                 pass
             threshold = float(getattr(config, "RAYDIUM_BUY_THRESHOLD", 55.0))  
-            _hyper = self.check_hyper_rocket_momentum(pair_data)
+            _hyper = self.check_hyper_rocket_momentum(pair_data) and bool(getattr(config, "VIP_ENTRIES_ENABLED", False))
 
             is_buy = bool(conf >= threshold)
             if is_buy:
