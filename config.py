@@ -115,7 +115,7 @@ PUMP_XGB_ENABLED = False        # ВЫКЛЮЧЕНО: 100% сливов (-235% P
 RAY_XGB_ENABLED = False         # ВЫКЛЮЧЕНО: старая модель Raydium XGB заменена на Rocket XGBoost v2
 ROCKET_XGB_ENABLED = True       # ВКЛЮЧЕНО: честная ML модель Rocket XGBoost v3 (20 фичей без ликеджа)
 ROCKET_XGB_STAGE1_THRESHOLD = 35.0  # Этап 1 (RAM): отсекает 90% шлака 0-30%, пропуская ранние ракеты (35%+)
-ROCKET_XGB_FINAL_THRESHOLD = 50.0   # Этап 2 (Audit): подтверждение входа с реальными долями разработчика и инсайдеров (50%+)
+ROCKET_XGB_FINAL_THRESHOLD = 35.0   # Этап 2 (Audit): подтверждение входа с реальными долями разработчика и инсайдеров (35%+)
 ROCKET_XGB_THRESHOLD = 35.0         # Базовый порог скринера
 
 # Stall Timer: выход при затухании моментума (CT / Reddit Best Practice)

@@ -84,6 +84,8 @@ def score_token_with_rocket_xgb(mint: str, pair_data: dict, holders_info: dict =
         _pc = pair_data.get("priceChange") or {}
         _m5 = float(_pc.get("m5", 0) or 0)
         _m1 = float(_pc.get("m1", 0) or 0)
+        if _m1 == 0.0 and abs(_m5) > 0.5:
+            _m1 = max(-25.0, min(25.0, _m5 * 0.15))
         _h1 = float(_pc.get("h1", 0) or 0)
         _vm5 = float((pair_data.get("volume") or {}).get("m5", 0) or 0)
         _txm5 = (pair_data.get("txns") or {}).get("m5", {}) or {}
@@ -1130,6 +1132,8 @@ class Analyzer:
         _pc = pair_data.get("priceChange") or {}
         _m5 = float(_pc.get("m5", 0) or 0)
         _m1 = float(_pc.get("m1", 0) or 0)
+        if _m1 == 0.0 and abs(_m5) > 0.5:
+            _m1 = max(-25.0, min(25.0, _m5 * 0.15))
         _h1 = float(_pc.get("h1", 0) or 0)
         _h6 = float(_pc.get("h6", 0) or 0)
         if _h1 < -8.0 or _h6 < -15.0:
@@ -1158,6 +1162,8 @@ class Analyzer:
         _pc = pair_data.get("priceChange") or {}
         _m5 = float(_pc.get("m5", 0) or 0)
         _m1 = float(_pc.get("m1", 0) or 0)
+        if _m1 == 0.0 and abs(_m5) > 0.5:
+            _m1 = max(-25.0, min(25.0, _m5 * 0.15))
         _h1 = float(_pc.get("h1", 0) or 0)
         _vm5_pre = float((pair_data.get("volume") or {}).get("m5", 0) or 0)
         _v24 = float((pair_data.get("volume") or {}).get("h24", 0) or 0)
@@ -2935,6 +2941,8 @@ class Analyzer:
         _pc = pair_data.get("priceChange") or {}
         _m5 = float(_pc.get("m5", 0) or 0)
         _m1 = float(_pc.get("m1", 0) or 0)
+        if _m1 == 0.0 and abs(_m5) > 0.5:
+            _m1 = max(-25.0, min(25.0, _m5 * 0.15))
         _h1 = float(_pc.get("h1", 0) or 0)
         _h6 = float(_pc.get("h6", 0) or 0)
         _fdv_check = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)

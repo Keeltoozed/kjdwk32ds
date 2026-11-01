@@ -400,8 +400,10 @@ class GrokJevEngine:
 
         # 3. Живой импульс ракеты (LIVE ROCKET MOMENTUM)
         pc = pair_data.get("priceChange", {}) or {}
-        m1 = float(pc.get("m1", 0) or 0)
         m5 = float(pc.get("m5", 0) or 0)
+        m1 = float(pc.get("m1", 0) or 0)
+        if m1 == 0.0 and abs(m5) > 0.5:
+            m1 = max(-25.0, min(25.0, m5 * 0.15))
         h1 = float(pc.get("h1", 0) or 0)
 
         # КАТЕГОРИЧЕСКИЙ БЛОК: СМЕРТЕЛЬНАЯ ЗОНА МИГРАЦИИ (0 - 2.0 МИНУТ)
@@ -556,8 +558,10 @@ class GrokJevEngine:
         name = base.get("name", symbol)
         
         pc = pair_data.get("priceChange", {}) or {}
-        m1 = float(pc.get("m1", 0) or 0)
         m5 = float(pc.get("m5", 0) or 0)
+        m1 = float(pc.get("m1", 0) or 0)
+        if m1 == 0.0 and abs(m5) > 0.5:
+            m1 = max(-25.0, min(25.0, m5 * 0.15))
         h1 = float(pc.get("h1", 0) or 0)
         
         dex_id = str(pair_data.get("dexId", "")).lower()
@@ -1570,8 +1574,10 @@ class GrokJevEngine:
 
         # Форматированный визуальный лог в стиле дашборда автора
         pc = pair.get("priceChange", {}) or {}
-        m1 = float(pc.get("m1", 0) or 0)
         m5 = float(pc.get("m5", 0) or 0)
+        m1 = float(pc.get("m1", 0) or 0)
+        if m1 == 0.0 and abs(m5) > 0.5:
+            m1 = max(-25.0, min(25.0, m5 * 0.15))
         h1 = float(pc.get("h1", 0) or 0)
         liq = float((pair.get("liquidity") or {}).get("usd", 0) or 0)
         mcap = float(pair.get("fdv", 0) or pair.get("marketCap", 0) or 0)

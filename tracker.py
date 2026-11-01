@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import time
 from typing import Dict, Tuple
 from pydantic import BaseModel, ConfigDict
@@ -432,6 +433,13 @@ class PaperTracker:
         return final_size
 
     def add_position(self, symbol, mint, entry_price, amount_usd=5.0, ml_features=None, ml_confidence=0.0, is_mature=False, source="", chain="solana", pair_address="", stop_under_wick=0.0, wick_stop_loss_pct=0.0):
+        # Валидация адреса минта Solana: валидный Base58 адрес должен быть длиной от 32 до 44 символов
+        if chain == "solana":
+            mint_str = str(mint or "").strip()
+            if len(mint_str) < 32 or len(mint_str) > 44 or not re.match(r'^[1-9A-HJ-NP-Za-km-z]+$', mint_str):
+                print(f"🚫 Отказ: невалидный адрес Solana mint '{mint_str}' (длина {len(mint_str)}, ожидается 32-44 Base58).")
+                return
+
         # Валидация входа: мусорный entry ~0 давал фантомы +586М% и $1.6M.
         try:
             entry_price = float(entry_price or 0)

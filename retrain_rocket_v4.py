@@ -81,6 +81,8 @@ def collect_training_data():
                 pnl = to_f(pnl_str, 0.0)
                 m5 = to_f(feats.get("price_change_m5", 0.0))
                 m1 = to_f(feats.get("price_change_m1", 0.0))
+                if m1 == 0.0 and abs(m5) > 0.5:
+                    m1 = m5 * 0.15
                 h1 = to_f(feats.get("price_change_h1", 0.0))
                 b5 = to_f(feats.get("buys_m5", 0.0))
                 s5 = to_f(feats.get("sells_m5", 0.0))
@@ -154,6 +156,8 @@ def collect_training_data():
                     pnl = to_f(r.get("pnl_percent") or r.get("pnl"), 0.0)
                     m5 = to_f(feats.get("price_change_m5", 0.0))
                     m1 = to_f(feats.get("price_change_m1", 0.0))
+                    if m1 == 0.0 and abs(m5) > 0.5:
+                        m1 = m5 * 0.15
                     h1 = to_f(feats.get("price_change_h1", 0.0))
                     b5 = to_f(feats.get("buys_m5", 0.0))
                     s5 = to_f(feats.get("sells_m5", 0.0))
@@ -284,7 +288,7 @@ def collect_training_data():
         if mode == "takeoff":
             # Ранний взлёт на кривой pump.fun / pumpswap (DRNK, NNN, DICE профиль)
             m5 = rng.uniform(45.0, 380.0)
-            m1 = rng.uniform(0.5, 18.0)
+            m1 = m5 * rng.uniform(0.10, 0.20)
             h1 = rng.uniform(50.0, 450.0)
             b_ratio = rng.uniform(0.68, 0.92)
             s5 = rng.randint(15, 60)
@@ -297,7 +301,7 @@ def collect_training_data():
         elif mode == "breakout":
             # Классический прорыв Raydium / Meteora
             m5 = rng.uniform(12.0, 65.0)
-            m1 = rng.uniform(-0.5, 6.0)
+            m1 = m5 * rng.uniform(0.10, 0.20)
             h1 = rng.uniform(25.0, 180.0)
             b_ratio = rng.uniform(0.62, 0.88)
             s5 = rng.randint(20, 90)
@@ -310,7 +314,7 @@ def collect_training_data():
         else: # pullback
             # Здоровый откат после импульса
             m5 = rng.uniform(-15.0, -1.5)
-            m1 = rng.uniform(-1.5, 2.0)
+            m1 = m5 * rng.uniform(0.10, 0.20)
             h1 = rng.uniform(35.0, 150.0)
             b_ratio = rng.uniform(0.58, 0.82)
             s5 = rng.randint(20, 80)
@@ -395,7 +399,7 @@ def collect_training_data():
         else: # thin_liq_trap
             # Тонкая фантомная ловушка (< 5 SOL)
             m5 = rng.uniform(5.0, 35.0)
-            m1 = 0.0
+            m1 = m5 * rng.uniform(0.10, 0.20)
             h1 = rng.uniform(10.0, 40.0)
             b5 = rng.randint(3, 12)
             s5 = rng.randint(1, 8)
