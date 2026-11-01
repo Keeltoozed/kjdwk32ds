@@ -230,21 +230,23 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
     _tx5_j = ((td or {}).get("txns") or {}).get("m5") or {}
     _b5_j = int(_tx5_j.get("buys", 0) or 0)
     _s5_j = int(_tx5_j.get("sells", 0) or 0)
-    if _s5_j == 0 and _b5_j >= 5:
-        print(f"🚫 [{source_tag}-HONEYPOT] {_sym_tmp} ({mint[:8]}): 0 продаж при {_b5_j} покупках — Honeypot (нельзя продать).")
-        return False
-        
-    _c_ms_j = (td or {}).get("pairCreatedAt") or 0
-    _age_j = ((time.time() * 1000 - _c_ms_j) / 60000.0) if _c_ms_j else 0.5
-    _liq_j = float(((td or {}).get("liquidity") or {}).get("usd", 0) or 0)
     _dex_j = str((td or {}).get("dexId", "")).lower()
-    _is_pump_token = mint.endswith("pump") or _dex_j in ("pump", "pumpfun", "pumpswap")
-    if _is_pump_token:
+    _is_raw_curve_j = _dex_j in ("pump", "pumpfun")
+    if _is_raw_curve_j:
+        if not getattr(config, "ALLOW_UNGRADUATED_PUMPFUN", True):
+            print(f"🚫 [{source_tag}-RAW-CURVE] {_sym_tmp} ({mint[:8]}): сырая кривая Pump.fun без миграции на DEX — вход запрещён.")
+            return False
         _fdv_j = float((td or {}).get("fdv", 0) or (td or {}).get("marketCap", 0) or 0)
-        _liq_j = max(_liq_j, _fdv_j * 0.40)
-    _min_liq_req = 1000.0 if _is_pump_token else (3500.0 if _age_j < 60.0 else float(getattr(config, "JEV_MIN_LIQUIDITY_USD", 6000.0)))
+        _min_c_mc = float(getattr(config, "MIN_PUMP_CURVE_MCAP_USD", 9000.0))
+        if _fdv_j > 0 and _fdv_j < _min_c_mc:
+            print(f"🚫 [{source_tag}-CURVE-FLASH-RUG] {_sym_tmp} ({mint[:8]}): FDV ${_fdv_j:,.0f} < ${_min_c_mc:,.0f} (пустой кёрв, flash-rug риск) — блок.")
+            return False
+        _liq_j = max(_raw_liq_j, _fdv_j * 0.40)
+    else:
+        _liq_j = _raw_liq_j
+    _min_liq_req = 1000.0 if _is_raw_curve_j else float(getattr(config, "MIN_GRADUATED_LIQ_USD", 7500.0))
     if _liq_j < _min_liq_req:
-        print(f"🚫 [{source_tag}-LOW-LIQ] {_sym_tmp} ({mint[:8]}): ликвидность ${_liq_j:.0f} < ${_min_liq_req:.0f} — микро-пул/риск слива.")
+        print(f"🚫 [{source_tag}-LOW-LIQ] {_sym_tmp} ({mint[:8]}): реальная ликвидность ${_liq_j:.0f} < ${_min_liq_req:.0f} — микро-пул/риск слива.")
         return False
     if (_b5_j + _s5_j) < 6:
         print(f"🚫 [{source_tag}-LOW-TXNS] {_sym_tmp} ({mint[:8]}): всего {_b5_j + _s5_j} сделок в m5 — нет активности.")
@@ -489,6 +491,13 @@ async def jup_loop(analyzer, tracker):
                         _ag = (_now_t * 1000 - _cr) / 60000.0 if _cr else 999.0
                         _m5 = float(((td.get("priceChange") or {}).get("m5", 0) or 0))
                         _sym = str(((td.get("baseToken") or {}).get("symbol") or m[:6])).upper()
+                        _dex_cand = str(td.get("dexId", "")).lower()
+                        if _dex_cand in ("pump", "pumpfun"):
+                            _fdv_cand = float(td.get("fdv", 0) or td.get("marketCap", 0) or 0)
+                            _min_c = float(getattr(config, "MIN_PUMP_CURVE_MCAP_USD", 9000.0))
+                            if not getattr(config, "ALLOW_UNGRADUATED_PUMPFUN", True) or (0 < _fdv_cand < _min_c):
+                                processed[m] = _now_t
+                                continue
 
                         # Зона созревания: отправляем в быстрый чекер
                         if _ag < _min_age:

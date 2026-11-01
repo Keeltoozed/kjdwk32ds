@@ -381,9 +381,43 @@ async def check_token(address: str, chain: str, force_refresh: bool = False, pai
 
 SOLANA_RPC_URLS = [
     "https://api.mainnet-beta.solana.com",
-    "https://solana-rpc.publicnode.com",
     "https://rpc.ankr.com/solana",
+    "https://solana-rpc.publicnode.com",
 ]
+_HELIUS_429_UNTIL: float = 0.0
+_RPC_BACKOFF_UNTIL: dict = {}  # rpc_url -> unix_ts
+
+
+def _note_rpc_status(rpc_url: str, status: int) -> None:
+    """Circuit-breaker для Solana RPC: при 429/401/403 (исчерпан лимит Helius или блок ноды) отключает URL на 30 мин."""
+    global _HELIUS_429_UNTIL
+    if status in (401, 403, 429):
+        now = _t.time()
+        if "helius" in str(rpc_url or "").lower():
+            if now >= _HELIUS_429_UNTIL:
+                print(f"⚡ [RPC-BREAKER] Helius вернул HTTP {status} (квота исчерпана) -> пауза Helius 30м, переключаюсь на прямой Solana RPC.")
+            _HELIUS_429_UNTIL = now + 1800.0
+        else:
+            _RPC_BACKOFF_UNTIL[str(rpc_url)] = now + 600.0
+
+
+def _get_solana_rpcs() -> list:
+    """Возвращает приоритетный список здоровых Solana RPC без мёртвых/залимиченных ключей."""
+    import os as _os
+    now = _t.time()
+    out = []
+    custom_rpc = (_os.getenv("SOLANA_RPC_URL") or getattr(config, "SOLANA_RPC_URL", "") or "").strip()
+    if custom_rpc and custom_rpc.startswith("http"):
+        if ("helius" not in custom_rpc.lower() or now >= _HELIUS_429_UNTIL) and now >= _RPC_BACKOFF_UNTIL.get(custom_rpc, 0.0):
+            out.append(custom_rpc)
+    for u in SOLANA_RPC_URLS:
+        if u not in out and now >= _RPC_BACKOFF_UNTIL.get(u, 0.0):
+            out.append(u)
+    if now >= _HELIUS_429_UNTIL:
+        h_rpc = (_os.getenv("HELIUS_RPC_URL") or getattr(config, "HELIUS_RPC_URL", "") or "").strip()
+        if h_rpc and h_rpc.startswith("http") and h_rpc not in out:
+            out.append(h_rpc)
+    return out or ["https://api.mainnet-beta.solana.com"]
 
 
 async def check_onchain_solana_security(mint: str) -> tuple:
@@ -408,15 +442,7 @@ async def check_onchain_solana_security(mint: str) -> tuple:
         from http_client import get_session
         import aiohttp
         session = await get_session()
-        
-        rpcs = list(SOLANA_RPC_URLS)
-        try:
-            import config as _c
-            _h_rpc = getattr(_c, "HELIUS_RPC_URL", "")
-            if _h_rpc and _h_rpc not in rpcs:
-                rpcs.append(_h_rpc)
-        except Exception:
-            pass
+        rpcs = _get_solana_rpcs()
 
         payload = {
             "jsonrpc": "2.0",
@@ -431,10 +457,17 @@ async def check_onchain_solana_security(mint: str) -> tuple:
                 async with session.post(rpc, json=payload, timeout=aiohttp.ClientTimeout(total=3.5)) as resp:
                     if resp.status == 200:
                         data = await resp.json()
+                        if isinstance(data, dict) and data.get("error"):
+                            err_msg = str(data.get("error")).lower()
+                            if "max usage" in err_msg or "429" in err_msg or "rate" in err_msg:
+                                _note_rpc_status(rpc, 429)
+                                continue
                         val = (data.get("result") or {}).get("value")
                         if val is not None:
                             account_info = val
                             break
+                    else:
+                        _note_rpc_status(rpc, resp.status)
             except Exception:
                 continue
 
@@ -973,19 +1006,11 @@ async def check_spl_holder_delegations(mint: str, holder_token_accounts: list = 
     if cached and (now - cached[0]) < 180.0:
         return cached[1]
 
-    import os as _os
     import aiohttp
     from collections import Counter
+    from http_client import get_session
 
-    rpcs = []
-    for env_k in ("SOLANA_RPC_URL", "HELIUS_RPC_URL"):
-        v = (_os.getenv(env_k) or getattr(config, env_k, "") or "").strip()
-        if v and v.startswith("http"):
-            rpcs.append(v)
-    helius_key = (_os.getenv("HELIUS_API_KEY") or getattr(config, "HELIUS_API_KEY", "") or "").strip()
-    if helius_key and not any("helius" in r for r in rpcs):
-        rpcs.append(f"https://mainnet.helius-rpc.com/?api-key={helius_key}")
-    rpcs.extend(["https://api.mainnet-beta.solana.com", "https://rpc.ankr.com/solana"])
+    rpcs = _get_solana_rpcs()
 
     SAFE_DELEGATES = {
         "5Q544fKrFoe6tsEbD7S8EmxGTJYAKtTVhAW5Q5pge4j1",
@@ -1002,7 +1027,7 @@ async def check_spl_holder_delegations(mint: str, holder_token_accounts: list = 
     max_del_pct = float(_cfg("AUDITOR_MAX_DELEGATED_PCT", 5.0))
 
     try:
-        session = await _get_shared_rpc_session()
+        session = await get_session()
         accs = [str(a).strip() for a in (holder_token_accounts or []) if a and str(a).strip()][:20]
 
         # Если список токен-аккаунтов не передан — берем топ-20 напрямую через getTokenLargestAccounts
@@ -1017,6 +1042,8 @@ async def check_spl_holder_delegations(mint: str, holder_token_accounts: list = 
                             accs = [str(x.get("address") or "").strip() for x in vals[:20] if x.get("address")]
                             if accs:
                                 break
+                        else:
+                            _note_rpc_status(rpc, resp.status)
                 except Exception:
                     continue
 
@@ -1039,6 +1066,8 @@ async def check_spl_holder_delegations(mint: str, holder_token_accounts: list = 
                         if isinstance(val, list):
                             parsed_accounts = val
                             break
+                    else:
+                        _note_rpc_status(rpc, resp.status)
             except Exception:
                 continue
 
@@ -1152,3 +1181,202 @@ async def check_rugcheck_insider_graph(mint: str, total_supply_raw: float = 0.0,
         return res
     except Exception:
         return True, ""
+
+
+_STAIRCASE_CACHE: dict = {}  # key -> (ts, (ok, reason))
+
+
+def analyze_trade_tape_staircase(trades_raw: list) -> tuple:
+    """
+    Чистый детерминированный разбор ленты сделок пула (Layer 9 Auditor, GMGN/Axiom Anti-Bundler).
+    Ловит:
+    1) Синхронные пачки продаж Jito-бандлера (4+ разных кошельков в 1 секунду на тонкой ленте или 8+ в любую секунду — кейс NOTHING 20:17:58Z и 20:19:04Z).
+    2) Синхронные пачки покупок бандлера в 1 блок/секунду (7+ разных кошельков).
+    3) Клонированные некруглые размеры покупок суб-кошельков (4+ кошельков с точностью до 0.0001 SOL).
+    4) Искусственную «лесенку» (Staircase Bump-Bot): >=30 покупок, >=90% одноразовых кошельков, низкий разброс CV<=0.72, дефицит мелкого ритейла (<$18 <=22%) и >=58% ордеров в узком коридоре бота ($30-$145).
+    Возвращает (is_clean: bool, reason: str, recent_buyer_wallets: list).
+    """
+    from collections import defaultdict
+    import statistics
+
+    if not isinstance(trades_raw, list) or not trades_raw:
+        return True, "", []
+
+    buys = []
+    sells = []
+    for item in trades_raw:
+        attrs = (item.get("attributes") if isinstance(item, dict) and "attributes" in item else item) or {}
+        if not isinstance(attrs, dict):
+            continue
+        kind = str(attrs.get("kind") or "").lower()
+        if kind == "buy":
+            buys.append(attrs)
+        elif kind == "sell":
+            sells.append(attrs)
+
+    # 1. Синхронный сброс суб-кошельков в одну и ту же секунду (Jito Sell-All / Skim Burst)
+    sell_by_sec = defaultdict(set)
+    for s in sells:
+        ts = str(s.get("block_timestamp") or "")
+        w = str(s.get("tx_from_address") or "")
+        if ts and w:
+            sell_by_sec[ts].add(w)
+    if sell_by_sec:
+        top_s_ts, top_s_wallets = max(sell_by_sec.items(), key=lambda kv: len(kv[1]))
+        max_s_1s = len(top_s_wallets)
+        # Блокируем только явный оптовый сброс бандла: 18+ продаж в 1с или >=35% всех продаж в одну секунду при 8+ кошельках (кейс NOTHING: 73 продажи в 1с)
+        # Обычный рыночный шум (MEV-арбитраж / снайперы 4-10 сделок в секунду на ракетах вроде OREX и MOBROS) НЕ блокируется!
+        if max_s_1s >= 18 or (len(sells) >= 20 and (max_s_1s / float(len(sells))) >= 0.35 and max_s_1s >= 8):
+            return False, f"bundler-sync-sells: {max_s_1s} wallets sold in 1s ({top_s_ts})", []
+
+    # 2. Синхронный закуп бандлера в одну секунду
+    buy_by_sec = defaultdict(set)
+    b_wallets = []
+    b_usd = []
+    nonround_sol_wallets = defaultdict(set)
+    COMMON_PRESETS = [0.05, 0.1, 0.2, 0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 2.5, 3.0, 5.0, 10.0]
+    for b in buys:
+        ts = str(b.get("block_timestamp") or "")
+        w = str(b.get("tx_from_address") or "")
+        usd = float(b.get("volume_in_usd") or 0.0)
+        sol_amt = float(b.get("from_token_amount") or 0.0)
+        if ts and w:
+            buy_by_sec[ts].add(w)
+        if w:
+            b_wallets.append(w)
+        if usd > 0:
+            b_usd.append(usd)
+        # Исключаем человеческие пресеты (0.1, 0.5, 1.0 SOL) и стандартные вычеты комиссий (0.0978, 0.4938 SOL)
+        if w and 0.35 <= sol_amt <= 25.0:
+            is_preset = any(abs(sol_amt - p) <= 0.018 for p in COMMON_PRESETS)
+            is_round = (abs(sol_amt * 10.0 - round(sol_amt * 10.0)) <= 0.02)
+            if not is_preset and not is_round:
+                nonround_sol_wallets[round(sol_amt, 4)].add(w)
+
+    if buy_by_sec and len(buys) <= 120:
+        top_b_ts, top_b_wallets = max(buy_by_sec.items(), key=lambda kv: len(kv[1]))
+        if len(top_b_wallets) >= 12:
+            return False, f"bundler-sync-buys: {len(top_b_wallets)} wallets bought in 1s ({top_b_ts})", []
+
+    # 3. Клонированные некруглые покупки бота (например 0.8459 SOL с 6+ разных суб-кошельков дева, как в NOTHING)
+    if nonround_sol_wallets:
+        best_amt, amt_wallets = max(nonround_sol_wallets.items(), key=lambda kv: len(kv[1]))
+        if len(amt_wallets) >= 6:
+            return False, f"staircase-cloned-buys: {len(amt_wallets)} wallets bought identical {best_amt:.4f} SOL", []
+
+    # 4. Статистический профиль искусственной «лесенки» (Staircase Bot: кейс NOTHING)
+    if len(b_usd) >= 30 and len(b_wallets) >= 30:
+        uniq_r = len(set(b_wallets)) / float(len(b_wallets))
+        small_r = sum(1 for v in b_usd if v < 18.0) / float(len(b_usd))
+        mid_r = sum(1 for v in b_usd if 30.0 <= v <= 145.0) / float(len(b_usd))
+        mean_u = statistics.mean(b_usd)
+        cv = (statistics.pstdev(b_usd) / mean_u) if mean_u > 0 else 9.9
+        if uniq_r >= 0.92 and cv <= 0.65 and small_r <= 0.18 and mid_r >= 0.65:
+            return (
+                False,
+                f"staircase-bot-pump: {uniq_r*100:.0f}% one-shot wallets, {mid_r*100:.0f}% uniform $30-$145 buys, CV={cv:.2f}",
+                [],
+            )
+
+    uniq_recent_buyers = list(dict.fromkeys(b_wallets))[:15]
+    return True, "", uniq_recent_buyers
+
+
+async def check_staircase_and_sybil_farm(mint: str, pair_address: str = "", holder_owners: list = None) -> tuple:
+    """
+    Layer 9 + Layer 10 Auditor (Защита от Staircase-ботов и ферм одноразовых суб-кошельков дева):
+    - Layer 9: Анализ последних сделок пула через GeckoTerminal /trades (синхронные сбросы Jito, лесенка ордеров).
+    - Layer 10: Мгновенная (~60мс) проверка нативных SOL-балансов топ-холдеров/покупателей через RPC getMultipleAccounts:
+      если >=85% кошельков сидят только на газовой пыли (<0.08 SOL) и ни у одного нет >=0.20 SOL — это ботоферма суб-кошельков!
+    """
+    if not mint or not _cfg("AUDITOR_STAIRCASE_ENABLED", True):
+        return True, ""
+
+    now = _t.time()
+    cache_key = f"{mint}:{pair_address or ''}"
+    cached = _STAIRCASE_CACHE.get(cache_key)
+    if cached and (now - cached[0]) < 90.0:
+        return cached[1]
+    if len(_STAIRCASE_CACHE) > 1500:
+        _STAIRCASE_CACHE.clear()
+
+    recent_buyers = []
+    # --- LAYER 9: Лента сделок пула (GeckoTerminal /trades через единый пейсер market_data) ---
+    clean_pair = str(pair_address or "").replace("solana_", "").strip()
+    if clean_pair and len(clean_pair) >= 32 and not clean_pair.startswith("0x"):
+        try:
+            import market_data
+            gt_resp = await market_data._gt_get(f"/networks/solana/pools/{clean_pair}/trades", retries=0, timeout=5)
+            trades_list = (gt_resp or {}).get("data") if isinstance(gt_resp, dict) else None
+            if isinstance(trades_list, list) and trades_list:
+                t_ok, t_why, recent_buyers = analyze_trade_tape_staircase(trades_list)
+                if not t_ok:
+                    res = (False, t_why)
+                    _STAIRCASE_CACHE[cache_key] = (now, res)
+                    return res
+        except Exception:
+            pass
+
+    # --- LAYER 10: RPC getMultipleAccounts проверка фермы газовой пыли у холдеров/покупателей (~60мс) ---
+    SAFE_SYSTEM_OWNERS = {
+        "5Q544fKrFoe6tsEbD7S8EmxGTJYAKtTVhAW5Q5pge4j1",
+        "D4FPEruKEHrG5NTsqazoqfv8zsFWApqTjuzFLUQDkTz5",
+        "Eo7WjKq67rjJQSZxS6z3YkapzY3eMj6Xy8X5EQVn5UaB",
+        "LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo",
+        "whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc",
+        "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P",
+        "Ce6TQqeHC9p8KetsN6JsjHK7UTZk7nasjjnr7XxXp9F1",
+        "11111111111111111111111111111111",
+        clean_pair,
+    }
+    candidate_wallets = []
+    for w in list(holder_owners or []) + list(recent_buyers or []):
+        ws = str(w or "").strip()
+        if len(ws) >= 32 and not ws.startswith("0x") and ws not in SAFE_SYSTEM_OWNERS and ws not in candidate_wallets:
+            candidate_wallets.append(ws)
+        if len(candidate_wallets) >= 15:
+            break
+
+    if len(candidate_wallets) >= 8:
+        try:
+            import aiohttp
+            from http_client import get_session
+            session = await get_session()
+            payload = {
+                "jsonrpc": "2.0",
+                "id": 9,
+                "method": "getMultipleAccounts",
+                "params": [candidate_wallets[:15], {"encoding": "base64"}],
+            }
+            vals = None
+            for rpc in _get_solana_rpcs():
+                try:
+                    async with session.post(rpc, json=payload, timeout=aiohttp.ClientTimeout(total=3.0)) as resp:
+                        if resp.status == 200:
+                            rdata = await resp.json()
+                            v = (rdata.get("result") or {}).get("value")
+                            if isinstance(v, list):
+                                vals = v
+                                break
+                        else:
+                            _note_rpc_status(rpc, resp.status)
+                except Exception:
+                    continue
+            if isinstance(vals, list) and len(vals) >= 8:
+                sols = [float((acc.get("lamports", 0) if isinstance(acc, dict) else 0) or 0) / 1e9 for acc in vals]
+                max_sol = max(sols) if sols else 0.0
+                dust_cnt = sum(1 for s in sols if s < 0.08)
+                dust_ratio = dust_cnt / float(len(sols))
+                if max_sol < 0.20 and dust_ratio >= 0.85:
+                    res = (
+                        False,
+                        f"sybil-gas-dust-farm: {dust_cnt}/{len(sols)} wallets hold <0.08 SOL (max {max_sol:.3f} SOL — disposable sub-wallets)",
+                    )
+                    _STAIRCASE_CACHE[cache_key] = (now, res)
+                    return res
+        except Exception:
+            pass
+
+    res = (True, "")
+    _STAIRCASE_CACHE[cache_key] = (now, res)
+    return res

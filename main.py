@@ -281,11 +281,15 @@ async def position_manager_loop(analyzer, tracker):
                 # === ИНТЕГРАЦИЯ МАТЕМАТИКИ ДЛЯ ЗРЕЛЫХ МОНЕТ (SWING TRADING / RIDE RUNNERS) ===
                 # Исполняется ДО скальперских Early Fade / Stagnant срезов, чтобы ракеты ехали по MatureExitManager!
                 _tp1_sol_thr = float(getattr(config, "TP1_TRIGGER_PCT", 0.50))
-                _tp1_sell = float(getattr(config, "TP1_SELL_FRAC", 0.40))
-                _tp2 = float(getattr(config, "TP2_TRIGGER_PCT", 1.50))
-                _tp2_sell = float(getattr(config, "TP2_SELL_FRAC", 0.30))
-                _mb = float(getattr(config, "MOONBAG_TRIGGER_PCT", 2.50))
-                _mb_sell = float(getattr(config, "MOONBAG_SELL_FRAC", 0.30))
+                _tp1_sell = float(getattr(config, "TP1_SELL_FRAC", 0.35))
+                _tp2 = float(getattr(config, "TP2_TRIGGER_PCT", 1.20))
+                _tp2_sell = float(getattr(config, "TP2_SELL_FRAC", 0.25))
+                _tp3 = float(getattr(config, "TP3_TRIGGER_PCT", 2.50))
+                _tp3_sell = float(getattr(config, "TP3_SELL_FRAC", 0.20))
+                _tp4 = float(getattr(config, "TP4_TRIGGER_PCT", 5.00))
+                _tp4_sell = float(getattr(config, "TP4_SELL_FRAC", 0.10))
+                _tp5 = float(getattr(config, "TP5_TRIGGER_PCT", 10.00))
+                _tp5_sell = float(getattr(config, "TP5_SELL_FRAC", 0.05))
                 if getattr(position, "is_mature", False):
                     if getattr(config, "PARTIAL_TP_ENABLED", False) and max_pnl_pct >= _tp1_sol_thr and not getattr(position, "tp1_done", False):
                         tracker.partial_close_position(mint, current_price, _tp1_sell, f"Take Profit +{_tp1_sol_thr*100:.0f}% (Tier-1 {int(_tp1_sell*100)}%)")
@@ -293,12 +297,20 @@ async def position_manager_loop(analyzer, tracker):
                         position.is_moonbag = True
                         continue
                     if getattr(config, "PARTIAL_TP_ENABLED", False) and max_pnl_pct >= _tp2 and not getattr(position, "tp2_done", False):
-                        tracker.partial_close_position(mint, current_price, _tp2_sell, f"Take Profit +{_tp2*100:.0f}% (2.5x Free Ride)")
+                        tracker.partial_close_position(mint, current_price, _tp2_sell, f"Take Profit +{_tp2*100:.0f}% (Tier-2 {int(_tp2_sell*100)}%)")
                         position.tp2_done = True
                         continue
-                    if getattr(config, "PARTIAL_TP_ENABLED", False) and max_pnl_pct >= _mb and not getattr(position, "is_moonbag", False):
-                        tracker.partial_close_position(mint, current_price, _mb_sell, f"Take Profit +{_mb*100:.0f}% (Risk Free)")
-                        position.is_moonbag = True
+                    if getattr(config, "PARTIAL_TP_ENABLED", False) and max_pnl_pct >= _tp3 and not getattr(position, "tp3_done", False):
+                        tracker.partial_close_position(mint, current_price, _tp3_sell, f"Take Profit +{_tp3*100:.0f}% (Tier-3 {int(_tp3_sell*100)}%)")
+                        position.tp3_done = True
+                        continue
+                    if getattr(config, "PARTIAL_TP_ENABLED", False) and max_pnl_pct >= _tp4 and not getattr(position, "tp4_done", False):
+                        tracker.partial_close_position(mint, current_price, _tp4_sell, f"Take Profit +{_tp4*100:.0f}% (Tier-4 {int(_tp4_sell*100)}%)")
+                        position.tp4_done = True
+                        continue
+                    if getattr(config, "PARTIAL_TP_ENABLED", False) and max_pnl_pct >= _tp5 and not getattr(position, "tp5_done", False):
+                        tracker.partial_close_position(mint, current_price, _tp5_sell, f"Take Profit +{_tp5*100:.0f}% (Tier-5 {int(_tp5_sell*100)}%)")
+                        position.tp5_done = True
                         continue
                     from exit_managers import MatureExitManager
                     mature_exit_reason = MatureExitManager.evaluate_exit(position, current_price)
@@ -379,12 +391,20 @@ async def position_manager_loop(analyzer, tracker):
                     position.is_moonbag = True
                     continue
                 if getattr(config, "PARTIAL_TP_ENABLED", False) and max_pnl_pct >= _tp2 and not getattr(position, "tp2_done", False):
-                    tracker.partial_close_position(mint, current_price, _tp2_sell, f"Take Profit +{_tp2*100:.0f}% (2.2x Free Ride)")
+                    tracker.partial_close_position(mint, current_price, _tp2_sell, f"Take Profit +{_tp2*100:.0f}% (Tier-2 {int(_tp2_sell*100)}%)")
                     position.tp2_done = True
                     continue
-                if getattr(config, "PARTIAL_TP_ENABLED", False) and max_pnl_pct >= _mb and not getattr(position, "is_moonbag", False):
-                    tracker.partial_close_position(mint, current_price, _mb_sell, f"Take Profit +{_mb*100:.0f}% (Risk Free)")
-                    position.is_moonbag = True
+                if getattr(config, "PARTIAL_TP_ENABLED", False) and max_pnl_pct >= _tp3 and not getattr(position, "tp3_done", False):
+                    tracker.partial_close_position(mint, current_price, _tp3_sell, f"Take Profit +{_tp3*100:.0f}% (Tier-3 {int(_tp3_sell*100)}%)")
+                    position.tp3_done = True
+                    continue
+                if getattr(config, "PARTIAL_TP_ENABLED", False) and max_pnl_pct >= _tp4 and not getattr(position, "tp4_done", False):
+                    tracker.partial_close_position(mint, current_price, _tp4_sell, f"Take Profit +{_tp4*100:.0f}% (Tier-4 {int(_tp4_sell*100)}%)")
+                    position.tp4_done = True
+                    continue
+                if getattr(config, "PARTIAL_TP_ENABLED", False) and max_pnl_pct >= _tp5 and not getattr(position, "tp5_done", False):
+                    tracker.partial_close_position(mint, current_price, _tp5_sell, f"Take Profit +{_tp5*100:.0f}% (Tier-5 {int(_tp5_sell*100)}%)")
+                    position.tp5_done = True
                     continue
 
                 # 1.5 ГАРАНТИРОВАННЫЙ НЕСНИЖАЕМЫЙ ПОРОГ ПРИБЫЛИ (PROFIT FLOOR LOCK)
@@ -881,6 +901,19 @@ async def scanner_loop(analyzer, tracker):
                                     print(f"🚫 [SCANNER-PRICE-SPLIT] {actual_symbol} ({mint[:8]}): рассинхрон пулов {_div_r:.1f}x — блок.")
                                     continue
                                 _dex_id = str((pair_data.get("dexId") or "")).lower()
+                                if _dex_id in ("pump", "pumpfun"):
+                                    _fdv_m_sc = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
+                                    _min_c_sc = float(getattr(config, "MIN_PUMP_CURVE_MCAP_USD", 9000.0))
+                                    if not getattr(config, "ALLOW_UNGRADUATED_PUMPFUN", True):
+                                        print(f"🚫 [SCANNER-RAW-CURVE] {actual_symbol} ({mint[:8]}): сырая кривая Pump.fun без миграции на DEX — отмена!")
+                                        continue
+                                    if 0 < _fdv_m_sc < _min_c_sc:
+                                        print(f"🚫 [SCANNER-CURVE-FLASH-RUG] {actual_symbol} ({mint[:8]}): FDV ${_fdv_m_sc:,.0f} < ${_min_c_sc:,.0f} (пустой кёрв, flash-rug) — отмена!")
+                                        continue
+                                _min_grad_sc = float(getattr(config, "MIN_GRADUATED_LIQ_USD", 7500.0))
+                                if _dex_id not in ("pump", "pumpfun") and liq_usd < _min_grad_sc:
+                                    print(f"🚫 [SCANNER-LOW-LIQ] {actual_symbol} ({mint[:8]}): ликвидность DEX ${liq_usd:,.0f} < ${_min_grad_sc:,.0f} — отмена!")
+                                    continue
                                 _pc_live = pair_data.get("priceChange") or {}
                                 _m5_live = float(_pc_live.get("m5", 0) or 0)
                                 _m1_live = float(_pc_live.get("m1", 0) or 0)

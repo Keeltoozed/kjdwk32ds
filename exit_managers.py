@@ -100,7 +100,7 @@ class MatureExitManager:
                 _floor_pnl = max(0.38, round(max_pnl_pct * 0.45, 2))
             elif max_pnl_pct >= 0.50:     # +50%..+80% (TP1 уже взят!): держим минимум +20% на остаток
                 _floor_pnl = 0.20
-            elif max_pnl_pct >= 0.32 and minutes_held >= 1.5:  # Пробой +32%+: переводим стоп в честный безубыток +3.5%
+            elif max_pnl_pct >= 0.22 and minutes_held >= 1.5:  # Пробой +22%+: переводим стоп в честный безубыток +3.5%
                 _floor_pnl = 0.035
         elif max_pnl_pct >= 5.00:       # Гипер-ракета (+500%+): держим 75% прибыли
             _floor_pnl = round(max_pnl_pct * 0.75, 2)
@@ -116,7 +116,7 @@ class MatureExitManager:
             _floor_pnl = 0.35
         elif max_pnl_pct >= 0.50:     # Пик +50%+ -> гарантируем минимум +20%
             _floor_pnl = 0.20
-        elif max_pnl_pct >= 0.32 and minutes_held >= 1.5:     # Пик +32%..+50%: безубыток +3.5%
+        elif max_pnl_pct >= 0.22 and minutes_held >= 1.5:     # Пик +22%..+50%: безубыток +3.5%
             _floor_pnl = 0.035
         if _floor_pnl is not None and pnl_pct <= _floor_pnl:
             # 2-тиковое подтверждение пробоя пола (защита от 1-секундных проколов и теней свечей),

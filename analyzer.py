@@ -823,20 +823,38 @@ class Analyzer:
                 t = tx.get(key) or {}
                 return {"buys": int(t.get("buys", 0) or 0), "sells": int(t.get("sells", 0) or 0)}
 
-            print(f"🦎 GeckoTerminal fallback для {mint[:8]}: пул найден.")
+            pair_addr_gt = str(best.get("id") or "").replace("solana_", "").strip()
+            dex_rel = str((((best.get("relationships") or {}).get("dex") or {}).get("data") or {}).get("id") or "").lower()
+            res_usd = float(a.get("reserve_in_usd") or 0)
+            if "pumpswap" in dex_rel:
+                real_dex = "pumpswap"
+            elif "raydium" in dex_rel:
+                real_dex = "raydium"
+            elif "meteora" in dex_rel:
+                real_dex = "meteora"
+            elif "orca" in dex_rel:
+                real_dex = "orca"
+            elif "pump" in dex_rel and res_usd < 6000.0:
+                real_dex = "pump"
+            else:
+                real_dex = "pumpswap" if (mint.endswith("pump") and res_usd >= 6000.0) else ("pump" if mint.endswith("pump") else (dex_rel or "raydium"))
+
+            print(f"🦎 GeckoTerminal fallback для {mint[:8]}: пул найден ({real_dex}, liq ${res_usd:,.0f}).")
             return {
-                "baseToken": {"symbol": symbol, "name": symbol},
+                "pairAddress": pair_addr_gt,
+                "baseToken": {"symbol": symbol, "name": symbol, "address": mint},
                 "priceUsd": str(a.get("base_token_price_usd") or 0),
                 "priceChange": {"m5": float(pc.get("m5") or 0), "m1": 0.0,
                                 "h1": float(pc.get("h1") or 0), "h24": float(pc.get("h24") or 0)},
                 "txns": {"m5": _tx("m5"), "h1": _tx("h1"), "h24": _tx("h24")},
                 "volume": {"m5": float(vu.get("m5") or 0), "h1": float(vu.get("h1") or 0),
                            "h24": float(vu.get("h24") or 0)},
-                "liquidity": {"usd": float(a.get("reserve_in_usd") or 0)},
+                "liquidity": {"usd": res_usd},
                 "fdv": float(a.get("fdv_usd") or a.get("market_cap_usd") or 0),
                 "pairCreatedAt": created_ms,
-                "dexId": "pump" if mint.endswith("pump") else "raydium",
+                "dexId": real_dex,
                 "info": {"socials": [], "websites": []},
+                "_socials_unknown": True,
             }
         except Exception as e:
             print(f"GeckoTerminal token data error: {type(e).__name__} {e}")
@@ -1221,6 +1239,22 @@ class Analyzer:
             
         _created_pre = pair_data.get("pairCreatedAt") or 0
         _age_min_pre = (time.time() * 1000 - _created_pre) / 60000.0 if _created_pre else 999
+        _dex_pre_early = str(pair_data.get("dexId", "")).lower()
+        if _dex_pre_early in ("pump", "pumpfun"):
+            if not getattr(config, "ALLOW_UNGRADUATED_PUMPFUN", True):
+                return self._deny(
+                    mint,
+                    "ungraduated-pump-curve",
+                    f"⏳ [CURVE-SKIP] {symbol} ({mint[:8]}): сырая кривая Pump.fun без миграции на DEX — ждём выхода на PumpSwap/Raydium.",
+                )
+            _fdv_curve_pre = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
+            _min_curve_mcap = float(getattr(config, "MIN_PUMP_CURVE_MCAP_USD", 9000.0))
+            if _fdv_curve_pre > 0 and _fdv_curve_pre < _min_curve_mcap:
+                return self._deny(
+                    mint,
+                    f"pump-curve-too-early ${_fdv_curve_pre:.0f}<{_min_curve_mcap:.0f}",
+                    f"🚫 [CURVE-FLASH-RUG] {symbol} ({mint[:8]}): FDV ${_fdv_curve_pre:,.0f} < ${_min_curve_mcap:,.0f} (прогресс кривой < 15%) — зона flash-rug с пустым пулом (как NOTHING/CAMPUS).",
+                )
         _sol_min_age = float(getattr(config, "SOLANA_MIN_AGE_MIN", 1.0))
         if _age_min_pre < _sol_min_age:
             print(f"⏳ [ENTRY] {mint[:8]}: возраст {_age_min_pre:.1f}м < {_sol_min_age}м — flash-rug зона дева, ждём созревания.")
@@ -1274,14 +1308,26 @@ class Analyzer:
             # 🛡️ ЭТАП 2: ОНЧЕЙН-АУДИТ БЕЗОПАСНОСТИ И ЗАЩИТА ОТ СКАМА (ДЛЯ ML-КАНДИДАТОВ)
             # =========================================================================
 
-            # 1. Защита от микрованночек и фейковых AMM-пулов
-            _min_liq = 1000 if is_pump_curve else (4000 if _age_min_pre < 60 else 8000)
-            if liq_val < _min_liq:
-                return self._deny(mint, f"low-liq ${liq_val:.0f}<{_min_liq}", f"🚫 [ANTI-RUG] {symbol} ({mint[:8]}): Ликвидность ${liq_val:,.0f} < ${_min_liq} — риск проскальзывания.")
+            # 1. Защита от микрованночек, сырых кёрвов и фейковых AMM-пулов
+            _is_raw_curve = dex_id_low in ("pump", "pumpfun")
+            _min_grad_liq = float(getattr(config, "MIN_GRADUATED_LIQ_USD", 7500.0))
+            _min_liq = 1000.0 if _is_raw_curve else _min_grad_liq
+            _eff_pool_liq = liq_val if _is_raw_curve else raw_liq
+            if _eff_pool_liq < _min_liq:
+                return self._deny(mint, f"low-liq ${_eff_pool_liq:.0f}<{_min_liq:.0f}", f"🚫 [ANTI-RUG] {symbol} ({mint[:8]}): Реальная ликвидность DEX ${_eff_pool_liq:,.0f} < ${_min_liq:,.0f} — риск дампа/проскальзывания.")
+
+            # Защита от анонимных wash-bot накруток на DEX (кейс Belief -96.7%: 0 соцсетей, liq <$22k, vol5/liq > 2.6x при слабом перевесе покупателей)
+            _info_a = pair_data.get("info") or {}
+            _has_soc_a = bool((_info_a.get("socials") or []) or (_info_a.get("websites") or [])) or bool(pair_data.get("_socials_unknown"))
+            if not _is_raw_curve and not _has_soc_a and raw_liq < 22000.0:
+                _v2l_a = _vm5_pre / max(raw_liq, 1.0)
+                _bs_a = _b5_pre / float(max(_s5_pre, 1))
+                if _v2l_a > 2.6 and _bs_a < 1.8:
+                    return self._deny(mint, f"anon-wash-churn {_v2l_a:.1f}x", f"🚫 [WASH-TRAP] {symbol} ({mint[:8]}): 0 соцсетей, liq ${raw_liq:,.0f}, оборот 5м {_v2l_a:.1f}x пула (b/s {_bs_a:.2f}) — анонимный wash-дамп!")
 
             # Блок кастомных не-pump токенов на PumpSwap с микропулом
-            if dex_id_low == "pumpswap" and not mint.endswith("pump") and liq_val < 6000.0:
-                return self._deny(mint, "fake-pumpswap-unlocked-lp", f"🚫 [FAKE-PUMPSWAP] {symbol} ({mint[:8]}): кастомный токен на PumpSwap с микропулом (${liq_val:.0f} < $6k) — блок!")
+            if dex_id_low == "pumpswap" and not mint.endswith("pump") and raw_liq < _min_grad_liq:
+                return self._deny(mint, "fake-pumpswap-unlocked-lp", f"🚫 [FAKE-PUMPSWAP] {symbol} ({mint[:8]}): кастомный токен на PumpSwap с микропулом (${raw_liq:.0f} < ${_min_grad_liq:.0f}) — блок!")
 
             # Защита от фантомных пулов с мизерным остатком реального SOL
             _quote_info = pair_data.get("liquidity", {}) or {}
@@ -1432,7 +1478,7 @@ class Analyzer:
                     if top_10_sum_pct > max_allowed_top10:
                         return self._deny(mint, f"top10-hold {top_10_sum_pct:.1f}%", f"🚫 [АНТИСКАМ] Топ-10 держат {top_10_sum_pct:.1f}% > {max_allowed_top10:.0f}% у {mint[:8]} → Блок.")
 
-                    # Layer 7 (RugCheck insiders/graph) + Layer 8 (SPL Holder Delegations / Drain Trap)
+                    # Layer 7 (RugCheck insiders/graph) + Layer 8 (SPL Holder Delegations) + Layer 9/10 (Staircase & Sybil Farm)
                     try:
                         import asyncio as _aio_aud
                         import goplus as _gp_aud
@@ -1441,23 +1487,30 @@ class Analyzer:
                         _dec_s = int(_tok_meta.get("decimals") or 6)
                         _ui_s = (_raw_s / (10 ** _dec_s)) if _raw_s > 0 else 1_000_000_000.0
                         _h_accs = [str(h.get("address") or "") for h in top_holders[:20] if h.get("address") and str(h.get("address")) not in pool_accounts]
-                        (_l7_ok, _l7_why), (_l8_ok, _l8_why) = await _aio_aud.gather(
+                        _h_owners = [str(h.get("owner") or "") for h in top_holders[:20] if h.get("owner") and str(h.get("owner")) not in pool_accounts and float(h.get("pct") or 0) <= 50.0]
+                        (_l7_ok, _l7_why), (_l8_ok, _l8_why), (_l9_ok, _l9_why) = await _aio_aud.gather(
                             _gp_aud.check_rugcheck_insider_graph(mint, total_supply_raw=_raw_s, pool_accounts=pool_accounts),
                             _gp_aud.check_spl_holder_delegations(mint, holder_token_accounts=_h_accs, total_supply_ui=_ui_s),
+                            _gp_aud.check_staircase_and_sybil_farm(mint, pair_address=str(pair_data.get("pairAddress") or ""), holder_owners=_h_owners),
                         )
                         if not _l7_ok:
                             return self._deny(mint, "insider-graph-bundle", f"🚫 [АНТИСКАМ-L7] {symbol} ({mint[:8]}): {_l7_why} → Блок.")
                         if not _l8_ok:
                             return self._deny(mint, "spl-delegation-drain", f"🚫 [АНТИСКАМ-L8] {symbol} ({mint[:8]}): {_l8_why} → Скрытый дрейнер!")
+                        if not _l9_ok:
+                            return self._deny(mint, "staircase-sybil-farm", f"🚫 [АНТИСКАМ-L9/10] {symbol} ({mint[:8]}): {_l9_why} → Ботоферма дева!")
                     except Exception:
                         pass
                 else:
-                    # Фоллбэк на GoPlus если RugCheck не ответил
+                    # Фоллбэк на GoPlus + Layer 8/9/10 если RugCheck ещё не проиндексировал пул
                     try:
                         import goplus as _gp
                         _g_ok, _g_why = await _gp.check_solana(mint)
                         if not _g_ok:
                             return self._deny(mint, f"goplus-reject {_g_why}", f"🚫 [GOPLUS] {symbol} ({mint[:8]}): {_g_why} — блок входа.")
+                        _l9_fb_ok, _l9_fb_why = await _gp.check_staircase_and_sybil_farm(mint, pair_address=str(pair_data.get("pairAddress") or ""))
+                        if not _l9_fb_ok:
+                            return self._deny(mint, "staircase-sybil-farm", f"🚫 [АНТИСКАМ-L9/10] {symbol} ({mint[:8]}): {_l9_fb_why} → Ботоферма дева!")
                         _h_stats = _gp.get_solana_holder_stats(mint)
                         if _h_stats.get("has_data"):
                             self._last_top10 = _h_stats.get("top_10_pct", 0.0)

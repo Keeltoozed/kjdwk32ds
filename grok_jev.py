@@ -328,7 +328,10 @@ class GrokJevEngine:
         Helius Parsed History: GET /v0/addresses/{mint}/transactions. Любая ошибка -> (None, None), торговлю не трогает."""
         try:
             import config as _c
+            import goplus as _gp_h
             from http_client import fetch_json
+            if time.time() < getattr(_gp_h, "_HELIUS_429_UNTIL", 0.0):
+                return None, None
             wallets = _smart_wallets()
             key = (os.getenv("HELIUS_API_KEY") or getattr(_c, "HELIUS_API_KEY", "") or "").strip()
             if not key or not wallets:
@@ -337,6 +340,8 @@ class GrokJevEngine:
                 f"https://api.helius.xyz/v0/addresses/{mint}/transactions",
                 params={"api-key": key, "limit": 50}, timeout=5, retries=0), timeout=7.0)
             if st != 200 or not isinstance(data, list):
+                if st in (401, 403, 429):
+                    _gp_h._note_rpc_status("helius", st)
                 _log_groq(f"helius history {mint[:6]}: HTTP {st}")
                 return None, None
             payers = {str(t.get("feePayer") or "") for t in data if isinstance(t, dict)} - {""}
@@ -391,19 +396,21 @@ class GrokJevEngine:
         if not _cc_ok:
             return False, _cc_why
 
-        # 1. Ликвидность (с защитой от гигантских не-мем пулов и фантомной ликвидности)
+        # 1. Ликвидность (с защитой от сырых кёрвов Pump.fun, микро-пулов и фантомной ликвидности)
         raw_liq = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
         fdv_mc = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
 
-        # Для немигрировавших токенов Pump.fun: пускаем живые ранние кёрвы от $6,000 FDV (или $5,000 при активных покупках, кейс HASHMINE)
-        if dex_id in ("pump", "pumpfun") and fdv_mc < 6000.0:
-            _etx5 = (pair_data.get("txns") or {}).get("m5", {}) or {}
-            _eb5, _es5 = int(_etx5.get("buys", 0) or 0), int(_etx5.get("sells", 0) or 0)
-            _evol5 = float((pair_data.get("volume") or {}).get("m5", 0) or 0)
-            if not (fdv_mc >= 5000.0 and _evol5 >= 2000.0 and _eb5 >= 15 and _eb5 >= _es5 * 1.15):
-                return False, f"pump-curve-too-early: FDV ${fdv_mc:,.0f} < $6,000 (early curve, dev dump risk)"
+        # ЗАЩИТА ОТ ПУСТЫХ 0.2% FLASH-RUG КЁРВОВ PUMP.FUN (кейсы NOTHING $2.6k, CAMPUS $2.6k):
+        # На пустой кривой с 2 SOL резерва любой дамп дева пробивает стоп сразу в -75%!
+        # Пускаем Pump.fun кёрвы ТОЛЬКО если они уже набрали базу (прогресс >=15% / FDV >=$9k, кейсы MOBROS $12.5k, OREX $13k)!
+        if dex_id in ("pump", "pumpfun"):
+            if not getattr(_c, "ALLOW_UNGRADUATED_PUMPFUN", True):
+                return False, "ungraduated-pump-curve (ждём миграции на DEX с сожжённым LP)"
+            _min_curve_mc = float(getattr(_c, "MIN_PUMP_CURVE_MCAP_USD", 9000.0))
+            if fdv_mc > 0 and fdv_mc < _min_curve_mc:
+                return False, f"pump-curve-flash-rug: FDV ${fdv_mc:,.0f} < ${_min_curve_mc:,.0f} (пустой кёрв <15%, риск мгновенного сноса в -75%)"
 
-        eff_liq = raw_liq if raw_liq > 0 else (fdv_mc * 0.40 if is_pump else 0.0)
+        eff_liq = raw_liq if dex_id not in ("pump", "pumpfun") else (raw_liq if raw_liq > 0 else fdv_mc * 0.40)
         
         # ЗАЩИТА ОТ ФАНТОМНОЙ ЛИКВИДНОСТИ И ОДНОМИНУТНЫХ ДЕВ-ДАМПОВ:
         # В пуле ОБЯЗАН быть реальный резерв SOL (>= 10-12 SOL), чтобы не пускать пустышки по 1.3-2.9 SOL вроде ZECP/MIKE/SLEGO.
@@ -419,8 +426,8 @@ class GrokJevEngine:
         created_at = pair_data.get("pairCreatedAt") or 0
         age_min = (time.time() * 1000 - created_at) / 60000.0 if created_at else 0.5
 
-        # Для мемкоинов и pump/meteora пулов порог $1,500 (пропускает $95 SOL пулы 15-20 SOL, CHAMELEON $4.9k, NACRE $11k, RTROLL)
-        min_liq = 1500.0 if (is_pump or dex_id in ("pump", "pumpfun", "pumpswap", "meteora")) else (4000.0 if age_min < 60.0 else float(getattr(_c, "JEV_MIN_LIQUIDITY_USD", 6000.0)))
+        _min_grad_liq = float(getattr(_c, "MIN_GRADUATED_LIQ_USD", 7500.0))
+        min_liq = 1500.0 if dex_id in ("pump", "pumpfun") else _min_grad_liq
         if eff_liq < min_liq:
             return False, f"liq-depth-low ${eff_liq:.0f} < ${min_liq:.0f} (micro-cap dump trap)"
             
@@ -540,11 +547,17 @@ class GrokJevEngine:
                 return False, f"trades-h24-low {trades_h24} < {min_trades_h24}"
 
         # 4.1. Wash Trading Check (накрутка объёма ботами копеечными сделками)
-        # 4.1. Wash Trading Check (накрутка объёма ботами копеечными сделками по h24)
+        # Разрешаем сильные памп-монеты с bump-ботами при наличии реального пула ликвидности ($7k+) и объема ($10k+)
         if trades_h24 >= 400 and vol_h24 > 0:
             avg_trade = vol_h24 / trades_h24
-            if avg_trade < 12.0:
-                return False, f"wash-trading-trap (avg trade ${avg_trade:.1f} < $12 across {trades_h24} txns)"
+            _is_strong_volume_pump = (
+                (vol_h24 >= 10000.0 or vol_m5 >= 2500.0)
+                and eff_liq >= 7000.0
+                and fdv_mc >= 15000.0
+                and avg_trade >= 0.50
+            )
+            if avg_trade < 12.0 and not _is_strong_volume_pump:
+                return False, f"wash-trading-trap (avg trade ${avg_trade:.1f} < $12 across {trades_h24} txns, weak pool)"
 
         # 5. Рыночная капитализация (MCap / FDV): минимум $48,000 для всех токенов
         # Отсекает микро-скамы pump.fun ($5k-$20k), где создатель держит 30% и сливает на входе (KAT)
@@ -1170,6 +1183,7 @@ class GrokJevEngine:
         6. AI ML Scam Filter (XGBoost)
         7. Клон-фильтр (is_clone)
         """
+        import config as _c
         _h_stats = {"top1_pct": 0.0, "top10_pct": 0.0, "dev_pct": 0.0}
         base_info = pair_data.get("baseToken", {}) or {}
         name = str(base_info.get("name", "")).upper()
@@ -1192,12 +1206,18 @@ class GrokJevEngine:
         has_twitter = any("twitter" in s.get("type", "").lower() or "x.com" in s.get("url", "").lower() for s in socials)
         has_tg = any("telegram" in s.get("type", "").lower() or "t.me" in s.get("url", "").lower() for s in socials)
         has_website = len(websites) > 0
-        has_socials = bool(has_twitter or has_tg or has_website)
+        has_socials = bool(has_twitter or has_tg or has_website or pair_data.get("_socials_unknown"))
 
         raw_liq = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
         fdv = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
         dex_id = str(pair_data.get("dexId", "")).lower()
         is_pump = dex_id in ("pump", "pumpfun")
+        if is_pump:
+            if not getattr(_c, "ALLOW_UNGRADUATED_PUMPFUN", True):
+                return False, "ungraduated-pump-curve (ждём миграции на DEX с сожжённым LP)", _h_stats
+            _min_c_mc = float(getattr(_c, "MIN_PUMP_CURVE_MCAP_USD", 9000.0))
+            if fdv > 0 and fdv < _min_c_mc:
+                return False, f"pump-curve-flash-rug (FDV ${fdv:,.0f} < ${_min_c_mc:,.0f})", _h_stats
         eff_liq = max(raw_liq, fdv * 0.40) if is_pump else raw_liq
 
         # Токены на AMM (PumpSwap / Raydium / Meteora) без соцсетей пускаем ТОЛЬКО при наличии подтвержденного органического потока
@@ -1206,8 +1226,13 @@ class GrokJevEngine:
         _b5 = int(_tx5.get("buys", 0) or 0)
         _s5 = int(_tx5.get("sells", 0) or 0)
         _vol5 = float((pair_data.get("volume") or {}).get("m5", 0) or 0)
+        if not is_pump and not has_socials and eff_liq < 22000.0:
+            _v2l = _vol5 / max(eff_liq, 1.0)
+            _bs = _b5 / float(max(_s5, 1))
+            if _v2l > 2.6 and _bs < 1.8:
+                return False, f"anon-wash-churn-trap (0 socials, liq ${eff_liq:,.0f}, vol5/liq {_v2l:.1f}x, b/s {_bs:.2f})", _h_stats
         _is_organic_flow = (
-            (_b5 >= 12 and _b5 >= _s5 and _vol5 >= 2500.0 and eff_liq >= 6000.0)
+            (_b5 >= 12 and _b5 >= _s5 and _vol5 >= 2500.0 and eff_liq >= float(getattr(_c, "MIN_GRADUATED_LIQ_USD", 7500.0)))
             or (_b5 >= 35 and _b5 >= _s5 * 1.15 and eff_liq >= 10000.0)
         )
 
@@ -1383,24 +1408,33 @@ class GrokJevEngine:
                     if top_10_sum > max_top10:
                         return False, f"top 10 concentration {top_10_sum:.1f}% > {max_top10:.0f}%", _h_stats
 
-                    # Layer 7 (RugCheck insiders/graph) + Layer 8 (SPL Holder Delegations / Approve Drain) параллельно!
+                    # Layer 7 (insiders/graph) + Layer 8 (SPL Delegations) + Layer 9/10 (Staircase & Sybil Farm) параллельно!
                     _holder_tok_accs = [str(h.get("address") or "") for h in holders[:20] if h.get("address") and str(h.get("address")) not in pool_accounts]
+                    _holder_owners = [str(h.get("owner") or "") for h in holders[:20] if h.get("owner") and str(h.get("owner")) not in pool_accounts and float(h.get("pct") or 0) <= 50.0]
                     _raw_sup = float((token_info.get("supply") or 0.0))
                     _dec_sup = int(token_info.get("decimals") or 6)
                     _ui_sup = (_raw_sup / (10 ** _dec_sup)) if _raw_sup > 0 else 1_000_000_000.0
-                    (_l7_ok, _l7_why), (_l8_ok, _l8_why) = await asyncio.gather(
+                    (_l7_ok, _l7_why), (_l8_ok, _l8_why), (_l9_ok, _l9_why) = await asyncio.gather(
                         _gp.check_rugcheck_insider_graph(address, total_supply_raw=_raw_sup, pool_accounts=pool_accounts),
                         _gp.check_spl_holder_delegations(address, holder_token_accounts=_holder_tok_accs, total_supply_ui=_ui_sup),
+                        _gp.check_staircase_and_sybil_farm(address, pair_address=str(pair_data.get("pairAddress") or ""), holder_owners=_holder_owners),
                     )
                     if not _l7_ok:
                         return False, f"auditor-layer7 {_l7_why}", _h_stats
                     if not _l8_ok:
                         return False, f"auditor-layer8 {_l8_why}", _h_stats
+                    if not _l9_ok:
+                        return False, f"auditor-layer9/10 {_l9_why}", _h_stats
                 else:
-                    # Фоллбэк: RugCheck API вернул 400/404/429/500 -> проверяем GoPlus holder stats + Layer 8 RPC Delegations
-                    _l8_fb_ok, _l8_fb_why = await _gp.check_spl_holder_delegations(address)
+                    # Фоллбэк: RugCheck API вернул 400/404/429/500 -> проверяем GoPlus holder stats + Layer 8/9/10
+                    (_l8_fb_ok, _l8_fb_why), (_l9_fb_ok, _l9_fb_why) = await asyncio.gather(
+                        _gp.check_spl_holder_delegations(address),
+                        _gp.check_staircase_and_sybil_farm(address, pair_address=str(pair_data.get("pairAddress") or "")),
+                    )
                     if not _l8_fb_ok:
                         return False, f"auditor-layer8 {_l8_fb_why}", _h_stats
+                    if not _l9_fb_ok:
+                        return False, f"auditor-layer9/10 {_l9_fb_why}", _h_stats
                     _h_raw = _gp.get_solana_holder_stats(address)
                     if _h_raw and _h_raw.get("has_data"):
                         _h_stats["top10_pct"] = float(_h_raw.get("top_10_pct", 0.0) or 0.0)
