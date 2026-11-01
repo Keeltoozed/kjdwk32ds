@@ -17,7 +17,7 @@ import config
 from http_client import fetch_json
 
 URL = ("https://public-api.birdeye.so/defi/token_trending"
-       "?sort_by=rank&sort_type=asc&offset=0&limit=50")
+       "?sort_by=rank&sort_type=asc&offset=0&limit=20")
 
 
 async def fetch_birdeye_trending(chain: str) -> list:
@@ -43,7 +43,7 @@ async def birdeye_loop(analyzer, tracker):
     if not (getattr(config, "BIRDEYE_API_KEY", "") or ""):
         return
     chains = list(getattr(config, "BIRDEYE_CHAINS",
-                          ["solana", "base"]))
+                          ["solana"]))
     print(f"🦅 Birdeye Scanner запущен: ротация {chains}!")
     processed = {}
     tick = 0

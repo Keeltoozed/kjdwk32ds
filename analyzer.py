@@ -798,12 +798,10 @@ class Analyzer:
             return await self.fetch_token_data_gecko(mint)
 
     async def fetch_token_data_gecko(self, mint: str) -> dict:
-        from http_client import fetch_json
+        import market_data
         try:
-            url = f"https://api.geckoterminal.com/api/v2/networks/solana/tokens/{mint}/pools?page=1"
-            status, data = await fetch_json(url, timeout=10, retries=1,
-                                            headers={"Accept": "application/json"})
-            if status != 200 or not data:
+            data = await market_data._gt_get(f"/networks/solana/tokens/{mint}/pools?page=1", retries=0, timeout=8)
+            if not data:
                 return {}
             
             pools = data.get("data", [])
@@ -1293,25 +1291,28 @@ class Analyzer:
                 return self._deny(mint, f"ghost-pool-sol {_quote_amt:.1f}<5", f"🚫 [AMM-GHOST-POOL] {symbol} ({mint[:8]}): в пуле всего {_quote_amt:.2f} SOL < 5 SOL — микро-резерв.")
 
             # 2. Защита от Honeypot на Solana (0 продаж при 5+ покупках)
-            if _s5_pre == 0 and _b5_pre >= 5:
-                return self._deny(mint, "honeypot-zero-sells", f"🚫 [HONEYPOT] {symbol} ({mint[:8]}): 0 продаж при {_b5_pre} покупках — Honeypot.")
-            if (_b5_pre + _s5_pre) >= 20 and (_s5_pre / (_b5_pre + _s5_pre)) < 0.05:
-                return self._deny(mint, "honeypot-anomaly", f"🚫 [HONEYPOT] {symbol} ({mint[:8]}): аномалия продаж m5 {_s5_pre}s/{_b5_pre}b (<5% продаж) — скрытый honeypot.")
+            # Каноничные .pump контракты Pump.fun используют неизменяемый SPL-контракт (не могут заблокировать sell или ввести налог;
+            # на первых секундах миграции на PumpSwap 6b/0s — это старт новой ракеты, кейс ENOKIN +344%!)
+            _is_canonical_pump = mint.endswith("pump") and dex_id_low in ("pump", "pumpfun", "pumpswap")
+            if not _is_canonical_pump:
+                if _s5_pre == 0 and _b5_pre >= 5:
+                    return self._deny(mint, "honeypot-zero-sells", f"🚫 [HONEYPOT] {symbol} ({mint[:8]}): 0 продаж при {_b5_pre} покупках — Honeypot.")
+                if (_b5_pre + _s5_pre) >= 20 and (_s5_pre / (_b5_pre + _s5_pre)) < 0.05:
+                    return self._deny(mint, "honeypot-anomaly", f"🚫 [HONEYPOT] {symbol} ({mint[:8]}): аномалия продаж m5 {_s5_pre}s/{_b5_pre}b (<5% продаж) — скрытый honeypot.")
 
             # 3. Ончейн-аудит: RugCheck & GoPlus
             _is_pump_flag = 1 if (mint.endswith("pump") or dex_id_low in ("pump", "pumpfun", "pumpswap")) else 0
             try:
-                import aiohttp
-                session = await self.get_session()
+                from http_client import fetch_json
                 rc_data = None
                 rugcheck_url = f"https://api.rugcheck.xyz/v1/tokens/{mint}/report"
-                async with session.get(rugcheck_url, timeout=8) as resp:
-                    if resp.status == 200:
-                        rc_data = await resp.json(content_type=None)
-                    elif resp.status == 400:
-                        print(f"ℹ️ [RUGCHECK] {mint[:8]}: монета ещё не проиндексирована RugCheck (код 400) -> аудит через GoPlus...")
-                    else:
-                        print(f"⚠️ RugCheck API вернул {resp.status} для {mint[:8]}.")
+                _rc_st, _rc_json = await fetch_json(rugcheck_url, timeout=8, retries=1)
+                if _rc_st == 200 and isinstance(_rc_json, dict):
+                    rc_data = _rc_json
+                elif _rc_st == 400:
+                    print(f"ℹ️ [RUGCHECK] {mint[:8]}: монета ещё не проиндексирована RugCheck (код 400) -> аудит через GoPlus...")
+                elif _rc_st not in (0, 429):
+                    print(f"⚠️ RugCheck API вернул {_rc_st} для {mint[:8]}.")
 
                 if rc_data:
                     token_info = rc_data.get("token", {})
@@ -1340,6 +1341,11 @@ class Analyzer:
                     _rc_score = max(0.0, _rc_raw_score - _rc_penalty_to_ignore)
                     if _rc_score >= 2000:
                         return self._deny(mint, f"rugcheck-score {_rc_score:.0f}", f"🚫 [АНТИСКАМ] RugCheck Score {_rc_score:.0f} >= 2000 у {mint[:8]} → СКАМ")
+                    if not _is_pump_flag:
+                        for _rk in (rc_data.get("risks") or []):
+                            _rkn = str(_rk.get("name") or "").lower()
+                            if "unlocked" in _rkn and "lp" in _rkn:
+                                return self._deny(mint, "rugcheck-lp-unlocked", f"🚫 [АНТИСКАМ] Незаблокированный LP ({_rk.get('name')}) у {mint[:8]} → LP RUG")
 
                     # Проверка холдеров RugCheck
                     top_holders = rc_data.get("topHolders") or []
@@ -1717,7 +1723,7 @@ class Analyzer:
             _b5, _s5 = _txm5.get("buys", 0) or 0, _txm5.get("sells", 0) or 0
             if _s > 0 and _b < _s * 1.1 and not (_m5 >= 3.0 and _s5 > 0 and _b5 >= _s5 * 1.2):
                 return self._deny(mint, "no-buyer-pressure-h1", f"🚫 [ENTRY] {mint}: buys {_b} / sells {_s} — нет давления покупателей.")
-            if _s == 0 and _b > 10:
+            if _s == 0 and _b > 10 and not mint.endswith("pump"):
                 return self._deny(mint, "honeypot-zero-sells", f"🚫 [HONEYPOT] {mint}: {_b} покупок и 0 продаж! Очевидный скам/honeypot.")
 
             # Проверка суточного объёма: не душим свежие ракеты с подтверждённым 5м-объёмом

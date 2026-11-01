@@ -841,11 +841,19 @@ async def scanner_loop(analyzer, tracker):
                                           is_good, getattr(analyzer, "last_score", 0.0))
 
                         if is_good:
-                            _cached_pair = getattr(analyzer, "_prefetch_cache", {}).pop(mint, None)
+                            _cached_hit = getattr(analyzer, "_prefetch_cache", {}).pop(mint, None)
+                            if isinstance(_cached_hit, tuple) and len(_cached_hit) >= 2 and isinstance(_cached_hit[1], dict):
+                                _cached_pair = dict(_cached_hit[1])
+                            elif isinstance(_cached_hit, dict):
+                                _cached_pair = dict(_cached_hit)
+                            else:
+                                _cached_pair = None
                             pair_data = await analyzer.fetch_token_data(mint)
-                            entry_price = float(pair_data.get("priceUsd", 0)) if pair_data else 0
+                            if not isinstance(pair_data, dict):
+                                pair_data = {}
+                            entry_price = float(pair_data.get("priceUsd", 0) or 0) if pair_data else 0.0
                             if (not pair_data or entry_price <= 0) and _cached_pair:
-                                pair_data = _cached_pair
+                                pair_data = dict(_cached_pair)
                                 entry_price = float(pair_data.get("priceUsd", 0) or 0)
                             if entry_price <= 0:
                                 try:
@@ -856,7 +864,7 @@ async def scanner_loop(analyzer, tracker):
                                         if pair_data:
                                             pair_data["priceUsd"] = _j_pr
                                         elif _cached_pair:
-                                            pair_data = _cached_pair
+                                            pair_data = dict(_cached_pair)
                                             pair_data["priceUsd"] = _j_pr
                                         else:
                                             pair_data = {"baseToken": {"symbol": "UNKNOWN"}, "pairAddress": mint, "priceUsd": _j_pr}
@@ -880,8 +888,8 @@ async def scanner_loop(analyzer, tracker):
                                 _pk_drop_live = float(pair_data.get("_drop_from_peak_5m", 0.0) or 0.0)
                                 _lq_drop_live = float(pair_data.get("_liq_drop_from_peak", 0.0) or 0.0)
 
-                                # Повторная проверка живых метрик после сброса prefetch-кэша (защита от кейса CHUNKEE: кэш +m5, а живой рынок m5 -1.6%, m1 -8.8%)
-                                if _m5_live < 2.5 or _m1_live < -8.0:
+                                # Повторная проверка живых метрик после сброса prefetch-кэша (защита от реального разворота вниз)
+                                if _m5_live < 1.0 or _m1_live < -8.0:
                                     print(f"🚫 [SCANNER-LIVE-REVERSAL] {actual_symbol} ({mint[:8]}): на живом графике импульс сломан (m5 {_m5_live:+.1f}%, m1 {_m1_live:+.1f}%) — отмена покупки!")
                                     continue
                                 _is_fresh_live = mint.endswith("pump") or _age_m <= 90.0
@@ -898,16 +906,22 @@ async def scanner_loop(analyzer, tracker):
                                     print(f"🚫 [SCANNER-FAKE-PUMPSWAP] {actual_symbol} ({mint[:8]}): кастомный не-pump контракт на PumpSwap с микро-пулом (${liq_usd:,.0f} < $6k) — отмена!")
                                     continue
 
-                                # Защита от миграционного дампа Pump.fun: первые 90с на сброс instant-ботов, затем свободный вход
+                                # Защита от миграционного дампа Pump.fun: первые 60с на сброс instant-ботов, затем повторная проверка через 25с
                                 if mint.endswith("pump") and _dex_id in ("pumpswap", "raydium", "meteora", "orca"):
                                     _c_ms_sc = pair_data.get("pairCreatedAt") or 0
                                     _age_sc = ((time.time() * 1000 - _c_ms_sc) / 60000.0) if _c_ms_sc else 0.5
-                                    if _age_sc < 1.5:
-                                        print(f"⏳ [SCANNER-MIGRATION] {actual_symbol} ({mint[:8]}): AMM-пул создан {_age_sc:.1f}м назад (< 1.5м) — зона сброса снайперов.")
+                                    if _age_sc < 1.0:
+                                        processed_mints[mint] = time.time() - _cd + 25
+                                        try:
+                                            from birth_tracker import birth_tracker as _bt_sc
+                                            _bt_sc.add_to_waiting_room(mint)
+                                        except Exception:
+                                            pass
+                                        print(f"⏳ [SCANNER-MIGRATION] {actual_symbol} ({mint[:8]}): AMM-пул создан {_age_sc:.1f}м назад (< 1.0м) — повтор через 25с.")
                                         continue
                                     _fdv_sc = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
-                                    if 0 < _fdv_sc < 14000.0:
-                                        print(f"🚫 [SCANNER-MIGRATION] {actual_symbol} ({mint[:8]}): FDV ${_fdv_sc:,.0f} < $14,000 — слит ниже уровня миграции.")
+                                    if 0 < _fdv_sc < 12000.0:
+                                        print(f"🚫 [SCANNER-MIGRATION] {actual_symbol} ({mint[:8]}): FDV ${_fdv_sc:,.0f} < $12,000 — слит ниже уровня миграции.")
                                         continue
                                     if liq_usd < 3500.0:
                                         print(f"🚫 [SCANNER-MIGRATION] {actual_symbol} ({mint[:8]}): ликвидность ${liq_usd:,.0f} < $3,500 — микро-пул.")
@@ -926,7 +940,6 @@ async def scanner_loop(analyzer, tracker):
                                             print(f"🚫 [SCANNER-PRICE-MISMATCH] {actual_symbol} ({mint[:8]}): Jupiter (${_jup_chk:.8f}) vs DS (${entry_price:.8f}) расхождение {_chk_r:.1f}x — блок.")
                                             continue
                                         entry_price = _jup_chk
-                                        entry_price = _jup_chk
                                 # RKT-вето дженерик-входов Solana (лотереи/VIP-билеты exempt).
                                 _ssig = analyzer.get_signal(mint)
                                 _sveto = analyzer.rocket_veto(mint, pair_data, _ssig)
@@ -937,30 +950,17 @@ async def scanner_loop(analyzer, tracker):
                                     await asyncio.sleep(1.5)
                                     continue
 
-                                # === GROK BOT x JEV ENGINE: АНТИСКАМ-АУДИТ ➔ HARD GATE ➔ JEV AI VET ➔ FILLS & RISK ===
+                                # === Analyzer уже выполнил ROCKET-XGB S1+S2 и 8-слойный ончейн-аудит (RPC + RugCheck + L7 Insiders + L8 Delegations + GoPlus).
+                                # Здесь выполняем только 0ms анти-клон и расчёт точки входа / стопа под фитиль без дублирования HTTP/LLM! ===
                                 from grok_jev import grok_jev
-
-                                # 0. ПОЛНЫЙ АНТИСКАМ-АУДИТ ПЕРЕД ВХОДОМ (RUGCHECK + DEV + WHALE + LP + JUPITER + SOCIALS)
-                                _sec_ok, _sec_why, _h_stats = await grok_jev.full_anti_scam_audit(mint, actual_symbol, "solana", pair_data)
-                                if not _sec_ok:
-                                    print(f"🚫 [SCANNER-ANTI-SCAM] {actual_symbol} ({mint[:8]}): {_sec_why} — отказ входа.")
+                                _cc_ok, _cc_why = grok_jev.check_copycat_runner(mint, actual_symbol, pair_data)
+                                if not _cc_ok:
+                                    print(f"🚫 [SCANNER-COPYCAT] {actual_symbol} ({mint[:8]}): {_cc_why} — отказ входа.")
                                     continue
 
-                                # 1. HARD GATE: "if it fails here, JEV never sees it"
-                                _jev_hard_ok, _jev_hard_why = grok_jev.hard_gate(mint, pair_data, "solana", _h_stats)
-                                if not _jev_hard_ok:
-                                    print(f"🚫 [JEV-HARD-GATE] {actual_symbol} ({mint[:8]}): {_jev_hard_why} — отказ входа.")
-                                    continue
-
-                                # 2. SOFT GATE: JEV AI Evaluation (Groq / xAI Grok / Gemini / Local)
-                                _jev_soft_ok, _jev_data, _jev_soft_why = await grok_jev.jev_vet(mint, actual_symbol, pair_data, "solana", _h_stats)
-                                if not _jev_soft_ok:
-                                    print(f"🚫 [JEV-AI-GATE] {actual_symbol} ({mint[:8]}): {_jev_soft_why} — отказ входа.")
-                                    continue
-
-                                # 3. FILLS: "We bid the flush, not the candle" & RISK: "The stop lives under the wick"
                                 _flush_ok, _wick_pct, _wick_stop_price, _flush_msg = grok_jev.check_flush_and_wick(pair_data, entry_price)
                                 if not _flush_ok:
+                                    processed_mints[mint] = time.time() - _cd + 25
                                     print(f"⏳ [JEV-FILLS] {actual_symbol} ({mint[:8]}): {_flush_msg}")
                                     continue
                                 else:
@@ -1043,7 +1043,7 @@ async def scanner_loop(analyzer, tracker):
                                 tracker.add_position(actual_symbol, mint, entry_price, position_size, is_mature=True,
                                                      ml_features=analyzer.pack_features(pair_data),
                                                      ml_confidence=float(getattr(analyzer, "last_score", 0.0)),
-                                                     source=f"JEV:{_jev_data.get('source', 'grok')}:{analyzer.get_signal(mint)}",
+                                                     source=f"SCANNER:{analyzer.get_signal(mint)}",
                                                      pair_address=pair_data.get("pairAddress", ""),
                                                      stop_under_wick=_wick_stop_price,
                                                      wick_stop_loss_pct=_wick_pct)

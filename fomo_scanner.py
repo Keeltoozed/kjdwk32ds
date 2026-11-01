@@ -12,9 +12,9 @@ async def fomo_loop(analyzer, tracker):
         "https://api.dexscreener.com/token-boosts/latest/v1",
         "https://api.dexscreener.com/token-boosts/top/v1"
     ]
-    gt_urls = [
-        "https://api.geckoterminal.com/api/v2/networks/solana/trending_pools?duration=1h",
-        "https://api.geckoterminal.com/api/v2/networks/solana/trending_pools?duration=5m"
+    gt_paths = [
+        "/networks/solana/trending_pools?duration=1h",
+        "/networks/solana/trending_pools?duration=5m"
     ]
     headers = {"Accept": "application/json", "User-Agent": "Mozilla/5.0"}
     
@@ -35,11 +35,12 @@ async def fomo_loop(analyzer, tracker):
                 except Exception:
                     pass
 
-            # 2. GeckoTerminal ТОП-тренды 1H и 5M (только с реальным импульсом m5 >= 2.5%)
-            for gt_url in gt_urls:
+            # 2. GeckoTerminal ТОП-тренды 1H и 5M через единый пейсер _gt_get (только с реальным импульсом m5 >= 2.5%)
+            import market_data
+            for gt_path in gt_paths:
                 try:
-                    status, data = await fetch_json(gt_url, headers=headers, timeout=10, retries=1)
-                    if status == 200 and data and "data" in data:
+                    data = await market_data._gt_get(gt_path, retries=0, timeout=8)
+                    if data and "data" in data:
                         for pool in data.get("data", []):
                             try:
                                 attrs = pool.get("attributes", {})

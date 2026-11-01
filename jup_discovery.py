@@ -260,7 +260,7 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
     if _h1_j > _max_h1_j:
         print(f"🚫 [{source_tag}-H1-EXHAUSTED] {_sym_tmp} ({mint[:8]}): h1 {_h1_j:+.0f}% > +{_max_h1_j:.0f}% — памп уже отработал, вход = вершина.")
         return False
-    if _m5_j < 2.5 or _m1_j < -2.5:
+    if _m5_j < 1.0 or _m1_j < -6.0:
         print(f"🚫 [{source_tag}-MOMENTUM-LOST] {_sym_tmp} ({mint[:8]}): импульс пропал (m5 {_m5_j:+.1f}%, m1 {_m1_j:+.1f}%) — отмена входа.")
         return False
     _pk_drop_j = float((td or {}).get("_drop_from_peak_5m", 0.0) or 0.0)
@@ -274,11 +274,12 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
         print(f"🚫 [{source_tag}-FAKE-PUMPSWAP] {_sym_tmp} ({mint[:8]}): кастомный не-pump контракт на PumpSwap с микро-ликвой ${_liq_j:,.0f} < $4k — блок.")
         return False
 
-    # Защита от анонимных бандлер-пулов без единой соцсети (кейс ARACH -66.9%: 0 соцсетей, $16k ликвы на PumpSwap)
+    # Защита от анонимных бандлер-пулов без соцсетей (пропускаем живые органические AMM-пулы вроде NVIDIA 1888b/879s)
     _info_j = (td or {}).get("info") or {}
     _soc_j = _info_j.get("socials") or []
     _web_j = _info_j.get("websites") or []
-    if not mint.endswith("pump") and not (td or {}).get("_socials_unknown", False) and len(_soc_j) == 0 and len(_web_j) == 0 and _liq_j < 35000:
+    _j_org_flow = (_b5_j >= 20 and _b5_j >= _s5_j and _liq_j >= 8000.0)
+    if not mint.endswith("pump") and not (td or {}).get("_socials_unknown", False) and not _j_org_flow and len(_soc_j) == 0 and len(_web_j) == 0 and _liq_j < 35000:
         print(f"🚫 [{source_tag}-NO-SOCIALS] {_sym_tmp} ({mint[:8]}): 0 соцсетей/сайтов при ликвидности ${_liq_j:,.0f} (<$35k) — анонимный бандлер-раг.")
         return False
 
@@ -323,26 +324,13 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
         analyzer._deny(mint, f"jup-veto: {_veto[:20]}", f"🚫 [{source_tag}-VETO] {_sym_tmp} ({mint[:8]}): {_veto}")
         return False
 
-    # === GROK BOT x JEV ENGINE: HARD GATE ➔ JEV AI VET ➔ FILLS & RISK ===
+    # === Analyzer уже провёл ROCKET-XGB S1+S2 и 8-слойный ончейн-аудит: проверяем только 0ms анти-клон и точку входа/стоп ===
     from grok_jev import grok_jev
-    _h_stats = {
-        "top1_pct": getattr(analyzer, "_last_dev", 0.0),
-        "top10_pct": getattr(analyzer, "_last_top10", 0.0),
-        "dev_pct": getattr(analyzer, "_last_dev", 0.0)
-    }
-    # 1. HARD GATE: "if it fails here, JEV never sees it"
-    _jev_hard_ok, _jev_hard_why = grok_jev.hard_gate(mint, td or {}, "solana", _h_stats)
-    if not _jev_hard_ok:
-        print(f"🚫 [JEV-HARD-GATE] {_sym_tmp} ({mint[:8]}): {_jev_hard_why} — отказ входа.")
+    _cc_ok, _cc_why = grok_jev.check_copycat_runner(mint, _sym_tmp, td or {})
+    if not _cc_ok:
+        print(f"🚫 [{source_tag}-COPYCAT] {_sym_tmp} ({mint[:8]}): {_cc_why} — отказ входа.")
         return False
 
-    # 2. SOFT GATE: JEV AI Evaluation (Groq / xAI / Gemini / Local)
-    _jev_soft_ok, _jev_data, _jev_soft_why = await grok_jev.jev_vet(mint, _sym_tmp, td or {}, "solana", _h_stats)
-    if not _jev_soft_ok:
-        print(f"🚫 [JEV-AI-GATE] {_sym_tmp} ({mint[:8]}): {_jev_soft_why} — отказ входа.")
-        return False
-
-    # 3. FILLS: "We bid the flush, not the candle" & RISK: "The stop lives under the wick"
     _flush_ok, _wick_pct, _wick_stop_price, _flush_msg = grok_jev.check_flush_and_wick(td or {}, price)
     if not _flush_ok:
         print(f"⏳ [JEV-FILLS] {_sym_tmp} ({mint[:8]}): {_flush_msg}")

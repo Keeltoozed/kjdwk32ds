@@ -245,16 +245,20 @@ class ShadowTracker:
         Берём цену только из живого пула с МАКСИМАЛЬНОЙ ликвидностью (>= $2,500) и реальными продажами,
         чтобы опустошённые пулы ($0.82 ликвы как LILEDGE) и 0-sell ханиподы не считались «ракетами».
         """
+        self._last_rugged_mints = set()
+        self._last_batch_ok = False
         if not mints:
             return {}
         prices = {}
         max_liq = {}
+        max_raw_liq = {}
         from http_client import fetch_json
         addresses = ",".join(mints[:30])
         url = f"https://api.dexscreener.com/latest/dex/tokens/{addresses}"
         try:
             status, data = await fetch_json(url, timeout=8, retries=1)
-            if status == 200 and data:
+            if status == 200 and data is not None:
+                self._last_batch_ok = True
                 all_pairs = data.get("pairs") or []
                 # Если токен уже мигрировал на AMM (pumpswap/raydium/meteora/orca),
                 # его старый bonding curve на pumpfun заморожен на $0.000042 ($42k FDV) — игнорируем его!
@@ -279,8 +283,10 @@ class ShadowTracker:
                             continue  # Никогда не берём замороженную кривую pumpfun для мигрировавших монет!
                         if liq == 0:
                             liq = fdv * 0.40
-                    # Игнорируем эксплойты с раздутым supply (FDV > $500M при микро-ликвидности, кейсы IRYS/BTW)
-                    if fdv > 500_000_000 and liq < 250_000:
+                    if m:
+                        max_raw_liq[m] = max(max_raw_liq.get(m, 0.0), liq)
+                    # Игнорируем эксплойты с раздутым supply или микро-пулы с фейковым FDV (кейсы IRYS/BTW/FAUCET/ANSEM)
+                    if (fdv > 500_000_000 and liq < 250_000) or (0 < liq < 25_000 and fdv > liq * 200.0):
                         continue
                     tx24 = ((pair.get("txns") or {}).get("h24") or {})
                     tx_m5 = ((pair.get("txns") or {}).get("m5") or {})
@@ -294,6 +300,11 @@ class ShadowTracker:
                         orig_m = base.get("address")
                         if orig_m:
                             prices[orig_m] = p
+                # Фиксируем токены с вынутой ликвидностью (LP Rug: пара есть в DexScreener, но ликвидность < $1,000, кейсы BAS $0.04 / NEX AI $0)
+                for req_m in mints[:30]:
+                    ml = (req_m or "").lower()
+                    if ml and ml not in prices and ml in max_raw_liq and max_raw_liq[ml] < 1000.0:
+                        self._last_rugged_mints.add(ml)
         except Exception as e:
             print(f"⚠️ [Shadow] DexScreener Fetch Error: {e}")
         return prices
@@ -319,11 +330,11 @@ class ShadowTracker:
                 if self.use_supabase and self.supabase:
                     def _fetch_sb():
                         try:
-                            return self.supabase.table(table_to_use).select("mint, rejected_at, initial_price, ath_price, check_5m_done, check_15m_done, check_1h_done, check_4h_done, check_24h_done").eq("check_24h_done", 0).order("rejected_at", desc=True).limit(50).execute().data or []
+                            return self.supabase.table(table_to_use).select("*").eq("check_24h_done", 0).order("rejected_at", desc=True).limit(50).execute().data or []
                         except Exception:
                             if table_to_use != "shadow_log":
                                 try:
-                                    return self.supabase.table("shadow_log").select("mint, rejected_at, initial_price, ath_price, check_5m_done, check_15m_done, check_1h_done, check_4h_done, check_24h_done").eq("check_24h_done", 0).order("rejected_at", desc=True).limit(50).execute().data or []
+                                    return self.supabase.table("shadow_log").select("*").eq("check_24h_done", 0).order("rejected_at", desc=True).limit(50).execute().data or []
                                 except Exception:
                                     return []
                             return []
@@ -385,18 +396,26 @@ class ShadowTracker:
 
                         if needs_check:
                             m = row.get("mint")
+                            _pe = float(row.get("price_at_rejection", 0) or row.get("initial_price", 0) or 0)
+                            _oa = float(row.get("ath_price", 0) or 0)
+                            _prev_ath_pnl = max(
+                                float(row.get("hypothetical_pnl", 0) or 0),
+                                ((_oa - _pe) / _pe * 100.0) if (_pe >= 1e-7 and _oa > 0) else 0.0
+                            )
                             mints_to_check.append(m)
                             updates.append({
                                 "mint": m,
-                                "price_at_rejection": float(row.get("price_at_rejection", 0) or 0),
-                                "old_ath": float(row.get("ath_price", 0) or 0),
+                                "price_at_rejection": _pe,
+                                "old_ath": _oa,
+                                "old_ath_pnl": _prev_ath_pnl,
+                                "old_outcome": str(row.get("outcome") or ""),
                                 "old_time_to_ath": float(row.get("time_to_ath_min", 0.0) or 0.0),
                                 "check_5m": check_5m,
                                 "check_15m": check_15m,
                                 "check_1h": check_1h,
                                 "check_4h": check_4h,
                                 "check_24h": check_24h,
-                                "symbol": row.get("symbol", m[:6]),
+                                "symbol": row.get("symbol") or (m[:6] if m else "UNK"),
                                 "elapsed_min": elapsed_min
                             })
                     except Exception:
@@ -406,18 +425,21 @@ class ShadowTracker:
                 for i in range(0, len(mints_to_check), 30):
                     batch_mints = mints_to_check[i:i+30]
                     cur_prices = await self._fetch_prices_batch(batch_mints)
+                    rugged_set = set(getattr(self, "_last_rugged_mints", set()))
+                    batch_ok = bool(getattr(self, "_last_batch_ok", False))
                     
                     for upd in updates:
                         m = upd["mint"]
                         if m in batch_mints:
                             p_now = cur_prices.get(m, 0) or cur_prices.get(m.lower(), 0)
                             p_entry = upd["price_at_rejection"]
-                            # Защита от бага котировок DexScreener (когда возвращается цена SOL/BNB $200-$400 вместо мем-токена $0.000008)
-                            if p_now > 10.0 and p_entry > 0 and p_entry < 0.005:
+                            # Защита от бага котировок DexScreener (когда возвращается цена SOL/BNB $200-$400 или фантомный x500)
+                            if (p_now > 10.0 and p_entry > 0 and p_entry < 0.1) or (p_entry > 0 and p_now / p_entry > 500.0):
                                 p_now = 0.0
                             old_ath = upd["old_ath"]
                             old_time = upd["old_time_to_ath"]
                             elapsed_m = upd["elapsed_min"]
+                            is_lp_rugged = (m.lower() in rugged_set) or (batch_ok and p_now <= 0 and elapsed_m >= 5.0)
 
                             # Если токен дал новый пик цены — фиксируем новый ATH и точную минуту
                             if p_now > old_ath:
@@ -426,21 +448,26 @@ class ShadowTracker:
                             else:
                                 new_ath = old_ath if old_ath > 0 else p_now
                                 time_to_ath = old_time
-                            if new_ath > 0:
+                            if new_ath > 0 and not is_lp_rugged:
                                 self.record_observation(m, new_ath, 0.0)
 
                             ath_pnl = ((new_ath - p_entry) / p_entry * 100.0) if p_entry >= 1e-7 and new_ath > 0 else 0.0
                             if p_now > 0 and p_entry >= 1e-7:
                                 cur_pnl = ((p_now - p_entry) / p_entry * 100.0)
+                            elif is_lp_rugged:
+                                # Пул ликвидности опустошён (< $1,000) или полностью удалён после 5+ минут -> реальный LP Rug (-100%), а не упущенная ракета!
+                                cur_pnl = -100.0
                             elif old_ath > 0:
-                                # Монета ещё не вернулась в батче DexScreener (напр. миграция на AMM) — сохраняем статус, не делаем ложный слив в 0
+                                # Первые минуты (0-5м): монета может быть в процессе 30-секундной миграции на AMM
                                 cur_pnl = ((old_ath - p_entry) / p_entry * 100.0)
                             else:
                                 cur_pnl = 0.0
-                            is_rocket = bool(ath_pnl >= 50.0)
+                            is_rocket = bool(ath_pnl >= 50.0 and not is_lp_rugged and cur_pnl > -85.0)
 
                             # Категоризация исхода монеты:
-                            if ath_pnl >= 50.0 and cur_pnl <= 0.0:
+                            if is_lp_rugged:
+                                outcome = f"☠️ LP Rug / Ликва вынута (пик +{ath_pnl:.0f}% -> $0, фильтр спас!)"
+                            elif ath_pnl >= 50.0 and cur_pnl <= 0.0:
                                 outcome = f"🚀 Ракета +{ath_pnl:.0f}% на {time_to_ath:.0f}м -> Слив в 0 ({cur_pnl:.0f}%)"
                             elif ath_pnl >= 50.0 and cur_pnl > 0.0:
                                 outcome = f"💎 Ракета летит (пик +{ath_pnl:.0f}%, сейчас {cur_pnl:+.0f}%)"
@@ -451,7 +478,10 @@ class ShadowTracker:
                             else:
                                 outcome = "😴 Флет / Без движения"
 
-                            if is_rocket and ath_pnl > (upd.get("old_ath_pnl", 0) or 0):
+                            prev_ath_pnl = float(upd.get("old_ath_pnl", 0) or 0)
+                            if is_lp_rugged and ath_pnl >= 50.0 and "LP Rug" not in upd.get("old_outcome", ""):
+                                print(f"🛡️ [LP-RUG AVOIDED] {upd['symbol']}: {outcome}")
+                            elif is_rocket and ath_pnl >= max(50.0, prev_ath_pnl + 15.0):
                                 if cur_pnl <= 0.0:
                                     print(f"🛡️ [DUMP AVOIDED] {upd['symbol']}: {outcome} (ATH ${new_ath:.6f} vs вход ${p_entry:.6f}) — фильтр спас от слива!")
                                 else:

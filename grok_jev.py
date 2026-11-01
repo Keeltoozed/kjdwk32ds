@@ -198,12 +198,20 @@ def _data_line(pair: dict, hs: dict, ticket: float) -> str:
     age = round((time.time() * 1000 - ca) / 60000) if ca else "NA"
     v24, v6 = float(vol.get("h24") or 0), float(vol.get("h6") or 0)
     ratio = round(v6 / (v24 / 4), 2) if v24 > 0 else "NA"
-    top1 = hs.get("top1_pct") or "NA"       # 0.0 в _h_stats = данных нет
-    top10 = hs.get("top10_pct") or "NA"
+    dex_id = str(pair.get("dexId") or "").lower()
+    base_addr = str(((pair.get("baseToken") or {}).get("address")) or "")
+    is_pump = dex_id in ("pump", "pumpfun") or base_addr.endswith("pump")
+    raw_liq = float((pair.get("liquidity") or {}).get("usd", 0) or 0)
+    mcap_val = float(pair.get("fdv") or pair.get("marketCap") or 0)
+    eff_liq = max(raw_liq, mcap_val * 0.40) if is_pump else raw_liq
+    liq_str = f"{eff_liq:.0f}" if eff_liq > 0 else "NA"
+    top1 = hs.get("top1_pct") if hs.get("top1_pct") is not None else "NA"
+    top10 = hs.get("top10_pct") if hs.get("top10_pct") is not None else "NA"
+    dev_v = hs.get("dev_pct") if hs.get("dev_pct") is not None else "NA"
     hold = hs.get("holders_count") or "NA"
-    return (f"age={age}m liq={(pair.get('liquidity') or {}).get('usd', 'NA')} "
-            f"mcap={pair.get('fdv') or pair.get('marketCap') or 'NA'} holders={hold} "
-            f"top1={top1} top10={top10} dev={hs.get('dev_pct', 'NA')} "
+    return (f"dex={dex_id or 'solana'} age={age}m liq={liq_str} "
+            f"mcap={int(mcap_val) if mcap_val > 0 else 'NA'} holders={hold} "
+            f"top1={top1} top10={top10} dev={dev_v} "
             f"vol=m5:{vol.get('m5', 'NA')},h1:{vol.get('h1', 'NA')},h6:{vol.get('h6', 'NA')},h24:{vol.get('h24', 'NA')} "
             f"vol_ratio={ratio} trades24={(t24.get('buys') or 0) + (t24.get('sells') or 0)} "
             f"b5={t5.get('buys', 'NA')} s5={t5.get('sells', 'NA')} "
@@ -236,6 +244,28 @@ class GrokJevEngine:
         self._px_hist: Dict[str, list] = {}
         # norm_symbol -> (mint, liq_usd, created_at_ms, ts): реестр сегодняшних ракет для мгновенного отсева copycat-клонов
         self._runner_registry: Dict[str, tuple] = {}
+
+    def check_copycat_runner(self, mint: str, symbol: str, pair_data: dict) -> Tuple[bool, str]:
+        """0ms проверка по реестру сегодняшних раннеров: отсекает свежие copycat-клоны с микро-ликвой."""
+        _norm_sym = re.sub(r"[^a-z]", "", str(symbol or "").lower())
+        if len(_norm_sym) < 3 or not isinstance(pair_data, dict):
+            return True, ""
+        _raw_liq_cc = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
+        _fdv_cc = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
+        _h24_cc = float(((pair_data.get("priceChange") or {}).get("h24", 0)) or 0)
+        _ca_cc = int(pair_data.get("pairCreatedAt") or 0)
+        _prev_r = self._runner_registry.get(_norm_sym)
+        if _prev_r and _prev_r[0] != mint:
+            _orig_mint, _orig_liq, _orig_ca, _orig_ts = _prev_r
+            if (time.time() - _orig_ts) < 86400.0 and _orig_liq >= 25000.0 and _raw_liq_cc < (_orig_liq * 0.25):
+                if _orig_ca == 0 or _ca_cc == 0 or _ca_cc > _orig_ca:
+                    return False, f"copycat-of-runner {symbol} (clone of {_orig_mint[:6]} liq ${_orig_liq:,.0f})"
+        if _raw_liq_cc >= 25000.0 and (_h24_cc >= 200.0 or _fdv_cc >= 180000.0):
+            if (not _prev_r) or _raw_liq_cc > _prev_r[1]:
+                if len(self._runner_registry) > 1500:
+                    self._runner_registry.clear()
+                self._runner_registry[_norm_sym] = (mint, _raw_liq_cc, _ca_cc, time.time())
+        return True, ""
 
     def score_rocket_xgb(self, address: str, pair: dict, holders_info: dict = None) -> float:
         """Оценка токена через Rocket XGBoost v3 (0ms)."""
@@ -357,37 +387,21 @@ class GrokJevEngine:
             return False, f"fake-brand-clone {symbol}"
 
         # 0.5. Быстрый 0ms анти-клон по реестру сегодняшних ракет (@savipww Scanner Copycat Rule)
-        import re as _re_cc
-        _norm_sym = _re_cc.sub(r"[^a-z]", "", symbol.lower())
-        _raw_liq_cc = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
-        _fdv_cc = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
-        _h24_cc = float(((pair_data.get("priceChange") or {}).get("h24", 0)) or 0)
-        _ca_cc = int(pair_data.get("pairCreatedAt") or 0)
-        if len(_norm_sym) >= 3:
-            _prev_r = self._runner_registry.get(_norm_sym)
-            if _prev_r and _prev_r[0] != mint:
-                _orig_mint, _orig_liq, _orig_ca, _orig_ts = _prev_r
-                if (time.time() - _orig_ts) < 86400.0 and _orig_liq >= 25000.0 and _raw_liq_cc < (_orig_liq * 0.25):
-                    if _orig_ca == 0 or _ca_cc == 0 or _ca_cc > _orig_ca:
-                        return False, f"copycat-of-runner {symbol} (clone of {_orig_mint[:6]} liq ${_orig_liq:,.0f})"
-            if _raw_liq_cc >= 25000.0 and (_h24_cc >= 200.0 or _fdv_cc >= 180000.0):
-                if (not _prev_r) or _raw_liq_cc > _prev_r[1]:
-                    if len(self._runner_registry) > 1500:
-                        self._runner_registry.clear()
-                    self._runner_registry[_norm_sym] = (mint, _raw_liq_cc, _ca_cc, time.time())
+        _cc_ok, _cc_why = self.check_copycat_runner(mint, symbol, pair_data)
+        if not _cc_ok:
+            return False, _cc_why
 
         # 1. Ликвидность (с защитой от гигантских не-мем пулов и фантомной ликвидности)
         raw_liq = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
         fdv_mc = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
 
-        # Для немигрировавших токенов Pump.fun: кёрв обязан набрать хотя бы $12,000 FDV (>15% кривой),
-        # либо от $8,000 FDV при мощном органическом потоке покупок (vol5 >= $4k, >=25 покупок, b5 >= 1.25*s5)
-        if dex_id in ("pump", "pumpfun") and fdv_mc < 12000.0:
+        # Для немигрировавших токенов Pump.fun: пускаем живые ранние кёрвы от $6,000 FDV (или $5,000 при активных покупках, кейс HASHMINE)
+        if dex_id in ("pump", "pumpfun") and fdv_mc < 6000.0:
             _etx5 = (pair_data.get("txns") or {}).get("m5", {}) or {}
             _eb5, _es5 = int(_etx5.get("buys", 0) or 0), int(_etx5.get("sells", 0) or 0)
             _evol5 = float((pair_data.get("volume") or {}).get("m5", 0) or 0)
-            if not (fdv_mc >= 8000.0 and _evol5 >= 4000.0 and _eb5 >= 25 and _eb5 >= _es5 * 1.25):
-                return False, f"pump-curve-too-early: FDV ${fdv_mc:,.0f} < $12,000 (under 8 SOL in curve, dev dump risk)"
+            if not (fdv_mc >= 5000.0 and _evol5 >= 2000.0 and _eb5 >= 15 and _eb5 >= _es5 * 1.15):
+                return False, f"pump-curve-too-early: FDV ${fdv_mc:,.0f} < $6,000 (early curve, dev dump risk)"
 
         eff_liq = raw_liq if raw_liq > 0 else (fdv_mc * 0.40 if is_pump else 0.0)
         
@@ -445,6 +459,11 @@ class GrokJevEngine:
         if is_migrated_pump:
             has_breakout_momentum = (vol_m5 >= 2000.0 and b5 >= 8 and m5 >= 3.0 and (s5 == 0 or b5 >= s5 * 0.90))
             if age_min < 1.0 and not has_breakout_momentum:
+                try:
+                    from birth_tracker import birth_tracker as _bt_mig
+                    _bt_mig.add_to_waiting_room(mint)
+                except Exception:
+                    pass
                 return False, f"post-migration-dump-zone {age_min:.1f}m < 1.0m (wait for curve snipers to flush, dump risk like 25%/MIKE)"
             # DIP RECLAIM: после 1м мигрировавший токен ОБЯЗАН показывать реальный разворот покупателей
             if not has_breakout_momentum and (m5 < 2.0 or (s5 > 0 and (b5 / s5) < 0.85) or vol_m5 < 800.0):
@@ -458,6 +477,11 @@ class GrokJevEngine:
         if not (min_age <= age_min <= max_age):
             if age_min > max_age:
                 return False, f"age-out-of-bounds {age_min:.1f}m > {max_age:.1f}m (old token)"
+            try:
+                from birth_tracker import birth_tracker as _bt_age
+                _bt_age.add_to_waiting_room(mint)
+            except Exception:
+                pass
             return False, f"age-out-of-bounds {age_min:.1f}m < {min_age:.1f}m (wait for maturation)"
 
         # 2.5. Exhaustion Guard: не режем молодые/мигрировавшие с Pump.fun ракеты (у них h1 +400..+1500% считается от $5k кривой!),
@@ -470,9 +494,8 @@ class GrokJevEngine:
             return False, f"fdv-liquidity-trap liq ${eff_liq:,.0f} < 2% of FDV ${fdv_mc:,.0f} (phantom valuation)"
 
         # 3. Живой импульс ракеты (LIVE ROCKET MOMENTUM)
-        # Токен ОБЯЗАН РАСТИ прямо сейчас (m5 >= 3.5%), а не стоять на месте или остывать (как WALT/STANK)!
-        if m5 < 3.5:
-            return False, f"no-momentum m5 {m5:+.1f}% < +3.5% (coin is flat/standing still, not an active rocket)"
+        if m5 < 2.0:
+            return False, f"no-momentum m5 {m5:+.1f}% < +2.0% (coin is flat/standing still, not an active rocket)"
         if s5 > 6 and b5 < s5:
             return False, f"sellers-dominating {b5}b/{s5}s (more sellers than buyers in m5)"
 
@@ -527,9 +550,9 @@ class GrokJevEngine:
         # Отсекает микро-скамы pump.fun ($5k-$20k), где создатель держит 30% и сливает на входе (KAT)
         # Капитализация строго в коридоре $60,000 - $8,000,000
         mcap = fdv_mc
-        if is_pump and mcap > 0 and mcap < 8000.0:
-            return False, f"pump-curve-too-early mcap ${mcap:,.0f} < $8k (high dev dump trap risk)"
-        min_mcap = float(getattr(_c, "JEV_MIN_MCAP_USD", 8000.0))
+        if is_pump and mcap > 0 and mcap < 5000.0:
+            return False, f"pump-curve-too-early mcap ${mcap:,.0f} < $5k (high dev dump trap risk)"
+        min_mcap = 5000.0 if is_pump else float(getattr(_c, "JEV_MIN_MCAP_USD", 8000.0))
         max_mcap = float(getattr(_c, "JEV_MAX_MCAP_USD", 8000000.0))
         if mcap > 0 and not (min_mcap <= mcap <= max_mcap):
             return False, f"mcap-out-of-bounds ${mcap:,.0f} not in [${min_mcap:,.0f}, ${max_mcap:,.0f}]"
@@ -739,8 +762,8 @@ class GrokJevEngine:
         if s5 > 5 and b5 < s5:
             return False, -0.14, 0.0, f"sellers-dominating ({b5}b/{s5}s) — sellers active, wait for buyer absorption"
 
-        # 4. Монета не должна стоять на месте (но не режем первый скан, если DexScreener не прислал m1, а m5 и покупки растут!):
-        if (_m1_known and m1 <= 0.0 and m5 < 5.0) or (not _m1_known and (m5 < 4.0 or b5 <= s5)):
+        # 4. Монета не должна стоять мёртвым флетом (но разрешаем здоровый микро-откат "bid the flush" на активном m5!):
+        if (_m1_known and m1 <= -2.0 and m5 < 2.5) or (not _m1_known and m5 < 1.5):
             return False, -0.14, 0.0, f"flat-coin (m1 {m1:+.1f}%, m5 {m5:+.1f}%) — price standing still, waiting for live impulse"
 
         # 3.2. ПОДТВЕРЖДЕНИЕ ТРЕНДА ПО СОБСТВЕННОЙ ИСТОРИИ ЦЕН (DexScreener m1/m5 запаздывают на минуту и больше)
@@ -806,7 +829,7 @@ class GrokJevEngine:
             "Evaluate the token's meme narrative, social links, holder safety, and pullback timing.\n"
             "CRITICAL RULE: NEVER return null. If a metric is 'NA', infer a reasonable score from the remaining data.\n\n"
             "Scoring Rubric (all values MUST be floats between 0.0 and 1.0):\n"
-            "1. concentration_is_exit_risk (max 0.55 to pass): 0.15-0.35 if top1<=5% and top10<=50% with liq>=$15k; >0.60 if whales dominate.\n"
+            "1. concentration_is_exit_risk (max 0.55 to pass): 0.15-0.35 if top1<=8% and top10<=35% with liq>=$15k on DEX (or liq>=$3k on pump/pumpswap); >0.60 if whales dominate.\n"
             "2. momentum_already_spent (max 0.60 to pass): 0.20-0.45 if price is in a healthy pullback/consolidation (m1 between -8% and +5%) while h24/h6 volume is active (vol_ratio >= 0.7); >0.70 if m1 > +15% (vertical top) or volume died.\n"
             "3. liquidity_fits_ticket (min 0.60 to pass): >=0.85 if ticket/liq <= 1%; ~0.65 if <= 2.5%; <=0.30 if > 4%.\n"
             "4. dev_still_loaded (max 0.55 to pass): 0.05-0.25 if dev <= 3% or NA; >0.60 if dev >= 8%.\n"
@@ -1009,24 +1032,21 @@ class GrokJevEngine:
             except Exception:
                 pass
 
-        # 3. GeckoTerminal Solana (Trending Pools) — 100% фокус на проверенных трендах
-        for net, endp in [
-            ("solana", "trending_pools")
-        ]:
-            try:
-                url_gt = f"https://api.geckoterminal.com/api/v2/networks/{net}/{endp}"
-                st_gt, data_gt = await fetch_json(url_gt, headers={"Accept": "application/json"}, timeout=5, retries=0)
-                if st_gt == 200 and isinstance(data_gt, dict):
-                    pools = data_gt.get("data", []) or []
-                    for p in pools:
-                        rel = p.get("relationships", {}) or {}
-                        base_tok = (rel.get("base_token", {}) or {}).get("data", {}) or {}
-                        tok_id = str(base_tok.get("id", "")).replace(f"{net}_", "").strip()
-                        if tok_id and tok_id not in seen:
-                            seen.add(tok_id)
-                            candidates.append((tok_id, "solana"))
-            except Exception:
-                pass
+        # 3. GeckoTerminal Solana (Trending Pools) через единый пейсер и circuit-breaker market_data._gt_get
+        try:
+            import market_data
+            data_gt = await market_data._gt_get("/networks/solana/trending_pools", retries=0, timeout=5)
+            if isinstance(data_gt, dict) and data_gt:
+                pools = data_gt.get("data", []) or []
+                for p in pools:
+                    rel = p.get("relationships", {}) or {}
+                    base_tok = (rel.get("base_token", {}) or {}).get("data", {}) or {}
+                    tok_id = str(base_tok.get("id", "")).replace("solana_", "").strip()
+                    if tok_id and tok_id not in seen:
+                        seen.add(tok_id)
+                        candidates.append((tok_id, "solana"))
+        except Exception:
+            pass
 
         FUNNEL_STATS["universe"] += len(candidates)
         return candidates
@@ -1186,7 +1206,10 @@ class GrokJevEngine:
         _b5 = int(_tx5.get("buys", 0) or 0)
         _s5 = int(_tx5.get("sells", 0) or 0)
         _vol5 = float((pair_data.get("volume") or {}).get("m5", 0) or 0)
-        _is_organic_flow = (_b5 >= 12 and _b5 >= _s5 and _vol5 >= 2500.0 and eff_liq >= 6000.0)
+        _is_organic_flow = (
+            (_b5 >= 12 and _b5 >= _s5 and _vol5 >= 2500.0 and eff_liq >= 6000.0)
+            or (_b5 >= 35 and _b5 >= _s5 * 1.15 and eff_liq >= 10000.0)
+        )
 
         if not is_pump and not has_socials and not _is_organic_flow:
             return False, f"no-socials-amm-scam (0 socials on DEX без органического объема — 100% disposable dev dump)", _h_stats
@@ -1775,8 +1798,8 @@ async def grok_bot_jev_loop(tracker, analyzer=None):
                         evaluated_cooldown[(address, chain)] = now + 60.0    # Судья недоступен: не долбим аудит
                     elif "rate-limit" in why_low or "429" in why_low:
                         evaluated_cooldown[(address, chain)] = now + 20.0    # Повтор через 20с при 429
-                    elif "candle-spike" in why_low or "flush" in why_low or "pullback" in why_low:
-                        evaluated_cooldown[(address, chain)] = now + 25.0    # Ждем откат 25 секунд!
+                    elif "candle-spike" in why_low or "flush" in why_low or "pullback" in why_low or "post-migration-dump-zone" in why_low or "maturation" in why_low:
+                        evaluated_cooldown[(address, chain)] = now + 25.0    # Ждем откат / созревание миграции 25 секунд!
                     elif any(k in why_low for k in ["vol5", "tx5", "buys5", "sellers", "momentum", "downtrend", "liq", "sol-reserve", "too-young", "mcap", "fills"]):
                         evaluated_cooldown[(address, chain)] = now + 60.0    # Рыночная динамика: перепроверка через 60с (токен может набрать объем)
                     elif "max-positions" in why_low:

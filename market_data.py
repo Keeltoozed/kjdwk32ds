@@ -58,7 +58,7 @@ async def _gt_get(path: str, retries: int = 0, timeout: int = 6):
         return {}  # Circuit breaker open: fail-fast
 
     async with _get_lock():
-        wait_s = 1.1 - (time.monotonic() - _last_call)
+        wait_s = 2.4 - (time.monotonic() - _last_call)
         if wait_s > 0:
             await asyncio.sleep(wait_s)
         _last_call = time.monotonic()
@@ -71,6 +71,7 @@ async def _gt_get(path: str, retries: int = 0, timeout: int = 6):
     if status == 429:
         _gt_consecutive_fails += 1
         if _gt_consecutive_fails >= 4:
+            _gt_consecutive_fails = 0
             _gt_breaker_until = time.monotonic() + 25.0
             print("⚡ [GT-BREAKER] GeckoTerminal 429/сбои -> пауза запросов на 25с (fail-fast).")
         return {}
@@ -78,8 +79,10 @@ async def _gt_get(path: str, retries: int = 0, timeout: int = 6):
     # 5xx / timeout:
     _gt_consecutive_fails += 1
     if _gt_consecutive_fails >= 4:
+        _fails_cnt = _gt_consecutive_fails
+        _gt_consecutive_fails = 0
         _gt_breaker_until = time.monotonic() + 25.0
-        print(f"⚡ [GT-BREAKER] GeckoTerminal {_gt_consecutive_fails} сбоя подряд -> пауза запросов на 25с.")
+        print(f"⚡ [GT-BREAKER] GeckoTerminal {_fails_cnt} сбоя подряд -> пауза запросов на 25с.")
 
     last_err = f"HTTP {status}"
     for attempt in range(retries):
