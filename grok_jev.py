@@ -235,6 +235,16 @@ class GrokJevEngine:
         # mint -> [(ts, price), ...] за последние 30 мин: нужна, чтобы отличать растущую монету от падающей
         self._px_hist: Dict[str, list] = {}
 
+    def score_rocket_xgb(self, address: str, pair: dict, holders_info: dict = None) -> float:
+        """Оценка токена через Rocket XGBoost v3 (0ms)."""
+        if hasattr(self, "analyzer") and self.analyzer and hasattr(self.analyzer, "score_rocket_xgb"):
+            return float(self.analyzer.score_rocket_xgb(address, pair, holders_info))
+        try:
+            from analyzer import score_token_with_rocket_xgb
+            return float(score_token_with_rocket_xgb(address, pair, holders_info))
+        except Exception:
+            return 0.0
+
     def _record_px(self, mint: str, price: float) -> list:
         """Запоминает цену, которую мы видели на этом скане. Возвращает историю mint."""
         now = time.time()
@@ -1409,6 +1419,15 @@ class GrokJevEngine:
             print(f"🚫 [PRICE-SPLIT] {symbol} ({address[:8]}): рассинхрон цен между пулами {_div_r:.2f}x — блок входа (защита от ложного стоп-лосса).")
             return False, f"price-divergence-pool-split ({_div_r:.2f}x)"
 
+        # 1.6. 🚀 STAGE 1: ROCKET XGBOOST ML СКРИНЕР (0ms IN-MEMORY)
+        # Отсекает 95% мусора и заведомых дампов в 0мс (DARTHLON 6%, BALLS 4%, PIKMIN 11%)
+        # без лишних сетевых вызовов Jupiter, RugCheck и LLM.
+        rkt_s1 = self.score_rocket_xgb(address, pair)
+        s1_thresh = float(getattr(_c, "ROCKET_XGB_STAGE1_THRESHOLD", 40.0))
+        if getattr(_c, "ROCKET_XGB_ENABLED", True) and rkt_s1 < s1_thresh:
+            print(f"🚫 [GROK-JEV-ML-S1] {symbol} ({address[:8]}): Rocket XGB score {rkt_s1:.1f}% < {s1_thresh:.0f}% — отсев дампа в 0мс.")
+            return False, f"rocket-xgb-s1-reject {rkt_s1:.1f}% < {s1_thresh:.0f}%"
+
         # 2. HARD GATE ПЕРВЫМ ("if it fails here, JEV and Jupiter never see it")
         # Мгновенный математический отсев (0 сетевых запросов!) — отсекает 95% пустых/стоячих монет ДО вызовов Jupiter/RugCheck/GoPlus
         hard_ok, hard_why = self.hard_gate(address, pair, chain, None)
@@ -1496,6 +1515,16 @@ class GrokJevEngine:
         pair, price = _fin, _fpx
         wick_price = price * (1.0 + wick_pct)
 
+        # 5.6. 🚀 STAGE 2: ROCKET XGBOOST FINAL ML FIREWALL
+        # Финальная проверка перед реальным открытием ордера со свежими данными и реальными ончейн холдерами (_h_stats).
+        rkt_final = self.score_rocket_xgb(address, pair, _h_stats)
+        final_thresh = float(getattr(_c, "ROCKET_XGB_FINAL_THRESHOLD", 50.0))
+        if getattr(_c, "ROCKET_XGB_ENABLED", True) and rkt_final < final_thresh:
+            print(f"🚫 [GROK-JEV-ML-VETO] {symbol} ({address[:8]}): Rocket XGB final score {rkt_final:.1f}% < {final_thresh:.0f}% — VETO! (Блокировка дампа)")
+            return False, f"rocket-xgb-final-veto {rkt_final:.1f}% < {final_thresh:.0f}%"
+
+        print(f"🚀 [GROK-JEV-ML-PASS] {symbol} ({address[:8]}): Rocket XGB score {rkt_final:.1f}% >= {final_thresh:.0f}% — ОДОБРЕНО!")
+
         # 6. CHIEF / GROK TRADES: Исполнение ордера
         if len(tracker.get_open_positions()) >= getattr(_c, "MAX_CONCURRENT_POSITIONS", 10):
             return False, "max-positions-reached"
@@ -1523,6 +1552,7 @@ class GrokJevEngine:
             pair_address=pair.get("pairAddress", ""),
             stop_under_wick=wick_price,
             wick_stop_loss_pct=wick_pct,
+            ml_confidence=rkt_final,
             ml_features=_entry_features(pair, _h_stats, jev_data)
         )
 

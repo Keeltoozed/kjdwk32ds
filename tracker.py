@@ -450,6 +450,16 @@ class PaperTracker:
         if is_cooling:
             print(f"🚫 Отказ входа {symbol}: {reason}")
             return
+
+        # ЗАЩИТА ML FIREWALL: Ни одна сделка с низким скором Rocket XGBoost не может быть открыта!
+        min_conf = float(getattr(config, "ROCKET_XGB_FINAL_THRESHOLD", 50.0))
+        if getattr(config, "ROCKET_XGB_ENABLED", True):
+            if ml_confidence > 0 and ml_confidence < min_conf:
+                print(f"🚫 [FIREWALL] Отказ входа {symbol} ({mint[:8]}): Rocket XGB скор {ml_confidence:.1f}% < {min_conf:.0f}% (блокировка убыточного дампа)")
+                return
+            if source == "GROK-JEV" and ml_confidence <= 0.0:
+                print(f"🚫 [FIREWALL] Отказ входа {symbol} ({mint[:8]}): GROK-JEV попытка входа без ML скоринга!")
+                return
         # СИМВОЛЬНЫЙ КУЛДАУН (кейс VRAX: +5% → перезаход в клона → -32%).
         # Все старые гарды keyed by mint (адрес), а клоны выходят под тем же
         # тикером с другим адресом. Баним тикер целиком: открыт такой же —

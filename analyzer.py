@@ -53,6 +53,113 @@ def _ctx_attr(name, default=0.0):
     return property(_get, _set)
 
 
+_GLOBAL_ROCKET_XGB = None
+
+def get_rocket_xgb_model():
+    """Глобальный синглтон загруженной модели Rocket XGBoost v4."""
+    global _GLOBAL_ROCKET_XGB
+    if _GLOBAL_ROCKET_XGB is None:
+        try:
+            import xgboost as xgb
+            import os as _os
+            _rkt_path = "rocket_xgb_v3.json" if _os.path.exists("rocket_xgb_v3.json") else "rocket_xgb_v2.json"
+            if _os.path.exists(_rkt_path):
+                m = xgb.XGBClassifier()
+                m.load_model(_rkt_path)
+                _GLOBAL_ROCKET_XGB = m
+        except Exception:
+            pass
+    return _GLOBAL_ROCKET_XGB
+
+def score_token_with_rocket_xgb(mint: str, pair_data: dict, holders_info: dict = None, return_features: bool = False):
+    """Глобальная быстрая оценка токена моделью Rocket XGBoost v4 в памяти (0ms).
+    Принимает пару DexScreener и опциональные метрики холдеров (top1, top10, dev).
+    Возвращает вероятность ракеты от 0.0 до 100.0%."""
+    model = get_rocket_xgb_model()
+    if model is None or not pair_data:
+        return (0.0, {}) if return_features else 0.0
+    try:
+        import time as _t
+        import pandas as _pd
+        _pc = pair_data.get("priceChange") or {}
+        _m5 = float(_pc.get("m5", 0) or 0)
+        _m1 = float(_pc.get("m1", 0) or 0)
+        _h1 = float(_pc.get("h1", 0) or 0)
+        _vm5 = float((pair_data.get("volume") or {}).get("m5", 0) or 0)
+        _txm5 = (pair_data.get("txns") or {}).get("m5", {}) or {}
+        _b5 = int(_txm5.get("buys", 0) or 0)
+        _s5 = int(_txm5.get("sells", 0) or 0)
+        _created = pair_data.get("pairCreatedAt") or 0
+        _now_ms = _t.time() * 1000.0
+        _age_min = (_now_ms - _created) / 60000.0 if _created else 999.0
+        _dex_low = str(pair_data.get("dexId", "")).lower()
+        _is_pump = 1 if (str(mint).endswith("pump") or _dex_low in ("pump", "pumpfun", "pumpswap")) else 0
+
+        raw_liq = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
+        fdv_val = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
+        curve_liq = fdv_val * 0.35 if fdv_val > 0 else 0.0
+        liq_val = max(raw_liq, curve_liq) if _is_pump else raw_liq
+
+        _info = pair_data.get("info", {}) or {}
+        _socs = _info.get("socials", []) or []
+        _webs = _info.get("websites", []) or []
+        _has_soc = 1 if (len(_socs) > 0 or len(_webs) > 0) else 0
+
+        _m1_exh = (_m1 / max(abs(_m5), 1.0)) if abs(_m5) > 0 else 0.0
+        _b_ratio = (_b5 / max(_b5 + _s5, 1.0)) if (_b5 + _s5) > 0 else 0.5
+        _net_b = _b5 - _s5
+        _v_to_l = (_vm5 / max(liq_val, 1.0)) if liq_val > 0 else 0.0
+        _avg_tx = (_vm5 / max(_b5 + _s5, 1.0)) if (_b5 + _s5) > 0 else 0.0
+        _f_to_l = (fdv_val / max(liq_val, 1.0)) if liq_val > 0 else 3.5
+
+        _top1 = 3.5
+        _top10 = 20.0
+        _dev = 0.0
+        if holders_info and isinstance(holders_info, dict) and any(k in holders_info for k in ("top1_pct", "top10_pct", "dev_pct", "top1", "top10", "dev")):
+            _top1 = float(holders_info.get("top1_pct", holders_info.get("top1", 3.5)) or 0.0)
+            _top10 = float(holders_info.get("top10_pct", holders_info.get("top10", 20.0)) or 0.0)
+            _dev = float(holders_info.get("dev_pct", holders_info.get("dev", 0.0)) or 0.0)
+
+        FEATURE_COLS = [
+            "m5_pct", "m1_pct", "h1_pct", "m1_to_m5",
+            "buys_m5", "sells_m5", "buy_ratio_m5", "net_buyers_m5",
+            "volume_m5", "vol_to_liq", "avg_tx_usd",
+            "liquidity", "fdv", "fdv_to_liq",
+            "age_min", "is_pump",
+            "top1_pct", "top10_pct", "dev_pct", "socials"
+        ]
+
+        rkt_features = {
+            "m5_pct": float(_m5),
+            "m1_pct": float(_m1),
+            "h1_pct": float(_h1),
+            "m1_to_m5": float(_m1_exh),
+            "buys_m5": float(_b5),
+            "sells_m5": float(_s5),
+            "buy_ratio_m5": float(_b_ratio),
+            "net_buyers_m5": float(_net_b),
+            "volume_m5": float(_vm5),
+            "vol_to_liq": float(_v_to_l),
+            "avg_tx_usd": float(_avg_tx),
+            "liquidity": float(liq_val),
+            "fdv": float(fdv_val),
+            "fdv_to_liq": float(_f_to_l),
+            "age_min": float(_age_min),
+            "is_pump": int(_is_pump),
+            "top1_pct": float(_top1),
+            "top10_pct": float(_top10),
+            "dev_pct": float(_dev),
+            "socials": int(_has_soc)
+        }
+        df = _pd.DataFrame([rkt_features])[FEATURE_COLS]
+        prob = float(model.predict_proba(df)[0][1] * 100.0)
+        if return_features:
+            return prob, rkt_features
+        return prob
+    except Exception:
+        return (0.0, {}) if return_features else 0.0
+
+
 class Analyzer:
     last_score = _ctx_attr("last_score", 0.0)    # Скор последнего решения (для радара)
     _last_top10 = _ctx_attr("_last_top10", 0.0)  # топ-10 холдеров % (последний разбор в этой задаче)
@@ -150,80 +257,30 @@ class Analyzer:
             pass
         return 1.0
 
-    def score_rocket_xgb(self, mint: str, pair_data: dict) -> float:
-        """Быстрая оценка токена моделью Rocket XGBoost v2 в памяти (0ms).
+    def score_rocket_xgb(self, mint: str, pair_data: dict, holders_info: dict = None) -> float:
+        """Быстрая оценка токена моделью Rocket XGBoost v4 в памяти (0ms).
         Извлекает 20 ключевых фичей без ликеджа и возвращает скор уверенности от 0.0 до 100.0%."""
+        if getattr(self, "rocket_xgb", None) is None:
+            self.rocket_xgb = get_rocket_xgb_model()
         if getattr(self, "rocket_xgb", None) is None or not pair_data:
             return 0.0
-        try:
-            import time as _t
-            import pandas as _pd
-            _pc = pair_data.get("priceChange") or {}
-            _m5 = float(_pc.get("m5", 0) or 0)
-            _m1 = float(_pc.get("m1", 0) or 0)
-            _h1 = float(_pc.get("h1", 0) or 0)
-            _vm5 = float((pair_data.get("volume") or {}).get("m5", 0) or 0)
-            _txm5 = (pair_data.get("txns") or {}).get("m5", {}) or {}
-            _b5 = int(_txm5.get("buys", 0) or 0)
-            _s5 = int(_txm5.get("sells", 0) or 0)
-            _created = pair_data.get("pairCreatedAt") or 0
-            _now_ms = _t.time() * 1000.0
-            _age_min = (_now_ms - _created) / 60000.0 if _created else 999.0
-            _dex_low = str(pair_data.get("dexId", "")).lower()
-            _is_pump = 1 if (mint.endswith("pump") or _dex_low in ("pump", "pumpfun", "pumpswap")) else 0
-
-            raw_liq = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
-            fdv_val = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
-            liq_val = max(raw_liq, fdv_val * 0.40) if (_dex_low in ("pump", "pumpfun") and raw_liq == 0) else raw_liq
-
-            _info = pair_data.get("info", {}) or {}
-            _socs = _info.get("socials", []) or []
-            _webs = _info.get("websites", []) or []
-            _has_soc = 1 if (len(_socs) > 0 or len(_webs) > 0) else 0
-
-            _m1_exh = (_m1 / max(abs(_m5), 1.0)) if abs(_m5) > 0 else 0.0
-            _b_ratio = (_b5 / max(_b5 + _s5, 1.0)) if (_b5 + _s5) > 0 else 0.5
-            _net_b = _b5 - _s5
-            _v_to_l = (_vm5 / max(liq_val, 1.0)) if liq_val > 0 else 0.0
-            _avg_tx = (_vm5 / max(_b5 + _s5, 1.0)) if (_b5 + _s5) > 0 else 0.0
-            _f_to_l = (fdv_val / max(liq_val, 1.0)) if liq_val > 0 else 3.5
-
-            FEATURE_COLS = [
-                "m5_pct", "m1_pct", "h1_pct", "m1_to_m5",
-                "buys_m5", "sells_m5", "buy_ratio_m5", "net_buyers_m5",
-                "volume_m5", "vol_to_liq", "avg_tx_usd",
-                "liquidity", "fdv", "fdv_to_liq",
-                "age_min", "is_pump",
-                "top1_pct", "top10_pct", "dev_pct", "socials"
-            ]
-
-            rkt_features = {
-                "m5_pct": float(_m5),
-                "m1_pct": float(_m1),
-                "h1_pct": float(_h1),
-                "m1_to_m5": float(_m1_exh),
-                "buys_m5": float(_b5),
-                "sells_m5": float(_s5),
-                "buy_ratio_m5": float(_b_ratio),
-                "net_buyers_m5": float(_net_b),
-                "volume_m5": float(_vm5),
-                "vol_to_liq": float(_v_to_l),
-                "avg_tx_usd": float(_avg_tx),
-                "liquidity": float(liq_val),
-                "fdv": float(fdv_val),
-                "fdv_to_liq": float(_f_to_l),
-                "age_min": float(_age_min),
-                "is_pump": int(_is_pump),
-                "top1_pct": float(getattr(self, '_last_dev', 0.0)),
-                "top10_pct": float(getattr(self, '_last_top10', 0.0)),
-                "dev_pct": float(getattr(self, '_last_dev', 0.0)),
-                "socials": int(_has_soc)
+        if holders_info is None and (hasattr(self, '_last_top1') or hasattr(self, '_last_top10') or hasattr(self, '_last_dev')):
+            holders_info = {
+                "top1_pct": getattr(self, '_last_top1', 3.5),
+                "top10_pct": getattr(self, '_last_top10', 20.0),
+                "dev_pct": getattr(self, '_last_dev', 0.0),
             }
-            df = _pd.DataFrame([rkt_features])[FEATURE_COLS]
-            prob = float(self.rocket_xgb.predict_proba(df)[0][1] * 100.0)
-            return prob
-        except Exception:
-            return 0.0
+        res = score_token_with_rocket_xgb(mint, pair_data, holders_info, return_features=True)
+        if isinstance(res, tuple):
+            prob, rkt_feats = res
+            self.last_rkt_features = rkt_feats
+        else:
+            prob = res
+        if not hasattr(self, "rocket_scores"):
+            self.rocket_scores = {}
+        self.rocket_scores[mint] = prob
+        self.last_score = prob
+        return prob
 
     async def meme_tag(self, address: str, symbol: str, pair_data: dict,
                        chain: str = "solana") -> str:
@@ -352,17 +409,19 @@ class Analyzer:
         try:
             from shadow_tracker import shadow_tracker
             ctx = getattr(self, "_eval_ctx", {}).get(key, {})
+            feats = ctx.get("features") or getattr(self, "last_rkt_features", None)
             shadow_tracker.log_rejection(
                 mint=key,
                 reason=short,
                 symbol=ctx.get("symbol", key[:6]),
                 chain=ctx.get("chain", "solana"),
                 score=float(ctx.get("score", 0.0) or 0.0),
-                rkt_score=self.rocket_scores.get(key),
+                rkt_score=self.rocket_scores.get(key) if hasattr(self, "rocket_scores") else None,
                 price=float(ctx.get("price", 0.0) or 0.0),
                 liquidity=float(ctx.get("liq", 0.0) or 0.0),
                 m5_pct=float(ctx.get("m5", 0.0) or 0.0),
-                source=ctx.get("source", "SCANNER")
+                source=ctx.get("source", "SCANNER"),
+                features=feats
             )
         except Exception:
             pass
@@ -1179,10 +1238,11 @@ class Analyzer:
             self.rocket_scores[mint] = conf
 
             dex_id_low = str(pair_data.get("dexId", "")).lower()
-            is_pump_curve = dex_id_low in ("pump", "pumpfun")
+            is_pump_curve = str(mint).endswith("pump") or dex_id_low in ("pump", "pumpfun", "pumpswap")
             raw_liq = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
             fdv_val = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
-            liq_val = max(raw_liq, fdv_val * 0.40) if (is_pump_curve and raw_liq == 0) else raw_liq
+            curve_liq = fdv_val * 0.35 if fdv_val > 0 else 0.0
+            liq_val = max(raw_liq, curve_liq) if is_pump_curve else raw_liq
 
             if conf < threshold:
                 self._deny(mint, f"rocket-xgb {conf:.0f}%", f"· [ROCKET-XGB] {symbol} ({mint[:8]}): уверенность модели {conf:.1f}% < {threshold:.0f}% — отсеян до тяжелых проверок (0ms).")
@@ -1198,7 +1258,8 @@ class Analyzer:
                         price=float(pair_data.get("priceUsd", 0) or 0.0),
                         liquidity=liq_val,
                         m5_pct=_m5,
-                        source="ROCKET_XGB_PRIMARY"
+                        source="ROCKET_XGB_PRIMARY",
+                        features=getattr(self, "last_rkt_features", None)
                     )
                 except Exception:
                     pass
@@ -2878,15 +2939,9 @@ class Analyzer:
         _h6 = float(_pc.get("h6", 0) or 0)
         _fdv_check = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
 
-        # Защита от покупки вершины вертикали (FOMO top)
-        if _m5 > 40.0:
-            return self._deny(mint, "m5-overheated", f"🚫 [FOMO-TOP] {mint[:8]}: m5 +{_m5:.1f}% > +40.0% — покупка локального хая.")
-        if _m5 > 25.0 and _m1 > 6.0:
-            return self._deny(mint, "candle-spike", f"🚫 [FOMO-TOP] {mint[:8]}: m5 +{_m5:.1f}%, m1 +{_m1:.1f}% — вертикальный спайк.")
-        if _m1 > 12.0:
-            return self._deny(mint, "m1-spike", f"🚫 [FOMO-TOP] {mint[:8]}: m1 +{_m1:.1f}% > +12.0% — резкий секундный памп.")
-        if _h1 > 200.0 and _age_min > 8.0:
-            return self._deny(mint, "h1-exhaustion", f"🚫 [FOMO-TOP] {mint[:8]}: h1 +{_h1:.1f}% > +200% (возраст {_age_min:.0f}м) — памп исчерпан.")
+        # Защита от покупки экстремального вертикального выброса (Blow-off peak)
+        if _m1 > 28.0 and not (_b5 >= _s5 * 1.5 and _vm5 >= 20000):
+            return self._deny(mint, "m1-blowoff", f"🚫 [FOMO-TOP] {mint[:8]}: m1 +{_m1:.1f}% > +28.0% — экстремальный секундный прострел.")
         
         if 0 < _fdv_check < 15000:
             return self._deny(mint, "ray-fdv-cliff", f"🚫 [RAYDIUM] {mint[:8]}: FDV ${_fdv_check:,.0f} < $15,000 — слишком мелкий пул.")
@@ -2997,21 +3052,25 @@ class Analyzer:
         if _t10 > 35.0:
             return self._deny(mint, "ray-top10-cabal", f"🚫 [TOP10-CABAL] {mint[:8]}: топ-10 держат {_t10:.1f}% > 35% — кабал/дамп-риск.")
 
-        # === ROCKET XGBOOST v2 INFERENCE (20 ФИЧЕЙ БЕЗ ЛИКЕДЖА) ===
+        # === ROCKET XGBOOST INFERENCE (20 ФИЧЕЙ БЕЗ ЛИКЕДЖА) ===
         import pandas as pd
         
-        # 1. Защита от покупки на макушке свечи (Exhaustion Guard из Reddit/CT)
-        if _m1 > 12.0 or (_m5 > 30.0 and _m1 > 8.0):
-            return self._deny(mint, "fomo-exhaustion", f"🚫 [EXHAUSTION] {mint[:8]}: 1m свеча +{_m1:.1f}% перегрета — ждём отката (bid the flush).")
+        # 1. Защита от покупки на макушке вертикали
+        if _m1 > 35.0:
+            return self._deny(mint, "fomo-exhaustion", f"🚫 [EXHAUSTION] {mint[:8]}: 1m свеча +{_m1:.1f}% > 35% перегрета — ждём отката (bid the flush).")
+
+        _is_pump = 1 if (mint.endswith("pump") or _dex_low in ("pump", "pumpfun", "pumpswap")) else 0
+        _curve_liq = fdv * 0.35 if _is_pump else 0.0
+        _eff_liq = max(liquidity, _curve_liq) if _is_pump else liquidity
 
         _m1_exhaustion = (_m1 / max(abs(_m5), 1.0)) if abs(_m5) > 0 else 0.0
         _buy_ratio_m5 = (_b5 / max(_b5 + _s5, 1.0)) if (_b5 + _s5) > 0 else 0.5
         _net_buyers_m5 = _b5 - _s5
-        _vol_to_liq = (_vm5 / max(liquidity, 1.0)) if liquidity > 0 else 0.0
+        _vol_to_liq = (_vm5 / max(_eff_liq, 1.0)) if _eff_liq > 0 else 0.0
         _avg_tx_usd = (_vm5 / max(_b5 + _s5, 1.0)) if (_b5 + _s5) > 0 else 0.0
-        _fdv_to_liq = (fdv / max(liquidity, 1.0)) if liquidity > 0 else 3.5
-        _is_pump = 1 if (mint.endswith("pump") or _dex_low in ("pump", "pumpswap")) else 0
+        _fdv_to_liq = (fdv / max(_eff_liq, 1.0)) if _eff_liq > 0 else 3.5
         _socials = 1 if len((pair_data.get("info") or {}).get("socials") or []) > 0 else 0
+        _top1_val = getattr(self, '_last_top1', 3.5)
 
         FEATURE_COLS = [
             "m5_pct", "m1_pct", "h1_pct", "m1_to_m5",
@@ -3034,12 +3093,12 @@ class Analyzer:
             "volume_m5": float(_vm5),
             "vol_to_liq": float(_vol_to_liq),
             "avg_tx_usd": float(_avg_tx_usd),
-            "liquidity": float(liquidity),
+            "liquidity": float(_eff_liq),
             "fdv": float(fdv),
             "fdv_to_liq": float(_fdv_to_liq),
             "age_min": float(_age_min),
             "is_pump": int(_is_pump),
-            "top1_pct": float(_dev),
+            "top1_pct": float(_top1_val),
             "top10_pct": float(_t10),
             "dev_pct": float(_dev),
             "socials": int(_socials)
@@ -3061,14 +3120,20 @@ class Analyzer:
                 else:
                     self._deny(mint, f"rocket-xgb {conf:.0f}%", f"· [ROCKET-XGB] {mint[:8]}: уверенность модели {conf:.1f}% < {threshold:.0f}%")
                     try:
-                        from shadow_tracker import ShadowTracker
-                        shadow = ShadowTracker()
-                        price = float(pair_data.get("priceUsd", 0))
-                        shadow.log_rejection(
+                        from shadow_tracker import shadow_tracker
+                        price = float(pair_data.get("priceUsd", 0) or 0.0)
+                        symbol_name = str(pair_data.get('baseToken', {}).get('symbol') or mint[:6]).upper()
+                        shadow_tracker.log_rejection(
                             mint=mint,
                             reason=f"Rocket XGBoost low score: {conf:.1f}%",
+                            symbol=symbol_name,
+                            chain="solana",
                             score=conf,
+                            rkt_score=conf,
                             price=price,
+                            liquidity=float(_eff_liq),
+                            m5_pct=float(_m5),
+                            source="ROCKET_XGB_RAYDIUM",
                             features=rkt_features
                         )
                     except Exception:
