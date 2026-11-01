@@ -11,7 +11,8 @@ DEXSCREENER_SEARCH = "https://api.dexscreener.com/latest/dex/tokens/"
 # Helius / PumpPortal WSS API
 HELIUS_API_KEY = "9efda6f4-fddb-42d3-a2b1-098bbbecd299"
 HELIUS_RPC_URL = f"https://mainnet.helius-rpc.com/?api-key={HELIUS_API_KEY}"
-PUMPPORTAL_WSS = "wss://pumpportal.fun/api/data"
+PUMPPORTAL_API_KEY = (os.getenv("PUMPPORTAL_API_KEY") or "").strip().strip('"').strip("'")
+PUMPPORTAL_WSS = f"wss://pumpportal.fun/api/data?api-key={PUMPPORTAL_API_KEY}" if PUMPPORTAL_API_KEY else "wss://pumpportal.fun/api/data"
 
 # RugCheck API
 RUGCHECK_API = "https://api.rugcheck.xyz/v1/tokens/{mint}/report/summary"
@@ -62,8 +63,8 @@ MAX_CONCURRENT_POSITIONS = 10         # Режим ракет: до 10 пози�
 # Risk Management
 MAX_DAILY_LOSS_USD = 1000.0
 KILL_SWITCH_ENABLED = False  # ОТКЛЮЧЕНО для тестов (не ставить торговлю на паузу при дневном минусе)
-STOP_LOSS_PCT = -0.15  # Чёткий стоп -15% (быстрый срез убытка, защита от раг-дампов)
-EMERGENCY_CAP_PCT = -0.20  # Аварийный срез на -20% (не даём уходить в -35%..-42%)
+STOP_LOSS_PCT = -0.14  # Чёткий стоп -14% (удерживает средний лосс ~-15% с учётом DEX fee, не давая раздувать убыток до -26%)
+EMERGENCY_CAP_PCT = -0.18  # Аварийный срез на -18% (не даём уходить в -35%..-42%)
 
 # === ЗАЩИТА ОТ СЕРИИ МИНУСОВ (STREAK CIRCUIT BREAKER) ===
 STREAK_COOLDOWN_ENABLED = True       # Включить паузу после серии минусов
@@ -100,33 +101,33 @@ VIP_ENTRIES_ENABLED = False  # ВЫКЛЮЧЕНО: VIP-полоса покупа
 TIME_EXIT_MINUTES = 60  # Если за 60 минут нет пампа - выходим
 TIME_EXIT_PROFIT_REQ = 0.0
 
-# Take-Profit: СТРАТЕГИЯ FREE RIDE ИЗ X (Crypto Twitter) & REDDIT
-# На +22% (1.22x) забираем 50% позиции: гарантированная прибыль в кармане!
-# На +150% (2.5x) забираем еще 25% позиции.
-# Оставшиеся 25% ("мунбэг") едут с нулевым риском по параболическому трейлингу до +500%..+2000%!
+# Take-Profit: СТРАТЕГИЯ FREE RIDE (+EV АСИММЕТРИЯ R:R > 3.0x)
+# На +50% (1.5x) забираем 40% позиции: фиксируем профит > 3x от риска, 60% объёма продолжает разгон!
+# На +150% (2.5x) забираем еще 30% остатка.
+# Оставшиеся ~42% ("мунбэг") едут с нулевым риском по параболическому трейлингу до +300%..+2000%!
 PARTIAL_TP_ENABLED = True       # Включен Free Ride
-TP1_TRIGGER_PCT = 0.22          # На +22% фикс 50% позиции (ранний сброс до отката толпы!)
-TP1_SELL_FRAC = 0.50            # Продать 50%
-TP2_TRIGGER_PCT = 1.50          # На +150% (2.5x) дополнительный срез 25%
-TP2_SELL_FRAC = 0.25
-MOONBAG_TRIGGER_PCT = 999.0     # Остаток 25% позиции едет в свободный полёт под трейлинг
+TP1_TRIGGER_PCT = 0.50          # На +50% фикс 40% позиции (не душим ракеты на +22%!)
+TP1_SELL_FRAC = 0.40            # Продать 40%, оставить 60% в ракете
+TP2_TRIGGER_PCT = 1.50          # На +150% (2.5x) дополнительный срез 30%
+TP2_SELL_FRAC = 0.30
+MOONBAG_TRIGGER_PCT = 999.0     # Остаток едет в свободный полёт под трейлинг
 MOONBAG_SELL_FRAC = 0.0
 PUMP_XGB_ENABLED = False        # ВЫКЛЮЧЕНО: 100% сливов (-235% PnL) на ложных скорах pump.fun вершин
 RAY_XGB_ENABLED = False         # ВЫКЛЮЧЕНО: старая модель Raydium XGB заменена на Rocket XGBoost v2
 ROCKET_XGB_ENABLED = True       # ВКЛЮЧЕНО: честная ML модель Rocket XGBoost v3 (20 фичей без ликеджа)
-ROCKET_XGB_STAGE1_THRESHOLD = 20.0  # Этап 1 (RAM): отсекает 95% мусора 0-15%, пропуская ранние взлеты (20%+)
-ROCKET_XGB_FINAL_THRESHOLD = 22.0   # Этап 2 (Audit): подтверждение входа после ончейн-аудита (22%+)
-ROCKET_XGB_THRESHOLD = 20.0         # Базовый порог скринера
+ROCKET_XGB_STAGE1_THRESHOLD = 24.0  # Этап 1 (RAM): отсекает мусор и вялые монеты (<24%, вроде CAPRI 22.8%), пропуская ракеты на аудит
+ROCKET_XGB_FINAL_THRESHOLD = 26.0   # Этап 2 (Audit): подтверждение входа после ончейн-аудита с реальными холдерами (26%+)
+ROCKET_XGB_THRESHOLD = 25.0         # Базовый порог скринера
 
-# Stall Timer: выход при затухании моментума (CT / Reddit Best Practice)
-# Мемкоин жив, пока идут покупки. Если за 120с нет нового максимума и pnl <= -5%, сбрасываем в околоноль.
-STALL_TIMER_SEC = 120.0         # 120 секунд (2.0м) таймер мертвого моментума
-STALL_MAX_LOSS_PCT = -0.05      # Резать при затухании на -5% вместо сидения до -15%..-20%
+# Stall Timer: выход при затухании моментума (даём полную 5м свечу на выход из консолидации!)
+# Раньше 120с на -5% резало 43% сделок в гарантированный мелкий минус (включая ракету CREDIT +901%).
+STALL_TIMER_SEC = 330.0         # 330 секунд (5.5м) — полная 5-минутная свеча + буфер на консолидацию отката
+STALL_MAX_LOSS_PCT = -0.08      # Срезаем только если за 5.5м не было импульса (+8%) и монета сползла <= -8%
 
-# Trailing Stop & Profit Protection: частичная фиксация и трейлинг от +25%
-TRAILING_ACTIVATION_PCT = 0.25  # Трейлинг и TP1 активируются с +25% пика
-TRAILING_DISTANCE_PCT = 0.12    # 12% откат от пика (жесткая защита прибыли)
-TRAILING_RUNNER_DISTANCE_PCT = 0.18 # 18% запас для супер-раннеров
+# Trailing Stop & Profit Protection: широкое дыхание для ракет
+TRAILING_ACTIVATION_PCT = 0.45  # Трейлинг активируется с +45% пика (не выбивает на стартовых откатах)
+TRAILING_DISTANCE_PCT = 0.18    # 18% откат от пика
+TRAILING_RUNNER_DISTANCE_PCT = 0.22 # 22% запас для супер-раннеров
 SCALP_PROFIT_ENABLED = False    # Скальп-срез +5% выключен (не режем ракеты)
 
 # Whale Dump Guard & Crash Protection
@@ -134,8 +135,8 @@ WHALE_DUMP_GUARD_PCT = 0.22     # Резкий слив >30% за <15с (защ�
 EVM_RUNNER_CRASH = 0.25         # Сброс на 30% за 60с (требует подтверждения тика для раннеров)
 EVM_NORMAL_CRASH = 0.22         # Сброс на 30%
 
-# Breakeven: при росте до +10% стоп сразу в безубыток (+1.5%..+2%), исключая любой минус!
-BREAKEVEN_PCT = 0.10
+# Breakeven: переводим стоп в безубыток (+3%) ТОЛЬКО после реального пробоя +32% (не убиваем ANSEM +13% и REGRETAMINE +17% в ноль!)
+BREAKEVEN_PCT = 0.32
 
 # Infant Dump: защита от настоящего дев-рага в первые минуты
 PREFETCH_TTL_SEC = 60  # Пакетный кэш DexScreener (до 30 токенов за запрос): 60с жизни для быстрого разбора пачки в RAM
@@ -143,7 +144,7 @@ SOLANA_MIN_AGE_MIN = 1.0  # 1.0 мин
 SOLANA_MAX_AGE_HOURS = 24.0
 SOLANA_MAX_AGE_MIN = 120.0      # Максимум 2 часа входа (не покупать старые тухлые монеты)
 INFANT_WINDOW_MIN = 2.0
-INFANT_DUMP_PCT = -0.16  # Резать в первые 2 мин сброс дева (-16%), не давая слиться в -35%..-42%
+INFANT_DUMP_PCT = -0.15  # Резать в первые 2 мин сброс дева (-15%), не давая слиться в -35%..-42%
 
 # Stagnant: даём ракетам 25-35 мин на раскачку и набор базы (кейсы CATTLEAXE 37м, NIO 20м+), не режем на 15-й минуте прямо перед пампом!
 STAGNANT_LOSS_MIN = 25.0
@@ -172,8 +173,15 @@ JEV_MIN_VOLUME_H24 = 30000.0
 JEV_MIN_TRADES_H24 = 100
 JEV_MIN_TRADES_H1 = 30
 JEV_MIN_HOLDERS = 80
-JEV_MAX_TOP_WALLET = 0.20        # 20% лимит на крупнейший кошелек (за вычетом пула, согласовано с RugCheck/GoPlus)
-JEV_MAX_TOP_10 = 0.60            # 35% лимит на топ-10 кошельков (за вычетом пула, согласовано с RugCheck/GoPlus)
+JEV_MAX_TOP_WALLET = 0.15        # 15% лимит на крупнейший кошелек (за вычетом пула)
+JEV_MAX_TOP_10 = 0.30            # 30% лимит на топ-10 кошельков вне пула (защита от кабал-разгрузки)
+MAX_POOL_LIQ_FRAC = 0.02         # Максимум 2% от ликвидности пула в одной сделке (защита от собственного слиппеджа)
+AUDITOR_MAX_DEV_PCT = 6.0        # Лимит доли создателя на DEX (<= 6%, sold 0 на старте миграции)
+AUDITOR_MAX_TOP10_PCT = 30.0     # Лимит концентрации топ-10 на DEX (<= 30% без учёта пулов/локеров)
+AUDITOR_MAX_DELEGATED_ACCOUNTS = 3   # Layer 8: максимум делегированных топ-аккаунтов одному адресу (защита от approve-дрейна)
+AUDITOR_MAX_DELEGATED_PCT = 5.0      # Layer 8: максимум % эмиссии под внешним SPL delegate
+AUDITOR_MAX_BUNDLE_WALLETS = 5       # Layer 7 (RugCheck insiders/graph): размер связанного кластера кошельков
+AUDITOR_MAX_BUNDLE_PCT = 12.0        # Layer 7: суммарная доля связанного кластера для бана (игнорирует пылевые аирдропы)
 JEV_LLM_ENFORCE = True           # True: строго отклонять токены, не прошедшие проверку JEV (momentum spent / concentration / dev dump)
 
 # SOFT AI Criteria (0.0 to 1.0)
@@ -187,8 +195,8 @@ JEV_MAX_DEV_STILL_LOADED = 0.25
 # FILLS & RISK: "We bid the flush, not the candle" & "The stop lives under the wick"
 JEV_BID_THE_FLUSH_ENABLED = True
 JEV_STOP_UNDER_WICK_ENABLED = True
-JEV_MAX_M1_ENTRY_PCT = 18.0      # Режем свечи выше +18% за 1м (не покупать верхушки импульсов)
-JEV_DEFAULT_WICK_STOP_PCT = -0.15 # -15% рабочий стоп (не выбивает на секундном шуме -5%..-8% как TV/TENMUSU)
+JEV_MAX_M1_ENTRY_PCT = 25.0      # Пускаем живые пробойные импульсы до +25% за 1м, отсекая только экстремальные свечи
+JEV_DEFAULT_WICK_STOP_PCT = -0.14 # -14% рабочий стоп (согласован с STOP_LOSS_PCT)
 
 # Birdeye API Key
 BIRDEYE_API_KEY = os.getenv("BIRDEYE_API_KEY", "")

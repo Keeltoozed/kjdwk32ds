@@ -104,7 +104,7 @@ def load_data():
 
     # 2. Загрузка из всех CSV файлов
     csv_trade_files = glob.glob(os.path.join(DOWNLOADS_DIR, "trades_*.csv")) + glob.glob("trades_*.csv")
-    csv_trade_files += glob.glob("/Users/taya/.gemini/antigravity/brain/1ce23e78-75cc-464d-8637-27f15686f1cd/.user_uploaded/*.csv")
+    csv_trade_files += glob.glob("/Users/taya/.gemini/antigravity/brain/*/.user_uploaded/*.csv")
 
     for tf in set(csv_trade_files):
         if "rejected" in tf or "shadow" in tf:
@@ -169,6 +169,7 @@ def load_data():
     all_rejected = []
     seen_rej = set()
     rej_files = sorted(glob.glob(os.path.join(DOWNLOADS_DIR, "rejected_tokens_rows*.csv"))) + glob.glob("rejected_tokens*.csv")
+    rej_files += [p for p in glob.glob("/Users/taya/.gemini/antigravity/brain/*/.user_uploaded/*.csv") if "rejected" in p or "media_" in p]
 
     for rf in set(rej_files):
         try:
@@ -230,25 +231,27 @@ def load_data():
 
     return pd.DataFrame(all_trades), pd.DataFrame(all_rejected)
 
-def simulate_smart_exit(ath_pnl, cur_pnl, sl=-12.0):
+def simulate_smart_exit(ath_pnl, cur_pnl, sl=-14.0):
     """
-    Симуляция умного выхода Smart Exit:
-    - Stall Timer: если монета за 120с не дала импульса (ath < +3%), выход по таймеру на -5%
-    - Ранний безубыток: при пике +10% стоп сразу переносится в безубыток (+1.5%)
-    - TP1 (+25%): фиксация 50% объема (тело входа возвращено в кэш!)
-    - Трейлинг: оставшиеся 50% едут с трейлингом -12% от ATH
-    - Супер-ракета (пик 80%+): фиксация 80% пикового движения
+    Симуляция обновлённого +EV выхода (Swing / Ride Runners):
+    - Stall Timer (330с): если монета без импульса (ath < +8%) уходит в минус, срез на -8%
+    - Зона дыхания (+8%..+32%): НЕ душим стартовые волны ранним безубытком (исходный cur_pnl с защитой -14% SL)
+    - Честный Breakeven (+32%..+50%): стоп переносится в +3.5% (перекрывает комиссии и слиппедж)
+    - TP1 (+50%): фиксация 40% позиции, остаток 60% держит пол +20% и трейлинг 22-26%
+    - TP2 (+150%): фиксация ещё 30%, остаток 30% едет как раннер с динамическим трейлингом
     """
-    if ath_pnl < 3.0:
-        return max(-5.0, cur_pnl if cur_pnl < 0 else sl)
-    if ath_pnl >= 10.0 and ath_pnl < 25.0:
-        return max(1.5, cur_pnl if cur_pnl > 0 else 1.5)
-    if ath_pnl >= 25.0 and ath_pnl < 80.0:
-        trail = max(2.0, ath_pnl - 12.0)
-        return 0.50 * 25.0 + 0.50 * trail
-    if ath_pnl >= 80.0:
-        trail = ath_pnl * 0.80
-        return 0.50 * 25.0 + 0.50 * trail
+    if ath_pnl < 8.0 and cur_pnl <= -8.0:
+        return max(-8.0, cur_pnl)
+    if 8.0 <= ath_pnl < 32.0:
+        return max(sl, cur_pnl)
+    if 32.0 <= ath_pnl < 50.0:
+        return max(3.5, cur_pnl if cur_pnl > 0 else 3.5)
+    if 50.0 <= ath_pnl < 150.0:
+        runner_exit = max(20.0, ath_pnl * 0.74)
+        return 0.40 * 50.0 + 0.60 * runner_exit
+    if ath_pnl >= 150.0:
+        runner_exit = max(95.0, ath_pnl * 0.78)
+        return 0.40 * 50.0 + 0.30 * 150.0 + 0.30 * runner_exit
     return max(sl, cur_pnl)
 
 def calculate_metrics(pnls):
@@ -362,13 +365,13 @@ def main():
     print(f"│ Средний выигрыш          │ {b_stats['avg_win']:>14.1f}% │ {opt_stats['avg_win']:>14.1f}% │")
     print(f"│ Средний убыток           │ {b_stats['avg_loss']:>14.1f}% │ {opt_stats['avg_loss']:>14.1f}% │")
     print(f"│ Соотношение R:R          │ {b_stats['rr_ratio']:>15.2f}x │ {opt_stats['rr_ratio']:>15.2f}x │")
-    print(f"│ Защита безубытка (BE)    │ +28% (не доходил)│ +10% (фикс +1.5%)│")
-    print(f"│ Фиксация прибыли (TP1)   │ +45% (не доходил)│ +25% (сброс 50%) │")
-    print(f"│ Трейлинг-стоп            │ Нет              │ Дистанция 12%    │")
-    print(f"│ Stall Timer              │ Нет (сидел в 0)  │ 120с / -5.0%     │")
+    print(f"│ Защита безубытка (BE)    │ +10% (душил рост)│ +32% (фикс +3.5%)│")
+    print(f"│ Фиксация прибыли (TP1)   │ +22% (сброс 50%) │ +50% (сброс 40%) │")
+    print(f"│ Трейлинг-стоп            │ Узкий (срезал)   │ 22-26% (от +55%) │")
+    print(f"│ Stall Timer              │ 120с / -10.0%    │ 330с / -8.0%     │")
     print("└──────────────────────────┴──────────────────┴──────────────────┘")
 
-    print("\n✅ Бектест завершён. Винрейт поднят до 83.5%, профит-фактор до 37.9!")
+    print(f"\n✅ Бектест завершён: Винрейт {opt_stats['win_rate']}%, R:R {opt_stats['rr_ratio']}x, Профит-фактор {opt_stats['profit_factor']}!")
 
 if __name__ == "__main__":
     main()

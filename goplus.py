@@ -949,3 +949,206 @@ async def verify_evm_token(address: str, chain: str, pair_data: dict = None) -> 
         return False, f"BSC отклонён по безопасности ({', '.join(_fail_reasons)})"
 
     return True, ""
+
+
+# =============================================================================
+# LAYER 7 & LAYER 8 (@savipww Auditor Extensions):
+# - Layer 7: RugCheck /insiders/graph (реальные связанные кластеры финансирования/трансферов)
+# - Layer 8: SPL Token Account Delegations (approve-дрейнер на топ-аккаунтах через getMultipleAccounts)
+# =============================================================================
+_DELEGATION_CACHE: dict = {}  # mint -> (ts, (ok, reason))
+_INSIDER_GRAPH_CACHE: dict = {}  # mint -> (ts, (ok, reason))
+
+
+async def check_spl_holder_delegations(mint: str, holder_token_accounts: list = None, total_supply_ui: float = 1_000_000_000.0) -> tuple:
+    """
+    Layer 8 Auditor: Проверяет скрытые SPL/Token-2022 делегации (approve drainers) у топ-20 держателей.
+    В отличие от тяжелого getProgramAccounts (который банят публичные RPC), использует 1 легкий вызов
+    getMultipleAccounts(jsonParsed) по топ-20 токен-аккаунтам (~60мс на любом RPC!).
+    """
+    if not mint:
+        return True, ""
+    now = _t.time()
+    cached = _DELEGATION_CACHE.get(mint)
+    if cached and (now - cached[0]) < 180.0:
+        return cached[1]
+
+    import os as _os
+    import aiohttp
+    from collections import Counter
+
+    rpcs = []
+    for env_k in ("SOLANA_RPC_URL", "HELIUS_RPC_URL"):
+        v = (_os.getenv(env_k) or getattr(config, env_k, "") or "").strip()
+        if v and v.startswith("http"):
+            rpcs.append(v)
+    helius_key = (_os.getenv("HELIUS_API_KEY") or getattr(config, "HELIUS_API_KEY", "") or "").strip()
+    if helius_key and not any("helius" in r for r in rpcs):
+        rpcs.append(f"https://mainnet.helius-rpc.com/?api-key={helius_key}")
+    rpcs.extend(["https://api.mainnet-beta.solana.com", "https://rpc.ankr.com/solana"])
+
+    SAFE_DELEGATES = {
+        "5Q544fKrFoe6tsEbD7S8EmxGTJYAKtTVhAW5Q5pge4j1",
+        "D4FPEruKEHrG5NTsqazoqfv8zsFWApqTjuzFLUQDkTz5",
+        "Eo7WjKq67rjJQSZxS6z3YkapzY3eMj6Xy8X5EQVn5UaB",
+        "LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo",
+        "whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc",
+        "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P",
+        "Ce6TQqeHC9p8KetsN6JsjHK7UTZk7nasjjnr7XxXp9F1",
+        "11111111111111111111111111111111",
+    }
+
+    max_del_accs = int(_cfg("AUDITOR_MAX_DELEGATED_ACCOUNTS", 3))
+    max_del_pct = float(_cfg("AUDITOR_MAX_DELEGATED_PCT", 5.0))
+
+    try:
+        session = await _get_shared_rpc_session()
+        accs = [str(a).strip() for a in (holder_token_accounts or []) if a and str(a).strip()][:20]
+
+        # Если список токен-аккаунтов не передан — берем топ-20 напрямую через getTokenLargestAccounts
+        if not accs:
+            largest_payload = {"jsonrpc": "2.0", "id": 1, "method": "getTokenLargestAccounts", "params": [mint]}
+            for rpc in rpcs:
+                try:
+                    async with session.post(rpc, json=largest_payload, timeout=aiohttp.ClientTimeout(total=3.0)) as resp:
+                        if resp.status == 200:
+                            ldata = await resp.json()
+                            vals = ((ldata.get("result") or {}).get("value")) or []
+                            accs = [str(x.get("address") or "").strip() for x in vals[:20] if x.get("address")]
+                            if accs:
+                                break
+                except Exception:
+                    continue
+
+        if not accs:
+            return True, ""
+
+        payload = {
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "getMultipleAccounts",
+            "params": [accs[:20], {"encoding": "jsonParsed"}],
+        }
+        parsed_accounts = None
+        for rpc in rpcs:
+            try:
+                async with session.post(rpc, json=payload, timeout=aiohttp.ClientTimeout(total=3.5)) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        val = (data.get("result") or {}).get("value")
+                        if isinstance(val, list):
+                            parsed_accounts = val
+                            break
+            except Exception:
+                continue
+
+        if not parsed_accounts:
+            return True, ""
+
+        delegate_counts = Counter()
+        delegated_ui_total = 0.0
+        for acc_obj in parsed_accounts:
+            if not isinstance(acc_obj, dict):
+                continue
+            p_info = (((acc_obj.get("data") or {}).get("parsed") or {}).get("info")) or {}
+            owner = str(p_info.get("owner") or "")
+            delegate = str(p_info.get("delegate") or "").strip()
+            if not delegate or delegate in SAFE_DELEGATES or owner in SAFE_DELEGATES:
+                continue
+            del_amt_obj = p_info.get("delegatedAmount") or {}
+            del_ui = float(del_amt_obj.get("uiAmount") or 0.0)
+            tok_ui = float((p_info.get("tokenAmount") or {}).get("uiAmount") or 0.0)
+            eff_del_ui = min(del_ui, tok_ui) if del_ui > 0 else 0.0
+            if eff_del_ui <= 0:
+                continue
+            delegate_counts[delegate] += 1
+            delegated_ui_total += eff_del_ui
+
+        if delegate_counts:
+            top_del, cnt = delegate_counts.most_common(1)[0]
+            if cnt >= max_del_accs:
+                res = (False, f"spl-delegation-drain: {cnt} top wallets delegated to {top_del[:8]}... (drain trap)")
+                _DELEGATION_CACHE[mint] = (now, res)
+                return res
+            if total_supply_ui > 0:
+                del_pct = (delegated_ui_total / total_supply_ui) * 100.0
+                if del_pct >= max_del_pct:
+                    res = (False, f"spl-delegation-drain: {del_pct:.1f}% supply delegated to {top_del[:8]}... (>={max_del_pct:.0f}%)")
+                    _DELEGATION_CACHE[mint] = (now, res)
+                    return res
+
+        res = (True, "")
+        _DELEGATION_CACHE[mint] = (now, res)
+        return res
+    except Exception:
+        return True, ""
+
+
+async def check_rugcheck_insider_graph(mint: str, total_supply_raw: float = 0.0, pool_accounts: set = None) -> tuple:
+    """
+    Layer 7 Auditor: Проверяет реальный ончейн-граф связанных кошельков через RugCheck /insiders/graph.
+    Отсеивает безобидных пылевых ботов (<0.35% на кошелек) и блокирует реальные инсайдерские бандлы,
+    когда >= 5 связанных кошельков суммарно держат >= 12% эмиссии (или >= 4 кошельков держат >= 18%).
+    """
+    if not mint:
+        return True, ""
+    now = _t.time()
+    cached = _INSIDER_GRAPH_CACHE.get(mint)
+    if cached and (now - cached[0]) < 180.0:
+        return cached[1]
+
+    max_bundle_n = int(_cfg("AUDITOR_MAX_BUNDLE_WALLETS", 5))
+    max_bundle_pct = float(_cfg("AUDITOR_MAX_BUNDLE_PCT", 12.0))
+    excl = set(pool_accounts or set()) | {
+        "5Q544fKrFoe6tsEbD7S8EmxGTJYAKtTVhAW5Q5pge4j1",
+        "D4FPEruKEHrG5NTsqazoqfv8zsFWApqTjuzFLUQDkTz5",
+        "Eo7WjKq67rjJQSZxS6z3YkapzY3eMj6Xy8X5EQVn5UaB",
+        "LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo",
+        "whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc",
+        "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P",
+        "Ce6TQqeHC9p8KetsN6JsjHK7UTZk7nasjjnr7XxXp9F1",
+    }
+
+    try:
+        from http_client import fetch_json
+        url = f"https://api.rugcheck.xyz/v1/tokens/{mint}/insiders/graph"
+        st, data = await fetch_json(url, timeout=4, retries=0)
+        if st != 200 or not isinstance(data, list):
+            return True, ""
+
+        # Стандартная эмиссия Pump.fun с 6 decimals = 1e15 raw (если точная raw эмиссия не передана)
+        eff_supply = float(total_supply_raw) if total_supply_raw and total_supply_raw > 0 else 1_000_000_000_000_000.0
+
+        for net in data:
+            if not isinstance(net, dict):
+                continue
+            nodes = net.get("nodes") or []
+            if len(nodes) < 4:
+                continue
+            real_Cluster_pcts = []
+            for nd in nodes:
+                if not isinstance(nd, dict) or not nd.get("participant", True):
+                    continue
+                nid = str(nd.get("id") or "")
+                if not nid or nid in excl:
+                    continue
+                hold_raw = float(nd.get("holdings") or 0.0)
+                if hold_raw <= 0:
+                    continue
+                pct = (hold_raw / eff_supply) * 100.0
+                # Игнорируем пул (>70%) и пылевые аирдроп-кошельки (<0.35% эмиссии), чтобы не резать живые ракеты вроде ANSEM/REGRETAMINE
+                if 0.35 <= pct <= 70.0:
+                    real_Cluster_pcts.append(pct)
+
+            n_real = len(real_Cluster_pcts)
+            sum_pct = sum(real_Cluster_pcts)
+            if (n_real >= max_bundle_n and sum_pct >= max_bundle_pct) or (n_real >= 4 and sum_pct >= max_bundle_pct * 1.5):
+                res = (False, f"insider-graph-bundle: {n_real} linked wallets hold {sum_pct:.1f}% supply")
+                _INSIDER_GRAPH_CACHE[mint] = (now, res)
+                return res
+
+        res = (True, "")
+        _INSIDER_GRAPH_CACHE[mint] = (now, res)
+        return res
+    except Exception:
+        return True, ""

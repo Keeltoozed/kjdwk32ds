@@ -280,10 +280,10 @@ async def position_manager_loop(analyzer, tracker):
 
                 # === ИНТЕГРАЦИЯ МАТЕМАТИКИ ДЛЯ ЗРЕЛЫХ МОНЕТ (SWING TRADING / RIDE RUNNERS) ===
                 # Исполняется ДО скальперских Early Fade / Stagnant срезов, чтобы ракеты ехали по MatureExitManager!
-                _tp1_sol_thr = float(getattr(config, "TP1_TRIGGER_PCT", 0.22))
-                _tp1_sell = float(getattr(config, "TP1_SELL_FRAC", 0.50))
-                _tp2 = float(getattr(config, "TP2_TRIGGER_PCT", 1.20))
-                _tp2_sell = float(getattr(config, "TP2_SELL_FRAC", 0.25))
+                _tp1_sol_thr = float(getattr(config, "TP1_TRIGGER_PCT", 0.50))
+                _tp1_sell = float(getattr(config, "TP1_SELL_FRAC", 0.40))
+                _tp2 = float(getattr(config, "TP2_TRIGGER_PCT", 1.50))
+                _tp2_sell = float(getattr(config, "TP2_SELL_FRAC", 0.30))
                 _mb = float(getattr(config, "MOONBAG_TRIGGER_PCT", 2.50))
                 _mb_sell = float(getattr(config, "MOONBAG_SELL_FRAC", 0.30))
                 if getattr(position, "is_mature", False):
@@ -293,7 +293,7 @@ async def position_manager_loop(analyzer, tracker):
                         position.is_moonbag = True
                         continue
                     if getattr(config, "PARTIAL_TP_ENABLED", False) and max_pnl_pct >= _tp2 and not getattr(position, "tp2_done", False):
-                        tracker.partial_close_position(mint, current_price, _tp2_sell, f"Take Profit +{_tp2*100:.0f}% (2.2x Free Ride)")
+                        tracker.partial_close_position(mint, current_price, _tp2_sell, f"Take Profit +{_tp2*100:.0f}% (2.5x Free Ride)")
                         position.tp2_done = True
                         continue
                     if getattr(config, "PARTIAL_TP_ENABLED", False) and max_pnl_pct >= _mb and not getattr(position, "is_moonbag", False):
@@ -306,18 +306,18 @@ async def position_manager_loop(analyzer, tracker):
                         tracker.close_position(mint, current_price, mature_exit_reason)
                     continue # Если это mature монета, скальперская логика ниже к ней не применяется!
 
-                # === STALL TIMER (DEAD MOMENTUM EXIT - CT / Reddit Strategy) ===
-                _stall_sec = float(getattr(config, "STALL_TIMER_SEC", 90.0))
-                _stall_loss = float(getattr(config, "STALL_MAX_LOSS_PCT", -0.06))
-                if minutes_held >= (_stall_sec / 60.0) and max_pnl_pct < 0.06 and pnl_pct <= _stall_loss:
+                # === STALL TIMER (DEAD MOMENTUM EXIT - 330с на консолидацию без ложных срезов) ===
+                _stall_sec = float(getattr(config, "STALL_TIMER_SEC", 330.0))
+                _stall_loss = float(getattr(config, "STALL_MAX_LOSS_PCT", -0.08))
+                if minutes_held >= (_stall_sec / 60.0) and max_pnl_pct < 0.08 and pnl_pct <= _stall_loss:
                     tracker.close_position(mint, current_price, f"Dead Momentum Stall ({minutes_held*60:.0f}s no breakout, pnl {pnl_pct*100:.1f}%)")
                     continue
 
-                # === ТАЙМАУТ ПОСЛЕ ИМПУЛЬСА (только для не-mature скальпов +18..+35%) ===
-                if minutes_held >= 6.0 and 0.18 <= max_pnl_pct < 0.35 and pnl_pct <= -0.08:
+                # === ТАЙМАУТ ПОСЛЕ ИМПУЛЬСА (только для не-mature скальпов +32..+50%) ===
+                if minutes_held >= 10.0 and 0.32 <= max_pnl_pct < 0.50 and pnl_pct <= -0.08:
                     tracker.close_position(mint, current_price, f"Early Fade Cut (был пик +{max_pnl_pct*100:.0f}%, слив до {pnl_pct*100:.1f}%)")
                     continue
-                if minutes_held >= 8.0 and 0.20 <= max_pnl_pct < 0.35 and minutes_since_peak >= 7 and pnl_pct <= 0.01:
+                if minutes_held >= 12.0 and 0.32 <= max_pnl_pct < 0.50 and minutes_since_peak >= 8 and pnl_pct <= 0.025:
                     tracker.close_position(mint, current_price, f"Post-Rocket Fade Cut ({minutes_since_peak:.0f}m after peak, pnl {pnl_pct*100:+.1f}%)")
                     continue
 
@@ -446,12 +446,12 @@ async def position_manager_loop(analyzer, tracker):
                         tracker.close_position(mint, current_price, f"Inactive Pool Cut ({pnl_pct*100:.1f}%, {minutes_held:.0f}м)")
                         continue
 
-                # Breakeven / Soft Guard резерв (только после 6 минут, не режем стартовые свечи ретеста):
-                if minutes_held >= 6.0 and max_pnl_pct >= 0.20 and pnl_pct <= -0.10:
+                # Breakeven / Soft Guard резерв (только после 2+ минут и пробоя +32%, не душим стартовые волны +10..+25%):
+                if minutes_held >= 8.0 and max_pnl_pct >= 0.25 and pnl_pct <= -0.10:
                     tracker.close_position(mint, current_price, f"Soft Guard (был пик +{max_pnl_pct*100:.0f}%, слив до {pnl_pct*100:.1f}%)")
                     continue
-                _be_sol = float(getattr(config, "BREAKEVEN_PCT", 0.10))
-                if minutes_held >= 1.0 and max_pnl_pct >= _be_sol and pnl_pct <= 0.015:
+                _be_sol = float(getattr(config, "BREAKEVEN_PCT", 0.32))
+                if minutes_held >= 2.0 and max_pnl_pct >= _be_sol and pnl_pct <= 0.025:
                     tracker.close_position(mint, current_price, f"Breakeven (был пик +{max_pnl_pct*100:.0f}%)")
                     continue
 
@@ -474,13 +474,14 @@ async def position_manager_loop(analyzer, tracker):
                         else:
                             position.wick_confirm_n = 0
                                 
-                # 3. АВАРИЙНЫЙ КЭП: больше -30% одну сделку не держим.
-                if pnl_pct <= -0.30:
+                # 3. АВАРИЙНЫЙ КЭП из config.py (-18% вместо -30%): не даём одной сделке съедать 3 профита!
+                _emerg_cap = -abs(float(getattr(config, "EMERGENCY_CAP_PCT", -0.18)))
+                if pnl_pct <= _emerg_cap:
                     tracker.close_position(mint, current_price, f"Emergency Cap ({pnl_pct*100:.0f}%)")
                     continue
 
-                # 3.5 ЖЕСТКИЙ Stop Loss из config.py (после 1.5 мин, чтобы пережить стартовый спред)
-                if minutes_held >= 5.0 and pnl_pct <= config.STOP_LOSS_PCT:
+                # 3.5 ЖЕСТКИЙ Stop Loss из config.py (-14% после 1.2 мин, чтобы пережить стартовый спред без слива до -30%)
+                if minutes_held >= 1.2 and pnl_pct <= config.STOP_LOSS_PCT:
                     from jupiter import JupiterAPI
                     _j_ok, _j_why = await JupiterAPI.is_token_sellable(mint)
                     if not _j_ok:
@@ -905,11 +906,11 @@ async def scanner_loop(analyzer, tracker):
                                         print(f"⏳ [SCANNER-MIGRATION] {actual_symbol} ({mint[:8]}): AMM-пул создан {_age_sc:.1f}м назад (< 1.5м) — зона сброса снайперов.")
                                         continue
                                     _fdv_sc = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
-                                    if 0 < _fdv_sc < 30000.0:
-                                        print(f"🚫 [SCANNER-MIGRATION] {actual_symbol} ({mint[:8]}): FDV ${_fdv_sc:,.0f} < $30,000 — слит ниже уровня миграции.")
+                                    if 0 < _fdv_sc < 14000.0:
+                                        print(f"🚫 [SCANNER-MIGRATION] {actual_symbol} ({mint[:8]}): FDV ${_fdv_sc:,.0f} < $14,000 — слит ниже уровня миграции.")
                                         continue
-                                    if liq_usd < 10000.0:
-                                        print(f"🚫 [SCANNER-MIGRATION] {actual_symbol} ({mint[:8]}): ликвидность ${liq_usd:,.0f} < $10,000 — микро-пул.")
+                                    if liq_usd < 3500.0:
+                                        print(f"🚫 [SCANNER-MIGRATION] {actual_symbol} ({mint[:8]}): ликвидность ${liq_usd:,.0f} < $3,500 — микро-пул.")
                                         continue
 
                                 # Живая проверка цены Jupiter для ЛЮБЫХ токенов на AMM (включая pump на Raydium/PumpSwap)
@@ -1115,9 +1116,11 @@ async def fomo_signal_loop(analyzer, tracker):
                     mints = f.read().splitlines()
                 
                 if mints:
-                    # Очищаем файл после прочтения
-                    with open('fomo_signals.txt', 'w') as f:
-                        f.write('')
+                    # Удаляем файл после прочтения (не оставляем 0-байтный пустой файл)
+                    try:
+                        os.remove('fomo_signals.txt')
+                    except OSError:
+                        pass
                     # Бёрст-контроль и дедупликация: очередь могла копиться пока петля спала —
                     # очищаем дубликаты, сохраняя самые свежие сигналы
                     _maxpass = int(getattr(config, "MAX_FOMO_BUYS_PER_PASS", 3) or 3)

@@ -266,12 +266,8 @@ class Analyzer:
             self.rocket_xgb = get_rocket_xgb_model()
         if getattr(self, "rocket_xgb", None) is None or not pair_data:
             return 0.0
-        if holders_info is None and (hasattr(self, '_last_top1') or hasattr(self, '_last_top10') or hasattr(self, '_last_dev')):
-            holders_info = {
-                "top1_pct": getattr(self, '_last_top1', 3.5),
-                "top10_pct": getattr(self, '_last_top10', 20.0),
-                "dev_pct": getattr(self, '_last_dev', 0.0),
-            }
+        # ВАЖНО: Никогда не подставляем _last_top10/_last_dev от предыдущего токена при holders_info=None!
+        # Иначе концентрация китов проверенного ранее скама утекает в Stage-1 скоринг чистых ракет.
         res = score_token_with_rocket_xgb(mint, pair_data, holders_info, return_features=True)
         if isinstance(res, tuple):
             prob, rkt_feats = res
@@ -1411,22 +1407,44 @@ class Analyzer:
                     self._last_top10 = top_10_sum_pct
                     self._last_dev = dev_holding_pct
 
-                    # Лимиты холдеров с учётом конфига ROBINHOOD_MAX_CREATOR_PCT
-                    max_dev_pct = float(getattr(config, "ROBINHOOD_MAX_CREATOR_PCT", 0.20)) * 100.0
-                    if _is_pump_flag:
-                        max_dev_pct = min(max_dev_pct, 15.0)
-                    else:
-                        max_dev_pct = min(max_dev_pct, 10.0)
-
+                    # Лимиты холдеров (@savipww Auditor: Dev <= 6% sold 0, Whale <= 15%, Top10 <= 30% на DEX)
+                    max_dev_pct = 8.0 if _is_pump_flag else float(getattr(config, "AUDITOR_MAX_DEV_PCT", 6.0))
                     if dev_holding_pct and dev_holding_pct > max_dev_pct:
                         return self._deny(mint, f"dev-hold {dev_holding_pct:.1f}%", f"🚫 [АНТИСКАМ] Дев держит {dev_holding_pct:.1f}% > {max_dev_pct:.0f}% у {mint[:8]} → Блок.")
+                    try:
+                        from birth_tracker import birth_tracker as _bt_a
+                        _dev_dumped, _dev_dump_why = _bt_a.check_creator_dumped(mint, dev_holding_pct)
+                        if _dev_dumped:
+                            return self._deny(mint, "dev-dumping", f"🚫 [АНТИСКАМ-L3] {symbol} ({mint[:8]}): {_dev_dump_why} → Блок.")
+                    except Exception:
+                        pass
                     largest_whale_pct = top_10[0][1] if top_10 else 0.0
-                    max_whale_pct = 25.0 if _is_pump_flag else 20.0
+                    max_whale_pct = 18.0 if _is_pump_flag else 15.0
                     if largest_whale_pct > max_whale_pct:
                         return self._deny(mint, f"whale-hold {largest_whale_pct:.1f}%", f"🚫 [АНТИСКАМ] Кит держит {largest_whale_pct:.1f}% > {max_whale_pct:.0f}% у {mint[:8]} → Блок.")
-                    max_allowed_top10 = 40.0 if _is_pump_flag else 45.0
+                    max_allowed_top10 = 35.0 if _is_pump_flag else float(getattr(config, "AUDITOR_MAX_TOP10_PCT", 30.0))
                     if top_10_sum_pct > max_allowed_top10:
-                        return self._deny(mint, f"top10-hold {top_10_sum_pct:.1f}%", f"🚫 [АНТИСКАМ] Топ-10 держат {top_10_sum_pct:.1f}% > {max_allowed_top10}% у {mint[:8]} → Блок.")
+                        return self._deny(mint, f"top10-hold {top_10_sum_pct:.1f}%", f"🚫 [АНТИСКАМ] Топ-10 держат {top_10_sum_pct:.1f}% > {max_allowed_top10:.0f}% у {mint[:8]} → Блок.")
+
+                    # Layer 7 (RugCheck insiders/graph) + Layer 8 (SPL Holder Delegations / Drain Trap)
+                    try:
+                        import asyncio as _aio_aud
+                        import goplus as _gp_aud
+                        _tok_meta = rc_data.get("token") or {}
+                        _raw_s = float(_tok_meta.get("supply") or 0.0)
+                        _dec_s = int(_tok_meta.get("decimals") or 6)
+                        _ui_s = (_raw_s / (10 ** _dec_s)) if _raw_s > 0 else 1_000_000_000.0
+                        _h_accs = [str(h.get("address") or "") for h in top_holders[:20] if h.get("address") and str(h.get("address")) not in pool_accounts]
+                        (_l7_ok, _l7_why), (_l8_ok, _l8_why) = await _aio_aud.gather(
+                            _gp_aud.check_rugcheck_insider_graph(mint, total_supply_raw=_raw_s, pool_accounts=pool_accounts),
+                            _gp_aud.check_spl_holder_delegations(mint, holder_token_accounts=_h_accs, total_supply_ui=_ui_s),
+                        )
+                        if not _l7_ok:
+                            return self._deny(mint, "insider-graph-bundle", f"🚫 [АНТИСКАМ-L7] {symbol} ({mint[:8]}): {_l7_why} → Блок.")
+                        if not _l8_ok:
+                            return self._deny(mint, "spl-delegation-drain", f"🚫 [АНТИСКАМ-L8] {symbol} ({mint[:8]}): {_l8_why} → Скрытый дрейнер!")
+                    except Exception:
+                        pass
                 else:
                     # Фоллбэк на GoPlus если RugCheck не ответил
                     try:
@@ -1463,6 +1481,20 @@ class Analyzer:
             # 4. Финальная проверка минутных свечей (защита от водопада в моменте)
             if not await self.verify_1m_candles_not_dumping(mint, pair_data, "solana"):
                 return False
+
+            # 5. Stage-2 ML пересчёт с реальными ончейн-данными холдеров этого конкретного токена
+            if getattr(self, "_last_top10", 0.0) > 0 or getattr(self, "_last_dev", 0.0) > 0:
+                _real_holders = {
+                    "top1_pct": max(float(getattr(self, "_last_dev", 0.0) or 0.0), float(getattr(self, "_last_top10", 20.0) or 20.0) / 5.0),
+                    "top10_pct": float(getattr(self, "_last_top10", 20.0) or 20.0),
+                    "dev_pct": float(getattr(self, "_last_dev", 0.0) or 0.0),
+                }
+                conf = self.score_rocket_xgb(mint, pair_data, holders_info=_real_holders)
+                self.last_score = conf
+                self.rocket_scores[mint] = conf
+            _final_thr = float(getattr(config, "ROCKET_XGB_FINAL_THRESHOLD", 26.0))
+            if conf < _final_thr:
+                return self._deny(mint, f"rocket-xgb-s2 {conf:.0f}%", f"🚫 [ROCKET-XGB-S2] {symbol} ({mint[:8]}): скор с учётом холдеров {conf:.1f}% < {_final_thr:.0f}% — отсев.")
 
             self._set_sig(mint, f"ROCKET-XGB {conf:.0f}%")
             print(f"🚀 [ENTRY-APPROVED] {symbol} ({mint[:8]}): ML Score {conf:.1f}%, Безопасность подтверждена! Сигнал на покупку.")
@@ -2978,12 +3010,12 @@ class Analyzer:
             _ray_liq = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
             if _ray_liq < 10000.0:
                 return self._deny(mint, "migrated-drained-liq",
-                                  f"🚫 [POST-MIGRATION] {mint[:8]}: ликвидность ${_ray_liq:,.0f} < $10,000 — снайперы высосали SOL на миграции.")
+                                  f"🚫 [POST-MIGRATION] {mint[:8]}: ликвидность ${_ray_liq:,.0f} < $3,500 — снайперы высосали SOL на миграции.")
 
             _fdv_check = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
-            if 0 < _fdv_check < 30000.0:
+            if 0 < _fdv_check < 14000.0:
                 return self._deny(mint, "migrated-below-graduation",
-                                  f"🚫 [POST-MIGRATION] {mint[:8]}: FDV ${_fdv_check:,.0f} < $30,000 — слит ниже уровня миграции.")
+                                  f"🚫 [POST-MIGRATION] {mint[:8]}: FDV ${_fdv_check:,.0f} < $14,000 — слит ниже уровня миграции.")
 
         _sol_min_age = float(getattr(config, "SOLANA_MIN_AGE_MIN", 1.5))
         if _age_min < _sol_min_age:

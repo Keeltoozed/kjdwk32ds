@@ -234,6 +234,8 @@ class GrokJevEngine:
         self.get_funnel_summary = get_funnel_summary
         # mint -> [(ts, price), ...] за последние 30 мин: нужна, чтобы отличать растущую монету от падающей
         self._px_hist: Dict[str, list] = {}
+        # norm_symbol -> (mint, liq_usd, created_at_ms, ts): реестр сегодняшних ракет для мгновенного отсева copycat-клонов
+        self._runner_registry: Dict[str, tuple] = {}
 
     def score_rocket_xgb(self, address: str, pair: dict, holders_info: dict = None) -> float:
         """Оценка токена через Rocket XGBoost v3 (0ms)."""
@@ -354,14 +356,38 @@ class GrokJevEngine:
         if symbol in FAKE_BRAND_BLACKLIST or any(b in symbol for b in ("NINTENDO", "POKEMON", "PLAYSTATION", "DISNEY")):
             return False, f"fake-brand-clone {symbol}"
 
+        # 0.5. Быстрый 0ms анти-клон по реестру сегодняшних ракет (@savipww Scanner Copycat Rule)
+        import re as _re_cc
+        _norm_sym = _re_cc.sub(r"[^a-z]", "", symbol.lower())
+        _raw_liq_cc = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
+        _fdv_cc = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
+        _h24_cc = float(((pair_data.get("priceChange") or {}).get("h24", 0)) or 0)
+        _ca_cc = int(pair_data.get("pairCreatedAt") or 0)
+        if len(_norm_sym) >= 3:
+            _prev_r = self._runner_registry.get(_norm_sym)
+            if _prev_r and _prev_r[0] != mint:
+                _orig_mint, _orig_liq, _orig_ca, _orig_ts = _prev_r
+                if (time.time() - _orig_ts) < 86400.0 and _orig_liq >= 25000.0 and _raw_liq_cc < (_orig_liq * 0.25):
+                    if _orig_ca == 0 or _ca_cc == 0 or _ca_cc > _orig_ca:
+                        return False, f"copycat-of-runner {symbol} (clone of {_orig_mint[:6]} liq ${_orig_liq:,.0f})"
+            if _raw_liq_cc >= 25000.0 and (_h24_cc >= 200.0 or _fdv_cc >= 180000.0):
+                if (not _prev_r) or _raw_liq_cc > _prev_r[1]:
+                    if len(self._runner_registry) > 1500:
+                        self._runner_registry.clear()
+                    self._runner_registry[_norm_sym] = (mint, _raw_liq_cc, _ca_cc, time.time())
+
         # 1. Ликвидность (с защитой от гигантских не-мем пулов и фантомной ликвидности)
         raw_liq = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
         fdv_mc = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
 
         # Для немигрировавших токенов Pump.fun: кёрв обязан набрать хотя бы $12,000 FDV (>15% кривой),
-        # иначе дев сливает 100% пула за секунду
+        # либо от $8,000 FDV при мощном органическом потоке покупок (vol5 >= $4k, >=25 покупок, b5 >= 1.25*s5)
         if dex_id in ("pump", "pumpfun") and fdv_mc < 12000.0:
-            return False, f"pump-curve-too-early: FDV ${fdv_mc:,.0f} < $12,000 (under 8 SOL in curve, dev dump risk)"
+            _etx5 = (pair_data.get("txns") or {}).get("m5", {}) or {}
+            _eb5, _es5 = int(_etx5.get("buys", 0) or 0), int(_etx5.get("sells", 0) or 0)
+            _evol5 = float((pair_data.get("volume") or {}).get("m5", 0) or 0)
+            if not (fdv_mc >= 8000.0 and _evol5 >= 4000.0 and _eb5 >= 25 and _eb5 >= _es5 * 1.25):
+                return False, f"pump-curve-too-early: FDV ${fdv_mc:,.0f} < $12,000 (under 8 SOL in curve, dev dump risk)"
 
         eff_liq = raw_liq if raw_liq > 0 else (fdv_mc * 0.40 if is_pump else 0.0)
         
@@ -402,8 +428,15 @@ class GrokJevEngine:
         pc = pair_data.get("priceChange", {}) or {}
         m5 = float(pc.get("m5", 0) or 0)
         m1 = float(pc.get("m1", 0) or 0)
-        if m1 == 0.0 and abs(m5) > 0.5:
-            m1 = max(-25.0, min(25.0, m5 * 0.15))
+        if m1 == 0.0:
+            _cur_px = float(pair_data.get("priceUsd", 0) or 0)
+            _ph = self._px_hist.get(mint) or []
+            _now_t = time.time()
+            _ref_pts = [p for t, p in _ph if 12.0 <= (_now_t - t) <= 120.0 and p > 0]
+            if _cur_px > 0 and _ref_pts:
+                m1 = max(-40.0, min(40.0, (_cur_px / _ref_pts[-1] - 1.0) * 100.0))
+            elif abs(m5) > 0.5:
+                m1 = max(-25.0, min(25.0, m5 * 0.15))
         h1 = float(pc.get("h1", 0) or 0)
 
         # КАТЕГОРИЧЕСКИЙ БЛОК: СМЕРТЕЛЬНАЯ ЗОНА МИГРАЦИИ (0 - 2.0 МИНУТ)
@@ -427,9 +460,12 @@ class GrokJevEngine:
                 return False, f"age-out-of-bounds {age_min:.1f}m > {max_age:.1f}m (old token)"
             return False, f"age-out-of-bounds {age_min:.1f}m < {min_age:.1f}m (wait for maturation)"
 
-        # 2.5. Exhaustion Guard: запрет входа на излете гигантского пампа (кейсы CYBER +4942%, BITCAT +657%, RETARD +382%)
-        if h1 > 250.0 and age_min >= 10.0:
-            return False, f"exhaustion-top-h1 h1 {h1:+.0f}% > +250% (late pump top, dump risk)"
+        # 2.5. Exhaustion Guard: не режем молодые/мигрировавшие с Pump.fun ракеты (у них h1 +400..+1500% считается от $5k кривой!),
+        # но блокируем старые выдохшиеся пампы (age >= 45m без свежего притока покупателей)
+        _is_young_grad = (is_pump or dex_id == "meteora" or age_min < 45.0)
+        _max_h1_allowed = 1800.0 if (_is_young_grad and b5 >= s5 * 1.10 and vol_m5 >= 3000.0) else (450.0 if _is_young_grad else 300.0)
+        if h1 > _max_h1_allowed and age_min >= 10.0:
+            return False, f"exhaustion-top-h1 h1 {h1:+.0f}% > +{_max_h1_allowed:.0f}% (late pump top, dump risk)"
         if fdv_mc > 100000.0 and eff_liq < 0.02 * fdv_mc:
             return False, f"fdv-liquidity-trap liq ${eff_liq:,.0f} < 2% of FDV ${fdv_mc:,.0f} (phantom valuation)"
 
@@ -651,49 +687,61 @@ class GrokJevEngine:
             return False, -0.06, 0.0, "invalid-entry-price"
 
         pc = pair_data.get("priceChange", {}) or {}
-        m1 = float(pc.get("m1", 0) or 0)
+        _raw_m1 = pc.get("m1")
+        m1 = float(_raw_m1 or 0)
         m5 = float(pc.get("m5", 0) or 0)
         txns_m5 = (pair_data.get("txns") or {}).get("m5", {}) or {}
         b5 = int(txns_m5.get("buys", 0) or 0)
         s5 = int(txns_m5.get("sells", 0) or 0)
         vol5 = float((pair_data.get("volume") or {}).get("m5", 0) or 0)
         
-        # 1. Запрет покупать вертикальную палку на гипер-пике FOMO:
+        # 1. Запрет покупать вертикальную палку на гипер-пике FOMO (но пропускаем органический пробой с объёмом!):
         _h1 = float(pc.get("h1", 0) or 0)
         _ca = pair_data.get("pairCreatedAt") or 0
         _age_m = round((time.time() * 1000 - _ca) / 60000.0, 1) if _ca else 999.0
         _liq_usd = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
         _base_addr = str(((pair_data.get("baseToken") or {}).get("address")) or "")
         _dex_id = str(pair_data.get("dexId", "")).lower()
-        _is_pump_pair = _base_addr.endswith("pump") or _dex_id in ("pump", "pumpfun", "pumpswap")
+        _is_pump_pair = _base_addr.endswith("pump") or _dex_id in ("pump", "pumpfun", "pumpswap", "meteora")
         _min_liq = 1500.0 if _is_pump_pair else (4000.0 if _age_m < 60.0 else float(getattr(_c, "JEV_MIN_LIQUIDITY_USD", 6000.0)))
-        _max_m1 = float(getattr(_c, "JEV_MAX_M1_ENTRY_PCT", 18.0))
+        _max_m1 = float(getattr(_c, "JEV_MAX_M1_ENTRY_PCT", 25.0))
 
-        if m5 > 75.0:
-            return False, -0.12, 0.0, f"fomo-spike (m5 {m5:+.1f}% > +75.0%) — buying local top, wait for reset"
-        if m5 > 45.0 and m1 > 5.0:
-            return False, -0.12, 0.0, f"fomo-spike (m5 {m5:+.1f}% > +45.0% and m1 {m1:+.1f}% > 5%) — FOMO spike without pullback"
-        if m5 > 35.0 and m1 > 12.0:
-            return False, -0.12, 0.0, f"candle-spike (m1 {m1:+.1f}%, m5 {m5:+.1f}%) — FOMO vertical spike"
+        # Если DexScreener не отдал m1 (0.0 / None) — берем реальный sub-minute m1 из нашей живой истории сканов
+        _m1_known = (_raw_m1 is not None and float(_raw_m1 or 0) != 0.0)
+        if not _m1_known and _base_addr:
+            _ph_f = self._px_hist.get(_base_addr) or []
+            _now_f = time.time()
+            _ref_f = [p for t, p in _ph_f if 12.0 <= (_now_f - t) <= 120.0 and p > 0]
+            if _ref_f:
+                m1 = max(-40.0, min(40.0, (entry_price / _ref_f[-1] - 1.0) * 100.0))
+                _m1_known = True
+            self._record_px(_base_addr, entry_price)
+
+        _strong_breakout = (b5 >= 20 and b5 >= s5 * 1.20 and vol5 >= 4000.0)
+        _max_m5_cap = 140.0 if _strong_breakout else 85.0
+        if m5 > _max_m5_cap:
+            return False, -0.14, 0.0, f"fomo-spike (m5 {m5:+.1f}% > +{_max_m5_cap:.0f}%) — buying local top, wait for reset"
+        if m5 > 65.0 and m1 > 18.0:
+            return False, -0.14, 0.0, f"fomo-spike (m5 {m5:+.1f}% > +65.0% and m1 {m1:+.1f}% > 18%) — vertical blow-off candle"
         if m1 > _max_m1:
-            return False, -0.12, 0.0, f"m1-spike (m1 {m1:+.1f}% > +{_max_m1:.1f}%) — vertical push, wait for consolidation"
-        if _h1 > 250.0 and _age_m > 8.0:
-            return False, -0.12, 0.0, f"h1-exhaustion (h1 {_h1:+.1f}% > +250% at {_age_m:.0f}m) — pump already exhausted"
+            return False, -0.14, 0.0, f"m1-spike (m1 {m1:+.1f}% > +{_max_m1:.1f}%) — vertical push, wait for consolidation"
+        _max_h1_flush = 1800.0 if ((_is_pump_pair or _age_m < 45.0) and b5 >= s5 * 1.10 and vol5 >= 3000.0) else (450.0 if (_is_pump_pair or _age_m < 45.0) else 300.0)
+        if _h1 > _max_h1_flush and _age_m > 10.0:
+            return False, -0.14, 0.0, f"h1-exhaustion (h1 {_h1:+.1f}% > +{_max_h1_flush:.0f}% at {_age_m:.0f}m) — pump already exhausted"
         if _liq_usd > 0 and _liq_usd < _min_liq:
-            return False, -0.12, 0.0, f"thin-liquidity (${_liq_usd:,.0f} < ${_min_liq:,.0f}) — slippage/dump risk"
+            return False, -0.14, 0.0, f"thin-liquidity (${_liq_usd:,.0f} < ${_min_liq:,.0f}) — slippage/dump risk"
 
         # 2. Откат не должен быть ножом падения (падение глубже -3.5% за 1 мин — это слив):
         if m1 < -3.5:
-            return False, -0.12, 0.0, f"flush-dump (m1 {m1:+.1f}% < -3.5%) — falling knife, wait for stabilization"
+            return False, -0.14, 0.0, f"flush-dump (m1 {m1:+.1f}% < -3.5%) — falling knife, wait for stabilization"
 
         # 3. Проверка давления продавцов: в m5 покупатели должны лидировать
         if s5 > 5 and b5 < s5:
-            return False, -0.12, 0.0, f"sellers-dominating ({b5}b/{s5}s) — sellers active, wait for buyer absorption"
+            return False, -0.14, 0.0, f"sellers-dominating ({b5}b/{s5}s) — sellers active, wait for buyer absorption"
 
-        # 4. Монета не должна стоять на месте (flat / frozen candle):
-        # Если в последнюю минуту нет покупок (m1 <= 0.0%) и 5м рост слабый (m5 < 5.0%), не входим в спящий токен (кейсы WALT/STANK)!
-        if m1 <= 0.0 and m5 < 5.0:
-            return False, -0.12, 0.0, f"flat-coin (m1 {m1:+.1f}%, m5 {m5:+.1f}%) — price standing still, waiting for live impulse"
+        # 4. Монета не должна стоять на месте (но не режем первый скан, если DexScreener не прислал m1, а m5 и покупки растут!):
+        if (_m1_known and m1 <= 0.0 and m5 < 5.0) or (not _m1_known and (m5 < 4.0 or b5 <= s5)):
+            return False, -0.14, 0.0, f"flat-coin (m1 {m1:+.1f}%, m5 {m5:+.1f}%) — price standing still, waiting for live impulse"
 
         # 3.2. ПОДТВЕРЖДЕНИЕ ТРЕНДА ПО СОБСТВЕННОЙ ИСТОРИИ ЦЕН (DexScreener m1/m5 запаздывают на минуту и больше)
         if getattr(_c, "JEV_TREND_CONFIRM_ENABLED", False):
@@ -909,6 +957,17 @@ class GrokJevEngine:
         """
         candidates = []
         seen = set()
+
+        # 0. ПРИОРИТЕТ №1: Живой поток миграций PumpPortal (subscribeMigration + Waiting Room 90с..45м)
+        try:
+            from birth_tracker import birth_tracker
+            grad_ready = birth_tracker.get_waiting_room_graduates(min_age_sec=90.0, max_age_sec=2700.0)
+            for gm in (grad_ready or []):
+                if gm and gm not in seen:
+                    seen.add(gm)
+                    candidates.append((gm, "solana"))
+        except Exception:
+            pass
 
         # 1. Solana: Jupiter Discovery (весь пул, без искусственной обрезки)
         try:
@@ -1284,26 +1343,50 @@ class GrokJevEngine:
                     _h_stats["dev_pct"] = dev_pct
                     _h_stats["top1_pct"] = largest_whale
 
-                    max_dev_limit = 15.0 if is_pump else 10.0
+                    max_dev_limit = 8.0 if is_pump else float(getattr(_c, "AUDITOR_MAX_DEV_PCT", 6.0))
                     if dev_pct and dev_pct > max_dev_limit:
                         return False, f"dev still loaded {dev_pct:.1f}% > {max_dev_limit:.0f}% (dump hazard: dev holds supply)", _h_stats
-                    max_whale_limit = 25.0 if is_pump else 20.0
+                    try:
+                        from birth_tracker import birth_tracker as _bt_aud
+                        _dumped, _dump_why = _bt_aud.check_creator_dumped(address, dev_pct)
+                        if _dumped:
+                            return False, f"auditor-layer3 {_dump_why}", _h_stats
+                    except Exception:
+                        pass
+                    max_whale_limit = 18.0 if is_pump else 15.0
                     if largest_whale > max_whale_limit:
                         return False, f"whale concentration {largest_whale:.1f}% > {max_whale_limit:.0f}%", _h_stats
-                    max_top10 = 40.0 if is_pump else 45.0
+                    max_top10 = 35.0 if is_pump else float(getattr(_c, "AUDITOR_MAX_TOP10_PCT", 30.0))
                     if top_10_sum > max_top10:
                         return False, f"top 10 concentration {top_10_sum:.1f}% > {max_top10:.0f}%", _h_stats
+
+                    # Layer 7 (RugCheck insiders/graph) + Layer 8 (SPL Holder Delegations / Approve Drain) параллельно!
+                    _holder_tok_accs = [str(h.get("address") or "") for h in holders[:20] if h.get("address") and str(h.get("address")) not in pool_accounts]
+                    _raw_sup = float((token_info.get("supply") or 0.0))
+                    _dec_sup = int(token_info.get("decimals") or 6)
+                    _ui_sup = (_raw_sup / (10 ** _dec_sup)) if _raw_sup > 0 else 1_000_000_000.0
+                    (_l7_ok, _l7_why), (_l8_ok, _l8_why) = await asyncio.gather(
+                        _gp.check_rugcheck_insider_graph(address, total_supply_raw=_raw_sup, pool_accounts=pool_accounts),
+                        _gp.check_spl_holder_delegations(address, holder_token_accounts=_holder_tok_accs, total_supply_ui=_ui_sup),
+                    )
+                    if not _l7_ok:
+                        return False, f"auditor-layer7 {_l7_why}", _h_stats
+                    if not _l8_ok:
+                        return False, f"auditor-layer8 {_l8_why}", _h_stats
                 else:
-                    # Фоллбэк: RugCheck API вернул 400/404/429/500 -> проверяем GoPlus holder stats
+                    # Фоллбэк: RugCheck API вернул 400/404/429/500 -> проверяем GoPlus holder stats + Layer 8 RPC Delegations
+                    _l8_fb_ok, _l8_fb_why = await _gp.check_spl_holder_delegations(address)
+                    if not _l8_fb_ok:
+                        return False, f"auditor-layer8 {_l8_fb_why}", _h_stats
                     _h_raw = _gp.get_solana_holder_stats(address)
                     if _h_raw and _h_raw.get("has_data"):
                         _h_stats["top10_pct"] = float(_h_raw.get("top_10_pct", 0.0) or 0.0)
                         _h_stats["dev_pct"] = float(_h_raw.get("dev_pct", 0.0) or 0.0)
                         _h_stats["top1_pct"] = _h_stats["dev_pct"]
-                        max_dev_gp = 15.0 if is_pump else 10.0
+                        max_dev_gp = 8.0 if is_pump else float(getattr(_c, "AUDITOR_MAX_DEV_PCT", 6.0))
                         if _h_stats["dev_pct"] > max_dev_gp:
                             return False, f"dev loaded (GoPlus) {_h_stats['dev_pct']:.1f}% > {max_dev_gp:.0f}% (dump risk)", _h_stats
-                        max_top10_gp = 35.0 if is_pump else 40.0
+                        max_top10_gp = 35.0 if is_pump else float(getattr(_c, "AUDITOR_MAX_TOP10_PCT", 30.0))
                         if _h_stats["top10_pct"] > max_top10_gp:
                             return False, f"top10 concentration (GoPlus) {_h_stats['top10_pct']:.1f}% > {max_top10_gp:.0f}%", _h_stats
                     elif is_pump or address.endswith("pump") or str(pair_data.get("dexId", "")).lower() in ("pump", "pumpfun", "pumpswap"):
@@ -1432,6 +1515,7 @@ class GrokJevEngine:
         self._pair_seen[address] = pair
         if price <= 0:
             return False, "invalid-price"
+        self._record_px(address, price)
 
         # 1.5. Проверка рассинхрона цен между пулами (миграция / арбитражная ловушка)
         if pair.get("_price_divergence"):
@@ -1443,7 +1527,7 @@ class GrokJevEngine:
         # Отсекает 95% мусора и заведомых дампов в 0мс (DARTHLON 6%, BALLS 4%, PIKMIN 11%)
         # без лишних сетевых вызовов Jupiter, RugCheck и LLM.
         rkt_s1 = self.score_rocket_xgb(address, pair)
-        s1_thresh = float(getattr(_c, "ROCKET_XGB_STAGE1_THRESHOLD", 40.0))
+        s1_thresh = float(getattr(_c, "ROCKET_XGB_STAGE1_THRESHOLD", 24.0))
         if getattr(_c, "ROCKET_XGB_ENABLED", True) and rkt_s1 < s1_thresh:
             print(f"🚫 [GROK-JEV-ML-S1] {symbol} ({address[:8]}): Rocket XGB score {rkt_s1:.1f}% < {s1_thresh:.0f}% — отсев дампа в 0мс.")
             return False, f"rocket-xgb-s1-reject {rkt_s1:.1f}% < {s1_thresh:.0f}%"
@@ -1524,13 +1608,13 @@ class GrokJevEngine:
             return False, "fills-flush-wait final-recheck invalid-price"
         if _fin.get("_price_divergence"):
             return False, "fills-flush-wait final-recheck price-divergence-pool-split"
-        if _fpx < _scan_price * 0.985:
+        if _fpx < _scan_price * 0.965:
             return False, f"fills-flush-wait final-recheck price falling ({(_fpx/_scan_price-1)*100:+.1f}% since scan)"
-        if _fpx > _scan_price * 1.06:
+        if _fpx > _scan_price * 1.12:
             return False, f"fills-flush-wait final-recheck price ran away ({(_fpx/_scan_price-1)*100:+.1f}% since scan, no chase)"
         if _scan_liq > 0 and _fliq > 0 and _fliq < _scan_liq * 0.85:
             return False, f"fills-flush-wait final-recheck liquidity draining ({_scan_liq:,.0f}->{_fliq:,.0f})"
-        if _fm1 < -2.0:
+        if _fm1 < -3.5:
             return False, f"fills-flush-wait final-recheck m1 {_fm1:+.1f}% falling"
         pair, price = _fin, _fpx
         wick_price = price * (1.0 + wick_pct)
@@ -1538,7 +1622,7 @@ class GrokJevEngine:
         # 5.6. 🚀 STAGE 2: ROCKET XGBOOST FINAL ML FIREWALL
         # Финальная проверка перед реальным открытием ордера со свежими данными и реальными ончейн холдерами (_h_stats).
         rkt_final = self.score_rocket_xgb(address, pair, _h_stats)
-        final_thresh = float(getattr(_c, "ROCKET_XGB_FINAL_THRESHOLD", 50.0))
+        final_thresh = float(getattr(_c, "ROCKET_XGB_FINAL_THRESHOLD", 26.0))
         if getattr(_c, "ROCKET_XGB_ENABLED", True) and rkt_final < final_thresh:
             print(f"🚫 [GROK-JEV-ML-VETO] {symbol} ({address[:8]}): Rocket XGB final score {rkt_final:.1f}% < {final_thresh:.0f}% — VETO! (Блокировка дампа)")
             return False, f"rocket-xgb-final-veto {rkt_final:.1f}% < {final_thresh:.0f}%"
@@ -1560,6 +1644,10 @@ class GrokJevEngine:
         _cap = float(getattr(_c, "JEV_MAX_TICKET_USD", 15.0) or 0.0)
         if _cap > 0:
             ticket_size = min(ticket_size, _cap)   # растущий билет ($31) умножал убыток на каждом сливе
+        # Executor Liquidity Cap (@savipww): не более 2% от ликвидности пула, чтобы собственный выход не двигал стакан
+        _pool_frac = float(getattr(_c, "MAX_POOL_LIQ_FRAC", 0.02) or 0.02)
+        if _fliq > 0:
+            ticket_size = min(ticket_size, max(5.0, round(_fliq * _pool_frac, 2)))
 
         tracker.add_position(
             symbol=symbol,
@@ -1693,7 +1781,7 @@ async def grok_bot_jev_loop(tracker, analyzer=None):
                         evaluated_cooldown[(address, chain)] = now + 60.0    # Рыночная динамика: перепроверка через 60с (токен может набрать объем)
                     elif "max-positions" in why_low:
                         evaluated_cooldown[(address, chain)] = now + 30.0    # Ждем слота 30с
-                    elif any(k in why_low for k in ["rugcheck", "honeypot", "goplus", "freeze", "mint-auth", "clone", "impersonation", "dev-dump", "cabal", "top-wallet", "top-10"]):
+                    elif any(k in why_low for k in ["rugcheck", "honeypot", "goplus", "freeze", "mint-auth", "clone", "copycat-of-runner", "auditor-layer", "delegation", "insider-graph", "impersonation", "dev-dump", "cabal", "top-wallet", "top-10"]):
                         evaluated_cooldown[(address, chain)] = now + 1200.0  # Подтвержденный скам / опасный контракт — 20 минут бана
                     else:
                         evaluated_cooldown[(address, chain)] = now + 90.0    # Остальные временные фильтры — 90 сек вместо 10 мин

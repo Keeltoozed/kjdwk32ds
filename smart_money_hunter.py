@@ -269,12 +269,14 @@ class SmartMoneyHunter:
                     # Tiering:
                     wins_count = len(entry["winning_tokens"])
                     tot_pnl = entry["total_pnl"]
-                    if wins_count >= 3 or tot_pnl >= 5000.0:
-                        entry["tier"] = 1  # Gold Alpha
-                    elif wins_count >= 2 or tot_pnl >= 1000.0:
-                        entry["tier"] = 2  # Silver Sniper
+                    # Защита от "одноразовых счастливчиков" и бернеров дева (@savipww Copy Rule):
+                    # В Tier-1/Tier-2 попадают ТОЛЬКО кошельки, доказавшие серию побед минимум на 2+ разных монетах!
+                    if wins_count >= 3 or (wins_count >= 2 and tot_pnl >= 4000.0):
+                        entry["tier"] = 1  # Gold Alpha (серийный снайпер)
+                    elif wins_count >= 2 and tot_pnl >= 800.0:
+                        entry["tier"] = 2  # Silver Sniper (подтвержден на 2+ монетах)
                     else:
-                        entry["tier"] = 3  # Scout
+                        entry["tier"] = 3  # Scout (1 удачная монета — только наблюдение, без авто-копирования)
 
                     if is_new:
                         new_alphas_count += 1

@@ -391,13 +391,14 @@ class PaperTracker:
         if isinstance(pair_data, dict):
             liq_usd = float((pair_data.get("liquidity") or {}).get("usd", 0.0) or 0.0)
 
+        _max_pool_frac = float(getattr(config, "MAX_POOL_LIQ_FRAC", 0.02) or 0.02)
         if liq_usd > 0 and liq_usd < min_liq:
             if target > base_size:
                 print(f"💧 [REINVEST] Пул ${liq_usd:,.0f} < ${min_liq:,.0f}: сброс сайза с ${target:.0f} на базовые ${base_size:.0f} (защита цены)")
-            target = base_size
+            target = min(base_size, max(5.0, liq_usd * _max_pool_frac))
         elif liq_usd > 0:
-            # Не более 1.0% от пула (для глубоких пулов $100k+ ордер может быть $1,000 без проскальзывания)
-            max_by_pool = max(base_size, liq_usd * 0.010)
+            # Не более MAX_POOL_LIQ_FRAC (2%) от пула, чтобы собственный выход не двигал стакан
+            max_by_pool = max(base_size, liq_usd * _max_pool_frac)
             if target > max_by_pool:
                 target = max_by_pool
 

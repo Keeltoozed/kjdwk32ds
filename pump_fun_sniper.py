@@ -52,10 +52,12 @@ class PumpFunSniper:
         self.audit_fails = collections.Counter()  # причина отказа аудита -> число
         self.created_total = 0
         self.trades_total = 0
+        self.migrations_total = 0
         self._last_funnel_print = time.time()
         self._bg_tasks = []
         self._pending_sub = set()
         self._pending_unsub = set()
+        self._trade_stream_blocked = False
 
     def _mark(self, state, stage: int):
         if stage > state.stage:
@@ -299,6 +301,10 @@ class PumpFunSniper:
         while self.running:
             await asyncio.sleep(0.5)
             try:
+                if self._trade_stream_blocked:
+                    self._pending_sub.clear()
+                    self._pending_unsub.clear()
+                    continue
                 if self._pending_sub:
                     batch = list(self._pending_sub)[:50]
                     self._pending_sub.difference_update(batch)
@@ -342,10 +348,14 @@ class PumpFunSniper:
                 self._pending_sub.discard(mint)
                 self._pending_unsub.add(mint)
 
-            if time.time() - self._last_funnel_print >= 60:
+            _funnel_interval = 300 if self._trade_stream_blocked else 60
+            if time.time() - self._last_funnel_print >= _funnel_interval:
                 self._last_funnel_print = time.time()
                 try:
-                    self.print_funnel()
+                    if self._trade_stream_blocked:
+                        print(f"🎂 [STREAM FEED] Выпускников (subscribeMigration): {self.migrations_total} | Новых минтов в BirthTracker: {self.created_total}")
+                    else:
+                        self.print_funnel()
                 except Exception as _fe:
                     print(f"⚠️ funnel print err: {_fe}")
 
@@ -367,9 +377,10 @@ class PumpFunSniper:
                 _ws_opts = {_ws_kw: headers, "ping_interval": 20, "ping_timeout": 20}
                 async with websockets.connect(uri, **_ws_opts) as ws:
                     backoff = 5.0  # Успешное подключение — сброс задержки
-                    # 1. Подписка на создание новых токенов (InitializeMint)
+                    # 1. Подписка на создание новых токенов И бесплатный поток миграций (subscribeMigration — 1 из 58 выживших монет!)
                     await ws.send(json.dumps({"method": "subscribeNewToken"}))
-                    print("🚀 [STREAM] Подписка на поток новых токенов оформлена!")
+                    await ws.send(json.dumps({"method": "subscribeMigration"}))
+                    print("🚀 [STREAM] Подписка на поток новых токенов и живых миграций (subscribeMigration) оформлена!")
 
                     # После реконнекта подписки на трейды теряются: переподписываем живые токены
                     for _t in self._bg_tasks:
@@ -389,7 +400,31 @@ class PumpFunSniper:
                     while self.running:
                         message = await ws.recv()
                         data = json.loads(message)
-                        tx_type = data.get("txType")
+                        _ws_err = str(data.get("message") or data.get("errors") or "")
+                        if _ws_err and ("only available" in _ws_err.lower() or "api key" in _ws_err.lower()):
+                            if not self._trade_stream_blocked:
+                                self._trade_stream_blocked = True
+                                print(f"⚠️ [STREAM] PumpPortal требует API-ключ для потока трейдов: {_ws_err} -> BirthTracker продолжает сбор новых минтов; добавьте PUMPPORTAL_API_KEY в .env для лайв-снайпинга кривой.")
+                            continue
+                        tx_type = str(data.get("txType") or "").lower()
+
+                        # --- СОБЫТИЕ: ВЫПУСКНИК PUMP.FUN -> PUMPSWAP/RAYDIUM (БЕСПЛАТНЫЙ ПОТОК subscribeMigration) ---
+                        if "mint" in data and (tx_type in ("migrate", "migration") or ("pool" in data and tx_type not in ("create", "buy", "sell"))):
+                            _mig_mint = str(data.get("mint") or "").strip()
+                            _mig_pool = str(data.get("pool") or "")
+                            _mig_creator = str(data.get("traderPublicKey") or data.get("creator") or "")
+                            _mig_sym = str(data.get("symbol") or _mig_mint[:8])
+                            if _mig_mint:
+                                self.migrations_total += 1
+                                print(f"🏁 [MIGRATION LIVE] {_mig_sym} ({_mig_mint[:8]}) вышел с кривой на DEX (pool {_mig_pool[:8] or 'AMM'}) -> в Waiting Room!")
+                                try:
+                                    from birth_tracker import birth_tracker as _bt_mig
+                                    _bt_mig.add_graduated(_mig_mint, pool=_mig_pool, creator=_mig_creator)
+                                except Exception:
+                                    pass
+                                self.trackers.pop(_mig_mint, None)
+                                self._pending_sub.discard(_mig_mint)
+                            continue
 
                         # --- СОБЫТИЕ: МИНТ НОВОГО ТОКЕНА ---
                         if "mint" in data and tx_type == "create":
@@ -402,22 +437,23 @@ class PumpFunSniper:
                             if initial_buy > max_dev_tokens:
                                 continue  # Пропускаем явные мега-дампы (> 18% эмиссии у дева)
 
-                            state = TokenTrackerState(mint, symbol, trader_pubkey, initial_buy)
-                            _init_vsol = float(data.get("vSolInBondingCurve") or 0.0)
-                            if _init_vsol > 0:
-                                state.last_v_sol = _init_vsol
-                            self.trackers[mint] = state
                             self.created_total += 1
 
-                            # Передаем в birth_tracker для созревания
+                            # Передаем в birth_tracker для созревания (5-20 мин -> DEX анализ)
                             try:
                                 from birth_tracker import birth_tracker
                                 birth_tracker.add_token(mint)
                             except Exception:
                                 pass
 
-                            # Добавляем в батч-подписку на торги этого токена (отправка каждые 0.5с без rate-limit)
-                            self._pending_sub.add(mint)
+                            if not self._trade_stream_blocked:
+                                state = TokenTrackerState(mint, symbol, trader_pubkey, initial_buy)
+                                _init_vsol = float(data.get("vSolInBondingCurve") or 0.0)
+                                if _init_vsol > 0:
+                                    state.last_v_sol = _init_vsol
+                                self.trackers[mint] = state
+                                # Добавляем в батч-подписку на торги этого токена (отправка каждые 0.5с без rate-limit)
+                                self._pending_sub.add(mint)
 
                         # --- СОБЫТИЕ: ПОКУПКА ИЛИ ПРОДАЖА (ТРЕЙД) ---
                         elif tx_type in ["buy", "sell"]:

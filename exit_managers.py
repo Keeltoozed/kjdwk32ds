@@ -47,24 +47,23 @@ class MatureExitManager:
             not _src or any(k in _src for k in ('GROK', 'JEV', 'JUP', 'RUNNER', 'VIP', 'XGB', 'RAY', 'PUMP', 'SCOUT', 'STREAM', 'FOMO', 'SMART'))
         )
 
-        # Аварийный кэп ПЕРВЫМ: гэпы типа раг-дампов дева режем мгновенно на -20% (не даем уйти в -35%..-50%)
-        _emerg_cap = float(getattr(config, "EMERGENCY_CAP_PCT", -0.20))
+        # Аварийный кэп ПЕРВЫМ: гэпы типа раг-дампов дева режем мгновенно на -18% (не даем уйти в -35%..-50%)
+        _emerg_cap = float(getattr(config, "EMERGENCY_CAP_PCT", -0.18))
         if pnl_pct <= _emerg_cap:
             return f"Mature Emergency Cap ({pnl_pct*100:.0f}%)"
 
         # Infant guard: дамп в первые минуты = дев сливает, не шум.
-        # Режем сброс дева (-16%+), спасая депозит от инста-рага.
+        # Режем сброс дева (-15%+), спасая депозит от инста-рага.
         _inf_win = float(getattr(config, "INFANT_WINDOW_MIN", 2.0))
-        _inf_pct = float(getattr(config, "INFANT_DUMP_PCT", -0.16))
+        _inf_pct = float(getattr(config, "INFANT_DUMP_PCT", -0.15))
         if minutes_held < _inf_win and pnl_pct <= _inf_pct:
             return f"Mature Infant Dump ({pnl_pct*100:.0f}%)"
 
-        # STALL TIMER (DEAD MOMENTUM EXIT - CT / Reddit Best Practice)
-        # Если после входа токен в течение 90 секунд не развил моментум (max_pnl_pct < +6%)
-        # и сползает в минус (pnl_pct <= -0.06), выходим немедленно, не дожидаясь дампа -20%..-35%!
-        _stall_sec = float(getattr(config, "STALL_TIMER_SEC", 90.0))
-        _stall_loss = float(getattr(config, "STALL_MAX_LOSS_PCT", -0.06))
-        if minutes_held >= (_stall_sec / 60.0) and max_pnl_pct < 0.06 and pnl_pct <= _stall_loss:
+        # STALL TIMER (DEAD MOMENTUM EXIT — даём полную 5м свечу 330с на выход из консолидации!)
+        # Раньше 90-120с на -5% резало 43% позиций в гарантированный минус на обычном дыхании пула.
+        _stall_sec = float(getattr(config, "STALL_TIMER_SEC", 330.0))
+        _stall_loss = float(getattr(config, "STALL_MAX_LOSS_PCT", -0.08))
+        if minutes_held >= (_stall_sec / 60.0) and max_pnl_pct < 0.08 and pnl_pct <= _stall_loss:
             return f"Dead Momentum Stall ({minutes_held*60:.0f}s no breakout, pnl {pnl_pct*100:.1f}%)"
 
         # GROK BOT x JEV: СТОП ПОД ФИТИЛЬ (по умолчанию ОТКЛЮЧЕН, чтобы не душить ракеты на -15%..-25% в первые минуты)
@@ -84,57 +83,48 @@ class MatureExitManager:
                 else:
                     position.wick_confirm_n = 0
 
-        # 1. ГАРАНТИРОВАННЫЙ НЕСНИЖАЕМЫЙ ПОРОГ ПРИБЫЛИ (PROFIT FLOOR LOCK)
-        # Не душим ракеты на старте (+15..+35%, кейсы KIM +27%, Chubby +19% -> +60%, ELON +184%):
-        # До +40% защищаем только БЕЗУБЫТОК (+2% на комиссии), давая монете свободно дышать перед 2x-5x!
-        # Ступенчатый пол фиксации прибыли включается только от +40% пика.
+        # 1. ГАРАНТИРОВАННЫЙ НЕСНИЖАЕМЫЙ ПОРОГ ПРИБЫЛИ (PROFIT FLOOR LOCK — +EV АСИММЕТРИЯ)
+        # НИКАКОГО удушения на +10%..+30% (кейсы ANSEM +13%->+20%, REGRETAMINE +17%->+27%, KIM, Chubby):
+        # Безубыток (+3.5%) включается ТОЛЬКО после реального пробоя +32%, ступенчатый пол прибыли — от +50% пика!
         max_pnl_pct = (position.max_price_usd - position.entry_price_usd) / position.entry_price_usd if position.entry_price_usd else 0.0
         _floor_pnl = None
         if _ride:
-            # RIDE: пол = доля от пика, допускает откат для полета ракет
+            # RIDE: широкое дыхание для захвата 2x-10x движений (R:R > 3.5x)
             if max_pnl_pct >= 5.00:       # +500%+: держим 65% прибыли
                 _floor_pnl = round(max_pnl_pct * 0.65, 2)
-            elif max_pnl_pct >= 3.00:     # +300%..+500%: 60%
+            elif max_pnl_pct >= 2.50:     # +250%..+500%: 60%
                 _floor_pnl = round(max_pnl_pct * 0.60, 2)
-            elif max_pnl_pct >= 1.50:     # +150%..+300%: 50%
+            elif max_pnl_pct >= 1.30:     # +130%..+250%: 50% (пик +150% -> пол +75%)
                 _floor_pnl = round(max_pnl_pct * 0.50, 2)
-            elif max_pnl_pct >= 1.00:     # +100%..+150%: 45% (пик +100% -> пол +45%)
-                _floor_pnl = round(max_pnl_pct * 0.45, 2)
-            elif max_pnl_pct >= 0.60:     # +60%..+100%: держим минимум 40% (пик +60% -> пол +25%, пик +80% -> пол +32%)
-                _floor_pnl = max(0.25, round(max_pnl_pct * 0.40, 2))
-            elif max_pnl_pct >= 0.40:     # +40%..+60%: держим минимум +18%
-                _floor_pnl = 0.18
-            elif max_pnl_pct >= 0.25:     # +25%..+40%: фиксируем минимум +10% профита
-                _floor_pnl = 0.10
-            elif max_pnl_pct >= 0.18:     # Пик +18%..+25%: безубыток +2% (не даем уйти в минус!)
-                _floor_pnl = 0.02
-        elif max_pnl_pct >= 5.00:       # Гипер-ракета (+500%+): держим 78% прибыли
-            _floor_pnl = round(max_pnl_pct * 0.78, 2)
-        elif max_pnl_pct >= 3.00:     # Мега-ракета (+300%..+500%): держим 75% прибыли
-            _floor_pnl = max(2.40, round(max_pnl_pct * 0.75, 2))
-        elif max_pnl_pct >= 2.00:     # Пик +200%+ (3x) -> гарантируем минимум +165%
-            _floor_pnl = 1.65
-        elif max_pnl_pct >= 1.50:     # Пик +150%+ (2.5x) -> гарантируем минимум +122%
-            _floor_pnl = 1.22
-        elif max_pnl_pct >= 1.00:     # Пик +100%+ (2x) -> гарантируем минимум +80%
-            _floor_pnl = 0.80
-        elif max_pnl_pct >= 0.70:     # Пик +70%+ -> гарантируем минимум +55%
+            elif max_pnl_pct >= 0.80:     # +80%..+130%: держим минимум +38%
+                _floor_pnl = max(0.38, round(max_pnl_pct * 0.45, 2))
+            elif max_pnl_pct >= 0.50:     # +50%..+80% (TP1 уже взят!): держим минимум +20% на остаток
+                _floor_pnl = 0.20
+            elif max_pnl_pct >= 0.32 and minutes_held >= 1.5:  # Пробой +32%+: переводим стоп в честный безубыток +3.5%
+                _floor_pnl = 0.035
+        elif max_pnl_pct >= 5.00:       # Гипер-ракета (+500%+): держим 75% прибыли
+            _floor_pnl = round(max_pnl_pct * 0.75, 2)
+        elif max_pnl_pct >= 3.00:     # Мега-ракета (+300%..+500%): держим 70% прибыли
+            _floor_pnl = max(2.10, round(max_pnl_pct * 0.70, 2))
+        elif max_pnl_pct >= 2.00:     # Пик +200%+ (3x) -> гарантируем минимум +140%
+            _floor_pnl = 1.40
+        elif max_pnl_pct >= 1.50:     # Пик +150%+ (2.5x) -> гарантируем минимум +95%
+            _floor_pnl = 0.95
+        elif max_pnl_pct >= 1.00:     # Пик +100%+ (2x) -> гарантируем минимум +55%
             _floor_pnl = 0.55
-        elif max_pnl_pct >= 0.50:     # Пик +50%+ -> гарантируем минимум +32%
-            _floor_pnl = 0.32
-        elif max_pnl_pct >= 0.40:     # Пик +40%+ -> гарантируем минимум +18%
-            _floor_pnl = 0.18
-        elif max_pnl_pct >= 0.25:     # Пик +25%..+40% -> гарантируем минимум +10%
-            _floor_pnl = 0.10
-        elif max_pnl_pct >= 0.18:     # Пик +18%..+25%: безубыток +2%
-            _floor_pnl = 0.02
+        elif max_pnl_pct >= 0.70:     # Пик +70%+ -> гарантируем минимум +35%
+            _floor_pnl = 0.35
+        elif max_pnl_pct >= 0.50:     # Пик +50%+ -> гарантируем минимум +20%
+            _floor_pnl = 0.20
+        elif max_pnl_pct >= 0.32 and minutes_held >= 1.5:     # Пик +32%..+50%: безубыток +3.5%
+            _floor_pnl = 0.035
         if _floor_pnl is not None and pnl_pct <= _floor_pnl:
             # 2-тиковое подтверждение пробоя пола (защита от 1-секундных проколов и теней свечей),
-            # НО если это жесткий сброс (слив профита к безубытку pnl_pct <= 0.03 при пике >= +18% или откат от хая >= 25%), выходим МГНОВЕННО:
+            # мгновенный выход только при реальном обвале от высокого пика (>= +45% пик и откат >= 32%):
             _fc = int(getattr(position, "floor_confirm_n", 0) or 0) + 1
             position.floor_confirm_n = _fc
             _drop_from_max = (position.max_price_usd - current_price) / position.max_price_usd if position.max_price_usd else 0
-            _fast_exit = (max_pnl_pct >= 0.18 and pnl_pct <= 0.03) or (pnl_pct <= 0.08 and max_pnl_pct >= 0.40) or (_drop_from_max >= 0.25 and max_pnl_pct >= 0.35)
+            _fast_exit = (_drop_from_max >= 0.32 and max_pnl_pct >= 0.45) or pnl_pct <= -0.02
             if _fc < 2 and not _fast_exit:
                 return None
             if pnl_pct >= 0:
@@ -143,15 +133,20 @@ class MatureExitManager:
         else:
             position.floor_confirm_n = 0
 
-        # 2. СУЖАЮЩИЙСЯ ПАРАБОЛИЧЕСКИЙ ТРЕЙЛИНГ-СТОП (Чем выше пик, тем плотнее зажимаем профит у вершины!)
+        # 2. СУЖАЮЩИЙСЯ ПАРАБОЛИЧЕСКИЙ ТРЕЙЛИНГ-СТОП (Включается от +55% пика, давая ракетам дышать на откатах 22-26%!)
         if hasattr(config, 'TRAILING_ACTIVATION_PCT'):
             if _ride:
-                # RIDE: трейлинг от +40% с широкой дистанцией 24% на старте (не душим шум ранних ракет):
-                if max_pnl_pct >= 0.40:
-                    _trail_dist = 0.24 if max_pnl_pct < 0.70 else (0.20 if max_pnl_pct < 2.00 else 0.15)
+                if max_pnl_pct >= 0.55:
+                    _trail_dist = 0.26 if max_pnl_pct < 1.00 else (0.22 if max_pnl_pct < 2.50 else 0.16)
                     drop_from_max = (position.max_price_usd - current_price) / position.max_price_usd
                     if drop_from_max >= _trail_dist:
-                        return f"Mature Trailing RIDE (+{max_pnl_pct*100:.0f}% peak, drop {drop_from_max*100:.0f}%)"
+                        _tr_c = int(getattr(position, "trail_confirm_n", 0) or 0) + 1
+                        position.trail_confirm_n = _tr_c
+                        if _tr_c >= 2:
+                            return f"Mature Trailing RIDE (+{max_pnl_pct*100:.0f}% peak, drop {drop_from_max*100:.0f}%)"
+                        return None
+                    else:
+                        position.trail_confirm_n = 0
             elif max_pnl_pct >= getattr(config, 'TRAILING_ACTIVATION_PCT', 0.40):
                 if max_pnl_pct >= 2.50:
                     _trail_dist = 0.08  # На гипер-пиках (+250%+) режем откат уже на 8% от макушки!
@@ -205,17 +200,17 @@ class MatureExitManager:
         except Exception:
             _maxp = 0
 
-        # Мягкий стоп и Breakeven (если был пик +10%+ и цена стекает к безубытку):
-        _be = float(getattr(config, 'BREAKEVEN_PCT', 0.10))
-        if _maxp >= _be and pnl_pct <= 0.015:
+        # Мягкий стоп и Breakeven (только после реального пробоя +32%+ и 2м удержания — не душим волны +10..+25%):
+        _be = float(getattr(config, 'BREAKEVEN_PCT', 0.32))
+        if minutes_held >= 2.0 and _maxp >= _be and pnl_pct <= 0.025:
             return f"Mature Breakeven (был пик +{_maxp*100:.0f}%, фикс {pnl_pct*100:+.1f}%)"
 
-        # Hard stop loss: стоп ВСЕГДА отрицательный (-15%), защищает депозит от постепенного сползания
-        _sl = -abs(float(getattr(config, 'STOP_LOSS_PCT', 0.15)))
+        # Hard stop loss: стоп ВСЕГДА отрицательный (-14%), защищает депозит от постепенного сползания
+        _sl = -abs(float(getattr(config, 'STOP_LOSS_PCT', 0.14)))
         if pnl_pct <= _sl:
             return f"Mature Stop Loss ({_sl*100:.0f}%)"
         # =====================================================================
-        # PRE-DUMP FRONT-RUNNER: Выход в плюс при затухании торгов (до слива толпы)
+        # PRE-DUMP FRONT-RUNNER: Выход в плюс только при ЯВНОЙ разгрузке после зрелого импульса
         # =====================================================================
         _pd = getattr(position, "pair_data", None) or getattr(position, "last_pair_data", None) or {}
         if isinstance(_pd, dict) and _pd:
@@ -228,19 +223,17 @@ class MatureExitManager:
             bs_ratio = (b5 / s5) if s5 > 0 else 2.0
             total_tx5 = b5 + s5
 
-            # СЦЕНАРИЙ 1: "Скрытая разгрузка кита" (мы в плюсе >= +6%, продавцов больше, свеча встала)
-            if pnl_pct >= 0.06 and bs_ratio < 0.92 and m1 <= 0.0:
-                return f"Front-Run Exit: Sellers dominating ({b5}b/{s5}s) while in profit (+{pnl_pct*100:.1f}%)"
+            # СЦЕНАРИЙ 1: Явная разгрузка продавцов (не трогаем стартовые откаты +6..+20%!)
+            if minutes_held >= 10.0 and pnl_pct >= 0.25 and total_tx5 >= 20 and bs_ratio < 0.60 and m1 <= -3.0:
+                return f"Front-Run Exit: Heavy sellers ({b5}b/{s5}s, m1 {m1:+.1f}%) while in profit (+{pnl_pct*100:.1f}%)"
 
-        # СЦЕНАРИЙ 2Б: Даем ракете время на консолидацию перед следующей ступенью
-        if minutes_held >= 8.0 and (0.20 <= pnl_pct <= 0.50) and _peak_age_min >= 7.0 and _dd_peak >= 0.12:
+        # СЦЕНАРИЙ 2Б: Даем ракете время (15+ минут) на консолидацию перед следующей ступенью
+        if minutes_held >= 15.0 and (0.35 <= pnl_pct <= 0.65) and _peak_age_min >= 12.0 and _dd_peak >= 0.16:
             return f"Quiet Top Exit (+{pnl_pct*100:.1f}% locked, no new high for {_peak_age_min:.1f}m)"
 
-        # СЦЕНАРИЙ 3: "Вялая ракета" (ОТКЛЮЧЕНО / СМЯГЧЕНО ДЛЯ РАКЕТ)
-        # Не срезаем волатильность на старте. Если хотите полностью отключить — просто закомментируйте.
-        # Оставляем только безубыток (+2%) после 5 минут стояния:
-        if 0.20 <= max_pnl_pct < 0.38 and minutes_held >= 5.0 and _peak_age_min >= 3.0:
-            if pnl_pct <= 0.02:
+        # СЦЕНАРИЙ 3: "Вялая ракета" — не срезаем волатильность на старте, только честный БУ (+3%) после 12 минут стояния и пика +32..+50%:
+        if 0.32 <= max_pnl_pct < 0.50 and minutes_held >= 12.0 and _peak_age_min >= 8.0:
+            if pnl_pct <= 0.03:
                 return f"Slow Rocket Scalp (+{pnl_pct*100:.1f}% locked after peak +{max_pnl_pct*100:.0f}%)"
 
         # Time exit - Stagnant: даём ракетам 25-35 минут на раскачку (кейс CATTLEAXE +23% на 37м, NIO +67% на 20м),

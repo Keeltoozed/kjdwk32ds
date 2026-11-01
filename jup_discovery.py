@@ -234,12 +234,15 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
         print(f"🚫 [{source_tag}-HONEYPOT] {_sym_tmp} ({mint[:8]}): 0 продаж при {_b5_j} покупках — Honeypot (нельзя продать).")
         return False
         
+    _c_ms_j = (td or {}).get("pairCreatedAt") or 0
+    _age_j = ((time.time() * 1000 - _c_ms_j) / 60000.0) if _c_ms_j else 0.5
     _liq_j = float(((td or {}).get("liquidity") or {}).get("usd", 0) or 0)
     _dex_j = str((td or {}).get("dexId", "")).lower()
-    if _dex_j in ("pump", "pumpfun"):
+    _is_pump_token = mint.endswith("pump") or _dex_j in ("pump", "pumpfun", "pumpswap")
+    if _is_pump_token:
         _fdv_j = float((td or {}).get("fdv", 0) or (td or {}).get("marketCap", 0) or 0)
         _liq_j = max(_liq_j, _fdv_j * 0.40)
-    _min_liq_req = float(getattr(config, "JEV_MIN_LIQUIDITY_USD", 4000.0))
+    _min_liq_req = 1000.0 if _is_pump_token else (3500.0 if _age_j < 60.0 else float(getattr(config, "JEV_MIN_LIQUIDITY_USD", 6000.0)))
     if _liq_j < _min_liq_req:
         print(f"🚫 [{source_tag}-LOW-LIQ] {_sym_tmp} ({mint[:8]}): ликвидность ${_liq_j:.0f} < ${_min_liq_req:.0f} — микро-пул/риск слива.")
         return False
@@ -252,8 +255,6 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
     _m5_j = float(_pc_j.get("m5", 0) or 0)
     _m1_j = float(_pc_j.get("m1", 0) or 0)
     _h1_j = float(_pc_j.get("h1", 0) or 0)
-    _c_ms_j = (td or {}).get("pairCreatedAt") or 0
-    _age_j = ((time.time() * 1000 - _c_ms_j) / 60000.0) if _c_ms_j else 0.5
     _is_fresh_j = mint.endswith("pump") or _age_j <= 90.0
     _max_h1_j = 3500.0 if (_is_fresh_j and _m5_j >= 2.5) else 400.0
     if _h1_j > _max_h1_j:
@@ -290,8 +291,8 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
         if 0 < _fdv_j < 12000.0:
             print(f"🚫 [{source_tag}-MIGRATION-LOW-FDV] {_sym_tmp} ({mint[:8]}): FDV ${_fdv_j:,.0f} < $12,000 — токен слит ниже уровня миграции pump.fun.")
             return False
-        if _liq_j < _min_liq_req:
-            print(f"🚫 [{source_tag}-MIGRATION-LOW-LIQ] {_sym_tmp} ({mint[:8]}): ликвидность ${_liq_j:,.0f} < ${_min_liq_req:.0f} — дев/снайперы высосали SOL.")
+        if _liq_j < 3500.0:
+            print(f"🚫 [{source_tag}-MIGRATION-LOW-LIQ] {_sym_tmp} ({mint[:8]}): ликвидность ${_liq_j:,.0f} < $3,500 — дев/снайперы высосали SOL.")
             return False
         
     from jupiter import JupiterAPI
@@ -362,7 +363,10 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
                 size = fixed
             else:
                 cap = tracker.get_total_capital()
-                size *= analyzer.conviction_size_mult(td or {})
+                size = cap * (float(getattr(config, "REINVEST_PERCENT", 15.0)) / 100.0) * analyzer.conviction_size_mult(td or {})
+        _j_liq = float(((td or {}).get("liquidity") or {}).get("usd", 0) or 0)
+        if _j_liq > 0:
+            size = min(size, max(5.0, _j_liq * float(getattr(config, "MAX_POOL_LIQ_FRAC", 0.02) or 0.02)))
         if "VIP-" in _sig and not getattr(config, "VIP_ENTRIES_ENABLED", False):
             print(f"🚫 [VIP-BLOCKED] {_sym_tmp}: VIP входы отключены в config.py.")
             return False
