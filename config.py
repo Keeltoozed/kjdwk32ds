@@ -114,9 +114,9 @@ MOONBAG_SELL_FRAC = 0.0
 PUMP_XGB_ENABLED = False        # ВЫКЛЮЧЕНО: 100% сливов (-235% PnL) на ложных скорах pump.fun вершин
 RAY_XGB_ENABLED = False         # ВЫКЛЮЧЕНО: старая модель Raydium XGB заменена на Rocket XGBoost v2
 ROCKET_XGB_ENABLED = True       # ВКЛЮЧЕНО: честная ML модель Rocket XGBoost v3 (20 фичей без ликеджа)
-ROCKET_XGB_STAGE1_THRESHOLD = 35.0  # Этап 1 (RAM): отсекает 90% шлака 0-30%, пропуская ранние ракеты (35%+)
-ROCKET_XGB_FINAL_THRESHOLD = 35.0   # Этап 2 (Audit): подтверждение входа с реальными долями разработчика и инсайдеров (35%+)
-ROCKET_XGB_THRESHOLD = 35.0         # Базовый порог скринера
+ROCKET_XGB_STAGE1_THRESHOLD = 20.0  # Этап 1 (RAM): отсекает 95% мусора 0-15%, пропуская ранние взлеты (20%+)
+ROCKET_XGB_FINAL_THRESHOLD = 22.0   # Этап 2 (Audit): подтверждение входа после ончейн-аудита (22%+)
+ROCKET_XGB_THRESHOLD = 20.0         # Базовый порог скринера
 
 # Stall Timer: выход при затухании моментума (CT / Reddit Best Practice)
 # Мемкоин жив, пока идут покупки. Если за 120с нет нового максимума и pnl <= -5%, сбрасываем в околоноль.

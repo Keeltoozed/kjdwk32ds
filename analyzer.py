@@ -1327,12 +1327,18 @@ class Analyzer:
                         return self._deny(mint, "freeze-authority-scam", f"🚫 [АНТИСКАМ] Freeze Authority у ДЕВ-кошелька {freeze_authority[:8]} у {mint[:8]} → СКАМ")
 
                     _rc_raw_score = float(rc_data.get("score") or 0.0)
-                    _rc_low_liq_penalty = sum(
+                    # Для pump.fun бондинг-кривой и PumpSwap:
+                    # Исключаем не-контрактные эвристики, которые искусственно накручивают score до 117,000 (история предыдущих запусков создателя, имя мема-копиката, ликва кривой)
+                    _rc_penalty_to_ignore = sum(
+                        float(rk.get("score", 0) or 0)
+                        for rk in (rc_data.get("risks") or [])
+                        if any(k in str(rk.get("name", "")).lower() for k in ("low liquidity", "creator history", "copycat", "single holder", "top 10"))
+                    ) if _is_pump_flag else sum(
                         float(rk.get("score", 0) or 0)
                         for rk in (rc_data.get("risks") or [])
                         if "low liquidity" in str(rk.get("name", "")).lower()
                     )
-                    _rc_score = max(0.0, _rc_raw_score - _rc_low_liq_penalty)
+                    _rc_score = max(0.0, _rc_raw_score - _rc_penalty_to_ignore)
                     if _rc_score >= 1000:
                         return self._deny(mint, f"rugcheck-score {_rc_score:.0f}", f"🚫 [АНТИСКАМ] RugCheck Score {_rc_score:.0f} >= 1000 у {mint[:8]} → СКАМ")
 
@@ -1363,17 +1369,23 @@ class Analyzer:
                         if count >= 4 and most_common_pct >= 2.5 and (most_common_pct * count) >= 12.0:
                             return self._deny(mint, "jito-bundle-sybil", f"🚫 [АНТИСКАМ] Jito-бандл ({count} кошельков по ~{most_common_pct:.1f}%) у {mint[:8]} → Блок.")
                     top_10_sum_pct = sum([x[1] for x in top_10])
-                    if not dev_holding_pct and top_10:
-                        dev_holding_pct = top_10[0][1]
                     self._last_top10 = top_10_sum_pct
                     self._last_dev = dev_holding_pct
 
-                    if dev_holding_pct > 10.0:
-                        return self._deny(mint, f"dev-hold {dev_holding_pct:.1f}%", f"🚫 [АНТИСКАМ] Дев держит {dev_holding_pct:.1f}% > 10% у {mint[:8]} → Блок.")
+                    # Лимиты холдеров с учётом конфига ROBINHOOD_MAX_CREATOR_PCT
+                    max_dev_pct = float(getattr(config, "ROBINHOOD_MAX_CREATOR_PCT", 0.20)) * 100.0
+                    if _is_pump_flag:
+                        max_dev_pct = min(max_dev_pct, 15.0)
+                    else:
+                        max_dev_pct = min(max_dev_pct, 10.0)
+
+                    if dev_holding_pct and dev_holding_pct > max_dev_pct:
+                        return self._deny(mint, f"dev-hold {dev_holding_pct:.1f}%", f"🚫 [АНТИСКАМ] Дев держит {dev_holding_pct:.1f}% > {max_dev_pct:.0f}% у {mint[:8]} → Блок.")
                     largest_whale_pct = top_10[0][1] if top_10 else 0.0
-                    if largest_whale_pct > 15.0:
-                        return self._deny(mint, f"whale-hold {largest_whale_pct:.1f}%", f"🚫 [АНТИСКАМ] Кит держит {largest_whale_pct:.1f}% > 15% у {mint[:8]} → Блок.")
-                    max_allowed_top10 = 30.0 if _is_pump_flag else 35.0
+                    max_whale_pct = 20.0 if _is_pump_flag else 15.0
+                    if largest_whale_pct > max_whale_pct:
+                        return self._deny(mint, f"whale-hold {largest_whale_pct:.1f}%", f"🚫 [АНТИСКАМ] Кит держит {largest_whale_pct:.1f}% > {max_whale_pct:.0f}% у {mint[:8]} → Блок.")
+                    max_allowed_top10 = 35.0 if _is_pump_flag else 40.0
                     if top_10_sum_pct > max_allowed_top10:
                         return self._deny(mint, f"top10-hold {top_10_sum_pct:.1f}%", f"🚫 [АНТИСКАМ] Топ-10 держат {top_10_sum_pct:.1f}% > {max_allowed_top10}% у {mint[:8]} → Блок.")
                 else:
@@ -1878,25 +1890,28 @@ class Analyzer:
                 
                 top_10_sum_pct = sum([x[1] for x in top_10])
                 
-                # Если дев не найден в rc_data, берем крупнейший реальный некомандный кошелек
-                if not real_creator and top_10:
-                    dev_holding_pct = top_10[0][1]
-                
+                # Если дев не найден в rc_data, не приравниваем слепо кита к деву (кита проверит max_single_whale)
                 self._last_top10 = top_10_sum_pct
                 self._last_dev = dev_holding_pct
                 
                 is_pump = pair_data and pair_data.get("dexId") in ("pump", "pumpfun")
-                max_allowed_pct = 30.0 if is_pump else 35.0
+                max_allowed_pct = 35.0 if is_pump else 40.0
+
+                max_dev_pct = float(getattr(config, "ROBINHOOD_MAX_CREATOR_PCT", 0.20)) * 100.0
+                if is_pump:
+                    max_dev_pct = min(max_dev_pct, 15.0)
+                else:
+                    max_dev_pct = min(max_dev_pct, 10.0)
                 
                 if top_10_sum_pct > 100:
                     print(f"⚠️ [HOLDERS] {mint[:8]}: топ-10 {top_10_sum_pct:.1f}% > 100% — битые данные сапплая.")
-                elif dev_holding_pct > 10.0:
-                    print(f"🚫 [АНТИСКАМ] Создатель (Dev) держит {dev_holding_pct:.1f}% (Лимит 10%). Блокируем.")
+                elif dev_holding_pct and dev_holding_pct > max_dev_pct:
+                    print(f"🚫 [АНТИСКАМ] Создатель (Dev) держит {dev_holding_pct:.1f}% (Лимит {max_dev_pct:.0f}%). Блокируем.")
                     return False
                 
-                # Защита от скрытого второго кошелька дева: ни один кит не должен держать > 15%
+                # Защита от скрытого второго кошелька дева: ни один кит не должен держать > 20% (pump) / 15% (dex)
                 largest_whale_pct = top_10[0][1] if top_10 else 0.0
-                max_single_whale = 15.0
+                max_single_whale = 20.0 if is_pump else 15.0
                 if largest_whale_pct > max_single_whale:
                     print(f"🚫 [АНТИСКАМ] Кит держит {largest_whale_pct:.1f}% > {max_single_whale:.0f}% (риск скрытого дева/дампа). Блокируем.")
                     return False

@@ -283,8 +283,10 @@ class ShadowTracker:
                     if fdv > 500_000_000 and liq < 250_000:
                         continue
                     tx24 = ((pair.get("txns") or {}).get("h24") or {})
-                    sells24 = int(tx24.get("sells", 0) or 0)
-                    if not m or p <= 0 or liq < 2500.0 or sells24 < 5:
+                    tx_m5 = ((pair.get("txns") or {}).get("m5") or {})
+                    sells_count = int(tx24.get("sells", 0) or 0) + int(tx_m5.get("sells", 0) or 0)
+                    min_sells = 1 if (dex_id in ("pump", "pumpfun", "pumpswap") or m.endswith("pump")) else 3
+                    if not m or p <= 0 or liq < 1500.0 or (sells_count < min_sells and liq < 20000.0):
                         continue
                     if liq > max_liq.get(m, -1.0):
                         max_liq[m] = liq
@@ -428,7 +430,13 @@ class ShadowTracker:
                                 self.record_observation(m, new_ath, 0.0)
 
                             ath_pnl = ((new_ath - p_entry) / p_entry * 100.0) if p_entry >= 1e-7 and new_ath > 0 else 0.0
-                            cur_pnl = ((p_now - p_entry) / p_entry * 100.0) if p_entry >= 1e-7 and p_now > 0 else (-100.0 if p_now == 0 else 0.0)
+                            if p_now > 0 and p_entry >= 1e-7:
+                                cur_pnl = ((p_now - p_entry) / p_entry * 100.0)
+                            elif old_ath > 0:
+                                # Монета ещё не вернулась в батче DexScreener (напр. миграция на AMM) — сохраняем статус, не делаем ложный слив в 0
+                                cur_pnl = ((old_ath - p_entry) / p_entry * 100.0)
+                            else:
+                                cur_pnl = 0.0
                             is_rocket = bool(ath_pnl >= 50.0)
 
                             # Категоризация исхода монеты:

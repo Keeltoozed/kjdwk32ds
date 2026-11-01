@@ -1167,30 +1167,30 @@ class GrokJevEngine:
                     if freeze_auth and freeze_auth not in SAFE_AUTHORITIES:
                         return False, f"rugcheck: freeze authority active ({freeze_auth[:8]})", _h_stats
 
-                    # Очищенный score RugCheck: для pump.fun бондинг-кривой вычитаем штраф за ликвидность,
-                    # но для мигрировавших DEX токенов низкая ликвидность — это смертельный признак рагпулла!
+                    # Очищенный score RugCheck: для pump.fun бондинг-кривой вычитаем не-контрактные эвристики
+                    # (история прошлых запусков создателя, имя мема-копиката, ликва кёрва), т.к. минт и фриз у pump.fun отключены
                     raw_score = float(rc_data.get("score") or 0.0)
                     if is_pump:
-                        low_liq_penalty = sum(
+                        penalty_to_ignore = sum(
                             float(rk.get("score", 0) or 0)
                             for rk in (rc_data.get("risks") or [])
-                            if "low liquidity" in str(rk.get("name", "")).lower()
+                            if any(k in str(rk.get("name", "")).lower() for k in ("low liquidity", "creator history", "copycat", "single holder", "top 10"))
                         )
-                        clean_score = max(0.0, raw_score - low_liq_penalty)
+                        clean_score = max(0.0, raw_score - penalty_to_ignore)
                     else:
                         clean_score = raw_score
-                    if clean_score >= 600:
-                        return False, f"rugcheck: high risk score {clean_score:.0f} >= 600", _h_stats
+                    if clean_score >= 1000:
+                        return False, f"rugcheck: high risk score {clean_score:.0f} >= 1000", _h_stats
 
-                    # Проверка критических рисков
+                    # Проверка критических рисков (реальные опасности смарт-контракта)
                     for rk in (rc_data.get("risks") or []):
                         rk_name = str(rk.get("name") or "").lower()
                         rk_lvl = str(rk.get("level") or "").lower()
-                        if is_pump and "low liquidity" in rk_name:
+                        if is_pump and any(k in rk_name for k in ("low liquidity", "creator history", "copycat")):
                             continue
-                        if rk_lvl == "danger":
+                        if rk_lvl == "danger" and "creator history" not in rk_name:
                             return False, f"rugcheck: critical danger risk '{rk.get('name')}'", _h_stats
-                        if "unlocked" in rk_name and "lp" in rk_name:
+                        if "unlocked" in rk_name and "lp" in rk_name and not is_pump:
                             return False, f"rugcheck: unlocked LP risk", _h_stats
 
                     # Проверка пулов и блокировки LP для не-pump токенов
@@ -1269,18 +1269,18 @@ class GrokJevEngine:
 
                     top_10_sum = sum(x[1] for x in top_10)
                     largest_whale = top_10[0][1] if top_10 else 0.0
-                    if not real_creator and top_10:
-                        dev_pct = largest_whale
 
                     _h_stats["top10_pct"] = top_10_sum
                     _h_stats["dev_pct"] = dev_pct
                     _h_stats["top1_pct"] = largest_whale
 
-                    if dev_pct > 4.0:
-                        return False, f"dev still loaded {dev_pct:.1f}% > 4.0% (dump hazard: dev holds supply)", _h_stats
-                    if largest_whale > 15.0:
-                        return False, f"whale concentration {largest_whale:.1f}% > 15.0%", _h_stats
-                    max_top10 = 30.0 if is_pump else 35.0
+                    max_dev_limit = 15.0 if is_pump else 10.0
+                    if dev_pct and dev_pct > max_dev_limit:
+                        return False, f"dev still loaded {dev_pct:.1f}% > {max_dev_limit:.0f}% (dump hazard: dev holds supply)", _h_stats
+                    max_whale_limit = 20.0 if is_pump else 15.0
+                    if largest_whale > max_whale_limit:
+                        return False, f"whale concentration {largest_whale:.1f}% > {max_whale_limit:.0f}%", _h_stats
+                    max_top10 = 35.0 if is_pump else 40.0
                     if top_10_sum > max_top10:
                         return False, f"top 10 concentration {top_10_sum:.1f}% > {max_top10:.0f}%", _h_stats
                 else:
@@ -1290,10 +1290,12 @@ class GrokJevEngine:
                         _h_stats["top10_pct"] = float(_h_raw.get("top_10_pct", 0.0) or 0.0)
                         _h_stats["dev_pct"] = float(_h_raw.get("dev_pct", 0.0) or 0.0)
                         _h_stats["top1_pct"] = _h_stats["dev_pct"]
-                        if _h_stats["dev_pct"] > 4.0:
-                            return False, f"dev loaded (GoPlus) {_h_stats['dev_pct']:.1f}% > 4.0% (dump risk)", _h_stats
-                        if _h_stats["top10_pct"] > (30.0 if is_pump else 35.0):
-                            return False, f"top10 concentration (GoPlus) {_h_stats['top10_pct']:.1f}% > 35%", _h_stats
+                        max_dev_gp = 15.0 if is_pump else 10.0
+                        if _h_stats["dev_pct"] > max_dev_gp:
+                            return False, f"dev loaded (GoPlus) {_h_stats['dev_pct']:.1f}% > {max_dev_gp:.0f}% (dump risk)", _h_stats
+                        max_top10_gp = 35.0 if is_pump else 40.0
+                        if _h_stats["top10_pct"] > max_top10_gp:
+                            return False, f"top10 concentration (GoPlus) {_h_stats['top10_pct']:.1f}% > {max_top10_gp:.0f}%", _h_stats
                     elif is_pump or address.endswith("pump") or str(pair_data.get("dexId", "")).lower() in ("pump", "pumpfun", "pumpswap"):
                         _h_stats["top10_pct"] = 15.0
                         _h_stats["dev_pct"] = 2.0
