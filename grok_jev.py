@@ -1374,11 +1374,15 @@ class GrokJevEngine:
                 if getattr(_c, "JEV_SHADOW_LOG_REJECTS", True) and not any(k in low for k in self._SHADOW_SKIP):
                     from shadow_tracker import shadow_tracker
                     base = pair.get("baseToken", {}) or {}
+                    rkt_f = getattr(getattr(self, "analyzer", None), "last_rkt_features", {}) or {}
+                    rkt_s = getattr(getattr(self, "analyzer", None), "rocket_scores", {}).get(address, None)
                     shadow_tracker.log_rejection(
                         mint=address, reason=str(why)[:140], symbol=base.get("symbol", address[:6]), chain="solana",
                         price=float(pair.get("priceUsd", 0) or 0),
                         liquidity=float((pair.get("liquidity") or {}).get("usd", 0) or 0),
                         m5_pct=float((pair.get("priceChange") or {}).get("m5", 0) or 0),
+                        features=rkt_f,
+                        rkt_score=rkt_s,
                         source="GROK-JEV")
             except Exception:
                 pass
