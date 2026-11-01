@@ -858,10 +858,10 @@ async def scanner_loop(analyzer, tracker):
                                             pair_data = _cached_pair
                                             pair_data["priceUsd"] = _j_pr
                                         else:
-                                            pair_data = {"baseToken": {"symbol": symbol}, "pairAddress": mint, "priceUsd": _j_pr}
+                                            pair_data = {"baseToken": {"symbol": "UNKNOWN"}, "pairAddress": mint, "priceUsd": _j_pr}
                                 except Exception:
                                     pass
-                            actual_symbol = pair_data.get("baseToken", {}).get("symbol", symbol) if pair_data else symbol
+                            actual_symbol = pair_data.get("baseToken", {}).get("symbol", "UNKNOWN") if pair_data else "UNKNOWN"
                             liq_usd = float(((pair_data or {}).get("liquidity", {}) or {}).get("usd", 0) or 0)
                             if liq_usd == 0 and (mint.endswith("pump") or (pair_data or {}).get("dexId") in ("pump", "pumpfun")):
                                 _fdv = float(((pair_data or {}).get("fdv", 0) or (pair_data or {}).get("marketCap", 0) or 0))

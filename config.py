@@ -172,7 +172,7 @@ JEV_MIN_VOLUME_H24 = 30000.0
 JEV_MIN_TRADES_H24 = 100
 JEV_MIN_TRADES_H1 = 30
 JEV_MIN_HOLDERS = 80
-JEV_MAX_TOP_WALLET = 0.05        # 15% лимит на крупнейший кошелек (за вычетом пула, согласовано с RugCheck/GoPlus)
+JEV_MAX_TOP_WALLET = 0.20        # 20% лимит на крупнейший кошелек (за вычетом пула, согласовано с RugCheck/GoPlus)
 JEV_MAX_TOP_10 = 0.60            # 35% лимит на топ-10 кошельков (за вычетом пула, согласовано с RugCheck/GoPlus)
 JEV_LLM_ENFORCE = True           # True: строго отклонять токены, не прошедшие проверку JEV (momentum spent / concentration / dev dump)
 

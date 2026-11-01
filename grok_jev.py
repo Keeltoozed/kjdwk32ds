@@ -506,12 +506,8 @@ class GrokJevEngine:
 
             top1_pct = float(holder_stats.get("top1_pct", 0.0) or 0.0)
             top10_pct = float(holder_stats.get("top10_pct", 0.0) or 0.0)
-            if 0 < top1_pct <= 1.0:
-                top1_pct *= 100.0
-            if 0 < top10_pct <= 1.0:
-                top10_pct *= 100.0
 
-            max_top1 = float(getattr(_c, "JEV_MAX_TOP_WALLET", 0.05)) * 100.0   # <= 5%
+            max_top1 = float(getattr(_c, "JEV_MAX_TOP_WALLET", 0.20)) * 100.0   # <= 20%
             max_top10 = float(getattr(_c, "JEV_MAX_TOP_10", 0.60)) * 100.0       # <= 60%
             
             if top1_pct > max_top1:
@@ -1170,19 +1166,23 @@ class GrokJevEngine:
                         return False, f"rugcheck: freeze authority active ({freeze_auth[:8]})", _h_stats
 
                     # Очищенный score RugCheck: для pump.fun бондинг-кривой вычитаем не-контрактные эвристики
-                    # (история прошлых запусков создателя, имя мема-копиката, ликва кёрва), т.к. минт и фриз у pump.fun отключены
+                    # (история прошлых запусков создателя, имя мема-копиката, ликва кёрва, концентрация холдеров из-за AMM), т.к. минт и фриз у pump.fun отключены
                     raw_score = float(rc_data.get("score") or 0.0)
                     if is_pump:
                         penalty_to_ignore = sum(
                             float(rk.get("score", 0) or 0)
                             for rk in (rc_data.get("risks") or [])
-                            if any(k in str(rk.get("name", "")).lower() for k in ("low liquidity", "creator history", "copycat", "single holder", "top 10"))
+                            if any(k in str(rk.get("name", "")).lower() for k in ("low liquidity", "creator history", "copycat", "single holder", "holder concentration", "concentration", "high holder", "top 10"))
                         )
-                        clean_score = max(0.0, raw_score - penalty_to_ignore)
                     else:
-                        clean_score = raw_score
-                    if clean_score >= 1000:
-                        return False, f"rugcheck: high risk score {clean_score:.0f} >= 1000", _h_stats
+                        penalty_to_ignore = sum(
+                            float(rk.get("score", 0) or 0)
+                            for rk in (rc_data.get("risks") or [])
+                            if any(k in str(rk.get("name", "")).lower() for k in ("low liquidity", "copycat", "creator history"))
+                        )
+                    clean_score = max(0.0, raw_score - penalty_to_ignore)
+                    if clean_score >= 2000:
+                        return False, f"rugcheck: high risk score {clean_score:.0f} >= 2000", _h_stats
 
                     # Проверка критических рисков (реальные опасности смарт-контракта)
                     for rk in (rc_data.get("risks") or []):
@@ -1251,15 +1251,11 @@ class GrokJevEngine:
                         for h in holders:
                             if h.get("owner") == real_creator or h.get("address") == real_creator:
                                 dev_pct = float(h.get("pct", 0) or 0.0)
-                                if 0 < dev_pct <= 1.0:
-                                    dev_pct *= 100.0
                                 break
 
                     non_curve = []
                     for h in holders:
                         pct = float(h.get("pct", 0) or 0.0)
-                        if 0 < pct <= 1.0:
-                            pct *= 100.0
                         amt = float(h.get("uiAmount", 0) or 0.0)
                         owner = str(h.get("owner") or "")
                         addr = str(h.get("address") or "")

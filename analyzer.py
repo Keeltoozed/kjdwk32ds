@@ -1331,19 +1331,19 @@ class Analyzer:
 
                     _rc_raw_score = float(rc_data.get("score") or 0.0)
                     # Для pump.fun бондинг-кривой и PumpSwap:
-                    # Исключаем не-контрактные эвристики, которые искусственно накручивают score до 117,000 (история предыдущих запусков создателя, имя мема-копиката, ликва кривой)
+                    # Исключаем не-контрактные эвристики, которые искусственно накручивают score до 117,000 (история предыдущих запусков создателя, имя мема-копиката, ликва кривой, концентрация холдеров из-за AMM)
                     _rc_penalty_to_ignore = sum(
                         float(rk.get("score", 0) or 0)
                         for rk in (rc_data.get("risks") or [])
-                        if any(k in str(rk.get("name", "")).lower() for k in ("low liquidity", "creator history", "copycat", "single holder", "top 10"))
+                        if any(k in str(rk.get("name", "")).lower() for k in ("low liquidity", "creator history", "copycat", "single holder", "holder concentration", "concentration", "high holder", "top 10"))
                     ) if _is_pump_flag else sum(
                         float(rk.get("score", 0) or 0)
                         for rk in (rc_data.get("risks") or [])
-                        if "low liquidity" in str(rk.get("name", "")).lower()
+                        if any(k in str(rk.get("name", "")).lower() for k in ("low liquidity", "copycat", "creator history"))
                     )
                     _rc_score = max(0.0, _rc_raw_score - _rc_penalty_to_ignore)
-                    if _rc_score >= 1000:
-                        return self._deny(mint, f"rugcheck-score {_rc_score:.0f}", f"🚫 [АНТИСКАМ] RugCheck Score {_rc_score:.0f} >= 1000 у {mint[:8]} → СКАМ")
+                    if _rc_score >= 2000:
+                        return self._deny(mint, f"rugcheck-score {_rc_score:.0f}", f"🚫 [АНТИСКАМ] RugCheck Score {_rc_score:.0f} >= 2000 у {mint[:8]} → СКАМ")
 
                     # Проверка холдеров RugCheck
                     top_holders = rc_data.get("topHolders") or []
@@ -1386,8 +1386,6 @@ class Analyzer:
                         owner = str(h.get("address") or "")
                         owner_wallet = str(h.get("owner") or "")
                         pct = float(h.get("pct", 0) or 0)
-                        if 0 < pct <= 1.0:
-                            pct *= 100.0
                         amt = float(h.get("amount", 0) or h.get("uiAmount", 0) or 0)
                         if creator and (owner == creator or owner_wallet == creator):
                             dev_holding_pct = pct
