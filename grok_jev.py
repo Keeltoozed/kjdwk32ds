@@ -371,12 +371,16 @@ class GrokJevEngine:
         quote_token_symbol = str((pair_data.get("quoteToken") or {}).get("symbol", "")).upper()
         quote_amount = float(liq_dict.get("quote", 0.0) or 0.0)
         if quote_token_symbol in ("SOL", "WSOL") and quote_amount > 0:
-            _min_sol_req = 12.0 if dex_id == "pumpswap" else 10.0
+            _min_sol_req = 8.0 if dex_id == "pumpswap" else 5.0
             if quote_amount < _min_sol_req:
                 return False, f"phantom-liq-trap: real pool SOL {quote_amount:.2f} < {_min_sol_req:.0f} SOL (dumped pool like ZECP/MIKE)"
 
-        # Для мемкоинов и pump/meteora пулов порог $3,500 (пропускает CHAMELEON $4.9k, NACRE $11k, RTROLL)
-        min_liq = 3500.0 if (is_pump or dex_id in ("pump", "pumpfun", "pumpswap", "meteora")) else float(getattr(_c, "JEV_MIN_LIQUIDITY_USD", 8000.0))
+        # 2. Возраст: если pairCreatedAt отсутствует (часто на первых секундах PumpSwap), не считаем токен старым!
+        created_at = pair_data.get("pairCreatedAt") or 0
+        age_min = (time.time() * 1000 - created_at) / 60000.0 if created_at else 0.5
+
+        # Для мемкоинов и pump/meteora пулов порог $1,500 (пропускает $95 SOL пулы 15-20 SOL, CHAMELEON $4.9k, NACRE $11k, RTROLL)
+        min_liq = 1500.0 if (is_pump or dex_id in ("pump", "pumpfun", "pumpswap", "meteora")) else (4000.0 if age_min < 60.0 else float(getattr(_c, "JEV_MIN_LIQUIDITY_USD", 6000.0)))
         if eff_liq < min_liq:
             return False, f"liq-depth-low ${eff_liq:.0f} < ${min_liq:.0f} (micro-cap dump trap)"
             
@@ -385,10 +389,6 @@ class GrokJevEngine:
             return False, f"liq-giant ${eff_liq:,.0f} > ${max_liq:,.0f} (stagnant giant pool, not a meme rocket)"
 
         FUNNEL_STATS["liquidity"] += 1
-
-        # 2. Возраст: если pairCreatedAt отсутствует (часто на первых секундах PumpSwap), не считаем токен старым!
-        created_at = pair_data.get("pairCreatedAt") or 0
-        age_min = (time.time() * 1000 - created_at) / 60000.0 if created_at else 0.5
 
         txns_m5 = (pair_data.get("txns") or {}).get("m5", {}) or {}
         txns_h24 = (pair_data.get("txns") or {}).get("h24", {}) or {}
@@ -545,7 +545,7 @@ class GrokJevEngine:
         hit = _JEV_CACHE.get(str(ck))
         if hit:
             hit_passed = hit[1].get("passed", False)
-            cache_ttl = 300.0 if hit_passed else 900.0
+            cache_ttl = 180.0 if hit_passed else 35.0
             if (now - hit[0]) < cache_ttl:
                 res = hit[1]
                 return res.get("passed", False), res, f"cached ({res.get('reason', '')})"
@@ -670,11 +670,13 @@ class GrokJevEngine:
         _base_addr = str(((pair_data.get("baseToken") or {}).get("address")) or "")
         _dex_id = str(pair_data.get("dexId", "")).lower()
         _is_pump_pair = _base_addr.endswith("pump") or _dex_id in ("pump", "pumpfun", "pumpswap")
-        _min_liq = 2500.0 if _is_pump_pair else float(getattr(_c, "JEV_MIN_LIQUIDITY_USD", 8000.0))
+        _min_liq = 1500.0 if _is_pump_pair else (4000.0 if _age_m < 60.0 else float(getattr(_c, "JEV_MIN_LIQUIDITY_USD", 6000.0)))
         _max_m1 = float(getattr(_c, "JEV_MAX_M1_ENTRY_PCT", 18.0))
 
-        if m5 > 45.0:
-            return False, -0.12, 0.0, f"fomo-spike (m5 {m5:+.1f}% > +45.0%) — buying local top, wait for reset"
+        if m5 > 75.0:
+            return False, -0.12, 0.0, f"fomo-spike (m5 {m5:+.1f}% > +75.0%) — buying local top, wait for reset"
+        if m5 > 45.0 and m1 > 5.0:
+            return False, -0.12, 0.0, f"fomo-spike (m5 {m5:+.1f}% > +45.0% and m1 {m1:+.1f}% > 5%) — FOMO spike without pullback"
         if m5 > 35.0 and m1 > 12.0:
             return False, -0.12, 0.0, f"candle-spike (m1 {m1:+.1f}%, m5 {m5:+.1f}%) — FOMO vertical spike"
         if m1 > _max_m1:
@@ -1222,13 +1224,25 @@ class GrokJevEngine:
                         if isinstance(p, dict) and p.get("pairAddress"):
                             pool_accounts.add(p["pairAddress"])
                     for k_acc, v_acc in (rc_data.get("knownAccounts") or {}).items():
-                        if isinstance(v_acc, dict) and v_acc.get("type") in ("AMM", "LOCKER"):
+                        if isinstance(v_acc, dict) and (v_acc.get("type") in ("AMM", "LOCKER", "DEX") or any(w in str(v_acc.get("name", "")).lower() for w in ("pool", "amm", "raydium", "meteora", "pump", "vault", "locker"))):
+                            pool_accounts.add(k_acc)
+                        elif isinstance(v_acc, str) and any(w in v_acc.lower() for w in ("pool", "amm", "raydium", "meteora", "pump", "vault", "locker")):
                             pool_accounts.add(k_acc)
                     for mkt in (rc_data.get("markets") or []):
                         if isinstance(mkt, dict):
-                            for m_field in ("pubkey", "liquidityA", "liquidityB"):
+                            for m_field in ("pubkey", "liquidityA", "liquidityB", "baseVault", "quoteVault"):
                                 if mkt.get(m_field):
                                     pool_accounts.add(mkt[m_field])
+
+                    DEX_POOL_AUTHORITIES = {
+                        "5Q544fKrFoe6tsEbD7S8EmxGTJYAKtTVhAW5Q5pge4j1", # Raydium AMM V4
+                        "D4FPEruKEHrG5NTsqazoqfv8zsFWApqTjuzFLUQDkTz5", # Raydium CP-Swap
+                        "Eo7WjKq67rjJQSZxS6z3YkapzY3eMj6Xy8X5EQVn5UaB", # Meteora Dynamic Pools
+                        "LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo", # Meteora DLMM
+                        "whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc", # Orca Whirlpools
+                        "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P", # Pump.fun Bonding Curve
+                        "Ce6TQqeHC9p8KetsN6JsjHK7UTZk7nasjjnr7XxXp9F1", # Pump.fun Authority
+                    }
 
                     pool_keywords = ("raydium", "meteora", "pump", "orca", "pool", "vault", "locker", "amm", "pumpswap")
                     real_creator = rc_data.get("creator") or ""
@@ -1249,9 +1263,9 @@ class GrokJevEngine:
                         amt = float(h.get("uiAmount", 0) or 0.0)
                         owner = str(h.get("owner") or "")
                         addr = str(h.get("address") or "")
-                        if owner in pool_accounts or addr in pool_accounts or owner == "5Q544fKrFoe6tsEbD7S8EmxGTJYAKtTVhAW5Q5pge4j1":
+                        if owner in pool_accounts or addr in pool_accounts or owner in DEX_POOL_AUTHORITIES or addr in DEX_POOL_AUTHORITIES:
                             continue
-                        if any(w in owner.lower() for w in pool_keywords):
+                        if any(w in owner.lower() for w in pool_keywords) or any(w in addr.lower() for w in pool_keywords):
                             continue
                         if pct > 80.0:
                             continue
@@ -1277,10 +1291,10 @@ class GrokJevEngine:
                     max_dev_limit = 15.0 if is_pump else 10.0
                     if dev_pct and dev_pct > max_dev_limit:
                         return False, f"dev still loaded {dev_pct:.1f}% > {max_dev_limit:.0f}% (dump hazard: dev holds supply)", _h_stats
-                    max_whale_limit = 20.0 if is_pump else 15.0
+                    max_whale_limit = 25.0 if is_pump else 20.0
                     if largest_whale > max_whale_limit:
                         return False, f"whale concentration {largest_whale:.1f}% > {max_whale_limit:.0f}%", _h_stats
-                    max_top10 = 35.0 if is_pump else 40.0
+                    max_top10 = 40.0 if is_pump else 45.0
                     if top_10_sum > max_top10:
                         return False, f"top 10 concentration {top_10_sum:.1f}% > {max_top10:.0f}%", _h_stats
                 else:

@@ -989,6 +989,9 @@ class Analyzer:
         if not current_mint.endswith("pump"):
             for c in wave_comps:
                 if c["mint"].endswith("pump") and (c["liq"] >= 8000 or c["fdv"] >= 25000):
+                    # Если наш токен уже набрал органический объем и покупателей больше, чем у pump-токена, это не мимикрия, а самостоятельный токен / миграция
+                    if current_vol5 >= 3000.0 and current_b5 >= 15 and current_vol5 >= c.get("vol5", 0.0):
+                        continue
                     print(f"🚫 [CLONE-SCAM] {sym_up} ({current_mint[:8]}): не-pump пул мимикрирует под живой pump {c['mint'][:8]}!")
                     return True
 
@@ -1278,7 +1281,7 @@ class Analyzer:
             # =========================================================================
 
             # 1. Защита от микрованночек и фейковых AMM-пулов
-            _min_liq = 2000 if is_pump_curve else (8000 if _age_min_pre < 60 else 12000)
+            _min_liq = 1000 if is_pump_curve else (4000 if _age_min_pre < 60 else 8000)
             if liq_val < _min_liq:
                 return self._deny(mint, f"low-liq ${liq_val:.0f}<{_min_liq}", f"🚫 [ANTI-RUG] {symbol} ({mint[:8]}): Ликвидность ${liq_val:,.0f} < ${_min_liq} — риск проскальзывания.")
 
@@ -1290,8 +1293,8 @@ class Analyzer:
             _quote_info = pair_data.get("liquidity", {}) or {}
             _quote_amt = float(_quote_info.get("quote", 0) or 0)
             _quote_sym = str((pair_data.get("quoteToken") or {}).get("symbol", "")).upper()
-            if "SOL" in _quote_sym and 0 < _quote_amt < 10.0 and not is_pump_curve:
-                return self._deny(mint, f"ghost-pool-sol {_quote_amt:.1f}<10", f"🚫 [AMM-GHOST-POOL] {symbol} ({mint[:8]}): в пуле всего {_quote_amt:.2f} SOL < 10 SOL — микро-резерв.")
+            if "SOL" in _quote_sym and 0 < _quote_amt < 5.0 and not is_pump_curve:
+                return self._deny(mint, f"ghost-pool-sol {_quote_amt:.1f}<5", f"🚫 [AMM-GHOST-POOL] {symbol} ({mint[:8]}): в пуле всего {_quote_amt:.2f} SOL < 5 SOL — микро-резерв.")
 
             # 2. Защита от Honeypot на Solana (0 продаж при 5+ покупках)
             if _s5_pre == 0 and _b5_pre >= 5:
@@ -1346,15 +1349,53 @@ class Analyzer:
                     top_holders = rc_data.get("topHolders") or []
                     dev_holding_pct = 0.0
                     creator = rc_data.get("creator")
-                    pool_keywords = ["raydium", "pool", "vault", "pump", "amm", "meteora", "orca"]
+
+                    # Собираем все известные адреса пулов и маркеров ликвидности (DEX, AMM, Bonding curve, Lockers)
+                    pool_accounts = set()
+                    if pair_data:
+                        _p_addr = pair_data.get("pairAddress")
+                        if _p_addr:
+                            pool_accounts.add(_p_addr)
+                        for _p in (pair_data.get("pairs") or []):
+                            if isinstance(_p, dict) and _p.get("pairAddress"):
+                                pool_accounts.add(_p["pairAddress"])
+                    for _k_acc, _v_acc in (rc_data.get("knownAccounts") or {}).items():
+                        if isinstance(_v_acc, dict) and (_v_acc.get("type") in ("AMM", "LOCKER", "DEX") or any(w in str(_v_acc.get("name", "")).lower() for w in ("pool", "amm", "raydium", "meteora", "pump", "vault", "locker"))):
+                            pool_accounts.add(_k_acc)
+                        elif isinstance(_v_acc, str) and any(w in _v_acc.lower() for w in ("pool", "amm", "raydium", "meteora", "pump", "vault", "locker")):
+                            pool_accounts.add(_k_acc)
+                    for _mkt in (rc_data.get("markets") or []):
+                        if isinstance(_mkt, dict):
+                            for _m_field in ("pubkey", "liquidityA", "liquidityB", "baseVault", "quoteVault"):
+                                if _mkt.get(_m_field):
+                                    pool_accounts.add(_mkt[_m_field])
+
+                    DEX_POOL_AUTHORITIES = {
+                        "5Q544fKrFoe6tsEbD7S8EmxGTJYAKtTVhAW5Q5pge4j1", # Raydium AMM V4
+                        "D4FPEruKEHrG5NTsqazoqfv8zsFWApqTjuzFLUQDkTz5", # Raydium CP-Swap
+                        "Eo7WjKq67rjJQSZxS6z3YkapzY3eMj6Xy8X5EQVn5UaB", # Meteora Dynamic Pools
+                        "LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo", # Meteora DLMM
+                        "whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc", # Orca Whirlpools
+                        "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P", # Pump.fun Bonding Curve
+                        "Ce6TQqeHC9p8KetsN6JsjHK7UTZk7nasjjnr7XxXp9F1", # Pump.fun Authority
+                    }
+
+                    pool_keywords = ["raydium", "pool", "vault", "pump", "amm", "meteora", "orca", "locker"]
                     non_curve_accounts = []
                     for h in top_holders:
                         owner = str(h.get("address") or "")
+                        owner_wallet = str(h.get("owner") or "")
                         pct = float(h.get("pct", 0) or 0)
-                        amt = float(h.get("amount", 0) or 0)
-                        if creator and owner == creator:
+                        if 0 < pct <= 1.0:
+                            pct *= 100.0
+                        amt = float(h.get("amount", 0) or h.get("uiAmount", 0) or 0)
+                        if creator and (owner == creator or owner_wallet == creator):
                             dev_holding_pct = pct
-                        if any(w in owner.lower() for w in pool_keywords):
+
+                        # Исключаем адреса пулов ликвидности, AMM и системные адреса Raydium/Pump/Meteora
+                        if owner in pool_accounts or owner_wallet in pool_accounts or owner in DEX_POOL_AUTHORITIES or owner_wallet in DEX_POOL_AUTHORITIES:
+                            continue
+                        if any(w in owner.lower() for w in pool_keywords) or any(w in owner_wallet.lower() for w in pool_keywords):
                             continue
                         if pct > 80.0:
                             continue
@@ -1382,10 +1423,10 @@ class Analyzer:
                     if dev_holding_pct and dev_holding_pct > max_dev_pct:
                         return self._deny(mint, f"dev-hold {dev_holding_pct:.1f}%", f"🚫 [АНТИСКАМ] Дев держит {dev_holding_pct:.1f}% > {max_dev_pct:.0f}% у {mint[:8]} → Блок.")
                     largest_whale_pct = top_10[0][1] if top_10 else 0.0
-                    max_whale_pct = 20.0 if _is_pump_flag else 15.0
+                    max_whale_pct = 25.0 if _is_pump_flag else 20.0
                     if largest_whale_pct > max_whale_pct:
                         return self._deny(mint, f"whale-hold {largest_whale_pct:.1f}%", f"🚫 [АНТИСКАМ] Кит держит {largest_whale_pct:.1f}% > {max_whale_pct:.0f}% у {mint[:8]} → Блок.")
-                    max_allowed_top10 = 35.0 if _is_pump_flag else 40.0
+                    max_allowed_top10 = 40.0 if _is_pump_flag else 45.0
                     if top_10_sum_pct > max_allowed_top10:
                         return self._deny(mint, f"top10-hold {top_10_sum_pct:.1f}%", f"🚫 [АНТИСКАМ] Топ-10 держат {top_10_sum_pct:.1f}% > {max_allowed_top10}% у {mint[:8]} → Блок.")
                 else:
@@ -1867,10 +1908,19 @@ class Analyzer:
                     owner = str(h.get("owner") or "")
                     addr = str(h.get("address") or "")
                     
+                    DEX_POOL_AUTHORITIES = {
+                        "5Q544fKrFoe6tsEbD7S8EmxGTJYAKtTVhAW5Q5pge4j1", # Raydium AMM V4
+                        "D4FPEruKEHrG5NTsqazoqfv8zsFWApqTjuzFLUQDkTz5", # Raydium CP-Swap
+                        "Eo7WjKq67rjJQSZxS6z3YkapzY3eMj6Xy8X5EQVn5UaB", # Meteora Dynamic Pools
+                        "LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo", # Meteora DLMM
+                        "whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc", # Orca Whirlpools
+                        "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P", # Pump.fun Bonding Curve
+                        "Ce6TQqeHC9p8KetsN6JsjHK7UTZk7nasjjnr7XxXp9F1", # Pump.fun Authority
+                    }
                     # Исключаем пулы ликвидности, AMM и системные адреса Raydium/Pump/Meteora
-                    if owner in pool_accounts or addr in pool_accounts or owner == "5Q544fKrFoe6tsEbD7S8EmxGTJYAKtTVhAW5Q5pge4j1":
+                    if owner in pool_accounts or addr in pool_accounts or owner in DEX_POOL_AUTHORITIES or addr in DEX_POOL_AUTHORITIES:
                         continue
-                    if any(w in owner.lower() for w in pool_keywords):
+                    if any(w in owner.lower() for w in pool_keywords) or any(w in addr.lower() for w in pool_keywords):
                         continue
                     if pct > 80.0:  # Первичный кёрв Pump.fun
                         continue
@@ -1895,7 +1945,7 @@ class Analyzer:
                 self._last_dev = dev_holding_pct
                 
                 is_pump = pair_data and pair_data.get("dexId") in ("pump", "pumpfun")
-                max_allowed_pct = 35.0 if is_pump else 40.0
+                max_allowed_pct = 40.0 if is_pump else 45.0
 
                 max_dev_pct = float(getattr(config, "ROBINHOOD_MAX_CREATOR_PCT", 0.20)) * 100.0
                 if is_pump:
@@ -1909,9 +1959,9 @@ class Analyzer:
                     print(f"🚫 [АНТИСКАМ] Создатель (Dev) держит {dev_holding_pct:.1f}% (Лимит {max_dev_pct:.0f}%). Блокируем.")
                     return False
                 
-                # Защита от скрытого второго кошелька дева: ни один кит не должен держать > 20% (pump) / 15% (dex)
+                # Защита от скрытого второго кошелька дева: ни один кит не должен держать > 25% (pump) / 20% (dex)
                 largest_whale_pct = top_10[0][1] if top_10 else 0.0
-                max_single_whale = 20.0 if is_pump else 15.0
+                max_single_whale = 25.0 if is_pump else 20.0
                 if largest_whale_pct > max_single_whale:
                     print(f"🚫 [АНТИСКАМ] Кит держит {largest_whale_pct:.1f}% > {max_single_whale:.0f}% (риск скрытого дева/дампа). Блокируем.")
                     return False
@@ -2024,9 +2074,9 @@ class Analyzer:
         if dex_id in ("pump", "pumpfun"):
             if liq == 0:
                 liq = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0) * 0.40
-            _floor_liq = 3500
+            _floor_liq = 1000
         else:
-            _floor_liq = 8000 if (age_minutes < 60 or _lottery or is_vip) else (12000 if (pair_data.get("chainId") or "").lower() == "solana" else 5000)
+            _floor_liq = 4000 if (age_minutes < 60 or _lottery or is_vip) else (8000 if (pair_data.get("chainId") or "").lower() == "solana" else 4000)
         if liq < _floor_liq:
             return self._deny(mint, f"low-liq ${liq:.0f}<{_floor_liq}", f"🚫 [ANTI-RUG] {symbol} ({mint[:8]}): Ликвидность всего ${liq:,.0f} < ${_floor_liq}. Слишком опасно.")
 
@@ -2034,8 +2084,8 @@ class Analyzer:
         _quote_info = pair_data.get("liquidity", {}) or {}
         _quote_amt = float(_quote_info.get("quote", 0) or 0)
         _quote_sym = str((pair_data.get("quoteToken") or {}).get("symbol", "")).upper()
-        if "SOL" in _quote_sym and 0 < _quote_amt < 10.0 and dex_id not in ("pump", "pumpfun"):
-            return self._deny(mint, f"ghost-pool-sol {_quote_amt:.1f}<10", f"🚫 [AMM-GHOST-POOL] {symbol} ({mint[:8]}): в пуле всего {_quote_amt:.2f} SOL < 10 SOL — микро-резерв, риск 100% слива девом.")
+        if "SOL" in _quote_sym and 0 < _quote_amt < 5.0 and dex_id not in ("pump", "pumpfun"):
+            return self._deny(mint, f"ghost-pool-sol {_quote_amt:.1f}<5", f"🚫 [AMM-GHOST-POOL] {symbol} ({mint[:8]}): в пуле всего {_quote_amt:.2f} SOL < 5 SOL — микро-резерв, риск 100% слива девом.")
 
         if dex_id in ("pump", "pumpfun"):
             ok = await self.analyze_token_xgboost(mint, pair_data, _lottery=_lottery)
@@ -2942,7 +2992,7 @@ class Analyzer:
             return self._deny(mint, "ray-young", f"⏳ [RAYDIUM] {mint[:8]}: возраст {_age_min:.1f}м < {_sol_min_age}м — ранняя flash-rug зона.")
 
         _ray_liq = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
-        _min_ray_liq = 8000.0 if (_age_min < 60) else 12000.0
+        _min_ray_liq = 4000.0 if (_age_min < 60) else 8000.0
         if _ray_liq < _min_ray_liq:
             return self._deny(mint, "ray-low-liq", f"🚫 [RAYDIUM] {mint[:8]}: реальная ликвидность AMM ${_ray_liq:,.0f} < ${_min_ray_liq:,.0f}.")
 

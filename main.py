@@ -840,10 +840,28 @@ async def scanner_loop(analyzer, tracker):
                                           is_good, getattr(analyzer, "last_score", 0.0))
 
                         if is_good:
-                            getattr(analyzer, "_prefetch_cache", {}).pop(mint, None)  # цена входа — только живая
+                            _cached_pair = getattr(analyzer, "_prefetch_cache", {}).pop(mint, None)
                             pair_data = await analyzer.fetch_token_data(mint)
                             entry_price = float(pair_data.get("priceUsd", 0)) if pair_data else 0
-                            actual_symbol = pair_data.get("baseToken", {}).get("symbol", "UNKNOWN") if pair_data else "UNKNOWN"
+                            if (not pair_data or entry_price <= 0) and _cached_pair:
+                                pair_data = _cached_pair
+                                entry_price = float(pair_data.get("priceUsd", 0) or 0)
+                            if entry_price <= 0:
+                                try:
+                                    from jupiter import JupiterAPI
+                                    _j_pr = await JupiterAPI.get_price(mint)
+                                    if _j_pr and _j_pr > 0:
+                                        entry_price = _j_pr
+                                        if pair_data:
+                                            pair_data["priceUsd"] = _j_pr
+                                        elif _cached_pair:
+                                            pair_data = _cached_pair
+                                            pair_data["priceUsd"] = _j_pr
+                                        else:
+                                            pair_data = {"baseToken": {"symbol": symbol}, "pairAddress": mint, "priceUsd": _j_pr}
+                                except Exception:
+                                    pass
+                            actual_symbol = pair_data.get("baseToken", {}).get("symbol", symbol) if pair_data else symbol
                             liq_usd = float(((pair_data or {}).get("liquidity", {}) or {}).get("usd", 0) or 0)
                             if liq_usd == 0 and (mint.endswith("pump") or (pair_data or {}).get("dexId") in ("pump", "pumpfun")):
                                 _fdv = float(((pair_data or {}).get("fdv", 0) or (pair_data or {}).get("marketCap", 0) or 0))
