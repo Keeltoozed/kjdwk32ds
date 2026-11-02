@@ -1263,16 +1263,24 @@ class Analyzer:
                     f"⏳ [CURVE-SKIP] {symbol} ({mint[:8]}): сырая кривая Pump.fun без миграции на DEX — ждём выхода на PumpSwap/Raydium.",
                 )
             _fdv_curve_pre = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
+            if _fdv_curve_pre <= 0:
+                _px_calc = float(pair_data.get("priceUsd", 0) or 0)
+                if _px_calc > 0:
+                    _fdv_curve_pre = _px_calc * 1_000_000_000.0
             _min_curve_mcap = float(getattr(config, "MIN_PUMP_CURVE_MCAP_USD", 9000.0))
             if _fdv_curve_pre > 0 and _fdv_curve_pre < _min_curve_mcap:
                 return self._deny(
                     mint,
-                    f"pump-curve-too-early ${_fdv_curve_pre:.0f}<{_min_curve_mcap:.0f}",
-                    f"🚫 [CURVE-FLASH-RUG] {symbol} ({mint[:8]}): FDV ${_fdv_curve_pre:,.0f} < ${_min_curve_mcap:,.0f} (прогресс кривой < 15%) — зона flash-rug с пустым пулом (как NOTHING/CAMPUS).",
+                    f"pump-curve-too-early {_fdv_curve_pre:.0f}<{_min_curve_mcap:.0f}",
+                    f"🚫 [CURVE-FLASH-RUG] {symbol} ({mint[:8]}): FDV ${_fdv_curve_pre:,.0f} < ${_min_curve_mcap:,.0f} (пустой кёрв < 15%) — зона flash-rug с пустым пулом (как NOTHING/CAMPUS/GODHOUSE).",
                 )
-        _sol_min_age = float(getattr(config, "SOLANA_MIN_AGE_MIN", 1.0))
-        if _age_min_pre < _sol_min_age:
-            print(f"⏳ [ENTRY] {mint[:8]}: возраст {_age_min_pre:.1f}м < {_sol_min_age}м — flash-rug зона дева, ждём созревания.")
+        # FAST-TRACK ДЛЯ МОЛОДЫХ РАКЕТ (< 48 сек):
+        # Если монета молодая, но уже показывает мощный органический взлёт покупателей —
+        # ПУСКАЕМ СРАЗУ! Не урезаем ракеты искусственным ожиданием!
+        _is_fast_rocket = (_vm5_pre >= 3500.0 and _b5_pre >= 10 and (_s5_pre == 0 or _b5_pre >= _s5_pre * 1.2) and _m5 >= 2.5)
+        _sol_min_age = float(getattr(config, "SOLANA_MIN_AGE_MIN", 0.8))
+        if _age_min_pre < _sol_min_age and not _is_fast_rocket:
+            print(f"⏳ [ENTRY] {mint[:8]}: возраст {_age_min_pre:.1f}м < {_sol_min_age}м без достаточного импульса (b/s {_b5_pre}/{_s5_pre}, vol5 ${_vm5_pre:,.0f}) — ждём созревания.")
             return None
 
         # 1. Защита от старых увядающих зомби (> 120 мин без прорывного объема $25k)

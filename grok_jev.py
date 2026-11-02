@@ -403,13 +403,16 @@ class GrokJevEngine:
         # ЗАЩИТА ОТ ПУСТЫХ 0.2% FLASH-RUG КЁРВОВ PUMP.FUN (кейсы NOTHING $2.6k, CAMPUS $2.6k):
         # На пустой кривой с 2 SOL резерва любой дамп дева пробивает стоп сразу в -75%!
         # Пускаем Pump.fun кёрвы ТОЛЬКО если они уже набрали базу (прогресс >=15% / FDV >=$9k, кейсы MOBROS $12.5k, OREX $13k)!
-        if dex_id in ("pump", "pumpfun"):
+        if is_pump:
             if not getattr(_c, "ALLOW_UNGRADUATED_PUMPFUN", True):
                 return False, "ungraduated-pump-curve (ждём миграции на DEX с сожжённым LP)"
+            if fdv_mc <= 0:
+                _cur_p = float(pair_data.get("priceUsd", 0) or 0)
+                if _cur_p > 0:
+                    fdv_mc = _cur_p * 1_000_000_000.0
             _min_curve_mc = float(getattr(_c, "MIN_PUMP_CURVE_MCAP_USD", 9000.0))
             if fdv_mc > 0 and fdv_mc < _min_curve_mc:
                 return False, f"pump-curve-flash-rug: FDV ${fdv_mc:,.0f} < ${_min_curve_mc:,.0f} (пустой кёрв <15%, риск мгновенного сноса в -75%)"
-
         eff_liq = raw_liq if dex_id not in ("pump", "pumpfun") else (raw_liq if raw_liq > 0 else fdv_mc * 0.40)
         
         # ЗАЩИТА ОТ ФАНТОМНОЙ ЛИКВИДНОСТИ И ОДНОМИНУТНЫХ ДЕВ-ДАМПОВ:
@@ -490,10 +493,12 @@ class GrokJevEngine:
             if not has_breakout_momentum and (m5 < 2.0 or (s5 > 0 and (b5 / s5) < 0.85) or vol_m5 < 800.0):
                 return False, f"post-migration-no-reclaim (m5 {m5:+.1f}%, vol5 ${vol_m5:,.0f}, {b5}b/{s5}s — need organic bounce)"
 
-        # 2. Возраст токена: карантинная выдержка (минимум 48 сек против 0-минутных дев-дампов)
-        _early_min_age = max(float(getattr(_c, "SOLANA_MIN_AGE_MIN", 0.8)), float(getattr(_c, "JEV_EARLY_MIN_AGE_MIN", 0.8)))
+        # 2. Возраст токена: для настоящих ракет с активными покупками вход сразу от 0.15м (9 сек)!
+        # Карантин 48 сек действует ТОЛЬКО на медленные или сомнительные монеты.
+        _is_fast_rkt = (vol_m5 >= 3500.0 and b5 >= 10 and (s5 == 0 or b5 >= s5 * 1.2) and m5 >= 2.5)
+        _early_min_age = 0.15 if _is_fast_rkt else max(float(getattr(_c, "SOLANA_MIN_AGE_MIN", 0.8)), float(getattr(_c, "JEV_EARLY_MIN_AGE_MIN", 0.8)))
         _std_min_age = max(1.0, float(getattr(_c, "JEV_MIN_AGE_MIN", 1.0)))
-        min_age = _early_min_age if (b5 >= s5 * 1.05 and m5 >= 4.0 and vol_m5 >= 2000.0) else _std_min_age
+        min_age = _early_min_age if _is_fast_rkt or (b5 >= s5 * 1.05 and m5 >= 4.0 and vol_m5 >= 2000.0) else _std_min_age
         max_age = float(getattr(_c, "JEV_MAX_AGE_MIN", 72.0 * 60.0))  # 72 часа
         if not (min_age <= age_min <= max_age):
             if age_min > max_age:
