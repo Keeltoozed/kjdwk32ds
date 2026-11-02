@@ -934,6 +934,22 @@ async def scanner_loop(analyzer, tracker):
                                     print(f"🚫 [SCANNER-POST-PEAK] {actual_symbol} ({mint[:8]}): токен уже слился от пика (цена {_pk_drop_live:+.1f}%, ликва {_lq_drop_live:+.1f}%) — отмена!")
                                     continue
 
+                                # Защита от старых увядающих зомби (> 120 мин)
+                                _max_age_live = float(getattr(config, "SOLANA_MAX_AGE_MIN", 120.0))
+                                _vol5_live = float(((pair_data.get("volume") or {}).get("m5", 0) or 0))
+                                if _age_m > _max_age_live and _vol5_live < 25000.0:
+                                    print(f"🚫 [SCANNER-OLD-ZOMBIE] {actual_symbol} ({mint[:8]}): возраст {_age_m/60:.1f}ч > {_max_age_live/60:.1f}ч без прорывного объема (${_vol5_live:,.0f} < $25k) — отмена!")
+                                    continue
+
+                                # Защита от фейковых bump-ботов без соцсетей (ELON, Trump, Amazon, MrBeast, Microsoft):
+                                _tx5_sc = (pair_data.get("txns") or {}).get("m5", {}) or {}
+                                _tot_tx5_sc = int(_tx5_sc.get("buys", 0) or 0) + int(_tx5_sc.get("sells", 0) or 0)
+                                _avg_tx5_sc = (_vol5_live / _tot_tx5_sc) if _tot_tx5_sc > 0 else 0.0
+                                _links_sc = len(pair_data.get("info", {}).get("socials", []) or pair_data.get("info", {}).get("websites", []) or [])
+                                if _tot_tx5_sc >= 250 and _avg_tx5_sc < 8.0 and _links_sc == 0:
+                                    print(f"🚫 [SCANNER-WASH-TRAP] {actual_symbol} ({mint[:8]}): накрутка микро-ботом ({_tot_tx5_sc} txns, avg ${_avg_tx5_sc:.2f} < $8) при 0 соцсетей — отмена!")
+                                    continue
+
                                 # Блок кастомных не-pump контрактов на PumpSwap только при микро-пуле (< $6k)
                                 if _dex_id == "pumpswap" and not mint.endswith("pump") and liq_usd < 6000.0:
                                     print(f"🚫 [SCANNER-FAKE-PUMPSWAP] {actual_symbol} ({mint[:8]}): кастомный не-pump контракт на PumpSwap с микро-пулом (${liq_usd:,.0f} < $6k) — отмена!")

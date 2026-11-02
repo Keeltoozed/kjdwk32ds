@@ -1260,6 +1260,36 @@ class Analyzer:
             print(f"⏳ [ENTRY] {mint[:8]}: возраст {_age_min_pre:.1f}м < {_sol_min_age}м — flash-rug зона дева, ждём созревания.")
             return None
 
+        # 1. Защита от старых увядающих зомби (> 120 мин без прорывного объема $25k)
+        _max_age_min = float(getattr(config, "SOLANA_MAX_AGE_MIN", 120.0))
+        if _age_min_pre > _max_age_min and _vm5_pre < 25000.0:
+            return self._deny(
+                mint,
+                f"zombie-old-token {_age_min_pre:.0f}m",
+                f"🚫 [ZOMBIE-AGE] {symbol} ({mint[:8]}): возраст {_age_min_pre/60:.1f}ч > {_max_age_min/60:.1f}ч без прорывного объема (${_vm5_pre:,.0f} < $25k) — старый увядающий токен.",
+            )
+
+        # 2. Защита от фейковых bump-ботов на именах брендов/селебрити (ELON, Trump, Amazon, MrBeast, Microsoft):
+        # 250+ сделок с копеечным чеком (< $8.0) при 0 соцсетей — 100% серийная ловушка скамера
+        _info_pre = pair_data.get("info") or {}
+        _has_soc_pre = bool((_info_pre.get("socials") or []) or (_info_pre.get("websites") or [])) or bool(pair_data.get("_socials_unknown"))
+        _tot_tx5_pre = _b5_pre + _s5_pre
+        _avg_tx_pre = (_vm5_pre / _tot_tx5_pre) if _tot_tx5_pre > 0 else 0.0
+        if _tot_tx5_pre >= 250 and _avg_tx_pre < 8.0 and not _has_soc_pre:
+            return self._deny(
+                mint,
+                f"fake-bump-wash-bot avg ${_avg_tx_pre:.1f}",
+                f"🚫 [WASH-BUMP-TRAP] {symbol} ({mint[:8]}): накрутка микро-ботом ({_tot_tx5_pre} txns, avg ${_avg_tx_pre:.2f} < $8) при 0 соцсетей — фейк-дамп!",
+            )
+
+        # 3. Минимальный 5м объем для молодых токенов (< $3,000)
+        if _vm5_pre < 3000.0 and _age_min_pre < 60.0:
+            return self._deny(
+                mint,
+                f"low-vol5 ${_vm5_pre:.0f}<$3k",
+                f"🚫 [LOW-MOMENTUM] {symbol} ({mint[:8]}): 5м объем ${_vm5_pre:,.0f} < $3,000 — нет реального торгового импульса.",
+            )
+
         # =========================================================================
         # 🚀 ЭТАП 1: ROCKET XGBOOST v2 — ПЕРВИЧНЫЙ ML-СКРИНЕР (0ms IN-MEMORY)
         # Все монеты СРАЗУ прогоняются через ML. Модель оценивает комплекс параметров
