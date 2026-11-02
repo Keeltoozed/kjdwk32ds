@@ -1600,13 +1600,22 @@ class GrokJevEngine:
             return False, f"price-divergence-pool-split ({_div_r:.2f}x)"
 
         # 1.6. 🚀 STAGE 1: ROCKET XGBOOST ML СКРИНЕР (0ms IN-MEMORY)
-        # Отсекает 95% мусора и заведомых дампов в 0мс (DARTHLON 6%, BALLS 4%, PIKMIN 11%)
+        # Отсекает 90% мусора и заведомых дампов в 0мс (DARTHLON 6%, BALLS 4%, DAISUKE 2%)
         # без лишних сетевых вызовов Jupiter, RugCheck и LLM.
         rkt_s1 = self.score_rocket_xgb(address, pair)
-        s1_thresh = float(getattr(_c, "ROCKET_XGB_STAGE1_THRESHOLD", 24.0))
-        if getattr(_c, "ROCKET_XGB_ENABLED", True) and rkt_s1 < s1_thresh:
+        s1_thresh = float(getattr(_c, "ROCKET_XGB_STAGE1_THRESHOLD", 13.0))
+        _txs_s1 = (pair.get("txns") or {}).get("m5") or {}
+        _b5_s1 = int(_txs_s1.get("buys", 0) or 0)
+        _s5_s1 = int(_txs_s1.get("sells", 0) or 0)
+        _vm5_s1 = float((pair.get("volume") or {}).get("m5", 0) or 0)
+        _m5_s1 = float((pair.get("priceChange") or {}).get("m5", 0) or 0)
+        _is_momentum_rocket = (_m5_s1 >= 18.0 and _b5_s1 >= _s5_s1 and _vm5_s1 >= 3000.0)
+
+        if getattr(_c, "ROCKET_XGB_ENABLED", True) and not _is_momentum_rocket and (rkt_s1 + 0.05) < s1_thresh:
             print(f"🚫 [GROK-JEV-ML-S1] {symbol} ({address[:8]}): Rocket XGB score {rkt_s1:.1f}% < {s1_thresh:.0f}% — отсев дампа в 0мс.")
             return False, f"rocket-xgb-s1-reject {rkt_s1:.1f}% < {s1_thresh:.0f}%"
+        elif _is_momentum_rocket and (rkt_s1 + 0.05) < s1_thresh:
+            print(f"⚡ [GROK-JEV-ML-S1] {symbol} ({address[:8]}): Моментум-байпас для ракеты (m5 +{_m5_s1:.1f}%, vol5 ${_vm5_s1:,.0f}, {_b5_s1}b/{_s5_s1}s) при скоре {rkt_s1:.1f}% — допуск в Hard Gate!")
 
         # 2. HARD GATE ПЕРВЫМ ("if it fails here, JEV and Jupiter never see it")
         # Мгновенный математический отсев (0 сетевых запросов!) — отсекает 95% пустых/стоячих монет ДО вызовов Jupiter/RugCheck/GoPlus
@@ -1698,8 +1707,8 @@ class GrokJevEngine:
         # 5.6. 🚀 STAGE 2: ROCKET XGBOOST FINAL ML FIREWALL
         # Финальная проверка перед реальным открытием ордера со свежими данными и реальными ончейн холдерами (_h_stats).
         rkt_final = self.score_rocket_xgb(address, pair, _h_stats)
-        final_thresh = float(getattr(_c, "ROCKET_XGB_FINAL_THRESHOLD", 26.0))
-        if getattr(_c, "ROCKET_XGB_ENABLED", True) and rkt_final < final_thresh:
+        final_thresh = float(getattr(_c, "ROCKET_XGB_FINAL_THRESHOLD", 18.0))
+        if getattr(_c, "ROCKET_XGB_ENABLED", True) and (rkt_final + 0.05) < final_thresh:
             print(f"🚫 [GROK-JEV-ML-VETO] {symbol} ({address[:8]}): Rocket XGB final score {rkt_final:.1f}% < {final_thresh:.0f}% — VETO! (Блокировка дампа)")
             return False, f"rocket-xgb-final-veto {rkt_final:.1f}% < {final_thresh:.0f}%"
 

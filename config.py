@@ -127,9 +127,9 @@ MOONBAG_SELL_FRAC = 0.0
 PUMP_XGB_ENABLED = False        # ВЫКЛЮЧЕНО: 100% сливов (-235% PnL) на ложных скорах pump.fun вершин
 RAY_XGB_ENABLED = False         # ВЫКЛЮЧЕНО: старая модель Raydium XGB заменена на Rocket XGBoost v2
 ROCKET_XGB_ENABLED = True       # ВКЛЮЧЕНО: честная ML модель Rocket XGBoost v3 (20 фичей без ликеджа)
-ROCKET_XGB_STAGE1_THRESHOLD = 21.0  # Этап 1 (RAM): пускаем кандидатов 21%+ (TRENCHDOWS 23.1%, ANAKIN 22.8%) до обогащения реальными холдерами
-ROCKET_XGB_FINAL_THRESHOLD = 25.0   # Этап 2 (Audit): подтверждение входа после ончейн-аудита с реальными холдерами (25%+)
-ROCKET_XGB_THRESHOLD = 25.0         # Базовый порог скринера
+ROCKET_XGB_STAGE1_THRESHOLD = 13.0  # Этап 1 (RAM): пускаем кандидатов 13%+ (BUNK 15.7%, BER 18.2%, PPC 15.1%, MEMECOINS 19.9%)
+ROCKET_XGB_FINAL_THRESHOLD = 18.0   # Этап 2 (Audit): подтверждение входа после ончейн-аудита с реальными холдерами (18%+)
+ROCKET_XGB_THRESHOLD = 18.0         # Базовый порог скринера
 
 # Stall Timer: выход при затухании моментума (даём полную 5м свечу на выход из консолидации!)
 # Раньше 120с на -5% резало 43% сделок в гарантированный мелкий минус (включая ракету CREDIT +901%).

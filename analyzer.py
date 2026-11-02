@@ -1213,7 +1213,7 @@ class Analyzer:
         _liq_drop_peak = float(pair_data.get("_liq_drop_from_peak", 0.0) or 0.0)
         if _drop_from_peak <= -18.0:
             return self._deny(mint, f"post-peak-crash {_drop_from_peak:.0f}%", f"🚫 [POST-PEAK-CRASH] {symbol} ({mint[:8]}): цена уже упала на {_drop_from_peak:.1f}% от виденного ботом пика — отскок дохлой кошки после дампа.")
-        if _liq_drop_peak <= -18.0:
+        if _liq_drop_peak <= -30.0:
             return self._deny(mint, f"post-peak-liq-drain {_liq_drop_peak:.0f}%", f"🚫 [LIQ-DRAIN] {symbol} ({mint[:8]}): ликвидность пула уже сдулась на {_liq_drop_peak:.1f}% от пика — снайперы/дев выводят SOL.")
         
         corporate_scam_keywords = ["AAPL", "S&P", "SP500", "MSFT", "TSLA", "TESLA", "TESLAA", "SPACEX", "STARLINK", "XAI", "NEURALINK", "PAYPAL",
@@ -1321,7 +1321,7 @@ class Analyzer:
         # =========================================================================
         if getattr(self, "rocket_xgb", None) is not None and getattr(config, "ROCKET_XGB_ENABLED", True):
             conf = self.score_rocket_xgb(mint, pair_data)
-            threshold = float(getattr(config, "ROCKET_XGB_STAGE1_THRESHOLD", getattr(config, "ROCKET_XGB_THRESHOLD", 40.0)))
+            threshold = float(getattr(config, "ROCKET_XGB_STAGE1_THRESHOLD", getattr(config, "ROCKET_XGB_THRESHOLD", 13.0)))
             self.last_score = conf
             if not hasattr(self, "rocket_scores"):
                 self.rocket_scores = {}
@@ -1334,7 +1334,9 @@ class Analyzer:
             curve_liq = fdv_val * 0.35 if fdv_val > 0 else 0.0
             liq_val = max(raw_liq, curve_liq) if is_pump_curve else raw_liq
 
-            if conf < threshold:
+            _is_momentum_rocket = (_m5 >= 18.0 and _b5 >= _s5 and _vm5_pre >= 3000.0)
+
+            if not _is_momentum_rocket and (conf + 0.05) < threshold:
                 self._deny(mint, f"rocket-xgb {conf:.0f}%", f"· [ROCKET-XGB] {symbol} ({mint[:8]}): уверенность модели {conf:.1f}% < {threshold:.0f}% — отсеян до тяжелых проверок (0ms).")
                 try:
                     from shadow_tracker import shadow_tracker
@@ -1354,6 +1356,8 @@ class Analyzer:
                 except Exception:
                     pass
                 return False
+            elif _is_momentum_rocket and (conf + 0.05) < threshold:
+                print(f"⚡ [ROCKET-XGB MOMENTUM-PASS] {symbol} ({mint[:8]}): Мощный памп (m5 +{_m5:.1f}%, vol5 ${_vm5_pre:,.0f}, {_b5}b/{_s5}s) при скоре {conf:.1f}% — допуск к ончейн аудиту!")
 
             print(f"🚀 [ROCKET-XGB PASSED] {symbol} ({mint[:8]}): ML Score {conf:.1f}% >= {threshold:.0f}%! Запуск ончейн-аудита безопасности...")
 
@@ -1608,8 +1612,8 @@ class Analyzer:
                 conf = self.score_rocket_xgb(mint, pair_data, holders_info=_real_holders)
                 self.last_score = conf
                 self.rocket_scores[mint] = conf
-            _final_thr = float(getattr(config, "ROCKET_XGB_FINAL_THRESHOLD", 26.0))
-            if conf < _final_thr:
+            _final_thr = float(getattr(config, "ROCKET_XGB_FINAL_THRESHOLD", 18.0))
+            if (conf + 0.05) < _final_thr:
                 return self._deny(mint, f"rocket-xgb-s2 {conf:.0f}%", f"🚫 [ROCKET-XGB-S2] {symbol} ({mint[:8]}): скор с учётом холдеров {conf:.1f}% < {_final_thr:.0f}% — отсев.")
 
             self._set_sig(mint, f"ROCKET-XGB {conf:.0f}%")
@@ -3329,9 +3333,9 @@ class Analyzer:
                 rkt_df = pd.DataFrame([rkt_features])[FEATURE_COLS]
                 prob = self.rocket_xgb.predict_proba(rkt_df)[0][1]
                 conf = float(prob * 100.0)
-                threshold = float(getattr(config, "ROCKET_XGB_FINAL_THRESHOLD", getattr(config, "ROCKET_XGB_THRESHOLD", 50.0)))
+                threshold = float(getattr(config, "ROCKET_XGB_FINAL_THRESHOLD", getattr(config, "ROCKET_XGB_THRESHOLD", 18.0)))
                 self.last_score = conf
-                is_buy = bool(conf >= threshold)
+                is_buy = bool((conf + 0.05) >= threshold)
                 print(f"🚀 [ROCKET-XGB v3] {mint[:8]} ({pair_data.get('baseToken', {}).get('symbol', '?')}): Score {conf:.1f}% (Порог {threshold:.0f}%) -> {'✅ BUY' if is_buy else '🚫 SKIP'}")
                 if is_buy:
                     self._set_sig(mint, f"ROCKET-XGB {conf:.0f}%")

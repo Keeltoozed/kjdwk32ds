@@ -461,9 +461,9 @@ class PaperTracker:
             return
 
         # ЗАЩИТА ML FIREWALL: Ни одна сделка с низким скором Rocket XGBoost не может быть открыта!
-        min_conf = float(getattr(config, "ROCKET_XGB_FINAL_THRESHOLD", 50.0))
+        min_conf = float(getattr(config, "ROCKET_XGB_FINAL_THRESHOLD", 18.0))
         if getattr(config, "ROCKET_XGB_ENABLED", True):
-            if ml_confidence > 0 and ml_confidence < min_conf:
+            if ml_confidence > 0 and (ml_confidence + 0.05) < min_conf:
                 print(f"🚫 [FIREWALL] Отказ входа {symbol} ({mint[:8]}): Rocket XGB скор {ml_confidence:.1f}% < {min_conf:.0f}% (блокировка убыточного дампа)")
                 return
             if source == "GROK-JEV" and ml_confidence <= 0.0:
