@@ -177,12 +177,12 @@ class PaperTracker:
             
         # 2. Сохраняем в Supabase (Render-proof).
         # Троттлинг: не спамим Supabase синхронными HTTP-запросами каждую секунду.
-        # В облако пишем немедленно при открытии/закрытии (force_cloud=True) или каждые 1.5 секунды для живых цен.
+        # В облако пишем немедленно при открытии/закрытии (force_cloud=True) или каждые 3.0 секунды для живых цен дашборда.
         if not data:
             return
         now = time.time()
         last_sb = getattr(self, "_last_sb_save", 0.0)
-        if not force_cloud and (now - last_sb) < 60.0:
+        if not force_cloud and (now - last_sb) < 3.0:
             return
         self._last_sb_save = now
         sb = self._supabase()

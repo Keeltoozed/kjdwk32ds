@@ -1216,13 +1216,13 @@ class Analyzer:
         if _liq_drop_peak <= -18.0:
             return self._deny(mint, f"post-peak-liq-drain {_liq_drop_peak:.0f}%", f"🚫 [LIQ-DRAIN] {symbol} ({mint[:8]}): ликвидность пула уже сдулась на {_liq_drop_peak:.1f}% от пика — снайперы/дев выводят SOL.")
         
-        corporate_scam_keywords = ["AAPL", "S&P", "SP500", "MSFT", "TSLA", "TESLA", "SPACEX", "STARLINK", "XAI", "NEURALINK", "PAYPAL",
-                                  "NVDA", "GOOG", "AMZN", "META", "NFLX", "ANTHROPIC", "OPENAI", "PERPLEXITY"]
+        corporate_scam_keywords = ["AAPL", "S&P", "SP500", "MSFT", "TSLA", "TESLA", "TESLAA", "SPACEX", "STARLINK", "XAI", "NEURALINK", "PAYPAL",
+                                  "NVDA", "NVIDIA", "GOOG", "AMZN", "META", "NFLX", "ANTHROPIC", "OPENAI", "PERPLEXITY"]
         if any(keyword in symbol for keyword in corporate_scam_keywords) or any(keyword in name for keyword in corporate_scam_keywords):
             if not self._brand_whitelisted(mint):
                 return self._deny(mint, "mimic-corp-scam", f"🚫 Мусор: Токен {symbol} мимикрирует под корпоративный бренд. Это 100% scam.")
 
-        meme_keywords = ["PEPE", "SHIB", "DOGE", "FLOKI", "BONK", "WIF", "BOME", "POPCAT", "TRUMP", "BIDEN", "ELON", "MUSK",
+        meme_keywords = ["PEPE", "SHIB", "DOGE", "FLOKI", "BONK", "WIF", "BOME", "POPCAT", "TRUMP", "BIDEN", "ELON", "ELUN", "ELOM", "MUSK",
                          "CLAUDE", "CHATGPT", "DEEPSEEK", "GROK", "GEMINI"]
         if any(keyword in symbol for keyword in meme_keywords) or any(keyword in name for keyword in meme_keywords):
             if not self._brand_whitelisted(mint):
@@ -1238,7 +1238,22 @@ class Analyzer:
                     return self._deny(mint, "mimic-scam", f"🚫 Мусор: Токен {symbol} мимикрирует под известный мем без органики (b/s {_b5_mc}/{_s5_mc}, vol5 ${_v5_mc:.0f}).")
             
         _created_pre = pair_data.get("pairCreatedAt") or 0
-        _age_min_pre = (time.time() * 1000 - _created_pre) / 60000.0 if _created_pre else 999
+        if _created_pre:
+            _age_min_pre = (time.time() * 1000 - _created_pre) / 60000.0
+        else:
+            _bt_age = None
+            try:
+                from birth_tracker import birth_tracker as _bt_check
+                _bt_age = _bt_check.get_age(mint)
+            except Exception:
+                pass
+            if _bt_age is not None:
+                _age_min_pre = float(_bt_age)
+            elif mint.endswith("pump") or str(pair_data.get("dexId", "")).lower() in ("pump", "pumpfun", "pumpswap"):
+                # Если метки времени нет у токена pump.fun — это новорожденный токен (<30 сек), а НЕ 999 минут!
+                _age_min_pre = 0.2
+            else:
+                _age_min_pre = 999.0
         _dex_pre_early = str(pair_data.get("dexId", "")).lower()
         if _dex_pre_early in ("pump", "pumpfun"):
             if not getattr(config, "ALLOW_UNGRADUATED_PUMPFUN", True):

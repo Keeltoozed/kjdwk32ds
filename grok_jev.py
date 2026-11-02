@@ -385,10 +385,10 @@ class GrokJevEngine:
         FAKE_BRAND_BLACKLIST = {
             "BASE", "SP500", "S&P500", "USDC", "USDT", "SOL", "ETH", "BTC", "SOLANA",
             "BINANCE", "COINBASE", "TESLA", "APPLE", "NVDA", "AMAZON", "GOOGLE", "MICROSOFT",
-            "NINTENDO", "PLAYSTATION", "SONY", "DISNEY", "MARVEL", "POKEMON", "SEGA", "XBOX",
+            "NINTENDO", "PLAYSTATION", "SONY", "DISNEY", "MARVEL", "POKEMON", "SEGA", "XBOX", "ELUN", "ELOM",
             "STEAM", "VALVE", "ROBLOX", "TIKTOK", "NETFLIX", "SPOTIFY", "PEPSI", "COCACOLA", "MCDONALDS"
         }
-        if symbol in FAKE_BRAND_BLACKLIST or any(b in symbol for b in ("NINTENDO", "POKEMON", "PLAYSTATION", "DISNEY")):
+        if symbol in FAKE_BRAND_BLACKLIST or any(b in symbol for b in ("NINTENDO", "POKEMON", "PLAYSTATION", "DISNEY", "NVIDIA", "APPLE", "TESLA", "MICROSOFT", "AMAZON")):
             return False, f"fake-brand-clone {symbol}"
 
         # 0.5. Быстрый 0ms анти-клон по реестру сегодняшних ракет (@savipww Scanner Copycat Rule)
@@ -422,9 +422,23 @@ class GrokJevEngine:
             if quote_amount < _min_sol_req:
                 return False, f"phantom-liq-trap: real pool SOL {quote_amount:.2f} < {_min_sol_req:.0f} SOL (dumped pool like ZECP/MIKE)"
 
-        # 2. Возраст: если pairCreatedAt отсутствует (часто на первых секундах PumpSwap), не считаем токен старым!
+        # 2. Возраст: если pairCreatedAt отсутствует (часто на первых секундах PumpSwap), берём из birth_tracker
         created_at = pair_data.get("pairCreatedAt") or 0
-        age_min = (time.time() * 1000 - created_at) / 60000.0 if created_at else 0.5
+        if created_at:
+            age_min = (time.time() * 1000 - created_at) / 60000.0
+        else:
+            _bt_age = None
+            try:
+                from birth_tracker import birth_tracker as _bt_check
+                _bt_age = _bt_check.get_age(mint)
+            except Exception:
+                pass
+            if _bt_age is not None:
+                age_min = float(_bt_age)
+            elif is_pump:
+                age_min = 0.2
+            else:
+                age_min = 999.0
 
         _min_grad_liq = float(getattr(_c, "MIN_GRADUATED_LIQ_USD", 7500.0))
         min_liq = 1500.0 if dex_id in ("pump", "pumpfun") else _min_grad_liq
@@ -476,8 +490,8 @@ class GrokJevEngine:
             if not has_breakout_momentum and (m5 < 2.0 or (s5 > 0 and (b5 / s5) < 0.85) or vol_m5 < 800.0):
                 return False, f"post-migration-no-reclaim (m5 {m5:+.1f}%, vol5 ${vol_m5:,.0f}, {b5}b/{s5}s — need organic bounce)"
 
-        # 2. Возраст токена: пускаем ранние ракеты от 0.5 мин при подтвержденном объеме
-        _early_min_age = max(0.4, float(getattr(_c, "JEV_EARLY_MIN_AGE_MIN", 0.5)))
+        # 2. Возраст токена: карантинная выдержка (минимум 48 сек против 0-минутных дев-дампов)
+        _early_min_age = max(float(getattr(_c, "SOLANA_MIN_AGE_MIN", 0.8)), float(getattr(_c, "JEV_EARLY_MIN_AGE_MIN", 0.8)))
         _std_min_age = max(1.0, float(getattr(_c, "JEV_MIN_AGE_MIN", 1.0)))
         min_age = _early_min_age if (b5 >= s5 * 1.05 and m5 >= 4.0 and vol_m5 >= 2000.0) else _std_min_age
         max_age = float(getattr(_c, "JEV_MAX_AGE_MIN", 72.0 * 60.0))  # 72 часа

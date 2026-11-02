@@ -280,10 +280,10 @@ async def position_manager_loop(analyzer, tracker):
 
                 # === ИНТЕГРАЦИЯ МАТЕМАТИКИ ДЛЯ ЗРЕЛЫХ МОНЕТ (SWING TRADING / RIDE RUNNERS) ===
                 # Исполняется ДО скальперских Early Fade / Stagnant срезов, чтобы ракеты ехали по MatureExitManager!
-                _tp1_sol_thr = float(getattr(config, "TP1_TRIGGER_PCT", 0.50))
-                _tp1_sell = float(getattr(config, "TP1_SELL_FRAC", 0.35))
-                _tp2 = float(getattr(config, "TP2_TRIGGER_PCT", 1.20))
-                _tp2_sell = float(getattr(config, "TP2_SELL_FRAC", 0.25))
+                _tp1_sol_thr = float(getattr(config, "TP1_TRIGGER_PCT", 0.30))
+                _tp1_sell = float(getattr(config, "TP1_SELL_FRAC", 0.40))
+                _tp2 = float(getattr(config, "TP2_TRIGGER_PCT", 1.00))
+                _tp2_sell = float(getattr(config, "TP2_SELL_FRAC", 0.50))
                 _tp3 = float(getattr(config, "TP3_TRIGGER_PCT", 2.50))
                 _tp3_sell = float(getattr(config, "TP3_SELL_FRAC", 0.20))
                 _tp4 = float(getattr(config, "TP4_TRIGGER_PCT", 5.00))
@@ -801,7 +801,16 @@ async def scanner_loop(analyzer, tracker):
                         continue
                     _pre_m = getattr(analyzer, "_prefetch_cache", {}).get(mint, (0, {}))[1]
                     _ca_m = _pre_m.get("pairCreatedAt") or 0 if isinstance(_pre_m, dict) else 0
-                    _age_m = (time.time() * 1000 - _ca_m) / 60000.0 if _ca_m else 999.0
+                    if _ca_m:
+                        _age_m = (time.time() * 1000 - _ca_m) / 60000.0
+                    else:
+                        _bt_age_m = None
+                        try:
+                            from birth_tracker import birth_tracker as _bt_c
+                            _bt_age_m = _bt_c.get_age(mint)
+                        except Exception:
+                            pass
+                        _age_m = float(_bt_age_m) if _bt_age_m is not None else (0.2 if mint.endswith("pump") else 999.0)
                     _is_fresh_m = mint in _graduated_set or _age_m <= 30.0
                     _cd = int(getattr(config, "SOLANA_FRESH_RESCAN_COOLDOWN", 45)) if _is_fresh_m else int(getattr(config, "SOLANA_RESCAN_COOLDOWN", 180))
                     if time.time() - processed_mints.get(mint, 0.0) < _cd:
@@ -2387,7 +2396,9 @@ st.markdown("Панель управления алгоритмическим б
 
 tab1, tab2 = st.tabs(["📊 Портфель и История", "📡 Радар Рынка (Alpha Scanner)"])
 
-with tab1:
+_frag_dec = getattr(st, "fragment", getattr(st, "experimental_fragment", None))
+
+def _render_tab1_content():
     # Кнопка для ручного обновления страницы
     if st.button("🔄 Обновить портфель"):
         pass
@@ -2591,6 +2602,12 @@ with tab1:
             st.info("Файл портфеля пуст.")
     except FileNotFoundError:
         st.info("Бот еще не совершил первую сделку.")
+
+if _frag_dec:
+    _render_tab1_content = _frag_dec(run_every="4s")(_render_tab1_content)
+
+with tab1:
+    _render_tab1_content()
 
 with tab2:
     st.subheader("🔥 Последние проанализированные токены (Alpha Scanner)")

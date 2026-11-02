@@ -46,8 +46,55 @@ class MatureExitManager:
         _ride = bool(getattr(config, 'RIDE_RUNNERS_ENABLED', True)) and (
             not _src or any(k in _src for k in ('GROK', 'JEV', 'JUP', 'RUNNER', 'VIP', 'XGB', 'RAY', 'PUMP', 'SCOUT', 'STREAM', 'FOMO', 'SMART'))
         )
+        max_pnl_pct = (position.max_price_usd - position.entry_price_usd) / position.entry_price_usd if position.entry_price_usd else 0.0
 
-        # Аварийный кэп ПЕРВЫМ: гэпы типа раг-дампов дева режем мгновенно на -18% (не даем уйти в -35%..-50%)
+        # =========================================================================
+        # 1. СТРАТЕГИЯ ХВАТАТЬ МАКСИМАЛЬНЫЙ ПЛЮС:
+        # ТРЕЙЛИНГ-СТОП И ПОЛ ПРИБЫЛИ ДЛЯ РАННЕРОВ И МУНБЭГОВ (ВЫХОД НА 1-М ТИКЕ!)
+        # =========================================================================
+        if max_pnl_pct >= 0.20 or getattr(position, "is_moonbag", False):
+            # А) Трейлинг отката от пика (Сужающийся трейлинг: 1-й же тик без задержек!)
+            if max_pnl_pct >= 0.40 or getattr(position, "is_moonbag", False):
+                if max_pnl_pct >= 2.50:
+                    _trail_dist = 0.12  # От +250%+: режем откат уже на 12% от макушки
+                elif max_pnl_pct >= 1.00:
+                    _trail_dist = 0.18  # От +100%..+250%: забираем максимум, откат 18% (пик +116% -> выход на +77%)
+                elif max_pnl_pct >= 0.50:
+                    _trail_dist = 0.20  # От +50%..+100%: откат 20%
+                else:
+                    _trail_dist = 0.22  # От +30%..+50%: откат 22%
+                
+                drop_from_max = (position.max_price_usd - current_price) / position.max_price_usd if position.max_price_usd > 0 else 0
+                if drop_from_max >= _trail_dist:
+                    return f"Mature Trailing RIDE (+{max_pnl_pct*100:.0f}% peak, drop {drop_from_max*100:.0f}%)"
+
+            # Б) Гарантированный пол прибыли (Profit Floor):
+            _floor_pnl = None
+            if max_pnl_pct >= 5.00:
+                _floor_pnl = round(max_pnl_pct * 0.70, 2)
+            elif max_pnl_pct >= 2.50:
+                _floor_pnl = round(max_pnl_pct * 0.60, 2)
+            elif max_pnl_pct >= 1.50:
+                _floor_pnl = 0.95
+            elif max_pnl_pct >= 1.00:
+                _floor_pnl = 0.55  # Пик +100%+ (TP2 взят!) -> минимум +55%
+            elif max_pnl_pct >= 0.70:
+                _floor_pnl = 0.35  # Пик +70%+ -> минимум +35%
+            elif max_pnl_pct >= 0.50:
+                _floor_pnl = 0.20  # Пик +50%+ -> минимум +20%
+            elif max_pnl_pct >= 0.30:
+                _floor_pnl = 0.08  # Пик +30%+ (TP1 взят!) -> минимум +8%
+            elif max_pnl_pct >= 0.20:
+                _floor_pnl = 0.025 # Пик +20%+ -> безубыток +2.5%
+
+            if _floor_pnl is not None and pnl_pct <= _floor_pnl:
+                if pnl_pct >= 0:
+                    return f"Mature Profit Floor (+{_floor_pnl*100:.0f}% locked after peak +{max_pnl_pct*100:.0f}%)"
+                return f"Crash Dump after peak (+{max_pnl_pct*100:.0f}% -> {pnl_pct*100:.0f}%)"
+
+        # =========================================================================
+        # 2. СТОПЫ И АВАРИЙНЫЕ КЭПЫ ДЛЯ МОНЕТ БЕЗ ПРИБЫЛИ (< +20%)
+        # =========================================================================
         _emerg_cap = float(getattr(config, "EMERGENCY_CAP_PCT", -0.18))
         if pnl_pct <= _emerg_cap:
             return f"Mature Emergency Cap ({pnl_pct*100:.0f}%)"
@@ -60,7 +107,6 @@ class MatureExitManager:
             return f"Mature Infant Dump ({pnl_pct*100:.0f}%)"
 
         # STALL TIMER (DEAD MOMENTUM EXIT — даём полную 5м свечу 330с на выход из консолидации!)
-        # Раньше 90-120с на -5% резало 43% позиций в гарантированный минус на обычном дыхании пула.
         _stall_sec = float(getattr(config, "STALL_TIMER_SEC", 330.0))
         _stall_loss = float(getattr(config, "STALL_MAX_LOSS_PCT", -0.08))
         if minutes_held >= (_stall_sec / 60.0) and max_pnl_pct < 0.08 and pnl_pct <= _stall_loss:
@@ -86,87 +132,6 @@ class MatureExitManager:
         # 1. ГАРАНТИРОВАННЫЙ НЕСНИЖАЕМЫЙ ПОРОГ ПРИБЫЛИ (PROFIT FLOOR LOCK — +EV АСИММЕТРИЯ)
         # НИКАКОГО удушения на +10%..+30% (кейсы ANSEM +13%->+20%, REGRETAMINE +17%->+27%, KIM, Chubby):
         # Безубыток (+3.5%) включается ТОЛЬКО после реального пробоя +32%, ступенчатый пол прибыли — от +50% пика!
-        max_pnl_pct = (position.max_price_usd - position.entry_price_usd) / position.entry_price_usd if position.entry_price_usd else 0.0
-        _floor_pnl = None
-        if _ride:
-            # RIDE: широкое дыхание для захвата 2x-10x движений (R:R > 3.5x)
-            if max_pnl_pct >= 5.00:       # +500%+: держим 65% прибыли
-                _floor_pnl = round(max_pnl_pct * 0.65, 2)
-            elif max_pnl_pct >= 2.50:     # +250%..+500%: 60%
-                _floor_pnl = round(max_pnl_pct * 0.60, 2)
-            elif max_pnl_pct >= 1.30:     # +130%..+250%: 50% (пик +150% -> пол +75%)
-                _floor_pnl = round(max_pnl_pct * 0.50, 2)
-            elif max_pnl_pct >= 0.80:     # +80%..+130%: держим минимум +38%
-                _floor_pnl = max(0.38, round(max_pnl_pct * 0.45, 2))
-            elif max_pnl_pct >= 0.50:     # +50%..+80%: держим минимум +20% на остаток
-                _floor_pnl = 0.20
-            elif max_pnl_pct >= 0.30:     # +30%..+50% (TP1 взят!): держим минимум +8% на остаток
-                _floor_pnl = 0.08
-            elif max_pnl_pct >= 0.20:     # Пробой +20%+: переводим стоп в безубыток +2.5%
-                _floor_pnl = 0.025
-        elif max_pnl_pct >= 5.00:       # Гипер-ракета (+500%+): держим 75% прибыли
-            _floor_pnl = round(max_pnl_pct * 0.75, 2)
-        elif max_pnl_pct >= 3.00:     # Мега-ракета (+300%..+500%): держим 70% прибыли
-            _floor_pnl = max(2.10, round(max_pnl_pct * 0.70, 2))
-        elif max_pnl_pct >= 2.00:     # Пик +200%+ (3x) -> гарантируем минимум +140%
-            _floor_pnl = 1.40
-        elif max_pnl_pct >= 1.50:     # Пик +150%+ (2.5x) -> гарантируем минимум +95%
-            _floor_pnl = 0.95
-        elif max_pnl_pct >= 1.00:     # Пик +100%+ (2x, TP2 взят!) -> гарантируем минимум +55%
-            _floor_pnl = 0.55
-        elif max_pnl_pct >= 0.70:     # Пик +70%+ -> гарантируем минимум +35%
-            _floor_pnl = 0.35
-        elif max_pnl_pct >= 0.50:     # Пик +50%+ -> гарантируем минимум +20%
-            _floor_pnl = 0.20
-        elif max_pnl_pct >= 0.30:     # Пик +30%+ (TP1 взят!) -> гарантируем минимум +8% на остаток
-            _floor_pnl = 0.08
-        elif max_pnl_pct >= 0.20:     # Пик +20%+ -> безубыток +2.5%
-            _floor_pnl = 0.025
-        if _floor_pnl is not None and pnl_pct <= _floor_pnl:
-            # 2-тиковое подтверждение пробоя пола (защита от 1-секундных проколов и теней свечей),
-            # мгновенный выход только при реальном обвале от высокого пика или уходе к 0%:
-            _fc = int(getattr(position, "floor_confirm_n", 0) or 0) + 1
-            position.floor_confirm_n = _fc
-            _drop_from_max = (position.max_price_usd - current_price) / position.max_price_usd if position.max_price_usd else 0
-            _fast_exit = (_drop_from_max >= 0.25 and max_pnl_pct >= 0.30) or pnl_pct <= 0.01
-            if _fc < 2 and not _fast_exit:
-                return None
-            if pnl_pct >= 0:
-                return f"Mature Profit Floor (+{_floor_pnl*100:.0f}% locked after peak +{max_pnl_pct*100:.0f}%)"
-            return f"Crash Dump after peak (+{max_pnl_pct*100:.0f}% -> {pnl_pct*100:.0f}%)"
-        else:
-            position.floor_confirm_n = 0
-
-        # 2. СУЖАЮЩИЙСЯ ПАРАБОЛИЧЕСКИЙ ТРЕЙЛИНГ-СТОП (Включается от +55% пика, давая ракетам дышать на откатах 22-26%!)
-        if hasattr(config, 'TRAILING_ACTIVATION_PCT'):
-            if _ride:
-                if max_pnl_pct >= 0.55:
-                    _trail_dist = 0.26 if max_pnl_pct < 1.00 else (0.22 if max_pnl_pct < 2.50 else 0.16)
-                    drop_from_max = (position.max_price_usd - current_price) / position.max_price_usd
-                    if drop_from_max >= _trail_dist:
-                        _tr_c = int(getattr(position, "trail_confirm_n", 0) or 0) + 1
-                        position.trail_confirm_n = _tr_c
-                        if _tr_c >= 2:
-                            return f"Mature Trailing RIDE (+{max_pnl_pct*100:.0f}% peak, drop {drop_from_max*100:.0f}%)"
-                        return None
-                    else:
-                        position.trail_confirm_n = 0
-            elif max_pnl_pct >= getattr(config, 'TRAILING_ACTIVATION_PCT', 0.40):
-                if max_pnl_pct >= 2.50:
-                    _trail_dist = 0.08  # На гипер-пиках (+250%+) режем откат уже на 8% от макушки!
-                elif max_pnl_pct >= 1.50:
-                    _trail_dist = 0.09  # На +150..+250% держим плотный стоп 9%
-                elif max_pnl_pct >= 0.70:
-                    _trail_dist = 0.11  # На +70..+150% стоп 11%
-                elif max_pnl_pct >= 0.40 or getattr(position, "is_moonbag", False):
-                    _trail_dist = float(getattr(config, "TRAILING_RUNNER_DISTANCE_PCT", 0.18))
-                else:
-                    _trail_dist = float(getattr(config, "TRAILING_DISTANCE_PCT", 0.20))
-
-                drop_from_max = (position.max_price_usd - current_price) / position.max_price_usd
-                if drop_from_max >= _trail_dist:
-                    return f"Mature Trailing (+{max_pnl_pct*100:.0f}% peak, drop {drop_from_max*100:.0f}%)"
-
         # Runner Stagnation / Inactive Pool (фиксация прибыли при затухании объёмов в пуле)
         _pt = getattr(position, 'peak_time', 0.0) or et
         if hasattr(_pt, 'timestamp'):
