@@ -1083,6 +1083,30 @@ async def scanner_loop(analyzer, tracker):
                                     print(f"🚫 Отказ (Exposure): занято ${_deployed:.0f} + ${position_size:.0f} > лимит ${_cap:.0f}.")
                                     continue
 
+                                # ПРАВКА 02.11.2026: сканер ROCKET-XGB в теневом режиме (0 побед из 6 по логу сделок).
+                                if not getattr(config, "SCANNER_ENTRIES_ENABLED", True):
+                                    try:
+                                        from shadow_tracker import shadow_tracker as _sh_sc
+                                        _pc_sh = pair_data.get("priceChange") or {}
+                                        _sh_sc.log_rejection(
+                                            mint=mint,
+                                            reason="scanner-shadow (entries disabled)",
+                                            score=float(getattr(analyzer, "last_score", 0.0)),
+                                            price=entry_price,
+                                            symbol=actual_symbol,
+                                            chain="solana",
+                                            m5_pct=float(_pc_sh.get("m5", 0) or 0),
+                                            rkt_score=float(getattr(analyzer, "last_score", 0.0)),
+                                            liquidity=liq_usd,
+                                            source="SCANNER_SHADOW:" + str(analyzer.get_signal(mint)),
+                                        )
+                                    except Exception:
+                                        pass
+                                    print(f"👻 [SCANNER-SHADOW] {actual_symbol} ({mint[:8]}): сигнал {analyzer.get_signal(mint)} записан в тень, вход отключён (SCANNER_ENTRIES_ENABLED=False).")
+                                    processed_mints[mint] = time.time()
+                                    await asyncio.sleep(1.0)
+                                    continue
+
                                 _pc = pair_data.get("priceChange") or {}
                                 _tx5 = (pair_data.get("txns") or {}).get("m5", {}) or {}
                                 analyzer.log_scan(actual_symbol, mint, "SCANNER", True,
