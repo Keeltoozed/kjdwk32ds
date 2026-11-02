@@ -98,10 +98,12 @@ class MatureExitManager:
                 _floor_pnl = round(max_pnl_pct * 0.50, 2)
             elif max_pnl_pct >= 0.80:     # +80%..+130%: держим минимум +38%
                 _floor_pnl = max(0.38, round(max_pnl_pct * 0.45, 2))
-            elif max_pnl_pct >= 0.50:     # +50%..+80% (TP1 уже взят!): держим минимум +20% на остаток
+            elif max_pnl_pct >= 0.50:     # +50%..+80%: держим минимум +20% на остаток
                 _floor_pnl = 0.20
-            elif max_pnl_pct >= 0.22 and minutes_held >= 1.5:  # Пробой +22%+: переводим стоп в честный безубыток +3.5%
-                _floor_pnl = 0.035
+            elif max_pnl_pct >= 0.30:     # +30%..+50% (TP1 взят!): держим минимум +8% на остаток
+                _floor_pnl = 0.08
+            elif max_pnl_pct >= 0.20:     # Пробой +20%+: переводим стоп в безубыток +2.5%
+                _floor_pnl = 0.025
         elif max_pnl_pct >= 5.00:       # Гипер-ракета (+500%+): держим 75% прибыли
             _floor_pnl = round(max_pnl_pct * 0.75, 2)
         elif max_pnl_pct >= 3.00:     # Мега-ракета (+300%..+500%): держим 70% прибыли
@@ -110,21 +112,23 @@ class MatureExitManager:
             _floor_pnl = 1.40
         elif max_pnl_pct >= 1.50:     # Пик +150%+ (2.5x) -> гарантируем минимум +95%
             _floor_pnl = 0.95
-        elif max_pnl_pct >= 1.00:     # Пик +100%+ (2x) -> гарантируем минимум +55%
+        elif max_pnl_pct >= 1.00:     # Пик +100%+ (2x, TP2 взят!) -> гарантируем минимум +55%
             _floor_pnl = 0.55
         elif max_pnl_pct >= 0.70:     # Пик +70%+ -> гарантируем минимум +35%
             _floor_pnl = 0.35
         elif max_pnl_pct >= 0.50:     # Пик +50%+ -> гарантируем минимум +20%
             _floor_pnl = 0.20
-        elif max_pnl_pct >= 0.22 and minutes_held >= 1.5:     # Пик +22%..+50%: безубыток +3.5%
-            _floor_pnl = 0.035
+        elif max_pnl_pct >= 0.30:     # Пик +30%+ (TP1 взят!) -> гарантируем минимум +8% на остаток
+            _floor_pnl = 0.08
+        elif max_pnl_pct >= 0.20:     # Пик +20%+ -> безубыток +2.5%
+            _floor_pnl = 0.025
         if _floor_pnl is not None and pnl_pct <= _floor_pnl:
             # 2-тиковое подтверждение пробоя пола (защита от 1-секундных проколов и теней свечей),
-            # мгновенный выход только при реальном обвале от высокого пика (>= +45% пик и откат >= 32%):
+            # мгновенный выход только при реальном обвале от высокого пика или уходе к 0%:
             _fc = int(getattr(position, "floor_confirm_n", 0) or 0) + 1
             position.floor_confirm_n = _fc
             _drop_from_max = (position.max_price_usd - current_price) / position.max_price_usd if position.max_price_usd else 0
-            _fast_exit = (_drop_from_max >= 0.32 and max_pnl_pct >= 0.45) or pnl_pct <= -0.02
+            _fast_exit = (_drop_from_max >= 0.25 and max_pnl_pct >= 0.30) or pnl_pct <= 0.01
             if _fc < 2 and not _fast_exit:
                 return None
             if pnl_pct >= 0:

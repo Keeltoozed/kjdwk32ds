@@ -416,16 +416,19 @@ async def position_manager_loop(analyzer, tracker):
                     _floor_pnl = round(max_pnl_pct * 0.62, 2)
                 elif max_pnl_pct >= 1.60:     # Пик +160%+ -> 55%
                     _floor_pnl = round(max_pnl_pct * 0.55, 2)
-                elif max_pnl_pct >= 1.00:     # Пик +100%+ (2x) -> 48%
-                    _floor_pnl = round(max_pnl_pct * 0.48, 2)
+                elif max_pnl_pct >= 1.00:     # Пик +100%+ (2x, TP2 взят!) -> 50%
+                    _floor_pnl = round(max_pnl_pct * 0.50, 2)
                 elif max_pnl_pct >= 0.65:     # Пик +65%+ -> гарантируем +28%
                     _floor_pnl = 0.28
-                elif max_pnl_pct >= 0.40 and minutes_held >= 4.0:  # Пик +40%+ -> мягкий безубыток +5%
-                    _floor_pnl = 0.05
+                elif max_pnl_pct >= 0.30:     # Пик +30%+ (TP1 взят!) -> гарантируем +8% на остаток
+                    _floor_pnl = 0.08
+                elif max_pnl_pct >= 0.20:     # Пик +20%+ -> мягкий безубыток +2.5%
+                    _floor_pnl = 0.025
                 if _floor_pnl is not None and pnl_pct <= _floor_pnl:
                     _fc_s = int(getattr(position, "floor_confirm_n", 0) or 0) + 1
                     position.floor_confirm_n = _fc_s
-                    if _fc_s < 2:
+                    _fast_dump = pnl_pct <= 0.01 or (position.max_price_usd > 0 and (position.max_price_usd - current_price) / position.max_price_usd >= 0.25)
+                    if _fc_s < 2 and not _fast_dump:
                         continue
                     if pnl_pct >= 0:
                         tracker.close_position(mint, current_price, f"Profit Floor (+{_floor_pnl*100:.0f}% locked after peak +{max_pnl_pct*100:.0f}%)")
@@ -470,8 +473,8 @@ async def position_manager_loop(analyzer, tracker):
                 if minutes_held >= 8.0 and max_pnl_pct >= 0.25 and pnl_pct <= -0.10:
                     tracker.close_position(mint, current_price, f"Soft Guard (был пик +{max_pnl_pct*100:.0f}%, слив до {pnl_pct*100:.1f}%)")
                     continue
-                _be_sol = float(getattr(config, "BREAKEVEN_PCT", 0.32))
-                if minutes_held >= 2.0 and max_pnl_pct >= _be_sol and pnl_pct <= 0.025:
+                _be_sol = float(getattr(config, "BREAKEVEN_PCT", 0.20))
+                if (minutes_held >= 1.0 or max_pnl_pct >= 0.30) and max_pnl_pct >= _be_sol and pnl_pct <= 0.025:
                     tracker.close_position(mint, current_price, f"Breakeven (был пик +{max_pnl_pct*100:.0f}%)")
                     continue
 
@@ -1081,30 +1084,6 @@ async def scanner_loop(analyzer, tracker):
                                 _cap = tracker.get_total_capital() * getattr(config, "MAX_DEPLOYED_PCT", 0.60)
                                 if _deployed + position_size > _cap:
                                     print(f"🚫 Отказ (Exposure): занято ${_deployed:.0f} + ${position_size:.0f} > лимит ${_cap:.0f}.")
-                                    continue
-
-                                # ПРАВКА 02.11.2026: сканер ROCKET-XGB в теневом режиме (0 побед из 6 по логу сделок).
-                                if not getattr(config, "SCANNER_ENTRIES_ENABLED", True):
-                                    try:
-                                        from shadow_tracker import shadow_tracker as _sh_sc
-                                        _pc_sh = pair_data.get("priceChange") or {}
-                                        _sh_sc.log_rejection(
-                                            mint=mint,
-                                            reason="scanner-shadow (entries disabled)",
-                                            score=float(getattr(analyzer, "last_score", 0.0)),
-                                            price=entry_price,
-                                            symbol=actual_symbol,
-                                            chain="solana",
-                                            m5_pct=float(_pc_sh.get("m5", 0) or 0),
-                                            rkt_score=float(getattr(analyzer, "last_score", 0.0)),
-                                            liquidity=liq_usd,
-                                            source="SCANNER_SHADOW:" + str(analyzer.get_signal(mint)),
-                                        )
-                                    except Exception:
-                                        pass
-                                    print(f"👻 [SCANNER-SHADOW] {actual_symbol} ({mint[:8]}): сигнал {analyzer.get_signal(mint)} записан в тень, вход отключён (SCANNER_ENTRIES_ENABLED=False).")
-                                    processed_mints[mint] = time.time()
-                                    await asyncio.sleep(1.0)
                                     continue
 
                                 _pc = pair_data.get("priceChange") or {}

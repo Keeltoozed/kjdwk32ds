@@ -1404,11 +1404,15 @@ class Analyzer:
 
                     _rc_raw_score = float(rc_data.get("score") or 0.0)
                     # Для pump.fun бондинг-кривой и PumpSwap:
-                    # Исключаем не-контрактные эвристики, которые искусственно накручивают score до 117,000 (история предыдущих запусков создателя, имя мема-копиката, ликва кривой, концентрация холдеров из-за AMM)
+                    # Исключаем не-контрактные эвристики, которые искусственно накручивают score до 11,501-35,000 (незаблокированный LP кривой 11,000, история создателя, имя мема-копиката, концентрация холдеров AMM пула)
                     _rc_penalty_to_ignore = sum(
                         float(rk.get("score", 0) or 0)
                         for rk in (rc_data.get("risks") or [])
-                        if any(k in str(rk.get("name", "")).lower() for k in ("low liquidity", "creator history", "copycat", "single holder", "holder concentration", "concentration", "high holder", "top 10"))
+                        if any(k in str(rk.get("name", "")).lower() for k in (
+                            "low liquidity", "creator history", "copycat", "single holder",
+                            "holder concentration", "concentration", "high holder", "top 10",
+                            "unlocked", "lp provider", "high ownership"
+                        ))
                     ) if _is_pump_flag else sum(
                         float(rk.get("score", 0) or 0)
                         for rk in (rc_data.get("risks") or [])
