@@ -755,16 +755,19 @@ class GrokJevEngine:
         # 1. Запрет покупать вертикальную палку на гипер-пике FOMO (но пропускаем органический пробой с объёмом!):
         _h1 = float(pc.get("h1", 0) or 0)
         _ca = pair_data.get("pairCreatedAt") or 0
+        _base_addr = str(((pair_data.get("baseToken") or {}).get("address")) or "")
+        _dex_id = str(pair_data.get("dexId", "")).lower()
+        _is_pump_pair = _base_addr.endswith("pump") or _dex_id in ("pump", "pumpfun")
         if _ca:
             _age_m = round((time.time() * 1000 - _ca) / 60000.0, 1)
         else:
             _bt_age = None
             try:
                 from birth_tracker import birth_tracker as _bt_check
-                _bt_age = _bt_check.get_age(mint)
+                _bt_age = _bt_check.get_age(_base_addr)
             except Exception:
                 pass
-            _age_m = float(_bt_age) if _bt_age is not None else (0.1 if is_pump else 999.0)
+            _age_m = float(_bt_age) if _bt_age is not None else (0.1 if _is_pump_pair else 999.0)
         _liq_usd = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
         _base_addr = str(((pair_data.get("baseToken") or {}).get("address")) or "")
         _dex_id = str(pair_data.get("dexId", "")).lower()
@@ -1241,14 +1244,14 @@ class GrokJevEngine:
         raw_liq = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
         fdv = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
         dex_id = str(pair_data.get("dexId", "")).lower()
-        is_pump = dex_id in ("pump", "pumpfun", "moonshot") or mint.endswith("moon")
+        is_pump = dex_id in ("pump", "pumpfun", "moonshot") or address.endswith("moon") or (dex_id in ("pump", "pumpfun") and address.endswith("pump"))
         if is_pump:
             if not getattr(_c, "ALLOW_UNGRADUATED_PUMPFUN", False):
                 return False, "ungraduated-pump-curve (ждём миграции на DEX с сожжённым LP)", _h_stats
             _min_c_mc = float(getattr(_c, "MIN_PUMP_CURVE_MCAP_USD", 12000.0))
             if fdv > 0 and fdv < _min_c_mc:
                 return False, f"pump-curve-flash-rug (FDV ${fdv:,.0f} < ${_min_c_mc:,.0f})", _h_stats
-        eff_liq = max(raw_liq, fdv * 0.40) if is_pump else raw_liq
+        eff_liq = max(raw_liq, fdv * 0.40) if (is_pump and dex_id in ("pump", "pumpfun")) else raw_liq
 
         # Токены на AMM (PumpSwap / Raydium / Meteora) без соцсетей пускаем ТОЛЬКО при наличии подтвержденного органического потока
         # (в первые минуты миграции DexScreener часто еще не успел подтянуть Twitter/TG, кейсы LAUNCH +793%, JOCKEY +274%, MBAPPE +166%, SPERM +112%)
@@ -1302,30 +1305,31 @@ class GrokJevEngine:
                     if freeze_auth and freeze_auth not in SAFE_AUTHORITIES:
                         return False, f"rugcheck: freeze authority active ({freeze_auth[:8]})", _h_stats
 
-                    # Очищенный score RugCheck: вычитаем не-контрактные эвристики
-                    # (история создателя, копикат-имя, незаблокированный LP пула, концентрация холдеров AMM), т.к. минт и фриз уже проверены
+                    # Очищенный score RugCheck: вычитаем ТОЛЬКО безвредный шум:
+                    # низкая ликвидность для молодых пулов и copycat для мемов.
+                    # НИ В КОЕМ СЛУЧАЕ НЕ ИСКЛЮЧАЕМ Single holder, High ownership, Top 10 concentration!
                     raw_score = float(rc_data.get("score") or 0.0)
                     penalty_to_ignore = sum(
                         float(rk.get("score", 0) or 0)
                         for rk in (rc_data.get("risks") or [])
                         if any(k in str(rk.get("name", "")).lower() for k in (
-                            "low liquidity", "creator history", "copycat", "single holder",
-                            "holder concentration", "concentration", "high holder", "top 10",
-                            "unlocked", "lp provider", "high ownership"
+                            "low liquidity", "creator history", "copycat", "symbol mimic", "lp provider"
                         ))
                     )
                     clean_score = max(0.0, raw_score - penalty_to_ignore)
                     if clean_score >= 2000:
                         return False, f"rugcheck: high risk score {clean_score:.0f} >= 2000", _h_stats
 
-                    # Проверка критических рисков (реальные опасности смарт-контракта)
+                    # Проверка критических рисков (реальные опасности смарт-контракта и концентрации)
                     for rk in (rc_data.get("risks") or []):
                         rk_name = str(rk.get("name") or "").lower()
                         rk_lvl = str(rk.get("level") or "").lower()
-                        if any(k in rk_name for k in ("low liquidity", "creator history", "copycat", "unlocked")):
+                        if any(k in rk_name for k in ("low liquidity", "creator history", "copycat", "symbol mimic", "lp provider")):
                             continue
                         if rk_lvl == "danger" and "creator history" not in rk_name:
                             return False, f"rugcheck: critical danger risk '{rk.get('name')}'", _h_stats
+                        if any(k in rk_name for k in ("single holder", "high ownership", "large amount of lp unlocked")):
+                            return False, f"rugcheck: critical hazard '{rk.get('name')}'", _h_stats
 
                     # Проверка пулов и блокировки LP для не-pump токенов
                     target_pair = str(pair_data.get("pairAddress") or "").strip()
@@ -1343,9 +1347,12 @@ class GrokJevEngine:
                                 if (target_pair and mkt_pubkey == target_pair) or mkt_quote_usd >= 2000:
                                     if lp_unlocked > 0 and lp_locked_pct < 80.0:
                                         return False, f"rugcheck: LP not locked ({lp_locked_pct:.1f}%)", _h_stats
-                    is_pump_sol = address.endswith("pump") or is_pump or str(pair_data.get("dexId", "")).lower() in ("pump", "pumpfun", "pumpswap")
-                    if not is_pump_sol and not has_verified_locked_lp:
-                        return False, "rugcheck: non-pump token without verified locked LP", _h_stats
+
+                    # Для ВСЕХ кастомных не-pump токенов (не оканчивающихся на 'pump'):
+                    # на ЛЮБОМ DEX (PumpSwap, Raydium, Meteora) требуем подтвержденный заблокированный LP >= 80%!
+                    is_canonical_pump = address.endswith("pump")
+                    if not is_canonical_pump and not has_verified_locked_lp:
+                        return False, "rugcheck: non-pump token without verified locked LP (lock < 80%)", _h_stats
 
                     # Проверка держателей и дева (Holders & Sybil analysis)
                     holders = rc_data.get("topHolders", []) or []
@@ -1394,8 +1401,6 @@ class GrokJevEngine:
                         if owner in pool_accounts or addr in pool_accounts or owner in DEX_POOL_AUTHORITIES or addr in DEX_POOL_AUTHORITIES:
                             continue
                         if any(w in owner.lower() for w in pool_keywords) or any(w in addr.lower() for w in pool_keywords):
-                            continue
-                        if pct > 80.0:
                             continue
                         non_curve.append((amt, pct, owner))
 
@@ -1451,7 +1456,11 @@ class GrokJevEngine:
                     if not _l9_ok:
                         return False, f"auditor-layer9/10 {_l9_why}", _h_stats
                 else:
-                    # Фоллбэк: RugCheck API вернул 400/404/429/500 -> проверяем GoPlus holder stats + Layer 8/9/10
+                    # Для кастомных не-pump токенов без отчёта RugCheck невозможно верифицировать блокировку LP — блок!
+                    if not address.endswith("pump"):
+                        return False, "rugcheck: non-pump token unindexed (cannot verify LP lock)", _h_stats
+
+                    # Фоллбэк: RugCheck API вернул 400/404/429/500 для pump-токена -> проверяем GoPlus holder stats + Layer 8/9/10
                     (_l8_fb_ok, _l8_fb_why), (_l9_fb_ok, _l9_fb_why) = await asyncio.gather(
                         _gp.check_spl_holder_delegations(address),
                         _gp.check_staircase_and_sybil_farm(address, pair_address=str(pair_data.get("pairAddress") or "")),
@@ -1471,13 +1480,17 @@ class GrokJevEngine:
                         max_top10_gp = 35.0 if is_pump else float(getattr(_c, "AUDITOR_MAX_TOP10_PCT", 30.0))
                         if _h_stats["top10_pct"] > max_top10_gp:
                             return False, f"top10 concentration (GoPlus) {_h_stats['top10_pct']:.1f}% > {max_top10_gp:.0f}%", _h_stats
-                    elif is_pump or address.endswith("pump") or str(pair_data.get("dexId", "")).lower() in ("pump", "pumpfun", "pumpswap"):
+                    elif address.endswith("pump"):
                         _h_stats["top10_pct"] = 15.0
                         _h_stats["dev_pct"] = 2.0
                         _h_stats["top1_pct"] = 2.0
+                    else:
+                        return False, "auditor: cannot verify holders on custom token", _h_stats
 
             except Exception as e:
                 # Фоллбэк: если RugCheck недоступен, проверяем GoPlus holder stats
+                if not address.endswith("pump"):
+                    return False, f"rugcheck-exception ({e}) on custom token", _h_stats
                 _h_raw = _gp.get_solana_holder_stats(address)
                 if _h_raw and _h_raw.get("has_data"):
                     _h_stats["top10_pct"] = float(_h_raw.get("top_10_pct", 0.0) or 0.0)
@@ -1487,7 +1500,7 @@ class GrokJevEngine:
                         return False, f"dev loaded (GoPlus) {_h_stats['dev_pct']:.1f}% > 4.0% (dump risk)", _h_stats
                     if _h_stats["top10_pct"] > 35.0:
                         return False, f"top10 concentration (GoPlus) {_h_stats['top10_pct']:.1f}% > 35%", _h_stats
-                elif is_pump or address.endswith("pump") or str(pair_data.get("dexId", "")).lower() in ("pump", "pumpfun", "pumpswap"):
+                elif address.endswith("pump"):
                     _h_stats["top10_pct"] = 15.0
                     _h_stats["dev_pct"] = 2.0
                     _h_stats["top1_pct"] = 2.0

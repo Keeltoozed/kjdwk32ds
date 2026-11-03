@@ -1341,7 +1341,7 @@ class Analyzer:
             self.rocket_scores[mint] = conf
 
             dex_id_low = str(pair_data.get("dexId", "")).lower()
-            is_pump_curve = str(mint).endswith("pump") or dex_id_low in ("pump", "pumpfun", "pumpswap")
+            is_pump_curve = dex_id_low in ("pump", "pumpfun")
             raw_liq = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
             fdv_val = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
             curve_liq = fdv_val * 0.35 if fdv_val > 0 else 0.0
@@ -1976,7 +1976,7 @@ class Analyzer:
         has_socials = bool(has_twitter or has_tg or has_website)
         
         _socials_unknown = bool(pair_data.get("_socials_unknown", False))
-        _is_pump_mint = mint.endswith("pump") or str(pair_data.get("dexId", "")).lower() in ("pump", "pumpfun", "pumpswap")
+        _is_pump_mint = mint.endswith("pump") or str(pair_data.get("dexId", "")).lower() in ("pump", "pumpfun")
         # Анонимные токены вообще без соцсетей при ликвидности < $35k — это бандлер-фермы, ЕСЛИ это не pump.fun и нет органического потока!
         if not _socials_unknown and not has_socials and liquidity < 35000 and not _lottery and not _is_pump_mint and not _is_organic_leader:
             return self._deny(mint, "no-socials-anon-rug", f"🚫 [NO-SOCIALS] У {symbol} ({mint[:8]}) 0 соцсетей/сайтов (Twitter/TG/Web) при ликвидности ${liquidity:,.0f} (<$35k) — анонимный дев-бандлер.")
