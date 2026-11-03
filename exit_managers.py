@@ -53,31 +53,24 @@ class MatureExitManager:
         # ТРЕЙЛИНГ-СТОП И ПОЛ ПРИБЫЛИ ДЛЯ РАННЕРОВ И МУНБЭГОВ (ВЫХОД НА 1-М ТИКЕ!)
         # =========================================================================
         _is_mb = getattr(position, "is_moonbag", False)
-        if max_pnl_pct >= 0.18 or _is_mb:
+        _is_runner = _is_mb or max_pnl_pct >= 0.25
+        if max_pnl_pct >= 0.18 or _is_runner:
             # А) Трейлинг отката от пика
-            if max_pnl_pct >= 0.30 or _is_mb:
-                if _is_mb:
-                    # ДЛЯ МУНБЭГА (дом-деньги, TP1 уже взят в плюс):
-                    # Мем-ракеты Solana (как ANONVOYAGE 17x) на пути откатывают на 20-35%.
-                    # Трейлинг 30-38% даёт пережить коррекцию и доехать до 5x-20x!
+            if max_pnl_pct >= 0.30 or _is_runner:
+                if _is_runner:
+                    # ДЛЯ РАННЕРОВ И МУНБЭГОВ:
+                    # Мем-ракеты Solana (как 2500 +235%, ANONVOYAGE 17x) на пути откатывают на 20-35%.
+                    # Трейлинг 32-38% даёт пережить коррекцию и доехать до 5x-20x!
                     if max_pnl_pct >= 5.00:
                         _trail_dist = 0.22  # От +500%+: откат 22% от макушки
                     elif max_pnl_pct >= 2.50:
                         _trail_dist = 0.28  # От +250%+: откат 28%
                     elif max_pnl_pct >= 1.00:
-                        _trail_dist = 0.35  # От +100%..+250%: откат 35% (не выбиваем на 18% как ANONVOYAGE!)
+                        _trail_dist = 0.35  # От +100%..+250%: откат 35%
                     else:
                         _trail_dist = 0.38  # До +100%: откат 38%
                 else:
-                    # Для полной позиции до первого тейка:
-                    if max_pnl_pct >= 2.50:
-                        _trail_dist = 0.18
-                    elif max_pnl_pct >= 1.00:
-                        _trail_dist = 0.24  # Было 0.15 — душило 100%+ монеты на первой минутной свече
-                    elif max_pnl_pct >= 0.50:
-                        _trail_dist = 0.25  # Было 0.18
-                    else:
-                        _trail_dist = 0.22  # От +30%..+50%: откат 22%
+                    _trail_dist = 0.25
                 
                 drop_from_max = (position.max_price_usd - current_price) / position.max_price_usd if position.max_price_usd > 0 else 0
                 if drop_from_max >= _trail_dist:
@@ -85,8 +78,7 @@ class MatureExitManager:
 
             # Б) Гарантированный несгораемый пол прибыли (Dynamic Ratchet Profit Floor):
             _floor_pnl = None
-            if _is_mb:
-                # ДЛЯ МУНБЭГА: депозит уже возвращен на TP1 (+30%)!
+            if _is_runner:
                 # Даём максимальный простор для разгона в 5x-20x, защищая только гарантированный плюс:
                 if max_pnl_pct >= 5.00:
                     _floor_pnl = round(max_pnl_pct * 0.50, 2) # Пик +500%+ -> держим +250%+
@@ -95,30 +87,13 @@ class MatureExitManager:
                 elif max_pnl_pct >= 2.00:
                     _floor_pnl = 0.60                         # Пик +200%+ -> держим +60%
                 elif max_pnl_pct >= 1.00:
-                    _floor_pnl = 0.20                         # Пик +100%+ (ANONVOYAGE) -> держим +20%, давая откат до 40% от пика
+                    _floor_pnl = 0.25                         # Пик +100%+ (ANONVOYAGE) -> держим +25%
                 elif max_pnl_pct >= 0.50:
-                    _floor_pnl = 0.10                         # Пик +50%+ -> держим +10%
+                    _floor_pnl = 0.10                         # Пик +50%+ (NALA) -> держим +10% (не выбиваем на +30%!)
                 else:
-                    _floor_pnl = 0.03                         # Гарантированный безубыток +3%
+                    _floor_pnl = 0.03                         # Гарантированный безубыток +3% (кейс 2500: переживаем откат с +39% до +8% и летим на +235%!)
             else:
-                if max_pnl_pct >= 5.00:
-                    _floor_pnl = round(max_pnl_pct * 0.70, 2)
-                elif max_pnl_pct >= 3.00:
-                    _floor_pnl = round(max_pnl_pct * 0.65, 2)
-                elif max_pnl_pct >= 2.00:
-                    _floor_pnl = 1.20
-                elif max_pnl_pct >= 1.50:
-                    _floor_pnl = 0.85
-                elif max_pnl_pct >= 1.00:
-                    _floor_pnl = 0.45
-                elif max_pnl_pct >= 0.70:
-                    _floor_pnl = 0.30
-                elif max_pnl_pct >= 0.50:
-                    _floor_pnl = 0.18
-                elif max_pnl_pct >= 0.30:
-                    _floor_pnl = 0.08
-                elif max_pnl_pct >= 0.18:
-                    _floor_pnl = 0.02
+                _floor_pnl = 0.02                             # Для мелких стартовых всплесков (+18..+24%) — безубыток +2%
 
             if _floor_pnl is not None and pnl_pct <= _floor_pnl:
                 if pnl_pct >= 0:
@@ -128,14 +103,13 @@ class MatureExitManager:
         # =========================================================================
         # 2. СТОПЫ И АВАРИЙНЫЕ КЭПЫ ДЛЯ МОНЕТ БЕЗ ПРИБЫЛИ (< +20%)
         # =========================================================================
-        _emerg_cap = float(getattr(config, "EMERGENCY_CAP_PCT", -0.18))
+        _emerg_cap = float(getattr(config, "EMERGENCY_CAP_PCT", -0.32))
         if pnl_pct <= _emerg_cap:
             return f"Mature Emergency Cap ({pnl_pct*100:.0f}%)"
 
-        # Infant guard: дамп в первые минуты = дев сливает, не шум.
-        # Режем сброс дева (-15%+), спасая депозит от инста-рага.
+        # Infant guard: дамп в первые минуты = настоящий дев-раг (-28%+), а не нормальный спред входа (-15%..-20%).
         _inf_win = float(getattr(config, "INFANT_WINDOW_MIN", 2.0))
-        _inf_pct = float(getattr(config, "INFANT_DUMP_PCT", -0.15))
+        _inf_pct = float(getattr(config, "INFANT_DUMP_PCT", -0.28))
         if minutes_held < _inf_win and pnl_pct <= _inf_pct:
             return f"Mature Infant Dump ({pnl_pct*100:.0f}%)"
 

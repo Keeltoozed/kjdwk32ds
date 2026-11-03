@@ -239,8 +239,8 @@ async def position_manager_loop(analyzer, tracker):
                 # Infant Dump (как в EVM): слив в первые минуты = дев, не шум.
                 # Раги идут -40..-96%, шум импульса -15..-18% переживаем.
                 try:
-                    _inf_w = float(getattr(config, "INFANT_WINDOW_MIN", 3.5))
-                    _inf_p = float(getattr(config, "INFANT_DUMP_PCT", -0.18))
+                    _inf_w = float(getattr(config, "INFANT_WINDOW_MIN", 2.0))
+                    _inf_p = float(getattr(config, "INFANT_DUMP_PCT", -0.28))
                     if minutes_held < _inf_w and pnl_pct <= _inf_p:
                         tracker.close_position(mint, current_price, f"Infant Dump ({pnl_pct*100:.0f}%)")
                         continue
