@@ -1443,16 +1443,30 @@ class Analyzer:
                         return self._deny(mint, "freeze-authority-scam", f"🚫 [АНТИСКАМ] Freeze Authority у ДЕВ-кошелька {freeze_authority[:8]} у {mint[:8]} → СКАМ")
 
                     _rc_raw_score = float(rc_data.get("score") or 0.0)
-                    # Исключаем не-контрактные эвристики, которые искусственно накручивают score до 11,501-35,000 (незаблокированный LP кривой/пула 11,000, история создателя, имя мема-копиката, концентрация холдеров AMM пула)
-                    _rc_penalty_to_ignore = sum(
-                        float(rk.get("score", 0) or 0)
-                        for rk in (rc_data.get("risks") or [])
-                        if any(k in str(rk.get("name", "")).lower() for k in (
-                            "low liquidity", "creator history", "copycat", "single holder",
-                            "holder concentration", "concentration", "high holder", "top 10",
-                            "unlocked", "lp provider", "high ownership"
-                        ))
-                    )
+                    _is_pump_token = str(mint).endswith("pump")
+
+                    # КРИТИЧЕСКИЙ АУДИТ: Для НЕ-pump токенов (Meteora, Raydium direct)
+                    # незаблокированный LP = 100% рагпулл (создатель забирает весь SOL, кейс PEPEBOT 160 SOL pull)!
+                    if not _is_pump_token:
+                        for rk in (rc_data.get("risks") or []):
+                            r_name = str(rk.get("name", "")).lower()
+                            if any(k in r_name for k in ("unlocked", "lp unlocked", "large amount of lp unlocked", "unburned")):
+                                return self._deny(mint, "unlocked-lp-rug", f"🚫 [LP-RUG RISK] {symbol} ({mint[:8]}): незаблокированный LP на {pair_data.get('dexId', 'DEX')} — дев может выдернуть весь SOL (кейс PEPEBOT 160 SOL pull)!")
+                            if any(k in r_name for k in ("single holder", "high ownership")) and float(rk.get("score", 0) or 0) >= 3000:
+                                return self._deny(mint, "single-holder-dump", f"🚫 [HOLDER-RUG] {symbol} ({mint[:8]}): критическая концентрация у 1 держателя ({rk.get('description', '')}) — риск дампа 99%!")
+
+                    # Для pump.fun токенов отсеиваем только ложные эвристики (LP кривой/PumpSwap технически считается unlocked в RugCheck)
+                    _rc_penalty_to_ignore = 0.0
+                    for rk in (rc_data.get("risks") or []):
+                        r_name = str(rk.get("name", "")).lower()
+                        r_score = float(rk.get("score", 0) or 0)
+                        if _is_pump_token and any(k in r_name for k in ("unlocked", "lp unburned", "unburned", "lp provider")):
+                            _rc_penalty_to_ignore += r_score
+                        elif any(k in r_name for k in ("creator history", "copycat", "symbol mimic")):
+                            _rc_penalty_to_ignore += r_score
+                        elif "low liquidity" in r_name and r_score <= 3500:
+                            _rc_penalty_to_ignore += r_score
+
                     _rc_score = max(0.0, _rc_raw_score - _rc_penalty_to_ignore)
                     if _rc_score >= 2000:
                         return self._deny(mint, f"rugcheck-score {_rc_score:.0f}", f"🚫 [АНТИСКАМ] RugCheck Score {_rc_score:.0f} >= 2000 у {mint[:8]} → СКАМ")
