@@ -83,10 +83,17 @@ async def position_security_auditor_loop(analyzer, tracker):
                         import market_data as _md
                         _td_sol = await asyncio.wait_for(_md.get_token_data(mint, max_cache_age=10.0), timeout=2.0)
                         if _td_sol:
-                            _sol_liq = float(((_td_sol.get("liquidity") or {}).get("usd", 0) or 0))
-                            if minutes_held >= 1.0 and 0 < _sol_liq < 800:
-                                print(f"🚨 [SOL-DEAD-POOL] {position.symbol} ({mint[:8]}): ликвидность ${_sol_liq:.0f} < $800 — пул высушен/умер, списание в 0.0$ (-100%).")
-                                tracker.close_position(mint, 0.0, f"SOL Liquidity Drained (${_sol_liq:.0f} liq, pool dead)")
+                            _liq_obj = _td_sol.get("liquidity") or {}
+                            _has_liq_data = bool(_liq_obj and ("usd" in _liq_obj or "quote" in _liq_obj))
+                            _sol_liq = float((_liq_obj.get("usd", 0) or 0))
+                            _quote_liq = float((_liq_obj.get("quote", 0) or 0))
+                            _q_sym = str(((_td_sol.get("quoteToken") or {}).get("symbol") or "")).upper()
+                            _quote_drained = (_q_sym in ("SOL", "WSOL") and _quote_liq < 2.0)
+                            _usd_drained = (_sol_liq < 800)
+                            if _has_liq_data and minutes_held >= 1.0 and (_usd_drained or _quote_drained):
+                                _drain_msg = f"{_quote_liq:.4f} SOL" if _quote_drained else f"${_sol_liq:.0f} liq"
+                                print(f"🚨 [SOL-DEAD-POOL] {position.symbol} ({mint[:8]}): пул высушен ({_drain_msg}) — списание в 0.0$ (-100%).")
+                                tracker.close_position(mint, 0.0, f"SOL Liquidity Drained ({_drain_msg}, pool dead)")
                                 continue
                     except Exception:
                         pass
@@ -202,10 +209,14 @@ async def position_manager_loop(analyzer, tracker):
                     continue
                 position.first_zero_ts = 0.0
                     
-                # Фантом цены (смена источника DS->node, пыль с liq 0): один тик
-                # +5000% — не пик, а битые данные. Пик не обновляем, трек не ломаем.
+                # Фантом цены (смена источника DS->node, пыль с liq 0, сбой децималов): один тик
+                # +5000% — не реальный рост, а битые данные котировок. Пик не обновляем, трек не ломаем.
                 if position.entry_price_usd > 0 and current_price / position.entry_price_usd > 50:
-                    print(f"⚠️ Phantom price {mint[:8]}: x{current_price/position.entry_price_usd:.0f} за тик — игнор.")
+                    _cur_t = time.time()
+                    _last_phantom_log = getattr(position, "_last_phantom_log", 0.0)
+                    if (_cur_t - _last_phantom_log) >= 30.0:
+                        position._last_phantom_log = _cur_t
+                        print(f"⚠️ Phantom price {mint[:8]}: x{current_price/position.entry_price_usd:.0f} за тик — аномалия отфильтрована (игнор).")
                     continue
                 if current_price > position.max_price_usd:
                     position.max_price_usd = current_price
@@ -1801,7 +1812,7 @@ async def _evm_track_once(tracker, chain: str, tag: str, emoji: str):
                         pass
                 pos.price_checked_at = _t.time()
                 if reason:
-                    _exit_px = 0.0 if any(k in reason.upper() for k in ("HONEYPOT", "RUG", "SCAM", "CANNOT SELL", "UNSELLABLE", "NO LIQUIDITY")) else cur
+                    _exit_px = 0.0 if any(k in reason.upper() for k in ("HONEYPOT", "RUG", "SCAM", "CANNOT SELL", "UNSELLABLE", "NO LIQUIDITY", "DRAIN", "DEAD", "ZERO-RUG", "PULL")) else cur
                     tracker.close_position(mint, _exit_px, reason)
             except Exception as _e:
                 # Одна битая позиция не должна ронять весь трек

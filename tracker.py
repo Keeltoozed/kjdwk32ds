@@ -635,9 +635,12 @@ class PaperTracker:
             except Exception:
                 exit_price = 0.0
             
-            # 1. Жесткий скам / Honeypot / Rugpull: честное списание по 0.0 (-100% реальный исход)
+            # 1. Жесткий скам / Honeypot / Rugpull / Drained Pool: честное списание по 0.0 (-100% реальный исход)
             _r_up = str(reason or "").upper()
-            _is_hard_scam = any(k in _r_up for k in ("HONEYPOT", "RUG", "SCAM", "CANNOT SELL", "UNSELLABLE", "NO LIQUIDITY"))
+            _is_hard_scam = any(k in _r_up for k in (
+                "HONEYPOT", "RUG", "SCAM", "CANNOT SELL", "UNSELLABLE", 
+                "NO LIQUIDITY", "DRAIN", "DEAD", "ZERO-RUG", "PULL"
+            ))
             if _is_hard_scam:
                 exit_price = 0.0
             elif not (exit_price > 0):
