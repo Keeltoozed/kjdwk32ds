@@ -62,15 +62,17 @@ class MatureExitManager:
                     # Мем-ракеты Solana (как 2500 +235%, ANONVOYAGE 17x) на пути откатывают на 20-35%.
                     # Трейлинг 32-38% даёт пережить коррекцию и доехать до 5x-20x!
                     if max_pnl_pct >= 5.00:
-                        _trail_dist = 0.22  # От +500%+: откат 22% от макушки
+                        _trail_dist = 0.20  # От +500%+: откат 20% от макушки
                     elif max_pnl_pct >= 2.50:
-                        _trail_dist = 0.28  # От +250%+: откат 28%
+                        _trail_dist = 0.22  # От +250%+: откат 22%
                     elif max_pnl_pct >= 1.00:
-                        _trail_dist = 0.35  # От +100%..+250%: откат 35%
+                        _trail_dist = 0.25  # От +100%..+250%: откат 25% (не отдаем 35% обратно!)
+                    elif max_pnl_pct >= 0.50:
+                        _trail_dist = 0.25  # От +50%..+100%: откат 25% (защита прибыли как у Pog/fartguy)
                     else:
-                        _trail_dist = 0.38  # До +100%: откат 38%
+                        _trail_dist = 0.28  # До +50%: откат 28% (не 38%, фиксируем плюс!)
                 else:
-                    _trail_dist = 0.25
+                    _trail_dist = 0.22
                 
                 drop_from_max = (position.max_price_usd - current_price) / position.max_price_usd if position.max_price_usd > 0 else 0
                 if drop_from_max >= _trail_dist:
@@ -79,19 +81,21 @@ class MatureExitManager:
             # Б) Гарантированный несгораемый пол прибыли (Dynamic Ratchet Profit Floor):
             _floor_pnl = None
             if _is_runner:
-                # Даём максимальный простор для разгона в 5x-20x, защищая только гарантированный плюс:
+                # Фиксируем львиную долю прибыли на пампах, защищая баланс от сливов:
                 if max_pnl_pct >= 5.00:
-                    _floor_pnl = round(max_pnl_pct * 0.50, 2) # Пик +500%+ -> держим +250%+
+                    _floor_pnl = round(max_pnl_pct * 0.55, 2) # Пик +500%+ -> держим +275%+
                 elif max_pnl_pct >= 3.00:
-                    _floor_pnl = round(max_pnl_pct * 0.40, 2) # Пик +300%+ -> держим +120%+
+                    _floor_pnl = round(max_pnl_pct * 0.45, 2) # Пик +300%+ -> держим +135%+
                 elif max_pnl_pct >= 2.00:
-                    _floor_pnl = 0.60                         # Пик +200%+ -> держим +60%
+                    _floor_pnl = 0.80                         # Пик +200%+ -> держим +80%
                 elif max_pnl_pct >= 1.00:
-                    _floor_pnl = 0.25                         # Пик +100%+ (ANONVOYAGE) -> держим +25%
+                    _floor_pnl = 0.45                         # Пик +100%+ (fartguy/ERIKA) -> держим +45% (не отдаем до +25%!)
                 elif max_pnl_pct >= 0.50:
-                    _floor_pnl = 0.10                         # Пик +50%+ (NALA) -> держим +10% (не выбиваем на +30%!)
+                    _floor_pnl = 0.22                         # Пик +50%+ (Pog) -> держим +22% (не отдаем до +10%!)
+                elif max_pnl_pct >= 0.25:
+                    _floor_pnl = 0.10                         # Пик +25%+ (PEPECOIN) -> держим +10% (не спускаем до безубытка!)
                 else:
-                    _floor_pnl = 0.03                         # Гарантированный безубыток +3% (кейс 2500: переживаем откат с +39% до +8% и летим на +235%!)
+                    _floor_pnl = 0.03                         # Гарантированный безубыток +3%
             else:
                 _floor_pnl = 0.02                             # Для мелких стартовых всплесков (+18..+24%) — безубыток +2%
 
