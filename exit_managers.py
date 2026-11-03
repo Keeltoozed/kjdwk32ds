@@ -52,40 +52,42 @@ class MatureExitManager:
         # 1. СТРАТЕГИЯ ХВАТАТЬ МАКСИМАЛЬНЫЙ ПЛЮС:
         # ТРЕЙЛИНГ-СТОП И ПОЛ ПРИБЫЛИ ДЛЯ РАННЕРОВ И МУНБЭГОВ (ВЫХОД НА 1-М ТИКЕ!)
         # =========================================================================
-        if max_pnl_pct >= 0.20 or getattr(position, "is_moonbag", False):
-            # А) Трейлинг отката от пика (Сужающийся трейлинг: 1-й же тик без задержек!)
-            if max_pnl_pct >= 0.40 or getattr(position, "is_moonbag", False):
+        if max_pnl_pct >= 0.18 or getattr(position, "is_moonbag", False):
+            # А) Трейлинг отката от пика (Сужающийся трейлинг: забираем максимум на откате!)
+            if max_pnl_pct >= 0.30 or getattr(position, "is_moonbag", False):
                 if max_pnl_pct >= 2.50:
-                    _trail_dist = 0.12  # От +250%+: режем откат уже на 12% от макушки
+                    _trail_dist = 0.12  # От +250%+: режем откат уже на 12% от макушки (пик +384% -> выход на +325%)
                 elif max_pnl_pct >= 1.00:
-                    _trail_dist = 0.18  # От +100%..+250%: забираем максимум, откат 18% (пик +116% -> выход на +77%)
+                    _trail_dist = 0.15  # От +100%..+250%: откат 15% (пик +116% -> выход на +83%)
                 elif max_pnl_pct >= 0.50:
-                    _trail_dist = 0.20  # От +50%..+100%: откат 20%
+                    _trail_dist = 0.18  # От +50%..+100%: откат 18%
                 else:
-                    _trail_dist = 0.22  # От +30%..+50%: откат 22%
+                    _trail_dist = 0.20  # От +30%..+50%: откат 20%
                 
                 drop_from_max = (position.max_price_usd - current_price) / position.max_price_usd if position.max_price_usd > 0 else 0
                 if drop_from_max >= _trail_dist:
                     return f"Mature Trailing RIDE (+{max_pnl_pct*100:.0f}% peak, drop {drop_from_max*100:.0f}%)"
 
-            # Б) Гарантированный пол прибыли (Profit Floor):
+            # Б) Гарантированный несгораемый пол прибыли (Dynamic Ratchet Profit Floor):
             _floor_pnl = None
             if max_pnl_pct >= 5.00:
                 _floor_pnl = round(max_pnl_pct * 0.70, 2)
-            elif max_pnl_pct >= 2.50:
-                _floor_pnl = round(max_pnl_pct * 0.60, 2)
+            elif max_pnl_pct >= 3.00:
+                _floor_pnl = round(max_pnl_pct * 0.65, 2) # Пик +300%+ (как MUSKX) -> железно держим +195%..+250%!
+            elif max_pnl_pct >= 2.00:
+                _floor_pnl = 1.30                         # Пик +200%+ -> минимум +130%!
             elif max_pnl_pct >= 1.50:
-                _floor_pnl = 0.95
+                _floor_pnl = 0.95                         # Пик +150%+ -> минимум +95%!
             elif max_pnl_pct >= 1.00:
-                _floor_pnl = 0.55  # Пик +100%+ (TP2 взят!) -> минимум +55%
+                _floor_pnl = 0.60                         # Пик +100%+ (Biscuit/DEEPSEEK/ANSEMKIN) -> минимум +60%!
             elif max_pnl_pct >= 0.70:
-                _floor_pnl = 0.35  # Пик +70%+ -> минимум +35%
+                _floor_pnl = 0.38                         # Пик +70%+ -> минимум +38%!
             elif max_pnl_pct >= 0.50:
-                _floor_pnl = 0.20  # Пик +50%+ -> минимум +20%
+                _floor_pnl = 0.25                         # Пик +50%+ (HEDGE) -> минимум +25%!
             elif max_pnl_pct >= 0.30:
-                _floor_pnl = 0.08  # Пик +30%+ (TP1 взят!) -> минимум +8%
-            elif max_pnl_pct >= 0.20:
-                _floor_pnl = 0.025 # Пик +20%+ -> безубыток +2.5%
+                _floor_pnl = 0.10                         # Пик +30%+ (TP1 взят!) -> минимум +10%!
+            elif max_pnl_pct >= 0.18 or getattr(position, "is_moonbag", False):
+                _floor_pnl = 0.03                         # Пик +18%+ или мунбэг -> безубыток +3% (никогда не в минус!)
 
             if _floor_pnl is not None and pnl_pct <= _floor_pnl:
                 if pnl_pct >= 0:

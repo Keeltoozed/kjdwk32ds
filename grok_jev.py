@@ -493,12 +493,10 @@ class GrokJevEngine:
             if not has_breakout_momentum and (m5 < 2.0 or (s5 > 0 and (b5 / s5) < 0.85) or vol_m5 < 800.0):
                 return False, f"post-migration-no-reclaim (m5 {m5:+.1f}%, vol5 ${vol_m5:,.0f}, {b5}b/{s5}s — need organic bounce)"
 
-        # 2. Возраст токена: для настоящих ракет с активными покупками вход сразу от 0.15м (9 сек)!
-        # Карантин 48 сек действует ТОЛЬКО на медленные или сомнительные монеты.
-        _is_fast_rkt = (vol_m5 >= 3500.0 and b5 >= 10 and (s5 == 0 or b5 >= s5 * 1.2) and m5 >= 2.5)
-        _early_min_age = 0.15 if _is_fast_rkt else max(float(getattr(_c, "SOLANA_MIN_AGE_MIN", 0.8)), float(getattr(_c, "JEV_EARLY_MIN_AGE_MIN", 0.8)))
+        # 2. Возраст токена: карантинная выдержка (минимум 48-60 сек против 0-минутных дев-дампов типа RIOT/Elun/GODHOUSE)
+        _early_min_age = max(0.8, float(getattr(_c, "SOLANA_MIN_AGE_MIN", 0.8)), float(getattr(_c, "JEV_EARLY_MIN_AGE_MIN", 0.8)))
         _std_min_age = max(1.0, float(getattr(_c, "JEV_MIN_AGE_MIN", 1.0)))
-        min_age = _early_min_age if _is_fast_rkt or (b5 >= s5 * 1.05 and m5 >= 4.0 and vol_m5 >= 2000.0) else _std_min_age
+        min_age = _early_min_age if (b5 >= s5 * 1.05 and m5 >= 4.0 and vol_m5 >= 2000.0) else _std_min_age
         max_age = float(getattr(_c, "JEV_MAX_AGE_MIN", 72.0 * 60.0))  # 72 часа
         if not (min_age <= age_min <= max_age):
             if age_min > max_age:
@@ -529,8 +527,11 @@ class GrokJevEngine:
         if age_min >= 30.0 and m5 < 15.0:
             return False, f"late-fade age {age_min:.0f}m m5 {m5:+.1f}% < +15% (old token cooling off, not a live rocket)"
 
+        # ПЕРЕГРЕВ: разрешаем супер-ракеты (как ASCEND +469%, PERPETUAL +130%, SLUDGE +99%) при подтвержденном прорывном объеме!
         if m5 > 120.0:
-            if not (-8.0 <= m1 <= 22.0 and b5 >= s5 * 1.15 and vol_m5 >= 5000.0 and m5 <= 200.0):
+            _has_breakout_vol = (vol_m5 >= 12000.0 and b5 >= s5 * 1.25 and m5 <= 500.0)
+            _has_steady_trend = (-8.0 <= m1 <= 25.0 and b5 >= s5 * 1.15 and vol_m5 >= 4000.0 and m5 <= 220.0)
+            if not (_has_breakout_vol or _has_steady_trend):
                 return False, f"overheated m5 {m5:+.0f}% > +120% (peak FOMO risk)"
         _min_h1 = float(getattr(_c, "JEV_MIN_H1_PCT", -8.0))
         if h1 < _min_h1:
@@ -1291,21 +1292,18 @@ class GrokJevEngine:
                     if freeze_auth and freeze_auth not in SAFE_AUTHORITIES:
                         return False, f"rugcheck: freeze authority active ({freeze_auth[:8]})", _h_stats
 
-                    # Очищенный score RugCheck: для pump.fun бондинг-кривой вычитаем не-контрактные эвристики
-                    # (история прошлых запусков создателя, имя мема-копиката, ликва кёрва, концентрация холдеров из-за AMM), т.к. минт и фриз у pump.fun отключены
+                    # Очищенный score RugCheck: вычитаем не-контрактные эвристики
+                    # (история создателя, копикат-имя, незаблокированный LP пула, концентрация холдеров AMM), т.к. минт и фриз уже проверены
                     raw_score = float(rc_data.get("score") or 0.0)
-                    if is_pump:
-                        penalty_to_ignore = sum(
-                            float(rk.get("score", 0) or 0)
-                            for rk in (rc_data.get("risks") or [])
-                            if any(k in str(rk.get("name", "")).lower() for k in ("low liquidity", "creator history", "copycat", "single holder", "holder concentration", "concentration", "high holder", "top 10"))
-                        )
-                    else:
-                        penalty_to_ignore = sum(
-                            float(rk.get("score", 0) or 0)
-                            for rk in (rc_data.get("risks") or [])
-                            if any(k in str(rk.get("name", "")).lower() for k in ("low liquidity", "copycat", "creator history"))
-                        )
+                    penalty_to_ignore = sum(
+                        float(rk.get("score", 0) or 0)
+                        for rk in (rc_data.get("risks") or [])
+                        if any(k in str(rk.get("name", "")).lower() for k in (
+                            "low liquidity", "creator history", "copycat", "single holder",
+                            "holder concentration", "concentration", "high holder", "top 10",
+                            "unlocked", "lp provider", "high ownership"
+                        ))
+                    )
                     clean_score = max(0.0, raw_score - penalty_to_ignore)
                     if clean_score >= 2000:
                         return False, f"rugcheck: high risk score {clean_score:.0f} >= 2000", _h_stats
@@ -1314,12 +1312,10 @@ class GrokJevEngine:
                     for rk in (rc_data.get("risks") or []):
                         rk_name = str(rk.get("name") or "").lower()
                         rk_lvl = str(rk.get("level") or "").lower()
-                        if is_pump and any(k in rk_name for k in ("low liquidity", "creator history", "copycat")):
+                        if any(k in rk_name for k in ("low liquidity", "creator history", "copycat", "unlocked")):
                             continue
                         if rk_lvl == "danger" and "creator history" not in rk_name:
                             return False, f"rugcheck: critical danger risk '{rk.get('name')}'", _h_stats
-                        if "unlocked" in rk_name and "lp" in rk_name and not is_pump:
-                            return False, f"rugcheck: unlocked LP risk", _h_stats
 
                     # Проверка пулов и блокировки LP для не-pump токенов
                     target_pair = str(pair_data.get("pairAddress") or "").strip()
@@ -1733,6 +1729,19 @@ class GrokJevEngine:
         _pool_frac = float(getattr(_c, "MAX_POOL_LIQ_FRAC", 0.02) or 0.02)
         if _fliq > 0:
             ticket_size = min(ticket_size, max(5.0, round(_fliq * _pool_frac, 2)))
+
+        # PRE-FLIGHT SELL CHECK: для Solana проверяем продаваемость на Jupiter ПЕРЕД входом!
+        # Спасает депозит от 100% потерь на ханипотах типа 134uyPgA/CAPY (NO_ROUTES_FOUND)
+        if chain == "solana":
+            try:
+                from jupiter import JupiterAPI
+                _j_ok, _j_why = await JupiterAPI.is_token_sellable(address)
+                _w_low = str(_j_why or "").lower()
+                if not _j_ok and any(k in _w_low for k in ("no routes", "cannot sell", "honeypot", "freeze", "0 sol returned")):
+                    print(f"🚫 [PRE-FLIGHT BLOCKED] Отказ входа {symbol} ({address[:8]}): токен непродаваем на DEX ({_j_why}) — предотвращен слив -100%!")
+                    return
+            except Exception:
+                pass
 
         tracker.add_position(
             symbol=symbol,

@@ -1274,13 +1274,12 @@ class Analyzer:
                     f"pump-curve-too-early {_fdv_curve_pre:.0f}<{_min_curve_mcap:.0f}",
                     f"🚫 [CURVE-FLASH-RUG] {symbol} ({mint[:8]}): FDV ${_fdv_curve_pre:,.0f} < ${_min_curve_mcap:,.0f} (пустой кёрв < 15%) — зона flash-rug с пустым пулом (как NOTHING/CAMPUS/GODHOUSE).",
                 )
-        # FAST-TRACK ДЛЯ МОЛОДЫХ РАКЕТ (< 48 сек):
-        # Если монета молодая, но уже показывает мощный органический взлёт покупателей —
-        # ПУСКАЕМ СРАЗУ! Не урезаем ракеты искусственным ожиданием!
-        _is_fast_rocket = (_vm5_pre >= 3500.0 and _b5_pre >= 10 and (_s5_pre == 0 or _b5_pre >= _s5_pre * 1.2) and _m5 >= 2.5)
+        # FAST-TRACK ДЛЯ МОЛОДЫХ РАКЕТ (от 48 сек):
+        # Требуем хотя бы 48 сек и органические продажи (_s5_pre >= 2), чтобы отсечь 0-секундные дев-бандлы (RIOT/Elun/memechain)
+        _is_fast_rocket = (_age_min_pre >= 0.8 and _vm5_pre >= 4000.0 and _b5_pre >= 12 and _s5_pre >= 2 and _b5_pre >= _s5_pre * 1.2 and _m5 >= 2.5)
         _sol_min_age = float(getattr(config, "SOLANA_MIN_AGE_MIN", 0.8))
-        if _age_min_pre < _sol_min_age and not _is_fast_rocket:
-            print(f"⏳ [ENTRY] {mint[:8]}: возраст {_age_min_pre:.1f}м < {_sol_min_age}м без достаточного импульса (b/s {_b5_pre}/{_s5_pre}, vol5 ${_vm5_pre:,.0f}) — ждём созревания.")
+        if _age_min_pre < _sol_min_age:
+            print(f"⏳ [ENTRY] {mint[:8]}: возраст {_age_min_pre:.1f}м < {_sol_min_age}м — выдерживаем 48с карантин от дев-дампа.")
             return None
 
         # 1. Защита от старых увядающих зомби (> 120 мин без прорывного объема $25k)
@@ -1430,8 +1429,7 @@ class Analyzer:
                         return self._deny(mint, "freeze-authority-scam", f"🚫 [АНТИСКАМ] Freeze Authority у ДЕВ-кошелька {freeze_authority[:8]} у {mint[:8]} → СКАМ")
 
                     _rc_raw_score = float(rc_data.get("score") or 0.0)
-                    # Для pump.fun бондинг-кривой и PumpSwap:
-                    # Исключаем не-контрактные эвристики, которые искусственно накручивают score до 11,501-35,000 (незаблокированный LP кривой 11,000, история создателя, имя мема-копиката, концентрация холдеров AMM пула)
+                    # Исключаем не-контрактные эвристики, которые искусственно накручивают score до 11,501-35,000 (незаблокированный LP кривой/пула 11,000, история создателя, имя мема-копиката, концентрация холдеров AMM пула)
                     _rc_penalty_to_ignore = sum(
                         float(rk.get("score", 0) or 0)
                         for rk in (rc_data.get("risks") or [])
@@ -1440,19 +1438,10 @@ class Analyzer:
                             "holder concentration", "concentration", "high holder", "top 10",
                             "unlocked", "lp provider", "high ownership"
                         ))
-                    ) if _is_pump_flag else sum(
-                        float(rk.get("score", 0) or 0)
-                        for rk in (rc_data.get("risks") or [])
-                        if any(k in str(rk.get("name", "")).lower() for k in ("low liquidity", "copycat", "creator history"))
                     )
                     _rc_score = max(0.0, _rc_raw_score - _rc_penalty_to_ignore)
                     if _rc_score >= 2000:
                         return self._deny(mint, f"rugcheck-score {_rc_score:.0f}", f"🚫 [АНТИСКАМ] RugCheck Score {_rc_score:.0f} >= 2000 у {mint[:8]} → СКАМ")
-                    if not _is_pump_flag:
-                        for _rk in (rc_data.get("risks") or []):
-                            _rkn = str(_rk.get("name") or "").lower()
-                            if "unlocked" in _rkn and "lp" in _rkn:
-                                return self._deny(mint, "rugcheck-lp-unlocked", f"🚫 [АНТИСКАМ] Незаблокированный LP ({_rk.get('name')}) у {mint[:8]} → LP RUG")
 
                     # Проверка холдеров RugCheck
                     top_holders = rc_data.get("topHolders") or []
