@@ -85,24 +85,40 @@ class MatureExitManager:
 
             # Б) Гарантированный несгораемый пол прибыли (Dynamic Ratchet Profit Floor):
             _floor_pnl = None
-            if max_pnl_pct >= 5.00:
-                _floor_pnl = round(max_pnl_pct * 0.70, 2)
-            elif max_pnl_pct >= 3.00:
-                _floor_pnl = round(max_pnl_pct * 0.65, 2) # Пик +300%+ -> железно держим +195%..+250%!
-            elif max_pnl_pct >= 2.00:
-                _floor_pnl = 1.20                         # Пик +200%+ -> минимум +120%!
-            elif max_pnl_pct >= 1.50:
-                _floor_pnl = 0.85                         # Пик +150%+ -> минимум +85%!
-            elif max_pnl_pct >= 1.00:
-                _floor_pnl = 0.45                         # Пик +100%+ (ANONVOYAGE) -> минимум +45%!
-            elif max_pnl_pct >= 0.70:
-                _floor_pnl = 0.30                         # Пик +70%+ -> минимум +30%!
-            elif max_pnl_pct >= 0.50:
-                _floor_pnl = 0.18                         # Пик +50%+ -> минимум +18%!
-            elif max_pnl_pct >= 0.30:
-                _floor_pnl = 0.08                         # Пик +30%+ (TP1 взят!) -> минимум +8%!
-            elif max_pnl_pct >= 0.18 or _is_mb:
-                _floor_pnl = 0.02                         # Безубыток +2% (никогда не в минус!)
+            if _is_mb:
+                # ДЛЯ МУНБЭГА: депозит уже возвращен на TP1 (+30%)!
+                # Даём максимальный простор для разгона в 5x-20x, защищая только гарантированный плюс:
+                if max_pnl_pct >= 5.00:
+                    _floor_pnl = round(max_pnl_pct * 0.50, 2) # Пик +500%+ -> держим +250%+
+                elif max_pnl_pct >= 3.00:
+                    _floor_pnl = round(max_pnl_pct * 0.40, 2) # Пик +300%+ -> держим +120%+
+                elif max_pnl_pct >= 2.00:
+                    _floor_pnl = 0.60                         # Пик +200%+ -> держим +60%
+                elif max_pnl_pct >= 1.00:
+                    _floor_pnl = 0.20                         # Пик +100%+ (ANONVOYAGE) -> держим +20%, давая откат до 40% от пика
+                elif max_pnl_pct >= 0.50:
+                    _floor_pnl = 0.10                         # Пик +50%+ -> держим +10%
+                else:
+                    _floor_pnl = 0.03                         # Гарантированный безубыток +3%
+            else:
+                if max_pnl_pct >= 5.00:
+                    _floor_pnl = round(max_pnl_pct * 0.70, 2)
+                elif max_pnl_pct >= 3.00:
+                    _floor_pnl = round(max_pnl_pct * 0.65, 2)
+                elif max_pnl_pct >= 2.00:
+                    _floor_pnl = 1.20
+                elif max_pnl_pct >= 1.50:
+                    _floor_pnl = 0.85
+                elif max_pnl_pct >= 1.00:
+                    _floor_pnl = 0.45
+                elif max_pnl_pct >= 0.70:
+                    _floor_pnl = 0.30
+                elif max_pnl_pct >= 0.50:
+                    _floor_pnl = 0.18
+                elif max_pnl_pct >= 0.30:
+                    _floor_pnl = 0.08
+                elif max_pnl_pct >= 0.18:
+                    _floor_pnl = 0.02
 
             if _floor_pnl is not None and pnl_pct <= _floor_pnl:
                 if pnl_pct >= 0:

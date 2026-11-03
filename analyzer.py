@@ -1288,12 +1288,12 @@ class Analyzer:
                     f"pump-curve-too-early {_fdv_curve_pre:.0f}<{_min_curve_mcap:.0f}",
                     f"🚫 [CURVE-FLASH-RUG] {symbol} ({mint[:8]}): FDV ${_fdv_curve_pre:,.0f} < ${_min_curve_mcap:,.0f} (пустой кёрв < 15%) — зона flash-rug с пустым пулом (как NOTHING/CAMPUS/GODHOUSE).",
                 )
-        # FAST-TRACK ДЛЯ МОЛОДЫХ РАКЕТ (от 48 сек):
-        # Требуем хотя бы 48 сек и органические продажи (_s5_pre >= 2), чтобы отсечь 0-секундные дев-бандлы (RIOT/Elun/memechain)
-        _is_fast_rocket = (_age_min_pre >= 0.8 and _vm5_pre >= 4000.0 and _b5_pre >= 12 and _s5_pre >= 2 and _b5_pre >= _s5_pre * 1.2 and _m5 >= 2.5)
-        _sol_min_age = float(getattr(config, "SOLANA_MIN_AGE_MIN", 0.8))
+        # FAST-TRACK ДЛЯ МОЛОДЫХ РАКЕТ (от 90 сек):
+        # Требуем хотя бы 90 сек и органические продажи (_s5_pre >= 2), чтобы отсечь 0-секундные дев-бандлы (RIOT/Elun/Белка)
+        _is_fast_rocket = (_age_min_pre >= 1.5 and _vm5_pre >= 4000.0 and _b5_pre >= 12 and _s5_pre >= 2 and _b5_pre >= _s5_pre * 1.2 and _m5 >= 2.5)
+        _sol_min_age = float(getattr(config, "SOLANA_MIN_AGE_MIN", 1.5))
         if _age_min_pre < _sol_min_age:
-            print(f"⏳ [ENTRY] {mint[:8]}: возраст {_age_min_pre:.1f}м < {_sol_min_age}м — выдерживаем 48с карантин от дев-дампа.")
+            print(f"⏳ [ENTRY] {mint[:8]}: возраст {_age_min_pre:.1f}м < {_sol_min_age}м — выдерживаем {_sol_min_age*60:.0f}с карантин от дев-дампа.")
             return None
 
         # 1. Защита от старых увядающих зомби (> 120 мин без прорывного объема $25k)
@@ -1406,13 +1406,11 @@ class Analyzer:
             if "SOL" in _quote_sym and 0 < _quote_amt < 5.0 and not is_pump_curve:
                 return self._deny(mint, f"ghost-pool-sol {_quote_amt:.1f}<5", f"🚫 [AMM-GHOST-POOL] {symbol} ({mint[:8]}): в пуле всего {_quote_amt:.2f} SOL < 5 SOL — микро-резерв.")
 
-            # 2. Защита от Honeypot на Solana (0 продаж при 5+ покупках)
-            # Каноничные .pump контракты Pump.fun используют неизменяемый SPL-контракт (не могут заблокировать sell или ввести налог;
-            # на первых секундах миграции на PumpSwap 6b/0s — это старт новой ракеты, кейс ENOKIN +344%!)
+            # 2. Защита от Honeypot и искусственных бандлов без реальных продаж (кейс Белка -98%: 12 покупок и 0 продаж)
+            if _s5_pre == 0 and _b5_pre >= 5:
+                return self._deny(mint, "zero-sells-dev-bundle", f"🚫 [DEV-BUNDLE] {symbol} ({mint[:8]}): 0 продаж при {_b5_pre} покупках — искусственный бандл дева без живого рынка (кейс Белка -98%)!")
             _is_canonical_pump = mint.endswith("pump") and dex_id_low in ("pump", "pumpfun", "pumpswap")
             if not _is_canonical_pump:
-                if _s5_pre == 0 and _b5_pre >= 5:
-                    return self._deny(mint, "honeypot-zero-sells", f"🚫 [HONEYPOT] {symbol} ({mint[:8]}): 0 продаж при {_b5_pre} покупках — Honeypot.")
                 if (_b5_pre + _s5_pre) >= 20 and (_s5_pre / (_b5_pre + _s5_pre)) < 0.05:
                     return self._deny(mint, "honeypot-anomaly", f"🚫 [HONEYPOT] {symbol} ({mint[:8]}): аномалия продаж m5 {_s5_pre}s/{_b5_pre}b (<5% продаж) — скрытый honeypot.")
 

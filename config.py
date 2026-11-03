@@ -81,8 +81,8 @@ DD_THROTTLE_START_USD = 15.0         # просадка от пика
 
 # === IN-MEMORY STREAMING SNIPER & GRADUATED DEX SHIELD (@savipww / GMGN Anti-Bundler) ===
 SNIPER_ENTRIES_ENABLED = False            # ВЫКЛ вход на сырой кривой Pump.fun: WSS работает как радар миграций (subscribeMigration -> Waiting Room)
-ALLOW_UNGRADUATED_PUMPFUN = False         # СТРОГО ВЫКЛЮЧЕНО: запрет входа на пустых сырых кривых Pump.fun/Moonshot (ванночки без ликвы). Вход ТОЛЬКО после миграции на DEX с сожжённым LP!
-MIN_PUMP_CURVE_MCAP_USD = 12000.0         # Запасной фильтр для DEX миграций
+ALLOW_UNGRADUATED_PUMPFUN = True          # ВКЛЮЧЕНО: зрелые кривые Pump.fun (FDV >= $15k) с реальной органикой для ловли 10x до миграции
+MIN_PUMP_CURVE_MCAP_USD = 15000.0         # Отсекаем пустые 0-секундные ванночки девов (FDV < $15k / прогресс < 20%) — вход только в созревшие кривые!
 JEV_MAX_TICKET_USD = 0.0                  # 0.0 = динамический авто-масштаб билета JEV вместе с ростом капитала (через calculate_dynamic_position_size)
 MIN_GRADUATED_LIQ_USD = 7500.0            # Мин. реальная ликвидность DEX-пула ($7,500+) после миграции (отсекает микро-пулы и слитые остатки)
 AUDITOR_STAIRCASE_ENABLED = True          # Layer 9+10: защита от Staircase bump-ботов, синхронных пачек сброса Jito и ферм суб-кошельков
@@ -153,7 +153,7 @@ BREAKEVEN_PCT = 0.20
 
 # Infant Dump: защита от настоящего дев-рага в первые минуты
 PREFETCH_TTL_SEC = 60  # Пакетный кэш DexScreener (до 30 токенов за запрос): 60с жизни для быстрого разбора пачки в RAM
-SOLANA_MIN_AGE_MIN = 0.8  # 48 секунд: карантин против 0-минутных дев-дампов и Jito-бандлов (дает первым снайперам выйти)
+SOLANA_MIN_AGE_MIN = 1.5  # 90 секунд: железный карантин против минутных сливов девов и Jito-бандлов (даёт девам слиться до нашего входа)
 SOLANA_MAX_AGE_HOURS = 24.0
 SOLANA_MAX_AGE_MIN = 120.0      # Максимум 2 часа входа (не покупать старые тухлые монеты)
 INFANT_WINDOW_MIN = 2.0
