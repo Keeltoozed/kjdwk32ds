@@ -1347,7 +1347,7 @@ class Analyzer:
             curve_liq = fdv_val * 0.35 if fdv_val > 0 else 0.0
             liq_val = max(raw_liq, curve_liq) if is_pump_curve else raw_liq
 
-            _is_momentum_rocket = (_m5 >= 18.0 and _b5 >= _s5 and _vm5_pre >= 3000.0)
+            _is_momentum_rocket = (_m5 >= 18.0 and _b5_pre >= _s5_pre and _vm5_pre >= 3000.0)
 
             if not _is_momentum_rocket and (conf + 0.05) < threshold:
                 self._deny(mint, f"rocket-xgb {conf:.0f}%", f"· [ROCKET-XGB] {symbol} ({mint[:8]}): уверенность модели {conf:.1f}% < {threshold:.0f}% — отсеян до тяжелых проверок (0ms).")
@@ -1370,7 +1370,7 @@ class Analyzer:
                     pass
                 return False
             elif _is_momentum_rocket and (conf + 0.05) < threshold:
-                print(f"⚡ [ROCKET-XGB MOMENTUM-PASS] {symbol} ({mint[:8]}): Мощный памп (m5 +{_m5:.1f}%, vol5 ${_vm5_pre:,.0f}, {_b5}b/{_s5}s) при скоре {conf:.1f}% — допуск к ончейн аудиту!")
+                print(f"⚡ [ROCKET-XGB MOMENTUM-PASS] {symbol} ({mint[:8]}): Мощный памп (m5 +{_m5:.1f}%, vol5 ${_vm5_pre:,.0f}, {_b5_pre}b/{_s5_pre}s) при скоре {conf:.1f}% — допуск к ончейн аудиту!")
 
             print(f"🚀 [ROCKET-XGB PASSED] {symbol} ({mint[:8]}): ML Score {conf:.1f}% >= {threshold:.0f}%! Запуск ончейн-аудита безопасности...")
 
@@ -3193,6 +3193,10 @@ class Analyzer:
         _h6 = float(_pc.get("h6", 0) or 0)
         _fdv_check = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
 
+        _vm5 = float(((pair_data.get("volume") or {}).get("m5", 0) or 0))
+        _txm5 = (pair_data.get("txns") or {}).get("m5", {}) or {}
+        _b5, _s5 = int(_txm5.get("buys", 0) or 0), int(_txm5.get("sells", 0) or 0)
+
         # Защита от покупки экстремального вертикального выброса (Blow-off peak)
         if _m1 > 28.0 and not (_b5 >= _s5 * 1.5 and _vm5 >= 20000):
             return self._deny(mint, "m1-blowoff", f"🚫 [FOMO-TOP] {mint[:8]}: m1 +{_m1:.1f}% > +28.0% — экстремальный секундный прострел.")
@@ -3233,10 +3237,6 @@ class Analyzer:
             return self._deny(mint, "ray-m1-blowoff", f"🚫 [RAYDIUM] {mint[:8]}: m1 {_m1:+.1f}% > +22% — вертикальный прострел за 1м, вход = вершина.")
         if _m5 < 2.5:
             return self._deny(mint, "ray-m5-flat", f"🚫 [RAYDIUM] {mint[:8]}: m5 {_m5:+.1f}% < +2.5% — нет импульса.")
-
-        _vm5 = float(((pair_data.get("volume") or {}).get("m5", 0) or 0))
-        _txm5 = (pair_data.get("txns") or {}).get("m5", {}) or {}
-        _b5, _s5 = int(_txm5.get("buys", 0) or 0), int(_txm5.get("sells", 0) or 0)
 
         # Защита от накрутки дев-ботами на PumpSwap (11 из 13 исторических сливов имели b/s >= 2.3x при buys >= 250)
         if _dex_low == "pumpswap" and (_b5 / max(_s5, 1)) >= 2.3 and _b5 >= 250:
