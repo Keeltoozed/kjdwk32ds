@@ -1281,7 +1281,7 @@ class Analyzer:
                 _px_calc = float(pair_data.get("priceUsd", 0) or 0)
                 if _px_calc > 0:
                     _fdv_curve_pre = _px_calc * 1_000_000_000.0
-            _min_curve_mcap = float(getattr(config, "MIN_PUMP_CURVE_MCAP_USD", 8500.0))
+            _min_curve_mcap = float(getattr(config, "MIN_PUMP_CURVE_MCAP_USD", 7500.0))
             _max_curve_mcap = float(getattr(config, "MAX_PUMP_CURVE_MCAP_USD", 42000.0))
             if _fdv_curve_pre > 0 and _fdv_curve_pre < _min_curve_mcap:
                 return self._deny(

@@ -411,7 +411,7 @@ class GrokJevEngine:
                 _cur_p = float(pair_data.get("priceUsd", 0) or 0)
                 if _cur_p > 0:
                     fdv_mc = _cur_p * 1_000_000_000.0
-            _min_curve_mc = float(getattr(_c, "MIN_PUMP_CURVE_MCAP_USD", 8500.0))
+            _min_curve_mc = float(getattr(_c, "MIN_PUMP_CURVE_MCAP_USD", 7500.0))
             _max_curve_mc = float(getattr(_c, "MAX_PUMP_CURVE_MCAP_USD", 42000.0))
             if fdv_mc > 0 and fdv_mc < _min_curve_mc:
                 return False, f"pump-curve-flash-rug: FDV ${fdv_mc:,.0f} < ${_min_curve_mc:,.0f} (пустой кёрв <12%, риск мгновенного сноса в -75%)"
@@ -1251,7 +1251,7 @@ class GrokJevEngine:
         if is_pump:
             if not getattr(_c, "ALLOW_UNGRADUATED_PUMPFUN", False):
                 return False, "ungraduated-pump-curve (ждём миграции на DEX с сожжённым LP)", _h_stats
-            _min_c_mc = float(getattr(_c, "MIN_PUMP_CURVE_MCAP_USD", 8500.0))
+            _min_c_mc = float(getattr(_c, "MIN_PUMP_CURVE_MCAP_USD", 7500.0))
             _max_c_mc = float(getattr(_c, "MAX_PUMP_CURVE_MCAP_USD", 42000.0))
             if fdv > 0 and fdv < _min_c_mc:
                 return False, f"pump-curve-flash-rug (FDV ${fdv:,.0f} < ${_min_c_mc:,.0f})", _h_stats

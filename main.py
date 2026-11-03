@@ -909,7 +909,7 @@ async def scanner_loop(analyzer, tracker):
                                 _dex_id = str((pair_data.get("dexId") or "")).lower()
                                 if _dex_id in ("pump", "pumpfun", "moonshot") or mint.endswith("moon"):
                                     _fdv_m_sc = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
-                                    _min_c_sc = float(getattr(config, "MIN_PUMP_CURVE_MCAP_USD", 8500.0))
+                                    _min_c_sc = float(getattr(config, "MIN_PUMP_CURVE_MCAP_USD", 7500.0))
                                     _max_c_sc = float(getattr(config, "MAX_PUMP_CURVE_MCAP_USD", 42000.0))
                                     if not getattr(config, "ALLOW_UNGRADUATED_PUMPFUN", False):
                                         print(f"🚫 [SCANNER-RAW-CURVE] {actual_symbol} ({mint[:8]}): сырая кривая bonding curve без миграции на DEX — отмена!")
