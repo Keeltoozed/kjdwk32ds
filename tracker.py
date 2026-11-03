@@ -395,7 +395,7 @@ class PaperTracker:
         if liq_usd > 0 and liq_usd < min_liq:
             if target > base_size:
                 print(f"💧 [REINVEST] Пул ${liq_usd:,.0f} < ${min_liq:,.0f}: сброс сайза с ${target:.0f} на базовые ${base_size:.0f} (защита цены)")
-            target = min(base_size, max(5.0, liq_usd * _max_pool_frac))
+            target = min(base_size, max(base_size * 0.5, liq_usd * _max_pool_frac))
         elif liq_usd > 0:
             # Не более MAX_POOL_LIQ_FRAC (2%) от пула, чтобы собственный выход не двигал стакан
             max_by_pool = max(base_size, liq_usd * _max_pool_frac)

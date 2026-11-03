@@ -43,22 +43,22 @@ PAPER_PORTFOLIO_FILE = "portfolio.json"
 # Ключ слепка в Supabase. ВАЖНО: у каждого бота свой, иначе два бота на одной
 # базе перезаписывают друг друга (сделки появляются и пропадают).
 # Задай в Render → Environment: первый бот PF_IDEBOT, второй PF_QYO7.
-PORTFOLIO_SNAPSHOT_MINT = (os.getenv("PORTFOLIO_SNAPSHOT_MINT", "") or "").strip().strip('"').strip("'") or "PORTFOLIO_STATE_V2.4"
-INITIAL_BALANCE_USD = 100.0  # Стартовый депозит для разгона ($100 -> $8,000+)
-REINVEST_PERCENT = 20.0  # 20% пула на сделку по стратегии автора (@savipww)
-VIRTUAL_POSITION_SIZE_USD = 20.0
-TRADE_AMOUNT_USD = 20.0  # Базовый ордер $20
-# === ЭКСПОНЕНЦИАЛЬНЫЙ РАЗГОН ДЕПОЗИТА (COMPOUNDING $100 -> $8,000+) ===
+PORTFOLIO_SNAPSHOT_MINT = (os.getenv("PORTFOLIO_SNAPSHOT_MINT", "") or "").strip().strip('"').strip("'") or "PORTFOLIO_20USD_V1"
+INITIAL_BALANCE_USD = 20.0  # Стартовый депозит для безопасного разгона ($20 -> $500+)
+REINVEST_PERCENT = 22.0  # 22% пула на сделку ($4.40 на старте)
+VIRTUAL_POSITION_SIZE_USD = 4.40
+TRADE_AMOUNT_USD = 4.40  # Базовый ордер $4.40
+# === ЭКСПОНЕНЦИАЛЬНЫЙ РАЗГОН ДЕПОЗИТА (COMPOUNDING $20 -> $500+) ===
 COMPOUNDING_ENABLED = True             # Разгон депозита по стратегии автора (@savipww)
-COMPOUNDING_PCT = 0.22                 # 22% от текущего капитала в сделку (20-25% риск/билет)
+COMPOUNDING_PCT = 0.22                 # 22% от текущего капитала в сделку (~$4.40 от $20)
 MAX_COMPOUNDING_SIZE_USD = 2500.0      # Динамический потолок (масштабируется с ростом баланса)
 DYNAMIC_REINVEST_ENABLED = True        # Включить ступенчатый реинвест прибыли
-BASE_TRADE_AMOUNT_USD = 15.0           # Базовый размер сделки (минимальный пол $15)
+BASE_TRADE_AMOUNT_USD = 4.0            # Базовый размер сделки (минимальный пол $4)
 MAX_POSITION_SIZE_USD = 2500.0         # Масштабируемый потолок для разгона
-REINVEST_MIN_POOL_LIQ_USD = 12000.0    # Мин. ликвидность пула для входа > $15 (защита от сдвига цены)
-SCOUT_SIZE_USD = 15.0                  # Ордер $15
-LOTTERY_SIZE_USD = 15.0
-MAX_CONCURRENT_POSITIONS = 10         # Режим ракет: до 10 позиций одновременно
+REINVEST_MIN_POOL_LIQ_USD = 7500.0     # Мин. ликвидность пула
+SCOUT_SIZE_USD = 4.0                  # Ордер $4.0
+LOTTERY_SIZE_USD = 4.0
+MAX_CONCURRENT_POSITIONS = 4          # До 4 позиций одновременно (4 * $4.40 = $17.60, всегда есть запас кэша)
 
 # Risk Management
 MAX_DAILY_LOSS_USD = 1000.0
@@ -93,7 +93,7 @@ STREAM_MIN_BUY_SOL = 1.5                 # Минимум 1.5 SOL реально
 STREAM_MAX_TOP_BUYER_RATIO = 0.50        # Доля крупнейшего покупателя <= 50%
 STREAM_MIN_BS_RATIO = 1.6                # Соотношение Buy/Sell volume >= 1.6
 STREAM_MAX_CURVE_PROGRESS = 85.0         # Пускаем токены вплоть до 85% перед миграцией
-STREAM_ENTRY_SIZE_USD = 15.0             # Размер билета на раннем входе ($15)
+STREAM_ENTRY_SIZE_USD = 4.0             # Размер билета на раннем входе ($4)
 STREAM_SLIPPAGE = 0.08                   # 8% реалистичное проскальзывание на быстром входе pump.fun
 STREAM_MAX_AGE_SEC = 900                 # Даем 15 минут органическим токенам набрать кривую
 STREAM_GC_MIN_PROGRESS = 4.0             # Чистим только если за 15 мин кривая < 4% (мертвый токен)
@@ -311,7 +311,7 @@ GROWTH_TRAIL_ACT = 0.08  # трейлинг с +8%
 GROWTH_TRAIL_DIST = 0.12  # дистанция 12%
 GROWTH_STAGNANT_MIN = 120  # флет режем через 2 часа, не 7 минут
 GROWTH_MAX_POS = 3  # не больше 3 трендовых позиций
-GROWTH_SIZE_USD = 15.0  # Ордер $15 (по запросу пользователя, было 6.0)
+GROWTH_SIZE_USD = 4.0  # Ордер $4 (для банка $20)
 GROWTH_INTERVAL = 75  # 75 сек: оперативный опрос откатов вместо 5 мин (в окне 5 мин кэша пулов)
 
 SNIPER_MIN_UNIQUE_BUYERS = 10
@@ -356,12 +356,12 @@ FOMO_MIN_USD = 100
 FOMO_BOARDS_INTERVAL = 7200
 USE_FOMO_SIGNALS = False  # ОТКЛЮЧЕНО: исключает попадание любых токсичных памп-энд-дамп коллов в бота
 MAX_FOMO_BUYS_PER_PASS = 3  # бёрст-контроль: не больше 3 входов за проход очереди
-TG_MAX_SIZE_USD = 15.0  # кэп TG/FOMO-входа: $15 (на уровне Base/BSC)
-TG_VIP_SIZE_USD = 15.0  # размер входа для VIP-сигналов (Solana) увеличен до $15
-ROB_MAX_SIZE_USD = 25.0  # Robinhood: потолок до $25 при реинвесте прибыли
-BSC_MAX_SIZE_USD = 25.0  # BSC: потолок до $25 при реинвесте прибыли
+TG_MAX_SIZE_USD = 4.0  # кэп TG/FOMO-входа: $4 (банк $20)
+TG_VIP_SIZE_USD = 4.0  # размер входа для VIP-сигналов (Solana): $4
+ROB_MAX_SIZE_USD = 10.0  # Robinhood: потолок до $10 при реинвесте прибыли
+BSC_MAX_SIZE_USD = 10.0  # BSC: потолок до $10 при реинвесте прибыли
 BSC_MIN_LIQUIDITY = 4000.0  # Пулы от $4k на BSC (раньше стояла опечатка 30000.0)
-BSC_WEAK_SIZE_USD = 15.0   # Сайз $15 по запросу пользователя (ставка не снижается)
+BSC_WEAK_SIZE_USD = 4.0   # Сайз $4 (банк $20)
 
 # EVM tracking intervals (адаптивный опрос открытых позиций без 429)
 EVM_TRACK_INTERVAL = 2.5  # Быстрый трекинг при открытых сделках (2.5с вместо 8с для мгновенных стопов)
@@ -410,6 +410,6 @@ JEV_MIN_H6_PCT = -10.0
 
 USE_COPYTRADE = True
 COPY_MIN_TIER = 2
-COPY_MAX_TICKET_USD = 15.0
+COPY_MAX_TICKET_USD = 4.0
 COPY_USE_ANTISCAM = True
 WHALE_CONSENSUS = 2

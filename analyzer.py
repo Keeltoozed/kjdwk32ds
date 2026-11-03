@@ -1483,9 +1483,25 @@ class Analyzer:
                             pool_accounts.add(_k_acc)
                     for _mkt in (rc_data.get("markets") or []):
                         if isinstance(_mkt, dict):
+                            # Точечная защита от незаблокированных пулов Meteora (DAMM V2, DLMM, DYN2) и кастомных Raydium
+                            # (кейсы PEPEBOT remove 160 SOL, Smiley drain: дев создаёт пул, держит LP и выдёргивает весь SOL)
+                            _m_type = str(_mkt.get("marketType", "")).lower()
+                            _m_lp = _mkt.get("lp") or {}
+                            _m_lp_locked = float(_m_lp.get("lpLockedPct", 0) or 0)
+                            _is_meteora_pool = ("meteora" in _m_type or "meteora" in dex_id_low)
+                            if _is_meteora_pool and _m_lp_locked < 80.0:
+                                return self._deny(mint, "meteora-unlocked-lp", f"🚫 [METEORA-RUG] {symbol} ({mint[:8]}): незаблокированный пул Meteora {_m_type} (lock {_m_lp_locked:.0f}% < 80%) — дев в любой момент забирает SOL (кейсы PEPEBOT/Smiley)!")
+                            if not _is_pump_flag and "raydium" in _m_type and _m_lp_locked < 80.0:
+                                return self._deny(mint, "raydium-unlocked-lp", f"🚫 [RAYDIUM-RUG] {symbol} ({mint[:8]}): кастомный токен на Raydium с незаблокированным LP (lock {_m_lp_locked:.0f}% < 80%) — риск сноса ликвидности!")
+
                             for _m_field in ("pubkey", "liquidityA", "liquidityB", "baseVault", "quoteVault"):
                                 if _mkt.get(_m_field):
                                     pool_accounts.add(_mkt[_m_field])
+
+                    if dex_id_low == "meteora":
+                        _met_locked = any("meteora" in str(m.get("marketType", "")).lower() and float((m.get("lp") or {}).get("lpLockedPct", 0) or 0) >= 80.0 for m in (rc_data.get("markets") or []))
+                        if not _met_locked:
+                            return self._deny(mint, "meteora-unlocked-lp", f"🚫 [METEORA-RUG] {symbol} ({mint[:8]}): токен на Meteora без подтвержденного заблокированного LP (>=80%) — дев в любой момент выдёргивает SOL (кейс PEPEBOT)!")
 
                     DEX_POOL_AUTHORITIES = {
                         "5Q544fKrFoe6tsEbD7S8EmxGTJYAKtTVhAW5Q5pge4j1", # Raydium AMM V4
@@ -1512,7 +1528,7 @@ class Analyzer:
                             continue
                         if any(w in owner.lower() for w in pool_keywords) or any(w in owner_wallet.lower() for w in pool_keywords):
                             continue
-                        if pct > 80.0:
+                        if _is_pump_flag and pct > 80.0:
                             continue
                         non_curve_accounts.append((amt, pct, owner))
                     top_10 = non_curve_accounts[:10]
