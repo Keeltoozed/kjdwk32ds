@@ -1308,7 +1308,7 @@ class Analyzer:
         # 2. Защита от фейковых bump-ботов на именах брендов/селебрити (ELON, Trump, Amazon, MrBeast, Microsoft):
         # 250+ сделок с копеечным чеком (< $8.0) при 0 соцсетей — 100% серийная ловушка скамера
         _info_pre = pair_data.get("info") or {}
-        _has_soc_pre = bool((_info_pre.get("socials") or []) or (_info_pre.get("websites") or [])) or bool(pair_data.get("_socials_unknown"))
+        _has_soc_pre = bool((_info_pre.get("socials") or []) or (_info_pre.get("websites") or []))
         _tot_tx5_pre = _b5_pre + _s5_pre
         _avg_tx_pre = (_vm5_pre / _tot_tx5_pre) if _tot_tx5_pre > 0 else 0.0
         if _tot_tx5_pre >= 250 and _avg_tx_pre < 8.0 and not _has_soc_pre:
@@ -1386,14 +1386,14 @@ class Analyzer:
             if _eff_pool_liq < _min_liq:
                 return self._deny(mint, f"low-liq ${_eff_pool_liq:.0f}<{_min_liq:.0f}", f"🚫 [ANTI-RUG] {symbol} ({mint[:8]}): Реальная ликвидность DEX ${_eff_pool_liq:,.0f} < ${_min_liq:,.0f} — риск дампа/проскальзывания.")
 
-            # Защита от анонимных wash-bot накруток на DEX (кейс Belief -96.7%: 0 соцсетей, liq <$22k, vol5/liq > 2.6x при слабом перевесе покупателей)
+            # Защита от анонимных wash-bot накруток на DEX (кейсы Belief/BUZZ: 0 соцсетей, liq <$25k, vol5/liq > 2.2x при слабом перевесе покупателей)
             _info_a = pair_data.get("info") or {}
-            _has_soc_a = bool((_info_a.get("socials") or []) or (_info_a.get("websites") or [])) or bool(pair_data.get("_socials_unknown"))
-            if not _is_raw_curve and not _has_soc_a and raw_liq < 22000.0:
+            _has_soc_a = bool((_info_a.get("socials") or []) or (_info_a.get("websites") or []))
+            if not _is_raw_curve and not _has_soc_a and raw_liq < 25000.0:
                 _v2l_a = _vm5_pre / max(raw_liq, 1.0)
                 _bs_a = _b5_pre / float(max(_s5_pre, 1))
-                if _v2l_a > 2.6 and _bs_a < 1.8:
-                    return self._deny(mint, f"anon-wash-churn {_v2l_a:.1f}x", f"🚫 [WASH-TRAP] {symbol} ({mint[:8]}): 0 соцсетей, liq ${raw_liq:,.0f}, оборот 5м {_v2l_a:.1f}x пула (b/s {_bs_a:.2f}) — анонимный wash-дамп!")
+                if _v2l_a > 2.2 and _bs_a < 1.8:
+                    return self._deny(mint, f"anon-wash-churn {_v2l_a:.1f}x", f"🚫 [WASH-TRAP] {symbol} ({mint[:8]}): 0 соцсетей, liq ${raw_liq:,.0f}, оборот 5м {_v2l_a:.1f}x пула (b/s {_bs_a:.2f}) — анонимный wash-дамп (кейс BUZZ)!")
 
             # Блок кастомных не-pump токенов на PumpSwap с микропулом
             if dex_id_low == "pumpswap" and not mint.endswith("pump") and raw_liq < _min_grad_liq:

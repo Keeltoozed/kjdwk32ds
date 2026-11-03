@@ -52,17 +52,32 @@ class MatureExitManager:
         # 1. СТРАТЕГИЯ ХВАТАТЬ МАКСИМАЛЬНЫЙ ПЛЮС:
         # ТРЕЙЛИНГ-СТОП И ПОЛ ПРИБЫЛИ ДЛЯ РАННЕРОВ И МУНБЭГОВ (ВЫХОД НА 1-М ТИКЕ!)
         # =========================================================================
-        if max_pnl_pct >= 0.18 or getattr(position, "is_moonbag", False):
-            # А) Трейлинг отката от пика (Сужающийся трейлинг: забираем максимум на откате!)
-            if max_pnl_pct >= 0.30 or getattr(position, "is_moonbag", False):
-                if max_pnl_pct >= 2.50:
-                    _trail_dist = 0.12  # От +250%+: режем откат уже на 12% от макушки (пик +384% -> выход на +325%)
-                elif max_pnl_pct >= 1.00:
-                    _trail_dist = 0.15  # От +100%..+250%: откат 15% (пик +116% -> выход на +83%)
-                elif max_pnl_pct >= 0.50:
-                    _trail_dist = 0.18  # От +50%..+100%: откат 18%
+        _is_mb = getattr(position, "is_moonbag", False)
+        if max_pnl_pct >= 0.18 or _is_mb:
+            # А) Трейлинг отката от пика
+            if max_pnl_pct >= 0.30 or _is_mb:
+                if _is_mb:
+                    # ДЛЯ МУНБЭГА (дом-деньги, TP1 уже взят в плюс):
+                    # Мем-ракеты Solana (как ANONVOYAGE 17x) на пути откатывают на 20-35%.
+                    # Трейлинг 30-38% даёт пережить коррекцию и доехать до 5x-20x!
+                    if max_pnl_pct >= 5.00:
+                        _trail_dist = 0.22  # От +500%+: откат 22% от макушки
+                    elif max_pnl_pct >= 2.50:
+                        _trail_dist = 0.28  # От +250%+: откат 28%
+                    elif max_pnl_pct >= 1.00:
+                        _trail_dist = 0.35  # От +100%..+250%: откат 35% (не выбиваем на 18% как ANONVOYAGE!)
+                    else:
+                        _trail_dist = 0.38  # До +100%: откат 38%
                 else:
-                    _trail_dist = 0.20  # От +30%..+50%: откат 20%
+                    # Для полной позиции до первого тейка:
+                    if max_pnl_pct >= 2.50:
+                        _trail_dist = 0.18
+                    elif max_pnl_pct >= 1.00:
+                        _trail_dist = 0.24  # Было 0.15 — душило 100%+ монеты на первой минутной свече
+                    elif max_pnl_pct >= 0.50:
+                        _trail_dist = 0.25  # Было 0.18
+                    else:
+                        _trail_dist = 0.22  # От +30%..+50%: откат 22%
                 
                 drop_from_max = (position.max_price_usd - current_price) / position.max_price_usd if position.max_price_usd > 0 else 0
                 if drop_from_max >= _trail_dist:
@@ -73,21 +88,21 @@ class MatureExitManager:
             if max_pnl_pct >= 5.00:
                 _floor_pnl = round(max_pnl_pct * 0.70, 2)
             elif max_pnl_pct >= 3.00:
-                _floor_pnl = round(max_pnl_pct * 0.65, 2) # Пик +300%+ (как MUSKX) -> железно держим +195%..+250%!
+                _floor_pnl = round(max_pnl_pct * 0.65, 2) # Пик +300%+ -> железно держим +195%..+250%!
             elif max_pnl_pct >= 2.00:
-                _floor_pnl = 1.30                         # Пик +200%+ -> минимум +130%!
+                _floor_pnl = 1.20                         # Пик +200%+ -> минимум +120%!
             elif max_pnl_pct >= 1.50:
-                _floor_pnl = 0.95                         # Пик +150%+ -> минимум +95%!
+                _floor_pnl = 0.85                         # Пик +150%+ -> минимум +85%!
             elif max_pnl_pct >= 1.00:
-                _floor_pnl = 0.60                         # Пик +100%+ (Biscuit/DEEPSEEK/ANSEMKIN) -> минимум +60%!
+                _floor_pnl = 0.45                         # Пик +100%+ (ANONVOYAGE) -> минимум +45%!
             elif max_pnl_pct >= 0.70:
-                _floor_pnl = 0.38                         # Пик +70%+ -> минимум +38%!
+                _floor_pnl = 0.30                         # Пик +70%+ -> минимум +30%!
             elif max_pnl_pct >= 0.50:
-                _floor_pnl = 0.25                         # Пик +50%+ (HEDGE) -> минимум +25%!
+                _floor_pnl = 0.18                         # Пик +50%+ -> минимум +18%!
             elif max_pnl_pct >= 0.30:
-                _floor_pnl = 0.10                         # Пик +30%+ (TP1 взят!) -> минимум +10%!
-            elif max_pnl_pct >= 0.18 or getattr(position, "is_moonbag", False):
-                _floor_pnl = 0.03                         # Пик +18%+ или мунбэг -> безубыток +3% (никогда не в минус!)
+                _floor_pnl = 0.08                         # Пик +30%+ (TP1 взят!) -> минимум +8%!
+            elif max_pnl_pct >= 0.18 or _is_mb:
+                _floor_pnl = 0.02                         # Безубыток +2% (никогда не в минус!)
 
             if _floor_pnl is not None and pnl_pct <= _floor_pnl:
                 if pnl_pct >= 0:
