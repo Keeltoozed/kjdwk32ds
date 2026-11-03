@@ -9,8 +9,8 @@ DEXSCREENER_PROFILES = "https://api.dexscreener.com/token-profiles/latest/v1"
 DEXSCREENER_SEARCH = "https://api.dexscreener.com/latest/dex/tokens/"
 
 # Helius / PumpPortal WSS API
-HELIUS_API_KEY = "9efda6f4-fddb-42d3-a2b1-098bbbecd299"
-HELIUS_RPC_URL = f"https://mainnet.helius-rpc.com/?api-key={HELIUS_API_KEY}"
+HELIUS_API_KEY = (os.getenv("HELIUS_API_KEY") or "").strip().strip('"').strip("'")
+HELIUS_RPC_URL = f"https://mainnet.helius-rpc.com/?api-key={HELIUS_API_KEY}" if HELIUS_API_KEY else "https://api.mainnet-beta.solana.com"
 PUMPPORTAL_API_KEY = (os.getenv("PUMPPORTAL_API_KEY") or "").strip().strip('"').strip("'")
 PUMPPORTAL_WSS = f"wss://pumpportal.fun/api/data?api-key={PUMPPORTAL_API_KEY}" if PUMPPORTAL_API_KEY else "wss://pumpportal.fun/api/data"
 
@@ -129,9 +129,9 @@ MOONBAG_SELL_FRAC = 0.0
 PUMP_XGB_ENABLED = False        # ВЫКЛЮЧЕНО: 100% сливов (-235% PnL) на ложных скорах pump.fun вершин
 RAY_XGB_ENABLED = False         # ВЫКЛЮЧЕНО: старая модель Raydium XGB заменена на Rocket XGBoost v2
 ROCKET_XGB_ENABLED = True       # ВКЛЮЧЕНО: честная ML модель Rocket XGBoost v3 (20 фичей без ликеджа)
-ROCKET_XGB_STAGE1_THRESHOLD = 13.0  # Этап 1 (RAM): пускаем кандидатов 13%+ (BUNK 15.7%, BER 18.2%, PPC 15.1%, MEMECOINS 19.9%)
-ROCKET_XGB_FINAL_THRESHOLD = 18.0   # Этап 2 (Audit): подтверждение входа после ончейн-аудита с реальными холдерами (18%+)
-ROCKET_XGB_THRESHOLD = 18.0         # Базовый порог скринера
+ROCKET_XGB_STAGE1_THRESHOLD = 25.0  # Этап 1 (RAM): отсекаем явный мусор со скором <25%
+ROCKET_XGB_FINAL_THRESHOLD = 30.0   # Этап 2 (Audit): подтверждение входа после ончейн-аудита с реальными холдерами (30%+)
+ROCKET_XGB_THRESHOLD = 30.0         # Базовый порог скринера (30%+)
 
 # Stall Timer: выход при затухании моментума (даём полную 5м свечу на выход из консолидации!)
 # Раньше 120с на -5% резало 43% сделок в гарантированный мелкий минус (включая ракету CREDIT +901%).
@@ -190,8 +190,6 @@ JEV_MIN_HOLDERS = 80
 JEV_MAX_TOP_WALLET = 0.15        # 15% лимит на крупнейший кошелек (за вычетом пула)
 JEV_MAX_TOP_10 = 0.30            # 30% лимит на топ-10 кошельков вне пула (защита от кабал-разгрузки)
 MAX_POOL_LIQ_FRAC = 0.02         # Максимум 2% от ликвидности пула в одной сделке (защита от собственного слиппеджа)
-AUDITOR_MAX_DEV_PCT = 6.0        # Лимит доли создателя на DEX (<= 6%, sold 0 на старте миграции)
-AUDITOR_MAX_TOP10_PCT = 30.0     # Лимит концентрации топ-10 на DEX (<= 30% без учёта пулов/локеров)
 AUDITOR_MAX_DELEGATED_ACCOUNTS = 3   # Layer 8: максимум делегированных топ-аккаунтов одному адресу (защита от approve-дрейна)
 AUDITOR_MAX_DELEGATED_PCT = 5.0      # Layer 8: максимум % эмиссии под внешним SPL delegate
 AUDITOR_MAX_BUNDLE_WALLETS = 5       # Layer 7 (RugCheck insiders/graph): размер связанного кластера кошельков
@@ -209,7 +207,7 @@ JEV_MAX_DEV_STILL_LOADED = 0.25
 # FILLS & RISK: "We bid the flush, not the candle" & "The stop lives under the wick"
 JEV_BID_THE_FLUSH_ENABLED = True
 JEV_STOP_UNDER_WICK_ENABLED = True
-JEV_MAX_M1_ENTRY_PCT = 25.0      # Пускаем живые пробойные импульсы до +25% за 1м, отсекая только экстремальные свечи
+JEV_MAX_M1_ENTRY_PCT = 12.0      # Anti-FOMO: не входить на вертикальных 1м свечах > +12% (вход на пике = мгновенный слив дева)
 JEV_DEFAULT_WICK_STOP_PCT = -0.14 # -14% рабочий стоп (согласован с STOP_LOSS_PCT)
 
 # Birdeye API Key
@@ -227,10 +225,9 @@ USE_JITO_EXECUTION = True # Поставь True, когда будешь гот�
 JITO_ENGINE_URL = "https://mainnet.block-engine.jito.wtf/api/v1/bundles"
 JITO_TIP_AMOUNT_SOL = 0.0005 # Чаевые валидатору (минимум 0.0001)
 JITO_TIP_ACCOUNT = "96gYZGLnJYVFmbjzopPSU6QiCRK4rPdTuQ8hB1aP442b" # Официальный Jito Tip Account
-LUNARCRUSH_API_KEY = "syvh43mkvrzrw54sor6kc5r6dmtyj5fhi4jd38ht"
+LUNARCRUSH_API_KEY = (os.getenv("LUNARCRUSH_API_KEY") or "").strip().strip('"').strip("'")
 
 # === ROBINHOOD CHAIN (ОТКЛЮЧЕНО: фокус только на Solana и Base) ===
-ROBINHOOD_ENABLED = False
 ROBINHOOD_ENTRIES_ENABLED = False
 ROBINHOOD_CHAIN_ID = 4663
 ROBINHOOD_DS_SLUG = "robinhood"  # slug DexScreener (НЕ 4663 - тот вернёт пусто!)
@@ -250,19 +247,16 @@ EVM_MAX_MINTS = 120  # Лимит активных кандидатов за ц�
 
 
 # === BASE (EVM L2: ОТКЛЮЧЕНО, фокус строго на Solana) ===
-BASE_ENABLED = False
 BASE_MIN_LIQUIDITY = 4000.0
 BASE_SCAN_INTERVAL = 15
 BASE_MAX_SIZE_USD = 25.0
 
 # === BSC (ОТКЛЮЧЕНО: фокус только на Solana и Base) ===
-BSC_ENABLED = False
 BSC_MIN_LIQUIDITY = 4000.0
 BSC_SCAN_INTERVAL = 20
 BSC_MIN_LP_LOCKED_PCT = 0.70
 
 # === ETHEREUM (ОТКЛЮЧЕНО: фокус только на Solana и Base) ===
-ETHEREUM_ENABLED = False
 ETHEREUM_ENTRIES_ENABLED = False
 
 # === РЕАЛЬНЫЕ КОМИССИИ СЕТЕЙ (EVM L2 vs BSC vs Solana) ===
@@ -321,16 +315,16 @@ SNIPER_BUYERS_WINDOW_MIN = 5
 VIP_MAX_M5_PCT = 0.60  # Выше +60% за 5м - вертикаль и перегрев
 PULLBACK_MIN_M5_PCT = 0.025  # 2.5%: не отсекаем растущие монеты (+2.5%..+4.9%) как флет
 PULLBACK_M1_MIN_PCT = -0.08  # Согласовано с Grok flush rule (здоровый откат до -8% за минуту)
-PULLBACK_M1_MAX_PCT = 0.40  # Поднято до 40%: позволяет заходить в реальный пробойный импульс (breakout), а не ждать затухания
-PULLBACK_MAX_H1_PCT = 250.0  # До +250% за час (выше - поздняя стадия пампа, риск сброса китов)
-PULLBACK_MAX_M5_PCT = 1.20  # До +120% за 5м при активных покупках (не режет реальные ракеты вроде vamp +51%)
+PULLBACK_M1_MAX_PCT = 0.12   # Anti-FOMO: макс +12% за 1м (отсекает покупки на вершине вертикальной свечи вроде GADSEN +22%, KATIE +15%)
+PULLBACK_MAX_H1_PCT = 160.0  # До +160% за час (выше - поздняя стадия пампа, риск сброса китов)
+PULLBACK_MAX_M5_PCT = 0.45   # До +45% за 5м (отсекает поздний вход после первой волны)
 MIN_VOLUME_M5 = 1200  # Снижено до $1,200 (ранний старт ракет, не ждём пока токен улетит)
 MIN_TXNS_M5 = 10     # Минимум 10 сделок за 5м
 MIN_BUY_SELL_RATIO = 1.05  # Покупатели лидируют над продавцами (не режем токены с паритетом 1.1x)
 LOTTERY_ENABLED = False  # Отключено: лотерея на вертикалях m5>60% вела в мгновенные дампы девов (SI, pablo)
 LOTTERY_MIN_M5_PCT = 0.60  # Было 0.80: закрываем мертвую зону m5 60-80% (VIP_MAX 60% + лотерея от 60%)
 LOTTERY_SIZE_MULT = 0.30  # $10 * 0.30 = $3.0 билет (было 0.25 = $2.5)
-WHALE_CONSENSUS = 1  # вход на 2-м ките (3-й = уже поздно)
+WHALE_CONSENSUS = 2  # вход на подтвержденном китовом потоке
 WHALE_MAX_RUNUP = 1.35  # цена не должна вырасти >35% с момента покупки первого кита
 
 # === FAST STREAM (0-сек discovery, идея DoradoDevs/solana-pumpfun-sniper-bot) ===
@@ -362,15 +356,11 @@ TG_MAX_SIZE_USD = 4.0  # кэп TG/FOMO-входа: $4 (банк $20)
 TG_VIP_SIZE_USD = 4.0  # размер входа для VIP-сигналов (Solana): $4
 ROB_MAX_SIZE_USD = 10.0  # Robinhood: потолок до $10 при реинвесте прибыли
 BSC_MAX_SIZE_USD = 10.0  # BSC: потолок до $10 при реинвесте прибыли
-BSC_MIN_LIQUIDITY = 4000.0  # Пулы от $4k на BSC (раньше стояла опечатка 30000.0)
 BSC_WEAK_SIZE_USD = 4.0   # Сайз $4 (банк $20)
 
 # EVM tracking intervals (адаптивный опрос открытых позиций без 429)
 EVM_TRACK_INTERVAL = 2.5  # Быстрый трекинг при открытых сделках (2.5с вместо 8с для мгновенных стопов)
 EVM_IDLE_TRACK_INTERVAL = 6.0  # Опрос в режиме ожидания (нет открытых позиций)
-
-# EVM factory WSS (ОТКЛЮЧЕНО: фокус только на Solana)
-EVM_WSS_ENABLED = False
 
 # CoinGecko trending -> Solana-минты для GROWTH (без ключей, кэш 30 мин)
 COINGECKO_ENABLED = True
@@ -385,7 +375,6 @@ SCOUT_MAX_AGE_SEC = 720  # старше 12 мин — уже сканер/lotter
 SCOUT_MIN_BUYERS = 5  # ≥5 уникальных покупателей WSS за окно
 SCOUT_MIN_TRADES = 15  # или ≥15 трейдов WSS
 SCOUT_MIN_LIQ = 15000  # пул от $15k (slippage $3 < 2%)
-SCOUT_SIZE_USD = 15.0
 SCOUT_MAX_POS = 3  # не больше 3 скаутов открыто
 SCOUT_RECOOLDOWN = 300  # перепроверка отклонённых через 5 мин
 SCOUT_BIRTH_FALLBACK = False  # birth-добор без WSS тяги ВЫКЛ: тащил раги v0/0 (AMM/XRPN/CLTR)
@@ -414,4 +403,3 @@ USE_COPYTRADE = True
 COPY_MIN_TIER = 2
 COPY_MAX_TICKET_USD = 4.0
 COPY_USE_ANTISCAM = True
-WHALE_CONSENSUS = 2

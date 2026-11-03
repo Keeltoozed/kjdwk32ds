@@ -84,8 +84,6 @@ def score_token_with_rocket_xgb(mint: str, pair_data: dict, holders_info: dict =
         _pc = pair_data.get("priceChange") or {}
         _m5 = float(_pc.get("m5", 0) or 0)
         _m1 = float(_pc.get("m1", 0) or 0)
-        if _m1 == 0.0 and abs(_m5) > 0.5:
-            _m1 = max(-25.0, min(25.0, _m5 * 0.15))
         _h1 = float(_pc.get("h1", 0) or 0)
         _vm5 = float((pair_data.get("volume") or {}).get("m5", 0) or 0)
         _txm5 = (pair_data.get("txns") or {}).get("m5", {}) or {}
@@ -1161,8 +1159,6 @@ class Analyzer:
         _pc = pair_data.get("priceChange") or {}
         _m5 = float(_pc.get("m5", 0) or 0)
         _m1 = float(_pc.get("m1", 0) or 0)
-        if _m1 == 0.0 and abs(_m5) > 0.5:
-            _m1 = max(-25.0, min(25.0, _m5 * 0.15))
         _h1 = float(_pc.get("h1", 0) or 0)
         _h6 = float(_pc.get("h6", 0) or 0)
         if _h1 < -8.0 or _h6 < -15.0:
@@ -1191,8 +1187,6 @@ class Analyzer:
         _pc = pair_data.get("priceChange") or {}
         _m5 = float(_pc.get("m5", 0) or 0)
         _m1 = float(_pc.get("m1", 0) or 0)
-        if _m1 == 0.0 and abs(_m5) > 0.5:
-            _m1 = max(-25.0, min(25.0, _m5 * 0.15))
         _h1 = float(_pc.get("h1", 0) or 0)
         _vm5_pre = float((pair_data.get("volume") or {}).get("m5", 0) or 0)
         _v24 = float((pair_data.get("volume") or {}).get("h24", 0) or 0)
@@ -1354,9 +1348,7 @@ class Analyzer:
             curve_liq = fdv_val * 0.35 if fdv_val > 0 else 0.0
             liq_val = max(raw_liq, curve_liq) if is_pump_curve else raw_liq
 
-            _is_momentum_rocket = (_m5 >= 18.0 and _b5_pre >= _s5_pre and _vm5_pre >= 3000.0)
-
-            if not _is_momentum_rocket and (conf + 0.05) < threshold:
+            if (conf + 0.05) < threshold:
                 self._deny(mint, f"rocket-xgb {conf:.0f}%", f"· [ROCKET-XGB] {symbol} ({mint[:8]}): уверенность модели {conf:.1f}% < {threshold:.0f}% — отсеян до тяжелых проверок (0ms).")
                 try:
                     from shadow_tracker import shadow_tracker
@@ -1376,8 +1368,6 @@ class Analyzer:
                 except Exception:
                     pass
                 return False
-            elif _is_momentum_rocket and (conf + 0.05) < threshold:
-                print(f"⚡ [ROCKET-XGB MOMENTUM-PASS] {symbol} ({mint[:8]}): Мощный памп (m5 +{_m5:.1f}%, vol5 ${_vm5_pre:,.0f}, {_b5_pre}b/{_s5_pre}s) при скоре {conf:.1f}% — допуск к ончейн аудиту!")
 
             print(f"🚀 [ROCKET-XGB PASSED] {symbol} ({mint[:8]}): ML Score {conf:.1f}% >= {threshold:.0f}%! Запуск ончейн-аудита безопасности...")
 
@@ -1817,14 +1807,14 @@ class Analyzer:
             if _m5 >= getattr(config, "LOTTERY_MIN_M5_PCT", 0.60) * 100:
                 if _is_runner or (_vm5_pre >= 2500.0 and _b5_pre >= 15 and _b5_pre >= _s5_pre * 1.05):
                     # Настоящая ракета с высокой ликвидностью и объемом (не микро-лотерейный раг)
-                    _m1_max = min(28.0, getattr(config, "PULLBACK_M1_MAX_PCT", 0.28) * 100)
+                    _m1_max = getattr(config, "PULLBACK_M1_MAX_PCT", 0.12) * 100
                     if _m1 > _m1_max:
                         return self._deny(mint, "runner-m1-spike", f"🚫 [RUNNER-SPIKE] {mint}: m1 {_m1:+.1f}% > +{_m1_max:.0f}% — свеча-прострел в моменте, ждём откат.")
                     if _m1 < getattr(config, "PULLBACK_M1_MIN_PCT", -0.15) * 100:
                         return self._deny(mint, "runner-m1-dump", f"🚫 [RUNNER-DUMP] {mint}: m1 {_m1:+.1f}% — импульс схлопнулся, это дамп.")
                     if _m5 > 450.0:
                         return self._deny(mint, "runner-m5-overheat", f"🚫 [RUNNER-EXHAUSTION] {mint}: m5 {_m5:+.0f}% > +450% — экстремальный перегрев 5м свечи.")
-                    _max_h1_cfg = float(getattr(config, "PULLBACK_MAX_H1_PCT", 250.0))
+                    _max_h1_cfg = float(getattr(config, "PULLBACK_MAX_H1_PCT", 160.0))
                     _max_h1_pct = (_max_h1_cfg * 100.0) if _max_h1_cfg <= 20.0 else _max_h1_cfg
                     _max_h1_allowed = min(350.0, _max_h1_pct * 1.4)
                     if _h1 > _max_h1_allowed:
@@ -1844,18 +1834,18 @@ class Analyzer:
                 if _m5 < _min_m5:
                     return self._deny(mint, f"m5-flat {_m5:+.1f}%", f"🚫 [ENTRY] {mint}: m5 {_m5:+.1f}% < {_min_m5:.1f}% — импульса нет.")
                 # 2. Максимальный импульс m5 (НЕ ВХОДИМ НА ВЕРШИНЕ, но пускаем подтвержденные ракеты!)
-                _max_m5 = 350.0 if (_vm5_pre >= 3500.0 and _b5_pre >= 18 and _b5_pre >= _s5_pre * 1.10) else (getattr(config, "PULLBACK_MAX_M5_PCT", 1.20) * 100)
+                _max_m5 = 350.0 if (_vm5_pre >= 3500.0 and _b5_pre >= 18 and _b5_pre >= _s5_pre * 1.10) else (getattr(config, "PULLBACK_MAX_M5_PCT", 0.45) * 100)
                 if _m5 > _max_m5:
                     return self._deny(mint, f"m5-late {_m5:+.0f}%", f"🚫 [LATE] {mint}: m5 {_m5:+.1f}% > +{_max_m5:.0f}% — ракета уже улетела, ждем откат.")
                 # 3. Минутный импульс (если DexScreener отдал m1)
                 if _m1 != 0:
-                    _m1_max = getattr(config, "PULLBACK_M1_MAX_PCT", 0.40) * 100
+                    _m1_max = getattr(config, "PULLBACK_M1_MAX_PCT", 0.12) * 100
                     if _m1 > _m1_max:
                         return self._deny(mint, f"m1-vertical {_m1:+.1f}%", f"🚫 [ENTRY] {mint}: m1 {_m1:+.1f}% > +{_m1_max:.0f}% — вертикаль в моменте, вход = вершина.")
                     if _m1 < getattr(config, "PULLBACK_M1_MIN_PCT", -0.05) * 100:
                         return self._deny(mint, f"m1-dump {_m1:+.1f}%", f"🚫 [ENTRY] {mint}: m1 {_m1:+.1f}% — падающий нож.")
                 # 4. Часовой тренд (не входить в уже улетевшие или падающие)
-                _max_h1_cfg = getattr(config, "PULLBACK_MAX_H1_PCT", 2.50)
+                _max_h1_cfg = getattr(config, "PULLBACK_MAX_H1_PCT", 160.0)
                 _max_h1 = (_max_h1_cfg * 100.0) if _max_h1_cfg <= 20.0 else float(_max_h1_cfg)
                 if _h1 > _max_h1:
                     return self._deny(mint, f"h1-gone {_h1:+.0f}%", f"🚫 [ENTRY] {mint}: h1 {_h1:+.0f}% > +{_max_h1:.0f}% — уже улетел.")
@@ -3224,8 +3214,6 @@ class Analyzer:
         _pc = pair_data.get("priceChange") or {}
         _m5 = float(_pc.get("m5", 0) or 0)
         _m1 = float(_pc.get("m1", 0) or 0)
-        if _m1 == 0.0 and abs(_m5) > 0.5:
-            _m1 = max(-25.0, min(25.0, _m5 * 0.15))
         _h1 = float(_pc.get("h1", 0) or 0)
         _h6 = float(_pc.get("h6", 0) or 0)
         _fdv_check = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
@@ -3235,8 +3223,9 @@ class Analyzer:
         _b5, _s5 = int(_txm5.get("buys", 0) or 0), int(_txm5.get("sells", 0) or 0)
 
         # Защита от покупки экстремального вертикального выброса (Blow-off peak)
-        if _m1 > 28.0 and not (_b5 >= _s5 * 1.5 and _vm5 >= 20000):
-            return self._deny(mint, "m1-blowoff", f"🚫 [FOMO-TOP] {mint[:8]}: m1 +{_m1:.1f}% > +28.0% — экстремальный секундный прострел.")
+        _max_blow = getattr(config, "PULLBACK_M1_MAX_PCT", 0.12) * 100
+        if _m1 > _max_blow and not (_b5 >= _s5 * 1.5 and _vm5 >= 20000):
+            return self._deny(mint, "m1-blowoff", f"🚫 [FOMO-TOP] {mint[:8]}: m1 +{_m1:.1f}% > +{_max_blow:.0f}% — экстремальный минутный прострел (вершина).")
         
         if 0 < _fdv_check < 15000:
             return self._deny(mint, "ray-fdv-cliff", f"🚫 [RAYDIUM] {mint[:8]}: FDV ${_fdv_check:,.0f} < $15,000 — слишком мелкий пул.")

@@ -232,12 +232,15 @@
   "AgmLJBMDCqWynYnQiPCuj9ewsNNsBJXyzoUhD9LJzN51": {
     "chain": "solana",
     "first_seen": 1792957265.08415,
-    "total_pnl": 363.11,
+    "total_pnl": 8562.25,
     "winning_tokens": [
-      "Marvin / SOL"
+      "Marvin / SOL",
+      "CAPY / SOL",
+      "FLOAT / SOL",
+      "MOGMAS / SOL"
     ],
-    "trade_count": 7,
-    "tier": 3
+    "trade_count": 305,
+    "tier": 1
   },
   "74EswSD4Eib6mhWmwxCQyx7qqafPD7jk8hYZM9B3AMpx": {
     "chain": "solana",
@@ -392,12 +395,13 @@
   "FHpcNSe6tb2n15bAdq4BkeYWGyZKFD7yLYrH92ng7wCT": {
     "chain": "solana",
     "first_seen": 1793552873.287704,
-    "total_pnl": 442.96,
+    "total_pnl": 1044.11,
     "winning_tokens": [
-      "KIM / SOL"
+      "KIM / SOL",
+      "FLOAT / SOL"
     ],
-    "trade_count": 15,
-    "tier": 3
+    "trade_count": 18,
+    "tier": 2
   },
   "5W9CfbLX3Eq2homQcLVrEY1cfCcWLcVHJz4pf8XbV8B1": {
     "chain": "solana",
@@ -525,6 +529,598 @@
     "total_pnl": 493.24,
     "winning_tokens": [
       "KIM / SOL"
+    ],
+    "trade_count": 1,
+    "tier": 3
+  },
+  "4Rcjjtb2xNVo8KCwaar72yUjiTLHXv8A4jo9MqaqR1A2": {
+    "chain": "solana",
+    "first_seen": 1793735894.2056801,
+    "total_pnl": 850.62,
+    "winning_tokens": [
+      "FLOAT / SOL"
+    ],
+    "trade_count": 2,
+    "tier": 3
+  },
+  "H3MNBqAMcvpzjhbUJLnzW1YGMakHgaSDsMQxojAruvKk": {
+    "chain": "solana",
+    "first_seen": 1793735894.205823,
+    "total_pnl": 3077.25,
+    "winning_tokens": [
+      "FLOAT / SOL"
+    ],
+    "trade_count": 11,
+    "tier": 3
+  },
+  "9GkMKDBHmiSqV7bdF5AaqNnXa8Y5p2dAQZtBQTkHNPuy": {
+    "chain": "solana",
+    "first_seen": 1793735894.2058408,
+    "total_pnl": 975.72,
+    "winning_tokens": [
+      "FLOAT / SOL"
+    ],
+    "trade_count": 2,
+    "tier": 3
+  },
+  "B3UgyrpiZVeAHxkA8qVftDFPoNuut6YicXwVmqAp9MGn": {
+    "chain": "solana",
+    "first_seen": 1793735894.205871,
+    "total_pnl": 10486.54,
+    "winning_tokens": [
+      "FLOAT / SOL"
+    ],
+    "trade_count": 22,
+    "tier": 3
+  },
+  "DjQouqTgRBYwwa2eafiQcyeckVU1JcH8qPZYd714HGo": {
+    "chain": "solana",
+    "first_seen": 1793735894.205899,
+    "total_pnl": 1167.88,
+    "winning_tokens": [
+      "FLOAT / SOL"
+    ],
+    "trade_count": 2,
+    "tier": 3
+  },
+  "Ddm8mwe37mmpni7W9nQoMbMpYD3DfQtcQZ75wxWTgTr1": {
+    "chain": "solana",
+    "first_seen": 1793735894.2059278,
+    "total_pnl": 1635.3,
+    "winning_tokens": [
+      "FLOAT / SOL"
+    ],
+    "trade_count": 2,
+    "tier": 3
+  },
+  "HJwwcBCVH6dpwAhp8saNsevBkVrsrMcxj6i9j842nQCw": {
+    "chain": "solana",
+    "first_seen": 1793735894.205963,
+    "total_pnl": 1532.96,
+    "winning_tokens": [
+      "FLOAT / SOL"
+    ],
+    "trade_count": 8,
+    "tier": 3
+  },
+  "AkXnZK5wGAhL8n47k78cD7XeCndd5KRzrNjfwGtaRdhq": {
+    "chain": "solana",
+    "first_seen": 1793735894.205972,
+    "total_pnl": 4190.969999999999,
+    "winning_tokens": [
+      "FLOAT / SOL",
+      "CAPY / SOL"
+    ],
+    "trade_count": 3,
+    "tier": 1
+  },
+  "9Tdm1qMy6Xt7Vfywb3jVFRoWw3r371i9aQ8eKJ2kChQk": {
+    "chain": "solana",
+    "first_seen": 1793735894.206034,
+    "total_pnl": 1420.44,
+    "winning_tokens": [
+      "FLOAT / SOL"
+    ],
+    "trade_count": 2,
+    "tier": 3
+  },
+  "D96kmD2FjJUvihSPAzQzh75ieKKBszx3hVsv6sjq25Ua": {
+    "chain": "solana",
+    "first_seen": 1793735894.21566,
+    "total_pnl": 1354.04,
+    "winning_tokens": [
+      "FLOAT / SOL"
+    ],
+    "trade_count": 2,
+    "tier": 3
+  },
+  "9CJm5LrfLJbVjavWe9ir7oVPVzea1kyQ9WEU61oSugaU": {
+    "chain": "solana",
+    "first_seen": 1793736147.459328,
+    "total_pnl": 423.21,
+    "winning_tokens": [
+      "FLOAT / SOL"
+    ],
+    "trade_count": 2,
+    "tier": 3
+  },
+  "ACDvQcEzXKQfZUEczSUMsmYsYKcEyED7EMmUP83vmFcB": {
+    "chain": "solana",
+    "first_seen": 1793736147.45937,
+    "total_pnl": 853.81,
+    "winning_tokens": [
+      "FLOAT / SOL"
+    ],
+    "trade_count": 1,
+    "tier": 3
+  },
+  "9gHYDihzsBMRgj5uzsKq7T81AgCMJjNuoPiUaxEh2fFb": {
+    "chain": "solana",
+    "first_seen": 1793738010.2728572,
+    "total_pnl": 2373.75,
+    "winning_tokens": [
+      "CAPY / SOL"
+    ],
+    "trade_count": 2,
+    "tier": 3
+  },
+  "3uAruw43pb1FEfjj864yyG4txppNR7UMK66PNjNa6Egz": {
+    "chain": "solana",
+    "first_seen": 1793738010.272918,
+    "total_pnl": 420.35,
+    "winning_tokens": [
+      "CAPY / SOL"
+    ],
+    "trade_count": 1,
+    "tier": 3
+  },
+  "ACvyFxS7USYmRJedHVdFLRvXq79go64TGHQdb7BAuDPh": {
+    "chain": "solana",
+    "first_seen": 1793738010.273025,
+    "total_pnl": 911.96,
+    "winning_tokens": [
+      "CAPY / SOL"
+    ],
+    "trade_count": 1,
+    "tier": 3
+  },
+  "2nMXNMW6AEprDgbkdPaDFBFxMmxtKKBDjQuGFEP8QcpK": {
+    "chain": "solana",
+    "first_seen": 1793738010.2730958,
+    "total_pnl": 872.79,
+    "winning_tokens": [
+      "CAPY / SOL"
+    ],
+    "trade_count": 1,
+    "tier": 3
+  },
+  "6YWdHjzz33CWEeABjs4f4rEFNA79dcRYscP9LK3oGRHA": {
+    "chain": "solana",
+    "first_seen": 1793738010.273155,
+    "total_pnl": 1845.69,
+    "winning_tokens": [
+      "CAPY / SOL"
+    ],
+    "trade_count": 2,
+    "tier": 3
+  },
+  "4SoK4PjZrMa82xD56sfVFyuZUy9Ghe6tBQVzPHkAKNxW": {
+    "chain": "solana",
+    "first_seen": 1793738010.2731678,
+    "total_pnl": 759.78,
+    "winning_tokens": [
+      "CAPY / SOL"
+    ],
+    "trade_count": 1,
+    "tier": 3
+  },
+  "7MzdAQ29ZdwUtLXiNiTmrw4xT8AQDh2Lf8ym4uQ7GT35": {
+    "chain": "solana",
+    "first_seen": 1793738030.762078,
+    "total_pnl": 248.74,
+    "winning_tokens": [
+      "MOGMAS / SOL"
+    ],
+    "trade_count": 8,
+    "tier": 3
+  },
+  "89rBotvrnK4jSQWxfZ2taF98zEGkxbYUGWNP89LkDhoA": {
+    "chain": "solana",
+    "first_seen": 1793738030.762285,
+    "total_pnl": 407.41,
+    "winning_tokens": [
+      "MOGMAS / SOL"
+    ],
+    "trade_count": 1,
+    "tier": 3
+  },
+  "Gb1R1LK1qPmLmc9YX9Qh1QUYw3gUbd4Um19nA1oxURkC": {
+    "chain": "solana",
+    "first_seen": 1793739855.981698,
+    "total_pnl": 1212.7,
+    "winning_tokens": [
+      "FLOAT / SOL"
+    ],
+    "trade_count": 2,
+    "tier": 3
+  },
+  "FsAadgLQF4DbVsu1EXuTFCEYK4SfBfupr4SQgWPcpAxn": {
+    "chain": "solana",
+    "first_seen": 1793739855.981792,
+    "total_pnl": 1238.66,
+    "winning_tokens": [
+      "FLOAT / SOL"
+    ],
+    "trade_count": 2,
+    "tier": 3
+  },
+  "8aYuDgUbrn8giS2LPbYZp4YfcGbYhx9nNMqhfnrMc1Tu": {
+    "chain": "solana",
+    "first_seen": 1793739855.981838,
+    "total_pnl": 853.62,
+    "winning_tokens": [
+      "FLOAT / SOL"
+    ],
+    "trade_count": 2,
+    "tier": 3
+  },
+  "HiMomvku1FajUW4mc33wudNg6vjaSVEwZhcv7DXGJmjH": {
+    "chain": "solana",
+    "first_seen": 1793739855.981857,
+    "total_pnl": 1732.68,
+    "winning_tokens": [
+      "FLOAT / SOL"
+    ],
+    "trade_count": 8,
+    "tier": 3
+  },
+  "13j3vyuQzekoq7ciMaLsG7P8cm9Z6PS4GdmWv8AgDfyo": {
+    "chain": "solana",
+    "first_seen": 1793739855.9818702,
+    "total_pnl": 979.02,
+    "winning_tokens": [
+      "FLOAT / SOL"
+    ],
+    "trade_count": 2,
+    "tier": 3
+  },
+  "Dy7C5ZKsYhyYazLYePwsgZ5H7SX4jg8wWcNrHYrRriVd": {
+    "chain": "solana",
+    "first_seen": 1793739855.981878,
+    "total_pnl": 981.42,
+    "winning_tokens": [
+      "FLOAT / SOL"
+    ],
+    "trade_count": 2,
+    "tier": 3
+  },
+  "ALVMJ9bny8tFT7AapoVbbzrgCYzrjy8iHw6EHFaehgZZ": {
+    "chain": "solana",
+    "first_seen": 1793739855.9818869,
+    "total_pnl": 925.66,
+    "winning_tokens": [
+      "FLOAT / SOL"
+    ],
+    "trade_count": 2,
+    "tier": 3
+  },
+  "HxSeRdvTwX3QrL827NUAn1ZsH2LBK1oT6TTK4b9fwufj": {
+    "chain": "solana",
+    "first_seen": 1793739855.981905,
+    "total_pnl": 1520.6799999999998,
+    "winning_tokens": [
+      "FLOAT / SOL"
+    ],
+    "trade_count": 3,
+    "tier": 3
+  },
+  "2ur6QgdT4sqTUS2ezcKxTTVTgyeboF8S4di68r7AV4WF": {
+    "chain": "solana",
+    "first_seen": 1793739855.981932,
+    "total_pnl": 2306.48,
+    "winning_tokens": [
+      "FLOAT / SOL"
+    ],
+    "trade_count": 4,
+    "tier": 3
+  },
+  "2BqTvkdyMMXk1aFThvRa9VcSeFG9i3iP8GAj2F6azX1y": {
+    "chain": "solana",
+    "first_seen": 1793739855.988945,
+    "total_pnl": 2131.62,
+    "winning_tokens": [
+      "FLOAT / SOL"
+    ],
+    "trade_count": 2,
+    "tier": 3
+  },
+  "9EwQoN74Hzw747EM7wB3WtvgAdRGH1czaPtbqZj1qDj4": {
+    "chain": "solana",
+    "first_seen": 1793739855.988975,
+    "total_pnl": 788.52,
+    "winning_tokens": [
+      "FLOAT / SOL"
+    ],
+    "trade_count": 4,
+    "tier": 3
+  },
+  "F244vvcBzZ5aMqQzCgtVQVREZ7owyR8QVyqaYLPXstSs": {
+    "chain": "solana",
+    "first_seen": 1793739855.989046,
+    "total_pnl": 952.66,
+    "winning_tokens": [
+      "FLOAT / SOL"
+    ],
+    "trade_count": 2,
+    "tier": 3
+  },
+  "EuPt2FBxWGRRf5vyX2UTauXYXYmjFnBqTwC4LkDh4kwK": {
+    "chain": "solana",
+    "first_seen": 1793739855.9890869,
+    "total_pnl": 762.08,
+    "winning_tokens": [
+      "FLOAT / SOL"
+    ],
+    "trade_count": 2,
+    "tier": 3
+  },
+  "856W7YxYvzj736wKPP2opoRNWNKsYrRUqFPkNd6N4tZ4": {
+    "chain": "solana",
+    "first_seen": 1793739855.9891,
+    "total_pnl": 759.16,
+    "winning_tokens": [
+      "FLOAT / SOL"
+    ],
+    "trade_count": 2,
+    "tier": 3
+  },
+  "FsG3BaPmRTdSrPaivbgJsFNCCa8cPfkUtk8VLWXkHpHP": {
+    "chain": "solana",
+    "first_seen": 1793739855.989145,
+    "total_pnl": 2162.8,
+    "winning_tokens": [
+      "FLOAT / SOL"
+    ],
+    "trade_count": 6,
+    "tier": 3
+  },
+  "3AeDtWNPwPnuUvxtPMtK2HJzHPpUyCxaU1wfv3sNiL8J": {
+    "chain": "solana",
+    "first_seen": 1793739855.989163,
+    "total_pnl": 1591.52,
+    "winning_tokens": [
+      "FLOAT / SOL",
+      "CAPY / SOL"
+    ],
+    "trade_count": 3,
+    "tier": 2
+  },
+  "HeLt5SQTDmKa12DeLGeBfJZtYAjKXCbyLA2abPnZEtEn": {
+    "chain": "solana",
+    "first_seen": 1793739855.989706,
+    "total_pnl": 720.25,
+    "winning_tokens": [
+      "FLOAT / SOL"
+    ],
+    "trade_count": 1,
+    "tier": 3
+  },
+  "GzmiPNy1tezFUzvb9sC5SvG4DnGaVDz7tniQf5HJGkUb": {
+    "chain": "solana",
+    "first_seen": 1793739855.989716,
+    "total_pnl": 557.72,
+    "winning_tokens": [
+      "FLOAT / SOL"
+    ],
+    "trade_count": 1,
+    "tier": 3
+  },
+  "9hJHfUvEkBqvR5QuoSsfZYFRebXi7Jbgpm8X4istudac": {
+    "chain": "solana",
+    "first_seen": 1793739855.989724,
+    "total_pnl": 364.85,
+    "winning_tokens": [
+      "FLOAT / SOL"
+    ],
+    "trade_count": 1,
+    "tier": 3
+  },
+  "HL81qSsskotftWTbvYZW44MoEcZy4UrhBSaH2squjPQG": {
+    "chain": "solana",
+    "first_seen": 1793739855.9897358,
+    "total_pnl": 839.52,
+    "winning_tokens": [
+      "FLOAT / SOL"
+    ],
+    "trade_count": 1,
+    "tier": 3
+  },
+  "8HiY5Fs63c3ZFCmRDSkn2zj46K3a1t9SsS1UaN1homxV": {
+    "chain": "solana",
+    "first_seen": 1793739855.9897668,
+    "total_pnl": 362.8,
+    "winning_tokens": [
+      "FLOAT / SOL"
+    ],
+    "trade_count": 1,
+    "tier": 3
+  },
+  "7mu7BGg6BscysbyjBsgKE99NttgeRB1Rs4u5nUAUsCnr": {
+    "chain": "solana",
+    "first_seen": 1793739855.989782,
+    "total_pnl": 707.46,
+    "winning_tokens": [
+      "FLOAT / SOL"
+    ],
+    "trade_count": 1,
+    "tier": 3
+  },
+  "8HvpSPLctqJg866GZRyau82MXHguayCkvNJjtjFnUpHz": {
+    "chain": "solana",
+    "first_seen": 1793740479.2590091,
+    "total_pnl": 800.37,
+    "winning_tokens": [
+      "MOGMAS / SOL"
+    ],
+    "trade_count": 1,
+    "tier": 3
+  },
+  "BnfiHRDpHQ5yQevvwnzTmxtaB1Ek276fV5oTY9bi71EA": {
+    "chain": "solana",
+    "first_seen": 1793740479.259131,
+    "total_pnl": 2141.43,
+    "winning_tokens": [
+      "MOGMAS / SOL"
+    ],
+    "trade_count": 3,
+    "tier": 3
+  },
+  "5MyMDPApPtnfyYuFbjZFiRKspw7fzNqNUQFVxG4csT6m": {
+    "chain": "solana",
+    "first_seen": 1793740479.259298,
+    "total_pnl": 1183.13,
+    "winning_tokens": [
+      "MOGMAS / SOL"
+    ],
+    "trade_count": 1,
+    "tier": 3
+  },
+  "37HY2xV1EBZGpqPjN35UR3U34qbVzcKjBRQYWiCSmmfX": {
+    "chain": "solana",
+    "first_seen": 1793740479.2593122,
+    "total_pnl": 360.39,
+    "winning_tokens": [
+      "MOGMAS / SOL"
+    ],
+    "trade_count": 1,
+    "tier": 3
+  },
+  "4fyqfaAhqygw9fZcWDGxFiCmpLv9gPDZWFz5SsPbpCRa": {
+    "chain": "solana",
+    "first_seen": 1793741390.9039738,
+    "total_pnl": 456.2,
+    "winning_tokens": [
+      "FLOAT / SOL"
+    ],
+    "trade_count": 1,
+    "tier": 3
+  },
+  "o6XxUEymyVfABuD5uJLcouTqJFPRk3HYJ6z4dQy3G8o": {
+    "chain": "solana",
+    "first_seen": 1793741390.9040241,
+    "total_pnl": 781.36,
+    "winning_tokens": [
+      "FLOAT / SOL"
+    ],
+    "trade_count": 1,
+    "tier": 3
+  },
+  "96MxJaTQRkWKC4vsi1hL2z8rDH21J7gDiaAGgzvaVzp3": {
+    "chain": "solana",
+    "first_seen": 1793741390.904045,
+    "total_pnl": 668.65,
+    "winning_tokens": [
+      "FLOAT / SOL"
+    ],
+    "trade_count": 1,
+    "tier": 3
+  },
+  "3KZKscE6JNJ9kEaMF3hiQJdhhrGRFQJCaPE19RfYZKvg": {
+    "chain": "solana",
+    "first_seen": 1793741390.9040582,
+    "total_pnl": 1104.99,
+    "winning_tokens": [
+      "FLOAT / SOL"
+    ],
+    "trade_count": 1,
+    "tier": 3
+  },
+  "2XQ5nvBHcrZ6fReYKfoXeQWFQRhCadSVRyDfzXiNoHmp": {
+    "chain": "solana",
+    "first_seen": 1793741403.757608,
+    "total_pnl": 1047.17,
+    "winning_tokens": [
+      "CAPY / SOL"
+    ],
+    "trade_count": 1,
+    "tier": 3
+  },
+  "F2dWzXQ5yBXqGEUx4EnJC9iZhU9gh9FF8UiugE9pmDTa": {
+    "chain": "solana",
+    "first_seen": 1793741403.757696,
+    "total_pnl": 455.03,
+    "winning_tokens": [
+      "CAPY / SOL"
+    ],
+    "trade_count": 1,
+    "tier": 3
+  },
+  "H2UFu7Ebnz5e4LYc6eRZEhSMwdekTB38hEY5QUJ1RhRw": {
+    "chain": "solana",
+    "first_seen": 1793741403.757741,
+    "total_pnl": 488.15,
+    "winning_tokens": [
+      "CAPY / SOL"
+    ],
+    "trade_count": 1,
+    "tier": 3
+  },
+  "HmxM7bvq39R6UixdmYsStpQh2qUqEMJtEH8TSQpMKiGV": {
+    "chain": "solana",
+    "first_seen": 1793741403.757779,
+    "total_pnl": 2313.06,
+    "winning_tokens": [
+      "CAPY / SOL"
+    ],
+    "trade_count": 1,
+    "tier": 3
+  },
+  "GVgVcJCvLCuzpsyHw2ucrp4e6oVSC3nuGU7nQ1ff9bF": {
+    "chain": "solana",
+    "first_seen": 1793741403.757809,
+    "total_pnl": 355.24,
+    "winning_tokens": [
+      "CAPY / SOL"
+    ],
+    "trade_count": 1,
+    "tier": 3
+  },
+  "AY6rLvuKc2f6wTMLjfesQamLNusGdouqjngc1prmNxU": {
+    "chain": "solana",
+    "first_seen": 1793741403.757817,
+    "total_pnl": 739.03,
+    "winning_tokens": [
+      "CAPY / SOL"
+    ],
+    "trade_count": 1,
+    "tier": 3
+  },
+  "Ps6KzrZVUvXbSojrAMWynd2uWob3BtCj1uiLyEzCJbj": {
+    "chain": "solana",
+    "first_seen": 1793741403.757893,
+    "total_pnl": 497.04,
+    "winning_tokens": [
+      "CAPY / SOL"
+    ],
+    "trade_count": 1,
+    "tier": 3
+  },
+  "8BNbG1eQeSMU2UPaPQ5t6XdHrYsQdR6eP9SGzQxndo3C": {
+    "chain": "solana",
+    "first_seen": 1793741403.75791,
+    "total_pnl": 408.33,
+    "winning_tokens": [
+      "CAPY / SOL"
+    ],
+    "trade_count": 1,
+    "tier": 3
+  },
+  "ZWgDY5CRzjhpkaeergeY5UeZdbEaCkevZYieSMGVPkz": {
+    "chain": "solana",
+    "first_seen": 1793741403.757919,
+    "total_pnl": 1601.99,
+    "winning_tokens": [
+      "CAPY / SOL"
     ],
     "trade_count": 1,
     "tier": 3
