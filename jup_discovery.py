@@ -231,13 +231,13 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
     _b5_j = int(_tx5_j.get("buys", 0) or 0)
     _s5_j = int(_tx5_j.get("sells", 0) or 0)
     _dex_j = str((td or {}).get("dexId", "")).lower()
-    _is_raw_curve_j = _dex_j in ("pump", "pumpfun")
+    _is_raw_curve_j = _dex_j in ("pump", "pumpfun", "moonshot") or mint.endswith("moon")
     if _is_raw_curve_j:
-        if not getattr(config, "ALLOW_UNGRADUATED_PUMPFUN", True):
-            print(f"🚫 [{source_tag}-RAW-CURVE] {_sym_tmp} ({mint[:8]}): сырая кривая Pump.fun без миграции на DEX — вход запрещён.")
+        if not getattr(config, "ALLOW_UNGRADUATED_PUMPFUN", False):
+            print(f"🚫 [{source_tag}-RAW-CURVE] {_sym_tmp} ({mint[:8]}): сырая кривая bonding curve без миграции на DEX — вход запрещён.")
             return False
         _fdv_j = float((td or {}).get("fdv", 0) or (td or {}).get("marketCap", 0) or 0)
-        _min_c_mc = float(getattr(config, "MIN_PUMP_CURVE_MCAP_USD", 9000.0))
+        _min_c_mc = float(getattr(config, "MIN_PUMP_CURVE_MCAP_USD", 12000.0))
         if _fdv_j > 0 and _fdv_j < _min_c_mc:
             print(f"🚫 [{source_tag}-CURVE-FLASH-RUG] {_sym_tmp} ({mint[:8]}): FDV ${_fdv_j:,.0f} < ${_min_c_mc:,.0f} (пустой кёрв, flash-rug риск) — блок.")
             return False

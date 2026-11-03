@@ -403,14 +403,15 @@ class GrokJevEngine:
         # ЗАЩИТА ОТ ПУСТЫХ 0.2% FLASH-RUG КЁРВОВ PUMP.FUN (кейсы NOTHING $2.6k, CAMPUS $2.6k):
         # На пустой кривой с 2 SOL резерва любой дамп дева пробивает стоп сразу в -75%!
         # Пускаем Pump.fun кёрвы ТОЛЬКО если они уже набрали базу (прогресс >=15% / FDV >=$9k, кейсы MOBROS $12.5k, OREX $13k)!
+        is_pump = dex_id in ("pump", "pumpfun", "moonshot") or mint.endswith("moon")
         if is_pump:
-            if not getattr(_c, "ALLOW_UNGRADUATED_PUMPFUN", True):
+            if not getattr(_c, "ALLOW_UNGRADUATED_PUMPFUN", False):
                 return False, "ungraduated-pump-curve (ждём миграции на DEX с сожжённым LP)"
             if fdv_mc <= 0:
                 _cur_p = float(pair_data.get("priceUsd", 0) or 0)
                 if _cur_p > 0:
                     fdv_mc = _cur_p * 1_000_000_000.0
-            _min_curve_mc = float(getattr(_c, "MIN_PUMP_CURVE_MCAP_USD", 9000.0))
+            _min_curve_mc = float(getattr(_c, "MIN_PUMP_CURVE_MCAP_USD", 12000.0))
             if fdv_mc > 0 and fdv_mc < _min_curve_mc:
                 return False, f"pump-curve-flash-rug: FDV ${fdv_mc:,.0f} < ${_min_curve_mc:,.0f} (пустой кёрв <15%, риск мгновенного сноса в -75%)"
         eff_liq = raw_liq if dex_id not in ("pump", "pumpfun") else (raw_liq if raw_liq > 0 else fdv_mc * 0.40)
@@ -1240,11 +1241,11 @@ class GrokJevEngine:
         raw_liq = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
         fdv = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
         dex_id = str(pair_data.get("dexId", "")).lower()
-        is_pump = dex_id in ("pump", "pumpfun")
+        is_pump = dex_id in ("pump", "pumpfun", "moonshot") or mint.endswith("moon")
         if is_pump:
-            if not getattr(_c, "ALLOW_UNGRADUATED_PUMPFUN", True):
+            if not getattr(_c, "ALLOW_UNGRADUATED_PUMPFUN", False):
                 return False, "ungraduated-pump-curve (ждём миграции на DEX с сожжённым LP)", _h_stats
-            _min_c_mc = float(getattr(_c, "MIN_PUMP_CURVE_MCAP_USD", 9000.0))
+            _min_c_mc = float(getattr(_c, "MIN_PUMP_CURVE_MCAP_USD", 12000.0))
             if fdv > 0 and fdv < _min_c_mc:
                 return False, f"pump-curve-flash-rug (FDV ${fdv:,.0f} < ${_min_c_mc:,.0f})", _h_stats
         eff_liq = max(raw_liq, fdv * 0.40) if is_pump else raw_liq
@@ -1724,20 +1725,21 @@ class GrokJevEngine:
             return False, "max-positions-reached"
 
         # Расчет размера билета (Dynamic Sizing / Compounding)
-        ticket_size = float(getattr(_c, "BASE_TRADE_AMOUNT_USD", 15.0) or 15.0)
+        _base_t = float(getattr(_c, "BASE_TRADE_AMOUNT_USD", 4.0) or 4.0)
+        ticket_size = _base_t
         if getattr(_c, "DYNAMIC_REINVEST_ENABLED", True) or getattr(_c, "COMPOUNDING_ENABLED", True):
             try:
                 ticket_size = tracker.calculate_dynamic_position_size(pair, chain=chain)
             except Exception:
                 pass
-        ticket_size = max(10.0, ticket_size)
-        _cap = float(getattr(_c, "JEV_MAX_TICKET_USD", 15.0) or 0.0)
+        ticket_size = max(_base_t, ticket_size)
+        _cap = float(getattr(_c, "JEV_MAX_TICKET_USD", 0.0) or 0.0)
         if _cap > 0:
-            ticket_size = min(ticket_size, _cap)   # растущий билет ($31) умножал убыток на каждом сливе
+            ticket_size = min(ticket_size, _cap)
         # Executor Liquidity Cap (@savipww): не более 2% от ликвидности пула, чтобы собственный выход не двигал стакан
         _pool_frac = float(getattr(_c, "MAX_POOL_LIQ_FRAC", 0.02) or 0.02)
         if _fliq > 0:
-            ticket_size = min(ticket_size, max(5.0, round(_fliq * _pool_frac, 2)))
+            ticket_size = min(ticket_size, max(_base_t, round(_fliq * _pool_frac, 2)))
 
         # PRE-FLIGHT SELL CHECK: для Solana проверяем продаваемость на Jupiter ПЕРЕД входом!
         # Спасает депозит от 100% потерь на ханипотах типа 134uyPgA/CAPY (NO_ROUTES_FOUND)

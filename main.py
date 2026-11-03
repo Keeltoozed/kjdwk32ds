@@ -907,11 +907,11 @@ async def scanner_loop(analyzer, tracker):
                                     print(f"🚫 [SCANNER-PRICE-SPLIT] {actual_symbol} ({mint[:8]}): рассинхрон пулов {_div_r:.1f}x — блок.")
                                     continue
                                 _dex_id = str((pair_data.get("dexId") or "")).lower()
-                                if _dex_id in ("pump", "pumpfun"):
+                                if _dex_id in ("pump", "pumpfun", "moonshot") or mint.endswith("moon"):
                                     _fdv_m_sc = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
-                                    _min_c_sc = float(getattr(config, "MIN_PUMP_CURVE_MCAP_USD", 9000.0))
-                                    if not getattr(config, "ALLOW_UNGRADUATED_PUMPFUN", True):
-                                        print(f"🚫 [SCANNER-RAW-CURVE] {actual_symbol} ({mint[:8]}): сырая кривая Pump.fun без миграции на DEX — отмена!")
+                                    _min_c_sc = float(getattr(config, "MIN_PUMP_CURVE_MCAP_USD", 12000.0))
+                                    if not getattr(config, "ALLOW_UNGRADUATED_PUMPFUN", False):
+                                        print(f"🚫 [SCANNER-RAW-CURVE] {actual_symbol} ({mint[:8]}): сырая кривая bonding curve без миграции на DEX — отмена!")
                                         continue
                                     if 0 < _fdv_m_sc < _min_c_sc:
                                         print(f"🚫 [SCANNER-CURVE-FLASH-RUG] {actual_symbol} ({mint[:8]}): FDV ${_fdv_m_sc:,.0f} < ${_min_c_sc:,.0f} (пустой кёрв, flash-rug) — отмена!")

@@ -81,8 +81,9 @@ DD_THROTTLE_START_USD = 15.0         # просадка от пика
 
 # === IN-MEMORY STREAMING SNIPER & GRADUATED DEX SHIELD (@savipww / GMGN Anti-Bundler) ===
 SNIPER_ENTRIES_ENABLED = False            # ВЫКЛ вход на сырой кривой Pump.fun: WSS работает как радар миграций (subscribeMigration -> Waiting Room)
-ALLOW_UNGRADUATED_PUMPFUN = True          # ВКЛЮЧЕНО: разрешаем зрелые ракеты на Pump.fun кривой ($12k+ MCap) и на DEX после миграции!
-MIN_PUMP_CURVE_MCAP_USD = 12000.0         # ПОЛ КЁРВА: блокирует пустые 0-минутные flash-rug ванночки ($2k-$5k MCap как tractor/OLLYBEE), но пускает реальные ракеты ZANT/AI/ZKSHARK ($12k+)!
+ALLOW_UNGRADUATED_PUMPFUN = False         # СТРОГО ВЫКЛЮЧЕНО: запрет входа на пустых сырых кривых Pump.fun/Moonshot (ванночки без ликвы). Вход ТОЛЬКО после миграции на DEX с сожжённым LP!
+MIN_PUMP_CURVE_MCAP_USD = 12000.0         # Запасной фильтр для DEX миграций
+JEV_MAX_TICKET_USD = 0.0                  # 0.0 = динамический авто-масштаб билета JEV вместе с ростом капитала (через calculate_dynamic_position_size)
 MIN_GRADUATED_LIQ_USD = 7500.0            # Мин. реальная ликвидность DEX-пула ($7,500+) после миграции (отсекает микро-пулы и слитые остатки)
 AUDITOR_STAIRCASE_ENABLED = True          # Layer 9+10: защита от Staircase bump-ботов, синхронных пачек сброса Jito и ферм суб-кошельков
 AUDITOR_MAX_DEV_PCT = 6.0                 # Макс. доля дева на DEX (6%)

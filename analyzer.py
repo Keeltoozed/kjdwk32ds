@@ -1269,19 +1269,19 @@ class Analyzer:
             else:
                 _age_min_pre = 999.0
         _dex_pre_early = str(pair_data.get("dexId", "")).lower()
-        if _dex_pre_early in ("pump", "pumpfun"):
-            if not getattr(config, "ALLOW_UNGRADUATED_PUMPFUN", True):
+        if _dex_pre_early in ("pump", "pumpfun", "moonshot") or mint.endswith("moon"):
+            if not getattr(config, "ALLOW_UNGRADUATED_PUMPFUN", False):
                 return self._deny(
                     mint,
                     "ungraduated-pump-curve",
-                    f"⏳ [CURVE-SKIP] {symbol} ({mint[:8]}): сырая кривая Pump.fun без миграции на DEX — ждём выхода на PumpSwap/Raydium.",
+                    f"⏳ [CURVE-SKIP] {symbol} ({mint[:8]}): сырая кривая bonding curve без миграции на DEX — ждём выхода на PumpSwap/Raydium с сожжённым LP.",
                 )
             _fdv_curve_pre = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
             if _fdv_curve_pre <= 0:
                 _px_calc = float(pair_data.get("priceUsd", 0) or 0)
                 if _px_calc > 0:
                     _fdv_curve_pre = _px_calc * 1_000_000_000.0
-            _min_curve_mcap = float(getattr(config, "MIN_PUMP_CURVE_MCAP_USD", 9000.0))
+            _min_curve_mcap = float(getattr(config, "MIN_PUMP_CURVE_MCAP_USD", 12000.0))
             if _fdv_curve_pre > 0 and _fdv_curve_pre < _min_curve_mcap:
                 return self._deny(
                     mint,
