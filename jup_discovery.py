@@ -232,6 +232,9 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
     _s5_j = int(_tx5_j.get("sells", 0) or 0)
     _dex_j = str((td or {}).get("dexId", "")).lower()
     _is_raw_curve_j = _dex_j in ("pump", "pumpfun", "moonshot") or mint.endswith("moon")
+    _raw_liq_j = float(((td or {}).get("liquidity") or {}).get("usd", 0) or 0)
+    _cr_j = (td or {}).get("pairCreatedAt") or 0
+    _age_j = (time.time() * 1000 - _cr_j) / 60000.0 if _cr_j else 999.0
     if _is_raw_curve_j:
         if not getattr(config, "ALLOW_UNGRADUATED_PUMPFUN", False):
             print(f"🚫 [{source_tag}-RAW-CURVE] {_sym_tmp} ({mint[:8]}): сырая кривая bonding curve без миграции на DEX — вход запрещён.")

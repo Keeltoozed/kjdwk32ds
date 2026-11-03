@@ -1769,7 +1769,7 @@ class GrokJevEngine:
                 _w_low = str(_j_why or "").lower()
                 if not _j_ok and any(k in _w_low for k in ("no routes", "cannot sell", "honeypot", "freeze", "0 sol returned")):
                     print(f"🚫 [PRE-FLIGHT BLOCKED] Отказ входа {symbol} ({address[:8]}): токен непродаваем на DEX ({_j_why}) — предотвращен слив -100%!")
-                    return
+                    return False, f"pre-flight-unsellable ({_j_why})"
             except Exception:
                 pass
 
