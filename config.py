@@ -81,7 +81,7 @@ DD_THROTTLE_START_USD = 15.0         # просадка от пика
 
 # === IN-MEMORY STREAMING SNIPER & GRADUATED DEX SHIELD (@savipww / GMGN Anti-Bundler) ===
 SNIPER_ENTRIES_ENABLED = False            # ВЫКЛ вход на сырой кривой Pump.fun: WSS работает как радар миграций (subscribeMigration -> Waiting Room)
-ALLOW_UNGRADUATED_PUMPFUN = True          # РАЗРЕШЕНО: пускаем органические pump.fun кёрвы, набравшие базу (прогресс >=15% / FDV >=$9k, кейсы MOBROS +10%, OREX +84%)!
+ALLOW_UNGRADUATED_PUMPFUN = False         # ВЫКЛЮЧЕНО: блокируем сырые pump.fun кёрвы без миграции (отсекает 0-минутные дев-дампы типа tractor -17%, OLLYBEE -33%, Elun -96%). Ждём миграции на PumpSwap/Raydium!
 MIN_PUMP_CURVE_MCAP_USD = 9000.0          # ЖЕСТКИЙ ПОЛ КЁРВА: блокирует пустые 0.2% flash-rug ванночки с 2 SOL резерва ($2.6k MCap у NOTHING и CAMPUS), где слив пробивает стоп в -75%!
 MIN_GRADUATED_LIQ_USD = 7500.0            # Мин. реальная ликвидность DEX-пула ($7,500+) после миграции (отсекает микро-пулы и слитые остатки)
 AUDITOR_STAIRCASE_ENABLED = True          # Layer 9+10: защита от Staircase bump-ботов, синхронных пачек сброса Jito и ферм суб-кошельков

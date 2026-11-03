@@ -93,7 +93,21 @@ def score_token_with_rocket_xgb(mint: str, pair_data: dict, holders_info: dict =
         _s5 = int(_txm5.get("sells", 0) or 0)
         _created = pair_data.get("pairCreatedAt") or 0
         _now_ms = _t.time() * 1000.0
-        _age_min = (_now_ms - _created) / 60000.0 if _created else 999.0
+        if _created:
+            _age_min = (_now_ms - _created) / 60000.0
+        else:
+            _bt_age = None
+            try:
+                from birth_tracker import birth_tracker as _bt_check
+                _bt_age = _bt_check.get_age(mint)
+            except Exception:
+                pass
+            if _bt_age is not None:
+                _age_min = float(_bt_age)
+            elif str(mint).endswith("pump") or str(pair_data.get("dexId", "")).lower() in ("pump", "pumpfun", "pumpswap"):
+                _age_min = 0.1
+            else:
+                _age_min = 999.0
         _dex_low = str(pair_data.get("dexId", "")).lower()
         _is_pump = 1 if (str(mint).endswith("pump") or _dex_low in ("pump", "pumpfun", "pumpswap")) else 0
 
@@ -2503,8 +2517,22 @@ class Analyzer:
         info = pair_data.get("info") or {}
         links = (info.get("socials") or []) + (info.get("websites") or [])
         import time as _tt
-        _age_min = ((_tt.time() * 1000 - (pair_data.get("pairCreatedAt") or 0)) / 60000.0) \
-            if pair_data.get("pairCreatedAt") else 999.0
+        _c_ms_sc = pair_data.get("pairCreatedAt") or 0
+        if _c_ms_sc:
+            _age_min = ((_tt.time() * 1000 - _c_ms_sc) / 60000.0)
+        else:
+            _bt_age = None
+            try:
+                from birth_tracker import birth_tracker as _bt_check
+                _bt_age = _bt_check.get_age(address)
+            except Exception:
+                pass
+            if _bt_age is not None:
+                _age_min = float(_bt_age)
+            elif str(address).endswith("pump") or str(pair_data.get("dexId", "")).lower() in ("pump", "pumpfun", "pumpswap"):
+                _age_min = 0.1
+            else:
+                _age_min = 999.0
         _px_now = float(pair_data.get("priceUsd", 0) or 0)
         if not hasattr(self, "_eval_ctx"):
             self._eval_ctx = {}

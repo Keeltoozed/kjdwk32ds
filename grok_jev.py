@@ -754,7 +754,16 @@ class GrokJevEngine:
         # 1. Запрет покупать вертикальную палку на гипер-пике FOMO (но пропускаем органический пробой с объёмом!):
         _h1 = float(pc.get("h1", 0) or 0)
         _ca = pair_data.get("pairCreatedAt") or 0
-        _age_m = round((time.time() * 1000 - _ca) / 60000.0, 1) if _ca else 999.0
+        if _ca:
+            _age_m = round((time.time() * 1000 - _ca) / 60000.0, 1)
+        else:
+            _bt_age = None
+            try:
+                from birth_tracker import birth_tracker as _bt_check
+                _bt_age = _bt_check.get_age(mint)
+            except Exception:
+                pass
+            _age_m = float(_bt_age) if _bt_age is not None else (0.1 if is_pump else 999.0)
         _liq_usd = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
         _base_addr = str(((pair_data.get("baseToken") or {}).get("address")) or "")
         _dex_id = str(pair_data.get("dexId", "")).lower()

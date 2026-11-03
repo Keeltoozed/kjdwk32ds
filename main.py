@@ -1079,6 +1079,18 @@ async def scanner_loop(analyzer, tracker):
                                                   getattr(analyzer, "last_score", 0.0),
                                                   liq_usd, _pc.get("m5", 0) or 0,
                                                   _tx5.get("buys", 0) or 0, _tx5.get("sells", 0) or 0)
+
+                                # PRE-FLIGHT GUARD: симулируем продажу на Jupiter ДО открытия позиции!
+                                try:
+                                    from jupiter import JupiterAPI
+                                    _j_ok, _j_why = await JupiterAPI.is_token_sellable(mint)
+                                    _w_low = str(_j_why or "").lower()
+                                    if not _j_ok and any(k in _w_low for k in ("no routes", "cannot sell", "honeypot", "freeze", "0 sol returned")):
+                                        print(f"🚫 [SCANNER PRE-FLIGHT BLOCKED] {actual_symbol} ({mint[:8]}): токен непродаваем на DEX ({_j_why}) — предотвращен вход!")
+                                        continue
+                                except Exception:
+                                    pass
+
                                 tracker.add_position(actual_symbol, mint, entry_price, position_size, is_mature=True,
                                                      ml_features=analyzer.pack_features(pair_data),
                                                      ml_confidence=float(getattr(analyzer, "last_score", 0.0)),
