@@ -183,9 +183,11 @@ class JupiterAPI:
         
         from http_client import get_session
         session = await get_session()
+        test_amounts = [1000000, 100000000]  # Пробуем микро-лот (1M) и стандартный (100M), а не 1 миллиард
         for attempt in range(3):
             host = hosts[attempt % len(hosts)]
-            sell_url = f"{host}/swap/v1/quote?inputMint={mint}&outputMint={sol_mint}&amount=1000000000&slippageBps=1500"
+            amt = test_amounts[attempt % len(test_amounts)]
+            sell_url = f"{host}/swap/v1/quote?inputMint={mint}&outputMint={sol_mint}&amount={amt}&slippageBps=2500"
             try:
                 async with session.get(sell_url, headers=_jup_headers(host), timeout=5) as resp:
                     if resp.status in (429, 401, 403):
@@ -195,9 +197,9 @@ class JupiterAPI:
                         data = await resp.json()
                         out_lamports = int(data.get("outAmount", 0) or 0)
                         impact = float(data.get("priceImpactPct", 100) or 100)
-                        if out_lamports > 0 and impact < 35.0:
+                        if out_lamports > 0 and impact < 50.0:
                             return True, "OK"
-                        elif impact >= 35.0:
+                        elif impact >= 50.0:
                             return False, f"Extreme sell price impact: {impact:.1f}% (liquidity drained)"
                         else:
                             return False, "Zero SOL out on sell quote"
@@ -207,6 +209,9 @@ class JupiterAPI:
                             err_code = err_data.get("errorCode", err_data.get("error", "NO_ROUTE"))
                         except Exception:
                             err_code = "NO_ROUTE"
+                        # Если на первой попытке NO_ROUTE, пробуем второй хост/размер перед вынесением вердикта
+                        if attempt < 2:
+                            continue
                         return False, f"HONEYPOT: cannot sell token back to SOL ({err_code})"
                     else:
                         # 5xx или временный сбой API — не считаем рагпуллом

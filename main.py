@@ -46,14 +46,19 @@ async def position_security_auditor_loop(analyzer, tracker):
                         from jupiter import JupiterAPI
                         _jup_ok, _jup_why = await JupiterAPI.is_token_sellable(mint)
                         if not _jup_ok:
-                            _strikes = getattr(position, "unsellable_strikes", 0) + 1
-                            position.unsellable_strikes = _strikes
-                            if _strikes >= 2:
-                                print(f"🚨 [SOL-SELL-BLOCKED] {position.symbol} ({mint[:10]}): {_jup_why} (подтверждено {_strikes}x) — токен непродаваем/рагпулл, списание в 0.0$ (-100%).")
-                                tracker.close_position(mint, 0.0, f"SOL Rug Pull / Unsellable ({_jup_why})")
-                                continue
+                            _cur_px_chk = float(getattr(position, "current_price_usd", 0.0) or 0.0)
+                            # Защита от ложного списания (кейс UNPOOLED +2000%): если цена активна и есть ликвидность, не списываем в 0!
+                            if _cur_px_chk > 0 and position.amount_usd > 0:
+                                print(f"⚠️ [JUP-QUOTE-WARN] {position.symbol} ({mint[:10]}): временная задержка маршрута Jupiter ({_jup_why}), но цена ${ _cur_px_chk:.8f} активна — позиция удерживается.")
                             else:
-                                print(f"⚠️ [SOL-SELL-WARN] {position.symbol} ({mint[:10]}): {_jup_why} (страйк 1/2, проверка через 35с)")
+                                _strikes = getattr(position, "unsellable_strikes", 0) + 1
+                                position.unsellable_strikes = _strikes
+                                if _strikes >= 3:
+                                    print(f"🚨 [SOL-SELL-BLOCKED] {position.symbol} ({mint[:10]}): {_jup_why} (подтверждено {_strikes}x) — токен непродаваем/рагпулл, списание в 0.0$ (-100%).")
+                                    tracker.close_position(mint, 0.0, f"SOL Rug Pull / Unsellable ({_jup_why})")
+                                    continue
+                                else:
+                                    print(f"⚠️ [SOL-SELL-WARN] {position.symbol} ({mint[:10]}): {_jup_why} (страйк {_strikes}/3, проверка через 35с)")
                         else:
                             position.unsellable_strikes = 0
                     except Exception:
