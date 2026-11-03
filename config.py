@@ -81,8 +81,8 @@ DD_THROTTLE_START_USD = 15.0         # просадка от пика
 
 # === IN-MEMORY STREAMING SNIPER & GRADUATED DEX SHIELD (@savipww / GMGN Anti-Bundler) ===
 SNIPER_ENTRIES_ENABLED = False            # ВЫКЛ вход на сырой кривой Pump.fun: WSS работает как радар миграций (subscribeMigration -> Waiting Room)
-ALLOW_UNGRADUATED_PUMPFUN = False         # ВЫКЛЮЧЕНО: блокируем сырые pump.fun кёрвы без миграции (отсекает 0-минутные дев-дампы типа tractor -17%, OLLYBEE -33%, Elun -96%). Ждём миграции на PumpSwap/Raydium!
-MIN_PUMP_CURVE_MCAP_USD = 9000.0          # ЖЕСТКИЙ ПОЛ КЁРВА: блокирует пустые 0.2% flash-rug ванночки с 2 SOL резерва ($2.6k MCap у NOTHING и CAMPUS), где слив пробивает стоп в -75%!
+ALLOW_UNGRADUATED_PUMPFUN = True          # ВКЛЮЧЕНО: разрешаем зрелые ракеты на Pump.fun кривой ($12k+ MCap) и на DEX после миграции!
+MIN_PUMP_CURVE_MCAP_USD = 12000.0         # ПОЛ КЁРВА: блокирует пустые 0-минутные flash-rug ванночки ($2k-$5k MCap как tractor/OLLYBEE), но пускает реальные ракеты ZANT/AI/ZKSHARK ($12k+)!
 MIN_GRADUATED_LIQ_USD = 7500.0            # Мин. реальная ликвидность DEX-пула ($7,500+) после миграции (отсекает микро-пулы и слитые остатки)
 AUDITOR_STAIRCASE_ENABLED = True          # Layer 9+10: защита от Staircase bump-ботов, синхронных пачек сброса Jito и ферм суб-кошельков
 AUDITOR_MAX_DEV_PCT = 6.0                 # Макс. доля дева на DEX (6%)
