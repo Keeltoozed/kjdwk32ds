@@ -909,12 +909,16 @@ async def scanner_loop(analyzer, tracker):
                                 _dex_id = str((pair_data.get("dexId") or "")).lower()
                                 if _dex_id in ("pump", "pumpfun", "moonshot") or mint.endswith("moon"):
                                     _fdv_m_sc = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
-                                    _min_c_sc = float(getattr(config, "MIN_PUMP_CURVE_MCAP_USD", 12000.0))
+                                    _min_c_sc = float(getattr(config, "MIN_PUMP_CURVE_MCAP_USD", 8500.0))
+                                    _max_c_sc = float(getattr(config, "MAX_PUMP_CURVE_MCAP_USD", 42000.0))
                                     if not getattr(config, "ALLOW_UNGRADUATED_PUMPFUN", False):
                                         print(f"🚫 [SCANNER-RAW-CURVE] {actual_symbol} ({mint[:8]}): сырая кривая bonding curve без миграции на DEX — отмена!")
                                         continue
                                     if 0 < _fdv_m_sc < _min_c_sc:
                                         print(f"🚫 [SCANNER-CURVE-FLASH-RUG] {actual_symbol} ({mint[:8]}): FDV ${_fdv_m_sc:,.0f} < ${_min_c_sc:,.0f} (пустой кёрв, flash-rug) — отмена!")
+                                        continue
+                                    if _fdv_m_sc > _max_c_sc:
+                                        print(f"🚫 [SCANNER-CURVE-CLIFF] {actual_symbol} ({mint[:8]}): FDV ${_fdv_m_sc:,.0f} > ${_max_c_sc:,.0f} (обрыв перед миграцией) — отмена!")
                                         continue
                                 _min_grad_sc = float(getattr(config, "MIN_GRADUATED_LIQ_USD", 7500.0))
                                 if _dex_id not in ("pump", "pumpfun") and liq_usd < _min_grad_sc:
@@ -932,7 +936,7 @@ async def scanner_loop(analyzer, tracker):
                                     print(f"🚫 [SCANNER-LIVE-REVERSAL] {actual_symbol} ({mint[:8]}): на живом графике импульс сломан (m5 {_m5_live:+.1f}%, m1 {_m1_live:+.1f}%) — отмена покупки!")
                                     continue
                                 _is_fresh_live = mint.endswith("pump") or _age_m <= 90.0
-                                _max_h1_live = 3500.0 if (_is_fresh_live and _m5_live >= 2.5) else 400.0
+                                _max_h1_live = 350.0 if (_is_fresh_live and _m5_live >= 2.5) else 250.0
                                 if _h1_live > _max_h1_live:
                                     print(f"🚫 [SCANNER-LIVE-EXHAUSTED] {actual_symbol} ({mint[:8]}): живой h1 {_h1_live:+.0f}% > +{_max_h1_live:.0f}% — перегретая вершина, отмена!")
                                     continue

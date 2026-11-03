@@ -411,9 +411,12 @@ class GrokJevEngine:
                 _cur_p = float(pair_data.get("priceUsd", 0) or 0)
                 if _cur_p > 0:
                     fdv_mc = _cur_p * 1_000_000_000.0
-            _min_curve_mc = float(getattr(_c, "MIN_PUMP_CURVE_MCAP_USD", 12000.0))
+            _min_curve_mc = float(getattr(_c, "MIN_PUMP_CURVE_MCAP_USD", 8500.0))
+            _max_curve_mc = float(getattr(_c, "MAX_PUMP_CURVE_MCAP_USD", 42000.0))
             if fdv_mc > 0 and fdv_mc < _min_curve_mc:
-                return False, f"pump-curve-flash-rug: FDV ${fdv_mc:,.0f} < ${_min_curve_mc:,.0f} (пустой кёрв <15%, риск мгновенного сноса в -75%)"
+                return False, f"pump-curve-flash-rug: FDV ${fdv_mc:,.0f} < ${_min_curve_mc:,.0f} (пустой кёрв <12%, риск мгновенного сноса в -75%)"
+            if fdv_mc > _max_curve_mc:
+                return False, f"pump-curve-migration-cliff: FDV ${fdv_mc:,.0f} > ${_max_curve_mc:,.0f} (опасная зона обрыва перед миграцией, сброс снайперов)"
         eff_liq = raw_liq if dex_id not in ("pump", "pumpfun") else (raw_liq if raw_liq > 0 else fdv_mc * 0.40)
         
         # ЗАЩИТА ОТ ФАНТОМНОЙ ЛИКВИДНОСТИ И ОДНОМИНУТНЫХ ДЕВ-ДАМПОВ:
@@ -1248,9 +1251,12 @@ class GrokJevEngine:
         if is_pump:
             if not getattr(_c, "ALLOW_UNGRADUATED_PUMPFUN", False):
                 return False, "ungraduated-pump-curve (ждём миграции на DEX с сожжённым LP)", _h_stats
-            _min_c_mc = float(getattr(_c, "MIN_PUMP_CURVE_MCAP_USD", 12000.0))
+            _min_c_mc = float(getattr(_c, "MIN_PUMP_CURVE_MCAP_USD", 8500.0))
+            _max_c_mc = float(getattr(_c, "MAX_PUMP_CURVE_MCAP_USD", 42000.0))
             if fdv > 0 and fdv < _min_c_mc:
                 return False, f"pump-curve-flash-rug (FDV ${fdv:,.0f} < ${_min_c_mc:,.0f})", _h_stats
+            if fdv > _max_c_mc:
+                return False, f"pump-curve-migration-cliff (FDV ${fdv:,.0f} > ${_max_c_mc:,.0f})", _h_stats
         eff_liq = max(raw_liq, fdv * 0.40) if (is_pump and dex_id in ("pump", "pumpfun")) else raw_liq
 
         # Токены на AMM (PumpSwap / Raydium / Meteora) без соцсетей пускаем ТОЛЬКО при наличии подтвержденного органического потока

@@ -81,8 +81,9 @@ DD_THROTTLE_START_USD = 15.0         # просадка от пика
 
 # === IN-MEMORY STREAMING SNIPER & GRADUATED DEX SHIELD (@savipww / GMGN Anti-Bundler) ===
 SNIPER_ENTRIES_ENABLED = False            # ВЫКЛ вход на сырой кривой Pump.fun: WSS работает как радар миграций (subscribeMigration -> Waiting Room)
-ALLOW_UNGRADUATED_PUMPFUN = True          # ВКЛЮЧЕНО: зрелые кривые Pump.fun (FDV >= $15k) с реальной органикой для ловли 10x до миграции
-MIN_PUMP_CURVE_MCAP_USD = 15000.0         # Отсекаем пустые 0-секундные ванночки девов (FDV < $15k / прогресс < 20%) — вход только в созревшие кривые!
+ALLOW_UNGRADUATED_PUMPFUN = True          # ВКЛЮЧЕНО: зрелые кривые Pump.fun (FDV $8.5k–$42k) с реальной органикой для ловли 10x до миграции
+MIN_PUMP_CURVE_MCAP_USD = 8500.0          # Вход в начале прорыва бондинг-кривой ($8.5k+), чтобы не пропускать ракеты (кейс FLOATER +197%, PEPECOIN +171%, LUNA +156%)
+MAX_PUMP_CURVE_MCAP_USD = 42000.0         # Не входить в перегретые кривые перед миграцией ($42k+), где девы и ранние снайперы сбрасывают 10x пачки в стакан
 JEV_MAX_TICKET_USD = 0.0                  # 0.0 = динамический авто-масштаб билета JEV вместе с ростом капитала (через calculate_dynamic_position_size)
 MIN_GRADUATED_LIQ_USD = 7500.0            # Мин. реальная ликвидность DEX-пула ($7,500+) после миграции (отсекает микро-пулы и слитые остатки)
 AUDITOR_STAIRCASE_ENABLED = True          # Layer 9+10: защита от Staircase bump-ботов, синхронных пачек сброса Jito и ферм суб-кошельков

@@ -237,9 +237,13 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
             print(f"🚫 [{source_tag}-RAW-CURVE] {_sym_tmp} ({mint[:8]}): сырая кривая bonding curve без миграции на DEX — вход запрещён.")
             return False
         _fdv_j = float((td or {}).get("fdv", 0) or (td or {}).get("marketCap", 0) or 0)
-        _min_c_mc = float(getattr(config, "MIN_PUMP_CURVE_MCAP_USD", 12000.0))
+        _min_c_mc = float(getattr(config, "MIN_PUMP_CURVE_MCAP_USD", 8500.0))
+        _max_c_mc = float(getattr(config, "MAX_PUMP_CURVE_MCAP_USD", 42000.0))
         if _fdv_j > 0 and _fdv_j < _min_c_mc:
             print(f"🚫 [{source_tag}-CURVE-FLASH-RUG] {_sym_tmp} ({mint[:8]}): FDV ${_fdv_j:,.0f} < ${_min_c_mc:,.0f} (пустой кёрв, flash-rug риск) — блок.")
+            return False
+        if _fdv_j > _max_c_mc:
+            print(f"🚫 [{source_tag}-CURVE-CLIFF] {_sym_tmp} ({mint[:8]}): FDV ${_fdv_j:,.0f} > ${_max_c_mc:,.0f} (обрыв перед миграцией) — блок.")
             return False
         _liq_j = max(_raw_liq_j, _fdv_j * 0.40)
     else:
@@ -494,8 +498,9 @@ async def jup_loop(analyzer, tracker):
                         _dex_cand = str(td.get("dexId", "")).lower()
                         if _dex_cand in ("pump", "pumpfun"):
                             _fdv_cand = float(td.get("fdv", 0) or td.get("marketCap", 0) or 0)
-                            _min_c = float(getattr(config, "MIN_PUMP_CURVE_MCAP_USD", 9000.0))
-                            if not getattr(config, "ALLOW_UNGRADUATED_PUMPFUN", True) or (0 < _fdv_cand < _min_c):
+                            _min_c = float(getattr(config, "MIN_PUMP_CURVE_MCAP_USD", 8500.0))
+                            _max_c = float(getattr(config, "MAX_PUMP_CURVE_MCAP_USD", 42000.0))
+                            if not getattr(config, "ALLOW_UNGRADUATED_PUMPFUN", True) or (0 < _fdv_cand < _min_c) or (_fdv_cand > _max_c):
                                 processed[m] = _now_t
                                 continue
 

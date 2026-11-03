@@ -1281,12 +1281,19 @@ class Analyzer:
                 _px_calc = float(pair_data.get("priceUsd", 0) or 0)
                 if _px_calc > 0:
                     _fdv_curve_pre = _px_calc * 1_000_000_000.0
-            _min_curve_mcap = float(getattr(config, "MIN_PUMP_CURVE_MCAP_USD", 12000.0))
+            _min_curve_mcap = float(getattr(config, "MIN_PUMP_CURVE_MCAP_USD", 8500.0))
+            _max_curve_mcap = float(getattr(config, "MAX_PUMP_CURVE_MCAP_USD", 42000.0))
             if _fdv_curve_pre > 0 and _fdv_curve_pre < _min_curve_mcap:
                 return self._deny(
                     mint,
                     f"pump-curve-too-early {_fdv_curve_pre:.0f}<{_min_curve_mcap:.0f}",
-                    f"🚫 [CURVE-FLASH-RUG] {symbol} ({mint[:8]}): FDV ${_fdv_curve_pre:,.0f} < ${_min_curve_mcap:,.0f} (пустой кёрв < 15%) — зона flash-rug с пустым пулом (как NOTHING/CAMPUS/GODHOUSE).",
+                    f"🚫 [CURVE-FLASH-RUG] {symbol} ({mint[:8]}): FDV ${_fdv_curve_pre:,.0f} < ${_min_curve_mcap:,.0f} (пустой кёрв < 12%) — зона flash-rug с пустым пулом.",
+                )
+            if _fdv_curve_pre > _max_curve_mcap:
+                return self._deny(
+                    mint,
+                    f"pump-curve-top {_fdv_curve_pre:.0f}>{_max_curve_mcap:.0f}",
+                    f"🚫 [CURVE-CLIFF] {symbol} ({mint[:8]}): FDV ${_fdv_curve_pre:,.0f} > ${_max_curve_mcap:,.0f} (опасная зона обрыва перед миграцией) — ждём выхода на Raydium/PumpSwap.",
                 )
         # FAST-TRACK ДЛЯ МОЛОДЫХ РАКЕТ (от 90 сек):
         # Требуем хотя бы 90 сек и органические продажи (_s5_pre >= 2), чтобы отсечь 0-секундные дев-бандлы (RIOT/Elun/Белка)
@@ -1403,8 +1410,9 @@ class Analyzer:
             _quote_info = pair_data.get("liquidity", {}) or {}
             _quote_amt = float(_quote_info.get("quote", 0) or 0)
             _quote_sym = str((pair_data.get("quoteToken") or {}).get("symbol", "")).upper()
-            if "SOL" in _quote_sym and 0 < _quote_amt < 5.0 and not is_pump_curve:
-                return self._deny(mint, f"ghost-pool-sol {_quote_amt:.1f}<5", f"🚫 [AMM-GHOST-POOL] {symbol} ({mint[:8]}): в пуле всего {_quote_amt:.2f} SOL < 5 SOL — микро-резерв.")
+            _min_sol_pool = 8.0 if dex_id_low == "pumpswap" else 5.0
+            if "SOL" in _quote_sym and 0 < _quote_amt < _min_sol_pool and not is_pump_curve:
+                return self._deny(mint, f"ghost-pool-sol {_quote_amt:.1f}<{_min_sol_pool:.0f}", f"🚫 [AMM-GHOST-POOL] {symbol} ({mint[:8]}): в пуле всего {_quote_amt:.2f} SOL < {_min_sol_pool:.0f} SOL — микро-резерв.")
 
             # 2. Защита от Honeypot и искусственных бандлов без реальных продаж (кейс Белка -98%: 12 покупок и 0 продаж)
             if _s5_pre == 0 and _b5_pre >= 5:
@@ -1816,9 +1824,11 @@ class Analyzer:
                         return self._deny(mint, "runner-m1-dump", f"🚫 [RUNNER-DUMP] {mint}: m1 {_m1:+.1f}% — импульс схлопнулся, это дамп.")
                     if _m5 > 450.0:
                         return self._deny(mint, "runner-m5-overheat", f"🚫 [RUNNER-EXHAUSTION] {mint}: m5 {_m5:+.0f}% > +450% — экстремальный перегрев 5м свечи.")
-                    _max_h1_pct = getattr(config, "PULLBACK_MAX_H1_PCT", 35.0) * 100
-                    if _h1 > _max_h1_pct:
-                        return self._deny(mint, "runner-h1-gone", f"🚫 [ENTRY] {mint}: h1 {_h1:+.0f}% — уже улетел, поздно.")
+                    _max_h1_cfg = float(getattr(config, "PULLBACK_MAX_H1_PCT", 250.0))
+                    _max_h1_pct = (_max_h1_cfg * 100.0) if _max_h1_cfg <= 20.0 else _max_h1_cfg
+                    _max_h1_allowed = min(350.0, _max_h1_pct * 1.4)
+                    if _h1 > _max_h1_allowed:
+                        return self._deny(mint, "runner-h1-gone", f"🚫 [ENTRY] {mint}: h1 {_h1:+.0f}% > +{_max_h1_allowed:.0f}% — ракета уже выдохлась/перегрета, поздно.")
                     print(f"🚀 [RUNNER-MOMENTUM] {mint}: мощный импульс m5 {_m5:+.0f}%, m1 {_m1:+.1f}%, liq ${_cur_liq_pre:,.0f}, vol5 ${_vm5_pre:,.0f} — ракета допущена к отбору.")
                 elif _lottery_enabled:
                     if _m1 < 0:
