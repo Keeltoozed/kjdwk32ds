@@ -1001,10 +1001,6 @@ async def scanner_loop(analyzer, tracker):
                                         entry_price = _jup_chk
                                 # RKT-вето дженерик-входов Solana (лотереи/VIP-билеты exempt).
                                 _ssig = analyzer.get_signal(mint)
-                                # Гонка сигналов: параллельная петля (JUP/GROK) могла отклонить этот же mint (SKIP ...) — не покупаем
-                                if str(_ssig).startswith("SKIP"):
-                                    print(f"🚫 [SCANNER-SKIP-RACE] {actual_symbol} ({mint[:8]}): параллельный анализ отклонил токен ({_ssig}) — вход отменён.")
-                                    continue
                                 _sveto = analyzer.rocket_veto(mint, pair_data, _ssig)
                                 if _sveto:
                                     analyzer._deny(mint, f"scanner-veto: {_sveto[:20]}", f"🚫 [SCANNER] {actual_symbol}: {_sveto}")
@@ -2414,9 +2410,35 @@ tab1, tab2 = st.tabs(["📊 Портфель и История", "📡 Рада�
 _frag_dec = getattr(st, "fragment", getattr(st, "experimental_fragment", None))
 
 def _render_tab1_content():
-    # Кнопка для ручного обновления страницы
-    if st.button("🔄 Обновить портфель"):
-        pass
+    # Кнопки управления портфелем
+    _b_col1, _b_col2 = st.columns([1, 1])
+    with _b_col1:
+        if st.button("🔄 Обновить портфель"):
+            pass
+    with _b_col2:
+        if st.button("🗑️ Очистить историю (С чистого листа)"):
+            try:
+                with open(config.PAPER_PORTFOLIO_FILE, 'w') as f:
+                    json.dump({}, f)
+            except Exception:
+                pass
+            try:
+                url = getattr(config, 'SUPABASE_URL', None)
+                key = getattr(config, 'SUPABASE_KEY', None)
+                if url and key:
+                    from supabase import create_client
+                    sb = create_client(url, key)
+                    _snap_key = getattr(config, "PORTFOLIO_SNAPSHOT_MINT", "PORTFOLIO_SOLANA_V2")
+                    sb.table("trades_pump").upsert({
+                        "mint": _snap_key,
+                        "features": json.dumps({}),
+                        "confidence": 0,
+                        "status": "SYSTEM"
+                    }).execute()
+            except Exception:
+                pass
+            st.success("✨ Портфель очищен! Начинаем торговлю с чистого листа.")
+            st.rerun()
         
     try:
         data = load_dashboard_portfolio()

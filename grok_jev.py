@@ -512,10 +512,8 @@ class GrokJevEngine:
                 pass
             return False, f"age-out-of-bounds {age_min:.1f}m < {min_age:.1f}m (wait for maturation)"
 
-        # 2.5. Exhaustion Guard: не режем молодые/мигрировавшие с Pump.fun ракеты (у них h1 +400..+1500% считается от $5k кривой!),
-        # но блокируем старые выдохшиеся пампы (age >= 45m без свежего притока покупателей)
-        _is_young_grad = (is_pump or dex_id == "meteora" or age_min < 45.0)
-        _max_h1_allowed = 1800.0 if (_is_young_grad and b5 >= s5 * 1.10 and vol_m5 >= 3000.0) else (450.0 if _is_young_grad else 300.0)
+        # 2.5. Exhaustion Guard: блокируем перегретые поздние пампы (h1 > MAX_ENTRY_H1_PCT при возрасте >= 10м)
+        _max_h1_allowed = float(getattr(_c, "MAX_ENTRY_H1_PCT", 85.0))
         if h1 > _max_h1_allowed and age_min >= 10.0:
             return False, f"exhaustion-top-h1 h1 {h1:+.0f}% > +{_max_h1_allowed:.0f}% (late pump top, dump risk)"
         if fdv_mc > 100000.0 and eff_liq < 0.02 * fdv_mc:
@@ -797,7 +795,7 @@ class GrokJevEngine:
             return False, -0.14, 0.0, f"fomo-spike (m5 {m5:+.1f}% > +65.0% and m1 {m1:+.1f}% > 18%) — vertical blow-off candle"
         if m1 > _max_m1:
             return False, -0.14, 0.0, f"m1-spike (m1 {m1:+.1f}% > +{_max_m1:.1f}%) — vertical push, wait for consolidation"
-        _max_h1_flush = 1800.0 if ((_is_pump_pair or _age_m < 45.0) and b5 >= s5 * 1.10 and vol5 >= 3000.0) else (450.0 if (_is_pump_pair or _age_m < 45.0) else 300.0)
+        _max_h1_flush = float(getattr(_c, "MAX_ENTRY_H1_PCT", 85.0))
         if _h1 > _max_h1_flush and _age_m > 10.0:
             return False, -0.14, 0.0, f"h1-exhaustion (h1 {_h1:+.1f}% > +{_max_h1_flush:.0f}% at {_age_m:.0f}m) — pump already exhausted"
         if _liq_usd > 0 and _liq_usd < _min_liq:

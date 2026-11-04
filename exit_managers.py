@@ -59,20 +59,19 @@ class MatureExitManager:
             if max_pnl_pct >= 0.30 or _is_runner:
                 if _is_runner:
                     # ДЛЯ РАННЕРОВ И МУНБЭГОВ:
-                    # Мем-ракеты Solana (как 2500 +235%, ANONVOYAGE 17x) на пути откатывают на 20-35%.
-                    # Трейлинг 32-38% даёт пережить коррекцию и доехать до 5x-20x!
+                    # Фиксируем львиную долю прибыли на откате, не давая ракетам (+60%..+105%) сливаться обратно в ноль.
                     if max_pnl_pct >= 5.00:
                         _trail_dist = 0.20  # От +500%+: откат 20% от макушки
                     elif max_pnl_pct >= 2.50:
-                        _trail_dist = 0.22  # От +250%+: откат 22%
+                        _trail_dist = 0.20  # От +250%+: откат 20%
                     elif max_pnl_pct >= 1.00:
-                        _trail_dist = 0.25  # От +100%..+250%: откат 25% (не отдаем 35% обратно!)
+                        _trail_dist = 0.20  # От +100%..+250%: откат 20% (не отдаем 35% обратно!)
                     elif max_pnl_pct >= 0.50:
-                        _trail_dist = 0.25  # От +50%..+100%: откат 25% (защита прибыли как у Pog/fartguy)
+                        _trail_dist = 0.18  # От +50%..+100%: откат 18% (защита Pog/fartguy — выход на +35..+65% прибыли!)
                     else:
-                        _trail_dist = 0.28  # До +50%: откат 28% (не 38%, фиксируем плюс!)
+                        _trail_dist = 0.18  # До +50%: откат 18% (фиксируем плюс!)
                 else:
-                    _trail_dist = 0.22
+                    _trail_dist = 0.18
                 
                 drop_from_max = (position.max_price_usd - current_price) / position.max_price_usd if position.max_price_usd > 0 else 0
                 if drop_from_max >= _trail_dist:
@@ -83,17 +82,17 @@ class MatureExitManager:
             if _is_runner:
                 # Фиксируем львиную долю прибыли на пампах, защищая баланс от сливов:
                 if max_pnl_pct >= 5.00:
-                    _floor_pnl = round(max_pnl_pct * 0.55, 2) # Пик +500%+ -> держим +275%+
+                    _floor_pnl = round(max_pnl_pct * 0.60, 2) # Пик +500%+ -> держим +300%+
                 elif max_pnl_pct >= 3.00:
-                    _floor_pnl = round(max_pnl_pct * 0.45, 2) # Пик +300%+ -> держим +135%+
+                    _floor_pnl = round(max_pnl_pct * 0.50, 2) # Пик +300%+ -> держим +150%+
                 elif max_pnl_pct >= 2.00:
-                    _floor_pnl = 0.80                         # Пик +200%+ -> держим +80%
+                    _floor_pnl = 0.90                         # Пик +200%+ -> держим +90%
                 elif max_pnl_pct >= 1.00:
-                    _floor_pnl = 0.45                         # Пик +100%+ (fartguy/ERIKA) -> держим +45% (не отдаем до +25%!)
+                    _floor_pnl = 0.55                         # Пик +100%+ (fartguy/ERIKA) -> держим +55%
                 elif max_pnl_pct >= 0.50:
-                    _floor_pnl = 0.22                         # Пик +50%+ (Pog) -> держим +22% (не отдаем до +10%!)
+                    _floor_pnl = 0.30                         # Пик +50%+ (Pog) -> держим +30% (не отдаем в +7%!)
                 elif max_pnl_pct >= 0.25:
-                    _floor_pnl = 0.10                         # Пик +25%+ (PEPECOIN) -> держим +10% (не спускаем до безубытка!)
+                    _floor_pnl = 0.12                         # Пик +25%+ (PEPECOIN) -> держим +12%
                 else:
                     _floor_pnl = 0.03                         # Гарантированный безубыток +3%
             else:
@@ -107,15 +106,20 @@ class MatureExitManager:
         # =========================================================================
         # 2. СТОПЫ И АВАРИЙНЫЕ КЭПЫ ДЛЯ МОНЕТ БЕЗ ПРИБЫЛИ (< +20%)
         # =========================================================================
-        _emerg_cap = float(getattr(config, "EMERGENCY_CAP_PCT", -0.32))
+        _emerg_cap = float(getattr(config, "EMERGENCY_CAP_PCT", -0.26))
         if pnl_pct <= _emerg_cap:
             return f"Mature Emergency Cap ({pnl_pct*100:.0f}%)"
 
-        # Infant guard: дамп в первые минуты = настоящий дев-раг (-28%+), а не нормальный спред входа (-15%..-20%).
+        # Infant guard: дамп в первые минуты = настоящий дев-раг (-18%+), а не нормальный спред входа
         _inf_win = float(getattr(config, "INFANT_WINDOW_MIN", 2.0))
-        _inf_pct = float(getattr(config, "INFANT_DUMP_PCT", -0.28))
+        _inf_pct = float(getattr(config, "INFANT_DUMP_PCT", -0.18))
         if minutes_held < _inf_win and pnl_pct <= _inf_pct:
             return f"Mature Infant Dump ({pnl_pct*100:.0f}%)"
+
+        # Hard stop loss: защита депозита от сползания (-16%)
+        _sl = -abs(float(getattr(config, 'STOP_LOSS_PCT', 0.16)))
+        if pnl_pct <= _sl:
+            return f"Mature Stop Loss ({_sl*100:.0f}%)"
 
         # STALL TIMER (DEAD MOMENTUM EXIT — даём полную 5м свечу 330с на выход из консолидации!)
         _stall_sec = float(getattr(config, "STALL_TIMER_SEC", 330.0))

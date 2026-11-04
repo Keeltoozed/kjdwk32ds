@@ -1293,9 +1293,6 @@ class Analyzer:
         # Требуем хотя бы 90 сек и органические продажи (_s5_pre >= 2), чтобы отсечь 0-секундные дев-бандлы (RIOT/Elun/Белка)
         _is_fast_rocket = (_age_min_pre >= 1.5 and _vm5_pre >= 4000.0 and _b5_pre >= 12 and _s5_pre >= 2 and _b5_pre >= _s5_pre * 1.2 and _m5 >= 2.5)
         _sol_min_age = float(getattr(config, "SOLANA_MIN_AGE_MIN", 1.5))
-        # Токены с суффиксом 'pump' моложе PUMP_MIN_AGE_MIN: по shadow-данным 0 ракет из 176 и 43% LP-рагов
-        if mint.endswith("pump"):
-            _sol_min_age = max(_sol_min_age, float(getattr(config, "PUMP_MIN_AGE_MIN", 3.0)))
         if _age_min_pre < _sol_min_age:
             print(f"⏳ [ENTRY] {mint[:8]}: возраст {_age_min_pre:.1f}м < {_sol_min_age}м — выдерживаем {_sol_min_age*60:.0f}с карантин от дев-дампа.")
             return None
@@ -1328,6 +1325,23 @@ class Analyzer:
                 mint,
                 f"low-vol5 ${_vm5_pre:.0f}<$3k",
                 f"🚫 [LOW-MOMENTUM] {symbol} ({mint[:8]}): 5м объем ${_vm5_pre:,.0f} < $3,000 — нет реального торгового импульса.",
+            )
+
+        # 4. Anti-FOMO: Защита от перегретых вершин и поздних входов
+        # Эмпирический факт из реальных сделок: монеты с h1 > 85% дают -$8.40 суммарного минуса (Donkey -98.6%, CLAUDE -41%, TOLY -38%).
+        _max_entry_h1 = float(getattr(config, "MAX_ENTRY_H1_PCT", 85.0))
+        _max_entry_m5 = float(getattr(config, "MAX_ENTRY_M5_PCT", 55.0))
+        if _age_min_pre >= 10.0 and _h1 > _max_entry_h1:
+            return self._deny(
+                mint,
+                f"h1-exhausted {_h1:.0f}%>{_max_entry_h1:.0f}%",
+                f"🚫 [EXHAUSTED-TOP] {symbol} ({mint[:8]}): рост за час +{_h1:+.1f}% > +{_max_entry_h1:.0f}% — поздний вход на вершине пампа (риск дев-дампа).",
+            )
+        if _m5 > _max_entry_m5:
+            return self._deny(
+                mint,
+                f"m5-vertical-spike {_m5:.0f}%>{_max_entry_m5:.0f}%",
+                f"🚫 [FOMO-VERTICAL] {symbol} ({mint[:8]}): 5м свеча +{_m5:+.1f}% > +{_max_entry_m5:.0f}% — вертикальный прострел в стакан, ждём откат.",
             )
 
         # =========================================================================
@@ -1432,16 +1446,6 @@ class Analyzer:
                     print(f"⚠️ RugCheck API вернул {_rc_st} для {mint[:8]}.")
 
                 if rc_data:
-                    # Для shadow_tracker: пишем названия рисков RugCheck, чтобы потом отделить рагов от ракет среди rugcheck-отказов
-                    try:
-                        _f_rc = dict(getattr(self, "last_rkt_features", None) or {})
-                        _f_rc["rc_score"] = rc_data.get("score")
-                        _f_rc["rc_risks"] = [f"{rk.get('name')}:{rk.get('level')}:{rk.get('score')}" for rk in (rc_data.get("risks") or [])][:12]
-                        if not hasattr(self, "_eval_ctx"):
-                            self._eval_ctx = {}
-                        self._eval_ctx.setdefault(mint, {})["features"] = _f_rc
-                    except Exception:
-                        pass
                     token_info = rc_data.get("token", {})
                     mint_authority = token_info.get("mintAuthority")
                     freeze_authority = token_info.get("freezeAuthority")
