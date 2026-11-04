@@ -49,83 +49,81 @@ class MatureExitManager:
         max_pnl_pct = (position.max_price_usd - position.entry_price_usd) / position.entry_price_usd if position.entry_price_usd else 0.0
 
         # =========================================================================
-        # 1. СТРАТЕГИЯ ХВАТАТЬ МАКСИМАЛЬНЫЙ ПЛЮС:
-        # ТРЕЙЛИНГ-СТОП И ПОЛ ПРИБЫЛИ ДЛЯ РАННЕРОВ И МУНБЭГОВ (ВЫХОД НА 1-М ТИКЕ!)
+        # 1. СТРАТЕГИЯ ЗАЩИТЫ И ФИКСАЦИИ ПРИБЫЛИ (PROFIT FLOOR & TRAILING STOP)
+        # ЖЕЛЕЗНОЕ ПРАВИЛО: если монета показала прибыль (пик >= +12%), она
+        # НИ ПРИ КАКИХ УСЛОВИЯХ не должна закрываться в убыток!
         # =========================================================================
         _is_mb = getattr(position, "is_moonbag", False)
-        _is_runner = _is_mb or max_pnl_pct >= 0.25
-        if max_pnl_pct >= 0.18 or _is_runner:
-            # А) Трейлинг отката от пика
-            if max_pnl_pct >= 0.30 or _is_runner:
-                if _is_runner:
-                    # ДЛЯ РАННЕРОВ И МУНБЭГОВ:
-                    # Фиксируем львиную долю прибыли на откате, не давая ракетам (+60%..+105%) сливаться обратно в ноль.
-                    if max_pnl_pct >= 5.00:
-                        _trail_dist = 0.20  # От +500%+: откат 20% от макушки
-                    elif max_pnl_pct >= 2.50:
-                        _trail_dist = 0.20  # От +250%+: откат 20%
-                    elif max_pnl_pct >= 1.00:
-                        _trail_dist = 0.20  # От +100%..+250%: откат 20% (не отдаем 35% обратно!)
-                    elif max_pnl_pct >= 0.50:
-                        _trail_dist = 0.18  # От +50%..+100%: откат 18% (защита Pog/fartguy — выход на +35..+65% прибыли!)
-                    else:
-                        _trail_dist = 0.18  # До +50%: откат 18% (фиксируем плюс!)
-                else:
-                    _trail_dist = 0.18
-                
-                drop_from_max = (position.max_price_usd - current_price) / position.max_price_usd if position.max_price_usd > 0 else 0
-                if drop_from_max >= _trail_dist:
-                    return f"Mature Trailing RIDE (+{max_pnl_pct*100:.0f}% peak, drop {drop_from_max*100:.0f}%)"
+        _floor_pnl = None
+        _trail_dist = None
 
-            # Б) Гарантированный несгораемый пол прибыли (Dynamic Ratchet Profit Floor):
-            _floor_pnl = None
-            if _is_runner:
-                # Фиксируем львиную долю прибыли на пампах, защищая баланс от сливов:
-                if max_pnl_pct >= 5.00:
-                    _floor_pnl = round(max_pnl_pct * 0.60, 2) # Пик +500%+ -> держим +300%+
-                elif max_pnl_pct >= 3.00:
-                    _floor_pnl = round(max_pnl_pct * 0.50, 2) # Пик +300%+ -> держим +150%+
-                elif max_pnl_pct >= 2.00:
-                    _floor_pnl = 0.90                         # Пик +200%+ -> держим +90%
-                elif max_pnl_pct >= 1.00:
-                    _floor_pnl = 0.55                         # Пик +100%+ (fartguy/ERIKA) -> держим +55%
-                elif max_pnl_pct >= 0.50:
-                    _floor_pnl = 0.30                         # Пик +50%+ (Pog) -> держим +30% (не отдаем в +7%!)
-                elif max_pnl_pct >= 0.25:
-                    _floor_pnl = 0.12                         # Пик +25%+ (PEPECOIN) -> держим +12%
-                else:
-                    _floor_pnl = 0.03                         # Гарантированный безубыток +3%
-            else:
-                _floor_pnl = 0.02                             # Для мелких стартовых всплесков (+18..+24%) — безубыток +2%
+        if max_pnl_pct >= 5.00:
+            _floor_pnl = round(max_pnl_pct * 0.55, 2)  # Пик +500%+ -> держим +275%+
+            _trail_dist = 0.16
+        elif max_pnl_pct >= 3.00:
+            _floor_pnl = round(max_pnl_pct * 0.45, 2)  # Пик +300%+ -> держим +135%+
+            _trail_dist = 0.16
+        elif max_pnl_pct >= 2.00:
+            _floor_pnl = 0.80                          # Пик +200%+ -> держим +80%
+            _trail_dist = 0.18
+        elif max_pnl_pct >= 1.00:
+            _floor_pnl = 0.50                          # Пик +100%+ -> держим +50%
+            _trail_dist = 0.18
+        elif max_pnl_pct >= 0.50:
+            _floor_pnl = 0.25                          # Пик +50%+ -> держим +25%
+            _trail_dist = 0.16
+        elif max_pnl_pct >= 0.25:
+            _floor_pnl = 0.10                          # Пик +25%+ -> держим +10% гарантированного плюса
+            _trail_dist = 0.12                         # Откат не более 12% от пика (не даем слить +25% в 0!)
+        elif max_pnl_pct >= 0.18:
+            _floor_pnl = 0.04                          # Пик +18%+ -> держим +4% (гарантия прибыли)
+            _trail_dist = 0.10
+        elif max_pnl_pct >= 0.12 or _is_mb:
+            _floor_pnl = 0.015                         # Пик +12%+ -> безубыток +1.5%
+            _trail_dist = 0.08
 
-            if _floor_pnl is not None and pnl_pct <= _floor_pnl:
+        if _floor_pnl is not None:
+            drop_from_max = (position.max_price_usd - current_price) / position.max_price_usd if position.max_price_usd > 0 else 0
+            # 1. Трейлинг отката от пика (только если цена не ниже пола прибыли)
+            if _trail_dist is not None and drop_from_max >= _trail_dist:
+                if pnl_pct >= _floor_pnl:
+                    return f"Mature Trailing Profit (+{pnl_pct*100:.1f}% locked after peak +{max_pnl_pct*100:.0f}%, drop {drop_from_max*100:.0f}%)"
+                elif pnl_pct >= 0:
+                    return f"Mature Profit Floor (+{_floor_pnl*100:.0f}% locked after peak +{max_pnl_pct*100:.0f}%)"
+                else:
+                    return f"Post-Peak Protection Cut (+{max_pnl_pct*100:.0f}% peak -> {pnl_pct*100:.1f}%)"
+
+            # 2. Несгораемый пол прибыли (Ratchet Floor):
+            if pnl_pct <= _floor_pnl:
                 if pnl_pct >= 0:
                     return f"Mature Profit Floor (+{_floor_pnl*100:.0f}% locked after peak +{max_pnl_pct*100:.0f}%)"
-                return f"Crash Dump after peak (+{max_pnl_pct*100:.0f}% -> {pnl_pct*100:.0f}%)"
+                return f"Post-Peak Protection Cut (+{max_pnl_pct*100:.0f}% peak -> {pnl_pct*100:.1f}%)"
 
         # =========================================================================
-        # 2. СТОПЫ И АВАРИЙНЫЕ КЭПЫ ДЛЯ МОНЕТ БЕЗ ПРИБЫЛИ (< +20%)
+        # 2. СТОПЫ И АВАРИЙНЫЕ КЭПЫ ДЛЯ МОНЕТ БЕЗ ПРИБЫЛИ (< +12%)
         # =========================================================================
-        _emerg_cap = float(getattr(config, "EMERGENCY_CAP_PCT", -0.26))
+        _emerg_cap = float(getattr(config, "EMERGENCY_CAP_PCT", -0.20))
         if pnl_pct <= _emerg_cap:
             return f"Mature Emergency Cap ({pnl_pct*100:.0f}%)"
 
-        # Infant guard: дамп в первые минуты = настоящий дев-раг (-18%+), а не нормальный спред входа
+        # Infant guard: дамп в первые минуты = настоящий дев-раг (-14%+)
         _inf_win = float(getattr(config, "INFANT_WINDOW_MIN", 2.0))
-        _inf_pct = float(getattr(config, "INFANT_DUMP_PCT", -0.18))
+        _inf_pct = float(getattr(config, "INFANT_DUMP_PCT", -0.14))
         if minutes_held < _inf_win and pnl_pct <= _inf_pct:
             return f"Mature Infant Dump ({pnl_pct*100:.0f}%)"
 
-        # Hard stop loss: защита депозита от сползания (-16%)
-        _sl = -abs(float(getattr(config, 'STOP_LOSS_PCT', 0.16)))
+        # Hard stop loss: защита депозита от сползания (-14%)
+        _sl = -abs(float(getattr(config, 'STOP_LOSS_PCT', 0.14)))
         if pnl_pct <= _sl:
             return f"Mature Stop Loss ({_sl*100:.0f}%)"
 
-        # STALL TIMER (DEAD MOMENTUM EXIT — даём полную 5м свечу 330с на выход из консолидации!)
-        _stall_sec = float(getattr(config, "STALL_TIMER_SEC", 330.0))
-        _stall_loss = float(getattr(config, "STALL_MAX_LOSS_PCT", -0.08))
-        if minutes_held >= (_stall_sec / 60.0) and max_pnl_pct < 0.08 and pnl_pct <= _stall_loss:
+        # STALL TIMER (DEAD MOMENTUM EXIT: 240с на проверку импульса)
+        _stall_sec = float(getattr(config, "STALL_TIMER_SEC", 240.0))
+        _stall_loss = float(getattr(config, "STALL_MAX_LOSS_PCT", -0.07))
+        if minutes_held >= (_stall_sec / 60.0) and max_pnl_pct < 0.06 and pnl_pct <= _stall_loss:
             return f"Dead Momentum Stall ({minutes_held*60:.0f}s no breakout, pnl {pnl_pct*100:.1f}%)"
+        if minutes_held >= 8.0 and pnl_pct <= -0.09 and max_pnl_pct < 0.05:
+            return f"Dead Momentum Stall ({minutes_held:.0f}m no breakout, pnl {pnl_pct*100:.1f}%)"
 
         # GROK BOT x JEV: СТОП ПОД ФИТИЛЬ (по умолчанию ОТКЛЮЧЕН, чтобы не душить ракеты на -15%..-25% в первые минуты)
         if getattr(config, "JEV_WICK_STOP_ENABLED", False):

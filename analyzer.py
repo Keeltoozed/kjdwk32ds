@@ -1328,9 +1328,9 @@ class Analyzer:
             )
 
         # 4. Anti-FOMO: Защита от перегретых вершин и поздних входов
-        # Эмпирический факт из реальных сделок: монеты с h1 > 85% дают -$8.40 суммарного минуса (Donkey -98.6%, CLAUDE -41%, TOLY -38%).
-        _max_entry_h1 = float(getattr(config, "MAX_ENTRY_H1_PCT", 85.0))
-        _max_entry_m5 = float(getattr(config, "MAX_ENTRY_M5_PCT", 55.0))
+        # Эмпирический факт из реальных сделок: монеты с h1 > 80% или m5 > 45% дают слив в 90% случаев (Donkey -98.6%, CLAUDE -41%, TOLY -38%, MONKAI -28%, STARMIND -24%).
+        _max_entry_h1 = float(getattr(config, "MAX_ENTRY_H1_PCT", 80.0))
+        _max_entry_m5 = float(getattr(config, "MAX_ENTRY_M5_PCT", 45.0))
         if _age_min_pre >= 10.0 and _h1 > _max_entry_h1:
             return self._deny(
                 mint,
@@ -1342,6 +1342,17 @@ class Analyzer:
                 mint,
                 f"m5-vertical-spike {_m5:.0f}%>{_max_entry_m5:.0f}%",
                 f"🚫 [FOMO-VERTICAL] {symbol} ({mint[:8]}): 5м свеча +{_m5:+.1f}% > +{_max_entry_m5:.0f}% — вертикальный прострел в стакан, ждём откат.",
+            )
+
+        # 5. Жесткая защита от безымянных 0-соцсеточных рагпулов Pump.fun / Solana
+        # Кейсы Donkey (-98.6%), VOLITION (-37.2%): 0 соцсетей, dev скинул пул в первые секунды.
+        _links_cnt = len((pair_data or {}).get("info", {}).get("socials", []) or []) + len((pair_data or {}).get("info", {}).get("websites", []) or [])
+        _req_soc_age = float(getattr(config, "REQUIRE_SOCIALS_MIN_AGE_MIN", 60.0))
+        if _links_cnt == 0 and _age_min_pre < _req_soc_age:
+            return self._deny(
+                mint,
+                f"no-socials-dev-rug {_age_min_pre:.0f}m<{_req_soc_age:.0f}m",
+                f"🚫 [NO-SOCIALS-GUARD] {symbol} ({mint[:8]}): 0 соцсетей/сайта при возрасте {_age_min_pre:.1f}м < {_req_soc_age:.0f}м — высокий риск мгновенного дев-дампа (кейс Donkey/VOLITION).",
             )
 
         # =========================================================================

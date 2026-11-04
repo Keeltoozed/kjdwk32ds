@@ -157,10 +157,33 @@ async def position_manager_loop(analyzer, tracker):
                             pass
                     if api_price > 0.0:
                         current_price = api_price
+                        position.last_live_price_ts = time.time()
                     else:
-                        # Если оба источника не дали цену в этом тике — держим последнюю известную, не сбрасываем в 0.0!
+                        # Если оба источника не дали цену в этом тике — проверяем насколько стара цена
                         _last_known = float(getattr(position, "current_price_usd", 0.0) or getattr(position, "entry_price_usd", 0.0) or 0.0)
-                        current_price = _last_known
+                        _last_live_ts = float(getattr(position, "last_live_price_ts", 0.0) or position.entry_time)
+                        _stale_sec = time.time() - _last_live_ts
+                        if _stale_sec > 45.0:
+                            # Пробуем запросить ончейн через Jupiter
+                            try:
+                                from jupiter import JupiterAPI
+                                _j_px = await JupiterAPI.get_price(mint)
+                                if _j_px > 0:
+                                    current_price = _j_px
+                                    position.current_price_usd = _j_px
+                                    position.last_live_price_ts = time.time()
+                                    position.price_updated_at = time.time()
+                                else:
+                                    current_price = _last_known
+                            except Exception:
+                                current_price = _last_known
+                            
+                            # Если котировок нет больше 90 сек — пул вымер / рагнут (предотвращает кейс BRO 28 минут!)
+                            if _stale_sec > 90.0:
+                                tracker.close_position(mint, current_price if current_price > 0 else 0.0, f"Dead Stale Pool Cut ({_stale_sec:.0f}s no quotes)")
+                                continue
+                        else:
+                            current_price = _last_known
                 
                 # Всегда фиксируем время активного мониторинга позиции менеджером
                 position.price_checked_at = time.time()
@@ -286,18 +309,18 @@ async def position_manager_loop(analyzer, tracker):
                 position.current_price_usd = current_price
                 position.current_pnl_usd = position.amount_usd * pnl_pct
                 position.price_checked_at = time.time()
-                if current_price > 0:
+                if current_price > 0 and (api_price > 0.0 or wss_fresh):
                     position.price_updated_at = time.time()
 
                 # === ИНТЕГРАЦИЯ МАТЕМАТИКИ ДЛЯ ЗРЕЛЫХ МОНЕТ (SWING TRADING / RIDE RUNNERS) ===
                 # Исполняется ДО скальперских Early Fade / Stagnant срезов, чтобы ракеты ехали по MatureExitManager!
-                _tp1_sol_thr = float(getattr(config, "TP1_TRIGGER_PCT", 0.30))
+                _tp1_sol_thr = float(getattr(config, "TP1_TRIGGER_PCT", 0.22))
                 _tp1_sell = float(getattr(config, "TP1_SELL_FRAC", 0.40))
-                _tp2 = float(getattr(config, "TP2_TRIGGER_PCT", 1.00))
-                _tp2_sell = float(getattr(config, "TP2_SELL_FRAC", 0.50))
-                _tp3 = float(getattr(config, "TP3_TRIGGER_PCT", 2.50))
-                _tp3_sell = float(getattr(config, "TP3_SELL_FRAC", 0.20))
-                _tp4 = float(getattr(config, "TP4_TRIGGER_PCT", 5.00))
+                _tp2 = float(getattr(config, "TP2_TRIGGER_PCT", 0.50))
+                _tp2_sell = float(getattr(config, "TP2_SELL_FRAC", 0.35))
+                _tp3 = float(getattr(config, "TP3_TRIGGER_PCT", 1.00))
+                _tp3_sell = float(getattr(config, "TP3_SELL_FRAC", 0.15))
+                _tp4 = float(getattr(config, "TP4_TRIGGER_PCT", 3.00))
                 _tp4_sell = float(getattr(config, "TP4_SELL_FRAC", 0.10))
                 _tp5 = float(getattr(config, "TP5_TRIGGER_PCT", 10.00))
                 _tp5_sell = float(getattr(config, "TP5_SELL_FRAC", 0.05))
@@ -935,9 +958,12 @@ async def scanner_loop(analyzer, tracker):
                                 if _m5_live < 1.0 or _m1_live < -8.0:
                                     print(f"🚫 [SCANNER-LIVE-REVERSAL] {actual_symbol} ({mint[:8]}): на живом графике импульс сломан (m5 {_m5_live:+.1f}%, m1 {_m1_live:+.1f}%) — отмена покупки!")
                                     continue
-                                _is_fresh_live = mint.endswith("pump") or _age_m <= 90.0
-                                _max_h1_live = 350.0 if (_is_fresh_live and _m5_live >= 2.5) else 250.0
-                                if _h1_live > _max_h1_live:
+                                _max_m5_cfg = float(getattr(config, "MAX_ENTRY_M5_PCT", 45.0))
+                                if _m5_live > _max_m5_cfg:
+                                    print(f"🚫 [SCANNER-FOMO-M5] {actual_symbol} ({mint[:8]}): живой m5 +{_m5_live:.1f}% > +{_max_m5_cfg:.0f}% — вершина свечи, отмена!")
+                                    continue
+                                _max_h1_live = float(getattr(config, "MAX_ENTRY_H1_PCT", 80.0))
+                                if _h1_live > _max_h1_live and _age_m >= 10.0:
                                     print(f"🚫 [SCANNER-LIVE-EXHAUSTED] {actual_symbol} ({mint[:8]}): живой h1 {_h1_live:+.0f}% > +{_max_h1_live:.0f}% — перегретая вершина, отмена!")
                                     continue
                                 if _pk_drop_live <= -18.0 or _lq_drop_live <= -18.0:
@@ -951,13 +977,19 @@ async def scanner_loop(analyzer, tracker):
                                     print(f"🚫 [SCANNER-OLD-ZOMBIE] {actual_symbol} ({mint[:8]}): возраст {_age_m/60:.1f}ч > {_max_age_live/60:.1f}ч без прорывного объема (${_vol5_live:,.0f} < $25k) — отмена!")
                                     continue
 
-                                # Защита от фейковых bump-ботов без соцсетей (ELON, Trump, Amazon, MrBeast, Microsoft):
+                                # Защита от 0-соцсеточных рагпулов (кейс Donkey, VOLITION)
+                                _links_sc = len(pair_data.get("info", {}).get("socials", []) or pair_data.get("info", {}).get("websites", []) or [])
+                                _req_soc_age = float(getattr(config, "REQUIRE_SOCIALS_MIN_AGE_MIN", 60.0))
+                                if _age_m < _req_soc_age and _links_sc == 0:
+                                    print(f"🚫 [SCANNER-NO-SOCIALS] {actual_symbol} ({mint[:8]}): возраст {_age_m:.1f}м < {_req_soc_age:.0f}м и 0 соцсетей — риск мгновенного дев-дампа/рага, отмена!")
+                                    continue
+
+                                # Защита от фейковых bump-ботов (ELON, Trump, Amazon, MrBeast, Microsoft):
                                 _tx5_sc = (pair_data.get("txns") or {}).get("m5", {}) or {}
                                 _tot_tx5_sc = int(_tx5_sc.get("buys", 0) or 0) + int(_tx5_sc.get("sells", 0) or 0)
                                 _avg_tx5_sc = (_vol5_live / _tot_tx5_sc) if _tot_tx5_sc > 0 else 0.0
-                                _links_sc = len(pair_data.get("info", {}).get("socials", []) or pair_data.get("info", {}).get("websites", []) or [])
-                                if _tot_tx5_sc >= 250 and _avg_tx5_sc < 8.0 and _links_sc == 0:
-                                    print(f"🚫 [SCANNER-WASH-TRAP] {actual_symbol} ({mint[:8]}): накрутка микро-ботом ({_tot_tx5_sc} txns, avg ${_avg_tx5_sc:.2f} < $8) при 0 соцсетей — отмена!")
+                                if _tot_tx5_sc >= 250 and _avg_tx5_sc < 8.0:
+                                    print(f"🚫 [SCANNER-WASH-TRAP] {actual_symbol} ({mint[:8]}): накрутка микро-ботом ({_tot_tx5_sc} txns, avg ${_avg_tx5_sc:.2f} < $8) — отмена!")
                                     continue
 
                                 # Блок кастомных не-pump контрактов на PumpSwap только при микро-пуле (< $6k)
@@ -1210,6 +1242,10 @@ async def fomo_signal_loop(analyzer, tracker):
                             print("🛑 FOMO KILL-SWITCH: дневной лимит убытка исчерпан, внешний сигнал отклонён.")
                             continue
                         kind, mint, _src_ch = parse_signal_line(raw)
+                        if getattr(config, "SOLANA_ONLY", True):
+                            if kind != "sol" or mint.startswith("0x"):
+                                print(f"🚫 [SOLANA-ONLY] Внешний не-Solana сигнал {mint[:10]} отклонён.")
+                                continue
                         if not mint or mint in tracker.positions:
                             continue
                         _tag = f"TG:{_src_ch} " if _src_ch else ""
@@ -2284,7 +2320,7 @@ async def async_main():
 
     # Важно: PumpPortal WSS разрешает ТОЛЬКО ОДНО соединение с одного IP.
     # Второй сокет (early_scout_loop в shadow-режиме) перебивал подписки subscribeTokenTrade у PumpFunSniper!
-    await asyncio.gather(
+    _core_loops = [
         _supervised(lambda: position_manager_loop(analyzer, tracker), "position_manager_loop"),
         _supervised(lambda: position_security_auditor_loop(analyzer, tracker), "position_security_auditor_loop"),
         _supervised(lambda: scanner_loop(analyzer, tracker), "scanner_loop"),
@@ -2295,11 +2331,8 @@ async def async_main():
         _supervised(lambda: fomo_loop(analyzer, tracker), "fomo_loop"),
         _supervised(lambda: birdeye_loop(analyzer, tracker), "birdeye_loop"),
         _supervised(lambda: jup_loop(analyzer, tracker), "jup_loop"),
-        _supervised(lambda: base_loop(analyzer, tracker), "base_loop"),
-        _supervised(lambda: evm_wss_loop(analyzer, tracker), "evm_wss_loop"),
         _supervised(lambda: fomo_api_loop(analyzer, tracker), "fomo_api_loop"),
         _supervised(lambda: gmgn_bridge_loop(analyzer, tracker), "gmgn_bridge_loop"),
-        _supervised(lambda: growth_loop(analyzer, tracker), "growth_loop"),
         _supervised(lambda: sniper.connect_and_listen(), "pump_fun_sniper"),
         _supervised(lambda: smart_money_hunter_loop(analyzer, tracker), "smart_money_hunter_loop"),
         _supervised(lambda: grok_bot_jev_loop(tracker, analyzer=analyzer), "grok_bot_jev_loop"),
@@ -2307,8 +2340,16 @@ async def async_main():
         _supervised(lambda: shadow_tracker.price_watcher_loop(), "shadow_tracker"),
         _supervised(lambda: rugpull_feeder_loop(), "rugpull_feeder_loop"),
         _supervised(lambda: sol_price_updater(), "sol_price_updater"),
-        return_exceptions=True
-    )
+    ]
+    if not getattr(config, "SOLANA_ONLY", True):
+        _core_loops.extend([
+            _supervised(lambda: base_loop(analyzer, tracker), "base_loop"),
+            _supervised(lambda: evm_wss_loop(analyzer, tracker), "evm_wss_loop"),
+        ])
+    if getattr(config, "GROWTH_ENABLED", False):
+        _core_loops.append(_supervised(lambda: growth_loop(analyzer, tracker), "growth_loop"))
+
+    await asyncio.gather(*_core_loops, return_exceptions=True)
 
 def run_background_bot():
     """Запускает асинхронный цикл в отдельном потоке с вечным авто-перезапуском при любых сбоях"""

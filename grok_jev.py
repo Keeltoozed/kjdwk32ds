@@ -373,6 +373,9 @@ class GrokJevEngine:
         import config as _c
         FUNNEL_STATS["universe"] += 1
         
+        if getattr(_c, "SOLANA_ONLY", True) and chain != "solana":
+            return False, "solana-only-mode"
+
         if not pair_data or not isinstance(pair_data, dict):
             return False, "no-pair-data"
             
@@ -512,8 +515,15 @@ class GrokJevEngine:
                 pass
             return False, f"age-out-of-bounds {age_min:.1f}m < {min_age:.1f}m (wait for maturation)"
 
+        # 2.4. Защита от безымянных рагпулов без соцсетей
+        _info_g = pair_data.get("info") or {}
+        _links_cnt_g = len(_info_g.get("socials", []) or []) + len(_info_g.get("websites", []) or [])
+        _req_soc_age = float(getattr(_c, "REQUIRE_SOCIALS_MIN_AGE_MIN", 60.0))
+        if age_min < _req_soc_age and _links_cnt_g == 0:
+            return False, f"no-socials-rug (age {age_min:.1f}m < {_req_soc_age:.0f}m, 0 socials/websites)"
+
         # 2.5. Exhaustion Guard: блокируем перегретые поздние пампы (h1 > MAX_ENTRY_H1_PCT при возрасте >= 10м)
-        _max_h1_allowed = float(getattr(_c, "MAX_ENTRY_H1_PCT", 85.0))
+        _max_h1_allowed = float(getattr(_c, "MAX_ENTRY_H1_PCT", 80.0))
         if h1 > _max_h1_allowed and age_min >= 10.0:
             return False, f"exhaustion-top-h1 h1 {h1:+.0f}% > +{_max_h1_allowed:.0f}% (late pump top, dump risk)"
         if fdv_mc > 100000.0 and eff_liq < 0.02 * fdv_mc:
@@ -522,6 +532,9 @@ class GrokJevEngine:
         # 3. Живой импульс ракеты (LIVE ROCKET MOMENTUM)
         if m5 < 2.0:
             return False, f"no-momentum m5 {m5:+.1f}% < +2.0% (coin is flat/standing still, not an active rocket)"
+        _max_m5_allowed = float(getattr(_c, "MAX_ENTRY_M5_PCT", 45.0))
+        if m5 > _max_m5_allowed:
+            return False, f"fomo-vertical-m5 m5 {m5:+.1f}% > +{_max_m5_allowed:.0f}% (buying top of vertical pump)"
         if s5 > 6 and b5 < s5:
             return False, f"sellers-dominating {b5}b/{s5}s (more sellers than buyers in m5)"
 

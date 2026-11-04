@@ -328,9 +328,35 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
         return False
 
     _sig = analyzer.get_signal(mint)
+    # Гонка сигналов: jup_loop / jup_fast_mature_loop / scanner анализируют один mint параллельно, и метка
+    # per-mint перезаписывается. Если любой из анализов уже поставил SKIP (напр. post-peak-crash -59% у PAW),
+    # покупать нельзя, даже если наш собственный analyze_token вернул True.
+    if str(_sig).startswith("SKIP"):
+        print(f"🚫 [{source_tag}-SKIP-RACE] {_sym_tmp} ({mint[:8]}): параллельный анализ отклонил токен ({_sig}) — вход отменён.")
+        return False
     _veto = analyzer.rocket_veto(mint, td or {}, _sig)
     if _veto:
         analyzer._deny(mint, f"jup-veto: {_veto[:20]}", f"🚫 [{source_tag}-VETO] {_sym_tmp} ({mint[:8]}): {_veto}")
+        return False
+
+    # Anti-FOMO и защита от 0-соцсеточных рагпулов
+    _m5_j = float(((td or {}).get("priceChange") or {}).get("m5", 0) or 0)
+    _h1_j = float(((td or {}).get("priceChange") or {}).get("h1", 0) or 0)
+    _c_at_j = (td or {}).get("pairCreatedAt") or 0
+    _age_j = ((time.time() * 1000 - _c_at_j) / 60000.0) if _c_at_j else 30.0
+    _max_h1_cfg = float(getattr(config, "MAX_ENTRY_H1_PCT", 80.0))
+    _max_m5_cfg = float(getattr(config, "MAX_ENTRY_M5_PCT", 45.0))
+    _req_soc_age = float(getattr(config, "REQUIRE_SOCIALS_MIN_AGE_MIN", 60.0))
+
+    if _m5_j > _max_m5_cfg:
+        print(f"🚫 [{source_tag}-FOMO-M5] {_sym_tmp}: m5 +{_m5_j:.1f}% > +{_max_m5_cfg:.0f}% — отмена входа на вершине свечи!")
+        return False
+    if _h1_j > _max_h1_cfg and _age_j >= 10.0:
+        print(f"🚫 [{source_tag}-FOMO-H1] {_sym_tmp}: h1 +{_h1_j:.0f}% > +{_max_h1_cfg:.0f}% — перегретый часовой памп, отмена!")
+        return False
+    _links_j = len((td or {}).get("info", {}).get("socials", []) or []) + len((td or {}).get("info", {}).get("websites", []) or [])
+    if _age_j < _req_soc_age and _links_j == 0:
+        print(f"🚫 [{source_tag}-NO-SOCIALS] {_sym_tmp}: 0 соцсетей при возрасте {_age_j:.1f}м < {_req_soc_age:.0f}м — отмена!")
         return False
 
     # === Analyzer уже провёл ROCKET-XGB S1+S2 и 8-слойный ончейн-аудит: проверяем только 0ms анти-клон и точку входа/стоп ===

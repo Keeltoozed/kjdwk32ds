@@ -38,6 +38,8 @@ def push_signal(chain: str, addr: str, why: str = ""):
         import config as _c
         if not getattr(_c, "USE_FOMO_SIGNALS", False):
             return
+        if getattr(_c, "SOLANA_ONLY", True) and chain != "solana":
+            return
     except Exception:
         pass
     chain = (chain or "").lower()

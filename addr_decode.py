@@ -122,6 +122,13 @@ def extract_signals(text: str) -> list:
     for kind, addr in extract_obfuscated(text):
         (sols if kind == "sol" else evms).add(addr)
 
+    try:
+        import config as _c_dec
+        if getattr(_c_dec, "SOLANA_ONLY", True):
+            evms.clear()
+    except Exception:
+        pass
+
     def _longest(pool: set) -> set:
         items = sorted(pool, key=len)
         return {a for a in items
