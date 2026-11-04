@@ -328,6 +328,12 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
         return False
 
     _sig = analyzer.get_signal(mint)
+    # Гонка сигналов: jup_loop / jup_fast_mature_loop / scanner анализируют один mint параллельно, и метка
+    # per-mint перезаписывается. Если любой из анализов уже поставил SKIP (напр. post-peak-crash -59% у PAW),
+    # покупать нельзя, даже если наш собственный analyze_token вернул True.
+    if str(_sig).startswith("SKIP"):
+        print(f"🚫 [{source_tag}-SKIP-RACE] {_sym_tmp} ({mint[:8]}): параллельный анализ отклонил токен ({_sig}) — вход отменён.")
+        return False
     _veto = analyzer.rocket_veto(mint, td or {}, _sig)
     if _veto:
         analyzer._deny(mint, f"jup-veto: {_veto[:20]}", f"🚫 [{source_tag}-VETO] {_sym_tmp} ({mint[:8]}): {_veto}")

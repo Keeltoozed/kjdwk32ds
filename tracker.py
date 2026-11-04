@@ -639,8 +639,11 @@ class PaperTracker:
             _r_up = str(reason or "").upper()
             _is_hard_scam = any(k in _r_up for k in (
                 "HONEYPOT", "RUG", "SCAM", "CANNOT SELL", "UNSELLABLE", 
-                "NO LIQUIDITY", "DRAIN", "DEAD", "ZERO-RUG", "PULL"
+                "NO LIQUIDITY", "DRAIN", "ZERO-RUG", "PULL"
             ))
+            # ВАЖНО: слово "DEAD" убрано из списка. Оно совпадало с обычными выходами "Dead Momentum Stall" и "Dead Coin Cut"
+            # и списывало их как рагпулл по цене 0 (-100.5%) при реальном PnL около -9%. Реальные случаи мёртвого пула
+            # уже ловятся по "DRAIN" / "UNSELLABLE" / "RUG".
             if _is_hard_scam:
                 exit_price = 0.0
             elif not (exit_price > 0):

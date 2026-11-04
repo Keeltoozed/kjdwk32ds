@@ -1001,6 +1001,10 @@ async def scanner_loop(analyzer, tracker):
                                         entry_price = _jup_chk
                                 # RKT-вето дженерик-входов Solana (лотереи/VIP-билеты exempt).
                                 _ssig = analyzer.get_signal(mint)
+                                # Гонка сигналов: параллельная петля (JUP/GROK) могла отклонить этот же mint (SKIP ...) — не покупаем
+                                if str(_ssig).startswith("SKIP"):
+                                    print(f"🚫 [SCANNER-SKIP-RACE] {actual_symbol} ({mint[:8]}): параллельный анализ отклонил токен ({_ssig}) — вход отменён.")
+                                    continue
                                 _sveto = analyzer.rocket_veto(mint, pair_data, _ssig)
                                 if _sveto:
                                     analyzer._deny(mint, f"scanner-veto: {_sveto[:20]}", f"🚫 [SCANNER] {actual_symbol}: {_sveto}")

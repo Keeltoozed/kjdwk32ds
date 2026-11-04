@@ -1293,6 +1293,9 @@ class Analyzer:
         # Требуем хотя бы 90 сек и органические продажи (_s5_pre >= 2), чтобы отсечь 0-секундные дев-бандлы (RIOT/Elun/Белка)
         _is_fast_rocket = (_age_min_pre >= 1.5 and _vm5_pre >= 4000.0 and _b5_pre >= 12 and _s5_pre >= 2 and _b5_pre >= _s5_pre * 1.2 and _m5 >= 2.5)
         _sol_min_age = float(getattr(config, "SOLANA_MIN_AGE_MIN", 1.5))
+        # Токены с суффиксом 'pump' моложе PUMP_MIN_AGE_MIN: по shadow-данным 0 ракет из 176 и 43% LP-рагов
+        if mint.endswith("pump"):
+            _sol_min_age = max(_sol_min_age, float(getattr(config, "PUMP_MIN_AGE_MIN", 3.0)))
         if _age_min_pre < _sol_min_age:
             print(f"⏳ [ENTRY] {mint[:8]}: возраст {_age_min_pre:.1f}м < {_sol_min_age}м — выдерживаем {_sol_min_age*60:.0f}с карантин от дев-дампа.")
             return None
@@ -1429,6 +1432,16 @@ class Analyzer:
                     print(f"⚠️ RugCheck API вернул {_rc_st} для {mint[:8]}.")
 
                 if rc_data:
+                    # Для shadow_tracker: пишем названия рисков RugCheck, чтобы потом отделить рагов от ракет среди rugcheck-отказов
+                    try:
+                        _f_rc = dict(getattr(self, "last_rkt_features", None) or {})
+                        _f_rc["rc_score"] = rc_data.get("score")
+                        _f_rc["rc_risks"] = [f"{rk.get('name')}:{rk.get('level')}:{rk.get('score')}" for rk in (rc_data.get("risks") or [])][:12]
+                        if not hasattr(self, "_eval_ctx"):
+                            self._eval_ctx = {}
+                        self._eval_ctx.setdefault(mint, {})["features"] = _f_rc
+                    except Exception:
+                        pass
                     token_info = rc_data.get("token", {})
                     mint_authority = token_info.get("mintAuthority")
                     freeze_authority = token_info.get("freezeAuthority")
