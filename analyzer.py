@@ -1292,7 +1292,11 @@ class Analyzer:
         # FAST-TRACK ДЛЯ МОЛОДЫХ РАКЕТ (от 90 сек):
         # Требуем хотя бы 90 сек и органические продажи (_s5_pre >= 2), чтобы отсечь 0-секундные дев-бандлы (RIOT/Elun/Белка)
         _is_fast_rocket = (_age_min_pre >= 1.5 and _vm5_pre >= 4000.0 and _b5_pre >= 12 and _s5_pre >= 2 and _b5_pre >= _s5_pre * 1.2 and _m5 >= 2.5)
-        _sol_min_age = float(getattr(config, "SOLANA_MIN_AGE_MIN", 1.5))
+        _raw_liq_age = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
+        _avg_tx_age = _vm5_pre / max(1, _b5_pre + _s5_pre)
+        _is_early_rocket = (_raw_liq_age >= 12000.0 and _vm5_pre >= 6000.0 and _b5_pre >= 30
+                            and _b5_pre >= _s5_pre * 1.30 and _avg_tx_age >= 25.0)
+        _sol_min_age = float(getattr(config, "SOLANA_MIN_AGE_MIN", 0.8)) if _is_early_rocket else 3.0
         if _age_min_pre < _sol_min_age:
             print(f"⏳ [ENTRY] {mint[:8]}: возраст {_age_min_pre:.1f}м < {_sol_min_age}м — выдерживаем {_sol_min_age*60:.0f}с карантин от дев-дампа.")
             return None

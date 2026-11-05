@@ -503,9 +503,13 @@ class GrokJevEngine:
                 return False, f"post-migration-no-reclaim (m5 {m5:+.1f}%, vol5 ${vol_m5:,.0f}, {b5}b/{s5}s — need organic bounce)"
 
         # 2. Возраст токена: карантинная выдержка (минимум 4.0 мин против дев-дампов типа inu/GDA/MOG/RIOT)
-        _early_min_age = max(3.5, float(getattr(_c, "SOLANA_MIN_AGE_MIN", 4.0)), float(getattr(_c, "JEV_EARLY_MIN_AGE_MIN", 3.5)))
-        _std_min_age = max(4.0, float(getattr(_c, "JEV_MIN_AGE_MIN", 4.0)))
-        min_age = _early_min_age if (b5 >= s5 * 1.05 and m5 >= 4.0 and vol_m5 >= 2000.0) else _std_min_age
+        # EARLY ROCKET FAST-LANE: реальный DEX-пул $12k+, взрывной поток покупателей и объём (INDEX/NMC/BEANOS/TULY)
+        _avg_tx_e = vol_m5 / max(1, b5 + s5)
+        _is_early_rocket = (eff_liq >= 12000.0 and vol_m5 >= 6000.0 and b5 >= 30 and b5 >= s5 * 1.30
+                            and _avg_tx_e >= 25.0 and m5 >= 2.0)
+        _early_min_age = max(0.8, float(getattr(_c, "JEV_EARLY_MIN_AGE_MIN", 0.8)))
+        _std_min_age = max(3.0, float(getattr(_c, "JEV_MIN_AGE_MIN", 1.5)))
+        min_age = _early_min_age if _is_early_rocket else _std_min_age
         max_age = float(getattr(_c, "JEV_MAX_AGE_MIN", 72.0 * 60.0))  # 72 часа
         if not (min_age <= age_min <= max_age):
             if age_min > max_age:
