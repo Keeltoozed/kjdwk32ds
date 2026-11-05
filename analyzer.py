@@ -1342,7 +1342,8 @@ class Analyzer:
         # 4. Anti-FOMO: Защита от перегретых вершин и поздних входов
         _max_entry_h1 = float(getattr(config, "MAX_ENTRY_H1_PCT", 120.0))
         _max_entry_m5 = float(getattr(config, "MAX_ENTRY_M5_PCT", 95.0))
-        if not _has_soc_pre and (_h1 > 100.0 or _m5 > 80.0):
+        _is_stealth_pre = (_vm5_pre >= 12000.0 and _b5_pre >= 40 and _b5_pre >= _s5_pre * 1.25)
+        if not _has_soc_pre and not _is_stealth_pre and (_h1 > 100.0 or _m5 > 80.0):
             return self._deny(
                 mint,
                 f"fomo-spike-no-socials h1 +{_h1:.0f}%/m5 +{_m5:.0f}%",

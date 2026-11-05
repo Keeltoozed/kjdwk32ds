@@ -526,8 +526,8 @@ class GrokJevEngine:
         _info_g = pair_data.get("info") or {}
         _links_cnt_g = len(_info_g.get("socials", []) or []) + len(_info_g.get("websites", []) or [])
         _req_soc_age = float(getattr(_c, "REQUIRE_SOCIALS_MIN_AGE_MIN", 20.0))
+        _is_organic_stealth = (vol_m5 >= 8000.0 and b5 >= 35 and (s5 == 0 or b5 >= s5 * 1.25) and eff_liq >= 10000.0)
         if age_min < _req_soc_age and _links_cnt_g == 0:
-            _is_organic_stealth = (vol_m5 >= 8000.0 and b5 >= 35 and (s5 == 0 or b5 >= s5 * 1.25) and eff_liq >= 10000.0)
             if not _is_organic_stealth:
                 return False, f"no-socials-rug (age {age_min:.1f}m < {_req_soc_age:.0f}m, 0 socials/websites)"
             else:
@@ -535,7 +535,7 @@ class GrokJevEngine:
 
         # 2.5. Exhaustion Guard: блокируем перегретые поздние пампы
         _max_h1_allowed = float(getattr(_c, "MAX_ENTRY_H1_PCT", 120.0))
-        if links_cnt == 0 and (h1 > 100.0 or m5 > 80.0):
+        if _links_cnt_g == 0 and not _is_organic_stealth and (h1 > 100.0 or m5 > 80.0):
             return False, f"exhaustion-no-soc-top h1 {h1:+.0f}%, m5 {m5:+.0f}% (0 socials pump-and-dump top)"
         if h1 > _max_h1_allowed:
             if age_min >= 10.0 or (vol_m5 < 35000.0 and h1 > 140.0):

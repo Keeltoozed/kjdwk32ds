@@ -972,8 +972,11 @@ async def scanner_loop(analyzer, tracker):
                                         print(f"🚫 [SCANNER-FOMO-M5] {actual_symbol} ({mint[:8]}): живой m5 +{_m5_live:.1f}% > +{_max_m5_cfg:.0f}% без прорывного объема — вершина свечи, отмена!")
                                         continue
                                 _links_sc = len(pair_data.get("info", {}).get("socials", []) or pair_data.get("info", {}).get("websites", []) or [])
+                                _b5_sc = int((pair_data.get("txns") or {}).get("m5", {}).get("buys", 0) or 0)
+                                _s5_sc = int((pair_data.get("txns") or {}).get("m5", {}).get("sells", 0) or 0)
+                                _is_stealth_sc = (_vol5_live >= 12000.0 and _b5_sc >= 40 and _b5_sc >= _s5_sc * 1.25)
                                 _max_h1_live = float(getattr(config, "MAX_ENTRY_H1_PCT", 120.0))
-                                if _links_sc == 0 and (_h1_live > 100.0 or _m5_live > 80.0):
+                                if _links_sc == 0 and not _is_stealth_sc and (_h1_live > 100.0 or _m5_live > 80.0):
                                     print(f"🚫 [SCANNER-FOMO-NO-SOC] {actual_symbol} ({mint[:8]}): памп (h1 +{_h1_live:.0f}%, m5 +{_m5_live:.0f}%) без соцсетей — ловушка памп-дампа дева, отмена!")
                                     continue
                                 if _h1_live > _max_h1_live:
