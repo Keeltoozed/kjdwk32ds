@@ -262,11 +262,11 @@ async def position_manager_loop(analyzer, tracker):
                 # Infant Dump (как в EVM): слив в первые минуты = дев, не шум.
                 # Раги идут -40..-96%, шум импульса -15..-18% переживаем.
                 try:
-                    _inf_w = float(getattr(config, "INFANT_WINDOW_MIN", 2.0))
-                    _inf_p = float(getattr(config, "INFANT_DUMP_PCT", -0.24))
+                    _inf_w = float(getattr(config, "INFANT_WINDOW_MIN", 1.0))
+                    _inf_p = float(getattr(config, "INFANT_DUMP_PCT", -0.42))
                     if minutes_held < _inf_w and pnl_pct <= _inf_p:
-                        if minutes_held < 0.35 and pnl_pct > -0.35:
-                            # Первые 21с пережидаем спред/проскальзывание входа
+                        if minutes_held < 0.75 and pnl_pct > -0.65:
+                            # Первые 45с пережидаем спред/проскальзывание входа и фитили AMM
                             pass
                         else:
                             tracker.close_position(mint, current_price, f"Infant Dump ({pnl_pct*100:.0f}%)")
@@ -357,9 +357,9 @@ async def position_manager_loop(analyzer, tracker):
                         tracker.close_position(mint, current_price, mature_exit_reason)
                     continue # Если это mature монета, скальперская логика ниже к ней не применяется!
 
-                # === STALL TIMER (DEAD MOMENTUM EXIT - 330с на консолидацию без ложных срезов) ===
-                _stall_sec = float(getattr(config, "STALL_TIMER_SEC", 330.0))
-                _stall_loss = float(getattr(config, "STALL_MAX_LOSS_PCT", -0.08))
+                # === STALL TIMER (DEAD MOMENTUM EXIT - 420с на консолидацию без ложных срезов) ===
+                _stall_sec = float(getattr(config, "STALL_TIMER_SEC", 420.0))
+                _stall_loss = float(getattr(config, "STALL_MAX_LOSS_PCT", -0.16))
                 if minutes_held >= (_stall_sec / 60.0) and max_pnl_pct < 0.08 and pnl_pct <= _stall_loss:
                     tracker.close_position(mint, current_price, f"Dead Momentum Stall ({minutes_held*60:.0f}s no breakout, pnl {pnl_pct*100:.1f}%)")
                     continue
@@ -1806,12 +1806,12 @@ async def _evm_track_once(tracker, chain: str, tag: str, emoji: str):
                     reason = f"{tag} Soft Guard (был пик +{maxp * 100:.0f}%, слив до {pnl * 100:.1f}%)"
                 elif held >= 1.0 and maxp >= float(getattr(config, "BREAKEVEN_PCT", 0.10)) and pnl <= 0.015:
                     reason = f"{tag} Breakeven (был пик +{maxp * 100:.0f}%)"
-                elif held < float(getattr(config, "INFANT_WINDOW_MIN", 2.0)) and pnl <= float(getattr(config, "INFANT_DUMP_PCT", -0.24)):
-                    if held >= 0.35 or pnl <= -0.35:
+                elif held < float(getattr(config, "INFANT_WINDOW_MIN", 1.0)) and pnl <= float(getattr(config, "INFANT_DUMP_PCT", -0.42)):
+                    if held >= 0.75 or pnl <= -0.65:
                         reason = f"{tag} Infant Dump ({pnl * 100:.1f}%)"
-                elif not _is_runner and maxp < 0.015 and pnl <= -0.10 and held >= 3.5:
+                elif not _is_runner and maxp < 0.015 and pnl <= -0.16 and held >= 7.0:
                     reason = f"{tag} Zero-Momentum Cut ({held:.0f}m, {pnl * 100:.1f}%)"
-                elif not _is_runner and maxp < 0.02 and pnl <= -0.18 and held >= 4:
+                elif not _is_runner and maxp < 0.02 and pnl <= -0.22 and held >= 8.0:
                     reason = f"{tag} Fail Cut ({held:.0f}m, {pnl * 100:.1f}%)"
                 # JEV: СТОП ПОД ФИТИЛЬ ("The stop lives under the wick")
                 elif not reason and held >= 0.5 and (

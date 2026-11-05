@@ -107,34 +107,34 @@ class MatureExitManager:
             return f"Mature Emergency Cap ({pnl_pct*100:.0f}%)"
 
         # Infant guard: дамп в первые минуты = настоящий дев-раг (-24%..-90%)
-        # НЕ режем в первые 20 секунд на шуме спреда входа (кейс CR: срез на 12с -15%, затем ракета +85%)!
-        _inf_win = float(getattr(config, "INFANT_WINDOW_MIN", 2.0))
-        _inf_pct = float(getattr(config, "INFANT_DUMP_PCT", -0.24))
+        # НЕ режем в первые 45 секунд на шуме спреда входа (кейс CR: срез на 12с -15%, затем ракета +85%)!
+        _inf_win = float(getattr(config, "INFANT_WINDOW_MIN", 1.0))
+        _inf_pct = float(getattr(config, "INFANT_DUMP_PCT", -0.42))
         if minutes_held < _inf_win and pnl_pct <= _inf_pct:
-            if minutes_held < 0.35 and pnl_pct > -0.35:
-                pass  # первые 21с пережидаем спред/комиссию входа
+            if minutes_held < 0.75 and pnl_pct > -0.65:
+                pass  # первые 45с пережидаем спред/комиссию входа и AMM шум
             else:
                 return f"Mature Infant Dump ({pnl_pct*100:.0f}%)"
 
-        # Hard stop loss: защита депозита от сползания (-18%)
-        _sl = -abs(float(getattr(config, 'STOP_LOSS_PCT', 0.18)))
+        # Hard stop loss: защита депозита от глубокого сползания (-25%)
+        _sl = -abs(float(getattr(config, 'STOP_LOSS_PCT', 0.25)))
         if pnl_pct <= _sl:
-            if minutes_held < 0.35 and pnl_pct > -0.35:
-                pass
+            if minutes_held < 1.0 and pnl_pct > -0.35:
+                pass  # первую минуту не режем по стопу при нормальной волатильности
             else:
                 return f"Mature Stop Loss ({_sl*100:.0f}%)"
 
-        # STALL TIMER (DEAD MOMENTUM EXIT: 240с на проверку импульса)
-        _stall_sec = float(getattr(config, "STALL_TIMER_SEC", 240.0))
-        _stall_loss = float(getattr(config, "STALL_MAX_LOSS_PCT", -0.07))
-        if minutes_held >= (_stall_sec / 60.0) and max_pnl_pct < 0.06 and pnl_pct <= _stall_loss:
+        # STALL TIMER: даём 7 минут (420с) на раскачку и пробой импульса
+        _stall_sec = float(getattr(config, "STALL_TIMER_SEC", 420.0))
+        _stall_loss = float(getattr(config, "STALL_MAX_LOSS_PCT", -0.16))
+        if minutes_held >= (_stall_sec / 60.0) and max_pnl_pct < 0.08 and pnl_pct <= _stall_loss:
             return f"Dead Momentum Stall ({minutes_held*60:.0f}s no breakout, pnl {pnl_pct*100:.1f}%)"
         
-        # SCALP MOMENTUM CUT (быстрый срез зависшего флета через 6м для освобождения слота):
-        _scalp_timeout = float(getattr(config, "SCALP_TIMEOUT_MIN", 6.0))
-        if minutes_held >= _scalp_timeout and max_pnl_pct < 0.06:
+        # SCALP MOMENTUM CUT: не режем живые монеты раньше 12 минут
+        _scalp_timeout = float(getattr(config, "SCALP_TIMEOUT_MIN", 12.0))
+        if minutes_held >= _scalp_timeout and max_pnl_pct < 0.05 and pnl_pct <= -0.10:
             return f"Stagnant Momentum Cut ({minutes_held:.1f}m no breakout, pnl {pnl_pct*100:+.1f}%)"
-        if minutes_held >= 8.0 and pnl_pct <= -0.09 and max_pnl_pct < 0.05:
+        if minutes_held >= 15.0 and pnl_pct <= -0.12 and max_pnl_pct < 0.05:
             return f"Dead Momentum Stall ({minutes_held:.0f}m no breakout, pnl {pnl_pct*100:.1f}%)"
 
         # GROK BOT x JEV: СТОП ПОД ФИТИЛЬ (по умолчанию ОТКЛЮЧЕН, чтобы не душить ракеты на -15%..-25% в первые минуты)
@@ -199,10 +199,13 @@ class MatureExitManager:
         if minutes_held >= 2.0 and _maxp >= _be and pnl_pct <= 0.025:
             return f"Mature Breakeven (был пик +{_maxp*100:.0f}%, фикс {pnl_pct*100:+.1f}%)"
 
-        # Hard stop loss: стоп ВСЕГДА отрицательный (-14%), защищает депозит от постепенного сползания
-        _sl = -abs(float(getattr(config, 'STOP_LOSS_PCT', 0.14)))
+        # Hard stop loss: защита от глубокого сползания (-25%), с грейсом 1м на шум входа
+        _sl = -abs(float(getattr(config, 'STOP_LOSS_PCT', 0.25)))
         if pnl_pct <= _sl:
-            return f"Mature Stop Loss ({_sl*100:.0f}%)"
+            if minutes_held < 1.0 and pnl_pct > -0.35:
+                pass
+            else:
+                return f"Mature Stop Loss ({_sl*100:.0f}%)"
         # =====================================================================
         # PRE-DUMP FRONT-RUNNER: Выход в плюс только при ЯВНОЙ разгрузке после зрелого импульса
         # =====================================================================

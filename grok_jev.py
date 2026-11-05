@@ -507,8 +507,8 @@ class GrokJevEngine:
         _avg_tx_e = vol_m5 / max(1, b5 + s5)
         _is_early_rocket = (eff_liq >= 12000.0 and vol_m5 >= 6000.0 and b5 >= 30 and b5 >= s5 * 1.30
                             and _avg_tx_e >= 25.0 and m5 >= 2.0)
-        _early_min_age = max(0.8, float(getattr(_c, "JEV_EARLY_MIN_AGE_MIN", 0.8)))
-        _std_min_age = max(3.0, float(getattr(_c, "JEV_MIN_AGE_MIN", 1.5)))
+        _early_min_age = max(0.5, float(getattr(_c, "JEV_EARLY_MIN_AGE_MIN", 0.5)))
+        _std_min_age = max(0.8, float(getattr(_c, "JEV_MIN_AGE_MIN", 0.8)))
         min_age = _early_min_age if _is_early_rocket else _std_min_age
         max_age = float(getattr(_c, "JEV_MAX_AGE_MIN", 72.0 * 60.0))  # 72 часа
         if not (min_age <= age_min <= max_age):
@@ -526,7 +526,7 @@ class GrokJevEngine:
         _info_g = pair_data.get("info") or {}
         _links_cnt_g = len(_info_g.get("socials", []) or []) + len(_info_g.get("websites", []) or [])
         _req_soc_age = float(getattr(_c, "REQUIRE_SOCIALS_MIN_AGE_MIN", 20.0))
-        _is_organic_stealth = (vol_m5 >= 8000.0 and b5 >= 35 and (s5 == 0 or b5 >= s5 * 1.25) and eff_liq >= 10000.0)
+        _is_organic_stealth = (vol_m5 >= 3000.0 and b5 >= 15 and (s5 == 0 or b5 >= s5 * 1.05) and eff_liq >= 6000.0)
         if age_min < _req_soc_age and _links_cnt_g == 0:
             if not _is_organic_stealth:
                 return False, f"no-socials-rug (age {age_min:.1f}m < {_req_soc_age:.0f}m, 0 socials/websites)"
@@ -544,19 +544,19 @@ class GrokJevEngine:
             return False, f"fdv-liquidity-trap liq ${eff_liq:,.0f} < 2% of FDV ${fdv_mc:,.0f} (phantom valuation)"
 
         # 3. Живой импульс ракеты (LIVE ROCKET MOMENTUM)
-        if m5 < 2.0:
-            return False, f"no-momentum m5 {m5:+.1f}% < +2.0% (coin is flat/standing still, not an active rocket)"
+        if m5 < 1.0:
+            return False, f"no-momentum m5 {m5:+.1f}% < +1.0% (coin is flat/standing still, not an active rocket)"
         _max_m5_allowed = float(getattr(_c, "MAX_ENTRY_M5_PCT", 95.0))
         if m5 > _max_m5_allowed:
-            _has_breakout_vol = (vol_m5 >= 12000.0 and b5 >= s5 * 1.25 and m5 <= 130.0)
+            _has_breakout_vol = (vol_m5 >= 8000.0 and b5 >= s5 * 1.15 and m5 <= 150.0)
             if not _has_breakout_vol:
                 return False, f"fomo-vertical-m5 m5 {m5:+.1f}% > +{_max_m5_allowed:.0f}% (buying top of vertical pump without breakthrough volume)"
-        if s5 > 6 and b5 < s5:
+        if s5 > 10 and b5 < (s5 * 0.80):
             return False, f"sellers-dominating {b5}b/{s5}s (more sellers than buyers in m5)"
 
-        # Остывающий поздний памп: токен старше 30м со слабым m5 — вход на спаде (HOUSEWORM -25%, SENSE -52%, PAWS/HYPERCAT ~0)
-        if age_min >= 30.0 and m5 < 15.0:
-            return False, f"late-fade age {age_min:.0f}m m5 {m5:+.1f}% < +15% (old token cooling off, not a live rocket)"
+        # Остывающий поздний памп: токен старше 30м режем ТОЛЬКО если m5 отрицательный (реальный дамп)
+        if age_min >= 30.0 and m5 < 1.0:
+            return False, f"late-fade age {age_min:.0f}m m5 {m5:+.1f}% < +1% (old token cooling off, not a live rocket)"
 
         # ПЕРЕГРЕВ: разрешаем супер-ракеты (как ASCEND +469%, PERPETUAL +130%, SLUDGE +99%) при подтвержденном прорывном объеме!
         if m5 > 120.0:
@@ -574,25 +574,28 @@ class GrokJevEngine:
                 return False, f"h6-downtrend {float(_h6_raw or 0):+.1f}% < {_min_h6:+.1f}% (monet is bleeding)"
 
         # 4. Объем и давление покупателей (LIVE 5M ACTIVITY)
-        # В 5-минутном окне ВСЕГДА должна быть живая активность (не входим в спящие монеты)
-        if vol_m5 < 2500.0:
-            return False, f"vol5-low ${vol_m5:.0f} < $2,500 (inactive dead pool)"
-        if (b5 + s5) < 12:
-            return False, f"tx5-low {b5+s5} < 12 (too few transactions)"
-        if b5 < 8:
-            return False, f"buys5-low {b5} < 8 (no active buyers)"
-        _req_bs = float(getattr(_c, "MIN_BUY_SELL_RATIO", 1.05))
-        if (b5 + s5) >= 60 or vol_m5 >= 15000.0:
-            _req_bs = 1.02
-        if s5 > 0 and (b5 / s5) < _req_bs:
+        # В 5-минутном окне проверяем живую активность (пороги снижены для ранних ракет)
+        _min_vol_m5 = float(getattr(_c, "MIN_VOLUME_M5", 1000.0))
+        if vol_m5 < _min_vol_m5:
+            return False, f"vol5-low ${vol_m5:.0f} < ${_min_vol_m5:.0f} (inactive dead pool)"
+        if (b5 + s5) < 5:
+            return False, f"tx5-low {b5+s5} < 5 (too few transactions)"
+        if b5 < 3:
+            return False, f"buys5-low {b5} < 3 (no active buyers)"
+        _req_bs = float(getattr(_c, "MIN_BUY_SELL_RATIO", 0.90))
+        if (b5 + s5) >= 30 or vol_m5 >= 8000.0:
+            _req_bs = 0.85
+        if s5 >= 4 and (b5 / s5) < _req_bs:
             return False, f"sellers-dominating {b5}b/{s5}s (ratio {b5/s5:.2f} < {_req_bs:.2f})"
 
-        # Проверка суточной активности h24 вместо h1 (vol >= $40k, trades >= 150)
-# ЗАМЕНИ НА (для молодых токенов не требуем суточную историю):
-        if age_min >= 60.0:  # Проверяем h24 ТОЛЬКО для старых токенов старше 1 часа
-            min_vol_h24 = float(getattr(_c, "JEV_MIN_VOLUME_H24", 30000.0))
-            min_trades_h24 = int(getattr(_c, "JEV_MIN_TRADES_H24", 100))
+        # Проверка суточной активности h24 для токенов старше 1 часа
+        if age_min >= 60.0:
+            min_vol_h24 = float(getattr(_c, "JEV_MIN_VOLUME_H24", 15000.0))
+            min_trades_h24 = int(getattr(_c, "JEV_MIN_TRADES_H24", 50))
             if vol_h24 < min_vol_h24:
+                return False, f"vol-h24-low ${vol_h24:,.0f} < ${min_vol_h24:,.0f}"
+            if trades_h24 < min_trades_h24:
+                return False, f"trades-h24-low {trades_h24} < {min_trades_h24}"
                 return False, f"vol-h24-low ${vol_h24:,.0f} < ${min_vol_h24:,.0f}"
             if trades_h24 < min_trades_h24:
                 return False, f"trades-h24-low {trades_h24} < {min_trades_h24}"
@@ -1669,13 +1672,13 @@ class GrokJevEngine:
         # Отсекает 90% мусора и заведомых дампов в 0мс (DARTHLON 6%, BALLS 4%, DAISUKE 2%)
         # без лишних сетевых вызовов Jupiter, RugCheck и LLM.
         rkt_s1 = self.score_rocket_xgb(address, pair)
-        s1_thresh = float(getattr(_c, "ROCKET_XGB_STAGE1_THRESHOLD", 13.0))
+        s1_thresh = float(getattr(_c, "ROCKET_XGB_STAGE1_THRESHOLD", 8.0))
         _txs_s1 = (pair.get("txns") or {}).get("m5") or {}
         _b5_s1 = int(_txs_s1.get("buys", 0) or 0)
         _s5_s1 = int(_txs_s1.get("sells", 0) or 0)
         _vm5_s1 = float((pair.get("volume") or {}).get("m5", 0) or 0)
         _m5_s1 = float((pair.get("priceChange") or {}).get("m5", 0) or 0)
-        _is_momentum_rocket = (_m5_s1 >= 18.0 and _b5_s1 >= _s5_s1 and _vm5_s1 >= 3000.0)
+        _is_momentum_rocket = (_m5_s1 >= 8.0 and _b5_s1 >= (_s5_s1 * 0.9) and _vm5_s1 >= 1200.0)
 
         if getattr(_c, "ROCKET_XGB_ENABLED", True) and not _is_momentum_rocket and (rkt_s1 + 0.05) < s1_thresh:
             print(f"🚫 [GROK-JEV-ML-S1] {symbol} ({address[:8]}): Rocket XGB score {rkt_s1:.1f}% < {s1_thresh:.0f}% — отсев дампа в 0мс.")
@@ -1773,7 +1776,7 @@ class GrokJevEngine:
         # 5.6. 🚀 STAGE 2: ROCKET XGBOOST FINAL ML FIREWALL
         # Финальная проверка перед реальным открытием ордера со свежими данными и реальными ончейн холдерами (_h_stats).
         rkt_final = self.score_rocket_xgb(address, pair, _h_stats)
-        final_thresh = float(getattr(_c, "ROCKET_XGB_FINAL_THRESHOLD", 18.0))
+        final_thresh = float(getattr(_c, "ROCKET_XGB_FINAL_THRESHOLD", 14.0))
         if getattr(_c, "ROCKET_XGB_ENABLED", True) and (rkt_final + 0.05) < final_thresh:
             print(f"🚫 [GROK-JEV-ML-VETO] {symbol} ({address[:8]}): Rocket XGB final score {rkt_final:.1f}% < {final_thresh:.0f}% — VETO! (Блокировка дампа)")
             return False, f"rocket-xgb-final-veto {rkt_final:.1f}% < {final_thresh:.0f}%"

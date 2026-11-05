@@ -1216,12 +1216,12 @@ class Analyzer:
             _div_r = float(pair_data.get("_price_divergence_ratio", 0.0) or 0.0)
             return self._deny(mint, "price-split", f"🚫 [PRICE-SPLIT] {symbol} ({mint[:8]}): рассинхрон цен между пулами {_div_r:.1f}x (миграция/гэп) — блок входа.")
 
-        # === PEAK-MEMORY GUARD: запрет покупки после слива с уже виденного пика (HOBBES -51%, BUGMAGEDDON -20%, CHUNKEE -16%) ===
+        # === PEAK-MEMORY GUARD: запрет покупки после глубокого краша с пика (отскок дохлой кошки) ===
         _drop_from_peak = float(pair_data.get("_drop_from_peak_5m", 0.0) or 0.0)
         _liq_drop_peak = float(pair_data.get("_liq_drop_from_peak", 0.0) or 0.0)
-        if _drop_from_peak <= -18.0:
+        if _drop_from_peak <= -38.0:
             return self._deny(mint, f"post-peak-crash {_drop_from_peak:.0f}%", f"🚫 [POST-PEAK-CRASH] {symbol} ({mint[:8]}): цена уже упала на {_drop_from_peak:.1f}% от виденного ботом пика — отскок дохлой кошки после дампа.")
-        if _liq_drop_peak <= -30.0:
+        if _liq_drop_peak <= -45.0:
             return self._deny(mint, f"post-peak-liq-drain {_liq_drop_peak:.0f}%", f"🚫 [LIQ-DRAIN] {symbol} ({mint[:8]}): ликвидность пула уже сдулась на {_liq_drop_peak:.1f}% от пика — снайперы/дев выводят SOL.")
         
         corporate_scam_keywords = ["AAPL", "S&P", "SP500", "MSFT", "TSLA", "TESLA", "TESLAA", "SPACEX", "STARLINK", "XAI", "NEURALINK", "PAYPAL",
@@ -2443,19 +2443,19 @@ class Analyzer:
                     print(f"🚫 [1M-BLOWOFF] {symbol} ({address[:8]}): вертикальный памп за 2 мин ({c1_pct:+.1f}%, {c0_pct:+.1f}%) — риск мгновенного дампа.")
                     return False
 
-            # В) Blow-off Top: цена уже упала на >= 16% от максимума последних 5 минут (кейс sBTC -20.9% от пика)
-            if drawdown_5m_pct <= -16.0 and c0_pct < 3.0:
+            # В) Blow-off Top: цена упала на >= 30% от максимума последних 5 минут (разрешаем умеренные откаты)
+            if drawdown_5m_pct <= -30.0 and c0_pct < 2.0:
                 print(f"🚫 [BLOWOFF-TOP] {symbol} ({address[:8]}): цена уже упала на {drawdown_5m_pct:.1f}% от 5м-пика — вершина пройдена, идёт разгрузка.")
                 return False
 
-            # В2) 5-минутное истощение (5m Exhaustion): если за последние 5 минут токен уже вырос в >= 3.8 раза от лоя (кейс DMN 5.3x за 4м -> Infant Dump -32.8%)
-            if low_5m > 0 and (high_5m / low_5m) >= 3.8:
+            # В2) 5-минутное истощение (5m Exhaustion): если за последние 5 минут токен уже вырос в >= 5.0 раз от лоя
+            if low_5m > 0 and (high_5m / low_5m) >= 5.0:
                 print(f"🚫 [5M-EXHAUSTION] {symbol} ({address[:8]}): за 5м уже сделал {high_5m/low_5m:.1f}x от лоя — кульминация пройдена.")
                 return False
 
-            # Г) Верхний фитиль (Shooting Star): внутри текущей минуты токен кольнул верх и сложился на >= 12% при слабом закрытии (<=2%), либо резкий обвал >= 25%
+            # Г) Верхний фитиль (Shooting Star): глубокий слив от хая текущей свечи >= 22%
             c0_wick_drop = ((c0_high - eff_close) / c0_high * 100.0) if c0_high > 0 else 0.0
-            if (c0_wick_drop >= 12.0 and c0_pct <= 2.0) or c0_wick_drop >= 25.0:
+            if (c0_wick_drop >= 22.0 and c0_pct <= 0.0) or c0_wick_drop >= 35.0:
                 print(f"🚫 [WICK-DUMP] {symbol} ({address[:8]}): слив от хая текущей свечи на -{c0_wick_drop:.1f}% — раздача в стакан.")
                 return False
 
