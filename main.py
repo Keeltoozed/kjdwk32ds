@@ -2318,7 +2318,7 @@ async def async_main():
     analyzer = Analyzer()
     tracker = PaperTracker()
     copy_trader = CopyTrader(tracker, analyzer)
-    sniper = PumpFunSniper(tracker)
+    sniper = PumpFunSniper(tracker, copy_trader=copy_trader)
     
     async def sol_price_updater():
         """Обновляет цену SOL каждые 5 минут"""

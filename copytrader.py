@@ -210,7 +210,7 @@ class CopyTrader:
             except Exception:
                 pass
 
-        # 3. Резервная прямая подгрузка из Supabase
+        # 3. Резервная прямая подгрузка из Supabase (с пагинацией для 1500+ кошельков)
         if len(candidates) < 10:
             try:
                 url = getattr(_cf, "SUPABASE_URL", None)
@@ -218,23 +218,30 @@ class CopyTrader:
                 if url and key:
                     from supabase import create_client
                     sb = create_client(url, key)
-                    res = sb.table("smart_wallets").select("*").limit(5000).execute()
-                    for r in (res.data or []):
-                        w = r.get("wallet")
-                        if w:
-                            candidates[w] = {
-                                "chain": r.get("chain") or "solana",
-                                "tier": int(r.get("tier") or 3),
-                                "total_pnl": float(r.get("total_pnl") or 0.0),
-                                "trade_count": int(r.get("trade_count") or 0),
-                            }
-            except Exception:
-                pass
+                    offset = 0
+                    page_size = 1000
+                    while True:
+                        res = sb.table("smart_wallets").select("*").range(offset, offset + page_size - 1).execute()
+                        rows = res.data or []
+                        for r in rows:
+                            w = r.get("wallet")
+                            if w:
+                                candidates[w] = {
+                                    "chain": r.get("chain") or "solana",
+                                    "tier": int(r.get("tier") or 3),
+                                    "total_pnl": float(r.get("total_pnl") or 0.0),
+                                    "trade_count": int(r.get("trade_count") or 0),
+                                }
+                        if len(rows) < page_size:
+                            break
+                        offset += page_size
+            except Exception as e:
+                print(f"⚠️ [COPY] Ошибка чтения Supabase: {e}")
 
         min_pnl = float(getattr(_cf, "COPY_MIN_PNL", 300.0))
-        # На пуле публичных RPC распределяем до 60 китов по 15 на сокет; с Helius ключом — до 100
-        _has_helius = bool(getattr(self, "HELIUS_API_KEY", ""))
-        max_active = int(getattr(_cf, "COPY_MAX_ACTIVE_WHALES", 100)) if _has_helius else 60
+        # На пуле публичных RPC распределяем до 80 китов по 20 на сокет; с Helius ключом — до 100
+        _has_helius = bool(getattr(self, "HELIUS_API_KEY", "")) and not getattr(self, "_helius_disabled", False)
+        max_active = int(getattr(_cf, "COPY_MAX_ACTIVE_WHALES", 80)) if not _has_helius else 100
 
         valid_whales = []
         for w, d in candidates.items():
@@ -350,17 +357,17 @@ class CopyTrader:
         # 2) Защита от перегруза: дедупликация сигнатур уже отсекает повторы. 
         # Не глушим активных китов-снайперов на 10 минут, а сразу передаём их покупки на проверку!
         wallet = self._sub_wallet.get(data["params"].get("subscription"))
-        if getattr(self, "_pending", 0) >= 120:
+        if getattr(self, "_pending", 0) >= 500:
             self._dropped = getattr(self, "_dropped", 0) + 1
             if self._dropped % 200 == 1:
-                print(f"⚠️ Копитрейдер: очередь перегружена, пропущено {self._dropped} (отсеяно префильтром: {getattr(self, '_pre_dropped', 0)})")
+                print(f"⚠️ Копитрейдер: очередь перегружена ({self._pending}), пропущено {self._dropped} (отсеяно префильтром: {getattr(self, '_pre_dropped', 0)})")
             return
         self._pending = getattr(self, "_pending", 0) + 1
         asyncio.create_task(self._guarded_process(sig))
 
     async def _guarded_process(self, sig: str) -> None:
-        if not hasattr(self, "_sem"):
-            self._sem = asyncio.Semaphore(4)
+        if not hasattr(self, "_sem") or self._sem is None:
+            self._sem = asyncio.Semaphore(20)
         try:
             async with self._sem:
                 await self.process_transaction(sig)
@@ -419,6 +426,12 @@ class CopyTrader:
             pass
         return 0.0001
 
+    async def get_http_session(self):
+        if not hasattr(self, "_session") or self._session is None or self._session.closed:
+            connector = aiohttp.TCPConnector(limit=60, keepalive_timeout=60)
+            self._session = aiohttp.ClientSession(connector=connector)
+        return self._session
+
     async def fetch_transaction(self, signature):
         payload = {
             "jsonrpc": "2.0",
@@ -430,35 +443,117 @@ class CopyTrader:
             ]
         }
         
-        rpc_endpoints = [
-            self.rpc_url,
+        rpc_endpoints = []
+        if getattr(self, "HELIUS_API_KEY", "") and not getattr(self, "_helius_disabled", False):
+            rpc_endpoints.append(self.rpc_url)
+        rpc_endpoints.extend([
+            "https://solana-rpc.publicnode.com/",
             "https://api.mainnet-beta.solana.com/",
-            "https://solana-rpc.publicnode.com/"
-        ]
+        ])
         
-        async with aiohttp.ClientSession() as session:
-            for rpc in rpc_endpoints:
-                try:
-                    async with session.post(rpc, json=payload, timeout=5) as resp:
-                        if resp.status == 200:
-                            return await resp.json()
-                        elif resp.status == 429:
-                            continue # Пробуем следующий RPC
-                except:
-                    continue
+        session = await self.get_http_session()
+        for rpc in rpc_endpoints:
+            try:
+                async with session.post(rpc, json=payload, timeout=aiohttp.ClientTimeout(total=4)) as resp:
+                    if resp.status == 200:
+                        return await resp.json()
+                    elif resp.status == 429:
+                        if "helius" in rpc.lower():
+                            self._helius_disabled = True
+                        continue
+            except Exception:
+                continue
         return None
+
+    async def _execute_copy_buy(self, wallet: str, trader_name: str, mint: str, symbol: str, cur_price: float = 0.0):
+        """Единая логика безопасного входа в сделку по сигналу кита (из WSS или PumpPortal)."""
+        import config
+        if len(self.tracker.get_open_positions()) >= config.MAX_CONCURRENT_POSITIONS:
+            print("🚫 Лимит позиций. Пропускаем копитрейд.")
+            return
+
+        if self.analyzer:
+            print(f"🤖 Передаем токен {symbol} ({mint[:8]}) кита {trader_name} ИИ на проверку...")
+            is_safe = await self.analyzer.analyze_token(mint)
+            if not is_safe:
+                print(f"🚫 ИИ забраковал токен кита {trader_name}. Спасли твои деньги от рагпула!")
+                self._record_junk_signal(wallet, trader_name, mint, "Зомби-возраст или отсев ИИ-фильтром", is_hard_scam=False)
+                return
+            else:
+                print(f"✅ ИИ одобрил токен кита! Покупаем!")
+        else:
+            print("⚠️ ИИ не подключен к Копитрейдеру. Покупаем вслепую!")
+
+        price_usd = cur_price if cur_price > 0 else await self.get_token_price(mint)
+        clean_symbol = symbol or f"COPY_{trader_name[1:5].upper()}"
+
+        # Защита: инсайдеры тоже сливают на копирующих. Полный антискам Grok-JEV (RugCheck/GoPlus/холдеры/Jupiter).
+        if getattr(config, "COPY_USE_ANTISCAM", True):
+            try:
+                from grok_jev import grok_jev as _gj
+                _pair = await _gj.fetch_pair(mint, "solana")
+                if _pair:
+                    _ok, _why, _hs = await _gj.full_anti_scam_audit(mint, clean_symbol, "solana", _pair)
+                    if not _ok:
+                        print(f"🚫 [COPY-SCAM] {trader_name} {mint[:12]}: {_why}")
+                        _is_hard = any(k in str(_why).lower() for k in ("rugcheck", "honeypot", "drain", "high risk", "freeze"))
+                        self._record_junk_signal(wallet, trader_name, mint, str(_why), is_hard_scam=_is_hard)
+                        return
+                    if getattr(config, "JEV_REQUIRE_HOLDER_DATA", True) and not (
+                            float(_hs.get("top1_pct", 0) or 0) > 0 or float(_hs.get("top10_pct", 0) or 0) > 0):
+                        print(f"🚫 [COPY] {mint[:12]}: нет данных о холдерах")
+                        return
+                    _px = float(_pair.get("priceUsd", 0) or 0)
+                    if _px > 0:
+                        price_usd = _px
+                    clean_symbol = str((_pair.get("baseToken") or {}).get("symbol") or clean_symbol)
+            except Exception as _e:
+                print(f"⚠️ [COPY] антискам проверка ({type(_e).__name__}), продолжаем с базовой защитой")
+
+        capital = self.tracker.get_total_capital()
+        _pct = float(getattr(config, "COMPOUNDING_PCT", 0.10))
+        _base = float(getattr(config, "BASE_TRADE_AMOUNT_USD", 2.0))
+        _cap = float(getattr(config, "COPY_MAX_TICKET_USD", 4.0))
+        position_size = max(_base, min(_cap, capital * _pct))
+
+        if mint not in self._copy_wallets:
+            self._copy_wallets[mint] = set()
+        self._copy_wallets[mint].add(wallet)
+        self.tracker.add_position(clean_symbol, mint, price_usd, amount_usd=position_size,
+                                  source=f"COPY:{trader_name}")
+        print(f"✅ Успешно скопировали сделку {trader_name} на {position_size:.2f}$!")
+
+    async def handle_whale_buy(self, wallet: str, mint: str, symbol: str, sol_amount: float = 0.0, mc_sol: float = 0.0):
+        """Прямой вызов при обнаружении покупки кита из базы Supabase (например, через PumpPortal stream).
+        Срабатывает мгновенно для ВСЕХ 1583 китов без WSS-ограничений!"""
+        if not wallet or wallet in self._banned:
+            return
+        trader_name = self.wallets.get(wallet, f"@Tier1_{wallet[:4]}")
+        cur_price = await self.get_token_price(mint)
+        now = time.time()
+        self.whale_buys.setdefault(mint, {})
+        self.whale_buys[mint][wallet] = now
+        self.whale_buys[mint] = {w: t for w, t in self.whale_buys[mint].items() if now - t <= 600}
+        n_whales = len(self.whale_buys[mint])
+        import config as _cfg
+        _consensus = getattr(_cfg, 'WHALE_CONSENSUS', 1)
+        if mint in self.consensus_done:
+            return
+        if n_whales < _consensus:
+            return
+        self.consensus_done.add(mint)
+        print(f"🐋 [PUMP WHALE COPY] Сигнал кита {trader_name} на {symbol} ({mint[:8]}) -> исполняем копирование!")
+        await self._execute_copy_buy(wallet, trader_name, mint, symbol, cur_price)
 
     async def process_transaction(self, signature):
         if signature in self.processed_sigs: return
         self.processed_sigs.add(signature)
-        if len(self.processed_sigs) > 1000: self.processed_sigs.clear()
+        if len(self.processed_sigs) > 5000: self.processed_sigs.clear()
         
-        # Даем RPC ноде 1.5 секунды на индексацию
-        await asyncio.sleep(1.5)
-        
+        # Первая быстрая попытка без задержки
         tx_data = await self.fetch_transaction(signature)
         if not tx_data or "result" not in tx_data or not tx_data["result"]:
-            await asyncio.sleep(1.5)
+            await asyncio.sleep(0.6)
             tx_data = await self.fetch_transaction(signature)
             if not tx_data or "result" not in tx_data or not tx_data["result"]: return
 
@@ -481,8 +576,6 @@ class CopyTrader:
 
             all_mints = set(pre_dict.keys()) | set(post_dict.keys())
             for mint in all_mints:
-                # Раньше только pump-минты — пропускали Raydium-миграции и прямые листинги.
-                # Теперь все минты: ИИ-гейт ниже отсеет мусор.
                 if len(mint) < 30:
                     continue
                 if mint in ["So11111111111111111111111111111111111111112", 
@@ -535,63 +628,8 @@ class CopyTrader:
                         print(f"🚫 [WHALE LATE] {mint[:12]}: цена +{(cur_price/first_price-1)*100:.0f}% с покупки 1-го кита — киты уже надули, входим в их выход.")
                         return
                     print(f"🐋 SMART MONEY CONSENSUS: {n_whales} кита, цена ещё не улетела (+{(cur_price/first_price-1)*100:.0f}%) — РАННИЙ вход!")
-                    if len(self.tracker.get_open_positions()) >= config.MAX_CONCURRENT_POSITIONS:
-                        print("🚫 Лимит позиций. Пропускаем копитрейд.")
-                        return
-                        
-                    if self.analyzer:
-                        print(f"🤖 Передаем сигнал кита ИИ на проверку...")
-                        is_safe = await self.analyzer.analyze_token(mint)
-                        if not is_safe:
-                            print(f"🚫 ИИ забраковал токен кита {trader_name}. Спасли твои деньги от рагпула!")
-                            self._record_junk_signal(wallet, trader_name, mint, "Зомби-возраст или отсев ИИ-фильтром", is_hard_scam=False)
-                            return
-                        else:
-                            print(f"✅ ИИ одобрил токен кита! Покупаем!")
-                    else:
-                        print("⚠️ ИИ не подключен к Копитрейдеру. Покупаем вслепую!")
-                        
-                    price_usd = await self.get_token_price(mint)
                     symbol = f"COPY_{trader_name[1:5].upper()}"
-
-                    # Защита: инсайдеры тоже сливают на копирующих. Полный антискам Grok-JEV (RugCheck/GoPlus/холдеры/Jupiter).
-                    if getattr(config, "COPY_USE_ANTISCAM", True):
-                        try:
-                            from grok_jev import grok_jev as _gj
-                            _pair = await _gj.fetch_pair(mint, "solana")
-                            if not _pair:
-                                print(f"🚫 [COPY] {mint[:12]}: нет данных пары, не копируем вслепую")
-                                continue
-                            _ok, _why, _hs = await _gj.full_anti_scam_audit(mint, symbol, "solana", _pair)
-                            if not _ok:
-                                print(f"🚫 [COPY-SCAM] {trader_name} {mint[:12]}: {_why}")
-                                _is_hard = any(k in str(_why).lower() for k in ("rugcheck", "honeypot", "drain", "high risk", "freeze"))
-                                self._record_junk_signal(wallet, trader_name, mint, str(_why), is_hard_scam=_is_hard)
-                                continue
-                            if getattr(config, "JEV_REQUIRE_HOLDER_DATA", True) and not (
-                                    float(_hs.get("top1_pct", 0) or 0) > 0 or float(_hs.get("top10_pct", 0) or 0) > 0):
-                                print(f"🚫 [COPY] {mint[:12]}: нет данных о холдерах")
-                                continue
-                            _px = float(_pair.get("priceUsd", 0) or 0)
-                            if _px > 0:
-                                price_usd = _px
-                            symbol = str((_pair.get("baseToken") or {}).get("symbol") or symbol)
-                        except Exception as _e:
-                            print(f"⚠️ [COPY] антискам недоступен ({type(_e).__name__}), не копируем")
-                            continue
-                    
-                    capital = self.tracker.get_total_capital()
-                    _pct = float(getattr(config, "COMPOUNDING_PCT", 0.10))
-                    _base = float(getattr(config, "BASE_TRADE_AMOUNT_USD", 2.0))
-                    _cap = float(getattr(config, "COPY_MAX_TICKET_USD", 4.0))
-                    position_size = max(_base, min(_cap, capital * _pct))
-
-                    if mint not in self._copy_wallets:
-                        self._copy_wallets[mint] = set()
-                    self._copy_wallets[mint].add(wallet)
-                    self.tracker.add_position(symbol, mint, price_usd, amount_usd=position_size,
-                                                source=f"COPY:{trader_name}")
-                    print(f"✅ Успешно скопировали сделку {trader_name} на {position_size:.2f}$!")
+                    await self._execute_copy_buy(wallet, trader_name, mint, symbol, cur_price)
 
     async def _listen_single_socket(self, wss_url: str, wallet_subset: dict):
         """Слушает выделенный пул китов (15 адресов) на конкретном RPC сокете."""
@@ -646,15 +684,15 @@ class CopyTrader:
             if res is False:
                 self._helius_disabled = True  # Отключаем Helius на время этой сессии при 429
 
-        # 2. Основной / резервный пул: распределяем китов по 15 штук на 4 публичных сокета Solana
+        # 2. Основной / резервный пул: распределяем до 80 китов по 20 штук на 4 проверенных сокета Solana
         endpoints = [
             "wss://api.mainnet-beta.solana.com/",
             "wss://solana-rpc.publicnode.com/",
-            "wss://rpc.ankr.com/solana/ws/",
-            "wss://solana.drpc.org/",
+            "wss://api.mainnet-beta.solana.com/",
+            "wss://solana-rpc.publicnode.com/",
         ]
 
-        chunk_size = 15
+        chunk_size = 20
         tasks = []
         for i, ep in enumerate(endpoints):
             chunk = dict(all_wallets[i * chunk_size : (i + 1) * chunk_size])
@@ -662,7 +700,7 @@ class CopyTrader:
                 tasks.append(self._listen_single_socket(ep, chunk))
 
         if not tasks:
-            tasks.append(self._listen_single_socket(endpoints[0], dict(all_wallets[:15])))
+            tasks.append(self._listen_single_socket(endpoints[0], dict(all_wallets[:20])))
 
         print(f"👥 [COPYTRADER] Запущен параллельный пул из {len(tasks)} публичных WSS-сокетов (всего {len(self.wallets)} активных китов)...")
         await asyncio.gather(*tasks, return_exceptions=True)

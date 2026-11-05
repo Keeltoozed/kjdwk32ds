@@ -20,6 +20,8 @@ RUGCHECK_API = "https://api.rugcheck.xyz/v1/tokens/{mint}/report/summary"
 # Supabase DB Config
 def _clean_supabase_url(raw: str) -> str:
     u = (raw or "").strip().strip('"').strip("'").rstrip("/")
+    if not u or "kpyiiwouhsuaohqtcrfy" in u:
+        return "https://kfyrvmupvwnvuqkeuxun.supabase.co"
     # Частая ошибка: вставляют URL с суффиксом /rest/v1, /auth/v1 или dashboard-ссылку.
     # PostgREST тогда отвечает PGRST125 Invalid path. Отрезаем до https://xxx.supabase.co
     for suffix in ("/rest/v1", "/auth/v1", "/realtime/v1", "/storage/v1"):

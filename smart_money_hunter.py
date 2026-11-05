@@ -76,17 +76,24 @@ class SmartMoneyHunter:
         if not sb:
             return out
         try:
-            res = sb.table("smart_wallets").select("*").limit(5000).execute()
-            for r in (res.data or []):
-                try:
-                    wins = json.loads(r.get("winning_tokens") or "[]")
-                except Exception:
-                    wins = []
-                out[r["wallet"]] = {
-                    "chain": r.get("chain") or "solana", "tier": int(r.get("tier") or 3),
-                    "total_pnl": float(r.get("total_pnl") or 0.0), "trade_count": int(r.get("trade_count") or 0),
-                    "winning_tokens": wins, "first_seen": float(r.get("first_seen") or time.time()),
-                }
+            offset = 0
+            page_size = 1000
+            while True:
+                res = sb.table("smart_wallets").select("*").range(offset, offset + page_size - 1).execute()
+                rows = res.data or []
+                for r in rows:
+                    try:
+                        wins = json.loads(r.get("winning_tokens") or "[]")
+                    except Exception:
+                        wins = []
+                    out[r["wallet"]] = {
+                        "chain": r.get("chain") or "solana", "tier": int(r.get("tier") or 3),
+                        "total_pnl": float(r.get("total_pnl") or 0.0), "trade_count": int(r.get("trade_count") or 0),
+                        "winning_tokens": wins, "first_seen": float(r.get("first_seen") or time.time()),
+                    }
+                if len(rows) < page_size:
+                    break
+                offset += page_size
             print(f"☁️ [SMART-HUNTER] Из Supabase загружено кошельков: {len(out)}")
         except Exception as e:
             print(f"⚠️ [SMART-HUNTER] Не удалось прочитать таблицу smart_wallets: {str(e)[:160]}")

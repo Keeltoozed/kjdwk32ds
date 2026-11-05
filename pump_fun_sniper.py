@@ -43,8 +43,9 @@ STAGES = ["0 создан", "1 есть сделки", "2 покупателей
 
 
 class PumpFunSniper:
-    def __init__(self, tracker=None):
+    def __init__(self, tracker=None, copy_trader=None):
         self.tracker = tracker
+        self.copy_trader = copy_trader
         self.running = False
         self.trackers = {}  # mint -> TokenTrackerState
         self.funnel = collections.Counter()       # этап -> сколько токенов закончили на нём
@@ -507,6 +508,8 @@ class PumpFunSniper:
                                         _w_pnl = float(_smh.db[trader].get("total_pnl", 0.0) or 0.0)
                                         print(f"🐋 [WHALE ON PUMP] Кит {trader[:8]}... (PnL +${_w_pnl:,.0f}) купил {state.symbol} ({mint[:8]}) на {sol_amount:.2f} SOL!")
                                         state.whale_buyer = trader
+                                        if getattr(self, "copy_trader", None):
+                                            asyncio.create_task(self.copy_trader.handle_whale_buy(trader, mint, state.symbol, sol_amount, mc_sol))
                                 except Exception:
                                     pass
 
