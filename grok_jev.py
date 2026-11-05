@@ -813,13 +813,19 @@ class GrokJevEngine:
                 _m1_known = True
             self._record_px(_base_addr, entry_price)
 
+        # Если токен молоде 3м, DexScreener часто отдаёт m1 == m5 (одна первая свеча).
+        # В таком случае m1-фильтр ложно блокирует ракеты (WENDYQUEST +356%, CR +210%, LILY +175%).
+        # Признак фантомного m1: |m1/m5 - 1| < 0.08 и возраст < 3м.
+        _m1_is_phantom = (_age_m < 3.0 and abs(m5) > 1.0 and abs(m1) > 0 and abs(m1 / max(abs(m5), 0.01) - 1.0) < 0.08)
         _strong_breakout = (b5 >= 20 and b5 >= s5 * 1.20 and vol5 >= 4000.0)
         _max_m5_cap = 140.0 if _strong_breakout else 85.0
         if m5 > _max_m5_cap:
             return False, -0.14, 0.0, f"fomo-spike (m5 {m5:+.1f}% > +{_max_m5_cap:.0f}%) — buying local top, wait for reset"
-        if m5 > 65.0 and m1 > 18.0:
+        # fomo-spike m5>65 + m1>18: пропускаем если фантомный m1 (молодой токен) и сильный breakout
+        if m5 > 65.0 and m1 > 18.0 and not (_m1_is_phantom and _strong_breakout):
             return False, -0.14, 0.0, f"fomo-spike (m5 {m5:+.1f}% > +65.0% and m1 {m1:+.1f}% > 18%) — vertical blow-off candle"
-        if m1 > _max_m1:
+        # m1-spike: пропускаем фантомный m1 на молодом токене с сильным потоком
+        if m1 > _max_m1 and not _m1_is_phantom:
             return False, -0.14, 0.0, f"m1-spike (m1 {m1:+.1f}% > +{_max_m1:.1f}%) — vertical push, wait for consolidation"
         _max_h1_flush = float(getattr(_c, "MAX_ENTRY_H1_PCT", 85.0))
         if _h1 > _max_h1_flush and _age_m > 10.0:
@@ -1254,9 +1260,14 @@ class GrokJevEngine:
         if any(w in name.lower() for w in bad_words) or any(w in symbol.lower() for w in bad_words):
             return False, f"bad-word-scam in name/symbol ({name} / {symbol})", _h_stats
 
+        # Корпоративные тикеры и знаменитости — фейковые бренды (MrBeast -52%, ELON, TRUMP, AMAZON)
         corporate_scam_keywords = ["AAPL", "S&P", "SP500", "MSFT", "TSLA", "TESLA", "SPACEX", "STARLINK", "XAI", "NEURALINK", "PAYPAL",
-                                  "NVDA", "GOOG", "AMZN", "META", "NFLX", "ANTHROPIC", "OPENAI", "PERPLEXITY"]
-        if any(k == symbol_upper for k in corporate_scam_keywords):
+                                  "NVDA", "GOOG", "AMZN", "META", "NFLX", "ANTHROPIC", "OPENAI", "PERPLEXITY",
+                                  "MRBEAST", "BEASTMODE", "ELONMUSK", "TRUMPCOIN", "TRUMP2024", "TRUMP2025",
+                                  "AMAZON", "MICROSOFT", "GOOGLE", "APPLE"]
+        # Проверяем точное совпадение тикера ИЛИ имя содержит бренд
+        _name_has_brand = any(k in name for k in corporate_scam_keywords)
+        if any(k == symbol_upper for k in corporate_scam_keywords) or _name_has_brand:
             return False, f"corporate-brand-mimic {symbol_upper}", _h_stats
 
         # 2. Аудит соцсетей и анонимности создателя
@@ -1292,7 +1303,10 @@ class GrokJevEngine:
         if not is_pump and not has_socials and eff_liq < 22000.0:
             _v2l = _vol5 / max(eff_liq, 1.0)
             _bs = _b5 / float(max(_s5, 1))
-            if _v2l > 2.6 and _bs < 1.8:
+            _avg_tx5 = _vol5 / max(_b5 + _s5, 1)
+            # Органические ракеты без соцсетей: крупные сделки ($80+) и 100+ покупок — не боты
+            _is_organic_no_soc = (_avg_tx5 >= 60.0 and _b5 >= 100 and _bs >= 1.4)
+            if _v2l > 2.6 and _bs < 1.8 and not _is_organic_no_soc:
                 return False, f"anon-wash-churn-trap (0 socials, liq ${eff_liq:,.0f}, vol5/liq {_v2l:.1f}x, b/s {_bs:.2f})", _h_stats
         _is_organic_flow = (
             (_b5 >= 12 and _b5 >= _s5 and _vol5 >= 2500.0 and eff_liq >= float(getattr(_c, "MIN_GRADUATED_LIQ_USD", 7500.0)))

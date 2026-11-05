@@ -1423,13 +1423,18 @@ class Analyzer:
                 return self._deny(mint, f"low-liq ${_eff_pool_liq:.0f}<{_min_liq:.0f}", f"🚫 [ANTI-RUG] {symbol} ({mint[:8]}): Реальная ликвидность DEX ${_eff_pool_liq:,.0f} < ${_min_liq:,.0f} — риск дампа/проскальзывания.")
 
             # Защита от анонимных wash-bot накруток на DEX (кейсы Belief/BUZZ: 0 соцсетей, liq <$25k, vol5/liq > 2.2x при слабом перевесе покупателей)
+            # НО: не блокируем реальные ракеты с крупными сделками (avg_tx > $80 = органические трейдеры, а не микро-боты)
             _info_a = pair_data.get("info") or {}
             _has_soc_a = bool((_info_a.get("socials") or []) or (_info_a.get("websites") or []))
             if not _is_raw_curve and not _has_soc_a and raw_liq < 25000.0:
                 _v2l_a = _vm5_pre / max(raw_liq, 1.0)
                 _bs_a = _b5_pre / float(max(_s5_pre, 1))
-                if _v2l_a > 2.2 and _bs_a < 1.8:
-                    return self._deny(mint, f"anon-wash-churn {_v2l_a:.1f}x", f"🚫 [WASH-TRAP] {symbol} ({mint[:8]}): 0 соцсетей, liq ${raw_liq:,.0f}, оборот 5м {_v2l_a:.1f}x пула (b/s {_bs_a:.2f}) — анонимный wash-дамп (кейс BUZZ)!")
+                _tot_tx5_a = _b5_pre + _s5_pre
+                _avg_tx5_a = _vm5_pre / max(_tot_tx5_a, 1)
+                # Органические ракеты: средняя сделка > $60 (настоящие покупатели, не боты), игнорируем wash-churn
+                _is_organic_trades = (_avg_tx5_a >= 60.0 and _b5_pre >= 100 and _bs_a >= 1.4)
+                if _v2l_a > 2.2 and _bs_a < 1.8 and not _is_organic_trades:
+                    return self._deny(mint, f"anon-wash-churn {_v2l_a:.1f}x", f"🚫 [WASH-TRAP] {symbol} ({mint[:8]}): 0 соцсетей, liq ${raw_liq:,.0f}, оборот 5м {_v2l_a:.1f}x пула (b/s {_bs_a:.2f}, avg ${_avg_tx5_a:.0f}) — анонимный wash-дамп!")
 
             # Блок кастомных не-pump токенов на PumpSwap с микропулом
             if dex_id_low == "pumpswap" and not mint.endswith("pump") and raw_liq < _min_grad_liq:
