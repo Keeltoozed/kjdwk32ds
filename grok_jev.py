@@ -839,16 +839,17 @@ class GrokJevEngine:
         if _liq_usd > 0 and _liq_usd < _min_liq:
             return False, -0.14, 0.0, f"thin-liquidity (${_liq_usd:,.0f} < ${_min_liq:,.0f}) — slippage/dump risk"
 
-        # 2. Откат не должен быть ножом падения (падение глубже -3.5% за 1 мин — это слив):
-        if m1 < -3.5:
-            return False, -0.14, 0.0, f"flush-dump (m1 {m1:+.1f}% < -3.5%) — falling knife, wait for stabilization"
+        # СТАЛО (замени строки 551-562 в grok_jev.py):
+        # 2. Разрешаем здоровый откат до -6.5% за 1 мин (мы покупаем откат "bid the flush"):
+        if m1 < -6.5:
+            return False, -0.14, 0.0, f"flush-dump (m1 {m1:+.1f}% < -6.5%) — falling knife, wait for stabilization"
 
-        # 3. Проверка давления продавцов: в m5 покупатели должны лидировать
-        if s5 > 5 and b5 < s5:
+        # 3. Проверка давления продавцов: допускаем небольшой перевес на самом откате
+        if s5 > 8 and b5 < int(s5 * 0.80):
             return False, -0.14, 0.0, f"sellers-dominating ({b5}b/{s5}s) — sellers active, wait for buyer absorption"
 
-        # 4. Монета не должна стоять мёртвым флетом (но разрешаем здоровый микро-откат "bid the flush" на активном m5!):
-        if (_m1_known and m1 <= -2.0 and m5 < 2.5) or (not _m1_known and m5 < 1.5):
+        # 4. Монета не должна стоять мёртвым флетом
+        if (_m1_known and m1 <= -3.5 and m5 < 1.5) or (not _m1_known and m5 < 1.2):
             return False, -0.14, 0.0, f"flat-coin (m1 {m1:+.1f}%, m5 {m5:+.1f}%) — price standing still, waiting for live impulse"
 
         # 3.2. ПОДТВЕРЖДЕНИЕ ТРЕНДА ПО СОБСТВЕННОЙ ИСТОРИИ ЦЕН (DexScreener m1/m5 запаздывают на минуту и больше)
@@ -1010,15 +1011,15 @@ class GrokJevEngine:
         conc_score = min(1.0, max(0.1, (top1_pct / 8.0) * 0.25 + (top10_pct / 30.0) * 0.25))
 
         # 4. momentum_already_spent
-        # Если m5 < 4.0% или h1 < -8.0% — импульса нет, токен дохлый или в сливе (риск 0.95 = REJECT!)
-        if m5 < 4.0 or h1 < -8.0:
+        # СТАЛО (замени строки 643-654 в grok_jev.py):
+        if m5 < 1.2 or h1 < -15.0:
             mom_score = 0.95
-        elif m1 > 22.0:
-            mom_score = 0.85  # Вертикальный прострел прямо сейчас в 1м свече (FOMO пик)
-        elif m5 >= 5.0 and m1 <= 8.0:
-            mom_score = 0.25  # Идеальный свежий импульс на откате / консолидации / старте
-        elif m5 > 350.0 and m1 > 12.0:
-            mom_score = 0.75  # Сильный перегрев
+        elif m1 > 28.0:
+            mom_score = 0.85
+        elif m5 >= 1.5 and m1 <= 15.0:
+            mom_score = 0.25
+        elif m5 > 400.0 and m1 > 18.0:
+            mom_score = 0.75
         else:
             mom_score = 0.40
 
@@ -1918,11 +1919,13 @@ async def grok_bot_jev_loop(tracker, analyzer=None):
                 addr for addr, ch in candidates
                 if addr and addr not in tracker.positions and now >= evaluated_cooldown.get((addr, ch), 0.0)
             ]
+            # СТАЛО:
             if active_batch and grok_jev.analyzer and hasattr(grok_jev.analyzer, "prefetch_token_data"):
                 try:
-                    await grok_jev.analyzer.prefetch_token_data(active_batch, chain="solana")
+                    await grok_jev.analyzer.prefetch_token_data(active_batch)
                 except Exception:
                     pass
+
 
             for address, chain in candidates:
                 if not address or address in tracker.positions:
