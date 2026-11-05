@@ -63,10 +63,10 @@ MAX_CONCURRENT_POSITIONS = 4          # До 4 позиций одновреме
 # Risk Management
 MAX_DAILY_LOSS_USD = 1000.0
 KILL_SWITCH_ENABLED = False  # ОТКЛЮЧЕНО для тестов (не ставить торговлю на паузу при дневном минусе)
-STOP_LOSS_PCT = -0.14  # Стоп -14%: жесткое ограничение потерь ($0.56 на $4 ордер вместо $1.00-$1.55)
-EMERGENCY_CAP_PCT = -0.20  # Аварийный срез на -20% для экстренного выхода при провале стакана
+STOP_LOSS_PCT = -0.18  # Стоп -18%: даёт запас на спред/проскальзывание входа (~$0.72 на $4 ордер)
+EMERGENCY_CAP_PCT = -0.28  # Аварийный срез на -28% для экстренного выхода при провале стакана
 INFANT_WINDOW_MIN = 2.0
-INFANT_DUMP_PCT = -0.14  # Слив в первые 2 минуты режем на -14%: спасает от дев-дампов
+INFANT_DUMP_PCT = -0.24  # Слив в первые 2 минуты: отсекает настоящий дев-дамп (-24%..-90%), переживает нормальный шум входа (-15%..-18%)
 
 # === АНТИ-ФОМО И АНТИ-РАГ ФИЛЬТРЫ ВХОДА (SOLANA) ===
 MAX_ENTRY_H1_PCT = 120.0  # Запрет входа если h1 > +120% на AMM (отсекает поздние перегретые пампы, но пускает сильные молодые ракеты)
@@ -214,7 +214,7 @@ JEV_MAX_DEV_STILL_LOADED = 0.25
 JEV_BID_THE_FLUSH_ENABLED = True
 JEV_STOP_UNDER_WICK_ENABLED = True
 JEV_MAX_M1_ENTRY_PCT = 12.0      # Anti-FOMO: не входить на вертикальных 1м свечах > +12% (вход на пике = мгновенный слив дева)
-JEV_DEFAULT_WICK_STOP_PCT = -0.14 # -14% рабочий стоп (согласован с STOP_LOSS_PCT)
+JEV_DEFAULT_WICK_STOP_PCT = -0.18 # -18% рабочий стоп (согласован с STOP_LOSS_PCT)
 
 # Birdeye API Key
 BIRDEYE_API_KEY = os.getenv("BIRDEYE_API_KEY", "")

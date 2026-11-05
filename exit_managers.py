@@ -102,20 +102,27 @@ class MatureExitManager:
         # =========================================================================
         # 2. СТОПЫ И АВАРИЙНЫЕ КЭПЫ ДЛЯ МОНЕТ БЕЗ ПРИБЫЛИ (< +12%)
         # =========================================================================
-        _emerg_cap = float(getattr(config, "EMERGENCY_CAP_PCT", -0.20))
+        _emerg_cap = float(getattr(config, "EMERGENCY_CAP_PCT", -0.28))
         if pnl_pct <= _emerg_cap:
             return f"Mature Emergency Cap ({pnl_pct*100:.0f}%)"
 
-        # Infant guard: дамп в первые минуты = настоящий дев-раг (-14%+)
+        # Infant guard: дамп в первые минуты = настоящий дев-раг (-24%..-90%)
+        # НЕ режем в первые 20 секунд на шуме спреда входа (кейс CR: срез на 12с -15%, затем ракета +85%)!
         _inf_win = float(getattr(config, "INFANT_WINDOW_MIN", 2.0))
-        _inf_pct = float(getattr(config, "INFANT_DUMP_PCT", -0.14))
+        _inf_pct = float(getattr(config, "INFANT_DUMP_PCT", -0.24))
         if minutes_held < _inf_win and pnl_pct <= _inf_pct:
-            return f"Mature Infant Dump ({pnl_pct*100:.0f}%)"
+            if minutes_held < 0.35 and pnl_pct > -0.35:
+                pass  # первые 21с пережидаем спред/комиссию входа
+            else:
+                return f"Mature Infant Dump ({pnl_pct*100:.0f}%)"
 
-        # Hard stop loss: защита депозита от сползания (-14%)
-        _sl = -abs(float(getattr(config, 'STOP_LOSS_PCT', 0.14)))
+        # Hard stop loss: защита депозита от сползания (-18%)
+        _sl = -abs(float(getattr(config, 'STOP_LOSS_PCT', 0.18)))
         if pnl_pct <= _sl:
-            return f"Mature Stop Loss ({_sl*100:.0f}%)"
+            if minutes_held < 0.35 and pnl_pct > -0.35:
+                pass
+            else:
+                return f"Mature Stop Loss ({_sl*100:.0f}%)"
 
         # STALL TIMER (DEAD MOMENTUM EXIT: 240с на проверку импульса)
         _stall_sec = float(getattr(config, "STALL_TIMER_SEC", 240.0))

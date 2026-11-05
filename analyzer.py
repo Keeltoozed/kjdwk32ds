@@ -1248,6 +1248,14 @@ class Analyzer:
         _created_pre = pair_data.get("pairCreatedAt") or 0
         if _created_pre:
             _age_min_pre = (time.time() * 1000 - _created_pre) / 60000.0
+            if _age_min_pre > 50000.0 and mint.endswith("pump"):
+                try:
+                    from birth_tracker import birth_tracker as _bt_check
+                    _bt_a = _bt_check.get_age(mint)
+                    if _bt_a is not None and _bt_a < 120.0:
+                        _age_min_pre = float(_bt_a)
+                except Exception:
+                    pass
         else:
             _bt_age = None
             try:
@@ -1311,16 +1319,16 @@ class Analyzer:
             )
 
         # 2. Защита от фейковых bump-ботов на именах брендов/селебрити (ELON, Trump, Amazon, MrBeast, Microsoft):
-        # 250+ сделок с копеечным чеком (< $8.0) при 0 соцсетей — 100% серийная ловушка скамера
+        # 200+ сделок с копеечным чеком (< $15.0) при 0 соцсетей — 100% серийная ловушка скамера
         _info_pre = pair_data.get("info") or {}
         _has_soc_pre = bool((_info_pre.get("socials") or []) or (_info_pre.get("websites") or []))
         _tot_tx5_pre = _b5_pre + _s5_pre
         _avg_tx_pre = (_vm5_pre / _tot_tx5_pre) if _tot_tx5_pre > 0 else 0.0
-        if _tot_tx5_pre >= 250 and _avg_tx_pre < 8.0 and not _has_soc_pre:
+        if _tot_tx5_pre >= 200 and _avg_tx_pre < 15.0 and not _has_soc_pre:
             return self._deny(
                 mint,
                 f"fake-bump-wash-bot avg ${_avg_tx_pre:.1f}",
-                f"🚫 [WASH-BUMP-TRAP] {symbol} ({mint[:8]}): накрутка микро-ботом ({_tot_tx5_pre} txns, avg ${_avg_tx_pre:.2f} < $8) при 0 соцсетей — фейк-дамп!",
+                f"🚫 [WASH-BUMP-TRAP] {symbol} ({mint[:8]}): накрутка микро-ботом ({_tot_tx5_pre} txns, avg ${_avg_tx_pre:.2f} < $15) при 0 соцсетей — фейк-дамп!",
             )
 
         # 3. Минимальный 5м объем для молодых токенов (< $3,000)
@@ -1334,12 +1342,19 @@ class Analyzer:
         # 4. Anti-FOMO: Защита от перегретых вершин и поздних входов
         _max_entry_h1 = float(getattr(config, "MAX_ENTRY_H1_PCT", 120.0))
         _max_entry_m5 = float(getattr(config, "MAX_ENTRY_M5_PCT", 95.0))
-        if _age_min_pre >= 10.0 and _h1 > _max_entry_h1:
+        if not _has_soc_pre and (_h1 > 100.0 or _m5 > 80.0):
             return self._deny(
                 mint,
-                f"h1-exhausted {_h1:.0f}%>{_max_entry_h1:.0f}%",
-                f"🚫 [EXHAUSTED-TOP] {symbol} ({mint[:8]}): рост за час +{_h1:+.1f}% > +{_max_entry_h1:.0f}% — поздний вход на вершине пампа (риск дев-дампа).",
+                f"fomo-spike-no-socials h1 +{_h1:.0f}%/m5 +{_m5:.0f}%",
+                f"🚫 [FOMO-SPIKE-NO-SOC] {symbol} ({mint[:8]}): памп (+{_h1:.0f}% 1h, +{_m5:.0f}% 5m) при 0 соцсетей — вершина памп-дампа дева!",
             )
+        if _h1 > _max_entry_h1:
+            if _age_min_pre >= 10.0 or (_vm5_pre < 35000.0 and _h1 > 140.0):
+                return self._deny(
+                    mint,
+                    f"h1-exhausted {_h1:.0f}%>{_max_entry_h1:.0f}%",
+                    f"🚫 [EXHAUSTED-TOP] {symbol} ({mint[:8]}): рост за час +{_h1:+.1f}% > +{_max_entry_h1:.0f}% — поздний вход на вершине пампа (риск дев-дампа).",
+                )
         if _m5 > _max_entry_m5:
             # Разрешаем мощные органические прорывы при подтвержденном объеме и доминировании покупателей
             _is_breakout = (_vm5_pre >= 12000.0 and _b5_pre >= _s5_pre * 1.25 and _m5 <= 130.0)

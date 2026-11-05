@@ -533,10 +533,13 @@ class GrokJevEngine:
             else:
                 print(f"💎 [JEV-ORGANIC-STEALTH] {symbol} ({mint[:8]}): 0 соцсетей, но подтвержден органический прорыв (${vol_m5:,.0f}, {b5}b/{s5}s) — пропуск.")
 
-        # 2.5. Exhaustion Guard: блокируем перегретые поздние пампы (h1 > MAX_ENTRY_H1_PCT при возрасте >= 10м)
+        # 2.5. Exhaustion Guard: блокируем перегретые поздние пампы
         _max_h1_allowed = float(getattr(_c, "MAX_ENTRY_H1_PCT", 120.0))
-        if h1 > _max_h1_allowed and age_min >= 10.0:
-            return False, f"exhaustion-top-h1 h1 {h1:+.0f}% > +{_max_h1_allowed:.0f}% (late pump top, dump risk)"
+        if links_cnt == 0 and (h1 > 100.0 or m5 > 80.0):
+            return False, f"exhaustion-no-soc-top h1 {h1:+.0f}%, m5 {m5:+.0f}% (0 socials pump-and-dump top)"
+        if h1 > _max_h1_allowed:
+            if age_min >= 10.0 or (vol_m5 < 35000.0 and h1 > 140.0):
+                return False, f"exhaustion-top-h1 h1 {h1:+.0f}% > +{_max_h1_allowed:.0f}% (late pump top, dump risk)"
         if fdv_mc > 100000.0 and eff_liq < 0.02 * fdv_mc:
             return False, f"fdv-liquidity-trap liq ${eff_liq:,.0f} < 2% of FDV ${fdv_mc:,.0f} (phantom valuation)"
 

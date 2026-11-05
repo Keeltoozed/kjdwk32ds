@@ -263,10 +263,14 @@ async def position_manager_loop(analyzer, tracker):
                 # Раги идут -40..-96%, шум импульса -15..-18% переживаем.
                 try:
                     _inf_w = float(getattr(config, "INFANT_WINDOW_MIN", 2.0))
-                    _inf_p = float(getattr(config, "INFANT_DUMP_PCT", -0.28))
+                    _inf_p = float(getattr(config, "INFANT_DUMP_PCT", -0.24))
                     if minutes_held < _inf_w and pnl_pct <= _inf_p:
-                        tracker.close_position(mint, current_price, f"Infant Dump ({pnl_pct*100:.0f}%)")
-                        continue
+                        if minutes_held < 0.35 and pnl_pct > -0.35:
+                            # Первые 21с пережидаем спред/проскальзывание входа
+                            pass
+                        else:
+                            tracker.close_position(mint, current_price, f"Infant Dump ({pnl_pct*100:.0f}%)")
+                            continue
                 except Exception:
                     pass
                 
@@ -709,7 +713,7 @@ async def scanner_loop(analyzer, tracker):
                 # вместо N одиночных. analyze_token() дальше читает из кэша без сети.
                 try:
                     _pf_list = [m for m in mints_to_scan if m not in tracker.positions
-                                and time.time() - processed_mints.get(m, 0.0) >= 25][:60]
+                                and time.time() - processed_mints.get(m, 0.0) >= 25][:150]
                     _pf_n = await analyzer.prefetch_token_data(_pf_list)
                     if _pf_list:
                         print(f"⚡ Префетч: {_pf_n}/{len(_pf_list)} токенов за {(len(_pf_list) + 14) // 15} запрос(а) DS.")
@@ -777,8 +781,8 @@ async def scanner_loop(analyzer, tracker):
                         elif mint.endswith("pump") and birth_tracker.get_age(mint) is not None and birth_tracker.get_age(mint) <= 30.0:
                             _ranked_mints.append((10.0, mint))
                         else:
-                            # Токен без данных префетча из бустов не спамит очередь одиночными запросами
-                            processed_mints[mint] = time.time() + 300
+                            # Токен вне текущего окна префетча — быстрый кулдаун 15с вместо заморозки на 5 минут
+                            processed_mints[mint] = time.time() + 15
 
                 _ranked_mints.sort(key=lambda x: x[0], reverse=True)
                 mints_to_scan = [m for _, m in _ranked_mints]
@@ -867,9 +871,9 @@ async def scanner_loop(analyzer, tracker):
                                 # Но после 3 пустых — это не лаг, а скам/нестандарт: хороним.
                                 _n = _grad_none.get(mint, 0) + 1
                                 _grad_none[mint] = _n
-                                if _n >= 3:
+                                if _n >= 8:
                                     _grad_none.pop(mint, None)
-                                    print(f"⚰️ [MIGRATION] {mint[:8]}: DS не видит после 3 попыток — unindexable, хороню.")
+                                    print(f"⚰️ [MIGRATION] {mint[:8]}: DS не видит после 8 попыток (~3.5м) — unindexable, хороню.")
                                 else:
                                     try:
                                         birth_tracker.add_graduated(mint)
@@ -967,10 +971,15 @@ async def scanner_loop(analyzer, tracker):
                                     if not _is_breakout:
                                         print(f"🚫 [SCANNER-FOMO-M5] {actual_symbol} ({mint[:8]}): живой m5 +{_m5_live:.1f}% > +{_max_m5_cfg:.0f}% без прорывного объема — вершина свечи, отмена!")
                                         continue
+                                _links_sc = len(pair_data.get("info", {}).get("socials", []) or pair_data.get("info", {}).get("websites", []) or [])
                                 _max_h1_live = float(getattr(config, "MAX_ENTRY_H1_PCT", 120.0))
-                                if _h1_live > _max_h1_live and _age_m >= 10.0:
-                                    print(f"🚫 [SCANNER-LIVE-EXHAUSTED] {actual_symbol} ({mint[:8]}): живой h1 {_h1_live:+.0f}% > +{_max_h1_live:.0f}% — перегретая вершина, отмена!")
+                                if _links_sc == 0 and (_h1_live > 100.0 or _m5_live > 80.0):
+                                    print(f"🚫 [SCANNER-FOMO-NO-SOC] {actual_symbol} ({mint[:8]}): памп (h1 +{_h1_live:.0f}%, m5 +{_m5_live:.0f}%) без соцсетей — ловушка памп-дампа дева, отмена!")
                                     continue
+                                if _h1_live > _max_h1_live:
+                                    if _age_m >= 10.0 or (_vol5_live < 35000.0 and _h1_live > 140.0):
+                                        print(f"🚫 [SCANNER-LIVE-EXHAUSTED] {actual_symbol} ({mint[:8]}): живой h1 {_h1_live:+.0f}% > +{_max_h1_live:.0f}% — перегретая вершина, отмена!")
+                                        continue
                                 if _pk_drop_live <= -18.0 or _lq_drop_live <= -18.0:
                                     print(f"🚫 [SCANNER-POST-PEAK] {actual_symbol} ({mint[:8]}): токен уже слился от пика (цена {_pk_drop_live:+.1f}%, ликва {_lq_drop_live:+.1f}%) — отмена!")
                                     continue
@@ -983,7 +992,6 @@ async def scanner_loop(analyzer, tracker):
                                     continue
 
                                 # Защита от 0-соцсеточных рагпулов (кейс Donkey, VOLITION)
-                                _links_sc = len(pair_data.get("info", {}).get("socials", []) or pair_data.get("info", {}).get("websites", []) or [])
                                 _req_soc_age = float(getattr(config, "REQUIRE_SOCIALS_MIN_AGE_MIN", 20.0))
                                 if _age_m < _req_soc_age and _links_sc == 0:
                                     _b5_sc = int((pair_data.get("txns") or {}).get("m5", {}).get("buys", 0) or 0)
@@ -999,8 +1007,8 @@ async def scanner_loop(analyzer, tracker):
                                 _tx5_sc = (pair_data.get("txns") or {}).get("m5", {}) or {}
                                 _tot_tx5_sc = int(_tx5_sc.get("buys", 0) or 0) + int(_tx5_sc.get("sells", 0) or 0)
                                 _avg_tx5_sc = (_vol5_live / _tot_tx5_sc) if _tot_tx5_sc > 0 else 0.0
-                                if _tot_tx5_sc >= 250 and _avg_tx5_sc < 8.0:
-                                    print(f"🚫 [SCANNER-WASH-TRAP] {actual_symbol} ({mint[:8]}): накрутка микро-ботом ({_tot_tx5_sc} txns, avg ${_avg_tx5_sc:.2f} < $8) — отмена!")
+                                if _tot_tx5_sc >= 200 and _avg_tx5_sc < 15.0 and _links_sc == 0:
+                                    print(f"🚫 [SCANNER-WASH-TRAP] {actual_symbol} ({mint[:8]}): накрутка микро-ботом ({_tot_tx5_sc} txns, avg ${_avg_tx5_sc:.2f} < $15) — отмена!")
                                     continue
 
                                 # Блок кастомных не-pump контрактов на PumpSwap только при микро-пуле (< $6k)
@@ -1792,8 +1800,9 @@ async def _evm_track_once(tracker, chain: str, tag: str, emoji: str):
                     reason = f"{tag} Soft Guard (был пик +{maxp * 100:.0f}%, слив до {pnl * 100:.1f}%)"
                 elif held >= 1.0 and maxp >= float(getattr(config, "BREAKEVEN_PCT", 0.10)) and pnl <= 0.015:
                     reason = f"{tag} Breakeven (был пик +{maxp * 100:.0f}%)"
-                elif held < float(getattr(config, "INFANT_WINDOW_MIN", 2.0)) and pnl <= float(getattr(config, "INFANT_DUMP_PCT", -0.25)):
-                    reason = f"{tag} Infant Dump ({pnl * 100:.1f}%)"
+                elif held < float(getattr(config, "INFANT_WINDOW_MIN", 2.0)) and pnl <= float(getattr(config, "INFANT_DUMP_PCT", -0.24)):
+                    if held >= 0.35 or pnl <= -0.35:
+                        reason = f"{tag} Infant Dump ({pnl * 100:.1f}%)"
                 elif not _is_runner and maxp < 0.015 and pnl <= -0.10 and held >= 3.5:
                     reason = f"{tag} Zero-Momentum Cut ({held:.0f}m, {pnl * 100:.1f}%)"
                 elif not _is_runner and maxp < 0.02 and pnl <= -0.18 and held >= 4:
@@ -2190,30 +2199,32 @@ async def _evm_chain_loop(analyzer, tracker, chain: str):
 
 async def robinhood_loop(analyzer, tracker):
     has_open_rh = any(getattr(p, "chain", "") == "robinhood" for p in tracker.get_open_positions().values())
-    if not getattr(config, "ROBINHOOD_ENABLED", False) and not has_open_rh:
-        print("🟣 Robinhood отключён в config (ROBINHOOD_ENABLED=False).")
+    if (getattr(config, "SOLANA_ONLY", True) or not getattr(config, "ROBINHOOD_ENABLED", False)) and not has_open_rh:
+        print("🟣 Robinhood отключён (SOLANA_ONLY=True / ROBINHOOD_ENABLED=False).")
         return
     await _evm_chain_loop(analyzer, tracker, "robinhood")
 
 
 async def base_loop(analyzer, tracker):
-    if not getattr(config, "BASE_ENABLED", True):
-        print("🟦 Base отключён в config (BASE_ENABLED=False).")
+    has_open_base = any(getattr(p, "chain", "") == "base" for p in tracker.get_open_positions().values())
+    if (getattr(config, "SOLANA_ONLY", True) or not getattr(config, "BASE_ENABLED", False)) and not has_open_base:
+        print("🟦 Base отключён (SOLANA_ONLY=True / BASE_ENABLED=False).")
         return
     await _evm_chain_loop(analyzer, tracker, "base")
 
 
 async def bsc_loop(analyzer, tracker):
     has_open_bsc = any(getattr(p, "chain", "") == "bsc" for p in tracker.get_open_positions().values())
-    if not getattr(config, "BSC_ENABLED", False) and not has_open_bsc:
-        print("🟨 BSC отключён в config (BSC_ENABLED=False).")
+    if (getattr(config, "SOLANA_ONLY", True) or not getattr(config, "BSC_ENABLED", False)) and not has_open_bsc:
+        print("🟨 BSC отключён (SOLANA_ONLY=True / BSC_ENABLED=False).")
         return
     await _evm_chain_loop(analyzer, tracker, "bsc")
 
 
 async def ethereum_loop(analyzer, tracker):
-    if not getattr(config, "ETHEREUM_ENABLED", True):
-        print("⬜ Ethereum отключён в config (ETHEREUM_ENABLED=False).")
+    has_open_eth = any(getattr(p, "chain", "") == "ethereum" for p in tracker.get_open_positions().values())
+    if (getattr(config, "SOLANA_ONLY", True) or not getattr(config, "ETHEREUM_ENABLED", False)) and not has_open_eth:
+        print("⬜ Ethereum отключён (SOLANA_ONLY=True / ETHEREUM_ENABLED=False).")
         return
     await _evm_chain_loop(analyzer, tracker, "ethereum")
 
