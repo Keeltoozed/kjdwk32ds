@@ -73,14 +73,14 @@ class MatureExitManager:
             _floor_pnl = 0.25                          # Пик +50%+ -> держим +25%
             _trail_dist = 0.16
         elif max_pnl_pct >= 0.25:
-            _floor_pnl = 0.10                          # Пик +25%+ -> держим +10% гарантированного плюса
-            _trail_dist = 0.12                         # Откат не более 12% от пика (не даем слить +25% в 0!)
+            _floor_pnl = 0.14                          # Пик +25%+ -> держим +14% гарантированного плюса
+            _trail_dist = 0.10                         # Откат не более 10% от пика
         elif max_pnl_pct >= 0.18:
-            _floor_pnl = 0.04                          # Пик +18%+ -> держим +4% (гарантия прибыли)
-            _trail_dist = 0.10
-        elif max_pnl_pct >= 0.12 or _is_mb:
-            _floor_pnl = 0.015                         # Пик +12%+ -> безубыток +1.5%
+            _floor_pnl = 0.09                          # Пик +18%+ -> держим +9% (с запасом на комиссии и спред, исключает минус!)
             _trail_dist = 0.08
+        elif max_pnl_pct >= 0.12 or _is_mb:
+            _floor_pnl = 0.05                          # Пик +12%+ -> держим +5% (чистая прибыль после DEX fee!)
+            _trail_dist = 0.06
 
         if _floor_pnl is not None:
             drop_from_max = (position.max_price_usd - current_price) / position.max_price_usd if position.max_price_usd > 0 else 0
@@ -129,6 +129,11 @@ class MatureExitManager:
         _stall_loss = float(getattr(config, "STALL_MAX_LOSS_PCT", -0.07))
         if minutes_held >= (_stall_sec / 60.0) and max_pnl_pct < 0.06 and pnl_pct <= _stall_loss:
             return f"Dead Momentum Stall ({minutes_held*60:.0f}s no breakout, pnl {pnl_pct*100:.1f}%)"
+        
+        # SCALP MOMENTUM CUT (быстрый срез зависшего флета через 6м для освобождения слота):
+        _scalp_timeout = float(getattr(config, "SCALP_TIMEOUT_MIN", 6.0))
+        if minutes_held >= _scalp_timeout and max_pnl_pct < 0.06:
+            return f"Stagnant Momentum Cut ({minutes_held:.1f}m no breakout, pnl {pnl_pct*100:+.1f}%)"
         if minutes_held >= 8.0 and pnl_pct <= -0.09 and max_pnl_pct < 0.05:
             return f"Dead Momentum Stall ({minutes_held:.0f}m no breakout, pnl {pnl_pct*100:.1f}%)"
 

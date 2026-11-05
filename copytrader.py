@@ -20,114 +20,264 @@ SWAP_LOG_HINTS = ("Instruction: Buy", "Instruction: Sell", "Instruction: Swap", 
 
 
 class CopyTrader:
+    BANNED_FILE = "banned_whales.json"
+
     def __init__(self, tracker, analyzer=None):
         self.tracker = tracker
         self.analyzer = analyzer
+        self._banned = self._load_banned()
+        self._wstat = {}          # кошелёк -> [прибыльных копий, убыточных копий]
+        self._copy_wallets = {}   # mint -> кошельки, чей сигнал мы скопировали
         self.wallets = self.load_wallets()
         import os as _os, config as _cfg
         self.HELIUS_API_KEY = _os.getenv("HELIUS_API_KEY") or getattr(_cfg, "HELIUS_API_KEY", "")
-        self.rpc_url = f"https://mainnet.helius-rpc.com/?api-key={self.HELIUS_API_KEY}"
-        self.wss_url = f"wss://mainnet.helius-rpc.com/?api-key={self.HELIUS_API_KEY}"
+        self.rpc_url = f"https://mainnet.helius-rpc.com/?api-key={self.HELIUS_API_KEY}" if self.HELIUS_API_KEY else "https://api.mainnet-beta.solana.com"
+        self.wss_url = f"wss://mainnet.helius-rpc.com/?api-key={self.HELIUS_API_KEY}" if self.HELIUS_API_KEY else "wss://api.mainnet-beta.solana.com"
         self.processed_sigs = set()
         self._req_wallet = {}   # id запроса подписки -> кошелёк
         self._sub_wallet = {}   # id подписки -> кошелёк
         self._rate = {}         # кошелёк -> времена последних уведомлений
         self._muted = {}        # кошелёк -> до какого времени игнорируем
         self.whale_buys = {}      # mint -> {wallet: ts}
-        self._copy_wallets = {}   # mint -> кошельки, чей сигнал мы скопировали
-        self._wstat = {}          # кошелёк -> [прибыльных копий, убыточных копий]
-        self._banned = set()      # кошельки-«фармеры»: копии не приносят прибыль
         try:
             _orig_close = self.tracker.close_position
             def _hooked_close(mint, exit_price, reason, *a, **k):
                 try:
                     _p = self.tracker.get_open_positions().get(mint)
                     if _p is not None and str(getattr(_p, "source", "")).startswith("COPY") and mint in self._copy_wallets:
-                        _e = float(getattr(_p, "entry_price", 0) or 0)
-                        _x = float(exit_price or 0)
+                        _e = float(getattr(_p, "entry_price_usd", 0.0) or getattr(_p, "entry_price", 0.0) or 0.0)
+                        _x = float(exit_price or 0.0)
+                        _sym = getattr(_p, "symbol", mint[:8])
+                        _tp1 = getattr(_p, "tp1_done", False)
                         if _e > 0:
-                            self._score_wallets(mint, (_x / _e - 1.0) * 100.0)
-                except Exception:
-                    pass
+                            # Если позиция уже зафиксировала TP1 (+15%), сделка в целом плюсовая
+                            _pnl = 15.0 if _tp1 else ((_x / _e - 1.0) * 100.0)
+                            self._score_wallets(mint, _pnl, exit_reason=str(reason), symbol=_sym)
+                except Exception as _err:
+                    print(f"⚠️ [COPY-HOOK] Ошибка скоринга кита: {_err}")
                 return _orig_close(mint, exit_price, reason, *a, **k)
             self.tracker.close_position = _hooked_close
         except Exception as _e:
             print(f"⚠️ [COPY] не удалось повесить учёт результатов на кошельки: {_e}")
         self.consensus_done = set()
         self.whale_first_price = {}  # mint -> цена в момент покупки ПЕРВОГО кита
-        
-    def load_wallets(self):
-        """Кошельки для копирования. Источники по порядку:
-        1) smart_money_hunter.db — база В ПАМЯТИ, которую охотник пополняет раз в 15 мин (самые свежие данные);
-        2) smart_wallets_db.json — файл, который охотник пишет рядом с ботом (пропадает при рестарте Render, если не закоммичен);
-        3) smart_wallets.txt — список (ручные + tier 1-2 из охотника).
-        Из базы берутся только tier <= COPY_MIN_TIER (по умолчанию 2)."""
+
+    def _load_banned(self) -> set:
+        """Загружает список навсегда забаненных китов из локального файла."""
         import os
-        import config as _cf
-        min_tier = int(getattr(_cf, "COPY_MIN_TIER", 2))
-        wallets = {}
+        banned = set()
+        if os.path.exists(self.BANNED_FILE):
+            try:
+                with open(self.BANNED_FILE, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    if isinstance(data, dict):
+                        banned.update(data.keys())
+                    elif isinstance(data, list):
+                        banned.update(data)
+            except Exception as e:
+                print(f"⚠️ [COPY] Ошибка чтения {self.BANNED_FILE}: {e}")
+        return banned
 
-        def _add_db(db):
-            for w, data in (db or {}).items():
-                if not isinstance(data, dict) or data.get("chain") != "solana" or w in wallets:
-                    continue
-                tier = int(data.get("tier", 3) or 3)
-                if tier > min_tier:
-                    continue   # слабые кошельки (tier-3: 1 удачный токен) не копируем
-                pnl = float(data.get("total_pnl", 0) or 0)
-                try:
-                    _wins = data.get("winning_tokens", [])
-                    if isinstance(_wins, str):
-                        _wins = json.loads(_wins or "[]")
-                    if len(_wins) < int(getattr(_cf, "COPY_MIN_WINS", 2)) or pnl < float(getattr(_cf, "COPY_MIN_PNL", 1000)):
-                        continue   # одиночная удача — не «умный» кошелёк
-                except Exception:
-                    pass
-                wallets[w] = f"@Tier{tier}_{w[:4]}_+${pnl:,.0f}"
+    def ban_whale_permanently(self, wallet: str, reason: str, symbol: str = "", pnl_pct: float = 0.0):
+        """Навсегда банит кошелёк кита, если его сигнал не принёс прибыли:
+        1. Добавляет в self._banned
+        2. Удаляет из активных подписок
+        3. Записывает в banned_whales.json на диске
+        4. Обновляет Supabase: ставит tier = -1 (персистентный бан в облаке)
+        """
+        import os
+        if not wallet or wallet in self._banned:
+            return
+        self._banned.add(wallet)
 
-        # 1) живая база охотника (тот же процесс)
+        # 1. Запись на диск
+        records = {}
+        if os.path.exists(self.BANNED_FILE):
+            try:
+                with open(self.BANNED_FILE, "r", encoding="utf-8") as f:
+                    records = json.load(f)
+                    if not isinstance(records, dict):
+                        records = {k: {} for k in records}
+            except Exception:
+                records = {}
+        records[wallet] = {
+            "banned_at": time.time(),
+            "reason": reason,
+            "symbol": symbol,
+            "pnl_pct": round(pnl_pct, 2)
+        }
+        try:
+            with open(self.BANNED_FILE, "w", encoding="utf-8") as f:
+                json.dump(records, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            print(f"⚠️ [COPY] Ошибка записи в {self.BANNED_FILE}: {e}")
+
+        # 2. Обновляем в локальной базе охотника
         try:
             from smart_money_hunter import smart_money_hunter as _smh
-            _add_db(_smh.db)
+            if wallet in _smh.db:
+                _smh.db[wallet]["tier"] = -1
         except Exception:
             pass
-        # 2) файл базы
+
+        # 3. Обновляем в Supabase (tier = -1: навсегда забанен)
+        try:
+            def _bg_sb_ban():
+                try:
+                    import config as _cfg
+                    url = getattr(_cfg, "SUPABASE_URL", None)
+                    key = getattr(_cfg, "SUPABASE_KEY", None)
+                    if url and key:
+                        from supabase import create_client
+                        sb = create_client(url, key)
+                        sb.table("smart_wallets").update({"tier": -1}).eq("wallet", wallet).execute()
+                        print(f"☁️ [SUPABASE] Кит {wallet[:8]}... помечен tier=-1 (BANNED)")
+                except Exception as ex:
+                    print(f"⚠️ [SUPABASE-BAN] Ошибка обновления в облаке: {ex}")
+            import threading
+            threading.Thread(target=_bg_sb_ban, daemon=True).start()
+        except Exception:
+            pass
+
+        # 4. Удаляем из активных подписок
+        trader_name = self.wallets.pop(wallet, f"@{wallet[:6]}")
+
+        print(
+            f"🚫 [WHALE PERMA-BAN] Кит {trader_name} ({wallet[:8]}...) НАВСЕГДА ЗАБАНЕН!\n"
+            f"   Причина: {reason}\n"
+            f"   Итог: PnL {pnl_pct:+.2f}%. Сигналы этого кита исключены из торговли!"
+        )
+
+    def load_wallets(self):
+        """Кошельки для копирования.
+        1. Читает всех китов из Supabase / SmartMoneyHunter (1500-2000 кошельков).
+        2. Исключает навсегда забаненных (tier <= 0 или в banned_whales.json).
+        3. Ранжирует всех китов по PnL и подтвержденным победам (от лучших к худшим).
+        4. Отбирает ТОП-80 самых прибыльных китов для активной WSS-подписки Helius (без 429 и лимитов сокета).
+        5. При убытке/нуле от кита -> мгновенный перманентный бан (tier=-1 в Supabase),
+           и его место в ТОП-80 сразу занимает следующий кит из базы!
+        """
+        import os
+        import config as _cf
+
+        candidates = {}  # wallet -> dict
+        
+        # 1. Живая база охотника (уже загружена из Supabase)
+        try:
+            from smart_money_hunter import smart_money_hunter as _smh
+            for w, data in (_smh.db or {}).items():
+                if isinstance(data, dict) and data.get("chain", "solana") == "solana":
+                    candidates[w] = data
+        except Exception:
+            pass
+
+        # 2. Локальный smart_wallets_db.json
         if os.path.exists("smart_wallets_db.json"):
             try:
                 with open("smart_wallets_db.json", "r", encoding="utf-8") as f:
-                    _add_db(json.load(f))
+                    for w, data in json.load(f).items():
+                        if w not in candidates and isinstance(data, dict):
+                            candidates[w] = data
             except Exception:
                 pass
-        # 3) txt (ручные и синхронизированные tier 1-2)
-        if os.path.exists("smart_wallets.txt"):
+
+        # 3. Резервная прямая подгрузка из Supabase
+        if len(candidates) < 10:
             try:
-                with open("smart_wallets.txt", "r", encoding="utf-8") as f:
-                    for line in f:
-                        line = line.strip()
-                        if line and not line.startswith("#") and line not in wallets:
-                            wallets[line] = f"@Smart_{line[:4]}"
+                url = getattr(_cf, "SUPABASE_URL", None)
+                key = getattr(_cf, "SUPABASE_KEY", None)
+                if url and key:
+                    from supabase import create_client
+                    sb = create_client(url, key)
+                    res = sb.table("smart_wallets").select("*").limit(5000).execute()
+                    for r in (res.data or []):
+                        w = r.get("wallet")
+                        if w:
+                            candidates[w] = {
+                                "chain": r.get("chain") or "solana",
+                                "tier": int(r.get("tier") or 3),
+                                "total_pnl": float(r.get("total_pnl") or 0.0),
+                                "trade_count": int(r.get("trade_count") or 0),
+                            }
             except Exception:
                 pass
 
-        if not wallets:
-            wallets = {
-                "5FGoPPj1nL8LCnfVnpTmreqQtqLuMXXAwuS1uahMrp8V": "@DumbCrayon",
-                "2yXwy5Dsa1XtEXcsrkFVRJeyuWD3qKkMN3pP3p5VTW3V": "@Salem1299"
-            }
-        return wallets
+        min_pnl = float(getattr(_cf, "COPY_MIN_PNL", 300.0))
+        max_active = int(getattr(_cf, "COPY_MAX_ACTIVE_WHALES", 80))
 
-    def _score_wallets(self, mint, pnl_pct):
-        """Учёт результата КОПИИ по кошелькам. Кошелёк, чьи копии в основном убыточны, банится."""
-        import config as _c
-        min_n = int(getattr(_c, "COPY_BAN_MIN_COPIES", 3))
-        max_wr = float(getattr(_c, "COPY_BAN_WINRATE", 0.34))
-        for w in self._copy_wallets.get(mint, ()):
-            st = self._wstat.setdefault(w, [0, 0])
-            st[0 if pnl_pct > 3.0 else 1] += 1
-            n = st[0] + st[1]
-            if n >= min_n and st[0] / n < max_wr and w not in self._banned:
+        valid_whales = []
+        for w, d in candidates.items():
+            if w in self._banned:
+                continue
+            tier = int(d.get("tier", 3) or 3)
+            if tier <= 0:  # tier <= 0 означает забанен в Supabase
                 self._banned.add(w)
-                print(f"🚫 [COPY] кошелёк {w[:6]}… забанен: {st[0]}/{n} прибыльных копий (фармер/шум)")
+                continue
+            pnl = float(d.get("total_pnl", 0.0) or 0.0)
+            trades = int(d.get("trade_count", 0) or 0)
+
+            # Отсекаем только явный мусор с отрицательным PnL
+            if pnl < min_pnl and tier not in (1, 2):
+                continue
+
+            tier_mult = 2.0 if tier == 1 else (1.4 if tier == 2 else 1.0)
+            rank_score = (pnl * tier_mult) + (trades * 10.0)
+            valid_whales.append((w, rank_score, tier, pnl, trades))
+
+        # Сохраняем полный пул китов для скоринга в анализаторе и памп.фане
+        self.all_whales_pool = {w for w, _, _, _, _ in valid_whales}
+
+        # Сортируем: сверху самые прибыльные и проверенные киты
+        valid_whales.sort(key=lambda x: x[1], reverse=True)
+
+        # Отбираем ТОП-N для активной WSS подписки
+        active_wallets = {}
+        for w, _, tier, pnl, trades in valid_whales[:max_active]:
+            active_wallets[w] = f"@Tier{tier}_{w[:4]}_+${pnl:,.0f}"
+
+        # Дефолтный fallback если база пуста
+        if not active_wallets:
+            default_whales = {
+                "5FGoPPj1nL8LCnfVnpTmreqQtqLuMXXAwuS1uahMrp8V": "@DumbCrayon",
+                "2yXwy5Dsa1XtEXcsrkFVRJeyuWD3qKkMN3pP3p5VTW3V": "@Salem1299",
+                "DNfuF1L62WWyW3pNakVkyGGFzVVhj4Yr52jSmdTyeBHm": "@Whale_TopPnL_1",
+                "7rhxnLV8C76MiKSnSqhMYnNvBjRHdJP36yGjwmF3tV3x": "@Whale_TopPnL_2",
+                "3FqQ42gknhMNNXnRMm7e4RU83Gk7VdcpRDQsgpn3eWPf": "@Whale_TopPnL_3",
+            }
+            for w, name in default_whales.items():
+                if w not in self._banned:
+                    active_wallets[w] = name
+
+        print(
+            f"🐋 [COPYTRADER] Загружено китов: {len(active_wallets)} активных в WSS "
+            f"(из {len(candidates)} в базе Supabase) | Забанено за убытки: {len(self._banned)}"
+        )
+        return active_wallets
+
+    def _score_wallets(self, mint, pnl_pct, exit_reason: str = "", symbol: str = ""):
+        """Учёт результата КОПИИ по кошелькам.
+        Если сделка дала убыток или 0 прибыли (pnl_pct <= 0) -> КИТ БАНИТСЯ НАВСЕГДА!
+        """
+        import config as _c
+        whales = list(self._copy_wallets.get(mint, set()))
+        if not whales:
+            return
+
+        for w in whales:
+            st = self._wstat.setdefault(w, [0, 0])
+            if pnl_pct > 1.0: # Чистая прибыль выше 1% (с запасом на комиссии)
+                st[0] += 1
+                trader_name = self.wallets.get(w, f"@{w[:6]}")
+                print(
+                    f"🏆 [WHALE PROFIT] Кит {trader_name} принёс прибыль {pnl_pct:+.2f}% на {symbol}! "
+                    f"Статистика кита: {st[0]} побед / {st[1]} поражений. Оставляем в топе."
+                )
+            else:
+                # МЫ НИЧЕГО НЕ ЗАРАБОТАЛИ (0% или минус) -> БАН НАВСЕГДА!
+                st[1] += 1
+                trader_name = self.wallets.get(w, f"@{w[:6]}")
+                reason = f"Сигнал на {symbol} дал {pnl_pct:+.2f}% (убыток/ноль). Причина выхода: {exit_reason}"
+                self.ban_whale_permanently(w, reason=reason, symbol=symbol, pnl_pct=pnl_pct)
 
     def _handle_ws_message(self, message) -> None:
         """Одно сообщение WSS. Проваленные транзакции (у ботов их много) и перегруз очереди отбрасываем,
@@ -304,8 +454,14 @@ class CopyTrader:
         pre_bals = meta.get("preTokenBalances", [])
         post_bals = meta.get("postTokenBalances", [])
 
-        # Проверяем транзакцию для каждого из 5 китов
-        for wallet, trader_name in self.wallets.items():
+        # Быстрый O(1) поиск китов в транзакции через пересечение множеств
+        tx_owners = {b.get("owner") for b in pre_bals if b.get("owner")} | {b.get("owner") for b in post_bals if b.get("owner")}
+        matching_whales = tx_owners.intersection(self.wallets.keys())
+        if not matching_whales:
+            return
+
+        for wallet in matching_whales:
+            trader_name = self.wallets[wallet]
             pre_dict = {b["mint"]: float(b["uiTokenAmount"]["uiAmountString"]) for b in pre_bals if b.get("owner") == wallet}
             post_dict = {b["mint"]: float(b["uiTokenAmount"]["uiAmountString"]) for b in post_bals if b.get("owner") == wallet}
 
@@ -346,11 +502,15 @@ class CopyTrader:
                     self.whale_buys[mint][wallet] = now
                     self.whale_buys[mint] = {w: t for w, t in self.whale_buys[mint].items() if now - t <= 600}
                     n_whales = len(self.whale_buys[mint])
+                    _consensus = getattr(config, 'WHALE_CONSENSUS', 1)
                     if n_whales == 1:
                         self.whale_first_price[mint] = await self.get_token_price(mint)
-                        print(f"👁️ WHALE WATCH: {trader_name} купил {mint[:12]}... слежу за ценой (вход на 2-м ките).")
-                    print(f"🚨 COPYTRADE: {trader_name} купил {mint[:12]}... (китов за 10 мин: {n_whales}/{getattr(config, 'WHALE_CONSENSUS', 2)})")
-                    if n_whales < getattr(config, 'WHALE_CONSENSUS', 2) or mint in self.consensus_done:
+                        if _consensus > 1:
+                            print(f"👁️ WHALE WATCH: {trader_name} купил {mint[:12]}... слежу за ценой (вход на {_consensus}-м ките).")
+                        else:
+                            print(f"🐋 WHALE SIGNAL: {trader_name} купил {mint[:12]}... мгновенный вход (consensus=1)!")
+                    print(f"🚨 COPYTRADE: {trader_name} купил {mint[:12]}... (китов за 10 мин: {n_whales}/{_consensus})")
+                    if n_whales < _consensus or mint in self.consensus_done:
                         continue  # ждём раннего консенсуса
                     self.consensus_done.add(mint)
                     # Guard от опоздания: цена не должна улететь от точки входа первого кита
@@ -404,13 +564,17 @@ class CopyTrader:
                             continue
                     
                     capital = self.tracker.get_total_capital()
-                    position_size = max(4.0, min(100.0, capital * (config.REINVEST_PERCENT / 100.0)))
-                    position_size = min(position_size, float(getattr(config, "COPY_MAX_TICKET_USD", 15.0)))
-                    
-                    self._copy_wallets[mint] = set(self.whale_buys.get(mint, {}).keys())
+                    _pct = float(getattr(config, "COMPOUNDING_PCT", 0.10))
+                    _base = float(getattr(config, "BASE_TRADE_AMOUNT_USD", 2.0))
+                    _cap = float(getattr(config, "COPY_MAX_TICKET_USD", 4.0))
+                    position_size = max(_base, min(_cap, capital * _pct))
+
+                    if mint not in self._copy_wallets:
+                        self._copy_wallets[mint] = set()
+                    self._copy_wallets[mint].add(wallet)
                     self.tracker.add_position(symbol, mint, price_usd, amount_usd=position_size,
                                                 source=f"COPY:{trader_name}")
-                    print(f"✅ Успешно скопировали сделку {trader_name} на {position_size}$!")
+                    print(f"✅ Успешно скопировали сделку {trader_name} на {position_size:.2f}$!")
 
     async def listen(self):
         try:
@@ -420,12 +584,14 @@ class CopyTrader:
                 return
         except Exception:
             pass
-        # Список бесплатных публичных WSS
-        wss_endpoints = [
-            self.wss_url, # Helius
+        # Список WSS эндпоинтов (Helius с ключом или надёжные публичные ноды)
+        wss_endpoints = []
+        if getattr(self, "HELIUS_API_KEY", ""):
+            wss_endpoints.append(self.wss_url)
+        wss_endpoints.extend([
             "wss://api.mainnet-beta.solana.com/",
-            "wss://solana-rpc.publicnode.com/"
-        ]
+            "wss://solana-rpc.publicnode.com/",
+        ])
         endpoint_idx = 0
         
         while True:

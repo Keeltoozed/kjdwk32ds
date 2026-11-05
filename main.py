@@ -459,10 +459,12 @@ async def position_manager_loop(analyzer, tracker):
                     _floor_pnl = round(max_pnl_pct * 0.50, 2)
                 elif max_pnl_pct >= 0.65:     # Пик +65%+ -> гарантируем +28%
                     _floor_pnl = 0.28
-                elif max_pnl_pct >= 0.30:     # Пик +30%+ (TP1 взят!) -> гарантируем +8% на остаток
-                    _floor_pnl = 0.08
-                elif max_pnl_pct >= 0.20:     # Пик +20%+ -> мягкий безубыток +2.5%
-                    _floor_pnl = 0.025
+                elif max_pnl_pct >= 0.25:     # Пик +25%+ (TP1 взят!) -> гарантируем +14% на остаток
+                    _floor_pnl = 0.14
+                elif max_pnl_pct >= 0.18:     # Пик +18%+ -> гарантируем +9% чистыми
+                    _floor_pnl = 0.09
+                elif max_pnl_pct >= 0.12 or getattr(position, "is_moonbag", False):     # Пик +12%+ -> безубыток +5%
+                    _floor_pnl = 0.05
                 if _floor_pnl is not None and pnl_pct <= _floor_pnl:
                     _fc_s = int(getattr(position, "floor_confirm_n", 0) or 0) + 1
                     position.floor_confirm_n = _fc_s

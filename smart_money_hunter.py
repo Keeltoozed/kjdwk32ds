@@ -48,6 +48,11 @@ class SmartMoneyHunter:
     def __init__(self):
         self.db: Dict[str, dict] = self._load_db()
         self._last_scan_ts = 0.0
+        try:
+            self.sync_to_txt()
+            self.sync_to_config()
+        except Exception:
+            pass
 
     # --- Постоянное хранилище: таблица smart_wallets в Supabase (диск Render стирается при каждом деплое) ---
     def _sb(self):
@@ -130,10 +135,12 @@ class SmartMoneyHunter:
         self._save_to_supabase()
 
     def sync_to_txt(self):
-        """Синхронизирует топовые Solana-кошельки в smart_wallets.txt."""
+        """Синхронизирует проверенные Solana-кошельки из Supabase/базы в smart_wallets.txt."""
         sol_wallets = [
             w for w, data in self.db.items()
-            if data.get("chain") == "solana" and data.get("tier", 3) in (1, 2)
+            if data.get("chain", "solana") == "solana" 
+            and int(data.get("tier", 3) or 3) > 0  # не забаненные (tier > 0)
+            and float(data.get("total_pnl", 0.0) or 0.0) >= 300.0  # PnL >= $300
         ]
         if not sol_wallets:
             return
