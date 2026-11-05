@@ -1138,8 +1138,9 @@ async def scanner_loop(analyzer, tracker):
                                         _vip_cap = float(getattr(config, "TG_VIP_SIZE_USD", 5.0))
                                         position_size = min(position_size, _vip_cap)
 
-                                if position_size < (1.0 if (_is_lot or _is_vipsig) else 4.0):
-                                    print(f"🚫 Отказ (Ликвидность): Недостаточно ликвидности (${liq_usd}) для безопасного входа.")
+                                _min_ticket = 1.0 if (_is_lot or _is_vipsig) else float(getattr(config, "BASE_TRADE_AMOUNT_USD", 2.0))
+                                if position_size < _min_ticket:
+                                    print(f"🚫 Отказ (Сайз): Размер входа (${position_size:.2f}) меньше минимального билета (${_min_ticket:.2f}).")
                                     continue
 
                                 # Защита от переразгона: в рынке не больше 60% капитала

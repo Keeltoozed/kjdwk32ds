@@ -18,13 +18,12 @@ class TradeLogger:
     """
     def __init__(self, db_path="trade_journal.db"):
         self.db_path = db_path
+        self._init_db()
         self.use_supabase = bool(getattr(config, 'SUPABASE_URL', None) and getattr(config, 'SUPABASE_KEY', None))
         
         if self.use_supabase:
             self.supabase: Client = create_client(config.SUPABASE_URL, config.SUPABASE_KEY)
             print("☁️ [TradeLogger] Подключен к Supabase PostgreSQL")
-        else:
-            self._init_db()
 
     def _init_db(self):
         """Создает таблицы, если их нет."""

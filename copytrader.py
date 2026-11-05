@@ -27,6 +27,7 @@ class CopyTrader:
         self.analyzer = analyzer
         self._banned = self._load_banned()
         self._wstat = {}          # кошелёк -> [прибыльных копий, убыточных копий]
+        self._junk_strikes = {}   # кошелёк -> количество страйков за зомби/мусорные токены
         self._copy_wallets = {}   # mint -> кошельки, чей сигнал мы скопировали
         self.wallets = self.load_wallets()
         import os as _os, config as _cfg
@@ -148,6 +149,34 @@ class CopyTrader:
             f"   Итог: PnL {pnl_pct:+.2f}%. Сигналы этого кита исключены из торговли!"
         )
 
+    def _record_junk_signal(self, wallet: str, trader_name: str, mint: str, reason: str, is_hard_scam: bool = False):
+        """Штрафует или банит кита за сигналы на скам или старые зомби-монеты:
+        - Подтверждённый скам/рагпулл (RugCheck/GoPlus) -> мгновенный перманентный бан!
+        - Старые зомби-токены (>2ч) -> 1-й страйк (предупреждение), на 2-м страйке перманентный бан.
+        """
+        if not wallet or wallet in self._banned:
+            return
+        if is_hard_scam:
+            self.ban_whale_permanently(
+                wallet,
+                reason=f"Покупка опасного скама/рагпула {mint[:8]} ({reason})",
+                symbol=mint[:8],
+                pnl_pct=0.0
+            )
+            return
+
+        strikes = self._junk_strikes.get(wallet, 0) + 1
+        self._junk_strikes[wallet] = strikes
+        if strikes >= 2:
+            self.ban_whale_permanently(
+                wallet,
+                reason=f"2 страйка за мусорные/зомби сигналы (последний: {mint[:8]} — {reason})",
+                symbol=mint[:8],
+                pnl_pct=0.0
+            )
+        else:
+            print(f"⚠️ [WHALE STRIKE 1/2] Кит {trader_name} прислал сигнал на неликвидный/зомби токен {mint[:8]} ({reason}). Предупреждение 1/2.")
+
     def load_wallets(self):
         """Кошельки для копирования.
         1. Читает всех китов из Supabase / SmartMoneyHunter (1500-2000 кошельков).
@@ -203,7 +232,9 @@ class CopyTrader:
                 pass
 
         min_pnl = float(getattr(_cf, "COPY_MIN_PNL", 300.0))
-        max_active = int(getattr(_cf, "COPY_MAX_ACTIVE_WHALES", 80))
+        # На пуле публичных RPC распределяем до 60 китов по 15 на сокет; с Helius ключом — до 100
+        _has_helius = bool(getattr(self, "HELIUS_API_KEY", ""))
+        max_active = int(getattr(_cf, "COPY_MAX_ACTIVE_WHALES", 100)) if _has_helius else 60
 
         valid_whales = []
         for w, d in candidates.items():
@@ -316,26 +347,9 @@ class CopyTrader:
         except Exception:
             pass
 
-        # 2) кошелёк-спамер (MEV/бот): >N записей в минуту -> молчим 10 минут, копировать такого бессмысленно
-        now = time.time()
+        # 2) Защита от перегруза: дедупликация сигнатур уже отсекает повторы. 
+        # Не глушим активных китов-снайперов на 10 минут, а сразу передаём их покупки на проверку!
         wallet = self._sub_wallet.get(data["params"].get("subscription"))
-        if wallet:
-            if now < self._muted.get(wallet, 0.0):
-                return
-            dq = self._rate.setdefault(wallet, [])
-            dq.append(now)
-            while dq and now - dq[0] > 60.0:
-                dq.pop(0)
-            try:
-                import config as _cf2
-                lim = int(getattr(_cf2, "COPY_MAX_TX_PER_MIN", 40))
-            except Exception:
-                lim = 40
-            if len(dq) > lim:
-                self._muted[wallet] = now + 600.0
-                dq.clear()
-                print(f"🔇 Копитрейдер: {self.wallets.get(wallet, wallet[:8])} шлёт >{lim} транзакций/мин (бот) - игнорируем 10 минут")
-                return
         if getattr(self, "_pending", 0) >= 120:
             self._dropped = getattr(self, "_dropped", 0) + 1
             if self._dropped % 200 == 1:
@@ -530,6 +544,7 @@ class CopyTrader:
                         is_safe = await self.analyzer.analyze_token(mint)
                         if not is_safe:
                             print(f"🚫 ИИ забраковал токен кита {trader_name}. Спасли твои деньги от рагпула!")
+                            self._record_junk_signal(wallet, trader_name, mint, "Зомби-возраст или отсев ИИ-фильтром", is_hard_scam=False)
                             return
                         else:
                             print(f"✅ ИИ одобрил токен кита! Покупаем!")
@@ -550,6 +565,8 @@ class CopyTrader:
                             _ok, _why, _hs = await _gj.full_anti_scam_audit(mint, symbol, "solana", _pair)
                             if not _ok:
                                 print(f"🚫 [COPY-SCAM] {trader_name} {mint[:12]}: {_why}")
+                                _is_hard = any(k in str(_why).lower() for k in ("rugcheck", "honeypot", "drain", "high risk", "freeze"))
+                                self._record_junk_signal(wallet, trader_name, mint, str(_why), is_hard_scam=_is_hard)
                                 continue
                             if getattr(config, "JEV_REQUIRE_HOLDER_DATA", True) and not (
                                     float(_hs.get("top1_pct", 0) or 0) > 0 or float(_hs.get("top10_pct", 0) or 0) > 0):
@@ -576,6 +593,30 @@ class CopyTrader:
                                                 source=f"COPY:{trader_name}")
                     print(f"✅ Успешно скопировали сделку {trader_name} на {position_size:.2f}$!")
 
+    async def _listen_single_socket(self, wss_url: str, wallet_subset: dict):
+        """Слушает выделенный пул китов (15 адресов) на конкретном RPC сокете."""
+        name = wss_url.split("?")[0].replace("wss://", "").split("/")[0]
+        while True:
+            try:
+                async with websockets.connect(wss_url, ping_interval=20, ping_timeout=60, close_timeout=5, max_size=2 ** 22) as ws:
+                    print(f"👥 [WSS-POOL] {name}: подключен, слушаем {len(wallet_subset)} китов...")
+                    subscribed = set()
+                    for wallet in wallet_subset.keys():
+                        self._req_id = getattr(self, "_req_id", 0) + 1
+                        self._req_wallet[self._req_id] = wallet
+                        await ws.send(json.dumps({
+                            "jsonrpc": "2.0", "id": self._req_id, "method": "logsSubscribe",
+                            "params": [{"mentions": [wallet]}, {"commitment": "processed"}]
+                        }))
+                        subscribed.add(wallet)
+                        await asyncio.sleep(0.06)
+                    async for message in ws:
+                        self._handle_ws_message(message)
+            except Exception as e:
+                err = str(e)
+                print(f"⚠️ [WSS-POOL] обрыв {name}: {err[:80] or type(e).__name__}. Реконнект через 4с...")
+                await asyncio.sleep(4)
+
     async def listen(self):
         try:
             import config as _c
@@ -584,36 +625,36 @@ class CopyTrader:
                 return
         except Exception:
             pass
-        # Список WSS эндпоинтов (Helius с ключом или надёжные публичные ноды)
-        wss_endpoints = []
+
+        self.wallets = self.load_wallets()
+        all_wallets = list(self.wallets.items())
+        if not all_wallets:
+            print("⚠️ [COPYTRADER] Нет доступных кошельков для копирования.")
+            return
+
+        # Если есть персональный ключ Helius, он тянет до 100 китов на одном сокете
         if getattr(self, "HELIUS_API_KEY", ""):
-            wss_endpoints.append(self.wss_url)
-        wss_endpoints.extend([
+            print(f"🚀 [COPYTRADER] Запуск выделенного Helius WSS сокета на {len(self.wallets)} китов...")
+            await self._listen_single_socket(self.wss_url, self.wallets)
+            return
+
+        # Если ключа Helius нет: распределяем китов по 15 штук на пул надёжных публичных сокетов Solana
+        endpoints = [
             "wss://api.mainnet-beta.solana.com/",
             "wss://solana-rpc.publicnode.com/",
-        ])
-        endpoint_idx = 0
+            "wss://rpc.ankr.com/solana/ws/",
+            "wss://solana.drpc.org/",
+        ]
         
-        while True:
-            self.wallets = self.load_wallets()
-            current_wss = wss_endpoints[endpoint_idx % len(wss_endpoints)]
-            try:
-                async with websockets.connect(current_wss, ping_interval=20, ping_timeout=60, close_timeout=5, max_size=2 ** 22) as ws:
-                    print(f"👥 Копитрейдер: Подключен к {current_wss.split('.')[0]}... Слушаем {len(self.wallets)} китов")
-                    
-                    subscribed = set()
-                    self._req_wallet.clear(); self._sub_wallet.clear()
-                    await self._subscribe_new(ws, subscribed)
-                    _refresher = asyncio.create_task(self._refresh_loop(ws, subscribed))
-                    try:
-                        async for message in ws:
-                            self._handle_ws_message(message)
-                    finally:
-                        _refresher.cancel()
-                                
-            except Exception as e:
-                err_msg = str(e)
-                _name = current_wss.split("?")[0]            # ключ из адреса в лог не пишем
-                print(f"⚠️ Копитрейдер: обрыв {_name}: {err_msg[:90] or type(e).__name__}. Следующий сервер...")
-                endpoint_idx += 1
-                await asyncio.sleep(3)
+        chunk_size = 15
+        tasks = []
+        for i, ep in enumerate(endpoints):
+            chunk = dict(all_wallets[i * chunk_size : (i + 1) * chunk_size])
+            if chunk:
+                tasks.append(self._listen_single_socket(ep, chunk))
+
+        if not tasks:
+            tasks.append(self._listen_single_socket(endpoints[0], dict(all_wallets[:15])))
+
+        print(f"👥 [COPYTRADER] Запущен параллельный пул из {len(tasks)} WSS-сокетов (всего {len(self.wallets)} активных китов)...")
+        await asyncio.gather(*tasks, return_exceptions=True)

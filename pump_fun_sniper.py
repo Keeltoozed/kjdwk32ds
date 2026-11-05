@@ -501,6 +501,14 @@ class PumpFunSniper:
                                     state.first_buyers.append(trader)
                                 if (now - state.start_time) <= 2.5:
                                     state.first_2s_buyers.add(trader)
+                                try:
+                                    from smart_money_hunter import smart_money_hunter as _smh
+                                    if trader in _smh.db and int(_smh.db[trader].get("tier", 3) or 3) > 0:
+                                        _w_pnl = float(_smh.db[trader].get("total_pnl", 0.0) or 0.0)
+                                        print(f"🐋 [WHALE ON PUMP] Кит {trader[:8]}... (PnL +${_w_pnl:,.0f}) купил {state.symbol} ({mint[:8]}) на {sol_amount:.2f} SOL!")
+                                        state.whale_buyer = trader
+                                except Exception:
+                                    pass
 
                             # Прогресс кривой связывания (Pump.fun стартует с 30 виртуальных SOL и финиширует при 85 реальных SOL)
                             real_sol = max(0.0, v_sol - 30.0)
