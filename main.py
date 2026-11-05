@@ -985,26 +985,26 @@ async def scanner_loop(analyzer, tracker):
                                     if _age_m >= 10.0 or (_vol5_live < 35000.0 and _h1_live > 140.0):
                                         print(f"🚫 [SCANNER-LIVE-EXHAUSTED] {actual_symbol} ({mint[:8]}): живой h1 {_h1_live:+.0f}% > +{_max_h1_live:.0f}% — перегретая вершина, отмена!")
                                         continue
-                                if _pk_drop_live <= -18.0 or _lq_drop_live <= -18.0:
-                                    print(f"🚫 [SCANNER-POST-PEAK] {actual_symbol} ({mint[:8]}): токен уже слился от пика (цена {_pk_drop_live:+.1f}%, ликва {_lq_drop_live:+.1f}%) — отмена!")
+                                # СТАЛО (в main.py строки 506-524):
+                                if _pk_drop_live <= -28.0 or _lq_drop_live <= -30.0:
+                                    print(f"🚫 [SCANNER-POST-PEAK] {actual_symbol} ({mint[:8]}): токен слился от пика ({_pk_drop_live:+.1f}%) — отмена!")
                                     continue
 
-                                # Защита от старых увядающих зомби (> 120 мин)
-                                _max_age_live = float(getattr(config, "SOLANA_MAX_AGE_MIN", 120.0))
+                                _max_age_live = float(getattr(config, "SOLANA_MAX_AGE_MIN", 360.0))
                                 _vol5_live = float(((pair_data.get("volume") or {}).get("m5", 0) or 0))
-                                if _age_m > _max_age_live and _vol5_live < 25000.0:
-                                    print(f"🚫 [SCANNER-OLD-ZOMBIE] {actual_symbol} ({mint[:8]}): возраст {_age_m/60:.1f}ч > {_max_age_live/60:.1f}ч без прорывного объема (${_vol5_live:,.0f} < $25k) — отмена!")
+                                if _age_m > _max_age_live and _vol5_live < 10000.0:
+                                    print(f"🚫 [SCANNER-OLD-ZOMBIE] {actual_symbol} ({mint[:8]}): возраст {_age_m/60:.1f}ч без объема — отмена!")
                                     continue
 
-                                # Защита от 0-соцсеточных рагпулов (кейс Donkey, VOLITION)
-                                _req_soc_age = float(getattr(config, "REQUIRE_SOCIALS_MIN_AGE_MIN", 20.0))
+                                _req_soc_age = float(getattr(config, "REQUIRE_SOCIALS_MIN_AGE_MIN", 6.0))
                                 if _age_m < _req_soc_age and _links_sc == 0:
                                     _b5_sc = int((pair_data.get("txns") or {}).get("m5", {}).get("buys", 0) or 0)
                                     _s5_sc = int((pair_data.get("txns") or {}).get("m5", {}).get("sells", 0) or 0)
-                                    _is_organic_stealth = (_vol5_live >= 8000.0 and _b5_sc >= 35 and _b5_sc >= _s5_sc * 1.25 and liq_usd >= 10000.0)
+                                    _is_organic_stealth = (_vol5_live >= 2500.0 and _b5_sc >= 12 and _b5_sc >= _s5_sc * 1.10 and liq_usd >= 6000.0)
                                     if not _is_organic_stealth:
-                                        print(f"🚫 [SCANNER-NO-SOCIALS] {actual_symbol} ({mint[:8]}): возраст {_age_m:.1f}м < {_req_soc_age:.0f}м и 0 соцсетей — риск мгновенного дев-дампа/рага, отмена!")
+                                        print(f"🚫 [SCANNER-NO-SOCIALS] {actual_symbol} ({mint[:8]}): 0 соцсетей без органики — отмена!")
                                         continue
+
                                     else:
                                         print(f"💎 [SCANNER-ORGANIC-STEALTH] {actual_symbol} ({mint[:8]}): 0 соцсетей, но подтвержден органический прорыв — пропуск в анализ.")
 
