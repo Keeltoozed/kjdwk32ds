@@ -596,10 +596,12 @@ class CopyTrader:
     async def _listen_single_socket(self, wss_url: str, wallet_subset: dict):
         """Слушает выделенный пул китов (15 адресов) на конкретном RPC сокете."""
         name = wss_url.split("?")[0].replace("wss://", "").split("/")[0]
+        fail_count = 0
         while True:
             try:
                 async with websockets.connect(wss_url, ping_interval=20, ping_timeout=60, close_timeout=5, max_size=2 ** 22) as ws:
                     print(f"👥 [WSS-POOL] {name}: подключен, слушаем {len(wallet_subset)} китов...")
+                    fail_count = 0
                     subscribed = set()
                     for wallet in wallet_subset.keys():
                         self._req_id = getattr(self, "_req_id", 0) + 1
@@ -614,6 +616,11 @@ class CopyTrader:
                         self._handle_ws_message(message)
             except Exception as e:
                 err = str(e)
+                fail_count += 1
+                if "429" in err or "rejected" in err or fail_count >= 2:
+                    if "helius" in wss_url.lower():
+                        print(f"⚠️ [HELIUS-QUOTA] Helius WSS вернул HTTP 429 (исчерпан месячный лимит бесплатного ключа). Авто-переход на бесплатный пул публичных нод Solana!")
+                        return False
                 print(f"⚠️ [WSS-POOL] обрыв {name}: {err[:80] or type(e).__name__}. Реконнект через 4с...")
                 await asyncio.sleep(4)
 
@@ -632,20 +639,21 @@ class CopyTrader:
             print("⚠️ [COPYTRADER] Нет доступных кошельков для копирования.")
             return
 
-        # Если есть персональный ключ Helius, он тянет до 100 китов на одном сокете
-        if getattr(self, "HELIUS_API_KEY", ""):
-            print(f"🚀 [COPYTRADER] Запуск выделенного Helius WSS сокета на {len(self.wallets)} китов...")
-            await self._listen_single_socket(self.wss_url, self.wallets)
-            return
+        # 1. Если есть персональный ключ Helius и он не заблокирован по 429, пробуем его
+        if getattr(self, "HELIUS_API_KEY", "") and not getattr(self, "_helius_disabled", False):
+            print(f"🚀 [COPYTRADER] Проверка Helius WSS на {len(self.wallets)} китов...")
+            res = await self._listen_single_socket(self.wss_url, self.wallets)
+            if res is False:
+                self._helius_disabled = True  # Отключаем Helius на время этой сессии при 429
 
-        # Если ключа Helius нет: распределяем китов по 15 штук на пул надёжных публичных сокетов Solana
+        # 2. Основной / резервный пул: распределяем китов по 15 штук на 4 публичных сокета Solana
         endpoints = [
             "wss://api.mainnet-beta.solana.com/",
             "wss://solana-rpc.publicnode.com/",
             "wss://rpc.ankr.com/solana/ws/",
             "wss://solana.drpc.org/",
         ]
-        
+
         chunk_size = 15
         tasks = []
         for i, ep in enumerate(endpoints):
@@ -656,5 +664,5 @@ class CopyTrader:
         if not tasks:
             tasks.append(self._listen_single_socket(endpoints[0], dict(all_wallets[:15])))
 
-        print(f"👥 [COPYTRADER] Запущен параллельный пул из {len(tasks)} WSS-сокетов (всего {len(self.wallets)} активных китов)...")
+        print(f"👥 [COPYTRADER] Запущен параллельный пул из {len(tasks)} публичных WSS-сокетов (всего {len(self.wallets)} активных китов)...")
         await asyncio.gather(*tasks, return_exceptions=True)
