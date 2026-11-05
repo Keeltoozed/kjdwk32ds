@@ -958,11 +958,15 @@ async def scanner_loop(analyzer, tracker):
                                 if _m5_live < 1.0 or _m1_live < -8.0:
                                     print(f"🚫 [SCANNER-LIVE-REVERSAL] {actual_symbol} ({mint[:8]}): на живом графике импульс сломан (m5 {_m5_live:+.1f}%, m1 {_m1_live:+.1f}%) — отмена покупки!")
                                     continue
-                                _max_m5_cfg = float(getattr(config, "MAX_ENTRY_M5_PCT", 45.0))
+                                _max_m5_cfg = float(getattr(config, "MAX_ENTRY_M5_PCT", 95.0))
                                 if _m5_live > _max_m5_cfg:
-                                    print(f"🚫 [SCANNER-FOMO-M5] {actual_symbol} ({mint[:8]}): живой m5 +{_m5_live:.1f}% > +{_max_m5_cfg:.0f}% — вершина свечи, отмена!")
-                                    continue
-                                _max_h1_live = float(getattr(config, "MAX_ENTRY_H1_PCT", 80.0))
+                                    _b5_sc = int((pair_data.get("txns") or {}).get("m5", {}).get("buys", 0) or 0)
+                                    _s5_sc = int((pair_data.get("txns") or {}).get("m5", {}).get("sells", 0) or 0)
+                                    _is_breakout = (_vol5_live >= 12000.0 and _b5_sc >= _s5_sc * 1.25 and _m5_live <= 130.0)
+                                    if not _is_breakout:
+                                        print(f"🚫 [SCANNER-FOMO-M5] {actual_symbol} ({mint[:8]}): живой m5 +{_m5_live:.1f}% > +{_max_m5_cfg:.0f}% без прорывного объема — вершина свечи, отмена!")
+                                        continue
+                                _max_h1_live = float(getattr(config, "MAX_ENTRY_H1_PCT", 120.0))
                                 if _h1_live > _max_h1_live and _age_m >= 10.0:
                                     print(f"🚫 [SCANNER-LIVE-EXHAUSTED] {actual_symbol} ({mint[:8]}): живой h1 {_h1_live:+.0f}% > +{_max_h1_live:.0f}% — перегретая вершина, отмена!")
                                     continue
@@ -979,10 +983,16 @@ async def scanner_loop(analyzer, tracker):
 
                                 # Защита от 0-соцсеточных рагпулов (кейс Donkey, VOLITION)
                                 _links_sc = len(pair_data.get("info", {}).get("socials", []) or pair_data.get("info", {}).get("websites", []) or [])
-                                _req_soc_age = float(getattr(config, "REQUIRE_SOCIALS_MIN_AGE_MIN", 60.0))
+                                _req_soc_age = float(getattr(config, "REQUIRE_SOCIALS_MIN_AGE_MIN", 20.0))
                                 if _age_m < _req_soc_age and _links_sc == 0:
-                                    print(f"🚫 [SCANNER-NO-SOCIALS] {actual_symbol} ({mint[:8]}): возраст {_age_m:.1f}м < {_req_soc_age:.0f}м и 0 соцсетей — риск мгновенного дев-дампа/рага, отмена!")
-                                    continue
+                                    _b5_sc = int((pair_data.get("txns") or {}).get("m5", {}).get("buys", 0) or 0)
+                                    _s5_sc = int((pair_data.get("txns") or {}).get("m5", {}).get("sells", 0) or 0)
+                                    _is_organic_stealth = (_vol5_live >= 8000.0 and _b5_sc >= 35 and _b5_sc >= _s5_sc * 1.25 and liq_usd >= 10000.0)
+                                    if not _is_organic_stealth:
+                                        print(f"🚫 [SCANNER-NO-SOCIALS] {actual_symbol} ({mint[:8]}): возраст {_age_m:.1f}м < {_req_soc_age:.0f}м и 0 соцсетей — риск мгновенного дев-дампа/рага, отмена!")
+                                        continue
+                                    else:
+                                        print(f"💎 [SCANNER-ORGANIC-STEALTH] {actual_symbol} ({mint[:8]}): 0 соцсетей, но подтвержден органический прорыв — пропуск в анализ.")
 
                                 # Защита от фейковых bump-ботов (ELON, Trump, Amazon, MrBeast, Microsoft):
                                 _tx5_sc = (pair_data.get("txns") or {}).get("m5", {}) or {}

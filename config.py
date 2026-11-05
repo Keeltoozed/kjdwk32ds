@@ -69,10 +69,10 @@ INFANT_WINDOW_MIN = 2.0
 INFANT_DUMP_PCT = -0.14  # Слив в первые 2 минуты режем на -14%: спасает от дев-дампов
 
 # === АНТИ-ФОМО И АНТИ-РАГ ФИЛЬТРЫ ВХОДА (SOLANA) ===
-MAX_ENTRY_H1_PCT = 80.0   # Запрет входа если h1 > +80% на AMM (отсекает поздние пампы вроде Donkey, CLAUDE, TOLY, PAIRITY)
-MAX_ENTRY_M5_PCT = 45.0   # Запрет входа если 5м свеча > +45% (отсекает покупки на вершине вертикали вроде MONKAI, STARMIND)
-MAX_ENTRY_M1_PCT = 12.0   # Запрет входа если 1м свеча > +12% (вертикальный прострел)
-REQUIRE_SOCIALS_MIN_AGE_MIN = 60.0  # Моложе 60 минут ОБЯЗАН иметь хотя бы 1 ссылку (Twitter/TG/Web), иначе 100% скам дева
+MAX_ENTRY_H1_PCT = 120.0  # Запрет входа если h1 > +120% на AMM (отсекает поздние перегретые пампы, но пускает сильные молодые ракеты)
+MAX_ENTRY_M5_PCT = 95.0   # Порог 5м свечи: 95% (не блокирует настоящие прорывы вроде LOOK +942%, CI +598%, CITH +996%)
+MAX_ENTRY_M1_PCT = 25.0   # Запрет входа если 1м свеча > +25%
+REQUIRE_SOCIALS_MIN_AGE_MIN = 20.0  # Моложе 20 минут требует соцсети, ЛИБО подтвержденный органический объем ($8k+ vol5, 35+ buys)
 
 # === ЗАЩИТА ОТ СЕРИИ МИНУСОВ (STREAK CIRCUIT BREAKER) ===
 STREAK_COOLDOWN_ENABLED = True       # Включить паузу после серии минусов
@@ -89,11 +89,11 @@ DD_THROTTLE_START_USD = 15.0         # просадка от пика
 
 # === IN-MEMORY STREAMING SNIPER & GRADUATED DEX SHIELD (@savipww / GMGN Anti-Bundler) ===
 SNIPER_ENTRIES_ENABLED = False            # ВЫКЛ вход на сырой кривой Pump.fun: WSS работает как радар миграций (subscribeMigration -> Waiting Room)
-ALLOW_UNGRADUATED_PUMPFUN = True          # ВКЛЮЧЕНО: зрелые кривые Pump.fun (FDV $7.5k–$42k) с реальной органикой для ловли 10x до миграции
-MIN_PUMP_CURVE_MCAP_USD = 7500.0          # Вход в начале прорыва бондинг-кривой ($7.5k+ / ~15 SOL), чтобы не пропускать ракеты (кейсы MI +202%, FLOATER +197%, PEPECOIN +171%)
-MAX_PUMP_CURVE_MCAP_USD = 42000.0         # Не входить в перегретые кривые перед миграцией ($42k+), где девы и ранние снайперы сбрасывают 10x пачки в стакан
+ALLOW_UNGRADUATED_PUMPFUN = False         # ОТКЛЮЧЕНО: запрет входа на сырых bonding curves ($5k ликвы, мгновенные дампы вроде Chihuahua -31%). Ждем миграции на DEX!
+MIN_PUMP_CURVE_MCAP_USD = 15000.0         # Вход только при зрелой капитализации
+MAX_PUMP_CURVE_MCAP_USD = 50000.0         # Не входить в перегретые кривые перед миграцией
 JEV_MAX_TICKET_USD = 0.0                  # 0.0 = динамический авто-масштаб билета JEV вместе с ростом капитала (через calculate_dynamic_position_size)
-MIN_GRADUATED_LIQ_USD = 7500.0            # Мин. реальная ликвидность DEX-пула ($7,500+) после миграции (отсекает микро-пулы и слитые остатки)
+MIN_GRADUATED_LIQ_USD = 10000.0           # Мин. реальная ликвидность DEX-пула ($10,000+) после миграции (отсекает микро-пулы и слитые остатки)
 AUDITOR_STAIRCASE_ENABLED = True          # Layer 9+10: защита от Staircase bump-ботов, синхронных пачек сброса Jito и ферм суб-кошельков
 AUDITOR_MAX_DEV_PCT = 6.0                 # Макс. доля дева на DEX (6%)
 AUDITOR_MAX_TOP10_PCT = 30.0              # Макс. доля Топ-10 холдеров без пула на DEX (30%)
@@ -162,7 +162,7 @@ BREAKEVEN_PCT = 0.20
 
 # Infant Dump: защита от настоящего дев-рага в первые минуты
 PREFETCH_TTL_SEC = 60  # Пакетный кэш DexScreener (до 30 токенов за запрос): 60с жизни для быстрого разбора пачки в RAM
-SOLANA_MIN_AGE_MIN = 1.5  # 90 секунд: железный карантин против минутных сливов девов и Jito-бандлов (даёт девам слиться до нашего входа)
+SOLANA_MIN_AGE_MIN = 4.0  # 4 минуты: карантин против минутных сливов девов и Jito-бандлов (спасает от дампа в первые 2-4 мин вроде inu, GDA, MOG)
 SOLANA_MAX_AGE_HOURS = 24.0
 SOLANA_MAX_AGE_MIN = 120.0      # Максимум 2 часа входа (не покупать старые тухлые монеты)
 
@@ -173,7 +173,7 @@ STAGNANT_HOLD_MIN = 35.0
 
 # Filtering
 AI_MODE = "degen" # "sniper" (строго 80-90% уверенности) или "degen"
-MIN_LIQUIDITY = 6000  # Снижено для скальпинга обычных монет ($95 SOL)
+MIN_LIQUIDITY = 10000.0  # $10,000 минимальная глубина пула (отсекает бумажную ликвидность)
 MAX_LIQUIDITY = 50000000
 
 # AI Аналитика: Groq (бесплатный сверхбыстрый API) + xAI Grok + Gemini
@@ -184,9 +184,9 @@ GEMINI_API_KEY = (os.getenv("GEMINI_API_KEY") or "").strip() # Получить 
 # === GROK BOT x JEV ENGINE (THE FUNNEL & THE LINE) ===
 JEV_ENABLED = True
 JEV_WICK_STOP_ENABLED = False     # ОТКЛЮЧЕНО: искусственный стоп по фитилю душил ракеты на -15%..-25% в первые 2-3 минуты (Goon, SPIDOGE)
-JEV_EARLY_MIN_AGE_MIN = 0.5       # ранние ракеты ловим от 0.5м (30 сек) при подтвержденном потоке
-JEV_MIN_AGE_MIN = 1.0            # стандартный минимум 1.0м (не ждем 2.5-6 минут, когда ракета уже улетела)
-JEV_MIN_LIQUIDITY_USD = 6000.0    # $6,000 минимальная глубина пула (не блокирует валидные AMM пулы 10-60 SOL при курсе $95)
+JEV_EARLY_MIN_AGE_MIN = 3.5       # ранние ракеты ловим от 3.5м при подтвержденном потоке
+JEV_MIN_AGE_MIN = 4.0            # стандартный минимум 4.0м (ждём пока дев и ранние снайперы закончат сброс)
+JEV_MIN_LIQUIDITY_USD = 10000.0   # $10,000 минимальная глубина пула
 JEV_MIN_VOLUME_H1 = 8000.0        # $8,000 часовой объем
 JEV_MIN_MCAP_USD = 8000.0         # $8,000 минимальная капитализация (не блокирует MCOWL/RAMP на старте)
 JEV_MIN_VOLUME_H24 = 30000.0

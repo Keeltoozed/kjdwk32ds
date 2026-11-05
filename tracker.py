@@ -434,6 +434,12 @@ class PaperTracker:
         return final_size
 
     def add_position(self, symbol, mint, entry_price, amount_usd=5.0, ml_features=None, ml_confidence=0.0, is_mature=False, source="", chain="solana", pair_address="", stop_under_wick=0.0, wick_stop_loss_pct=0.0):
+        # Master Firewall: ТОЛЬКО SOLANA
+        if getattr(config, "SOLANA_ONLY", True):
+            if chain != "solana" or str(mint or "").startswith("0x"):
+                print(f"🚫 [SOLANA-ONLY-FIREWALL] Отказ входа: {symbol} ({str(mint)[:10]}) не Solana (chain={chain}).")
+                return
+
         # Валидация адреса минта Solana: валидный Base58 адрес должен быть длиной от 32 до 44 символов
         if chain == "solana":
             mint_str = str(mint or "").strip()

@@ -344,20 +344,30 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
     _h1_j = float(((td or {}).get("priceChange") or {}).get("h1", 0) or 0)
     _c_at_j = (td or {}).get("pairCreatedAt") or 0
     _age_j = ((time.time() * 1000 - _c_at_j) / 60000.0) if _c_at_j else 30.0
-    _max_h1_cfg = float(getattr(config, "MAX_ENTRY_H1_PCT", 80.0))
-    _max_m5_cfg = float(getattr(config, "MAX_ENTRY_M5_PCT", 45.0))
-    _req_soc_age = float(getattr(config, "REQUIRE_SOCIALS_MIN_AGE_MIN", 60.0))
+    _max_h1_cfg = float(getattr(config, "MAX_ENTRY_H1_PCT", 120.0))
+    _max_m5_cfg = float(getattr(config, "MAX_ENTRY_M5_PCT", 95.0))
+    _req_soc_age = float(getattr(config, "REQUIRE_SOCIALS_MIN_AGE_MIN", 20.0))
+    _vm5_j = float(((td or {}).get("volume") or {}).get("m5", 0) or 0)
+    _b5_j = int((((td or {}).get("txns") or {}).get("m5") or {}).get("buys", 0) or 0)
+    _s5_j = int((((td or {}).get("txns") or {}).get("m5") or {}).get("sells", 0) or 0)
+    _liq_j = float(((td or {}).get("liquidity") or {}).get("usd", 0) or 0)
 
     if _m5_j > _max_m5_cfg:
-        print(f"🚫 [{source_tag}-FOMO-M5] {_sym_tmp}: m5 +{_m5_j:.1f}% > +{_max_m5_cfg:.0f}% — отмена входа на вершине свечи!")
-        return False
+        _is_breakout = (_vm5_j >= 12000.0 and _b5_j >= _s5_j * 1.25 and _m5_j <= 130.0)
+        if not _is_breakout:
+            print(f"🚫 [{source_tag}-FOMO-M5] {_sym_tmp}: m5 +{_m5_j:.1f}% > +{_max_m5_cfg:.0f}% без прорывного объема — отмена!")
+            return False
     if _h1_j > _max_h1_cfg and _age_j >= 10.0:
         print(f"🚫 [{source_tag}-FOMO-H1] {_sym_tmp}: h1 +{_h1_j:.0f}% > +{_max_h1_cfg:.0f}% — перегретый часовой памп, отмена!")
         return False
     _links_j = len((td or {}).get("info", {}).get("socials", []) or []) + len((td or {}).get("info", {}).get("websites", []) or [])
     if _age_j < _req_soc_age and _links_j == 0:
-        print(f"🚫 [{source_tag}-NO-SOCIALS] {_sym_tmp}: 0 соцсетей при возрасте {_age_j:.1f}м < {_req_soc_age:.0f}м — отмена!")
-        return False
+        _is_organic_stealth = (_vm5_j >= 8000.0 and _b5_j >= 35 and _b5_j >= _s5_j * 1.25 and _liq_j >= 10000.0)
+        if not _is_organic_stealth:
+            print(f"🚫 [{source_tag}-NO-SOCIALS] {_sym_tmp}: 0 соцсетей при возрасте {_age_j:.1f}м < {_req_soc_age:.0f}м без органического потока — отмена!")
+            return False
+        else:
+            print(f"💎 [{source_tag}-ORGANIC-STEALTH] {_sym_tmp}: 0 соцсетей, но подтвержден органический прорыв — пропуск.")
 
     # === Analyzer уже провёл ROCKET-XGB S1+S2 и 8-слойный ончейн-аудит: проверяем только 0ms анти-клон и точку входа/стоп ===
     from grok_jev import grok_jev

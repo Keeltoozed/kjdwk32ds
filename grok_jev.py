@@ -450,7 +450,9 @@ class GrokJevEngine:
             else:
                 age_min = 999.0
 
-        _min_grad_liq = float(getattr(_c, "MIN_GRADUATED_LIQ_USD", 7500.0))
+        _min_grad_liq = float(getattr(_c, "MIN_GRADUATED_LIQ_USD", 10000.0))
+        if dex_id in ("pump", "pumpfun") and not getattr(_c, "ALLOW_UNGRADUATED_PUMPFUN", False):
+            return False, "raw-pump-curve (wait for graduation to PumpSwap/Raydium with locked LP)"
         min_liq = 1500.0 if dex_id in ("pump", "pumpfun") else _min_grad_liq
         if eff_liq < min_liq:
             return False, f"liq-depth-low ${eff_liq:.0f} < ${min_liq:.0f} (micro-cap dump trap)"
@@ -500,9 +502,9 @@ class GrokJevEngine:
             if not has_breakout_momentum and (m5 < 2.0 or (s5 > 0 and (b5 / s5) < 0.85) or vol_m5 < 800.0):
                 return False, f"post-migration-no-reclaim (m5 {m5:+.1f}%, vol5 ${vol_m5:,.0f}, {b5}b/{s5}s — need organic bounce)"
 
-        # 2. Возраст токена: карантинная выдержка (минимум 90 сек против 0-минутных дев-дампов типа RIOT/Elun/Белка)
-        _early_min_age = max(1.2, float(getattr(_c, "SOLANA_MIN_AGE_MIN", 1.5)), float(getattr(_c, "JEV_EARLY_MIN_AGE_MIN", 1.2)))
-        _std_min_age = max(1.5, float(getattr(_c, "JEV_MIN_AGE_MIN", 1.5)))
+        # 2. Возраст токена: карантинная выдержка (минимум 4.0 мин против дев-дампов типа inu/GDA/MOG/RIOT)
+        _early_min_age = max(3.5, float(getattr(_c, "SOLANA_MIN_AGE_MIN", 4.0)), float(getattr(_c, "JEV_EARLY_MIN_AGE_MIN", 3.5)))
+        _std_min_age = max(4.0, float(getattr(_c, "JEV_MIN_AGE_MIN", 4.0)))
         min_age = _early_min_age if (b5 >= s5 * 1.05 and m5 >= 4.0 and vol_m5 >= 2000.0) else _std_min_age
         max_age = float(getattr(_c, "JEV_MAX_AGE_MIN", 72.0 * 60.0))  # 72 часа
         if not (min_age <= age_min <= max_age):
@@ -516,14 +518,19 @@ class GrokJevEngine:
             return False, f"age-out-of-bounds {age_min:.1f}m < {min_age:.1f}m (wait for maturation)"
 
         # 2.4. Защита от безымянных рагпулов без соцсетей
+        # Разрешаем стелс-ракеты (кейсы CITH +996%, LOOK +942%, CI +598%) ТОЛЬКО если есть подтвержденный органический поток
         _info_g = pair_data.get("info") or {}
         _links_cnt_g = len(_info_g.get("socials", []) or []) + len(_info_g.get("websites", []) or [])
-        _req_soc_age = float(getattr(_c, "REQUIRE_SOCIALS_MIN_AGE_MIN", 60.0))
+        _req_soc_age = float(getattr(_c, "REQUIRE_SOCIALS_MIN_AGE_MIN", 20.0))
         if age_min < _req_soc_age and _links_cnt_g == 0:
-            return False, f"no-socials-rug (age {age_min:.1f}m < {_req_soc_age:.0f}m, 0 socials/websites)"
+            _is_organic_stealth = (vol_m5 >= 8000.0 and b5 >= 35 and (s5 == 0 or b5 >= s5 * 1.25) and eff_liq >= 10000.0)
+            if not _is_organic_stealth:
+                return False, f"no-socials-rug (age {age_min:.1f}m < {_req_soc_age:.0f}m, 0 socials/websites)"
+            else:
+                print(f"💎 [JEV-ORGANIC-STEALTH] {symbol} ({mint[:8]}): 0 соцсетей, но подтвержден органический прорыв (${vol_m5:,.0f}, {b5}b/{s5}s) — пропуск.")
 
         # 2.5. Exhaustion Guard: блокируем перегретые поздние пампы (h1 > MAX_ENTRY_H1_PCT при возрасте >= 10м)
-        _max_h1_allowed = float(getattr(_c, "MAX_ENTRY_H1_PCT", 80.0))
+        _max_h1_allowed = float(getattr(_c, "MAX_ENTRY_H1_PCT", 120.0))
         if h1 > _max_h1_allowed and age_min >= 10.0:
             return False, f"exhaustion-top-h1 h1 {h1:+.0f}% > +{_max_h1_allowed:.0f}% (late pump top, dump risk)"
         if fdv_mc > 100000.0 and eff_liq < 0.02 * fdv_mc:
@@ -532,9 +539,11 @@ class GrokJevEngine:
         # 3. Живой импульс ракеты (LIVE ROCKET MOMENTUM)
         if m5 < 2.0:
             return False, f"no-momentum m5 {m5:+.1f}% < +2.0% (coin is flat/standing still, not an active rocket)"
-        _max_m5_allowed = float(getattr(_c, "MAX_ENTRY_M5_PCT", 45.0))
+        _max_m5_allowed = float(getattr(_c, "MAX_ENTRY_M5_PCT", 95.0))
         if m5 > _max_m5_allowed:
-            return False, f"fomo-vertical-m5 m5 {m5:+.1f}% > +{_max_m5_allowed:.0f}% (buying top of vertical pump)"
+            _has_breakout_vol = (vol_m5 >= 12000.0 and b5 >= s5 * 1.25 and m5 <= 130.0)
+            if not _has_breakout_vol:
+                return False, f"fomo-vertical-m5 m5 {m5:+.1f}% > +{_max_m5_allowed:.0f}% (buying top of vertical pump without breakthrough volume)"
         if s5 > 6 and b5 < s5:
             return False, f"sellers-dominating {b5}b/{s5}s (more sellers than buyers in m5)"
 
