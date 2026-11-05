@@ -1301,81 +1301,73 @@ class Analyzer:
         _avg_tx_age = _vm5_pre / max(1, _b5_pre + _s5_pre)
         _is_early_rocket = (_raw_liq_age >= 12000.0 and _vm5_pre >= 6000.0 and _b5_pre >= 30
                             and _b5_pre >= _s5_pre * 1.30 and _avg_tx_age >= 25.0)
-        _sol_min_age = float(getattr(config, "SOLANA_MIN_AGE_MIN", 0.8)) if _is_early_rocket else 3.0
+        # СТАЛО (замени строки 543-605 в analyzer.py):
+        _sol_min_age = float(getattr(config, "SOLANA_MIN_AGE_MIN", 0.8)) if _is_early_rocket else 1.2
         if _age_min_pre < _sol_min_age:
-            print(f"⏳ [ENTRY] {mint[:8]}: возраст {_age_min_pre:.1f}м < {_sol_min_age}м — выдерживаем {_sol_min_age*60:.0f}с карантин от дев-дампа.")
+            print(f"⏳ [ENTRY] {mint[:8]}: возраст {_age_min_pre:.1f}м < {_sol_min_age}м — выдерживаем карантин.")
             return None
 
-        # 1. Защита от старых увядающих зомби (> 120 мин без прорывного объема $25k)
-        _max_age_min = float(getattr(config, "SOLANA_MAX_AGE_MIN", 120.0))
-        if _age_min_pre > _max_age_min and _vm5_pre < 25000.0:
+        # 1. Защита от старых увядающих зомби (> 360 мин без объема)
+        _max_age_min = float(getattr(config, "SOLANA_MAX_AGE_MIN", 360.0))
+        if _age_min_pre > _max_age_min and _vm5_pre < 10000.0:
             return self._deny(
                 mint,
                 f"zombie-old-token {_age_min_pre:.0f}m",
-                f"🚫 [ZOMBIE-AGE] {symbol} ({mint[:8]}): возраст {_age_min_pre/60:.1f}ч > {_max_age_min/60:.1f}ч без прорывного объема (${_vm5_pre:,.0f} < $25k) — старый увядающий токен.",
+                f"🚫 [ZOMBIE-AGE] {symbol} ({mint[:8]}): возраст {_age_min_pre/60:.1f}ч > {_max_age_min/60:.1f}ч без объема.",
             )
 
-        # 2. Защита от фейковых bump-ботов на именах брендов/селебрити (ELON, Trump, Amazon, MrBeast, Microsoft):
-        # 200+ сделок с копеечным чеком (< $15.0) при 0 соцсетей — 100% серийная ловушка скамера
+        # 2. Защита от фейковых bump-ботов
         _info_pre = pair_data.get("info") or {}
         _has_soc_pre = bool((_info_pre.get("socials") or []) or (_info_pre.get("websites") or []))
         _tot_tx5_pre = _b5_pre + _s5_pre
         _avg_tx_pre = (_vm5_pre / _tot_tx5_pre) if _tot_tx5_pre > 0 else 0.0
-        if _tot_tx5_pre >= 200 and _avg_tx_pre < 15.0 and not _has_soc_pre:
+        if _tot_tx5_pre >= 200 and _avg_tx_pre < 12.0 and not _has_soc_pre:
             return self._deny(
                 mint,
                 f"fake-bump-wash-bot avg ${_avg_tx_pre:.1f}",
-                f"🚫 [WASH-BUMP-TRAP] {symbol} ({mint[:8]}): накрутка микро-ботом ({_tot_tx5_pre} txns, avg ${_avg_tx_pre:.2f} < $15) при 0 соцсетей — фейк-дамп!",
+                f"🚫 [WASH-BUMP-TRAP] {symbol} ({mint[:8]}): накрутка микро-ботом ({_tot_tx5_pre} txns, avg ${_avg_tx_pre:.2f} < $12).",
             )
 
-        # 3. Минимальный 5м объем для молодых токенов (< $3,000)
-        if _vm5_pre < 3000.0 and _age_min_pre < 60.0:
+        # 3. Минимальный 5м объем ($1,200 вместо $3,000, чтобы ловить старт импульса, а не его конец!)
+        _min_v5_cfg = float(getattr(config, "MIN_VOLUME_M5", 1200.0))
+        if _vm5_pre < _min_v5_cfg and _age_min_pre < 60.0:
             return self._deny(
                 mint,
-                f"low-vol5 ${_vm5_pre:.0f}<$3k",
-                f"🚫 [LOW-MOMENTUM] {symbol} ({mint[:8]}): 5м объем ${_vm5_pre:,.0f} < $3,000 — нет реального торгового импульса.",
+                f"low-vol5 ${_vm5_pre:.0f}<${_min_v5_cfg:.0f}",
+                f"🚫 [LOW-MOMENTUM] {symbol} ({mint[:8]}): 5м объем ${_vm5_pre:,.0f} < ${_min_v5_cfg:,.0f}.",
             )
 
-        # 4. Anti-FOMO: Защита от перегретых вершин и поздних входов
-        _max_entry_h1 = float(getattr(config, "MAX_ENTRY_H1_PCT", 120.0))
+        # 4. Anti-FOMO (с учетом миграций с Pump.fun)
+        _max_entry_h1 = float(getattr(config, "MAX_ENTRY_H1_PCT", 380.0))
         _max_entry_m5 = float(getattr(config, "MAX_ENTRY_M5_PCT", 95.0))
-        _is_stealth_pre = (_vm5_pre >= 12000.0 and _b5_pre >= 40 and _b5_pre >= _s5_pre * 1.25)
-        if not _has_soc_pre and not _is_stealth_pre and (_h1 > 100.0 or _m5 > 80.0):
+        if _h1 > _max_entry_h1 and _age_min_pre >= 30.0 and _vm5_pre < 25000.0:
             return self._deny(
                 mint,
-                f"fomo-spike-no-socials h1 +{_h1:.0f}%/m5 +{_m5:.0f}%",
-                f"🚫 [FOMO-SPIKE-NO-SOC] {symbol} ({mint[:8]}): памп (+{_h1:.0f}% 1h, +{_m5:.0f}% 5m) при 0 соцсетей — вершина памп-дампа дева!",
+                f"h1-exhausted {_h1:.0f}%>{_max_entry_h1:.0f}%",
+                f"🚫 [EXHAUSTED-TOP] {symbol} ({mint[:8]}): рост за час +{_h1:+.1f}% > +{_max_entry_h1:.0f}%.",
             )
-        if _h1 > _max_entry_h1:
-            if _age_min_pre >= 10.0 or (_vm5_pre < 35000.0 and _h1 > 140.0):
-                return self._deny(
-                    mint,
-                    f"h1-exhausted {_h1:.0f}%>{_max_entry_h1:.0f}%",
-                    f"🚫 [EXHAUSTED-TOP] {symbol} ({mint[:8]}): рост за час +{_h1:+.1f}% > +{_max_entry_h1:.0f}% — поздний вход на вершине пампа (риск дев-дампа).",
-                )
         if _m5 > _max_entry_m5:
-            # Разрешаем мощные органические прорывы при подтвержденном объеме и доминировании покупателей (не на вершине)
-            _is_breakout = (_vm5_pre >= 15000.0 and _b5_pre >= _s5_pre * 1.35 and _m5 <= 85.0)
+            _is_breakout = (_vm5_pre >= 6000.0 and _b5_pre >= _s5_pre * 1.15 and _m5 <= 180.0)
             if not _is_breakout:
                 return self._deny(
                     mint,
                     f"m5-vertical-spike {_m5:.0f}%>{_max_entry_m5:.0f}%",
-                    f"🚫 [FOMO-VERTICAL] {symbol} ({mint[:8]}): 5м свеча +{_m5:+.1f}% > +{_max_entry_m5:.0f}% без подтвержденного прорывного объема/покупателей — вертикальный прострел в стакан.",
+                    f"🚫 [FOMO-VERTICAL] {symbol} ({mint[:8]}): 5м свеча +{_m5:+.1f}% > +{_max_entry_m5:.0f}%.",
                 )
 
-        # 5. Защита от безымянных 0-соцсеточных рагпулов Pump.fun / Solana
-        # Разрешаем стелс-прорывы (кейсы CITH +996%, LOOK +942%, CI +598%) ТОЛЬКО если есть доказанный взрывной объем и buyers
+        # 5. Соцсети для совсем юных токенов (< 6 мин)
         _links_cnt = len((pair_data or {}).get("info", {}).get("socials", []) or []) + len((pair_data or {}).get("info", {}).get("websites", []) or [])
-        _req_soc_age = float(getattr(config, "REQUIRE_SOCIALS_MIN_AGE_MIN", 20.0))
+        _req_soc_age = float(getattr(config, "REQUIRE_SOCIALS_MIN_AGE_MIN", 6.0))
         if _links_cnt == 0 and _age_min_pre < _req_soc_age:
             _raw_liq_chk = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
-            _is_organic_stealth = (_vm5_pre >= 8000.0 and _b5_pre >= 35 and _b5_pre >= _s5_pre * 1.25 and _raw_liq_chk >= 10000.0)
+            _is_organic_stealth = (_vm5_pre >= 2500.0 and _b5_pre >= 12 and _b5_pre >= _s5_pre * 1.10 and _raw_liq_chk >= 6000.0)
             if not _is_organic_stealth:
                 return self._deny(
                     mint,
                     f"no-socials-dev-rug {_age_min_pre:.0f}m<{_req_soc_age:.0f}m",
-                    f"🚫 [NO-SOCIALS-GUARD] {symbol} ({mint[:8]}): 0 соцсетей/сайта при возрасте {_age_min_pre:.1f}м < {_req_soc_age:.0f}м без органического потока — высокий риск мгновенного дев-дампа.",
+                    f"🚫 [NO-SOCIALS-GUARD] {symbol} ({mint[:8]}): 0 соцсетей при возрасте {_age_min_pre:.1f}м без органики.",
                 )
+
             else:
                 print(f"💎 [ORGANIC-STEALTH] {symbol} ({mint[:8]}): 0 соцсетей, но доказан взрывной органический поток (${_vm5_pre:,.0f}, {_b5_pre}b/{_s5_pre}s) — пропуск в анализ.")
 
