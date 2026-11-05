@@ -712,17 +712,14 @@ class Analyzer:
                 except Exception:
                     pass
 
-                recent_px = [x[1] for x in hist if now - x[0] <= 2700.0 and x[1] > 0]
-                if sh_peak_px > 0:
-                    recent_px.append(sh_peak_px)
+                # СТАЛО (замени строки 397-412 в analyzer.py):
+                recent_px = [x[1] for x in hist if now - x[0] <= 180.0 and x[1] > 0]
                 if recent_px:
                     peak_px = max(recent_px)
                     if peak_px > 0:
                         best_pair["_drop_from_peak_5m"] = (px - peak_px) / peak_px * 100.0
 
-                recent_liq = [x[2] for x in hist if len(x) >= 3 and now - x[0] <= 2700.0 and x[2] > 0]
-                if sh_peak_liq > 0:
-                    recent_liq.append(sh_peak_liq)
+                recent_liq = [x[2] for x in hist if len(x) >= 3 and now - x[0] <= 300.0 and x[2] > 0]
                 if recent_liq and cur_liq_obs > 0:
                     peak_liq = max(recent_liq)
                     if peak_liq > 0:
