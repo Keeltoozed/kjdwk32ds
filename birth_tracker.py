@@ -82,6 +82,20 @@ class BirthTracker:
                 for _km, _ in stale:
                     self.waiting_room.pop(_km, None)
 
+    def add_to_waiting_room(self, mint: str, pool: str = "", creator: str = ""):
+        """Кладёт молодой токен в Waiting Room (без пометки миграции) для повторной проверки после созревания."""
+        if not mint:
+            return
+        now = time.time()
+        with self.lock:
+            if mint not in self.waiting_room:
+                self.waiting_room[mint] = {"ts": now, "pool": str(pool or ""),
+                                           "creator": str(creator or ""), "init_dev_pct": None}
+            if len(self.waiting_room) > self.WAIT_ROOM_MAX:
+                stale = sorted(self.waiting_room.items(), key=lambda kv: kv[1].get("ts", 0.0))[:len(self.waiting_room) - self.WAIT_ROOM_MAX]
+                for _km, _ in stale:
+                    self.waiting_room.pop(_km, None)
+
     def get_waiting_room_graduates(self, min_age_sec: float = 90.0, max_age_sec: float = 2700.0) -> list:
         """Возвращает мигрировавшие монеты, пережившие первые 90с сброса снайперов (Waiting Room)."""
         now = time.time()

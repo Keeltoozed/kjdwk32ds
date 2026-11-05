@@ -959,6 +959,7 @@ async def scanner_loop(analyzer, tracker):
                                     print(f"🚫 [SCANNER-LIVE-REVERSAL] {actual_symbol} ({mint[:8]}): на живом графике импульс сломан (m5 {_m5_live:+.1f}%, m1 {_m1_live:+.1f}%) — отмена покупки!")
                                     continue
                                 _max_m5_cfg = float(getattr(config, "MAX_ENTRY_M5_PCT", 95.0))
+                                _vol5_live = float(((pair_data.get("volume") or {}).get("m5", 0) or 0))
                                 if _m5_live > _max_m5_cfg:
                                     _b5_sc = int((pair_data.get("txns") or {}).get("m5", {}).get("buys", 0) or 0)
                                     _s5_sc = int((pair_data.get("txns") or {}).get("m5", {}).get("sells", 0) or 0)
