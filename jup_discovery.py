@@ -471,7 +471,16 @@ async def jup_fast_mature_loop(analyzer, tracker):
                     print(f"🪐 JUP mature analyze err {mint[:8]}: {e}")
                     continue
                 if ok is None:
-                    print(f"⏭ [JUP-SKIP] {sym} ({mint[:8]}): анализ созревшего токена не дал сигнала (eval_none)")
+                    # FIX: analyzer держит карантин 3.0м (для не-early токенов), а ready_at = 0.8м + 5с.
+                    # Раньше токен выкидывался из очереди после первого же отказа. Теперь один раз
+                    # возвращаем его в реестр на момент снятия карантина.
+                    if not info.get("retried"):
+                        info["retried"] = True
+                        info["ready_at"] = float(info.get("created_sec") or time.time()) + 3.0 * 60.0 + 3.0
+                        _immature_registry[mint] = info
+                        print(f"🔁 [JUP-RETRY] {sym} ({mint[:8]}): карантин analyzer ещё идёт — повтор после 3.0м.")
+                    else:
+                        print(f"⏭ [JUP-SKIP] {sym} ({mint[:8]}): анализ созревшего токена не дал сигнала (eval_none)")
                     continue
                 analyzer.log_scan(sym, mint, "JUP-MATURE", ok, getattr(analyzer, "last_score", 0.0))
                 if ok is True:
@@ -552,7 +561,9 @@ async def jup_loop(analyzer, tracker):
                                 "ready_at": ready_at,
                                 "sym": _sym,
                                 "min_age": _min_age,
-                                "added_at": _now_t
+                                "added_at": _now_t,
+                                "created_sec": created_sec,  # FIX: нужно для повторной проверки после карантина analyzer (3.0м)
+                                "retried": False
                             }
                             continue
 

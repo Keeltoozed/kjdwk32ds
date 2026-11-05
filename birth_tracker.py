@@ -1,13 +1,14 @@
 import time
 import threading
 
+
 class BirthTracker:
     def __init__(self):
-        self.tokens = {}  # mint -> timestamp
-        self.graduated = {}  # mint -> timestamp миграции (приоритет сканера!)
+        self.tokens = {}      # mint -> timestamp
+        self.graduated = {}   # mint -> timestamp миграции (приоритет сканера!)
         self.waiting_room = {}  # mint -> {"ts": float, "pool": str, "creator": str, "init_dev_pct": float|None}
         self.lock = threading.Lock()
-    
+
     def add_token(self, mint: str):
         with self.lock:
             self.tokens[mint] = time.time()
@@ -27,12 +28,11 @@ class BirthTracker:
             if ts is not None:
                 return (now - ts) / 60.0
             return None
-    
+
     def get_mature_tokens(self, min_age_minutes: int, max_age_minutes: int):
         now = time.time()
         min_age_seconds = min_age_minutes * 60
         max_age_seconds = max_age_minutes * 60
-        
         with self.lock:
             mature = []
             to_remove = []
@@ -42,15 +42,13 @@ class BirthTracker:
                     mature.append(mint)
                 elif age > max_age_seconds:
                     to_remove.append(mint)
-            
             for mint in to_remove:
                 del self.tokens[mint]
-            
             return mature
 
     # Лимиты очереди миграций (защита от распухания при панике/раге):
-    GRAD_MAX = 200  # больше — выкидываем самые старые (FIFO) с логом
-    GRAD_TTL = 900  # 15 мин: DS в пик индексирует и по 15-20 мин, 10 было впритык
+    GRAD_MAX = 200   # больше — выкидываем самые старые (FIFO) с логом
+    GRAD_TTL = 900   # 15 мин: DS в пик индексирует и по 15-20 мин, 10 было впритык
     WAIT_ROOM_MAX = 400
     WAIT_ROOM_TTL = 2700  # 45 мин наблюдение за выпускниками PumpSwap ("Waiting Room")
 
@@ -83,14 +81,27 @@ class BirthTracker:
                     self.waiting_room.pop(_km, None)
 
     def add_to_waiting_room(self, mint: str, pool: str = "", creator: str = ""):
-        """Кладёт молодой токен в Waiting Room (без пометки миграции) для повторной проверки после созревания."""
+        """FIX: этот метод вызывался из grok_jev.py и main.py, но не существовал (AttributeError глотался try/except).
+        Ставит токен в Waiting Room: через 90с он попадёт в grok_jev.crawl_universe()
+        (get_waiting_room_graduates) и будет перепроверен, когда карантин по возрасту снимется.
+        Существующую запись не перезаписывает, чтобы не сбрасывать таймер ожидания."""
         if not mint:
             return
         now = time.time()
         with self.lock:
-            if mint not in self.waiting_room:
-                self.waiting_room[mint] = {"ts": now, "pool": str(pool or ""),
-                                           "creator": str(creator or ""), "init_dev_pct": None}
+            meta = self.waiting_room.get(mint)
+            if meta is None:
+                self.waiting_room[mint] = {
+                    "ts": now,
+                    "pool": str(pool or ""),
+                    "creator": str(creator or ""),
+                    "init_dev_pct": None,
+                }
+            else:
+                if pool and not meta.get("pool"):
+                    meta["pool"] = str(pool)
+                if creator and not meta.get("creator"):
+                    meta["creator"] = str(creator)
             if len(self.waiting_room) > self.WAIT_ROOM_MAX:
                 stale = sorted(self.waiting_room.items(), key=lambda kv: kv[1].get("ts", 0.0))[:len(self.waiting_room) - self.WAIT_ROOM_MAX]
                 for _km, _ in stale:
@@ -153,5 +164,6 @@ class BirthTracker:
             self.graduated = {m: ts for m, ts in self.graduated.items()
                               if now - ts <= max_age_sec}
             return out
+
 
 birth_tracker = BirthTracker()
