@@ -318,45 +318,53 @@ async def position_manager_loop(analyzer, tracker):
 
                 # === ИНТЕГРАЦИЯ МАТЕМАТИКИ ДЛЯ ЗРЕЛЫХ МОНЕТ (SWING TRADING / RIDE RUNNERS) ===
                 # Исполняется ДО скальперских Early Fade / Stagnant срезов, чтобы ракеты ехали по MatureExitManager!
-                _tp1_sol_thr = float(getattr(config, "TP1_TRIGGER_PCT", 0.22))
+                # === ИНТЕГРАЦИЯ МАТЕМАТИКИ ДЛЯ ВСЕХ ПОЗИЦИЙ SOLANA (main.py строки 240-280) ===
+                _tp1_sol_thr = float(getattr(config, "TP1_TRIGGER_PCT", 0.09))
                 _tp1_sell = float(getattr(config, "TP1_SELL_FRAC", 0.40))
-                _tp2 = float(getattr(config, "TP2_TRIGGER_PCT", 0.50))
-                _tp2_sell = float(getattr(config, "TP2_SELL_FRAC", 0.35))
-                _tp3 = float(getattr(config, "TP3_TRIGGER_PCT", 1.00))
+                _tp2 = float(getattr(config, "TP2_TRIGGER_PCT", 0.22))
+                _tp2_sell = float(getattr(config, "TP2_SELL_FRAC", 0.30))
+                _tp3 = float(getattr(config, "TP3_TRIGGER_PCT", 0.55))
                 _tp3_sell = float(getattr(config, "TP3_SELL_FRAC", 0.15))
-                _tp4 = float(getattr(config, "TP4_TRIGGER_PCT", 3.00))
+                _tp4 = float(getattr(config, "TP4_TRIGGER_PCT", 1.50))
                 _tp4_sell = float(getattr(config, "TP4_SELL_FRAC", 0.10))
-                _tp5 = float(getattr(config, "TP5_TRIGGER_PCT", 10.00))
+                _tp5 = float(getattr(config, "TP5_TRIGGER_PCT", 4.00))
                 _tp5_sell = float(getattr(config, "TP5_SELL_FRAC", 0.05))
-                if getattr(position, "is_mature", False):
-                    # Take-Profit фиксируется строго по текущей живой цене (pnl_pct), а не по старому пику!
-                    if getattr(config, "PARTIAL_TP_ENABLED", False) and pnl_pct >= _tp1_sol_thr and not getattr(position, "tp1_done", False):
+                if True:
+                    if getattr(config, "PARTIAL_TP_ENABLED", True) and pnl_pct >= _tp1_sol_thr and not getattr(position, "tp1_done", False):
                         tracker.partial_close_position(mint, current_price, _tp1_sell, f"Take Profit +{_tp1_sol_thr*100:.0f}% (Tier-1 {int(_tp1_sell*100)}%)")
                         position.tp1_done = True
                         position.is_moonbag = True
+                        position.last_tp_ts = time.time()
                         continue
-                    if getattr(config, "PARTIAL_TP_ENABLED", False) and pnl_pct >= _tp2 and not getattr(position, "tp2_done", False):
+                    if getattr(config, "PARTIAL_TP_ENABLED", True) and pnl_pct >= _tp2 and not getattr(position, "tp2_done", False):
                         tracker.partial_close_position(mint, current_price, _tp2_sell, f"Take Profit +{_tp2*100:.0f}% (Tier-2 {int(_tp2_sell*100)}%)")
                         position.tp2_done = True
+                        position.last_tp_ts = time.time()
                         continue
-                    if getattr(config, "PARTIAL_TP_ENABLED", False) and pnl_pct >= _tp3 and not getattr(position, "tp3_done", False):
+                    if getattr(config, "PARTIAL_TP_ENABLED", True) and pnl_pct >= _tp3 and not getattr(position, "tp3_done", False):
                         tracker.partial_close_position(mint, current_price, _tp3_sell, f"Take Profit +{_tp3*100:.0f}% (Tier-3 {int(_tp3_sell*100)}%)")
                         position.tp3_done = True
+                        position.last_tp_ts = time.time()
                         continue
-                    if getattr(config, "PARTIAL_TP_ENABLED", False) and pnl_pct >= _tp4 and not getattr(position, "tp4_done", False):
+                    if getattr(config, "PARTIAL_TP_ENABLED", True) and pnl_pct >= _tp4 and not getattr(position, "tp4_done", False):
                         tracker.partial_close_position(mint, current_price, _tp4_sell, f"Take Profit +{_tp4*100:.0f}% (Tier-4 {int(_tp4_sell*100)}%)")
                         position.tp4_done = True
+                        position.last_tp_ts = time.time()
                         continue
-                    if getattr(config, "PARTIAL_TP_ENABLED", False) and pnl_pct >= _tp5 and not getattr(position, "tp5_done", False):
+                    if getattr(config, "PARTIAL_TP_ENABLED", True) and pnl_pct >= _tp5 and not getattr(position, "tp5_done", False):
                         tracker.partial_close_position(mint, current_price, _tp5_sell, f"Take Profit +{_tp5*100:.0f}% (Tier-5 {int(_tp5_sell*100)}%)")
                         position.tp5_done = True
+                        position.last_tp_ts = time.time()
+                        continue
+                    # Даем 15 секунд передышки после взятия частичного тейка, чтобы не закрыть мунбэг на том же секундном тике (кейс AMD +171%)
+                    if (time.time() - float(getattr(position, "last_tp_ts", 0.0) or 0.0)) < 15.0 and pnl_pct > -0.08:
                         continue
                     from exit_managers import MatureExitManager
                     mature_exit_reason = MatureExitManager.evaluate_exit(position, current_price)
                     if mature_exit_reason:
                         tracker.close_position(mint, current_price, mature_exit_reason)
-                    continue # Если это mature монета, скальперская логика ниже к ней не применяется!
-
+                    continue
+                    
                 # === STALL TIMER (DEAD MOMENTUM EXIT - 420с на консолидацию без ложных срезов) ===
                 _stall_sec = float(getattr(config, "STALL_TIMER_SEC", 420.0))
                 _stall_loss = float(getattr(config, "STALL_MAX_LOSS_PCT", -0.16))
