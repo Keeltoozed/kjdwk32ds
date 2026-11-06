@@ -3,21 +3,17 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Dexscreener API (Только топ-бусты и профили, без мусорных 1-минутных скамов)
 DEXSCREENER_LATEST = "https://api.dexscreener.com/token-boosts/latest/v1" 
 DEXSCREENER_PROFILES = "https://api.dexscreener.com/token-profiles/latest/v1" 
 DEXSCREENER_SEARCH = "https://api.dexscreener.com/latest/dex/tokens/"
 
-# Helius / PumpPortal WSS API
 HELIUS_API_KEY = (os.getenv("HELIUS_API_KEY") or "").strip().strip('"').strip("'")
 HELIUS_RPC_URL = f"https://mainnet.helius-rpc.com/?api-key={HELIUS_API_KEY}" if HELIUS_API_KEY else "https://api.mainnet-beta.solana.com"
 PUMPPORTAL_API_KEY = (os.getenv("PUMPPORTAL_API_KEY") or "").strip().strip('"').strip("'")
 PUMPPORTAL_WSS = f"wss://pumpportal.fun/api/data?api-key={PUMPPORTAL_API_KEY}" if PUMPPORTAL_API_KEY else "wss://pumpportal.fun/api/data"
 
-# RugCheck API
 RUGCHECK_API = "https://api.rugcheck.xyz/v1/tokens/{mint}/report/summary"
 
-# Supabase DB Config
 def _clean_supabase_url(raw: str) -> str:
     u = (raw or "").strip().strip('"').strip("'").rstrip("/")
     if not u or "kpyiiwouhsuaohqtcrfy" in u:
@@ -37,7 +33,6 @@ def _clean_supabase_url(raw: str) -> str:
 SUPABASE_URL = _clean_supabase_url(os.getenv("SUPABASE_URL"))
 SUPABASE_KEY = (os.getenv("SUPABASE_KEY") or "").strip().strip('"').strip("'")
 
-# Paper Trading Config
 PAPER_PORTFOLIO_FILE = "portfolio.json"
 PORTFOLIO_SNAPSHOT_MINT = (os.getenv("PORTFOLIO_SNAPSHOT_MINT", "") or "").strip().strip('"').strip("'") or "PORTFOLIO_SOLANA_V2"
 INITIAL_BALANCE_USD = 20.0
@@ -45,34 +40,32 @@ REINVEST_PERCENT = 22.0
 VIRTUAL_POSITION_SIZE_USD = 4.40
 TRADE_AMOUNT_USD = 4.40
 
-# === ЭКСПОНЕНЦИАЛЬНЫЙ РАЗГОН ДЕПОЗИТА ===
 COMPOUNDING_ENABLED = True
 COMPOUNDING_PCT = 0.10
 MAX_COMPOUNDING_SIZE_USD = 2500.0
 DYNAMIC_REINVEST_ENABLED = True
 BASE_TRADE_AMOUNT_USD = 2.0
 MAX_POSITION_SIZE_USD = 2500.0
-REINVEST_MIN_POOL_LIQ_USD = 6000.0
+REINVEST_MIN_POOL_LIQ_USD = 7500.0
 SCOUT_SIZE_USD = 4.0
 LOTTERY_SIZE_USD = 4.0
 MAX_CONCURRENT_POSITIONS = 6
 
-# === RISK MANAGEMENT (ОПТИМИЗИРОВАНО ПРОТИВ МЕЛКИХ МИНУСОВ) ===
+# === ЖЕСТКОЕ ОГРАНИЧЕНИЕ УБЫТКА (БЕЗ -25% СЛИВОВ) ===
 MAX_DAILY_LOSS_USD = 1000.0
 KILL_SWITCH_ENABLED = False
-STOP_LOSS_PCT = -0.14          # Четкий стоп -14% (вместо -25%)
-EMERGENCY_CAP_PCT = -0.22      # Аварийный стоп -22% (вместо -38%)
+STOP_LOSS_PCT = -0.125         # Стоп -12.5% (вместо -25%)
+EMERGENCY_CAP_PCT = -0.16      # Аварийный кэп -16% (убирает сливы -24%..-37%)
 INFANT_WINDOW_MIN = 1.0
-INFANT_DUMP_PCT = -0.42
+INFANT_DUMP_PCT = -0.25
 
-# === АНТИ-ФОМО И АНТИ-РАГ ФИЛЬТРЫ ВХОДА (РАЗБЛОКИРОВАНЫ МИГРАЦИИ И ИМПУЛЬСЫ) ===
-MAX_ENTRY_H1_PCT = 380.0       # Было 120.0 (блокировало все мигрировавшие с Pump.fun ракеты!)
-MAX_ENTRY_M5_PCT = 95.0        # Было 45.0 (блокировало живые прорывы)
-MAX_ENTRY_M1_PCT = 25.0
-REQUIRE_SOCIALS_MIN_AGE_MIN = 6.0  # Было 20.0 (не блокируем свежие миграции до индексации соцсетей DS)
+# === ФИЛЬТРЫ ВХОДА (ОТСЕКАЮТ ВЕРШИНЫ И ПАДАЮЩИЕ НОЖИ) ===
+MAX_ENTRY_H1_PCT = 240.0       # Запрет входа в перегретые пампы > +240% за 1ч (кейс MOOTUN +311% -> -26%)
+MAX_ENTRY_M5_PCT = 60.0        # Запрет входа на вершине 5м свечи > +60% (кейс CHIKA +69.8% -> -24%)
+MAX_ENTRY_M1_PCT = 14.0        # Запрет входа на вертикальной 1м свече > +14% (кейсы Bill +19.4%, Greg +14.8%)
+REQUIRE_SOCIALS_MIN_AGE_MIN = 8.0
 
-# === ЗАЩИТА ОТ СЕРИИ МИНУСОВ ===
-STREAK_COOLDOWN_ENABLED = False    # Отключено, чтобы бот не замирал на паузах
+STREAK_COOLDOWN_ENABLED = False
 STREAK_MAX_CONSECUTIVE_LOSSES = 5
 STREAK_COOLDOWN_MINUTES = 5.0
 
@@ -83,16 +76,16 @@ ROLLING_BREAKER_PAUSE_MIN = 5.0
 DD_THROTTLE_ENABLED = False
 DD_THROTTLE_START_USD = 15.0
 
-# === STREAMING SNIPER & GRADUATED DEX SHIELD ===
+# === ВХОД В ЗРЕЛЫЕ КРИВЫЕ PUMP.FUN ДО МИГРАЦИИ + ЗАЩИТА DEX ===
 SNIPER_ENTRIES_ENABLED = False
-ALLOW_UNGRADUATED_PUMPFUN = False
-MIN_PUMP_CURVE_MCAP_USD = 12000.0
-MAX_PUMP_CURVE_MCAP_USD = 50000.0
+ALLOW_UNGRADUATED_PUMPFUN = True          # ВКЛЮЧЕНО только для зрелых кривых $18k-$44k (ловит RECEIPTS +779%, CHIKA до 2x!)
+MIN_PUMP_CURVE_MCAP_USD = 18000.0         # Минимум $18k FDV (~$7.2k виртуальной ликвидности)
+MAX_PUMP_CURVE_MCAP_USD = 44000.0         # До $44k FDV (не покупаем перед самым обрывом миграции $55k+)
 JEV_MAX_TICKET_USD = 0.0
-MIN_GRADUATED_LIQ_USD = 6500.0     # Снижено с 10000 до 6500 для раннего входа после миграции
+MIN_GRADUATED_LIQ_USD = 12000.0           # На DEX не берем тонкие пулы < $12k (отсекает KLAUDIA $7.6k и LIBTARD $8.9k!)
 AUDITOR_STAIRCASE_ENABLED = True
-AUDITOR_MAX_DEV_PCT = 7.0
-AUDITOR_MAX_TOP10_PCT = 34.0
+AUDITOR_MAX_DEV_PCT = 6.0
+AUDITOR_MAX_TOP10_PCT = 32.0
 STREAM_WINDOW_SEC = 60
 STREAM_MIN_UNIQUE_BUYERS = 6
 STREAM_MIN_BUY_SOL = 1.5
@@ -110,20 +103,20 @@ STREAM_MIN_ENTRY_PROGRESS = 15.0
 STREAM_MOMENTUM_MIN_RATIO = 0.35
 
 VIP_ENTRIES_ENABLED = False
-TIME_EXIT_MINUTES = 45
-TIME_EXIT_PROFIT_REQ = 0.01
+TIME_EXIT_MINUTES = 40
+TIME_EXIT_PROFIT_REQ = 0.015
 
-# === TAKE-PROFIT И РАННИЙ ЗАХВАТ ПЛЮСОВ (ГЛАВНОЕ ИСПРАВЛЕНИЕ) ===
+# === ЛЕСТНИЦА ТЕЙК-ПРОФИТОВ (ФИКСИРУЕТ ПЛЮС И ОСТАВЛЯЕТ 60% НА РАКЕТУ) ===
 PARTIAL_TP_ENABLED = True
-TP1_TRIGGER_PCT = 0.08          # Было 0.15! На +8% сразу забираем 50% позиции в плюс и ставим БУ!
-TP1_SELL_FRAC = 0.50
-TP2_TRIGGER_PCT = 0.18          # Было 0.35! На +18% забираем еще 25% позиции
-TP2_SELL_FRAC = 0.25
-TP3_TRIGGER_PCT = 0.45          # На +45% забираем еще 15%
+TP1_TRIGGER_PCT = 0.09          # На +9% фиксируем 40% позиции (остальные 60% едут дальше!)
+TP1_SELL_FRAC = 0.40
+TP2_TRIGGER_PCT = 0.22          # На +22% фиксируем еще 30% позиции
+TP2_SELL_FRAC = 0.30
+TP3_TRIGGER_PCT = 0.55          # На +55% фиксируем 15% позиции
 TP3_SELL_FRAC = 0.15
-TP4_TRIGGER_PCT = 1.20          # На +120% забираем 5%
-TP4_SELL_FRAC = 0.05
-TP5_TRIGGER_PCT = 3.50          # На +350% забираем 5%
+TP4_TRIGGER_PCT = 1.50          # На +150% фиксируем 10%
+TP4_SELL_FRAC = 0.10
+TP5_TRIGGER_PCT = 4.00          # На +400% фиксируем 5%
 TP5_SELL_FRAC = 0.05
 MOONBAG_TRIGGER_PCT = 999.0
 MOONBAG_SELL_FRAC = 0.0
@@ -131,39 +124,36 @@ MOONBAG_SELL_FRAC = 0.0
 PUMP_XGB_ENABLED = False
 RAY_XGB_ENABLED = False
 ROCKET_XGB_ENABLED = True
-ROCKET_XGB_STAGE1_THRESHOLD = 5.0   # Снижено с 8.0 до 5.0 (не режем ранние ракеты)
-ROCKET_XGB_FINAL_THRESHOLD = 9.0    # Снижено с 14.0 до 9.0
-ROCKET_XGB_THRESHOLD = 7.0
+ROCKET_XGB_STAGE1_THRESHOLD = 14.0  # Повышено с 5% до 14% (отсекает мусор вроде Greg 14%, LIBTARD 12%)
+ROCKET_XGB_FINAL_THRESHOLD = 20.0   # Повышено до 20% (отсекает KLAUDIA 18%, CAGE 18%, COGE 17.5%)
+ROCKET_XGB_THRESHOLD = 18.0
 
-# === ТАЙМЕРЫ УДЕРЖАНИЯ (НЕ РЕЖЕМ КОНСОЛИДАЦИЮ В МЕЛКИЙ МИНУС!) ===
-STALL_TIMER_SEC = 720.0         # 12 минут (было 7м)
-STALL_MAX_LOSS_PCT = -0.14
+STALL_TIMER_SEC = 600.0
+STALL_MAX_LOSS_PCT = -0.10
 
-TRAILING_ACTIVATION_PCT = 0.12  # Было 0.40! Трейлинг включается уже с +12%
-TRAILING_DISTANCE_PCT = 0.05    # Дистанция отката 5% на младших уровнях
+TRAILING_ACTIVATION_PCT = 0.15
+TRAILING_DISTANCE_PCT = 0.06
 TRAILING_RUNNER_DISTANCE_PCT = 0.14
-SCALP_PROFIT_ENABLED = True     # ВКЛЮЧЕНО: защищает импульсы +6%..+12% от превращения в минус
+SCALP_PROFIT_ENABLED = False
 
 WHALE_DUMP_GUARD_PCT = 0.22
 EVM_RUNNER_CRASH = 0.25
 EVM_NORMAL_CRASH = 0.22
 
-# Ранний безубыток с +6% пика (было 0.14)
-BREAKEVEN_PCT = 0.06
+BREAKEVEN_PCT = 0.09
 
-PREFETCH_TTL_SEC = 45
-SOLANA_MIN_AGE_MIN = 0.8
+PREFETCH_TTL_SEC = 35
+SOLANA_MIN_AGE_MIN = 0.5        # Разрешаем молодые ракеты от 30 секунд (LEMON +406%, SHADOW +195%)
 SOLANA_MAX_AGE_HOURS = 24.0
-SOLANA_MAX_AGE_MIN = 360.0      # Было 120.0 (расширено до 6 часов для живых трендов)
+SOLANA_MAX_AGE_MIN = 360.0
 
-# Увеличено с 4-8 минут до 14-20 минут, чтобы бот не закрывал консолидации в мелкий минус!
-SCALP_TIMEOUT_MIN = 14.0
-STAGNANT_LOSS_MIN = 14.0
-STAGNANT_LOSS_MIN_FAST = 10.0
-STAGNANT_HOLD_MIN = 20.0
+SCALP_TIMEOUT_MIN = 12.0
+STAGNANT_LOSS_MIN = 12.0
+STAGNANT_LOSS_MIN_FAST = 9.0
+STAGNANT_HOLD_MIN = 18.0
 
 AI_MODE = "degen"
-MIN_LIQUIDITY = 6500.0          # Было 10000.0
+MIN_LIQUIDITY = 12000.0         # Минимум $12,000 реальной ликвидности на DEX
 MAX_LIQUIDITY = 50000000
 
 GROQ_API_KEY = (os.getenv("GROQ_API_KEY") or os.getenv("GROK_API_KEY") or os.getenv("XAI_API_KEY") or "").strip().strip('"').strip("'")
@@ -173,35 +163,35 @@ GEMINI_API_KEY = (os.getenv("GEMINI_API_KEY") or "").strip()
 # === GROK BOT x JEV ENGINE ===
 JEV_ENABLED = True
 JEV_WICK_STOP_ENABLED = False
-JEV_EARLY_MIN_AGE_MIN = 0.8
-JEV_MIN_AGE_MIN = 1.2            # Было 1.5
-JEV_MIN_LIQUIDITY_USD = 6500.0   # Было 10000.0
+JEV_EARLY_MIN_AGE_MIN = 0.4     # Ловим ранние ракеты от 24 секунд (LEMON, WANK, SHADOW)
+JEV_MIN_AGE_MIN = 0.5
+JEV_MIN_LIQUIDITY_USD = 12000.0
 JEV_MIN_VOLUME_H1 = 5000.0
-JEV_MIN_MCAP_USD = 6500.0
+JEV_MIN_MCAP_USD = 12000.0
 JEV_MIN_VOLUME_H24 = 15000.0
 JEV_MIN_TRADES_H24 = 60
 JEV_MIN_TRADES_H1 = 20
 JEV_MIN_HOLDERS = 50
-JEV_MAX_TOP_WALLET = 0.18
-JEV_MAX_TOP_10 = 0.34
+JEV_MAX_TOP_WALLET = 0.16
+JEV_MAX_TOP_10 = 0.32
 MAX_POOL_LIQ_FRAC = 0.02
 AUDITOR_MAX_DELEGATED_ACCOUNTS = 3
 AUDITOR_MAX_DELEGATED_PCT = 5.0
 AUDITOR_MAX_BUNDLE_WALLETS = 5
 AUDITOR_MAX_BUNDLE_PCT = 12.0
-JEV_LLM_ENFORCE = False          # False = ИИ работает в режиме советника и не блокирует живые прорывы при лимитах Groq
+JEV_LLM_ENFORCE = False
 
 JEV_MIN_ACCOUNT_IS_PROJECT = 0.65
 JEV_MAX_RECYCLED_ACCOUNT = 0.35
 JEV_MAX_CONCENTRATION_RISK = 0.45
-JEV_MAX_MOMENTUM_SPENT = 0.70
+JEV_MAX_MOMENTUM_SPENT = 0.65
 JEV_MIN_LIQUIDITY_FITS_TICKET = 0.60
 JEV_MAX_DEV_STILL_LOADED = 0.35
 
 JEV_BID_THE_FLUSH_ENABLED = True
 JEV_STOP_UNDER_WICK_ENABLED = True
-JEV_MAX_M1_ENTRY_PCT = 22.0      # Было 12.0 (разрешаем вход в живое движение)
-JEV_DEFAULT_WICK_STOP_PCT = -0.14
+JEV_MAX_M1_ENTRY_PCT = 14.0      # Не влетаем в 1м свечи > +14%
+JEV_DEFAULT_WICK_STOP_PCT = -0.125
 
 BIRDEYE_API_KEY = os.getenv("BIRDEYE_API_KEY", "")
 BIRDEYE_CHAINS = ["solana"]
@@ -255,7 +245,7 @@ EVM_CHAIN_FEES = {
 
 CONVICTION_MULT = 2.0
 CONVICTION_MIN_M5_PCT = 0.15
-CONVICTION_MAX_M5_PCT = 0.65
+CONVICTION_MAX_M5_PCT = 0.55
 CONVICTION_MIN_BUYSELL = 1.5
 CONVICTION_MIN_LIQ = 20000
 MAX_DEPLOYED_PCT = 0.85
@@ -287,20 +277,20 @@ GROWTH_INTERVAL = 75
 
 SNIPER_MIN_UNIQUE_BUYERS = 8
 SNIPER_BUYERS_WINDOW_MIN = 5
-VIP_MAX_M5_PCT = 0.80
-PULLBACK_MIN_M5_PCT = 0.018     # Снижено с 2.5% до 1.8%
-PULLBACK_M1_MIN_PCT = -0.10
-PULLBACK_M1_MAX_PCT = 0.22      # Было 0.12 (не режем активные свечи)
-PULLBACK_MAX_H1_PCT = 380.0     # Было 85.0
-PULLBACK_MAX_M5_PCT = 0.95      # Было 0.45
-MIN_VOLUME_M5 = 1000            # Снижено до $1,000
-MIN_TXNS_M5 = 8
-MIN_BUY_SELL_RATIO = 1.02
+VIP_MAX_M5_PCT = 0.60
+PULLBACK_MIN_M5_PCT = 0.025
+PULLBACK_M1_MIN_PCT = -0.08
+PULLBACK_M1_MAX_PCT = 0.14
+PULLBACK_MAX_H1_PCT = 240.0
+PULLBACK_MAX_M5_PCT = 0.60
+MIN_VOLUME_M5 = 2500            # Минимум $2,500 за 5м (отсекает дохлые пулы вроде FISCHER $906 и KLAUDIA $1221)
+MIN_TXNS_M5 = 25
+MIN_BUY_SELL_RATIO = 1.20       # Покупателей минимум на 20% больше продавцов (отсекает COGE 477/529 и LUNOX 104/127!)
 LOTTERY_ENABLED = False
 LOTTERY_MIN_M5_PCT = 0.60
 LOTTERY_SIZE_MULT = 0.30
 WHALE_CONSENSUS = 1
-WHALE_MAX_RUNUP = 1.45
+WHALE_MAX_RUNUP = 1.35
 
 FAST_STREAM_ENABLED = True
 FAST_WINDOW_SEC = 120
@@ -339,7 +329,7 @@ SCOUT_MIN_AGE_SEC = 60
 SCOUT_MAX_AGE_SEC = 720
 SCOUT_MIN_BUYERS = 5
 SCOUT_MIN_TRADES = 12
-SCOUT_MIN_LIQ = 10000
+SCOUT_MIN_LIQ = 12000
 SCOUT_MAX_POS = 3
 SCOUT_RECOOLDOWN = 180
 SCOUT_BIRTH_FALLBACK = False
@@ -352,22 +342,21 @@ SCAN_CONCURRENCY = 8
 SCAN_LOOP_SLEEP_SEC = 2
 SCAN_AFTER_ENTRY_SLEEP_SEC = 3
 SCAN_LATEST_TTL_SEC = 12
-SOLANA_RESCAN_COOLDOWN = 45       # Было 90с
-SOLANA_FRESH_RESCAN_COOLDOWN = 12 # Было 15с
+SOLANA_RESCAN_COOLDOWN = 45
+SOLANA_FRESH_RESCAN_COOLDOWN = 12
 
 JEV_TREND_CONFIRM_ENABLED = False
-JEV_FRESH_RECHECK_ENABLED = False # Отключено: ложно сбрасывало сделки при секундном колебании цены во время аудита
-JEV_MIN_M1_ENTRY_FLOOR_PCT = -6.0
-JEV_MIN_H1_PCT = -12.0
-JEV_MIN_H6_PCT = -25.0
+JEV_FRESH_RECHECK_ENABLED = True   # Включена финальная проверка цены перед покупкой (защищает от покупки на падающей свече!)
+JEV_MIN_M1_ENTRY_FLOOR_PCT = -5.0
+JEV_MIN_H1_PCT = -5.0              # Запрет покупки токенов в часовом сливе (отсекает KLAUDIA -65%, LIBTARD -53%, CAGE -23%)
+JEV_MIN_H6_PCT = -15.0
 
 USE_COPYTRADE = True
 COPY_MIN_TIER = 3
 COPY_MAX_TICKET_USD = 4.0
 COPY_USE_ANTISCAM = True
 COPY_MAX_ACTIVE_WHALES = 80
-COPY_BAN_ON_FIRST_LOSS = False    # Отключен пермабан кита за первый же флет/микро-минус
+COPY_BAN_ON_FIRST_LOSS = False
 COPY_PREFILTER = True
 COPY_MAX_TX_PER_MIN = 40
 COPY_MIN_PNL = 250.0
-
