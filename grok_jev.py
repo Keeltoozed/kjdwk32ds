@@ -577,19 +577,14 @@ class GrokJevEngine:
             if float(_h6_raw or 0) < _min_h6:
                 return False, f"h6-downtrend {float(_h6_raw or 0):+.1f}% < {_min_h6:+.1f}% (monet is bleeding)"
 
-        # 4. Объем и давление покупателей (LIVE 5M ACTIVITY)
-        # В 5-минутном окне проверяем живую активность (пороги снижены для ранних ракет)
-        _min_vol_m5 = float(getattr(_c, "MIN_VOLUME_M5", 1000.0))
+        # 4. Объем и давление покупателей (строго покупателей >= 1.20x продавцов, отсекает COGE, TOKEN, SSSDFG):
+        _min_vol_m5 = float(getattr(_c, "MIN_VOLUME_M5", 2500.0))
         if vol_m5 < _min_vol_m5:
             return False, f"vol5-low ${vol_m5:.0f} < ${_min_vol_m5:.0f} (inactive dead pool)"
-        if (b5 + s5) < 5:
-            return False, f"tx5-low {b5+s5} < 5 (too few transactions)"
-        if b5 < 3:
-            return False, f"buys5-low {b5} < 3 (no active buyers)"
-        _req_bs = float(getattr(_c, "MIN_BUY_SELL_RATIO", 0.90))
-        if (b5 + s5) >= 30 or vol_m5 >= 8000.0:
-            _req_bs = 0.85
-        if s5 >= 4 and (b5 / s5) < _req_bs:
+        if (b5 + s5) < 25:
+            return False, f"tx5-low {b5+s5} < 25 (too few transactions)"
+        _req_bs = float(getattr(_c, "MIN_BUY_SELL_RATIO", 1.20))
+        if s5 > 0 and (b5 / s5) < _req_bs:
             return False, f"sellers-dominating {b5}b/{s5}s (ratio {b5/s5:.2f} < {_req_bs:.2f})"
 
         # Проверка суточной активности h24 для токенов старше 1 часа
