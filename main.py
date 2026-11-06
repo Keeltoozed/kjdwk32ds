@@ -319,15 +319,15 @@ async def position_manager_loop(analyzer, tracker):
                 # === ИНТЕГРАЦИЯ МАТЕМАТИКИ ДЛЯ ЗРЕЛЫХ МОНЕТ (SWING TRADING / RIDE RUNNERS) ===
                 # Исполняется ДО скальперских Early Fade / Stagnant срезов, чтобы ракеты ехали по MatureExitManager!
                 # === ИНТЕГРАЦИЯ МАТЕМАТИКИ ДЛЯ ВСЕХ ПОЗИЦИЙ SOLANA (main.py строки 240-280) ===
-                _tp1_sol_thr = float(getattr(config, "TP1_TRIGGER_PCT", 0.09))
-                _tp1_sell = float(getattr(config, "TP1_SELL_FRAC", 0.40))
-                _tp2 = float(getattr(config, "TP2_TRIGGER_PCT", 0.22))
-                _tp2_sell = float(getattr(config, "TP2_SELL_FRAC", 0.30))
-                _tp3 = float(getattr(config, "TP3_TRIGGER_PCT", 0.55))
+                _tp1_sol_thr = float(getattr(config, "TP1_TRIGGER_PCT", 0.18))
+                _tp1_sell = float(getattr(config, "TP1_SELL_FRAC", 0.50))
+                _tp2 = float(getattr(config, "TP2_TRIGGER_PCT", 0.40))
+                _tp2_sell = float(getattr(config, "TP2_SELL_FRAC", 0.25))
+                _tp3 = float(getattr(config, "TP3_TRIGGER_PCT", 1.00))
                 _tp3_sell = float(getattr(config, "TP3_SELL_FRAC", 0.15))
-                _tp4 = float(getattr(config, "TP4_TRIGGER_PCT", 1.50))
-                _tp4_sell = float(getattr(config, "TP4_SELL_FRAC", 0.10))
-                _tp5 = float(getattr(config, "TP5_TRIGGER_PCT", 4.00))
+                _tp4 = float(getattr(config, "TP4_TRIGGER_PCT", 3.00))
+                _tp4_sell = float(getattr(config, "TP4_SELL_FRAC", 0.05))
+                _tp5 = float(getattr(config, "TP5_TRIGGER_PCT", 10.00))
                 _tp5_sell = float(getattr(config, "TP5_SELL_FRAC", 0.05))
                 if True:
                     if getattr(config, "PARTIAL_TP_ENABLED", True) and pnl_pct >= _tp1_sol_thr and not getattr(position, "tp1_done", False):

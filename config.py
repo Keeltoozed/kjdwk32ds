@@ -37,27 +37,27 @@ PAPER_PORTFOLIO_FILE = "portfolio.json"
 PORTFOLIO_SNAPSHOT_MINT = (os.getenv("PORTFOLIO_SNAPSHOT_MINT", "") or "").strip().strip('"').strip("'") or "PORTFOLIO_SOLANA_V2"
 INITIAL_BALANCE_USD = 20.0
 REINVEST_PERCENT = 22.0
-VIRTUAL_POSITION_SIZE_USD = 4.40
-TRADE_AMOUNT_USD = 4.40
+VIRTUAL_POSITION_SIZE_USD = 4.0
+TRADE_AMOUNT_USD = 4.0
 
 COMPOUNDING_ENABLED = True
-COMPOUNDING_PCT = 0.10
+COMPOUNDING_PCT = 0.20
 MAX_COMPOUNDING_SIZE_USD = 2500.0
 DYNAMIC_REINVEST_ENABLED = True
-BASE_TRADE_AMOUNT_USD = 2.0
+BASE_TRADE_AMOUNT_USD = 4.0
 MAX_POSITION_SIZE_USD = 2500.0
 REINVEST_MIN_POOL_LIQ_USD = 7500.0
 SCOUT_SIZE_USD = 4.0
 LOTTERY_SIZE_USD = 4.0
-MAX_CONCURRENT_POSITIONS = 6
+MAX_CONCURRENT_POSITIONS = 5
 
-# === ЖЕСТКОЕ ОГРАНИЧЕНИЕ УБЫТКА (БЕЗ -25% СЛИВОВ) ===
+# === ЖЕСТКОЕ ОГРАНИЧЕНИЕ УБЫТКА (РИСК-МЕНЕДЖМЕНТ) ===
 MAX_DAILY_LOSS_USD = 1000.0
 KILL_SWITCH_ENABLED = False
-STOP_LOSS_PCT = -0.125         # Стоп -12.5% (вместо -25%)
-EMERGENCY_CAP_PCT = -0.16      # Аварийный кэп -16% (убирает сливы -24%..-37%)
+STOP_LOSS_PCT = -0.14         # Стоп -14% (на $4 ордер = -$0.56)
+EMERGENCY_CAP_PCT = -0.20      # Аварийный кэп -20%
 INFANT_WINDOW_MIN = 1.0
-INFANT_DUMP_PCT = -0.25
+INFANT_DUMP_PCT = -0.32
 
 # === ФИЛЬТРЫ ВХОДА (ОТСЕКАЮТ ВЕРШИНЫ И ПАДАЮЩИЕ НОЖИ) ===
 MAX_ENTRY_H1_PCT = 240.0       # Запрет входа в перегретые пампы > +240% за 1ч (кейс MOOTUN +311% -> -26%)
@@ -106,17 +106,17 @@ VIP_ENTRIES_ENABLED = False
 TIME_EXIT_MINUTES = 40
 TIME_EXIT_PROFIT_REQ = 0.015
 
-# === ЛЕСТНИЦА ТЕЙК-ПРОФИТОВ (ФИКСИРУЕТ ПЛЮС И ОСТАВЛЯЕТ 60% НА РАКЕТУ) ===
+# === ЛЕСТНИЦА ТЕЙК-ПРОФИТОВ (+EV АСИММЕТРИЯ: R:R > 3.0x) ===
 PARTIAL_TP_ENABLED = True
-TP1_TRIGGER_PCT = 0.09          # На +9% фиксируем 40% позиции (остальные 60% едут дальше!)
-TP1_SELL_FRAC = 0.40
-TP2_TRIGGER_PCT = 0.22          # На +22% фиксируем еще 30% позиции
-TP2_SELL_FRAC = 0.30
-TP3_TRIGGER_PCT = 0.55          # На +55% фиксируем 15% позиции
+TP1_TRIGGER_PCT = 0.18          # На +18% фиксируем 50% позиции (гарантирует профит и перевод остатка в безубыток!)
+TP1_SELL_FRAC = 0.50
+TP2_TRIGGER_PCT = 0.40          # На +40% фиксируем еще 25% позиции
+TP2_SELL_FRAC = 0.25
+TP3_TRIGGER_PCT = 1.00          # На +100% (2x) фиксируем 15% позиции
 TP3_SELL_FRAC = 0.15
-TP4_TRIGGER_PCT = 1.50          # На +150% фиксируем 10%
-TP4_SELL_FRAC = 0.10
-TP5_TRIGGER_PCT = 4.00          # На +400% фиксируем 5%
+TP4_TRIGGER_PCT = 3.00          # На +300% (4x) фиксируем 5%
+TP4_SELL_FRAC = 0.05
+TP5_TRIGGER_PCT = 10.00         # На +1000% (11x) фиксируем 5%
 TP5_SELL_FRAC = 0.05
 MOONBAG_TRIGGER_PCT = 999.0
 MOONBAG_SELL_FRAC = 0.0
