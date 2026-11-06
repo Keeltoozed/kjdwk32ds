@@ -1328,32 +1328,61 @@ class Analyzer:
                 f"🚫 [WASH-BUMP-TRAP] {symbol} ({mint[:8]}): накрутка микро-ботом ({_tot_tx5_pre} txns, avg ${_avg_tx_pre:.2f} < $12).",
             )
 
-        # 3. Минимальный 5м объем ($1,200 вместо $3,000, чтобы ловить старт импульса, а не его конец!)
-        _min_v5_cfg = float(getattr(config, "MIN_VOLUME_M5", 1200.0))
-        if _vm5_pre < _min_v5_cfg and _age_min_pre < 60.0:
+        # 3. ЖЕСТКИЙ ФИЛЬТР ИМПУЛЬСА И ТРЕНДА ДО ROCKET-XGB (закрывает дыру покупки KLAUDIA -65%, LIBTARD -53%, CAGE -23%, COGE 477b/529s):
+        _min_v5_cfg = float(getattr(config, "MIN_VOLUME_M5", 2500.0))
+        if _vm5_pre < _min_v5_cfg:
             return self._deny(
                 mint,
                 f"low-vol5 ${_vm5_pre:.0f}<${_min_v5_cfg:.0f}",
-                f"🚫 [LOW-MOMENTUM] {symbol} ({mint[:8]}): 5м объем ${_vm5_pre:,.0f} < ${_min_v5_cfg:,.0f}.",
+                f"🚫 [LOW-MOMENTUM] {symbol} ({mint[:8]}): 5м объем ${_vm5_pre:,.0f} < ${_min_v5_cfg:,.0f} — слабый пул.",
             )
 
-        # 4. Anti-FOMO (с учетом миграций с Pump.fun)
-        _max_entry_h1 = float(getattr(config, "MAX_ENTRY_H1_PCT", 380.0))
-        _max_entry_m5 = float(getattr(config, "MAX_ENTRY_M5_PCT", 95.0))
-        if _h1 > _max_entry_h1 and _age_min_pre >= 30.0 and _vm5_pre < 25000.0:
+        # Запрет входа, если продавцов больше или почти столько же, сколько покупателей (кейсы COGE 477/529, LUNOX 104/127, Greg 333/321)
+        _min_bs_cfg = float(getattr(config, "MIN_BUY_SELL_RATIO", 1.20))
+        if _s5_pre > 0 and (_b5_pre / _s5_pre) < _min_bs_cfg:
+            return self._deny(
+                mint,
+                f"weak-buyers {_b5_pre}b/{_s5_pre}s",
+                f"🚫 [WEAK-BUYERS] {symbol} ({mint[:8]}): покупки/продажи 5м {_b5_pre}/{_s5_pre} ({_b5_pre/_s5_pre:.2f}x < {_min_bs_cfg:.2f}x) — продавцы давят!",
+            )
+
+        # Запрет покупки «дохлых кошек» в часовом сливе (кейсы KLAUDIA h1=-65%, LIBTARD h1=-53%, Edmond h1=-47%, CAGE h1=-23%)
+        _min_h1_cfg = float(getattr(config, "JEV_MIN_H1_PCT", -5.0))
+        _h6_pre_val = float(_pc.get("h6", 0) or 0)
+        if _h1 < _min_h1_cfg or _h6_pre_val < -20.0:
+            return self._deny(
+                mint,
+                f"downtrend-h1 {_h1:+.0f}%",
+                f"🚫 [DEAD-CAT-DUMP] {symbol} ({mint[:8]}): часовой тренд в сливе (h1 {_h1:+.1f}%, h6 {_h6_pre_val:+.1f}%) — падающий нож!",
+            )
+
+        # Запрет входа во флет (< +4.5%) и в вертикальную 1м свечу (> +14%, кейсы Bill m1=+19.5%, Greg m1=+14.8%)
+        _max_m1_cfg = float(getattr(config, "MAX_ENTRY_M1_PCT", 14.0))
+        if _m5 < 4.5:
+            return self._deny(mint, f"m5-too-weak {_m5:+.1f}%", f"🚫 [WEAK-M5] {symbol} ({mint[:8]}): m5 {_m5:+.1f}% < +4.5% — нет разгона.")
+        if _m1 > _max_m1_cfg or _m1 < -5.0:
+            return self._deny(
+                mint,
+                f"m1-bad {_m1:+.1f}%",
+                f"🚫 [M1-FILTER] {symbol} ({mint[:8]}): 1м свеча {_m1:+.1f}% вне безопасного коридора [-5%, +{_max_m1_cfg:.0f}%].",
+            )
+
+        # 4. Anti-FOMO: Защита от перегретых вершин (кейсы MOOTUN h1=+311%, CHIKA m5=+69.8%)
+        _max_entry_h1 = float(getattr(config, "MAX_ENTRY_H1_PCT", 240.0))
+        _max_entry_m5 = float(getattr(config, "MAX_ENTRY_M5_PCT", 60.0))
+        if _h1 > _max_entry_h1:
             return self._deny(
                 mint,
                 f"h1-exhausted {_h1:.0f}%>{_max_entry_h1:.0f}%",
-                f"🚫 [EXHAUSTED-TOP] {symbol} ({mint[:8]}): рост за час +{_h1:+.1f}% > +{_max_entry_h1:.0f}%.",
+                f"🚫 [EXHAUSTED-TOP] {symbol} ({mint[:8]}): рост за час +{_h1:+.1f}% > +{_max_entry_h1:.0f}% — вершина пампа.",
             )
         if _m5 > _max_entry_m5:
-            _is_breakout = (_vm5_pre >= 6000.0 and _b5_pre >= _s5_pre * 1.15 and _m5 <= 180.0)
-            if not _is_breakout:
-                return self._deny(
-                    mint,
-                    f"m5-vertical-spike {_m5:.0f}%>{_max_entry_m5:.0f}%",
-                    f"🚫 [FOMO-VERTICAL] {symbol} ({mint[:8]}): 5м свеча +{_m5:+.1f}% > +{_max_entry_m5:.0f}%.",
-                )
+            return self._deny(
+                mint,
+                f"m5-vertical-spike {_m5:.0f}%>{_max_entry_m5:.0f}%",
+                f"🚫 [FOMO-VERTICAL] {symbol} ({mint[:8]}): 5м свеча +{_m5:+.1f}% > +{_max_entry_m5:.0f}% — перегретая свеча, ждём откат.",
+            )
+
 
         # 5. Соцсети для совсем юных токенов (< 6 мин)
         _links_cnt = len((pair_data or {}).get("info", {}).get("socials", []) or []) + len((pair_data or {}).get("info", {}).get("websites", []) or [])
