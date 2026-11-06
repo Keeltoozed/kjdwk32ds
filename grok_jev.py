@@ -488,16 +488,20 @@ class GrokJevEngine:
 
         # КАТЕГОРИЧЕСКИЙ БЛОК: СМЕРТЕЛЬНАЯ ЗОНА МИГРАЦИИ (0 - 2.0 МИНУТ)
         # Отсекаем только мгновенный сброс дева без объема, но пускаем реальные ракеты с объемом (MBAPPE, SAFU, OMNI)
+        # КАТЕГОРИЧЕСКИЙ БЛОК: СМЕРТЕЛЬНАЯ ЗОНА МИГРАЦИИ (замени строки 340-355 в grok_jev.py):
         is_migrated_pump = (dex_id not in ("pump", "pumpfun")) and (mint.endswith("pump") or "pump" in dex_id)
         if is_migrated_pump:
-            has_breakout_momentum = (vol_m5 >= 2000.0 and b5 >= 8 and m5 >= 3.0 and (s5 == 0 or b5 >= s5 * 0.90))
-            if age_min < 1.0 and not has_breakout_momentum:
+            has_breakout_momentum = (vol_m5 >= 3000.0 and b5 >= 20 and b5 >= s5 * 1.20)
+            if age_min < 0.8 and not has_breakout_momentum:
                 try:
                     from birth_tracker import birth_tracker as _bt_mig
                     _bt_mig.add_to_waiting_room(mint)
                 except Exception:
                     pass
-                return False, f"post-migration-dump-zone {age_min:.1f}m < 1.0m (wait for curve snipers to flush, dump risk like 25%/MIKE)"
+                return False, f"post-migration-dump-zone {age_min:.1f}m < 0.8m"
+            # Разрешаем мигрировавшие ракеты, если покупателей >= 1.25x продавцов и объем >= $5k (даже если m5 еще переваривает откат миграции!)
+            if not has_breakout_momentum and (m5 < 3.0 or (s5 > 0 and (b5 / s5) < 1.15) or vol_m5 < 2000.0):
+                return False, f"post-migration-no-reclaim (m5 {m5:+.1f}%, vol5 ${vol_m5:,.0f}, {b5}b/{s5}s)"
             # DIP RECLAIM: после 1м мигрировавший токен ОБЯЗАН показывать реальный разворот покупателей
             if not has_breakout_momentum and (m5 < 2.0 or (s5 > 0 and (b5 / s5) < 0.85) or vol_m5 < 800.0):
                 return False, f"post-migration-no-reclaim (m5 {m5:+.1f}%, vol5 ${vol_m5:,.0f}, {b5}b/{s5}s — need organic bounce)"
