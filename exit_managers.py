@@ -3,7 +3,7 @@ import config
 
 
 class MatureExitManager:
-    """Exit-логика для сбора всех зеленых импульсов и защиты от мелких минусов."""
+    """Exit-логика для сбора зеленых импульсов и удержания ракет (без закрытия откатов в минус)."""
 
     @staticmethod
     def evaluate_exit(position, current_price):
@@ -47,66 +47,84 @@ class MatureExitManager:
             _peak_age_min = 0.0
 
         # =========================================================================
-        # 1. РАННИЙ ЗАХВАТ ПРИБЫЛИ И ТРЕЙЛИНГ (ЗАКРЫВАЕТ СЛЕПУЮ ЗОНУ +5.5%..+15%)
+        # 1. ФИКСАЦИЯ ТОЛЬКО В ПЛЮС (PROFIT FLOOR & TRAILING STOP)
+        # КРИТИЧЕСКОЕ ПРАВИЛО: Никогда не закрываем сделку по Profit Floor, если
+        # текущий тик ушел в минус (pnl_pct < +1.5%) — не продаем на дне секундного сквиза!
+        # И в первые 45 секунд (minutes_held < 0.75) даем ракете (кейс AMD +171%) дышать!
         # =========================================================================
         _is_mb = getattr(position, "is_moonbag", False)
         _floor_pnl = None
         _trail_dist = None
 
         if max_pnl_pct >= 5.00:
-            _floor_pnl = round(max_pnl_pct * 0.60, 2)
+            _floor_pnl = round(max_pnl_pct * 0.62, 2)
             _trail_dist = 0.14
         elif max_pnl_pct >= 3.00:
-            _floor_pnl = round(max_pnl_pct * 0.50, 2)
+            _floor_pnl = round(max_pnl_pct * 0.55, 2)
             _trail_dist = 0.14
         elif max_pnl_pct >= 2.00:
-            _floor_pnl = 0.90
+            _floor_pnl = 0.95
             _trail_dist = 0.15
         elif max_pnl_pct >= 1.00:
-            _floor_pnl = 0.52
-            _trail_dist = 0.15
+            _floor_pnl = 0.55
+            _trail_dist = 0.14
         elif max_pnl_pct >= 0.50:
             _floor_pnl = 0.28
             _trail_dist = 0.12
         elif max_pnl_pct >= 0.25:
-            _floor_pnl = 0.15
+            _floor_pnl = 0.14
             _trail_dist = 0.08
         elif max_pnl_pct >= 0.15:
-            _floor_pnl = 0.085
-            _trail_dist = 0.060
-        elif max_pnl_pct >= 0.095:
-            _floor_pnl = 0.048
-            _trail_dist = 0.042
-        elif max_pnl_pct >= 0.055 or _is_mb:
-            # Главная защита от мелких минусов: увидели +5.5% -> пол +2.2% (чистый плюс!)
+            _floor_pnl = 0.075
+            _trail_dist = 0.055
+        elif max_pnl_pct >= 0.09:
+            _floor_pnl = 0.040
+            _trail_dist = 0.040
+        elif max_pnl_pct >= 0.06 or _is_mb:
             _floor_pnl = 0.022
             _trail_dist = 0.032
 
-        if _floor_pnl is not None:
+        # В первые 45 секунд не душим стартовую свечу ракеты (кейс AMD: +27.6% на 3-й секунде -> +171%),
+        # если только прибыль уже не огромная (>= +40%)
+        if _floor_pnl is not None and (minutes_held >= 0.75 or max_pnl_pct >= 0.40):
             drop_from_max = (position.max_price_usd - current_price) / position.max_price_usd if position.max_price_usd > 0 else 0.0
-            if _trail_dist is not None and drop_from_max >= _trail_dist:
-                if pnl_pct >= _floor_pnl:
-                    return f"Mature Trailing Profit (+{pnl_pct*100:.1f}% locked after peak +{max_pnl_pct*100:.1f}%, drop {drop_from_max*100:.1f}%)"
-                elif pnl_pct >= 0:
-                    return f"Mature Profit Floor (+{pnl_pct*100:.1f}% locked after peak +{max_pnl_pct*100:.1f}%)"
+
+            # Закрываем ТОЛЬКО если мы реально находимся в плюсе (pnl_pct >= +1.5%)!
+            # Если секундный фитиль проколол в минус — НЕ фиксируем убыток через Profit Floor!
+            if pnl_pct >= 0.015:
+                if _trail_dist is not None and drop_from_max >= _trail_dist and pnl_pct >= _floor_pnl:
+                    _tc = int(getattr(position, "mature_trail_confirm", 0) or 0) + 1
+                    position.mature_trail_confirm = _tc
+                    if _tc >= 2:
+                        return f"Mature Trailing Profit (+{pnl_pct*100:.1f}% locked after peak +{max_pnl_pct*100:.1f}%)"
+                elif pnl_pct <= _floor_pnl:
+                    _fc = int(getattr(position, "mature_floor_confirm", 0) or 0) + 1
+                    position.mature_floor_confirm = _fc
+                    if _fc >= 2:
+                        return f"Mature Profit Floor (+{pnl_pct*100:.1f}% locked after peak +{max_pnl_pct*100:.1f}%)"
                 else:
-                    return f"Post-Peak Protection Cut (+{max_pnl_pct*100:.1f}% peak -> {pnl_pct*100:.1f}%)"
+                    position.mature_trail_confirm = 0
+                    position.mature_floor_confirm = 0
 
-            if pnl_pct <= _floor_pnl:
-                if pnl_pct >= 0:
-                    return f"Mature Profit Floor (+{pnl_pct*100:.1f}% locked after peak +{max_pnl_pct*100:.1f}%)"
-                return f"Post-Peak Protection Cut (+{max_pnl_pct*100:.1f}% peak -> {pnl_pct*100:.1f}%)"
+            # Если был серьезный пик (>= +18%), но монета полностью сдулась и 3 тика подряд ушла ниже -4.5% — выходим с минимальным риском
+            elif max_pnl_pct >= 0.18 and pnl_pct <= -0.045 and minutes_held >= 1.5:
+                _pc_cut = int(getattr(position, "post_peak_cut_confirm", 0) or 0) + 1
+                position.post_peak_cut_confirm = _pc_cut
+                if _pc_cut >= 3:
+                    return f"Post-Peak Reversal Cut (+{max_pnl_pct*100:.1f}% peak -> {pnl_pct*100:.1f}%)"
+            else:
+                position.post_peak_cut_confirm = 0
 
         # =========================================================================
-        # 1.5. MICRO-PROFIT HARVESTER (СБОР ЗАСТРЯВШИХ ПЛЮСОВ +2.0%..+5.4%)
-        # Если монета в плюсе 2.5+ минуты, но импульс затих (нет нового пика 1.5 мин) — забираем плюс!
+        # 1.5. MICRO-PROFIT HARVESTER (СБОР ЗАСТРЯВШИХ ПЛЮСОВ +2.5%..+5.9%)
+        # Только после 3.5 минут удержания, если токен перестал обновлять хай 2 минуты
         # =========================================================================
-        if minutes_held >= 2.5 and 0.020 <= pnl_pct < 0.055:
-            if _peak_age_min >= 1.4 or (max_pnl_pct >= 0.038 and (max_pnl_pct - pnl_pct) >= 0.015):
+        if minutes_held >= 3.5 and 0.025 <= pnl_pct < 0.060:
+            if _peak_age_min >= 2.0:
                 return f"Micro Profit Harvest (+{pnl_pct*100:.1f}% locked, peak +{max_pnl_pct*100:.1f}%)"
 
         # =========================================================================
-        # 2. PRE-DUMP FRONT-RUNNER (Выход в плюс при давлении продавцов)
+        # 2. PRE-DUMP FRONT-RUNNER (Выход в плюс при развороте стакана в продажи)
         # =========================================================================
         _pd = getattr(position, "pair_data", None) or getattr(position, "last_pair_data", None) or {}
         if isinstance(_pd, dict) and _pd:
@@ -118,47 +136,44 @@ class MatureExitManager:
             bs_ratio = (b5 / s5) if s5 > 0 else 2.0
             total_tx5 = b5 + s5
 
-            if minutes_held >= 1.5 and pnl_pct >= 0.025 and total_tx5 >= 15 and bs_ratio < 0.72 and m1 <= -2.0:
+            if minutes_held >= 2.0 and pnl_pct >= 0.030 and total_tx5 >= 20 and bs_ratio < 0.70 and m1 <= -2.5:
                 return f"Front-Run Profit Exit: Sellers dominating ({b5}b/{s5}s) while in profit (+{pnl_pct*100:.1f}%)"
 
         # =========================================================================
-        # 3. СТОПЫ И АВАРИЙНЫЕ КЭПЫ ДЛЯ УБЫТОЧНЫХ СДЕЛОК
+        # 3. ЖЕСТКИЙ КОНТРОЛЬ УБЫТКА (БЕЗ СЛИВОВ ПО -24%..-37%!)
         # =========================================================================
-        _emerg_cap = -abs(float(getattr(config, "EMERGENCY_CAP_PCT", -0.22)))
+        _emerg_cap = -abs(float(getattr(config, "EMERGENCY_CAP_PCT", -0.16)))
         if pnl_pct <= _emerg_cap:
-            return f"Mature Emergency Cap ({pnl_pct*100:.0f}%)"
+            if minutes_held >= 0.35 or pnl_pct <= -0.22:
+                return f"Mature Emergency Cap ({pnl_pct*100:.1f}%)"
 
-        _inf_win = float(getattr(config, "INFANT_WINDOW_MIN", 1.0))
-        _inf_pct = float(getattr(config, "INFANT_DUMP_PCT", -0.42))
-        if minutes_held < _inf_win and pnl_pct <= _inf_pct:
-            if minutes_held >= 0.75 or pnl_pct <= -0.65:
-                return f"Mature Infant Dump ({pnl_pct*100:.0f}%)"
-
-        _sl = -abs(float(getattr(config, 'STOP_LOSS_PCT', 0.14)))
-        if pnl_pct <= _sl:
-            if minutes_held >= 1.0 or pnl_pct <= -0.22:
+        _sl = -abs(float(getattr(config, 'STOP_LOSS_PCT', 0.125)))
+        if pnl_pct <= _sl and minutes_held >= 0.75:
+            _sl_c = int(getattr(position, "sl_confirm_n", 0) or 0) + 1
+            position.sl_confirm_n = _sl_c
+            if _sl_c >= 2:
                 return f"Mature Stop Loss ({pnl_pct*100:.1f}%)"
+        else:
+            position.sl_confirm_n = 0
 
         # =========================================================================
-        # 4. УМНЫЙ ТАЙМ-АУТ СТАГНАЦИИ (НЕ РЕЖЕТ БОКОВИКИ ЧЕРЕЗ 5 МИНУТ В МИНУС!)
+        # 4. ВЫХОД ПО СТАГНАЦИИ
         # =========================================================================
-        _stall_sec = float(getattr(config, "STALL_TIMER_SEC", 720.0))
-        _stall_loss = float(getattr(config, "STALL_MAX_LOSS_PCT", -0.14))
+        _stall_sec = float(getattr(config, "STALL_TIMER_SEC", 600.0))
+        _stall_loss = float(getattr(config, "STALL_MAX_LOSS_PCT", -0.10))
         if minutes_held >= (_stall_sec / 60.0) and max_pnl_pct < 0.05 and pnl_pct <= _stall_loss:
             return f"Dead Momentum Stall ({minutes_held*60:.0f}s no breakout, pnl {pnl_pct*100:.1f}%)"
 
-        _loss_min = float(getattr(config, 'STAGNANT_LOSS_MIN', 14.0))
-        _hold_min = float(getattr(config, 'STAGNANT_HOLD_MIN', 20.0))
+        _loss_min = float(getattr(config, 'STAGNANT_LOSS_MIN', 12.0))
+        _hold_min = float(getattr(config, 'STAGNANT_HOLD_MIN', 18.0))
 
-        # Если через 8+ минут сделка в любом чистом плюсе (> +1.2%), но стоит на месте — закрываем в плюс!
-        if minutes_held >= 8.0 and pnl_pct >= 0.012 and _peak_age_min >= 4.0:
+        if minutes_held >= 7.0 and pnl_pct >= 0.015 and _peak_age_min >= 4.0:
             return f"Stagnant Profit Harvest (+{pnl_pct*100:.1f}% after {minutes_held:.0f}m)"
 
-        # В минус закрываем по стагнации ТОЛЬКО после 14+ минут, если вообще не было импульса (<4%) и просадка хуже -6%
         if minutes_held >= _loss_min and pnl_pct <= -0.06 and max_pnl_pct < 0.04:
             return f"Stagnant Loss Cut ({minutes_held:.0f}m, {pnl_pct*100:.1f}%)"
 
-        if minutes_held >= _hold_min and pnl_pct < 0.01 and max_pnl_pct < 0.06:
+        if minutes_held >= _hold_min and pnl_pct < 0.015 and max_pnl_pct < 0.06:
             return f"Stagnant Cut ({minutes_held:.0f}m, {pnl_pct*100:.1f}%)"
 
         if hasattr(config, 'TIME_EXIT_MINUTES') and hasattr(config, 'TIME_EXIT_PROFIT_REQ'):
@@ -178,8 +193,8 @@ class TrailingExitManager:
         pnl = (current_price - entry) / entry
         max_pnl = (position.max_price_usd - entry) / entry
 
-        if pnl <= -0.25:
-            return "Moonshot Hard Stop (-25%)"
+        if pnl <= -0.16:
+            return "Moonshot Hard Stop (-16%)"
 
         if max_pnl >= self.min_profit and not getattr(position, 'tp_1_hit', False):
             position.tp_1_hit = True
@@ -196,4 +211,3 @@ class TrailingExitManager:
                 return f"Moonshot TP +{pct*100:.0f}% ({label})"
 
         return None
-
