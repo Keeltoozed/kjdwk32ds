@@ -166,6 +166,86 @@ def _verdict_evm(info: dict, chain: str = "", pair_data: dict = None):
 RAW_SOLANA_INFO: dict = {}  # mint -> raw goplus dict
 
 
+_SOL_DEX_AUTHORITIES = {
+    "5Q544fKrFoe6tsEbD7S8EmxGTJYAKtTVhAW5Q5pge4j1",  # Raydium AMM V4
+    "D4FPEruKEHrG5NTsqazoqfv8zsFWApqTjuzFLUQDkTz5",  # Raydium CP-Swap
+    "GpMZbSM2GgvTKHJirzeGfMFoaZ8UR2X7F4v8vHTvxFbL",  # Raydium CPMM / LaunchLab Vault Authority
+    "CAMMCzo5YL8w4VFF8KVHrK22GGUsp5VTaW7grrKgrWqK",  # Raydium CLMM
+    "pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA",  # PumpSwap AMM
+    "39azUYFWPz3VHgKCf3VChUwbpURdCHRxjWVowf5jUJjg",  # Pump.fun / PumpSwap Migration Authority
+    "Eo7WjKq67rjJQSZxS6z3YkapzY3eMj6Xy8X5EQVn5UaB",  # Meteora Dynamic Pools
+    "LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo",  # Meteora DLMM
+    "whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc",  # Orca Whirlpools
+    "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P",  # Pump.fun Bonding Curve
+    "Ce6TQqeHC9p8KetsN6JsjHK7UTZk7nasjjnr7XxXp9F1",  # Pump.fun Authority
+}
+
+_SOL_POOL_OR_CEX_TAGS = (
+    "raydium", "meteora", "orca", "pump", "pumpswap", "amm", "pool", "vault",
+    "lp", "lock", "burn", "dead", "dex", "binance", "coinbase", "bybit",
+    "okx", "gate", "mexc", "kucoin", "bitget", "kraken", "wintermute",
+)
+
+
+def _extract_goplus_non_pool_holders(info: dict) -> list:
+    """Возвращает доли реальных холдеров [pct_frac, ...] без AMM-пулов, залоченных сейфов и CEX.
+    На PumpSwap и Meteora DLMM GoPlus часто оставляет tag='' у пула ликвидности (~20.7% сапплая),
+    из-за чего пул ошибочно принимался за 'кита >15%' и блокировал 100% мигрировавших токенов."""
+    holders = info.get("holders") or []
+    if not isinstance(holders, list) or not holders:
+        return []
+
+    dex_list = info.get("dex") or []
+    has_dex = isinstance(dex_list, list) and len(dex_list) > 0
+    pool_addrs = set(_SOL_DEX_AUTHORITIES)
+    if isinstance(dex_list, list):
+        for d in dex_list:
+            if isinstance(d, dict):
+                for fk in ("id", "pool_address", "address", "account", "lp_address"):
+                    val = str(d.get(fk) or "").strip()
+                    if val:
+                        pool_addrs.add(val)
+    for lph in (info.get("lp_holders") or []):
+        if isinstance(lph, dict):
+            val = str(lph.get("account") or lph.get("address") or "").strip()
+            if val and int(lph.get("is_locked", 0) or 0) == 1:
+                pool_addrs.add(val)
+
+    any_tagged_pool = False
+    for h in holders[:6]:
+        if not isinstance(h, dict):
+            continue
+        t_low = str(h.get("tag", "") or "").lower()
+        acc = str(h.get("account") or h.get("token_account") or h.get("address") or "").strip()
+        own = str(h.get("owner") or "").strip()
+        if int(h.get("is_locked", 0) or 0) == 1 or acc in pool_addrs or own in pool_addrs or any(k in t_low for k in _SOL_POOL_OR_CEX_TAGS):
+            any_tagged_pool = True
+            break
+
+    cleaned = []
+    skipped_untagged_vault = False
+    for idx, h in enumerate(holders[:12]):
+        if not isinstance(h, dict):
+            continue
+        pct = _tax_frac(h.get("percent", 0))
+        if pct <= 0.0 or pct > 0.65:
+            continue
+        if int(h.get("is_locked", 0) or 0) == 1:
+            continue
+        tag = str(h.get("tag", "") or "").lower()
+        acc = str(h.get("account") or h.get("token_account") or h.get("address") or "").strip()
+        own = str(h.get("owner") or "").strip()
+        if acc in pool_addrs or own in pool_addrs or any(k in tag for k in _SOL_POOL_OR_CEX_TAGS):
+            continue
+        # Если токен уже торгуется на DEX (has_dex), но GoPlus не разметил ни один AMM-пул тегом,
+        # то крупнейший токен-аккаунт #0 (14%..65%) — это неразмеченный AMM vault (PumpSwap 20.7% / Meteora).
+        if idx == 0 and has_dex and not any_tagged_pool and not skipped_untagged_vault and not tag and pct >= 0.14:
+            skipped_untagged_vault = True
+            continue
+        cleaned.append(pct)
+    return cleaned
+
+
 def get_solana_holder_stats(mint: str) -> dict:
     """Извлекает метрики холдеров из кэша GoPlus Solana для анализатора."""
     info = RAW_SOLANA_INFO.get(mint) or {}
@@ -174,18 +254,14 @@ def get_solana_holder_stats(mint: str) -> dict:
     holders = info.get("holders") or []
     if not isinstance(holders, list) or not holders:
         return {"top_10_pct": 0.0, "dev_pct": 0.0, "has_data": False}
-    top10_sum = 0.0
-    dev_pct = 0.0
-    valid_holders = []
-    for h in holders:
-        pct = _tax_frac(h.get("percent", 0)) * 100.0
-        tag = str(h.get("tag", "")).lower()
-        if "raydium" in tag or "meteora" in tag or "orca" in tag or "pump" in tag or pct > 65.0:
-            continue
-        valid_holders.append(pct)
-    if valid_holders:
-        dev_pct = valid_holders[0]
-        top10_sum = sum(valid_holders[:10])
+    valid_holders = [p * 100.0 for p in _extract_goplus_non_pool_holders(info)]
+    top10_sum = sum(valid_holders[:10]) if valid_holders else 0.0
+    # Не приравниваем крупнейшего холдера к деву, если creator_percent явно задан в GoPlus
+    creator_raw = info.get("creator_percent")
+    if creator_raw is not None and str(creator_raw).strip() != "":
+        dev_pct = _tax_frac(creator_raw) * 100.0
+    else:
+        dev_pct = 0.0
     return {
         "top_10_pct": top10_sum,
         "dev_pct": dev_pct,
@@ -257,20 +333,14 @@ def _verdict_sol(info: dict):
     if worst > float(_cfg("GOPLUS_MAX_SELL_TAX", 0.10)):
         return False, f"tax {worst * 100:.0f}%"
 
-    # 6. Концентрация у китов и топ-10 холдеров (защита от Cabal/Инсайдерских дампов)
-    holders = info.get("holders") or []
-    if holders and isinstance(holders, list):
-        top10_sum = 0.0
-        for h in holders[:10]:
-            pct = _tax_frac(h.get("percent", 0))
-            tag = str(h.get("tag", "")).lower()
-            if "raydium" in tag or "meteora" in tag or "orca" in tag or "pump" in tag or pct > 0.65:
-                continue
-            max_single = float(_cfg("SOLANA_MAX_SINGLE_WHALE_PCT", 0.15))
-            if pct > max_single:
-                return False, f"кит держит {pct*100:.1f}% (>{max_single*100:.0f}%) — риск дампа"
-            top10_sum += pct
-        max_top10 = float(_cfg("SOLANA_MAX_TOP10_PCT", 0.35))
+    # 6. Концентрация у китов и топ-10 холдеров (без AMM-пулов PumpSwap/Meteora/Raydium и CEX)
+    non_pool_pcts = _extract_goplus_non_pool_holders(info)
+    if non_pool_pcts:
+        max_single = float(_cfg("SOLANA_MAX_SINGLE_WHALE_PCT", 0.18))
+        if non_pool_pcts[0] > max_single:
+            return False, f"кит держит {non_pool_pcts[0]*100:.1f}% (>{max_single*100:.0f}%) — риск дампа"
+        top10_sum = sum(non_pool_pcts[:10])
+        max_top10 = float(_cfg("SOLANA_MAX_TOP10_PCT", 0.38))
         if top10_sum > max_top10:
             return False, f"топ-10 китов держат {top10_sum*100:.1f}% (>{max_top10*100:.0f}%) — кабал-риск"
 
@@ -1365,12 +1435,12 @@ async def check_staircase_and_sybil_farm(mint: str, pair_address: str = "", hold
             if isinstance(vals, list) and len(vals) >= 8:
                 sols = [float((acc.get("lamports", 0) if isinstance(acc, dict) else 0) or 0) / 1e9 for acc in vals]
                 max_sol = max(sols) if sols else 0.0
-                dust_cnt = sum(1 for s in sols if s < 0.08)
+                dust_cnt = sum(1 for s in sols if s < 0.010)
                 dust_ratio = dust_cnt / float(len(sols))
-                if max_sol < 0.20 and dust_ratio >= 0.85:
+                if max_sol < 0.035 and dust_ratio >= 0.90:
                     res = (
                         False,
-                        f"sybil-gas-dust-farm: {dust_cnt}/{len(sols)} wallets hold <0.08 SOL (max {max_sol:.3f} SOL — disposable sub-wallets)",
+                        f"sybil-gas-dust-farm: {dust_cnt}/{len(sols)} wallets hold <0.010 SOL (max {max_sol:.3f} SOL — disposable sub-wallets)",
                     )
                     _STAIRCASE_CACHE[cache_key] = (now, res)
                     return res

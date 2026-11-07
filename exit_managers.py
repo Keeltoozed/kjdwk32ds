@@ -47,12 +47,11 @@ class MatureExitManager:
             _peak_age_min = 0.0
 
         # =========================================================================
-        # 1. ФИКСАЦИЯ ПРИБЫЛИ (PROFIT FLOOR & TRAILING STOP ДЛЯ РАКЕТ)
-        # Правило +EV: Не душим монету на старте (+6%..+15%)!
-        # Трейлинг активируется ТОЛЬКО от реального пампа (>= +20%),
-        # а ширина трейлинга (12-18%) позволяет переживать нормальные мем-откаты!
+        # 1. ФИКСАЦИЯ ПРИБЫЛИ (PROFIT FLOOR & TRAILING STOP ДЛЯ РАКЕТ + ЗАЩИТА +8.5%..+12%)
         # =========================================================================
         _is_mb = getattr(position, "is_moonbag", False)
+        _tp1_thr = float(getattr(config, "TP1_TRIGGER_PCT", 0.12))
+        _be_act = float(getattr(config, "BREAKEVEN_PCT", 0.085))
         _floor_pnl = None
         _trail_dist = None
 
@@ -70,31 +69,29 @@ class MatureExitManager:
             _trail_dist = 0.15
         elif max_pnl_pct >= 0.25:
             _floor_pnl = 0.12
-            _trail_dist = 0.12
-        elif _is_mb and max_pnl_pct >= 0.18:
-            # Для мунбэгов после взятого TP1 держим пол +4%
-            _floor_pnl = 0.04
+            _trail_dist = 0.13
+        elif _is_mb and max_pnl_pct >= _tp1_thr:
+            # Для мунбэгов после взятого TP1 (+12%) держим пол +3.0% и просторный трейлинг 14%
+            _floor_pnl = 0.03
             _trail_dist = 0.14
         else:
-            # Монета моложе +25% пика: даем ей расти до TP1 (+18%) и TP2 (+40%)
-            # БЕЗ ложного трейлинг-среза на копеечном 3-4% откате!
             _floor_pnl = None
             _trail_dist = None
 
         if _floor_pnl is not None and minutes_held >= 0.5:
             drop_from_max = (position.max_price_usd - current_price) / position.max_price_usd if position.max_price_usd > 0 else 0.0
 
-            if pnl_pct >= 0.03:
+            if pnl_pct >= 0.025:
                 if _trail_dist is not None and drop_from_max >= _trail_dist and pnl_pct >= _floor_pnl:
                     _tc = int(getattr(position, "mature_trail_confirm", 0) or 0) + 1
                     position.mature_trail_confirm = _tc
                     if _tc >= 2:
-                        return f"Mature Trailing Profit (+{pnl_pct*100:.1f}% locked after peak +{max_pnl_pct*100:.1f}%)"
+                        return f"Mature Trailing Profit ({pnl_pct*100:+.1f}% locked after peak +{max_pnl_pct*100:.1f}%)"
                 elif pnl_pct <= _floor_pnl:
                     _fc = int(getattr(position, "mature_floor_confirm", 0) or 0) + 1
                     position.mature_floor_confirm = _fc
                     if _fc >= 2:
-                        return f"Mature Profit Floor (+{pnl_pct*100:.1f}% locked after peak +{max_pnl_pct*100:.1f}%)"
+                        return f"Mature Profit Floor ({pnl_pct*100:+.1f}% locked after peak +{max_pnl_pct*100:.1f}%)"
                 else:
                     position.mature_trail_confirm = 0
                     position.mature_floor_confirm = 0
@@ -102,21 +99,36 @@ class MatureExitManager:
                 position.mature_trail_confirm = 0
                 position.mature_floor_confirm = 0
 
-            # Если был серьезный пик (>= +18%), но монета полностью сдулась и 3 тика подряд ушла ниже -4.5% — выходим с минимальным риском
-            if max_pnl_pct >= 0.18 and pnl_pct <= -0.045 and minutes_held >= 1.5:
+            # Если был серьезный пик (>= TP1), но монета полностью сдулась и ушла ниже -3.5% — выходим с минимальным риском
+            if max_pnl_pct >= _tp1_thr and pnl_pct <= -0.035 and minutes_held >= 1.0:
                 _pc_cut = int(getattr(position, "post_peak_cut_confirm", 0) or 0) + 1
                 position.post_peak_cut_confirm = _pc_cut
-                if _pc_cut >= 3:
+                if _pc_cut >= 2:
                     return f"Post-Peak Reversal Cut (+{max_pnl_pct*100:.1f}% peak -> {pnl_pct*100:.1f}%)"
             else:
                 position.post_peak_cut_confirm = 0
 
         # =========================================================================
-        # 1.5. БЕЗУБЫТОК ДЛЯ ПОЗИЦИЙ ПОСЛЕ ВЗЯТИЯ TP1
-        # Гарантирует, что монета после частичной прибыли никогда не станет минусом!
+        # 1.4. PRE-TP1 BREAKEVEN SHIELD (ЗАЩИТА СДЕЛОК С ПИКОМ +8.5%..+12%)
+        # Раньше любая сделка с ростом +9%..+17% не имела безубытка и скатывалась до -9%..-14%!
+        # Теперь после достижения +8.5% пика даём монете спокойно дышать выше +2.2%,
+        # но при развороте <= +2.2% (2 тика подряд) закрываем сделку в гарантированный плюс!
         # =========================================================================
-        if _is_mb and max_pnl_pct >= 0.18 and pnl_pct <= 0.02:
-            return f"Mature Breakeven (+{pnl_pct*100:.1f}% locked after TP1)"
+        if not _is_mb and max_pnl_pct >= _be_act and minutes_held >= 0.65:
+            if pnl_pct <= 0.022:
+                _pbe = int(getattr(position, "pre_tp_be_confirm", 0) or 0) + 1
+                position.pre_tp_be_confirm = _pbe
+                if _pbe >= 2 or pnl_pct <= -0.025:
+                    return f"Mature Breakeven Shield ({pnl_pct*100:+.1f}% locked after peak +{max_pnl_pct*100:.1f}%)"
+            else:
+                position.pre_tp_be_confirm = 0
+
+        # =========================================================================
+        # 1.5. БЕЗУБЫТОК ДЛЯ ПОЗИЦИЙ ПОСЛЕ ВЗЯТИЯ TP1
+        # Гарантирует, что монета после частичной фиксации (+12%) никогда не уйдёт в минус!
+        # =========================================================================
+        if _is_mb and max_pnl_pct >= _tp1_thr and pnl_pct <= 0.025:
+            return f"Mature Breakeven ({pnl_pct*100:+.1f}% locked after TP1)"
 
         # =========================================================================
         # 2. PRE-DUMP FRONT-RUNNER (Выход при развороте стакана ТОЛЬКО при солидной прибыли >= +15%)
@@ -139,8 +151,14 @@ class MatureExitManager:
         # =========================================================================
         _emerg_cap = -abs(float(getattr(config, "EMERGENCY_CAP_PCT", -0.22)))
         if pnl_pct <= _emerg_cap:
-            if minutes_held >= 0.50 or pnl_pct <= -0.28:
+            _em_c = int(getattr(position, "emerg_confirm_n", 0) or 0) + 1
+            position.emerg_confirm_n = _em_c
+            # На 0-й минуте требуем минимум 2 тика подтверждения (или обвал <= -55%),
+            # чтобы 1 отстающий тик DexScreener не закрывал живую сделку в -31% за 0м (кейс Burn)
+            if pnl_pct <= -0.55 or (minutes_held >= 0.50 and _em_c >= 2) or _em_c >= 3:
                 return f"Mature Emergency Cap ({pnl_pct*100:.1f}%)"
+        else:
+            position.emerg_confirm_n = 0
 
         _sl = -abs(float(getattr(config, 'STOP_LOSS_PCT', 0.15)))
         if pnl_pct <= _sl and minutes_held >= 0.75:
@@ -154,9 +172,17 @@ class MatureExitManager:
         # =========================================================================
         # 4. ВЫХОД ПО СТАГНАЦИИ
         # =========================================================================
-        _stall_sec = float(getattr(config, "STALL_TIMER_SEC", 600.0))
-        _stall_loss = float(getattr(config, "STALL_MAX_LOSS_PCT", -0.10))
-        if minutes_held >= (_stall_sec / 60.0) and max_pnl_pct < 0.05 and pnl_pct <= _stall_loss:
+        _stall_sec = float(getattr(config, "STALL_TIMER_SEC", 360.0))
+        _stall_loss = float(getattr(config, "STALL_MAX_LOSS_PCT", -0.095))
+        _buyers_active_stall = False
+        if isinstance(_pd, dict) and _pd:
+            _tx_st = (_pd.get("txns") or {}).get("m5") or {}
+            _b_st = int(_tx_st.get("buys", 0) or 0)
+            _s_st = int(_tx_st.get("sells", 0) or 0)
+            if _b_st >= 25 and _b_st >= _s_st * 1.20:
+                _buyers_active_stall = True
+        _eff_stall_sec = (_stall_sec + 180.0) if _buyers_active_stall else _stall_sec
+        if minutes_held >= (_eff_stall_sec / 60.0) and max_pnl_pct < 0.05 and pnl_pct <= _stall_loss:
             return f"Dead Momentum Stall ({minutes_held*60:.0f}s no breakout, pnl {pnl_pct*100:.1f}%)"
 
         _loss_min = float(getattr(config, 'STAGNANT_LOSS_MIN', 12.0))

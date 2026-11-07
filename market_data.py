@@ -58,7 +58,7 @@ async def _gt_get(path: str, retries: int = 0, timeout: int = 6):
         return {}  # Circuit breaker open: fail-fast
 
     async with _get_lock():
-        wait_s = 2.4 - (time.monotonic() - _last_call)
+        wait_s = 2.8 - (time.monotonic() - _last_call)
         if wait_s > 0:
             await asyncio.sleep(wait_s)
         _last_call = time.monotonic()
@@ -316,7 +316,17 @@ async def get_token_data(mint: str, max_cache_age: float = TD_TTL) -> dict:
         if len(_TD_CACHE) > 2000:
             _TD_CACHE.clear()
         return jup
-    # 3. GeckoTerminal целиком (старая логика)
+    # 3. GeckoTerminal целиком (только если это не сырая неиндексированная кривая pump.fun)
+    import config as _md_cfg
+    if mint.endswith("pump") and not getattr(_md_cfg, "ALLOW_UNGRADUATED_PUMPFUN", False):
+        _is_grad_md = False
+        try:
+            from birth_tracker import birth_tracker as _bt_md
+            _is_grad_md = mint in getattr(_bt_md, "_graduated", {})
+        except Exception:
+            pass
+        if not _is_grad_md:
+            return ds or {}
     d = await _gt_get(f"/networks/solana/tokens/{mint}?include=top_pools")
     try:
         data = d.get("data", {})
@@ -451,18 +461,24 @@ async def _jup_v3_bulk_prices(mints: list) -> dict:
         chunk = [m for m in mints[i:i + 50] if m and not m.startswith("0x")]
         if not chunk:
             continue
-        url = f"https://api.jup.ag/price/v3?ids={','.join(chunk)}"
-        try:
-            status, data = await fetch_json(url, headers=headers, timeout=2.5, retries=0)
-            if status == 200 and isinstance(data, dict):
-                for m in chunk:
-                    entry = data.get(m)
-                    if isinstance(entry, dict):
-                        px = float(entry.get("usdPrice") or entry.get("price") or 0.0)
-                        if px > 0.0:
-                            out[m] = px
-        except Exception:
-            pass
+        ids_q = ",".join(chunk)
+        for j_host, use_key in (("https://api.jup.ag", True), ("https://lite-api.jup.ag", False)):
+            url = f"{j_host}/price/v3?ids={ids_q}"
+            req_hdrs = headers if use_key else {"Accept": "application/json"}
+            try:
+                status, data = await fetch_json(url, headers=req_hdrs, timeout=2.5, retries=0)
+                if status == 200 and isinstance(data, dict):
+                    for m in chunk:
+                        entry = data.get(m)
+                        if isinstance(entry, dict):
+                            px = float(entry.get("usdPrice") or entry.get("price") or 0.0)
+                            if px > 0.0:
+                                out[m] = px
+                    break
+                if status not in (429, 401, 403):
+                    break
+            except Exception:
+                continue
     return out
 
 
@@ -764,12 +780,12 @@ async def fetch_dexscreener_gainers(timeframe: str = "5m", network: str = "all")
     cache_key = f"{tf}:{net}"
     now = time.time()
     hit = _gainers_cache.get(cache_key)
-    if hit and (now - hit[0]) < 25.0:
+    if hit and (now - hit[0]) < 60.0:
         return hit[1]
 
     pools = []
     gt_net = {"solana": "solana", "base": "base", "robinhood": "robinhood", "bsc": "bsc", "ethereum": "eth"}.get(net, net)
-    for page in (1, 2, 3):
+    for page in (1, 2):
         path = f"/networks/trending_pools?duration={tf}&page={page}" if net == "all" else f"/networks/{gt_net}/trending_pools?duration={tf}&page={page}"
         data = await _gt_get(path, retries=0)
         if data and isinstance(data, dict):

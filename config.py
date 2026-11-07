@@ -60,9 +60,9 @@ INFANT_WINDOW_MIN = 1.0
 INFANT_DUMP_PCT = -0.32
 
 # === ФИЛЬТРЫ ВХОДА (ОТСЕКАЮТ ВЕРШИНЫ И ПАДАЮЩИЕ НОЖИ) ===
-MAX_ENTRY_H1_PCT = 320.0       # Запрет входа в перегретые пампы > +320% за 1ч
-MAX_ENTRY_M5_PCT = 95.0        # Запрет входа на экстремальной 5м свече > +95% без прорывного объема
-MAX_ENTRY_M1_PCT = 20.0        # Запрет входа на вертикальной 1м свече > +20%
+MAX_ENTRY_H1_PCT = 360.0       # Запрет входа в перегретые пампы > +360% за 1ч
+MAX_ENTRY_M5_PCT = 110.0       # Запрет входа на экстремальной 5м свече > +110% без прорывного объема
+MAX_ENTRY_M1_PCT = 28.0        # Разрешаем живой 1м импульс пробоя до +28% (COGE +330%), режем только blow-off свечи
 REQUIRE_SOCIALS_MIN_AGE_MIN = 8.0
 
 STREAK_COOLDOWN_ENABLED = False
@@ -106,18 +106,18 @@ VIP_ENTRIES_ENABLED = False
 TIME_EXIT_MINUTES = 40
 TIME_EXIT_PROFIT_REQ = 0.015
 
-# === ЛЕСТНИЦА ТЕЙК-ПРОФИТОВ (+EV АСИММЕТРИЯ: R:R > 3.0x) ===
+# === ЛЕСТНИЦА ТЕЙК-ПРОФИТОВ (+EV АСИММЕТРИЯ: ГАРАНТИРОВАННЫЙ ПЛЮС + МУНБЭГ) ===
 PARTIAL_TP_ENABLED = True
-TP1_TRIGGER_PCT = 0.18          # На +18% фиксируем 50% позиции (гарантирует профит и перевод остатка в безубыток!)
+TP1_TRIGGER_PCT = 0.12          # На +12% фиксируем 50% позиции (забираем живой плюс и переводим остаток в безубыток +2.5%!)
 TP1_SELL_FRAC = 0.50
-TP2_TRIGGER_PCT = 0.40          # На +40% фиксируем еще 25% позиции
-TP2_SELL_FRAC = 0.25
-TP3_TRIGGER_PCT = 1.00          # На +100% (2x) фиксируем 15% позиции
-TP3_SELL_FRAC = 0.15
-TP4_TRIGGER_PCT = 3.00          # На +300% (4x) фиксируем 5%
-TP4_SELL_FRAC = 0.05
-TP5_TRIGGER_PCT = 10.00         # На +1000% (11x) фиксируем 5%
-TP5_SELL_FRAC = 0.05
+TP2_TRIGGER_PCT = 0.28          # На +28% фиксируем 40% от остатка (20% исходной позиции)
+TP2_SELL_FRAC = 0.40
+TP3_TRIGGER_PCT = 0.75          # На +75% фиксируем 50% от остатка (15% исходной позиции)
+TP3_SELL_FRAC = 0.50
+TP4_TRIGGER_PCT = 2.00          # На +200% (3x) фиксируем 50% от остатка
+TP4_SELL_FRAC = 0.50
+TP5_TRIGGER_PCT = 6.00          # На +600% (7x) фиксируем 50% от остатка
+TP5_SELL_FRAC = 0.50
 MOONBAG_TRIGGER_PCT = 999.0
 MOONBAG_SELL_FRAC = 0.0
 
@@ -128,8 +128,8 @@ ROCKET_XGB_STAGE1_THRESHOLD = 10.0  # Первичный отсев заведо
 ROCKET_XGB_FINAL_THRESHOLD = 13.5   # Финальный порог с реальными ончейн-холдерами (баланс качества и частоты входов)
 ROCKET_XGB_THRESHOLD = 12.0
 
-STALL_TIMER_SEC = 270.0   # 4.5 минуты на консолидацию (не держим дохлый флет 10 минут, спасает от затяжных сливов как SLINGFOLIO -18%)
-STALL_MAX_LOSS_PCT = -0.09
+STALL_TIMER_SEC = 360.0   # 6.0 минут (полное закрытие 5м свечи перед срезом флета)
+STALL_MAX_LOSS_PCT = -0.095
 
 TRAILING_ACTIVATION_PCT = 0.15
 TRAILING_DISTANCE_PCT = 0.06
@@ -140,7 +140,7 @@ WHALE_DUMP_GUARD_PCT = 0.22
 EVM_RUNNER_CRASH = 0.25
 EVM_NORMAL_CRASH = 0.22
 
-BREAKEVEN_PCT = 0.09
+BREAKEVEN_PCT = 0.085     # После +8.5% пика включается Pre-TP1 Breakeven Shield (+2.2% пол) — зеленые сделки больше не превращаются в минусы!
 
 PREFETCH_TTL_SEC = 35
 SOLANA_MIN_AGE_MIN = 0.5        # Разрешаем молодые ракеты от 30 секунд (LEMON +406%, SHADOW +195%)
@@ -190,7 +190,7 @@ JEV_MAX_DEV_STILL_LOADED = 0.35
 
 JEV_BID_THE_FLUSH_ENABLED = True
 JEV_STOP_UNDER_WICK_ENABLED = True
-JEV_MAX_M1_ENTRY_PCT = 20.0      # Не влетаем в экстремальные 1м свечи > +20%
+JEV_MAX_M1_ENTRY_PCT = 28.0      # Разрешаем пробойные 1м свечи до +28% (до +35% при сильном объеме), не блокируя живой старт ракет
 JEV_DEFAULT_WICK_STOP_PCT = -0.125
 
 BIRDEYE_API_KEY = os.getenv("BIRDEYE_API_KEY", "")

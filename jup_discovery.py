@@ -14,10 +14,11 @@ import config
 from http_client import fetch_json
 
 BASE = "https://api.jup.ag/tokens/v2"
+LITE_BASE = "https://lite-api.jup.ag/tokens/v2"
 
 _cache = []
 _cache_time = 0.0
-CACHE_TTL = 30
+CACHE_TTL = 40
 SKIP_SYMBOLS = {
     "SOL", "WSOL", "USDC", "USDT", "USDG", "EURC", "CBBTC", "WBTC", "WETH", "JLP", "PYTH", "JUP", "NEAR",
     "ZEC", "WNEAR", "CARDS", "PUMP", "HYPE", "ZEREBRO", "TTWO", "SPCX", "SPYX", "TSLAX", "NVDAX", "GROKIUS",
@@ -68,26 +69,23 @@ async def fetch_jup_tokens() -> list:
     if time.time() - _cache_time < CACHE_TTL and _cache:
         return _cache
     
-    trending_url = f"{BASE}/toptrending/5m?limit=100"
-    trending_1h_url = f"{BASE}/toptrending/1h?limit=100"
-    trending_24h_url = f"{BASE}/toptrending/24h?limit=100"
-    organic_url = f"{BASE}/toporganicscore/5m?limit=100"
-    organic_1h_url = f"{BASE}/toporganicscore/1h?limit=100"
-    top_vol_url = f"{BASE}/toptraded/5m?limit=100"
-    top_vol_1h_url = f"{BASE}/toptraded/1h?limit=100"
-    recent_url = f"{BASE}/recent"
-    
     headers = _headers()
-    (s1, d1), (s1h, d1h), (s24h, d24h), (s_org, d_org), (s_org1h, d_org1h), (s3, d3), (s3h, d3h), (s2, d2) = await asyncio.gather(
-        fetch_json(trending_url, headers=headers, timeout=8),
-        fetch_json(trending_1h_url, headers=headers, timeout=8),
-        fetch_json(trending_24h_url, headers=headers, timeout=8),
-        fetch_json(organic_url, headers=headers, timeout=8),
-        fetch_json(organic_1h_url, headers=headers, timeout=8),
-        fetch_json(top_vol_url, headers=headers, timeout=8),
-        fetch_json(top_vol_1h_url, headers=headers, timeout=8),
-        fetch_json(recent_url, headers=headers, timeout=8),
+    # 4 самых сигнальных эндпоинта (вместо 8 одновременных запросов, вызывавших 429 без платного ключа)
+    (s1, d1), (s_org, d_org), (s3, d3), (s2, d2) = await asyncio.gather(
+        fetch_json(f"{BASE}/toptrending/5m?limit=100", headers=headers, timeout=8, retries=0),
+        fetch_json(f"{BASE}/toporganicscore/5m?limit=100", headers=headers, timeout=8, retries=0),
+        fetch_json(f"{BASE}/toptraded/5m?limit=100", headers=headers, timeout=8, retries=0),
+        fetch_json(f"{BASE}/recent", headers=headers, timeout=8, retries=0),
     )
+    # Авто-фоллбэк на бесплатный lite-api.jup.ag при 429/401/403 на основном хосте
+    if s1 in (429, 401, 403) and s_org in (429, 401, 403):
+        (s1, d1), (s_org, d_org), (s3, d3), (s2, d2) = await asyncio.gather(
+            fetch_json(f"{LITE_BASE}/toptrending/5m?limit=100", timeout=8, retries=0),
+            fetch_json(f"{LITE_BASE}/toporganicscore/5m?limit=100", timeout=8, retries=0),
+            fetch_json(f"{LITE_BASE}/toptraded/5m?limit=100", timeout=8, retries=0),
+            fetch_json(f"{LITE_BASE}/recent", timeout=8, retries=0),
+        )
+    s1h, d1h, s24h, d24h, s_org1h, d_org1h, s3h, d3h = 0, None, 0, None, 0, None, 0, None
     
     ranked = []
     seen = set()
@@ -118,7 +116,7 @@ async def fetch_jup_tokens() -> list:
                 continue
             _is_fresh_jup = m.endswith("pump") or age_m < 90.0
             _max_pc1h = 3500.0 if (_is_fresh_jup and pc5 >= 2.0) else 400.0
-            if pc1h > _max_pc1h or pc1h < -35.0:
+            if pc1h > _max_pc1h or (pc1h < -35.0 and pc5 < 15.0):
                 continue
             if pc5 < min_pc5 or vol5 < 350.0:
                 continue
@@ -176,43 +174,22 @@ async def fetch_jup_tokens() -> list:
             ranked.append((pc5, 0.0, sym, m, "recent"))
             
     if not ranked:
-        # Fallback для датацентров (Render), если Jupiter API вернул 401/403/пусто без ключа:
-        # добираем 5m тренды и новые пулы Solana через GeckoTerminal
-        print(f"⚠️ [JUPITER] API вернул статусы ({s1}, {s2}, {s3}). Включаю fallback GT duration=5m + new_pools...")
+        # Fallback через DexScreener boosts/profiles (300 RPM, без добивания лимита GeckoTerminal 429!)
+        print(f"⚠️ [JUPITER] API вернул статусы ({s1}, {s2}, {s3}). Добираем пул через DexScreener Solana boosts/profiles...")
         try:
-            from market_data import _gt_get
-            gt_data5 = await _gt_get("/networks/solana/trending_pools?duration=5m", retries=0, timeout=6)
-            for item in ((gt_data5 or {}).get("data") or []):
-                bid = item.get("relationships", {}).get("base_token", {}).get("data", {}).get("id", "")
-                addr = bid.split("_", 1)[1] if "_" in bid else ""
-                dex_gt = str(((item.get("relationships") or {}).get("dex") or {}).get("data", {}).get("id") or "").lower()
-                if "pumpswap" in dex_gt and not addr.endswith("pump"):
-                    continue
-                attrs = item.get("attributes") or {}
-                sym = str(attrs.get("name") or "").upper().strip()
-                if not addr or addr.startswith("0x") or len(addr) < 32 or len(addr) > 44 or addr in seen or any(s in sym for s in SKIP_SYMBOLS):
-                    continue
-                seen.add(addr)
-                pc = attrs.get("price_change_percentage") or {}
-                m5_c = float(pc.get("m5") or 0)
-                ranked.append((m5_c, 0.0, sym, addr, "gt_trending_5m"))
-            gt_data_new = await _gt_get("/networks/solana/new_pools", retries=0, timeout=6)
-            for item in ((gt_data_new or {}).get("data") or []):
-                bid = item.get("relationships", {}).get("base_token", {}).get("data", {}).get("id", "")
-                addr = bid.split("_", 1)[1] if "_" in bid else ""
-                dex_gt = str(((item.get("relationships") or {}).get("dex") or {}).get("data", {}).get("id") or "").lower()
-                if "pumpswap" in dex_gt and not addr.endswith("pump"):
-                    continue
-                attrs = item.get("attributes") or {}
-                sym = str(attrs.get("name") or "").upper().strip()
-                if not addr or addr.startswith("0x") or len(addr) < 32 or len(addr) > 44 or addr in seen or any(s in sym for s in SKIP_SYMBOLS):
-                    continue
-                seen.add(addr)
-                pc = attrs.get("price_change_percentage") or {}
-                m5_c = float(pc.get("m5") or 0)
-                ranked.append((m5_c, 0.0, sym, addr, "gt_new_pools"))
+            for ds_url in (config.DEXSCREENER_LATEST, config.DEXSCREENER_PROFILES):
+                st_ds, d_ds = await fetch_json(ds_url, timeout=6, retries=0)
+                if st_ds == 200 and isinstance(d_ds, list):
+                    for item in d_ds:
+                        if item.get("chainId") != "solana":
+                            continue
+                        addr = str(item.get("tokenAddress") or "").strip()
+                        if not addr or addr.startswith("0x") or len(addr) < 32 or len(addr) > 44 or addr in seen:
+                            continue
+                        seen.add(addr)
+                        ranked.append((3.0, 0.0, addr[:6], addr, "ds_boost"))
         except Exception as e:
-            print(f"⚠️ [JUPITER-FALLBACK] ошибка GT: {e}")
+            print(f"⚠️ [JUPITER-FALLBACK] ошибка DS: {e}")
 
     out = [m for _, _, _, m, _ in ranked][:120]
     _cache, _cache_time = out, time.time()
@@ -277,13 +254,16 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
     _pc_j = (td or {}).get("priceChange") or {}
     _m5_j = float(_pc_j.get("m5", 0) or 0)
     _m1_j = float(_pc_j.get("m1", 0) or 0)
+    if abs(_m1_j) > max(180.0, abs(_m5_j) * 3.0 + 40.0):
+        _m1_j = _m5_j / 5.0
     _h1_j = float(_pc_j.get("h1", 0) or 0)
-    _is_fresh_j = mint.endswith("pump") or _age_j <= 90.0
-    _max_h1_j = 3500.0 if (_is_fresh_j and _m5_j >= 2.5) else 400.0
+    _is_fresh_j = mint.endswith(("pump", "bonk", "BAGS")) or _age_j <= 90.0
+    _max_h1_j = 3500.0 if (_is_fresh_j and _m5_j >= 2.5) else float(getattr(config, "MAX_ENTRY_H1_PCT", 360.0))
     if _h1_j > _max_h1_j:
         print(f"🚫 [{source_tag}-H1-EXHAUSTED] {_sym_tmp} ({mint[:8]}): h1 {_h1_j:+.0f}% > +{_max_h1_j:.0f}% — памп уже отработал, вход = вершина.")
         return False
-    if _m5_j < 1.0 or _m1_j < -6.0:
+    _min_m1_j = -2.8 if _m5_j < 12.0 else -6.0
+    if _m5_j < 1.5 or _m1_j < _min_m1_j:
         print(f"🚫 [{source_tag}-MOMENTUM-LOST] {_sym_tmp} ({mint[:8]}): импульс пропал (m5 {_m5_j:+.1f}%, m1 {_m1_j:+.1f}%) — отмена входа.")
         return False
     _pk_drop_j = float((td or {}).get("_drop_from_peak_5m", 0.0) or 0.0)
@@ -324,8 +304,8 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
     jup_price = await JupiterAPI.get_price(mint)
     if ds_price > 0 and jup_price and jup_price > 0:
         ratio = max(ds_price, jup_price) / min(ds_price, jup_price)
-        if ratio > 1.25:
-            print(f"🚫 [{source_tag}-PRICE-MISMATCH] {_sym_tmp} ({mint[:8]}): Jupiter (${jup_price:.8f}) vs Dex (${ds_price:.8f}) расхождение {ratio:.1f}x — блок.")
+        if ratio > 1.09:
+            print(f"🚫 [{source_tag}-PRICE-MISMATCH] {_sym_tmp} ({mint[:8]}): Jupiter (${jup_price:.8f}) vs Dex (${ds_price:.8f}) расхождение {ratio:.2f}x (>1.09x) — блок от ложного стопа.")
             return False
         if jup_price < ds_price * 0.90:
             analyzer._deny(mint, "jup-live-dump >10%", f"🚫 [{source_tag}-LIVE-DUMP] {_sym_tmp} ({mint[:8]}): живая котировка Jupiter (${jup_price:.8f}) уже ниже DexScreener (${ds_price:.8f}) на {(1.0 - jup_price/ds_price)*100:.1f}% [>10%] — слив в процессе!")
@@ -358,8 +338,8 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
     _h1_j = float(((td or {}).get("priceChange") or {}).get("h1", 0) or 0)
     _c_at_j = (td or {}).get("pairCreatedAt") or 0
     _age_j = ((time.time() * 1000 - _c_at_j) / 60000.0) if _c_at_j else 30.0
-    _max_h1_cfg = float(getattr(config, "MAX_ENTRY_H1_PCT", 120.0))
-    _max_m5_cfg = float(getattr(config, "MAX_ENTRY_M5_PCT", 95.0))
+    _max_h1_cfg = float(getattr(config, "MAX_ENTRY_H1_PCT", 360.0))
+    _max_m5_cfg = float(getattr(config, "MAX_ENTRY_M5_PCT", 110.0))
     _req_soc_age = float(getattr(config, "REQUIRE_SOCIALS_MIN_AGE_MIN", 20.0))
     _vm5_j = float(((td or {}).get("volume") or {}).get("m5", 0) or 0)
     _b5_j = int((((td or {}).get("txns") or {}).get("m5") or {}).get("buys", 0) or 0)
@@ -367,12 +347,13 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
     _liq_j = float(((td or {}).get("liquidity") or {}).get("usd", 0) or 0)
 
     if _m5_j > _max_m5_cfg:
-        _is_breakout = (_vm5_j >= 12000.0 and _b5_j >= _s5_j * 1.25 and _m5_j <= 130.0)
+        _is_breakout = (_vm5_j >= 10000.0 and _b5_j >= _s5_j * 1.20 and _m5_j <= 165.0)
         if not _is_breakout:
             print(f"🚫 [{source_tag}-FOMO-M5] {_sym_tmp}: m5 +{_m5_j:.1f}% > +{_max_m5_cfg:.0f}% без прорывного объема — отмена!")
             return False
-    if _h1_j > _max_h1_cfg and _age_j >= 10.0:
-        print(f"🚫 [{source_tag}-FOMO-H1] {_sym_tmp}: h1 +{_h1_j:.0f}% > +{_max_h1_cfg:.0f}% — перегретый часовой памп, отмена!")
+    _eff_max_h1_j = 3500.0 if (mint.endswith(("pump", "bonk", "BAGS")) or _age_j <= 90.0) else _max_h1_cfg
+    if _h1_j > _eff_max_h1_j and _age_j >= 10.0:
+        print(f"🚫 [{source_tag}-FOMO-H1] {_sym_tmp}: h1 +{_h1_j:.0f}% > +{_eff_max_h1_j:.0f}% — перегретый часовой памп, отмена!")
         return False
     _links_j = len((td or {}).get("info", {}).get("socials", []) or []) + len((td or {}).get("info", {}).get("websites", []) or [])
     _soc_unk_j = bool((td or {}).get("_socials_unknown", False))
@@ -597,8 +578,8 @@ async def jup_loop(analyzer, tracker):
                             processed[m] = _now_t + 120
                             continue
 
-                        # Отсекаем флет m5 < 2.0%
-                        if _m5 < 2.0:
+                        # Отсекаем флет m5 < 1.8%
+                        if _m5 < 1.8:
                             skipped_flat += 1
                             processed[m] = _now_t + 90
                             continue

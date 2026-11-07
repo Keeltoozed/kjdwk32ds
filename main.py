@@ -319,16 +319,16 @@ async def position_manager_loop(analyzer, tracker):
                 # === ИНТЕГРАЦИЯ МАТЕМАТИКИ ДЛЯ ЗРЕЛЫХ МОНЕТ (SWING TRADING / RIDE RUNNERS) ===
                 # Исполняется ДО скальперских Early Fade / Stagnant срезов, чтобы ракеты ехали по MatureExitManager!
                 # === ИНТЕГРАЦИЯ МАТЕМАТИКИ ДЛЯ ВСЕХ ПОЗИЦИЙ SOLANA (main.py строки 240-280) ===
-                _tp1_sol_thr = float(getattr(config, "TP1_TRIGGER_PCT", 0.18))
+                _tp1_sol_thr = float(getattr(config, "TP1_TRIGGER_PCT", 0.12))
                 _tp1_sell = float(getattr(config, "TP1_SELL_FRAC", 0.50))
-                _tp2 = float(getattr(config, "TP2_TRIGGER_PCT", 0.40))
-                _tp2_sell = float(getattr(config, "TP2_SELL_FRAC", 0.25))
-                _tp3 = float(getattr(config, "TP3_TRIGGER_PCT", 1.00))
-                _tp3_sell = float(getattr(config, "TP3_SELL_FRAC", 0.15))
-                _tp4 = float(getattr(config, "TP4_TRIGGER_PCT", 3.00))
-                _tp4_sell = float(getattr(config, "TP4_SELL_FRAC", 0.05))
-                _tp5 = float(getattr(config, "TP5_TRIGGER_PCT", 10.00))
-                _tp5_sell = float(getattr(config, "TP5_SELL_FRAC", 0.05))
+                _tp2 = float(getattr(config, "TP2_TRIGGER_PCT", 0.28))
+                _tp2_sell = float(getattr(config, "TP2_SELL_FRAC", 0.40))
+                _tp3 = float(getattr(config, "TP3_TRIGGER_PCT", 0.75))
+                _tp3_sell = float(getattr(config, "TP3_SELL_FRAC", 0.50))
+                _tp4 = float(getattr(config, "TP4_TRIGGER_PCT", 2.00))
+                _tp4_sell = float(getattr(config, "TP4_SELL_FRAC", 0.50))
+                _tp5 = float(getattr(config, "TP5_TRIGGER_PCT", 6.00))
+                _tp5_sell = float(getattr(config, "TP5_SELL_FRAC", 0.50))
                 if True:
                     if getattr(config, "PARTIAL_TP_ENABLED", True) and pnl_pct >= _tp1_sol_thr and not getattr(position, "tp1_done", False):
                         tracker.partial_close_position(mint, current_price, _tp1_sell, f"Take Profit +{_tp1_sol_thr*100:.0f}% (Tier-1 {int(_tp1_sell*100)}%)")
@@ -356,12 +356,30 @@ async def position_manager_loop(analyzer, tracker):
                         position.tp5_done = True
                         position.last_tp_ts = time.time()
                         continue
-                    # Даем 15 секунд передышки после взятия частичного тейка, чтобы не закрыть мунбэг на том же секундном тике (кейс AMD +171%)
-                    if (time.time() - float(getattr(position, "last_tp_ts", 0.0) or 0.0)) < 15.0 and pnl_pct > -0.08:
+                    # Даем 5 секунд передышки после взятия частичного тейка ТОЛЬКО пока позиция уверенно в плюсе (>= +4.5%),
+                    # чтобы никогда не блокировать Mature Breakeven при резком откате к цене входа!
+                    if (time.time() - float(getattr(position, "last_tp_ts", 0.0) or 0.0)) < 5.0 and pnl_pct >= 0.045:
                         continue
                     from exit_managers import MatureExitManager
                     mature_exit_reason = MatureExitManager.evaluate_exit(position, current_price)
                     if mature_exit_reason:
+                        # Защита от ложного 0м стопа из-за лагающего тика DexScreener / побочного пула (кейс Burn -31% за 0м):
+                        # если в первые 2 минуты сработал Emergency Cap / Stop Loss, сверяем с живой ончейн-котировкой Jupiter!
+                        if minutes_held < 2.0 and pnl_pct <= -0.12 and ("Emergency Cap" in mature_exit_reason or "Stop Loss" in mature_exit_reason):
+                            try:
+                                from jupiter import JupiterAPI
+                                _live_em_px = await JupiterAPI.get_price(mint)
+                                if _live_em_px and _live_em_px > 0 and position.entry_price_usd > 0:
+                                    _live_em_pnl = (_live_em_px - position.entry_price_usd) / position.entry_price_usd
+                                    if _live_em_pnl > -0.11:
+                                        print(f"🛡️ [EARLY-EXIT-RESCUED] {position.symbol} ({mint[:8]}): ложный тик {pnl_pct*100:+.1f}%, живой Jupiter ${_live_em_px:.8f} ({_live_em_pnl*100:+.1f}%) — позиция спасена!")
+                                        position.current_price_usd = _live_em_px
+                                        position.emerg_confirm_n = 0
+                                        position.sl_confirm_n = 0
+                                        continue
+                                    current_price = _live_em_px
+                            except Exception:
+                                pass
                         tracker.close_position(mint, current_price, mature_exit_reason)
                     continue
                     
@@ -896,6 +914,8 @@ async def scanner_loop(analyzer, tracker):
                             _sig = str(analyzer.get_signal(mint) or "")
                             if "откат" in _sig or "вертикаль" in _sig or mint in _graduated_set:
                                 processed_mints[mint] = time.time() - _cd + 35  # Перепроверить через 35с
+                            elif "ungraduated" in _sig or "bonding curve" in _sig or "CURVE" in _sig:
+                                processed_mints[mint] = time.time() + 60        # Сырая кривая: ждём 60с (при миграции _graduated_set пробьёт сразу)
                             elif "dead-token" in _sig or "мёртвый токен" in _sig:
                                 processed_mints[mint] = time.time() + 3600      # Мертвый токен: скип на 1 час
                             else:
@@ -973,7 +993,7 @@ async def scanner_loop(analyzer, tracker):
                                 _vol5_live = float(((pair_data.get("volume") or {}).get("m5", 0) or 0))  # FIX: объявлено до первого использования (был UnboundLocalError при m5 > MAX_ENTRY_M5_PCT)
 
                                 # Повторная проверка живых метрик после сброса prefetch-кэша (защита от реального разворота вниз)
-                                if _m5_live < 1.0 or _m1_live < -8.0:
+                                if _m5_live < 1.0 or _m1_live < -4.5:
                                     print(f"🚫 [SCANNER-LIVE-REVERSAL] {actual_symbol} ({mint[:8]}): на живом графике импульс сломан (m5 {_m5_live:+.1f}%, m1 {_m1_live:+.1f}%) — отмена покупки!")
                                     continue
                                 _max_m5_cfg = float(getattr(config, "MAX_ENTRY_M5_PCT", 95.0))
@@ -988,18 +1008,18 @@ async def scanner_loop(analyzer, tracker):
                                 _soc_unk_sc = bool(pair_data.get("_socials_unknown", False))
                                 _b5_sc = int((pair_data.get("txns") or {}).get("m5", {}).get("buys", 0) or 0)
                                 _s5_sc = int((pair_data.get("txns") or {}).get("m5", {}).get("sells", 0) or 0)
-                                _is_stealth_sc = (_vol5_live >= 6000.0 and _b5_sc >= 20 and _b5_sc >= _s5_sc * 1.15)
-                                _max_h1_live = float(getattr(config, "MAX_ENTRY_H1_PCT", 320.0))
-                                if _links_sc == 0 and not _soc_unk_sc and not _is_stealth_sc and (_h1_live > 140.0 or _m5_live > 95.0):
+                                _is_stealth_sc = (_vol5_live >= 4500.0 and _b5_sc >= 20 and _b5_sc >= _s5_sc * 1.15 and liq_usd >= 12000.0)
+                                _max_h1_live = float(getattr(config, "MAX_ENTRY_H1_PCT", 360.0))
+                                if _links_sc == 0 and not _soc_unk_sc and not _is_stealth_sc and (_h1_live > 180.0 or _m5_live > 110.0):
                                     print(f"🚫 [SCANNER-FOMO-NO-SOC] {actual_symbol} ({mint[:8]}): памп (h1 +{_h1_live:.0f}%, m5 +{_m5_live:.0f}%) без соцсетей — ловушка памп-дампа дева, отмена!")
                                     continue
                                 if _h1_live > _max_h1_live:
-                                    if _age_m >= 12.0 or (_vol5_live < 35000.0 and _h1_live > 350.0):
+                                    if _age_m >= 12.0 or (_vol5_live < 35000.0 and _h1_live > 380.0):
                                         print(f"🚫 [SCANNER-LIVE-EXHAUSTED] {actual_symbol} ({mint[:8]}): живой h1 {_h1_live:+.0f}% > +{_max_h1_live:.0f}% — перегретая вершина, отмена!")
                                         continue
                                 # СТАЛО (в main.py строки 506-524):
-                                if _pk_drop_live <= -28.0 or _lq_drop_live <= -30.0:
-                                    print(f"🚫 [SCANNER-POST-PEAK] {actual_symbol} ({mint[:8]}): токен слился от пика ({_pk_drop_live:+.1f}%) — отмена!")
+                                if _pk_drop_live <= -18.0 or _lq_drop_live <= -18.0:
+                                    print(f"🚫 [SCANNER-POST-PEAK] {actual_symbol} ({mint[:8]}): токен слился от пика (цена {_pk_drop_live:+.1f}%, ликва {_lq_drop_live:+.1f}%) — отмена!")
                                     continue
 
                                 _max_age_live = float(getattr(config, "SOLANA_MAX_AGE_MIN", 360.0))
@@ -1020,12 +1040,20 @@ async def scanner_loop(analyzer, tracker):
                                     else:
                                         print(f"💎 [SCANNER-ORGANIC-STEALTH] {actual_symbol} ({mint[:8]}): 0 соцсетей, но подтвержден органический прорыв — пропуск в анализ.")
 
-                                # Защита от фейковых bump-ботов (ELON, Trump, Amazon, MrBeast, Microsoft):
+                                # Защита от фейковых bump-ботов (не блокируем глубокие пулы мигрировавших pump/bonk/BAGS с живым объемом покупателей, кейсы VETO $74k liq, CAT $48k liq):
                                 _tx5_sc = (pair_data.get("txns") or {}).get("m5", {}) or {}
-                                _tot_tx5_sc = int(_tx5_sc.get("buys", 0) or 0) + int(_tx5_sc.get("sells", 0) or 0)
+                                _b5_bump = int(_tx5_sc.get("buys", 0) or 0)
+                                _s5_bump = int(_tx5_sc.get("sells", 0) or 0)
+                                _tot_tx5_sc = _b5_bump + _s5_bump
                                 _avg_tx5_sc = (_vol5_live / _tot_tx5_sc) if _tot_tx5_sc > 0 else 0.0
-                                if _tot_tx5_sc >= 200 and _avg_tx5_sc < 15.0 and _links_sc == 0:
-                                    print(f"🚫 [SCANNER-WASH-TRAP] {actual_symbol} ({mint[:8]}): накрутка микро-ботом ({_tot_tx5_sc} txns, avg ${_avg_tx5_sc:.2f} < $15) — отмена!")
+                                _is_deep_launchpad_runner = (
+                                    mint.endswith(("pump", "bonk", "BAGS"))
+                                    and liq_usd >= 20000.0
+                                    and _vol5_live >= 8000.0
+                                    and _b5_bump >= _s5_bump * 1.18
+                                )
+                                if _tot_tx5_sc >= 200 and _avg_tx5_sc < 12.0 and _links_sc == 0 and not _is_deep_launchpad_runner:
+                                    print(f"🚫 [SCANNER-WASH-TRAP] {actual_symbol} ({mint[:8]}): накрутка микро-ботом ({_tot_tx5_sc} txns, avg ${_avg_tx5_sc:.2f} < $12) — отмена!")
                                     continue
 
                                 # Блок кастомных не-pump контрактов на PumpSwap только при микро-пуле (< $6k)
@@ -1063,8 +1091,8 @@ async def scanner_loop(analyzer, tracker):
                                             analyzer._deny(mint, "scanner-live-dump >7%", f"🚫 [LIVE-DUMP] {actual_symbol} ({mint[:8]}): живая цена Jupiter (${_jup_chk:.8f}) уже на {(1.0 - _jup_chk / entry_price) * 100:.1f}% ниже DexScreener (${entry_price:.8f}) [>7%] — токен обваливается прямо сейчас, блок входа!")
                                             continue
                                         _chk_r = max(_jup_chk, entry_price) / min(_jup_chk, entry_price)
-                                        if _chk_r > 1.25:
-                                            print(f"🚫 [SCANNER-PRICE-MISMATCH] {actual_symbol} ({mint[:8]}): Jupiter (${_jup_chk:.8f}) vs DS (${entry_price:.8f}) расхождение {_chk_r:.1f}x — блок.")
+                                        if _chk_r > 1.09:
+                                            print(f"🚫 [SCANNER-PRICE-MISMATCH] {actual_symbol} ({mint[:8]}): Jupiter (${_jup_chk:.8f}) vs DS (${entry_price:.8f}) расхождение {_chk_r:.2f}x (>1.09x) — блок от ложного стопа.")
                                             continue
                                         entry_price = _jup_chk
                                 # RKT-вето дженерик-входов Solana (лотереи/VIP-билеты exempt).

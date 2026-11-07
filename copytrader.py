@@ -18,6 +18,37 @@ DEX_PROGRAMS = (
 )
 SWAP_LOG_HINTS = ("Instruction: Buy", "Instruction: Sell", "Instruction: Swap", "SwapBaseIn", "SwapBaseOut", "ray_log", "Instruction: Route")
 
+# Известные институциональные маркетмейкеры / MEV-роутеры (Wintermute и др.) — НЕ люди-снайперы
+KNOWN_MM_BOTS = {
+    "MfDuWeqSHEqTFVYZ7LoexgAK9dxk7cy4DFJWjWMGVWa",  # Wintermute MM
+    "5Q544fKrFoe6tsEbD7S8EmxGTJYAKtTVhAW5Q5pge4j1",
+    "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4",
+}
+
+# Стейблы, обёрнутые BTC/ETH и тяжёлые majors — не мем-ракеты, не тратим на них квоту API
+SKIP_COPY_MINTS = {
+    "So11111111111111111111111111111111111111112",   # WSOL
+    "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",  # USDC
+    "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB",  # USDT
+    "cbbtcf3aa214zXHbiAZQwf4122FBYbraNdFqgw4iMij",   # cbBTC
+    "3NZ9JMVBmGAqocybic2c7LQCJScmgsAZ6vQqTDzcqmJh",  # WBTC
+    "7vfCXTUXx5WJV5JADk17DUJ4ksgau7utNKj4b963voxs",  # WETH
+    "27G8MtK7VtTcCHkpASjSDdkWWYfoqT6ggEuKidVJidD4",  # JLP
+    "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN",   # JUP
+    "4k3Dyjzvzp8eMZWUXbBCjEvwSkkk59S5iCNLY3QrkX6R",  # RAY
+    "orcaEKTdK7LKz57vaAYr9QeNsVEPfiu6QeMU1kektZE",   # ORCA
+    "HZ1JovNiVvGrGNiiYvEozEVgZ58xaU3RKwX8eACQBCt3",  # PYTH
+    "EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm",  # WIF
+    "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263",  # BONK
+    "7GCihgDB8fe6KNjn2MYtkzZcRjQy3t9GHdC8uHYmW2hr",  # POPCAT
+}
+
+SKIP_COPY_SYMBOLS = {
+    "SOL", "WSOL", "USDC", "USDT", "USDG", "EURC", "CBBTC", "WBTC", "WETH", "TBTC",
+    "JLP", "JUP", "RAY", "ORCA", "PYTH", "JTO", "KMNO", "DRIFT", "NEAR", "WNEAR",
+    "ZEC", "WIF", "$WIF", "BONK", "POPCAT", "TRUMP", "RENDER", "HNT", "MET",
+}
+
 
 class CopyTrader:
     BANNED_FILE = "banned_whales.json"
@@ -26,6 +57,10 @@ class CopyTrader:
         self.tracker = tracker
         self.analyzer = analyzer
         self._banned = self._load_banned()
+        self._hft_excluded = set(KNOWN_MM_BOTS)  # сессионный блок HFT/MEV маркетмейкеров (без записи бана в Supabase)
+        self._wallet_buy_times = {}              # wallet -> [ts покупок за 60с]
+        self._mint_eval_lock = set()             # минты, которые прямо сейчас проверяются (защита от 25 параллельных вызовов)
+        self._mint_skip_until = {}               # mint -> ts кулдауна после пропуска [WHALE-SKIP]
         self._wstat = {}          # кошелёк -> [прибыльных копий, убыточных копий]
         self._junk_strikes = {}   # кошелёк -> количество страйков за зомби/мусорные токены
         self._copy_wallets = {}   # mint -> кошельки, чей сигнал мы скопировали
@@ -324,7 +359,7 @@ class CopyTrader:
 
         valid_whales = []
         for w, d in candidates.items():
-            if w in self._banned:
+            if w in self._banned or w in getattr(self, "_hft_excluded", set()) or w in KNOWN_MM_BOTS or w.startswith("MfDu"):
                 continue
             tier = int(d.get("tier", 3) or 3)
             if tier <= 0:  # tier <= 0 означает забанен в Supabase
@@ -333,7 +368,9 @@ class CopyTrader:
             pnl = float(d.get("total_pnl", 0.0) or 0.0)
             trades = int(d.get("trade_count", 0) or 0)
 
-            # Отсекаем только явный мусор с отрицательным PnL
+            # Отсекаем HFT/арбитражных ботов (>350 сделок в базе) и кошельки с низким PnL
+            if trades > 350:
+                continue
             if pnl < min_pnl and tier not in (1, 2):
                 continue
 
@@ -436,9 +473,21 @@ class CopyTrader:
         except Exception:
             pass
 
-        # 2) Защита от перегруза: дедупликация сигнатур уже отсекает повторы.
-        # Не глушим активных китов-снайперов на 10 минут, а сразу передаём их покупки на проверку!
+        # 2) Авто-отсечение HFT / MEV / маркетмейкер-ботов (например Wintermute MfDu...):
+        # живой человек-снайпер никогда не отправляет >12 DEX-транзакций за 60 секунд!
         wallet = _sw.get(data["params"].get("subscription"))
+        if wallet:
+            if wallet in self._banned or wallet in self._hft_excluded:
+                return
+            now_ws = time.time()
+            w_times = [t for t in self._rate.get(wallet, []) if (now_ws - t) <= 60.0]
+            w_times.append(now_ws)
+            self._rate[wallet] = w_times
+            if len(w_times) > 12:
+                w_name = self.wallets.pop(wallet, wallet[:8])
+                self._hft_excluded.add(wallet)
+                print(f"🤖 [HFT-BOT-EXCLUDED] {w_name} ({wallet[:8]}...): >12 DEX-свопов/мин (маркетмейкер/MEV-роутер) — отключён от копитрейдинга (защита API от 429)!")
+                return
         if getattr(self, "_pending", 0) >= 500:
             self._dropped = getattr(self, "_dropped", 0) + 1
             if self._dropped % 200 == 1:
@@ -554,6 +603,17 @@ class CopyTrader:
         Если сделка закрывается в минус — кит навсегда банится в Supabase (tier = -1)."""
         import config
 
+        if mint in SKIP_COPY_MINTS:
+            return
+
+        now_c = time.time()
+        if len(self._mint_skip_until) > 1500:
+            self._mint_skip_until = {m: ts for m, ts in self._mint_skip_until.items() if ts > now_c}
+        if now_c < self._mint_skip_until.get(mint, 0.0):
+            return
+        if mint in self._mint_eval_lock:
+            return
+
         # 1. Проверка лимита открытых позиций
         open_positions = self.tracker.get_open_positions()
         if len(open_positions) >= config.MAX_CONCURRENT_POSITIONS:
@@ -561,77 +621,111 @@ class CopyTrader:
             return
 
         if mint in open_positions:
-            print(f"ℹ️ [COPY] Монета {mint[:8]} уже открыта в позициях. Не дублируем.")
             return
 
-        # 2. Получаем актуальные данные пары с DexScreener для реального символа и цены
-        price_usd = cur_price
-        clean_symbol = symbol or mint[:8]
-        pair_data = None
+        self._mint_eval_lock.add(mint)
         try:
-            from grok_jev import grok_jev as _gj
-            pair_data = await _gj.fetch_pair(mint, "solana")
-            if pair_data:
-                base_info = pair_data.get("baseToken") or {}
-                real_sym = str(base_info.get("symbol") or "").strip().upper()
-                if real_sym and not real_sym.startswith("COPY_") and real_sym != "UNKNOWN":
-                    clean_symbol = real_sym
-                _px = float(pair_data.get("priceUsd", 0) or 0)
-                if _px > 0:
-                    price_usd = _px
-        except Exception:
-            pass
-
-        if not price_usd or price_usd <= 0:
-            price_usd = await self.get_token_price(mint)
-
-        # 3. Глубокий ИИ-анализ токена кита через Analyzer
-        if self.analyzer:
-            print(f"🤖 Передаем токен {clean_symbol} ({mint[:8]}) кита {trader_name} ИИ на глубокий анализ...")
-            is_safe, ai_reason = await self.analyzer.analyze_whale_token(mint, trader_name=trader_name)
-            if not is_safe:
-                print(f"🚫 [WHALE-SKIP] ИИ забраковал токен {clean_symbol} ({mint[:8]}) кита {trader_name}: {ai_reason}. Сделка пропущена, кит остаётся активен.")
+            # 2. Получаем актуальные данные пары с DexScreener для реального символа и цены
+            price_usd = cur_price
+            clean_symbol = (symbol or mint[:8]).strip().upper()
+            if clean_symbol in SKIP_COPY_SYMBOLS:
+                self._mint_skip_until[mint] = time.time() + 1800.0
                 return
-            else:
-                print(f"✅ ИИ одобрил токен {clean_symbol} кита {trader_name} ({ai_reason})! Покупаем!")
-        elif getattr(config, "COPY_USE_ANTISCAM", True) and pair_data:
+            pair_data = None
             try:
                 from grok_jev import grok_jev as _gj
-                _ok, _why, _hs = await _gj.full_anti_scam_audit(mint, clean_symbol, "solana", pair_data)
-                if not _ok:
-                    print(f"🚫 [WHALE-SKIP] Токен {clean_symbol} ({mint[:8]}) кита {trader_name} не прошёл антискам ({_why}). Пропуск сделки.")
-                    return
-            except Exception as _e:
-                print(f"⚠️ [COPY] Антискам-проверка ({type(_e).__name__}), продолжаем: {_e}")
+                pair_data = await _gj.fetch_pair(mint, "solana")
+                if pair_data:
+                    base_info = pair_data.get("baseToken") or {}
+                    real_sym = str(base_info.get("symbol") or "").strip().upper()
+                    if real_sym and not real_sym.startswith("COPY_") and real_sym != "UNKNOWN":
+                        clean_symbol = real_sym
+                    _px = float(pair_data.get("priceUsd", 0) or 0)
+                    if _px > 0:
+                        price_usd = _px
+            except Exception:
+                pass
 
-        # 4. Проверка ликвидности пула (минимум $500, чтобы не получить 100% slippage)
-        if pair_data:
-            liq = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
-            if 0 < liq < 500.0:
-                print(f"🚫 [COPY] Слишком низкая ликвидность пула (${liq:.0f} < $500) для {clean_symbol}. Пропуск.")
+            if clean_symbol in SKIP_COPY_SYMBOLS:
+                self._mint_skip_until[mint] = time.time() + 1800.0
                 return
 
-        # 5. Размер позиции ($4.00 базовый вход)
-        capital = self.tracker.get_total_capital()
-        _pct = float(getattr(config, "COMPOUNDING_PCT", 0.10))
-        _base = float(getattr(config, "BASE_TRADE_AMOUNT_USD", 4.0))
-        _cap = float(getattr(config, "COPY_MAX_TICKET_USD", 4.0))
-        position_size = max(_base, min(_cap, capital * _pct))
+            if not price_usd or price_usd <= 0:
+                price_usd = await self.get_token_price(mint)
 
-        # 6. Запоминаем кошелёк кита для этого минта и открываем позицию
-        if mint not in self._copy_wallets:
-            self._copy_wallets[mint] = set()
-        self._copy_wallets[mint].add(wallet)
-        self.consensus_done.add(mint)
+            # 3. Глубокий ИИ-анализ токена кита через Analyzer
+            if self.analyzer:
+                print(f"🤖 Передаем токен {clean_symbol} ({mint[:8]}) кита {trader_name} ИИ на глубокий анализ...")
+                is_safe, ai_reason = await self.analyzer.analyze_whale_token(mint, trader_name=trader_name, prefetched_pair=pair_data)
+                if not is_safe:
+                    self._mint_skip_until[mint] = time.time() + 180.0
+                    print(f"🚫 [WHALE-SKIP] ИИ забраковал токен {clean_symbol} ({mint[:8]}) кита {trader_name}: {ai_reason}. Сделка пропущена, кит остаётся активен.")
+                    return
+                else:
+                    print(f"✅ ИИ одобрил токен {clean_symbol} кита {trader_name} ({ai_reason})! Покупаем!")
+            elif getattr(config, "COPY_USE_ANTISCAM", True) and pair_data:
+                try:
+                    from grok_jev import grok_jev as _gj
+                    _ok, _why, _hs = await _gj.full_anti_scam_audit(mint, clean_symbol, "solana", pair_data)
+                    if not _ok:
+                        self._mint_skip_until[mint] = time.time() + 180.0
+                        print(f"🚫 [WHALE-SKIP] Токен {clean_symbol} ({mint[:8]}) кита {trader_name} не прошёл антискам ({_why}). Пропуск сделки.")
+                        return
+                except Exception as _e:
+                    print(f"⚠️ [COPY] Антискам-проверка ({type(_e).__name__}), продолжаем: {_e}")
 
-        self.tracker.add_position(
-            clean_symbol,
-            mint,
-            price_usd,
-            amount_usd=position_size,
-            source=f"COPY:{trader_name}"
-        )
-        print(f"✅ 🐋 [COPY-EXECUTED] Успешно вошли по сделке кита {trader_name} в {clean_symbol} на ${position_size:.2f} (цена: ${price_usd})!")
+            # 4. Проверка ликвидности пула и синхронизация с живой ценой Jupiter
+            if pair_data:
+                liq = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
+                if 0 < liq < 500.0:
+                    self._mint_skip_until[mint] = time.time() + 120.0
+                    print(f"🚫 [COPY] Слишком низкая ликвидность пула (${liq:.0f} < $500) для {clean_symbol}. Пропуск.")
+                    return
+
+            dex_id_cp = str((pair_data or {}).get("dexId") or "").lower()
+            if dex_id_cp not in ("pump", "pumpfun"):
+                try:
+                    from jupiter import JupiterAPI
+                    j_px = await JupiterAPI.get_price(mint)
+                    if j_px and j_px > 0:
+                        if price_usd > 0:
+                            r_cp = max(j_px, price_usd) / min(j_px, price_usd)
+                            if r_cp > 1.12:
+                                self._mint_skip_until[mint] = time.time() + 90.0
+                                print(f"🚫 [COPY-PRICE-MISMATCH] {clean_symbol} ({mint[:8]}): расхождение Jupiter (${j_px:.8f}) vs DS (${price_usd:.8f}) {r_cp:.2f}x — защита от ложного стопа, пропуск.")
+                                return
+                        price_usd = j_px
+                except Exception:
+                    pass
+
+            if not price_usd or price_usd <= 0:
+                return
+
+            # 5. Размер позиции ($4.00 базовый вход)
+            capital = self.tracker.get_total_capital()
+            _pct = float(getattr(config, "COMPOUNDING_PCT", 0.10))
+            _base = float(getattr(config, "BASE_TRADE_AMOUNT_USD", 4.0))
+            _cap = float(getattr(config, "COPY_MAX_TICKET_USD", 4.0))
+            position_size = max(_base, min(_cap, capital * _pct))
+
+            # 6. Запоминаем кошелёк кита для этого минта и открываем позицию
+            if mint not in self._copy_wallets:
+                self._copy_wallets[mint] = set()
+            self._copy_wallets[mint].add(wallet)
+            self.consensus_done.add(mint)
+
+            self.tracker.add_position(
+                clean_symbol,
+                mint,
+                price_usd,
+                amount_usd=position_size,
+                is_mature=True,
+                source=f"COPY:{trader_name}",
+                pair_address=((pair_data or {}).get("pairAddress", "") or ""),
+            )
+            print(f"✅ 🐋 [COPY-EXECUTED] Успешно вошли по сделке кита {trader_name} в {clean_symbol} на ${position_size:.2f} (цена: ${price_usd})!")
+        finally:
+            self._mint_eval_lock.discard(mint)
 
     async def handle_whale_buy(self, wallet: str, mint: str, symbol: str, sol_amount: float = 0.0, mc_sol: float = 0.0):
         """Прямой вызов при обнаружении покупки кита из базы Supabase (например, через PumpPortal stream).
@@ -692,11 +786,7 @@ class CopyTrader:
 
             all_mints = set(pre_dict.keys()) | set(post_dict.keys())
             for mint in all_mints:
-                if len(mint) < 30:
-                    continue
-                if mint in ["So11111111111111111111111111111111111111112", 
-                            "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", 
-                            "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB"]:
+                if len(mint) < 30 or mint in SKIP_COPY_MINTS:
                     continue
                 
                 pre_amt = pre_dict.get(mint, 0.0)
@@ -719,7 +809,21 @@ class CopyTrader:
                 elif post_amt > pre_amt: # Баланс вырос = ПОКУПКА
                     import config
                     now = time.time()
-                    if wallet in self._banned:
+                    if wallet in self._banned or wallet in self._hft_excluded:
+                        continue
+                    # Дополнительный детектор HFT-маркетмейкера по частоте покупок (>5 покупок за 60с = робот)
+                    b_times = [t for t in self._wallet_buy_times.get(wallet, []) if (now - t) <= 60.0]
+                    b_times.append(now)
+                    self._wallet_buy_times[wallet] = b_times
+                    if len(b_times) > 5:
+                        self._hft_excluded.add(wallet)
+                        self.wallets.pop(wallet, None)
+                        print(f"🤖 [HFT-BOT-EXCLUDED] {trader_name} ({wallet[:8]}...): >5 покупок за 60с — маркетмейкер/арбитраж-бот исключён!")
+                        break
+                    if now < self._mint_skip_until.get(mint, 0.0) or mint in self._mint_eval_lock:
+                        continue
+                    open_pos = self.tracker.get_open_positions()
+                    if mint in open_pos:
                         continue
                     self.whale_buys.setdefault(mint, {})
                     self.whale_buys[mint][wallet] = now
@@ -733,9 +837,6 @@ class CopyTrader:
                         else:
                             print(f"🐋 WHALE SIGNAL: {trader_name} купил {mint[:12]}... мгновенный вход (consensus=1)!")
                     print(f"🚨 COPYTRADE: {trader_name} купил {mint[:12]}... (китов за 10 мин: {n_whales}/{_consensus})")
-                    open_pos = self.tracker.get_open_positions()
-                    if mint in open_pos:
-                        continue
                     if n_whales < _consensus:
                         continue  # ждём раннего консенсуса
                     # Guard от опоздания: цена не должна улететь от точки входа первого кита

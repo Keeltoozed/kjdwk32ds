@@ -85,6 +85,10 @@ def score_token_with_rocket_xgb(mint: str, pair_data: dict, holders_info: dict =
         _m5 = float(_pc.get("m5", 0) or 0)
         _m1 = float(_pc.get("m1", 0) or 0)
         _h1 = float(_pc.get("h1", 0) or 0)
+        # Защита фичей XGBoost от битых котировок / смены пула (+208,153,141% m1 ронял скор живых ракет):
+        if abs(_m1) > max(180.0, abs(_m5) * 3.0 + 40.0):
+            _m1 = max(-40.0, min(40.0, _m5 * 0.20))
+        _m1 = max(-95.0, min(200.0, _m1))
         _vm5 = float((pair_data.get("volume") or {}).get("m5", 0) or 0)
         _txm5 = (pair_data.get("txns") or {}).get("m5", {}) or {}
         _b5 = int(_txm5.get("buys", 0) or 0)
@@ -119,7 +123,7 @@ def score_token_with_rocket_xgb(mint: str, pair_data: dict, holders_info: dict =
         _webs = _info.get("websites", []) or []
         _has_soc = 1 if (len(_socs) > 0 or len(_webs) > 0) else 0
 
-        _m1_exh = (_m1 / max(abs(_m5), 1.0)) if abs(_m5) > 0 else 0.0
+        _m1_exh = max(-4.0, min(4.0, (_m1 / max(abs(_m5), 1.0)) if abs(_m5) > 0 else 0.0))
         _b_ratio = (_b5 / max(_b5 + _s5, 1.0)) if (_b5 + _s5) > 0 else 0.5
         _net_b = _b5 - _s5
         _v_to_l = (_vm5 / max(liq_val, 1.0)) if liq_val > 0 else 0.0
@@ -178,6 +182,7 @@ class Analyzer:
     last_score = _ctx_attr("last_score", 0.0)    # Скор последнего решения (для радара)
     _last_top10 = _ctx_attr("_last_top10", 0.0)  # топ-10 холдеров % (последний разбор в этой задаче)
     _last_dev = _ctx_attr("_last_dev", 0.0)      # доля дева % (последний разбор в этой задаче)
+    last_rkt_features = _ctx_attr("last_rkt_features", None)  # Фичи Rocket XGBoost локально в корутине
 
     def __init__(self):
         self._clone_cache = {}
@@ -185,6 +190,7 @@ class Analyzer:
         self.session = None
         self.rocket_model = None  # ROCKET-модель (EVM ракеты). None = нет файла, гейты как раньше
         self.rocket_scores = {}  # address -> score 0..1 (для сайзинга в main)
+        self.rkt_features_map = {}  # mint -> dict фичей Rocket XGBoost (без гонки между 8 потоками)
         self.last_signal = ""  # Метка последнего решения: "VIP RAY-XGB 98%", "PULLBACK", "ROBINHOOD rule 72%"...
         self.last_score = 0.0  # Скор последнего решения (для радара)
         self.signals = {}  # Метки по mint: НЕ делит состояние между параллельными петлями (иначе FOMO:? в дашборде)
@@ -284,6 +290,12 @@ class Analyzer:
         if isinstance(res, tuple):
             prob, rkt_feats = res
             self.last_rkt_features = rkt_feats
+            if not hasattr(self, "rkt_features_map"):
+                self.rkt_features_map = {}
+            if len(self.rkt_features_map) > 2000:
+                self.rkt_features_map.clear()
+            if mint and rkt_feats:
+                self.rkt_features_map[mint] = rkt_feats
         else:
             prob = res
         if not hasattr(self, "rocket_scores"):
@@ -419,7 +431,11 @@ class Analyzer:
         try:
             from shadow_tracker import shadow_tracker
             ctx = getattr(self, "_eval_ctx", {}).get(key, {})
-            feats = ctx.get("features") or getattr(self, "last_rkt_features", None)
+            feats = (
+                ctx.get("features")
+                or getattr(self, "rkt_features_map", {}).get(key)
+                or getattr(self, "last_rkt_features", None)
+            )
             shadow_tracker.log_rejection(
                 mint=key,
                 reason=short,
@@ -692,12 +708,15 @@ class Analyzer:
         try:
             px = float(best_pair.get("priceUsd", 0) or 0)
             cur_liq_obs = float(((best_pair.get("liquidity") or {}).get("usd", 0) or 0))
-            if px > 0 and mint:
+            cur_pair_addr = str(best_pair.get("pairAddress") or "")
+            is_curve_obs = str(best_pair.get("dexId") or "").lower() in ("pump", "pumpfun")
+            # Не записываем пылевые/призрачные AMM-пулы (< $1,500), иначе смена пула рождает фантом m1 +208,153,141% или -99% crash!
+            if px > 0 and mint and (is_curve_obs or cur_liq_obs >= 1500.0):
                 now = time.time()
                 if not hasattr(Analyzer, "_sol_price_obs"):
                     Analyzer._sol_price_obs = {}
                 hist = Analyzer._sol_price_obs.setdefault(mint, [])
-                hist.append((now, px, cur_liq_obs))
+                hist.append((now, px, cur_liq_obs, cur_pair_addr))
                 if len(hist) > 80:
                     hist[:] = [x for x in hist if now - x[0] <= 2700.0]
                 if len(Analyzer._sol_price_obs) > 4000:
@@ -712,28 +731,48 @@ class Analyzer:
                 except Exception:
                     pass
 
-                # СТАЛО (замени строки 397-412 в analyzer.py):
-                recent_px = [x[1] for x in hist if now - x[0] <= 180.0 and x[1] > 0]
+                # Сравниваем ТОЛЬКО наблюдения того же пула (или сопоставимой ликвидности) без скачков единиц x20+:
+                def _same_pool_obs(obs_item):
+                    if len(obs_item) >= 4 and cur_pair_addr and obs_item[3]:
+                        return obs_item[3] == cur_pair_addr
+                    return len(obs_item) >= 3 and obs_item[2] >= max(1500.0, cur_liq_obs * 0.25)
+
+                recent_px = [
+                    x[1] for x in hist
+                    if now - x[0] <= 180.0 and x[1] > 0 and _same_pool_obs(x)
+                    and 0.03 <= (px / x[1]) <= 15.0
+                ]
                 if recent_px:
                     peak_px = max(recent_px)
                     if peak_px > 0:
                         best_pair["_drop_from_peak_5m"] = (px - peak_px) / peak_px * 100.0
 
-                recent_liq = [x[2] for x in hist if len(x) >= 3 and now - x[0] <= 300.0 and x[2] > 0]
+                recent_liq = [
+                    x[2] for x in hist
+                    if len(x) >= 3 and now - x[0] <= 300.0 and x[2] > 0 and _same_pool_obs(x)
+                ]
                 if recent_liq and cur_liq_obs > 0:
                     peak_liq = max(recent_liq)
                     if peak_liq > 0:
                         best_pair["_liq_drop_from_peak"] = (cur_liq_obs - peak_liq) / peak_liq * 100.0
 
-                cands = [(abs((now - x[0]) - 60.0), x[0], x[1]) for x in hist if 12.0 <= (now - x[0]) <= 150.0 and x[1] > 0]
+                cands = [
+                    (abs((now - x[0]) - 60.0), x[0], x[1])
+                    for x in hist
+                    if 12.0 <= (now - x[0]) <= 150.0 and x[1] > 0 and _same_pool_obs(x)
+                    and 0.04 <= (px / x[1]) <= 12.0
+                ]
                 if cands:
                     cands.sort(key=lambda x: x[0])
                     old_px = cands[0][2]
                     real_m1 = (px - old_px) / old_px * 100.0
-                    if not isinstance(best_pair.get("priceChange"), dict):
-                        best_pair["priceChange"] = {}
-                    if not best_pair["priceChange"].get("m1"):
-                        best_pair["priceChange"]["m1"] = round(real_m1, 2)
+                    _ds_m5 = float(((best_pair.get("priceChange") or {}).get("m5", 0)) or 0)
+                    _m1_cap = max(120.0, abs(_ds_m5) * 2.5 + 35.0)
+                    if abs(real_m1) <= _m1_cap:
+                        if not isinstance(best_pair.get("priceChange"), dict):
+                            best_pair["priceChange"] = {}
+                        if not best_pair["priceChange"].get("m1"):
+                            best_pair["priceChange"]["m1"] = round(real_m1, 2)
         except Exception:
             pass
         return best_pair
@@ -802,19 +841,40 @@ class Analyzer:
                 best_pair = self._best_solana_pair(mint, data.get("pairs") or [])
                 if best_pair:
                     return best_pair
+            # Если торговля сырыми кривыми Pump.fun выключена и минт ещё НЕ мигрировал,
+            # НЕ сжигаем лимит GeckoTerminal (24 RPM) на неиндексированные кёрвы (иначе падает check_1m_candles с 429)!
+            if mint.endswith("pump") and not getattr(config, "ALLOW_UNGRADUATED_PUMPFUN", False):
+                _is_grad = False
+                try:
+                    from birth_tracker import birth_tracker as _bt_g
+                    _is_grad = mint in getattr(_bt_g, "_graduated", {})
+                except Exception:
+                    pass
+                if not _is_grad:
+                    return {}
             return await self.fetch_token_data_gecko(mint)
-        except Exception as e:
+        except Exception:
             return await self.fetch_token_data_gecko(mint)
 
     async def fetch_token_data_gecko(self, mint: str) -> dict:
         import market_data
+        now_gt = time.time()
+        if not hasattr(self, "_gt_token_cache"):
+            self._gt_token_cache = {}
+        if len(self._gt_token_cache) > 1500:
+            self._gt_token_cache = {k: v for k, v in self._gt_token_cache.items() if (now_gt - v[0]) < 60.0}
+        cached_gt = self._gt_token_cache.get(mint)
+        if cached_gt and (now_gt - cached_gt[0]) < 45.0:
+            return dict(cached_gt[1]) if cached_gt[1] else {}
         try:
             data = await market_data._gt_get(f"/networks/solana/tokens/{mint}/pools?page=1", retries=0, timeout=8)
             if not data:
+                self._gt_token_cache[mint] = (now_gt, {})
                 return {}
             
             pools = data.get("data", [])
             if not pools:
+                self._gt_token_cache[mint] = (now_gt, {})
                 return {}
             best = max(pools, key=lambda p: float((p.get("attributes") or {}).get("reserve_in_usd", 0) or 0))
             a = best.get("attributes", {})
@@ -849,7 +909,7 @@ class Analyzer:
                 real_dex = "pumpswap" if (mint.endswith("pump") and res_usd >= 6000.0) else ("pump" if mint.endswith("pump") else (dex_rel or "raydium"))
 
             print(f"🦎 GeckoTerminal fallback для {mint[:8]}: пул найден ({real_dex}, liq ${res_usd:,.0f}).")
-            return {
+            gt_out = {
                 "pairAddress": pair_addr_gt,
                 "baseToken": {"symbol": symbol, "name": symbol, "address": mint},
                 "priceUsd": str(a.get("base_token_price_usd") or 0),
@@ -865,6 +925,8 @@ class Analyzer:
                 "info": {"socials": [], "websites": []},
                 "_socials_unknown": True,
             }
+            self._gt_token_cache[mint] = (now_gt, gt_out)
+            return dict(gt_out)
         except Exception as e:
             print(f"GeckoTerminal token data error: {type(e).__name__} {e}")
             return {}
@@ -1157,6 +1219,10 @@ class Analyzer:
         _m5 = float(_pc.get("m5", 0) or 0)
         _m1 = float(_pc.get("m1", 0) or 0)
         _h1 = float(_pc.get("h1", 0) or 0)
+        # Защита фичей XGBoost от битых котировок / смены пула (+208,153,141% m1 ронял скор живых ракет):
+        if abs(_m1) > max(180.0, abs(_m5) * 3.0 + 40.0):
+            _m1 = max(-40.0, min(40.0, _m5 * 0.20))
+        _m1 = max(-95.0, min(200.0, _m1))
         _h6 = float(_pc.get("h6", 0) or 0)
         if _h1 < -8.0 or _h6 < -15.0:
             return False
@@ -1165,7 +1231,7 @@ class Analyzer:
             return True
         return False
         
-    async def analyze_whale_token(self, mint: str, trader_name: str = "") -> tuple[bool, str]:
+    async def analyze_whale_token(self, mint: str, trader_name: str = "", prefetched_pair=None) -> tuple:
         """Специализированный глубокий аудит безопасности токена, выбранного смарт-китом.
         НЕ режет токен сканерными фильтрами (0 соцсетей на старте, низкий 5м объём или покупка на кривой Pump.fun),
         потому что киты покупают ДО розничного пампа!
@@ -1180,13 +1246,15 @@ class Analyzer:
                     "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB"]:
             return False, "Native / Stablecoin"
 
-        pair_data = await self.fetch_token_data(mint)
+        pair_data = prefetched_pair if isinstance(prefetched_pair, dict) and prefetched_pair else None
         if not pair_data:
             try:
                 from grok_jev import grok_jev as _gj
                 pair_data = await _gj.fetch_pair(mint, "solana")
             except Exception:
                 pair_data = None
+        if not pair_data:
+            pair_data = await self.fetch_token_data(mint)
 
         clean_symbol = mint[:8]
         base_name = ""
@@ -1235,11 +1303,17 @@ class Analyzer:
             if not onchain_ok:
                 return False, f"On-Chain Contract Trap: {onchain_why}"
             gp_ok, gp_why = await goplus.check_solana(mint)
-            if not gp_ok and "rugcheck-score" not in str(gp_why).lower():
+            gp_why_low = str(gp_why or "").lower()
+            # В analyze_whale_token концентрацию холдеров проверяет RugCheck (с точным исключением AMM/CEX сейфов),
+            # поэтому от GoPlus блокируем только реальные контрактные ловушки (honeypot/tax/freeze/mint/closable),
+            # а не сырые строки 'кит держит' / 'топ-10 китов' на неразмеченных AMM-пулах
+            rc_st, rc_data = await goplus.fetch_rugcheck_report_cached(mint, ttl=120.0, timeout=6)
+            _gp_is_holder_str = ("кит держит" in gp_why_low or "топ-10 китов" in gp_why_low)
+            _liq_w = float(((pair_data or {}).get("liquidity") or {}).get("usd", 0) or 0)
+            if not gp_ok and "rugcheck-score" not in gp_why_low and not (_gp_is_holder_str and (rc_st == 200 or _liq_w >= 20000.0)):
                 return False, f"GoPlus Honeypot/Tax: {gp_why}"
 
             # 4. Кэшированный RugCheck аудит (концентрация холдеров и блокировка LP на кастомных токенах)
-            rc_st, rc_data = await goplus.fetch_rugcheck_report_cached(mint, ttl=120.0, timeout=6)
             if rc_st == 200 and isinstance(rc_data, dict):
                 raw_sc = float(rc_data.get("score") or 0.0)
                 ign = sum(
@@ -1318,6 +1392,10 @@ class Analyzer:
         _m5 = float(_pc.get("m5", 0) or 0)
         _m1 = float(_pc.get("m1", 0) or 0)
         _h1 = float(_pc.get("h1", 0) or 0)
+        # Защита фичей XGBoost от битых котировок / смены пула (+208,153,141% m1 ронял скор живых ракет):
+        if abs(_m1) > max(180.0, abs(_m5) * 3.0 + 40.0):
+            _m1 = max(-40.0, min(40.0, _m5 * 0.20))
+        _m1 = max(-95.0, min(200.0, _m1))
         _vm5_pre = float((pair_data.get("volume") or {}).get("m5", 0) or 0)
         _v24 = float((pair_data.get("volume") or {}).get("h24", 0) or 0)
         _txm5_pre = (pair_data.get("txns") or {}).get("m5", {}) or {}
@@ -1451,12 +1529,20 @@ class Analyzer:
                 f"🚫 [ZOMBIE-AGE] {symbol} ({mint[:8]}): возраст {_age_min_pre/60:.1f}ч > {_max_age_min/60:.1f}ч без объема.",
             )
 
-        # 2. Защита от фейковых bump-ботов
+        # 2. Защита от фейковых bump-ботов (не блокируем глубокие пулы мигрировавших pump/bonk/BAGS с реальным потоком покупателей: VETO $74k liq, CAT $48k liq)
         _info_pre = pair_data.get("info") or {}
         _has_soc_pre = bool((_info_pre.get("socials") or []) or (_info_pre.get("websites") or []))
+        _raw_liq_chk = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
+        _is_burned_launchpad = mint.endswith(("pump", "bonk", "BAGS"))
         _tot_tx5_pre = _b5_pre + _s5_pre
         _avg_tx_pre = (_vm5_pre / _tot_tx5_pre) if _tot_tx5_pre > 0 else 0.0
-        if _tot_tx5_pre >= 200 and _avg_tx_pre < 12.0 and not _has_soc_pre:
+        _is_deep_launchpad_runner = (
+            _is_burned_launchpad
+            and _raw_liq_chk >= 20000.0
+            and _vm5_pre >= 8000.0
+            and _b5_pre >= _s5_pre * 1.18
+        )
+        if _tot_tx5_pre >= 200 and _avg_tx_pre < 12.0 and not _has_soc_pre and not _is_deep_launchpad_runner:
             return self._deny(
                 mint,
                 f"fake-bump-wash-bot avg ${_avg_tx_pre:.1f}",
@@ -1464,7 +1550,7 @@ class Analyzer:
             )
 
         # 3. ЖЕСТКИЙ ФИЛЬТР ИМПУЛЬСА И ТРЕНДА ДО ROCKET-XGB (закрывает дыру покупки KLAUDIA -65%, LIBTARD -53%, CAGE -23%, COGE 477b/529s):
-        _min_v5_cfg = float(getattr(config, "MIN_VOLUME_M5", 2500.0))
+        _min_v5_cfg = float(getattr(config, "MIN_VOLUME_M5", 2000.0))
         if _vm5_pre < _min_v5_cfg:
             return self._deny(
                 mint,
@@ -1472,8 +1558,9 @@ class Analyzer:
                 f"🚫 [LOW-MOMENTUM] {symbol} ({mint[:8]}): 5м объем ${_vm5_pre:,.0f} < ${_min_v5_cfg:,.0f} — слабый пул.",
             )
 
-        # Запрет входа, если продавцов больше или почти столько же, сколько покупателей (кейсы COGE 477/529, LUNOX 104/127, Greg 333/321)
-        _min_bs_cfg = float(getattr(config, "MIN_BUY_SELL_RATIO", 1.20))
+        # Запрет входа, если продавцов больше или почти столько же, сколько покупателей (на глубоких пулах >=$25k допускаем 1.08x при зелёном m5/m1)
+        _base_bs_cfg = float(getattr(config, "MIN_BUY_SELL_RATIO", 1.15))
+        _min_bs_cfg = 1.08 if (_raw_liq_chk >= 25000.0 and _m5 >= 5.0 and _m1 >= 0.0) else _base_bs_cfg
         if _s5_pre > 0 and (_b5_pre / _s5_pre) < _min_bs_cfg:
             return self._deny(
                 mint,
@@ -1481,30 +1568,38 @@ class Analyzer:
                 f"🚫 [WEAK-BUYERS] {symbol} ({mint[:8]}): покупки/продажи 5м {_b5_pre}/{_s5_pre} ({_b5_pre/_s5_pre:.2f}x < {_min_bs_cfg:.2f}x) — продавцы давят!",
             )
 
-        # Запрет покупки «дохлых кошек» в часовом сливе (кейсы KLAUDIA h1=-65%, LIBTARD h1=-53%, Edmond h1=-47%, CAGE h1=-23%)
+        # Запрет покупки «дохлых кошек» в часовом сливе, КРОМЕ подтверждённого V-образного разворота с объёмом (SCAMSEM +122%)
         _min_h1_cfg = float(getattr(config, "JEV_MIN_H1_PCT", -5.0))
         _h6_pre_val = float(_pc.get("h6", 0) or 0)
-        if _h1 < _min_h1_cfg or _h6_pre_val < -20.0:
+        _is_v_reversal = (
+            _h1 >= -25.0 and _h6_pre_val >= -30.0
+            and _m5 >= 12.0 and _vm5_pre >= 15000.0
+            and _raw_liq_chk >= 18000.0 and _b5_pre >= _s5_pre * 1.30
+        )
+        if not _is_v_reversal and (_h1 < _min_h1_cfg or _h6_pre_val < -20.0):
             return self._deny(
                 mint,
                 f"downtrend-h1 {_h1:+.0f}%",
                 f"🚫 [DEAD-CAT-DUMP] {symbol} ({mint[:8]}): часовой тренд в сливе (h1 {_h1:+.1f}%, h6 {_h6_pre_val:+.1f}%) — падающий нож!",
             )
 
-        # Запрет входа во флет (< +3.5%) и в экстремальную вертикальную 1м свечу
-        _max_m1_cfg = float(getattr(config, "MAX_ENTRY_M1_PCT", 20.0))
-        if _m5 < 3.5:
-            return self._deny(mint, f"m5-too-weak {_m5:+.1f}%", f"🚫 [WEAK-M5] {symbol} ({mint[:8]}): m5 {_m5:+.1f}% < +3.5% — нет разгона.")
-        if _m1 > _max_m1_cfg or _m1 < -5.5:
+        # Ранний вход в накопление на ликвидных пулах (>= +1.8% при liq >= $18k, EMBER +38%, FUSE +34%) и защита от затухающих/экстремальных 1м свечей
+        _min_m5_req = 1.8 if (_raw_liq_chk >= 18000.0 and _b5_pre >= _s5_pre * 1.18 and _vm5_pre >= 3500.0) else 3.0
+        if _m5 < _min_m5_req:
+            return self._deny(mint, f"m5-too-weak {_m5:+.1f}%", f"🚫 [WEAK-M5] {symbol} ({mint[:8]}): m5 {_m5:+.1f}% < +{_min_m5_req:.1f}% — нет разгона.")
+        _base_max_m1 = float(getattr(config, "MAX_ENTRY_M1_PCT", 28.0))
+        _max_m1_cfg = 35.0 if (_raw_liq_chk >= 18000.0 and _b5_pre >= _s5_pre * 1.28) else _base_max_m1
+        _min_m1_floor = -5.5 if _m5 >= 12.0 else -2.8
+        if _m1 > _max_m1_cfg or _m1 < _min_m1_floor:
             return self._deny(
                 mint,
                 f"m1-bad {_m1:+.1f}%",
-                f"🚫 [M1-FILTER] {symbol} ({mint[:8]}): 1м свеча {_m1:+.1f}% вне безопасного коридора [-5.5%, +{_max_m1_cfg:.0f}%].",
+                f"🚫 [M1-FILTER] {symbol} ({mint[:8]}): 1м свеча {_m1:+.1f}% вне коридора [{_min_m1_floor:+.1f}%, +{_max_m1_cfg:.0f}%].",
             )
 
         # 4. Anti-FOMO: Защита от перегретых вершин
-        _max_entry_h1 = float(getattr(config, "MAX_ENTRY_H1_PCT", 320.0))
-        _max_entry_m5 = float(getattr(config, "MAX_ENTRY_M5_PCT", 95.0))
+        _max_entry_h1 = float(getattr(config, "MAX_ENTRY_H1_PCT", 360.0))
+        _max_entry_m5 = float(getattr(config, "MAX_ENTRY_M5_PCT", 110.0))
         if _h1 > _max_entry_h1 and _age_min_pre >= 12.0:
             return self._deny(
                 mint,
@@ -1512,7 +1607,7 @@ class Analyzer:
                 f"🚫 [EXHAUSTED-TOP] {symbol} ({mint[:8]}): рост за час +{_h1:+.1f}% > +{_max_entry_h1:.0f}% — вершина пампа.",
             )
         if _m5 > _max_entry_m5:
-            _is_strong_breakout = (_vm5_pre >= 10000.0 and _b5_pre >= _s5_pre * 1.25 and _m5 <= 145.0)
+            _is_strong_breakout = (_vm5_pre >= 10000.0 and _b5_pre >= _s5_pre * 1.22 and _m5 <= 165.0)
             if not _is_strong_breakout:
                 return self._deny(
                     mint,
@@ -1520,11 +1615,15 @@ class Analyzer:
                     f"🚫 [FOMO-VERTICAL] {symbol} ({mint[:8]}): 5м свеча +{_m5:+.1f}% > +{_max_entry_m5:.0f}% без прорывного объема — перегретая свеча.",
                 )
 
-        # 4.9. Wash-Trading Spike Guard: отличаем симметричную бот-накрутку от реального пробоя покупателями!
-        _raw_liq_chk = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
+        # 4.9. Wash-Trading Spike Guard: НЕ баним живые ракеты (CHIMPS 1.5x, CALLCAT 2.2x, VADER 2.1x), режем реальный симметричный wash-дамп!
         _txns_tot_pre = _b5_pre + _s5_pre
         _avg_tx_pre = (_vm5_pre / max(1, _txns_tot_pre)) if _txns_tot_pre > 0 else 0.0
-        _max_vl_allowed = 3.20 if (_b5_pre >= _s5_pre * 1.25 and _avg_tx_pre >= 18.0) else 1.65
+        if _is_burned_launchpad and _raw_liq_chk >= 12000.0:
+            _max_vl_allowed = 6.50 if (_b5_pre >= _s5_pre * 1.18) else 3.20
+        elif _b5_pre >= _s5_pre * 1.22 and _avg_tx_pre >= 20.0 and _raw_liq_chk >= 15000.0:
+            _max_vl_allowed = 3.80
+        else:
+            _max_vl_allowed = 1.85
         if _raw_liq_chk > 0 and (_vm5_pre / _raw_liq_chk) > _max_vl_allowed:
             return self._deny(
                 mint,
@@ -1540,9 +1639,16 @@ class Analyzer:
             _vol_liq_r = (_vm5_pre / max(_raw_liq_chk, 1.0)) if _raw_liq_chk > 0 else 0.0
             _txns_tot = _b5_pre + _s5_pre
             _is_organic_stealth = (
-                _vm5_pre >= 2000.0 and _b5_pre >= 12 and _b5_pre >= _s5_pre * 1.15
-                and _raw_liq_chk >= 8000.0 and _vol_liq_r <= 2.60 and _txns_tot <= 800
-                and _avg_tx_pre >= 16.0
+                (
+                    _vm5_pre >= 2000.0 and _b5_pre >= 12 and _b5_pre >= _s5_pre * 1.15
+                    and _raw_liq_chk >= 8000.0 and _vol_liq_r <= 2.80 and _txns_tot <= 800
+                    and _avg_tx_pre >= 16.0
+                )
+                or (
+                    _vm5_pre >= 10000.0 and _b5_pre >= 40 and _b5_pre >= _s5_pre * 1.22
+                    and _raw_liq_chk >= 14000.0 and _vol_liq_r <= 6.50
+                    and (_avg_tx_pre >= 28.0 or _is_deep_launchpad_runner)
+                )
             )
             if not _is_organic_stealth:
                 return self._deny(
@@ -1589,7 +1695,7 @@ class Analyzer:
                         liquidity=liq_val,
                         m5_pct=_m5,
                         source="ROCKET_XGB_PRIMARY",
-                        features=getattr(self, "last_rkt_features", None)
+                        features=getattr(self, "rkt_features_map", {}).get(mint) or getattr(self, "last_rkt_features", None)
                     )
                 except Exception:
                     pass
@@ -1610,7 +1716,7 @@ class Analyzer:
                 return self._deny(mint, f"low-liq ${_eff_pool_liq:.0f}<{_min_liq:.0f}", f"🚫 [ANTI-RUG] {symbol} ({mint[:8]}): Реальная ликвидность DEX ${_eff_pool_liq:,.0f} < ${_min_liq:,.0f} — риск дампа/проскальзывания.")
 
             # Защита от анонимных wash-bot накруток на DEX (кейсы Belief/BUZZ: 0 соцсетей, liq <$25k, vol5/liq > 2.2x при слабом перевесе покупателей)
-            # НО: не блокируем реальные ракеты с крупными сделками (avg_tx > $80 = органические трейдеры, а не микро-боты)
+            # НО: не блокируем сожжённые лаунчпад-пулы с перевесом покупателей и реальные ракеты с живым чеком!
             _info_a = pair_data.get("info") or {}
             _has_soc_a = bool((_info_a.get("socials") or []) or (_info_a.get("websites") or []))
             if not _is_raw_curve and not _has_soc_a and raw_liq < 25000.0:
@@ -1618,9 +1724,11 @@ class Analyzer:
                 _bs_a = _b5_pre / float(max(_s5_pre, 1))
                 _tot_tx5_a = _b5_pre + _s5_pre
                 _avg_tx5_a = _vm5_pre / max(_tot_tx5_a, 1)
-                # Органические ракеты: средняя сделка > $60 (настоящие покупатели, не боты), игнорируем wash-churn
-                _is_organic_trades = (_avg_tx5_a >= 60.0 and _b5_pre >= 100 and _bs_a >= 1.4)
-                if _v2l_a > 2.2 and _bs_a < 1.8 and not _is_organic_trades:
+                _is_organic_trades = (
+                    (_avg_tx5_a >= 32.0 and _b5_pre >= 40 and _bs_a >= 1.25)
+                    or (mint.endswith(("pump", "bonk", "BAGS")) and raw_liq >= 14000.0 and _bs_a >= 1.22)
+                )
+                if _v2l_a > 2.6 and _bs_a < 1.5 and not _is_organic_trades:
                     return self._deny(mint, f"anon-wash-churn {_v2l_a:.1f}x", f"🚫 [WASH-TRAP] {symbol} ({mint[:8]}): 0 соцсетей, liq ${raw_liq:,.0f}, оборот 5м {_v2l_a:.1f}x пула (b/s {_bs_a:.2f}, avg ${_avg_tx5_a:.0f}) — анонимный wash-дамп!")
 
             # Блок кастомных не-pump токенов на PumpSwap с микропулом
@@ -2286,7 +2394,7 @@ class Analyzer:
                 # Маркеты из RugCheck
                 for _mkt in (rc_data.get("markets") or []):
                     if isinstance(_mkt, dict):
-                        for _m_field in ("pubkey", "liquidityA", "liquidityB"):
+                        for _m_field in ("pubkey", "liquidityA", "liquidityB", "baseVault", "quoteVault"):
                             if _mkt.get(_m_field):
                                 pool_accounts.add(_mkt[_m_field])
                 
@@ -2311,6 +2419,10 @@ class Analyzer:
                     DEX_POOL_AUTHORITIES = {
                         "5Q544fKrFoe6tsEbD7S8EmxGTJYAKtTVhAW5Q5pge4j1", # Raydium AMM V4
                         "D4FPEruKEHrG5NTsqazoqfv8zsFWApqTjuzFLUQDkTz5", # Raydium CP-Swap
+                        "GpMZbSM2GgvTKHJirzeGfMFoaZ8UR2X7F4v8vHTvxFbL", # Raydium CPMM / LaunchLab
+                        "CAMMCzo5YL8w4VFF8KVHrK22GGUsp5VTaW7grrKgrWqK", # Raydium CLMM
+                        "pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA", # PumpSwap AMM
+                        "39azUYFWPz3VHgKCf3VChUwbpURdCHRxjWVowf5jUJjg", # Pump.fun Migration Authority
                         "Eo7WjKq67rjJQSZxS6z3YkapzY3eMj6Xy8X5EQVn5UaB", # Meteora Dynamic Pools
                         "LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo", # Meteora DLMM
                         "whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc", # Orca Whirlpools
@@ -2539,11 +2651,13 @@ class Analyzer:
             c0 = ohlcv[0]
             c0_open, c0_high, c0_low, c0_close = float(c0[1] or 0), float(c0[2] or 0), float(c0[3] or 0), float(c0[4] or 0)
             eff_close = min(c0_close, cur_px) if (cur_px > 0 and c0_close > 0) else (cur_px or c0_close)
-            c0_pct = ((eff_close - c0_open) / c0_open * 100.0) if c0_open > 0 else 0.0
-
-            if not isinstance(pair_data.get("priceChange"), dict):
-                pair_data["priceChange"] = {}
-            pair_data["priceChange"]["m1"] = round(c0_pct, 2)
+            if c0_open > 0 and 0.04 <= (eff_close / c0_open) <= 12.0:
+                c0_pct = max(-95.0, min(180.0, (eff_close - c0_open) / c0_open * 100.0))
+                if not isinstance(pair_data.get("priceChange"), dict):
+                    pair_data["priceChange"] = {}
+                pair_data["priceChange"]["m1"] = round(c0_pct, 2)
+            else:
+                c0_pct = float(((pair_data.get("priceChange") or {}).get("m1", 0)) or 0)
 
             highs_5m = [float(r[2] or 0) for r in ohlcv[:5] if float(r[2] or 0) > 0]
             lows_5m = [float(r[3] or 0) for r in ohlcv[:5] if float(r[3] or 0) > 0]
@@ -3421,6 +3535,10 @@ class Analyzer:
         _m5 = float(_pc.get("m5", 0) or 0)
         _m1 = float(_pc.get("m1", 0) or 0)
         _h1 = float(_pc.get("h1", 0) or 0)
+        # Защита фичей XGBoost от битых котировок / смены пула (+208,153,141% m1 ронял скор живых ракет):
+        if abs(_m1) > max(180.0, abs(_m5) * 3.0 + 40.0):
+            _m1 = max(-40.0, min(40.0, _m5 * 0.20))
+        _m1 = max(-95.0, min(200.0, _m1))
         _h6 = float(_pc.get("h6", 0) or 0)
         _fdv_check = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
 
