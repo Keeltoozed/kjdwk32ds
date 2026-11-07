@@ -50,8 +50,8 @@ class MatureExitManager:
         # 1. ФИКСАЦИЯ ПРИБЫЛИ (PROFIT FLOOR & TRAILING STOP ДЛЯ РАКЕТ + ЗАЩИТА ДО TP1)
         # =========================================================================
         _is_mb = getattr(position, "is_moonbag", False)
-        _tp1_thr = float(getattr(config, "TP1_TRIGGER_PCT", 0.16))
-        _be_act = float(getattr(config, "BREAKEVEN_PCT", 0.095))
+        _tp1_thr = float(getattr(config, "TP1_TRIGGER_PCT", 0.095))
+        _be_act = float(getattr(config, "BREAKEVEN_PCT", 0.08))
         _floor_pnl = None
         _trail_dist = None
 
@@ -67,17 +67,20 @@ class MatureExitManager:
         elif max_pnl_pct >= 0.50:
             _floor_pnl = 0.26
             _trail_dist = 0.16
-        elif max_pnl_pct >= 0.28:
+        elif max_pnl_pct >= 0.25:
             _floor_pnl = 0.10
-            _trail_dist = 0.15
+            _trail_dist = 0.10
+        elif max_pnl_pct >= 0.15:
+            _floor_pnl = 0.06
+            _trail_dist = 0.06
+        elif max_pnl_pct >= 0.09:
+            _floor_pnl = 0.035
+            _trail_dist = 0.045
         else:
-            # ВАЖНО: На интервале +16%..+28% сразу после взятия TP1 НЕ ставим тесный пол +3%,
-            # который убивал мунбэг за 16 секунд на первом же спредовом тике (кейсы farmsem, DUGE)!
-            # Мунбэг защищён снизу подтверждённым безубытком -1.5% (секция 1.5 ниже).
             _floor_pnl = None
             _trail_dist = None
 
-        if _floor_pnl is not None and minutes_held >= 0.45:
+        if _floor_pnl is not None and minutes_held >= 0.25:
             drop_from_max = (position.max_price_usd - current_price) / position.max_price_usd if position.max_price_usd > 0 else 0.0
 
             if pnl_pct >= 0.02:
@@ -99,34 +102,32 @@ class MatureExitManager:
                 position.mature_floor_confirm = 0
 
         # =========================================================================
-        # 1.4. PRE-TP1 BREAKEVEN SHIELD (ЗАЩИТА СДЕЛОК С ПИКОМ +9.5%..+16%)
-        # После достижения +9.5% пика при развороте <= +2.2% (2 тика подряд) закрываем сделку в плюс.
+        # 1.4. PRE-TP1 BREAKEVEN SHIELD (ЗАЩИТА СДЕЛОК С ПИКОМ +8.0%..+9.5%)
+        # После достижения +8.0% пика при возврате к цене входа (<= +0.8%) закрываем сделку в безубыток.
         # =========================================================================
-        if not _is_mb and max_pnl_pct >= _be_act and minutes_held >= 0.65:
-            if pnl_pct <= 0.022:
+        if not _is_mb and max_pnl_pct >= _be_act and minutes_held >= 0.25:
+            if pnl_pct <= 0.03:
                 _pbe = int(getattr(position, "pre_tp_be_confirm", 0) or 0) + 1
                 position.pre_tp_be_confirm = _pbe
-                if _pbe >= 2 or pnl_pct <= -0.025:
+                if _pbe >= 2 or pnl_pct <= 0.008:
                     return f"Mature Breakeven Shield ({pnl_pct*100:+.1f}% locked after peak +{max_pnl_pct*100:.1f}%)"
             else:
                 position.pre_tp_be_confirm = 0
 
         # =========================================================================
-        # 1.5. БЕЗУБЫТОК ДЛЯ МУНБЭГА ПОСЛЕ ВЗЯТИЯ TP1 (+16% уже в кармане на 40% объёма!)
-        # Раньше 1-тиковый выход на <= +2.5% душил ракеты за 16 секунд (farmsem +6.2%, DUGE +4.0%).
-        # Теперь даём 20с передышки после TP1 и держим пол -1.5% с 3-тиковым подтверждением:
-        # суммарная сделка гарантированно остаётся в чистом плюсе (~+4.5%..+5.5%), а ракета переживает ретест!
+        # 1.5. БЕЗУБЫТОК ДЛЯ МУНБЭГА ПОСЛЕ ВЗЯТИЯ TP1 (+9.5% уже в кармане на 50% объёма!)
+        # Суммарная сделка гарантированно остаётся в чистом плюсе, а остаток защищён от ухода в минус.
         # =========================================================================
         if _is_mb and max_pnl_pct >= _tp1_thr:
             _since_tp1 = now_ts - float(getattr(position, "last_tp_ts", 0.0) or 0.0)
-            if pnl_pct <= -0.08:
+            if pnl_pct <= -0.05:
                 return f"Mature Breakeven ({pnl_pct*100:+.1f}% hard reversal after TP1)"
-            if _since_tp1 >= 20.0 and pnl_pct <= -0.015:
+            if _since_tp1 >= 10.0 and pnl_pct <= 0.005:
                 _mb_be = int(getattr(position, "mb_be_confirm_n", 0) or 0) + 1
                 position.mb_be_confirm_n = _mb_be
-                if _mb_be >= 3:
+                if _mb_be >= 2:
                     return f"Mature Breakeven ({pnl_pct*100:+.1f}% locked after TP1)"
-            elif pnl_pct > -0.015:
+            elif pnl_pct > 0.005:
                 position.mb_be_confirm_n = 0
 
         # =========================================================================
@@ -182,17 +183,17 @@ class MatureExitManager:
         # =========================================================================
         # 4. ВЫХОД ПО СТАГНАЦИИ
         # =========================================================================
-        _stall_sec = float(getattr(config, "STALL_TIMER_SEC", 360.0))
-        _stall_loss = float(getattr(config, "STALL_MAX_LOSS_PCT", -0.095))
+        _stall_sec = float(getattr(config, "STALL_TIMER_SEC", 210.0))
+        _stall_loss = float(getattr(config, "STALL_MAX_LOSS_PCT", -0.075))
         _buyers_active_stall = False
         if isinstance(_pd, dict) and _pd:
             _tx_st = (_pd.get("txns") or {}).get("m5") or {}
             _b_st = int(_tx_st.get("buys", 0) or 0)
             _s_st = int(_tx_st.get("sells", 0) or 0)
-            if _b_st >= 25 and _b_st >= _s_st * 1.20:
+            if _b_st >= 25 and _b_st >= _s_st * 1.30:
                 _buyers_active_stall = True
-        _eff_stall_sec = (_stall_sec + 180.0) if _buyers_active_stall else _stall_sec
-        if minutes_held >= (_eff_stall_sec / 60.0) and max_pnl_pct < 0.05 and pnl_pct <= _stall_loss:
+        _eff_stall_sec = (_stall_sec + 60.0) if _buyers_active_stall else _stall_sec
+        if minutes_held >= (_eff_stall_sec / 60.0) and max_pnl_pct < 0.04 and pnl_pct <= _stall_loss:
             return f"Dead Momentum Stall ({minutes_held*60:.0f}s no breakout, pnl {pnl_pct*100:.1f}%)"
 
         _loss_min = float(getattr(config, 'STAGNANT_LOSS_MIN', 12.0))

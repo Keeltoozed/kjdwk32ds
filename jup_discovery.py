@@ -427,7 +427,8 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
     _liq_j = float(((td or {}).get("liquidity") or {}).get("usd", 0) or 0)
 
     if _m5_j > _max_m5_cfg:
-        _is_breakout = (_vm5_j >= 10000.0 and _b5_j >= _s5_j * 1.20 and _m5_j <= 165.0)
+        _max_allowed_m5_j = 450.0 if (_age_j <= 30.0 or mint.endswith(("pump", "bonk", "BAGS")) or _dex_j == "pumpswap") else 165.0
+        _is_breakout = (_vm5_j >= 6000.0 and _b5_j >= _s5_j * 1.12 and _m5_j <= _max_allowed_m5_j)
         if not _is_breakout:
             print(f"🚫 [{source_tag}-FOMO-M5] {_sym_tmp}: m5 +{_m5_j:.1f}% > +{_max_m5_cfg:.0f}% без прорывного объема — отмена!")
             return False

@@ -108,15 +108,15 @@ TIME_EXIT_PROFIT_REQ = 0.015
 
 # === ЛЕСТНИЦА ТЕЙК-ПРОФИТОВ (+EV АСИММЕТРИЯ: ГАРАНТИРОВАННЫЙ ПЛЮС + ПРОСТОР ДЛЯ РАКЕТ) ===
 PARTIAL_TP_ENABLED = True
-TP1_TRIGGER_PCT = 0.16          # На +16% фиксируем 40% позиции (кэш в кармане, 60% мунбэг дышит до -1.5% на 2-ю волну!)
-TP1_SELL_FRAC = 0.40
-TP2_TRIGGER_PCT = 0.35          # На +35% фиксируем 40% от остатка (24% исходной позиции)
+TP1_TRIGGER_PCT = 0.095          # На +9.5% фиксируем 50% позиции (кэш в кармане, 50% мунбэг едет дальше!)
+TP1_SELL_FRAC = 0.50
+TP2_TRIGGER_PCT = 0.22          # На +22% фиксируем 40% от остатка
 TP2_SELL_FRAC = 0.40
-TP3_TRIGGER_PCT = 0.80          # На +80% фиксируем 50% от остатка (18% исходной позиции)
+TP3_TRIGGER_PCT = 0.50          # На +50% фиксируем 50% от остатка
 TP3_SELL_FRAC = 0.50
-TP4_TRIGGER_PCT = 2.00          # На +200% (3x) фиксируем 50% от остатка
+TP4_TRIGGER_PCT = 1.50          # На +150% фиксируем 50% от остатка
 TP4_SELL_FRAC = 0.50
-TP5_TRIGGER_PCT = 5.00          # На +500% (6x) фиксируем 50% от остатка
+TP5_TRIGGER_PCT = 4.00          # На +400% (5x) фиксируем 50% от остатка
 TP5_SELL_FRAC = 0.50
 MOONBAG_TRIGGER_PCT = 999.0
 MOONBAG_SELL_FRAC = 0.0
@@ -128,19 +128,19 @@ ROCKET_XGB_STAGE1_THRESHOLD = 10.0  # Первичный отсев в 0мс (о
 ROCKET_XGB_FINAL_THRESHOLD = 14.0   # Финальный порог с ончейн-холдерами (ловит ракеты DUGE, 花, SOUVENIR, CHOO, ELYSIONPAD)
 ROCKET_XGB_THRESHOLD = 12.0
 
-STALL_TIMER_SEC = 300.0   # 5.0 минут (быстрый срез стоячего минуса без заморозки слота)
-STALL_MAX_LOSS_PCT = -0.085
+STALL_TIMER_SEC = 210.0   # 3.5 минуты (быстрый срез стоячего минуса без затягивания убытка до 13м)
+STALL_MAX_LOSS_PCT = -0.075
 
-TRAILING_ACTIVATION_PCT = 0.28
-TRAILING_DISTANCE_PCT = 0.12
-TRAILING_RUNNER_DISTANCE_PCT = 0.15
+TRAILING_ACTIVATION_PCT = 0.095
+TRAILING_DISTANCE_PCT = 0.045
+TRAILING_RUNNER_DISTANCE_PCT = 0.08
 SCALP_PROFIT_ENABLED = False
 
 WHALE_DUMP_GUARD_PCT = 0.22
 EVM_RUNNER_CRASH = 0.25
 EVM_NORMAL_CRASH = 0.22
 
-BREAKEVEN_PCT = 0.095     # После +9.5% пика включается Pre-TP1 Breakeven Shield (+2.2% пол) — зеленые сделки не превращаются в минусы!
+BREAKEVEN_PCT = 0.08     # После +8.0% пика включается Breakeven Shield (+1.0%..+3.5% пол) — зеленые сделки больше никогда не уходят в минус!
 
 PREFETCH_TTL_SEC = 35
 SOLANA_MIN_AGE_MIN = 0.5        # Разрешаем молодые ракеты от 30 секунд (LEMON +406%, SHADOW +195%)

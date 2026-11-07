@@ -336,15 +336,15 @@ async def position_manager_loop(analyzer, tracker):
                 # === ИНТЕГРАЦИЯ МАТЕМАТИКИ ДЛЯ ЗРЕЛЫХ МОНЕТ (SWING TRADING / RIDE RUNNERS) ===
                 # Исполняется ДО скальперских Early Fade / Stagnant срезов, чтобы ракеты ехали по MatureExitManager!
                 # === ИНТЕГРАЦИЯ МАТЕМАТИКИ ДЛЯ ВСЕХ ПОЗИЦИЙ SOLANA (main.py строки 240-280) ===
-                _tp1_sol_thr = float(getattr(config, "TP1_TRIGGER_PCT", 0.12))
+                _tp1_sol_thr = float(getattr(config, "TP1_TRIGGER_PCT", 0.095))
                 _tp1_sell = float(getattr(config, "TP1_SELL_FRAC", 0.50))
-                _tp2 = float(getattr(config, "TP2_TRIGGER_PCT", 0.28))
+                _tp2 = float(getattr(config, "TP2_TRIGGER_PCT", 0.22))
                 _tp2_sell = float(getattr(config, "TP2_SELL_FRAC", 0.40))
-                _tp3 = float(getattr(config, "TP3_TRIGGER_PCT", 0.75))
+                _tp3 = float(getattr(config, "TP3_TRIGGER_PCT", 0.50))
                 _tp3_sell = float(getattr(config, "TP3_SELL_FRAC", 0.50))
-                _tp4 = float(getattr(config, "TP4_TRIGGER_PCT", 2.00))
+                _tp4 = float(getattr(config, "TP4_TRIGGER_PCT", 1.50))
                 _tp4_sell = float(getattr(config, "TP4_SELL_FRAC", 0.50))
-                _tp5 = float(getattr(config, "TP5_TRIGGER_PCT", 6.00))
+                _tp5 = float(getattr(config, "TP5_TRIGGER_PCT", 4.00))
                 _tp5_sell = float(getattr(config, "TP5_SELL_FRAC", 0.50))
                 if True:
                     if getattr(config, "PARTIAL_TP_ENABLED", True) and pnl_pct >= _tp1_sol_thr and not getattr(position, "tp1_done", False):
@@ -400,10 +400,10 @@ async def position_manager_loop(analyzer, tracker):
                         tracker.close_position(mint, current_price, mature_exit_reason)
                     continue
                     
-                # === STALL TIMER (DEAD MOMENTUM EXIT - 420с на консолидацию без ложных срезов) ===
-                _stall_sec = float(getattr(config, "STALL_TIMER_SEC", 420.0))
-                _stall_loss = float(getattr(config, "STALL_MAX_LOSS_PCT", -0.16))
-                if minutes_held >= (_stall_sec / 60.0) and max_pnl_pct < 0.08 and pnl_pct <= _stall_loss:
+                # === STALL TIMER (DEAD MOMENTUM EXIT - 210с на консолидацию без затягивания убытка) ===
+                _stall_sec = float(getattr(config, "STALL_TIMER_SEC", 210.0))
+                _stall_loss = float(getattr(config, "STALL_MAX_LOSS_PCT", -0.075))
+                if minutes_held >= (_stall_sec / 60.0) and max_pnl_pct < 0.04 and pnl_pct <= _stall_loss:
                     tracker.close_position(mint, current_price, f"Dead Momentum Stall ({minutes_held*60:.0f}s no breakout, pnl {pnl_pct*100:.1f}%)")
                     continue
 
@@ -430,10 +430,9 @@ async def position_manager_loop(analyzer, tracker):
                         _alive = ((_tx5.get("buys", 0) or 0) + (_tx5.get("sells", 0) or 0)) >= 3
                     except Exception:
                         continue
-                    if _alive and _graces < 2:
+                    if _alive and _graces < 1 and pnl_pct > -0.04:
                         position.stagnant_graces = _graces + 1
-                        position.entry_time = time.time() - 2 * 60
-                        print(f"⏳ {mint[:8]}: живой флет ({pnl_pct*100:.1f}%), грейс {position.stagnant_graces}/2 — ждём выстрел.")
+                        print(f"⏳ {mint[:8]}: живой флет ({pnl_pct*100:.1f}%), грейс {position.stagnant_graces}/1 — ждём выстрел.")
                         continue
                     from jupiter import JupiterAPI
                     _j_ok, _j_why = await JupiterAPI.is_token_sellable(mint)
@@ -1028,11 +1027,12 @@ async def scanner_loop(analyzer, tracker):
                                 if _m5_live < 1.0 or _m1_live < -4.5:
                                     print(f"🚫 [SCANNER-LIVE-REVERSAL] {actual_symbol} ({mint[:8]}): на живом графике импульс сломан (m5 {_m5_live:+.1f}%, m1 {_m1_live:+.1f}%) — отмена покупки!")
                                     continue
-                                _max_m5_cfg = float(getattr(config, "MAX_ENTRY_M5_PCT", 95.0))
+                                _max_m5_cfg = float(getattr(config, "MAX_ENTRY_M5_PCT", 110.0))
                                 if _m5_live > _max_m5_cfg:
                                     _b5_sc = int((pair_data.get("txns") or {}).get("m5", {}).get("buys", 0) or 0)
                                     _s5_sc = int((pair_data.get("txns") or {}).get("m5", {}).get("sells", 0) or 0)
-                                    _is_breakout = (_vol5_live >= 12000.0 and _b5_sc >= _s5_sc * 1.25 and _m5_live <= 130.0)
+                                    _max_allowed_m5 = 450.0 if (_age_m <= 30.0 or mint in _graduated_set or mint.endswith(("pump", "bonk", "BAGS")) or _dex_id == "pumpswap") else 165.0
+                                    _is_breakout = (_vol5_live >= 6000.0 and _b5_sc >= _s5_sc * 1.12 and _m5_live <= _max_allowed_m5)
                                     if not _is_breakout:
                                         print(f"🚫 [SCANNER-FOMO-M5] {actual_symbol} ({mint[:8]}): живой m5 +{_m5_live:.1f}% > +{_max_m5_cfg:.0f}% без прорывного объема — вершина свечи, отмена!")
                                         continue
