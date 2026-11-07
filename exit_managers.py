@@ -68,66 +68,65 @@ class MatureExitManager:
             _floor_pnl = 0.26
             _trail_dist = 0.16
         elif max_pnl_pct >= 0.25:
-            _floor_pnl = 0.10
-            _trail_dist = 0.10
+            _floor_pnl = 0.12
+            _trail_dist = 0.09
         elif max_pnl_pct >= 0.15:
-            _floor_pnl = 0.06
+            _floor_pnl = 0.07
             _trail_dist = 0.06
         elif max_pnl_pct >= 0.09:
-            _floor_pnl = 0.035
+            _floor_pnl = 0.040
             _trail_dist = 0.045
         else:
             _floor_pnl = None
             _trail_dist = None
 
-        if _floor_pnl is not None and minutes_held >= 0.25:
+        if _floor_pnl is not None and minutes_held >= 0.15:
             drop_from_max = (position.max_price_usd - current_price) / position.max_price_usd if position.max_price_usd > 0 else 0.0
 
-            if pnl_pct >= 0.02:
+            if pnl_pct >= 0.015:
                 if _trail_dist is not None and drop_from_max >= _trail_dist and pnl_pct >= _floor_pnl:
                     _tc = int(getattr(position, "mature_trail_confirm", 0) or 0) + 1
                     position.mature_trail_confirm = _tc
-                    if _tc >= 2:
+                    if _tc >= 2 or drop_from_max >= (_trail_dist * 1.35):
                         return f"Mature Trailing Profit ({pnl_pct*100:+.1f}% locked after peak +{max_pnl_pct*100:.1f}%)"
                 elif pnl_pct <= _floor_pnl:
                     _fc = int(getattr(position, "mature_floor_confirm", 0) or 0) + 1
                     position.mature_floor_confirm = _fc
-                    if _fc >= 2:
+                    if _fc >= 2 or pnl_pct <= (_floor_pnl - 0.015):
                         return f"Mature Profit Floor ({pnl_pct*100:+.1f}% locked after peak +{max_pnl_pct*100:.1f}%)"
                 else:
                     position.mature_trail_confirm = 0
                     position.mature_floor_confirm = 0
+            elif pnl_pct < 0.015 and max_pnl_pct >= 0.085:
+                # Если монета была на пике >= +8.5%, но провалилась ниже +1.5%,
+                # НЕМЕДЛЕННО закрываем в безубыток/защиту прибыли, не давая уйти в минус!
+                return f"Mature Profit Shield ({pnl_pct*100:+.1f}% locked after peak +{max_pnl_pct*100:.1f}%)"
             else:
                 position.mature_trail_confirm = 0
                 position.mature_floor_confirm = 0
 
         # =========================================================================
-        # 1.4. PRE-TP1 BREAKEVEN SHIELD (ЗАЩИТА СДЕЛОК С ПИКОМ +8.0%..+9.5%)
-        # После достижения +8.0% пика при возврате к цене входа (<= +0.8%) закрываем сделку в безубыток.
+        # 1.4. PRE-TP1 BREAKEVEN SHIELD (ЗАЩИТА СДЕЛОК С ПИКОМ +8.5%..+12.0%)
+        # После достижения +8.5% пика при возврате к цене входа (<= +1.5%) закрываем сделку в безубыток.
         # =========================================================================
-        if not _is_mb and max_pnl_pct >= _be_act and minutes_held >= 0.25:
-            if pnl_pct <= 0.03:
-                _pbe = int(getattr(position, "pre_tp_be_confirm", 0) or 0) + 1
-                position.pre_tp_be_confirm = _pbe
-                if _pbe >= 2 or pnl_pct <= 0.008:
-                    return f"Mature Breakeven Shield ({pnl_pct*100:+.1f}% locked after peak +{max_pnl_pct*100:.1f}%)"
-            else:
-                position.pre_tp_be_confirm = 0
+        if not _is_mb and max_pnl_pct >= _be_act and minutes_held >= 0.15:
+            if pnl_pct <= 0.015:
+                return f"Mature Breakeven Shield ({pnl_pct*100:+.1f}% locked after peak +{max_pnl_pct*100:.1f}%)"
 
         # =========================================================================
-        # 1.5. БЕЗУБЫТОК ДЛЯ МУНБЭГА ПОСЛЕ ВЗЯТИЯ TP1 (+9.5% уже в кармане на 50% объёма!)
+        # 1.5. БЕЗУБЫТОК ДЛЯ МУНБЭГА ПОСЛЕ ВЗЯТИЯ TP1 (+12.0% уже в кармане на 40% объёма!)
         # Суммарная сделка гарантированно остаётся в чистом плюсе, а остаток защищён от ухода в минус.
         # =========================================================================
         if _is_mb and max_pnl_pct >= _tp1_thr:
             _since_tp1 = now_ts - float(getattr(position, "last_tp_ts", 0.0) or 0.0)
-            if pnl_pct <= -0.05:
+            if pnl_pct <= -0.04:
                 return f"Mature Breakeven ({pnl_pct*100:+.1f}% hard reversal after TP1)"
-            if _since_tp1 >= 10.0 and pnl_pct <= 0.005:
+            if _since_tp1 >= 10.0 and pnl_pct <= 0.010:
                 _mb_be = int(getattr(position, "mb_be_confirm_n", 0) or 0) + 1
                 position.mb_be_confirm_n = _mb_be
-                if _mb_be >= 2:
+                if _mb_be >= 2 or pnl_pct <= 0.005:
                     return f"Mature Breakeven ({pnl_pct*100:+.1f}% locked after TP1)"
-            elif pnl_pct > 0.005:
+            elif pnl_pct > 0.010:
                 position.mb_be_confirm_n = 0
 
         # =========================================================================
@@ -147,35 +146,28 @@ class MatureExitManager:
                 return f"Front-Run Profit Exit: Sellers dominating ({b5}b/{s5}s) while in profit (+{pnl_pct*100:.1f}%)"
 
         # =========================================================================
-        # 3. ЖЕСТКИЙ КОНТРОЛЬ УБЫТКА (БЕЗ ПРОВАЛОВ -42% В ПЕРВУЮ МИНУТУ!)
+        # 3. ЖЕСТКИЙ КОНТРОЛЬ УБЫТКА (БЕЗ ПРОВАЛОВ -22%..-32%!)
         # =========================================================================
-        _emerg_cap = -abs(float(getattr(config, "EMERGENCY_CAP_PCT", -0.18)))
+        _emerg_cap = -abs(float(getattr(config, "EMERGENCY_CAP_PCT", -0.130)))
         if pnl_pct <= _emerg_cap:
-            _em_c = int(getattr(position, "emerg_confirm_n", 0) or 0) + 1
-            position.emerg_confirm_n = _em_c
-            # При реальном провале пула режем сразу без задержек (кейс Burn / STONKS):
-            # при <= -20% или повторном тике отсекаем мгновенно, не допуская слива до -32%..-42%
-            if pnl_pct <= -0.20 or _em_c >= 2:
-                return f"Mature Emergency Cap ({pnl_pct*100:.1f}%)"
-        else:
-            position.emerg_confirm_n = 0
+            return f"Mature Emergency Cap ({pnl_pct*100:.1f}%)"
 
-        _base_sl = -abs(float(getattr(config, 'STOP_LOSS_PCT', 0.135)))
-        # Если пул глубокий ($22k+), есть соцсети и покупатели продолжают выкупать пролив (кейс DEBTDOG -14% -> +46%),
-        # даём буфер до -15.5% против сноса стопов маркетмейкером
+        _base_sl = -abs(float(getattr(config, 'STOP_LOSS_PCT', -0.100)))
+        # Если пул глубокий ($25k+), есть соцсети и покупатели продолжают выкупать пролив,
+        # даём небольшой буфер до -11.5% против сноса стопов маркетмейкером
         _has_organic_bid = False
         _feats = getattr(position, "ml_features", None) or {}
         if isinstance(_feats, dict) and _feats:
             _f_liq = float(_feats.get("liquidity", 0) or 0)
             _f_bs = float(_feats.get("buy_sell_ratio", 0) or 0)
             _f_links = int(_feats.get("links_count", 0) or (1 if _feats.get("socials") else 0))
-            if _f_liq >= 22000.0 and _f_bs >= 1.28 and _f_links >= 1:
+            if _f_liq >= 25000.0 and _f_bs >= 1.35 and _f_links >= 1:
                 _has_organic_bid = True
-        _sl = min(_base_sl, -0.155) if _has_organic_bid else _base_sl
-        if pnl_pct <= _sl and (minutes_held >= 0.25 or pnl_pct <= -0.16):
+        _sl = min(_base_sl, -0.115) if _has_organic_bid else _base_sl
+        if pnl_pct <= _sl:
             _sl_c = int(getattr(position, "sl_confirm_n", 0) or 0) + 1
             position.sl_confirm_n = _sl_c
-            if _sl_c >= 2 or pnl_pct <= -0.16:
+            if _sl_c >= 2 or pnl_pct <= (_sl - 0.015) or minutes_held >= 0.15:
                 return f"Mature Stop Loss ({pnl_pct*100:.1f}%)"
         else:
             position.sl_confirm_n = 0
@@ -225,8 +217,9 @@ class TrailingExitManager:
         pnl = (current_price - entry) / entry
         max_pnl = (position.max_price_usd - entry) / entry
 
-        if pnl <= -0.16:
-            return "Moonshot Hard Stop (-16%)"
+        _ms_sl = -abs(float(getattr(config, "STOP_LOSS_PCT", -0.10)))
+        if pnl <= _ms_sl:
+            return f"Moonshot Hard Stop ({_ms_sl*100:.0f}%)"
 
         if max_pnl >= self.min_profit and not getattr(position, 'tp_1_hit', False):
             position.tp_1_hit = True

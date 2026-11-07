@@ -382,13 +382,13 @@ async def position_manager_loop(analyzer, tracker):
                     if mature_exit_reason:
                         # Защита от ложного 0м стопа из-за лагающего тика DexScreener / побочного пула (кейс Burn -31% за 0м):
                         # если в первые 2 минуты сработал Emergency Cap / Stop Loss, сверяем с живой ончейн-котировкой Jupiter!
-                        if minutes_held < 2.0 and pnl_pct <= -0.12 and ("Emergency Cap" in mature_exit_reason or "Stop Loss" in mature_exit_reason):
+                        if minutes_held < 2.0 and pnl_pct <= -0.10 and ("Emergency Cap" in mature_exit_reason or "Stop Loss" in mature_exit_reason):
                             try:
                                 from jupiter import JupiterAPI
                                 _live_em_px = await JupiterAPI.get_price(mint)
                                 if _live_em_px and _live_em_px > 0 and position.entry_price_usd > 0:
                                     _live_em_pnl = (_live_em_px - position.entry_price_usd) / position.entry_price_usd
-                                    if _live_em_pnl > -0.11:
+                                    if _live_em_pnl > -0.09:
                                         print(f"🛡️ [EARLY-EXIT-RESCUED] {position.symbol} ({mint[:8]}): ложный тик {pnl_pct*100:+.1f}%, живой Jupiter ${_live_em_px:.8f} ({_live_em_pnl*100:+.1f}%) — позиция спасена!")
                                         position.current_price_usd = _live_em_px
                                         position.emerg_confirm_n = 0
@@ -1027,6 +1027,10 @@ async def scanner_loop(analyzer, tracker):
                                 if _m5_live < 1.0 or _m1_live < -4.5:
                                     print(f"🚫 [SCANNER-LIVE-REVERSAL] {actual_symbol} ({mint[:8]}): на живом графике импульс сломан (m5 {_m5_live:+.1f}%, m1 {_m1_live:+.1f}%) — отмена покупки!")
                                     continue
+                                _max_m1_cfg_live = min(float(getattr(config, "MAX_ENTRY_M1_PCT", 8.0)), 10.0)
+                                if _m1_live > _max_m1_cfg_live and _age_m >= 3.0:
+                                    print(f"🚫 [SCANNER-M1-SPIKE] {actual_symbol} ({mint[:8]}): живой m1 +{_m1_live:.1f}% > +{_max_m1_cfg_live:.1f}% — вершина свечи, отмена!")
+                                    continue
                                 _max_m5_cfg = float(getattr(config, "MAX_ENTRY_M5_PCT", 110.0))
                                 if _m5_live > _max_m5_cfg:
                                     _b5_sc = int((pair_data.get("txns") or {}).get("m5", {}).get("buys", 0) or 0)
@@ -1040,21 +1044,24 @@ async def scanner_loop(analyzer, tracker):
                                 _soc_unk_sc = bool(pair_data.get("_socials_unknown", False))
                                 _b5_sc = int((pair_data.get("txns") or {}).get("m5", {}).get("buys", 0) or 0)
                                 _s5_sc = int((pair_data.get("txns") or {}).get("m5", {}).get("sells", 0) or 0)
-                                _is_stealth_sc = (_vol5_live >= 4500.0 and _b5_sc >= 20 and _b5_sc >= _s5_sc * 1.15 and liq_usd >= 12000.0)
-                                _base_max_h1_live = float(getattr(config, "MAX_ENTRY_H1_PCT", 360.0))
+                                if _links_sc == 0 and not _soc_unk_sc:
+                                    if _age_m >= 12.0:
+                                        print(f"🚫 [SCANNER-NO-SOC] {actual_symbol} ({mint[:8]}): 0 соцсетей при возрасте {_age_m:.0f}м (>=12м) — отмена!")
+                                        continue
+                                    _is_stealth_sc = (_vol5_live >= 6000.0 and _b5_sc >= 30 and _b5_sc >= _s5_sc * 1.50 and liq_usd >= 18000.0)
+                                    if not _is_stealth_sc:
+                                        print(f"🚫 [SCANNER-NO-SOC] {actual_symbol} ({mint[:8]}): 0 соцсетей без органики — отмена!")
+                                        continue
+                                _base_max_h1_live = float(getattr(config, "MAX_ENTRY_H1_PCT", 350.0))
                                 _is_fresh_active_sc = (
-                                    (_age_m <= 90.0 or mint.endswith(("pump", "bonk", "BAGS")) or _dex_id == "pumpswap")
+                                    _age_m <= 4.0
                                     and _vol5_live >= 5000.0
                                     and _b5_sc >= _s5_sc * 1.15
                                 )
                                 _max_h1_live = 2500.0 if _is_fresh_active_sc else _base_max_h1_live
-                                if _links_sc == 0 and not _soc_unk_sc and not _is_stealth_sc and (_h1_live > 180.0 or _m5_live > 110.0):
-                                    print(f"🚫 [SCANNER-FOMO-NO-SOC] {actual_symbol} ({mint[:8]}): памп (h1 +{_h1_live:.0f}%, m5 +{_m5_live:.0f}%) без соцсетей — ловушка памп-дампа дева, отмена!")
+                                if _h1_live > _max_h1_live and _age_m > 4.0:
+                                    print(f"🚫 [SCANNER-LIVE-EXHAUSTED] {actual_symbol} ({mint[:8]}): живой h1 {_h1_live:+.0f}% > +{_max_h1_live:.0f}% — перегретая вершина, отмена!")
                                     continue
-                                if _h1_live > _max_h1_live:
-                                    if _age_m >= 12.0 or (_vol5_live < 35000.0 and _h1_live > _max_h1_live):
-                                        print(f"🚫 [SCANNER-LIVE-EXHAUSTED] {actual_symbol} ({mint[:8]}): живой h1 {_h1_live:+.0f}% > +{_max_h1_live:.0f}% — перегретая вершина, отмена!")
-                                        continue
                                 # СТАЛО (в main.py строки 506-524):
                                 if _pk_drop_live <= -18.0 or _lq_drop_live <= -18.0:
                                     print(f"🚫 [SCANNER-POST-PEAK] {actual_symbol} ({mint[:8]}): токен слился от пика (цена {_pk_drop_live:+.1f}%, ликва {_lq_drop_live:+.1f}%) — отмена!")

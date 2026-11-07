@@ -135,9 +135,9 @@ async def fetch_jup_tokens() -> list:
                 continue
             if age_m > 60.0 and pc5 < 2.0:
                 continue
-            _is_fresh_jup = m.endswith(("pump", "bonk", "BAGS")) or age_m <= 90.0
-            _max_pc1h = 2500.0 if (_is_fresh_jup and pc5 >= 2.0 and b5 >= s5) else 360.0
-            if pc1h > _max_pc1h or (pc1h < -25.0 and pc5 < 12.0):
+            _is_fresh_jup = age_m <= 4.0
+            _max_pc1h = 2500.0 if (_is_fresh_jup and pc5 >= 2.0 and b5 >= s5) else float(getattr(config, "MAX_ENTRY_H1_PCT", 350.0))
+            if (pc1h > _max_pc1h and age_m > 4.0) or (pc1h < -25.0 and pc5 < 12.0):
                 continue
             if pc5 < min_pc5 or vol5 < 1500.0:
                 continue
@@ -208,9 +208,9 @@ async def fetch_jup_tokens() -> list:
                     continue
                 if age_p > 360.0 and (vol5_p < 6000.0 or m5_p < 5.0 or liq_p < 25000.0):
                     continue
-                _is_fresh_ds = addr.endswith(("pump", "bonk", "BAGS")) or dex_p == "pumpswap" or age_p <= 90.0
-                _max_h1_ds = 2500.0 if (_is_fresh_ds and b5_p >= s5_p * 1.15) else 360.0
-                if h1_p > _max_h1_ds:
+                _is_fresh_ds = age_p <= 4.0
+                _max_h1_ds = 2500.0 if (_is_fresh_ds and b5_p >= s5_p * 1.15) else float(getattr(config, "MAX_ENTRY_H1_PCT", 350.0))
+                if h1_p > _max_h1_ds and age_p > 4.0:
                     continue
                 seen.add(addr)
                 ranked.append((m5_p, vol5_p, sym_p, addr, "ds_radar"))
@@ -336,10 +336,14 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
     _m1_j = float(_pc_j.get("m1", 0) or 0)
     if abs(_m1_j) > max(180.0, abs(_m5_j) * 3.0 + 40.0):
         _m1_j = _m5_j / 5.0
+    _max_m1_cfg_j = min(float(getattr(config, "MAX_ENTRY_M1_PCT", 8.0)), 10.0)
+    if _m1_j > _max_m1_cfg_j and _age_j >= 3.0:
+        print(f"🚫 [{source_tag}-M1-SPIKE] {_sym_tmp} ({mint[:8]}): m1 +{_m1_j:.1f}% > +{_max_m1_cfg_j:.1f}% — вершина свечи, отмена входа.")
+        return False
     _h1_j = float(_pc_j.get("h1", 0) or 0)
-    _is_fresh_j = mint.endswith(("pump", "bonk", "BAGS")) or _dex_j == "pumpswap" or _age_j <= 90.0
-    _max_h1_j = 2500.0 if (_is_fresh_j and _m5_j >= 2.5 and _b5_j >= _s5_j * 1.15) else float(getattr(config, "MAX_ENTRY_H1_PCT", 360.0))
-    if _h1_j > _max_h1_j:
+    _is_fresh_j = _age_j <= 4.0
+    _max_h1_j = 2500.0 if (_is_fresh_j and _m5_j >= 2.5 and _b5_j >= _s5_j * 1.15) else float(getattr(config, "MAX_ENTRY_H1_PCT", 350.0))
+    if _h1_j > _max_h1_j and _age_j > 4.0:
         print(f"🚫 [{source_tag}-H1-EXHAUSTED] {_sym_tmp} ({mint[:8]}): h1 {_h1_j:+.0f}% > +{_max_h1_j:.0f}% — памп уже отработал, вход = вершина.")
         return False
     _min_m1_j = -2.8 if _m5_j < 12.0 else -6.0
@@ -432,8 +436,8 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
         if not _is_breakout:
             print(f"🚫 [{source_tag}-FOMO-M5] {_sym_tmp}: m5 +{_m5_j:.1f}% > +{_max_m5_cfg:.0f}% без прорывного объема — отмена!")
             return False
-    _eff_max_h1_j = 2500.0 if (mint.endswith(("pump", "bonk", "BAGS")) or _dex_j == "pumpswap" or _age_j <= 90.0) and (_vm5_j >= 4000.0 and _b5_j >= _s5_j * 1.15) else _max_h1_cfg
-    if _h1_j > _eff_max_h1_j and _age_j >= 10.0:
+    _eff_max_h1_j = 2500.0 if (_age_j <= 4.0 and _vm5_j >= 4000.0 and _b5_j >= _s5_j * 1.15) else _max_h1_cfg
+    if _h1_j > _eff_max_h1_j and _age_j > 4.0:
         print(f"🚫 [{source_tag}-FOMO-H1] {_sym_tmp}: h1 +{_h1_j:.0f}% > +{_eff_max_h1_j:.0f}% — перегретый часовой памп, отмена!")
         return False
     _links_j = len((td or {}).get("info", {}).get("socials", []) or []) + len((td or {}).get("info", {}).get("websites", []) or [])
@@ -441,11 +445,11 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
     if _links_j == 0 and not _soc_unk_j:
         _avg_j = _vm5_j / max(1, _b5_j + _s5_j)
         _vl_j = _vm5_j / max(_liq_j, 1.0)
-        if _age_j >= 20.0:
-            print(f"🚫 [{source_tag}-NO-SOCIALS] {_sym_tmp}: 0 соцсетей в зрелом возрасте {_age_j:.0f}м (>=20м) — отмена!")
+        if _age_j >= 12.0:
+            print(f"🚫 [{source_tag}-NO-SOCIALS] {_sym_tmp}: 0 соцсетей в зрелом возрасте {_age_j:.0f}м (>=12м) — отмена!")
             return False
         else:
-            _is_organic_stealth = (_vm5_j >= 5000.0 and _b5_j >= 25 and _b5_j >= _s5_j * 1.12 and _liq_j >= 12000.0 and _avg_j >= 12.0 and _vl_j <= 6.0)
+            _is_organic_stealth = (_vm5_j >= 6000.0 and _b5_j >= 30 and _b5_j >= _s5_j * 1.50 and _liq_j >= 18000.0 and _avg_j >= 15.0 and _vl_j <= 1.8)
         if not _is_organic_stealth:
             print(f"🚫 [{source_tag}-NO-SOCIALS] {_sym_tmp}: 0 соцсетей при возрасте {_age_j:.1f}м без чистой органики — отмена!")
             return False

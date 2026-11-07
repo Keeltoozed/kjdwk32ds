@@ -1746,8 +1746,8 @@ class Analyzer:
         _min_m5_req = 1.8 if (_raw_liq_chk >= 18000.0 and _b5_pre >= _s5_pre * 1.18 and _vm5_pre >= 3500.0) else 3.0
         if _m5 < _min_m5_req:
             return self._deny(mint, f"m5-too-weak {_m5:+.1f}%", f"🚫 [WEAK-M5] {symbol} ({mint[:8]}): m5 {_m5:+.1f}% < +{_min_m5_req:.1f}% — нет разгона.")
-        _base_max_m1 = float(getattr(config, "MAX_ENTRY_M1_PCT", 28.0))
-        _max_m1_cfg = 35.0 if (_raw_liq_chk >= 18000.0 and _b5_pre >= _s5_pre * 1.28) else _base_max_m1
+        _base_max_m1 = float(getattr(config, "MAX_ENTRY_M1_PCT", 8.0))
+        _max_m1_cfg = min(_base_max_m1, 10.0)
         _min_m1_floor = -5.5 if _m5 >= 12.0 else -2.8
         if _m1 > _max_m1_cfg or _m1 < _min_m1_floor:
             return self._deny(
@@ -1756,16 +1756,16 @@ class Analyzer:
                 f"🚫 [M1-FILTER] {symbol} ({mint[:8]}): 1м свеча {_m1:+.1f}% вне коридора [{_min_m1_floor:+.1f}%, +{_max_m1_cfg:.0f}%].",
             )
 
-        # 4. Anti-FOMO: Защита от перегретых вершин (для свежих выпускников <=90м и активных лаунчпад-ракет с потоком покупателей допускаем h1 до +2500%, т.к. h1 включает рост на кёрве $5k->$69k!)
-        _base_max_entry_h1 = float(getattr(config, "MAX_ENTRY_H1_PCT", 360.0))
+        # 4. Anti-FOMO: Защита от перегретых вершин (для свежих выпускников <=4м допускаем h1 до +2500%, т.к. h1 включает рост на кёрве $5k->$69k!)
+        _base_max_entry_h1 = float(getattr(config, "MAX_ENTRY_H1_PCT", 350.0))
         _is_active_fresh_rocket = (
-            (_age_min_pre <= 90.0 or _is_burned_launchpad)
+            _age_min_pre <= 4.0
             and _vm5_pre >= 5000.0
             and _b5_pre >= _s5_pre * 1.15
         )
         _max_entry_h1 = 2500.0 if _is_active_fresh_rocket else _base_max_entry_h1
         _max_entry_m5 = float(getattr(config, "MAX_ENTRY_M5_PCT", 110.0))
-        if _h1 > _max_entry_h1 and _age_min_pre >= 12.0:
+        if _h1 > _max_entry_h1 and _age_min_pre > 4.0:
             return self._deny(
                 mint,
                 f"h1-exhausted {_h1:.0f}%>{_max_entry_h1:.0f}%",
@@ -1808,16 +1808,16 @@ class Analyzer:
         if _links_cnt == 0 and not _soc_unknown:
             _vol_liq_r = (_vm5_pre / max(_raw_liq_chk, 1.0)) if _raw_liq_chk > 0 else 0.0
             _txns_tot = _b5_pre + _s5_pre
-            if _age_min_pre >= 20.0:
+            if _age_min_pre >= 12.0:
                 return self._deny(
                     mint,
                     f"no-socials-mature {_age_min_pre:.0f}m",
-                    f"🚫 [NO-SOCIALS-MATURE] {symbol} ({mint[:8]}): 0 соцсетей/сайта в возрасте {_age_min_pre:.0f}м (>=20м) — анонимный дев-бандл.",
+                    f"🚫 [NO-SOCIALS-MATURE] {symbol} ({mint[:8]}): 0 соцсетей/сайта в возрасте {_age_min_pre:.0f}м (>=12м) — анонимный дев-бандл.",
                 )
             else:
                 _is_organic_stealth = (
-                    _vm5_pre >= 5000.0 and _b5_pre >= 25 and _b5_pre >= _s5_pre * 1.12
-                    and _raw_liq_chk >= 12000.0 and _vol_liq_r <= 6.0 and _avg_tx_pre >= 12.0
+                    _vm5_pre >= 6000.0 and _b5_pre >= 30 and _b5_pre >= _s5_pre * 1.50
+                    and _raw_liq_chk >= 18000.0 and _vol_liq_r <= 1.8 and _avg_tx_pre >= 15.0
                 )
             if not _is_organic_stealth:
                 return self._deny(

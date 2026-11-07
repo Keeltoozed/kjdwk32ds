@@ -557,12 +557,12 @@ class GrokJevEngine:
         _is_burned_lp_g = mint.endswith(("pump", "bonk", "BAGS")) or dex_id == "pumpswap"
         _is_organic_stealth = False
         if _links_cnt_g == 0 and not _soc_unk_g:
-            if age_min >= 20.0:
-                return False, f"no-socials-mature-rug (age {age_min:.0f}m >= 20m, 0 socials/websites)"
+            if age_min >= 12.0:
+                return False, f"no-socials-mature-rug (age {age_min:.0f}m >= 12m, 0 socials/websites)"
             else:
                 _is_organic_stealth = (
-                    vol_m5 >= 5000.0 and b5 >= 25 and b5 >= s5 * 1.12
-                    and eff_liq >= 12000.0 and _vol_liq_ratio_g <= 6.0 and _avg_tx_g >= 12.0
+                    vol_m5 >= 6000.0 and b5 >= 30 and b5 >= s5 * 1.50
+                    and eff_liq >= 18000.0 and _vol_liq_ratio_g <= 1.8 and _avg_tx_g >= 15.0
                 )
             if not _is_organic_stealth:
                 return False, f"no-socials-rug (age {age_min:.1f}m, 0 socials/websites, v/l {_vol_liq_ratio_g:.1f}x)"
@@ -570,18 +570,17 @@ class GrokJevEngine:
                 print(f"💎 [JEV-ORGANIC-STEALTH] {symbol} ({mint[:8]}): 0 соцсетей, но доказан чистый органический поток (${vol_m5:,.0f}, {b5}b/{s5}s, v/l {_vol_liq_ratio_g:.2f}) — пропуск.")
 
         # 2.5. Exhaustion Guard: блокируем перегретые поздние пампы, но пускаем свежих выпускников (h1 включает рост на кёрве $5k->$69k!)
-        _base_max_h1_jev = float(getattr(_c, "MAX_ENTRY_H1_PCT", 360.0))
+        _base_max_h1_jev = float(getattr(_c, "MAX_ENTRY_H1_PCT", 350.0))
         _is_active_fresh_jev = (
-            (age_min <= 90.0 or _is_burned_lp_g)
+            age_min <= 4.0
             and vol_m5 >= 5000.0
             and b5 >= s5 * 1.15
         )
         _max_h1_allowed = 2500.0 if _is_active_fresh_jev else _base_max_h1_jev
         if _links_cnt_g == 0 and not _soc_unk_g and not _is_organic_stealth and (h1 > 160.0 or m5 > 110.0):
             return False, f"exhaustion-no-soc-top h1 {h1:+.0f}%, m5 {m5:+.0f}% (0 socials pump-and-dump top)"
-        if h1 > _max_h1_allowed:
-            if age_min >= 10.0 or (vol_m5 < 35000.0 and h1 > _max_h1_allowed):
-                return False, f"exhaustion-top-h1 h1 {h1:+.0f}% > +{_max_h1_allowed:.0f}% (late pump top, dump risk)"
+        if h1 > _max_h1_allowed and age_min > 4.0:
+            return False, f"exhaustion-top-h1 h1 {h1:+.0f}% > +{_max_h1_allowed:.0f}% (late pump top, dump risk)"
         if fdv_mc > 100000.0 and eff_liq < 35000.0 and eff_liq < 0.02 * fdv_mc:
             return False, f"fdv-liquidity-trap liq ${eff_liq:,.0f} < 2% of FDV ${fdv_mc:,.0f} (phantom valuation)"
 
@@ -884,18 +883,18 @@ class GrokJevEngine:
         # Если токен моложе 3м, DexScreener часто отдаёт m1 == m5 (одна первая свеча).
         _m1_is_phantom = (_age_m < 3.0 and abs(m5) > 1.0 and abs(m1) > 0 and abs(m1 / max(abs(m5), 0.01) - 1.0) < 0.08)
         _strong_breakout = (b5 >= 20 and b5 >= s5 * 1.20 and vol5 >= 4000.0)
-        _max_m1 = 35.0 if (_strong_breakout and _liq_usd >= 15000.0) else _base_max_m1
+        _max_m1 = min(float(getattr(_c, "JEV_MAX_M1_ENTRY_PCT", 8.0)), 10.0)
         _max_m5_cap = 165.0 if _strong_breakout else 100.0
         if m5 > _max_m5_cap:
             return False, -0.14, 0.0, f"fomo-spike (m5 {m5:+.1f}% > +{_max_m5_cap:.0f}%) — buying local top, wait for reset"
-        if m5 > 95.0 and m1 > 28.0 and not _strong_breakout:
-            return False, -0.14, 0.0, f"fomo-spike (m5 {m5:+.1f}% > +95.0% and m1 {m1:+.1f}% > 28%) — vertical blow-off candle"
+        if m5 > 95.0 and m1 > _max_m1 and not _strong_breakout:
+            return False, -0.14, 0.0, f"fomo-spike (m5 {m5:+.1f}% > +95.0% and m1 {m1:+.1f}% > {_max_m1:.1f}%) — vertical blow-off candle"
         if m1 > _max_m1 and not _m1_is_phantom:
             return False, -0.14, 0.0, f"m1-spike (m1 {m1:+.1f}% > +{_max_m1:.1f}%) — vertical push, wait for consolidation"
-        _base_max_h1_flush = float(getattr(_c, "MAX_ENTRY_H1_PCT", 360.0))
-        _is_burned_flush = _base_addr.endswith(("pump", "bonk", "BAGS")) or _dex_id == "pumpswap"
-        _max_h1_flush = 2500.0 if ((_age_m <= 90.0 or _is_burned_flush) and vol5 >= 5000.0 and b5 >= s5 * 1.15) else _base_max_h1_flush
-        if _h1 > _max_h1_flush and _age_m > 10.0:
+        _base_max_h1_flush = float(getattr(_c, "MAX_ENTRY_H1_PCT", 350.0))
+        _is_active_fresh_flush = (_age_m <= 4.0 and vol5 >= 5000.0 and b5 >= s5 * 1.15)
+        _max_h1_flush = 2500.0 if _is_active_fresh_flush else _base_max_h1_flush
+        if _h1 > _max_h1_flush and _age_m > 4.0:
             return False, -0.14, 0.0, f"h1-exhaustion (h1 {_h1:+.1f}% > +{_max_h1_flush:.0f}% at {_age_m:.0f}m) — pump already exhausted"
         if _liq_usd > 0 and _liq_usd < _min_liq:
             return False, -0.14, 0.0, f"thin-liquidity (${_liq_usd:,.0f} < ${_min_liq:,.0f}) — slippage/dump risk"
