@@ -85,20 +85,14 @@ class MatureExitManager:
 
             if pnl_pct >= 0.015:
                 if _trail_dist is not None and drop_from_max >= _trail_dist and pnl_pct >= _floor_pnl:
-                    _tc = int(getattr(position, "mature_trail_confirm", 0) or 0) + 1
-                    position.mature_trail_confirm = _tc
-                    if _tc >= 2 or drop_from_max >= (_trail_dist * 1.35):
-                        return f"Mature Trailing Profit ({pnl_pct*100:+.1f}% locked after peak +{max_pnl_pct*100:.1f}%)"
+                    return f"Mature Trailing Profit ({pnl_pct*100:+.1f}% locked after peak +{max_pnl_pct*100:.1f}%)"
                 elif pnl_pct <= _floor_pnl:
-                    _fc = int(getattr(position, "mature_floor_confirm", 0) or 0) + 1
-                    position.mature_floor_confirm = _fc
-                    if _fc >= 2 or pnl_pct <= (_floor_pnl - 0.015):
-                        return f"Mature Profit Floor ({pnl_pct*100:+.1f}% locked after peak +{max_pnl_pct*100:.1f}%)"
+                    return f"Mature Profit Floor ({pnl_pct*100:+.1f}% locked after peak +{max_pnl_pct*100:.1f}%)"
                 else:
                     position.mature_trail_confirm = 0
                     position.mature_floor_confirm = 0
-            elif pnl_pct < 0.015 and max_pnl_pct >= 0.085:
-                # Если монета была на пике >= +8.5%, но провалилась ниже +1.5%,
+            elif pnl_pct < 0.015 and max_pnl_pct >= 0.075:
+                # Если монета была на пике >= +7.5%, но провалилась ниже +1.5%,
                 # НЕМЕДЛЕННО закрываем в безубыток/защиту прибыли, не давая уйти в минус!
                 return f"Mature Profit Shield ({pnl_pct*100:+.1f}% locked after peak +{max_pnl_pct*100:.1f}%)"
             else:

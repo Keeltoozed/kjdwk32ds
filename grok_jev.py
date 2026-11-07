@@ -507,7 +507,8 @@ class GrokJevEngine:
                 except Exception:
                     pass
                 return False, f"post-migration-dump-zone {age_min:.1f}m < 0.6m"
-            if not has_breakout_momentum and (m5 < 2.0 or (s5 > 0 and (b5 / s5) < 1.08) or vol_m5 < 1500.0):
+            _has_reclaim_mig = (m5 >= 5.0 and b5 >= s5 * 1.30 and vol_m5 >= 800.0)
+            if not has_breakout_momentum and not _has_reclaim_mig and (m5 < 2.0 or (s5 > 0 and (b5 / s5) < 1.08) or vol_m5 < 1500.0):
                 return False, f"post-migration-no-reclaim (m5 {m5:+.1f}%, vol5 ${vol_m5:,.0f}, {b5}b/{s5}s)"
 
         # 2. Возраст токена и запрет старых стоячих гигантов (кейс HODL 940.7м $4.2M FDV, DUGE 224.7м m5 +1.9%)
@@ -539,7 +540,8 @@ class GrokJevEngine:
             return False, f"age-out-of-bounds {age_min:.1f}m > {max_age:.1f}m (old token without breakout)"
 
         # Защита от микро bump-ботов в m5 (LAURA $1.60, HODL $3.10, IPHONEDUO $5.00)
-        if (b5 + s5) >= 120 and _avg_tx_e < 8.0:
+        _is_real_bump_runner_g = (b5 >= s5 * 1.30 and (b5 - s5) >= 80 and vol_m5 >= 3500.0 and eff_liq >= 18000.0)
+        if (b5 + s5) >= 120 and _avg_tx_e < 8.0 and not _is_real_bump_runner_g:
             return False, f"fake-bump-wash-bot avg ${_avg_tx_e:.2f} < $8 across {b5+s5} m5 txns"
 
         # Защита от слитых ниже миграции выпускников Pump.fun (кейс SHANE FDV $35.8k, но пускаем LOWCAP $34.9k / MEME $40k с живым потоком)
@@ -559,15 +561,19 @@ class GrokJevEngine:
         _is_burned_lp_g = mint.endswith(("pump", "bonk", "BAGS")) or dex_id == "pumpswap"
         _is_organic_stealth = False
         if _links_cnt_g == 0 and not _soc_unk_g:
-            if age_min >= 12.0:
-                return False, f"no-socials-mature-rug (age {age_min:.0f}m >= 12m, 0 socials/websites)"
-            else:
-                _is_organic_stealth = (
-                    vol_m5 >= 6000.0 and b5 >= 30 and b5 >= s5 * 1.50
-                    and eff_liq >= 18000.0 and _vol_liq_ratio_g <= 1.8 and _avg_tx_g >= 15.0
+            _is_organic_stealth = (
+                eff_liq >= 15000.0
+                and vol_m5 >= 2500.0
+                and _vol_liq_ratio_g <= 2.2
+                and (
+                    (b5 >= 15 and b5 >= s5 * 1.05) or
+                    (b5 >= 10 and s5 <= 30 and m5 >= 2.0 and _avg_tx_g >= 25.0) or
+                    (vol_m5 >= 8000.0 and b5 >= s5)
                 )
+            )
             if not _is_organic_stealth:
-                return False, f"no-socials-rug (age {age_min:.1f}m, 0 socials/websites, v/l {_vol_liq_ratio_g:.1f}x)"
+                _sub_reason_g = f"no-socials-mature-rug (age {age_min:.0f}m >= 12m, 0 socials/websites)" if age_min >= 12.0 else f"no-socials-rug (age {age_min:.1f}m, 0 socials/websites, v/l {_vol_liq_ratio_g:.1f}x)"
+                return False, _sub_reason_g
             else:
                 print(f"💎 [JEV-ORGANIC-STEALTH] {symbol} ({mint[:8]}): 0 соцсетей, но доказан чистый органический поток (${vol_m5:,.0f}, {b5}b/{s5}s, v/l {_vol_liq_ratio_g:.2f}) — пропуск.")
 
@@ -591,8 +597,9 @@ class GrokJevEngine:
         if m5 < _min_m5_jev:
             return False, f"no-momentum m5 {m5:+.1f}% < +{_min_m5_jev:.1f}% (coin is flat/standing still)"
         if age_min >= 20.0:
+            _is_massive_mature_flow_g = (vol_m5 >= 12000.0 and eff_liq >= 25000.0 and b5 >= s5 and m5 >= 1.5)
             _is_strong_jev_breakout = (m5 >= 5.0 and vol_m5 >= 2000.0 and b5 >= s5 * 1.08 and (b5 + s5) >= 20)
-            if not _is_strong_jev_breakout and (vol_m5 < 6000.0 or ((vol_m5 / max(eff_liq, 1.0)) < 0.22 and vol_m5 < 18000.0) or m5 < 4.5 or (b5 + s5) < 45):
+            if not _is_massive_mature_flow_g and not _is_strong_jev_breakout and (vol_m5 < 6000.0 or ((vol_m5 / max(eff_liq, 1.0)) < 0.22 and vol_m5 < 18000.0) or m5 < 4.5 or (b5 + s5) < 45):
                 return False, f"slow-mature-pool age {age_min:.0f}m vol5 ${vol_m5:,.0f} v/l {(vol_m5/max(eff_liq,1.0)):.2f}x"
         _max_m5_allowed = float(getattr(_c, "MAX_ENTRY_M5_PCT", 110.0))
         if m5 > _max_m5_allowed:

@@ -1556,10 +1556,11 @@ class Analyzer:
                 _links_m = len((pair_data or {}).get("info", {}).get("socials", []) or []) + len((pair_data or {}).get("info", {}).get("websites", []) or [])
                 _v_to_l_m = (_v5_mc / max(_lq_mc, 1.0)) if _lq_mc > 0 else 0.0
                 _avg_tx_m = (_v5_mc / max(1, _b5_mc + _s5_mc)) if (_b5_mc + _s5_mc) > 0 else 0.0
-                # Живые вирусные мемы (PEPE69 $172k vol, DUGE, TRUMP): пускаем при подтверждённом торговом потоке
+                # Живые вирусные мемы (PEPE69 $172k vol, DUGE, TRUMP, PNUT): пускаем при подтверждённом торговом потоке
                 _is_valid_meme_runner = (
-                    (_links_m > 0 and _v5_mc >= 4000.0 and _b5_mc >= _s5_mc) or
-                    (_v5_mc >= 8000.0 and _b5_mc >= _s5_mc * 1.10 and _avg_tx_m >= 10.0 and _lq_mc >= 10000.0)
+                    (_links_m > 0 and _v5_mc >= 3000.0 and _b5_mc >= _s5_mc) or
+                    (_v5_mc >= 4000.0 and _b5_mc >= _s5_mc and _lq_mc >= 12000.0) or
+                    (_v5_mc >= 2500.0 and _b5_mc >= int(_s5_mc * 1.10) and _lq_mc >= 15000.0)
                 )
                 if _is_valid_meme_runner:
                     print(f"🔥 [MIMIC-FOMO] {symbol} ({mint[:8]}): подтвержденный вирусный мем (b/s {_b5_mc}/{_s5_mc}, vol5 ${_v5_mc:,.0f}, links {_links_m}) — пропуск.")
@@ -1674,7 +1675,13 @@ class Analyzer:
         _is_burned_launchpad = mint.endswith(("pump", "bonk", "BAGS")) or _dex_pre_early == "pumpswap"
         _tot_tx5_pre = _b5_pre + _s5_pre
         _avg_tx_pre = (_vm5_pre / _tot_tx5_pre) if _tot_tx5_pre > 0 else 0.0
-        if _tot_tx5_pre >= 120 and _avg_tx_pre < 8.0:
+        _is_real_bump_runner = (
+            _b5_pre >= _s5_pre * 1.30
+            and (_b5_pre - _s5_pre) >= 80
+            and _vm5_pre >= 3500.0
+            and _raw_liq_chk >= 18000.0
+        )
+        if _tot_tx5_pre >= 120 and _avg_tx_pre < 8.0 and not _is_real_bump_runner:
             return self._deny(
                 mint,
                 f"fake-bump-wash-bot avg ${_avg_tx_pre:.1f}",
@@ -1688,7 +1695,7 @@ class Analyzer:
             and _m5 >= 5.0
             and _b5_pre >= _s5_pre * 1.22
         )
-        if _tot_tx5_pre >= 200 and _avg_tx_pre < 12.0 and not _has_soc_pre and not _is_deep_launchpad_runner:
+        if _tot_tx5_pre >= 200 and _avg_tx_pre < 12.0 and not _has_soc_pre and not _is_deep_launchpad_runner and not _is_real_bump_runner:
             return self._deny(
                 mint,
                 f"fake-bump-wash-bot avg ${_avg_tx_pre:.1f}",
@@ -1704,9 +1711,10 @@ class Analyzer:
                 f"🚫 [LOW-MOMENTUM] {symbol} ({mint[:8]}): 5м объем ${_vm5_pre:,.0f} < ${_min_v5_cfg:,.0f} — слабый пул.",
             )
         if _age_min_pre >= 20.0:
+            _is_massive_mature_flow = (_vm5_pre >= 12000.0 and _raw_liq_chk >= 25000.0 and _b5_pre >= _s5_pre and _m5 >= 1.5)
             _is_strong_mature_breakout = (_m5 >= 5.0 and _vm5_pre >= 2000.0 and _b5_pre >= _s5_pre * 1.08 and _tot_tx5_pre >= 20)
             _v2l_mat = (_vm5_pre / max(_raw_liq_chk, 1.0)) if _raw_liq_chk > 0 else 0.0
-            if not _is_strong_mature_breakout and (_vm5_pre < 6000.0 or (_v2l_mat < 0.22 and _vm5_pre < 18000.0) or _m5 < 4.5 or _tot_tx5_pre < 45):
+            if not _is_massive_mature_flow and not _is_strong_mature_breakout and (_vm5_pre < 6000.0 or (_v2l_mat < 0.22 and _vm5_pre < 18000.0) or _m5 < 4.5 or _tot_tx5_pre < 45):
                 return self._deny(
                     mint,
                     f"slow-mature-pool v5=${_vm5_pre:.0f} v/l={_v2l_mat:.2f}x",
@@ -1809,21 +1817,21 @@ class Analyzer:
         if _links_cnt == 0 and not _soc_unknown:
             _vol_liq_r = (_vm5_pre / max(_raw_liq_chk, 1.0)) if _raw_liq_chk > 0 else 0.0
             _txns_tot = _b5_pre + _s5_pre
-            if _age_min_pre >= 12.0:
-                return self._deny(
-                    mint,
-                    f"no-socials-mature {_age_min_pre:.0f}m",
-                    f"🚫 [NO-SOCIALS-MATURE] {symbol} ({mint[:8]}): 0 соцсетей/сайта в возрасте {_age_min_pre:.0f}м (>=12м) — анонимный дев-бандл.",
+            _is_organic_stealth = (
+                _raw_liq_chk >= 15000.0
+                and _vm5_pre >= 2500.0
+                and _vol_liq_r <= 2.2
+                and (
+                    (_b5_pre >= 15 and _b5_pre >= _s5_pre * 1.05) or
+                    (_b5_pre >= 10 and _s5_pre <= 30 and _m5 >= 2.0 and _avg_tx_pre >= 25.0) or
+                    (_vm5_pre >= 8000.0 and _b5_pre >= _s5_pre)
                 )
-            else:
-                _is_organic_stealth = (
-                    _vm5_pre >= 6000.0 and _b5_pre >= 30 and _b5_pre >= _s5_pre * 1.50
-                    and _raw_liq_chk >= 18000.0 and _vol_liq_r <= 1.8 and _avg_tx_pre >= 15.0
-                )
+            )
             if not _is_organic_stealth:
+                _sub_reason = f"no-socials-mature {_age_min_pre:.0f}m" if _age_min_pre >= 12.0 else f"no-socials-dev-rug {_age_min_pre:.0f}m"
                 return self._deny(
                     mint,
-                    f"no-socials-dev-rug {_age_min_pre:.0f}m",
+                    _sub_reason,
                     f"🚫 [NO-SOCIALS-GUARD] {symbol} ({mint[:8]}): 0 соцсетей при возрасте {_age_min_pre:.1f}м (v/l {_vol_liq_r:.1f}x, b/s {_b5_pre}/{_s5_pre}) — анонимный дев-раг.",
                 )
             else:
