@@ -1336,24 +1336,64 @@ class Analyzer:
         if _is_tokenized_stock:
             return False, f"tokenized-equity-skip (токенизированная акция {clean_symbol} — не мем-токен, пропуск без штрафа киту)"
 
-        # 1. Защита от краха и микро-пулов / пустых кривых
+        # 1. Защита от краха, стоячих majors и неликвидных/старых пулов
         dex_id_low = str((pair_data or {}).get("dexId") or "").lower()
         is_pump_curve = dex_id_low in ("pump", "pumpfun")
+        if is_pump_curve and not getattr(config, "ALLOW_UNGRADUATED_PUMPFUN", False):
+            return False, "Сырая кривая Pump.fun до миграции на DEX (ALLOW_UNGRADUATED_PUMPFUN=False)"
         if pair_data:
             drop_peak = float(pair_data.get("_drop_from_peak_5m", 0.0) or 0.0)
-            if drop_peak <= -65.0:
+            if drop_peak <= -40.0:
                 return False, f"Цена уже упала на {drop_peak:.0f}% с пика — отскок дохлой кошки после дампа"
 
             liq = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
             fdv = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
+            if fdv > 2_000_000.0 or liq > 250_000.0:
+                return False, f"Крупная капа / не мем-ракета (FDV ${fdv:,.0f}, liq ${liq:,.0f}) — пропуск без штрафа киту"
             if is_pump_curve:
-                if 0 < fdv < 6000.0:
-                    return False, f"Слишком ранняя кривая Pump.fun (FDV ${fdv:,.0f} < $6,000)"
-                if fdv > 54000.0:
-                    return False, f"Кривая Pump.fun перед обрывом миграции (FDV ${fdv:,.0f} > $54,000)"
+                if 0 < fdv < 18000.0:
+                    return False, f"Слишком ранняя кривая Pump.fun (FDV ${fdv:,.0f} < $18,000)"
+                if fdv > 48000.0:
+                    return False, f"Кривая Pump.fun перед обрывом миграции (FDV ${fdv:,.0f} > $48,000)"
             else:
-                if 0 < liq < 1500.0:
-                    return False, f"Слишком низкая ликвидность AMM пула (${liq:,.0f} < $1,500)"
+                if liq < 8000.0:
+                    return False, f"Слишком низкая ликвидность AMM пула (${liq:,.0f} < $8,000)"
+                if mint.endswith("pump") and 0 < fdv < 44000.0:
+                    return False, f"Слитый после миграции токен (FDV ${fdv:,.0f} < $44,000)"
+                if not mint.endswith("pump") and 0 < fdv < 20000.0:
+                    return False, f"Микро-капа токена (FDV ${fdv:,.0f} < $20,000)"
+
+            # 1.5. Фильтр живого импульса мем-ракеты (отсекает 18-минутные флеты CLAUDIA, HOOKED, DACITY, FUSE, NOS)
+            _pc_w = pair_data.get("priceChange") or {}
+            _m5_w = float(_pc_w.get("m5", 0) or 0)
+            _h1_w = float(_pc_w.get("h1", 0) or 0)
+            _vm5_w = float((pair_data.get("volume") or {}).get("m5", 0) or 0)
+            _tx5_w = (pair_data.get("txns") or {}).get("m5") or {}
+            _b5_w = int(_tx5_w.get("buys", 0) or 0)
+            _s5_w = int(_tx5_w.get("sells", 0) or 0)
+            _tot_w = _b5_w + _s5_w
+            _avg_w = (_vm5_w / _tot_w) if _tot_w > 0 else 0.0
+            _cat_w = pair_data.get("pairCreatedAt") or 0
+            _age_w = ((time.time() * 1000 - _cat_w) / 60000.0) if _cat_w else 30.0
+            if _age_w > 360.0 and not (_age_w <= 1440.0 and _vm5_w >= 15000.0 and _m5_w >= 10.0 and _b5_w >= _s5_w * 1.25):
+                return False, f"Старый стоячий токен ({_age_w/60:.1f}ч > 6ч без прорывного объёма)"
+            if _vm5_w < 3500.0 or _tot_w < 20:
+                return False, f"Вялый стакан без объёма (vol5 ${_vm5_w:,.0f} < $3,500, txns {_tot_w})"
+            if _m5_w < 2.5 or _m5_w > 135.0:
+                return False, f"Нет живого импульса / перегрев (m5 {_m5_w:+.1f}% вне [+2.5%, +135%])"
+            if _h1_w < 0.0:
+                return False, f"Часовой тренд в минусе (h1 {_h1_w:+.1f}%)"
+            if _s5_w > 0 and (_b5_w / _s5_w) < 1.12:
+                return False, f"Слабый поток покупателей ({_b5_w}b/{_s5_w}s < 1.12x)"
+            if _tot_w >= 100 and _avg_w < 8.0:
+                return False, f"Накрутка микро-ботом (avg ${_avg_w:.2f} < $8)"
+            if _age_w >= 20.0 and _vm5_w < 6000.0 and (_vm5_w / max(liq, 1.0)) < 0.20:
+                return False, f"Низкий оборот зрелого пула (vol5 ${_vm5_w:,.0f}, v/l {_vm5_w/max(liq,1.0):.2f}x)"
+            _links_w = len((pair_data.get("info") or {}).get("socials", []) or []) + len((pair_data.get("info") or {}).get("websites", []) or [])
+            if _age_w >= 20.0 and _links_w == 0 and not bool(pair_data.get("_socials_unknown", False)):
+                return False, f"Зрелый токен ({_age_w:.0f}м) без единой соцсети/сайта"
+        else:
+            return False, "Нет рыночных данных пула (DexScreener)"
 
         # 2. Корпоративный фейк-скам
         corp_scams = ["AAPL", "S&P", "SP500", "MSFT", "TSLA", "TESLA", "SPACEX", "STARLINK", "NVDA", "OPENAI"]
@@ -1423,6 +1463,7 @@ class Analyzer:
 
         # 6. Быстрый ML-скоринг через актуальную модель rocket_xgb
         ml_score = 0.0
+        _whale_ml_thr = float(getattr(config, "ROCKET_XGB_STAGE1_THRESHOLD", 18.0))
         if pair_data and getattr(self, "rocket_xgb", None) is not None:
             try:
                 ml_score = float(self.score_rocket_xgb(mint, pair_data) or 0.0)
@@ -1430,12 +1471,12 @@ class Analyzer:
                 if not hasattr(self, "rocket_scores"):
                     self.rocket_scores = {}
                 self.rocket_scores[mint] = ml_score
-                if 0.0 < ml_score < 4.0:
-                    return False, f"Rocket XGB экстремально низкий скор {ml_score:.1f}% < 4%"
+                if ml_score < _whale_ml_thr:
+                    return False, f"Rocket XGB низкий скор {ml_score:.1f}% < {_whale_ml_thr:.0f}%"
             except Exception:
                 pass
 
-        return True, f"Passed Whale Contract Audit (ML: {ml_score:.1f}%)"
+        return True, f"Passed Whale Contract & Momentum Audit (ML: {ml_score:.1f}%)"
 
     async def analyze_token(self, mint: str) -> bool:
         self.last_signal = ""
@@ -1585,14 +1626,33 @@ class Analyzer:
             print(f"⏳ [ENTRY] {mint[:8]}: возраст {_age_min_pre:.1f}м < {_sol_min_age}м — выдерживаем карантин.")
             return None
 
-        # 1. Защита от старых увядающих зомби (> 6ч без активного пробоя ликвидного пула и все > 24ч)
+        # 1. Защита от старых увядающих зомби (> 6ч без активного пробоя ликвидного пула и все > 24ч) и переросших mid-caps (> $1.8M)
+        _fdv_chk_pre = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
+        if _fdv_chk_pre > float(getattr(config, "JEV_MAX_MCAP_USD", 1800000.0)):
+            return self._deny(
+                mint,
+                f"mcap-too-large ${_fdv_chk_pre/1e6:.1f}M",
+                f"🚫 [LARGE-CAP-SKIP] {symbol} ({mint[:8]}): FDV ${_fdv_chk_pre:,.0f} > $1.8M — ракета уже тяжёлая.",
+            )
+        if mint.endswith("pump") and _dex_pre_early not in ("pump", "pumpfun") and 0 < _fdv_chk_pre < 46000.0:
+            _is_fresh_reclaim = (_age_min_pre < 5.0 and _vm5_pre >= 20000.0 and _m5 >= 18.0 and _b5_pre >= _s5_pre * 1.45)
+            if not _is_fresh_reclaim:
+                return self._deny(
+                    mint,
+                    f"post-mig-dumped ${_fdv_chk_pre:.0f}<$46k",
+                    f"🚫 [POST-MIGRATION-DUMP] {symbol} ({mint[:8]}): выпускник Pump.fun слит ниже миграции (FDV ${_fdv_chk_pre:,.0f} < $46k) — кейс SHANE.",
+                )
+
         _max_age_min = float(getattr(config, "SOLANA_MAX_AGE_MIN", 360.0))
         _is_active_breakout_pool = (
             _age_min_pre <= 1440.0
+            and _fdv_chk_pre <= 1500000.0
             and _raw_liq_age >= 25000.0
-            and _vm5_pre >= 6000.0
-            and _m5 >= 5.0
-            and _b5_pre >= _s5_pre * 1.20
+            and _vm5_pre >= 18000.0
+            and (_vm5_pre / max(_raw_liq_age, 1.0)) >= 0.25
+            and _m5 >= 8.0
+            and _avg_tx_age >= 15.0
+            and _b5_pre >= _s5_pre * 1.25
         )
         if _age_min_pre > _max_age_min and not _is_active_breakout_pool:
             return self._deny(
@@ -1601,19 +1661,26 @@ class Analyzer:
                 f"🚫 [ZOMBIE-AGE] {symbol} ({mint[:8]}): возраст {_age_min_pre/60:.1f}ч > {_max_age_min/60:.1f}ч без прорывного объема.",
             )
 
-        # 2. Защита от фейковых bump-ботов (не блокируем живые пулы выпускников PumpSwap / pump / bonk / BAGS с перевесом покупателей: Laura $25k liq +26%, VETO $74k liq)
+        # 2. Защита от фейковых микро bump-ботов (кейсы LAURA $1.60 avg_tx, HODL $3.10, IPHONEDUO $5.00)
         _info_pre = pair_data.get("info") or {}
         _has_soc_pre = bool((_info_pre.get("socials") or []) or (_info_pre.get("websites") or []))
         _raw_liq_chk = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
         _is_burned_launchpad = mint.endswith(("pump", "bonk", "BAGS")) or _dex_pre_early == "pumpswap"
         _tot_tx5_pre = _b5_pre + _s5_pre
         _avg_tx_pre = (_vm5_pre / _tot_tx5_pre) if _tot_tx5_pre > 0 else 0.0
+        if _tot_tx5_pre >= 120 and _avg_tx_pre < 8.0:
+            return self._deny(
+                mint,
+                f"fake-bump-wash-bot avg ${_avg_tx_pre:.1f}",
+                f"🚫 [WASH-BUMP-TRAP] {symbol} ({mint[:8]}): накрутка микро-ботом ({_tot_tx5_pre} txns, avg ${_avg_tx_pre:.2f} < $8) — блок!",
+            )
         _is_deep_launchpad_runner = (
             _is_burned_launchpad
-            and _raw_liq_chk >= 18000.0
-            and _vm5_pre >= 3200.0
+            and _raw_liq_chk >= 20000.0
+            and _vm5_pre >= 12000.0
+            and _avg_tx_pre >= 10.0
             and _m5 >= 5.0
-            and _b5_pre >= _s5_pre * 1.20
+            and _b5_pre >= _s5_pre * 1.22
         )
         if _tot_tx5_pre >= 200 and _avg_tx_pre < 12.0 and not _has_soc_pre and not _is_deep_launchpad_runner:
             return self._deny(
@@ -1622,14 +1689,22 @@ class Analyzer:
                 f"🚫 [WASH-BUMP-TRAP] {symbol} ({mint[:8]}): накрутка микро-ботом ({_tot_tx5_pre} txns, avg ${_avg_tx_pre:.2f} < $12).",
             )
 
-        # 3. ЖЕСТКИЙ ФИЛЬТР ИМПУЛЬСА И ТРЕНДА ДО ROCKET-XGB (закрывает дыру покупки KLAUDIA -65%, LIBTARD -53%, CAGE -23%, COGE 477b/529s):
-        _min_v5_cfg = float(getattr(config, "MIN_VOLUME_M5", 2000.0))
+        # 3. ЖЕСТКИЙ ФИЛЬТР ИМПУЛЬСА, СКОРОСТИ ОБОРОТА И ТРЕНДА ДО ROCKET-XGB:
+        _min_v5_cfg = float(getattr(config, "MIN_VOLUME_M5", 3500.0))
         if _vm5_pre < _min_v5_cfg:
             return self._deny(
                 mint,
                 f"low-vol5 ${_vm5_pre:.0f}<${_min_v5_cfg:.0f}",
                 f"🚫 [LOW-MOMENTUM] {symbol} ({mint[:8]}): 5м объем ${_vm5_pre:,.0f} < ${_min_v5_cfg:,.0f} — слабый пул.",
             )
+        if _age_min_pre >= 20.0:
+            _v2l_mat = (_vm5_pre / max(_raw_liq_chk, 1.0)) if _raw_liq_chk > 0 else 0.0
+            if _vm5_pre < 6000.0 or (_v2l_mat < 0.22 and _vm5_pre < 18000.0) or _m5 < 4.5 or _tot_tx5_pre < 45:
+                return self._deny(
+                    mint,
+                    f"slow-mature-pool v5=${_vm5_pre:.0f} v/l={_v2l_mat:.2f}x",
+                    f"🚫 [MATURE-STALL-GUARD] {symbol} ({mint[:8]}): токену {_age_min_pre:.0f}м, но оборот вялый (vol5 ${_vm5_pre:,.0f}, v/l {_v2l_mat:.2f}x, m5 {_m5:+.1f}%) — кейс PROPFUN.",
+                )
 
         # Запрет входа, если продавцов больше или почти столько же, сколько покупателей (на глубоких пулах >=$25k допускаем 1.08x при зелёном m5/m1)
         _base_bs_cfg = float(getattr(config, "MIN_BUY_SELL_RATIO", 1.15))
@@ -1712,30 +1787,36 @@ class Analyzer:
                 f"🚫 [WASH-SPIKE] {symbol} ({mint[:8]}): 5м объем (${_vm5_pre:,.0f}) в {(_vm5_pre/_raw_liq_chk):.1f}x > {_max_vl_allowed:.2f}x пула ликвидности — накрутка ботами.",
             )
 
-        # 5. Соцсети: молодые токены обязаны иметь соцсети/сайт либо подтверждённый органический поток покупателей
+        # 5. Соцсети на ВСЕХ возрастах: раньше проверка выключалась после 8м (STONKS 12.5м -42.3%, scamsem 25.8м, LAURA 88.6м)!
         _links_cnt = len((pair_data or {}).get("info", {}).get("socials", []) or []) + len((pair_data or {}).get("info", {}).get("websites", []) or [])
         _soc_unknown = bool((pair_data or {}).get("_socials_unknown", False))
         _req_soc_age = float(getattr(config, "REQUIRE_SOCIALS_MIN_AGE_MIN", 8.0))
-        if _links_cnt == 0 and not _soc_unknown and _age_min_pre < _req_soc_age:
+        if _links_cnt == 0 and not _soc_unknown:
             _vol_liq_r = (_vm5_pre / max(_raw_liq_chk, 1.0)) if _raw_liq_chk > 0 else 0.0
             _txns_tot = _b5_pre + _s5_pre
-            _is_organic_stealth = (
-                (
-                    _vm5_pre >= 2000.0 and _b5_pre >= 12 and _b5_pre >= _s5_pre * 1.15
-                    and _raw_liq_chk >= 8000.0 and _vol_liq_r <= 2.80 and _txns_tot <= 800
-                    and _avg_tx_pre >= 16.0
+            if _age_min_pre >= 20.0:
+                return self._deny(
+                    mint,
+                    f"no-socials-mature {_age_min_pre:.0f}m",
+                    f"🚫 [NO-SOCIALS-MATURE] {symbol} ({mint[:8]}): 0 соцсетей/сайта в возрасте {_age_min_pre:.0f}м (>=20м) — анонимный дев-бандл.",
                 )
-                or (
-                    _vm5_pre >= 10000.0 and _b5_pre >= 40 and _b5_pre >= _s5_pre * 1.22
-                    and _raw_liq_chk >= 14000.0 and _vol_liq_r <= 6.50
-                    and (_avg_tx_pre >= 28.0 or _is_deep_launchpad_runner)
+            elif _age_min_pre >= _req_soc_age:
+                _is_organic_stealth = (
+                    _vm5_pre >= 15000.0 and _b5_pre >= 50 and _b5_pre >= _s5_pre * 1.45
+                    and _raw_liq_chk >= 20000.0 and _vol_liq_r <= 2.20
+                    and _avg_tx_pre >= 25.0 and _h1 <= 300.0 and _m1 <= 12.0
                 )
-            )
+            else:
+                _is_organic_stealth = (
+                    _vm5_pre >= 4000.0 and _b5_pre >= 20 and _b5_pre >= _s5_pre * 1.25
+                    and _raw_liq_chk >= 12000.0 and _vol_liq_r <= 2.60
+                    and _avg_tx_pre >= 20.0 and _m5 <= 80.0
+                )
             if not _is_organic_stealth:
                 return self._deny(
                     mint,
-                    f"no-socials-dev-rug {_age_min_pre:.0f}m<{_req_soc_age:.0f}m",
-                    f"🚫 [NO-SOCIALS-GUARD] {symbol} ({mint[:8]}): 0 соцсетей при возрасте {_age_min_pre:.1f}м (v/l {_vol_liq_r:.1f}x, txns {_txns_tot}) — анонимный дев-раг.",
+                    f"no-socials-dev-rug {_age_min_pre:.0f}m",
+                    f"🚫 [NO-SOCIALS-GUARD] {symbol} ({mint[:8]}): 0 соцсетей при возрасте {_age_min_pre:.1f}м (v/l {_vol_liq_r:.1f}x, b/s {_b5_pre}/{_s5_pre}) — анонимный дев-раг.",
                 )
             else:
                 print(f"💎 [ORGANIC-STEALTH] {symbol} ({mint[:8]}): 0 соцсетей, но доказан чистый органический поток (${_vm5_pre:,.0f}, {_b5_pre}b/{_s5_pre}s, v/l {_vol_liq_r:.2f}) — пропуск в анализ.")
@@ -1915,17 +1996,21 @@ class Analyzer:
                             pool_accounts.add(_k_acc)
                         elif isinstance(_v_acc, str) and any(w in _v_acc.lower() for w in ("pool", "amm", "raydium", "meteora", "pump", "vault", "locker")):
                             pool_accounts.add(_k_acc)
+                    _target_pair_rc = str((pair_data or {}).get("pairAddress") or "").strip()
                     for _mkt in (rc_data.get("markets") or []):
                         if isinstance(_mkt, dict):
                             # Точечная защита от незаблокированных пулов Meteora (DAMM V2, DLMM, DYN2) и кастомных Raydium
-                            # (кейсы PEPEBOT remove 160 SOL, Smiley drain: дев создаёт пул, держит LP и выдёргивает весь SOL)
+                            # ВАЖНО: не блокируем канонический выпускник PumpSwap (...pump с сожжённым LP $25k+) из-за стороннего $10 DLMM арбитраж-пула (кейс DEBTDOG +46%)!
+                            _m_pub = str(_mkt.get("pubkey") or "").strip()
                             _m_type = str(_mkt.get("marketType", "")).lower()
                             _m_lp = _mkt.get("lp") or {}
                             _m_lp_locked = float(_m_lp.get("lpLockedPct", 0) or 0)
-                            _is_meteora_pool = ("meteora" in _m_type or "meteora" in dex_id_low)
+                            _m_quote_usd = float(_m_lp.get("quoteUSD", 0) or 0)
+                            _is_target_mkt = bool(_target_pair_rc and _m_pub == _target_pair_rc)
+                            _is_meteora_pool = ("meteora" in _m_type and (_is_target_mkt or "meteora" in dex_id_low or (not _is_canonical_pump and _m_quote_usd >= 2000.0)))
                             if _is_meteora_pool and _m_lp_locked < 80.0:
                                 return self._deny(mint, "meteora-unlocked-lp", f"🚫 [METEORA-RUG] {symbol} ({mint[:8]}): незаблокированный пул Meteora {_m_type} (lock {_m_lp_locked:.0f}% < 80%) — дев в любой момент забирает SOL (кейсы PEPEBOT/Smiley)!")
-                            if not _is_pump_flag and "raydium" in _m_type and _m_lp_locked < 80.0:
+                            if not _is_pump_flag and "raydium" in _m_type and (_is_target_mkt or _m_quote_usd >= 2000.0) and _m_lp_locked < 80.0:
                                 return self._deny(mint, "raydium-unlocked-lp", f"🚫 [RAYDIUM-RUG] {symbol} ({mint[:8]}): кастомный токен на Raydium с незаблокированным LP (lock {_m_lp_locked:.0f}% < 80%) — риск сноса ликвидности!")
 
                             for _m_field in ("pubkey", "liquidityA", "liquidityB", "baseVault", "quoteVault"):
@@ -1940,6 +2025,7 @@ class Analyzer:
                     DEX_POOL_AUTHORITIES = {
                         "5Q544fKrFoe6tsEbD7S8EmxGTJYAKtTVhAW5Q5pge4j1", # Raydium AMM V4
                         "D4FPEruKEHrG5NTsqazoqfv8zsFWApqTjuzFLUQDkTz5", # Raydium CP-Swap
+                        "pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA", # PumpSwap AMM
                         "Eo7WjKq67rjJQSZxS6z3YkapzY3eMj6Xy8X5EQVn5UaB", # Meteora Dynamic Pools
                         "LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo", # Meteora DLMM
                         "whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc", # Orca Whirlpools
@@ -2053,7 +2139,9 @@ class Analyzer:
                 conf = self.score_rocket_xgb(mint, pair_data, holders_info=_real_holders)
                 self.last_score = conf
                 self.rocket_scores[mint] = conf
-            _final_thr = float(getattr(config, "ROCKET_XGB_FINAL_THRESHOLD", 18.0))
+            _final_thr = float(getattr(config, "ROCKET_XGB_FINAL_THRESHOLD", 28.0))
+            if _links_cnt == 0 and not _soc_unknown:
+                _final_thr = max(_final_thr, 36.0)
             if (conf + 0.05) < _final_thr:
                 return self._deny(mint, f"rocket-xgb-s2 {conf:.0f}%", f"🚫 [ROCKET-XGB-S2] {symbol} ({mint[:8]}): скор с учётом холдеров {conf:.1f}% < {_final_thr:.0f}% — отсев.")
 

@@ -467,13 +467,15 @@ class PaperTracker:
             return
 
         # ЗАЩИТА ML FIREWALL: Ни одна сделка с низким скором Rocket XGBoost не может быть открыта!
-        min_conf = float(getattr(config, "ROCKET_XGB_FINAL_THRESHOLD", 18.0))
+        min_conf = float(getattr(config, "ROCKET_XGB_FINAL_THRESHOLD", 28.0))
+        _is_copy_src = str(source or "").startswith("COPY")
+        _eff_min_conf = float(getattr(config, "ROCKET_XGB_STAGE1_THRESHOLD", 18.0)) if _is_copy_src else min_conf
         if getattr(config, "ROCKET_XGB_ENABLED", True):
-            if ml_confidence > 0 and (ml_confidence + 0.05) < min_conf:
-                print(f"🚫 [FIREWALL] Отказ входа {symbol} ({mint[:8]}): Rocket XGB скор {ml_confidence:.1f}% < {min_conf:.0f}% (блокировка убыточного дампа)")
+            if ml_confidence > 0 and (ml_confidence + 0.05) < _eff_min_conf:
+                print(f"🚫 [FIREWALL] Отказ входа {symbol} ({mint[:8]}): Rocket XGB скор {ml_confidence:.1f}% < {_eff_min_conf:.0f}% (блокировка убыточного дампа)")
                 return
-            if source == "GROK-JEV" and ml_confidence <= 0.0:
-                print(f"🚫 [FIREWALL] Отказ входа {symbol} ({mint[:8]}): GROK-JEV попытка входа без ML скоринга!")
+            if (source == "GROK-JEV" or _is_copy_src) and ml_confidence <= 0.0:
+                print(f"🚫 [FIREWALL] Отказ входа {symbol} ({mint[:8]}): {source} попытка входа без ML скоринга!")
                 return
         # СИМВОЛЬНЫЙ КУЛДАУН (кейс VRAX: +5% → перезаход в клона → -32%).
         # Все старые гарды keyed by mint (адрес), а клоны выходят под тем же
@@ -500,8 +502,14 @@ class PaperTracker:
                 if _p.status == "closed" and _cd > 0:
                     _xt = float(getattr(_p, "exit_time", 0) or 0)
                     _pnl = float(getattr(_p, "pnl_usd", 0.0) or 0.0)
-                    _was_profitable = _pnl > 0 and not any(k in str(getattr(_p, "exit_reason", "")).upper() for k in ("CRASH", "RUG", "HONEYPOT", "EMERGENCY"))
-                    _eff_cd = (5 * 60) if _was_profitable else _cd
+                    _orig_a = float(getattr(_p, "original_amount_usd", 0.0) or getattr(_p, "amount_usd", 4.0) or 4.0)
+                    _pnl_ratio = (_pnl / _orig_a) if _orig_a > 0 else 0.0
+                    _er_up = str(getattr(_p, "exit_reason", "")).upper()
+                    _was_profitable = (
+                        _pnl_ratio >= 0.08
+                        and not any(k in _er_up for k in ("CRASH", "RUG", "HONEYPOT", "EMERGENCY", "BREAKEVEN", "REVERSAL", "STALL", "STAGNANT", "STOP"))
+                    )
+                    _eff_cd = (15 * 60) if _was_profitable else _cd
                     if _xt and (_now - _xt) < _eff_cd:
                         _left = (_eff_cd - (_now - _xt)) / 60 if _was_profitable else (_eff_cd - (_now - _xt)) / 3600
                         _unit = "м" if _was_profitable else "ч"
@@ -516,17 +524,21 @@ class PaperTracker:
                 return
                 
             # Умный кулдаун:
-            # 1. Если сделка закрылась в плюс (TP / Trailing) и это не скам/раг:
-            #    даём 5 минут на окончание первого отката. Если монета снова растёт и сканер
-            #    подтверждает импульс — разрешаем повторный вход на вторую волну!
-            # 2. Если сделка закрылась в минус (Stop-Loss / Cut / Crash) — кулдаун 4 часа,
-            #    чтобы гарантированно не ловить падающий нож в умирающем токене.
+            # 1. Только уверенный профит (>= +8% по Trailing / Profit Floor, БЕЗ Breakeven-сливов вроде IPHONEDUO -37.7%!)
+            #    получает 15-минутный кулдаун на 2-ю волну.
+            # 2. Все минусы, флеты и возвраты в безубыток получают 4 часа карантина.
             _pnl = float(getattr(pos, "pnl_usd", 0.0) or 0.0)
+            _orig_p = float(getattr(pos, "original_amount_usd", 0.0) or getattr(pos, "amount_usd", 4.0) or 4.0)
+            _pnl_ratio_m = (_pnl / _orig_p) if _orig_p > 0 else 0.0
+            _er_m_up = str(getattr(pos, "exit_reason", "")).upper()
             _exit_time = float(getattr(pos, "exit_time", 0.0) or pos.entry_time)
             time_since_exit = time.time() - _exit_time
-            _was_profitable = _pnl > 0 and not any(k in str(getattr(pos, "exit_reason", "")).upper() for k in ("CRASH", "RUG", "HONEYPOT", "EMERGENCY"))
+            _was_profitable = (
+                _pnl_ratio_m >= 0.08
+                and not any(k in _er_m_up for k in ("CRASH", "RUG", "HONEYPOT", "EMERGENCY", "BREAKEVEN", "REVERSAL", "STALL", "STAGNANT", "STOP"))
+            )
             
-            _req_cd = (5 * 60) if _was_profitable else (4 * 3600)
+            _req_cd = (15 * 60) if _was_profitable else (4 * 3600)
             if time_since_exit < _req_cd:
                 if _was_profitable:
                     print(f"⏳ Кулдаун профитной монеты: {symbol} закрыт в +${_pnl:.2f}. Ждем еще {int(_req_cd - time_since_exit)}с перед возможным перезаходом во 2-ю волну.")
@@ -701,15 +713,13 @@ class PaperTracker:
             if not original_amount:
                 _rem = pos.amount_usd
                 _tp1 = bool(getattr(pos, "tp1_done", False))
-                _moon = bool(getattr(pos, "is_moonbag", False))
-                if _tp1 and _moon:
-                    original_amount = _rem / 0.4 if _rem else _rem
-                elif _moon:
-                    original_amount = _rem / 0.5 if _rem else _rem
-                elif _tp1:
-                    original_amount = _rem / 0.8 if _rem else _rem
-                else:
-                    original_amount = _rem
+                _tp2 = bool(getattr(pos, "tp2_done", False))
+                _rem_frac = 1.0
+                if _tp1:
+                    _rem_frac *= (1.0 - float(getattr(config, "TP1_SELL_FRAC", 0.40)))
+                if _tp2:
+                    _rem_frac *= (1.0 - float(getattr(config, "TP2_SELL_FRAC", 0.40)))
+                original_amount = (_rem / _rem_frac) if (_rem and _rem_frac > 0) else _rem
                 pos.original_amount_usd = original_amount
 
             # ХАНИПОД / РАГ / UNSELLABLE: на реальном блокчейне частичные тейки (TP1/TP2)

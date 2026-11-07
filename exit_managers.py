@@ -47,11 +47,11 @@ class MatureExitManager:
             _peak_age_min = 0.0
 
         # =========================================================================
-        # 1. ФИКСАЦИЯ ПРИБЫЛИ (PROFIT FLOOR & TRAILING STOP ДЛЯ РАКЕТ + ЗАЩИТА +8.5%..+12%)
+        # 1. ФИКСАЦИЯ ПРИБЫЛИ (PROFIT FLOOR & TRAILING STOP ДЛЯ РАКЕТ + ЗАЩИТА ДО TP1)
         # =========================================================================
         _is_mb = getattr(position, "is_moonbag", False)
-        _tp1_thr = float(getattr(config, "TP1_TRIGGER_PCT", 0.12))
-        _be_act = float(getattr(config, "BREAKEVEN_PCT", 0.085))
+        _tp1_thr = float(getattr(config, "TP1_TRIGGER_PCT", 0.16))
+        _be_act = float(getattr(config, "BREAKEVEN_PCT", 0.095))
         _floor_pnl = None
         _trail_dist = None
 
@@ -59,29 +59,28 @@ class MatureExitManager:
             _floor_pnl = round(max_pnl_pct * 0.70, 2)
             _trail_dist = 0.22
         elif max_pnl_pct >= 2.00:
-            _floor_pnl = 1.35
+            _floor_pnl = 1.30
             _trail_dist = 0.20
         elif max_pnl_pct >= 1.00:
-            _floor_pnl = 0.60
+            _floor_pnl = 0.58
             _trail_dist = 0.18
         elif max_pnl_pct >= 0.50:
-            _floor_pnl = 0.28
+            _floor_pnl = 0.26
+            _trail_dist = 0.16
+        elif max_pnl_pct >= 0.28:
+            _floor_pnl = 0.10
             _trail_dist = 0.15
-        elif max_pnl_pct >= 0.25:
-            _floor_pnl = 0.12
-            _trail_dist = 0.13
-        elif _is_mb and max_pnl_pct >= _tp1_thr:
-            # Для мунбэгов после взятого TP1 (+12%) держим пол +3.0% и просторный трейлинг 14%
-            _floor_pnl = 0.03
-            _trail_dist = 0.14
         else:
+            # ВАЖНО: На интервале +16%..+28% сразу после взятия TP1 НЕ ставим тесный пол +3%,
+            # который убивал мунбэг за 16 секунд на первом же спредовом тике (кейсы farmsem, DUGE)!
+            # Мунбэг защищён снизу подтверждённым безубытком -1.5% (секция 1.5 ниже).
             _floor_pnl = None
             _trail_dist = None
 
-        if _floor_pnl is not None and minutes_held >= 0.5:
+        if _floor_pnl is not None and minutes_held >= 0.45:
             drop_from_max = (position.max_price_usd - current_price) / position.max_price_usd if position.max_price_usd > 0 else 0.0
 
-            if pnl_pct >= 0.025:
+            if pnl_pct >= 0.02:
                 if _trail_dist is not None and drop_from_max >= _trail_dist and pnl_pct >= _floor_pnl:
                     _tc = int(getattr(position, "mature_trail_confirm", 0) or 0) + 1
                     position.mature_trail_confirm = _tc
@@ -99,20 +98,9 @@ class MatureExitManager:
                 position.mature_trail_confirm = 0
                 position.mature_floor_confirm = 0
 
-            # Если был серьезный пик (>= TP1), но монета полностью сдулась и ушла ниже -3.5% — выходим с минимальным риском
-            if max_pnl_pct >= _tp1_thr and pnl_pct <= -0.035 and minutes_held >= 1.0:
-                _pc_cut = int(getattr(position, "post_peak_cut_confirm", 0) or 0) + 1
-                position.post_peak_cut_confirm = _pc_cut
-                if _pc_cut >= 2:
-                    return f"Post-Peak Reversal Cut (+{max_pnl_pct*100:.1f}% peak -> {pnl_pct*100:.1f}%)"
-            else:
-                position.post_peak_cut_confirm = 0
-
         # =========================================================================
-        # 1.4. PRE-TP1 BREAKEVEN SHIELD (ЗАЩИТА СДЕЛОК С ПИКОМ +8.5%..+12%)
-        # Раньше любая сделка с ростом +9%..+17% не имела безубытка и скатывалась до -9%..-14%!
-        # Теперь после достижения +8.5% пика даём монете спокойно дышать выше +2.2%,
-        # но при развороте <= +2.2% (2 тика подряд) закрываем сделку в гарантированный плюс!
+        # 1.4. PRE-TP1 BREAKEVEN SHIELD (ЗАЩИТА СДЕЛОК С ПИКОМ +9.5%..+16%)
+        # После достижения +9.5% пика при развороте <= +2.2% (2 тика подряд) закрываем сделку в плюс.
         # =========================================================================
         if not _is_mb and max_pnl_pct >= _be_act and minutes_held >= 0.65:
             if pnl_pct <= 0.022:
@@ -124,14 +112,25 @@ class MatureExitManager:
                 position.pre_tp_be_confirm = 0
 
         # =========================================================================
-        # 1.5. БЕЗУБЫТОК ДЛЯ ПОЗИЦИЙ ПОСЛЕ ВЗЯТИЯ TP1
-        # Гарантирует, что монета после частичной фиксации (+12%) никогда не уйдёт в минус!
+        # 1.5. БЕЗУБЫТОК ДЛЯ МУНБЭГА ПОСЛЕ ВЗЯТИЯ TP1 (+16% уже в кармане на 40% объёма!)
+        # Раньше 1-тиковый выход на <= +2.5% душил ракеты за 16 секунд (farmsem +6.2%, DUGE +4.0%).
+        # Теперь даём 20с передышки после TP1 и держим пол -1.5% с 3-тиковым подтверждением:
+        # суммарная сделка гарантированно остаётся в чистом плюсе (~+4.5%..+5.5%), а ракета переживает ретест!
         # =========================================================================
-        if _is_mb and max_pnl_pct >= _tp1_thr and pnl_pct <= 0.025:
-            return f"Mature Breakeven ({pnl_pct*100:+.1f}% locked after TP1)"
+        if _is_mb and max_pnl_pct >= _tp1_thr:
+            _since_tp1 = now_ts - float(getattr(position, "last_tp_ts", 0.0) or 0.0)
+            if pnl_pct <= -0.08:
+                return f"Mature Breakeven ({pnl_pct*100:+.1f}% hard reversal after TP1)"
+            if _since_tp1 >= 20.0 and pnl_pct <= -0.015:
+                _mb_be = int(getattr(position, "mb_be_confirm_n", 0) or 0) + 1
+                position.mb_be_confirm_n = _mb_be
+                if _mb_be >= 3:
+                    return f"Mature Breakeven ({pnl_pct*100:+.1f}% locked after TP1)"
+            elif pnl_pct > -0.015:
+                position.mb_be_confirm_n = 0
 
         # =========================================================================
-        # 2. PRE-DUMP FRONT-RUNNER (Выход при развороте стакана ТОЛЬКО при солидной прибыли >= +15%)
+        # 2. PRE-DUMP FRONT-RUNNER (Выход при развороте стакана ТОЛЬКО при солидной прибыли >= +20%)
         # =========================================================================
         _pd = getattr(position, "pair_data", None) or getattr(position, "last_pair_data", None) or {}
         if isinstance(_pd, dict) and _pd:
@@ -143,25 +142,36 @@ class MatureExitManager:
             bs_ratio = (b5 / s5) if s5 > 0 else 2.0
             total_tx5 = b5 + s5
 
-            if minutes_held >= 2.0 and pnl_pct >= 0.15 and total_tx5 >= 20 and bs_ratio < 0.65 and m1 <= -3.0:
+            if minutes_held >= 2.0 and pnl_pct >= 0.20 and total_tx5 >= 20 and bs_ratio < 0.65 and m1 <= -3.5:
                 return f"Front-Run Profit Exit: Sellers dominating ({b5}b/{s5}s) while in profit (+{pnl_pct*100:.1f}%)"
 
         # =========================================================================
-        # 3. ЖЕСТКИЙ КОНТРОЛЬ УБЫТКА (РИСК-МЕНЕДЖМЕНТ)
+        # 3. ЖЕСТКИЙ КОНТРОЛЬ УБЫТКА (БЕЗ ПРОВАЛОВ -42% В ПЕРВУЮ МИНУТУ!)
         # =========================================================================
-        _emerg_cap = -abs(float(getattr(config, "EMERGENCY_CAP_PCT", -0.22)))
+        _emerg_cap = -abs(float(getattr(config, "EMERGENCY_CAP_PCT", -0.17)))
         if pnl_pct <= _emerg_cap:
             _em_c = int(getattr(position, "emerg_confirm_n", 0) or 0) + 1
             position.emerg_confirm_n = _em_c
-            # На 0-й минуте требуем минимум 2 тика подтверждения (или обвал <= -55%),
-            # чтобы 1 отстающий тик DexScreener не закрывал живую сделку в -31% за 0м (кейс Burn)
-            if pnl_pct <= -0.55 or (minutes_held >= 0.50 and _em_c >= 2) or _em_c >= 3:
+            # main.py дополнительно сверяет ранний выход (<2м) с живым Jupiter API (защита от кейса Burn),
+            # поэтому при реальном обвале пула режем за 2 тика (от 7с удержания), не допуская -42% (STONKS)!
+            if pnl_pct <= -0.28 or (minutes_held >= 0.12 and _em_c >= 2) or _em_c >= 3:
                 return f"Mature Emergency Cap ({pnl_pct*100:.1f}%)"
         else:
             position.emerg_confirm_n = 0
 
-        _sl = -abs(float(getattr(config, 'STOP_LOSS_PCT', 0.15)))
-        if pnl_pct <= _sl and minutes_held >= 0.75:
+        _base_sl = -abs(float(getattr(config, 'STOP_LOSS_PCT', 0.135)))
+        # Если пул глубокий ($22k+), есть соцсети и покупатели продолжают выкупать пролив (кейс DEBTDOG -14% -> +46%),
+        # даём буфер до -15.5% против сноса стопов маркетмейкером
+        _has_organic_bid = False
+        _feats = getattr(position, "ml_features", None) or {}
+        if isinstance(_feats, dict) and _feats:
+            _f_liq = float(_feats.get("liquidity", 0) or 0)
+            _f_bs = float(_feats.get("buy_sell_ratio", 0) or 0)
+            _f_links = int(_feats.get("links_count", 0) or (1 if _feats.get("socials") else 0))
+            if _f_liq >= 22000.0 and _f_bs >= 1.28 and _f_links >= 1:
+                _has_organic_bid = True
+        _sl = min(_base_sl, -0.155) if _has_organic_bid else _base_sl
+        if pnl_pct <= _sl and minutes_held >= 0.40:
             _sl_c = int(getattr(position, "sl_confirm_n", 0) or 0) + 1
             position.sl_confirm_n = _sl_c
             if _sl_c >= 2:

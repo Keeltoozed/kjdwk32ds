@@ -54,10 +54,10 @@ MAX_CONCURRENT_POSITIONS = 5
 # === ЖЕСТКОЕ ОГРАНИЧЕНИЕ УБЫТКА (РИСК-МЕНЕДЖМЕНТ) ===
 MAX_DAILY_LOSS_USD = 1000.0
 KILL_SWITCH_ENABLED = False
-STOP_LOSS_PCT = -0.14         # Стоп -14% (на $4 ордер = -$0.56)
-EMERGENCY_CAP_PCT = -0.20      # Аварийный кэп -20%
-INFANT_WINDOW_MIN = 1.0
-INFANT_DUMP_PCT = -0.32
+STOP_LOSS_PCT = -0.135        # Стоп -13.5% (-15.5% при живом перевесе покупателей на глубоком пуле)
+EMERGENCY_CAP_PCT = -0.17     # Жёсткий аварийный потолок -17% (с живой сверкой Jupiter, без провалов -42%)
+INFANT_WINDOW_MIN = 0.5
+INFANT_DUMP_PCT = -0.18
 
 # === ФИЛЬТРЫ ВХОДА (ОТСЕКАЮТ ВЕРШИНЫ И ПАДАЮЩИЕ НОЖИ) ===
 MAX_ENTRY_H1_PCT = 360.0       # Запрет входа в перегретые пампы > +360% за 1ч
@@ -106,17 +106,17 @@ VIP_ENTRIES_ENABLED = False
 TIME_EXIT_MINUTES = 40
 TIME_EXIT_PROFIT_REQ = 0.015
 
-# === ЛЕСТНИЦА ТЕЙК-ПРОФИТОВ (+EV АСИММЕТРИЯ: ГАРАНТИРОВАННЫЙ ПЛЮС + МУНБЭГ) ===
+# === ЛЕСТНИЦА ТЕЙК-ПРОФИТОВ (+EV АСИММЕТРИЯ: ГАРАНТИРОВАННЫЙ ПЛЮС + ПРОСТОР ДЛЯ РАКЕТ) ===
 PARTIAL_TP_ENABLED = True
-TP1_TRIGGER_PCT = 0.12          # На +12% фиксируем 50% позиции (забираем живой плюс и переводим остаток в безубыток +2.5%!)
-TP1_SELL_FRAC = 0.50
-TP2_TRIGGER_PCT = 0.28          # На +28% фиксируем 40% от остатка (20% исходной позиции)
+TP1_TRIGGER_PCT = 0.16          # На +16% фиксируем 40% позиции (кэш в кармане, 60% мунбэг дышит до -1.5% на 2-ю волну!)
+TP1_SELL_FRAC = 0.40
+TP2_TRIGGER_PCT = 0.35          # На +35% фиксируем 40% от остатка (24% исходной позиции)
 TP2_SELL_FRAC = 0.40
-TP3_TRIGGER_PCT = 0.75          # На +75% фиксируем 50% от остатка (15% исходной позиции)
+TP3_TRIGGER_PCT = 0.80          # На +80% фиксируем 50% от остатка (18% исходной позиции)
 TP3_SELL_FRAC = 0.50
 TP4_TRIGGER_PCT = 2.00          # На +200% (3x) фиксируем 50% от остатка
 TP4_SELL_FRAC = 0.50
-TP5_TRIGGER_PCT = 6.00          # На +600% (7x) фиксируем 50% от остатка
+TP5_TRIGGER_PCT = 5.00          # На +500% (6x) фиксируем 50% от остатка
 TP5_SELL_FRAC = 0.50
 MOONBAG_TRIGGER_PCT = 999.0
 MOONBAG_SELL_FRAC = 0.0
@@ -124,33 +124,33 @@ MOONBAG_SELL_FRAC = 0.0
 PUMP_XGB_ENABLED = False
 RAY_XGB_ENABLED = False
 ROCKET_XGB_ENABLED = True
-ROCKET_XGB_STAGE1_THRESHOLD = 10.0  # Первичный отсев заведомых дампов (<10%) без заморозки потока сделок
-ROCKET_XGB_FINAL_THRESHOLD = 13.5   # Финальный порог с реальными ончейн-холдерами (баланс качества и частоты входов)
-ROCKET_XGB_THRESHOLD = 12.0
+ROCKET_XGB_STAGE1_THRESHOLD = 18.0  # Отсев слабых сетапов <18% на входе (STONKS 26%, HODL 20%, DUGE 22% отсекаются на финализации)
+ROCKET_XGB_FINAL_THRESHOLD = 28.0   # Финальный порог с реальными ончейн-холдерами (пускает farmsem 36%, DEBTDOG 52%, Chimps 53%)
+ROCKET_XGB_THRESHOLD = 24.0
 
-STALL_TIMER_SEC = 360.0   # 6.0 минут (полное закрытие 5м свечи перед срезом флета)
-STALL_MAX_LOSS_PCT = -0.095
+STALL_TIMER_SEC = 300.0   # 5.0 минут (быстрый срез стоячего минуса без заморозки слота)
+STALL_MAX_LOSS_PCT = -0.085
 
-TRAILING_ACTIVATION_PCT = 0.15
-TRAILING_DISTANCE_PCT = 0.06
-TRAILING_RUNNER_DISTANCE_PCT = 0.14
+TRAILING_ACTIVATION_PCT = 0.28
+TRAILING_DISTANCE_PCT = 0.12
+TRAILING_RUNNER_DISTANCE_PCT = 0.15
 SCALP_PROFIT_ENABLED = False
 
 WHALE_DUMP_GUARD_PCT = 0.22
 EVM_RUNNER_CRASH = 0.25
 EVM_NORMAL_CRASH = 0.22
 
-BREAKEVEN_PCT = 0.085     # После +8.5% пика включается Pre-TP1 Breakeven Shield (+2.2% пол) — зеленые сделки больше не превращаются в минусы!
+BREAKEVEN_PCT = 0.095     # После +9.5% пика включается Pre-TP1 Breakeven Shield (+2.2% пол) — зеленые сделки не превращаются в минусы!
 
 PREFETCH_TTL_SEC = 35
 SOLANA_MIN_AGE_MIN = 0.5        # Разрешаем молодые ракеты от 30 секунд (LEMON +406%, SHADOW +195%)
-SOLANA_MAX_AGE_HOURS = 24.0
+SOLANA_MAX_AGE_HOURS = 6.0
 SOLANA_MAX_AGE_MIN = 360.0
 
-SCALP_TIMEOUT_MIN = 12.0
-STAGNANT_LOSS_MIN = 12.0
-STAGNANT_LOSS_MIN_FAST = 9.0
-STAGNANT_HOLD_MIN = 18.0
+SCALP_TIMEOUT_MIN = 10.0
+STAGNANT_LOSS_MIN = 9.0
+STAGNANT_LOSS_MIN_FAST = 7.0
+STAGNANT_HOLD_MIN = 12.0
 
 AI_MODE = "degen"
 MIN_LIQUIDITY = 10000.0         # Минимум $10,000 реальной ликвидности на DEX
@@ -163,11 +163,14 @@ GEMINI_API_KEY = (os.getenv("GEMINI_API_KEY") or "").strip()
 # === GROK BOT x JEV ENGINE ===
 JEV_ENABLED = True
 JEV_WICK_STOP_ENABLED = False
-JEV_EARLY_MIN_AGE_MIN = 0.4     # Ловим ранние ракеты от 24 секунд (LEMON, WANK, SHADOW)
-JEV_MIN_AGE_MIN = 0.5
+JEV_EARLY_MIN_AGE_MIN = 0.5
+JEV_MIN_AGE_MIN = 0.8
+JEV_MAX_AGE_MIN = 360.0         # Не покупаем 16-часовых гигантов (кейс HODL 940м $4.2M FDV)
 JEV_MIN_LIQUIDITY_USD = 10000.0
-JEV_MIN_VOLUME_H1 = 5000.0
-JEV_MIN_MCAP_USD = 12000.0
+JEV_MAX_LIQUIDITY_USD = 220000.0
+JEV_MIN_VOLUME_H1 = 8000.0
+JEV_MIN_MCAP_USD = 22000.0
+JEV_MAX_MCAP_USD = 1800000.0    # Верхняя граница $1.8M MCap (ловим мем-ракеты $48k-$1.8M, а не стоячие mid-caps)
 JEV_MIN_VOLUME_H24 = 15000.0
 JEV_MIN_TRADES_H24 = 60
 JEV_MIN_TRADES_H1 = 20
@@ -283,9 +286,9 @@ PULLBACK_M1_MIN_PCT = -0.08
 PULLBACK_M1_MAX_PCT = 0.20
 PULLBACK_MAX_H1_PCT = 320.0
 PULLBACK_MAX_M5_PCT = 0.95
-MIN_VOLUME_M5 = 2000            # Минимум $2,000 за 5м (отсекает дохлые пулы вроде FISCHER $906 и KLAUDIA $1221)
-MIN_TXNS_M5 = 20
-MIN_BUY_SELL_RATIO = 1.15       # Покупателей минимум на 15% больше продавцов (отсекает сливные COGE 477/529 и LUNOX 104/127)
+MIN_VOLUME_M5 = 3500            # Минимум $3,500 за 5м (отсекает вялые пулы PROPFUN $3,100 и LAURA $3,368)
+MIN_TXNS_M5 = 25
+MIN_BUY_SELL_RATIO = 1.15       # Покупателей минимум на 15% больше продавцов
 LOTTERY_ENABLED = False
 LOTTERY_MIN_M5_PCT = 0.60
 LOTTERY_SIZE_MULT = 0.30
@@ -347,13 +350,14 @@ SOLANA_FRESH_RESCAN_COOLDOWN = 12
 
 JEV_TREND_CONFIRM_ENABLED = False
 JEV_FRESH_RECHECK_ENABLED = True   # Включена финальная проверка цены перед покупкой (защищает от покупки на падающей свече!)
-JEV_MIN_M1_ENTRY_FLOOR_PCT = -5.0
-JEV_MIN_H1_PCT = -5.0              # Запрет покупки токенов в часовом сливе (отсекает KLAUDIA -65%, LIBTARD -53%, CAGE -23%)
-JEV_MIN_H6_PCT = -15.0
+JEV_MIN_M1_ENTRY_FLOOR_PCT = -4.0
+JEV_MIN_H1_PCT = 4.0               # Покупаем только растущий часовой тренд >= +4% (отсекает SHANE -3.6% и PROPFUN +1.5%)
+JEV_MIN_H6_PCT = -10.0
 
 USE_COPYTRADE = True
 COPY_MIN_TIER = 3
 COPY_MAX_TICKET_USD = 4.0
+COPY_MAX_CONCURRENT_POSITIONS = 2  # Максимум 2 слота под копитрейд, чтобы киты никогда не забивали все 5 слотов сканера
 COPY_USE_ANTISCAM = True
 COPY_MAX_ACTIVE_WHALES = 80
 COPY_BAN_ON_FIRST_LOSS = True

@@ -259,18 +259,35 @@ async def position_manager_loop(analyzer, tracker):
                     _pnl_str = f"{pnl_pct*100:+.1f}%" if position.entry_price_usd > 0 else "0%"
                     print(f"🛡️ [TRACK] {position.symbol} ({mint[:8]}): цена ${current_price:.8f} ({_pnl_str}) | пик: ${position.max_price_usd:.8f} | держим {minutes_held:.1f}м", flush=True)
 
-                # Infant Dump (как в EVM): слив в первые минуты = дев, не шум.
-                # Раги идут -40..-96%, шум импульса -15..-18% переживаем.
+                # Infant Dump: не даём монете сложиться на -42% за 27с на первой минуте (кейс STONKS)!
+                # Сразу сверяем провал <= -18% с живой котировкой Jupiter (защита от фантомного тика DS) и рубим реальный раг.
                 try:
-                    _inf_w = float(getattr(config, "INFANT_WINDOW_MIN", 1.0))
-                    _inf_p = float(getattr(config, "INFANT_DUMP_PCT", -0.42))
-                    if minutes_held < _inf_w and pnl_pct <= _inf_p:
-                        if minutes_held < 0.75 and pnl_pct > -0.65:
-                            # Первые 45с пережидаем спред/проскальзывание входа и фитили AMM
-                            pass
-                        else:
-                            tracker.close_position(mint, current_price, f"Infant Dump ({pnl_pct*100:.0f}%)")
-                            continue
+                    _inf_w = float(getattr(config, "INFANT_WINDOW_MIN", 0.5))
+                    _inf_p = float(getattr(config, "INFANT_DUMP_PCT", -0.18))
+                    if minutes_held < _inf_w and minutes_held >= 0.12 and pnl_pct <= _inf_p:
+                        _inf_c = int(getattr(position, "infant_confirm_n", 0) or 0) + 1
+                        position.infant_confirm_n = _inf_c
+                        if _inf_c >= 2 or pnl_pct <= -0.28:
+                            _real_inf_dump = True
+                            try:
+                                _j_inf_px = await JupiterAPI.get_price(mint)
+                                if _j_inf_px and _j_inf_px > 0 and position.entry_price_usd > 0:
+                                    _j_inf_pnl = (_j_inf_px - position.entry_price_usd) / position.entry_price_usd
+                                    if _j_inf_pnl > -0.14:
+                                        _real_inf_dump = False
+                                        current_price = _j_inf_px
+                                        position.current_price_usd = _j_inf_px
+                                        position.infant_confirm_n = 0
+                                    else:
+                                        current_price = _j_inf_px
+                                        pnl_pct = _j_inf_pnl
+                            except Exception:
+                                pass
+                            if _real_inf_dump:
+                                tracker.close_position(mint, current_price, f"Infant Dump ({pnl_pct*100:.1f}%)")
+                                continue
+                    else:
+                        position.infant_confirm_n = 0
                 except Exception:
                     pass
                 
@@ -1057,29 +1074,45 @@ async def scanner_loop(analyzer, tracker):
                                     continue
 
                                 _req_soc_age = float(getattr(config, "REQUIRE_SOCIALS_MIN_AGE_MIN", 8.0))
-                                if _age_m < _req_soc_age and _links_sc == 0 and not _soc_unk_sc:
-                                    _b5_sc = int((pair_data.get("txns") or {}).get("m5", {}).get("buys", 0) or 0)
-                                    _s5_sc = int((pair_data.get("txns") or {}).get("m5", {}).get("sells", 0) or 0)
-                                    _is_organic_stealth = (_vol5_live >= 2000.0 and _b5_sc >= 12 and _b5_sc >= _s5_sc * 1.15 and liq_usd >= 8000.0)
-                                    if not _is_organic_stealth:
-                                        print(f"🚫 [SCANNER-NO-SOCIALS] {actual_symbol} ({mint[:8]}): 0 соцсетей без органики — отмена!")
-                                        continue
-
-                                    else:
-                                        print(f"💎 [SCANNER-ORGANIC-STEALTH] {actual_symbol} ({mint[:8]}): 0 соцсетей, но подтвержден органический прорыв — пропуск в анализ.")
-
-                                # Защита от фейковых bump-ботов (не блокируем живые пулы выпускников PumpSwap / pump / bonk / BAGS с перевесом покупателей):
                                 _tx5_sc = (pair_data.get("txns") or {}).get("m5", {}) or {}
                                 _b5_bump = int(_tx5_sc.get("buys", 0) or 0)
                                 _s5_bump = int(_tx5_sc.get("sells", 0) or 0)
                                 _tot_tx5_sc = _b5_bump + _s5_bump
                                 _avg_tx5_sc = (_vol5_live / _tot_tx5_sc) if _tot_tx5_sc > 0 else 0.0
+                                if _links_sc == 0 and not _soc_unk_sc:
+                                    _vl_sc = _vol5_live / max(liq_usd, 1.0)
+                                    if _age_m >= 20.0:
+                                        print(f"🚫 [SCANNER-NO-SOCIALS] {actual_symbol} ({mint[:8]}): 0 соцсетей в зрелом возрасте {_age_m:.0f}м (>=20м) — отмена!")
+                                        continue
+                                    elif _age_m >= _req_soc_age:
+                                        _is_organic_stealth = (
+                                            _vol5_live >= 15000.0 and _b5_bump >= 50 and _b5_bump >= _s5_bump * 1.45
+                                            and liq_usd >= 20000.0 and _vl_sc <= 2.20 and _avg_tx5_sc >= 25.0
+                                            and _h1_live <= 300.0 and _m1_live <= 12.0
+                                        )
+                                    else:
+                                        _is_organic_stealth = (
+                                            _vol5_live >= 4000.0 and _b5_bump >= 20 and _b5_bump >= _s5_bump * 1.25
+                                            and liq_usd >= 12000.0 and _vl_sc <= 2.60 and _avg_tx5_sc >= 20.0
+                                            and _m5_live <= 80.0
+                                        )
+                                    if not _is_organic_stealth:
+                                        print(f"🚫 [SCANNER-NO-SOCIALS] {actual_symbol} ({mint[:8]}): 0 соцсетей при {_age_m:.1f}м без чистой органики — отмена!")
+                                        continue
+                                    else:
+                                        print(f"💎 [SCANNER-ORGANIC-STEALTH] {actual_symbol} ({mint[:8]}): 0 соцсетей, но подтвержден органический прорыв — пропуск в анализ.")
+
+                                # Защита от микро bump-ботов (кейс LAURA $1.60 avg_tx):
+                                if _tot_tx5_sc >= 120 and _avg_tx5_sc < 8.0:
+                                    print(f"🚫 [SCANNER-WASH-TRAP] {actual_symbol} ({mint[:8]}): накрутка микро-ботом ({_tot_tx5_sc} txns, avg ${_avg_tx5_sc:.2f} < $8) — отмена!")
+                                    continue
                                 _is_deep_launchpad_runner = (
                                     (mint.endswith(("pump", "bonk", "BAGS")) or _dex_id == "pumpswap")
-                                    and liq_usd >= 18000.0
-                                    and _vol5_live >= 3200.0
+                                    and liq_usd >= 20000.0
+                                    and _vol5_live >= 12000.0
+                                    and _avg_tx5_sc >= 10.0
                                     and _m5_live >= 5.0
-                                    and _b5_bump >= _s5_bump * 1.20
+                                    and _b5_bump >= _s5_bump * 1.22
                                 )
                                 if _tot_tx5_sc >= 200 and _avg_tx5_sc < 12.0 and _links_sc == 0 and not _is_deep_launchpad_runner:
                                     print(f"🚫 [SCANNER-WASH-TRAP] {actual_symbol} ({mint[:8]}): накрутка микро-ботом ({_tot_tx5_sc} txns, avg ${_avg_tx5_sc:.2f} < $12) — отмена!")
@@ -1090,7 +1123,7 @@ async def scanner_loop(analyzer, tracker):
                                     print(f"🚫 [SCANNER-FAKE-PUMPSWAP] {actual_symbol} ({mint[:8]}): кастомный не-pump контракт на PumpSwap с микро-пулом (${liq_usd:,.0f} < $6k) — отмена!")
                                     continue
 
-                                # Защита от миграционного дампа Pump.fun: первые 60с на сброс instant-ботов, затем повторная проверка через 25с
+                                # Защита от миграционного дампа Pump.fun (кейс SHANE FDV $35.8k -24.2%!)
                                 if mint.endswith("pump") and _dex_id in ("pumpswap", "raydium", "meteora", "orca"):
                                     _c_ms_sc = pair_data.get("pairCreatedAt") or 0
                                     _age_sc = ((time.time() * 1000 - _c_ms_sc) / 60000.0) if _c_ms_sc else 0.5
@@ -1104,11 +1137,11 @@ async def scanner_loop(analyzer, tracker):
                                         print(f"⏳ [SCANNER-MIGRATION] {actual_symbol} ({mint[:8]}): AMM-пул создан {_age_sc:.1f}м назад (< 1.0м) — повтор через 25с.")
                                         continue
                                     _fdv_sc = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
-                                    if 0 < _fdv_sc < 12000.0:
-                                        print(f"🚫 [SCANNER-MIGRATION] {actual_symbol} ({mint[:8]}): FDV ${_fdv_sc:,.0f} < $12,000 — слит ниже уровня миграции.")
+                                    if 0 < _fdv_sc < 46000.0 and not (_age_sc < 5.0 and _vol5_live >= 20000.0 and _m5_live >= 18.0 and _b5_bump >= _s5_bump * 1.45):
+                                        print(f"🚫 [SCANNER-MIGRATION] {actual_symbol} ({mint[:8]}): FDV ${_fdv_sc:,.0f} < $46,000 — слит ниже уровня миграции (кейс SHANE).")
                                         continue
-                                    if liq_usd < 3500.0:
-                                        print(f"🚫 [SCANNER-MIGRATION] {actual_symbol} ({mint[:8]}): ликвидность ${liq_usd:,.0f} < $3,500 — микро-пул.")
+                                    if liq_usd < 8000.0:
+                                        print(f"🚫 [SCANNER-MIGRATION] {actual_symbol} ({mint[:8]}): ликвидность ${liq_usd:,.0f} < $8,000 — микро-пул.")
                                         continue
 
                                 # Живая проверка цены Jupiter для ЛЮБЫХ токенов на AMM (включая pump на Raydium/PumpSwap)

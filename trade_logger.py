@@ -61,7 +61,15 @@ class TradeLogger:
                         "features": json.dumps(features),
                         "confidence": confidence,
                         "status": "OPEN",
-                        "entry_time": datetime.utcnow().isoformat()
+                        "entry_time": datetime.utcnow().isoformat(),
+                        "pnl": None,
+                        "exit_reason": None,
+                        "exit_time": None,
+                        "post_exit_ath": 0.0,
+                        "missed_pnl": 0.0,
+                        "check_1h_done": 0,
+                        "check_4h_done": 0,
+                        "check_24h_done": 0,
                     }
                     self.supabase.table(table_name).upsert(data).execute()
                 except Exception as sb_err:
@@ -75,7 +83,7 @@ class TradeLogger:
             try:
                 with sqlite3.connect(self.db_path) as conn:
                     conn.execute(
-                        f"INSERT OR REPLACE INTO {table_name} (mint, features, confidence) VALUES (?, ?, ?)",
+                        f"INSERT OR REPLACE INTO {table_name} (mint, features, confidence, status, pnl, exit_reason, exit_time) VALUES (?, ?, ?, 'OPEN', NULL, NULL, NULL)",
                         (mint, json.dumps(features), confidence)
                     )
             except Exception as sql_e:

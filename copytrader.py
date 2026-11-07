@@ -41,12 +41,15 @@ SKIP_COPY_MINTS = {
     "EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm",  # WIF
     "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263",  # BONK
     "7GCihgDB8fe6KNjn2MYtkzZcRjQy3t9GHdC8uHYmW2hr",  # POPCAT
+    "nosXBVoaCTtYdLvKY6Csb4AC8JCdQKKAaWYtx2ZMoo7",   # NOS (Nosana major)
 }
 
 SKIP_COPY_SYMBOLS = {
     "SOL", "WSOL", "USDC", "USDT", "USDG", "EURC", "CBBTC", "WBTC", "WETH", "TBTC",
     "JLP", "JUP", "RAY", "ORCA", "PYTH", "JTO", "KMNO", "DRIFT", "NEAR", "WNEAR",
-    "ZEC", "WIF", "$WIF", "BONK", "POPCAT", "TRUMP", "RENDER", "HNT", "MET",
+    "ZEC", "WIF", "$WIF", "BONK", "POPCAT", "TRUMP", "RENDER", "HNT", "MET", "NOS",
+    "GRASS", "IO", "TNSR", "MEW", "BOME", "PENGU", "MELANIA", "FARTCOIN", "AI16Z",
+    "VIRTUAL", "GOAT", "PNUT", "ACT", "MOODENG",
 }
 
 
@@ -62,6 +65,7 @@ class CopyTrader:
         self._mint_eval_lock = set()             # минты, которые прямо сейчас проверяются (защита от 25 параллельных вызовов)
         self._mint_skip_until = {}               # mint -> ts кулдауна после пропуска [WHALE-SKIP]
         self._wstat = {}          # кошелёк -> [прибыльных копий, убыточных копий]
+        self._whale_cum_pnl = {}  # кошелёк -> суммарный чистый PnL % всех его сделок у нас
         self._junk_strikes = {}   # кошелёк -> количество страйков за зомби/мусорные токены
         self._copy_wallets = {}   # mint -> кошельки, чей сигнал мы скопировали
         self.wallets = self.load_wallets()
@@ -261,6 +265,7 @@ class CopyTrader:
                     or "ии выявил скам" in reason
                     or "страйк" in reason
                     or w.startswith("3kc6")
+                    or w.startswith("Dtvm")  # Принёс PAWS +18.21%, получил ложный бан за -0.70% комиссий на флете DACITY
                     or (pnl >= 300.0 and "сделка дала убыток" not in reason and "убыток" not in reason)
                 )
 
@@ -419,18 +424,29 @@ class CopyTrader:
 
         for w in whales:
             st = self._wstat.setdefault(w, [0, 0])
+            cum_pnl = float(self._whale_cum_pnl.get(w, 0.0)) + float(pnl_pct)
+            self._whale_cum_pnl[w] = cum_pnl
             if pnl_pct > 0.0: # Любая чистая прибыль > $0 после комиссий DEX и Jito = победа кита
                 st[0] += 1
                 trader_name = self.wallets.get(w, f"@{w[:6]}")
                 print(
-                    f"🏆 [WHALE PROFIT] Кит {trader_name} принёс чистую прибыль {pnl_pct:+.2f}% на {symbol}! "
-                    f"Статистика кита: {st[0]} побед / {st[1]} поражений. Оставляем в топе."
+                    f"🏆 [WHALE PROFIT] Кит {trader_name} принёс чистую прибыль {pnl_pct:+.2f}% на {symbol} "
+                    f"(суммарно {cum_pnl:+.2f}%)! Статистика: {st[0]} побед / {st[1]} поражений. Оставляем в топе."
                 )
-            else:
-                # МЫ НИЧЕГО НЕ ЗАРАБОТАЛИ (0% или минус) -> БАН НАВСЕГДА!
+            elif cum_pnl > 2.0 and pnl_pct > -5.0:
+                # Кит уже принёс нам ощутимый плюс (например PAWS +18.2%) и закрыл царапину на комиссиях (-0.7%):
+                # мы по-прежнему в чистом плюсе по этому киту (+17.5%) — НЕ баним проверенного снайпера!
                 st[1] += 1
                 trader_name = self.wallets.get(w, f"@{w[:6]}")
-                reason = f"Сигнал на {symbol} дал {pnl_pct:+.2f}% (убыток/ноль). Причина выхода: {exit_reason}"
+                print(
+                    f"🛡️ [WHALE SURPLUS SHIELD] Кит {trader_name} закрыл {symbol} в {pnl_pct:+.2f}%, "
+                    f"но его чистый профит для нас остаётся +{cum_pnl:.2f}% — сохраняем кита в строю!"
+                )
+            else:
+                # Суммарно мы на ките не заработали (<= 0%) или словили жесткий слив (<= -5%) -> БАН НАВСЕГДА!
+                st[1] += 1
+                trader_name = self.wallets.get(w, f"@{w[:6]}")
+                reason = f"Сигнал на {symbol} дал {pnl_pct:+.2f}% (суммарно {cum_pnl:+.2f}%). Причина выхода: {exit_reason}"
                 self.ban_whale_permanently(w, reason=reason, symbol=symbol, pnl_pct=pnl_pct)
         self._copy_wallets.pop(mint, None)
 
@@ -614,11 +630,20 @@ class CopyTrader:
         if mint in self._mint_eval_lock:
             return
 
-        # 1. Проверка лимита открытых позиций
+        # 1. Проверка общего лимита позиций, квоты копитрейдера (<=2 слотов) и лимита 1 сделка на 1 кита
         open_positions = self.tracker.get_open_positions()
         if len(open_positions) >= config.MAX_CONCURRENT_POSITIONS:
             print(f"🚫 [COPY] Лимит позиций ({len(open_positions)}/{config.MAX_CONCURRENT_POSITIONS}). Пропускаем копитрейд {mint[:8]}.")
             return
+        max_copy_slots = int(getattr(config, "COPY_MAX_CONCURRENT_POSITIONS", 2))
+        open_copy_positions = [p for p in open_positions.values() if str(getattr(p, "source", "")).startswith("COPY")]
+        if len(open_copy_positions) >= max_copy_slots:
+            print(f"🚫 [COPY] Заняты все слоты копитрейда ({len(open_copy_positions)}/{max_copy_slots}) — бережём слоты для основного сканера ракет.")
+            return
+        for _op_m, _op_p in open_positions.items():
+            if wallet in self._copy_wallets.get(_op_m, set()):
+                print(f"🚫 [COPY] У кита {trader_name} уже открыта сделка {_op_p.symbol} — не открываем пачку параллельных копий от одного кошелька.")
+                return
 
         if mint in open_positions:
             return
@@ -708,11 +733,22 @@ class CopyTrader:
             _cap = float(getattr(config, "COPY_MAX_TICKET_USD", 4.0))
             position_size = max(_base, min(_cap, capital * _pct))
 
-            # 6. Запоминаем кошелёк кита для этого минта и открываем позицию
+            # 6. Запоминаем кошелёк кита для этого минта и открываем позицию (с полными фичами и ML-скором!)
             if mint not in self._copy_wallets:
                 self._copy_wallets[mint] = set()
             self._copy_wallets[mint].add(wallet)
             self.consensus_done.add(mint)
+
+            _copy_ml_conf = 25.0
+            _copy_ml_feats = {}
+            if self.analyzer and pair_data:
+                try:
+                    _copy_ml_conf = float(getattr(self.analyzer, "rocket_scores", {}).get(mint, getattr(self.analyzer, "last_score", 0.0)) or 0.0)
+                    if _copy_ml_conf <= 0.0:
+                        _copy_ml_conf = float(self.analyzer.score_rocket_xgb(mint, pair_data) or 0.0)
+                    _copy_ml_feats = self.analyzer.pack_features(pair_data)
+                except Exception:
+                    pass
 
             self.tracker.add_position(
                 clean_symbol,
@@ -720,6 +756,8 @@ class CopyTrader:
                 price_usd,
                 amount_usd=position_size,
                 is_mature=True,
+                ml_features=_copy_ml_feats,
+                ml_confidence=_copy_ml_conf,
                 source=f"COPY:{trader_name}",
                 pair_address=((pair_data or {}).get("pairAddress", "") or ""),
             )

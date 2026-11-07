@@ -1201,6 +1201,7 @@ async def check_rugcheck_insider_graph(mint: str, total_supply_raw: float = 0.0,
     excl = set(pool_accounts or set()) | {
         "5Q544fKrFoe6tsEbD7S8EmxGTJYAKtTVhAW5Q5pge4j1",
         "D4FPEruKEHrG5NTsqazoqfv8zsFWApqTjuzFLUQDkTz5",
+        "pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA",
         "Eo7WjKq67rjJQSZxS6z3YkapzY3eMj6Xy8X5EQVn5UaB",
         "LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo",
         "whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc",
@@ -1215,8 +1216,10 @@ async def check_rugcheck_insider_graph(mint: str, total_supply_raw: float = 0.0,
         if st != 200 or not isinstance(data, list):
             return True, ""
 
-        # Стандартная эмиссия Pump.fun с 6 decimals = 1e15 raw (если точная raw эмиссия не передана)
+        # Стандартная эмиссия Pump.fun с 6 decimals = 1e15 raw (защита если передан UI supply 1e9 вместо raw 1e15)
         eff_supply = float(total_supply_raw) if total_supply_raw and total_supply_raw > 0 else 1_000_000_000_000_000.0
+        if 0 < eff_supply < 1e12 and mint.endswith("pump"):
+            eff_supply = eff_supply * 1e6
 
         for net in data:
             if not isinstance(net, dict):
@@ -1225,12 +1228,16 @@ async def check_rugcheck_insider_graph(mint: str, total_supply_raw: float = 0.0,
             if len(nodes) < 4:
                 continue
             real_Cluster_pcts = []
+            seen_ids = set()
             for nd in nodes:
                 if not isinstance(nd, dict) or not nd.get("participant", True):
                     continue
-                nid = str(nd.get("id") or "")
-                if not nid or nid in excl:
+                if str(nd.get("type") or "").lower() in ("token_account", "tokenaccount", "ata", "amm", "pool", "vault"):
                     continue
+                nid = str(nd.get("id") or "")
+                if not nid or nid in excl or nid in seen_ids:
+                    continue
+                seen_ids.add(nid)
                 hold_raw = float(nd.get("holdings") or 0.0)
                 if hold_raw <= 0:
                     continue
@@ -1240,7 +1247,7 @@ async def check_rugcheck_insider_graph(mint: str, total_supply_raw: float = 0.0,
                     real_Cluster_pcts.append(pct)
 
             n_real = len(real_Cluster_pcts)
-            sum_pct = sum(real_Cluster_pcts)
+            sum_pct = min(100.0, sum(real_Cluster_pcts))
             if (n_real >= max_bundle_n and sum_pct >= max_bundle_pct) or (n_real >= 4 and sum_pct >= max_bundle_pct * 1.5):
                 res = (False, f"insider-graph-bundle: {n_real} linked wallets hold {sum_pct:.1f}% supply")
                 _INSIDER_GRAPH_CACHE[mint] = (now, res)
