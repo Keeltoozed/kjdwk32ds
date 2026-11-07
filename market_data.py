@@ -658,15 +658,17 @@ async def get_growth_universe(min_reserve_usd: float = 500000.0, limit: int = 20
 
 
 async def get_trending() -> list:
-    """Замена boosts/profiles: тренды GT + свежие пулы pump.fun.
+    """Замена boosts/profiles: компактная выборка живых пулов GT (6 страниц ~14с раз в 60с, без 429!).
+    Параллельно прогревает _TD_CACHE нормализованными данными пулов, экономя одиночные запросы GT.
     Формат как у DexScreener boosts: [{'tokenAddress','chainId'}]."""
     global _trending_cache, _trending_cache_time
-    
+
     # Кэшируем результаты на 60 секунд (снижает нагрузку на GeckoTerminal API и защищает от 429)
-    if time.time() - _trending_cache_time < 60:
+    if time.time() - _trending_cache_time < 60 and _trending_cache:
         return _trending_cache
 
     out, seen = [], set()
+    now_mono = time.monotonic()
 
     def add(item):
         if not item or not isinstance(item, dict):
@@ -687,44 +689,40 @@ async def get_trending() -> list:
                 return  # Древний токен старше 48 часов
         seen.add(mint)
         out.append({"tokenAddress": mint, "chainId": "solana"})
+        # Прогрев _TD_CACHE прямо из ответа списка пулов (0 лишних сетевых вызовов!)
+        hit = _TD_CACHE.get(mint)
+        if not hit or (now_mono - hit[0]) >= TD_TTL:
+            try:
+                raw_name = str(attrs.get("name") or "")
+                base_sym = raw_name.split("/")[0].strip() if "/" in raw_name else (raw_name.strip() or mint[:6])
+                norm = _normalize_pool(mint, base_sym, base_sym, item, {"fdv_usd": attrs.get("fdv_usd"), "market_cap_usd": attrs.get("market_cap_usd")})
+                if float(norm.get("priceUsd", 0) or 0) > 0:
+                    _TD_CACHE[mint] = (now_mono, norm)
+            except Exception:
+                pass
 
-    # 1. Сканируем ТОП 5-минутных трендов (страницы 1, 2, 3)
-    for page in (1, 2, 3):
-        d5 = await _gt_get(f"/networks/solana/trending_pools?duration=5m&page={page}", retries=0, timeout=6)
-        for item in (d5.get("data") or []):
+    # 6 высокоприоритетных страниц (~14с с пейсером 2.4с вместо 48с и без 429):
+    # Основной широкий охват (700+ токенов за 0.8с) даёт параллельный Jupiter API v2 в jup_discovery!
+    gt_pages = (
+        "/networks/solana/trending_pools?duration=5m&page=1",
+        "/networks/solana/trending_pools?duration=5m&page=2",
+        "/networks/solana/trending_pools?duration=1h&page=1",
+        "/networks/solana/new_pools?page=1",
+        "/networks/solana/new_pools?page=2",
+        "/networks/solana/dexes/raydium/pools?page=1",
+    )
+    for path in gt_pages:
+        d = await _gt_get(path, retries=0, timeout=6)
+        for item in (d.get("data") or []):
             add(item)
 
-    # 2. ТОП 1-часовых трендов (страницы 1, 2)
-    for page in (1, 2):
-        d1h = await _gt_get(f"/networks/solana/trending_pools?duration=1h&page={page}", retries=0, timeout=6)
-        for item in (d1h.get("data") or []):
-            add(item)
-
-    # 3. Свежие пулы (new_pools) — ловит новые Raydium/Meteora/Pump ракеты первыми! (страницы 1, 2, 3, 4, 5)
-    for page in (1, 2, 3, 4, 5):
-        d2 = await _gt_get(f"/networks/solana/new_pools?page={page}", retries=0, timeout=6)
-        for item in (d2.get("data") or []):
-            add(item)
-
-    # 4. Свежие Pump.fun (страницы 1, 2, 3)
-    for page in (1, 2, 3):
-        d3 = await _gt_get(f"/networks/solana/dexes/pump-fun/pools?page={page}", retries=0, timeout=6)
-        for item in (d3.get("data") or []):
-            add(item)
-
-    # 5. Свежие Raydium (страницы 1, 2, 3)
-    for page in (1, 2, 3):
-        dr = await _gt_get(f"/networks/solana/dexes/raydium/pools?page={page}", retries=0, timeout=6)
-        for item in (dr.get("data") or []):
-            add(item)
-
-    # Не кэшируем пустой get_trending на 180с (иначе бот слепнет на 3 минуты при сбое GT)
+    # Не кэшируем пустой get_trending на 60с (иначе бот слепнет при сбое GT)
     if out:
         _trending_cache = out
         _trending_cache_time = time.time()
     else:
         _trending_cache = []
-        _trending_cache_time = time.time() - 175  # даём повторить через 5с
+        _trending_cache_time = time.time() - 55  # даём повторить через 5с
     return out
 
 

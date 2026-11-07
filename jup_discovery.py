@@ -375,8 +375,9 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
         print(f"🚫 [{source_tag}-FOMO-H1] {_sym_tmp}: h1 +{_h1_j:.0f}% > +{_max_h1_cfg:.0f}% — перегретый часовой памп, отмена!")
         return False
     _links_j = len((td or {}).get("info", {}).get("socials", []) or []) + len((td or {}).get("info", {}).get("websites", []) or [])
-    if _age_j < _req_soc_age and _links_j == 0:
-        _is_organic_stealth = (_vm5_j >= 8000.0 and _b5_j >= 35 and _b5_j >= _s5_j * 1.25 and _liq_j >= 10000.0)
+    _soc_unk_j = bool((td or {}).get("_socials_unknown", False))
+    if _age_j < _req_soc_age and _links_j == 0 and not _soc_unk_j:
+        _is_organic_stealth = (_vm5_j >= 2000.0 and _b5_j >= 12 and _b5_j >= _s5_j * 1.15 and _liq_j >= 8000.0)
         if not _is_organic_stealth:
             print(f"🚫 [{source_tag}-NO-SOCIALS] {_sym_tmp}: 0 соцсетей при возрасте {_age_j:.1f}м < {_req_soc_age:.0f}м без органического потока — отмена!")
             return False
@@ -428,11 +429,12 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
             return False
         if "VIP-" in _sig:
             size = min(size, float(getattr(config, "TG_VIP_SIZE_USD", 15.0) or 15.0))
+        _mint_ml_conf = float(getattr(analyzer, "rocket_scores", {}).get(mint, getattr(analyzer, "last_score", 0.0)) or 0.0)
         tracker.add_position(
             _sym_tmp, mint, price, min(size, 100.0),
             is_mature=True,
             ml_features=analyzer.pack_features(td or {}),
-            ml_confidence=float(getattr(analyzer, "last_score", 0.0)),
+            ml_confidence=_mint_ml_conf,
             source=f"{source_tag}:{analyzer.get_signal(mint)}",
             pair_address=((td or {}).get("pairAddress", "") or ""),
             stop_under_wick=_wick_stop_price,
@@ -496,7 +498,8 @@ async def jup_fast_mature_loop(analyzer, tracker):
                     else:
                         print(f"⏭ [JUP-SKIP] {sym} ({mint[:8]}): анализ созревшего токена не дал сигнала (eval_none)")
                     continue
-                analyzer.log_scan(sym, mint, "JUP-MATURE", ok, getattr(analyzer, "last_score", 0.0))
+                _m_sc = float(getattr(analyzer, "rocket_scores", {}).get(mint, getattr(analyzer, "last_score", 0.0)) or 0.0)
+                analyzer.log_scan(sym, mint, "JUP-MATURE", ok, _m_sc)
                 if ok is True:
                     await _evaluate_and_buy(mint, td, analyzer, tracker, source_tag="JUP-MATURE")
         except Exception as e:
@@ -524,8 +527,9 @@ async def jup_loop(analyzer, tracker):
                 mints = await fetch_jup_tokens()
                 if mints:
                     print(f"🪐 [JUPITER] Получено {len(mints)} кандидатов (toptrending + recent). Пакетный анализ...")
+                    open_jup = set(tracker.get_open_positions().keys())
                     try:
-                        _to_pf = [m for m in mints if m not in tracker.positions and (_t.time() - processed.get(m, 0.0)) >= 35]
+                        _to_pf = [m for m in mints if m not in open_jup and (_t.time() - processed.get(m, 0.0)) >= 35]
                         if _to_pf:
                             await analyzer.prefetch_token_data(_to_pf, ttl=60.0)
                     except Exception:
@@ -542,8 +546,14 @@ async def jup_loop(analyzer, tracker):
                     _min_age = float(getattr(config, "SOLANA_MIN_AGE_MIN", 2.0))
 
                     for m in mints:
-                        if not m or m in tracker.positions:
+                        if not m or m in open_jup:
                             continue
+                        if m in tracker.positions:
+                            _cp = tracker.positions.get(m)
+                            _cpnl = float(getattr(_cp, "pnl_usd", 0.0) or 0.0)
+                            _cext = float(getattr(_cp, "exit_time", 0.0) or 0.0)
+                            if (_now_t - _cext) < (300.0 if _cpnl > 0 else 14400.0):
+                                continue
                         if _now_t - processed.get(m, 0.0) < 35:
                             continue
 
@@ -614,7 +624,7 @@ async def jup_loop(analyzer, tracker):
                     async def _process_hot_candidate(cand):
                         async with sem:
                             _score, _m5_val, _ag_val, _sym_val, mint, td = cand
-                            if not mint or mint in tracker.positions:
+                            if not mint or mint in tracker.get_open_positions():
                                 return
                             if len(tracker.get_open_positions()) >= config.MAX_CONCURRENT_POSITIONS:
                                 return
@@ -641,12 +651,13 @@ async def jup_loop(analyzer, tracker):
                                 return
 
                             processed[mint] = _t.time()
-                            analyzer.log_scan(_sym_val, mint, "JUP", ok, getattr(analyzer, "last_score", 0.0))
+                            _j_sc = float(getattr(analyzer, "rocket_scores", {}).get(mint, getattr(analyzer, "last_score", 0.0)) or 0.0)
+                            analyzer.log_scan(_sym_val, mint, "JUP", ok, _j_sc)
 
                             if ok is True:
                                 await _evaluate_and_buy(mint, td, analyzer, tracker, source_tag="JUP")
 
-                    tasks = [_process_hot_candidate(c) for c in hot_candidates]
+                    tasks = [_process_hot_candidate(c) for c in hot_candidates[:30]]
                     if tasks:
                         try:
                             await asyncio.wait_for(asyncio.gather(*tasks, return_exceptions=True), timeout=35.0)

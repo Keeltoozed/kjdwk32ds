@@ -14,20 +14,6 @@ async def fomo_loop(analyzer, tracker):
         "https://api.dexscreener.com/token-profiles/recent-updates/v1",
         "https://api.dexscreener.com/community-takeovers/latest/v1"
     ]
-    gt_paths = [
-        "/networks/solana/trending_pools?duration=5m&page=1",
-        "/networks/solana/trending_pools?duration=5m&page=2",
-        "/networks/solana/trending_pools?duration=5m&page=3",
-        "/networks/solana/trending_pools?duration=1h&page=1",
-        "/networks/solana/trending_pools?duration=1h&page=2",
-        "/networks/solana/new_pools?page=1",
-        "/networks/solana/new_pools?page=2",
-        "/networks/solana/new_pools?page=3",
-        "/networks/solana/dexes/raydium/pools?page=1",
-        "/networks/solana/dexes/raydium/pools?page=2",
-        "/networks/solana/dexes/pump-fun/pools?page=1",
-        "/networks/solana/dexes/pump-fun/pools?page=2"
-    ]
     headers = {"Accept": "application/json", "User-Agent": "Mozilla/5.0"}
     
     seen = set()
@@ -36,38 +22,29 @@ async def fomo_loop(analyzer, tracker):
         try:
             mints = []
             
-            # 1. Свежие профили и бусты DexScreener
-            for url in ds_urls:
-                try:
-                    status, data = await fetch_json(url, headers=headers, timeout=10, retries=1)
+            # 1. Свежие профили и бусты DexScreener (квота 300 req/min, параллельно)
+            results = await asyncio.gather(
+                *[fetch_json(url, headers=headers, timeout=8, retries=0) for url in ds_urls],
+                return_exceptions=True,
+            )
+            for res in results:
+                if isinstance(res, tuple) and len(res) == 2:
+                    status, data = res
                     if status == 200 and isinstance(data, list):
                         for item in data:
                             if item.get("chainId") == "solana" and "tokenAddress" in item:
                                 mints.append(item["tokenAddress"])
-                except Exception:
-                    pass
 
-            # 2. GeckoTerminal ТОП-тренды 1H и 5M через единый пейсер _gt_get (только с реальным импульсом m5 >= 2.5%)
-            import market_data
-            for gt_path in gt_paths:
-                try:
-                    data = await market_data._gt_get(gt_path, retries=0, timeout=8)
-                    if data and "data" in data:
-                        for pool in data.get("data", []):
-                            try:
-                                attrs = pool.get("attributes", {})
-                                chg_m5 = float((attrs.get("price_change_percentage") or {}).get("m5", 0) or 0)
-                                # Не шлём во флете: только монеты с реальным импульсом m5 >= 2.5%
-                                if chg_m5 < 2.5:
-                                    continue
-                                bid = pool.get("relationships", {}).get("base_token", {}).get("data", {}).get("id", "")
-                                m = bid.split("_", 1)[1] if "_" in bid else bid
-                                if m and len(m) > 30:
-                                    mints.append(m)
-                            except Exception:
-                                pass
-                except Exception:
-                    pass
+            # 2. GeckoTerminal ТОП-тренды через ОБЩИЙ 60с кэш market_data.get_trending() (0 лишних 429 запросов!)
+            try:
+                import market_data
+                gt_items = await market_data.get_trending()
+                for item in (gt_items or []):
+                    m = item.get("tokenAddress")
+                    if m and len(m) > 30:
+                        mints.append(m)
+            except Exception:
+                pass
             
             mints = [m for m in mints if m and len(m) > 30]
             new_mints = list(set(mints) - seen)

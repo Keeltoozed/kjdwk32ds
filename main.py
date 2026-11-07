@@ -814,14 +814,16 @@ async def scanner_loop(analyzer, tracker):
                     if _now_l - processed_mints.get(_m, 0.0) < _cd_l:
                         continue
                     _launch.append(_m)
-                    if len(_launch) >= 120:
+                    if len(_launch) >= 60:
                         break
                 _launch_n = len(_launch)
                 _scan_conc = int(getattr(config, "SCAN_CONCURRENCY", 8))
                 if _launch and _scan_conc > 1:
                     _scan_win = ScanWindow(analyzer, _launch, _scan_conc)
 
-                for mint in mints_to_scan:
+                # Итерируем СТРОГО по отобранному ТОП-60 окну _launch (а не по 300+ хвосту последовательно!),
+                # чтобы цикл сканера всегда укладывался в 8-15 секунд и цены на входе были свежими!
+                for mint in (_launch if _launch else mints_to_scan[:30]):
                     if not mint or mint in tracker.positions:
                         continue
                     _pl = tracker.last_loss_pct(mint)
@@ -900,8 +902,9 @@ async def scanner_loop(analyzer, tracker):
                                 processed_mints[mint] = time.time()
                         else:
                             processed_mints[mint] = time.time()
+                        _sc_score_m = float(getattr(analyzer, "rocket_scores", {}).get(mint, getattr(analyzer, "last_score", 0.0)) or 0.0)
                         analyzer.log_scan(mint[:8], mint, "SCANNER",
-                                          is_good, getattr(analyzer, "last_score", 0.0))
+                                          is_good, _sc_score_m)
 
                         if is_good:
                             _cached_hit = getattr(analyzer, "_prefetch_cache", {}).pop(mint, None)
@@ -981,16 +984,17 @@ async def scanner_loop(analyzer, tracker):
                                     if not _is_breakout:
                                         print(f"🚫 [SCANNER-FOMO-M5] {actual_symbol} ({mint[:8]}): живой m5 +{_m5_live:.1f}% > +{_max_m5_cfg:.0f}% без прорывного объема — вершина свечи, отмена!")
                                         continue
-                                _links_sc = len(pair_data.get("info", {}).get("socials", []) or pair_data.get("info", {}).get("websites", []) or [])
+                                _links_sc = len(pair_data.get("info", {}).get("socials", []) or []) + len(pair_data.get("info", {}).get("websites", []) or [])
+                                _soc_unk_sc = bool(pair_data.get("_socials_unknown", False))
                                 _b5_sc = int((pair_data.get("txns") or {}).get("m5", {}).get("buys", 0) or 0)
                                 _s5_sc = int((pair_data.get("txns") or {}).get("m5", {}).get("sells", 0) or 0)
-                                _is_stealth_sc = (_vol5_live >= 12000.0 and _b5_sc >= 40 and _b5_sc >= _s5_sc * 1.25)
-                                _max_h1_live = float(getattr(config, "MAX_ENTRY_H1_PCT", 120.0))
-                                if _links_sc == 0 and not _is_stealth_sc and (_h1_live > 100.0 or _m5_live > 80.0):
+                                _is_stealth_sc = (_vol5_live >= 6000.0 and _b5_sc >= 20 and _b5_sc >= _s5_sc * 1.15)
+                                _max_h1_live = float(getattr(config, "MAX_ENTRY_H1_PCT", 320.0))
+                                if _links_sc == 0 and not _soc_unk_sc and not _is_stealth_sc and (_h1_live > 140.0 or _m5_live > 95.0):
                                     print(f"🚫 [SCANNER-FOMO-NO-SOC] {actual_symbol} ({mint[:8]}): памп (h1 +{_h1_live:.0f}%, m5 +{_m5_live:.0f}%) без соцсетей — ловушка памп-дампа дева, отмена!")
                                     continue
                                 if _h1_live > _max_h1_live:
-                                    if _age_m >= 10.0 or (_vol5_live < 35000.0 and _h1_live > 140.0):
+                                    if _age_m >= 12.0 or (_vol5_live < 35000.0 and _h1_live > 350.0):
                                         print(f"🚫 [SCANNER-LIVE-EXHAUSTED] {actual_symbol} ({mint[:8]}): живой h1 {_h1_live:+.0f}% > +{_max_h1_live:.0f}% — перегретая вершина, отмена!")
                                         continue
                                 # СТАЛО (в main.py строки 506-524):
@@ -1004,11 +1008,11 @@ async def scanner_loop(analyzer, tracker):
                                     print(f"🚫 [SCANNER-OLD-ZOMBIE] {actual_symbol} ({mint[:8]}): возраст {_age_m/60:.1f}ч без объема — отмена!")
                                     continue
 
-                                _req_soc_age = float(getattr(config, "REQUIRE_SOCIALS_MIN_AGE_MIN", 6.0))
-                                if _age_m < _req_soc_age and _links_sc == 0:
+                                _req_soc_age = float(getattr(config, "REQUIRE_SOCIALS_MIN_AGE_MIN", 8.0))
+                                if _age_m < _req_soc_age and _links_sc == 0 and not _soc_unk_sc:
                                     _b5_sc = int((pair_data.get("txns") or {}).get("m5", {}).get("buys", 0) or 0)
                                     _s5_sc = int((pair_data.get("txns") or {}).get("m5", {}).get("sells", 0) or 0)
-                                    _is_organic_stealth = (_vol5_live >= 2500.0 and _b5_sc >= 12 and _b5_sc >= _s5_sc * 1.10 and liq_usd >= 6000.0)
+                                    _is_organic_stealth = (_vol5_live >= 2000.0 and _b5_sc >= 12 and _b5_sc >= _s5_sc * 1.15 and liq_usd >= 8000.0)
                                     if not _is_organic_stealth:
                                         print(f"🚫 [SCANNER-NO-SOCIALS] {actual_symbol} ({mint[:8]}): 0 соцсетей без органики — отмена!")
                                         continue
@@ -1160,8 +1164,9 @@ async def scanner_loop(analyzer, tracker):
 
                                 _pc = pair_data.get("priceChange") or {}
                                 _tx5 = (pair_data.get("txns") or {}).get("m5", {}) or {}
+                                _final_sc_conf = float(getattr(analyzer, "rocket_scores", {}).get(mint, getattr(analyzer, "last_score", 0.0)) or 0.0)
                                 analyzer.log_scan(actual_symbol, mint, "SCANNER", True,
-                                                  getattr(analyzer, "last_score", 0.0),
+                                                  _final_sc_conf,
                                                   liq_usd, _pc.get("m5", 0) or 0,
                                                   _tx5.get("buys", 0) or 0, _tx5.get("sells", 0) or 0)
 
@@ -1178,7 +1183,7 @@ async def scanner_loop(analyzer, tracker):
 
                                 tracker.add_position(actual_symbol, mint, entry_price, position_size, is_mature=True,
                                                      ml_features=analyzer.pack_features(pair_data),
-                                                     ml_confidence=float(getattr(analyzer, "last_score", 0.0)),
+                                                     ml_confidence=_final_sc_conf,
                                                      source=f"SCANNER:{analyzer.get_signal(mint)}",
                                                      pair_address=pair_data.get("pairAddress", ""),
                                                      stop_under_wick=_wick_stop_price,

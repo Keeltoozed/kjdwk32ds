@@ -60,9 +60,9 @@ INFANT_WINDOW_MIN = 1.0
 INFANT_DUMP_PCT = -0.32
 
 # === ФИЛЬТРЫ ВХОДА (ОТСЕКАЮТ ВЕРШИНЫ И ПАДАЮЩИЕ НОЖИ) ===
-MAX_ENTRY_H1_PCT = 240.0       # Запрет входа в перегретые пампы > +240% за 1ч (кейс MOOTUN +311% -> -26%)
-MAX_ENTRY_M5_PCT = 60.0        # Запрет входа на вершине 5м свечи > +60% (кейс CHIKA +69.8% -> -24%)
-MAX_ENTRY_M1_PCT = 14.0        # Запрет входа на вертикальной 1м свече > +14% (кейсы Bill +19.4%, Greg +14.8%)
+MAX_ENTRY_H1_PCT = 320.0       # Запрет входа в перегретые пампы > +320% за 1ч
+MAX_ENTRY_M5_PCT = 95.0        # Запрет входа на экстремальной 5м свече > +95% без прорывного объема
+MAX_ENTRY_M1_PCT = 20.0        # Запрет входа на вертикальной 1м свече > +20%
 REQUIRE_SOCIALS_MIN_AGE_MIN = 8.0
 
 STREAK_COOLDOWN_ENABLED = False
@@ -82,7 +82,7 @@ ALLOW_UNGRADUATED_PUMPFUN = False         # ОТКЛЮЧЕНО: запрет с�
 MIN_PUMP_CURVE_MCAP_USD = 18000.0         # Минимум $18k FDV (~$7.2k виртуальной ликвидности)
 MAX_PUMP_CURVE_MCAP_USD = 44000.0         # До $44k FDV (не покупаем перед самым обрывом миграции $55k+)
 JEV_MAX_TICKET_USD = 0.0
-MIN_GRADUATED_LIQ_USD = 12000.0           # На DEX не берем тонкие пулы < $12k (отсекает KLAUDIA $7.6k и LIBTARD $8.9k!)
+MIN_GRADUATED_LIQ_USD = 10000.0           # На DEX минимум $10k реальной ликвидности (пускает свежие миграции PumpSwap $10.5k+, режет микро-пулы <$9k)
 AUDITOR_STAIRCASE_ENABLED = True
 AUDITOR_MAX_DEV_PCT = 6.0
 AUDITOR_MAX_TOP10_PCT = 32.0
@@ -124,12 +124,12 @@ MOONBAG_SELL_FRAC = 0.0
 PUMP_XGB_ENABLED = False
 RAY_XGB_ENABLED = False
 ROCKET_XGB_ENABLED = True
-ROCKET_XGB_STAGE1_THRESHOLD = 14.0  # Повышено с 5% до 14% (отсекает мусор вроде Greg 14%, LIBTARD 12%)
-ROCKET_XGB_FINAL_THRESHOLD = 20.0   # Повышено до 20% (отсекает KLAUDIA 18%, CAGE 18%, COGE 17.5%)
-ROCKET_XGB_THRESHOLD = 18.0
+ROCKET_XGB_STAGE1_THRESHOLD = 10.0  # Первичный отсев заведомых дампов (<10%) без заморозки потока сделок
+ROCKET_XGB_FINAL_THRESHOLD = 13.5   # Финальный порог с реальными ончейн-холдерами (баланс качества и частоты входов)
+ROCKET_XGB_THRESHOLD = 12.0
 
-STALL_TIMER_SEC = 600.0
-STALL_MAX_LOSS_PCT = -0.10
+STALL_TIMER_SEC = 270.0   # 4.5 минуты на консолидацию (не держим дохлый флет 10 минут, спасает от затяжных сливов как SLINGFOLIO -18%)
+STALL_MAX_LOSS_PCT = -0.09
 
 TRAILING_ACTIVATION_PCT = 0.15
 TRAILING_DISTANCE_PCT = 0.06
@@ -153,7 +153,7 @@ STAGNANT_LOSS_MIN_FAST = 9.0
 STAGNANT_HOLD_MIN = 18.0
 
 AI_MODE = "degen"
-MIN_LIQUIDITY = 12000.0         # Минимум $12,000 реальной ликвидности на DEX
+MIN_LIQUIDITY = 10000.0         # Минимум $10,000 реальной ликвидности на DEX
 MAX_LIQUIDITY = 50000000
 
 GROQ_API_KEY = (os.getenv("GROQ_API_KEY") or os.getenv("GROK_API_KEY") or os.getenv("XAI_API_KEY") or "").strip().strip('"').strip("'")
@@ -165,7 +165,7 @@ JEV_ENABLED = True
 JEV_WICK_STOP_ENABLED = False
 JEV_EARLY_MIN_AGE_MIN = 0.4     # Ловим ранние ракеты от 24 секунд (LEMON, WANK, SHADOW)
 JEV_MIN_AGE_MIN = 0.5
-JEV_MIN_LIQUIDITY_USD = 12000.0
+JEV_MIN_LIQUIDITY_USD = 10000.0
 JEV_MIN_VOLUME_H1 = 5000.0
 JEV_MIN_MCAP_USD = 12000.0
 JEV_MIN_VOLUME_H24 = 15000.0
@@ -190,7 +190,7 @@ JEV_MAX_DEV_STILL_LOADED = 0.35
 
 JEV_BID_THE_FLUSH_ENABLED = True
 JEV_STOP_UNDER_WICK_ENABLED = True
-JEV_MAX_M1_ENTRY_PCT = 14.0      # Не влетаем в 1м свечи > +14%
+JEV_MAX_M1_ENTRY_PCT = 20.0      # Не влетаем в экстремальные 1м свечи > +20%
 JEV_DEFAULT_WICK_STOP_PCT = -0.125
 
 BIRDEYE_API_KEY = os.getenv("BIRDEYE_API_KEY", "")
@@ -277,15 +277,15 @@ GROWTH_INTERVAL = 75
 
 SNIPER_MIN_UNIQUE_BUYERS = 8
 SNIPER_BUYERS_WINDOW_MIN = 5
-VIP_MAX_M5_PCT = 0.60
+VIP_MAX_M5_PCT = 0.95
 PULLBACK_MIN_M5_PCT = 0.025
 PULLBACK_M1_MIN_PCT = -0.08
-PULLBACK_M1_MAX_PCT = 0.14
-PULLBACK_MAX_H1_PCT = 240.0
-PULLBACK_MAX_M5_PCT = 0.60
-MIN_VOLUME_M5 = 2500            # Минимум $2,500 за 5м (отсекает дохлые пулы вроде FISCHER $906 и KLAUDIA $1221)
-MIN_TXNS_M5 = 25
-MIN_BUY_SELL_RATIO = 1.20       # Покупателей минимум на 20% больше продавцов (отсекает COGE 477/529 и LUNOX 104/127!)
+PULLBACK_M1_MAX_PCT = 0.20
+PULLBACK_MAX_H1_PCT = 320.0
+PULLBACK_MAX_M5_PCT = 0.95
+MIN_VOLUME_M5 = 2000            # Минимум $2,000 за 5м (отсекает дохлые пулы вроде FISCHER $906 и KLAUDIA $1221)
+MIN_TXNS_M5 = 20
+MIN_BUY_SELL_RATIO = 1.15       # Покупателей минимум на 15% больше продавцов (отсекает сливные COGE 477/529 и LUNOX 104/127)
 LOTTERY_ENABLED = False
 LOTTERY_MIN_M5_PCT = 0.60
 LOTTERY_SIZE_MULT = 0.30

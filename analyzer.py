@@ -1166,80 +1166,137 @@ class Analyzer:
         return False
         
     async def analyze_whale_token(self, mint: str, trader_name: str = "") -> tuple[bool, str]:
-        """Специализированный глубокий ИИ-анализ токена, выбранного смарт-китом.
-        Проверяет:
-        1. Безопасность контракта: Honeypot, Freeze Authority, Mint Authority (GoPlus / Jupiter).
-        2. RugCheck Score (< 2000) — отсутствие скрытых дрейнеров и бэкдоров.
-        3. Защита от краха (-75% с пика) и критического падения ликвидности.
-        4. Минимальная ликвидность пула ($500+), чтобы выйти без проскальзывания.
-        5. Отсутствие мимикрии под корпоративные бренды (AAPL, TSLA, NVDA).
-        6. Расчёт Rocket XGBoost скора для оценки потенциала пампа.
-        НЕ бракует по сканерным фильтрам (возраст >6ч или низкий 5м объем), так как киты накапливают монеты ДО пампа!
+        """Специализированный глубокий аудит безопасности токена, выбранного смарт-китом.
+        НЕ режет токен сканерными фильтрами (0 соцсетей на старте, низкий 5м объём или покупка на кривой Pump.fun),
+        потому что киты покупают ДО розничного пампа!
+        Строго блокирует ТОЛЬКО реальные смарт-контракт ловушки:
+        1. Freeze Authority / Mint Authority / Token-2022 Permanent Delegate (прямой RPC ончейн).
+        2. GoPlus Honeypot / Blacklist / Sell Tax.
+        3. RugCheck Score >= 2500, концентрацию у 1 кошелька и кастомный незаблокированный LP (<80%).
+        4. Непродаваемые AMM-пулы (Jupiter sell simulation) и мёртвые после дампа монеты (-65% от пика).
         """
-        if mint in ["So11111111111111111111111111111111111111112", 
-                    "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", 
+        if mint in ["So11111111111111111111111111111111111111112",
+                    "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
                     "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB"]:
             return False, "Native / Stablecoin"
 
         pair_data = await self.fetch_token_data(mint)
+        if not pair_data:
+            try:
+                from grok_jev import grok_jev as _gj
+                pair_data = await _gj.fetch_pair(mint, "solana")
+            except Exception:
+                pair_data = None
+
         clean_symbol = mint[:8]
+        base_name = ""
         if pair_data:
             base_token = pair_data.get("baseToken", {}) or {}
+            base_name = str(base_token.get("name") or "").lower()
             clean_symbol = str(base_token.get("symbol") or clean_symbol).upper().strip()
 
-        # 1. Защита от краха / дрейна ликвидности (отскок дохлой кошки)
+        _is_tokenized_stock = (
+            "backpack securities" in base_name
+            or "securities" in base_name
+            or clean_symbol in ("TTWO", "BACKPACK", "SPY", "QQQ")
+        )
+        if _is_tokenized_stock:
+            return False, f"tokenized-equity-skip (токенизированная акция {clean_symbol} — не мем-токен, пропуск без штрафа киту)"
+
+        # 1. Защита от краха и микро-пулов / пустых кривых
+        dex_id_low = str((pair_data or {}).get("dexId") or "").lower()
+        is_pump_curve = dex_id_low in ("pump", "pumpfun")
         if pair_data:
             drop_peak = float(pair_data.get("_drop_from_peak_5m", 0.0) or 0.0)
-            if drop_peak <= -75.0:
+            if drop_peak <= -65.0:
                 return False, f"Цена уже упала на {drop_peak:.0f}% с пика — отскок дохлой кошки после дампа"
-            
+
             liq = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
-            if 0 < liq < 500.0:
-                return False, f"Слишком низкая ликвидность пула (${liq:,.0f} < $500)"
+            fdv = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
+            if is_pump_curve:
+                if 0 < fdv < 6000.0:
+                    return False, f"Слишком ранняя кривая Pump.fun (FDV ${fdv:,.0f} < $6,000)"
+                if fdv > 54000.0:
+                    return False, f"Кривая Pump.fun перед обрывом миграции (FDV ${fdv:,.0f} > $54,000)"
+            else:
+                if 0 < liq < 1500.0:
+                    return False, f"Слишком низкая ликвидность AMM пула (${liq:,.0f} < $1,500)"
 
         # 2. Корпоративный фейк-скам
         corp_scams = ["AAPL", "S&P", "SP500", "MSFT", "TSLA", "TESLA", "SPACEX", "STARLINK", "NVDA", "OPENAI"]
         if any(c in clean_symbol for c in corp_scams):
             if not self._brand_whitelisted(mint):
-                return False, f"Токен мимикрирует под корпоративный бренд ({clean_symbol}) — 100% scam"
+                return False, f"Токен мимикрирует под корпоративный бренд ({clean_symbol}) — scam"
 
-        # 3. Полный аудит безопасности Grok-JEV (RugCheck, GoPlus honeypot, freeze authority)
-        try:
-            from grok_jev import grok_jev as _gj
-            if not pair_data:
-                pair_data = await _gj.fetch_pair(mint, "solana")
-            if pair_data:
-                _ok, _why, _hs = await _gj.full_anti_scam_audit(mint, clean_symbol, "solana", pair_data)
-                if not _ok:
-                    return False, f"Антискам-аудит: {_why}"
-        except Exception as e:
-            print(f"⚠️ [WHALE-ANALYSIS] Сбой антискам-проверки ({e}), продолжаем проверку контракта...")
-
-        # 4. Проверка через GoPlus напрямую
+        # 3. Прямой ончейн RPC + GoPlus проверка контракта (Freeze, Mint, Token-2022 Delegate, Honeypot)
         try:
             import goplus
-            goplus_res = await goplus.check_solana_token(mint)
-            if goplus_res:
-                is_safe, gp_reason = goplus.is_token_safe_solana(goplus_res)
-                if not is_safe:
-                    return False, f"GoPlus Honeypot/Freeze: {gp_reason}"
-        except Exception as e:
-            pass
+            onchain_ok, onchain_why = await goplus.check_onchain_solana_security(mint)
+            if not onchain_ok:
+                return False, f"On-Chain Contract Trap: {onchain_why}"
+            gp_ok, gp_why = await goplus.check_solana(mint)
+            if not gp_ok and "rugcheck-score" not in str(gp_why).lower():
+                return False, f"GoPlus Honeypot/Tax: {gp_why}"
 
-        # 5. Быстрый ML-скоринг если есть модель
-        ml_score = 0.0
-        if pair_data and hasattr(self, "rocket_model") and self.rocket_model:
+            # 4. Кэшированный RugCheck аудит (концентрация холдеров и блокировка LP на кастомных токенах)
+            rc_st, rc_data = await goplus.fetch_rugcheck_report_cached(mint, ttl=120.0, timeout=6)
+            if rc_st == 200 and isinstance(rc_data, dict):
+                raw_sc = float(rc_data.get("score") or 0.0)
+                ign = sum(
+                    float(rk.get("score", 0) or 0)
+                    for rk in (rc_data.get("risks") or [])
+                    if any(k in str(rk.get("name", "")).lower() for k in (
+                        "low liquidity", "creator history", "copycat", "symbol mimic", "lp provider"
+                    ))
+                )
+                clean_sc = max(0.0, raw_sc - ign)
+                if clean_sc >= 2500:
+                    return False, f"RugCheck риск {clean_sc:.0f} >= 2500"
+                for rk in (rc_data.get("risks") or []):
+                    rkn = str(rk.get("name", "")).lower()
+                    rkl = str(rk.get("level", "")).lower()
+                    if rkl == "danger" and any(k in rkn for k in ("single holder", "high ownership", "large amount of lp unlocked", "freeze authority")):
+                        return False, f"RugCheck критический риск: {rk.get('name')}"
+                if not mint.endswith("pump") and not is_pump_curve:
+                    lp_locked_ok = any(
+                        isinstance(m, dict) and float((m.get("lp") or {}).get("lpLockedPct", 0) or 0) >= 80.0
+                        for m in (rc_data.get("markets") or [])
+                    )
+                    if not lp_locked_ok:
+                        return False, "Кастомный не-pump токен без заблокированного LP (<80%)"
+            elif not mint.endswith("pump"):
+                return False, f"Кастомный не-pump токен ещё не проиндексирован RugCheck (статус {rc_st})"
+        except Exception as e:
+            print(f"⚠️ [WHALE-ANALYSIS] Ошибка проверки контракта ({e})")
+            if not mint.endswith("pump"):
+                return False, f"Сбой проверки кастомного токена ({e})"
+
+        # 5. Для токенов на AMM DEX (не сырой bonding curve) проверяем маршрут продажи через Jupiter
+        if not is_pump_curve:
             try:
-                features = self._extract_features(mint, pair_data)
-                if features:
-                    ml_score = float(self.rocket_model.predict_proba([features])[0][1] * 100.0)
-                    self.last_score = ml_score
-                    if ml_score < 5.0:
-                        return False, f"Rocket XGB скор {ml_score:.1f}% < 5% (высокий риск рагпула)"
+                from jupiter import JupiterAPI
+                j_ok, j_why = await JupiterAPI.is_token_sellable(mint)
+                w_low = str(j_why or "").lower()
+                if not j_ok and any(k in w_low for k in ("no routes", "cannot sell", "honeypot", "freeze", "0 sol returned")):
+                    return False, f"Jupiter: токен непродаваем ({j_why})"
             except Exception:
                 pass
 
-        return True, f"Passed AI Audit (Score: {ml_score:.1f}%)"
+        # 6. Быстрый ML-скоринг через актуальную модель rocket_xgb
+        ml_score = 0.0
+        if pair_data and getattr(self, "rocket_xgb", None) is not None:
+            try:
+                ml_score = float(self.score_rocket_xgb(mint, pair_data) or 0.0)
+                self.last_score = ml_score
+                if not hasattr(self, "rocket_scores"):
+                    self.rocket_scores = {}
+                self.rocket_scores[mint] = ml_score
+                if 0.0 < ml_score < 4.0:
+                    return False, f"Rocket XGB экстремально низкий скор {ml_score:.1f}% < 4%"
+            except Exception:
+                pass
+
+        return True, f"Passed Whale Contract Audit (ML: {ml_score:.1f}%)"
 
     async def analyze_token(self, mint: str) -> bool:
         self.last_signal = ""
@@ -1434,52 +1491,58 @@ class Analyzer:
                 f"🚫 [DEAD-CAT-DUMP] {symbol} ({mint[:8]}): часовой тренд в сливе (h1 {_h1:+.1f}%, h6 {_h6_pre_val:+.1f}%) — падающий нож!",
             )
 
-        # Запрет входа во флет (< +4.5%) и в вертикальную 1м свечу (> +14%, кейсы Bill m1=+19.5%, Greg m1=+14.8%)
-        _max_m1_cfg = float(getattr(config, "MAX_ENTRY_M1_PCT", 14.0))
-        if _m5 < 4.5:
-            return self._deny(mint, f"m5-too-weak {_m5:+.1f}%", f"🚫 [WEAK-M5] {symbol} ({mint[:8]}): m5 {_m5:+.1f}% < +4.5% — нет разгона.")
-        if _m1 > _max_m1_cfg or _m1 < -5.0:
+        # Запрет входа во флет (< +3.5%) и в экстремальную вертикальную 1м свечу
+        _max_m1_cfg = float(getattr(config, "MAX_ENTRY_M1_PCT", 20.0))
+        if _m5 < 3.5:
+            return self._deny(mint, f"m5-too-weak {_m5:+.1f}%", f"🚫 [WEAK-M5] {symbol} ({mint[:8]}): m5 {_m5:+.1f}% < +3.5% — нет разгона.")
+        if _m1 > _max_m1_cfg or _m1 < -5.5:
             return self._deny(
                 mint,
                 f"m1-bad {_m1:+.1f}%",
-                f"🚫 [M1-FILTER] {symbol} ({mint[:8]}): 1м свеча {_m1:+.1f}% вне безопасного коридора [-5%, +{_max_m1_cfg:.0f}%].",
+                f"🚫 [M1-FILTER] {symbol} ({mint[:8]}): 1м свеча {_m1:+.1f}% вне безопасного коридора [-5.5%, +{_max_m1_cfg:.0f}%].",
             )
 
-        # 4. Anti-FOMO: Защита от перегретых вершин (кейсы MOOTUN h1=+311%, CHIKA m5=+69.8%)
-        _max_entry_h1 = float(getattr(config, "MAX_ENTRY_H1_PCT", 240.0))
-        _max_entry_m5 = float(getattr(config, "MAX_ENTRY_M5_PCT", 60.0))
-        if _h1 > _max_entry_h1:
+        # 4. Anti-FOMO: Защита от перегретых вершин
+        _max_entry_h1 = float(getattr(config, "MAX_ENTRY_H1_PCT", 320.0))
+        _max_entry_m5 = float(getattr(config, "MAX_ENTRY_M5_PCT", 95.0))
+        if _h1 > _max_entry_h1 and _age_min_pre >= 12.0:
             return self._deny(
                 mint,
                 f"h1-exhausted {_h1:.0f}%>{_max_entry_h1:.0f}%",
                 f"🚫 [EXHAUSTED-TOP] {symbol} ({mint[:8]}): рост за час +{_h1:+.1f}% > +{_max_entry_h1:.0f}% — вершина пампа.",
             )
         if _m5 > _max_entry_m5:
-            return self._deny(
-                mint,
-                f"m5-vertical-spike {_m5:.0f}%>{_max_entry_m5:.0f}%",
-                f"🚫 [FOMO-VERTICAL] {symbol} ({mint[:8]}): 5м свеча +{_m5:+.1f}% > +{_max_entry_m5:.0f}% — перегретая свеча, ждём откат.",
-            )
+            _is_strong_breakout = (_vm5_pre >= 10000.0 and _b5_pre >= _s5_pre * 1.25 and _m5 <= 145.0)
+            if not _is_strong_breakout:
+                return self._deny(
+                    mint,
+                    f"m5-vertical-spike {_m5:.0f}%>{_max_entry_m5:.0f}%",
+                    f"🚫 [FOMO-VERTICAL] {symbol} ({mint[:8]}): 5м свеча +{_m5:+.1f}% > +{_max_entry_m5:.0f}% без прорывного объема — перегретая свеча.",
+                )
 
-
-        # 4.9. Wash-Trading Spike Guard: защита от накрутки ботами (кейсы Hakutaku 4.2x, ELON 5.7x, HATCH 2.1x)
+        # 4.9. Wash-Trading Spike Guard: отличаем симметричную бот-накрутку от реального пробоя покупателями!
         _raw_liq_chk = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
-        if _raw_liq_chk > 0 and (_vm5_pre / _raw_liq_chk) > 1.40:
+        _txns_tot_pre = _b5_pre + _s5_pre
+        _avg_tx_pre = (_vm5_pre / max(1, _txns_tot_pre)) if _txns_tot_pre > 0 else 0.0
+        _max_vl_allowed = 3.20 if (_b5_pre >= _s5_pre * 1.25 and _avg_tx_pre >= 18.0) else 1.65
+        if _raw_liq_chk > 0 and (_vm5_pre / _raw_liq_chk) > _max_vl_allowed:
             return self._deny(
                 mint,
                 f"wash-spike {(_vm5_pre/_raw_liq_chk):.1f}x",
-                f"🚫 [WASH-SPIKE] {symbol} ({mint[:8]}): 5м объем (${_vm5_pre:,.0f}) в {(_vm5_pre/_raw_liq_chk):.1f}x больше пула ликвидности — накрутка ботами создателя.",
+                f"🚫 [WASH-SPIKE] {symbol} ({mint[:8]}): 5м объем (${_vm5_pre:,.0f}) в {(_vm5_pre/_raw_liq_chk):.1f}x > {_max_vl_allowed:.2f}x пула ликвидности — накрутка ботами.",
             )
 
-        # 5. Соцсети: токены моложе 60 мин ОБЯЗАНЫ иметь соцсети/сайт, либо чистый органический поток
+        # 5. Соцсети: молодые токены обязаны иметь соцсети/сайт либо подтверждённый органический поток покупателей
         _links_cnt = len((pair_data or {}).get("info", {}).get("socials", []) or []) + len((pair_data or {}).get("info", {}).get("websites", []) or [])
-        _req_soc_age = float(getattr(config, "REQUIRE_SOCIALS_MIN_AGE_MIN", 60.0))
-        if _links_cnt == 0 and _age_min_pre < _req_soc_age:
+        _soc_unknown = bool((pair_data or {}).get("_socials_unknown", False))
+        _req_soc_age = float(getattr(config, "REQUIRE_SOCIALS_MIN_AGE_MIN", 8.0))
+        if _links_cnt == 0 and not _soc_unknown and _age_min_pre < _req_soc_age:
             _vol_liq_r = (_vm5_pre / max(_raw_liq_chk, 1.0)) if _raw_liq_chk > 0 else 0.0
             _txns_tot = _b5_pre + _s5_pre
             _is_organic_stealth = (
-                _vm5_pre >= 2500.0 and _b5_pre >= 12 and _b5_pre >= _s5_pre * 1.10
-                and _raw_liq_chk >= 6000.0 and _vol_liq_r <= 0.60 and _txns_tot <= 250
+                _vm5_pre >= 2000.0 and _b5_pre >= 12 and _b5_pre >= _s5_pre * 1.15
+                and _raw_liq_chk >= 8000.0 and _vol_liq_r <= 2.60 and _txns_tot <= 800
+                and _avg_tx_pre >= 16.0
             )
             if not _is_organic_stealth:
                 return self._deny(
@@ -1585,15 +1648,11 @@ class Analyzer:
             # (наличие пула на PumpSwap НЕ делает кастомный скам-токен безопасным pump.fun токеном!)
             _is_pump_flag = 1 if mint.endswith("pump") else 0
             try:
-                from http_client import fetch_json
-                rc_data = None
-                rugcheck_url = f"https://api.rugcheck.xyz/v1/tokens/{mint}/report"
-                _rc_st, _rc_json = await fetch_json(rugcheck_url, timeout=8, retries=1)
-                if _rc_st == 200 and isinstance(_rc_json, dict):
-                    rc_data = _rc_json
-                elif _rc_st == 400:
-                    print(f"ℹ️ [RUGCHECK] {mint[:8]}: монета ещё не проиндексирована RugCheck (код 400) -> аудит через GoPlus...")
-                elif _rc_st not in (0, 429):
+                import goplus as _gp_rc
+                _rc_st, rc_data = await _gp_rc.fetch_rugcheck_report_cached(mint, ttl=120.0, timeout=7)
+                if _rc_st == 400:
+                    print(f"ℹ️ [RUGCHECK] {mint[:8]}: монета ещё индексируется RugCheck (код 400) -> ждём индексации...")
+                elif _rc_st not in (200, 0, 429):
                     print(f"⚠️ RugCheck API вернул {_rc_st} для {mint[:8]}.")
 
                 if rc_data:
@@ -1624,11 +1683,11 @@ class Analyzer:
                     if _rc_score >= 2000:
                         return self._deny(mint, f"rugcheck-score {_rc_score:.0f}", f"🚫 [АНТИСКАМ] RugCheck Score {_rc_score:.0f} >= 2000 у {mint[:8]} → СКАМ")
 
-                    # Жёсткий фильтр критических опасностей RugCheck (кейс AMERICA 87% single holder)
+                    # Жёсткий фильтр критических опасностей RugCheck (кейсы AMERICA 87% single holder, Qeshcrb 80% dev dump)
                     for rk in (rc_data.get("risks") or []):
                         _rk_name = str(rk.get("name", "")).lower()
                         _rk_lvl = str(rk.get("level", "")).lower()
-                        if _rk_lvl == "danger" and any(k in _rk_name for k in ("single holder", "high ownership", "large amount of lp unlocked")):
+                        if _rk_lvl == "danger" and any(k in _rk_name for k in ("single holder", "high ownership", "top 10 holders", "large amount of lp unlocked", "freeze authority")):
                             return self._deny(mint, f"rc-danger {_rk_name[:15]}", f"🚫 [АНТИСКАМ-RC] {symbol} ({mint[:8]}): критический риск RugCheck '{rk.get('name')}' — блок скама!")
 
                     # Для ВСЕХ кастомных не-pump токенов (не оканчивающихся на 'pump'):
@@ -1769,31 +1828,10 @@ class Analyzer:
                     except Exception:
                         pass
                 else:
-                    # Фоллбэк если RugCheck ещё не вернул отчёт (код 400/404):
-                    # Для кастомных не-pump токенов — это 100% блок, так как без RugCheck неизвестно, кто держит LP и саплай!
-                    if not mint.endswith("pump"):
-                        return self._deny(mint, "rc-unindexed-custom", f"⏳ [RUGCHECK-PENDING] {symbol} ({mint[:8]}): кастомный не-pump токен ещё не проиндексирован RugCheck — вход запрещён.")
-                    # Фоллбэк на GoPlus + Layer 8/9/10 для токенов pump.fun если RugCheck ещё индексирует
-                    try:
-                        import goplus as _gp
-                        _g_ok, _g_why = await _gp.check_solana(mint)
-                        if not _g_ok:
-                            return self._deny(mint, f"goplus-reject {_g_why}", f"🚫 [GOPLUS] {symbol} ({mint[:8]}): {_g_why} — блок входа.")
-                        _l9_fb_ok, _l9_fb_why = await _gp.check_staircase_and_sybil_farm(mint, pair_address=str(pair_data.get("pairAddress") or ""))
-                        if not _l9_fb_ok:
-                            return self._deny(mint, "staircase-sybil-farm", f"🚫 [АНТИСКАМ-L9/10] {symbol} ({mint[:8]}): {_l9_fb_why} → Ботоферма дева!")
-                        _h_stats = _gp.get_solana_holder_stats(mint)
-                        if _h_stats.get("has_data"):
-                            self._last_top10 = _h_stats.get("top_10_pct", 0.0)
-                            self._last_dev = _h_stats.get("dev_pct", 0.0)
-                            if self._last_dev > 10.0:
-                                return self._deny(mint, f"dev-hold {self._last_dev:.1f}%", f"🚫 [GOPLUS-DEV] {symbol} ({mint[:8]}): дев {self._last_dev:.1f}% > 10%.")
-                            max_allowed_top10 = 30.0 if _is_pump_flag else 35.0
-                            if self._last_top10 > max_allowed_top10:
-                                return self._deny(mint, f"top10-hold {self._last_top10:.1f}%", f"🚫 [GOPLUS-CABAL] {symbol} ({mint[:8]}): топ-10 {self._last_top10:.1f}% > {max_allowed_top10}%.")
-                    except Exception as _ge:
-                        if not _is_pump_flag:
-                            return self._deny(mint, "audit-failed", f"🚫 [AUDIT-FAIL] Не удалось подтвердить безопасность {symbol} ({mint[:8]}).")
+                    # Фоллбэк если RugCheck ещё не вернул отчёт (код 400/404 или 429/таймаут):
+                    # Вслепую НЕ покупаем (защита от Qeshcrb), но возвращаем None (перепроверка через 25с вместо вечного бана)!
+                    print(f"⏳ [RUGCHECK-PENDING] {symbol} ({mint[:8]}): отчёт RugCheck ещё не готов (HTTP {_rc_st}) — повтор через 25с.")
+                    return None
 
                 # Прямой ончейн RPC аудит
                 try:

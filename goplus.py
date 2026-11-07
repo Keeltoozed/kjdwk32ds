@@ -1380,3 +1380,30 @@ async def check_staircase_and_sybil_farm(mint: str, pair_address: str = "", hold
     res = (True, "")
     _STAIRCASE_CACHE[cache_key] = (now, res)
     return res
+
+
+_RC_REPORT_CACHE: dict = {}  # mint -> (ts, status, data_dict_or_none)
+
+
+async def fetch_rugcheck_report_cached(mint: str, ttl: float = 120.0, timeout: int = 7) -> tuple:
+    """Единый кэшированный запрос к RugCheck /v1/tokens/{mint}/report для всех движков (SCANNER, JUP, GROK-JEV, COPY).
+    Экономит лимит 30 RPM на api.rugcheck.xyz и исключает ложные блокировки при параллельных проверках одного минта."""
+    if not mint:
+        return 0, None
+    now = _t.time()
+    if len(_RC_REPORT_CACHE) > 1500:
+        _RC_REPORT_CACHE.clear()
+    hit = _RC_REPORT_CACHE.get(mint)
+    if hit:
+        ts, st, data = hit
+        eff_ttl = ttl if (st == 200 and isinstance(data, dict)) else (15.0 if st in (400, 404) else 5.0)
+        if (now - ts) < eff_ttl:
+            return st, data
+    from http_client import fetch_json
+    url = f"https://api.rugcheck.xyz/v1/tokens/{mint}/report"
+    st, body = await fetch_json(url, timeout=timeout, retries=1)
+    if st == 200 and isinstance(body, dict):
+        _RC_REPORT_CACHE[mint] = (now, 200, body)
+        return 200, body
+    _RC_REPORT_CACHE[mint] = (now, int(st or 0), None)
+    return int(st or 0), None

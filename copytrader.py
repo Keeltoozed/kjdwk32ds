@@ -149,12 +149,17 @@ class CopyTrader:
         )
 
     def _record_junk_signal(self, wallet: str, trader_name: str, mint: str, reason: str, is_hard_scam: bool = False):
-        """Штрафует или банит кита за сигналы на скам или старые зомби-монеты:
-        - Подтверждённый скам/рагпулл (RugCheck/GoPlus) -> мгновенный перманентный бан!
-        - Старые зомби-токены (>2ч) -> 1-й страйк (предупреждение), на 2-м страйке перманентный бан.
+        """Штрафует или банит кошельки за спам/зомби-монеты:
+        - Киты Tier-1/2 с высоким PnL НЕ банятся по страйкам отсева (банятся ТОЛЬКО по реальной убыточной сделке)!
         """
         if not wallet or wallet in self._banned:
             return
+
+        # Если у кита отличная история (Tier-1/2 или PnL > 0) — не баним его за то, что токен не подошел нашему сканеру!
+        if "@Tier1" in trader_name or "@Tier2" in trader_name or "+$" in trader_name:
+            print(f"ℹ️ [WHALE-INFO] Кит {trader_name} прислал сигнал {mint[:8]} ({reason}). Сделка пропущена, кит остаётся активен.")
+            return
+
         if is_hard_scam:
             self.ban_whale_permanently(
                 wallet,
@@ -166,15 +171,87 @@ class CopyTrader:
 
         strikes = self._junk_strikes.get(wallet, 0) + 1
         self._junk_strikes[wallet] = strikes
-        if strikes >= 2:
+        if strikes >= 3:
             self.ban_whale_permanently(
                 wallet,
-                reason=f"2 страйка за мусорные/зомби сигналы (последний: {mint[:8]} — {reason})",
+                reason=f"3 страйка за мусорные/зомби сигналы (последний: {mint[:8]} — {reason})",
                 symbol=mint[:8],
                 pnl_pct=0.0
             )
         else:
-            print(f"⚠️ [WHALE STRIKE 1/2] Кит {trader_name} прислал сигнал на неликвидный/зомби токен {mint[:8]} ({reason}). Предупреждение 1/2.")
+            print(f"⚠️ [WHALE STRIKE {strikes}/3] Кошелёк {trader_name} прислал сигнал на неликвидный токен {mint[:8]} ({reason}).")
+
+    def _repair_falsely_banned_whales(self):
+        """Восстанавливает ошибочно забаненных китов (например, за токенизированные акции TTWO или фильтры соцсетей):
+        1. Проверяет Supabase smart_wallets на tier == -1.
+        2. Если у кита total_pnl > 0 и нет подтвержденного слива нашей копи-сделки:
+           - Возвращает tier = 1 (или 2) в Supabase
+           - Удаляет из self._banned
+           - Удаляет из banned_whales.json
+        """
+        try:
+            import os, json
+            import config as _cf
+            url = getattr(_cf, "SUPABASE_URL", None)
+            key = getattr(_cf, "SUPABASE_KEY", None)
+            if not (url and key):
+                return
+            from supabase import create_client
+            sb = create_client(url, key)
+
+            local_banned = {}
+            if os.path.exists(self.BANNED_FILE):
+                try:
+                    with open(self.BANNED_FILE, "r", encoding="utf-8") as f:
+                        local_banned = json.load(f) or {}
+                except Exception:
+                    local_banned = {}
+
+            res = sb.table("smart_wallets").select("*").eq("tier", -1).execute()
+            rows = res.data or []
+            restored = 0
+            for r in rows:
+                w = r.get("wallet")
+                if not w:
+                    continue
+                pnl = float(r.get("total_pnl") or 0.0)
+                ban_info = local_banned.get(w, {})
+                reason = str(ban_info.get("reason", "")).lower()
+
+                # Настоящий бан происходит ТОЛЬКО при убытке в реальной скопированной сделке.
+                # Все баны за проверки токенов (TTWO, no-socials, скам-аудит, страйки) — ошибочные и снимаются.
+                is_false_ban = (
+                    "no-socials" in reason
+                    or "ttwo" in reason
+                    or "ии выявил скам" in reason
+                    or "страйк" in reason
+                    or w.startswith("3kc6")
+                    or (pnl >= 300.0 and "сделка дала убыток" not in reason and "убыток" not in reason)
+                )
+
+                if is_false_ban:
+                    new_tier = 1 if pnl >= 3000.0 else (2 if pnl >= 1000.0 else 3)
+                    sb.table("smart_wallets").update({"tier": new_tier}).eq("wallet", w).execute()
+                    self._banned.discard(w)
+                    if w in local_banned:
+                        del local_banned[w]
+                    try:
+                        from smart_money_hunter import smart_money_hunter as _smh
+                        if w in _smh.db:
+                            _smh.db[w]["tier"] = new_tier
+                    except Exception:
+                        pass
+                    restored += 1
+                    print(f"♻️ [WHALE-RESTORE] Кит @Tier{new_tier}_{w[:4]}_+${pnl:,.0f} ({w[:8]}...) успешно РАЗБАНЕН и возвращён в WSS! Снят ложный бан.")
+
+            if restored > 0 and os.path.exists(self.BANNED_FILE):
+                try:
+                    with open(self.BANNED_FILE, "w", encoding="utf-8") as f:
+                        json.dump(local_banned, f, indent=2, ensure_ascii=False)
+                except Exception:
+                    pass
+        except Exception as e:
+            print(f"⚠️ [WHALE-REPAIR] Ошибка автоматического разбана китов: {e}")
 
     def load_wallets(self):
         """Кошельки для копирования.
@@ -187,6 +264,9 @@ class CopyTrader:
         """
         import os
         import config as _cf
+
+        # Разбаниваем ошибочно забаненных китов перед сборкой пула
+        self._repair_falsely_banned_whales()
 
         candidates = {}  # wallet -> dict
         
@@ -302,11 +382,11 @@ class CopyTrader:
 
         for w in whales:
             st = self._wstat.setdefault(w, [0, 0])
-            if pnl_pct > 1.0: # Чистая прибыль выше 1% (с запасом на комиссии)
+            if pnl_pct > 0.0: # Любая чистая прибыль > $0 после комиссий DEX и Jito = победа кита
                 st[0] += 1
                 trader_name = self.wallets.get(w, f"@{w[:6]}")
                 print(
-                    f"🏆 [WHALE PROFIT] Кит {trader_name} принёс прибыль {pnl_pct:+.2f}% на {symbol}! "
+                    f"🏆 [WHALE PROFIT] Кит {trader_name} принёс чистую прибыль {pnl_pct:+.2f}% на {symbol}! "
                     f"Статистика кита: {st[0]} побед / {st[1]} поражений. Оставляем в топе."
                 )
             else:
@@ -317,18 +397,20 @@ class CopyTrader:
                 self.ban_whale_permanently(w, reason=reason, symbol=symbol, pnl_pct=pnl_pct)
         self._copy_wallets.pop(mint, None)
 
-    def _handle_ws_message(self, message) -> None:
+    def _handle_ws_message(self, message, req_wallet: dict = None, sub_wallet: dict = None) -> None:
         """Одно сообщение WSS. Проваленные транзакции (у ботов их много) и перегруз очереди отбрасываем,
         иначе на каждую запись уходит 1-3 запроса getTransaction -> 429 у Helius и разрывы соединения."""
         try:
             data = json.loads(message)
         except Exception:
             return
-        # ответ на подписку: запоминаем, какой id подписки принадлежит какому кошельку
+        _rw = req_wallet if req_wallet is not None else self._req_wallet
+        _sw = sub_wallet if sub_wallet is not None else self._sub_wallet
+        # ответ на подписку: запоминаем, какой id подписки принадлежит какому кошельку на ЭТОМ сокете
         if "id" in data and "result" in data and "method" not in data:
-            w = getattr(self, "_req_wallet", {}).pop(data["id"], None)
+            w = _rw.pop(data["id"], None)
             if w is not None:
-                self._sub_wallet[data["result"]] = w
+                _sw[data["result"]] = w
             return
         if data.get("method") != "logsNotification":
             return
@@ -354,23 +436,23 @@ class CopyTrader:
         except Exception:
             pass
 
-        # 2) Защита от перегруза: дедупликация сигнатур уже отсекает повторы. 
+        # 2) Защита от перегруза: дедупликация сигнатур уже отсекает повторы.
         # Не глушим активных китов-снайперов на 10 минут, а сразу передаём их покупки на проверку!
-        wallet = self._sub_wallet.get(data["params"].get("subscription"))
+        wallet = _sw.get(data["params"].get("subscription"))
         if getattr(self, "_pending", 0) >= 500:
             self._dropped = getattr(self, "_dropped", 0) + 1
             if self._dropped % 200 == 1:
                 print(f"⚠️ Копитрейдер: очередь перегружена ({self._pending}), пропущено {self._dropped} (отсеяно префильтром: {getattr(self, '_pre_dropped', 0)})")
             return
         self._pending = getattr(self, "_pending", 0) + 1
-        asyncio.create_task(self._guarded_process(sig))
+        asyncio.create_task(self._guarded_process(sig, hint_wallet=wallet))
 
-    async def _guarded_process(self, sig: str) -> None:
+    async def _guarded_process(self, sig: str, hint_wallet: str = None) -> None:
         if not hasattr(self, "_sem") or self._sem is None:
             self._sem = asyncio.Semaphore(20)
         try:
             async with self._sem:
-                await self.process_transaction(sig)
+                await self.process_transaction(sig, hint_wallet=hint_wallet)
         except Exception as e:
             print(f"⚠️ Копитрейдер: ошибка обработки {sig[:8]}: {type(e).__name__}")
         finally:
@@ -508,13 +590,7 @@ class CopyTrader:
             print(f"🤖 Передаем токен {clean_symbol} ({mint[:8]}) кита {trader_name} ИИ на глубокий анализ...")
             is_safe, ai_reason = await self.analyzer.analyze_whale_token(mint, trader_name=trader_name)
             if not is_safe:
-                print(f"🚫 ИИ забраковал токен {clean_symbol} кита {trader_name}: {ai_reason}")
-                _is_hard = any(k in str(ai_reason).lower() for k in ("rugcheck", "honeypot", "drain", "freeze", "mint", "scam", "black", "бренд"))
-                if _is_hard:
-                    print(f"🚨 [WHALE-TRAP] Кит {trader_name} влетел в опасный скам! Навсегда баним в Supabase!")
-                    self.ban_whale_permanently(wallet, reason=f"ИИ выявил скам {clean_symbol} ({ai_reason})", symbol=clean_symbol, pnl_pct=0.0)
-                else:
-                    self._record_junk_signal(wallet, trader_name, mint, ai_reason, is_hard_scam=False)
+                print(f"🚫 [WHALE-SKIP] ИИ забраковал токен {clean_symbol} ({mint[:8]}) кита {trader_name}: {ai_reason}. Сделка пропущена, кит остаётся активен.")
                 return
             else:
                 print(f"✅ ИИ одобрил токен {clean_symbol} кита {trader_name} ({ai_reason})! Покупаем!")
@@ -523,14 +599,7 @@ class CopyTrader:
                 from grok_jev import grok_jev as _gj
                 _ok, _why, _hs = await _gj.full_anti_scam_audit(mint, clean_symbol, "solana", pair_data)
                 if not _ok:
-                    _is_hard = any(k in str(_why).lower() for k in ("rugcheck", "honeypot", "drain", "freeze authority", "mint authority", "blacklist"))
-                    print(f"🚫 [COPY-SCAM] Кит {trader_name} купил подозрительный токен {clean_symbol} ({mint[:8]}): {_why}")
-                    if _is_hard:
-                        # Если кит купил прямой ханипот/скам — БАН НАВСЕГДА в Supabase!
-                        print(f"🚨 [WHALE-TRAP] Кит {trader_name} влетел в прямой скам! Навсегда баним в Supabase!")
-                        self.ban_whale_permanently(wallet, reason=f"Покупка опасного скама {clean_symbol} ({_why})", symbol=clean_symbol, pnl_pct=0.0)
-                    else:
-                        self._record_junk_signal(wallet, trader_name, mint, str(_why), is_hard_scam=False)
+                    print(f"🚫 [WHALE-SKIP] Токен {clean_symbol} ({mint[:8]}) кита {trader_name} не прошёл антискам ({_why}). Пропуск сделки.")
                     return
             except Exception as _e:
                 print(f"⚠️ [COPY] Антискам-проверка ({type(_e).__name__}), продолжаем: {_e}")
@@ -586,17 +655,21 @@ class CopyTrader:
         print(f"🐋 [PUMP WHALE COPY] Сигнал кита {trader_name} на {symbol} ({mint[:8]}) -> исполняем копирование!")
         await self._execute_copy_buy(wallet, trader_name, mint, symbol, cur_price)
 
-    async def process_transaction(self, signature):
+    async def process_transaction(self, signature, hint_wallet: str = None):
         if signature in self.processed_sigs: return
         self.processed_sigs.add(signature)
         if len(self.processed_sigs) > 5000: self.processed_sigs.clear()
         
-        # Первая быстрая попытка без задержки
+        # Первая быстрая попытка, затем до 2 повторов по мере финализации блока (processed -> confirmed)
         tx_data = await self.fetch_transaction(signature)
         if not tx_data or "result" not in tx_data or not tx_data["result"]:
-            await asyncio.sleep(0.6)
+            await asyncio.sleep(0.75)
             tx_data = await self.fetch_transaction(signature)
-            if not tx_data or "result" not in tx_data or not tx_data["result"]: return
+            if not tx_data or "result" not in tx_data or not tx_data["result"]:
+                await asyncio.sleep(1.1)
+                tx_data = await self.fetch_transaction(signature)
+                if not tx_data or "result" not in tx_data or not tx_data["result"]:
+                    return
 
         meta = tx_data["result"].get("meta", {})
         if not meta or meta.get("err"): return # Ошибка транзакции (Failed)
@@ -604,9 +677,11 @@ class CopyTrader:
         pre_bals = meta.get("preTokenBalances", [])
         post_bals = meta.get("postTokenBalances", [])
 
-        # Быстрый O(1) поиск китов в транзакции через пересечение множеств
+        # Быстрый O(1) поиск китов в транзакции через пересечение множеств (+ hint_wallet с подписки сокета)
         tx_owners = {b.get("owner") for b in pre_bals if b.get("owner")} | {b.get("owner") for b in post_bals if b.get("owner")}
         matching_whales = tx_owners.intersection(self.wallets.keys())
+        if not matching_whales and hint_wallet and hint_wallet in self.wallets and hint_wallet in tx_owners:
+            matching_whales = {hint_wallet}
         if not matching_whales:
             return
 
@@ -674,7 +749,7 @@ class CopyTrader:
                     await self._execute_copy_buy(wallet, trader_name, mint, "", cur_price)
 
     async def _listen_single_socket(self, wss_url: str, wallet_subset: dict):
-        """Слушает выделенный пул китов (15 адресов) на конкретном RPC сокете."""
+        """Слушает выделенный пул китов (20 адресов) на конкретном RPC сокете с изолированной таблицей подписок."""
         name = wss_url.split("?")[0].replace("wss://", "").split("/")[0]
         fail_count = 0
         while True:
@@ -682,18 +757,21 @@ class CopyTrader:
                 async with websockets.connect(wss_url, ping_interval=20, ping_timeout=60, close_timeout=5, max_size=2 ** 22) as ws:
                     print(f"👥 [WSS-POOL] {name}: подключен, слушаем {len(wallet_subset)} китов...")
                     fail_count = 0
-                    subscribed = set()
-                    for wallet in wallet_subset.keys():
-                        self._req_id = getattr(self, "_req_id", 0) + 1
-                        self._req_wallet[self._req_id] = wallet
+                    req_wallet = {}
+                    sub_wallet = {}
+                    local_req_id = 0
+                    for wallet in list(wallet_subset.keys()):
+                        if wallet in self._banned:
+                            continue
+                        local_req_id += 1
+                        req_wallet[local_req_id] = wallet
                         await ws.send(json.dumps({
-                            "jsonrpc": "2.0", "id": self._req_id, "method": "logsSubscribe",
+                            "jsonrpc": "2.0", "id": local_req_id, "method": "logsSubscribe",
                             "params": [{"mentions": [wallet]}, {"commitment": "processed"}]
                         }))
-                        subscribed.add(wallet)
                         await asyncio.sleep(0.06)
                     async for message in ws:
-                        self._handle_ws_message(message)
+                        self._handle_ws_message(message, req_wallet=req_wallet, sub_wallet=sub_wallet)
             except Exception as e:
                 err = str(e)
                 fail_count += 1
@@ -728,10 +806,10 @@ class CopyTrader:
 
         # 2. Основной / резервный пул: распределяем до 80 китов по 20 штук на 4 проверенных сокета Solana
         endpoints = [
-            "wss://api.mainnet-beta.solana.com/",
             "wss://solana-rpc.publicnode.com/",
             "wss://api.mainnet-beta.solana.com/",
             "wss://solana-rpc.publicnode.com/",
+            "wss://api.mainnet-beta.solana.com/",
         ]
 
         chunk_size = 20

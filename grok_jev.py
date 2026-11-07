@@ -526,24 +526,27 @@ class GrokJevEngine:
             return False, f"age-out-of-bounds {age_min:.1f}m < {min_age:.1f}m (wait for maturation)"
 
         # 2.4. Защита от безымянных рагпулов без соцсетей
-        # Разрешаем стелс-ракеты ТОЛЬКО если поток РЕАЛЬНО органический (без бот-накрутки vol/liq и без 1000 микро-сделок!)
+        # Разрешаем стелс-ракеты если поток РЕАЛЬНО органический (покупатели давят продавцов, средний чек >= $16)
         _info_g = pair_data.get("info") or {}
         _links_cnt_g = len(_info_g.get("socials", []) or []) + len(_info_g.get("websites", []) or [])
-        _req_soc_age = float(getattr(_c, "REQUIRE_SOCIALS_MIN_AGE_MIN", 30.0))
+        _soc_unk_g = bool(pair_data.get("_socials_unknown", False))
+        _req_soc_age = float(getattr(_c, "REQUIRE_SOCIALS_MIN_AGE_MIN", 8.0))
         _vol_liq_ratio_g = (vol_m5 / max(eff_liq, 1.0)) if eff_liq > 0 else 0.0
+        _avg_tx_g = vol_m5 / max(1, b5 + s5)
         _is_organic_stealth = (
-            vol_m5 >= 3000.0 and b5 >= 15 and (s5 == 0 or b5 >= s5 * 1.05)
-            and eff_liq >= 6000.0 and _vol_liq_ratio_g <= 0.70 and (b5 + s5) <= 250
+            vol_m5 >= 2000.0 and b5 >= 12 and (s5 == 0 or b5 >= s5 * 1.15)
+            and eff_liq >= 8000.0 and _vol_liq_ratio_g <= 2.60 and (b5 + s5) <= 800
+            and _avg_tx_g >= 16.0
         )
-        if age_min < _req_soc_age and _links_cnt_g == 0:
+        if age_min < _req_soc_age and _links_cnt_g == 0 and not _soc_unk_g:
             if not _is_organic_stealth:
                 return False, f"no-socials-rug (age {age_min:.1f}m < {_req_soc_age:.0f}m, 0 socials/websites, v/l {_vol_liq_ratio_g:.1f}x)"
             else:
                 print(f"💎 [JEV-ORGANIC-STEALTH] {symbol} ({mint[:8]}): 0 соцсетей, но доказан чистый органический поток (${vol_m5:,.0f}, {b5}b/{s5}s, v/l {_vol_liq_ratio_g:.2f}) — пропуск.")
 
         # 2.5. Exhaustion Guard: блокируем перегретые поздние пампы
-        _max_h1_allowed = float(getattr(_c, "MAX_ENTRY_H1_PCT", 120.0))
-        if _links_cnt_g == 0 and not _is_organic_stealth and (h1 > 100.0 or m5 > 80.0):
+        _max_h1_allowed = float(getattr(_c, "MAX_ENTRY_H1_PCT", 320.0))
+        if _links_cnt_g == 0 and not _soc_unk_g and not _is_organic_stealth and (h1 > 140.0 or m5 > 95.0):
             return False, f"exhaustion-no-soc-top h1 {h1:+.0f}%, m5 {m5:+.0f}% (0 socials pump-and-dump top)"
         if h1 > _max_h1_allowed:
             if age_min >= 10.0 or (vol_m5 < 35000.0 and h1 > 140.0):
@@ -582,17 +585,19 @@ class GrokJevEngine:
                 return False, f"h6-downtrend {float(_h6_raw or 0):+.1f}% < {_min_h6:+.1f}% (monet is bleeding)"
 
         # 4. Объем и давление покупателей:
-        # 4.0. Wash-Trading Spike Guard: 5м объем не должен превышать 1.4x ликвидности пула
-        # Защита от кейсов Hakutaku (4.2x), ELON (5.7x), HATCH (2.1x), SLINGFOLIO (2.3x), SCAMCHI (1.7x) — 100% накрутка ботами создателя перед дампом
-        if eff_liq > 0 and (vol_m5 / eff_liq) > 1.40:
-            return False, f"wash-trading-spike: vol5 ${vol_m5:,.0f} is {(vol_m5/eff_liq):.1f}x of pool liq ${eff_liq:,.0f} (bot pump trap)"
+        # 4.0. Wash-Trading Spike Guard: отличаем симметричную бот-накрутку от реального пробоя покупателями!
+        _avg_tx5 = vol_m5 / max(1, b5 + s5)
+        _max_vl_jev = 3.20 if (b5 >= s5 * 1.25 and _avg_tx5 >= 18.0) else 1.65
+        if eff_liq > 0 and (vol_m5 / eff_liq) > _max_vl_jev:
+            return False, f"wash-trading-spike: vol5 ${vol_m5:,.0f} is {(vol_m5/eff_liq):.1f}x > {_max_vl_jev:.2f}x of pool liq ${eff_liq:,.0f} (bot pump trap)"
 
-        _min_vol_m5 = float(getattr(_c, "MIN_VOLUME_M5", 2500.0))
+        _min_vol_m5 = float(getattr(_c, "MIN_VOLUME_M5", 2000.0))
         if vol_m5 < _min_vol_m5:
             return False, f"vol5-low ${vol_m5:.0f} < ${_min_vol_m5:.0f} (inactive dead pool)"
-        if (b5 + s5) < 25:
-            return False, f"tx5-low {b5+s5} < 25 (too few transactions)"
-        _req_bs = float(getattr(_c, "MIN_BUY_SELL_RATIO", 1.20))
+        _min_tx5 = int(getattr(_c, "MIN_TXNS_M5", 20))
+        if (b5 + s5) < _min_tx5:
+            return False, f"tx5-low {b5+s5} < {_min_tx5} (too few transactions)"
+        _req_bs = float(getattr(_c, "MIN_BUY_SELL_RATIO", 1.15))
         if s5 > 0 and (b5 / s5) < _req_bs:
             return False, f"sellers-dominating {b5}b/{s5}s (ratio {b5/s5:.2f} < {_req_bs:.2f})"
 
@@ -601,9 +606,6 @@ class GrokJevEngine:
             min_vol_h24 = float(getattr(_c, "JEV_MIN_VOLUME_H24", 15000.0))
             min_trades_h24 = int(getattr(_c, "JEV_MIN_TRADES_H24", 50))
             if vol_h24 < min_vol_h24:
-                return False, f"vol-h24-low ${vol_h24:,.0f} < ${min_vol_h24:,.0f}"
-            if trades_h24 < min_trades_h24:
-                return False, f"trades-h24-low {trades_h24} < {min_trades_h24}"
                 return False, f"vol-h24-low ${vol_h24:,.0f} < ${min_vol_h24:,.0f}"
             if trades_h24 < min_trades_h24:
                 return False, f"trades-h24-low {trades_h24} < {min_trades_h24}"
@@ -1126,22 +1128,7 @@ class GrokJevEngine:
             except Exception:
                 pass
 
-        # 3. GeckoTerminal Solana (Trending Pools) через единый пейсер и circuit-breaker market_data._gt_get
-        try:
-            import market_data
-            data_gt = await market_data._gt_get("/networks/solana/trending_pools", retries=0, timeout=5)
-            if isinstance(data_gt, dict) and data_gt:
-                pools = data_gt.get("data", []) or []
-                for p in pools:
-                    rel = p.get("relationships", {}) or {}
-                    base_tok = (rel.get("base_token", {}) or {}).get("data", {}) or {}
-                    tok_id = str(base_tok.get("id", "")).replace("solana_", "").strip()
-                    if tok_id and tok_id not in seen:
-                        seen.add(tok_id)
-                        candidates.append((tok_id, "solana"))
-        except Exception:
-            pass
-
+        # Примечание: тренды GeckoTerminal уже подтянуты на шаге 1.1 через общий кэш market_data.get_trending() (без дублирования запросов и 429)
         FUNNEL_STATS["universe"] += len(candidates)
         return candidates
 
@@ -1275,6 +1262,11 @@ class GrokJevEngine:
         if any(w in name.lower() for w in bad_words) or any(w in symbol.lower() for w in bad_words):
             return False, f"bad-word-scam in name/symbol ({name} / {symbol})", _h_stats
 
+        # Токенизированные регулируемые акции брокеров (Backpack Securities: TTWO, TSLA, AAPL и др.)
+        # Это официальные акции с регуляторным freeze authority, а не скам. Отклоняем без маркировки скама!
+        if "backpack securities" in name.lower() or "securities" in name.lower() or symbol_upper in ("TTWO", "BACKPACK"):
+            return False, f"tokenized-equity-skip ({symbol_upper} — официальная акция Backpack Securities, не мем-токен)", _h_stats
+
         # Корпоративные тикеры и знаменитости — фейковые бренды (MrBeast -52%, ELON, TRUMP, AMAZON)
         corporate_scam_keywords = ["AAPL", "S&P", "SP500", "MSFT", "TSLA", "TESLA", "SPACEX", "STARLINK", "XAI", "NEURALINK", "PAYPAL",
                                   "NVDA", "GOOG", "AMZN", "META", "NFLX", "ANTHROPIC", "OPENAI", "PERPLEXITY",
@@ -1345,11 +1337,9 @@ class GrokJevEngine:
             if not sec_ok and "rugcheck-score" not in str(sec_why).lower():
                 return False, f"goplus-sol-reject {sec_why}", _h_stats
               
-            # В) Полный отчет RugCheck API
+            # В) Полный отчет RugCheck API (через общий 120с кэш goplus, чтобы не ловить 429 при 30 RPM)
             try:
-                from http_client import fetch_json
-                rc_url = f"https://api.rugcheck.xyz/v1/tokens/{address}/report"
-                rc_status, rc_data = await fetch_json(rc_url, timeout=5, retries=1)
+                rc_status, rc_data = await _gp.fetch_rugcheck_report_cached(address, ttl=120.0, timeout=6)
                 if rc_status == 200 and isinstance(rc_data, dict):
                     token_info = rc_data.get("token", {}) or {}
                     mint_auth = token_info.get("mintAuthority")
@@ -1649,7 +1639,7 @@ class GrokJevEngine:
 
         if chain != "solana":
             return False, "non-solana-chain-disabled"
-        if not address or address in tracker.positions:
+        if not address or address in tracker.get_open_positions():
             return False, "already-held"
         if len(tracker.get_open_positions()) >= getattr(_c, "MAX_CONCURRENT_POSITIONS", 10):
             return False, "max-positions-reached"
@@ -1923,25 +1913,60 @@ async def grok_bot_jev_loop(tracker, analyzer=None):
                 continue
 
             # Пакетная предзагрузка пар (по 30 адресов за 1 запрос вместо 120 одиночных запросов)
-            active_batch = [
-                addr for addr, ch in candidates
-                if addr and addr not in tracker.positions and now >= evaluated_cooldown.get((addr, ch), 0.0)
-            ]
-            # СТАЛО:
+            open_pos_mints = set(tracker.get_open_positions().keys())
+            active_batch = []
+            for addr, ch in candidates:
+                if not addr or addr in open_pos_mints or now < evaluated_cooldown.get((addr, ch), 0.0):
+                    continue
+                if addr in tracker.positions:
+                    _cp = tracker.positions.get(addr)
+                    _c_pnl = float(getattr(_cp, "pnl_usd", 0.0) or 0.0)
+                    _c_ext = float(getattr(_cp, "exit_time", 0.0) or 0.0)
+                    _req_w = 300.0 if _c_pnl > 0 else 14400.0
+                    if (now - _c_ext) < _req_w:
+                        continue
+                active_batch.append(addr)
+
             if active_batch and grok_jev.analyzer and hasattr(grok_jev.analyzer, "prefetch_token_data"):
                 try:
-                    await grok_jev.analyzer.prefetch_token_data(active_batch)
+                    await grok_jev.analyzer.prefetch_token_data(active_batch[:120])
                 except Exception:
                     pass
 
+            # Приоритизируем живые импульсные монеты (m5 >= 2%) и ограничиваем цикл ТОП-55 кандидатами,
+            # чтобы один проход занимал 10-15 секунд вместо 5 минут и цены не устаревали!
+            _pf_map = getattr(grok_jev.analyzer, "_prefetch_cache", {}) if grok_jev.analyzer else {}
+            _ranked_cands = []
+            for idx, (address, chain) in enumerate(candidates):
+                if not address or address in open_pos_mints or now < evaluated_cooldown.get((address, chain), 0.0):
+                    continue
+                if address in tracker.positions:
+                    _cp = tracker.positions.get(address)
+                    _c_pnl = float(getattr(_cp, "pnl_usd", 0.0) or 0.0)
+                    _c_ext = float(getattr(_cp, "exit_time", 0.0) or 0.0)
+                    if (now - _c_ext) < (300.0 if _c_pnl > 0 else 14400.0):
+                        continue
+                _hit = _pf_map.get(address)
+                _td_c = _hit[1] if (_hit and len(_hit) > 1 and isinstance(_hit[1], dict)) else None
+                if _td_c:
+                    _m5_c = float((_td_c.get("priceChange") or {}).get("m5", 0) or 0)
+                    _dex_c = str(_td_c.get("dexId", "")).lower()
+                    if _dex_c in ("pump", "pumpfun") and not getattr(_c, "ALLOW_UNGRADUATED_PUMPFUN", False):
+                        evaluated_cooldown[(address, chain)] = now + 45.0
+                        continue
+                    if _m5_c < 1.0 and idx > 15:
+                        evaluated_cooldown[(address, chain)] = now + 60.0
+                        continue
+                    _prio = _m5_c + (50.0 if idx < 15 else 0.0)
+                else:
+                    _prio = 25.0 if idx < 25 else 0.0
+                _ranked_cands.append((_prio, address, chain))
 
-            for address, chain in candidates:
-                if not address or address in tracker.positions:
-                    continue
-                # Адаптивный кулдаун
-                retry_until = evaluated_cooldown.get((address, chain), 0.0)
-                if now < retry_until:
-                    continue
+            _ranked_cands.sort(key=lambda x: x[0], reverse=True)
+
+            for _, address, chain in _ranked_cands[:55]:
+                if len(tracker.get_open_positions()) >= getattr(_c, "MAX_CONCURRENT_POSITIONS", 5):
+                    break
 
                 # 2. Обработка через независимый конвейер
                 try:
