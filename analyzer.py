@@ -1640,8 +1640,9 @@ class Analyzer:
                 f"🚫 [LARGE-CAP-SKIP] {symbol} ({mint[:8]}): FDV ${_fdv_chk_pre:,.0f} > $1.8M — ракета уже тяжёлая.",
             )
         if mint.endswith("pump") and _dex_pre_early not in ("pump", "pumpfun") and 0 < _fdv_chk_pre < 46000.0:
-            _is_fresh_reclaim = (_age_min_pre < 5.0 and _vm5_pre >= 20000.0 and _m5 >= 18.0 and _b5_pre >= _s5_pre * 1.45)
-            if not _is_fresh_reclaim:
+            _is_real_dump = (_fdv_chk_pre < 22000.0) or (_s5_pre > int(_b5_pre * 1.25) and _m5 < -5.0)
+            _is_active_grad = (_vm5_pre >= 2500.0 and _b5_pre >= int(_s5_pre * 1.05) and _m5 >= -4.0)
+            if _is_real_dump or not _is_active_grad:
                 return self._deny(
                     mint,
                     f"post-mig-dumped ${_fdv_chk_pre:.0f}<$46k",

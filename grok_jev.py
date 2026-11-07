@@ -542,9 +542,11 @@ class GrokJevEngine:
         if (b5 + s5) >= 120 and _avg_tx_e < 8.0:
             return False, f"fake-bump-wash-bot avg ${_avg_tx_e:.2f} < $8 across {b5+s5} m5 txns"
 
-        # Защита от слитых ниже миграции выпускников Pump.fun (кейс SHANE FDV $35.8k)
+        # Защита от слитых ниже миграции выпускников Pump.fun (кейс SHANE FDV $35.8k, но пускаем LOWCAP $34.9k / MEME $40k с живым потоком)
         if mint.endswith("pump") and dex_id not in ("pump", "pumpfun") and 0 < fdv_mc < 46000.0:
-            if not (age_min < 5.0 and vol_m5 >= 20000.0 and m5 >= 18.0 and b5 >= s5 * 1.45):
+            _is_real_dump = (fdv_mc < 22000.0) or (s5 > int(b5 * 1.25) and m5 < -5.0)
+            _is_active_grad = (vol_m5 >= 2500.0 and b5 >= int(s5 * 1.05) and m5 >= -4.0)
+            if _is_real_dump or not _is_active_grad:
                 return False, f"post-mig-dumped-fdv ${fdv_mc:,.0f} < $46k"
 
         # 2.4. Защита от безымянных рагпулов без соцсетей на ВСЕХ возрастах (STONKS 12.5м, IPHONEDUO 28.2м, scamsem 25.8м)
@@ -585,8 +587,9 @@ class GrokJevEngine:
             return False, f"fdv-liquidity-trap liq ${eff_liq:,.0f} < 2% of FDV ${fdv_mc:,.0f} (phantom valuation)"
 
         # 3. Живой импульс ракеты (LIVE ROCKET MOMENTUM)
-        if m5 < 4.0:
-            return False, f"no-momentum m5 {m5:+.1f}% < +4.0% (coin is flat/standing still, not an active rocket)"
+        _min_m5_jev = 1.8 if (eff_liq >= 18000.0 and b5 >= int(s5 * 1.15) and vol_m5 >= 3500.0) else 3.0
+        if m5 < _min_m5_jev:
+            return False, f"no-momentum m5 {m5:+.1f}% < +{_min_m5_jev:.1f}% (coin is flat/standing still)"
         if age_min >= 20.0:
             _is_strong_jev_breakout = (m5 >= 5.0 and vol_m5 >= 2000.0 and b5 >= s5 * 1.08 and (b5 + s5) >= 20)
             if not _is_strong_jev_breakout and (vol_m5 < 6000.0 or ((vol_m5 / max(eff_liq, 1.0)) < 0.22 and vol_m5 < 18000.0) or m5 < 4.5 or (b5 + s5) < 45):
@@ -780,8 +783,17 @@ class GrokJevEngine:
                 else:
                     print(f"⚠️ [JEV/GROK] Ошибка вызова LLM ({type(e).__name__}): {e}")
 
-        # LLM не ответила (нет ключа / лимит) -> переключаемся на детерминированный скоринг JEV!
-        if not llm_res:
+        # Защита от математических галлюцинаций LLM и переключение на детерминированный JEV
+        if llm_res and isinstance(llm_res, dict):
+            try:
+                import json as _json_raw
+                print(f"🤖 [JEV-RAW-VERDICT] {symbol} ({mint[:8]}): {_json_raw.dumps(llm_res, ensure_ascii=False)}")
+            except Exception:
+                pass
+            # Билет $4-$15 на пул $5k+ (<=2%) математически идеален: проскальзывание <0.5%, min 0.90!
+            if liq >= 5000.0 and ticket <= (liq * 0.02):
+                llm_res["liquidity_fits_ticket"] = max(float(llm_res.get("liquidity_fits_ticket", 0) or 0), 0.90)
+        else:
             llm_res = self._deterministic_jev_eval(
                 symbol, name, socials, websites,
                 m1, m5, h1, liq, mcap, vol5,
@@ -790,6 +802,23 @@ class GrokJevEngine:
             print(f"📊 [JEV-ALGO] {symbol}: детерминированный скоринг (LLM offline) ➔ {llm_res.get('reason')}")
 
         failed = _jev_failed(llm_res)
+        
+        # Если LLM отклонила токен из-за шума промпта (кейс APU), перепроверяем строгим детерминированным алгоритмом:
+        if failed:
+            algo_res = self._deterministic_jev_eval(
+                symbol, name, socials, websites,
+                m1, m5, h1, liq, mcap, vol5,
+                top1_pct, top10_pct, dev_pct, is_pump=is_pump
+            )
+            algo_failed = _jev_failed(algo_res)
+            if not algo_failed:
+                print(f"📊 [JEV-ALGO-RESCUE] {symbol} ({mint[:8]}): алгоритмический скоринг спас токен от шума LLM ({', '.join(failed)}) -> PASS!")
+                for k in list(failed):
+                    if k in algo_res:
+                        llm_res[k] = algo_res[k]
+                llm_res["source"] = f"{llm_res.get('source', 'llm')}+algo-rescue"
+                failed = []
+
         is_passed = not failed
         llm_res["passed"] = is_passed          # кэш читает это поле
 
@@ -2031,6 +2060,12 @@ async def grok_bot_jev_loop(tracker, analyzer=None):
                 _hit = _pf_map.get(address)
                 _td_c = _hit[1] if (_hit and len(_hit) > 1 and isinstance(_hit[1], dict)) else None
                 if _td_c:
+                    _ca_c = _td_c.get("pairCreatedAt") or 0
+                    if _ca_c:
+                        _age_c_m = (now * 1000 - _ca_c) / 60000.0
+                        if _age_c_m > 720.0:
+                            evaluated_cooldown[(address, chain)] = now + 86400.0
+                            continue
                     _m5_c = float((_td_c.get("priceChange") or {}).get("m5", 0) or 0)
                     _dex_c = str(_td_c.get("dexId", "")).lower()
                     if _dex_c in ("pump", "pumpfun") and not getattr(_c, "ALLOW_UNGRADUATED_PUMPFUN", False):

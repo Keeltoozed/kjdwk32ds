@@ -124,7 +124,7 @@ MOONBAG_SELL_FRAC = 0.0
 PUMP_XGB_ENABLED = False
 RAY_XGB_ENABLED = False
 ROCKET_XGB_ENABLED = True
-ROCKET_XGB_STAGE1_THRESHOLD = 10.0  # Первичный отсев в 0мс (отсекает мертвецов 2-7%, пускает DUGE 10.6%, PEPE69 16.7%, 花 20.5%)
+ROCKET_XGB_STAGE1_THRESHOLD = 8.0   # Первичный отсев в 0мс (отсекает мертвецов 2-7%, пускает APU, DUGE, PEPE69)
 ROCKET_XGB_FINAL_THRESHOLD = 14.0   # Финальный порог с ончейн-холдерами (ловит ракеты DUGE, 花, SOUVENIR, CHOO, ELYSIONPAD)
 ROCKET_XGB_THRESHOLD = 12.0
 
@@ -182,7 +182,7 @@ AUDITOR_MAX_DELEGATED_ACCOUNTS = 3
 AUDITOR_MAX_DELEGATED_PCT = 5.0
 AUDITOR_MAX_BUNDLE_WALLETS = 5
 AUDITOR_MAX_BUNDLE_PCT = 12.0
-JEV_LLM_ENFORCE = True          # ВКЛЮЧЕНО: строго отклонять токены, забракованные судьёй JEV AI (отсекает VETO -55% и ложные пампы)!
+JEV_LLM_ENFORCE = False         # ОТКЛЮЧЕНО: судья пишет вердикт в лог, но шум/галлюцинации LLM не блокируют вход!
 
 JEV_MIN_ACCOUNT_IS_PROJECT = 0.65
 JEV_MAX_RECYCLED_ACCOUNT = 0.35

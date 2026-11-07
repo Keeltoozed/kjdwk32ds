@@ -128,8 +128,8 @@ async def fetch_jup_tokens() -> list:
             b5 = int(st5.get("numBuys") or 0)
             s5 = int(st5.get("numSells") or 0)
             age_m = _parse_jup_age_min(t)
-            # Жесткое отсечение древних мамонтов (>24ч полностью, >6ч только при реальном пробое ликвидного пула):
-            if age_m > 1440.0:
+            # Жесткое отсечение древних мамонтов (>12ч полностью, >6ч только при реальном пробое ликвидного пула):
+            if age_m > 720.0:
                 continue
             if age_m > 360.0 and (vol5 < 6000.0 or pc5 < 5.0 or liq < 25000.0):
                 continue
@@ -204,7 +204,7 @@ async def fetch_jup_tokens() -> list:
                     continue
                 ca_p = float(p.get("pairCreatedAt") or 0)
                 age_p = ((now_ms_ds - ca_p) / 60000.0) if ca_p > 0 else 999.0
-                if age_p > 1440.0:
+                if age_p > 720.0:
                     continue
                 if age_p > 360.0 and (vol5_p < 6000.0 or m5_p < 5.0 or liq_p < 25000.0):
                     continue

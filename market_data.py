@@ -751,11 +751,9 @@ async def get_trending() -> list:
             age_h = (time.time() * 1000 - created_ms) / 3600000.0
             tx = attrs.get("transactions") or {}
             m5_tx = int((tx.get("m5") or {}).get("buys", 0) or 0) + int((tx.get("m5") or {}).get("sells", 0) or 0)
-            if age_h > 6.0 and vol5_usd < 6000.0:
+            if age_h > 4.0 and vol5_usd < 5000.0:
                 return
-            if age_h > 24.0 and (vol5_usd < 12000.0 or m5_tx < 20):
-                return
-            if age_h > 48.0:
+            if age_h > 12.0:
                 return
         seen.add(mint)
         out.append({"tokenAddress": mint, "chainId": "solana"})
