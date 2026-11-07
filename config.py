@@ -55,7 +55,7 @@ MAX_CONCURRENT_POSITIONS = 5
 MAX_DAILY_LOSS_USD = 1000.0
 KILL_SWITCH_ENABLED = False
 STOP_LOSS_PCT = -0.135        # Стоп -13.5% (-15.5% при живом перевесе покупателей на глубоком пуле)
-EMERGENCY_CAP_PCT = -0.17     # Жёсткий аварийный потолок -17% (с живой сверкой Jupiter, без провалов -42%)
+EMERGENCY_CAP_PCT = -0.18     # Жёсткий аварийный потолок -18% (с живой сверкой Jupiter, без провалов -42%)
 INFANT_WINDOW_MIN = 0.5
 INFANT_DUMP_PCT = -0.18
 
@@ -144,8 +144,8 @@ BREAKEVEN_PCT = 0.095     # После +9.5% пика включается Pre-T
 
 PREFETCH_TTL_SEC = 35
 SOLANA_MIN_AGE_MIN = 0.5        # Разрешаем молодые ракеты от 30 секунд (LEMON +406%, SHADOW +195%)
-SOLANA_MAX_AGE_HOURS = 6.0
-SOLANA_MAX_AGE_MIN = 360.0
+SOLANA_MAX_AGE_HOURS = 12.0
+SOLANA_MAX_AGE_MIN = 720.0
 
 SCALP_TIMEOUT_MIN = 10.0
 STAGNANT_LOSS_MIN = 9.0
@@ -165,7 +165,7 @@ JEV_ENABLED = True
 JEV_WICK_STOP_ENABLED = False
 JEV_EARLY_MIN_AGE_MIN = 0.5
 JEV_MIN_AGE_MIN = 0.8
-JEV_MAX_AGE_MIN = 360.0         # Не покупаем 16-часовых гигантов (кейс HODL 940м $4.2M FDV)
+JEV_MAX_AGE_MIN = 720.0         # До 12ч для активных пробойных пулов (DUGE 361м, PEPE69)
 JEV_MIN_LIQUIDITY_USD = 10000.0
 JEV_MAX_LIQUIDITY_USD = 220000.0
 JEV_MIN_VOLUME_H1 = 8000.0
@@ -286,7 +286,7 @@ PULLBACK_M1_MIN_PCT = -0.08
 PULLBACK_M1_MAX_PCT = 0.20
 PULLBACK_MAX_H1_PCT = 320.0
 PULLBACK_MAX_M5_PCT = 0.95
-MIN_VOLUME_M5 = 3500            # Минимум $3,500 за 5м (отсекает вялые пулы PROPFUN $3,100 и LAURA $3,368)
+MIN_VOLUME_M5 = 2000            # Минимум $2,000 за 5м (пускает активные ракеты вроде DEBTDOG $2,152)
 MIN_TXNS_M5 = 25
 MIN_BUY_SELL_RATIO = 1.08       # Покупателей больше продавцов (не душит активные ракеты вроде DUGE 776b/720s)
 LOTTERY_ENABLED = False

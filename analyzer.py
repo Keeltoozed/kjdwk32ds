@@ -1626,7 +1626,7 @@ class Analyzer:
         _is_early_rocket = (_raw_liq_age >= 12000.0 and _vm5_pre >= 6000.0 and _b5_pre >= 30
                             and _b5_pre >= _s5_pre * 1.30 and _avg_tx_age >= 25.0)
         # СТАЛО (замени строки 543-605 в analyzer.py):
-        _sol_min_age = float(getattr(config, "SOLANA_MIN_AGE_MIN", 0.8)) if _is_early_rocket else 1.2
+        _sol_min_age = float(getattr(config, "SOLANA_MIN_AGE_MIN", 0.5))
         if _age_min_pre < _sol_min_age:
             print(f"⏳ [ENTRY] {mint[:8]}: возраст {_age_min_pre:.1f}м < {_sol_min_age}м — выдерживаем карантин.")
             return None
@@ -1648,16 +1648,16 @@ class Analyzer:
                     f"🚫 [POST-MIGRATION-DUMP] {symbol} ({mint[:8]}): выпускник Pump.fun слит ниже миграции (FDV ${_fdv_chk_pre:,.0f} < $46k) — кейс SHANE.",
                 )
 
-        _max_age_min = float(getattr(config, "SOLANA_MAX_AGE_MIN", 360.0))
+        _max_age_min = float(getattr(config, "SOLANA_MAX_AGE_MIN", 720.0))
         _is_active_breakout_pool = (
             _age_min_pre <= 1440.0
             and _fdv_chk_pre <= 1500000.0
-            and _raw_liq_age >= 25000.0
-            and _vm5_pre >= 18000.0
-            and (_vm5_pre / max(_raw_liq_age, 1.0)) >= 0.25
-            and _m5 >= 8.0
-            and _avg_tx_age >= 15.0
-            and _b5_pre >= _s5_pre * 1.25
+            and _raw_liq_age >= 15000.0
+            and _vm5_pre >= 8000.0
+            and (_vm5_pre / max(_raw_liq_age, 1.0)) >= 0.15
+            and _m5 >= 5.0
+            and _avg_tx_age >= 12.0
+            and _b5_pre >= _s5_pre * 1.15
         )
         if _age_min_pre > _max_age_min and not _is_active_breakout_pool:
             return self._deny(
@@ -1703,8 +1703,9 @@ class Analyzer:
                 f"🚫 [LOW-MOMENTUM] {symbol} ({mint[:8]}): 5м объем ${_vm5_pre:,.0f} < ${_min_v5_cfg:,.0f} — слабый пул.",
             )
         if _age_min_pre >= 20.0:
+            _is_strong_mature_breakout = (_m5 >= 5.0 and _vm5_pre >= 2000.0 and _b5_pre >= _s5_pre * 1.08 and _tot_tx5_pre >= 20)
             _v2l_mat = (_vm5_pre / max(_raw_liq_chk, 1.0)) if _raw_liq_chk > 0 else 0.0
-            if _vm5_pre < 6000.0 or (_v2l_mat < 0.22 and _vm5_pre < 18000.0) or _m5 < 4.5 or _tot_tx5_pre < 45:
+            if not _is_strong_mature_breakout and (_vm5_pre < 6000.0 or (_v2l_mat < 0.22 and _vm5_pre < 18000.0) or _m5 < 4.5 or _tot_tx5_pre < 45):
                 return self._deny(
                     mint,
                     f"slow-mature-pool v5=${_vm5_pre:.0f} v/l={_v2l_mat:.2f}x",
@@ -1771,7 +1772,8 @@ class Analyzer:
                 f"🚫 [EXHAUSTED-TOP] {symbol} ({mint[:8]}): рост за час +{_h1:+.1f}% > +{_max_entry_h1:.0f}% — вершина пампа.",
             )
         if _m5 > _max_entry_m5:
-            _is_strong_breakout = (_vm5_pre >= 10000.0 and _b5_pre >= _s5_pre * 1.22 and _m5 <= 165.0)
+            _max_allowed_m5 = 450.0 if (_age_min_pre <= 30.0 or _is_burned_launchpad) else 165.0
+            _is_strong_breakout = (_vm5_pre >= 6000.0 and _b5_pre >= _s5_pre * 1.12 and _m5 <= _max_allowed_m5)
             if not _is_strong_breakout:
                 return self._deny(
                     mint,

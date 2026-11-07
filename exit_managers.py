@@ -148,13 +148,13 @@ class MatureExitManager:
         # =========================================================================
         # 3. ЖЕСТКИЙ КОНТРОЛЬ УБЫТКА (БЕЗ ПРОВАЛОВ -42% В ПЕРВУЮ МИНУТУ!)
         # =========================================================================
-        _emerg_cap = -abs(float(getattr(config, "EMERGENCY_CAP_PCT", -0.17)))
+        _emerg_cap = -abs(float(getattr(config, "EMERGENCY_CAP_PCT", -0.18)))
         if pnl_pct <= _emerg_cap:
             _em_c = int(getattr(position, "emerg_confirm_n", 0) or 0) + 1
             position.emerg_confirm_n = _em_c
-            # main.py дополнительно сверяет ранний выход (<2м) с живым Jupiter API (защита от кейса Burn),
-            # поэтому при реальном обвале пула режем за 2 тика (от 7с удержания), не допуская -42% (STONKS)!
-            if pnl_pct <= -0.28 or (minutes_held >= 0.12 and _em_c >= 2) or _em_c >= 3:
+            # При реальном провале пула режем сразу без задержек (кейс Burn / STONKS):
+            # при <= -20% или повторном тике отсекаем мгновенно, не допуская слива до -32%..-42%
+            if pnl_pct <= -0.20 or _em_c >= 2:
                 return f"Mature Emergency Cap ({pnl_pct*100:.1f}%)"
         else:
             position.emerg_confirm_n = 0
@@ -171,10 +171,10 @@ class MatureExitManager:
             if _f_liq >= 22000.0 and _f_bs >= 1.28 and _f_links >= 1:
                 _has_organic_bid = True
         _sl = min(_base_sl, -0.155) if _has_organic_bid else _base_sl
-        if pnl_pct <= _sl and minutes_held >= 0.40:
+        if pnl_pct <= _sl and (minutes_held >= 0.25 or pnl_pct <= -0.16):
             _sl_c = int(getattr(position, "sl_confirm_n", 0) or 0) + 1
             position.sl_confirm_n = _sl_c
-            if _sl_c >= 2:
+            if _sl_c >= 2 or pnl_pct <= -0.16:
                 return f"Mature Stop Loss ({pnl_pct*100:.1f}%)"
         else:
             position.sl_confirm_n = 0

@@ -494,20 +494,20 @@ class GrokJevEngine:
 
         # КАТЕГОРИЧЕСКИЙ БЛОК: СМЕРТЕЛЬНАЯ ЗОНА МИГРАЦИИ (0 - 2.0 МИНУТ)
         # Отсекаем только мгновенный сброс дева без объема, но пускаем реальные ракеты с объемом (MBAPPE, SAFU, OMNI, DEMOCAT, LUCKY)
-        is_migrated_pump = (dex_id not in ("pump", "pumpfun")) and (mint.endswith("pump") or "pump" in dex_id)
+        is_migrated_pump = (dex_id not in ("pump", "pumpfun")) and (mint.endswith("pump") or "pump" in dex_id) and age_min <= 10.0
         if is_migrated_pump:
             has_breakout_momentum = (
-                (vol_m5 >= 3000.0 and b5 >= 20 and b5 >= s5 * 1.18)
-                or (age_min >= 1.5 and eff_liq >= 18000.0 and vol_m5 >= 6000.0 and m5 >= 4.0 and b5 >= s5 * 1.05)
+                (vol_m5 >= 2000.0 and b5 >= 15 and b5 >= s5 * 1.08)
+                or (age_min >= 1.2 and eff_liq >= 12000.0 and vol_m5 >= 4000.0 and m5 >= 2.5 and b5 >= s5 * 1.05)
             )
-            if age_min < 0.8 and not has_breakout_momentum:
+            if age_min < 0.6 and not has_breakout_momentum:
                 try:
                     from birth_tracker import birth_tracker as _bt_mig
                     _bt_mig.add_to_waiting_room(mint)
                 except Exception:
                     pass
-                return False, f"post-migration-dump-zone {age_min:.1f}m < 0.8m"
-            if not has_breakout_momentum and (m5 < 2.5 or (s5 > 0 and (b5 / s5) < 1.12) or vol_m5 < 2000.0):
+                return False, f"post-migration-dump-zone {age_min:.1f}m < 0.6m"
+            if not has_breakout_momentum and (m5 < 2.0 or (s5 > 0 and (b5 / s5) < 1.08) or vol_m5 < 1500.0):
                 return False, f"post-migration-no-reclaim (m5 {m5:+.1f}%, vol5 ${vol_m5:,.0f}, {b5}b/{s5}s)"
 
         # 2. Возраст токена и запрет старых стоячих гигантов (кейс HODL 940.7м $4.2M FDV, DUGE 224.7м m5 +1.9%)
@@ -517,7 +517,7 @@ class GrokJevEngine:
         _early_min_age = max(0.5, float(getattr(_c, "JEV_EARLY_MIN_AGE_MIN", 0.5)))
         _std_min_age = max(0.8, float(getattr(_c, "JEV_MIN_AGE_MIN", 0.8)))
         min_age = _early_min_age if _is_early_rocket else _std_min_age
-        max_age = float(getattr(_c, "JEV_MAX_AGE_MIN", 360.0))  # 6 часов (с пробойным окном до 12ч)
+        max_age = float(getattr(_c, "JEV_MAX_AGE_MIN", 720.0))  # До 12ч для активных пробойных пулов (DUGE 361м)
         _is_jev_breakout = (
             age_min <= 720.0
             and fdv_mc <= 1500000.0
@@ -589,11 +589,13 @@ class GrokJevEngine:
         if m5 < 4.0:
             return False, f"no-momentum m5 {m5:+.1f}% < +4.0% (coin is flat/standing still, not an active rocket)"
         if age_min >= 20.0:
-            if vol_m5 < 6000.0 or ((vol_m5 / max(eff_liq, 1.0)) < 0.22 and vol_m5 < 18000.0) or m5 < 4.5 or (b5 + s5) < 45:
+            _is_strong_jev_breakout = (m5 >= 5.0 and vol_m5 >= 2000.0 and b5 >= s5 * 1.08 and (b5 + s5) >= 20)
+            if not _is_strong_jev_breakout and (vol_m5 < 6000.0 or ((vol_m5 / max(eff_liq, 1.0)) < 0.22 and vol_m5 < 18000.0) or m5 < 4.5 or (b5 + s5) < 45):
                 return False, f"slow-mature-pool age {age_min:.0f}m vol5 ${vol_m5:,.0f} v/l {(vol_m5/max(eff_liq,1.0)):.2f}x"
         _max_m5_allowed = float(getattr(_c, "MAX_ENTRY_M5_PCT", 110.0))
         if m5 > _max_m5_allowed:
-            _has_breakout_vol = (vol_m5 >= 8000.0 and b5 >= s5 * 1.15 and m5 <= 165.0)
+            _max_allowed_m5_g = 450.0 if (age_min <= 30.0 or is_migrated_pump or _is_burned_lp_g) else 165.0
+            _has_breakout_vol = (vol_m5 >= 6000.0 and b5 >= s5 * 1.12 and m5 <= _max_allowed_m5_g)
             if not _has_breakout_vol:
                 return False, f"fomo-vertical-m5 m5 {m5:+.1f}% > +{_max_m5_allowed:.0f}% (buying top of vertical pump without breakthrough volume)"
         if s5 > 10 and b5 < (s5 * 0.80):
