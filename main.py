@@ -1084,17 +1084,10 @@ async def scanner_loop(analyzer, tracker):
                                     if _age_m >= 20.0:
                                         print(f"🚫 [SCANNER-NO-SOCIALS] {actual_symbol} ({mint[:8]}): 0 соцсетей в зрелом возрасте {_age_m:.0f}м (>=20м) — отмена!")
                                         continue
-                                    elif _age_m >= _req_soc_age:
-                                        _is_organic_stealth = (
-                                            _vol5_live >= 15000.0 and _b5_bump >= 50 and _b5_bump >= _s5_bump * 1.45
-                                            and liq_usd >= 20000.0 and _vl_sc <= 2.20 and _avg_tx5_sc >= 25.0
-                                            and _h1_live <= 300.0 and _m1_live <= 12.0
-                                        )
                                     else:
                                         _is_organic_stealth = (
-                                            _vol5_live >= 4000.0 and _b5_bump >= 20 and _b5_bump >= _s5_bump * 1.25
-                                            and liq_usd >= 12000.0 and _vl_sc <= 2.60 and _avg_tx5_sc >= 20.0
-                                            and _m5_live <= 80.0
+                                            _vol5_live >= 5000.0 and _b5_bump >= 25 and _b5_bump >= _s5_bump * 1.12
+                                            and liq_usd >= 12000.0 and _vl_sc <= 6.0 and _avg_tx5_sc >= 12.0
                                         )
                                     if not _is_organic_stealth:
                                         print(f"🚫 [SCANNER-NO-SOCIALS] {actual_symbol} ({mint[:8]}): 0 соцсетей при {_age_m:.1f}м без чистой органики — отмена!")

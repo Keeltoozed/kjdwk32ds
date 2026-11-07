@@ -559,17 +559,10 @@ class GrokJevEngine:
         if _links_cnt_g == 0 and not _soc_unk_g:
             if age_min >= 20.0:
                 return False, f"no-socials-mature-rug (age {age_min:.0f}m >= 20m, 0 socials/websites)"
-            elif age_min >= _req_soc_age:
-                _is_organic_stealth = (
-                    vol_m5 >= 15000.0 and b5 >= 50 and b5 >= s5 * 1.45
-                    and eff_liq >= 20000.0 and _vol_liq_ratio_g <= 2.20
-                    and _avg_tx_g >= 25.0 and h1 <= 300.0 and m1 <= 12.0
-                )
             else:
                 _is_organic_stealth = (
-                    vol_m5 >= 4000.0 and b5 >= 20 and b5 >= s5 * 1.25
-                    and eff_liq >= 12000.0 and _vol_liq_ratio_g <= 2.60
-                    and _avg_tx_g >= 20.0 and m5 <= 80.0
+                    vol_m5 >= 5000.0 and b5 >= 25 and b5 >= s5 * 1.12
+                    and eff_liq >= 12000.0 and _vol_liq_ratio_g <= 6.0 and _avg_tx_g >= 12.0
                 )
             if not _is_organic_stealth:
                 return False, f"no-socials-rug (age {age_min:.1f}m, 0 socials/websites, v/l {_vol_liq_ratio_g:.1f}x)"
@@ -679,7 +672,7 @@ class GrokJevEngine:
         mcap = fdv_mc
         if is_pump and mcap > 0 and mcap < 5000.0:
             return False, f"pump-curve-too-early mcap ${mcap:,.0f} < $5k (high dev dump trap risk)"
-        min_mcap = 5000.0 if (dex_id in ("pump", "pumpfun")) else float(getattr(_c, "JEV_MIN_MCAP_USD", 22000.0))
+        min_mcap = 5000.0 if (dex_id in ("pump", "pumpfun")) else float(getattr(_c, "JEV_MIN_MCAP_USD", 10000.0))
         max_mcap = float(getattr(_c, "JEV_MAX_MCAP_USD", 1800000.0))
         if mcap > 0 and not (min_mcap <= mcap <= max_mcap):
             return False, f"mcap-out-of-bounds ${mcap:,.0f} not in [${min_mcap:,.0f}, ${max_mcap:,.0f}]"
@@ -1846,10 +1839,10 @@ class GrokJevEngine:
         # 5.6. 🚀 STAGE 2: ROCKET XGBOOST FINAL ML FIREWALL
         # Финальная проверка перед реальным открытием ордера со свежими данными и реальными ончейн холдерами (_h_stats).
         rkt_final = self.score_rocket_xgb(address, pair, _h_stats)
-        final_thresh = float(getattr(_c, "ROCKET_XGB_FINAL_THRESHOLD", 28.0))
+        final_thresh = float(getattr(_c, "ROCKET_XGB_FINAL_THRESHOLD", 14.0))
         _fin_links = len((pair.get("info") or {}).get("socials", []) or []) + len((pair.get("info") or {}).get("websites", []) or [])
         if _fin_links == 0 and not bool(pair.get("_socials_unknown", False)):
-            final_thresh = max(final_thresh, 36.0)
+            final_thresh = max(final_thresh, 18.0)
         if getattr(_c, "ROCKET_XGB_ENABLED", True) and (rkt_final + 0.05) < final_thresh:
             print(f"🚫 [GROK-JEV-ML-VETO] {symbol} ({address[:8]}): Rocket XGB final score {rkt_final:.1f}% < {final_thresh:.0f}% — VETO! (Блокировка дампа)")
             return False, f"rocket-xgb-final-veto {rkt_final:.1f}% < {final_thresh:.0f}%"

@@ -1360,8 +1360,8 @@ class Analyzer:
                     return False, f"Слишком низкая ликвидность AMM пула (${liq:,.0f} < $8,000)"
                 if mint.endswith("pump") and 0 < fdv < 44000.0:
                     return False, f"Слитый после миграции токен (FDV ${fdv:,.0f} < $44,000)"
-                if not mint.endswith("pump") and 0 < fdv < 20000.0:
-                    return False, f"Микро-капа токена (FDV ${fdv:,.0f} < $20,000)"
+                if not mint.endswith("pump") and 0 < fdv < 10000.0:
+                    return False, f"Микро-капа токена (FDV ${fdv:,.0f} < $10,000)"
 
             # 1.5. Фильтр живого импульса мем-ракеты (отсекает 18-минутные флеты CLAUDIA, HOOKED, DACITY, FUSE, NOS)
             _pc_w = pair_data.get("priceChange") or {}
@@ -1553,13 +1553,18 @@ class Analyzer:
                 _s5_mc = int(_tx5_mc.get("sells", 0) or 0)
                 _v5_mc = float((pair_data.get("volume") or {}).get("m5", 0) or 0)
                 _lq_mc = float((pair_data.get("liquidity", {}) or {}).get("usd", 0) or 0)
-                # Если у мем-токена есть соцсети И подтвержденная органика без накрутки (vol/liq <= 1.0)
                 _links_m = len((pair_data or {}).get("info", {}).get("socials", []) or []) + len((pair_data or {}).get("info", {}).get("websites", []) or [])
                 _v_to_l_m = (_v5_mc / max(_lq_mc, 1.0)) if _lq_mc > 0 else 0.0
-                if _links_m > 0 and _v_to_l_m <= 1.0 and ((_b5_mc >= 20 and _b5_mc >= _s5_mc) or _v5_mc >= 8000.0):
-                    print(f"🔥 [MIMIC-FOMO] {symbol} ({mint[:8]}): подтвержденный вирусный мем с соцсетями (b/s {_b5_mc}/{_s5_mc}, vol5 ${_v5_mc:.0f}) — пропуск.")
+                _avg_tx_m = (_v5_mc / max(1, _b5_mc + _s5_mc)) if (_b5_mc + _s5_mc) > 0 else 0.0
+                # Живые вирусные мемы (PEPE69 $172k vol, DUGE, TRUMP): пускаем при подтверждённом торговом потоке
+                _is_valid_meme_runner = (
+                    (_links_m > 0 and _v5_mc >= 4000.0 and _b5_mc >= _s5_mc) or
+                    (_v5_mc >= 8000.0 and _b5_mc >= _s5_mc * 1.10 and _avg_tx_m >= 10.0 and _lq_mc >= 10000.0)
+                )
+                if _is_valid_meme_runner:
+                    print(f"🔥 [MIMIC-FOMO] {symbol} ({mint[:8]}): подтвержденный вирусный мем (b/s {_b5_mc}/{_s5_mc}, vol5 ${_v5_mc:,.0f}, links {_links_m}) — пропуск.")
                 else:
-                    return self._deny(mint, "mimic-scam", f"🚫 Мусор: Токен {symbol} мимикрирует под известный мем без соцсетей или с накруткой (links {_links_m}, v/l {_v_to_l_m:.1f}x).")
+                    return self._deny(mint, "mimic-scam", f"🚫 Мусор: Токен {symbol} мимикрирует под известный мем без активности (links {_links_m}, v/l {_v_to_l_m:.1f}x, vol5 ${_v5_mc:,.0f}).")
             
         _created_pre = pair_data.get("pairCreatedAt") or 0
         if _created_pre:
@@ -1707,8 +1712,13 @@ class Analyzer:
                 )
 
         # Запрет входа, если продавцов больше или почти столько же, сколько покупателей (на глубоких пулах >=$25k допускаем 1.08x при зелёном m5/m1)
-        _base_bs_cfg = float(getattr(config, "MIN_BUY_SELL_RATIO", 1.15))
-        _min_bs_cfg = 1.08 if (_raw_liq_chk >= 25000.0 and _m5 >= 5.0 and _m1 >= 0.0) else _base_bs_cfg
+        _base_bs_cfg = float(getattr(config, "MIN_BUY_SELL_RATIO", 1.08))
+        if _b5_pre >= 40 and _vm5_pre >= 8000.0 and _b5_pre > _s5_pre:
+            _min_bs_cfg = 1.05 if (_m5 >= 3.0 and _m1 >= -2.0) else 1.08
+        elif _raw_liq_chk >= 20000.0 and _m5 >= 4.0 and _m1 >= 0.0:
+            _min_bs_cfg = 1.06
+        else:
+            _min_bs_cfg = _base_bs_cfg
         if _s5_pre > 0 and (_b5_pre / _s5_pre) < _min_bs_cfg:
             return self._deny(
                 mint,
@@ -1769,17 +1779,19 @@ class Analyzer:
                     f"🚫 [FOMO-VERTICAL] {symbol} ({mint[:8]}): 5м свеча +{_m5:+.1f}% > +{_max_entry_m5:.0f}% без прорывного объема — перегретая свеча.",
                 )
 
-        # 4.9. Wash-Trading Spike Guard: НЕ баним живые ракеты (CHIMPS 1.5x, CALLCAT 2.2x, duge $158k liq 3.82x), режем реальный симметричный wash-дамп!
+        # 4.9. Wash-Trading Spike Guard: НЕ баним живые ракеты (ELYSIONPAD 25.2x avg $183, CHIMPS 1.5x, CALLCAT 2.2x), режем реальный симметричный wash-дамп!
         _txns_tot_pre = _b5_pre + _s5_pre
         _avg_tx_pre = (_vm5_pre / max(1, _txns_tot_pre)) if _txns_tot_pre > 0 else 0.0
-        if _is_burned_launchpad and _raw_liq_chk >= 12000.0:
-            _max_vl_allowed = 6.50 if (_b5_pre >= _s5_pre * 1.18) else 3.20
-        elif _raw_liq_chk >= 30000.0 and _b5_pre >= _s5_pre * 1.25 and _avg_tx_pre >= 35.0:
-            _max_vl_allowed = 6.00
-        elif _b5_pre >= _s5_pre * 1.22 and _avg_tx_pre >= 20.0 and _raw_liq_chk >= 15000.0:
-            _max_vl_allowed = 3.80
+        if _avg_tx_pre >= 35.0 and _b5_pre >= 150 and _b5_pre >= _s5_pre * 1.20 and _raw_liq_chk >= 15000.0:
+            _max_vl_allowed = 30.0
+        elif _is_burned_launchpad and _raw_liq_chk >= 12000.0:
+            _max_vl_allowed = 8.00 if (_b5_pre >= _s5_pre * 1.15) else 4.00
+        elif _raw_liq_chk >= 30000.0 and _b5_pre >= _s5_pre * 1.20 and _avg_tx_pre >= 25.0:
+            _max_vl_allowed = 8.00
+        elif _b5_pre >= _s5_pre * 1.15 and _avg_tx_pre >= 15.0 and _raw_liq_chk >= 12000.0:
+            _max_vl_allowed = 5.50
         else:
-            _max_vl_allowed = 1.85
+            _max_vl_allowed = 2.50
         if _raw_liq_chk > 0 and (_vm5_pre / _raw_liq_chk) > _max_vl_allowed:
             return self._deny(
                 mint,
@@ -1800,17 +1812,10 @@ class Analyzer:
                     f"no-socials-mature {_age_min_pre:.0f}m",
                     f"🚫 [NO-SOCIALS-MATURE] {symbol} ({mint[:8]}): 0 соцсетей/сайта в возрасте {_age_min_pre:.0f}м (>=20м) — анонимный дев-бандл.",
                 )
-            elif _age_min_pre >= _req_soc_age:
-                _is_organic_stealth = (
-                    _vm5_pre >= 15000.0 and _b5_pre >= 50 and _b5_pre >= _s5_pre * 1.45
-                    and _raw_liq_chk >= 20000.0 and _vol_liq_r <= 2.20
-                    and _avg_tx_pre >= 25.0 and _h1 <= 300.0 and _m1 <= 12.0
-                )
             else:
                 _is_organic_stealth = (
-                    _vm5_pre >= 4000.0 and _b5_pre >= 20 and _b5_pre >= _s5_pre * 1.25
-                    and _raw_liq_chk >= 12000.0 and _vol_liq_r <= 2.60
-                    and _avg_tx_pre >= 20.0 and _m5 <= 80.0
+                    _vm5_pre >= 5000.0 and _b5_pre >= 25 and _b5_pre >= _s5_pre * 1.12
+                    and _raw_liq_chk >= 12000.0 and _vol_liq_r <= 6.0 and _avg_tx_pre >= 12.0
                 )
             if not _is_organic_stealth:
                 return self._deny(
@@ -2139,9 +2144,9 @@ class Analyzer:
                 conf = self.score_rocket_xgb(mint, pair_data, holders_info=_real_holders)
                 self.last_score = conf
                 self.rocket_scores[mint] = conf
-            _final_thr = float(getattr(config, "ROCKET_XGB_FINAL_THRESHOLD", 28.0))
+            _final_thr = float(getattr(config, "ROCKET_XGB_FINAL_THRESHOLD", 14.0))
             if _links_cnt == 0 and not _soc_unknown:
-                _final_thr = max(_final_thr, 36.0)
+                _final_thr = max(_final_thr, 18.0)
             if (conf + 0.05) < _final_thr:
                 return self._deny(mint, f"rocket-xgb-s2 {conf:.0f}%", f"🚫 [ROCKET-XGB-S2] {symbol} ({mint[:8]}): скор с учётом холдеров {conf:.1f}% < {_final_thr:.0f}% — отсев.")
 

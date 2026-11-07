@@ -443,10 +443,8 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
         if _age_j >= 20.0:
             print(f"🚫 [{source_tag}-NO-SOCIALS] {_sym_tmp}: 0 соцсетей в зрелом возрасте {_age_j:.0f}м (>=20м) — отмена!")
             return False
-        elif _age_j >= _req_soc_age:
-            _is_organic_stealth = (_vm5_j >= 15000.0 and _b5_j >= 50 and _b5_j >= _s5_j * 1.45 and _liq_j >= 20000.0 and _avg_j >= 25.0 and _vl_j <= 2.20 and _h1_j <= 300.0)
         else:
-            _is_organic_stealth = (_vm5_j >= 4000.0 and _b5_j >= 20 and _b5_j >= _s5_j * 1.25 and _liq_j >= 12000.0 and _avg_j >= 20.0 and _vl_j <= 2.60 and _m5_j <= 80.0)
+            _is_organic_stealth = (_vm5_j >= 5000.0 and _b5_j >= 25 and _b5_j >= _s5_j * 1.12 and _liq_j >= 12000.0 and _avg_j >= 12.0 and _vl_j <= 6.0)
         if not _is_organic_stealth:
             print(f"🚫 [{source_tag}-NO-SOCIALS] {_sym_tmp}: 0 соцсетей при возрасте {_age_j:.1f}м без чистой органики — отмена!")
             return False
