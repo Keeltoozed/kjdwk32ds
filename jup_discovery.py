@@ -8,6 +8,7 @@
 Без JUP_API_KEY модуль использует public/fallback режим.
 """
 import asyncio
+import re
 import time
 
 import config
@@ -48,100 +49,175 @@ def _headers():
 
 
 def _parse_jup_age_min(t: dict) -> float:
-    """Вычисляет возраст пула в минутах из graduatedAt (если мигрировал) или firstPool.createdAt ответа Jupiter API v2."""
+    """Вычисляет возраст пула в минутах из graduatedAt (если мигрировал) или firstPool.createdAt ответа Jupiter API v2.
+    Корректно обрабатывает миллисекунды (.246Z) в Python 3.9 без ложного фоллбэка в 30.0м."""
     try:
-        ca = (t.get("graduatedAt") or (t.get("firstPool") or {}).get("createdAt") or "").strip()
+        ca = (
+            t.get("graduatedAt")
+            or (t.get("firstPool") or {}).get("createdAt")
+            or t.get("createdAt")
+            or ""
+        ).strip()
         if not ca:
-            return 30.0
+            return 999.0
         from datetime import datetime
-        dt = datetime.fromisoformat(ca.replace("Z", "+00:00"))
+        s = ca.replace("Z", "+00:00")
+        try:
+            dt = datetime.fromisoformat(s)
+        except ValueError:
+            dt = datetime.fromisoformat(re.sub(r"\.\d+", "", s))
         return max(0.0, (time.time() - dt.timestamp()) / 60.0)
     except Exception:
-        return 30.0
+        return 999.0
 
 
 async def fetch_jup_tokens() -> list:
-    """Возвращает [mint, ...] Solana: приоритет органическим ракетам (toporganicscore/5m + toptrending/5m + GT 5m).
-    Предварительно отсекает древние мамонты (>60-180м без пампа) и пустые пулы (<$4k ликвидности) прямо по полям Jupiter,
-    чтобы они не забивали лимит пачки и не отрезали живые пулы GeckoTerminal.
+    """Возвращает [mint, ...] Solana: живые ракеты Jupiter v2 (5m + 1h + recent) + DexScreener Active DEX Radar + GT 5m.
+    Отсекает древние мамонты (>6ч без крупного прорыва и все >24ч) и сырые немигрировавшие кривые прямо на входе,
+    чтобы пачка состояла из реальных выпускников PumpSwap / Meteora / Raydium.
     """
     global _cache, _cache_time
     if time.time() - _cache_time < CACHE_TTL and _cache:
         return _cache
-    
+
     headers = _headers()
-    # 4 самых сигнальных эндпоинта (вместо 8 одновременных запросов, вызывавших 429 без платного ключа)
-    (s1, d1), (s_org, d_org), (s3, d3), (s2, d2) = await asyncio.gather(
+    allow_raw_curve = bool(getattr(config, "ALLOW_UNGRADUATED_PUMPFUN", False))
+
+    # 1. Jupiter Tokens API v2 (5 параллельных срезов: 5m тренды + 1h тренды + recent)
+    (s1, d1), (s_org, d_org), (s3, d3), (s1h, d1h), (s2, d2) = await asyncio.gather(
         fetch_json(f"{BASE}/toptrending/5m?limit=100", headers=headers, timeout=8, retries=0),
         fetch_json(f"{BASE}/toporganicscore/5m?limit=100", headers=headers, timeout=8, retries=0),
         fetch_json(f"{BASE}/toptraded/5m?limit=100", headers=headers, timeout=8, retries=0),
+        fetch_json(f"{BASE}/toptrending/1h?limit=100", headers=headers, timeout=8, retries=0),
         fetch_json(f"{BASE}/recent", headers=headers, timeout=8, retries=0),
     )
     # Авто-фоллбэк на бесплатный lite-api.jup.ag при 429/401/403 на основном хосте
     if s1 in (429, 401, 403) and s_org in (429, 401, 403):
-        (s1, d1), (s_org, d_org), (s3, d3), (s2, d2) = await asyncio.gather(
+        (s1, d1), (s_org, d_org), (s3, d3), (s1h, d1h), (s2, d2) = await asyncio.gather(
             fetch_json(f"{LITE_BASE}/toptrending/5m?limit=100", timeout=8, retries=0),
             fetch_json(f"{LITE_BASE}/toporganicscore/5m?limit=100", timeout=8, retries=0),
             fetch_json(f"{LITE_BASE}/toptraded/5m?limit=100", timeout=8, retries=0),
+            fetch_json(f"{LITE_BASE}/toptrending/1h?limit=100", timeout=8, retries=0),
             fetch_json(f"{LITE_BASE}/recent", timeout=8, retries=0),
         )
-    s1h, d1h, s24h, d24h, s_org1h, d_org1h, s3h, d3h = 0, None, 0, None, 0, None, 0, None
-    
+
     ranked = []
     seen = set()
 
-    def _add_jup_list(items, tag: str, min_pc5: float = 2.0):
+    def _add_jup_list(items, tag: str, min_pc5: float = 1.8):
         if not isinstance(items, list):
             return
         for t in items:
+            if not isinstance(t, dict):
+                continue
             m = t.get("id", "")
             sym = str(t.get("symbol") or "").upper().strip()
             if not m or m.startswith("0x") or len(m) < 32 or len(m) > 44 or m in seen or sym in SKIP_SYMBOLS:
                 continue
             liq = float(t.get("liquidity") or 0.0)
-            if liq < 3500.0:
+            is_grad = bool(t.get("graduatedAt") or t.get("graduatedPool") or (not m.endswith("pump") and liq >= 7500.0))
+            if not allow_raw_curve and not is_grad:
+                continue
+            if liq < (3500.0 if allow_raw_curve else 7500.0):
                 continue
             st5 = t.get("stats5m") or {}
             st1h = t.get("stats1h") or {}
             pc5 = float(st5.get("priceChange") or 0.0)
             pc1h = float(st1h.get("priceChange") or 0.0)
             vol5 = float(st5.get("buyVolume") or 0.0) + float(st5.get("sellVolume") or 0.0)
+            b5 = int(st5.get("numBuys") or 0)
+            s5 = int(st5.get("numSells") or 0)
             age_m = _parse_jup_age_min(t)
-            # Отсекаем древние мамонты и перегретые хаи ДО формирования пачки:
-            if age_m > 1440.0 and pc5 < 8.0:
+            # Жесткое отсечение древних мамонтов (>24ч полностью, >6ч только при реальном пробое ликвидного пула):
+            if age_m > 1440.0:
                 continue
-            if age_m > 240.0 and pc5 < 4.0:
+            if age_m > 360.0 and (vol5 < 6000.0 or pc5 < 5.0 or liq < 25000.0):
                 continue
-            if age_m > 60.0 and pc5 < 2.5:
+            if age_m > 60.0 and pc5 < 2.0:
                 continue
-            _is_fresh_jup = m.endswith("pump") or age_m < 90.0
-            _max_pc1h = 3500.0 if (_is_fresh_jup and pc5 >= 2.0) else 400.0
-            if pc1h > _max_pc1h or (pc1h < -35.0 and pc5 < 15.0):
+            _is_fresh_jup = m.endswith(("pump", "bonk", "BAGS")) or age_m <= 90.0
+            _max_pc1h = 2500.0 if (_is_fresh_jup and pc5 >= 2.0 and b5 >= s5) else 360.0
+            if pc1h > _max_pc1h or (pc1h < -25.0 and pc5 < 12.0):
                 continue
-            if pc5 < min_pc5 or vol5 < 350.0:
+            if pc5 < min_pc5 or vol5 < 1500.0:
                 continue
             seen.add(m)
             ranked.append((pc5, vol5, sym, m, tag))
 
-    # 1. Органические 5м-ракеты и топ-тренды 5м/1ч (без древнего мусора)
     if s_org == 200:
-        _add_jup_list(d_org, "organic_5m", min_pc5=2.0)
-    if s_org1h == 200:
-        _add_jup_list(d_org1h, "organic_1h", min_pc5=2.0)
+        _add_jup_list(d_org, "organic_5m", min_pc5=1.8)
     if s1 == 200:
-        _add_jup_list(d1, "trending_5m", min_pc5=2.0)
+        _add_jup_list(d1, "trending_5m", min_pc5=1.8)
     if s1h == 200:
-        _add_jup_list(d1h, "trending_1h", min_pc5=2.5)
-    if s24h == 200:
-        _add_jup_list(d24h, "trending_24h", min_pc5=2.0)
+        _add_jup_list(d1h, "trending_1h", min_pc5=2.0)
     if s3 == 200:
-        _add_jup_list(d3, "traded_5m", min_pc5=2.0)
-    if s3h == 200:
-        _add_jup_list(d3h, "traded_1h", min_pc5=2.0)
+        _add_jup_list(d3, "traded_5m", min_pc5=1.8)
     if s2 == 200:
         _add_jup_list(d2, "recent", min_pc5=1.5)
 
-    # 2. Добор живых трендов и свежих пулов GeckoTerminal из общего кэша market_data (без дублирования запросов и 429)
+    # 2. Прямой DexScreener Rocket Radar (300 RPM, 0 нагрузки на GT):
+    # Ловит живые выпускники PumpSwap / Meteora / Raydium / Bonk, когда топ-100 Jupiter забит старыми мейджорами!
+    try:
+        ds_queries = (
+            "https://api.dexscreener.com/latest/dex/search?q=pumpswap",
+            "https://api.dexscreener.com/latest/dex/search?q=SOL%20pump",
+            "https://api.dexscreener.com/latest/dex/search?q=meteora%20SOL",
+            "https://api.dexscreener.com/latest/dex/search?q=bonk%20SOL",
+        )
+        ds_results = await asyncio.gather(
+            *[fetch_json(u, timeout=6, retries=0) for u in ds_queries],
+            return_exceptions=True,
+        )
+        now_ms_ds = time.time() * 1000.0
+        for res in ds_results:
+            if not isinstance(res, tuple) or len(res) != 2:
+                continue
+            st_q, d_q = res
+            if st_q != 200 or not isinstance(d_q, dict):
+                continue
+            for p in (d_q.get("pairs") or []):
+                if not isinstance(p, dict) or str(p.get("chainId") or "").lower() != "solana":
+                    continue
+                dex_p = str(p.get("dexId") or "").lower()
+                if not allow_raw_curve and dex_p in ("pump", "pumpfun", "moonshot", "meteoradbc"):
+                    continue
+                bt = p.get("baseToken") or {}
+                addr = str(bt.get("address") or "").strip()
+                sym_p = str(bt.get("symbol") or "").upper().strip()
+                if not addr or addr.startswith("0x") or len(addr) < 32 or len(addr) > 44 or addr in seen or sym_p in SKIP_SYMBOLS:
+                    continue
+                liq_p = float((p.get("liquidity") or {}).get("usd", 0) or 0)
+                if liq_p < 7500.0:
+                    continue
+                vol5_p = float((p.get("volume") or {}).get("m5", 0) or 0)
+                if vol5_p < 2000.0:
+                    continue
+                tx5_p = (p.get("txns") or {}).get("m5") or {}
+                b5_p = int(tx5_p.get("buys", 0) or 0)
+                s5_p = int(tx5_p.get("sells", 0) or 0)
+                if (b5_p + s5_p) < 12 or (s5_p > 0 and (b5_p / s5_p) < 1.08):
+                    continue
+                pc_p = p.get("priceChange") or {}
+                m5_p = float(pc_p.get("m5", 0) or 0)
+                h1_p = float(pc_p.get("h1", 0) or 0)
+                if m5_p < 1.8:
+                    continue
+                ca_p = float(p.get("pairCreatedAt") or 0)
+                age_p = ((now_ms_ds - ca_p) / 60000.0) if ca_p > 0 else 999.0
+                if age_p > 1440.0:
+                    continue
+                if age_p > 360.0 and (vol5_p < 6000.0 or m5_p < 5.0 or liq_p < 25000.0):
+                    continue
+                _is_fresh_ds = addr.endswith(("pump", "bonk", "BAGS")) or dex_p == "pumpswap" or age_p <= 90.0
+                _max_h1_ds = 2500.0 if (_is_fresh_ds and b5_p >= s5_p * 1.15) else 360.0
+                if h1_p > _max_h1_ds:
+                    continue
+                seen.add(addr)
+                ranked.append((m5_p, vol5_p, sym_p, addr, "ds_radar"))
+    except Exception:
+        pass
+
+    # 3. Добор живых трендов и свежих пулов PumpSwap из общего кэша market_data (без дублирования запросов и 429)
     try:
         import market_data
         gt_items = await market_data.get_trending()
@@ -154,19 +230,23 @@ async def fetch_jup_tokens() -> list:
     except Exception:
         pass
 
-    # Сортируем все импульсные монеты по силе 5м движения:
-    ranked.sort(key=lambda x: x[0], reverse=True)
+    # Сортируем все импульсные монеты по силе 5м движения и объёму:
+    ranked.sort(key=lambda x: (x[0], x[1]), reverse=True)
 
-    # 3. Свежие листинги (recent) — берём те, у которых уже есть пул >= $2,000 (для отправки в реестр созревания)
+    # 4. Свежие мигрировавшие листинги (recent) — для отправки молодых выпускников в реестр созревания
     if s2 == 200 and isinstance(d2, list):
         for t in d2:
+            if not isinstance(t, dict):
+                continue
             m = t.get("id", "")
             sym = str(t.get("symbol") or "").upper().strip()
             if not m or m.startswith("0x") or len(m) < 32 or len(m) > 44 or m in seen or sym in SKIP_SYMBOLS:
                 continue
             liq = float(t.get("liquidity") or 0.0)
-            mcap = float(t.get("mcap") or t.get("fdv") or 0.0)
-            if liq < 2000.0 and mcap < 6000.0:
+            is_grad_r = bool(t.get("graduatedAt") or t.get("graduatedPool") or (not m.endswith("pump") and liq >= 7500.0))
+            if not allow_raw_curve and not is_grad_r:
+                continue
+            if liq < 5000.0:
                 continue
             st5 = t.get("stats5m") or {}
             pc5 = float(st5.get("priceChange") or 0.0)
@@ -222,7 +302,7 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
     _b5_j = int(_tx5_j.get("buys", 0) or 0)
     _s5_j = int(_tx5_j.get("sells", 0) or 0)
     _dex_j = str((td or {}).get("dexId", "")).lower()
-    _is_raw_curve_j = _dex_j in ("pump", "pumpfun", "moonshot") or mint.endswith("moon")
+    _is_raw_curve_j = _dex_j in ("pump", "pumpfun", "moonshot", "meteoradbc") or mint.endswith("moon")
     _raw_liq_j = float(((td or {}).get("liquidity") or {}).get("usd", 0) or 0)
     _cr_j = (td or {}).get("pairCreatedAt") or 0
     _age_j = (time.time() * 1000 - _cr_j) / 60000.0 if _cr_j else 999.0
@@ -257,8 +337,8 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
     if abs(_m1_j) > max(180.0, abs(_m5_j) * 3.0 + 40.0):
         _m1_j = _m5_j / 5.0
     _h1_j = float(_pc_j.get("h1", 0) or 0)
-    _is_fresh_j = mint.endswith(("pump", "bonk", "BAGS")) or _age_j <= 90.0
-    _max_h1_j = 3500.0 if (_is_fresh_j and _m5_j >= 2.5) else float(getattr(config, "MAX_ENTRY_H1_PCT", 360.0))
+    _is_fresh_j = mint.endswith(("pump", "bonk", "BAGS")) or _dex_j == "pumpswap" or _age_j <= 90.0
+    _max_h1_j = 2500.0 if (_is_fresh_j and _m5_j >= 2.5 and _b5_j >= _s5_j * 1.15) else float(getattr(config, "MAX_ENTRY_H1_PCT", 360.0))
     if _h1_j > _max_h1_j:
         print(f"🚫 [{source_tag}-H1-EXHAUSTED] {_sym_tmp} ({mint[:8]}): h1 {_h1_j:+.0f}% > +{_max_h1_j:.0f}% — памп уже отработал, вход = вершина.")
         return False
@@ -351,7 +431,7 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
         if not _is_breakout:
             print(f"🚫 [{source_tag}-FOMO-M5] {_sym_tmp}: m5 +{_m5_j:.1f}% > +{_max_m5_cfg:.0f}% без прорывного объема — отмена!")
             return False
-    _eff_max_h1_j = 3500.0 if (mint.endswith(("pump", "bonk", "BAGS")) or _age_j <= 90.0) else _max_h1_cfg
+    _eff_max_h1_j = 2500.0 if (mint.endswith(("pump", "bonk", "BAGS")) or _dex_j == "pumpswap" or _age_j <= 90.0) and (_vm5_j >= 4000.0 and _b5_j >= _s5_j * 1.15) else _max_h1_cfg
     if _h1_j > _eff_max_h1_j and _age_j >= 10.0:
         print(f"🚫 [{source_tag}-FOMO-H1] {_sym_tmp}: h1 +{_h1_j:.0f}% > +{_eff_max_h1_j:.0f}% — перегретый часовой памп, отмена!")
         return False
@@ -549,11 +629,11 @@ async def jup_loop(analyzer, tracker):
                         _m5 = float(((td.get("priceChange") or {}).get("m5", 0) or 0))
                         _sym = str(((td.get("baseToken") or {}).get("symbol") or m[:6])).upper()
                         _dex_cand = str(td.get("dexId", "")).lower()
-                        if _dex_cand in ("pump", "pumpfun"):
+                        if _dex_cand in ("pump", "pumpfun", "moonshot", "meteoradbc"):
                             _fdv_cand = float(td.get("fdv", 0) or td.get("marketCap", 0) or 0)
                             _min_c = float(getattr(config, "MIN_PUMP_CURVE_MCAP_USD", 7500.0))
                             _max_c = float(getattr(config, "MAX_PUMP_CURVE_MCAP_USD", 42000.0))
-                            if not getattr(config, "ALLOW_UNGRADUATED_PUMPFUN", True) or (0 < _fdv_cand < _min_c) or (_fdv_cand > _max_c):
+                            if not getattr(config, "ALLOW_UNGRADUATED_PUMPFUN", False) or (0 < _fdv_cand < _min_c) or (_fdv_cand > _max_c):
                                 processed[m] = _now_t
                                 continue
 
@@ -572,10 +652,13 @@ async def jup_loop(analyzer, tracker):
                             }
                             continue
 
-                        # Отсекаем древние мамонты без пампа
-                        if (_ag > 240.0 and _m5 < 3.5) or (_ag > 1440.0 and _m5 < 5.0) or (_ag > 60.0 and _m5 < 2.5):
+                        _lq_cand = float((td.get("liquidity") or {}).get("usd", 0) or 0)
+                        _v5_cand = float((td.get("volume") or {}).get("m5", 0) or 0)
+
+                        # Отсекаем древние мамонты синхронно с ZOMBIE-AGE в analyzer.py (без пустого спама лога!)
+                        if _ag > 1440.0 or (_ag > 360.0 and (_v5_cand < 6000.0 or _m5 < 5.0 or _lq_cand < 25000.0)) or (_ag > 60.0 and _m5 < 2.0):
                             skipped_ancient += 1
-                            processed[m] = _now_t + 120
+                            processed[m] = _now_t + 300
                             continue
 
                         # Отсекаем флет m5 < 1.8%
@@ -583,9 +666,6 @@ async def jup_loop(analyzer, tracker):
                             skipped_flat += 1
                             processed[m] = _now_t + 90
                             continue
-
-                        _lq_cand = float((td.get("liquidity") or {}).get("usd", 0) or 0)
-                        _v5_cand = float((td.get("volume") or {}).get("m5", 0) or 0)
                         _turnover = (_v5_cand / max(_lq_cand, 1.0))
                         # Оценка ракеты: если включена Rocket XGBoost v2, ранжируем строго по ML-скору
                         if getattr(config, "ROCKET_XGB_ENABLED", True) and hasattr(analyzer, "score_rocket_xgb"):

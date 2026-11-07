@@ -406,7 +406,7 @@ class GrokJevEngine:
         # ЗАЩИТА ОТ ПУСТЫХ 0.2% FLASH-RUG КЁРВОВ PUMP.FUN (кейсы NOTHING $2.6k, CAMPUS $2.6k):
         # На пустой кривой с 2 SOL резерва любой дамп дева пробивает стоп сразу в -75%!
         # Пускаем Pump.fun кёрвы ТОЛЬКО если они уже набрали базу (прогресс >=15% / FDV >=$9k, кейсы MOBROS $12.5k, OREX $13k)!
-        is_pump = dex_id in ("pump", "pumpfun", "moonshot") or mint.endswith("moon")
+        is_pump = dex_id in ("pump", "pumpfun", "moonshot", "meteoradbc") or mint.endswith("moon")
         if is_pump:
             if not getattr(_c, "ALLOW_UNGRADUATED_PUMPFUN", False):
                 return False, "ungraduated-pump-curve (ждём миграции на DEX с сожжённым LP)"
@@ -420,7 +420,7 @@ class GrokJevEngine:
                 return False, f"pump-curve-flash-rug: FDV ${fdv_mc:,.0f} < ${_min_curve_mc:,.0f} (пустой кёрв <12%, риск мгновенного сноса в -75%)"
             if fdv_mc > _max_curve_mc:
                 return False, f"pump-curve-migration-cliff: FDV ${fdv_mc:,.0f} > ${_max_curve_mc:,.0f} (опасная зона обрыва перед миграцией, сброс снайперов)"
-        eff_liq = raw_liq if dex_id not in ("pump", "pumpfun") else (raw_liq if raw_liq > 0 else fdv_mc * 0.40)
+        eff_liq = raw_liq if dex_id not in ("pump", "pumpfun", "meteoradbc") else (raw_liq if raw_liq > 0 else fdv_mc * 0.40)
         
         # ЗАЩИТА ОТ ФАНТОМНОЙ ЛИКВИДНОСТИ И ОДНОМИНУТНЫХ ДЕВ-ДАМПОВ:
         # В пуле ОБЯЗАН быть реальный резерв SOL (>= 10-12 SOL), чтобы не пускать пустышки по 1.3-2.9 SOL вроде ZECP/MIKE/SLEGO.
@@ -451,9 +451,9 @@ class GrokJevEngine:
                 age_min = 999.0
 
         _min_grad_liq = float(getattr(_c, "MIN_GRADUATED_LIQ_USD", 10000.0))
-        if dex_id in ("pump", "pumpfun") and not getattr(_c, "ALLOW_UNGRADUATED_PUMPFUN", False):
+        if dex_id in ("pump", "pumpfun", "meteoradbc") and not getattr(_c, "ALLOW_UNGRADUATED_PUMPFUN", False):
             return False, "raw-pump-curve (wait for graduation to PumpSwap/Raydium with locked LP)"
-        min_liq = 1500.0 if dex_id in ("pump", "pumpfun") else _min_grad_liq
+        min_liq = 1500.0 if dex_id in ("pump", "pumpfun", "meteoradbc") else _min_grad_liq
         if eff_liq < min_liq:
             return False, f"liq-depth-low ${eff_liq:.0f} < ${min_liq:.0f} (micro-cap dump trap)"
             
@@ -537,7 +537,7 @@ class GrokJevEngine:
         _req_soc_age = float(getattr(_c, "REQUIRE_SOCIALS_MIN_AGE_MIN", 8.0))
         _vol_liq_ratio_g = (vol_m5 / max(eff_liq, 1.0)) if eff_liq > 0 else 0.0
         _avg_tx_g = vol_m5 / max(1, b5 + s5)
-        _is_burned_lp_g = mint.endswith(("pump", "bonk", "BAGS"))
+        _is_burned_lp_g = mint.endswith(("pump", "bonk", "BAGS")) or dex_id == "pumpswap"
         _is_organic_stealth = (
             (
                 vol_m5 >= 2000.0 and b5 >= 12 and (s5 == 0 or b5 >= s5 * 1.15)
@@ -556,14 +556,20 @@ class GrokJevEngine:
             else:
                 print(f"💎 [JEV-ORGANIC-STEALTH] {symbol} ({mint[:8]}): 0 соцсетей, но доказан чистый органический поток (${vol_m5:,.0f}, {b5}b/{s5}s, v/l {_vol_liq_ratio_g:.2f}) — пропуск.")
 
-        # 2.5. Exhaustion Guard: блокируем перегретые поздние пампы
-        _max_h1_allowed = float(getattr(_c, "MAX_ENTRY_H1_PCT", 360.0))
+        # 2.5. Exhaustion Guard: блокируем перегретые поздние пампы, но пускаем свежих выпускников (h1 включает рост на кёрве $5k->$69k!)
+        _base_max_h1_jev = float(getattr(_c, "MAX_ENTRY_H1_PCT", 360.0))
+        _is_active_fresh_jev = (
+            (age_min <= 90.0 or _is_burned_lp_g)
+            and vol_m5 >= 5000.0
+            and b5 >= s5 * 1.15
+        )
+        _max_h1_allowed = 2500.0 if _is_active_fresh_jev else _base_max_h1_jev
         if _links_cnt_g == 0 and not _soc_unk_g and not _is_organic_stealth and (h1 > 160.0 or m5 > 110.0):
             return False, f"exhaustion-no-soc-top h1 {h1:+.0f}%, m5 {m5:+.0f}% (0 socials pump-and-dump top)"
         if h1 > _max_h1_allowed:
-            if age_min >= 10.0 or (vol_m5 < 35000.0 and h1 > 160.0):
+            if age_min >= 10.0 or (vol_m5 < 35000.0 and h1 > _max_h1_allowed):
                 return False, f"exhaustion-top-h1 h1 {h1:+.0f}% > +{_max_h1_allowed:.0f}% (late pump top, dump risk)"
-        if fdv_mc > 100000.0 and eff_liq < 0.02 * fdv_mc:
+        if fdv_mc > 100000.0 and eff_liq < 35000.0 and eff_liq < 0.02 * fdv_mc:
             return False, f"fdv-liquidity-trap liq ${eff_liq:,.0f} < 2% of FDV ${fdv_mc:,.0f} (phantom valuation)"
 
         # 3. Живой импульс ракеты (LIVE ROCKET MOMENTUM)
@@ -598,10 +604,12 @@ class GrokJevEngine:
                 return False, f"h6-downtrend {float(_h6_raw or 0):+.1f}% < {_min_h6:+.1f}% (monet is bleeding)"
 
         # 4. Объем и давление покупателей:
-        # 4.0. Wash-Trading Spike Guard: отличаем симметричную бот-накрутку от реального пробоя покупателями (CHIMPS +59% v/l 1.5x)!
+        # 4.0. Wash-Trading Spike Guard: отличаем симметричную бот-накрутку от реального пробоя покупателями (CHIMPS +59% v/l 1.5x, duge $158k liq 3.82x)!
         _avg_tx5 = vol_m5 / max(1, b5 + s5)
         if _is_burned_lp_g and eff_liq >= 12000.0:
             _max_vl_jev = 6.50 if (b5 >= s5 * 1.18) else 3.20
+        elif eff_liq >= 30000.0 and b5 >= s5 * 1.25 and _avg_tx5 >= 35.0:
+            _max_vl_jev = 6.00
         elif b5 >= s5 * 1.22 and _avg_tx5 >= 20.0 and eff_liq >= 15000.0:
             _max_vl_jev = 3.80
         else:
@@ -865,7 +873,9 @@ class GrokJevEngine:
             return False, -0.14, 0.0, f"fomo-spike (m5 {m5:+.1f}% > +95.0% and m1 {m1:+.1f}% > 28%) — vertical blow-off candle"
         if m1 > _max_m1 and not _m1_is_phantom:
             return False, -0.14, 0.0, f"m1-spike (m1 {m1:+.1f}% > +{_max_m1:.1f}%) — vertical push, wait for consolidation"
-        _max_h1_flush = float(getattr(_c, "MAX_ENTRY_H1_PCT", 360.0))
+        _base_max_h1_flush = float(getattr(_c, "MAX_ENTRY_H1_PCT", 360.0))
+        _is_burned_flush = _base_addr.endswith(("pump", "bonk", "BAGS")) or _dex_id == "pumpswap"
+        _max_h1_flush = 2500.0 if ((_age_m <= 90.0 or _is_burned_flush) and vol5 >= 5000.0 and b5 >= s5 * 1.15) else _base_max_h1_flush
         if _h1 > _max_h1_flush and _age_m > 10.0:
             return False, -0.14, 0.0, f"h1-exhaustion (h1 {_h1:+.1f}% > +{_max_h1_flush:.0f}% at {_age_m:.0f}m) — pump already exhausted"
         if _liq_usd > 0 and _liq_usd < _min_liq:
@@ -1196,7 +1206,7 @@ class GrokJevEngine:
 
         # 1. Если есть AMM-пулы (pumpswap/raydium/meteora/orca) с ликвидностью >= $500,
         # токен УЖЕ мигрировал, bonding curve pump.fun игнорируется!
-        amm_pairs = [p for p in sol_pairs if p.get("dexId") not in ("pump", "pumpfun")]
+        amm_pairs = [p for p in sol_pairs if str(p.get("dexId") or "").lower() not in ("pump", "pumpfun", "meteoradbc")]
         real_pairs = [p for p in amm_pairs if float(((p.get("liquidity") or {}).get("usd", 0) or 0)) >= 500]
         if real_pairs:
             best_pair = sorted(real_pairs, key=lambda p: float(((p.get("liquidity") or {}).get("usd", 0) or 0)), reverse=True)[0]
@@ -1207,7 +1217,7 @@ class GrokJevEngine:
 
         # 2. Проверка рассинхрона цен между КРУПНЫМИ AMM-пулами (Raydium / Meteora / Orca):
         # ВАЖНО: исключаем мертвый пул bonding curve pump.fun, у которого цена застыла!
-        _amm_check = [p for p in sol_pairs if p.get("dexId") not in ("pump", "pumpfun")]
+        _amm_check = [p for p in sol_pairs if str(p.get("dexId") or "").lower() not in ("pump", "pumpfun", "meteoradbc")]
         if _amm_check and len(_amm_check) >= 2:
             _top_l = float(((best_pair.get("liquidity") or {}).get("usd", 0) or 0))
             if _top_l >= 5000.0:

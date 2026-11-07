@@ -582,6 +582,53 @@ class Analyzer:
         tokens = []
         from http_client import fetch_json
         if True:
+            # 0. Прямой радар активных DEX-пулов Solana (PumpSwap / Meteora / Bonk выпускники, без ожидания платных бустов!)
+            try:
+                import asyncio as _aio_lt
+                _ds_search_urls = (
+                    "https://api.dexscreener.com/latest/dex/search?q=pumpswap",
+                    "https://api.dexscreener.com/latest/dex/search?q=SOL%20pump",
+                    "https://api.dexscreener.com/latest/dex/search?q=meteora%20SOL",
+                    "https://api.dexscreener.com/latest/dex/search?q=bonk%20SOL",
+                )
+                _ds_sr = await _aio_lt.gather(
+                    *[fetch_json(u, timeout=6, retries=0) for u in _ds_search_urls],
+                    return_exceptions=True,
+                )
+                _allow_raw_lt = bool(getattr(config, "ALLOW_UNGRADUATED_PUMPFUN", False))
+                _by_mint_lt = {}
+                for _res_lt in _ds_sr:
+                    if not isinstance(_res_lt, tuple) or len(_res_lt) != 2:
+                        continue
+                    _st_lt, _d_lt = _res_lt
+                    if _st_lt != 200 or not isinstance(_d_lt, dict):
+                        continue
+                    for _p_lt in (_d_lt.get("pairs") or []):
+                        if not isinstance(_p_lt, dict) or str(_p_lt.get("chainId") or "").lower() != "solana":
+                            continue
+                        _dex_lt = str(_p_lt.get("dexId") or "").lower()
+                        if not _allow_raw_lt and _dex_lt in ("pump", "pumpfun", "moonshot", "meteoradbc"):
+                            continue
+                        _liq_lt = float((_p_lt.get("liquidity") or {}).get("usd", 0) or 0)
+                        _vol5_lt = float((_p_lt.get("volume") or {}).get("m5", 0) or 0)
+                        _m5_lt = float((_p_lt.get("priceChange") or {}).get("m5", 0) or 0)
+                        if _liq_lt < 7500.0 or _vol5_lt < 2000.0 or _m5_lt < 1.8:
+                            continue
+                        _addr_lt = str((_p_lt.get("baseToken") or {}).get("address") or "").strip()
+                        if _addr_lt and not _addr_lt.startswith("0x") and 32 <= len(_addr_lt) <= 44:
+                            tokens.append({"tokenAddress": _addr_lt, "chainId": "solana"})
+                            _by_mint_lt.setdefault(_addr_lt, []).append(_p_lt)
+                if _by_mint_lt:
+                    if not hasattr(self, "_prefetch_cache"):
+                        self._prefetch_cache = {}
+                    _ts_lt = time.time()
+                    for _m_lt, _plist_lt in _by_mint_lt.items():
+                        _best_lt = self._best_solana_pair(_m_lt, _plist_lt)
+                        if _best_lt:
+                            self._prefetch_cache[_m_lt] = (_ts_lt, _best_lt)
+            except Exception as e:
+                print(f"Dexscreener active search radar error: {e}")
+
             # 1. Сканируем САМЫЕ СВЕЖИЕ бусты (token-boosts/latest/v1) — ловит новые ⚡-бусты сразу
             try:
                 status, data = await fetch_json("https://api.dexscreener.com/token-boosts/latest/v1", timeout=8, retries=1)
@@ -664,7 +711,7 @@ class Analyzer:
 
         # 1. Если у токена уже есть AMM-пулы (pumpswap/raydium/meteora/orca), он УЖЕ мигрировал с кривой pump.fun.
         # Ни при каких условиях не возвращаемся к замороженному мёртвому пулу pumpfun ($43k FDV, кейс DUMB -99%).
-        amm_pairs = [p for p in sol_pairs if p.get("dexId") not in ("pump", "pumpfun")]
+        amm_pairs = [p for p in sol_pairs if str(p.get("dexId") or "").lower() not in ("pump", "pumpfun", "meteoradbc")]
         real_pairs = [p for p in amm_pairs if float(((p.get("liquidity") or {}).get("usd", 0) or 0)) >= 500]
         if real_pairs:
             best_pair = sorted(real_pairs, key=lambda p: float(((p.get("liquidity") or {}).get("usd", 0) or 0)), reverse=True)[0]
@@ -691,7 +738,7 @@ class Analyzer:
 
         # Проверка рассинхрона цен между КРУПНЫМИ AMM пулами (Raydium / Meteora / Orca):
         # ВАЖНО: исключаем заброшенный пул bonding curve pump.fun, у которого цена застыла на миграции!
-        _amm_pools = [p for p in sol_pairs if p.get("dexId") not in ("pump", "pumpfun")]
+        _amm_pools = [p for p in sol_pairs if str(p.get("dexId") or "").lower() not in ("pump", "pumpfun", "meteoradbc")]
         if _amm_pools and len(_amm_pools) >= 2:
             _top_liq = float(((best_pair.get("liquidity") or {}).get("usd", 0) or 0))
             if _top_liq >= 5000.0:
@@ -827,34 +874,55 @@ class Analyzer:
         return got
 
     async def fetch_token_data(self, mint: str) -> dict:
+        _is_grad = False
+        try:
+            from birth_tracker import birth_tracker as _bt_g
+            _is_grad = _bt_g.is_graduated(mint)
+        except Exception:
+            pass
+
         # 1. Свежий пакетный кэш (prefetch_token_data) — мгновенно из памяти без сети
         _hit = getattr(self, "_prefetch_cache", {}).get(mint)
         if _hit and time.time() - _hit[0] < float(getattr(config, "PREFETCH_TTL_SEC", 60)):
             if not _hit[1]:
-                return {}
-            return dict(_hit[1])
+                if not _is_grad:
+                    return {}
+            else:
+                _hit_dex = str(_hit[1].get("dexId") or "").lower()
+                if not (_is_grad and _hit_dex in ("pump", "pumpfun", "meteoradbc")):
+                    return dict(_hit[1])
+
         url = f"https://api.dexscreener.com/latest/dex/tokens/{mint}"
         from http_client import fetch_json
+        best_pair = None
         try:
             status, data = await fetch_json(url, timeout=8, retries=1)
             if status == 200 and data:
                 best_pair = self._best_solana_pair(mint, data.get("pairs") or [])
                 if best_pair:
-                    return best_pair
+                    _bp_dex = str(best_pair.get("dexId") or "").lower()
+                    if not (_is_grad and _bp_dex in ("pump", "pumpfun", "meteoradbc")):
+                        return best_pair
             # Если торговля сырыми кривыми Pump.fun выключена и минт ещё НЕ мигрировал,
             # НЕ сжигаем лимит GeckoTerminal (24 RPM) на неиндексированные кёрвы (иначе падает check_1m_candles с 429)!
             if mint.endswith("pump") and not getattr(config, "ALLOW_UNGRADUATED_PUMPFUN", False):
-                _is_grad = False
-                try:
-                    from birth_tracker import birth_tracker as _bt_g
-                    _is_grad = mint in getattr(_bt_g, "_graduated", {})
-                except Exception:
-                    pass
                 if not _is_grad:
-                    return {}
-            return await self.fetch_token_data_gecko(mint)
+                    return best_pair or {}
+            # Для свежих миграций (subscribeMigration), где DS ещё запаздывает, сначала берём быстрый Jupiter v2 (0 лимитов GT)!
+            try:
+                import market_data as _md_fb
+                _jup_pair = await _md_fb._jup_token_data(mint)
+                if _jup_pair and float(_jup_pair.get("priceUsd", 0) or 0) > 0:
+                    _jp_dex = str(_jup_pair.get("dexId") or "").lower()
+                    if _jp_dex not in ("pump", "pumpfun", "meteoradbc") or getattr(config, "ALLOW_UNGRADUATED_PUMPFUN", False):
+                        return _jup_pair
+            except Exception:
+                pass
+            gt_pair = await self.fetch_token_data_gecko(mint)
+            return gt_pair or best_pair or {}
         except Exception:
-            return await self.fetch_token_data_gecko(mint)
+            gt_pair = await self.fetch_token_data_gecko(mint)
+            return gt_pair or best_pair or {}
 
     async def fetch_token_data_gecko(self, mint: str) -> dict:
         import market_data
@@ -882,10 +950,7 @@ class Analyzer:
             tx = a.get("transactions") or {}
             vu = a.get("volume_usd") or {}
             created = a.get("pool_created_at")
-            created_ms = 0
-            if created:
-                from datetime import datetime
-                created_ms = int(datetime.fromisoformat(created.replace("Z", "+00:00")).timestamp() * 1000)
+            created_ms = market_data._parse_ms(created) if created else 0
             symbol = (a.get("name") or "UNKNOWN").split("/")[0].strip()
 
             def _tx(key):
@@ -1481,7 +1546,7 @@ class Analyzer:
             else:
                 _age_min_pre = 999.0
         _dex_pre_early = str(pair_data.get("dexId", "")).lower()
-        if _dex_pre_early in ("pump", "pumpfun", "moonshot") or mint.endswith("moon"):
+        if _dex_pre_early in ("pump", "pumpfun", "moonshot", "meteoradbc") or mint.endswith("moon"):
             if not getattr(config, "ALLOW_UNGRADUATED_PUMPFUN", False):
                 return self._deny(
                     mint,
@@ -1520,27 +1585,35 @@ class Analyzer:
             print(f"⏳ [ENTRY] {mint[:8]}: возраст {_age_min_pre:.1f}м < {_sol_min_age}м — выдерживаем карантин.")
             return None
 
-        # 1. Защита от старых увядающих зомби (> 360 мин без объема)
+        # 1. Защита от старых увядающих зомби (> 6ч без активного пробоя ликвидного пула и все > 24ч)
         _max_age_min = float(getattr(config, "SOLANA_MAX_AGE_MIN", 360.0))
-        if _age_min_pre > _max_age_min and _vm5_pre < 10000.0:
+        _is_active_breakout_pool = (
+            _age_min_pre <= 1440.0
+            and _raw_liq_age >= 25000.0
+            and _vm5_pre >= 6000.0
+            and _m5 >= 5.0
+            and _b5_pre >= _s5_pre * 1.20
+        )
+        if _age_min_pre > _max_age_min and not _is_active_breakout_pool:
             return self._deny(
                 mint,
                 f"zombie-old-token {_age_min_pre:.0f}m",
-                f"🚫 [ZOMBIE-AGE] {symbol} ({mint[:8]}): возраст {_age_min_pre/60:.1f}ч > {_max_age_min/60:.1f}ч без объема.",
+                f"🚫 [ZOMBIE-AGE] {symbol} ({mint[:8]}): возраст {_age_min_pre/60:.1f}ч > {_max_age_min/60:.1f}ч без прорывного объема.",
             )
 
-        # 2. Защита от фейковых bump-ботов (не блокируем глубокие пулы мигрировавших pump/bonk/BAGS с реальным потоком покупателей: VETO $74k liq, CAT $48k liq)
+        # 2. Защита от фейковых bump-ботов (не блокируем живые пулы выпускников PumpSwap / pump / bonk / BAGS с перевесом покупателей: Laura $25k liq +26%, VETO $74k liq)
         _info_pre = pair_data.get("info") or {}
         _has_soc_pre = bool((_info_pre.get("socials") or []) or (_info_pre.get("websites") or []))
         _raw_liq_chk = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
-        _is_burned_launchpad = mint.endswith(("pump", "bonk", "BAGS"))
+        _is_burned_launchpad = mint.endswith(("pump", "bonk", "BAGS")) or _dex_pre_early == "pumpswap"
         _tot_tx5_pre = _b5_pre + _s5_pre
         _avg_tx_pre = (_vm5_pre / _tot_tx5_pre) if _tot_tx5_pre > 0 else 0.0
         _is_deep_launchpad_runner = (
             _is_burned_launchpad
-            and _raw_liq_chk >= 20000.0
-            and _vm5_pre >= 8000.0
-            and _b5_pre >= _s5_pre * 1.18
+            and _raw_liq_chk >= 18000.0
+            and _vm5_pre >= 3200.0
+            and _m5 >= 5.0
+            and _b5_pre >= _s5_pre * 1.20
         )
         if _tot_tx5_pre >= 200 and _avg_tx_pre < 12.0 and not _has_soc_pre and not _is_deep_launchpad_runner:
             return self._deny(
@@ -1597,8 +1670,14 @@ class Analyzer:
                 f"🚫 [M1-FILTER] {symbol} ({mint[:8]}): 1м свеча {_m1:+.1f}% вне коридора [{_min_m1_floor:+.1f}%, +{_max_m1_cfg:.0f}%].",
             )
 
-        # 4. Anti-FOMO: Защита от перегретых вершин
-        _max_entry_h1 = float(getattr(config, "MAX_ENTRY_H1_PCT", 360.0))
+        # 4. Anti-FOMO: Защита от перегретых вершин (для свежих выпускников <=90м и активных лаунчпад-ракет с потоком покупателей допускаем h1 до +2500%, т.к. h1 включает рост на кёрве $5k->$69k!)
+        _base_max_entry_h1 = float(getattr(config, "MAX_ENTRY_H1_PCT", 360.0))
+        _is_active_fresh_rocket = (
+            (_age_min_pre <= 90.0 or _is_burned_launchpad)
+            and _vm5_pre >= 5000.0
+            and _b5_pre >= _s5_pre * 1.15
+        )
+        _max_entry_h1 = 2500.0 if _is_active_fresh_rocket else _base_max_entry_h1
         _max_entry_m5 = float(getattr(config, "MAX_ENTRY_M5_PCT", 110.0))
         if _h1 > _max_entry_h1 and _age_min_pre >= 12.0:
             return self._deny(
@@ -1615,11 +1694,13 @@ class Analyzer:
                     f"🚫 [FOMO-VERTICAL] {symbol} ({mint[:8]}): 5м свеча +{_m5:+.1f}% > +{_max_entry_m5:.0f}% без прорывного объема — перегретая свеча.",
                 )
 
-        # 4.9. Wash-Trading Spike Guard: НЕ баним живые ракеты (CHIMPS 1.5x, CALLCAT 2.2x, VADER 2.1x), режем реальный симметричный wash-дамп!
+        # 4.9. Wash-Trading Spike Guard: НЕ баним живые ракеты (CHIMPS 1.5x, CALLCAT 2.2x, duge $158k liq 3.82x), режем реальный симметричный wash-дамп!
         _txns_tot_pre = _b5_pre + _s5_pre
         _avg_tx_pre = (_vm5_pre / max(1, _txns_tot_pre)) if _txns_tot_pre > 0 else 0.0
         if _is_burned_launchpad and _raw_liq_chk >= 12000.0:
             _max_vl_allowed = 6.50 if (_b5_pre >= _s5_pre * 1.18) else 3.20
+        elif _raw_liq_chk >= 30000.0 and _b5_pre >= _s5_pre * 1.25 and _avg_tx_pre >= 35.0:
+            _max_vl_allowed = 6.00
         elif _b5_pre >= _s5_pre * 1.22 and _avg_tx_pre >= 20.0 and _raw_liq_chk >= 15000.0:
             _max_vl_allowed = 3.80
         else:
@@ -1755,6 +1836,8 @@ class Analyzer:
             # Каноничный pump-флаг ставится ТОЛЬКО для монет, чей адрес оканчивается на 'pump'
             # (наличие пула на PumpSwap НЕ делает кастомный скам-токен безопасным pump.fun токеном!)
             _is_pump_flag = 1 if mint.endswith("pump") else 0
+            _cur_tok_top10 = 0.0
+            _cur_tok_dev = 0.0
             try:
                 import goplus as _gp_rc
                 _rc_st, rc_data = await _gp_rc.fetch_rugcheck_report_cached(mint, ttl=120.0, timeout=7)
@@ -1890,6 +1973,8 @@ class Analyzer:
                         if count >= 4 and most_common_pct >= 2.5 and (most_common_pct * count) >= 12.0:
                             return self._deny(mint, "jito-bundle-sybil", f"🚫 [АНТИСКАМ] Jito-бандл ({count} кошельков по ~{most_common_pct:.1f}%) у {mint[:8]} → Блок.")
                     top_10_sum_pct = sum([x[1] for x in top_10])
+                    _cur_tok_top10 = top_10_sum_pct
+                    _cur_tok_dev = dev_holding_pct
                     self._last_top10 = top_10_sum_pct
                     self._last_dev = dev_holding_pct
 
@@ -1958,12 +2043,12 @@ class Analyzer:
             if not await self.verify_1m_candles_not_dumping(mint, pair_data, "solana"):
                 return False
 
-            # 5. Stage-2 ML пересчёт с реальными ончейн-данными холдеров этого конкретного токена
-            if getattr(self, "_last_top10", 0.0) > 0 or getattr(self, "_last_dev", 0.0) > 0:
+            # 5. Stage-2 ML пересчёт с реальными ончейн-данными холдеров этого конкретного токена (локальные переменные защищают от гонок ScanWindow!)
+            if _cur_tok_top10 > 0 or _cur_tok_dev > 0:
                 _real_holders = {
-                    "top1_pct": max(float(getattr(self, "_last_dev", 0.0) or 0.0), float(getattr(self, "_last_top10", 20.0) or 20.0) / 5.0),
-                    "top10_pct": float(getattr(self, "_last_top10", 20.0) or 20.0),
-                    "dev_pct": float(getattr(self, "_last_dev", 0.0) or 0.0),
+                    "top1_pct": max(float(_cur_tok_dev or 0.0), float(_cur_tok_top10 or 20.0) / 5.0),
+                    "top10_pct": float(_cur_tok_top10 or 20.0),
+                    "dev_pct": float(_cur_tok_dev or 0.0),
                 }
                 conf = self.score_rocket_xgb(mint, pair_data, holders_info=_real_holders)
                 self.last_score = conf

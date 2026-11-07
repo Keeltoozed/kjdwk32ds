@@ -12,6 +12,7 @@ DexScreener остаётся fallback'ом внутри get_token_data (fail-ope
   _source, _socials_unknown (True, если соцсети проверить негде).
 """
 import asyncio
+import re
 import time
 from datetime import datetime, timezone
 
@@ -58,7 +59,7 @@ async def _gt_get(path: str, retries: int = 0, timeout: int = 6):
         return {}  # Circuit breaker open: fail-fast
 
     async with _get_lock():
-        wait_s = 2.8 - (time.monotonic() - _last_call)
+        wait_s = 3.0 - (time.monotonic() - _last_call)
         if wait_s > 0:
             await asyncio.sleep(wait_s)
         _last_call = time.monotonic()
@@ -104,7 +105,12 @@ def _parse_ms(ts) -> int:
     try:
         if not ts:
             return 0
-        dt = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+        s = str(ts).strip().replace("Z", "+00:00")
+        try:
+            dt = datetime.fromisoformat(s)
+        except ValueError:
+            s_clean = re.sub(r"\.\d+", "", s)
+            dt = datetime.fromisoformat(s_clean)
         return int(dt.timestamp() * 1000)
     except Exception:
         return 0
@@ -113,11 +119,19 @@ def _parse_ms(ts) -> int:
 def _dex_id_from_pool(item: dict) -> str:
     try:
         dex = item.get("relationships", {}).get("dex", {}).get("data", {}).get("id", "")
-        dex = str(dex).lower()
-        if "pump" in dex:
+        dex = str(dex).lower().strip()
+        if "pumpswap" in dex or "pump-swap" in dex or "pump_swap" in dex:
+            return "pumpswap"
+        if dex in ("pump", "pump-fun", "pumpfun", "pump.fun"):
             return "pump"
+        if "meteora-dbc" in dex or "meteoradbc" in dex or "dynamic-bonding" in dex:
+            return "meteoradbc"
+        if "meteora" in dex:
+            return "meteora"
         if "raydium" in dex:
             return "raydium"
+        if "orca" in dex or "whirlpool" in dex:
+            return "orca"
         return dex or "unknown"
     except Exception:
         return "unknown"
@@ -180,15 +194,22 @@ def _normalize_pool(mint: str, name: str, symbol: str, item: dict, token_attrs: 
 
 
 async def _jup_token_data(mint: str) -> dict:
-    """Токен-профиль через Jupiter Token API.
-    Старые хосты tokens.jup.ag sunset (Jupiter их гасит) — идём через
-    api.jup.ag -> lite-api.jup.ag. Даёт соцсети, холдеры, аудит, возраст.
+    """Токен-профиль через Jupiter Tokens API v2 (/tokens/v2/search?query=mint).
+    Старый /tokens/v1/token/{mint} отключён (404) — используем v2 на
+    api.jup.ag (с x-api-key) -> lite-api.jup.ag. Даёт соцсети, холдеры, аудит, возраст миграции и m5/h1 статистику.
     Нормализация — в форму DexScreener-пары. {} если токен не проиндексирован."""
     from http_client import fetch_json
+    import config as _jc
+    jup_key = getattr(_jc, "JUP_API_KEY", "") or ""
+    jup_hdrs = {"x-api-key": jup_key} if jup_key else {}
     data = None
-    for base in ("https://api.jup.ag", "https://lite-api.jup.ag"):
-        status, body = await fetch_json(f"{base}/tokens/v1/token/{mint}",
-                                        timeout=10, retries=1)
+    for base, hdrs in (("https://api.jup.ag", jup_hdrs), ("https://lite-api.jup.ag", {})):
+        status, body = await fetch_json(
+            f"{base}/tokens/v2/search?query={mint}",
+            headers=hdrs,
+            timeout=8,
+            retries=0,
+        )
         if status == 200 and body:
             data = [body] if isinstance(body, dict) else body
             break
@@ -202,6 +223,7 @@ async def _jup_token_data(mint: str) -> dict:
         t = exact[0]
         s5 = t.get("stats5m", {}) or {}
         s1 = t.get("stats1h", {}) or {}
+        s6 = t.get("stats6h", {}) or {}
         s24 = t.get("stats24h", {}) or {}
         try:
             price = float(t.get("usdPrice", 0) or 0)
@@ -221,7 +243,7 @@ async def _jup_token_data(mint: str) -> dict:
             mcap = float(t.get("mcap", 0) or fdv)
         except Exception:
             mcap = fdv
-        graduated = bool(t.get("graduatedAt"))
+        graduated = bool(t.get("graduatedAt") or t.get("graduatedPool") or (not mint.endswith("pump") and liq >= 5000.0))
         socials, websites = [], []
         if t.get("twitter"):
             socials.append({"type": "twitter", "url": t["twitter"]})
@@ -241,12 +263,18 @@ async def _jup_token_data(mint: str) -> dict:
             bv24 = float(s24.get("buyVolume", 0) or 0) + float(s24.get("sellVolume", 0) or 0)
         except Exception:
             bv24 = 0.0
+        first_pool_obj = t.get("firstPool") if isinstance(t.get("firstPool"), dict) else {}
+        grad_pool_raw = t.get("graduatedPool")
+        pair_addr_jup = (
+            grad_pool_raw.get("id", "") if isinstance(grad_pool_raw, dict)
+            else (str(grad_pool_raw) if grad_pool_raw else str(first_pool_obj.get("id", "") or ""))
+        )
+        created_ts_raw = t.get("graduatedAt") or first_pool_obj.get("createdAt") or t.get("createdAt")
+        dex_out = ("pumpswap" if mint.endswith("pump") else "raydium") if graduated else "pump"
         return {
             "chainId": "solana",
-            "dexId": "raydium" if graduated else "pump",
-            "pairAddress": (t.get("graduatedPool") or t.get("firstPool") or {}).get("id", "")
-                          if isinstance(t.get("graduatedPool") or t.get("firstPool"), dict)
-                          else (t.get("graduatedPool") or t.get("firstPool") or ""),
+            "dexId": dex_out,
+            "pairAddress": pair_addr_jup,
             "baseToken": {"address": mint, "name": t.get("name", ""),
                           "symbol": t.get("symbol", "")},
             "priceUsd": str(price),
@@ -258,11 +286,11 @@ async def _jup_token_data(mint: str) -> dict:
                              "sells": int(s24.get("numSells", 0) or 0)}},
             "priceChange": {"m5": float(s5.get("priceChange", 0) or 0),
                             "h1": float(s1.get("priceChange", 0) or 0),
-                            "h6": 0.0,
+                            "h6": float(s6.get("priceChange", 0) or 0),
                             "h24": float(s24.get("priceChange", 0) or 0)},
             "fdv": fdv,
             "marketCap": mcap,
-            "pairCreatedAt": _parse_ms(t.get("createdAt")),
+            "pairCreatedAt": _parse_ms(created_ts_raw),
             "info": {"socials": socials, "websites": websites},
             "holderCount": int(t.get("holderCount", 0) or 0),
             "organicScore": t.get("organicScore"),
@@ -276,42 +304,55 @@ async def _jup_token_data(mint: str) -> dict:
 
 
 async def get_token_data(mint: str, max_cache_age: float = TD_TTL) -> dict:
-    """Jupiter Token API -> GeckoTerminal -> DexScreener fallback."""
+    """DexScreener -> Jupiter Tokens API v2 -> GeckoTerminal fallback."""
     import time as _t
     now = _t.monotonic()
+    _is_grad_md = False
+    try:
+        from birth_tracker import birth_tracker as _bt_md
+        _is_grad_md = _bt_md.is_graduated(mint)
+    except Exception:
+        pass
     hit = _TD_CACHE.get(mint)
     if hit and (now - hit[0]) < max_cache_age:
-        return hit[1]
+        cached_d = hit[1] or {}
+        if not (_is_grad_md and str(cached_d.get("dexId", "")).lower() in ("pump", "pumpfun")):
+            return cached_d
     # 1. DexScreener первым: 300 зап/мин, самый надёжный, даёт m5/h1/h24 + соцсети.
-    # (Jupiter Token API гаснет - старые хосты sunset, поэтому он теперь вторым.)
     ds = await _ds_token_data(mint)
     if ds and float(ds.get("priceUsd", 0) or 0) > 0:
-        _TD_CACHE[mint] = (now, ds)
-        if len(_TD_CACHE) > 2000:
-            _TD_CACHE.clear()
-        return ds
-    # 2. Jupiter: соцсети, холдеры, аудит, возраст, ликвидность
+        # Если токен ТОЛЬКО ЧТО мигрировал (subscribeMigration), а DS ещё отдаёт старый кёрв "pump",
+        # проваливаемся в Jupiter v2 / GeckoTerminal за живым пулом PumpSwap!
+        if not (_is_grad_md and str(ds.get("dexId", "")).lower() in ("pump", "pumpfun")):
+            _TD_CACHE[mint] = (now, ds)
+            if len(_TD_CACHE) > 2000:
+                _TD_CACHE.clear()
+            return ds
+    # 2. Jupiter v2: мгновенно видит graduatedPool, ликвидность, соцсети, холдеры и m5/h1 статистику
     jup = await _jup_token_data(mint)
-    if jup:
-        # 2. Добираем m5-окно (txns/volume) из GeckoTerminal — нужно для
-        # VIP-фильтра и XGBoost-velocity. Не критично: при провале нули.
-        try:
-            g = await _gt_get(f"/networks/solana/tokens/{mint}?include=top_pools")
-            pools = [x for x in g.get("included", []) if x.get("type") == "pool" and _base_mint(x) == mint]
-            if pools:
-                best = max(pools, key=lambda x: float(
-                    x.get("attributes", {}).get("reserve_in_usd", 0) or 0))
-                pa = best.get("attributes", {})
-                vol = pa.get("volume_usd", {}) or {}
-                tx = pa.get("transactions", {}) or {}
-                chg = pa.get("price_change_percentage", {}) or {}
-                m5 = tx.get("m5", {}) or {}
-                jup["volume"]["m5"] = float(vol.get("m5", 0) or 0)
-                jup["txns"]["m5"] = {"buys": int(m5.get("buys", 0) or 0),
-                                     "sells": int(m5.get("sells", 0) or 0)}
-                jup["priceChange"]["m5"] = float(chg.get("m5", 0) or 0)
-        except Exception:
-            pass
+    if jup and not (_is_grad_md and str(jup.get("dexId", "")).lower() in ("pump", "pumpfun")):
+        # Добираем GT только если у Jupiter пустое окно m5
+        if float((jup.get("volume") or {}).get("m5", 0) or 0) <= 0:
+            try:
+                g = await _gt_get(f"/networks/solana/tokens/{mint}?include=top_pools")
+                pools = [x for x in g.get("included", []) if x.get("type") == "pool" and _base_mint(x) == mint]
+                if pools:
+                    best = max(pools, key=lambda x: float(
+                        x.get("attributes", {}).get("reserve_in_usd", 0) or 0))
+                    pa = best.get("attributes", {})
+                    vol = pa.get("volume_usd", {}) or {}
+                    tx = pa.get("transactions", {}) or {}
+                    chg = pa.get("price_change_percentage", {}) or {}
+                    m5 = tx.get("m5", {}) or {}
+                    jup["volume"]["m5"] = float(vol.get("m5", 0) or 0)
+                    jup["txns"]["m5"] = {"buys": int(m5.get("buys", 0) or 0),
+                                         "sells": int(m5.get("sells", 0) or 0)}
+                    jup["priceChange"]["m5"] = float(chg.get("m5", 0) or 0)
+                    gt_dex = _dex_id_from_pool(best)
+                    if gt_dex not in ("unknown", "pump"):
+                        jup["dexId"] = gt_dex
+            except Exception:
+                pass
         _TD_CACHE[mint] = (now, jup)
         if len(_TD_CACHE) > 2000:
             _TD_CACHE.clear()
@@ -319,12 +360,6 @@ async def get_token_data(mint: str, max_cache_age: float = TD_TTL) -> dict:
     # 3. GeckoTerminal целиком (только если это не сырая неиндексированная кривая pump.fun)
     import config as _md_cfg
     if mint.endswith("pump") and not getattr(_md_cfg, "ALLOW_UNGRADUATED_PUMPFUN", False):
-        _is_grad_md = False
-        try:
-            from birth_tracker import birth_tracker as _bt_md
-            _is_grad_md = mint in getattr(_bt_md, "_graduated", {})
-        except Exception:
-            pass
         if not _is_grad_md:
             return ds or {}
     d = await _gt_get(f"/networks/solana/tokens/{mint}?include=top_pools")
@@ -686,23 +721,42 @@ async def get_trending() -> list:
     out, seen = [], set()
     now_mono = time.monotonic()
 
+    import config as _tr_cfg
+    _allow_raw_curve = bool(getattr(_tr_cfg, "ALLOW_UNGRADUATED_PUMPFUN", False))
+
     def add(item):
         if not item or not isinstance(item, dict):
             return
         mint = _base_mint(item)
         if not mint or mint in seen or mint.startswith("0x") or len(mint) < 32 or len(mint) > 44:
             return
+        dex_id = _dex_id_from_pool(item)
+        if not _allow_raw_curve and dex_id in ("pump", "pumpfun", "meteoradbc"):
+            return
         attrs = item.get("attributes") or {}
-        # Защита от старых трупов: если пулу > 24ч и < 5 сделок в m5, либо старше 48ч — не засоряем очередь!
+        try:
+            liq_usd = float(attrs.get("reserve_in_usd", 0) or 0)
+        except Exception:
+            liq_usd = 0.0
+        if dex_id not in ("pump", "pumpfun") and liq_usd < 2500.0:
+            return
+        vol = attrs.get("volume_usd") or {}
+        try:
+            vol5_usd = float(vol.get("m5", 0) or 0)
+        except Exception:
+            vol5_usd = 0.0
+        # Защита от старых трупов и мамонтов прямо на входе дискавери:
         created_ms = _parse_ms(attrs.get("pool_created_at"))
         if created_ms:
             age_h = (time.time() * 1000 - created_ms) / 3600000.0
             tx = attrs.get("transactions") or {}
             m5_tx = int((tx.get("m5") or {}).get("buys", 0) or 0) + int((tx.get("m5") or {}).get("sells", 0) or 0)
-            if age_h > 24.0 and m5_tx < 5:
-                return  # Мертвый старый пул
+            if age_h > 6.0 and vol5_usd < 6000.0:
+                return
+            if age_h > 24.0 and (vol5_usd < 12000.0 or m5_tx < 20):
+                return
             if age_h > 48.0:
-                return  # Древний токен старше 48 часов
+                return
         seen.add(mint)
         out.append({"tokenAddress": mint, "chainId": "solana"})
         # Прогрев _TD_CACHE прямо из ответа списка пулов (0 лишних сетевых вызовов!)
@@ -717,15 +771,13 @@ async def get_trending() -> list:
             except Exception:
                 pass
 
-    # 6 высокоприоритетных страниц (~14с с пейсером 2.4с вместо 48с и без 429):
-    # Основной широкий охват (700+ токенов за 0.8с) даёт параллельный Jupiter API v2 в jup_discovery!
+    # 4 страницы живых 5м трендов GT (~9с с пейсером 3.0с — гарантированно без HTTP 429!):
+    # Охватывает ТОП-80 самых горячих 5м пулов Solana (PumpSwap / Meteora / Raydium).
     gt_pages = (
         "/networks/solana/trending_pools?duration=5m&page=1",
         "/networks/solana/trending_pools?duration=5m&page=2",
-        "/networks/solana/trending_pools?duration=1h&page=1",
-        "/networks/solana/new_pools?page=1",
-        "/networks/solana/new_pools?page=2",
-        "/networks/solana/dexes/raydium/pools?page=1",
+        "/networks/solana/trending_pools?duration=5m&page=3",
+        "/networks/solana/trending_pools?duration=5m&page=4",
     )
     for path in gt_pages:
         d = await _gt_get(path, retries=0, timeout=6)

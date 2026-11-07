@@ -765,6 +765,11 @@ async def scanner_loop(analyzer, tracker):
                             processed_mints[mint] = time.time() + 86400
                             continue
 
+                        _c_dex = str(_c_pre.get("dexId", "")).lower()
+                        if not getattr(config, "ALLOW_UNGRADUATED_PUMPFUN", False) and _c_dex in ("pump", "pumpfun", "moonshot", "meteoradbc") and mint not in _graduated_set:
+                            processed_mints[mint] = time.time() + 60
+                            continue
+
                         _c_at = _c_pre.get("pairCreatedAt") or 0
                         _c_age_m = (time.time() * 1000 - _c_at) / 60000.0 if _c_at else 999.0
                         _c_pc = _c_pre.get("priceChange") or {}
@@ -772,10 +777,14 @@ async def scanner_loop(analyzer, tracker):
                         _c_tx = (_c_pre.get("txns") or {}).get("m5", {}) or {}
                         _c_trades = int(_c_tx.get("buys", 0) or 0) + int(_c_tx.get("sells", 0) or 0)
                         _c_vol5 = float((_c_pre.get("volume") or {}).get("m5", 0) or 0)
+                        _c_liq = float((_c_pre.get("liquidity") or {}).get("usd", 0) or 0)
 
-                        # Древний токен старше 24ч без пробоя: скип на 24 часа
-                        if _c_age_m > 1440.0 and _c_m5 < 12.0:
+                        # Древний токен старше 24ч или >6ч без ликвидного пробоя: скип до входа в окно ТОП-60!
+                        if _c_age_m > 1440.0 and mint not in _graduated_set:
                             processed_mints[mint] = time.time() + 86400
+                            continue
+                        if _c_age_m > 360.0 and (_c_vol5 < 6000.0 or _c_m5 < 5.0 or _c_liq < 25000.0) and mint not in _graduated_set:
+                            processed_mints[mint] = time.time() + 3600
                             continue
 
                         # Старый токен (>4ч) без импульса (<6%): скип на 1 час
@@ -912,12 +921,18 @@ async def scanner_loop(analyzer, tracker):
                             continue
                         if is_good is False:
                             _sig = str(analyzer.get_signal(mint) or "")
-                            if "откат" in _sig or "вертикаль" in _sig or mint in _graduated_set:
-                                processed_mints[mint] = time.time() - _cd + 35  # Перепроверить через 35с
-                            elif "ungraduated" in _sig or "bonding curve" in _sig or "CURVE" in _sig:
+                            _sig_l = _sig.lower()
+                            if any(k in _sig_l for k in ("rugcheck", "scam", "unlocked-lp", "bundle", "honeypot", "freeze", "mimic", "dead-token", "мёртвый токен", "sybil", "delegation")):
+                                processed_mints[mint] = time.time() + 3600      # Подтверждённый скам/мертвец: бан на 1 час и убираем из очереди миграций
+                                try:
+                                    with birth_tracker.lock:
+                                        birth_tracker.graduated.pop(mint, None)
+                                except Exception:
+                                    pass
+                            elif "откат" in _sig_l or "вертикаль" in _sig_l or mint in _graduated_set:
+                                processed_mints[mint] = time.time() - _cd + 35  # Живой выпускник ждёт отката/импульса: перепроверить через 35с
+                            elif "ungraduated" in _sig_l or "bonding curve" in _sig_l or "curve" in _sig_l:
                                 processed_mints[mint] = time.time() + 60        # Сырая кривая: ждём 60с (при миграции _graduated_set пробьёт сразу)
-                            elif "dead-token" in _sig or "мёртвый токен" in _sig:
-                                processed_mints[mint] = time.time() + 3600      # Мертвый токен: скип на 1 час
                             else:
                                 processed_mints[mint] = time.time()
                         else:
@@ -967,7 +982,7 @@ async def scanner_loop(analyzer, tracker):
                                     print(f"🚫 [SCANNER-PRICE-SPLIT] {actual_symbol} ({mint[:8]}): рассинхрон пулов {_div_r:.1f}x — блок.")
                                     continue
                                 _dex_id = str((pair_data.get("dexId") or "")).lower()
-                                if _dex_id in ("pump", "pumpfun", "moonshot") or mint.endswith("moon"):
+                                if _dex_id in ("pump", "pumpfun", "moonshot", "meteoradbc") or mint.endswith("moon"):
                                     _fdv_m_sc = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
                                     _min_c_sc = float(getattr(config, "MIN_PUMP_CURVE_MCAP_USD", 7500.0))
                                     _max_c_sc = float(getattr(config, "MAX_PUMP_CURVE_MCAP_USD", 42000.0))
@@ -981,7 +996,7 @@ async def scanner_loop(analyzer, tracker):
                                         print(f"🚫 [SCANNER-CURVE-CLIFF] {actual_symbol} ({mint[:8]}): FDV ${_fdv_m_sc:,.0f} > ${_max_c_sc:,.0f} (обрыв перед миграцией) — отмена!")
                                         continue
                                 _min_grad_sc = float(getattr(config, "MIN_GRADUATED_LIQ_USD", 7500.0))
-                                if _dex_id not in ("pump", "pumpfun") and liq_usd < _min_grad_sc:
+                                if _dex_id not in ("pump", "pumpfun", "meteoradbc") and liq_usd < _min_grad_sc:
                                     print(f"🚫 [SCANNER-LOW-LIQ] {actual_symbol} ({mint[:8]}): ликвидность DEX ${liq_usd:,.0f} < ${_min_grad_sc:,.0f} — отмена!")
                                     continue
                                 _pc_live = pair_data.get("priceChange") or {}
@@ -1009,12 +1024,18 @@ async def scanner_loop(analyzer, tracker):
                                 _b5_sc = int((pair_data.get("txns") or {}).get("m5", {}).get("buys", 0) or 0)
                                 _s5_sc = int((pair_data.get("txns") or {}).get("m5", {}).get("sells", 0) or 0)
                                 _is_stealth_sc = (_vol5_live >= 4500.0 and _b5_sc >= 20 and _b5_sc >= _s5_sc * 1.15 and liq_usd >= 12000.0)
-                                _max_h1_live = float(getattr(config, "MAX_ENTRY_H1_PCT", 360.0))
+                                _base_max_h1_live = float(getattr(config, "MAX_ENTRY_H1_PCT", 360.0))
+                                _is_fresh_active_sc = (
+                                    (_age_m <= 90.0 or mint.endswith(("pump", "bonk", "BAGS")) or _dex_id == "pumpswap")
+                                    and _vol5_live >= 5000.0
+                                    and _b5_sc >= _s5_sc * 1.15
+                                )
+                                _max_h1_live = 2500.0 if _is_fresh_active_sc else _base_max_h1_live
                                 if _links_sc == 0 and not _soc_unk_sc and not _is_stealth_sc and (_h1_live > 180.0 or _m5_live > 110.0):
                                     print(f"🚫 [SCANNER-FOMO-NO-SOC] {actual_symbol} ({mint[:8]}): памп (h1 +{_h1_live:.0f}%, m5 +{_m5_live:.0f}%) без соцсетей — ловушка памп-дампа дева, отмена!")
                                     continue
                                 if _h1_live > _max_h1_live:
-                                    if _age_m >= 12.0 or (_vol5_live < 35000.0 and _h1_live > 380.0):
+                                    if _age_m >= 12.0 or (_vol5_live < 35000.0 and _h1_live > _max_h1_live):
                                         print(f"🚫 [SCANNER-LIVE-EXHAUSTED] {actual_symbol} ({mint[:8]}): живой h1 {_h1_live:+.0f}% > +{_max_h1_live:.0f}% — перегретая вершина, отмена!")
                                         continue
                                 # СТАЛО (в main.py строки 506-524):
@@ -1024,8 +1045,15 @@ async def scanner_loop(analyzer, tracker):
 
                                 _max_age_live = float(getattr(config, "SOLANA_MAX_AGE_MIN", 360.0))
                                 _vol5_live = float(((pair_data.get("volume") or {}).get("m5", 0) or 0))
-                                if _age_m > _max_age_live and _vol5_live < 10000.0:
-                                    print(f"🚫 [SCANNER-OLD-ZOMBIE] {actual_symbol} ({mint[:8]}): возраст {_age_m/60:.1f}ч без объема — отмена!")
+                                _is_active_breakout_live = (
+                                    _age_m <= 1440.0
+                                    and liq_usd >= 25000.0
+                                    and _vol5_live >= 6000.0
+                                    and _m5_live >= 5.0
+                                    and _b5_sc >= _s5_sc * 1.20
+                                )
+                                if _age_m > _max_age_live and not _is_active_breakout_live:
+                                    print(f"🚫 [SCANNER-OLD-ZOMBIE] {actual_symbol} ({mint[:8]}): возраст {_age_m/60:.1f}ч без прорывного объема — отмена!")
                                     continue
 
                                 _req_soc_age = float(getattr(config, "REQUIRE_SOCIALS_MIN_AGE_MIN", 8.0))
@@ -1040,17 +1068,18 @@ async def scanner_loop(analyzer, tracker):
                                     else:
                                         print(f"💎 [SCANNER-ORGANIC-STEALTH] {actual_symbol} ({mint[:8]}): 0 соцсетей, но подтвержден органический прорыв — пропуск в анализ.")
 
-                                # Защита от фейковых bump-ботов (не блокируем глубокие пулы мигрировавших pump/bonk/BAGS с живым объемом покупателей, кейсы VETO $74k liq, CAT $48k liq):
+                                # Защита от фейковых bump-ботов (не блокируем живые пулы выпускников PumpSwap / pump / bonk / BAGS с перевесом покупателей):
                                 _tx5_sc = (pair_data.get("txns") or {}).get("m5", {}) or {}
                                 _b5_bump = int(_tx5_sc.get("buys", 0) or 0)
                                 _s5_bump = int(_tx5_sc.get("sells", 0) or 0)
                                 _tot_tx5_sc = _b5_bump + _s5_bump
                                 _avg_tx5_sc = (_vol5_live / _tot_tx5_sc) if _tot_tx5_sc > 0 else 0.0
                                 _is_deep_launchpad_runner = (
-                                    mint.endswith(("pump", "bonk", "BAGS"))
-                                    and liq_usd >= 20000.0
-                                    and _vol5_live >= 8000.0
-                                    and _b5_bump >= _s5_bump * 1.18
+                                    (mint.endswith(("pump", "bonk", "BAGS")) or _dex_id == "pumpswap")
+                                    and liq_usd >= 18000.0
+                                    and _vol5_live >= 3200.0
+                                    and _m5_live >= 5.0
+                                    and _b5_bump >= _s5_bump * 1.20
                                 )
                                 if _tot_tx5_sc >= 200 and _avg_tx5_sc < 12.0 and _links_sc == 0 and not _is_deep_launchpad_runner:
                                     print(f"🚫 [SCANNER-WASH-TRAP] {actual_symbol} ({mint[:8]}): накрутка микро-ботом ({_tot_tx5_sc} txns, avg ${_avg_tx5_sc:.2f} < $12) — отмена!")

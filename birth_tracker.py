@@ -146,6 +146,13 @@ class BirthTracker:
                 meta["init_dev_pct"] = float(current_dev_pct)
             return False, ""
 
+    def is_graduated(self, mint: str) -> bool:
+        """Проверяет, зафиксирована ли миграция токена в очереди graduated или waiting_room."""
+        if not mint:
+            return False
+        with self.lock:
+            return mint in self.graduated or mint in self.waiting_room
+
     def graduated_age(self, mint: str) -> float:
         """Сколько секунд назад зафиксирована миграция (для метрики time_to_index)."""
         with self.lock:
