@@ -70,16 +70,22 @@ async def fetch_jup_tokens() -> list:
     
     trending_url = f"{BASE}/toptrending/5m?limit=100"
     trending_1h_url = f"{BASE}/toptrending/1h?limit=100"
+    trending_24h_url = f"{BASE}/toptrending/24h?limit=100"
     organic_url = f"{BASE}/toporganicscore/5m?limit=100"
+    organic_1h_url = f"{BASE}/toporganicscore/1h?limit=100"
     top_vol_url = f"{BASE}/toptraded/5m?limit=100"
+    top_vol_1h_url = f"{BASE}/toptraded/1h?limit=100"
     recent_url = f"{BASE}/recent"
     
     headers = _headers()
-    (s1, d1), (s1h, d1h), (s_org, d_org), (s3, d3), (s2, d2) = await asyncio.gather(
+    (s1, d1), (s1h, d1h), (s24h, d24h), (s_org, d_org), (s_org1h, d_org1h), (s3, d3), (s3h, d3h), (s2, d2) = await asyncio.gather(
         fetch_json(trending_url, headers=headers, timeout=8),
         fetch_json(trending_1h_url, headers=headers, timeout=8),
+        fetch_json(trending_24h_url, headers=headers, timeout=8),
         fetch_json(organic_url, headers=headers, timeout=8),
+        fetch_json(organic_1h_url, headers=headers, timeout=8),
         fetch_json(top_vol_url, headers=headers, timeout=8),
+        fetch_json(top_vol_1h_url, headers=headers, timeout=8),
         fetch_json(recent_url, headers=headers, timeout=8),
     )
     
@@ -122,12 +128,20 @@ async def fetch_jup_tokens() -> list:
     # 1. Органические 5м-ракеты и топ-тренды 5м/1ч (без древнего мусора)
     if s_org == 200:
         _add_jup_list(d_org, "organic_5m", min_pc5=2.0)
+    if s_org1h == 200:
+        _add_jup_list(d_org1h, "organic_1h", min_pc5=2.0)
     if s1 == 200:
         _add_jup_list(d1, "trending_5m", min_pc5=2.0)
     if s1h == 200:
         _add_jup_list(d1h, "trending_1h", min_pc5=2.5)
+    if s24h == 200:
+        _add_jup_list(d24h, "trending_24h", min_pc5=2.0)
     if s3 == 200:
         _add_jup_list(d3, "traded_5m", min_pc5=2.0)
+    if s3h == 200:
+        _add_jup_list(d3h, "traded_1h", min_pc5=2.0)
+    if s2 == 200:
+        _add_jup_list(d2, "recent", min_pc5=1.5)
 
     # 2. Добор живых трендов и свежих пулов GeckoTerminal из общего кэша market_data (без дублирования запросов и 429)
     try:

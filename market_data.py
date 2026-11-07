@@ -633,7 +633,7 @@ async def get_growth_universe(min_reserve_usd: float = 500000.0, limit: int = 20
     stables = {"EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
                "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB"}
     try:
-        for page in (1, 2):
+        for page in (1, 2, 3, 4, 5):
             d = await _gt_get(f"/networks/solana/dexes/raydium/pools?page={page}")
             for item in (d.get("data") or []):
                 try:
@@ -688,20 +688,35 @@ async def get_trending() -> list:
         seen.add(mint)
         out.append({"tokenAddress": mint, "chainId": "solana"})
 
-    # 1. Сканируем ТОП 5-минутных трендов (duration=5m)
-    d5 = await _gt_get("/networks/solana/trending_pools?duration=5m&page=1", retries=0, timeout=6)
-    for item in (d5.get("data") or []):
-        add(item)
+    # 1. Сканируем ТОП 5-минутных трендов (страницы 1, 2, 3)
+    for page in (1, 2, 3):
+        d5 = await _gt_get(f"/networks/solana/trending_pools?duration=5m&page={page}", retries=0, timeout=6)
+        for item in (d5.get("data") or []):
+            add(item)
 
-    # 2. Свежие пулы (new_pools) — ловит новые Raydium/Meteora/Pump ракеты первыми!
-    d2 = await _gt_get("/networks/solana/new_pools?page=1", retries=0, timeout=6)
-    for item in (d2.get("data") or []):
-        add(item)
+    # 2. ТОП 1-часовых трендов (страницы 1, 2)
+    for page in (1, 2):
+        d1h = await _gt_get(f"/networks/solana/trending_pools?duration=1h&page={page}", retries=0, timeout=6)
+        for item in (d1h.get("data") or []):
+            add(item)
 
-    # 3. Свежие Pump.fun
-    d3 = await _gt_get("/networks/solana/dexes/pump-fun/pools?page=1", retries=0, timeout=6)
-    for item in (d3.get("data") or []):
-        add(item)
+    # 3. Свежие пулы (new_pools) — ловит новые Raydium/Meteora/Pump ракеты первыми! (страницы 1, 2, 3, 4, 5)
+    for page in (1, 2, 3, 4, 5):
+        d2 = await _gt_get(f"/networks/solana/new_pools?page={page}", retries=0, timeout=6)
+        for item in (d2.get("data") or []):
+            add(item)
+
+    # 4. Свежие Pump.fun (страницы 1, 2, 3)
+    for page in (1, 2, 3):
+        d3 = await _gt_get(f"/networks/solana/dexes/pump-fun/pools?page={page}", retries=0, timeout=6)
+        for item in (d3.get("data") or []):
+            add(item)
+
+    # 5. Свежие Raydium (страницы 1, 2, 3)
+    for page in (1, 2, 3):
+        dr = await _gt_get(f"/networks/solana/dexes/raydium/pools?page={page}", retries=0, timeout=6)
+        for item in (dr.get("data") or []):
+            add(item)
 
     # Не кэшируем пустой get_trending на 180с (иначе бот слепнет на 3 минуты при сбое GT)
     if out:
@@ -754,17 +769,15 @@ async def fetch_dexscreener_gainers(timeframe: str = "5m", network: str = "all")
     if hit and (now - hit[0]) < 25.0:
         return hit[1]
 
-    if net == "all":
-        path = f"/networks/trending_pools?duration={tf}&page=1"
-    else:
-        gt_net = {"solana": "solana", "base": "base", "robinhood": "robinhood", "bsc": "bsc", "ethereum": "eth"}.get(net, net)
-        path = f"/networks/{gt_net}/trending_pools?duration={tf}&page=1"
-
-    data = await _gt_get(path, retries=1)
-    if not data or not isinstance(data, dict):
+    pools = []
+    gt_net = {"solana": "solana", "base": "base", "robinhood": "robinhood", "bsc": "bsc", "ethereum": "eth"}.get(net, net)
+    for page in (1, 2, 3):
+        path = f"/networks/trending_pools?duration={tf}&page={page}" if net == "all" else f"/networks/{gt_net}/trending_pools?duration={tf}&page={page}"
+        data = await _gt_get(path, retries=0)
+        if data and isinstance(data, dict):
+            pools.extend(data.get("data") or [])
+    if not pools:
         return hit[1] if hit else []
-
-    pools = data.get("data") or []
     out = []
     rank = 1
     for p in pools:

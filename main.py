@@ -723,7 +723,7 @@ async def scanner_loop(analyzer, tracker):
                 # вместо N одиночных. analyze_token() дальше читает из кэша без сети.
                 try:
                     _pf_list = [m for m in mints_to_scan if m not in tracker.positions
-                                and time.time() - processed_mints.get(m, 0.0) >= 25][:150]
+                                and time.time() - processed_mints.get(m, 0.0) >= 25][:300]
                     _pf_n = await analyzer.prefetch_token_data(_pf_list)
                     if _pf_list:
                         print(f"⚡ Префетч: {_pf_n}/{len(_pf_list)} токенов за {(len(_pf_list) + 14) // 15} запрос(а) DS.")
@@ -814,10 +814,10 @@ async def scanner_loop(analyzer, tracker):
                     if _now_l - processed_mints.get(_m, 0.0) < _cd_l:
                         continue
                     _launch.append(_m)
-                    if len(_launch) >= 60:
+                    if len(_launch) >= 120:
                         break
                 _launch_n = len(_launch)
-                _scan_conc = int(getattr(config, "SCAN_CONCURRENCY", 6))
+                _scan_conc = int(getattr(config, "SCAN_CONCURRENCY", 8))
                 if _launch and _scan_conc > 1:
                     _scan_win = ScanWindow(analyzer, _launch, _scan_conc)
 

@@ -10,11 +10,23 @@ async def fomo_loop(analyzer, tracker):
     ds_urls = [
         "https://api.dexscreener.com/token-profiles/latest/v1",
         "https://api.dexscreener.com/token-boosts/latest/v1",
-        "https://api.dexscreener.com/token-boosts/top/v1"
+        "https://api.dexscreener.com/token-boosts/top/v1",
+        "https://api.dexscreener.com/token-profiles/recent-updates/v1",
+        "https://api.dexscreener.com/community-takeovers/latest/v1"
     ]
     gt_paths = [
-        "/networks/solana/trending_pools?duration=1h",
-        "/networks/solana/trending_pools?duration=5m"
+        "/networks/solana/trending_pools?duration=5m&page=1",
+        "/networks/solana/trending_pools?duration=5m&page=2",
+        "/networks/solana/trending_pools?duration=5m&page=3",
+        "/networks/solana/trending_pools?duration=1h&page=1",
+        "/networks/solana/trending_pools?duration=1h&page=2",
+        "/networks/solana/new_pools?page=1",
+        "/networks/solana/new_pools?page=2",
+        "/networks/solana/new_pools?page=3",
+        "/networks/solana/dexes/raydium/pools?page=1",
+        "/networks/solana/dexes/raydium/pools?page=2",
+        "/networks/solana/dexes/pump-fun/pools?page=1",
+        "/networks/solana/dexes/pump-fun/pools?page=2"
     ]
     headers = {"Accept": "application/json", "User-Agent": "Mozilla/5.0"}
     

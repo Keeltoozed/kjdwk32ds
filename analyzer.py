@@ -1165,6 +1165,82 @@ class Analyzer:
             return True
         return False
         
+    async def analyze_whale_token(self, mint: str, trader_name: str = "") -> tuple[bool, str]:
+        """Специализированный глубокий ИИ-анализ токена, выбранного смарт-китом.
+        Проверяет:
+        1. Безопасность контракта: Honeypot, Freeze Authority, Mint Authority (GoPlus / Jupiter).
+        2. RugCheck Score (< 2000) — отсутствие скрытых дрейнеров и бэкдоров.
+        3. Защита от краха (-75% с пика) и критического падения ликвидности.
+        4. Минимальная ликвидность пула ($500+), чтобы выйти без проскальзывания.
+        5. Отсутствие мимикрии под корпоративные бренды (AAPL, TSLA, NVDA).
+        6. Расчёт Rocket XGBoost скора для оценки потенциала пампа.
+        НЕ бракует по сканерным фильтрам (возраст >6ч или низкий 5м объем), так как киты накапливают монеты ДО пампа!
+        """
+        if mint in ["So11111111111111111111111111111111111111112", 
+                    "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", 
+                    "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB"]:
+            return False, "Native / Stablecoin"
+
+        pair_data = await self.fetch_token_data(mint)
+        clean_symbol = mint[:8]
+        if pair_data:
+            base_token = pair_data.get("baseToken", {}) or {}
+            clean_symbol = str(base_token.get("symbol") or clean_symbol).upper().strip()
+
+        # 1. Защита от краха / дрейна ликвидности (отскок дохлой кошки)
+        if pair_data:
+            drop_peak = float(pair_data.get("_drop_from_peak_5m", 0.0) or 0.0)
+            if drop_peak <= -75.0:
+                return False, f"Цена уже упала на {drop_peak:.0f}% с пика — отскок дохлой кошки после дампа"
+            
+            liq = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
+            if 0 < liq < 500.0:
+                return False, f"Слишком низкая ликвидность пула (${liq:,.0f} < $500)"
+
+        # 2. Корпоративный фейк-скам
+        corp_scams = ["AAPL", "S&P", "SP500", "MSFT", "TSLA", "TESLA", "SPACEX", "STARLINK", "NVDA", "OPENAI"]
+        if any(c in clean_symbol for c in corp_scams):
+            if not self._brand_whitelisted(mint):
+                return False, f"Токен мимикрирует под корпоративный бренд ({clean_symbol}) — 100% scam"
+
+        # 3. Полный аудит безопасности Grok-JEV (RugCheck, GoPlus honeypot, freeze authority)
+        try:
+            from grok_jev import grok_jev as _gj
+            if not pair_data:
+                pair_data = await _gj.fetch_pair(mint, "solana")
+            if pair_data:
+                _ok, _why, _hs = await _gj.full_anti_scam_audit(mint, clean_symbol, "solana", pair_data)
+                if not _ok:
+                    return False, f"Антискам-аудит: {_why}"
+        except Exception as e:
+            print(f"⚠️ [WHALE-ANALYSIS] Сбой антискам-проверки ({e}), продолжаем проверку контракта...")
+
+        # 4. Проверка через GoPlus напрямую
+        try:
+            import goplus
+            goplus_res = await goplus.check_solana_token(mint)
+            if goplus_res:
+                is_safe, gp_reason = goplus.is_token_safe_solana(goplus_res)
+                if not is_safe:
+                    return False, f"GoPlus Honeypot/Freeze: {gp_reason}"
+        except Exception as e:
+            pass
+
+        # 5. Быстрый ML-скоринг если есть модель
+        ml_score = 0.0
+        if pair_data and hasattr(self, "rocket_model") and self.rocket_model:
+            try:
+                features = self._extract_features(mint, pair_data)
+                if features:
+                    ml_score = float(self.rocket_model.predict_proba([features])[0][1] * 100.0)
+                    self.last_score = ml_score
+                    if ml_score < 5.0:
+                        return False, f"Rocket XGB скор {ml_score:.1f}% < 5% (высокий риск рагпула)"
+            except Exception:
+                pass
+
+        return True, f"Passed AI Audit (Score: {ml_score:.1f}%)"
+
     async def analyze_token(self, mint: str) -> bool:
         self.last_signal = ""
         self.last_score = 0.0
