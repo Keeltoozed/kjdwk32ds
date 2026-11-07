@@ -78,7 +78,7 @@ DD_THROTTLE_START_USD = 15.0
 
 # === ВХОД В ЗРЕЛЫЕ КРИВЫЕ PUMP.FUN ДО МИГРАЦИИ + ЗАЩИТА DEX ===
 SNIPER_ENTRIES_ENABLED = False
-ALLOW_UNGRADUATED_PUMPFUN = True          # ВКЛЮЧЕНО только для зрелых кривых $18k-$44k (ловит RECEIPTS +779%, CHIKA до 2x!)
+ALLOW_UNGRADUATED_PUMPFUN = False         # ОТКЛЮЧЕНО: запрет сырых bonding curves (сливы $KCAT -58%, REVERSE -34%). Ждём миграции на DEX с сожжённым LP!
 MIN_PUMP_CURVE_MCAP_USD = 18000.0         # Минимум $18k FDV (~$7.2k виртуальной ликвидности)
 MAX_PUMP_CURVE_MCAP_USD = 44000.0         # До $44k FDV (не покупаем перед самым обрывом миграции $55k+)
 JEV_MAX_TICKET_USD = 0.0
@@ -179,7 +179,7 @@ AUDITOR_MAX_DELEGATED_ACCOUNTS = 3
 AUDITOR_MAX_DELEGATED_PCT = 5.0
 AUDITOR_MAX_BUNDLE_WALLETS = 5
 AUDITOR_MAX_BUNDLE_PCT = 12.0
-JEV_LLM_ENFORCE = False
+JEV_LLM_ENFORCE = True          # ВКЛЮЧЕНО: строго отклонять токены, забракованные судьёй JEV AI (отсекает VETO -55% и ложные пампы)!
 
 JEV_MIN_ACCOUNT_IS_PROJECT = 0.65
 JEV_MAX_RECYCLED_ACCOUNT = 0.35

@@ -1236,11 +1236,13 @@ class Analyzer:
                 _s5_mc = int(_tx5_mc.get("sells", 0) or 0)
                 _v5_mc = float((pair_data.get("volume") or {}).get("m5", 0) or 0)
                 _lq_mc = float((pair_data.get("liquidity", {}) or {}).get("usd", 0) or 0)
-                # Если у мем-токена есть мощная органика — это вирусный тренд, разрешаем вход!
-                if (_b5_mc >= 20 and _b5_mc >= _s5_mc) or _v5_mc >= 8000.0 or _lq_mc >= 15000.0:
-                    print(f"🔥 [MIMIC-FOMO] {symbol} ({mint[:8]}): мощный органический FOMO мем-бренда (b/s {_b5_mc}/{_s5_mc}, vol5 ${_v5_mc:.0f}, liq ${_lq_mc:.0f}) — пропуск.")
+                # Если у мем-токена есть соцсети И подтвержденная органика без накрутки (vol/liq <= 1.0)
+                _links_m = len((pair_data or {}).get("info", {}).get("socials", []) or []) + len((pair_data or {}).get("info", {}).get("websites", []) or [])
+                _v_to_l_m = (_v5_mc / max(_lq_mc, 1.0)) if _lq_mc > 0 else 0.0
+                if _links_m > 0 and _v_to_l_m <= 1.0 and ((_b5_mc >= 20 and _b5_mc >= _s5_mc) or _v5_mc >= 8000.0):
+                    print(f"🔥 [MIMIC-FOMO] {symbol} ({mint[:8]}): подтвержденный вирусный мем с соцсетями (b/s {_b5_mc}/{_s5_mc}, vol5 ${_v5_mc:.0f}) — пропуск.")
                 else:
-                    return self._deny(mint, "mimic-scam", f"🚫 Мусор: Токен {symbol} мимикрирует под известный мем без органики (b/s {_b5_mc}/{_s5_mc}, vol5 ${_v5_mc:.0f}).")
+                    return self._deny(mint, "mimic-scam", f"🚫 Мусор: Токен {symbol} мимикрирует под известный мем без соцсетей или с накруткой (links {_links_m}, v/l {_v_to_l_m:.1f}x).")
             
         _created_pre = pair_data.get("pairCreatedAt") or 0
         if _created_pre:
@@ -1384,21 +1386,33 @@ class Analyzer:
             )
 
 
-        # 5. Соцсети для совсем юных токенов (< 6 мин)
+        # 4.9. Wash-Trading Spike Guard: защита от накрутки ботами (кейсы Hakutaku 4.2x, ELON 5.7x, HATCH 2.1x)
+        _raw_liq_chk = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
+        if _raw_liq_chk > 0 and (_vm5_pre / _raw_liq_chk) > 1.40:
+            return self._deny(
+                mint,
+                f"wash-spike {(_vm5_pre/_raw_liq_chk):.1f}x",
+                f"🚫 [WASH-SPIKE] {symbol} ({mint[:8]}): 5м объем (${_vm5_pre:,.0f}) в {(_vm5_pre/_raw_liq_chk):.1f}x больше пула ликвидности — накрутка ботами создателя.",
+            )
+
+        # 5. Соцсети: токены моложе 60 мин ОБЯЗАНЫ иметь соцсети/сайт, либо чистый органический поток
         _links_cnt = len((pair_data or {}).get("info", {}).get("socials", []) or []) + len((pair_data or {}).get("info", {}).get("websites", []) or [])
-        _req_soc_age = float(getattr(config, "REQUIRE_SOCIALS_MIN_AGE_MIN", 6.0))
+        _req_soc_age = float(getattr(config, "REQUIRE_SOCIALS_MIN_AGE_MIN", 60.0))
         if _links_cnt == 0 and _age_min_pre < _req_soc_age:
-            _raw_liq_chk = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
-            _is_organic_stealth = (_vm5_pre >= 2500.0 and _b5_pre >= 12 and _b5_pre >= _s5_pre * 1.10 and _raw_liq_chk >= 6000.0)
+            _vol_liq_r = (_vm5_pre / max(_raw_liq_chk, 1.0)) if _raw_liq_chk > 0 else 0.0
+            _txns_tot = _b5_pre + _s5_pre
+            _is_organic_stealth = (
+                _vm5_pre >= 2500.0 and _b5_pre >= 12 and _b5_pre >= _s5_pre * 1.10
+                and _raw_liq_chk >= 6000.0 and _vol_liq_r <= 0.60 and _txns_tot <= 250
+            )
             if not _is_organic_stealth:
                 return self._deny(
                     mint,
                     f"no-socials-dev-rug {_age_min_pre:.0f}m<{_req_soc_age:.0f}m",
-                    f"🚫 [NO-SOCIALS-GUARD] {symbol} ({mint[:8]}): 0 соцсетей при возрасте {_age_min_pre:.1f}м без органики.",
+                    f"🚫 [NO-SOCIALS-GUARD] {symbol} ({mint[:8]}): 0 соцсетей при возрасте {_age_min_pre:.1f}м (v/l {_vol_liq_r:.1f}x, txns {_txns_tot}) — анонимный дев-раг.",
                 )
-
             else:
-                print(f"💎 [ORGANIC-STEALTH] {symbol} ({mint[:8]}): 0 соцсетей, но доказан взрывной органический поток (${_vm5_pre:,.0f}, {_b5_pre}b/{_s5_pre}s) — пропуск в анализ.")
+                print(f"💎 [ORGANIC-STEALTH] {symbol} ({mint[:8]}): 0 соцсетей, но доказан чистый органический поток (${_vm5_pre:,.0f}, {_b5_pre}b/{_s5_pre}s, v/l {_vol_liq_r:.2f}) — пропуск в анализ.")
 
         # =========================================================================
         # 🚀 ЭТАП 1: ROCKET XGBOOST v2 — ПЕРВИЧНЫЙ ML-СКРИНЕР (0ms IN-MEMORY)

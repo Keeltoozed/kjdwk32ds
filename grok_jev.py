@@ -526,16 +526,20 @@ class GrokJevEngine:
             return False, f"age-out-of-bounds {age_min:.1f}m < {min_age:.1f}m (wait for maturation)"
 
         # 2.4. Защита от безымянных рагпулов без соцсетей
-        # Разрешаем стелс-ракеты (кейсы CITH +996%, LOOK +942%, CI +598%) ТОЛЬКО если есть подтвержденный органический поток
+        # Разрешаем стелс-ракеты ТОЛЬКО если поток РЕАЛЬНО органический (без бот-накрутки vol/liq и без 1000 микро-сделок!)
         _info_g = pair_data.get("info") or {}
         _links_cnt_g = len(_info_g.get("socials", []) or []) + len(_info_g.get("websites", []) or [])
-        _req_soc_age = float(getattr(_c, "REQUIRE_SOCIALS_MIN_AGE_MIN", 20.0))
-        _is_organic_stealth = (vol_m5 >= 3000.0 and b5 >= 15 and (s5 == 0 or b5 >= s5 * 1.05) and eff_liq >= 6000.0)
+        _req_soc_age = float(getattr(_c, "REQUIRE_SOCIALS_MIN_AGE_MIN", 30.0))
+        _vol_liq_ratio_g = (vol_m5 / max(eff_liq, 1.0)) if eff_liq > 0 else 0.0
+        _is_organic_stealth = (
+            vol_m5 >= 3000.0 and b5 >= 15 and (s5 == 0 or b5 >= s5 * 1.05)
+            and eff_liq >= 6000.0 and _vol_liq_ratio_g <= 0.70 and (b5 + s5) <= 250
+        )
         if age_min < _req_soc_age and _links_cnt_g == 0:
             if not _is_organic_stealth:
-                return False, f"no-socials-rug (age {age_min:.1f}m < {_req_soc_age:.0f}m, 0 socials/websites)"
+                return False, f"no-socials-rug (age {age_min:.1f}m < {_req_soc_age:.0f}m, 0 socials/websites, v/l {_vol_liq_ratio_g:.1f}x)"
             else:
-                print(f"💎 [JEV-ORGANIC-STEALTH] {symbol} ({mint[:8]}): 0 соцсетей, но подтвержден органический прорыв (${vol_m5:,.0f}, {b5}b/{s5}s) — пропуск.")
+                print(f"💎 [JEV-ORGANIC-STEALTH] {symbol} ({mint[:8]}): 0 соцсетей, но доказан чистый органический поток (${vol_m5:,.0f}, {b5}b/{s5}s, v/l {_vol_liq_ratio_g:.2f}) — пропуск.")
 
         # 2.5. Exhaustion Guard: блокируем перегретые поздние пампы
         _max_h1_allowed = float(getattr(_c, "MAX_ENTRY_H1_PCT", 120.0))
@@ -577,7 +581,12 @@ class GrokJevEngine:
             if float(_h6_raw or 0) < _min_h6:
                 return False, f"h6-downtrend {float(_h6_raw or 0):+.1f}% < {_min_h6:+.1f}% (monet is bleeding)"
 
-        # 4. Объем и давление покупателей (строго покупателей >= 1.20x продавцов, отсекает COGE, TOKEN, SSSDFG):
+        # 4. Объем и давление покупателей:
+        # 4.0. Wash-Trading Spike Guard: 5м объем не должен превышать 1.4x ликвидности пула
+        # Защита от кейсов Hakutaku (4.2x), ELON (5.7x), HATCH (2.1x), SLINGFOLIO (2.3x), SCAMCHI (1.7x) — 100% накрутка ботами создателя перед дампом
+        if eff_liq > 0 and (vol_m5 / eff_liq) > 1.40:
+            return False, f"wash-trading-spike: vol5 ${vol_m5:,.0f} is {(vol_m5/eff_liq):.1f}x of pool liq ${eff_liq:,.0f} (bot pump trap)"
+
         _min_vol_m5 = float(getattr(_c, "MIN_VOLUME_M5", 2500.0))
         if vol_m5 < _min_vol_m5:
             return False, f"vol5-low ${vol_m5:.0f} < ${_min_vol_m5:.0f} (inactive dead pool)"
