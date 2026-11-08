@@ -111,9 +111,8 @@ class PumpFunSniper:
 
         async def _check_rugcheck():
             try:
-                from http_client import fetch_json
-                rc_url = f"https://api.rugcheck.xyz/v1/tokens/{mint}/report/summary"
-                status, data = await fetch_json(rc_url, timeout=4, retries=0)
+                import goplus as _gp
+                status, data = await _gp.fetch_rugcheck_report_cached(mint, ttl=120.0, timeout=4)
                 if status == 200 and isinstance(data, dict):
                     score = float(data.get("score", 0) or 0)
                     low_liq_penalty = sum(
@@ -125,9 +124,10 @@ class PumpFunSniper:
                     if clean_score >= 800:
                         return False, f"RugCheck clean score {clean_score:.0f} >= 800 (высокий риск)"
 
-                    if data.get("freezeAuthority"):
+                    tok_info = data.get("token") if isinstance(data.get("token"), dict) else data
+                    if tok_info.get("freezeAuthority"):
                         return False, "RugCheck: Freeze Authority не отозвана"
-                    if data.get("mintAuthority"):
+                    if tok_info.get("mintAuthority"):
                         return False, "RugCheck: Mint Authority не отозвана"
 
                     for r in (data.get("risks", []) or []):
@@ -141,14 +141,20 @@ class PumpFunSniper:
                         if any(bad in r_name_low for bad in ("honeypot", "freeze", "mint authority", "transfer hook", "token-2022")):
                             return False, f"RugCheck: {r_name}"
                     return True, ""
-                elif status == 404:
+                elif status in (400, 404):
                     # Токен только создан (<10 сек) и ещё не проиндексирован RugCheck — полагаемся на RPC
                     return True, ""
                 elif status == 429:
+                    if mint.endswith("pump"):
+                        return True, ""  # Безопасность гарантирована pump.fun контрактом и RPC
                     return False, "RugCheck: rate-limit (429) — вход заблокирован (защита от слепого входа)"
                 else:
+                    if mint.endswith("pump"):
+                        return True, ""
                     return False, f"RugCheck: HTTP {status} — ошибка аудита"
             except Exception as e:
+                if mint.endswith("pump"):
+                    return True, ""
                 return False, f"RugCheck таймаут/сбой: {type(e).__name__} — вход заблокирован"
 
         res_gp, res_rc = await asyncio.gather(_check_onchain_and_gp(), _check_rugcheck())

@@ -1994,6 +1994,16 @@ class Analyzer:
                 elif _rc_st not in (200, 0, 429):
                     print(f"⚠️ RugCheck API вернул {_rc_st} для {mint[:8]}.")
 
+                # КРИТИЧЕСКИЙ БЛОК: Для кастомных токенов (не оканчивающихся на 'pump')
+                # НЕЛЬЗЯ покупать вслепую, если RugCheck ещё не вернул полный отчёт (код 400 или таймаут)!
+                # Именно так залетал SOUVENIR (дев держал 56% и слил пул).
+                if not _is_pump_flag and not is_pump_curve and (_rc_st != 200 or not rc_data):
+                    return self._deny(
+                        mint,
+                        "unverified-custom-token",
+                        f"⏳ [SECURITY-WAIT] {symbol} ({mint[:8]}): кастомный токен без pump.fun ожидает индексации RugCheck — блокировка до подтверждения сожжения LP!"
+                    )
+
                 if rc_data:
                     token_info = rc_data.get("token", {})
                     mint_authority = token_info.get("mintAuthority")
@@ -2012,11 +2022,11 @@ class Analyzer:
                     # за "Large amount of LP unlocked", "LP provider", и ошибочно за "Single holder ownership" (AMM-пул кривой).
                     # Дев не может снять этот LP и не держит пул!
                     _dex_low_main = str((pair_data or {}).get("dexId", "")).lower()
-                    _is_pump_origin_main = mint.endswith("pump") or _dex_low_main in ("pumpswap", "pump", "pumpfun", "meteora", "meteoradbc") or is_pump_curve
+                    _is_canonical_pump = mint.endswith("pump") or is_pump_curve
                     _allowed_lp_terms_main = (
                         "large amount of lp unlocked", "lp provider", "single lp provider",
                         "lp not locked", "unlocked lp", "single holder ownership", "high holder concentration", "top 10 holders"
-                    ) if _is_pump_origin_main else ("lp provider",)
+                    ) if _is_canonical_pump else ("lp provider", "low liquidity")
 
                     # Исключаем безвредный шум: низкая ликвидность для молодых пулов, copycat для мемов, и LP контракт пула.
                     _rc_penalty_to_ignore = sum(
@@ -2035,14 +2045,14 @@ class Analyzer:
                     for rk in (rc_data.get("risks") or []):
                         _rk_name = str(rk.get("name", "")).lower()
                         _rk_lvl = str(rk.get("level", "")).lower()
-                        if _is_pump_origin_main and any(k in _rk_name for k in ("large amount of lp unlocked", "single holder", "high ownership", "top 10 holders", "lp not locked")):
+                        if _is_canonical_pump and any(k in _rk_name for k in ("large amount of lp unlocked", "single holder", "high ownership", "top 10 holders", "lp not locked")):
                             continue
                         if _rk_lvl == "danger" and any(k in _rk_name for k in ("single holder", "high ownership", "top 10 holders", "large amount of lp unlocked", "freeze authority")):
                             return self._deny(mint, f"rc-danger {_rk_name[:15]}", f"🚫 [АНТИСКАМ-RC] {symbol} ({mint[:8]}): критический риск RugCheck '{rk.get('name')}' — блок скама!")
 
-                    # Для кастомных токенов (не с launchpad и не на PumpSwap):
-                    # Проверяем блокировку/сжигание LP на открытых DEX (Raydium / Meteora)
-                    if not _is_pump_origin_main:
+                    # Для ВСЕХ кастомных токенов (не оканчивающихся на 'pump'):
+                    # ОБЯЗАТЕЛЬНО требуем подтверждённое сжигание или блокировку LP >= 80%!
+                    if not _is_canonical_pump:
                         _lp_ok = False
                         for _m in (rc_data.get("markets") or []):
                             if isinstance(_m, dict):
@@ -2567,18 +2577,12 @@ class Analyzer:
             print(f"🚀 [VIP] {symbol}: Проверка клонов и соцсетей пройдена!")
             
         try:
-            import aiohttp
-            session = await self.get_session()
-            
-            rugcheck_url = f"https://api.rugcheck.xyz/v1/tokens/{mint}/report"
-            rc_data = None
-            async with session.get(rugcheck_url, timeout=8) as resp:
-                if resp.status == 200:
-                    rc_data = await resp.json(content_type=None)
-                elif resp.status == 400:
-                    print(f"ℹ️ [RUGCHECK] {mint[:8]}: монета ещё не проиндексирована RugCheck (код 400) -> аудит через GoPlus & On-Chain RPC...")
-                else:
-                    print(f"⚠️ RugCheck API вернул {resp.status} для {mint[:8]}.")
+            import goplus as _gp_rc
+            _rc_st, rc_data = await _gp_rc.fetch_rugcheck_report_cached(mint, ttl=120.0, timeout=6)
+            if _rc_st == 400:
+                print(f"ℹ️ [RUGCHECK] {mint[:8]}: монета ещё не проиндексирована RugCheck (код 400) -> аудит через GoPlus & On-Chain RPC...")
+            elif _rc_st not in (200, 0, 429):
+                print(f"⚠️ RugCheck API вернул {_rc_st} для {mint[:8]}.")
                     
             if rc_data:
                 token_info = rc_data.get("token", {})

@@ -60,6 +60,19 @@ class MatureExitManager:
         _allow_partial_tp = getattr(config, "PARTIAL_TP_ENABLED", True) and (_pos_val >= _min_tp_ticket)
 
         # =========================================================================
+        # 0. МГНОВЕННЫЙ СБРОС ПРИ ДАМПЕ ПУЛА / ВЫВОДЕ ЛИКВИДНОСТИ (0ms Liquidity Shield)
+        # =========================================================================
+        _pd_chk = getattr(position, "pair_data", None) or getattr(position, "last_pair_data", None) or {}
+        if isinstance(_pd_chk, dict) and _pd_chk:
+            _cur_l = float(((_pd_chk.get("liquidity") or {}).get("usd", 0) or 0))
+            _peak_l = float(getattr(position, "peak_liquidity_usd", 0.0) or getattr(position, "initial_liquidity_usd", 0.0) or 0.0)
+            if _cur_l > _peak_l:
+                position.peak_liquidity_usd = _cur_l
+                _peak_l = _cur_l
+            if _peak_l >= 6000.0 and 0 < _cur_l < (_peak_l * 0.70):
+                return f"Liquidity Drain Escape (Liq dropped to ${_cur_l:.0f} from ${_peak_l:.0f})"
+
+        # =========================================================================
         # 1. ЖЕСТКИЙ КОНТРОЛЬ УБЫТКА (EMERGENCY CAP & STOP LOSS) — ПЕРВЫЙ ПРИОРИТЕТ!
         # =========================================================================
         _emerg_cap = -abs(float(getattr(config, "EMERGENCY_CAP_PCT", -0.105)))

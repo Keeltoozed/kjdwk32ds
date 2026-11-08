@@ -1444,6 +1444,11 @@ class GrokJevEngine:
             if not sec_ok and "rugcheck-score" not in sec_why_low and not (_gp_is_holder and (rc_status_pre == 200 or eff_liq >= 20000.0)):
                 return False, f"goplus-sol-reject {sec_why}", _h_stats
               
+            # Кастомные токены (не оканчивающиеся на 'pump') требуют 100% подтверждённого RugCheck отчёта
+            is_canonical_pump = address.endswith("pump") or is_raw_pump_curve
+            if not is_canonical_pump and (rc_status_pre != 200 or not isinstance(rc_data_pre, dict)):
+                return False, "unverified-custom-token (waiting for rugcheck index)", _h_stats
+
             # В) Полный отчет RugCheck API (из общего 120с кэша)
             try:
                 rc_status, rc_data = rc_status_pre, rc_data_pre
@@ -1462,11 +1467,11 @@ class GrokJevEngine:
                         return False, f"rugcheck: freeze authority active ({freeze_auth[:8]})", _h_stats
 
                     # Очищенный score RugCheck: вычитаем безвредный шум и AMM LP пула для bonding curve / pump tokens.
-                    _is_pump_orig_jev = address.endswith("pump") or str(pair_data.get("dexId") or "").lower() in ("pumpswap", "meteora", "pump", "pumpfun")
+                    _is_pump_orig_jev = is_canonical_pump
                     _allowed_lp_terms_jev = (
                         "large amount of lp unlocked", "lp provider", "single lp provider",
                         "lp not locked", "unlocked lp", "single holder ownership", "high holder concentration"
-                    ) if _is_pump_orig_jev else ("lp provider",)
+                    ) if _is_pump_orig_jev else ("lp provider", "low liquidity")
 
                     raw_score = float(rc_data.get("score") or 0.0)
                     penalty_to_ignore = sum(
@@ -1495,7 +1500,6 @@ class GrokJevEngine:
 
                     # Проверка пулов и блокировки LP для не-pump токенов
                     target_pair = str(pair_data.get("pairAddress") or "").strip()
-                    is_canonical_pump = address.endswith("pump") or _is_pump_orig_jev
                     _dex_rc_low = str(pair_data.get("dexId") or "").lower()
                     has_verified_locked_lp = False
                     for mkt in (rc_data.get("markets") or []):

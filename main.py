@@ -75,13 +75,13 @@ async def position_security_auditor_loop(analyzer, tracker):
                     except Exception:
                         pass
 
-                # 2. Ранний перехват вывода ликвидности (Early Liquidity Drain Escape)
+                # 2. Ранний перехват вывода ликвидности (Early Liquidity Drain Escape - 1.5s Live Protection)
                 _last_lchk = getattr(position, "last_liq_chk", 0.0)
-                if (now_ts - _last_lchk) > 10:
+                if (now_ts - _last_lchk) > 1.5:
                     position.last_liq_chk = now_ts
                     try:
                         import market_data as _md
-                        _td_sol = await asyncio.wait_for(_md.get_token_data(mint, max_cache_age=5.0), timeout=2.0)
+                        _td_sol = await asyncio.wait_for(_md.get_token_data(mint, max_cache_age=2.5), timeout=1.5)
                         if _td_sol:
                             _liq_obj = _td_sol.get("liquidity") or {}
                             _has_liq_data = bool(_liq_obj and ("usd" in _liq_obj or "quote" in _liq_obj))
@@ -93,13 +93,17 @@ async def position_security_auditor_loop(analyzer, tracker):
                             if _init_liq <= 0 and _sol_liq > 0:
                                 position.initial_liquidity_usd = _sol_liq
                                 _init_liq = _sol_liq
+                            _peak_liq = float(getattr(position, "peak_liquidity_usd", 0.0) or _init_liq or 0.0)
+                            if _sol_liq > _peak_liq:
+                                position.peak_liquidity_usd = _sol_liq
+                                _peak_liq = _sol_liq
 
-                            _crit_drained = (_q_sym in ("SOL", "WSOL") and _quote_liq < 5.0) or (_sol_liq < 1800.0)
-                            _drain_pct_drop = (_init_liq > 8000.0 and _sol_liq < _init_liq * 0.50)
+                            _crit_drained = (_q_sym in ("SOL", "WSOL") and 0 < _quote_liq < 4.0) or (0 < _sol_liq < 1800.0)
+                            _drain_pct_drop = (_peak_liq >= 6000.0 and _sol_liq < _peak_liq * 0.72)
 
-                            if _has_liq_data and minutes_held >= 0.5 and (_crit_drained or _drain_pct_drop):
+                            if _has_liq_data and (_crit_drained or _drain_pct_drop):
                                 _px_now = float(getattr(position, "current_price_usd", 0.0) or 0.0)
-                                _msg = f"Liq Drop ${_sol_liq:.0f} (было ${_init_liq:.0f})" if _drain_pct_drop else f"Low Liq ${_sol_liq:.0f} / {_quote_liq:.1f} SOL"
+                                _msg = f"Liq Drop ${_sol_liq:.0f} (было ${_peak_liq:.0f})" if _drain_pct_drop else f"Low Liq ${_sol_liq:.0f} / {_quote_liq:.1f} SOL"
                                 print(f"🚨 [EARLY-LIQ-ESCAPE] {position.symbol} ({mint[:8]}): вывод пула ({_msg}) — аварийный выход по рынку!")
                                 tracker.close_position(mint, _px_now, f"Early Liquidity Drain Escape ({_msg})")
                                 continue
@@ -107,7 +111,7 @@ async def position_security_auditor_loop(analyzer, tracker):
                         pass
         except Exception as e:
             print(f"⚠️ Ошибка в position_security_auditor_loop: {e}")
-        await asyncio.sleep(5.0)
+        await asyncio.sleep(1.0)
 
 
 async def position_manager_loop(analyzer, tracker):
