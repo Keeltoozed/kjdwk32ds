@@ -518,11 +518,11 @@ class GrokJevEngine:
         _early_min_age = max(0.5, float(getattr(_c, "JEV_EARLY_MIN_AGE_MIN", 0.5)))
         _std_min_age = max(0.8, float(getattr(_c, "JEV_MIN_AGE_MIN", 0.8)))
         min_age = _early_min_age if _is_early_rocket else _std_min_age
-        max_age = float(getattr(_c, "JEV_MAX_AGE_MIN", 720.0))  # До 12ч для активных пробойных пулов (DUGE 361м)
+        max_age = float(getattr(_c, "SOLANA_MAX_AGE_MIN", 60.0))  # Только свежие ракеты до 60м (отсекаем зомби 6-11ч!)
         _is_jev_breakout = (
-            age_min <= 720.0
+            age_min <= 90.0
             and fdv_mc <= 1500000.0
-            and eff_liq >= 25000.0
+            and eff_liq >= 40000.0
             and vol_m5 >= 18000.0
             and (vol_m5 / max(eff_liq, 1.0)) >= 0.25
             and m5 >= 8.0
@@ -562,13 +562,13 @@ class GrokJevEngine:
         _is_organic_stealth = False
         if _links_cnt_g == 0 and not _soc_unk_g:
             _is_organic_stealth = (
-                eff_liq >= 15000.0
-                and vol_m5 >= 2500.0
-                and _vol_liq_ratio_g <= 2.2
+                eff_liq >= 10000.0
+                and vol_m5 >= 1200.0
+                and _vol_liq_ratio_g <= 5.5
                 and (
-                    (b5 >= 15 and b5 >= s5 * 1.05) or
-                    (b5 >= 10 and s5 <= 30 and m5 >= 2.0 and _avg_tx_g >= 25.0) or
-                    (vol_m5 >= 8000.0 and b5 >= s5)
+                    (b5 >= 12 and b5 >= s5 * 1.05) or
+                    (b5 >= 8 and s5 <= 30 and m5 >= 2.0 and _avg_tx_g >= 20.0) or
+                    (vol_m5 >= 6000.0 and b5 >= s5)
                 )
             )
             if not _is_organic_stealth:
@@ -601,25 +601,25 @@ class GrokJevEngine:
             _is_strong_jev_breakout = (m5 >= 5.0 and vol_m5 >= 2000.0 and b5 >= s5 * 1.08 and (b5 + s5) >= 20)
             if not _is_massive_mature_flow_g and not _is_strong_jev_breakout and (vol_m5 < 6000.0 or ((vol_m5 / max(eff_liq, 1.0)) < 0.22 and vol_m5 < 18000.0) or m5 < 4.5 or (b5 + s5) < 45):
                 return False, f"slow-mature-pool age {age_min:.0f}m vol5 ${vol_m5:,.0f} v/l {(vol_m5/max(eff_liq,1.0)):.2f}x"
-        _max_m5_allowed = float(getattr(_c, "MAX_ENTRY_M5_PCT", 110.0))
+        _max_m5_allowed = float(getattr(_c, "MAX_ENTRY_M5_PCT", 28.0))
         if m5 > _max_m5_allowed:
-            _max_allowed_m5_g = 450.0 if (age_min <= 30.0 or is_migrated_pump or _is_burned_lp_g) else 165.0
-            _has_breakout_vol = (vol_m5 >= 6000.0 and b5 >= s5 * 1.12 and m5 <= _max_allowed_m5_g)
-            if not _has_breakout_vol:
-                return False, f"fomo-vertical-m5 m5 {m5:+.1f}% > +{_max_m5_allowed:.0f}% (buying top of vertical pump without breakthrough volume)"
+            _is_cooling_pullback = (-6.0 <= m1 <= -1.8 and m5 <= 38.0 and b5 >= s5 * 1.15)
+            if not _is_cooling_pullback:
+                return False, f"fomo-vertical-m5 m5 {m5:+.1f}% > +{_max_m5_allowed:.0f}% (buying top of vertical pump without cooling pullback, m1={m1:+.1f}%)"
         if s5 > 10 and b5 < (s5 * 0.80):
             return False, f"sellers-dominating {b5}b/{s5}s (more sellers than buyers in m5)"
 
-        # Остывающий поздний памп: токен старше 30м режем ТОЛЬКО если m5 отрицательный (реальный дамп)
-        if age_min >= 30.0 and m5 < 1.0:
-            return False, f"late-fade age {age_min:.0f}m m5 {m5:+.1f}% < +1% (old token cooling off, not a live rocket)"
+        # Давление продаж и сброс китов (кейс SOLC/DOG™)
+        _tot_tx_g = b5 + s5
+        if _tot_tx_g >= 25 and s5 > 0:
+            _sell_ratio_g = s5 / _tot_tx_g
+            _vl_ratio_g = vol_m5 / max(eff_liq, 1.0)
+            if _sell_ratio_g >= 0.38 and (_vl_ratio_g >= 2.2 or b5 < s5 * 1.20):
+                return False, f"heavy-sell-pressure {_sell_ratio_g*100:.0f}% sells ({s5}/{_tot_tx_g}) v/l {_vl_ratio_g:.1f}x (whale exit dump)"
 
-        # ПЕРЕГРЕВ: разрешаем супер-ракеты (как ASCEND +469%, PERPETUAL +130%, SLUDGE +99%) при подтвержденном прорывном объеме!
-        if m5 > 120.0:
-            _has_breakout_vol = (vol_m5 >= 12000.0 and b5 >= s5 * 1.25 and m5 <= 500.0)
-            _has_steady_trend = (-8.0 <= m1 <= 32.0 and b5 >= s5 * 1.15 and vol_m5 >= 4000.0 and m5 <= 220.0)
-            if not (_has_breakout_vol or _has_steady_trend):
-                return False, f"overheated m5 {m5:+.0f}% > +120% (peak FOMO risk)"
+        # Остывающий поздний памп: токен старше 20м режем ТОЛЬКО если m5 отрицательный или нулевой (реальный дамп)
+        if age_min >= 20.0 and m5 < 1.2:
+            return False, f"late-fade age {age_min:.0f}m m5 {m5:+.1f}% < +1.2% (old token cooling off, not a live rocket)"
         _min_h1 = float(getattr(_c, "JEV_MIN_H1_PCT", -8.0))
         _is_jev_v_rev = (h1 >= -25.0 and m5 >= 12.0 and vol_m5 >= 15000.0 and eff_liq >= 18000.0 and b5 >= s5 * 1.30)
         if h1 < _min_h1 and not _is_jev_v_rev:
@@ -920,11 +920,10 @@ class GrokJevEngine:
         _m1_is_phantom = (_age_m < 3.0 and abs(m5) > 1.0 and abs(m1) > 0 and abs(m1 / max(abs(m5), 0.01) - 1.0) < 0.08)
         _strong_breakout = (b5 >= 20 and b5 >= s5 * 1.20 and vol5 >= 4000.0)
         _max_m1 = min(float(getattr(_c, "JEV_MAX_M1_ENTRY_PCT", 8.0)), 10.0)
-        _max_m5_cap = 165.0 if _strong_breakout else 100.0
+        _cfg_m5 = float(getattr(_c, "MAX_ENTRY_M5_PCT", 28.0))
+        _max_m5_cap = min(_cfg_m5 + 10.0, 38.0) if _strong_breakout else _cfg_m5
         if m5 > _max_m5_cap:
             return False, -0.14, 0.0, f"fomo-spike (m5 {m5:+.1f}% > +{_max_m5_cap:.0f}%) — buying local top, wait for reset"
-        if m5 > 95.0 and m1 > _max_m1 and not _strong_breakout:
-            return False, -0.14, 0.0, f"fomo-spike (m5 {m5:+.1f}% > +95.0% and m1 {m1:+.1f}% > {_max_m1:.1f}%) — vertical blow-off candle"
         if m1 > _max_m1 and not _m1_is_phantom:
             return False, -0.14, 0.0, f"m1-spike (m1 {m1:+.1f}% > +{_max_m1:.1f}%) — vertical push, wait for consolidation"
         _base_max_h1_flush = float(getattr(_c, "MAX_ENTRY_H1_PCT", 350.0))
@@ -1447,15 +1446,16 @@ class GrokJevEngine:
                     if freeze_auth and freeze_auth not in SAFE_AUTHORITIES:
                         return False, f"rugcheck: freeze authority active ({freeze_auth[:8]})", _h_stats
 
-                    # Очищенный score RugCheck: вычитаем ТОЛЬКО безвредный шум:
-                    # низкая ликвидность для молодых пулов и copycat для мемов.
-                    # НИ В КОЕМ СЛУЧАЕ НЕ ИСКЛЮЧАЕМ Single holder, High ownership, Top 10 concentration!
+                    # Очищенный score RugCheck: вычитаем безвредный шум и AMM LP пула для bonding curve.
+                    _is_pump_orig_jev = address.endswith("pump") or str(pair_data.get("dexId") or "").lower() in ("pumpswap", "meteora")
+                    _allowed_lp_terms_jev = ("large amount of lp unlocked", "lp provider", "single lp provider") if _is_pump_orig_jev else ("lp provider",)
+
                     raw_score = float(rc_data.get("score") or 0.0)
                     penalty_to_ignore = sum(
                         float(rk.get("score", 0) or 0)
                         for rk in (rc_data.get("risks") or [])
                         if any(k in str(rk.get("name", "")).lower() for k in (
-                            "low liquidity", "creator history", "copycat", "symbol mimic", "lp provider"
+                            "low liquidity", "creator history", "copycat", "symbol mimic", *_allowed_lp_terms_jev
                         ))
                     )
                     clean_score = max(0.0, raw_score - penalty_to_ignore)
@@ -1466,7 +1466,9 @@ class GrokJevEngine:
                     for rk in (rc_data.get("risks") or []):
                         rk_name = str(rk.get("name") or "").lower()
                         rk_lvl = str(rk.get("level") or "").lower()
-                        if any(k in rk_name for k in ("low liquidity", "creator history", "copycat", "symbol mimic", "lp provider")):
+                        if any(k in rk_name for k in ("low liquidity", "creator history", "copycat", "symbol mimic", *_allowed_lp_terms_jev)):
+                            continue
+                        if _is_pump_orig_jev and "large amount of lp unlocked" in rk_name:
                             continue
                         if rk_lvl == "danger" and "creator history" not in rk_name:
                             return False, f"rugcheck: critical danger risk '{rk.get('name')}'", _h_stats
@@ -1922,12 +1924,12 @@ class GrokJevEngine:
                 if _dex_fin not in ("pump", "pumpfun"):
                     _jup_live_px = await JupiterAPI.get_price(address)
                     if _jup_live_px and _jup_live_px > 0 and price > 0:
-                        if _jup_live_px < price * 0.93:
+                        if _jup_live_px < price * 0.975:
                             print(f"🚫 [JEV-LIVE-DUMP] {symbol} ({address[:8]}): живая цена Jupiter (${_jup_live_px:.8f}) уже на {(1.0 - _jup_live_px / price) * 100:.1f}% ниже DexScreener (${price:.8f}) — обвал в моменте, блок входа!")
                             return False, "fills-flush-wait live-jup-dump"
                         _jup_ratio = max(_jup_live_px, price) / min(_jup_live_px, price)
-                        if _jup_ratio > 1.09:
-                            print(f"🚫 [JEV-PRICE-MISMATCH] {symbol} ({address[:8]}): Jupiter (${_jup_live_px:.8f}) vs DS (${price:.8f}) расхождение {_jup_ratio:.2f}x (>1.09x) — защита от ложного стопа!")
+                        if _jup_ratio > 1.055:
+                            print(f"🚫 [JEV-PRICE-MISMATCH] {symbol} ({address[:8]}): Jupiter (${_jup_live_px:.8f}) vs DS (${price:.8f}) расхождение {_jup_ratio:.2f}x (>1.055x) — защита от ложного стопа!")
                             return False, f"fills-flush-wait jup-ds-mismatch ({_jup_ratio:.2f}x)"
                         price = _jup_live_px
                         wick_price = price * (1.0 + wick_pct)
@@ -2070,7 +2072,8 @@ async def grok_bot_jev_loop(tracker, analyzer=None):
                     _ca_c = _td_c.get("pairCreatedAt") or 0
                     if _ca_c:
                         _age_c_m = (now * 1000 - _ca_c) / 60000.0
-                        if _age_c_m > 720.0:
+                        _max_loop_age = float(getattr(_c, "SOLANA_MAX_AGE_MIN", 60.0))
+                        if _age_c_m > _max_loop_age:
                             evaluated_cooldown[(address, chain)] = now + 86400.0
                             continue
                     _m5_c = float((_td_c.get("priceChange") or {}).get("m5", 0) or 0)

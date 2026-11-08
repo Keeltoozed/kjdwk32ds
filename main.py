@@ -259,33 +259,30 @@ async def position_manager_loop(analyzer, tracker):
                     _pnl_str = f"{pnl_pct*100:+.1f}%" if position.entry_price_usd > 0 else "0%"
                     print(f"🛡️ [TRACK] {position.symbol} ({mint[:8]}): цена ${current_price:.8f} ({_pnl_str}) | пик: ${position.max_price_usd:.8f} | держим {minutes_held:.1f}м", flush=True)
 
-                # Infant Dump: не даём монете сложиться на -42% за 27с на первой минуте (кейс STONKS)!
-                # Сразу сверяем провал <= -18% с живой котировкой Jupiter (защита от фантомного тика DS) и рубим реальный раг.
+                # Infant Dump: не даём монете сложиться на первой минуте (кейс STONKS / DОG™)!
+                # Сразу сверяем провал <= -9.5% с живой котировкой Jupiter и мгновенно рубим реальный раг без провала в -30%!
                 try:
                     _inf_w = float(getattr(config, "INFANT_WINDOW_MIN", 0.5))
-                    _inf_p = float(getattr(config, "INFANT_DUMP_PCT", -0.18))
-                    if minutes_held < _inf_w and minutes_held >= 0.12 and pnl_pct <= _inf_p:
-                        _inf_c = int(getattr(position, "infant_confirm_n", 0) or 0) + 1
-                        position.infant_confirm_n = _inf_c
-                        if _inf_c >= 2 or pnl_pct <= -0.28:
-                            _real_inf_dump = True
-                            try:
-                                _j_inf_px = await JupiterAPI.get_price(mint)
-                                if _j_inf_px and _j_inf_px > 0 and position.entry_price_usd > 0:
-                                    _j_inf_pnl = (_j_inf_px - position.entry_price_usd) / position.entry_price_usd
-                                    if _j_inf_pnl > -0.14:
-                                        _real_inf_dump = False
-                                        current_price = _j_inf_px
-                                        position.current_price_usd = _j_inf_px
-                                        position.infant_confirm_n = 0
-                                    else:
-                                        current_price = _j_inf_px
-                                        pnl_pct = _j_inf_pnl
-                            except Exception:
-                                pass
-                            if _real_inf_dump:
-                                tracker.close_position(mint, current_price, f"Infant Dump ({pnl_pct*100:.1f}%)")
-                                continue
+                    _inf_p = -abs(float(getattr(config, "INFANT_DUMP_PCT", -0.095)))
+                    if minutes_held < _inf_w and pnl_pct <= _inf_p:
+                        _real_inf_dump = True
+                        try:
+                            _j_inf_px = await JupiterAPI.get_price(mint)
+                            if _j_inf_px and _j_inf_px > 0 and position.entry_price_usd > 0:
+                                _j_inf_pnl = (_j_inf_px - position.entry_price_usd) / position.entry_price_usd
+                                if _j_inf_pnl > -0.080:
+                                    _real_inf_dump = False
+                                    current_price = _j_inf_px
+                                    position.current_price_usd = _j_inf_px
+                                    position.infant_confirm_n = 0
+                                else:
+                                    current_price = _j_inf_px
+                                    pnl_pct = _j_inf_pnl
+                        except Exception:
+                            pass
+                        if _real_inf_dump:
+                            tracker.close_position(mint, current_price, f"Infant Dump ({pnl_pct*100:.1f}%)")
+                            continue
                     else:
                         position.infant_confirm_n = 0
                 except Exception:
@@ -336,12 +333,12 @@ async def position_manager_loop(analyzer, tracker):
                 # === ИНТЕГРАЦИЯ МАТЕМАТИКИ ДЛЯ ЗРЕЛЫХ МОНЕТ (SWING TRADING / RIDE RUNNERS) ===
                 # Исполняется ДО скальперских Early Fade / Stagnant срезов, чтобы ракеты ехали по MatureExitManager!
                 # === ИНТЕГРАЦИЯ МАТЕМАТИКИ ДЛЯ ВСЕХ ПОЗИЦИЙ SOLANA (main.py строки 240-280) ===
-                _tp1_sol_thr = float(getattr(config, "TP1_TRIGGER_PCT", 0.095))
-                _tp1_sell = float(getattr(config, "TP1_SELL_FRAC", 0.50))
-                _tp2 = float(getattr(config, "TP2_TRIGGER_PCT", 0.22))
-                _tp2_sell = float(getattr(config, "TP2_SELL_FRAC", 0.40))
-                _tp3 = float(getattr(config, "TP3_TRIGGER_PCT", 0.50))
-                _tp3_sell = float(getattr(config, "TP3_SELL_FRAC", 0.50))
+                _tp1_sol_thr = float(getattr(config, "TP1_TRIGGER_PCT", 0.085))
+                _tp1_sell = float(getattr(config, "TP1_SELL_FRAC", 0.45))
+                _tp2 = float(getattr(config, "TP2_TRIGGER_PCT", 0.28))
+                _tp2_sell = float(getattr(config, "TP2_SELL_FRAC", 0.35))
+                _tp3 = float(getattr(config, "TP3_TRIGGER_PCT", 0.65))
+                _tp3_sell = float(getattr(config, "TP3_SELL_FRAC", 0.40))
                 _tp4 = float(getattr(config, "TP4_TRIGGER_PCT", 1.50))
                 _tp4_sell = float(getattr(config, "TP4_SELL_FRAC", 0.50))
                 _tp5 = float(getattr(config, "TP5_TRIGGER_PCT", 4.00))
@@ -379,6 +376,12 @@ async def position_manager_loop(analyzer, tracker):
                         continue
                     from exit_managers import MatureExitManager
                     mature_exit_reason = MatureExitManager.evaluate_exit(position, current_price)
+                    if mature_exit_reason == "PARTIAL_TP1_TRIGGER":
+                        tracker.partial_close_position(mint, current_price, _tp1_sell, f"Take Profit Flush +{pnl_pct*100:.1f}% (after peak +{max_pnl_pct*100:.1f}%)")
+                        position.tp1_done = True
+                        position.is_moonbag = True
+                        position.last_tp_ts = time.time()
+                        continue
                     if mature_exit_reason:
                         # Защита от ложного 0м стопа из-за лагающего тика DexScreener / побочного пула (кейс Burn -31% за 0м):
                         # если в первые 2 минуты сработал Emergency Cap / Stop Loss, сверяем с живой ончейн-котировкой Jupiter!
@@ -388,7 +391,7 @@ async def position_manager_loop(analyzer, tracker):
                                 _live_em_px = await JupiterAPI.get_price(mint)
                                 if _live_em_px and _live_em_px > 0 and position.entry_price_usd > 0:
                                     _live_em_pnl = (_live_em_px - position.entry_price_usd) / position.entry_price_usd
-                                    if _live_em_pnl > -0.09:
+                                    if _live_em_pnl > -0.080:
                                         print(f"🛡️ [EARLY-EXIT-RESCUED] {position.symbol} ({mint[:8]}): ложный тик {pnl_pct*100:+.1f}%, живой Jupiter ${_live_em_px:.8f} ({_live_em_pnl*100:+.1f}%) — позиция спасена!")
                                         position.current_price_usd = _live_em_px
                                         position.emerg_confirm_n = 0
@@ -398,7 +401,7 @@ async def position_manager_loop(analyzer, tracker):
                             except Exception:
                                 pass
                         tracker.close_position(mint, current_price, mature_exit_reason)
-                    continue
+                        continue
                     
                 # === STALL TIMER (DEAD MOMENTUM EXIT - 210с на консолидацию без затягивания убытка) ===
                 _stall_sec = float(getattr(config, "STALL_TIMER_SEC", 210.0))
@@ -1271,6 +1274,12 @@ async def scanner_loop(analyzer, tracker):
                                     if not _j_ok and any(k in _w_low for k in ("no routes", "cannot sell", "honeypot", "freeze", "0 sol returned")):
                                         print(f"🚫 [SCANNER PRE-FLIGHT BLOCKED] {actual_symbol} ({mint[:8]}): токен непродаваем на DEX ({_j_why}) — предотвращен вход!")
                                         continue
+                                    _live_jup_px = await JupiterAPI.get_price(mint)
+                                    if _live_jup_px and _live_jup_px > 0 and entry_price > 0:
+                                        if _live_jup_px < entry_price * 0.975:
+                                            print(f"🚫 [SCANNER LIVE-DUMP BLOCKED] {actual_symbol} ({mint[:8]}): живая цена Jupiter (${_live_jup_px:.8f}) уже на {(1.0 - _live_jup_px / entry_price) * 100:.1f}% ниже цены сигнала (${entry_price:.8f}) — обвал в моменте, отмена входа!")
+                                            continue
+                                        entry_price = _live_jup_px
                                 except Exception:
                                     pass
 

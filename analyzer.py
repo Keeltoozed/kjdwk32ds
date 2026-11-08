@@ -1421,11 +1421,13 @@ class Analyzer:
             # 4. Кэшированный RugCheck аудит (концентрация холдеров и блокировка LP на кастомных токенах)
             if rc_st == 200 and isinstance(rc_data, dict):
                 raw_sc = float(rc_data.get("score") or 0.0)
+                _is_pump_origin_chk = mint.endswith("pump") or str((pair_data or {}).get("dexId", "")).lower() in ("pumpswap", "meteora")
+                _allowed_lp_terms_chk = ("large amount of lp unlocked", "lp provider", "single lp provider") if _is_pump_origin_chk else ("lp provider",)
                 ign = sum(
                     float(rk.get("score", 0) or 0)
                     for rk in (rc_data.get("risks") or [])
                     if any(k in str(rk.get("name", "")).lower() for k in (
-                        "low liquidity", "creator history", "copycat", "symbol mimic", "lp provider"
+                        "low liquidity", "creator history", "copycat", "symbol mimic", *_allowed_lp_terms_chk
                     ))
                 )
                 clean_sc = max(0.0, raw_sc - ign)
@@ -1434,6 +1436,8 @@ class Analyzer:
                 for rk in (rc_data.get("risks") or []):
                     rkn = str(rk.get("name", "")).lower()
                     rkl = str(rk.get("level", "")).lower()
+                    if _is_pump_origin_chk and "large amount of lp unlocked" in rkn:
+                        continue
                     if rkl == "danger" and any(k in rkn for k in ("single holder", "high ownership", "large amount of lp unlocked", "freeze authority")):
                         return False, f"RugCheck критический риск: {rk.get('name')}"
                 if not mint.endswith("pump") and not is_pump_curve:
@@ -1650,22 +1654,23 @@ class Analyzer:
                     f"🚫 [POST-MIGRATION-DUMP] {symbol} ({mint[:8]}): выпускник Pump.fun слит ниже миграции (FDV ${_fdv_chk_pre:,.0f} < $46k) — кейс SHANE.",
                 )
 
-        _max_age_min = float(getattr(config, "SOLANA_MAX_AGE_MIN", 720.0))
+        _max_age_min = float(getattr(config, "SOLANA_MAX_AGE_MIN", 60.0))
+        # Разрешаем монеты до 90м ТОЛЬКО при огромной ликвидности ($40k+) и мощном притоке покупателей
         _is_active_breakout_pool = (
-            _age_min_pre <= 1440.0
+            _age_min_pre <= 90.0
             and _fdv_chk_pre <= 1500000.0
-            and _raw_liq_age >= 15000.0
-            and _vm5_pre >= 8000.0
-            and (_vm5_pre / max(_raw_liq_age, 1.0)) >= 0.15
+            and _raw_liq_age >= 40000.0
+            and _vm5_pre >= 15000.0
+            and (_vm5_pre / max(_raw_liq_age, 1.0)) >= 0.20
             and _m5 >= 5.0
-            and _avg_tx_age >= 12.0
-            and _b5_pre >= _s5_pre * 1.15
+            and _avg_tx_age >= 15.0
+            and _b5_pre >= _s5_pre * 1.25
         )
         if _age_min_pre > _max_age_min and not _is_active_breakout_pool:
             return self._deny(
                 mint,
                 f"zombie-old-token {_age_min_pre:.0f}m",
-                f"🚫 [ZOMBIE-AGE] {symbol} ({mint[:8]}): возраст {_age_min_pre/60:.1f}ч > {_max_age_min/60:.1f}ч без прорывного объема.",
+                f"🚫 [ZOMBIE-AGE] {symbol} ({mint[:8]}): возраст {_age_min_pre:.0f}м > {_max_age_min:.0f}м — уставший старый пул (кейс GIGAHUG/INVEST).",
             )
 
         # 2. Защита от фейковых микро bump-ботов (кейсы LAURA $1.60 avg_tx, HODL $3.10, IPHONEDUO $5.00)
@@ -1703,7 +1708,12 @@ class Analyzer:
             )
 
         # 3. ЖЕСТКИЙ ФИЛЬТР ИМПУЛЬСА, СКОРОСТИ ОБОРОТА И ТРЕНДА ДО ROCKET-XGB:
-        _min_v5_cfg = float(getattr(config, "MIN_VOLUME_M5", 3500.0))
+        _base_v5_cfg = float(getattr(config, "MIN_VOLUME_M5", 2000.0))
+        # Для свежих миграций и молодых токенов (<10м) пускаем ранний старт от $600 при живом перевесе покупателей
+        if _age_min_pre <= 10.0 or _is_burned_launchpad:
+            _min_v5_cfg = 600.0 if (_b5_pre >= _s5_pre and _tot_tx5_pre >= 12) else 1400.0
+        else:
+            _min_v5_cfg = _base_v5_cfg
         if _vm5_pre < _min_v5_cfg:
             return self._deny(
                 mint,
@@ -1773,21 +1783,34 @@ class Analyzer:
             and _b5_pre >= _s5_pre * 1.15
         )
         _max_entry_h1 = 2500.0 if _is_active_fresh_rocket else _base_max_entry_h1
-        _max_entry_m5 = float(getattr(config, "MAX_ENTRY_M5_PCT", 110.0))
+        _max_entry_m5 = float(getattr(config, "MAX_ENTRY_M5_PCT", 28.0))
         if _h1 > _max_entry_h1 and _age_min_pre > 4.0:
             return self._deny(
                 mint,
                 f"h1-exhausted {_h1:.0f}%>{_max_entry_h1:.0f}%",
                 f"🚫 [EXHAUSTED-TOP] {symbol} ({mint[:8]}): рост за час +{_h1:+.1f}% > +{_max_entry_h1:.0f}% — вершина пампа.",
             )
+        # Защита от покупки на верхушке вертикальной свечи (кейсы yarl +84%, ㅤ +61%, p402 +59%, Raymond +54%):
+        # Если m5 > 28%, разрешаем вход ТОЛЬКО если монета уже откатила на m1 (-1.8%..-6.0%),
+        # а если свеча летит вертикально без отката (m1 >= 0) — это 100% покупка локального хая!
         if _m5 > _max_entry_m5:
-            _max_allowed_m5 = 450.0 if (_age_min_pre <= 30.0 or _is_burned_launchpad) else 165.0
-            _is_strong_breakout = (_vm5_pre >= 6000.0 and _b5_pre >= _s5_pre * 1.12 and _m5 <= _max_allowed_m5)
-            if not _is_strong_breakout:
+            _is_cooling_pullback = (_m1 <= -1.8 and _m5 <= 38.0 and _b5_pre >= _s5_pre * 1.15)
+            if not _is_cooling_pullback:
                 return self._deny(
                     mint,
                     f"m5-vertical-spike {_m5:.0f}%>{_max_entry_m5:.0f}%",
-                    f"🚫 [FOMO-VERTICAL] {symbol} ({mint[:8]}): 5м свеча +{_m5:+.1f}% > +{_max_entry_m5:.0f}% без прорывного объема — перегретая свеча.",
+                    f"🚫 [FOMO-VERTICAL] {symbol} ({mint[:8]}): 5м свеча +{_m5:+.1f}% > +{_max_entry_m5:.0f}% (покупка вершины зеленой палки без отката) — кейс yarl/p402.",
+                )
+
+        # Защита от давления продавцов и скрытого сброса китов (кейсы SOLC 735 продаж, DOG™ 291 продажа):
+        if _txns_tot_pre >= 25 and _s5_pre > 0:
+            _sell_ratio = _s5_pre / _txns_tot_pre
+            _v2l_pre = (_vm5_pre / max(_raw_liq_chk, 1.0)) if _raw_liq_chk > 0 else 0.0
+            if _sell_ratio >= 0.38 and (_v2l_pre >= 2.2 or _b5_pre < _s5_pre * 1.20):
+                return self._deny(
+                    mint,
+                    f"heavy-sell-pressure {_sell_ratio*100:.0f}% sells",
+                    f"🚫 [SELL-PRESSURE] {symbol} ({mint[:8]}): продавцов {_s5_pre}/{_txns_tot_pre} ({_sell_ratio*100:.0f}%) при v/l {_v2l_pre:.1f}x — сброс китов (кейс SOLC/DOG™).",
                 )
 
         # 4.9. Wash-Trading Spike Guard: НЕ баним живые ракеты (ELYSIONPAD 25.2x avg $183, CHIMPS 1.5x, CALLCAT 2.2x), режем реальный симметричный wash-дамп!
@@ -1818,13 +1841,13 @@ class Analyzer:
             _vol_liq_r = (_vm5_pre / max(_raw_liq_chk, 1.0)) if _raw_liq_chk > 0 else 0.0
             _txns_tot = _b5_pre + _s5_pre
             _is_organic_stealth = (
-                _raw_liq_chk >= 15000.0
-                and _vm5_pre >= 2500.0
-                and _vol_liq_r <= 2.2
+                _raw_liq_chk >= 10000.0
+                and _vm5_pre >= 1200.0
+                and _vol_liq_r <= 5.5
                 and (
-                    (_b5_pre >= 15 and _b5_pre >= _s5_pre * 1.05) or
-                    (_b5_pre >= 10 and _s5_pre <= 30 and _m5 >= 2.0 and _avg_tx_pre >= 25.0) or
-                    (_vm5_pre >= 8000.0 and _b5_pre >= _s5_pre)
+                    (_b5_pre >= 12 and _b5_pre >= _s5_pre * 1.05) or
+                    (_b5_pre >= 8 and _s5_pre <= 30 and _m5 >= 2.0 and _avg_tx_pre >= 20.0) or
+                    (_vm5_pre >= 6000.0 and _b5_pre >= _s5_pre)
                 )
             )
             if not _is_organic_stealth:
@@ -1957,13 +1980,18 @@ class Analyzer:
 
                     _rc_raw_score = float(rc_data.get("score") or 0.0)
 
-                    # Исключаем ТОЛЬКО безвредный шум: низкая ликвидность для молодых пулов и copycat для мемов.
-                    # НИ В КОЕМ СЛУЧАЕ НЕ ИСКЛЮЧАЕМ Single holder, High ownership, Top 10 concentration!
+                    # Для PumpSwap / токенов с launchpad bonding curve RugCheck начисляет 10,000-11,000 штрафных баллов
+                    # за "Large amount of LP unlocked" и "LP provider", так как LP лежит в смарт-контракте AMM,
+                    # а не сожжён на 11111111111111111111111111111111. Дев не может снять этот LP!
+                    _is_pump_origin_main = mint.endswith("pump") or str((pair_data or {}).get("dexId", "")).lower() in ("pumpswap", "meteora")
+                    _allowed_lp_terms_main = ("large amount of lp unlocked", "lp provider", "single lp provider") if _is_pump_origin_main else ("lp provider",)
+
+                    # Исключаем безвредный шум: низкая ликвидность для молодых пулов, copycat для мемов, и LP контракт пула.
                     _rc_penalty_to_ignore = sum(
                         float(rk.get("score", 0) or 0)
                         for rk in (rc_data.get("risks") or [])
                         if any(k in str(rk.get("name", "")).lower() for k in (
-                            "low liquidity", "creator history", "copycat", "symbol mimic", "lp provider"
+                            "low liquidity", "creator history", "copycat", "symbol mimic", *_allowed_lp_terms_main
                         ))
                     )
 
@@ -1975,6 +2003,8 @@ class Analyzer:
                     for rk in (rc_data.get("risks") or []):
                         _rk_name = str(rk.get("name", "")).lower()
                         _rk_lvl = str(rk.get("level", "")).lower()
+                        if _is_pump_origin_main and "large amount of lp unlocked" in _rk_name:
+                            continue
                         if _rk_lvl == "danger" and any(k in _rk_name for k in ("single holder", "high ownership", "top 10 holders", "large amount of lp unlocked", "freeze authority")):
                             return self._deny(mint, f"rc-danger {_rk_name[:15]}", f"🚫 [АНТИСКАМ-RC] {symbol} ({mint[:8]}): критический риск RugCheck '{rk.get('name')}' — блок скама!")
 

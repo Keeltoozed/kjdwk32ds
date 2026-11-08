@@ -419,23 +419,42 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
 
     # Anti-FOMO и защита от 0-соцсеточных рагпулов
     _m5_j = float(((td or {}).get("priceChange") or {}).get("m5", 0) or 0)
+    _m1_j = float(((td or {}).get("priceChange") or {}).get("m1", 0) or 0)
     _h1_j = float(((td or {}).get("priceChange") or {}).get("h1", 0) or 0)
     _c_at_j = (td or {}).get("pairCreatedAt") or 0
     _age_j = ((time.time() * 1000 - _c_at_j) / 60000.0) if _c_at_j else 30.0
-    _max_h1_cfg = float(getattr(config, "MAX_ENTRY_H1_PCT", 360.0))
-    _max_m5_cfg = float(getattr(config, "MAX_ENTRY_M5_PCT", 110.0))
+    _max_h1_cfg = float(getattr(config, "MAX_ENTRY_H1_PCT", 350.0))
+    _max_m5_cfg = float(getattr(config, "MAX_ENTRY_M5_PCT", 28.0))
+    _max_age_cfg = float(getattr(config, "SOLANA_MAX_AGE_MIN", 60.0))
     _req_soc_age = float(getattr(config, "REQUIRE_SOCIALS_MIN_AGE_MIN", 20.0))
     _vm5_j = float(((td or {}).get("volume") or {}).get("m5", 0) or 0)
     _b5_j = int((((td or {}).get("txns") or {}).get("m5") or {}).get("buys", 0) or 0)
-    _s5_j = int((((td or {}).get("txns") or {}).get("m5") or {}).get("sells", 0) or 0)
+    _s5_j = int((((td or {}).get("txns") or {}).get("sells", 0) or 0))
     _liq_j = float(((td or {}).get("liquidity") or {}).get("usd", 0) or 0)
 
-    if _m5_j > _max_m5_cfg:
-        _max_allowed_m5_j = 450.0 if (_age_j <= 30.0 or mint.endswith(("pump", "bonk", "BAGS")) or _dex_j == "pumpswap") else 165.0
-        _is_breakout = (_vm5_j >= 6000.0 and _b5_j >= _s5_j * 1.12 and _m5_j <= _max_allowed_m5_j)
-        if not _is_breakout:
-            print(f"🚫 [{source_tag}-FOMO-M5] {_sym_tmp}: m5 +{_m5_j:.1f}% > +{_max_m5_cfg:.0f}% без прорывного объема — отмена!")
+    # 1. Защита от уставших зомби-монет (кейс GIGAHUG, INVEST, HABIBI)
+    if _age_j > _max_age_cfg:
+        _is_active_breakout_j = (_age_j <= 90.0 and _liq_j >= 40000.0 and _vm5_j >= 25000.0 and _b5_j >= _s5_j * 1.25)
+        if not _is_active_breakout_j:
+            print(f"🚫 [{source_tag}-ZOMBIE-AGE] {_sym_tmp}: возраст {_age_j:.0f}м > {_max_age_cfg:.0f}м — уставший пул, отмена!")
             return False
+
+    # 2. Anti-FOMO m5: не покупаем вершины пампа без отката (кейсы yarl, p402, ㅤ, Raymond)
+    if _m5_j > _max_m5_cfg:
+        _is_cooling_pullback = (_m1_j <= -1.8 and _m5_j <= 38.0 and _b5_j >= _s5_j * 1.15)
+        if not _is_cooling_pullback:
+            print(f"🚫 [{source_tag}-FOMO-M5] {_sym_tmp}: m5 +{_m5_j:.1f}% > +{_max_m5_cfg:.0f}% без отката (m1={_m1_j:+.1f}%) — покупка хая, отмена!")
+            return False
+
+    # 3. Защита от давления продавцов (кейс SOLC 735 продаж, DOG™ 291 продажа)
+    _tot_tx_j = _b5_j + _s5_j
+    if _tot_tx_j >= 25 and _s5_j > 0:
+        _sell_ratio_j = _s5_j / _tot_tx_j
+        _vl_ratio_j = (_vm5_j / max(_liq_j, 1.0)) if _liq_j > 0 else 0.0
+        if _sell_ratio_j >= 0.38 and (_vl_ratio_j >= 2.2 or _b5_j < _s5_j * 1.20):
+            print(f"🚫 [{source_tag}-SELL-PRESSURE] {_sym_tmp}: продавцов {_s5_j}/{_tot_tx_j} ({_sell_ratio_j*100:.0f}%) при v/l {_vl_ratio_j:.1f}x — сброс китов, отмена!")
+            return False
+
     _eff_max_h1_j = 2500.0 if (_age_j <= 4.0 and _vm5_j >= 4000.0 and _b5_j >= _s5_j * 1.15) else _max_h1_cfg
     if _h1_j > _eff_max_h1_j and _age_j > 4.0:
         print(f"🚫 [{source_tag}-FOMO-H1] {_sym_tmp}: h1 +{_h1_j:.0f}% > +{_eff_max_h1_j:.0f}% — перегретый часовой памп, отмена!")
@@ -502,6 +521,29 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
         if "VIP-" in _sig:
             size = min(size, float(getattr(config, "TG_VIP_SIZE_USD", 15.0) or 15.0))
         _mint_ml_conf = float(getattr(analyzer, "rocket_scores", {}).get(mint, getattr(analyzer, "last_score", 0.0)) or 0.0)
+
+        # Pre-flight live Jupiter price check (защита от покупки падающей свечи)
+        try:
+            from jupiter import JupiterAPI
+            _j_ok, _j_why = await JupiterAPI.is_token_sellable(mint)
+            if not _j_ok and any(k in str(_j_why or "").lower() for k in ("no routes", "cannot sell", "honeypot", "freeze", "0 sol returned")):
+                print(f"🚫 [{source_tag}-UNSELLABLE] {_sym_tmp} ({mint[:8]}): токен непродаваем на DEX ({_j_why}) — отмена входа!")
+                return False
+            _jup_live_px = await JupiterAPI.get_price(mint)
+            if _jup_live_px and _jup_live_px > 0 and price > 0:
+                if _jup_live_px < price * 0.975:
+                    print(f"🚫 [{source_tag}-LIVE-DUMP] {_sym_tmp} ({mint[:8]}): живая цена Jupiter (${_jup_live_px:.8f}) уже на {(1.0 - _jup_live_px / price) * 100:.1f}% ниже DexScreener (${price:.8f}) — обвал в моменте, отмена!")
+                    return False
+                _jup_ratio = max(_jup_live_px, price) / min(_jup_live_px, price)
+                if _jup_ratio > 1.055:
+                    print(f"🚫 [{source_tag}-PRICE-MISMATCH] {_sym_tmp} ({mint[:8]}): Jupiter vs сигнал расхождение {_jup_ratio:.2f}x (>1.055x) — отмена!")
+                    return False
+                price = _jup_live_px
+                if _wick_stop_price and _wick_pct:
+                    _wick_stop_price = price * (1.0 + _wick_pct)
+        except Exception:
+            pass
+
         tracker.add_position(
             _sym_tmp, mint, price, min(size, 100.0),
             is_mature=True,
@@ -666,11 +708,14 @@ async def jup_loop(analyzer, tracker):
                         _lq_cand = float((td.get("liquidity") or {}).get("usd", 0) or 0)
                         _v5_cand = float((td.get("volume") or {}).get("m5", 0) or 0)
 
-                        # Отсекаем древние мамонты синхронно с ZOMBIE-AGE в analyzer.py (без пустого спама лога!)
-                        if _ag > 1440.0 or (_ag > 360.0 and (_v5_cand < 6000.0 or _m5 < 5.0 or _lq_cand < 25000.0)) or (_ag > 60.0 and _m5 < 2.0):
-                            skipped_ancient += 1
-                            processed[m] = _now_t + 300
-                            continue
+                        # Отсекаем уставшие зомби-монеты синхронно с ZOMBIE-AGE в analyzer.py
+                        _max_age_cand = float(getattr(config, "SOLANA_MAX_AGE_MIN", 60.0))
+                        if _ag > _max_age_cand:
+                            _is_big_cand = (_ag <= 90.0 and _lq_cand >= 40000.0 and _v5_cand >= 25000.0)
+                            if not _is_big_cand:
+                                skipped_ancient += 1
+                                processed[m] = _now_t + 600
+                                continue
 
                         # Отсекаем флет m5 < 1.8%
                         if _m5 < 1.8:
