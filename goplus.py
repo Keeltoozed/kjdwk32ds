@@ -629,18 +629,23 @@ async def check_solana(mint: str):
                 rc_status, rc_data = await fetch_json(rc_url, timeout=4, retries=1)
                 if rc_status == 200 and isinstance(rc_data, dict):
                     rc_score = rc_data.get("score", 0) or 0
-                    # Вычитаем штраф за "Low Liquidity", чтобы не блокировать молодые пулы:
-                    low_liq_penalty = sum(
+                    # Вычитаем штрафы за стандартный шум DEX/AMM-пулов и launchpad (unlocked LP, AMM концентрация, copycat):
+                    _allowed_rc_noise = (
+                        "low liquidity", "creator history", "copycat", "symbol mimic",
+                        "large amount of lp unlocked", "lp provider", "single lp provider",
+                        "lp not locked", "unlocked lp", "single holder ownership", "high holder concentration"
+                    )
+                    rc_noise_penalty = sum(
                         float(rk.get("score", 0) or 0)
                         for rk in (rc_data.get("risks") or [])
-                        if "low liquidity" in str(rk.get("name", "")).lower()
+                        if any(k in str(rk.get("name", "")).lower() for k in _allowed_rc_noise)
                     )
-                    clean_score = max(0.0, rc_score - low_liq_penalty)
-                    if clean_score >= 1000:
-                        verdict = (False, f"rugcheck-score {clean_score:.0f} >= 1000 (высокий риск скама/слива)")
-                    elif rc_data.get("freezeAuthority"):
+                    clean_score = max(0.0, rc_score - rc_noise_penalty)
+                    if clean_score >= 2000:
+                        verdict = (False, f"rugcheck-score {clean_score:.0f} >= 2000 (высокий риск скама/слива)")
+                    elif rc_data.get("freezeAuthority") and str(rc_data.get("freezeAuthority") or "") not in ("11111111111111111111111111111111", "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"):
                         verdict = (False, "rugcheck: freeze authority не отозвана")
-                    elif rc_data.get("mintAuthority"):
+                    elif rc_data.get("mintAuthority") and str(rc_data.get("mintAuthority") or "") not in ("11111111111111111111111111111111", "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"):
                         verdict = (False, "rugcheck: mint authority не отозвана")
             except Exception:
                 pass

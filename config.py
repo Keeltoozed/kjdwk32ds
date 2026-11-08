@@ -61,8 +61,8 @@ INFANT_DUMP_PCT = -0.095       # Срез рага на 1-й минуте при
 
 # === ФИЛЬТРЫ ВХОДА (ОТСЕКАЮТ ВЕРШИНЫ И ПАДАЮЩИЕ НОЖИ) ===
 MAX_ENTRY_H1_PCT = 350.0       # Запрет входа в перегретые пампы > +350% за 1ч (строго для всех токенов > 4м!)
-MAX_ENTRY_M5_PCT = 28.0        # Жесткий потолок: запрет входа на перегретой 5м свече > +28% (не покупаем хай вертикального пампа!)
-MAX_ENTRY_M1_PCT = 8.0         # Вход в консолидацию и откат: запрет покупки вершины 1м свечи > +8.0% (не кормим снайперов!)
+MAX_ENTRY_M5_PCT = 45.0        # Потолок m5: допускаем сильный импульс до +45% (не срезаем взлетающие ракеты вроде FLOAT +29.7%)
+MAX_ENTRY_M1_PCT = 12.0        # Вход в импульс: до +12.0% (до +25% при высоком спросе покупателей)
 REQUIRE_SOCIALS_MIN_AGE_MIN = 8.0
 
 STREAK_COOLDOWN_ENABLED = False
@@ -144,7 +144,7 @@ EVM_NORMAL_CRASH = 0.22
 BREAKEVEN_PCT = 0.075     # После +7.5% пика включается Breakeven Shield (+1.5%..+3.5% пол) — зеленые сделки больше никогда не уходят в минус!
 
 PREFETCH_TTL_SEC = 35
-SOLANA_MIN_AGE_MIN = 0.5        # Разрешаем молодые ракеты от 30 секунд (LEMON +406%, SHADOW +195%)
+SOLANA_MIN_AGE_MIN = 0.25       # Разрешаем молодые ракеты от 15 секунд (TWAP, LEMON, SHADOW)
 SOLANA_MAX_AGE_HOURS = 4.0       # До 4 часов (не срезаем развивающиеся ракеты на пике тренда)
 SOLANA_MAX_AGE_MIN = 240.0       # Торгуем активные монеты до 4 часов
 JEV_MAX_AGE_MIN = 240.0          # В GROK-JEV активные монеты до 4 часов
@@ -156,7 +156,7 @@ STAGNANT_LOSS_MIN_FAST = 7.0
 STAGNANT_HOLD_MIN = 12.0
 
 AI_MODE = "degen"
-MIN_LIQUIDITY = 10000.0         # Минимум $10,000 реальной ликвидности на DEX
+MIN_LIQUIDITY = 8000.0          # Минимум $8,000 реальной ликвидности на DEX (пускает MELT с $9,981)
 MAX_LIQUIDITY = 50000000
 
 GROQ_API_KEY = (os.getenv("GROQ_API_KEY") or os.getenv("GROK_API_KEY") or os.getenv("XAI_API_KEY") or "").strip().strip('"').strip("'")
@@ -166,10 +166,10 @@ GEMINI_API_KEY = (os.getenv("GEMINI_API_KEY") or "").strip()
 # === GROK BOT x JEV ENGINE ===
 JEV_ENABLED = True
 JEV_WICK_STOP_ENABLED = False
-JEV_EARLY_MIN_AGE_MIN = 0.5
-JEV_MIN_AGE_MIN = 0.8
+JEV_EARLY_MIN_AGE_MIN = 0.25    # Сверхбыстрый вход в горячие ракеты с объемом от 15 секунд
+JEV_MIN_AGE_MIN = 0.35          # Базовый карантин от 20 секунд (не срезаем TWAP 0.4m)
 JEV_MAX_AGE_MIN = 60.0          # Свежие монеты до 60м (защита от зомби-монет GIGAHUG/INVEST)
-JEV_MIN_LIQUIDITY_USD = 10000.0
+JEV_MIN_LIQUIDITY_USD = 8000.0  # Минимум $8k ликвидности (пускает MELT $9,981)
 JEV_MAX_LIQUIDITY_USD = 220000.0
 JEV_MIN_VOLUME_H1 = 8000.0
 JEV_MIN_MCAP_USD = 10000.0      # Минимум $10k MCap (ловит ранние Raydium/PumpSwap ракеты вроде CHOO $11.8k FDV / $18.9k liq)
@@ -354,8 +354,8 @@ SOLANA_FRESH_RESCAN_COOLDOWN = 8
 JEV_TREND_CONFIRM_ENABLED = False
 JEV_FRESH_RECHECK_ENABLED = True   # Включена финальная проверка цены перед покупкой (защищает от покупки на падающей свече!)
 JEV_MIN_M1_ENTRY_FLOOR_PCT = -4.0
-JEV_MIN_H1_PCT = 4.0               # Покупаем только растущий часовой тренд >= +4% (отсекает SHANE -3.6% и PROPFUN +1.5%)
-JEV_MIN_H6_PCT = -10.0
+JEV_MIN_H1_PCT = -8.0              # Разрешаем плоскую консолидацию и разворот от -8% (не режет MEME +3% и GORP +3.8%)
+JEV_MIN_H6_PCT = -15.0
 
 USE_COPYTRADE = True
 COPY_MIN_TIER = 3

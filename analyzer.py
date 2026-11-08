@@ -1429,8 +1429,11 @@ class Analyzer:
             if rc_st == 200 and isinstance(rc_data, dict):
                 raw_sc = float(rc_data.get("score") or 0.0)
                 _dex_low_rc = str((pair_data or {}).get("dexId", "")).lower()
-                _is_pump_origin_chk = mint.endswith("pump") or _dex_low_rc in ("pumpswap", "pump", "pumpfun") or is_pump_curve
-                _allowed_lp_terms_chk = ("large amount of lp unlocked", "lp provider", "single lp provider") if _is_pump_origin_chk else ("lp provider",)
+                _is_pump_origin_chk = mint.endswith("pump") or _dex_low_rc in ("pumpswap", "pump", "pumpfun", "meteora", "meteoradbc") or is_pump_curve
+                _allowed_lp_terms_chk = (
+                    "large amount of lp unlocked", "lp provider", "single lp provider",
+                    "lp not locked", "unlocked lp", "single holder ownership", "high holder concentration", "top 10 holders"
+                ) if _is_pump_origin_chk else ("lp provider",)
                 ign = sum(
                     float(rk.get("score", 0) or 0)
                     for rk in (rc_data.get("risks") or [])
@@ -1653,8 +1656,8 @@ class Analyzer:
                 f"🚫 [LARGE-CAP-SKIP] {symbol} ({mint[:8]}): FDV ${_fdv_chk_pre:,.0f} > $1.8M — ракета уже тяжёлая.",
             )
         if mint.endswith("pump") and _dex_pre_early not in ("pump", "pumpfun") and 0 < _fdv_chk_pre < 46000.0:
-            _is_real_dump = (_fdv_chk_pre < 22000.0) or (_s5_pre > int(_b5_pre * 1.25) and _m5 < -5.0)
-            _is_active_grad = (_vm5_pre >= 2500.0 and _b5_pre >= int(_s5_pre * 1.05) and _m5 >= -4.0)
+            _is_real_dump = (_fdv_chk_pre < 12000.0) or (_s5_pre > int(_b5_pre * 1.25) and _m5 < -5.0)
+            _is_active_grad = (_vm5_pre >= 2000.0 and _b5_pre >= int(_s5_pre * 1.00) and _m5 >= -4.0)
             if _is_real_dump or not _is_active_grad:
                 return self._deny(
                     mint,
@@ -1688,16 +1691,15 @@ class Analyzer:
         _tot_tx5_pre = _b5_pre + _s5_pre
         _avg_tx_pre = (_vm5_pre / _tot_tx5_pre) if _tot_tx5_pre > 0 else 0.0
         _is_real_bump_runner = (
-            _b5_pre >= _s5_pre * 1.30
-            and (_b5_pre - _s5_pre) >= 80
-            and _vm5_pre >= 3500.0
-            and _raw_liq_chk >= 18000.0
+            (_b5_pre >= _s5_pre * 1.15 and _vm5_pre >= 3000.0 and _raw_liq_chk >= 14000.0)
+            or (_b5_pre >= _s5_pre * 1.30 and (_b5_pre - _s5_pre) >= 60 and _vm5_pre >= 2500.0)
+            or (_vm5_pre >= 10000.0 and _b5_pre >= _s5_pre)
         )
-        if _tot_tx5_pre >= 120 and _avg_tx_pre < 8.0 and not _is_real_bump_runner:
+        if _tot_tx5_pre >= 120 and _avg_tx_pre < 3.0 and not _is_real_bump_runner:
             return self._deny(
                 mint,
                 f"fake-bump-wash-bot avg ${_avg_tx_pre:.1f}",
-                f"🚫 [WASH-BUMP-TRAP] {symbol} ({mint[:8]}): накрутка микро-ботом ({_tot_tx5_pre} txns, avg ${_avg_tx_pre:.2f} < $8) — блок!",
+                f"🚫 [WASH-BUMP-TRAP] {symbol} ({mint[:8]}): накрутка микро-ботом ({_tot_tx5_pre} txns, avg ${_avg_tx_pre:.2f} < $3) — блок!",
             )
         _is_deep_launchpad_runner = (
             _is_burned_launchpad
@@ -1756,23 +1758,28 @@ class Analyzer:
             )
 
         # Запрет покупки «дохлых кошек» в часовом сливе, КРОМЕ подтверждённого V-образного разворота с объёмом (SCAMSEM +122%)
-        _min_h1_cfg = float(getattr(config, "JEV_MIN_H1_PCT", -5.0))
-        _h6_pre_val = float(_pc.get("h6", 0) or 0)
-        _is_v_reversal = (
-            _h1 >= -25.0 and _h6_pre_val >= -30.0
-            and _m5 >= 12.0 and _vm5_pre >= 15000.0
-            and _raw_liq_chk >= 18000.0 and _b5_pre >= _s5_pre * 1.30
-        )
-        if not _is_v_reversal and (_h1 < _min_h1_cfg or _h6_pre_val < -20.0):
-            return self._deny(
-                mint,
-                f"downtrend-h1 {_h1:+.0f}%",
-                f"🚫 [DEAD-CAT-DUMP] {symbol} ({mint[:8]}): часовой тренд в сливе (h1 {_h1:+.1f}%, h6 {_h6_pre_val:+.1f}%) — падающий нож!",
+        # Проверяем часовой тренд ТОЛЬКО если монете реально >= 45 минут!
+        # Молодые токены (<45м) не имеют полноценной 1ч истории, а h1 отражает кривую Pump.fun (кейсы MEME +342%, GORP +100%)
+        if _age_min_pre >= 45.0:
+            _min_h1_cfg = float(getattr(config, "JEV_MIN_H1_PCT", -8.0))
+            _h6_pre_val = float(_pc.get("h6", 0) or 0)
+            _is_v_reversal = (
+                _h1 >= -25.0 and _h6_pre_val >= -30.0
+                and _m5 >= 12.0 and _vm5_pre >= 15000.0
+                and _raw_liq_chk >= 18000.0 and _b5_pre >= _s5_pre * 1.30
             )
+            if not _is_v_reversal and (_h1 < _min_h1_cfg or (_age_min_pre >= 90.0 and _h6_pre_val < -25.0)):
+                return self._deny(
+                    mint,
+                    f"downtrend-h1 {_h1:+.0f}%",
+                    f"🚫 [DEAD-CAT-DUMP] {symbol} ({mint[:8]}): часовой тренд в сливе (h1 {_h1:+.1f}%, h6 {_h6_pre_val:+.1f}%) — падающий нож!",
+                )
 
-        # Ранний вход в накопление на ликвидных пулах (>= +1.8% при liq >= $18k, EMBER +38%, FUSE +34%) и защита от затухающих/экстремальных 1м свечей
-        _min_m5_req = 1.8 if (_raw_liq_chk >= 18000.0 and _b5_pre >= _s5_pre * 1.18 and _vm5_pre >= 3500.0) else 3.0
-        if _m5 < _min_m5_req:
+        # Ранний вход в накопление на ликвидных пулах (>= +1.2% при liq >= $14k, EMBER +38%, FUSE +34%)
+        # и вход на микро-откате покупателей (до -2.5% при b5 >= s5 * 1.25)
+        _is_buyer_dip_pre = (_b5_pre >= int(_s5_pre * 1.25) and _vm5_pre >= 2500.0 and _m5 >= -2.5)
+        _min_m5_req = 1.2 if (_raw_liq_chk >= 14000.0 and _b5_pre >= _s5_pre * 1.10 and _vm5_pre >= 2500.0) else 2.5
+        if _m5 < _min_m5_req and not _is_buyer_dip_pre:
             return self._deny(mint, f"m5-too-weak {_m5:+.1f}%", f"🚫 [WEAK-M5] {symbol} ({mint[:8]}): m5 {_m5:+.1f}% < +{_min_m5_req:.1f}% — нет разгона.")
         _base_max_m1 = float(getattr(config, "MAX_ENTRY_M1_PCT", 10.0))
         # Разрешаем импульсный пробой (свеча +12%..+25%) при активном спросе покупателей (b5 >= s5 и vol >= $2500)
@@ -1796,7 +1803,7 @@ class Analyzer:
             and _b5_pre >= _s5_pre * 1.05
         )
         _max_entry_h1 = 2500.0 if _is_active_fresh_rocket else _base_max_entry_h1
-        _max_entry_m5 = float(getattr(config, "MAX_ENTRY_M5_PCT", 28.0))
+        _max_entry_m5 = float(getattr(config, "MAX_ENTRY_M5_PCT", 45.0))
         if _h1 > _max_entry_h1 and _age_min_pre > 4.0:
             return self._deny(
                 mint,
@@ -1804,11 +1811,11 @@ class Analyzer:
                 f"🚫 [EXHAUSTED-TOP] {symbol} ({mint[:8]}): рост за час {_h1:+.1f}% > +{_max_entry_h1:.0f}% — вершина пампа.",
             )
         # Защита от покупки на верхушке вертикальной свечи:
-        # Разрешаем сильный пробой покупателями (до +120% при 20%+ перевесе покупателей b5/s5 >= 1.20)
+        # Разрешаем сильный пробой покупателями (до +120% при 10%+ перевесе покупателей b5/s5 >= 1.10)
         # либо остывающий откат (m1 <= -1.0%). Блокируем чистую покупку хая без перевеса покупателей!
         if _m5 > _max_entry_m5:
-            _is_strong_buyer_breakout = (_m5 <= 120.0 and _b5_pre >= int(_s5_pre * 1.20) and _vm5_pre >= 5000.0 and (_b5_pre + _s5_pre) >= 20)
-            _is_cooling_pullback = (_m1 <= -1.0 and _m5 <= 90.0 and _b5_pre >= _s5_pre * 1.10)
+            _is_strong_buyer_breakout = (_m5 <= 120.0 and _b5_pre >= int(_s5_pre * 1.10) and _vm5_pre >= 3500.0 and (_b5_pre + _s5_pre) >= 20)
+            _is_cooling_pullback = (_m1 <= -1.0 and _m5 <= 90.0 and _b5_pre >= _s5_pre * 1.05)
             if not (_is_strong_buyer_breakout or _is_cooling_pullback):
                 return self._deny(
                     mint,
@@ -2001,14 +2008,14 @@ class Analyzer:
 
                     _rc_raw_score = float(rc_data.get("score") or 0.0)
 
-                    # Для PumpSwap / токенов с launchpad bonding curve RugCheck начисляет 10,000-11,000 штрафных баллов
+                    # Для PumpSwap / Meteora / токенов с launchpad bonding curve RugCheck начисляет 10,000-35,000 штрафных баллов
                     # за "Large amount of LP unlocked", "LP provider", и ошибочно за "Single holder ownership" (AMM-пул кривой).
                     # Дев не может снять этот LP и не держит пул!
                     _dex_low_main = str((pair_data or {}).get("dexId", "")).lower()
-                    _is_pump_origin_main = mint.endswith("pump") or _dex_low_main in ("pumpswap", "pump", "pumpfun") or is_pump_curve
+                    _is_pump_origin_main = mint.endswith("pump") or _dex_low_main in ("pumpswap", "pump", "pumpfun", "meteora", "meteoradbc") or is_pump_curve
                     _allowed_lp_terms_main = (
                         "large amount of lp unlocked", "lp provider", "single lp provider",
-                        "lp not locked", "unlocked lp", "single holder ownership", "high holder concentration"
+                        "lp not locked", "unlocked lp", "single holder ownership", "high holder concentration", "top 10 holders"
                     ) if _is_pump_origin_main else ("lp provider",)
 
                     # Исключаем безвредный шум: низкая ликвидность для молодых пулов, copycat для мемов, и LP контракт пула.

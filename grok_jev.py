@@ -513,10 +513,12 @@ class GrokJevEngine:
 
         # 2. Возраст токена и запрет старых стоячих гигантов (кейс HODL 940.7м $4.2M FDV, DUGE 224.7м m5 +1.9%)
         _avg_tx_e = vol_m5 / max(1, b5 + s5)
-        _is_early_rocket = (eff_liq >= 12000.0 and vol_m5 >= 6000.0 and b5 >= 30 and b5 >= s5 * 1.25
-                            and _avg_tx_e >= 22.0 and m5 >= 3.5)
-        _early_min_age = max(0.5, float(getattr(_c, "JEV_EARLY_MIN_AGE_MIN", 0.5)))
-        _std_min_age = max(0.8, float(getattr(_c, "JEV_MIN_AGE_MIN", 0.8)))
+        _is_early_rocket = (
+            (eff_liq >= 10000.0 and vol_m5 >= 3000.0 and b5 >= 15 and b5 >= s5 * 1.05 and m5 >= 1.5)
+            or (vol_m5 >= 15000.0 and b5 >= s5)
+        )
+        _early_min_age = max(0.25, float(getattr(_c, "JEV_EARLY_MIN_AGE_MIN", 0.25)))
+        _std_min_age = max(0.35, float(getattr(_c, "JEV_MIN_AGE_MIN", 0.35)))
         min_age = _early_min_age if _is_early_rocket else _std_min_age
         max_age = float(getattr(_c, "SOLANA_MAX_AGE_MIN", 240.0))  # Ракеты до 240м (4 часа)
         _is_jev_breakout = (
@@ -540,13 +542,17 @@ class GrokJevEngine:
             return False, f"age-out-of-bounds {age_min:.1f}m > {max_age:.1f}m (old token without breakout)"
 
         # Защита от микро bump-ботов в m5 (LAURA $1.60, HODL $3.10, IPHONEDUO $5.00)
-        _is_real_bump_runner_g = (b5 >= s5 * 1.30 and (b5 - s5) >= 80 and vol_m5 >= 3500.0 and eff_liq >= 18000.0)
-        if (b5 + s5) >= 120 and _avg_tx_e < 8.0 and not _is_real_bump_runner_g:
-            return False, f"fake-bump-wash-bot avg ${_avg_tx_e:.2f} < $8 across {b5+s5} m5 txns"
+        _is_real_bump_runner_g = (
+            (b5 >= s5 * 1.15 and vol_m5 >= 3000.0 and eff_liq >= 14000.0)
+            or (b5 >= s5 * 1.30 and (b5 - s5) >= 60 and vol_m5 >= 2500.0)
+            or (vol_m5 >= 10000.0 and b5 >= s5)
+        )
+        if (b5 + s5) >= 120 and _avg_tx_e < 3.0 and not _is_real_bump_runner_g:
+            return False, f"fake-bump-wash-bot avg ${_avg_tx_e:.2f} < $3 across {b5+s5} m5 txns"
 
         # Защита от слитых ниже миграции выпускников Pump.fun (кейс SHANE FDV $35.8k, но пускаем PERCOLATOR / LOWCAP $34.9k / MEME $40k с живым потоком)
         if mint.endswith("pump") and dex_id not in ("pump", "pumpfun") and 0 < fdv_mc < 46000.0:
-            _is_real_dump = (fdv_mc < 20000.0) or (s5 > int(b5 * 1.25) and m5 < -5.0)
+            _is_real_dump = (fdv_mc < 12000.0) or (s5 > int(b5 * 1.25) and m5 < -5.0)
             _is_active_grad = (vol_m5 >= 2000.0 and b5 >= int(s5 * 1.00) and m5 >= -5.0)
             if _is_real_dump or not _is_active_grad:
                 return False, f"post-mig-dumped-fdv ${fdv_mc:,.0f} < $46k"
@@ -594,18 +600,21 @@ class GrokJevEngine:
             return False, f"fdv-liquidity-trap liq ${eff_liq:,.0f} < 2% of FDV ${fdv_mc:,.0f} (phantom valuation)"
 
         # 3. Живой импульс ракеты (LIVE ROCKET MOMENTUM)
-        _min_m5_jev = 1.8 if (eff_liq >= 18000.0 and b5 >= int(s5 * 1.15) and vol_m5 >= 3500.0) else 2.5
-        if m5 < _min_m5_jev:
+        # Разрешаем моментум от +1.0% (вместо 2.5%), а при преобладании покупателей (b5 >= s5 * 1.25)
+        # разрешаем вход на микро-откате покупателей до -2.5% (кейсы TAOLF +86%, BTC BANK +145%)
+        _is_buyer_dip_g = (b5 >= int(s5 * 1.25) and vol_m5 >= 2500.0 and (b5 + s5) >= 20 and m5 >= -2.5)
+        _min_m5_jev = 1.0 if (eff_liq >= 14000.0 and b5 >= int(s5 * 1.05) and vol_m5 >= 2500.0) else 1.8
+        if m5 < _min_m5_jev and not _is_buyer_dip_g:
             return False, f"no-momentum m5 {m5:+.1f}% < +{_min_m5_jev:.1f}% (coin is flat/standing still)"
         if age_min >= 20.0:
             _is_massive_mature_flow_g = (vol_m5 >= 10000.0 and eff_liq >= 20000.0 and b5 >= s5 and m5 >= 1.2)
             _is_strong_jev_breakout = (m5 >= 4.0 and vol_m5 >= 2000.0 and b5 >= s5 * 1.05 and (b5 + s5) >= 20)
             if not _is_massive_mature_flow_g and not _is_strong_jev_breakout and (vol_m5 < 5000.0 or ((vol_m5 / max(eff_liq, 1.0)) < 0.18 and vol_m5 < 15000.0) or m5 < 3.5 or (b5 + s5) < 30):
                 return False, f"slow-mature-pool age {age_min:.0f}m vol5 ${vol_m5:,.0f} v/l {(vol_m5/max(eff_liq,1.0)):.2f}x"
-        _max_m5_allowed = float(getattr(_c, "MAX_ENTRY_M5_PCT", 28.0))
+        _max_m5_allowed = float(getattr(_c, "MAX_ENTRY_M5_PCT", 45.0))
         if m5 > _max_m5_allowed:
-            _is_strong_buyer_breakout_g = (m5 <= 120.0 and b5 >= int(s5 * 1.20) and vol_m5 >= 4000.0 and (b5 + s5) >= 20)
-            _is_cooling_pullback = (-6.0 <= m1 <= -1.5 and m5 <= 42.0 and b5 >= s5 * 1.15)
+            _is_strong_buyer_breakout_g = (m5 <= 120.0 and b5 >= int(s5 * 1.10) and vol_m5 >= 3500.0 and (b5 + s5) >= 20)
+            _is_cooling_pullback = (-8.0 <= m1 <= -1.0 and m5 <= 60.0 and b5 >= s5 * 1.05)
             if not (_is_strong_buyer_breakout_g or _is_cooling_pullback):
                 return False, f"fomo-vertical-m5 m5 {m5:+.1f}% > +{_max_m5_allowed:.0f}% (buying top of vertical pump without cooling pullback, m1={m1:+.1f}%)"
         if s5 > 10 and b5 < (s5 * 0.80):
@@ -622,15 +631,19 @@ class GrokJevEngine:
         # Остывающий поздний памп: токен старше 20м режем ТОЛЬКО если m5 отрицательный или нулевой (реальный дамп)
         if age_min >= 20.0 and m5 < 1.2:
             return False, f"late-fade age {age_min:.0f}m m5 {m5:+.1f}% < +1.2% (old token cooling off, not a live rocket)"
-        _min_h1 = float(getattr(_c, "JEV_MIN_H1_PCT", -8.0))
-        _is_jev_v_rev = (h1 >= -25.0 and m5 >= 12.0 and vol_m5 >= 15000.0 and eff_liq >= 18000.0 and b5 >= s5 * 1.30)
-        if h1 < _min_h1 and not _is_jev_v_rev:
-            return False, f"hourly-downtrend h1 {h1:+.1f}% < {_min_h1:+.1f}% (dead-cat bounce)"
-        _h6_raw = pc.get("h6")
-        if _h6_raw is not None:
-            _min_h6 = float(getattr(_c, "JEV_MIN_H6_PCT", -1000.0))
-            if float(_h6_raw or 0) < _min_h6 and not _is_jev_v_rev:
-                return False, f"h6-downtrend {float(_h6_raw or 0):+.1f}% < {_min_h6:+.1f}% (monet is bleeding)"
+        
+        # Проверяем часовой тренд ТОЛЬКО если монете реально >= 45 минут!
+        # Молодые токены (<45м) не имеют 1ч истории, а h1 отражает кёрву Pump.fun (кейс MEME +342%, GORP +100%)
+        if age_min >= 45.0:
+            _min_h1 = float(getattr(_c, "JEV_MIN_H1_PCT", -8.0))
+            _is_jev_v_rev = (h1 >= -25.0 and m5 >= 12.0 and vol_m5 >= 15000.0 and eff_liq >= 18000.0 and b5 >= s5 * 1.30)
+            if h1 < _min_h1 and not _is_jev_v_rev:
+                return False, f"hourly-downtrend h1 {h1:+.1f}% < {_min_h1:+.1f}% (dead-cat bounce)"
+            _h6_raw = pc.get("h6")
+            if _h6_raw is not None and age_min >= 90.0:
+                _min_h6 = float(getattr(_c, "JEV_MIN_H6_PCT", -25.0))
+                if float(_h6_raw or 0) < _min_h6 and not _is_jev_v_rev:
+                    return False, f"h6-downtrend {float(_h6_raw or 0):+.1f}% < {_min_h6:+.1f}% (monet is bleeding)"
 
         # 4. Объем и давление покупателей:
         # 4.0. Wash-Trading Spike Guard: отличаем симметричную бот-накрутку от реального пробоя покупателями (CHIMPS +59% v/l 1.5x, duge $158k liq 3.82x)!
