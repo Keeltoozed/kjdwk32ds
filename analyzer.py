@@ -2062,22 +2062,36 @@ class Analyzer:
                             _m_type = str(_mkt.get("marketType", "")).lower()
                             _m_lp = _mkt.get("lp") or {}
                             _m_lp_locked = float(_m_lp.get("lpLockedPct", 0) or 0)
+                            _m_lp_burned = float(_m_lp.get("lpBurnedPct", 0) or 0)
+                            _m_lp_safe = max(_m_lp_locked, _m_lp_burned)
                             _m_quote_usd = float(_m_lp.get("quoteUSD", 0) or 0)
                             _is_target_mkt = bool(_target_pair_rc and _m_pub == _target_pair_rc)
                             _is_meteora_pool = ("meteora" in _m_type and (_is_target_mkt or "meteora" in dex_id_low or (not _is_canonical_pump and _m_quote_usd >= 2000.0)))
-                            if _is_meteora_pool and _m_lp_locked < 80.0:
-                                return self._deny(mint, "meteora-unlocked-lp", f"🚫 [METEORA-RUG] {symbol} ({mint[:8]}): незаблокированный пул Meteora {_m_type} (lock {_m_lp_locked:.0f}% < 80%) — дев в любой момент забирает SOL (кейсы PEPEBOT/Smiley)!")
-                            if not _is_pump_flag and "raydium" in _m_type and (_is_target_mkt or _m_quote_usd >= 2000.0) and _m_lp_locked < 80.0:
-                                return self._deny(mint, "raydium-unlocked-lp", f"🚫 [RAYDIUM-RUG] {symbol} ({mint[:8]}): кастомный токен на Raydium с незаблокированным LP (lock {_m_lp_locked:.0f}% < 80%) — риск сноса ликвидности!")
+                            if _is_meteora_pool and _m_lp_safe < 80.0:
+                                _has_crit_rug = bool(rc_data.get("freezeAuthority")) or bool(rc_data.get("mintAuthority")) or any(
+                                    rk.get("level") == "danger" and any(w in str(rk.get("name", "")).lower() for w in ("single holder", "high ownership", "creator holding"))
+                                    for rk in (rc_data.get("risks") or [])
+                                )
+                                if _has_crit_rug:
+                                    return self._deny(mint, "meteora-unlocked-lp", f"🚫 [METEORA-RUG] {symbol} ({mint[:8]}): незаблокированный пул Meteora {_m_type} (lock/burn {_m_lp_safe:.0f}% < 80%) с критическим риском — дев выдернет SOL (кейсы PEPEBOT/Smiley)!")
+                            if not _is_pump_flag and "raydium" in _m_type and (_is_target_mkt or _m_quote_usd >= 2000.0) and _m_lp_safe < 80.0:
+                                _has_crit_rug_ray = bool(rc_data.get("freezeAuthority")) or bool(rc_data.get("mintAuthority"))
+                                if _has_crit_rug_ray:
+                                    return self._deny(mint, "raydium-unlocked-lp", f"🚫 [RAYDIUM-RUG] {symbol} ({mint[:8]}): кастомный токен на Raydium с незаблокированным LP (lock/burn {_m_lp_safe:.0f}% < 80%) — риск сноса ликвидности!")
 
                             for _m_field in ("pubkey", "liquidityA", "liquidityB", "baseVault", "quoteVault"):
                                 if _mkt.get(_m_field):
                                     pool_accounts.add(_mkt[_m_field])
 
                     if dex_id_low == "meteora":
-                        _met_locked = any("meteora" in str(m.get("marketType", "")).lower() and float((m.get("lp") or {}).get("lpLockedPct", 0) or 0) >= 80.0 for m in (rc_data.get("markets") or []))
+                        _met_locked = any("meteora" in str(m.get("marketType", "")).lower() and (float((m.get("lp") or {}).get("lpLockedPct", 0) or 0) >= 80.0 or float((m.get("lp") or {}).get("lpBurnedPct", 0) or 0) >= 80.0) for m in (rc_data.get("markets") or []))
                         if not _met_locked:
-                            return self._deny(mint, "meteora-unlocked-lp", f"🚫 [METEORA-RUG] {symbol} ({mint[:8]}): токен на Meteora без подтвержденного заблокированного LP (>=80%) — дев в любой момент выдёргивает SOL (кейс PEPEBOT)!")
+                            _has_crit_met = bool(rc_data.get("freezeAuthority")) or bool(rc_data.get("mintAuthority")) or any(
+                                rk.get("level") == "danger" and any(w in str(rk.get("name", "")).lower() for w in ("single holder", "high ownership", "creator holding"))
+                                for rk in (rc_data.get("risks") or [])
+                            )
+                            if _has_crit_met:
+                                return self._deny(mint, "meteora-unlocked-lp", f"🚫 [METEORA-RUG] {symbol} ({mint[:8]}): токен на Meteora без заблокированного LP с критическим риском манипуляции (кейс PEPEBOT)!")
 
                     DEX_POOL_AUTHORITIES = {
                         "5Q544fKrFoe6tsEbD7S8EmxGTJYAKtTVhAW5Q5pge4j1", # Raydium AMM V4
