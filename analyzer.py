@@ -1429,7 +1429,7 @@ class Analyzer:
             if rc_st == 200 and isinstance(rc_data, dict):
                 raw_sc = float(rc_data.get("score") or 0.0)
                 _dex_low_rc = str((pair_data or {}).get("dexId", "")).lower()
-                _is_pump_origin_chk = mint.endswith("pump") or _dex_low_rc in ("pumpswap", "pump", "pumpfun", "meteora", "meteoradbc") or is_pump_curve
+                _is_pump_origin_chk = mint.endswith("pump") or _dex_low_rc in ("pumpswap", "pump", "pumpfun", "meteora", "meteoradbc", "raydium", "moonshot") or is_pump_curve
                 _allowed_lp_terms_chk = (
                     "large amount of lp unlocked", "lp provider", "single lp provider",
                     "lp not locked", "unlocked lp", "single holder ownership", "high holder concentration", "top 10 holders"
@@ -1451,18 +1451,18 @@ class Analyzer:
                         continue
                     if rkl == "danger" and any(k in rkn for k in ("single holder", "high ownership", "large amount of lp unlocked", "freeze authority")):
                         return False, f"RugCheck критический риск: {rk.get('name')}"
-                if not mint.endswith("pump") and not is_pump_curve:
+                if not _is_pump_origin_chk:
                     lp_locked_ok = any(
                         isinstance(m, dict) and float((m.get("lp") or {}).get("lpLockedPct", 0) or 0) >= 80.0
                         for m in (rc_data.get("markets") or [])
                     )
                     if not lp_locked_ok:
-                        return False, "Кастомный не-pump токен без заблокированного LP (<80%)"
-            elif not mint.endswith("pump"):
-                return False, f"Кастомный не-pump токен ещё не проиндексирован RugCheck (статус {rc_st})"
+                        return False, "Кастомный неизвестный токен без заблокированного LP (<80%)"
+            elif not _is_pump_origin_chk:
+                return False, f"Кастомный неизвестный токен ещё не проиндексирован RugCheck (статус {rc_st})"
         except Exception as e:
             print(f"⚠️ [WHALE-ANALYSIS] Ошибка проверки контракта ({e})")
-            if not mint.endswith("pump"):
+            if not _is_pump_origin_chk:
                 return False, f"Сбой проверки кастомного токена ({e})"
 
         # 5. Для токенов на AMM DEX (не сырой bonding curve) проверяем маршрут продажи через Jupiter
@@ -1981,27 +1981,26 @@ class Analyzer:
                     return self._deny(mint, "honeypot-anomaly", f"🚫 [HONEYPOT] {symbol} ({mint[:8]}): аномалия продаж m5 {_s5_pre}s/{_b5_pre}b (<5% продаж) — скрытый honeypot.")
 
             # 3. Ончейн-аудит: RugCheck & GoPlus
-            # Каноничный pump-флаг ставится ТОЛЬКО для монет, чей адрес оканчивается на 'pump'
-            # (наличие пула на PumpSwap НЕ делает кастомный скам-токен безопасным pump.fun токеном!)
-            _is_pump_flag = 1 if mint.endswith("pump") else 0
+            # Каноничный флаг экосистемы Solana DEX/Launchpad (Pump.fun, PumpSwap, Raydium, Meteora, Moonshot):
+            _dex_low_main = str((pair_data or {}).get("dexId", "")).lower()
+            _is_canonical_pump = mint.endswith("pump") or _dex_low_main in ("pumpswap", "pump", "pumpfun", "meteora", "meteoradbc", "raydium", "moonshot") or is_pump_curve
+            _is_pump_flag = 1 if _is_canonical_pump else 0
             _cur_tok_top10 = 0.0
             _cur_tok_dev = 0.0
             try:
                 import goplus as _gp_rc
                 _rc_st, rc_data = await _gp_rc.fetch_rugcheck_report_cached(mint, ttl=120.0, timeout=7)
                 if _rc_st == 400:
-                    print(f"ℹ️ [RUGCHECK] {mint[:8]}: монета ещё индексируется RugCheck (код 400) -> ждём индексации...")
+                    print(f"ℹ️ [RUGCHECK] {mint[:8]}: монета ещё индексируется RugCheck (код 400) -> ончейн аудит...")
                 elif _rc_st not in (200, 0, 429):
                     print(f"⚠️ RugCheck API вернул {_rc_st} для {mint[:8]}.")
 
-                # КРИТИЧЕСКИЙ БЛОК: Для кастомных токенов (не оканчивающихся на 'pump')
-                # НЕЛЬЗЯ покупать вслепую, если RugCheck ещё не вернул полный отчёт (код 400 или таймаут)!
-                # Именно так залетал SOUVENIR (дев держал 56% и слил пул).
-                if not _is_pump_flag and not is_pump_curve and (_rc_st != 200 or not rc_data):
+                # Для неизвестных кастомных токенов вне стандартных DEX требуем отчёт RugCheck:
+                if not _is_canonical_pump and (_rc_st != 200 or not rc_data):
                     return self._deny(
                         mint,
                         "unverified-custom-token",
-                        f"⏳ [SECURITY-WAIT] {symbol} ({mint[:8]}): кастомный токен без pump.fun ожидает индексации RugCheck — блокировка до подтверждения сожжения LP!"
+                        f"⏳ [SECURITY-WAIT] {symbol} ({mint[:8]}): кастомный токен вне DEX ожидает индексации RugCheck..."
                     )
 
                 if rc_data:
@@ -2018,11 +2017,9 @@ class Analyzer:
 
                     _rc_raw_score = float(rc_data.get("score") or 0.0)
 
-                    # Для PumpSwap / Meteora / токенов с launchpad bonding curve RugCheck начисляет 10,000-35,000 штрафных баллов
+                    # Для PumpSwap / Meteora / Raydium / launchpad bonding curve RugCheck начисляет штрафные баллы
                     # за "Large amount of LP unlocked", "LP provider", и ошибочно за "Single holder ownership" (AMM-пул кривой).
                     # Дев не может снять этот LP и не держит пул!
-                    _dex_low_main = str((pair_data or {}).get("dexId", "")).lower()
-                    _is_canonical_pump = mint.endswith("pump") or is_pump_curve
                     _allowed_lp_terms_main = (
                         "large amount of lp unlocked", "lp provider", "single lp provider",
                         "lp not locked", "unlocked lp", "single holder ownership", "high holder concentration", "top 10 holders"
@@ -2050,8 +2047,7 @@ class Analyzer:
                         if _rk_lvl == "danger" and any(k in _rk_name for k in ("single holder", "high ownership", "top 10 holders", "large amount of lp unlocked", "freeze authority")):
                             return self._deny(mint, f"rc-danger {_rk_name[:15]}", f"🚫 [АНТИСКАМ-RC] {symbol} ({mint[:8]}): критический риск RugCheck '{rk.get('name')}' — блок скама!")
 
-                    # Для ВСЕХ кастомных токенов (не оканчивающихся на 'pump'):
-                    # ОБЯЗАТЕЛЬНО требуем подтверждённое сжигание или блокировку LP >= 80%!
+                    # Для неизвестных кастомных токенов (не с launchpad и не на стандартном DEX):
                     if not _is_canonical_pump:
                         _lp_ok = False
                         for _m in (rc_data.get("markets") or []):
@@ -2066,7 +2062,7 @@ class Analyzer:
                             return self._deny(
                                 mint,
                                 "unlocked-custom-lp",
-                                f"🚫 [CUSTOM-LP-RUG] {symbol} ({mint[:8]}): кастомный токен на {_dex_low_main} без сожжённого/заблокированного LP (<80%) — риск сноса пула девом (кейс SOUVENIR/AMERICA)!"
+                                f"🚫 [CUSTOM-LP-RUG] {symbol} ({mint[:8]}): кастомный токен на {_dex_low_main} без сожжённого/заблокированного LP (<80%) — риск сноса пула!"
                             )
 
                     # Проверка холдеров RugCheck
@@ -2568,7 +2564,7 @@ class Analyzer:
         has_socials = bool(has_twitter or has_tg or has_website)
         
         _socials_unknown = bool(pair_data.get("_socials_unknown", False))
-        _is_pump_mint = mint.endswith("pump") or str(pair_data.get("dexId", "")).lower() in ("pump", "pumpfun")
+        _is_pump_mint = mint.endswith("pump") or str(pair_data.get("dexId", "")).lower() in ("pumpswap", "pump", "pumpfun", "meteora", "meteoradbc", "raydium", "moonshot")
         # Анонимные токены вообще без соцсетей при ликвидности < $35k — это бандлер-фермы, ЕСЛИ это не pump.fun и нет органического потока!
         if not _socials_unknown and not has_socials and liquidity < 35000 and not _lottery and not _is_pump_mint and not _is_organic_leader:
             return self._deny(mint, "no-socials-anon-rug", f"🚫 [NO-SOCIALS] У {symbol} ({mint[:8]}) 0 соцсетей/сайтов (Twitter/TG/Web) при ликвидности ${liquidity:,.0f} (<$35k) — анонимный дев-бандлер.")

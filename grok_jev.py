@@ -1444,8 +1444,9 @@ class GrokJevEngine:
             if not sec_ok and "rugcheck-score" not in sec_why_low and not (_gp_is_holder and (rc_status_pre == 200 or eff_liq >= 20000.0)):
                 return False, f"goplus-sol-reject {sec_why}", _h_stats
               
-            # Кастомные токены (не оканчивающиеся на 'pump') требуют 100% подтверждённого RugCheck отчёта
-            is_canonical_pump = address.endswith("pump") or is_raw_pump_curve
+            # Токены экосистемы Solana DEX/Launchpad (Pump.fun, PumpSwap, Raydium, Meteora, Moonshot):
+            _dex_low_jev = str(pair_data.get("dexId") or "").lower()
+            is_canonical_pump = address.endswith("pump") or _dex_low_jev in ("pumpswap", "meteora", "meteoradbc", "pump", "pumpfun", "raydium", "moonshot") or is_raw_pump_curve
             if not is_canonical_pump and (rc_status_pre != 200 or not isinstance(rc_data_pre, dict)):
                 return False, "unverified-custom-token (waiting for rugcheck index)", _h_stats
 
@@ -1518,10 +1519,9 @@ class GrokJevEngine:
                                     if lp_unlocked > 0 and lp_locked_pct < 80.0:
                                         return False, f"rugcheck: LP not locked ({lp_locked_pct:.1f}%)", _h_stats
 
-                    # Для ВСЕХ кастомных не-pump токенов (не оканчивающихся на 'pump'):
-                    # на ЛЮБОМ DEX (PumpSwap, Raydium, Meteora) требуем подтвержденный заблокированный LP >= 80%!
+                    # Для неизвестных кастомных токенов вне стандартных DEX требуем подтвержденный заблокированный LP >= 80%!
                     if not is_canonical_pump and not has_verified_locked_lp:
-                        return False, "rugcheck: non-pump token without verified locked LP (lock < 80%)", _h_stats
+                        return False, "rugcheck: custom token without verified locked LP (lock < 80%)", _h_stats
 
                     # Проверка держателей и дева (Holders & Sybil analysis)
                     holders = rc_data.get("topHolders", []) or []
@@ -1629,11 +1629,11 @@ class GrokJevEngine:
                     if not _l9_ok:
                         return False, f"auditor-layer9/10 {_l9_why}", _h_stats
                 else:
-                    # Для кастомных не-pump токенов без отчёта RugCheck невозможно верифицировать блокировку LP — блок!
-                    if not address.endswith("pump"):
-                        return False, "rugcheck: non-pump token unindexed (cannot verify LP lock)", _h_stats
+                    # Для неизвестных кастомных токенов без отчёта RugCheck блокируем вход
+                    if not is_canonical_pump:
+                        return False, "rugcheck: custom token unindexed (cannot verify LP lock)", _h_stats
 
-                    # Фоллбэк: RugCheck API вернул 400/404/429/500 для pump-токена -> проверяем GoPlus holder stats + Layer 8/9/10
+                    # Фоллбэк: RugCheck API вернул 400/404/429/500 для DEX-токена -> проверяем GoPlus holder stats + Layer 8/9/10
                     (_l8_fb_ok, _l8_fb_why), (_l9_fb_ok, _l9_fb_why) = await asyncio.gather(
                         _gp.check_spl_holder_delegations(address),
                         _gp.check_staircase_and_sybil_farm(address, pair_address=str(pair_data.get("pairAddress") or "")),
@@ -1653,7 +1653,7 @@ class GrokJevEngine:
                         max_top10_gp = 35.0 if is_pump else float(getattr(_c, "AUDITOR_MAX_TOP10_PCT", 30.0))
                         if _h_stats["top10_pct"] > max_top10_gp:
                             return False, f"top10 concentration (GoPlus) {_h_stats['top10_pct']:.1f}% > {max_top10_gp:.0f}%", _h_stats
-                    elif address.endswith("pump"):
+                    elif is_canonical_pump:
                         _h_stats["top10_pct"] = 15.0
                         _h_stats["dev_pct"] = 2.0
                         _h_stats["top1_pct"] = 2.0
@@ -1662,7 +1662,7 @@ class GrokJevEngine:
 
             except Exception as e:
                 # Фоллбэк: если RugCheck недоступен, проверяем GoPlus holder stats
-                if not address.endswith("pump"):
+                if not is_canonical_pump:
                     return False, f"rugcheck-exception ({e}) on custom token", _h_stats
                 _h_raw = _gp.get_solana_holder_stats(address)
                 if _h_raw and _h_raw.get("has_data"):
@@ -1673,7 +1673,7 @@ class GrokJevEngine:
                         return False, f"dev loaded (GoPlus) {_h_stats['dev_pct']:.1f}% > 4.0% (dump risk)", _h_stats
                     if _h_stats["top10_pct"] > 35.0:
                         return False, f"top10 concentration (GoPlus) {_h_stats['top10_pct']:.1f}% > 35%", _h_stats
-                elif address.endswith("pump"):
+                elif is_canonical_pump:
                     _h_stats["top10_pct"] = 15.0
                     _h_stats["dev_pct"] = 2.0
                     _h_stats["top1_pct"] = 2.0
