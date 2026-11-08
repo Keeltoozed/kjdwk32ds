@@ -1788,7 +1788,7 @@ class Analyzer:
             return self._deny(
                 mint,
                 f"h1-exhausted {_h1:.0f}%>{_max_entry_h1:.0f}%",
-                f"🚫 [EXHAUSTED-TOP] {symbol} ({mint[:8]}): рост за час +{_h1:+.1f}% > +{_max_entry_h1:.0f}% — вершина пампа.",
+                f"🚫 [EXHAUSTED-TOP] {symbol} ({mint[:8]}): рост за час {_h1:+.1f}% > +{_max_entry_h1:.0f}% — вершина пампа.",
             )
         # Защита от покупки на верхушке вертикальной свечи (кейсы yarl +84%, ㅤ +61%, p402 +59%, Raymond +54%):
         # Если m5 > 28%, разрешаем вход ТОЛЬКО если монета уже откатила на m1 (-1.8%..-6.0%),
@@ -1799,10 +1799,11 @@ class Analyzer:
                 return self._deny(
                     mint,
                     f"m5-vertical-spike {_m5:.0f}%>{_max_entry_m5:.0f}%",
-                    f"🚫 [FOMO-VERTICAL] {symbol} ({mint[:8]}): 5м свеча +{_m5:+.1f}% > +{_max_entry_m5:.0f}% (покупка вершины зеленой палки без отката) — кейс yarl/p402.",
+                    f"🚫 [FOMO-VERTICAL] {symbol} ({mint[:8]}): 5м свеча {_m5:+.1f}% > +{_max_entry_m5:.0f}% (покупка вершины зеленой палки без отката) — кейс yarl/p402.",
                 )
 
         # Защита от давления продавцов и скрытого сброса китов (кейсы SOLC 735 продаж, DOG™ 291 продажа):
+        _txns_tot_pre = _b5_pre + _s5_pre
         if _txns_tot_pre >= 25 and _s5_pre > 0:
             _sell_ratio = _s5_pre / _txns_tot_pre
             _v2l_pre = (_vm5_pre / max(_raw_liq_chk, 1.0)) if _raw_liq_chk > 0 else 0.0
@@ -1814,7 +1815,6 @@ class Analyzer:
                 )
 
         # 4.9. Wash-Trading Spike Guard: НЕ баним живые ракеты (ELYSIONPAD 25.2x avg $183, CHIMPS 1.5x, CALLCAT 2.2x), режем реальный симметричный wash-дамп!
-        _txns_tot_pre = _b5_pre + _s5_pre
         _avg_tx_pre = (_vm5_pre / max(1, _txns_tot_pre)) if _txns_tot_pre > 0 else 0.0
         if _avg_tx_pre >= 35.0 and _b5_pre >= 150 and _b5_pre >= _s5_pre * 1.20 and _raw_liq_chk >= 15000.0:
             _max_vl_allowed = 30.0
