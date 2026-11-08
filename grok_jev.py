@@ -603,8 +603,9 @@ class GrokJevEngine:
                 return False, f"slow-mature-pool age {age_min:.0f}m vol5 ${vol_m5:,.0f} v/l {(vol_m5/max(eff_liq,1.0)):.2f}x"
         _max_m5_allowed = float(getattr(_c, "MAX_ENTRY_M5_PCT", 28.0))
         if m5 > _max_m5_allowed:
-            _is_cooling_pullback = (-6.0 <= m1 <= -1.8 and m5 <= 38.0 and b5 >= s5 * 1.15)
-            if not _is_cooling_pullback:
+            _is_strong_buyer_breakout_g = (m5 <= 45.0 and b5 >= int(s5 * 1.30) and vol_m5 >= 6000.0 and (b5 + s5) >= 25)
+            _is_cooling_pullback = (-6.0 <= m1 <= -1.5 and m5 <= 42.0 and b5 >= s5 * 1.15)
+            if not (_is_strong_buyer_breakout_g or _is_cooling_pullback):
                 return False, f"fomo-vertical-m5 m5 {m5:+.1f}% > +{_max_m5_allowed:.0f}% (buying top of vertical pump without cooling pullback, m1={m1:+.1f}%)"
         if s5 > 10 and b5 < (s5 * 0.80):
             return False, f"sellers-dominating {b5}b/{s5}s (more sellers than buyers in m5)"
@@ -614,7 +615,7 @@ class GrokJevEngine:
         if _tot_tx_g >= 25 and s5 > 0:
             _sell_ratio_g = s5 / _tot_tx_g
             _vl_ratio_g = vol_m5 / max(eff_liq, 1.0)
-            if _sell_ratio_g >= 0.38 and (_vl_ratio_g >= 2.2 or b5 < s5 * 1.20):
+            if b5 < int(s5 * 1.15) and (_sell_ratio_g >= 0.46 or (_sell_ratio_g >= 0.42 and _vl_ratio_g >= 2.5)):
                 return False, f"heavy-sell-pressure {_sell_ratio_g*100:.0f}% sells ({s5}/{_tot_tx_g}) v/l {_vl_ratio_g:.1f}x (whale exit dump)"
 
         # Остывающий поздний памп: токен старше 20м режем ТОЛЬКО если m5 отрицательный или нулевой (реальный дамп)
@@ -921,7 +922,7 @@ class GrokJevEngine:
         _strong_breakout = (b5 >= 20 and b5 >= s5 * 1.20 and vol5 >= 4000.0)
         _max_m1 = min(float(getattr(_c, "JEV_MAX_M1_ENTRY_PCT", 8.0)), 10.0)
         _cfg_m5 = float(getattr(_c, "MAX_ENTRY_M5_PCT", 28.0))
-        _max_m5_cap = min(_cfg_m5 + 10.0, 38.0) if _strong_breakout else _cfg_m5
+        _max_m5_cap = 45.0 if _strong_breakout else _cfg_m5
         if m5 > _max_m5_cap:
             return False, -0.14, 0.0, f"fomo-spike (m5 {m5:+.1f}% > +{_max_m5_cap:.0f}%) — buying local top, wait for reset"
         if m1 > _max_m1 and not _m1_is_phantom:

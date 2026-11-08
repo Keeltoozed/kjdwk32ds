@@ -1790,12 +1790,13 @@ class Analyzer:
                 f"h1-exhausted {_h1:.0f}%>{_max_entry_h1:.0f}%",
                 f"🚫 [EXHAUSTED-TOP] {symbol} ({mint[:8]}): рост за час {_h1:+.1f}% > +{_max_entry_h1:.0f}% — вершина пампа.",
             )
-        # Защита от покупки на верхушке вертикальной свечи (кейсы yarl +84%, ㅤ +61%, p402 +59%, Raymond +54%):
-        # Если m5 > 28%, разрешаем вход ТОЛЬКО если монета уже откатила на m1 (-1.8%..-6.0%),
-        # а если свеча летит вертикально без отката (m1 >= 0) — это 100% покупка локального хая!
+        # Защита от покупки на верхушке вертикальной свечи:
+        # Разрешаем сильный пробой покупателями (до +45% при 30%+ перевесе покупателей b5/s5 >= 1.30)
+        # либо остывающий откат (m1 <= -1.5%). Блокируем чистую покупку хая без перевеса покупателей!
         if _m5 > _max_entry_m5:
-            _is_cooling_pullback = (_m1 <= -1.8 and _m5 <= 38.0 and _b5_pre >= _s5_pre * 1.15)
-            if not _is_cooling_pullback:
+            _is_strong_buyer_breakout = (_m5 <= 45.0 and _b5_pre >= int(_s5_pre * 1.30) and _vm5_pre >= 6000.0 and (_b5_pre + _s5_pre) >= 25)
+            _is_cooling_pullback = (_m1 <= -1.5 and _m5 <= 42.0 and _b5_pre >= _s5_pre * 1.15)
+            if not (_is_strong_buyer_breakout or _is_cooling_pullback):
                 return self._deny(
                     mint,
                     f"m5-vertical-spike {_m5:.0f}%>{_max_entry_m5:.0f}%",
@@ -1803,11 +1804,12 @@ class Analyzer:
                 )
 
         # Защита от давления продавцов и скрытого сброса китов (кейсы SOLC 735 продаж, DOG™ 291 продажа):
+        # Блокируем ТОЛЬКО если продавцы реально давят (sells >= 46% и покупатели не имеют явного перевеса b5 < s5*1.15)
         _txns_tot_pre = _b5_pre + _s5_pre
         if _txns_tot_pre >= 25 and _s5_pre > 0:
             _sell_ratio = _s5_pre / _txns_tot_pre
             _v2l_pre = (_vm5_pre / max(_raw_liq_chk, 1.0)) if _raw_liq_chk > 0 else 0.0
-            if _sell_ratio >= 0.38 and (_v2l_pre >= 2.2 or _b5_pre < _s5_pre * 1.20):
+            if _b5_pre < int(_s5_pre * 1.15) and (_sell_ratio >= 0.46 or (_sell_ratio >= 0.42 and _v2l_pre >= 2.5)):
                 return self._deny(
                     mint,
                     f"heavy-sell-pressure {_sell_ratio*100:.0f}% sells",
@@ -2008,20 +2010,29 @@ class Analyzer:
                         if _rk_lvl == "danger" and any(k in _rk_name for k in ("single holder", "high ownership", "top 10 holders", "large amount of lp unlocked", "freeze authority")):
                             return self._deny(mint, f"rc-danger {_rk_name[:15]}", f"🚫 [АНТИСКАМ-RC] {symbol} ({mint[:8]}): критический риск RugCheck '{rk.get('name')}' — блок скама!")
 
-                    # Для ВСЕХ кастомных не-pump токенов (не оканчивающихся на 'pump'):
-                    # на ЛЮБОМ DEX (PumpSwap, Raydium, Meteora) требуем подтвержденный заблокированный LP >= 80%!
+                    # Для кастомных не-pump токенов (Raydium, PumpSwap, Meteora):
                     # Защита от кейсов AMERICA (снятие 234 SOL на PumpSwap) и PEPEBOT (снятие 160 SOL на Meteora)
+                    # Проверяем лок/берн LP, либо отсутствие опасных прав (freeze/mint) и опасной концентрации у создателя!
                     if not mint.endswith("pump"):
                         _lp_ok = False
                         for _m in (rc_data.get("markets") or []):
                             if isinstance(_m, dict):
                                 _m_lp_info = _m.get("lp") or {}
                                 _m_lp_locked_pct = float(_m_lp_info.get("lpLockedPct", 0) or 0)
-                                if _m_lp_locked_pct >= 80.0:
+                                _m_lp_burned_pct = float(_m_lp_info.get("lpBurnedPct", 0) or 0)
+                                if _m_lp_locked_pct >= 80.0 or _m_lp_burned_pct >= 80.0:
                                     _lp_ok = True
                                     break
                         if not _lp_ok:
-                            return self._deny(mint, "custom-unlocked-lp", f"🚫 [CUSTOM-LP-RUG] {symbol} ({mint[:8]}): кастомный не-pump токен на {dex_id_low} без заблокированного LP (lock < 80%) — дев выдернет SOL (кейс AMERICA remove 234 SOL)!")
+                            _has_freeze = bool(rc_data.get("freezeAuthority"))
+                            _has_mint_auth = bool(rc_data.get("mintAuthority"))
+                            _has_critical_holder_risk = any(
+                                rk.get("level") == "danger" and any(w in str(rk.get("name", "")).lower() for w in ("single holder", "high ownership", "creator holding"))
+                                for rk in (rc_data.get("risks") or [])
+                            )
+                            # Блокируем только если есть реальный критический риск манипуляции пулом
+                            if _has_freeze or _has_mint_auth or _has_critical_holder_risk:
+                                return self._deny(mint, "custom-unlocked-lp", f"🚫 [CUSTOM-LP-RUG] {symbol} ({mint[:8]}): кастомный не-pump токен с критическим риском (freeze={_has_freeze}, mint={_has_mint_auth}, holder_danger={_has_critical_holder_risk})!")
 
                     # Проверка холдеров RugCheck
                     top_holders = rc_data.get("topHolders") or []

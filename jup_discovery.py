@@ -441,8 +441,9 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
 
     # 2. Anti-FOMO m5: не покупаем вершины пампа без отката (кейсы yarl, p402, ㅤ, Raymond)
     if _m5_j > _max_m5_cfg:
-        _is_cooling_pullback = (_m1_j <= -1.8 and _m5_j <= 38.0 and _b5_j >= _s5_j * 1.15)
-        if not _is_cooling_pullback:
+        _is_strong_buyer_breakout_j = (_m5_j <= 45.0 and _b5_j >= int(_s5_j * 1.30) and _vm5_j >= 6000.0 and (_b5_j + _s5_j) >= 25)
+        _is_cooling_pullback = (_m1_j <= -1.5 and _m5_j <= 42.0 and _b5_j >= _s5_j * 1.15)
+        if not (_is_strong_buyer_breakout_j or _is_cooling_pullback):
             print(f"🚫 [{source_tag}-FOMO-M5] {_sym_tmp}: m5 +{_m5_j:.1f}% > +{_max_m5_cfg:.0f}% без отката (m1={_m1_j:+.1f}%) — покупка хая, отмена!")
             return False
 
@@ -451,7 +452,7 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
     if _tot_tx_j >= 25 and _s5_j > 0:
         _sell_ratio_j = _s5_j / _tot_tx_j
         _vl_ratio_j = (_vm5_j / max(_liq_j, 1.0)) if _liq_j > 0 else 0.0
-        if _sell_ratio_j >= 0.38 and (_vl_ratio_j >= 2.2 or _b5_j < _s5_j * 1.20):
+        if _b5_j < int(_s5_j * 1.15) and (_sell_ratio_j >= 0.46 or (_sell_ratio_j >= 0.42 and _vl_ratio_j >= 2.5)):
             print(f"🚫 [{source_tag}-SELL-PRESSURE] {_sym_tmp}: продавцов {_s5_j}/{_tot_tx_j} ({_sell_ratio_j*100:.0f}%) при v/l {_vl_ratio_j:.1f}x — сброс китов, отмена!")
             return False
 
