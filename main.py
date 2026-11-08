@@ -730,13 +730,16 @@ async def scanner_loop(analyzer, tracker):
                 # Срез 25/цикл: при панике очередь не блочит VIP-разбор надолго.
                 graduated_mints = []
                 try:
-                    graduated_mints = (birth_tracker.drain_graduated() or [])[:25]
+                    _raw_grads = birth_tracker.drain_graduated() or []
+                    _now_g = time.time()
+                    _fresh_cd_g = int(getattr(config, "SOLANA_FRESH_RESCAN_COOLDOWN", 10))
+                    graduated_mints = [m for m in _raw_grads if _now_g - processed_mints.get(m, 0.0) >= _fresh_cd_g][:25]
                 except Exception:
                     pass
                 if graduated_mints:
                     print(f"🏁 Разбираю {len(graduated_mints)} свежих миграций ПЕРВЫМИ!")
                     mints_to_scan = graduated_mints + mints_to_scan
-                _graduated_set = set(graduated_mints)
+                _graduated_set = set(birth_tracker.drain_graduated() or [])
                 
                 # 2. Уличные Токены (Берем молодые ракеты от 5 до 20 минут)
                 mature_mints = birth_tracker.get_mature_tokens(2, 30)  # Было 3-25: шире окно молодняка = больше ракет
