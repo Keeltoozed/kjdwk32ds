@@ -98,15 +98,26 @@ async def position_security_auditor_loop(analyzer, tracker):
                                 position.peak_liquidity_usd = _sol_liq
                                 _peak_liq = _sol_liq
 
-                            _crit_drained = (_q_sym in ("SOL", "WSOL") and 0 < _quote_liq < 4.0) or (0 < _sol_liq < 1800.0)
-                            _drain_pct_drop = (_peak_liq >= 6000.0 and _sol_liq < _peak_liq * 0.72)
+                            # Игнорируем пустые/нулевые ответы API (0 ликвидности — это баг Jupiter / лаг DexScreener, а не мгновенный вывод пула!)
+                            if _sol_liq <= 0:
+                                continue
+
+                            _crit_drained = (_q_sym in ("SOL", "WSOL") and 0 < _quote_liq < 3.0) or (0 < _sol_liq < 1500.0)
+                            _drain_pct_drop = (_peak_liq >= 6000.0 and 0 < _sol_liq < _peak_liq * 0.65)
 
                             if _has_liq_data and (_crit_drained or _drain_pct_drop):
-                                _px_now = float(getattr(position, "current_price_usd", 0.0) or 0.0)
+                                _drop_cnt = getattr(position, "_liq_drop_streak", 0) + 1
+                                position._liq_drop_streak = _drop_cnt
+                                if _drop_cnt < 2:
+                                    # Требуем подтверждения 2 тика подряд (3-4 сек), чтобы единичный сетевой глитч не закрывал позицию!
+                                    continue
+                                _px_now = float(getattr(position, "current_price_usd", 0.0) or getattr(position, "entry_price_usd", 0.0) or 0.0)
                                 _msg = f"Liq Drop ${_sol_liq:.0f} (было ${_peak_liq:.0f})" if _drain_pct_drop else f"Low Liq ${_sol_liq:.0f} / {_quote_liq:.1f} SOL"
                                 print(f"🚨 [EARLY-LIQ-ESCAPE] {position.symbol} ({mint[:8]}): вывод пула ({_msg}) — аварийный выход по рынку!")
-                                tracker.close_position(mint, _px_now, f"Early Liquidity Drain Escape ({_msg})")
+                                tracker.close_position(mint, _px_now, f"Early Liquidity Drop Escape ({_msg})")
                                 continue
+                            else:
+                                position._liq_drop_streak = 0
                     except Exception:
                         pass
         except Exception as e:

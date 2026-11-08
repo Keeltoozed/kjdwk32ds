@@ -69,8 +69,13 @@ class MatureExitManager:
             if _cur_l > _peak_l:
                 position.peak_liquidity_usd = _cur_l
                 _peak_l = _cur_l
-            if _peak_l >= 6000.0 and 0 < _cur_l < (_peak_l * 0.70):
-                return f"Liquidity Drain Escape (Liq dropped to ${_cur_l:.0f} from ${_peak_l:.0f})"
+            if _peak_l >= 6000.0 and 0 < _cur_l < (_peak_l * 0.65):
+                _drop_cnt_em = getattr(position, "_liq_drop_streak_em", 0) + 1
+                position._liq_drop_streak_em = _drop_cnt_em
+                if _drop_cnt_em >= 2:
+                    return f"Early Liquidity Drop Escape (Liq dropped to ${_cur_l:.0f} from ${_peak_l:.0f})"
+            else:
+                position._liq_drop_streak_em = 0
 
         # =========================================================================
         # 1. ЖЕСТКИЙ КОНТРОЛЬ УБЫТКА (EMERGENCY CAP & STOP LOSS) — ПЕРВЫЙ ПРИОРИТЕТ!

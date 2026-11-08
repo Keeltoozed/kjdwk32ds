@@ -1426,13 +1426,13 @@ class Analyzer:
                 return False, f"GoPlus Honeypot/Tax: {gp_why}"
 
             # 4. Кэшированный RugCheck аудит (концентрация холдеров и блокировка LP на кастомных токенах)
+            _dex_low_rc = str((pair_data or {}).get("dexId", "")).lower()
+            _is_pump_origin_chk = mint.endswith("pump") or _dex_low_rc in ("pump", "pumpfun") or is_pump_curve
             if rc_st == 200 and isinstance(rc_data, dict):
                 raw_sc = float(rc_data.get("score") or 0.0)
-                _dex_low_rc = str((pair_data or {}).get("dexId", "")).lower()
-                _is_pump_origin_chk = mint.endswith("pump") or _dex_low_rc in ("pumpswap", "pump", "pumpfun", "meteora", "meteoradbc", "raydium", "moonshot") or is_pump_curve
                 _allowed_lp_terms_chk = (
                     "large amount of lp unlocked", "lp provider", "single lp provider",
-                    "lp not locked", "unlocked lp", "single holder ownership", "high holder concentration", "top 10 holders"
+                    "lp not locked", "unlocked lp"
                 ) if _is_pump_origin_chk else ("lp provider",)
                 ign = sum(
                     float(rk.get("score", 0) or 0)
@@ -1449,11 +1449,11 @@ class Analyzer:
                     rkl = str(rk.get("level", "")).lower()
                     if _is_pump_origin_chk and "large amount of lp unlocked" in rkn:
                         continue
-                    if rkl == "danger" and any(k in rkn for k in ("single holder", "high ownership", "large amount of lp unlocked", "freeze authority")):
+                    if rkl == "danger" and any(k in rkn for k in ("single holder", "high ownership", "top 10 holders", "large amount of lp unlocked", "freeze authority")):
                         return False, f"RugCheck критический риск: {rk.get('name')}"
                 if not _is_pump_origin_chk:
                     lp_locked_ok = any(
-                        isinstance(m, dict) and float((m.get("lp") or {}).get("lpLockedPct", 0) or 0) >= 80.0
+                        isinstance(m, dict) and (float((m.get("lp") or {}).get("lpLockedPct", 0) or 0) >= 80.0 or float((m.get("lp") or {}).get("lpBurnedPct", 0) or 0) >= 80.0)
                         for m in (rc_data.get("markets") or [])
                     )
                     if not lp_locked_ok:
@@ -1981,9 +1981,10 @@ class Analyzer:
                     return self._deny(mint, "honeypot-anomaly", f"🚫 [HONEYPOT] {symbol} ({mint[:8]}): аномалия продаж m5 {_s5_pre}s/{_b5_pre}b (<5% продаж) — скрытый honeypot.")
 
             # 3. Ончейн-аудит: RugCheck & GoPlus
-            # Каноничный флаг экосистемы Solana DEX/Launchpad (Pump.fun, PumpSwap, Raydium, Meteora, Moonshot):
+            # Каноничный pump-флаг ставится ТОЛЬКО для монет с bonding curve Pump.fun (оканчивающихся на 'pump' или на сырой кривой).
+            # Наличие пула на PumpSwap/Raydium НЕ делает кастомный скам-токен безопасным pump-токеном (кейсы DEMOCAT/SAFU/SOUVENIR)!
             _dex_low_main = str((pair_data or {}).get("dexId", "")).lower()
-            _is_canonical_pump = mint.endswith("pump") or _dex_low_main in ("pumpswap", "pump", "pumpfun", "meteora", "meteoradbc", "raydium", "moonshot") or is_pump_curve
+            _is_canonical_pump = mint.endswith("pump") or _dex_low_main in ("pump", "pumpfun") or is_pump_curve
             _is_pump_flag = 1 if _is_canonical_pump else 0
             _cur_tok_top10 = 0.0
             _cur_tok_dev = 0.0
@@ -1991,16 +1992,16 @@ class Analyzer:
                 import goplus as _gp_rc
                 _rc_st, rc_data = await _gp_rc.fetch_rugcheck_report_cached(mint, ttl=120.0, timeout=7)
                 if _rc_st == 400:
-                    print(f"ℹ️ [RUGCHECK] {mint[:8]}: монета ещё индексируется RugCheck (код 400) -> ончейн аудит...")
+                    print(f"ℹ️ [RUGCHECK] {mint[:8]}: монета ещё индексируется RugCheck (код 400) -> ожидаем отчёта...")
                 elif _rc_st not in (200, 0, 429):
                     print(f"⚠️ RugCheck API вернул {_rc_st} для {mint[:8]}.")
 
-                # Для неизвестных кастомных токенов вне стандартных DEX требуем отчёт RugCheck:
+                # Для кастомных токенов (не оканчивающихся на 'pump') требуем обязательный отчёт RugCheck:
                 if not _is_canonical_pump and (_rc_st != 200 or not rc_data):
                     return self._deny(
                         mint,
                         "unverified-custom-token",
-                        f"⏳ [SECURITY-WAIT] {symbol} ({mint[:8]}): кастомный токен вне DEX ожидает индексации RugCheck..."
+                        f"⏳ [SECURITY-WAIT] {symbol} ({mint[:8]}): кастомный не-pump токен ожидает индексации RugCheck для проверки блокировки LP..."
                     )
 
                 if rc_data:
@@ -2017,12 +2018,11 @@ class Analyzer:
 
                     _rc_raw_score = float(rc_data.get("score") or 0.0)
 
-                    # Для PumpSwap / Meteora / Raydium / launchpad bonding curve RugCheck начисляет штрафные баллы
-                    # за "Large amount of LP unlocked", "LP provider", и ошибочно за "Single holder ownership" (AMM-пул кривой).
-                    # Дев не может снять этот LP и не держит пул!
+                    # Для launchpad bonding curve RugCheck начисляет шум за AMM LP контракт пула.
+                    # ВАЖНО: концентрацию дева и китов ("single holder", "top 10 holders") НИКОГДА не вычитаем как шум!
                     _allowed_lp_terms_main = (
                         "large amount of lp unlocked", "lp provider", "single lp provider",
-                        "lp not locked", "unlocked lp", "single holder ownership", "high holder concentration", "top 10 holders"
+                        "lp not locked", "unlocked lp"
                     ) if _is_canonical_pump else ("lp provider", "low liquidity")
 
                     # Исключаем безвредный шум: низкая ликвидность для молодых пулов, copycat для мемов, и LP контракт пула.
@@ -2038,16 +2038,17 @@ class Analyzer:
                     if _rc_score >= 2000:
                         return self._deny(mint, f"rugcheck-score {_rc_score:.0f}", f"🚫 [АНТИСКАМ] RugCheck Score {_rc_score:.0f} >= 2000 у {mint[:8]} → СКАМ")
 
-                    # Жёсткий фильтр критических опасностей RugCheck (кейсы AMERICA 87% single holder, Qeshcrb 80% dev dump)
+                    # Жёсткий фильтр критических опасностей RugCheck (кейсы AMERICA 87%, DEMOCAT 58.6% drain, SAFU 59% drain)
                     for rk in (rc_data.get("risks") or []):
                         _rk_name = str(rk.get("name", "")).lower()
                         _rk_lvl = str(rk.get("level", "")).lower()
-                        if _is_canonical_pump and any(k in _rk_name for k in ("large amount of lp unlocked", "single holder", "high ownership", "top 10 holders", "lp not locked")):
+                        if _is_canonical_pump and any(k in _rk_name for k in ("large amount of lp unlocked", "lp not locked", "unlocked lp")):
                             continue
                         if _rk_lvl == "danger" and any(k in _rk_name for k in ("single holder", "high ownership", "top 10 holders", "large amount of lp unlocked", "freeze authority")):
                             return self._deny(mint, f"rc-danger {_rk_name[:15]}", f"🚫 [АНТИСКАМ-RC] {symbol} ({mint[:8]}): критический риск RugCheck '{rk.get('name')}' — блок скама!")
 
-                    # Для неизвестных кастомных токенов (не с launchpad и не на стандартном DEX):
+                    # Для кастомных не-pump токенов (не оканчивающихся на 'pump' и не на сырой кривой pumpfun):
+                    # на ЛЮБОМ DEX (PumpSwap, Raydium, Meteora) требуем подтвержденный заблокированный/сожжённый LP >= 80%!
                     if not _is_canonical_pump:
                         _lp_ok = False
                         for _m in (rc_data.get("markets") or []):
@@ -2062,7 +2063,7 @@ class Analyzer:
                             return self._deny(
                                 mint,
                                 "unlocked-custom-lp",
-                                f"🚫 [CUSTOM-LP-RUG] {symbol} ({mint[:8]}): кастомный токен на {_dex_low_main} без сожжённого/заблокированного LP (<80%) — риск сноса пула!"
+                                f"🚫 [CUSTOM-LP-RUG] {symbol} ({mint[:8]}): кастомный токен на {_dex_low_main} без сожжённого/заблокированного LP (<80%) — риск сноса пула (кейсы DEMOCAT/SAFU)!"
                             )
 
                     # Проверка холдеров RugCheck

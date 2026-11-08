@@ -653,21 +653,19 @@ class PaperTracker:
             except Exception:
                 exit_price = 0.0
             
-            # 1. Жесткий скам / Honeypot / Rugpull / Drained Pool: честное списание по 0.0 (-100% реальный исход)
+            # 1. Жесткий скам / Honeypot / Непродаваемый токен: списание по 0.0 только если exit_price <= 0
             _r_up = str(reason or "").upper()
             _is_hard_scam = any(k in _r_up for k in (
-                "HONEYPOT", "RUG", "SCAM", "CANNOT SELL", "UNSELLABLE", 
-                "NO LIQUIDITY", "DRAIN", "ZERO-RUG", "PULL"
+                "HONEYPOT", "CANNOT SELL", "UNSELLABLE", "ZERO-RUG"
             ))
-            # ВАЖНО: слово "DEAD" убрано из списка. Оно совпадало с обычными выходами "Dead Momentum Stall" и "Dead Coin Cut"
-            # и списывало их как рагпулл по цене 0 (-100.5%) при реальном PnL около -9%. Реальные случаи мёртвого пула
-            # уже ловятся по "DRAIN" / "UNSELLABLE" / "RUG".
-            if _is_hard_scam:
-                exit_price = 0.0
-            elif not (exit_price > 0):
-                # Stale-выход по 0 (сбой API котировок): закрываем по цене входа (0% PnL - комиссии)
-                exit_price = pos.entry_price_usd
-                reason = f"{reason} [stale→entry]"
+            # Если передана реальная рыночная цена продажи (> 0) — ВСЕГДА используем её!
+            # Никакие выходы по ликвидному щиту или стопам не должны принудительно занулять цену в 0.0!
+            if not (exit_price > 0):
+                if _is_hard_scam:
+                    exit_price = 0.0
+                else:
+                    exit_price = pos.entry_price_usd
+                    reason = f"{reason} [stale→entry]"
 
             # Фантом единиц цены: exit в разы от entry+пика = битые данные, не пишем миллион.
             if not _is_hard_scam:
