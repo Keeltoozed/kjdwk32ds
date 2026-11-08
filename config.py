@@ -125,9 +125,9 @@ MOONBAG_SELL_FRAC = 0.0
 PUMP_XGB_ENABLED = False
 RAY_XGB_ENABLED = False
 ROCKET_XGB_ENABLED = True
-ROCKET_XGB_STAGE1_THRESHOLD = 8.0   # Первичный отсев в 0мс (отсекает мертвецов 2-7%, пускает APU, DUGE, PEPE69)
-ROCKET_XGB_FINAL_THRESHOLD = 14.0   # Финальный порог с ончейн-холдерами (ловит ракеты DUGE, 花, SOUVENIR, CHOO, ELYSIONPAD)
-ROCKET_XGB_THRESHOLD = 12.0
+ROCKET_XGB_STAGE1_THRESHOLD = 18.0   # Первичный отсев в 0мс (отсекает мертвецов 2-17%)
+ROCKET_XGB_FINAL_THRESHOLD = 52.0    # Финальный порог (отсекает слабые дампы SpaceCoin 48%, fomo 36%, пускает ракеты 69-77%)
+ROCKET_XGB_THRESHOLD = 52.0
 
 STALL_TIMER_SEC = 210.0   # 3.5 минуты (быстрый срез стоячего минуса без затягивания убытка до 13м)
 STALL_MAX_LOSS_PCT = -0.075

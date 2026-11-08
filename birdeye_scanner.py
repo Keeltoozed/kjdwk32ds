@@ -28,6 +28,10 @@ async def fetch_birdeye_trending(chain: str) -> list:
     status, data = await fetch_json(
         URL, headers={"X-API-KEY": key, "x-chain": chain},
         timeout=12, retries=1)
+    if status in (400, 401, 403):
+        print(f"⚠️ [BIRDEYE] API вернул {status} (недействительный ключ) — отключаем опрос Birdeye.")
+        setattr(config, "BIRDEYE_API_KEY", "")
+        return []
     if status != 200 or not isinstance(data, dict):
         return []
     out = []

@@ -91,7 +91,10 @@ class MatureExitManager:
                     return f"Mature {_tag} Trailing ({pnl_pct*100:+.1f}% locked after peak +{max_pnl_pct*100:.1f}%)"
                 elif pnl_pct <= _floor_pnl:
                     _tag = "Moonbag" if _is_mb else "Full Runner"
-                    return f"Mature {_tag} Floor ({pnl_pct*100:+.1f}% locked after peak +{max_pnl_pct*100:.1f}%)"
+                    if pnl_pct > 0:
+                        return f"Mature {_tag} Floor (+{pnl_pct*100:.1f}% locked after peak +{max_pnl_pct*100:.1f}%)"
+                    else:
+                        return f"Mature Post-Peak Dump Cut ({pnl_pct*100:.1f}% dump after peak +{max_pnl_pct*100:.1f}%)"
 
         # =========================================================================
         # 1.2. PARABOLIC MOMENTUM HARVEST (Фиксация прибыли при затухании импульса на вершине)

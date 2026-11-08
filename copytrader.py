@@ -914,12 +914,16 @@ class CopyTrader:
             except Exception as e:
                 err = str(e)
                 fail_count += 1
-                if "429" in err or "rejected" in err or fail_count >= 2:
-                    if "helius" in wss_url.lower():
-                        print(f"⚠️ [HELIUS-QUOTA] Helius WSS вернул HTTP 429 (исчерпан месячный лимит бесплатного ключа). Авто-переход на бесплатный пул публичных нод Solana!")
-                        return False
-                print(f"⚠️ [WSS-POOL] обрыв {name}: {err[:80] or type(e).__name__}. Реконнект через 4с...")
-                await asyncio.sleep(4)
+                if "helius" in wss_url.lower() and ("429" in err or "rejected" in err or fail_count >= 2):
+                    print(f"⚠️ [HELIUS-QUOTA] Helius WSS вернул HTTP 429 (исчерпан месячный лимит бесплатного ключа). Авто-переход на бесплатный пул публичных нод Solana!")
+                    return False
+                if "429" in err or "rejected" in err:
+                    if fail_count >= 2:
+                        print(f"⚠️ [WSS-POOL] {name}: лимит подключений (429) — тихий сон 60с для предотвращения бана...")
+                        await asyncio.sleep(60)
+                        continue
+                print(f"⚠️ [WSS-POOL] обрыв {name}: {err[:80] or type(e).__name__}. Реконнект через 12с...")
+                await asyncio.sleep(12)
 
     async def listen(self):
         try:
@@ -943,12 +947,10 @@ class CopyTrader:
             if res is False:
                 self._helius_disabled = True  # Отключаем Helius на время этой сессии при 429
 
-        # 2. Основной / резервный пул: распределяем до 80 китов по 20 штук на 4 проверенных сокета Solana
+        # 2. Основной пул: распределяем до 40 топ-китов на проверенный сокет publicnode
         endpoints = [
             "wss://solana-rpc.publicnode.com/",
-            "wss://api.mainnet-beta.solana.com/",
             "wss://solana-rpc.publicnode.com/",
-            "wss://api.mainnet-beta.solana.com/",
         ]
 
         chunk_size = 20

@@ -1421,7 +1421,7 @@ class Analyzer:
             # 4. Кэшированный RugCheck аудит (концентрация холдеров и блокировка LP на кастомных токенах)
             if rc_st == 200 and isinstance(rc_data, dict):
                 raw_sc = float(rc_data.get("score") or 0.0)
-                _is_pump_origin_chk = mint.endswith("pump") or str((pair_data or {}).get("dexId", "")).lower() in ("pumpswap", "meteora")
+                _is_pump_origin_chk = mint.endswith("pump")
                 _allowed_lp_terms_chk = ("large amount of lp unlocked", "lp provider", "single lp provider") if _is_pump_origin_chk else ("lp provider",)
                 ign = sum(
                     float(rk.get("score", 0) or 0)
@@ -1733,7 +1733,9 @@ class Analyzer:
 
         # Запрет входа, если продавцов больше или почти столько же, сколько покупателей (на глубоких пулах >=$25k допускаем 1.08x при зелёном m5/m1)
         _base_bs_cfg = float(getattr(config, "MIN_BUY_SELL_RATIO", 1.08))
-        if _b5_pre >= 40 and _vm5_pre >= 8000.0 and _b5_pre > _s5_pre:
+        if _b5_pre >= 150 and _vm5_pre >= 15000.0 and _b5_pre >= _s5_pre:
+            _min_bs_cfg = 1.00  # Массивный встречный объём на ракетах (кейс PERCOLATOR 879b/845s)
+        elif _b5_pre >= 40 and _vm5_pre >= 8000.0 and _b5_pre > _s5_pre:
             _min_bs_cfg = 1.05 if (_m5 >= 3.0 and _m1 >= -2.0) else 1.08
         elif _raw_liq_chk >= 20000.0 and _m5 >= 4.0 and _m1 >= 0.0:
             _min_bs_cfg = 1.06
@@ -1765,8 +1767,11 @@ class Analyzer:
         _min_m5_req = 1.8 if (_raw_liq_chk >= 18000.0 and _b5_pre >= _s5_pre * 1.18 and _vm5_pre >= 3500.0) else 3.0
         if _m5 < _min_m5_req:
             return self._deny(mint, f"m5-too-weak {_m5:+.1f}%", f"🚫 [WEAK-M5] {symbol} ({mint[:8]}): m5 {_m5:+.1f}% < +{_min_m5_req:.1f}% — нет разгона.")
-        _base_max_m1 = float(getattr(config, "MAX_ENTRY_M1_PCT", 8.0))
-        _max_m1_cfg = min(_base_max_m1, 10.0)
+        _base_max_m1 = float(getattr(config, "MAX_ENTRY_M1_PCT", 10.0))
+        if _b5_pre >= int(_s5_pre * 1.20) and _vm5_pre >= 8000.0 and _m5 >= 10.0:
+            _max_m1_cfg = 22.0  # Импульсный пробой (кейс MELT m1 +19.5%)
+        else:
+            _max_m1_cfg = min(_base_max_m1, 12.0)
         _min_m1_floor = -5.5 if _m5 >= 12.0 else -2.8
         if _m1 > _max_m1_cfg or _m1 < _min_m1_floor:
             return self._deny(
@@ -1791,11 +1796,11 @@ class Analyzer:
                 f"🚫 [EXHAUSTED-TOP] {symbol} ({mint[:8]}): рост за час {_h1:+.1f}% > +{_max_entry_h1:.0f}% — вершина пампа.",
             )
         # Защита от покупки на верхушке вертикальной свечи:
-        # Разрешаем сильный пробой покупателями (до +45% при 30%+ перевесе покупателей b5/s5 >= 1.30)
+        # Разрешаем сильный пробой покупателями (до +75% при 25%+ перевесе покупателей b5/s5 >= 1.25)
         # либо остывающий откат (m1 <= -1.5%). Блокируем чистую покупку хая без перевеса покупателей!
         if _m5 > _max_entry_m5:
-            _is_strong_buyer_breakout = (_m5 <= 45.0 and _b5_pre >= int(_s5_pre * 1.30) and _vm5_pre >= 6000.0 and (_b5_pre + _s5_pre) >= 25)
-            _is_cooling_pullback = (_m1 <= -1.5 and _m5 <= 42.0 and _b5_pre >= _s5_pre * 1.15)
+            _is_strong_buyer_breakout = (_m5 <= 75.0 and _b5_pre >= int(_s5_pre * 1.25) and _vm5_pre >= 6000.0 and (_b5_pre + _s5_pre) >= 25)
+            _is_cooling_pullback = (_m1 <= -1.5 and _m5 <= 60.0 and _b5_pre >= _s5_pre * 1.15)
             if not (_is_strong_buyer_breakout or _is_cooling_pullback):
                 return self._deny(
                     mint,
@@ -1852,7 +1857,12 @@ class Analyzer:
                     (_vm5_pre >= 6000.0 and _b5_pre >= _s5_pre)
                 )
             )
-            if not _is_organic_stealth:
+            _is_viral_stealth = (
+                _vm5_pre >= 25000.0
+                and _b5_pre >= 150
+                and _b5_pre >= int(_s5_pre * 1.20)
+            )
+            if not (_is_organic_stealth or _is_viral_stealth):
                 _sub_reason = f"no-socials-mature {_age_min_pre:.0f}m" if _age_min_pre >= 12.0 else f"no-socials-dev-rug {_age_min_pre:.0f}m"
                 return self._deny(
                     mint,
@@ -1860,7 +1870,8 @@ class Analyzer:
                     f"🚫 [NO-SOCIALS-GUARD] {symbol} ({mint[:8]}): 0 соцсетей при возрасте {_age_min_pre:.1f}м (v/l {_vol_liq_r:.1f}x, b/s {_b5_pre}/{_s5_pre}) — анонимный дев-раг.",
                 )
             else:
-                print(f"💎 [ORGANIC-STEALTH] {symbol} ({mint[:8]}): 0 соцсетей, но доказан чистый органический поток (${_vm5_pre:,.0f}, {_b5_pre}b/{_s5_pre}s, v/l {_vol_liq_r:.2f}) — пропуск в анализ.")
+                _stealth_label = "VIRAL-STEALTH" if _is_viral_stealth else "ORGANIC-STEALTH"
+                print(f"💎 [{_stealth_label}] {symbol} ({mint[:8]}): 0 соцсетей, но подтверждён реальный приток (${_vm5_pre:,.0f}, {_b5_pre}b/{_s5_pre}s, v/l {_vol_liq_r:.2f}) — пропуск в анализ.")
 
         # =========================================================================
         # 🚀 ЭТАП 1: ROCKET XGBOOST v2 — ПЕРВИЧНЫЙ ML-СКРИНЕР (0ms IN-MEMORY)
@@ -1985,7 +1996,7 @@ class Analyzer:
                     # Для PumpSwap / токенов с launchpad bonding curve RugCheck начисляет 10,000-11,000 штрафных баллов
                     # за "Large amount of LP unlocked" и "LP provider", так как LP лежит в смарт-контракте AMM,
                     # а не сожжён на 11111111111111111111111111111111. Дев не может снять этот LP!
-                    _is_pump_origin_main = mint.endswith("pump") or str((pair_data or {}).get("dexId", "")).lower() in ("pumpswap", "meteora")
+                    _is_pump_origin_main = mint.endswith("pump")
                     _allowed_lp_terms_main = ("large amount of lp unlocked", "lp provider", "single lp provider") if _is_pump_origin_main else ("lp provider",)
 
                     # Исключаем безвредный шум: низкая ликвидность для молодых пулов, copycat для мемов, и LP контракт пула.
@@ -2011,8 +2022,9 @@ class Analyzer:
                             return self._deny(mint, f"rc-danger {_rk_name[:15]}", f"🚫 [АНТИСКАМ-RC] {symbol} ({mint[:8]}): критический риск RugCheck '{rk.get('name')}' — блок скама!")
 
                     # Для кастомных не-pump токенов (Raydium, PumpSwap, Meteora):
-                    # Защита от кейсов AMERICA (снятие 234 SOL на PumpSwap) и PEPEBOT (снятие 160 SOL на Meteora)
-                    # Проверяем лок/берн LP, либо отсутствие опасных прав (freeze/mint) и опасной концентрации у создателя!
+                    # Защита от кейсов SOUVENIR (-$45k вынос пула), AMERICA (-234 SOL), PEPEBOT (-160 SOL):
+                    # Если токен НЕ с Pump.fun (не оканчивается на pump) — его LP ОБЯЗАТЕЛЬНО должен быть заблокирован или сожжён (>= 80%)!
+                    # Иначе создатель может в любой момент вынуть ликвидность!
                     if not mint.endswith("pump"):
                         _lp_ok = False
                         for _m in (rc_data.get("markets") or []):
@@ -2024,15 +2036,11 @@ class Analyzer:
                                     _lp_ok = True
                                     break
                         if not _lp_ok:
-                            _has_freeze = bool(rc_data.get("freezeAuthority"))
-                            _has_mint_auth = bool(rc_data.get("mintAuthority"))
-                            _has_critical_holder_risk = any(
-                                rk.get("level") == "danger" and any(w in str(rk.get("name", "")).lower() for w in ("single holder", "high ownership", "creator holding"))
-                                for rk in (rc_data.get("risks") or [])
+                            return self._deny(
+                                mint,
+                                "unlocked-custom-lp",
+                                f"🚫 [CUSTOM-LP-RUG] {symbol} ({mint[:8]}): кастомный токен без сожжённого/заблокированного LP (<80%) — риск сноса пула девом (кейс SOUVENIR/AMERICA)!"
                             )
-                            # Блокируем только если есть реальный критический риск манипуляции пулом
-                            if _has_freeze or _has_mint_auth or _has_critical_holder_risk:
-                                return self._deny(mint, "custom-unlocked-lp", f"🚫 [CUSTOM-LP-RUG] {symbol} ({mint[:8]}): кастомный не-pump токен с критическим риском (freeze={_has_freeze}, mint={_has_mint_auth}, holder_danger={_has_critical_holder_risk})!")
 
                     # Проверка холдеров RugCheck
                     top_holders = rc_data.get("topHolders") or []
@@ -2150,7 +2158,8 @@ class Analyzer:
                     max_whale_pct = 18.0 if _is_pump_flag else 15.0
                     if largest_whale_pct > max_whale_pct:
                         return self._deny(mint, f"whale-hold {largest_whale_pct:.1f}%", f"🚫 [АНТИСКАМ] Кит держит {largest_whale_pct:.1f}% > {max_whale_pct:.0f}% у {mint[:8]} → Блок.")
-                    max_allowed_top10 = 35.0 if _is_pump_flag else float(getattr(config, "AUDITOR_MAX_TOP10_PCT", 30.0))
+                    _pump_top10_cap = 38.0 if (_is_pump_flag and (_vm5_pre >= 10000.0 or _b5_pre >= 80)) else (35.0 if _is_pump_flag else float(getattr(config, "AUDITOR_MAX_TOP10_PCT", 32.0)))
+                    max_allowed_top10 = _pump_top10_cap
                     if top_10_sum_pct > max_allowed_top10:
                         return self._deny(mint, f"top10-hold {top_10_sum_pct:.1f}%", f"🚫 [АНТИСКАМ] Топ-10 держат {top_10_sum_pct:.1f}% > {max_allowed_top10:.0f}% у {mint[:8]} → Блок.")
 

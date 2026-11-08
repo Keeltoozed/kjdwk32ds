@@ -31,6 +31,7 @@ SKIP_SYMBOLS = {
 # Быстрый чекер опрашивает их каждые 2с сразу по наступлению ready_at.
 _immature_registry: dict = {}
 _buy_locks: dict = {}
+_fetch_locks: dict = {}
 
 def _get_buy_lock():
     try:
@@ -41,6 +42,17 @@ def _get_buy_lock():
     if k not in _buy_locks:
         _buy_locks[k] = asyncio.Lock()
     return _buy_locks[k]
+
+
+def _get_fetch_lock():
+    try:
+        loop = asyncio.get_running_loop()
+        k = id(loop)
+    except RuntimeError:
+        k = 0
+    if k not in _fetch_locks:
+        _fetch_locks[k] = asyncio.Lock()
+    return _fetch_locks[k]
 
 
 def _headers():
@@ -80,200 +92,203 @@ async def fetch_jup_tokens() -> list:
     if time.time() - _cache_time < CACHE_TTL and _cache:
         return _cache
 
-    headers = _headers()
-    allow_raw_curve = bool(getattr(config, "ALLOW_UNGRADUATED_PUMPFUN", False))
+    async with _get_fetch_lock():
+        if time.time() - _cache_time < CACHE_TTL and _cache:
+            return _cache
 
-    # 1. Jupiter Tokens API v2 (5 параллельных срезов: 5m тренды + 1h тренды + recent)
-    (s1, d1), (s_org, d_org), (s3, d3), (s1h, d1h), (s2, d2) = await asyncio.gather(
-        fetch_json(f"{BASE}/toptrending/5m?limit=100", headers=headers, timeout=8, retries=0),
-        fetch_json(f"{BASE}/toporganicscore/5m?limit=100", headers=headers, timeout=8, retries=0),
-        fetch_json(f"{BASE}/toptraded/5m?limit=100", headers=headers, timeout=8, retries=0),
-        fetch_json(f"{BASE}/toptrending/1h?limit=100", headers=headers, timeout=8, retries=0),
-        fetch_json(f"{BASE}/recent", headers=headers, timeout=8, retries=0),
-    )
-    # Авто-фоллбэк на бесплатный lite-api.jup.ag при 429/401/403 на основном хосте
-    if s1 in (429, 401, 403) and s_org in (429, 401, 403):
+        headers = _headers()
+        allow_raw_curve = bool(getattr(config, "ALLOW_UNGRADUATED_PUMPFUN", False))
+
+        # 1. Jupiter Tokens API v2 (5 параллельных срезов: 5m тренды + 1h тренды + recent)
         (s1, d1), (s_org, d_org), (s3, d3), (s1h, d1h), (s2, d2) = await asyncio.gather(
-            fetch_json(f"{LITE_BASE}/toptrending/5m?limit=100", timeout=8, retries=0),
-            fetch_json(f"{LITE_BASE}/toporganicscore/5m?limit=100", timeout=8, retries=0),
-            fetch_json(f"{LITE_BASE}/toptraded/5m?limit=100", timeout=8, retries=0),
-            fetch_json(f"{LITE_BASE}/toptrending/1h?limit=100", timeout=8, retries=0),
-            fetch_json(f"{LITE_BASE}/recent", timeout=8, retries=0),
+            fetch_json(f"{BASE}/toptrending/5m?limit=100", headers=headers, timeout=8, retries=0),
+            fetch_json(f"{BASE}/toporganicscore/5m?limit=100", headers=headers, timeout=8, retries=0),
+            fetch_json(f"{BASE}/toptraded/5m?limit=100", headers=headers, timeout=8, retries=0),
+            fetch_json(f"{BASE}/toptrending/1h?limit=100", headers=headers, timeout=8, retries=0),
+            fetch_json(f"{BASE}/recent", headers=headers, timeout=8, retries=0),
         )
+        # Авто-фоллбэк на бесплатный lite-api.jup.ag при 429/401/403 на основном хосте
+        if s1 in (429, 401, 403) and s_org in (429, 401, 403):
+            (s1, d1), (s_org, d_org), (s3, d3), (s1h, d1h), (s2, d2) = await asyncio.gather(
+                fetch_json(f"{LITE_BASE}/toptrending/5m?limit=100", timeout=8, retries=0),
+                fetch_json(f"{LITE_BASE}/toporganicscore/5m?limit=100", timeout=8, retries=0),
+                fetch_json(f"{LITE_BASE}/toptraded/5m?limit=100", timeout=8, retries=0),
+                fetch_json(f"{LITE_BASE}/toptrending/1h?limit=100", timeout=8, retries=0),
+                fetch_json(f"{LITE_BASE}/recent", timeout=8, retries=0),
+            )
 
-    ranked = []
-    seen = set()
+        ranked = []
+        seen = set()
 
-    def _add_jup_list(items, tag: str, min_pc5: float = 1.8):
-        if not isinstance(items, list):
-            return
-        for t in items:
-            if not isinstance(t, dict):
-                continue
-            m = t.get("id", "")
-            sym = str(t.get("symbol") or "").upper().strip()
-            if not m or m.startswith("0x") or len(m) < 32 or len(m) > 44 or m in seen or sym in SKIP_SYMBOLS:
-                continue
-            liq = float(t.get("liquidity") or 0.0)
-            is_grad = bool(t.get("graduatedAt") or t.get("graduatedPool") or (not m.endswith("pump") and liq >= 7500.0))
-            if not allow_raw_curve and not is_grad:
-                continue
-            if liq < (3500.0 if allow_raw_curve else 7500.0):
-                continue
-            st5 = t.get("stats5m") or {}
-            st1h = t.get("stats1h") or {}
-            pc5 = float(st5.get("priceChange") or 0.0)
-            pc1h = float(st1h.get("priceChange") or 0.0)
-            vol5 = float(st5.get("buyVolume") or 0.0) + float(st5.get("sellVolume") or 0.0)
-            b5 = int(st5.get("numBuys") or 0)
-            s5 = int(st5.get("numSells") or 0)
-            age_m = _parse_jup_age_min(t)
-            # Жесткое отсечение древних мамонтов (>12ч полностью, >6ч только при реальном пробое ликвидного пула):
-            if age_m > 720.0:
-                continue
-            if age_m > 360.0 and (vol5 < 6000.0 or pc5 < 5.0 or liq < 25000.0):
-                continue
-            if age_m > 60.0 and pc5 < 2.0:
-                continue
-            _is_fresh_jup = age_m <= 4.0
-            _max_pc1h = 2500.0 if (_is_fresh_jup and pc5 >= 2.0 and b5 >= s5) else float(getattr(config, "MAX_ENTRY_H1_PCT", 350.0))
-            if (pc1h > _max_pc1h and age_m > 4.0) or (pc1h < -25.0 and pc5 < 12.0):
-                continue
-            if pc5 < min_pc5 or vol5 < 1500.0:
-                continue
-            seen.add(m)
-            ranked.append((pc5, vol5, sym, m, tag))
+        def _add_jup_list(items, tag: str, min_pc5: float = 1.8):
+            if not isinstance(items, list):
+                return
+            for t in items:
+                if not isinstance(t, dict):
+                    continue
+                m = t.get("id", "")
+                sym = str(t.get("symbol") or "").upper().strip()
+                if not m or m.startswith("0x") or len(m) < 32 or len(m) > 44 or m in seen or sym in SKIP_SYMBOLS:
+                    continue
+                liq = float(t.get("liquidity") or 0.0)
+                is_grad = bool(t.get("graduatedAt") or t.get("graduatedPool") or (not m.endswith("pump") and liq >= 7500.0))
+                if not allow_raw_curve and not is_grad:
+                    continue
+                if liq < (3500.0 if allow_raw_curve else 7500.0):
+                    continue
+                st5 = t.get("stats5m") or {}
+                st1h = t.get("stats1h") or {}
+                pc5 = float(st5.get("priceChange") or 0.0)
+                pc1h = float(st1h.get("priceChange") or 0.0)
+                vol5 = float(st5.get("buyVolume") or 0.0) + float(st5.get("sellVolume") or 0.0)
+                b5 = int(st5.get("numBuys") or 0)
+                s5 = int(st5.get("numSells") or 0)
+                age_m = _parse_jup_age_min(t)
+                # Жесткое отсечение древних мамонтов (>12ч полностью, >6ч только при реальном пробое ликвидного пула):
+                if age_m > 720.0:
+                    continue
+                if age_m > 360.0 and (vol5 < 6000.0 or pc5 < 5.0 or liq < 25000.0):
+                    continue
+                if age_m > 60.0 and pc5 < 2.0:
+                    continue
+                _is_fresh_jup = age_m <= 4.0
+                _max_pc1h = 2500.0 if (_is_fresh_jup and pc5 >= 2.0 and b5 >= s5) else float(getattr(config, "MAX_ENTRY_H1_PCT", 350.0))
+                if (pc1h > _max_pc1h and age_m > 4.0) or (pc1h < -25.0 and pc5 < 12.0):
+                    continue
+                if pc5 < min_pc5 or vol5 < 1500.0:
+                    continue
+                seen.add(m)
+                ranked.append((pc5, vol5, sym, m, tag))
 
-    if s_org == 200:
-        _add_jup_list(d_org, "organic_5m", min_pc5=1.8)
-    if s1 == 200:
-        _add_jup_list(d1, "trending_5m", min_pc5=1.8)
-    if s1h == 200:
-        _add_jup_list(d1h, "trending_1h", min_pc5=2.0)
-    if s3 == 200:
-        _add_jup_list(d3, "traded_5m", min_pc5=1.8)
-    if s2 == 200:
-        _add_jup_list(d2, "recent", min_pc5=1.5)
+        if s_org == 200:
+            _add_jup_list(d_org, "organic_5m", min_pc5=1.8)
+        if s1 == 200:
+            _add_jup_list(d1, "trending_5m", min_pc5=1.8)
+        if s1h == 200:
+            _add_jup_list(d1h, "trending_1h", min_pc5=2.0)
+        if s3 == 200:
+            _add_jup_list(d3, "traded_5m", min_pc5=1.8)
+        if s2 == 200:
+            _add_jup_list(d2, "recent", min_pc5=1.5)
 
-    # 2. Прямой DexScreener Rocket Radar (300 RPM, 0 нагрузки на GT):
-    # Ловит живые выпускники PumpSwap / Meteora / Raydium / Bonk, когда топ-100 Jupiter забит старыми мейджорами!
-    try:
-        ds_queries = (
-            "https://api.dexscreener.com/latest/dex/search?q=pumpswap",
-            "https://api.dexscreener.com/latest/dex/search?q=SOL%20pump",
-            "https://api.dexscreener.com/latest/dex/search?q=meteora%20SOL",
-            "https://api.dexscreener.com/latest/dex/search?q=bonk%20SOL",
-        )
-        ds_results = await asyncio.gather(
-            *[fetch_json(u, timeout=6, retries=0) for u in ds_queries],
-            return_exceptions=True,
-        )
-        now_ms_ds = time.time() * 1000.0
-        for res in ds_results:
-            if not isinstance(res, tuple) or len(res) != 2:
-                continue
-            st_q, d_q = res
-            if st_q != 200 or not isinstance(d_q, dict):
-                continue
-            for p in (d_q.get("pairs") or []):
-                if not isinstance(p, dict) or str(p.get("chainId") or "").lower() != "solana":
+        # 2. Прямой DexScreener Rocket Radar (300 RPM, 0 нагрузки на GT):
+        # Ловит живые выпускники PumpSwap / Meteora / Raydium / Bonk, когда топ-100 Jupiter забит старыми мейджорами!
+        try:
+            ds_queries = (
+                "https://api.dexscreener.com/latest/dex/search?q=pumpswap",
+                "https://api.dexscreener.com/latest/dex/search?q=SOL%20pump",
+                "https://api.dexscreener.com/latest/dex/search?q=meteora%20SOL",
+                "https://api.dexscreener.com/latest/dex/search?q=bonk%20SOL",
+            )
+            ds_results = await asyncio.gather(
+                *[fetch_json(u, timeout=6, retries=0) for u in ds_queries],
+                return_exceptions=True,
+            )
+            now_ms_ds = time.time() * 1000.0
+            for res in ds_results:
+                if not isinstance(res, tuple) or len(res) != 2:
                     continue
-                dex_p = str(p.get("dexId") or "").lower()
-                if not allow_raw_curve and dex_p in ("pump", "pumpfun", "moonshot", "meteoradbc"):
+                st_q, d_q = res
+                if st_q != 200 or not isinstance(d_q, dict):
                     continue
-                bt = p.get("baseToken") or {}
-                addr = str(bt.get("address") or "").strip()
-                sym_p = str(bt.get("symbol") or "").upper().strip()
-                if not addr or addr.startswith("0x") or len(addr) < 32 or len(addr) > 44 or addr in seen or sym_p in SKIP_SYMBOLS:
-                    continue
-                liq_p = float((p.get("liquidity") or {}).get("usd", 0) or 0)
-                if liq_p < 7500.0:
-                    continue
-                vol5_p = float((p.get("volume") or {}).get("m5", 0) or 0)
-                if vol5_p < 2000.0:
-                    continue
-                tx5_p = (p.get("txns") or {}).get("m5") or {}
-                b5_p = int(tx5_p.get("buys", 0) or 0)
-                s5_p = int(tx5_p.get("sells", 0) or 0)
-                if (b5_p + s5_p) < 12 or (s5_p > 0 and (b5_p / s5_p) < 1.08):
-                    continue
-                pc_p = p.get("priceChange") or {}
-                m5_p = float(pc_p.get("m5", 0) or 0)
-                h1_p = float(pc_p.get("h1", 0) or 0)
-                if m5_p < 1.8:
-                    continue
-                ca_p = float(p.get("pairCreatedAt") or 0)
-                age_p = ((now_ms_ds - ca_p) / 60000.0) if ca_p > 0 else 999.0
-                if age_p > 720.0:
-                    continue
-                if age_p > 360.0 and (vol5_p < 6000.0 or m5_p < 5.0 or liq_p < 25000.0):
-                    continue
-                _is_fresh_ds = age_p <= 4.0
-                _max_h1_ds = 2500.0 if (_is_fresh_ds and b5_p >= s5_p * 1.15) else float(getattr(config, "MAX_ENTRY_H1_PCT", 350.0))
-                if h1_p > _max_h1_ds and age_p > 4.0:
+                for p in (d_q.get("pairs") or []):
+                    if not isinstance(p, dict) or str(p.get("chainId") or "").lower() != "solana":
+                        continue
+                    dex_p = str(p.get("dexId") or "").lower()
+                    if not allow_raw_curve and dex_p in ("pump", "pumpfun", "moonshot", "meteoradbc"):
+                        continue
+                    bt = p.get("baseToken") or {}
+                    addr = str(bt.get("address") or "").strip()
+                    sym_p = str(bt.get("symbol") or "").upper().strip()
+                    if not addr or addr.startswith("0x") or len(addr) < 32 or len(addr) > 44 or addr in seen or sym_p in SKIP_SYMBOLS:
+                        continue
+                    liq_p = float((p.get("liquidity") or {}).get("usd", 0) or 0)
+                    if liq_p < 7500.0:
+                        continue
+                    vol5_p = float((p.get("volume") or {}).get("m5", 0) or 0)
+                    if vol5_p < 2000.0:
+                        continue
+                    tx5_p = (p.get("txns") or {}).get("m5") or {}
+                    b5_p = int(tx5_p.get("buys", 0) or 0)
+                    s5_p = int(tx5_p.get("sells", 0) or 0)
+                    if (b5_p + s5_p) < 12 or (s5_p > 0 and (b5_p / s5_p) < 1.08):
+                        continue
+                    pc_p = p.get("priceChange") or {}
+                    m5_p = float(pc_p.get("m5", 0) or 0)
+                    h1_p = float(pc_p.get("h1", 0) or 0)
+                    if m5_p < 1.8:
+                        continue
+                    ca_p = float(p.get("pairCreatedAt") or 0)
+                    age_p = ((now_ms_ds - ca_p) / 60000.0) if ca_p > 0 else 999.0
+                    if age_p > 720.0:
+                        continue
+                    if age_p > 360.0 and (vol5_p < 6000.0 or m5_p < 5.0 or liq_p < 25000.0):
+                        continue
+                    _is_fresh_ds = age_p <= 4.0
+                    _max_h1_ds = 2500.0 if (_is_fresh_ds and b5_p >= s5_p * 1.15) else float(getattr(config, "MAX_ENTRY_H1_PCT", 350.0))
+                    if h1_p > _max_h1_ds and age_p > 4.0:
+                        continue
+                    seen.add(addr)
+                    ranked.append((m5_p, vol5_p, sym_p, addr, "ds_radar"))
+        except Exception:
+            pass
+
+        # 3. Добор живых трендов и свежих пулов PumpSwap из общего кэша market_data (без дублирования запросов и 429)
+        try:
+            import market_data
+            gt_items = await market_data.get_trending()
+            for item in (gt_items or []):
+                addr = item.get("tokenAddress") or ""
+                if not addr or addr.startswith("0x") or len(addr) < 32 or len(addr) > 44 or addr in seen:
                     continue
                 seen.add(addr)
-                ranked.append((m5_p, vol5_p, sym_p, addr, "ds_radar"))
-    except Exception:
-        pass
+                ranked.append((5.0, 0.0, addr[:6], addr, "gt_trending"))
+        except Exception:
+            pass
 
-    # 3. Добор живых трендов и свежих пулов PumpSwap из общего кэша market_data (без дублирования запросов и 429)
-    try:
-        import market_data
-        gt_items = await market_data.get_trending()
-        for item in (gt_items or []):
-            addr = item.get("tokenAddress") or ""
-            if not addr or addr.startswith("0x") or len(addr) < 32 or len(addr) > 44 or addr in seen:
-                continue
-            seen.add(addr)
-            ranked.append((5.0, 0.0, addr[:6], addr, "gt_trending"))
-    except Exception:
-        pass
+        # Сортируем все импульсные монеты по силе 5м движения и объёму:
+        ranked.sort(key=lambda x: (x[0], x[1]), reverse=True)
 
-    # Сортируем все импульсные монеты по силе 5м движения и объёму:
-    ranked.sort(key=lambda x: (x[0], x[1]), reverse=True)
+        # 4. Свежие мигрировавшие листинги (recent) — для отправки молодых выпускников в реестр созревания
+        if s2 == 200 and isinstance(d2, list):
+            for t in d2:
+                if not isinstance(t, dict):
+                    continue
+                m = t.get("id", "")
+                sym = str(t.get("symbol") or "").upper().strip()
+                if not m or m.startswith("0x") or len(m) < 32 or len(m) > 44 or m in seen or sym in SKIP_SYMBOLS:
+                    continue
+                liq = float(t.get("liquidity") or 0.0)
+                is_grad_r = bool(t.get("graduatedAt") or t.get("graduatedPool") or (not m.endswith("pump") and liq >= 7500.0))
+                if not allow_raw_curve and not is_grad_r:
+                    continue
+                if liq < 5000.0:
+                    continue
+                st5 = t.get("stats5m") or {}
+                pc5 = float(st5.get("priceChange") or 0.0)
+                seen.add(m)
+                ranked.append((pc5, 0.0, sym, m, "recent"))
+                
+        if not ranked:
+            # Fallback через DexScreener boosts/profiles (300 RPM, без добивания лимита GeckoTerminal 429!)
+            try:
+                for ds_url in (config.DEXSCREENER_LATEST, config.DEXSCREENER_PROFILES):
+                    st_ds, d_ds = await fetch_json(ds_url, timeout=6, retries=0)
+                    if st_ds == 200 and isinstance(d_ds, list):
+                        for item in d_ds:
+                            if item.get("chainId") != "solana":
+                                continue
+                            addr = str(item.get("tokenAddress") or "").strip()
+                            if not addr or addr.startswith("0x") or len(addr) < 32 or len(addr) > 44 or addr in seen:
+                                continue
+                            seen.add(addr)
+                            ranked.append((3.0, 0.0, addr[:6], addr, "ds_boost"))
+            except Exception as e:
+                pass
 
-    # 4. Свежие мигрировавшие листинги (recent) — для отправки молодых выпускников в реестр созревания
-    if s2 == 200 and isinstance(d2, list):
-        for t in d2:
-            if not isinstance(t, dict):
-                continue
-            m = t.get("id", "")
-            sym = str(t.get("symbol") or "").upper().strip()
-            if not m or m.startswith("0x") or len(m) < 32 or len(m) > 44 or m in seen or sym in SKIP_SYMBOLS:
-                continue
-            liq = float(t.get("liquidity") or 0.0)
-            is_grad_r = bool(t.get("graduatedAt") or t.get("graduatedPool") or (not m.endswith("pump") and liq >= 7500.0))
-            if not allow_raw_curve and not is_grad_r:
-                continue
-            if liq < 5000.0:
-                continue
-            st5 = t.get("stats5m") or {}
-            pc5 = float(st5.get("priceChange") or 0.0)
-            seen.add(m)
-            ranked.append((pc5, 0.0, sym, m, "recent"))
-            
-    if not ranked:
-        # Fallback через DexScreener boosts/profiles (300 RPM, без добивания лимита GeckoTerminal 429!)
-        print(f"⚠️ [JUPITER] API вернул статусы ({s1}, {s2}, {s3}). Добираем пул через DexScreener Solana boosts/profiles...")
-        try:
-            for ds_url in (config.DEXSCREENER_LATEST, config.DEXSCREENER_PROFILES):
-                st_ds, d_ds = await fetch_json(ds_url, timeout=6, retries=0)
-                if st_ds == 200 and isinstance(d_ds, list):
-                    for item in d_ds:
-                        if item.get("chainId") != "solana":
-                            continue
-                        addr = str(item.get("tokenAddress") or "").strip()
-                        if not addr or addr.startswith("0x") or len(addr) < 32 or len(addr) > 44 or addr in seen:
-                            continue
-                        seen.add(addr)
-                        ranked.append((3.0, 0.0, addr[:6], addr, "ds_boost"))
-        except Exception as e:
-            print(f"⚠️ [JUPITER-FALLBACK] ошибка DS: {e}")
-
-    out = [m for _, _, _, m, _ in ranked][:120]
-    _cache, _cache_time = out, time.time()
-    return out
+        out = [m for _, _, _, m, _ in ranked][:120]
+        _cache, _cache_time = out, time.time()
+        return out
 
 
 async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: str = "JUP") -> bool:
