@@ -75,31 +75,39 @@ async def position_security_auditor_loop(analyzer, tracker):
                     except Exception:
                         pass
 
-                # 2. Проверка вывода ликвидности (Dead Pool Guard)
+                # 2. Ранний перехват вывода ликвидности (Early Liquidity Drain Escape)
                 _last_lchk = getattr(position, "last_liq_chk", 0.0)
-                if (now_ts - _last_lchk) > 25:
+                if (now_ts - _last_lchk) > 10:
                     position.last_liq_chk = now_ts
                     try:
                         import market_data as _md
-                        _td_sol = await asyncio.wait_for(_md.get_token_data(mint, max_cache_age=10.0), timeout=2.0)
+                        _td_sol = await asyncio.wait_for(_md.get_token_data(mint, max_cache_age=5.0), timeout=2.0)
                         if _td_sol:
                             _liq_obj = _td_sol.get("liquidity") or {}
                             _has_liq_data = bool(_liq_obj and ("usd" in _liq_obj or "quote" in _liq_obj))
                             _sol_liq = float((_liq_obj.get("usd", 0) or 0))
                             _quote_liq = float((_liq_obj.get("quote", 0) or 0))
                             _q_sym = str(((_td_sol.get("quoteToken") or {}).get("symbol") or "")).upper()
-                            _quote_drained = (_q_sym in ("SOL", "WSOL") and _quote_liq < 2.0)
-                            _usd_drained = (_sol_liq < 800)
-                            if _has_liq_data and minutes_held >= 1.0 and (_usd_drained or _quote_drained):
-                                _drain_msg = f"{_quote_liq:.4f} SOL" if _quote_drained else f"${_sol_liq:.0f} liq"
-                                print(f"🚨 [SOL-DEAD-POOL] {position.symbol} ({mint[:8]}): пул высушен ({_drain_msg}) — списание в 0.0$ (-100%).")
-                                tracker.close_position(mint, 0.0, f"SOL Liquidity Drained ({_drain_msg}, pool dead)")
+
+                            _init_liq = float(getattr(position, "initial_liquidity_usd", 0.0) or 0.0)
+                            if _init_liq <= 0 and _sol_liq > 0:
+                                position.initial_liquidity_usd = _sol_liq
+                                _init_liq = _sol_liq
+
+                            _crit_drained = (_q_sym in ("SOL", "WSOL") and _quote_liq < 5.0) or (_sol_liq < 1800.0)
+                            _drain_pct_drop = (_init_liq > 8000.0 and _sol_liq < _init_liq * 0.50)
+
+                            if _has_liq_data and minutes_held >= 0.5 and (_crit_drained or _drain_pct_drop):
+                                _px_now = float(getattr(position, "current_price_usd", 0.0) or 0.0)
+                                _msg = f"Liq Drop ${_sol_liq:.0f} (было ${_init_liq:.0f})" if _drain_pct_drop else f"Low Liq ${_sol_liq:.0f} / {_quote_liq:.1f} SOL"
+                                print(f"🚨 [EARLY-LIQ-ESCAPE] {position.symbol} ({mint[:8]}): вывод пула ({_msg}) — аварийный выход по рынку!")
+                                tracker.close_position(mint, _px_now, f"Early Liquidity Drain Escape ({_msg})")
                                 continue
                     except Exception:
                         pass
         except Exception as e:
             print(f"⚠️ Ошибка в position_security_auditor_loop: {e}")
-        await asyncio.sleep(20.0)
+        await asyncio.sleep(5.0)
 
 
 async def position_manager_loop(analyzer, tracker):
@@ -343,29 +351,33 @@ async def position_manager_loop(analyzer, tracker):
                 _tp4_sell = float(getattr(config, "TP4_SELL_FRAC", 0.50))
                 _tp5 = float(getattr(config, "TP5_TRIGGER_PCT", 4.00))
                 _tp5_sell = float(getattr(config, "TP5_SELL_FRAC", 0.50))
-                if True:
-                    if getattr(config, "PARTIAL_TP_ENABLED", True) and pnl_pct >= _tp1_sol_thr and not getattr(position, "tp1_done", False):
+                _min_tp_ticket = float(getattr(config, "PARTIAL_TP_MIN_TICKET_USD", 20.0))
+                _pos_val = float(getattr(position, "original_amount_usd", 0.0) or getattr(position, "amount_usd", 0.0) or 0.0)
+                _allow_partial_tp = getattr(config, "PARTIAL_TP_ENABLED", True) and (_pos_val >= _min_tp_ticket)
+
+                if _allow_partial_tp:
+                    if pnl_pct >= _tp1_sol_thr and not getattr(position, "tp1_done", False):
                         tracker.partial_close_position(mint, current_price, _tp1_sell, f"Take Profit +{_tp1_sol_thr*100:.0f}% (Tier-1 {int(_tp1_sell*100)}%)")
                         position.tp1_done = True
                         position.is_moonbag = True
                         position.last_tp_ts = time.time()
                         continue
-                    if getattr(config, "PARTIAL_TP_ENABLED", True) and pnl_pct >= _tp2 and not getattr(position, "tp2_done", False):
+                    if pnl_pct >= _tp2 and not getattr(position, "tp2_done", False):
                         tracker.partial_close_position(mint, current_price, _tp2_sell, f"Take Profit +{_tp2*100:.0f}% (Tier-2 {int(_tp2_sell*100)}%)")
                         position.tp2_done = True
                         position.last_tp_ts = time.time()
                         continue
-                    if getattr(config, "PARTIAL_TP_ENABLED", True) and pnl_pct >= _tp3 and not getattr(position, "tp3_done", False):
+                    if pnl_pct >= _tp3 and not getattr(position, "tp3_done", False):
                         tracker.partial_close_position(mint, current_price, _tp3_sell, f"Take Profit +{_tp3*100:.0f}% (Tier-3 {int(_tp3_sell*100)}%)")
                         position.tp3_done = True
                         position.last_tp_ts = time.time()
                         continue
-                    if getattr(config, "PARTIAL_TP_ENABLED", True) and pnl_pct >= _tp4 and not getattr(position, "tp4_done", False):
+                    if pnl_pct >= _tp4 and not getattr(position, "tp4_done", False):
                         tracker.partial_close_position(mint, current_price, _tp4_sell, f"Take Profit +{_tp4*100:.0f}% (Tier-4 {int(_tp4_sell*100)}%)")
                         position.tp4_done = True
                         position.last_tp_ts = time.time()
                         continue
-                    if getattr(config, "PARTIAL_TP_ENABLED", True) and pnl_pct >= _tp5 and not getattr(position, "tp5_done", False):
+                    if pnl_pct >= _tp5 and not getattr(position, "tp5_done", False):
                         tracker.partial_close_position(mint, current_price, _tp5_sell, f"Take Profit +{_tp5*100:.0f}% (Tier-5 {int(_tp5_sell*100)}%)")
                         position.tp5_done = True
                         position.last_tp_ts = time.time()
@@ -374,34 +386,40 @@ async def position_manager_loop(analyzer, tracker):
                     # чтобы никогда не блокировать Mature Breakeven при резком откате к цене входа!
                     if (time.time() - float(getattr(position, "last_tp_ts", 0.0) or 0.0)) < 5.0 and pnl_pct >= 0.045:
                         continue
-                    from exit_managers import MatureExitManager
-                    mature_exit_reason = MatureExitManager.evaluate_exit(position, current_price)
-                    if mature_exit_reason == "PARTIAL_TP1_TRIGGER":
+                from exit_managers import MatureExitManager
+                mature_exit_reason = MatureExitManager.evaluate_exit(position, current_price)
+                if mature_exit_reason == "PARTIAL_TP1_TRIGGER":
+                    if _allow_partial_tp:
                         tracker.partial_close_position(mint, current_price, _tp1_sell, f"Take Profit Flush +{pnl_pct*100:.1f}% (after peak +{max_pnl_pct*100:.1f}%)")
                         position.tp1_done = True
                         position.is_moonbag = True
                         position.last_tp_ts = time.time()
-                        continue
-                    if mature_exit_reason:
-                        # Защита от ложного 0м стопа из-за лагающего тика DexScreener / побочного пула (кейс Burn -31% за 0м):
-                        # если в первые 2 минуты сработал Emergency Cap / Stop Loss, сверяем с живой ончейн-котировкой Jupiter!
-                        if minutes_held < 2.0 and pnl_pct <= -0.10 and ("Emergency Cap" in mature_exit_reason or "Stop Loss" in mature_exit_reason):
-                            try:
-                                from jupiter import JupiterAPI
-                                _live_em_px = await JupiterAPI.get_price(mint)
-                                if _live_em_px and _live_em_px > 0 and position.entry_price_usd > 0:
-                                    _live_em_pnl = (_live_em_px - position.entry_price_usd) / position.entry_price_usd
-                                    if _live_em_pnl > -0.080:
-                                        print(f"🛡️ [EARLY-EXIT-RESCUED] {position.symbol} ({mint[:8]}): ложный тик {pnl_pct*100:+.1f}%, живой Jupiter ${_live_em_px:.8f} ({_live_em_pnl*100:+.1f}%) — позиция спасена!")
-                                        position.current_price_usd = _live_em_px
-                                        position.emerg_confirm_n = 0
-                                        position.sl_confirm_n = 0
-                                        continue
-                                    current_price = _live_em_px
-                            except Exception:
-                                pass
-                        tracker.close_position(mint, current_price, mature_exit_reason)
-                        continue
+                    continue
+                if mature_exit_reason:
+                    # Защита от ложного 0м стопа из-за лагающего тика DexScreener / побочного пула (кейс Burn -31% за 0м):
+                    # если в первые 2 минуты сработал Emergency Cap / Stop Loss, сверяем с живой ончейн-котировкой Jupiter!
+                    if minutes_held < 2.0 and pnl_pct <= -0.10 and ("Emergency Cap" in mature_exit_reason or "Stop Loss" in mature_exit_reason):
+                        try:
+                            from jupiter import JupiterAPI
+                            _live_em_px = await JupiterAPI.get_price(mint)
+                            if _live_em_px and _live_em_px > 0 and position.entry_price_usd > 0:
+                                _live_em_pnl = (_live_em_px - position.entry_price_usd) / position.entry_price_usd
+                                if _live_em_pnl > -0.080:
+                                    print(f"🛡️ [EARLY-EXIT-RESCUED] {position.symbol} ({mint[:8]}): ложный тик {pnl_pct*100:+.1f}%, живой Jupiter ${_live_em_px:.8f} ({_live_em_pnl*100:+.1f}%) — позиция спасена!")
+                                    position.current_price_usd = _live_em_px
+                                    position.emerg_confirm_n = 0
+                                    position.sl_confirm_n = 0
+                                    continue
+                                current_price = _live_em_px
+                        except Exception:
+                            pass
+                    tracker.close_position(mint, current_price, mature_exit_reason)
+                    continue
+
+                # Позиция находится под управлением MatureExitManager:
+                # Если менеджер выходов вернул None — держим позицию и даём ракете свободно расти!
+                # Не пускаем позицию в устаревшие скальперские фильтры (Profit Floor +5%), которые срезали прибыль на копейки.
+                continue
                     
                 # === STALL TIMER (DEAD MOMENTUM EXIT - 210с на консолидацию без затягивания убытка) ===
                 _stall_sec = float(getattr(config, "STALL_TIMER_SEC", 210.0))
@@ -468,28 +486,29 @@ async def position_manager_loop(analyzer, tracker):
                         tracker.close_position(mint, current_price, f"Scalp Profit (peak +{max_pnl_pct*100:.0f}%)")
                         continue
                         
-                # === TAKE-PROFIT LADDER (Лестница фиксации прибыли — только если включено) ===
-                if getattr(config, "PARTIAL_TP_ENABLED", False) and pnl_pct >= _tp1_sol_thr and not getattr(position, "tp1_done", False):
-                    tracker.partial_close_position(mint, current_price, _tp1_sell, f"Take Profit +{_tp1_sol_thr*100:.0f}% (Tier-1 {int(_tp1_sell*100)}%)")
-                    position.tp1_done = True
-                    position.is_moonbag = True
-                    continue
-                if getattr(config, "PARTIAL_TP_ENABLED", False) and pnl_pct >= _tp2 and not getattr(position, "tp2_done", False):
-                    tracker.partial_close_position(mint, current_price, _tp2_sell, f"Take Profit +{_tp2*100:.0f}% (Tier-2 {int(_tp2_sell*100)}%)")
-                    position.tp2_done = True
-                    continue
-                if getattr(config, "PARTIAL_TP_ENABLED", False) and pnl_pct >= _tp3 and not getattr(position, "tp3_done", False):
-                    tracker.partial_close_position(mint, current_price, _tp3_sell, f"Take Profit +{_tp3*100:.0f}% (Tier-3 {int(_tp3_sell*100)}%)")
-                    position.tp3_done = True
-                    continue
-                if getattr(config, "PARTIAL_TP_ENABLED", False) and pnl_pct >= _tp4 and not getattr(position, "tp4_done", False):
-                    tracker.partial_close_position(mint, current_price, _tp4_sell, f"Take Profit +{_tp4*100:.0f}% (Tier-4 {int(_tp4_sell*100)}%)")
-                    position.tp4_done = True
-                    continue
-                if getattr(config, "PARTIAL_TP_ENABLED", False) and pnl_pct >= _tp5 and not getattr(position, "tp5_done", False):
-                    tracker.partial_close_position(mint, current_price, _tp5_sell, f"Take Profit +{_tp5*100:.0f}% (Tier-5 {int(_tp5_sell*100)}%)")
-                    position.tp5_done = True
-                    continue
+                # === TAKE-PROFIT LADDER (Лестница фиксации прибыли — только если билет >= $20) ===
+                if _allow_partial_tp:
+                    if getattr(config, "PARTIAL_TP_ENABLED", False) and pnl_pct >= _tp1_sol_thr and not getattr(position, "tp1_done", False):
+                        tracker.partial_close_position(mint, current_price, _tp1_sell, f"Take Profit +{_tp1_sol_thr*100:.0f}% (Tier-1 {int(_tp1_sell*100)}%)")
+                        position.tp1_done = True
+                        position.is_moonbag = True
+                        continue
+                    if getattr(config, "PARTIAL_TP_ENABLED", False) and pnl_pct >= _tp2 and not getattr(position, "tp2_done", False):
+                        tracker.partial_close_position(mint, current_price, _tp2_sell, f"Take Profit +{_tp2*100:.0f}% (Tier-2 {int(_tp2_sell*100)}%)")
+                        position.tp2_done = True
+                        continue
+                    if getattr(config, "PARTIAL_TP_ENABLED", False) and pnl_pct >= _tp3 and not getattr(position, "tp3_done", False):
+                        tracker.partial_close_position(mint, current_price, _tp3_sell, f"Take Profit +{_tp3*100:.0f}% (Tier-3 {int(_tp3_sell*100)}%)")
+                        position.tp3_done = True
+                        continue
+                    if getattr(config, "PARTIAL_TP_ENABLED", False) and pnl_pct >= _tp4 and not getattr(position, "tp4_done", False):
+                        tracker.partial_close_position(mint, current_price, _tp4_sell, f"Take Profit +{_tp4*100:.0f}% (Tier-4 {int(_tp4_sell*100)}%)")
+                        position.tp4_done = True
+                        continue
+                    if getattr(config, "PARTIAL_TP_ENABLED", False) and pnl_pct >= _tp5 and not getattr(position, "tp5_done", False):
+                        tracker.partial_close_position(mint, current_price, _tp5_sell, f"Take Profit +{_tp5*100:.0f}% (Tier-5 {int(_tp5_sell*100)}%)")
+                        position.tp5_done = True
+                        continue
 
                 # 1.5 ГАРАНТИРОВАННЫЙ НЕСНИЖАЕМЫЙ ПОРОГ ПРИБЫЛИ (PROFIT FLOOR LOCK)
                 # На +40..+65% защищаем только безубыток (+5% после 2.5м), давая монете свободно дышать перед 2x-5x!
