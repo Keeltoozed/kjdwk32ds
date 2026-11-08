@@ -1450,7 +1450,10 @@ class GrokJevEngine:
 
                     # Очищенный score RugCheck: вычитаем безвредный шум и AMM LP пула для bonding curve / pump tokens.
                     _is_pump_orig_jev = address.endswith("pump") or str(pair_data.get("dexId") or "").lower() in ("pumpswap", "meteora", "pump", "pumpfun")
-                    _allowed_lp_terms_jev = ("large amount of lp unlocked", "lp provider", "single lp provider", "lp not locked", "unlocked lp") if _is_pump_orig_jev else ("lp provider",)
+                    _allowed_lp_terms_jev = (
+                        "large amount of lp unlocked", "lp provider", "single lp provider",
+                        "lp not locked", "unlocked lp", "single holder ownership", "high holder concentration"
+                    ) if _is_pump_orig_jev else ("lp provider",)
 
                     raw_score = float(rc_data.get("score") or 0.0)
                     penalty_to_ignore = sum(
@@ -1470,11 +1473,11 @@ class GrokJevEngine:
                         rk_lvl = str(rk.get("level") or "").lower()
                         if any(k in rk_name for k in ("low liquidity", "creator history", "copycat", "symbol mimic", *_allowed_lp_terms_jev)):
                             continue
-                        if _is_pump_orig_jev and any(lp_k in rk_name for lp_k in ("large amount of lp unlocked", "lp not locked", "unlocked lp")):
+                        if _is_pump_orig_jev and any(lp_k in rk_name for lp_k in ("large amount of lp unlocked", "lp not locked", "unlocked lp", "single holder", "high ownership")):
                             continue
                         if rk_lvl == "danger" and "creator history" not in rk_name:
                             return False, f"rugcheck: critical danger risk '{rk.get('name')}'", _h_stats
-                        if any(k in rk_name for k in ("single holder", "high ownership")):
+                        if not _is_pump_orig_jev and any(k in rk_name for k in ("single holder", "high ownership")):
                             return False, f"rugcheck: critical hazard '{rk.get('name')}'", _h_stats
 
                     # Проверка пулов и блокировки LP для не-pump токенов

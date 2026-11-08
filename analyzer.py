@@ -1,3 +1,4 @@
+import asyncio
 import aiohttp
 from datetime import datetime, timezone
 import time
@@ -1774,11 +1775,12 @@ class Analyzer:
         if _m5 < _min_m5_req:
             return self._deny(mint, f"m5-too-weak {_m5:+.1f}%", f"🚫 [WEAK-M5] {symbol} ({mint[:8]}): m5 {_m5:+.1f}% < +{_min_m5_req:.1f}% — нет разгона.")
         _base_max_m1 = float(getattr(config, "MAX_ENTRY_M1_PCT", 10.0))
-        if _b5_pre >= int(_s5_pre * 1.20) and _vm5_pre >= 8000.0 and _m5 >= 10.0:
-            _max_m1_cfg = 22.0  # Импульсный пробой (кейс MELT m1 +19.5%)
+        # Разрешаем импульсный пробой (свеча +12%..+25%) при активном спросе покупателей (b5 >= s5 и vol >= $2500)
+        if _b5_pre >= int(_s5_pre * 1.05) and _vm5_pre >= 2500.0 and _m5 >= 3.0:
+            _max_m1_cfg = 25.0  # Импульсный пробой (кейс MELT m1 +15.8%)
         else:
-            _max_m1_cfg = min(_base_max_m1, 12.0)
-        _min_m1_floor = -5.5 if _m5 >= 12.0 else -2.8
+            _max_m1_cfg = min(_base_max_m1, 14.0)
+        _min_m1_floor = -6.0 if _m5 >= 10.0 else -2.8
         if _m1 > _max_m1_cfg or _m1 < _min_m1_floor:
             return self._deny(
                 mint,
@@ -2000,11 +2002,14 @@ class Analyzer:
                     _rc_raw_score = float(rc_data.get("score") or 0.0)
 
                     # Для PumpSwap / токенов с launchpad bonding curve RugCheck начисляет 10,000-11,000 штрафных баллов
-                    # за "Large amount of LP unlocked" и "LP provider", так как LP лежит в смарт-контракте AMM,
-                    # а не сожжён на 11111111111111111111111111111111. Дев не может снять этот LP!
+                    # за "Large amount of LP unlocked", "LP provider", и ошибочно за "Single holder ownership" (AMM-пул кривой).
+                    # Дев не может снять этот LP и не держит пул!
                     _dex_low_main = str((pair_data or {}).get("dexId", "")).lower()
                     _is_pump_origin_main = mint.endswith("pump") or _dex_low_main in ("pumpswap", "pump", "pumpfun") or is_pump_curve
-                    _allowed_lp_terms_main = ("large amount of lp unlocked", "lp provider", "single lp provider") if _is_pump_origin_main else ("lp provider",)
+                    _allowed_lp_terms_main = (
+                        "large amount of lp unlocked", "lp provider", "single lp provider",
+                        "lp not locked", "unlocked lp", "single holder ownership", "high holder concentration"
+                    ) if _is_pump_origin_main else ("lp provider",)
 
                     # Исключаем безвредный шум: низкая ликвидность для молодых пулов, copycat для мемов, и LP контракт пула.
                     _rc_penalty_to_ignore = sum(
@@ -2023,7 +2028,7 @@ class Analyzer:
                     for rk in (rc_data.get("risks") or []):
                         _rk_name = str(rk.get("name", "")).lower()
                         _rk_lvl = str(rk.get("level", "")).lower()
-                        if _is_pump_origin_main and "large amount of lp unlocked" in _rk_name:
+                        if _is_pump_origin_main and any(k in _rk_name for k in ("large amount of lp unlocked", "single holder", "high ownership", "top 10 holders", "lp not locked")):
                             continue
                         if _rk_lvl == "danger" and any(k in _rk_name for k in ("single holder", "high ownership", "top 10 holders", "large amount of lp unlocked", "freeze authority")):
                             return self._deny(mint, f"rc-danger {_rk_name[:15]}", f"🚫 [АНТИСКАМ-RC] {symbol} ({mint[:8]}): критический риск RugCheck '{rk.get('name')}' — блок скама!")
