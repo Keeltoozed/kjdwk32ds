@@ -111,7 +111,10 @@ async def position_security_auditor_loop(analyzer, tracker):
                                 if _drop_cnt < 2:
                                     # Требуем подтверждения 2 тика подряд (3-4 сек), чтобы единичный сетевой глитч не закрывал позицию!
                                     continue
-                                _px_now = float(getattr(position, "current_price_usd", 0.0) or getattr(position, "entry_price_usd", 0.0) or 0.0)
+                                if _crit_drained and (_sol_liq < 200.0 or _quote_liq < 1.0):
+                                    _px_now = 0.0
+                                else:
+                                    _px_now = float(getattr(position, "current_price_usd", 0.0) or getattr(position, "entry_price_usd", 0.0) or 0.0)
                                 _msg = f"Liq Drop ${_sol_liq:.0f} (было ${_peak_liq:.0f})" if _drain_pct_drop else f"Low Liq ${_sol_liq:.0f} / {_quote_liq:.1f} SOL"
                                 print(f"🚨 [EARLY-LIQ-ESCAPE] {position.symbol} ({mint[:8]}): вывод пула ({_msg}) — аварийный выход по рынку!")
                                 tracker.close_position(mint, _px_now, f"Early Liquidity Drop Escape ({_msg})")

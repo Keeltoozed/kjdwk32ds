@@ -1446,7 +1446,7 @@ class GrokJevEngine:
               
             # Токены канонического происхождения Pump.fun (bonding curve / выпускники):
             _dex_low_jev = str(pair_data.get("dexId") or "").lower()
-            is_canonical_pump = address.endswith("pump") or _dex_low_jev in ("pump", "pumpfun") or is_raw_pump_curve
+            is_canonical_pump = address.endswith("pump") or _dex_low_jev in ("pump", "pumpfun", "pumpswap") or is_raw_pump_curve
             if not is_canonical_pump and (rc_status_pre != 200 or not isinstance(rc_data_pre, dict)):
                 return False, "unverified-custom-token (waiting for rugcheck index)", _h_stats
 
@@ -1856,7 +1856,7 @@ class GrokJevEngine:
             return False, f"anti-scam-reject {sec_why}"
 
         # 4.5. Нет данных о холдерах (RugCheck/GoPlus молчат) -> не входим вслепую (для не-pump токенов):
-        _is_pump_token = address.endswith("pump") or str(pair.get("dexId", "")).lower() in ("pump", "pumpfun")
+        _is_pump_token = address.endswith("pump") or str(pair.get("dexId", "")).lower() in ("pump", "pumpfun", "pumpswap")
         if getattr(_c, "JEV_REQUIRE_HOLDER_DATA", True) and not _is_pump_token:
             if not (float((_h_stats or {}).get("top1_pct", 0) or 0) > 0 or float((_h_stats or {}).get("top10_pct", 0) or 0) > 0):
                 return False, "anti-scam-reject holders-no-data (нет данных о холдерах)"
@@ -1953,8 +1953,8 @@ class GrokJevEngine:
                             print(f"🚫 [JEV-LIVE-DUMP] {symbol} ({address[:8]}): живая цена Jupiter (${_jup_live_px:.8f}) уже на {(1.0 - _jup_live_px / price) * 100:.1f}% ниже DexScreener (${price:.8f}) — обвал в моменте, блок входа!")
                             return False, "fills-flush-wait live-jup-dump"
                         _jup_ratio = max(_jup_live_px, price) / min(_jup_live_px, price)
-                        if _jup_ratio > 1.055:
-                            print(f"🚫 [JEV-PRICE-MISMATCH] {symbol} ({address[:8]}): Jupiter (${_jup_live_px:.8f}) vs DS (${price:.8f}) расхождение {_jup_ratio:.2f}x (>1.055x) — защита от ложного стопа!")
+                        if _jup_ratio > 1.12:
+                            print(f"🚫 [JEV-PRICE-MISMATCH] {symbol} ({address[:8]}): Jupiter (${_jup_live_px:.8f}) vs DS (${price:.8f}) расхождение {_jup_ratio:.2f}x (>1.12x) — защита от ложного стопа!")
                             return False, f"fills-flush-wait jup-ds-mismatch ({_jup_ratio:.2f}x)"
                         price = _jup_live_px
                         wick_price = price * (1.0 + wick_pct)

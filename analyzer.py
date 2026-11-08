@@ -1427,7 +1427,7 @@ class Analyzer:
 
             # 4. Кэшированный RugCheck аудит (концентрация холдеров и блокировка LP на кастомных токенах)
             _dex_low_rc = str((pair_data or {}).get("dexId", "")).lower()
-            _is_pump_origin_chk = mint.endswith("pump") or _dex_low_rc in ("pump", "pumpfun") or is_pump_curve
+            _is_pump_origin_chk = mint.endswith("pump") or _dex_low_rc in ("pump", "pumpfun", "pumpswap") or is_pump_curve
             if rc_st == 200 and isinstance(rc_data, dict):
                 raw_sc = float(rc_data.get("score") or 0.0)
                 _allowed_lp_terms_chk = (
@@ -1984,7 +1984,7 @@ class Analyzer:
             # Каноничный pump-флаг ставится ТОЛЬКО для монет с bonding curve Pump.fun (оканчивающихся на 'pump' или на сырой кривой).
             # Наличие пула на PumpSwap/Raydium НЕ делает кастомный скам-токен безопасным pump-токеном (кейсы DEMOCAT/SAFU/SOUVENIR)!
             _dex_low_main = str((pair_data or {}).get("dexId", "")).lower()
-            _is_canonical_pump = mint.endswith("pump") or _dex_low_main in ("pump", "pumpfun") or is_pump_curve
+            _is_canonical_pump = mint.endswith("pump") or _dex_low_main in ("pump", "pumpfun", "pumpswap") or is_pump_curve
             _is_pump_flag = 1 if _is_canonical_pump else 0
             _cur_tok_top10 = 0.0
             _cur_tok_dev = 0.0
