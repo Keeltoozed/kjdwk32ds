@@ -725,9 +725,9 @@ async def jup_loop(analyzer, tracker):
                         _v5_cand = float((td.get("volume") or {}).get("m5", 0) or 0)
 
                         # Отсекаем уставшие зомби-монеты синхронно с ZOMBIE-AGE в analyzer.py
-                        _max_age_cand = float(getattr(config, "SOLANA_MAX_AGE_MIN", 60.0))
+                        _max_age_cand = float(getattr(config, "SOLANA_MAX_AGE_MIN", 240.0))
                         if _ag > _max_age_cand:
-                            _is_big_cand = (_ag <= 90.0 and _lq_cand >= 40000.0 and _v5_cand >= 25000.0)
+                            _is_big_cand = (_ag <= 360.0 and _lq_cand >= 25000.0 and _v5_cand >= 15000.0)
                             if not _is_big_cand:
                                 skipped_ancient += 1
                                 processed[m] = _now_t + 600

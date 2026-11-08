@@ -518,16 +518,16 @@ class GrokJevEngine:
         _early_min_age = max(0.5, float(getattr(_c, "JEV_EARLY_MIN_AGE_MIN", 0.5)))
         _std_min_age = max(0.8, float(getattr(_c, "JEV_MIN_AGE_MIN", 0.8)))
         min_age = _early_min_age if _is_early_rocket else _std_min_age
-        max_age = float(getattr(_c, "SOLANA_MAX_AGE_MIN", 60.0))  # Только свежие ракеты до 60м (отсекаем зомби 6-11ч!)
+        max_age = float(getattr(_c, "SOLANA_MAX_AGE_MIN", 240.0))  # Ракеты до 240м (4 часа)
         _is_jev_breakout = (
-            age_min <= 90.0
+            age_min <= 360.0
             and fdv_mc <= 1500000.0
-            and eff_liq >= 40000.0
-            and vol_m5 >= 18000.0
-            and (vol_m5 / max(eff_liq, 1.0)) >= 0.25
-            and m5 >= 8.0
-            and _avg_tx_e >= 15.0
-            and b5 >= s5 * 1.25
+            and eff_liq >= 25000.0
+            and vol_m5 >= 10000.0
+            and (vol_m5 / max(eff_liq, 1.0)) >= 0.15
+            and m5 >= 4.0
+            and _avg_tx_e >= 10.0
+            and b5 >= s5 * 1.05
         )
         if age_min < min_age:
             try:
@@ -544,10 +544,10 @@ class GrokJevEngine:
         if (b5 + s5) >= 120 and _avg_tx_e < 8.0 and not _is_real_bump_runner_g:
             return False, f"fake-bump-wash-bot avg ${_avg_tx_e:.2f} < $8 across {b5+s5} m5 txns"
 
-        # Защита от слитых ниже миграции выпускников Pump.fun (кейс SHANE FDV $35.8k, но пускаем LOWCAP $34.9k / MEME $40k с живым потоком)
+        # Защита от слитых ниже миграции выпускников Pump.fun (кейс SHANE FDV $35.8k, но пускаем PERCOLATOR / LOWCAP $34.9k / MEME $40k с живым потоком)
         if mint.endswith("pump") and dex_id not in ("pump", "pumpfun") and 0 < fdv_mc < 46000.0:
-            _is_real_dump = (fdv_mc < 22000.0) or (s5 > int(b5 * 1.25) and m5 < -5.0)
-            _is_active_grad = (vol_m5 >= 2500.0 and b5 >= int(s5 * 1.05) and m5 >= -4.0)
+            _is_real_dump = (fdv_mc < 20000.0) or (s5 > int(b5 * 1.25) and m5 < -5.0)
+            _is_active_grad = (vol_m5 >= 2000.0 and b5 >= int(s5 * 1.00) and m5 >= -5.0)
             if _is_real_dump or not _is_active_grad:
                 return False, f"post-mig-dumped-fdv ${fdv_mc:,.0f} < $46k"
 
@@ -577,12 +577,13 @@ class GrokJevEngine:
             else:
                 print(f"💎 [JEV-ORGANIC-STEALTH] {symbol} ({mint[:8]}): 0 соцсетей, но доказан чистый органический поток (${vol_m5:,.0f}, {b5}b/{s5}s, v/l {_vol_liq_ratio_g:.2f}) — пропуск.")
 
-        # 2.5. Exhaustion Guard: блокируем перегретые поздние пампы, но пускаем свежих выпускников (h1 включает рост на кёрве $5k->$69k!)
+        # 2.5. Exhaustion Guard: блокируем перегретые поздние пампы, но пускаем активные ракеты (h1 включает рост на кёрве $5k->$69k!)
         _base_max_h1_jev = float(getattr(_c, "MAX_ENTRY_H1_PCT", 350.0))
         _is_active_fresh_jev = (
-            age_min <= 4.0
-            and vol_m5 >= 5000.0
-            and b5 >= s5 * 1.15
+            age_min <= 120.0
+            and vol_m5 >= 3000.0
+            and b5 >= int(s5 * 1.05)
+            and m5 >= 1.5
         )
         _max_h1_allowed = 2500.0 if _is_active_fresh_jev else _base_max_h1_jev
         if _links_cnt_g == 0 and not _soc_unk_g and not _is_organic_stealth and (h1 > 160.0 or m5 > 110.0):
@@ -593,17 +594,17 @@ class GrokJevEngine:
             return False, f"fdv-liquidity-trap liq ${eff_liq:,.0f} < 2% of FDV ${fdv_mc:,.0f} (phantom valuation)"
 
         # 3. Живой импульс ракеты (LIVE ROCKET MOMENTUM)
-        _min_m5_jev = 1.8 if (eff_liq >= 18000.0 and b5 >= int(s5 * 1.15) and vol_m5 >= 3500.0) else 3.0
+        _min_m5_jev = 1.8 if (eff_liq >= 18000.0 and b5 >= int(s5 * 1.15) and vol_m5 >= 3500.0) else 2.5
         if m5 < _min_m5_jev:
             return False, f"no-momentum m5 {m5:+.1f}% < +{_min_m5_jev:.1f}% (coin is flat/standing still)"
         if age_min >= 20.0:
-            _is_massive_mature_flow_g = (vol_m5 >= 12000.0 and eff_liq >= 25000.0 and b5 >= s5 and m5 >= 1.5)
-            _is_strong_jev_breakout = (m5 >= 5.0 and vol_m5 >= 2000.0 and b5 >= s5 * 1.08 and (b5 + s5) >= 20)
-            if not _is_massive_mature_flow_g and not _is_strong_jev_breakout and (vol_m5 < 6000.0 or ((vol_m5 / max(eff_liq, 1.0)) < 0.22 and vol_m5 < 18000.0) or m5 < 4.5 or (b5 + s5) < 45):
+            _is_massive_mature_flow_g = (vol_m5 >= 10000.0 and eff_liq >= 20000.0 and b5 >= s5 and m5 >= 1.2)
+            _is_strong_jev_breakout = (m5 >= 4.0 and vol_m5 >= 2000.0 and b5 >= s5 * 1.05 and (b5 + s5) >= 20)
+            if not _is_massive_mature_flow_g and not _is_strong_jev_breakout and (vol_m5 < 5000.0 or ((vol_m5 / max(eff_liq, 1.0)) < 0.18 and vol_m5 < 15000.0) or m5 < 3.5 or (b5 + s5) < 30):
                 return False, f"slow-mature-pool age {age_min:.0f}m vol5 ${vol_m5:,.0f} v/l {(vol_m5/max(eff_liq,1.0)):.2f}x"
         _max_m5_allowed = float(getattr(_c, "MAX_ENTRY_M5_PCT", 28.0))
         if m5 > _max_m5_allowed:
-            _is_strong_buyer_breakout_g = (m5 <= 45.0 and b5 >= int(s5 * 1.30) and vol_m5 >= 6000.0 and (b5 + s5) >= 25)
+            _is_strong_buyer_breakout_g = (m5 <= 120.0 and b5 >= int(s5 * 1.20) and vol_m5 >= 4000.0 and (b5 + s5) >= 20)
             _is_cooling_pullback = (-6.0 <= m1 <= -1.5 and m5 <= 42.0 and b5 >= s5 * 1.15)
             if not (_is_strong_buyer_breakout_g or _is_cooling_pullback):
                 return False, f"fomo-vertical-m5 m5 {m5:+.1f}% > +{_max_m5_allowed:.0f}% (buying top of vertical pump without cooling pullback, m1={m1:+.1f}%)"
@@ -919,16 +920,16 @@ class GrokJevEngine:
 
         # Если токен моложе 3м, DexScreener часто отдаёт m1 == m5 (одна первая свеча).
         _m1_is_phantom = (_age_m < 3.0 and abs(m5) > 1.0 and abs(m1) > 0 and abs(m1 / max(abs(m5), 0.01) - 1.0) < 0.08)
-        _strong_breakout = (b5 >= 20 and b5 >= s5 * 1.20 and vol5 >= 4000.0)
-        _max_m1 = min(float(getattr(_c, "JEV_MAX_M1_ENTRY_PCT", 8.0)), 10.0)
+        _strong_breakout = (b5 >= 15 and b5 >= s5 * 1.10 and vol5 >= 3000.0)
+        _max_m1 = 22.0 if _strong_breakout else min(float(getattr(_c, "JEV_MAX_M1_ENTRY_PCT", 8.0)), 12.0)
         _cfg_m5 = float(getattr(_c, "MAX_ENTRY_M5_PCT", 28.0))
-        _max_m5_cap = 45.0 if _strong_breakout else _cfg_m5
+        _max_m5_cap = 120.0 if _strong_breakout else _cfg_m5
         if m5 > _max_m5_cap:
             return False, -0.14, 0.0, f"fomo-spike (m5 {m5:+.1f}% > +{_max_m5_cap:.0f}%) — buying local top, wait for reset"
         if m1 > _max_m1 and not _m1_is_phantom:
             return False, -0.14, 0.0, f"m1-spike (m1 {m1:+.1f}% > +{_max_m1:.1f}%) — vertical push, wait for consolidation"
         _base_max_h1_flush = float(getattr(_c, "MAX_ENTRY_H1_PCT", 350.0))
-        _is_active_fresh_flush = (_age_m <= 4.0 and vol5 >= 5000.0 and b5 >= s5 * 1.15)
+        _is_active_fresh_flush = (_age_m <= 120.0 and vol5 >= 3000.0 and b5 >= s5 * 1.05 and m5 >= 1.5)
         _max_h1_flush = 2500.0 if _is_active_fresh_flush else _base_max_h1_flush
         if _h1 > _max_h1_flush and _age_m > 4.0:
             return False, -0.14, 0.0, f"h1-exhaustion (h1 {_h1:+.1f}% > +{_max_h1_flush:.0f}% at {_age_m:.0f}m) — pump already exhausted"
@@ -1447,9 +1448,9 @@ class GrokJevEngine:
                     if freeze_auth and freeze_auth not in SAFE_AUTHORITIES:
                         return False, f"rugcheck: freeze authority active ({freeze_auth[:8]})", _h_stats
 
-                    # Очищенный score RugCheck: вычитаем безвредный шум и AMM LP пула для bonding curve.
-                    _is_pump_orig_jev = address.endswith("pump") or str(pair_data.get("dexId") or "").lower() in ("pumpswap", "meteora")
-                    _allowed_lp_terms_jev = ("large amount of lp unlocked", "lp provider", "single lp provider") if _is_pump_orig_jev else ("lp provider",)
+                    # Очищенный score RugCheck: вычитаем безвредный шум и AMM LP пула для bonding curve / pump tokens.
+                    _is_pump_orig_jev = address.endswith("pump") or str(pair_data.get("dexId") or "").lower() in ("pumpswap", "meteora", "pump", "pumpfun")
+                    _allowed_lp_terms_jev = ("large amount of lp unlocked", "lp provider", "single lp provider", "lp not locked", "unlocked lp") if _is_pump_orig_jev else ("lp provider",)
 
                     raw_score = float(rc_data.get("score") or 0.0)
                     penalty_to_ignore = sum(
@@ -1469,16 +1470,16 @@ class GrokJevEngine:
                         rk_lvl = str(rk.get("level") or "").lower()
                         if any(k in rk_name for k in ("low liquidity", "creator history", "copycat", "symbol mimic", *_allowed_lp_terms_jev)):
                             continue
-                        if _is_pump_orig_jev and "large amount of lp unlocked" in rk_name:
+                        if _is_pump_orig_jev and any(lp_k in rk_name for lp_k in ("large amount of lp unlocked", "lp not locked", "unlocked lp")):
                             continue
                         if rk_lvl == "danger" and "creator history" not in rk_name:
                             return False, f"rugcheck: critical danger risk '{rk.get('name')}'", _h_stats
-                        if any(k in rk_name for k in ("single holder", "high ownership", "large amount of lp unlocked")):
+                        if any(k in rk_name for k in ("single holder", "high ownership")):
                             return False, f"rugcheck: critical hazard '{rk.get('name')}'", _h_stats
 
                     # Проверка пулов и блокировки LP для не-pump токенов
                     target_pair = str(pair_data.get("pairAddress") or "").strip()
-                    is_canonical_pump = address.endswith("pump")
+                    is_canonical_pump = address.endswith("pump") or _is_pump_orig_jev
                     _dex_rc_low = str(pair_data.get("dexId") or "").lower()
                     has_verified_locked_lp = False
                     for mkt in (rc_data.get("markets") or []):
@@ -1492,8 +1493,8 @@ class GrokJevEngine:
                                 if lp_locked_pct >= 80.0 and (mkt_quote_usd >= 2000 or (target_pair and mkt_pubkey == target_pair)):
                                     has_verified_locked_lp = True
                                 _is_target = bool(target_pair and mkt_pubkey == target_pair)
-                                # Для канонического выпускника ...pump на PumpSwap не блокируем сделку из-за стороннего арбитражного DLMM-пула
-                                if _is_target or (not (is_canonical_pump and _dex_rc_low == "pumpswap") and mkt_quote_usd >= 2000):
+                                # Для канонического выпускника ...pump на любом DEX не блокируем сделку из-за стороннего арбитражного DLMM-пула или задержки индексации сожжения
+                                if not is_canonical_pump and (_is_target or mkt_quote_usd >= 2000):
                                     if lp_unlocked > 0 and lp_locked_pct < 80.0:
                                         return False, f"rugcheck: LP not locked ({lp_locked_pct:.1f}%)", _h_stats
 
@@ -1586,7 +1587,7 @@ class GrokJevEngine:
                     max_whale_limit = 18.0 if is_pump else 15.0
                     if largest_whale > max_whale_limit:
                         return False, f"whale concentration {largest_whale:.1f}% > {max_whale_limit:.0f}%", _h_stats
-                    max_top10 = 35.0 if is_pump else float(getattr(_c, "AUDITOR_MAX_TOP10_PCT", 30.0))
+                    max_top10 = 38.0 if (is_pump or vol_m5 >= 10000.0) else float(getattr(_c, "AUDITOR_MAX_TOP10_PCT", 32.0))
                     if top_10_sum > max_top10:
                         return False, f"top 10 concentration {top_10_sum:.1f}% > {max_top10:.0f}%", _h_stats
 
@@ -2073,7 +2074,7 @@ async def grok_bot_jev_loop(tracker, analyzer=None):
                     _ca_c = _td_c.get("pairCreatedAt") or 0
                     if _ca_c:
                         _age_c_m = (now * 1000 - _ca_c) / 60000.0
-                        _max_loop_age = float(getattr(_c, "SOLANA_MAX_AGE_MIN", 60.0))
+                        _max_loop_age = float(getattr(_c, "SOLANA_MAX_AGE_MIN", 240.0))
                         if _age_c_m > _max_loop_age:
                             evaluated_cooldown[(address, chain)] = now + 86400.0
                             continue

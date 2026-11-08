@@ -763,10 +763,15 @@ async def scanner_loop(analyzer, tracker):
                     mints_to_scan = graduated_mints + mints_to_scan
                 _graduated_set = set(birth_tracker.drain_graduated() or [])
                 
-                # 2. Уличные Токены (Берем молодые ракеты от 5 до 20 минут)
-                mature_mints = birth_tracker.get_mature_tokens(2, 30)  # Было 3-25: шире окно молодняка = больше ракет
+                # 2. Уличные Токены (Берем созревающие ракеты)
+                if getattr(config, "ALLOW_UNGRADUATED_PUMPFUN", False):
+                    mature_mints = birth_tracker.get_mature_tokens(2, 30)
+                else:
+                    # Если сырые кёрвы выключены — берём только проверенные миграции / waiting room
+                    _wr_mints = list(getattr(birth_tracker, "waiting_room", {}).keys())
+                    mature_mints = [m for m in _wr_mints if m not in _graduated_set]
                 if mature_mints:
-                    print(f"🎂 Найдено {len(mature_mints)} перспективных монет (возраст 5-20 минут)!")
+                    print(f"🎂 Найдено {len(mature_mints)} созревающих монет (waiting room)!")
                     mints_to_scan.extend(mature_mints)
 
                 # 3. Ручной вотчлист юзера (увидел рано на fomo - бот исполняет по своим гейтам)
@@ -785,7 +790,7 @@ async def scanner_loop(analyzer, tracker):
                                 and time.time() - processed_mints.get(m, 0.0) >= 25][:300]
                     _pf_n = await analyzer.prefetch_token_data(_pf_list)
                     if _pf_list:
-                        print(f"⚡ Префетч: {_pf_n}/{len(_pf_list)} токенов за {(len(_pf_list) + 14) // 15} запрос(а) DS.")
+                        print(f"⚡ Префетч: {_pf_n}/{len(_pf_list)} токенов за {(len(_pf_list) + 29) // 30} запрос(а) DS.")
                 except Exception as _pfe:
                     print(f"⚠️ prefetch err: {type(_pfe).__name__}")
                 

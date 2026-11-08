@@ -837,24 +837,31 @@ class Analyzer:
         todo = [m for m in dict.fromkeys(mints or []) if m and not m.startswith("0x")
                 and now - self._prefetch_cache.get(m, (0, None))[0] >= ttl]
         got = 0
-        # Запрашиваем пачками по 15 минтов через /tokens/v1/solana/ (чтобы не упираться в лимит 30 пар у /latest/dex/tokens/)
-        for i in range(0, len(todo), 15):
-            chunk = todo[i:i + 15]
+        async def _fetch_chunk(chunk):
             pairs_list = []
             try:
                 status, data = await fetch_json(
                     "https://api.dexscreener.com/tokens/v1/solana/" + ",".join(chunk),
-                    timeout=10, retries=1)
+                    timeout=8, retries=1)
                 if status == 200 and isinstance(data, list):
                     pairs_list = data
                 else:
                     status2, data2 = await fetch_json(
                         "https://api.dexscreener.com/latest/dex/tokens/" + ",".join(chunk),
-                        timeout=10, retries=1)
+                        timeout=8, retries=1)
                     if status2 == 200 and isinstance(data2, dict):
                         pairs_list = data2.get("pairs") or []
             except Exception:
+                return chunk, []
+            return chunk, pairs_list
+
+        chunks = [todo[i:i + 30] for i in range(0, len(todo), 30)]
+        results = await asyncio.gather(*[_fetch_chunk(c) for c in chunks], return_exceptions=True)
+        ts = time.time()
+        for res in results:
+            if not isinstance(res, tuple) or len(res) != 2:
                 continue
+            chunk, pairs_list = res
             if not pairs_list:
                 continue
             by_mint = {}
@@ -862,7 +869,6 @@ class Analyzer:
                 a = (p.get("baseToken") or {}).get("address")
                 if a:
                     by_mint.setdefault(a, []).append(p)
-            ts = time.time()
             for m in chunk:
                 best = self._best_solana_pair(m, by_mint.get(m, []))
                 if best:
@@ -1421,7 +1427,8 @@ class Analyzer:
             # 4. Кэшированный RugCheck аудит (концентрация холдеров и блокировка LP на кастомных токенах)
             if rc_st == 200 and isinstance(rc_data, dict):
                 raw_sc = float(rc_data.get("score") or 0.0)
-                _is_pump_origin_chk = mint.endswith("pump")
+                _dex_low_rc = str((pair_data or {}).get("dexId", "")).lower()
+                _is_pump_origin_chk = mint.endswith("pump") or _dex_low_rc in ("pumpswap", "pump", "pumpfun") or is_pump_curve
                 _allowed_lp_terms_chk = ("large amount of lp unlocked", "lp provider", "single lp provider") if _is_pump_origin_chk else ("lp provider",)
                 ign = sum(
                     float(rk.get("score", 0) or 0)
@@ -1654,17 +1661,16 @@ class Analyzer:
                     f"🚫 [POST-MIGRATION-DUMP] {symbol} ({mint[:8]}): выпускник Pump.fun слит ниже миграции (FDV ${_fdv_chk_pre:,.0f} < $46k) — кейс SHANE.",
                 )
 
-        _max_age_min = float(getattr(config, "SOLANA_MAX_AGE_MIN", 60.0))
-        # Разрешаем монеты до 90м ТОЛЬКО при огромной ликвидности ($40k+) и мощном притоке покупателей
+        _max_age_min = float(getattr(config, "SOLANA_MAX_AGE_MIN", 240.0))
+        # Разрешаем монеты до 360м ТОЛЬКО при огромной ликвидности ($40k+) и мощном притоке покупателей
         _is_active_breakout_pool = (
-            _age_min_pre <= 90.0
+            _age_min_pre <= 360.0
             and _fdv_chk_pre <= 1500000.0
-            and _raw_liq_age >= 40000.0
-            and _vm5_pre >= 15000.0
-            and (_vm5_pre / max(_raw_liq_age, 1.0)) >= 0.20
-            and _m5 >= 5.0
-            and _avg_tx_age >= 15.0
-            and _b5_pre >= _s5_pre * 1.25
+            and _raw_liq_age >= 25000.0
+            and _vm5_pre >= 12000.0
+            and (_vm5_pre / max(_raw_liq_age, 1.0)) >= 0.15
+            and _m5 >= 3.0
+            and _b5_pre >= _s5_pre * 1.10
         )
         if _age_min_pre > _max_age_min and not _is_active_breakout_pool:
             return self._deny(
@@ -1721,10 +1727,10 @@ class Analyzer:
                 f"🚫 [LOW-MOMENTUM] {symbol} ({mint[:8]}): 5м объем ${_vm5_pre:,.0f} < ${_min_v5_cfg:,.0f} — слабый пул.",
             )
         if _age_min_pre >= 20.0:
-            _is_massive_mature_flow = (_vm5_pre >= 12000.0 and _raw_liq_chk >= 25000.0 and _b5_pre >= _s5_pre and _m5 >= 1.5)
-            _is_strong_mature_breakout = (_m5 >= 5.0 and _vm5_pre >= 2000.0 and _b5_pre >= _s5_pre * 1.08 and _tot_tx5_pre >= 20)
+            _is_massive_mature_flow = (_vm5_pre >= 15000.0 and _b5_pre >= _s5_pre)
+            _is_strong_mature_breakout = (_m5 >= 3.0 and _vm5_pre >= 3000.0 and _b5_pre >= _s5_pre * 1.05 and _tot_tx5_pre >= 15)
             _v2l_mat = (_vm5_pre / max(_raw_liq_chk, 1.0)) if _raw_liq_chk > 0 else 0.0
-            if not _is_massive_mature_flow and not _is_strong_mature_breakout and (_vm5_pre < 6000.0 or (_v2l_mat < 0.22 and _vm5_pre < 18000.0) or _m5 < 4.5 or _tot_tx5_pre < 45):
+            if not _is_massive_mature_flow and not _is_strong_mature_breakout and (_vm5_pre < 4000.0 or _m5 < 1.0 or _tot_tx5_pre < 20):
                 return self._deny(
                     mint,
                     f"slow-mature-pool v5=${_vm5_pre:.0f} v/l={_v2l_mat:.2f}x",
@@ -1780,12 +1786,12 @@ class Analyzer:
                 f"🚫 [M1-FILTER] {symbol} ({mint[:8]}): 1м свеча {_m1:+.1f}% вне коридора [{_min_m1_floor:+.1f}%, +{_max_m1_cfg:.0f}%].",
             )
 
-        # 4. Anti-FOMO: Защита от перегретых вершин (для свежих выпускников <=4м допускаем h1 до +2500%, т.к. h1 включает рост на кёрве $5k->$69k!)
+        # 4. Anti-FOMO: Защита от перегретых вершин (для свежих выпускников <=90м допускаем h1 до +2500%, т.к. h1 включает рост на кёрве $5k->$69k!)
         _base_max_entry_h1 = float(getattr(config, "MAX_ENTRY_H1_PCT", 350.0))
         _is_active_fresh_rocket = (
-            _age_min_pre <= 4.0
+            _age_min_pre <= 90.0
             and _vm5_pre >= 5000.0
-            and _b5_pre >= _s5_pre * 1.15
+            and _b5_pre >= _s5_pre * 1.05
         )
         _max_entry_h1 = 2500.0 if _is_active_fresh_rocket else _base_max_entry_h1
         _max_entry_m5 = float(getattr(config, "MAX_ENTRY_M5_PCT", 28.0))
@@ -1796,11 +1802,11 @@ class Analyzer:
                 f"🚫 [EXHAUSTED-TOP] {symbol} ({mint[:8]}): рост за час {_h1:+.1f}% > +{_max_entry_h1:.0f}% — вершина пампа.",
             )
         # Защита от покупки на верхушке вертикальной свечи:
-        # Разрешаем сильный пробой покупателями (до +75% при 25%+ перевесе покупателей b5/s5 >= 1.25)
-        # либо остывающий откат (m1 <= -1.5%). Блокируем чистую покупку хая без перевеса покупателей!
+        # Разрешаем сильный пробой покупателями (до +120% при 20%+ перевесе покупателей b5/s5 >= 1.20)
+        # либо остывающий откат (m1 <= -1.0%). Блокируем чистую покупку хая без перевеса покупателей!
         if _m5 > _max_entry_m5:
-            _is_strong_buyer_breakout = (_m5 <= 75.0 and _b5_pre >= int(_s5_pre * 1.25) and _vm5_pre >= 6000.0 and (_b5_pre + _s5_pre) >= 25)
-            _is_cooling_pullback = (_m1 <= -1.5 and _m5 <= 60.0 and _b5_pre >= _s5_pre * 1.15)
+            _is_strong_buyer_breakout = (_m5 <= 120.0 and _b5_pre >= int(_s5_pre * 1.20) and _vm5_pre >= 5000.0 and (_b5_pre + _s5_pre) >= 20)
+            _is_cooling_pullback = (_m1 <= -1.0 and _m5 <= 90.0 and _b5_pre >= _s5_pre * 1.10)
             if not (_is_strong_buyer_breakout or _is_cooling_pullback):
                 return self._deny(
                     mint,
@@ -1809,12 +1815,12 @@ class Analyzer:
                 )
 
         # Защита от давления продавцов и скрытого сброса китов (кейсы SOLC 735 продаж, DOG™ 291 продажа):
-        # Блокируем ТОЛЬКО если продавцы реально давят (sells >= 46% и покупатели не имеют явного перевеса b5 < s5*1.15)
+        # Блокируем ТОЛЬКО если продавцы реально давят (sells >= 52% и покупателей меньше чем продавцов)
         _txns_tot_pre = _b5_pre + _s5_pre
-        if _txns_tot_pre >= 25 and _s5_pre > 0:
+        if _txns_tot_pre >= 30 and _s5_pre > 0:
             _sell_ratio = _s5_pre / _txns_tot_pre
             _v2l_pre = (_vm5_pre / max(_raw_liq_chk, 1.0)) if _raw_liq_chk > 0 else 0.0
-            if _b5_pre < int(_s5_pre * 1.15) and (_sell_ratio >= 0.46 or (_sell_ratio >= 0.42 and _v2l_pre >= 2.5)):
+            if _b5_pre < _s5_pre and (_sell_ratio >= 0.52 or (_sell_ratio >= 0.48 and _v2l_pre >= 3.5)):
                 return self._deny(
                     mint,
                     f"heavy-sell-pressure {_sell_ratio*100:.0f}% sells",
@@ -1996,7 +2002,8 @@ class Analyzer:
                     # Для PumpSwap / токенов с launchpad bonding curve RugCheck начисляет 10,000-11,000 штрафных баллов
                     # за "Large amount of LP unlocked" и "LP provider", так как LP лежит в смарт-контракте AMM,
                     # а не сожжён на 11111111111111111111111111111111. Дев не может снять этот LP!
-                    _is_pump_origin_main = mint.endswith("pump")
+                    _dex_low_main = str((pair_data or {}).get("dexId", "")).lower()
+                    _is_pump_origin_main = mint.endswith("pump") or _dex_low_main in ("pumpswap", "pump", "pumpfun") or is_pump_curve
                     _allowed_lp_terms_main = ("large amount of lp unlocked", "lp provider", "single lp provider") if _is_pump_origin_main else ("lp provider",)
 
                     # Исключаем безвредный шум: низкая ликвидность для молодых пулов, copycat для мемов, и LP контракт пула.
@@ -2021,11 +2028,9 @@ class Analyzer:
                         if _rk_lvl == "danger" and any(k in _rk_name for k in ("single holder", "high ownership", "top 10 holders", "large amount of lp unlocked", "freeze authority")):
                             return self._deny(mint, f"rc-danger {_rk_name[:15]}", f"🚫 [АНТИСКАМ-RC] {symbol} ({mint[:8]}): критический риск RugCheck '{rk.get('name')}' — блок скама!")
 
-                    # Для кастомных не-pump токенов (Raydium, PumpSwap, Meteora):
-                    # Защита от кейсов SOUVENIR (-$45k вынос пула), AMERICA (-234 SOL), PEPEBOT (-160 SOL):
-                    # Если токен НЕ с Pump.fun (не оканчивается на pump) — его LP ОБЯЗАТЕЛЬНО должен быть заблокирован или сожжён (>= 80%)!
-                    # Иначе создатель может в любой момент вынуть ликвидность!
-                    if not mint.endswith("pump"):
+                    # Для кастомных токенов (не с launchpad и не на PumpSwap):
+                    # Проверяем блокировку/сжигание LP на открытых DEX (Raydium / Meteora)
+                    if not _is_pump_origin_main:
                         _lp_ok = False
                         for _m in (rc_data.get("markets") or []):
                             if isinstance(_m, dict):
@@ -2039,7 +2044,7 @@ class Analyzer:
                             return self._deny(
                                 mint,
                                 "unlocked-custom-lp",
-                                f"🚫 [CUSTOM-LP-RUG] {symbol} ({mint[:8]}): кастомный токен без сожжённого/заблокированного LP (<80%) — риск сноса пула девом (кейс SOUVENIR/AMERICA)!"
+                                f"🚫 [CUSTOM-LP-RUG] {symbol} ({mint[:8]}): кастомный токен на {_dex_low_main} без сожжённого/заблокированного LP (<80%) — риск сноса пула девом (кейс SOUVENIR/AMERICA)!"
                             )
 
                     # Проверка холдеров RugCheck

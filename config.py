@@ -125,9 +125,9 @@ MOONBAG_SELL_FRAC = 0.0
 PUMP_XGB_ENABLED = False
 RAY_XGB_ENABLED = False
 ROCKET_XGB_ENABLED = True
-ROCKET_XGB_STAGE1_THRESHOLD = 18.0   # Первичный отсев в 0мс (отсекает мертвецов 2-17%)
-ROCKET_XGB_FINAL_THRESHOLD = 52.0    # Финальный порог (отсекает слабые дампы SpaceCoin 48%, fomo 36%, пускает ракеты 69-77%)
-ROCKET_XGB_THRESHOLD = 52.0
+ROCKET_XGB_STAGE1_THRESHOLD = 8.0    # Первичный отсев в 0мс (отсекает мертвецов 2-7%)
+ROCKET_XGB_FINAL_THRESHOLD = 18.0    # Финальный порог (отсекает шлак < 18%, пропускает ракеты 20-80%)
+ROCKET_XGB_THRESHOLD = 18.0
 
 STALL_TIMER_SEC = 210.0   # 3.5 минуты (быстрый срез стоячего минуса без затягивания убытка до 13м)
 STALL_MAX_LOSS_PCT = -0.075
@@ -145,9 +145,9 @@ BREAKEVEN_PCT = 0.075     # После +7.5% пика включается Break
 
 PREFETCH_TTL_SEC = 35
 SOLANA_MIN_AGE_MIN = 0.5        # Разрешаем молодые ракеты от 30 секунд (LEMON +406%, SHADOW +195%)
-SOLANA_MAX_AGE_HOURS = 1.0       # Максимум 1 час (убираем уставшие зомби-монеты 6-11 часов!)
-SOLANA_MAX_AGE_MIN = 60.0        # Торгуем горячий молодняк до 60 минут
-JEV_MAX_AGE_MIN = 60.0           # В GROK-JEV только свежие монеты до 60 минут
+SOLANA_MAX_AGE_HOURS = 4.0       # До 4 часов (не срезаем развивающиеся ракеты на пике тренда)
+SOLANA_MAX_AGE_MIN = 240.0       # Торгуем активные монеты до 4 часов
+JEV_MAX_AGE_MIN = 240.0          # В GROK-JEV активные монеты до 4 часов
 JEV_MAX_M1_ENTRY_PCT = 8.0
 
 SCALP_TIMEOUT_MIN = 10.0

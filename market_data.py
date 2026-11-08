@@ -73,8 +73,8 @@ async def _gt_get(path: str, retries: int = 0, timeout: int = 6):
         _gt_consecutive_fails += 1
         if _gt_consecutive_fails >= 4:
             _gt_consecutive_fails = 0
-            _gt_breaker_until = time.monotonic() + 25.0
-            print("⚡ [GT-BREAKER] GeckoTerminal 429/сбои -> пауза запросов на 25с (fail-fast).")
+            _gt_breaker_until = time.monotonic() + 15.0
+            print("⚡ [GT-BREAKER] GeckoTerminal 429 -> пауза GT на 15с (fail-fast, не блочим систему).")
         return {}
 
     # 5xx / timeout:
@@ -82,8 +82,8 @@ async def _gt_get(path: str, retries: int = 0, timeout: int = 6):
     if _gt_consecutive_fails >= 4:
         _fails_cnt = _gt_consecutive_fails
         _gt_consecutive_fails = 0
-        _gt_breaker_until = time.monotonic() + 25.0
-        print(f"⚡ [GT-BREAKER] GeckoTerminal {_fails_cnt} сбоя подряд -> пауза запросов на 25с.")
+        _gt_breaker_until = time.monotonic() + 15.0
+        print(f"⚡ [GT-BREAKER] GeckoTerminal {_fails_cnt} сбоя подряд -> пауза GT на 15с.")
 
     last_err = f"HTTP {status}"
     for attempt in range(retries):
@@ -548,18 +548,6 @@ async def get_bulk_prices(mints: list, pair_hints: dict = None) -> dict:
         except Exception:
             pass
 
-    # 4. Fallback: GeckoTerminal
-    missing = [m for m in ms if m not in out]
-    for i in range(0, len(missing), 30):
-        chunk = missing[i:i + 30]
-        d = await _gt_get("/simple/networks/solana/token_price/" + ",".join(chunk))
-        try:
-            px = d.get("data", {}).get("attributes", {}).get("token_prices", {})
-            for m, p in px.items():
-                if float(p) > 0:
-                    out[m] = float(p)
-        except Exception:
-            pass
     return out
 
 
