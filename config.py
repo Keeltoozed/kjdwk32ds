@@ -145,8 +145,8 @@ ROCKET_XGB_STAGE1_THRESHOLD = 8.0    # Первичный отсев в 0мс (�
 ROCKET_XGB_FINAL_THRESHOLD = 18.0    # Финальный порог (как в коммите 0d2b1ae: отсекает шлак < 18%, пропускает ракеты 20-80%)
 ROCKET_XGB_THRESHOLD = 18.0
 
-STALL_TIMER_SEC = 210.0   # 3.5 минуты (быстрый срез стоячего минуса без затягивания убытка до 13м)
-STALL_MAX_LOSS_PCT = -0.075
+STALL_TIMER_SEC = 120.0   # 2.0 минуты (быстрый срез зависшего минуса без затягивания убытка до 10м)
+STALL_MAX_LOSS_PCT = -0.06  # -6.0% (выход из мертвого импульса)
 
 TRAILING_ACTIVATION_PCT = 0.280
 TRAILING_DISTANCE_PCT = 0.180

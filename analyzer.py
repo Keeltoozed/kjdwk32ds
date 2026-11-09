@@ -1785,17 +1785,16 @@ class Analyzer:
             )
         _is_deep_launchpad_runner = (
             _is_burned_launchpad
-            and _raw_liq_chk >= 20000.0
-            and _vm5_pre >= 12000.0
-            and _avg_tx_pre >= 10.0
-            and _m5 >= 5.0
-            and _b5_pre >= _s5_pre * 1.22
+            and _raw_liq_chk >= 8000.0
+            and _vm5_pre >= 2000.0
+            and _m5 >= 2.0
+            and _b5_pre >= _s5_pre
         )
-        if _tot_tx5_pre >= 200 and _avg_tx_pre < 12.0 and not _has_soc_pre and not _is_deep_launchpad_runner and not _is_real_bump_runner:
+        if _tot_tx5_pre >= 200 and _avg_tx_pre < 2.5 and not _has_soc_pre and not _is_deep_launchpad_runner and not _is_real_bump_runner:
             return self._deny(
                 mint,
                 f"fake-bump-wash-bot avg ${_avg_tx_pre:.1f}",
-                f"🚫 [WASH-BUMP-TRAP] {symbol} ({mint[:8]}): накрутка микро-ботом ({_tot_tx5_pre} txns, avg ${_avg_tx_pre:.2f} < $12).",
+                f"🚫 [WASH-BUMP-TRAP] {symbol} ({mint[:8]}): накрутка микро-ботом ({_tot_tx5_pre} txns, avg ${_avg_tx_pre:.2f} < $2.5).",
             )
 
         # 3. ЖЕСТКИЙ ФИЛЬТР ИМПУЛЬСА, СКОРОСТИ ОБОРОТА И ТРЕНДА ДО ROCKET-XGB:
@@ -1897,13 +1896,15 @@ class Analyzer:
         # Защита от покупки на верхушке вертикальной свечи:
         # Не покупаем перегретые свечи >+65% (вершина FOMO-палки, кейсы AIB/MAX/yarl/p402).
         # Пропускаем только здоровый старт ракеты (m5 до +65%, либо до +85% при мощном доминировании покупателей b5/s5 >= 1.35)
-        # либо остывающий откат (m1 <= -1.0%).
+        # либо остывающий откат (m1 <= -1.0%). Разрешаем сильные ракетные пампы (+100%..+400%) при перевесе покупателей!
         if _m5 > _max_entry_m5:
             _is_strong_buyer_breakout = (
-                (_m5 <= 65.0 and _b5_pre >= int(_s5_pre * 1.10) and _vm5_pre >= 2500.0) or
-                (_m5 <= 85.0 and _b5_pre >= int(_s5_pre * 1.35) and _vm5_pre >= 12000.0 and (_b5_pre - _s5_pre) >= 30)
+                (_m5 <= 120.0 and _b5_pre >= int(_s5_pre * 1.05) and _vm5_pre >= 2000.0) or
+                (_m5 <= 450.0 and _b5_pre >= int(_s5_pre * 1.10) and _vm5_pre >= 2500.0) or
+                (_is_burned_launchpad and _b5_pre >= _s5_pre and _m5 <= 500.0) or
+                (_is_narr_match and _b5_pre >= _s5_pre)
             )
-            _is_cooling_pullback = (_m1 <= -1.0 and _m5 <= 65.0 and _b5_pre >= _s5_pre * 1.05)
+            _is_cooling_pullback = (_m1 <= -1.0 and _m5 <= 180.0 and _b5_pre >= _s5_pre * 1.02)
             if not (_is_strong_buyer_breakout or _is_cooling_pullback):
                 return self._deny(
                     mint,
@@ -2183,24 +2184,23 @@ class Analyzer:
 
                     _rc_raw_score = float(rc_data.get("score") or 0.0)
 
-                    # Безвредный шум RugCheck: для launchpad bonding curve / pump tokens вычитаем "Large Amount of LP Unlocked" (как в 0d2b1ae)!
+                    # Безвредный шум RugCheck: для launchpad bonding curve / pump / Raydium / Meteora пулов вычитаем "Large Amount of LP Unlocked" (как в 0d2b1ae)!
                     _allowed_lp_terms_main = (
                         "large amount of lp unlocked", "lp provider", "single lp provider",
-                        "lp not locked", "unlocked lp", "low liquidity", "copycat", "symbol mimic"
-                    ) if (_is_canonical_pump or _is_narr_match) else ("lp provider", "low amount of lp providers", "low liquidity", "copycat", "symbol mimic")
+                        "lp not locked", "unlocked lp", "low liquidity", "copycat", "symbol mimic",
+                        "creator history", "low amount of lp providers"
+                    )
 
                     # Исключаем безвредный шум: низкая ликвидность для молодых пулов, copycat для мемов, и LP контракт пула.
                     _rc_penalty_to_ignore = sum(
                         float(rk.get("score", 0) or 0)
                         for rk in (rc_data.get("risks") or [])
-                        if any(k in str(rk.get("name", "")).lower() for k in (
-                            "low liquidity", "creator history", "copycat", "symbol mimic", *_allowed_lp_terms_main
-                        ))
+                        if any(k in str(rk.get("name", "")).lower() for k in _allowed_lp_terms_main)
                     )
 
                     _rc_score = max(0.0, _rc_raw_score - _rc_penalty_to_ignore)
-                    if _rc_score >= 2000:
-                        return self._deny(mint, f"rugcheck-score {_rc_score:.0f}", f"🚫 [АНТИСКАМ] RugCheck Score {_rc_score:.0f} >= 2000 у {mint[:8]} → СКАМ")
+                    if _rc_score >= 5000:
+                        return self._deny(mint, f"rugcheck-score {_rc_score:.0f}", f"🚫 [АНТИСКАМ] RugCheck Score {_rc_score:.0f} >= 5000 у {mint[:8]} → СКАМ")
 
                     # Жёсткий фильтр критических опасностей RugCheck
                     for rk in (rc_data.get("risks") or []):

@@ -202,7 +202,7 @@ async def position_manager_loop(analyzer, tracker):
                         # Если не пришло в общем батче — одиночный моментальный запрос без очередей
                         try:
                             import market_data as _md_fast
-                            _one_px = await _md_fast.get_fast_position_prices([mint], pair_hints={mint: getattr(position, "pair_address", "")})
+                            _one_px = await asyncio.wait_for(_md_fast.get_fast_position_prices([mint], pair_hints={mint: getattr(position, "pair_address", "")}), timeout=1.2)
                             api_price = _one_px.get(mint, 0.0)
                         except Exception:
                             api_price = 0.0
@@ -250,7 +250,10 @@ async def position_manager_loop(analyzer, tracker):
                     # Если цена 0.0 больше 45 секунд — проверяем продаваемость через Jupiter
                     if (time.time() - _fz) > 45:
                         from jupiter import JupiterAPI
-                        _sell_ok, _sell_why = await JupiterAPI.is_token_sellable(mint)
+                        try:
+                            _sell_ok, _sell_why = await asyncio.wait_for(JupiterAPI.is_token_sellable(mint), timeout=1.5)
+                        except Exception:
+                            _sell_ok, _sell_why = True, "timeout"
                         if not _sell_ok:
                             print(f"🚨 [SOL-ZERO-RUG] {position.symbol} ({mint[:8]}): цена 0.00 и токен подтвержденно непродаваем ({_sell_why}) — списание в 0.0$ (-100%).")
                             tracker.close_position(mint, 0.0, f"Rug Pull / Unsellable ({_sell_why})")
@@ -258,7 +261,10 @@ async def position_manager_loop(analyzer, tracker):
                         else:
                             # Токен ПРОДАВАЕМ на Jupiter! Значит ликвидность ЕСТЬ, и это НЕ рагпулл!
                             # Запрашиваем живую ончейн-цену Jupiter и восстанавливаем позицию
-                            _jup_px = await JupiterAPI.get_price(mint)
+                            try:
+                                _jup_px = await asyncio.wait_for(JupiterAPI.get_price(mint), timeout=1.2)
+                            except Exception:
+                                _jup_px = 0.0
                             if _jup_px > 0:
                                 current_price = _jup_px
                                 position.current_price_usd = _jup_px
@@ -310,7 +316,7 @@ async def position_manager_loop(analyzer, tracker):
 
                     if minutes_held < _inf_w and pnl_pct <= _inf_warn_thresh:
                         try:
-                            _j_inf_px = await JupiterAPI.get_price(mint)
+                            _j_inf_px = await asyncio.wait_for(JupiterAPI.get_price(mint), timeout=1.0)
                             if _j_inf_px and _j_inf_px > 0 and position.entry_price_usd > 0:
                                 _j_inf_pnl = (_j_inf_px - position.entry_price_usd) / position.entry_price_usd
                                 current_price = _j_inf_px
@@ -353,7 +359,7 @@ async def position_manager_loop(analyzer, tracker):
                     # Защита от кейса NMS (фантомный прокол / сбой котировок при реальном пампе):
                     try:
                         from jupiter import JupiterAPI
-                        _live_px_check = await JupiterAPI.get_price(mint)
+                        _live_px_check = await asyncio.wait_for(JupiterAPI.get_price(mint), timeout=1.0)
                         if _live_px_check and _live_px_check > prev_price * 0.78:
                             print(f"🛡️ [CRASH-GUARD-RESCUED] {position.symbol} ({mint[:8]}): ложный краш-тик! Live DEX price ${_live_px_check:.6f} > prev ({(1 - _live_px_check/prev_price)*100:+.1f}%). Позиция спасена.")
                             current_price = _live_px_check
@@ -441,7 +447,7 @@ async def position_manager_loop(analyzer, tracker):
                     if minutes_held < 2.0 and pnl_pct <= -0.10 and ("Emergency Cap" in mature_exit_reason or "Stop Loss" in mature_exit_reason):
                         try:
                             from jupiter import JupiterAPI
-                            _live_em_px = await JupiterAPI.get_price(mint)
+                            _live_em_px = await asyncio.wait_for(JupiterAPI.get_price(mint), timeout=1.0)
                             if _live_em_px and _live_em_px > 0 and position.entry_price_usd > 0:
                                 _live_em_pnl = (_live_em_px - position.entry_price_usd) / position.entry_price_usd
                                 if _live_em_pnl > -0.080:
@@ -2661,11 +2667,29 @@ def chain_badge(chain: str, long: bool = False) -> str:
 
 
 def load_dashboard_portfolio():
-    """Портфель для дашборда: слияние Supabase + локальный файл.
-    Раньше облако было «главным источником правды»: если апсерт лагал,
-    открытые сделки пропадали с экрана (хотя бот их вёл). Теперь ни один
-    источник не может спрятать сделку — merge_states берёт объединение."""
-    cloud, local = {}, {}
+    """Портфель для дашборда: мгновенная отдача из локального файла (0.1мс).
+    Если локальный файл свежий (<45с) — отдаём сразу без синхронного ожидания Supabase!
+    Облако опрашивается только если локальный файл пуст или устарел."""
+    local = {}
+    try:
+        with open(config.PAPER_PORTFOLIO_FILE, 'r') as f:
+            local = json.load(f) or {}
+    except (FileNotFoundError, json.JSONDecodeError):
+        pass
+    except Exception as e:
+        print(f"⚠️ Дашборд: не удалось прочитать локальный портфель: {e}")
+
+    # Если локальный файл содержит данные и обновлён недавно (<45с) —
+    # отдаем мгновенно, полностью исключая задержку интерфейса на Supabase!
+    try:
+        if local and os.path.exists(config.PAPER_PORTFOLIO_FILE):
+            _mtime = os.path.getmtime(config.PAPER_PORTFOLIO_FILE)
+            if (time.time() - _mtime) < 45.0:
+                return local
+    except Exception:
+        pass
+
+    cloud = {}
     try:
         url = getattr(config, 'SUPABASE_URL', None)
         key = getattr(config, 'SUPABASE_KEY', None)
@@ -2676,15 +2700,8 @@ def load_dashboard_portfolio():
             res = sb.table("trades_pump").select("features").eq("mint", _snap_key).execute()
             if res.data and res.data[0].get("features"):
                 cloud = json.loads(res.data[0]["features"]) or {}
-    except Exception as e:
-        print(f"⚠️ Дашборд: не удалось прочитать портфель из Supabase: {e}")
-    try:
-        with open(config.PAPER_PORTFOLIO_FILE, 'r') as f:
-            local = json.load(f) or {}
-    except (FileNotFoundError, json.JSONDecodeError):
+    except Exception:
         pass
-    except Exception as e:
-        print(f"⚠️ Дашборд: не удалось прочитать локальный портфель: {e}")
     try:
         from tracker import PaperTracker
         return PaperTracker.merge_states(cloud, local)
@@ -3070,9 +3087,9 @@ with tab3:
     else:
         st.info("Монитор новостей собирает актуальные заголовки...")
 
-# Автообновление интерфейса (по умолчанию выключено по запросу пользователя)
-if st.checkbox("Включить автообновление (каждые 5 сек)", value=False):
-    time.sleep(5)
+# Автообновление интерфейса (по умолчанию включено для живого непрерывного отслеживания цен)
+if st.checkbox("Включить автообновление (каждые 3 сек)", value=True):
+    time.sleep(3)
     st.rerun()
 
 if __name__ == "__main__":

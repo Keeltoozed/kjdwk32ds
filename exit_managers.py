@@ -230,16 +230,21 @@ class MatureExitManager:
             return f"Max Hold Expiry ({pnl_pct*100:+.1f}% after {minutes_held:.0f}m)"
 
         # =========================================================================
-        # 7. СТАГНАЦИЯ И МЕРТВЫЙ ИМПУЛЬС
+        # 7. СТАГНАЦИЯ И МЕРТВЫЙ ИМПУЛЬС (БЫСТРЫЙ СБРОС ЗАВИСШИХ СДЕЛОК 90-120с)
         # =========================================================================
-        _stall_sec = float(getattr(config, "STALL_TIMER_SEC", 210.0))
-        _stall_loss = float(getattr(config, "STALL_MAX_LOSS_PCT", -0.075))
-        if minutes_held >= (_stall_sec / 60.0) and max_pnl_pct < 0.04 and pnl_pct <= _stall_loss:
+        _stall_sec = float(getattr(config, "STALL_TIMER_SEC", 120.0))
+        _stall_loss = float(getattr(config, "STALL_MAX_LOSS_PCT", -0.06))
+        # 1. Быстрый сброс мертвого импульса: 90-120 сек без роста и с уходом в минус
+        if minutes_held >= (_stall_sec / 60.0) and pnl_pct <= _stall_loss and max_pnl_pct < 0.08:
             return f"Dead Momentum Stall ({minutes_held*60:.0f}s no breakout, pnl {pnl_pct*100:.1f}%)"
 
-        if minutes_held >= 15.0 and pnl_pct <= -0.05 and max_pnl_pct < 0.04:
+        # 2. Сброс ложного пробоя (выросли на +4..+10%, но импульс захлебнулся и ушел в минус)
+        if minutes_held >= 2.5 and max_pnl_pct >= 0.04 and max_pnl_pct < 0.15 and pnl_pct <= -0.05:
+            return f"Failed Breakout Fade ({minutes_held*60:.0f}s, peak +{max_pnl_pct*100:.1f}% -> {pnl_pct*100:.1f}%)"
+
+        if minutes_held >= 6.0 and pnl_pct <= -0.05 and max_pnl_pct < 0.04:
             return f"Stagnant Loss Cut ({minutes_held:.0f}m, {pnl_pct*100:.1f}%)"
-        if minutes_held >= 20.0 and pnl_pct < 0.015 and max_pnl_pct < 0.06:
+        if minutes_held >= 10.0 and pnl_pct < 0.015 and max_pnl_pct < 0.06:
             return f"Stagnant Cut ({minutes_held:.0f}m, {pnl_pct*100:.1f}%)"
 
         return None

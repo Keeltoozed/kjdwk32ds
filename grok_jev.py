@@ -544,18 +544,18 @@ class GrokJevEngine:
 
         # Защита от микро bump-ботов в m5 (LAURA $1.60, HODL $3.10, IPHONEDUO $5.00)
         _is_real_bump_runner_g = (
-            (b5 >= s5 * 1.15 and vol_m5 >= 3000.0 and eff_liq >= 14000.0)
-            or (b5 >= s5 * 1.30 and (b5 - s5) >= 60 and vol_m5 >= 2500.0)
-            or (vol_m5 >= 10000.0 and b5 >= s5)
+            (b5 >= s5 * 1.10 and vol_m5 >= 2000.0 and eff_liq >= 10000.0)
+            or (b5 >= s5 * 1.20 and (b5 - s5) >= 30 and vol_m5 >= 1500.0)
+            or (vol_m5 >= 6000.0 and b5 >= s5)
         )
-        if (b5 + s5) >= 120 and _avg_tx_e < 3.0 and not _is_real_bump_runner_g:
-            return False, f"fake-bump-wash-bot avg ${_avg_tx_e:.2f} < $3 across {b5+s5} m5 txns"
+        if (b5 + s5) >= 120 and _avg_tx_e < 1.5 and not _is_real_bump_runner_g:
+            return False, f"fake-bump-wash-bot avg ${_avg_tx_e:.2f} < $1.50 across {b5+s5} m5 txns"
 
         # Защита от слитых ниже миграции выпускников Pump.fun (кейс STARTPUP $37.7k, SHANE $35.8k)
         # При миграции токен стоит ~$69k. Если FDV упал ниже $46k — это дамп дева/снайперов.
         # Пускаем ТОЛЬКО если есть подтвержденный мощный разворот (rebound)!
         if mint.endswith("pump") and dex_id not in ("pump", "pumpfun") and 0 < fdv_mc < 46000.0:
-            _is_rebounding = (m5 >= 8.0 and b5 >= int(s5 * 1.15) and vol_m5 >= 2500.0)
+            _is_rebounding = (m5 >= 5.0 and b5 >= int(s5 * 1.05) and vol_m5 >= 1500.0)
             if not _is_rebounding:
                 return False, f"post-mig-dumped-fdv ${fdv_mc:,.0f} < $46k (no active rebound)"
 
@@ -570,21 +570,21 @@ class GrokJevEngine:
         _is_organic_stealth = False
         if _links_cnt_g == 0 and not _soc_unk_g:
             # Для токенов с сожженным LP или Pump.fun AMM: DexScreener индексирует соцсети с задержкой 1-3 мин.
-            # Если пул защищен (Pump / сожженный LP), не блокируем молодые токены (<8м) за отсутствие соцсетей (как в прибыльном коммите 0d2b1ae)!
+            # Если пул защищен (Pump / сожженный LP), не блокируем молодые токены (<30м) за отсутствие соцсетей (как в прибыльном коммите 0d2b1ae)!
             if _is_burned_lp_g:
                 _is_organic_stealth = (
-                    age_min < _req_soc_age
-                    or (vol_m5 >= 1200.0 and b5 >= 10 and b5 >= s5)
-                    or (eff_liq >= 6000.0 and vol_m5 >= 800.0)
+                    age_min < 30.0
+                    or (vol_m5 >= 600.0 and b5 >= 6 and b5 >= s5)
+                    or (eff_liq >= 4000.0 and vol_m5 >= 400.0)
                 )
             else:
                 _is_organic_stealth = (
-                    eff_liq >= 10000.0
-                    and vol_m5 >= 1200.0
-                    and _vol_liq_ratio_g <= 5.5
+                    eff_liq >= 8000.0
+                    and vol_m5 >= 800.0
+                    and _vol_liq_ratio_g <= 6.5
                     and (
-                        (b5 >= 12 and b5 >= int(s5 * 1.05))
-                        or (vol_m5 >= 6000.0 and b5 >= s5)
+                        (b5 >= 8 and b5 >= int(s5 * 1.02))
+                        or (vol_m5 >= 4000.0 and b5 >= s5)
                     )
                 )
             if not _is_organic_stealth and age_min >= 5.0:

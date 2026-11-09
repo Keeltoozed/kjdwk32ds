@@ -592,7 +592,7 @@ async def get_fast_position_prices(mints: list, pair_hints: dict = None) -> dict
             chunk = missing[i:i + 30]
             try:
                 ds_url = "https://api.dexscreener.com/tokens/v1/solana/" + ",".join(chunk)
-                async with session.get(ds_url) as r:
+                async with session.get(ds_url, timeout=1.5) as r:
                     if r.status == 200:
                         data = await r.json(content_type=None)
                         if isinstance(data, list):
@@ -611,6 +611,33 @@ async def get_fast_position_prices(mints: list, pair_hints: dict = None) -> dict
                                     out[b_addr] = px
             except Exception:
                 pass
+
+    # 3. Мгновенный фоллбэк: опрос latest/dex/tokens/{m} для оставшихся (например pump.fun bonding curve)
+    still_missing = [m for m in ms if m not in out]
+    if still_missing:
+        async def _fetch_one_latest(m_addr):
+            try:
+                u_one = f"https://api.dexscreener.com/latest/dex/tokens/{m_addr}"
+                async with session.get(u_one, timeout=1.2) as r:
+                    if r.status == 200:
+                        d_one = await r.json(content_type=None)
+                        pairs = (d_one or {}).get("pairs") or []
+                        if pairs:
+                            px_val = float(pairs[0].get("priceUsd") or 0.0)
+                            if px_val > 0:
+                                return m_addr, px_val
+            except Exception:
+                pass
+            return m_addr, 0.0
+
+        try:
+            tasks = [_fetch_one_latest(m) for m in still_missing[:10]]
+            res = await asyncio.gather(*tasks, return_exceptions=True)
+            for item in res:
+                if isinstance(item, tuple) and len(item) == 2 and item[1] > 0:
+                    out[item[0]] = item[1]
+        except Exception:
+            pass
 
     return out
 
