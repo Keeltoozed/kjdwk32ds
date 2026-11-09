@@ -552,10 +552,9 @@ class GrokJevEngine:
             return False, f"fake-bump-wash-bot avg ${_avg_tx_e:.2f} < $1.50 across {b5+s5} m5 txns"
 
         # Защита от слитых ниже миграции выпускников Pump.fun (кейс STARTPUP $37.7k, SHANE $35.8k)
-        # При миграции токен стоит ~$69k. Если FDV упал ниже $46k — это дамп дева/снайперов.
-        # Пускаем ТОЛЬКО если есть подтвержденный мощный разворот (rebound)!
+        # Если есть активный объем и приток покупателей — пускаем для захвата раннего импульса ($15k-$45k FDV)!
         if mint.endswith("pump") and dex_id not in ("pump", "pumpfun") and 0 < fdv_mc < 46000.0:
-            _is_rebounding = (m5 >= 5.0 and b5 >= int(s5 * 1.05) and vol_m5 >= 1500.0)
+            _is_rebounding = (b5 >= s5 and vol_m5 >= 1200.0 and m5 >= -6.0) or (m5 >= 4.0 and vol_m5 >= 1000.0)
             if not _is_rebounding:
                 return False, f"post-mig-dumped-fdv ${fdv_mc:,.0f} < $46k (no active rebound)"
 

@@ -1737,9 +1737,9 @@ class Analyzer:
                 f"🚫 [LARGE-CAP-SKIP] {symbol} ({mint[:8]}): FDV ${_fdv_chk_pre:,.0f} > $1.8M — ракета уже тяжёлая.",
             )
         if mint.endswith("pump") and _dex_pre_early not in ("pump", "pumpfun") and 0 < _fdv_chk_pre < 46000.0:
-            _is_rebounding = (_m5 >= 8.0 and _b5_pre >= int(_s5_pre * 1.15) and _vm5_pre >= 2500.0)
-            _is_real_dump = not _is_rebounding and ((_fdv_chk_pre < 12000.0) or (_s5_pre > int(_b5_pre * 1.25) and _m5 < -5.0))
-            _is_active_grad = (_vm5_pre >= 2000.0 and _b5_pre >= int(_s5_pre * 1.00) and _m5 >= -4.0)
+            _is_rebounding = (_m5 >= 4.0 and _b5_pre >= _s5_pre and _vm5_pre >= 1200.0)
+            _is_real_dump = not _is_rebounding and ((_fdv_chk_pre < 8500.0) or (_s5_pre > int(_b5_pre * 1.35) and _m5 < -10.0))
+            _is_active_grad = (_vm5_pre >= 1200.0 and _b5_pre >= _s5_pre and _m5 >= -6.0)
             if _is_real_dump or not (_is_active_grad or _is_rebounding):
                 return self._deny(
                     mint,
@@ -3930,9 +3930,9 @@ class Analyzer:
                                   f"⏳ [POST-MIGRATION] {mint[:8]}: пул миграции создан всего {_age_min:.1f}м назад (< 1.5м) — зона сброса снайперов pump.fun.")
 
             _ray_liq = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
-            if _ray_liq < 10000.0:
+            if _ray_liq < 4500.0:
                 return self._deny(mint, "migrated-drained-liq",
-                                  f"🚫 [POST-MIGRATION] {mint[:8]}: ликвидность ${_ray_liq:,.0f} < $3,500 — снайперы высосали SOL на миграции.")
+                                  f"🚫 [POST-MIGRATION] {mint[:8]}: ликвидность ${_ray_liq:,.0f} < $4,500 — снайперы высосали SOL на миграции.")
 
             _fdv_check = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
             if 0 < _fdv_check < 14000.0:
@@ -3970,8 +3970,8 @@ class Analyzer:
         _txm5 = (pair_data.get("txns") or {}).get("m5", {}) or {}
         _b5, _s5 = int(_txm5.get("buys", 0) or 0), int(_txm5.get("sells", 0) or 0)
 
-        # Защита от покупки экстремального вертикального выброса (Blow-off peak)
-        _max_blow = getattr(config, "PULLBACK_M1_MAX_PCT", 0.12) * 100
+        # Защита от покупки экстремального вертикального выброса (Blow-off peak > 35%)
+        _max_blow = max(35.0, getattr(config, "PULLBACK_M1_MAX_PCT", 0.12) * 100)
         if _m1 > _max_blow and not (_b5 >= _s5 * 1.5 and _vm5 >= 20000):
             return self._deny(mint, "m1-blowoff", f"🚫 [FOMO-TOP] {mint[:8]}: m1 +{_m1:.1f}% > +{_max_blow:.0f}% — экстремальный минутный прострел (вершина).")
         
@@ -4012,9 +4012,9 @@ class Analyzer:
         if _m5 < 2.5:
             return self._deny(mint, "ray-m5-flat", f"🚫 [RAYDIUM] {mint[:8]}: m5 {_m5:+.1f}% < +2.5% — нет импульса.")
 
-        # Защита от накрутки дев-ботами на PumpSwap (11 из 13 исторических сливов имели b/s >= 2.3x при buys >= 250)
-        if _dex_low == "pumpswap" and (_b5 / max(_s5, 1)) >= 2.3 and _b5 >= 250:
-            return self._deny(mint, "pumpswap-buybot-wall", f"🚫 [PUMPSWAP-BOT-WALL] {mint[:8]}: аномальный перекос покупок {_b5}b/{_s5}s ({_b5/max(_s5,1):.1f}x) — боты дева рисуют стенку перед сливом.")
+        # Защита от накрутки дев-ботами на PumpSwap (только при микро-чеках ботов < $5.0, а реальный поток покупателей b5>=250 пропускаем!)
+        if _dex_low == "pumpswap" and (_b5 / max(_s5, 1)) >= 3.5 and _b5 >= 250 and (_vm5 / max(_b5 + _s5, 1)) < 5.0:
+            return self._deny(mint, "pumpswap-buybot-wall", f"🚫 [PUMPSWAP-BOT-WALL] {mint[:8]}: аномальный перекос покупок {_b5}b/{_s5}s ({_b5/max(_s5,1):.1f}x) при микро-чеке — боты дева рисуют стенку.")
 
         # Запрет перегретого часового тренда: для старых токенов (>90м) h1 > 400% — признак истощения.
         # Для молодых ракет (<90м) или pump.fun токенов h1 отражает запуск из бондинг-кривой (+500%..+3500%).
@@ -4077,8 +4077,8 @@ class Analyzer:
         _dev = getattr(self, '_last_dev', 0.0)
         if _dev > 10.0:
             return self._deny(mint, "ray-dev-hold", f"🚫 [DEV-HOLD] {mint[:8]}: создатель держит {_dev:.1f}% > 10% — дамп-риск.")
-        if _t10 > 35.0:
-            return self._deny(mint, "ray-top10-cabal", f"🚫 [TOP10-CABAL] {mint[:8]}: топ-10 держат {_t10:.1f}% > 35% — кабал/дамп-риск.")
+        if _t10 > 65.0:
+            return self._deny(mint, "ray-top10-cabal", f"🚫 [TOP10-CABAL] {mint[:8]}: топ-10 держат {_t10:.1f}% > 65% — кабал/дамп-риск.")
 
         # === ROCKET XGBOOST INFERENCE (20 ФИЧЕЙ БЕЗ ЛИКЕДЖА) ===
         import pandas as pd
