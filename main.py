@@ -886,24 +886,19 @@ async def scanner_loop(analyzer, tracker):
                             processed_mints[mint] = time.time() + 300
                             continue
 
-                        # Слив/флет (m5 < 2.0%) не из миграций: кулдаун 1 мин
-                        if _c_m5 < 2.0 and mint not in _graduated_set and _c_age_m > 3.0:
-                            processed_mints[mint] = time.time() + 60
+                        # Слив/флет (m5 < 0.5%) не из миграций: кулдаун 20 сек
+                        if _c_m5 < 0.5 and mint not in _graduated_set and _c_age_m > 3.0:
+                            processed_mints[mint] = time.time()
                             continue
 
                         _score_rank = (1000.0 if mint in _graduated_set else 0.0) + _c_m5
                         _ranked_mints.append((_score_rank, mint))
                     else:
-                        # Если данных в префетче нет: пускаем только свежие миграции, ручной вотчлист или молодой токен из роддома
-                        if mint in _graduated_set:
-                            _ranked_mints.append((1000.0, mint))
-                        elif mint in getattr(config, "USER_WATCHLIST", []):
-                            _ranked_mints.append((50.0, mint))
-                        elif mint.endswith("pump") and birth_tracker.get_age(mint) is not None and birth_tracker.get_age(mint) <= 30.0:
-                            _ranked_mints.append((10.0, mint))
-                        else:
-                            # Токен вне текущего окна префетча — быстрый кулдаун 15с вместо заморозки на 5 минут
-                            processed_mints[mint] = time.time() + 15
+                        # Если в префетче DS пока нет данных (DexScreener запаздывает / пул на Meteora или PumpSwap):
+                        # не отбрасываем кандидатов из Jupiter/GT/миграций!
+                        # Пускаем их на прямой анализ через Jupiter v2 API / GeckoTerminal.
+                        _score_rank = 1000.0 if mint in _graduated_set else (50.0 if mint in getattr(config, "USER_WATCHLIST", []) else 20.0)
+                        _ranked_mints.append((_score_rank, mint))
 
                 _ranked_mints.sort(key=lambda x: x[0], reverse=True)
                 mints_to_scan = [m for _, m in _ranked_mints]
@@ -1006,15 +1001,17 @@ async def scanner_loop(analyzer, tracker):
                         if is_good is False:
                             _sig = str(analyzer.get_signal(mint) or "")
                             _sig_l = _sig.lower()
-                            if any(k in _sig_l for k in ("rugcheck", "scam", "unlocked-lp", "bundle", "honeypot", "freeze", "mimic", "dead-token", "мёртвый токен", "sybil", "delegation")):
+                            if any(k in _sig_l for k in ("freeze", "mint-authority", "honeypot", "mimic", "dead-token", "мёртвый токен")):
                                 processed_mints[mint] = time.time() + 3600      # Подтверждённый скам/мертвец: бан на 1 час и убираем из очереди миграций
                                 try:
                                     with birth_tracker.lock:
                                         birth_tracker.graduated.pop(mint, None)
                                 except Exception:
                                     pass
+                            elif any(k in _sig_l for k in ("unlocked-lp", "rugcheck", "scam", "sybil", "waiting-rugcheck", "bundle")):
+                                processed_mints[mint] = time.time() - _cd + 25  # Временный риск / лаг RugCheck: перепроверить через 25с, не удаляя из миграций!
                             elif "откат" in _sig_l or "вертикаль" in _sig_l or mint in _graduated_set:
-                                processed_mints[mint] = time.time() - _cd + 35  # Живой выпускник ждёт отката/импульса: перепроверить через 35с
+                                processed_mints[mint] = time.time() - _cd + 20  # Живой выпускник ждёт отката/импульса: перепроверить через 20с
                             elif "ungraduated" in _sig_l or "bonding curve" in _sig_l or "curve" in _sig_l:
                                 processed_mints[mint] = time.time() + 60        # Сырая кривая: ждём 60с (при миграции _graduated_set пробьёт сразу)
                             else:

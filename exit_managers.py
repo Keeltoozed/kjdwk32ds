@@ -103,14 +103,15 @@ class MatureExitManager:
             position.sl_confirm_n = 0
 
         # =========================================================================
-        # 2. BREAKEVEN SHIELD (ПРАВИЛО ПРОФИ: ЗЕЛЕНАЯ СДЕЛКА НЕ СТАНОВИТСЯ КРАСНОЙ!)
+        # 2. BREAKEVEN SHIELD (ПРАВИЛО ПРОФИ: СДЕЛКА С ИМПУЛЬСОМ +25%+ НЕ СТАНОВИТСЯ КРАСНОЙ)
         # =========================================================================
-        # Если монета брала импульс >= +16%, стоп БЕЗУСЛОВНО переносится в +1.5%!
-        # Никакие -42% математически невозможны, и нормальный откат после старта не срезается!
-        _be_act = float(getattr(config, "BREAKEVEN_PCT", 0.16))
-        if max_pnl_pct >= _be_act and minutes_held >= 0.25:
-            if pnl_pct <= 0.015:
-                return f"Mature Breakeven Shield (+{pnl_pct*100:.1f}% locked after peak +{max_pnl_pct*100:.1f}%)"
+        # Если монета брала подтверждённый импульс >= +25%, стоп переносится в безубыток (+2.0%)!
+        # Не включаем на +10%..+16%, чтобы не резать стартовые откаты на шуме спреда!
+        _be_act = float(getattr(config, "BREAKEVEN_PCT", 0.25))
+        if max_pnl_pct >= _be_act and minutes_held >= 0.50:
+            if pnl_pct <= 0.020:
+                _sign = "+" if pnl_pct >= 0 else ""
+                return f"Mature Breakeven Shield ({_sign}{pnl_pct*100:.1f}% locked after peak +{max_pnl_pct*100:.1f}%)"
 
         # Безубыток для мунбэга:
         if _is_mb:
@@ -120,36 +121,35 @@ class MatureExitManager:
         # =========================================================================
         # 3. ТРЕЙЛИНГ-СТОП И PROFIT FLOOR (МАКСИМАЛЬНЫЙ ВЫНОС ПРИБЫЛИ ИЗ РАКЕТ)
         # =========================================================================
-        # На позиции $4 (или без partial TP) летим 100% объема до разворота!
+        # Даём РАКЕТЕ ДЫШАТЬ! На монетах до +28% пика НЕТ микро-трейлинга,
+        # чтобы нормальные откаты не срезали позицию с копейками (+10 центов).
+        # Трейлинг и полы прибыли включаются от +28% и выше с широкой дистанцией!
         _floor_pnl = None
         _trail_dist = None
 
         if max_pnl_pct >= 5.00:         # +500%+ (6x+ гипер-ракета)
-            _floor_pnl = round(max_pnl_pct * 0.75, 2)
+            _floor_pnl = round(max_pnl_pct * 0.72, 2)
             _trail_dist = 0.20
-        elif max_pnl_pct >= 2.50:       # +250%..+500% (Democat +300% -> фиксируем +240% чистыми!)
-            _floor_pnl = 1.50           # Гарантируем минимум +150%
-            _trail_dist = 0.15          # Плотный трейлинг 15% от пика
-        elif max_pnl_pct >= 1.00:       # +100%..+250% (NEX Ai +249% -> фиксируем +190% чистыми!)
-            _floor_pnl = 0.65           # Гарантируем минимум +65%
-            _trail_dist = 0.16          # Трейлинг 16% от пика
-        elif max_pnl_pct >= 0.50:       # +50%..+100% (Horned cat +93%..+150% -> фиксируем +65%..+110%!)
-            _floor_pnl = 0.28           # Гарантируем минимум +28%
-            _trail_dist = 0.16          # Трейлинг 16% от пика
-        elif max_pnl_pct >= 0.25:       # +25%..+50% (UNEMPLOYED +38% -> фиксируем +20% чистыми!)
-            _floor_pnl = 0.12           # Гарантируем минимум +12%
-            _trail_dist = 0.14          # Трейлинг 14% от пика
-        elif max_pnl_pct >= 0.14:       # +14%..+25%
-            _floor_pnl = 0.05
-            _trail_dist = 0.10
+        elif max_pnl_pct >= 2.50:       # +250%..+500% (Democat +300% -> фиксируем +140%..+240% чистыми!)
+            _floor_pnl = 1.40           # Гарантируем минимум +140%
+            _trail_dist = 0.18          # Трейлинг 18% от пика
+        elif max_pnl_pct >= 1.00:       # +100%..+250% (NEX Ai +249% -> фиксируем +60%..+190% чистыми!)
+            _floor_pnl = 0.60           # Гарантируем минимум +60%
+            _trail_dist = 0.18          # Трейлинг 18% от пика
+        elif max_pnl_pct >= 0.50:       # +50%..+100% (Horned cat +93% -> фиксируем +25%..+70%!)
+            _floor_pnl = 0.25           # Гарантируем минимум +25%
+            _trail_dist = 0.18          # Трейлинг 18% от пика
+        elif max_pnl_pct >= 0.28:       # +28%..+50% (UNEMPLOYED +38% -> фиксируем +8%..+25% чистыми!)
+            _floor_pnl = 0.08           # Гарантируем минимум +8% чистыми
+            _trail_dist = 0.18          # Широкий трейлинг 18% от пика (даем откатить с +35% до +11%)
 
-        if _floor_pnl is not None and minutes_held >= 0.10:
+        if _floor_pnl is not None and minutes_held >= 0.35:
             drop_from_max = (position.max_price_usd - current_price) / position.max_price_usd if position.max_price_usd > 0 else 0.0
             _tag = "Moonbag" if _is_mb else "Full Runner"
             if _trail_dist is not None and drop_from_max >= _trail_dist and pnl_pct >= _floor_pnl:
                 return f"Mature {_tag} Trailing ({pnl_pct*100:+.1f}% locked after peak +{max_pnl_pct*100:.1f}%)"
             elif pnl_pct <= _floor_pnl:
-                return f"Mature {_tag} Floor (+{pnl_pct*100:.1f}% locked after peak +{max_pnl_pct*100:.1f}%)"
+                return f"Mature {_tag} Floor ({pnl_pct*100:+.1f}% locked after peak +{max_pnl_pct*100:.1f}%)"
 
         # =========================================================================
         # 4. PARABOLIC MOMENTUM HARVEST (ФИКСАЦИЯ ПРИ ЗАСТРЕВАНИИ НА ВЕРШИНЕ)

@@ -133,16 +133,16 @@ ROCKET_XGB_THRESHOLD = 18.0
 STALL_TIMER_SEC = 210.0   # 3.5 минуты (быстрый срез стоячего минуса без затягивания убытка до 13м)
 STALL_MAX_LOSS_PCT = -0.075
 
-TRAILING_ACTIVATION_PCT = 0.100
-TRAILING_DISTANCE_PCT = 0.050
-TRAILING_RUNNER_DISTANCE_PCT = 0.08
+TRAILING_ACTIVATION_PCT = 0.280
+TRAILING_DISTANCE_PCT = 0.180
+TRAILING_RUNNER_DISTANCE_PCT = 0.18
 SCALP_PROFIT_ENABLED = False
 
 WHALE_DUMP_GUARD_PCT = 0.22
 EVM_RUNNER_CRASH = 0.25
 EVM_NORMAL_CRASH = 0.22
 
-BREAKEVEN_PCT = 0.160     # После +16.0% пика включается Breakeven Shield (+1.5%..+3.5% пол) — зеленые сделки защищены, а стартовые откаты не срезаются!
+BREAKEVEN_PCT = 0.250     # После +25.0% пика включается Breakeven Shield (+2.0% пол) — зеленые сделки защищены, а стартовые откаты не срезаются!
 
 PREFETCH_TTL_SEC = 35
 SOLANA_MIN_AGE_MIN = 0.25       # Разрешаем молодые ракеты от 15 секунд (TWAP, LEMON, SHADOW)

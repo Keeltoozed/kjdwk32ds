@@ -757,11 +757,12 @@ async def get_trending() -> list:
             except Exception:
                 pass
 
-    # Быстрый охват GeckoTerminal: 2 страницы самых горячих 5м трендов (40 пулов)
+    # Быстрый охват GeckoTerminal: 2 страницы 5м трендов + 1 страница 1h трендов (60 пулов)
     # Защищает от 429 Rate Limit на публичном API GeckoTerminal!
     gt_pages = (
         "/networks/solana/trending_pools?duration=5m&page=1",
         "/networks/solana/trending_pools?duration=5m&page=2",
+        "/networks/solana/trending_pools?duration=1h&page=1",
     )
     for path in gt_pages:
         d = await _gt_get(path, retries=0, timeout=6)

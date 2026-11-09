@@ -1470,7 +1470,13 @@ class GrokJevEngine:
                     if freeze_auth and freeze_auth not in SAFE_AUTHORITIES:
                         return False, f"rugcheck: freeze authority active ({freeze_auth[:8]})", _h_stats
 
-                    # Проверка блокировки LP в пулах (Raydium Lock/Burn >= 75% или официальный Pump.fun AMM)
+                    # Проверка блокировки LP в пулах (Raydium Lock/Burn >= 75% или официальный Pump.fun AMM / Meteora)
+                    _KNOWN_AMM_OWNERS_JEV = {
+                        PUMPFUN_PROGRAM, SYSTEM_PROGRAM, None, "",
+                        "2ekvogH7UGLZuCqq2hzbersH8r2iHRsA7pLUgEiSMnkZ",  # PumpSwap AMM Program Authority
+                        "BSfD6SHZigAfDWSQu5ngnxBgGWdxPGshaCDFiMmU3zst",  # Pump.fun Raydium migration authority
+                        "5Q544fKrFoe6tsEbD7S8EmxGTJYAKtTVhAW5Q5pge4j1",  # Raydium Authority V4
+                    }
                     has_verified_locked_lp = False
                     has_unlocked_whale_lp = False
                     for mkt in (rc_data.get("markets") or []):
@@ -1485,10 +1491,15 @@ class GrokJevEngine:
                                 lp_holders = lp_info.get("holders") or []
                                 if lp_locked_pct >= 75.0 or lp_burned_pct >= 75.0:
                                     has_verified_locked_lp = True
-                                elif any(float(h.get("pct", 0) or 0) >= 25.0 for h in lp_holders if isinstance(h, dict)):
-                                    has_unlocked_whale_lp = True
+                                elif not has_verified_locked_lp:
+                                    for h in lp_holders:
+                                        if isinstance(h, dict):
+                                            h_pct = float(h.get("pct", 0) or 0)
+                                            h_owner = str(h.get("owner", "") or h.get("address", ""))
+                                            if h_pct >= 25.0 and h_owner not in _KNOWN_AMM_OWNERS_JEV and not h_owner.startswith("11111111"):
+                                                has_unlocked_whale_lp = True
 
-                    # Если пул контролируется индивидуальным кошельком (LP whale >= 25%) при незалоченном пуле — 100% блок риска сноса пула (кейсы JENSEN / 牛逼)
+                    # Если кастомный пул контролируется индивидуальным кошельком (LP whale >= 25%) при незалоченном пуле — блок риска сноса пула (кейсы JENSEN / 牛逼)
                     if has_unlocked_whale_lp:
                         return False, "rugcheck: unlocked LP held by individual wallet (drain risk)", _h_stats
 

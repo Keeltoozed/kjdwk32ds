@@ -2070,10 +2070,15 @@ class Analyzer:
                     if freeze_authority and freeze_authority not in SAFE_AUTHORITIES:
                         return self._deny(mint, "freeze-authority-scam", f"🚫 [АНТИСКАМ] Freeze Authority у ДЕВ-кошелька {freeze_authority[:8]} у {mint[:8]} → СКАМ")
 
-                    # 1. Проверяем РЕАЛЬНУЮ блокировку/сожжение LP во всех рынках (Raydium, PumpSwap, Meteora Lock/Burn >= 80%)
-                    # ВАЖНО: кастомные пулы на PumpSwap AMM БЕЗ сожжённого LP являются 100% скамом (кейсы JENSEN / 牛逼 / NEX Ai)!
-                    # В официальных выпускниках Pump.fun RugCheck ВСЕГДА возвращает lpLockedPct == 100.0.
-                    # Если lpLockedPct < 80 и lpBurnedPct < 80 — пул разблокирован и дев может выдернуть SOL!
+                    # 1. Проверяем РЕАЛЬНУЮ блокировку/сожжение LP во всех рынках (Raydium, PumpSwap, Meteora)
+                    # ВАЖНО: В PumpSwap AMM и Meteora DLMM ликвидность контролируется смарт-контрактом пула,
+                    # дев физически не может ее снести. В Raydium AMM требуется сожжение/лок >= 75% либо отсутствие кошелька-кита.
+                    _KNOWN_AMM_OWNERS = {
+                        PUMPFUN_PROGRAM, SYSTEM_PROGRAM, None, "",
+                        "2ekvogH7UGLZuCqq2hzbersH8r2iHRsA7pLUgEiSMnkZ",  # PumpSwap AMM Program Authority
+                        "BSfD6SHZigAfDWSQu5ngnxBgGWdxPGshaCDFiMmU3zst",  # Pump.fun Raydium migration authority
+                        "5Q544fKrFoe6tsEbD7S8EmxGTJYAKtTVhAW5Q5pge4j1",  # Raydium Authority V4
+                    }
                     _lp_ok = False
                     _unlocked_lp_holder_danger = False
                     for _m in (rc_data.get("markets") or []):
@@ -2086,27 +2091,31 @@ class Analyzer:
                                 _m_lp_locked_pct = float(_m_lp_info.get("lpLockedPct", 0) or 0)
                                 _m_lp_burned_pct = float(_m_lp_info.get("lpBurnedPct", 0) or 0)
                                 _m_holders = _m_lp_info.get("holders") or []
-                                # Если 75%+ пула сожжено/заблокировано — дев НЕ может снести ликвидность!
                                 if _m_lp_locked_pct >= 75.0 or _m_lp_burned_pct >= 75.0:
                                     _lp_ok = True
-                                elif any(float(h.get("pct", 0) or 0) >= 25.0 for h in _m_holders if isinstance(h, dict)):
-                                    # Пул незалочен (<75%) И отдельный кошелек контролирует >= 25% LP — риск выдергивания (JENSEN/STEVE/SI)
-                                    _unlocked_lp_holder_danger = True
+                                elif not _lp_ok:
+                                    # Проверяем, держит ли неизвестный индивидуальный кошелек >= 25% незалоченного пула:
+                                    for h in _m_holders:
+                                        if isinstance(h, dict):
+                                            h_pct = float(h.get("pct", 0) or 0)
+                                            h_owner = str(h.get("owner", "") or h.get("address", ""))
+                                            if h_pct >= 25.0 and h_owner not in _KNOWN_AMM_OWNERS and not h_owner.startswith("11111111"):
+                                                _unlocked_lp_holder_danger = True
 
-                    # Если пул контролируется индивидуальным кошельком (LP whale >= 15%) — мгновенный блок риска выдергивания пула (кейсы JENSEN / 牛逼)
+                    # Если кастомный пул удерживается индивидуальным кошельком (LP whale >= 25%) — риск выдергивания (кейс JENSEN)
                     if _unlocked_lp_holder_danger:
                         return self._deny(
                             mint,
                             "unlocked-custom-lp",
-                            f"🚫 [UNLOCKED-LP-RUG] {symbol} ({mint[:8]}): пул LP удерживается индивидуальным кошельком (>=15%) — риск сноса ликвидности девом (кейсы JENSEN/牛逼/DEMOCAT)!"
+                            f"🚫 [UNLOCKED-LP-RUG] {symbol} ({mint[:8]}): пул LP удерживается индивидуальным кошельком (>=25%) — риск сноса ликвидности девом (кейс JENSEN)!"
                         )
 
-                    # Для токенов вне bonding curve требуем подтвержденный заблокированный LP >= 80%
+                    # Для токенов вне bonding curve и вне официального AMM требуем подтвержденный заблокированный LP >= 75%
                     if not _lp_ok and not _is_canonical_pump:
                         return self._deny(
                             mint,
                             "unlocked-custom-lp",
-                            f"🚫 [UNLOCKED-LP-RUG] {symbol} ({mint[:8]}): незаблокированный LP (<80%) — риск сноса пула (кейсы JENSEN/牛逼/DEMOCAT)!"
+                            f"🚫 [UNLOCKED-LP-RUG] {symbol} ({mint[:8]}): незаблокированный кастомный LP (<75%) — риск сноса пула (кейсы JENSEN/SOUVENIR)!"
                         )
 
                     _rc_raw_score = float(rc_data.get("score") or 0.0)
