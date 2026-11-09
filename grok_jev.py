@@ -1476,7 +1476,7 @@ class GrokJevEngine:
                     for mkt in (rc_data.get("markets") or []):
                         if isinstance(mkt, dict):
                             mkt_type = str(mkt.get("marketType") or "").lower()
-                            if mkt_type in ("pump_fun_amm", "pump_amm"):
+                            if mkt_type in ("pump_fun_amm", "pump_amm", "meteora_damm", "meteora_damm_v2", "meteora_dlmm", "meteora"):
                                 has_verified_locked_lp = True
                             lp_info = mkt.get("lp") or {}
                             if isinstance(lp_info, dict):

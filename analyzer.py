@@ -137,7 +137,9 @@ def score_token_with_rocket_xgb(mint: str, pair_data: dict, holders_info: dict =
         if holders_info and isinstance(holders_info, dict) and any(k in holders_info for k in ("top1_pct", "top10_pct", "dev_pct", "top1", "top10", "dev")):
             _top1 = float(holders_info.get("top1_pct", holders_info.get("top1", 3.5)) or 0.0)
             _top10 = float(holders_info.get("top10_pct", holders_info.get("top10", 20.0)) or 0.0)
-            _dev = float(holders_info.get("dev_pct", holders_info.get("dev", 0.0)) or 0.0)
+            _raw_dev = float(holders_info.get("dev_pct", holders_info.get("dev", 0.0)) or 0.0)
+            # В обучающей выборке Rocket XGBoost остаточная пыль дева (<=1.5%) соответствовала чистым ракетам (0.0):
+            _dev = 0.0 if _raw_dev <= 1.5 else _raw_dev
 
         FEATURE_COLS = [
             "m5_pct", "m1_pct", "h1_pct", "m1_to_m5",
@@ -1839,9 +1841,12 @@ class Analyzer:
             )
         # Защита от покупки на верхушке вертикальной свечи:
         # Разрешаем сильный пробой покупателями (до +120% при 10%+ перевесе покупателей b5/s5 >= 1.10)
-        # либо остывающий откат (m1 <= -1.0%). Блокируем чистую покупку хая без перевеса покупателей!
+        # либо остывающий откат (m1 <= -1.0%). Для свежих миграций (<=30м) допускаем пробой до +480%.
         if _m5 > _max_entry_m5:
+            _is_grad_m5 = (_age_min_pre <= 30.0 or mint.endswith("pump") or _is_canonical_pump)
+            _max_breakout_m5 = 480.0 if _is_grad_m5 else 200.0
             _is_strong_buyer_breakout = (
+                (_m5 <= _max_breakout_m5 and _b5_pre >= int(_s5_pre * 1.05) and _vm5_pre >= 2500.0) or
                 (_m5 <= 200.0 and _b5_pre >= int(_s5_pre * 1.20) and _vm5_pre >= 8000.0 and (_b5_pre - _s5_pre) >= 30) or
                 (_m5 <= 120.0 and _b5_pre >= int(_s5_pre * 1.10) and _vm5_pre >= 3500.0 and (_b5_pre + _s5_pre) >= 20)
             )
@@ -2033,7 +2038,7 @@ class Analyzer:
             # Каноничный pump-флаг ставится ТОЛЬКО для монет с bonding curve Pump.fun (оканчивающихся на 'pump' или на сырой кривой).
             # Наличие пула на PumpSwap/Raydium НЕ делает кастомный скам-токен безопасным pump-токеном (кейсы DEMOCAT/SAFU/SOUVENIR)!
             _dex_low_main = str((pair_data or {}).get("dexId", "")).lower()
-            _is_canonical_pump = mint.endswith("pump") or is_pump_curve
+            _is_canonical_pump = mint.endswith("pump") or _dex_low_main in ("pump", "pumpfun", "pumpswap", "meteora", "meteoradbc") or is_pump_curve
             _is_pump_flag = 1 if _is_canonical_pump else 0
             _cur_tok_top10 = 0.0
             _cur_tok_dev = 0.0
@@ -2074,7 +2079,7 @@ class Analyzer:
                     for _m in (rc_data.get("markets") or []):
                         if isinstance(_m, dict):
                             _m_type = str(_m.get("marketType") or "").lower()
-                            if _m_type in ("pump_fun_amm", "pump_amm"):
+                            if _m_type in ("pump_fun_amm", "pump_amm", "meteora_damm", "meteora_damm_v2", "meteora_dlmm", "meteora"):
                                 _lp_ok = True
                             _m_lp_info = _m.get("lp") or {}
                             if isinstance(_m_lp_info, dict):
@@ -2303,7 +2308,7 @@ class Analyzer:
                 _real_holders = {
                     "top1_pct": max(float(_cur_tok_dev or 0.0), float(_cur_tok_top10 or 20.0) / 5.0),
                     "top10_pct": float(_cur_tok_top10 or 20.0),
-                    "dev_pct": float(_cur_tok_dev or 0.0),
+                    "dev_pct": 0.0 if float(_cur_tok_dev or 0.0) <= 1.5 else float(_cur_tok_dev or 0.0),
                 }
                 conf = self.score_rocket_xgb(mint, pair_data, holders_info=_real_holders)
                 self.last_score = conf
