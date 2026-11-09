@@ -141,25 +141,7 @@ class MatureExitManager:
             position.sl_confirm_n = 0
 
         # =========================================================================
-        # 2. BREAKEVEN SHIELD (ПРАВИЛО ИЗ 0d2b1ae: ЗЕЛЕНАЯ СДЕЛКА НЕ СТАНОВИТСЯ КРАСНОЙ!)
-        # =========================================================================
-        # Если монета брала импульс >= +14%, стоп БЕЗУСЛОВНО переносится в безубыток +2.0%!
-        # Предотвращает слив ракет вроде QUAKE (+34.4% -> -9.1%), PAYDAY (+35.8% -> -11.8%)!
-        _be_act = float(getattr(config, "BREAKEVEN_PCT", 0.14))
-        if max_pnl_pct >= _be_act and minutes_held >= 0.08:
-            if pnl_pct <= 0.020:
-                if pnl_pct >= 0.0:
-                    return f"Mature Breakeven Shield (+{pnl_pct*100:.1f}% locked after peak +{max_pnl_pct*100:.1f}%)"
-                else:
-                    return f"Crash Dump after peak (+{max_pnl_pct*100:.0f}% -> {pnl_pct*100:.1f}%)"
-
-        # Безубыток для мунбэга:
-        if _is_mb:
-            if pnl_pct <= 0.010:
-                return f"Mature Moonbag Breakeven (+{pnl_pct*100:.1f}% locked after TP1)"
-
-        # =========================================================================
-        # 3. ТРЕЙЛИНГ-СТОП И СТУПЕНЧАТЫЙ PROFIT FLOOR (СЕКРЕТ ПРОФИТА ИЗ 0d2b1ae)
+        # 2. ТРЕЙЛИНГ-СТОП И СТУПЕНЧАТЫЙ PROFIT FLOOR (СЕКРЕТ ПРОФИТА ИЗ 0d2b1ae)
         # =========================================================================
         # При достижении ступеней фиксации бот гарантирует прибыль и трейлит от пика!
         _floor_pnl = None
@@ -194,6 +176,23 @@ class MatureExitManager:
                     return f"Mature {_tag} Floor (+{pnl_pct*100:.1f}% locked after peak +{max_pnl_pct*100:.1f}%)"
                 else:
                     return f"Crash Dump after peak (+{max_pnl_pct*100:.0f}% -> {pnl_pct*100:.1f}%)"
+
+        # =========================================================================
+        # 3. BREAKEVEN SHIELD (ПРАВИЛО ИЗ 0d2b1ae: ЗЕЛЕНАЯ СДЕЛКА НЕ СТАНОВИТСЯ КРАСНОЙ!)
+        # =========================================================================
+        # Если монета брала импульс >= +14%, стоп БЕЗУСЛОВНО переносится в безубыток +2.0%!
+        _be_act = float(getattr(config, "BREAKEVEN_PCT", 0.14))
+        if max_pnl_pct >= _be_act and minutes_held >= 0.08:
+            if pnl_pct <= 0.020:
+                if pnl_pct >= 0.0:
+                    return f"Mature Breakeven Shield (+{pnl_pct*100:.1f}% locked after peak +{max_pnl_pct*100:.1f}%)"
+                else:
+                    return f"Crash Dump after peak (+{max_pnl_pct*100:.0f}% -> {pnl_pct*100:.1f}%)"
+
+        # Безубыток для мунбэга:
+        if _is_mb:
+            if pnl_pct <= 0.010:
+                return f"Mature Moonbag Breakeven (+{pnl_pct*100:.1f}% locked after TP1)"
 
         # =========================================================================
         # 4. PARABOLIC MOMENTUM HARVEST (ФИКСАЦИЯ ПРИ ЗАСТРЕВАНИИ НА ВЕРШИНЕ)

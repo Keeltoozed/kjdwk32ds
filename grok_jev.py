@@ -458,10 +458,11 @@ class GrokJevEngine:
         vol_h24 = float((pair_data.get("volume") or {}).get("h24", 0) or 0)
         trades_h24 = int(txns_h24.get("buys", 0) or 0) + int(txns_h24.get("sells", 0) or 0)
 
-        _min_grad_liq = 5000.0 if (vol_m5 >= 2500.0 and b5 >= s5) else float(getattr(_c, "MIN_GRADUATED_LIQ_USD", 8000.0))
+        _is_pump_token_jev = mint.endswith("pump") or dex_id in ("pump", "pumpfun", "pumpswap", "meteoradbc") or is_raw_pump_curve
+        _min_grad_liq = 4000.0 if (vol_m5 >= 2000.0 and b5 >= s5) else float(getattr(_c, "MIN_GRADUATED_LIQ_USD", 7500.0))
         if dex_id in ("pump", "pumpfun", "meteoradbc") and not getattr(_c, "ALLOW_UNGRADUATED_PUMPFUN", False):
             return False, "raw-pump-curve (wait for graduation to PumpSwap/Raydium with locked LP)"
-        min_liq = 1500.0 if dex_id in ("pump", "pumpfun", "meteoradbc") else _min_grad_liq
+        min_liq = 1500.0 if _is_pump_token_jev else _min_grad_liq
         if eff_liq < min_liq:
             return False, f"liq-depth-low ${eff_liq:.0f} < ${min_liq:.0f} (micro-cap dump trap)"
             
@@ -569,32 +570,28 @@ class GrokJevEngine:
         _is_organic_stealth = False
         if _links_cnt_g == 0 and not _soc_unk_g:
             # Для токенов с сожженным LP или Pump.fun AMM: DexScreener индексирует соцсети с задержкой 1-3 мин.
-            # Если пул защищен (Pump / сожженный LP) и идет чистый поток покупателей — даем окно до _req_soc_age (8м).
-            # Для кастомных Raydium токенов без сожженного LP — строжайший блок с 0 минут (рагпулы LORI, QUACK, MLC)!
-            _is_safe_young_pump_jev = (
-                _is_burned_lp_g
-                and age_min < _req_soc_age
-                and eff_liq >= 7500.0
-                and b5 >= 15
-                and b5 >= int(s5 * 1.05)
-                and vol_m5 >= 2000.0
-            )
-            if not _is_safe_young_pump_jev and age_min < 5.0 and not _is_burned_lp_g:
-                return False, f"sub-5m-zero-socials (age {age_min:.1f}m < 5.0m, 0 socials/websites — disposable dev trap)"
-            _is_organic_stealth = (
-                _is_safe_young_pump_jev or
-                (eff_liq >= 14000.0 and vol_m5 >= 5000.0 and _vol_liq_ratio_g <= 4.0 and (
-                    (b5 >= 25 and b5 >= s5 * 1.20 and _avg_tx_g >= 15.0) or
-                    (vol_m5 >= 15000.0 and b5 >= s5)
-                )) or
-                (vol_m5 >= 25000.0 and b5 >= 80 and b5 >= int(s5 * 1.25))
-            )
-            if not _is_organic_stealth:
+            # Если пул защищен (Pump / сожженный LP), не блокируем молодые токены (<8м) за отсутствие соцсетей (как в прибыльном коммите 0d2b1ae)!
+            if _is_burned_lp_g:
+                _is_organic_stealth = (
+                    age_min < _req_soc_age
+                    or (vol_m5 >= 1200.0 and b5 >= 10 and b5 >= s5)
+                    or (eff_liq >= 6000.0 and vol_m5 >= 800.0)
+                )
+            else:
+                _is_organic_stealth = (
+                    eff_liq >= 10000.0
+                    and vol_m5 >= 1200.0
+                    and _vol_liq_ratio_g <= 5.5
+                    and (
+                        (b5 >= 12 and b5 >= int(s5 * 1.05))
+                        or (vol_m5 >= 6000.0 and b5 >= s5)
+                    )
+                )
+            if not _is_organic_stealth and age_min >= 5.0:
                 _sub_reason_g = f"no-socials-mature-rug (age {age_min:.0f}m >= 12m, 0 socials/websites)" if age_min >= 12.0 else f"no-socials-rug (age {age_min:.1f}m, 0 socials/websites, v/l {_vol_liq_ratio_g:.1f}x)"
                 return False, _sub_reason_g
-            else:
-                _stealth_lbl = "JEV-PUMP-INDEXING-GRACE" if _is_safe_young_pump_jev else "JEV-ORGANIC-STEALTH"
-                print(f"💎 [{_stealth_lbl}] {symbol} ({mint[:8]}): 0 соцсетей, но доказан чистый органический поток (${vol_m5:,.0f}, {b5}b/{s5}s, v/l {_vol_liq_ratio_g:.2f}) — пропуск.")
+            elif _is_organic_stealth:
+                print(f"💎 [JEV-ORGANIC-STEALTH] {symbol} ({mint[:8]}): 0 соцсетей, но доказан чистый органический поток (${vol_m5:,.0f}, {b5}b/{s5}s, v/l {_vol_liq_ratio_g:.2f}) — пропуск.")
 
         # 2.5. Exhaustion Guard: блокируем перегретые поздние пампы, но пускаем активные ракеты (h1 включает рост на кёрве $5k->$69k!)
         _base_max_h1_jev = float(getattr(_c, "MAX_ENTRY_H1_PCT", 350.0))
@@ -1476,11 +1473,13 @@ class GrokJevEngine:
             if not sec_ok and "rugcheck-score" not in sec_why_low and not (_gp_is_holder and (rc_status_pre == 200 or eff_liq >= 20000.0)):
                 return False, f"goplus-sol-reject {sec_why}", _h_stats
               
-            # Токены канонического происхождения Pump.fun (bonding curve / выпускники):
+            # Токены канонического происхождения Pump.fun (bonding curve / выпускники) и Narrative токены:
             _dex_low_jev = str(pair_data.get("dexId") or "").lower()
-            is_canonical_pump = address.endswith("pump") or is_raw_pump_curve
-            if rc_status_pre != 200 or not isinstance(rc_data_pre, dict):
-                return False, "waiting for rugcheck index (auditor safety)", _h_stats
+            from news_narrative import news_radar
+            _is_narr_jev = bool(news_radar.match_token(symbol, name))
+            is_canonical_pump = address.endswith("pump") or _dex_low_jev in ("pump", "pumpfun", "pumpswap") or is_raw_pump_curve or _is_narr_jev
+            if not is_canonical_pump and (rc_status_pre != 200 or not isinstance(rc_data_pre, dict)):
+                return False, "unverified-custom-token (waiting for rugcheck index)", _h_stats
 
             # В) Полный отчет RugCheck API (из общего 120с кэша)
             try:
@@ -1533,24 +1532,24 @@ class GrokJevEngine:
                         return False, "rugcheck: unlocked LP held by individual wallet (drain risk)", _h_stats
 
                     # Для токенов вне bonding curve требуем подтвержденный заблокированный/сожженный LP >= 75%
-                    if not has_verified_locked_lp and not is_raw_pump_curve:
+                    if not has_verified_locked_lp and not is_canonical_pump:
                         return False, "rugcheck: unverified unlocked LP (lock < 75%)", _h_stats
 
                     # Очищенный score RugCheck: вычитаем безвредный шум пула (низкая ликвидность для молодых пулов, копикаты).
-                    # ВАЖНО: 'Large Amount of LP Unlocked' НИКОГДА не вычитается как шум!
-                    _allowed_lp_terms_jev = ["lp provider", "low amount of lp providers", "low liquidity"]
-                    # "creator history" вычитается как шум ТОЛЬКО если у токена есть подтвержденные соцсети И он старше 20м!
-                    # На монетах без соцсетей или <20м 'creator history' = серийный скамер (кейсы JENSEN / STARTPUP)!
+                    # ВАЖНО: 'Large Amount of LP Unlocked' вычитается как шум для canonical pump токенов (как в прибыльном коммите 0d2b1ae)!
+                    _allowed_lp_terms_jev = (
+                        "large amount of lp unlocked", "lp provider", "single lp provider",
+                        "lp not locked", "unlocked lp", "low liquidity", "copycat", "symbol mimic"
+                    ) if is_canonical_pump else ("lp provider", "low amount of lp providers", "low liquidity", "copycat", "symbol mimic")
+
                     _tok_age_rc = (time.time() * 1000 - (pair_data.get("pairCreatedAt") or 0)) / 60000.0 if pair_data.get("pairCreatedAt") else 0.0
-                    if has_socials and _tok_age_rc >= 20.0:
-                        _allowed_lp_terms_jev.append("creator history")
 
                     raw_score = float(rc_data.get("score") or 0.0)
                     penalty_to_ignore = sum(
                         float(rk.get("score", 0) or 0)
                         for rk in (rc_data.get("risks") or [])
                         if any(k in str(rk.get("name", "")).lower() for k in (
-                            "low liquidity", "copycat", "symbol mimic", *_allowed_lp_terms_jev
+                            "low liquidity", "creator history", "copycat", "symbol mimic", *_allowed_lp_terms_jev
                         ))
                     )
                     clean_score = max(0.0, raw_score - penalty_to_ignore)
@@ -1563,8 +1562,10 @@ class GrokJevEngine:
                         rk_lvl = str(rk.get("level") or "").lower()
                         if any(k in rk_name for k in ("low liquidity", "copycat", "symbol mimic", *_allowed_lp_terms_jev)):
                             continue
+                        if is_canonical_pump and any(lp_k in rk_name for lp_k in ("large amount of lp unlocked", "lp not locked", "unlocked lp")):
+                            continue
                         if "creator history" in rk_name:
-                            if not has_socials or _tok_age_rc < 20.0 or rk_lvl == "danger":
+                            if not is_canonical_pump and (not has_socials or _tok_age_rc < 20.0 or rk_lvl == "danger"):
                                 return False, f"rugcheck: creator history risk (серийный создатель скамов без соцсетей / <20м)", _h_stats
                             continue
                         if has_verified_locked_lp and any(lp_k in rk_name for lp_k in ("large amount of lp unlocked", "lp not locked", "unlocked lp")):

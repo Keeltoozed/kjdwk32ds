@@ -1641,7 +1641,9 @@ class Analyzer:
         meme_keywords = ["PEPE", "SHIB", "DOGE", "FLOKI", "BONK", "WIF", "BOME", "POPCAT", "TRUMP", "BIDEN", "ELON", "ELUN", "ELOM", "MUSK",
                          "CLAUDE", "CHATGPT", "DEEPSEEK", "GROK", "GEMINI"]
         if any(keyword in symbol for keyword in meme_keywords) or any(keyword in name for keyword in meme_keywords):
-            if not self._brand_whitelisted(mint):
+            from news_narrative import news_radar
+            _is_narr_meme = bool(news_radar.match_token(symbol, name))
+            if not self._brand_whitelisted(mint) and not mint.endswith("pump") and not _is_narr_meme:
                 _tx5_mc = (pair_data.get("txns") or {}).get("m5", {}) or {}
                 _b5_mc = int(_tx5_mc.get("buys", 0) or 0)
                 _s5_mc = int(_tx5_mc.get("sells", 0) or 0)
@@ -2032,8 +2034,8 @@ class Analyzer:
             # =========================================================================
 
             # 1. Защита от микрованночек, сырых кёрвов и фейковых AMM-пулов
-            _is_raw_curve = dex_id_low in ("pump", "pumpfun")
-            _min_grad_liq = float(getattr(config, "MIN_GRADUATED_LIQ_USD", 7500.0))
+            _is_raw_curve = dex_id_low in ("pump", "pumpfun") or is_pump_curve or mint.endswith("pump") or _is_canonical_pump
+            _min_grad_liq = float(getattr(config, "MIN_GRADUATED_LIQ_USD", 5000.0))
             _min_liq = 1000.0 if _is_raw_curve else _min_grad_liq
             _eff_pool_liq = liq_val if _is_raw_curve else raw_liq
             if _eff_pool_liq < _min_liq and not _is_raw_curve:
@@ -2110,12 +2112,13 @@ class Analyzer:
                 elif _rc_st not in (200, 0, 429):
                     print(f"⚠️ RugCheck API вернул {_rc_st} для {mint[:8]}.")
 
-                # Требуем подтверждённый отчёт RugCheck для ВСЕХ кандидатов (защита от входа вслепую до индексации дев-бандлов):
-                if _rc_st != 200 or not rc_data:
+                # Для кастомных токенов требуем обязательный отчёт RugCheck.
+                # Токены Pump.fun и Narrative Radar НЕ ждут RugCheck (код 400/404 на старте) — как в прибыльном коммите 0d2b1ae:
+                if not _is_canonical_pump and not _is_narr_match and (_rc_st != 200 or not rc_data):
                     return self._deny(
                         mint,
                         "waiting-rugcheck-index",
-                        f"⏳ [SECURITY-WAIT] {symbol} ({mint[:8]}): ожидаем индексации RugCheck (статус {_rc_st}) для проверки холдеров и LP..."
+                        f"⏳ [SECURITY-WAIT] {symbol} ({mint[:8]}): кастомный токен ожидает индексации RugCheck (статус {_rc_st}) для проверки LP..."
                     )
 
                 if rc_data:
@@ -2171,7 +2174,7 @@ class Analyzer:
                         )
 
                     # Для токенов вне bonding curve и вне официального AMM требуем подтвержденный заблокированный LP >= 75%
-                    if not _lp_ok and not _is_canonical_pump:
+                    if not _lp_ok and not _is_canonical_pump and not _is_narr_match:
                         return self._deny(
                             mint,
                             "unlocked-custom-lp",
@@ -2180,19 +2183,18 @@ class Analyzer:
 
                     _rc_raw_score = float(rc_data.get("score") or 0.0)
 
-                    # Безвредный шум RugCheck: низкая ликвидность для молодых пулов (Low Liquidity) и copycat для мемов.
-                    # ВАЖНО: 'Large Amount of LP Unlocked' НИКОГДА не является шумом при отсутствии подтвержденного лока!
-                    _allowed_lp_terms_main = ["lp provider", "low amount of lp providers", "low liquidity"]
-                    # "creator history" вычитается как шум ТОЛЬКО если у токена есть соцсети И возраст >= 20м!
-                    if _links_cnt > 0 and _age_min_pre >= 20.0:
-                        _allowed_lp_terms_main.append("creator history")
+                    # Безвредный шум RugCheck: для launchpad bonding curve / pump tokens вычитаем "Large Amount of LP Unlocked" (как в 0d2b1ae)!
+                    _allowed_lp_terms_main = (
+                        "large amount of lp unlocked", "lp provider", "single lp provider",
+                        "lp not locked", "unlocked lp", "low liquidity", "copycat", "symbol mimic"
+                    ) if (_is_canonical_pump or _is_narr_match) else ("lp provider", "low amount of lp providers", "low liquidity", "copycat", "symbol mimic")
 
                     # Исключаем безвредный шум: низкая ликвидность для молодых пулов, copycat для мемов, и LP контракт пула.
                     _rc_penalty_to_ignore = sum(
                         float(rk.get("score", 0) or 0)
                         for rk in (rc_data.get("risks") or [])
                         if any(k in str(rk.get("name", "")).lower() for k in (
-                            "low liquidity", "copycat", "symbol mimic", *_allowed_lp_terms_main
+                            "low liquidity", "creator history", "copycat", "symbol mimic", *_allowed_lp_terms_main
                         ))
                     )
 
@@ -2200,17 +2202,16 @@ class Analyzer:
                     if _rc_score >= 2000:
                         return self._deny(mint, f"rugcheck-score {_rc_score:.0f}", f"🚫 [АНТИСКАМ] RugCheck Score {_rc_score:.0f} >= 2000 у {mint[:8]} → СКАМ")
 
-                    # Жёсткий фильтр критических опасностей RugCheck (кейсы JENSEN 99% drain, 牛逼 99% drain, AMERICA 87%, DEMOCAT 58.6% drain, SAFU 59% drain)
+                    # Жёсткий фильтр критических опасностей RugCheck
                     for rk in (rc_data.get("risks") or []):
                         _rk_name = str(rk.get("name", "")).lower()
                         _rk_lvl = str(rk.get("level", "")).lower()
-                        if _lp_ok and any(k in _rk_name for k in ("large amount of lp unlocked", "lp not locked", "unlocked lp")):
+                        if (_is_canonical_pump or _is_narr_match or _lp_ok) and any(k in _rk_name for k in ("large amount of lp unlocked", "lp not locked", "unlocked lp")):
                             continue
                         if "creator history" in _rk_name:
-                            if _links_cnt == 0 or _age_min_pre < 20.0 or _rk_lvl == "danger":
-                                return self._deny(mint, "rc-creator-history", f"🚫 [АНТИСКАМ-RC] {symbol} ({mint[:8]}): подозрительная история создателя (creator history на монете без соцсетей/<20м) — блок скама!")
+                            # В коммите 0d2b1ae creator history не блокировал молодые pump токены
                             continue
-                        if _rk_lvl == "danger" and any(k in _rk_name for k in ("single holder", "high ownership", "top 10 holders", "large amount of lp unlocked", "unlocked lp", "freeze authority")):
+                        if _rk_lvl == "danger" and any(k in _rk_name for k in ("single holder", "high ownership", "top 10 holders", "freeze authority")):
                             return self._deny(mint, f"rc-danger {_rk_name[:15]}", f"🚫 [АНТИСКАМ-RC] {symbol} ({mint[:8]}): критический риск RugCheck '{rk.get('name')}' — блок скама!")
 
                     # Проверка холдеров RugCheck
