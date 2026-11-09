@@ -50,7 +50,7 @@ REINVEST_MIN_POOL_LIQ_USD = 7500.0
 SCOUT_SIZE_USD = 4.0
 LOTTERY_SIZE_USD = 4.0
 MAX_CONCURRENT_POSITIONS = 5
-REBUY_COOLDOWN_SEC = 86400.0
+REBUY_COOLDOWN_SEC = 1800.0         # 30 минут кулдаун после закрытия позиции (вместо 24 часов блокировки!)
 
 # === ЖЕСТКОЕ ОГРАНИЧЕНИЕ УБЫТКА (РИСК-МЕНЕДЖМЕНТ) ===
 MAX_DAILY_LOSS_USD = 1000.0
@@ -80,7 +80,7 @@ DD_THROTTLE_START_USD = 15.0
 
 # === ВХОД В ЗРЕЛЫЕ КРИВЫЕ PUMP.FUN ДО МИГРАЦИИ + ЗАЩИТА DEX ===
 SNIPER_ENTRIES_ENABLED = False
-ALLOW_UNGRADUATED_PUMPFUN = False          # ВКЛЮЧЕНО для зрелых кривых: находит ранние ракеты до миграции на DEX
+ALLOW_UNGRADUATED_PUMPFUN = True           # ВКЛЮЧЕНО для зрелых кривых ($24k-$58k): находит ранние ракеты до миграции на DEX
 MIN_PUMP_CURVE_MCAP_USD = 24000.0         # Минимум $24k FDV (уже набрали ~40% кёрва, есть органическая подушка ликвидности)
 MAX_PUMP_CURVE_MCAP_USD = 58000.0         # До $58k FDV (окно максимального разгона перед миграцией на Raydium/PumpSwap)
 JEV_MAX_TICKET_USD = 0.0

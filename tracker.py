@@ -499,22 +499,21 @@ class PaperTracker:
                 if _p.status == "open":
                     print(f"🚫 Отказ: {symbol} уже в рынке (другой контракт, {_k[:10]}). Не удваиваемся в тот же тикер.")
                     return
-                if _p.status == "closed" and _cd > 0:
+                if _p.status == "closed":
                     _xt = float(getattr(_p, "exit_time", 0) or 0)
                     _pnl = float(getattr(_p, "pnl_usd", 0.0) or 0.0)
                     _orig_a = float(getattr(_p, "original_amount_usd", 0.0) or getattr(_p, "amount_usd", 4.0) or 4.0)
-                    _pnl_ratio = (_pnl / _orig_a) if _orig_a > 0 else 0.0
                     _er_up = str(getattr(_p, "exit_reason", "")).upper()
-                    _was_profitable = (
-                        _pnl_ratio >= 0.08
-                        and not any(k in _er_up for k in ("CRASH", "RUG", "HONEYPOT", "EMERGENCY", "BREAKEVEN", "REVERSAL", "STALL", "STAGNANT", "STOP"))
-                    )
-                    _eff_cd = (15 * 60) if _was_profitable else _cd
+                    _max_p_usd = float(getattr(_p, "max_price_usd", 0.0) or 0.0)
+                    _entry_p_usd = float(getattr(_p, "entry_price_usd", 0.0) or 0.0)
+                    _peak_ratio = (_max_p_usd - _entry_p_usd) / _entry_p_usd if _entry_p_usd > 0 else 0.0
+                    _was_runner = (_pnl > 0.0 or _peak_ratio >= 0.20) and not any(k in _er_up for k in ("RUG", "HONEYPOT"))
+                    # Для раннеров (кейс GTA +56%) кулдаун всего 10 мин, для остальных символов 15 мин (вместо 24ч блокировки всего тикера!)
+                    _eff_cd = (10 * 60) if _was_runner else (15 * 60)
                     if _xt and (_now - _xt) < _eff_cd:
-                        _left = (_eff_cd - (_now - _xt)) / 60 if _was_profitable else (_eff_cd - (_now - _xt)) / 3600
-                        _unit = "м" if _was_profitable else "ч"
+                        _left_m = (_eff_cd - (_now - _xt)) / 60.0
                         print(f"⏳ Символьный кулдаун: {symbol} закрыт {_p.pnl_usd:+.2f}$ недавно ({getattr(_p, 'exit_reason', '')}). "
-                              f"Повтор через {_left:.1f}{_unit} — не покупаем свой же выход.")
+                              f"Повтор через {_left_m:.1f}м — даём монете отдышаться.")
                         return
         # БЛОКИРОВКА ПОВТОРНОГО ВХОДА С УМНЫМ КУЛДАУНОМ
         if mint in self.positions:
@@ -531,19 +530,24 @@ class PaperTracker:
             _orig_p = float(getattr(pos, "original_amount_usd", 0.0) or getattr(pos, "amount_usd", 4.0) or 4.0)
             _pnl_ratio_m = (_pnl / _orig_p) if _orig_p > 0 else 0.0
             _er_m_up = str(getattr(pos, "exit_reason", "")).upper()
+            _max_p_m = float(getattr(pos, "max_price_usd", 0.0) or 0.0)
+            _entry_p_m = float(getattr(pos, "entry_price_usd", 0.0) or 0.0)
+            _peak_ratio_m = (_max_p_m - _entry_p_m) / _entry_p_m if _entry_p_m > 0 else 0.0
             _exit_time = float(getattr(pos, "exit_time", 0.0) or pos.entry_time)
             time_since_exit = time.time() - _exit_time
             _was_profitable = (
-                _pnl_ratio_m >= 0.08
-                and not any(k in _er_m_up for k in ("CRASH", "RUG", "HONEYPOT", "EMERGENCY", "BREAKEVEN", "REVERSAL", "STALL", "STAGNANT", "STOP"))
+                (_pnl > 0.0 or _peak_ratio_m >= 0.20)
+                and not any(k in _er_m_up for k in ("CRASH", "RUG", "HONEYPOT"))
             )
             
-            _req_cd = (15 * 60) if _was_profitable else int(float(getattr(config, "REBUY_COOLDOWN_SEC", 86400.0) or 86400.0))
+            # Для профитных раннеров (кейс GTA +56.1%) даем 10м на консолидацию и разрешаем вход во 2-ю волну!
+            # Для минусовых позиций кулдаун 30 минут (вместо 24 часов), чтобы не хоронить монеты на целый день!
+            _req_cd = (10 * 60) if _was_profitable else int(float(getattr(config, "REBUY_COOLDOWN_SEC", 1800.0) or 1800.0))
             if time_since_exit < _req_cd:
                 if _was_profitable:
-                    print(f"⏳ Кулдаун профитной монеты: {symbol} закрыт в +${_pnl:.2f}. Ждем еще {int(_req_cd - time_since_exit)}с перед возможным перезаходом во 2-ю волну.")
+                    print(f"⏳ Кулдаун профитной монеты: {symbol} закрыт в +${_pnl:.2f} (пик +{_peak_ratio_m*100:.0f}%). Ждем еще {int(_req_cd - time_since_exit)}с перед возможным перезаходом во 2-ю волну.")
                 else:
-                    print(f"⏳ Кулдаун: {symbol} закрыт с минусом. Ждем еще {(4*3600 - time_since_exit)/3600:.1f}ч перед входом.")
+                    print(f"⏳ Кулдаун: {symbol} закрыт с минусом. Ждем еще {int((_req_cd - time_since_exit)/60)}м перед входом.")
                 return
                 
             # Если кулдаун прошел, архивируем старую сделку, чтобы не потерять ее из истории PnL
