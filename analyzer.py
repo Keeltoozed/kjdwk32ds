@@ -2056,16 +2056,23 @@ class Analyzer:
                             if isinstance(_m_lp_info, dict):
                                 _m_lp_locked_pct = float(_m_lp_info.get("lpLockedPct", 0) or 0)
                                 _m_lp_burned_pct = float(_m_lp_info.get("lpBurnedPct", 0) or 0)
-                                if _m_lp_locked_pct >= 80.0 or _m_lp_burned_pct >= 80.0:
+                                _m_holders = _m_lp_info.get("holders") or []
+                                _m_has_whale = any(float(h.get("pct", 0) or 0) >= 15.0 for h in _m_holders if isinstance(h, dict))
+                                if (_m_lp_locked_pct >= 80.0 or _m_lp_burned_pct >= 80.0) and not _m_has_whale:
                                     _lp_ok = True
-                                    break
-                                # Проверяем, есть ли индивидуальный кошелек, контролирующий LP пул
-                                for _lph in (_m_lp_info.get("holders") or []):
-                                    if float(_lph.get("pct", 0) or 0) >= 15.0:
-                                        _unlocked_lp_holder_danger = True
+                                elif _m_has_whale:
+                                    _unlocked_lp_holder_danger = True
 
-                    # Для кастомных не-pump токенов или пулов с незалоченным LP — жесткий блок
-                    if not _lp_ok and (not _is_canonical_pump or _unlocked_lp_holder_danger):
+                    # Если пул контролируется индивидуальным кошельком (LP whale >= 15%) — мгновенный блок риска выдергивания пула (кейсы JENSEN / 牛逼)
+                    if _unlocked_lp_holder_danger:
+                        return self._deny(
+                            mint,
+                            "unlocked-custom-lp",
+                            f"🚫 [UNLOCKED-LP-RUG] {symbol} ({mint[:8]}): пул LP удерживается индивидуальным кошельком (>=15%) — риск сноса ликвидности девом (кейсы JENSEN/牛逼/DEMOCAT)!"
+                        )
+
+                    # Для токенов вне bonding curve требуем подтвержденный заблокированный LP >= 80%
+                    if not _lp_ok and not _is_canonical_pump:
                         return self._deny(
                             mint,
                             "unlocked-custom-lp",

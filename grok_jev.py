@@ -1471,27 +1471,27 @@ class GrokJevEngine:
                     if freeze_auth and freeze_auth not in SAFE_AUTHORITIES:
                         return False, f"rugcheck: freeze authority active ({freeze_auth[:8]})", _h_stats
 
-                    # Проверка блокировки LP в пулах (Raydium Lock/Burn >= 80% или протокольный PumpSwap AMM)
-                    target_pair = str(pair_data.get("pairAddress") or "").strip()
-                    _dex_rc_low = str(pair_data.get("dexId") or "").lower()
+                    # Проверка блокировки LP в пулах (Raydium Lock/Burn >= 80% или официальный Pump.fun AMM)
                     has_verified_locked_lp = False
+                    has_unlocked_whale_lp = False
                     for mkt in (rc_data.get("markets") or []):
                         if isinstance(mkt, dict):
-                            mkt_type = str(mkt.get("marketType") or "").lower()
-                            mkt_pubkey = str(mkt.get("pubkey") or "").strip()
                             lp_info = mkt.get("lp") or {}
                             if isinstance(lp_info, dict):
-                                mkt_quote_usd = float(lp_info.get("quoteUSD") or 0.0)
-                                lp_unlocked = float(lp_info.get("lpUnlocked") or 0.0)
                                 lp_locked_pct = float(lp_info.get("lpLockedPct") or 0.0)
                                 lp_burned_pct = float(lp_info.get("lpBurnedPct") or 0.0)
-                                if (lp_locked_pct >= 80.0 or lp_burned_pct >= 80.0) and (mkt_quote_usd >= 2000 or (target_pair and mkt_pubkey == target_pair)):
+                                lp_holders = lp_info.get("holders") or []
+                                _single_lp_whale = any(float(h.get("pct", 0) or 0) >= 15.0 for h in lp_holders if isinstance(h, dict))
+                                if (lp_locked_pct >= 80.0 or lp_burned_pct >= 80.0) and not _single_lp_whale:
                                     has_verified_locked_lp = True
-                                for _lph in (lp_info.get("holders") or []):
-                                    if float(_lph.get("pct", 0) or 0) >= 15.0:
-                                        has_verified_locked_lp = False
+                                elif _single_lp_whale:
+                                    has_unlocked_whale_lp = True
 
-                    # Для неизвестных кастомных токенов (не оканчивающихся на 'pump') или пулов с незалоченным LP — жесткий отказ
+                    # Если пул контролируется индивидуальным кошельком (LP whale >= 15%) — 100% блок риска сноса пула (кейсы JENSEN / 牛逼)
+                    if has_unlocked_whale_lp:
+                        return False, "rugcheck: unlocked LP held by individual wallet (drain risk)", _h_stats
+
+                    # Для токенов вне bonding curve требуем подтвержденный заблокированный/сожженный LP >= 80%
                     if not has_verified_locked_lp and not is_raw_pump_curve:
                         return False, "rugcheck: unverified unlocked LP (lock < 80%)", _h_stats
 

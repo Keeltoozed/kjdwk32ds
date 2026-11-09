@@ -300,7 +300,6 @@ async def fetch_json(url: str, params=None, headers=None, timeout: int = 12,
                 await asyncio.sleep(2.0 + 1.0 * attempt)
             else:
                 await asyncio.sleep(1.0 + 1.0 * attempt)
-    if last_status != 429:
-        if last_status != 429:
-            print(f"🔌 API fail {host}{urlparse(url).path[:50]}: {last_err} (status {last_status})")
+    if last_status not in (429, 400) and "birdeye" not in str(host).lower():
+        print(f"🔌 API fail {host}{urlparse(url).path[:50]}: {last_err} (status {last_status})")
     return last_status, {}

@@ -80,11 +80,11 @@ class MatureExitManager:
         # =========================================================================
         # 1. ЖЕСТКИЙ КОНТРОЛЬ УБЫТКА (EMERGENCY CAP & STOP LOSS) — ПЕРВЫЙ ПРИОРИТЕТ!
         # =========================================================================
-        _emerg_cap = -abs(float(getattr(config, "EMERGENCY_CAP_PCT", -0.105)))
+        _emerg_cap = -abs(float(getattr(config, "EMERGENCY_CAP_PCT", -0.22)))
         if pnl_pct <= _emerg_cap:
             return f"Mature Emergency Cap ({pnl_pct*100:.1f}%)"
 
-        _base_sl = -abs(float(getattr(config, 'STOP_LOSS_PCT', -0.090)))
+        _base_sl = -abs(float(getattr(config, 'STOP_LOSS_PCT', -0.15)))
         _has_organic_bid = False
         _feats = getattr(position, "ml_features", None) or {}
         if isinstance(_feats, dict) and _feats:
@@ -93,11 +93,11 @@ class MatureExitManager:
             _f_links = int(_feats.get("links_count", 0) or (1 if _feats.get("socials") else 0))
             if _f_liq >= 25000.0 and _f_bs >= 1.35 and _f_links >= 1:
                 _has_organic_bid = True
-        _sl = min(_base_sl, -0.105) if _has_organic_bid else _base_sl
+        _sl = min(_base_sl, -0.16) if _has_organic_bid else _base_sl
         if pnl_pct <= _sl:
             _sl_c = int(getattr(position, "sl_confirm_n", 0) or 0) + 1
             position.sl_confirm_n = _sl_c
-            if _sl_c >= 2 or pnl_pct <= -0.100 or minutes_held >= 0.10:
+            if _sl_c >= 2 or pnl_pct <= -0.20 or minutes_held >= 0.75:
                 return f"Mature Stop Loss ({pnl_pct*100:.1f}%)"
         else:
             position.sl_confirm_n = 0
@@ -105,11 +105,11 @@ class MatureExitManager:
         # =========================================================================
         # 2. BREAKEVEN SHIELD (ПРАВИЛО ПРОФИ: ЗЕЛЕНАЯ СДЕЛКА НЕ СТАНОВИТСЯ КРАСНОЙ!)
         # =========================================================================
-        # Если монета брала импульс >= +14%, стоп БЕЗУСЛОВНО переносится в +1.5%..+2.0%!
-        # Никакие -42% (кейс SpaceCoin) математически невозможны!
-        _be_act = float(getattr(config, "BREAKEVEN_PCT", 0.14))
-        if max_pnl_pct >= _be_act and minutes_held >= 0.10:
-            if pnl_pct <= 0.020:
+        # Если монета брала импульс >= +16%, стоп БЕЗУСЛОВНО переносится в +1.5%!
+        # Никакие -42% математически невозможны, и нормальный откат после старта не срезается!
+        _be_act = float(getattr(config, "BREAKEVEN_PCT", 0.16))
+        if max_pnl_pct >= _be_act and minutes_held >= 0.25:
+            if pnl_pct <= 0.015:
                 return f"Mature Breakeven Shield (+{pnl_pct*100:.1f}% locked after peak +{max_pnl_pct*100:.1f}%)"
 
         # Безубыток для мунбэга:
