@@ -1357,6 +1357,19 @@ class GrokJevEngine:
         name = str(base_info.get("name", "")).upper()
         symbol_upper = symbol.upper().strip()
 
+        raw_liq = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
+        fdv = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
+        dex_id = str(pair_data.get("dexId", "")).lower()
+        is_raw_pump_curve = dex_id in ("pump", "pumpfun", "moonshot") or address.endswith("moon")
+        is_pump = address.endswith("pump") or is_raw_pump_curve
+        eff_liq = max(raw_liq, fdv * 0.40) if is_raw_pump_curve else raw_liq
+
+        _tx5 = (pair_data.get("txns") or {}).get("m5", {}) or {}
+        _b5 = int(_tx5.get("buys", 0) or 0)
+        _s5 = int(_tx5.get("sells", 0) or 0)
+        _vol5 = float((pair_data.get("volume") or {}).get("m5", 0) or 0)
+        vol_m5 = _vol5
+
         # 1. Запрещенные ключевые слова в названии / тикере
         bad_words = ["test", "scam", "nigger", "fuck", "pump and dump", "rug", "airdrop", "presale", "honeypot", "drain"]
         if any(w in name.lower() for w in bad_words) or any(w in symbol.lower() for w in bad_words):
@@ -1387,11 +1400,6 @@ class GrokJevEngine:
         has_website = len(websites) > 0
         has_socials = bool(has_twitter or has_tg or has_website or pair_data.get("_socials_unknown"))
 
-        raw_liq = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
-        fdv = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
-        dex_id = str(pair_data.get("dexId", "")).lower()
-        is_raw_pump_curve = dex_id in ("pump", "pumpfun", "moonshot") or address.endswith("moon")
-        is_pump = address.endswith("pump") or is_raw_pump_curve
         if is_raw_pump_curve:
             if not getattr(_c, "ALLOW_UNGRADUATED_PUMPFUN", False):
                 return False, "ungraduated-pump-curve (ждём миграции на DEX с сожжённым LP)", _h_stats
@@ -1401,15 +1409,9 @@ class GrokJevEngine:
                 return False, f"pump-curve-flash-rug (FDV ${fdv:,.0f} < ${_min_c_mc:,.0f})", _h_stats
             if fdv > _max_c_mc:
                 return False, f"pump-curve-migration-cliff (FDV ${fdv:,.0f} > ${_max_c_mc:,.0f})", _h_stats
-        eff_liq = max(raw_liq, fdv * 0.40) if is_raw_pump_curve else raw_liq
 
         # Токены на AMM (PumpSwap / Raydium / Meteora) без соцсетей пускаем ТОЛЬКО при наличии подтвержденного органического потока
         # (в первые минуты миграции DexScreener часто еще не успел подтянуть Twitter/TG, кейсы LAUNCH +793%, JOCKEY +274%, MBAPPE +166%, SPERM +112%)
-        _tx5 = (pair_data.get("txns") or {}).get("m5", {}) or {}
-        _b5 = int(_tx5.get("buys", 0) or 0)
-        _s5 = int(_tx5.get("sells", 0) or 0)
-        _vol5 = float((pair_data.get("volume") or {}).get("m5", 0) or 0)
-        vol_m5 = _vol5
         if not is_raw_pump_curve and not has_socials and eff_liq < 22000.0:
             _v2l = _vol5 / max(eff_liq, 1.0)
             _bs = _b5 / float(max(_s5, 1))

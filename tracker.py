@@ -724,9 +724,9 @@ class PaperTracker:
                 original_amount = (_rem / _rem_frac) if (_rem and _rem_frac > 0) else _rem
                 pos.original_amount_usd = original_amount
 
-            # ХАНИПОД / РАГ / UNSELLABLE: на реальном блокчейне частичные тейки (TP1/TP2)
+            # ХАНИПОД / РАГ / UNSELLABLE / ДРЕЙН ЛИКВИДНОСТИ: на реальном блокчейне частичные тейки (TP1/TP2)
             # физически не исполнились бы! Списываем 100% от ИЗНАЧАЛЬНОГО депозита без иллюзий.
-            if "HONEYPOT" in _r or "UNSELLABLE" in _r or "RUG" in _r:
+            if "HONEYPOT" in _r or "UNSELLABLE" in _r or "RUG" in _r or "LIQUIDITY DROP" in _r or "DRAIN" in _r:
                 pos.pnl_usd = -original_amount - priority_fee_usd
                 pos.exit_price_usd = 0.0
             else:
