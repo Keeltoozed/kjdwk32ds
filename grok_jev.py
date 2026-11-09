@@ -450,7 +450,7 @@ class GrokJevEngine:
             else:
                 age_min = 999.0
 
-        _min_grad_liq = float(getattr(_c, "MIN_GRADUATED_LIQ_USD", 10000.0))
+        _min_grad_liq = 5000.0 if (vol_m5 >= 2500.0 and b5 >= s5) else float(getattr(_c, "MIN_GRADUATED_LIQ_USD", 8000.0))
         if dex_id in ("pump", "pumpfun", "meteoradbc") and not getattr(_c, "ALLOW_UNGRADUATED_PUMPFUN", False):
             return False, "raw-pump-curve (wait for graduation to PumpSwap/Raydium with locked LP)"
         min_liq = 1500.0 if dex_id in ("pump", "pumpfun", "meteoradbc") else _min_grad_liq
@@ -550,11 +550,12 @@ class GrokJevEngine:
         if (b5 + s5) >= 120 and _avg_tx_e < 3.0 and not _is_real_bump_runner_g:
             return False, f"fake-bump-wash-bot avg ${_avg_tx_e:.2f} < $3 across {b5+s5} m5 txns"
 
-        # Защита от слитых ниже миграции выпускников Pump.fun (кейс SHANE FDV $35.8k, но пускаем PERCOLATOR / LOWCAP $34.9k / MEME $40k с живым потоком)
+        # Защита от слитых ниже миграции выпускников Pump.fun (кейс SHANE FDV $35.8k, но пускаем отскоки и живой поток)
         if mint.endswith("pump") and dex_id not in ("pump", "pumpfun") and 0 < fdv_mc < 46000.0:
-            _is_real_dump = (fdv_mc < 12000.0) or (s5 > int(b5 * 1.25) and m5 < -5.0)
+            _is_rebounding = (m5 >= 8.0 and b5 >= int(s5 * 1.15) and vol_m5 >= 2500.0)
+            _is_real_dump = not _is_rebounding and ((fdv_mc < 12000.0) or (s5 > int(b5 * 1.25) and m5 < -5.0))
             _is_active_grad = (vol_m5 >= 2000.0 and b5 >= int(s5 * 1.00) and m5 >= -5.0)
-            if _is_real_dump or not _is_active_grad:
+            if _is_real_dump or not (_is_active_grad or _is_rebounding):
                 return False, f"post-mig-dumped-fdv ${fdv_mc:,.0f} < $46k"
 
         # 2.4. Защита от безымянных рагпулов без соцсетей на ВСЕХ возрастах (STONKS 12.5м, IPHONEDUO 28.2м, scamsem 25.8м)
@@ -568,14 +569,12 @@ class GrokJevEngine:
         _is_organic_stealth = False
         if _links_cnt_g == 0 and not _soc_unk_g:
             _is_organic_stealth = (
-                eff_liq >= 10000.0
-                and vol_m5 >= 1200.0
-                and _vol_liq_ratio_g <= 5.5
-                and (
+                (eff_liq >= 6000.0 and vol_m5 >= 1200.0 and _vol_liq_ratio_g <= 6.5 and (
                     (b5 >= 12 and b5 >= s5 * 1.05) or
-                    (b5 >= 8 and s5 <= 30 and m5 >= 2.0 and _avg_tx_g >= 20.0) or
-                    (vol_m5 >= 6000.0 and b5 >= s5)
-                )
+                    (b5 >= 8 and s5 <= 30 and m5 >= 2.0 and _avg_tx_g >= 18.0) or
+                    (vol_m5 >= 5000.0 and b5 >= s5)
+                )) or
+                (vol_m5 >= 15000.0 and b5 >= 80 and b5 >= int(s5 * 1.15))
             )
             if not _is_organic_stealth:
                 _sub_reason_g = f"no-socials-mature-rug (age {age_min:.0f}m >= 12m, 0 socials/websites)" if age_min >= 12.0 else f"no-socials-rug (age {age_min:.1f}m, 0 socials/websites, v/l {_vol_liq_ratio_g:.1f}x)"
@@ -698,7 +697,7 @@ class GrokJevEngine:
         mcap = fdv_mc
         if is_pump and mcap > 0 and mcap < 5000.0:
             return False, f"pump-curve-too-early mcap ${mcap:,.0f} < $5k (high dev dump trap risk)"
-        min_mcap = 5000.0 if (dex_id in ("pump", "pumpfun")) else float(getattr(_c, "JEV_MIN_MCAP_USD", 10000.0))
+        min_mcap = 5000.0 if (dex_id in ("pump", "pumpfun") or vol_m5 >= 2500.0) else float(getattr(_c, "JEV_MIN_MCAP_USD", 7500.0))
         max_mcap = float(getattr(_c, "JEV_MAX_MCAP_USD", 1800000.0))
         if mcap > 0 and not (min_mcap <= mcap <= max_mcap):
             return False, f"mcap-out-of-bounds ${mcap:,.0f} not in [${min_mcap:,.0f}, ${max_mcap:,.0f}]"
@@ -1375,7 +1374,8 @@ class GrokJevEngine:
                                   "AMAZON", "MICROSOFT", "GOOGLE", "APPLE"]
         # Проверяем точное совпадение тикера ИЛИ имя содержит бренд
         _name_has_brand = any(k in name for k in corporate_scam_keywords)
-        if any(k == symbol_upper for k in corporate_scam_keywords) or _name_has_brand:
+        _is_high_volume_corp = (eff_liq >= 10000.0 and _vol5 >= 3000.0 and _b5 >= _s5) or (_vol5 >= 10000.0 and _b5 >= _s5)
+        if (any(k == symbol_upper for k in corporate_scam_keywords) or _name_has_brand) and not _is_high_volume_corp:
             return False, f"corporate-brand-mimic {symbol_upper}", _h_stats
 
         # 2. Аудит соцсетей и анонимности создателя
@@ -1409,6 +1409,7 @@ class GrokJevEngine:
         _b5 = int(_tx5.get("buys", 0) or 0)
         _s5 = int(_tx5.get("sells", 0) or 0)
         _vol5 = float((pair_data.get("volume") or {}).get("m5", 0) or 0)
+        vol_m5 = _vol5
         if not is_raw_pump_curve and not has_socials and eff_liq < 22000.0:
             _v2l = _vol5 / max(eff_liq, 1.0)
             _bs = _b5 / float(max(_s5, 1))
@@ -1420,8 +1421,9 @@ class GrokJevEngine:
             if _v2l > 2.8 and _bs < 1.5 and not _is_organic_no_soc:
                 return False, f"anon-wash-churn-trap (0 socials, liq ${eff_liq:,.0f}, vol5/liq {_v2l:.1f}x, b/s {_bs:.2f})", _h_stats
         _is_organic_flow = (
-            (_b5 >= 12 and _b5 >= _s5 and _vol5 >= 2000.0 and eff_liq >= float(getattr(_c, "MIN_GRADUATED_LIQ_USD", 7500.0)))
-            or (_b5 >= 35 and _b5 >= _s5 * 1.15 and eff_liq >= 10000.0)
+            (_b5 >= 12 and _b5 >= _s5 and _vol5 >= 1500.0 and eff_liq >= 5000.0)
+            or (_b5 >= 25 and _b5 >= _s5 * 1.10 and eff_liq >= 6000.0)
+            or (_vol5 >= 12000.0 and _b5 >= _s5)
         )
 
         if not is_raw_pump_curve and not has_socials and not _is_organic_flow:
@@ -1467,12 +1469,35 @@ class GrokJevEngine:
                     if freeze_auth and freeze_auth not in SAFE_AUTHORITIES:
                         return False, f"rugcheck: freeze authority active ({freeze_auth[:8]})", _h_stats
 
-                    # Очищенный score RugCheck: вычитаем безвредный шум и AMM LP пула для bonding curve / pump tokens.
-                    _is_pump_orig_jev = is_canonical_pump
+                    # Проверка блокировки LP в пулах (Raydium Lock/Burn >= 80% или протокольный PumpSwap AMM)
+                    target_pair = str(pair_data.get("pairAddress") or "").strip()
+                    _dex_rc_low = str(pair_data.get("dexId") or "").lower()
+                    has_verified_locked_lp = False
+                    for mkt in (rc_data.get("markets") or []):
+                        if isinstance(mkt, dict):
+                            mkt_type = str(mkt.get("marketType") or "").lower()
+                            mkt_pubkey = str(mkt.get("pubkey") or "").strip()
+                            lp_info = mkt.get("lp") or {}
+                            if isinstance(lp_info, dict):
+                                mkt_quote_usd = float(lp_info.get("quoteUSD") or 0.0)
+                                lp_unlocked = float(lp_info.get("lpUnlocked") or 0.0)
+                                lp_locked_pct = float(lp_info.get("lpLockedPct") or 0.0)
+                                lp_burned_pct = float(lp_info.get("lpBurnedPct") or 0.0)
+                                if (lp_locked_pct >= 80.0 or lp_burned_pct >= 80.0) and (mkt_quote_usd >= 2000 or (target_pair and mkt_pubkey == target_pair)):
+                                    has_verified_locked_lp = True
+                            if mkt_type in ("pump_fun_amm", "pump_amm"):
+                                has_verified_locked_lp = True
+
+                    # Для неизвестных кастомных токенов (не оканчивающихся на 'pump') требуем подтвержденный заблокированный LP >= 80%!
+                    if not is_canonical_pump and not has_verified_locked_lp:
+                        return False, "rugcheck: custom token without verified locked LP (lock < 80%)", _h_stats
+
+                    # Очищенный score RugCheck: вычитаем безвредный шум и AMM LP пула для bonding curve / pump tokens / проверенных пулов с залоченным LP.
+                    _lp_noise_allowed = bool(is_canonical_pump or has_verified_locked_lp)
                     _allowed_lp_terms_jev = (
                         "large amount of lp unlocked", "lp provider", "single lp provider",
                         "lp not locked", "unlocked lp"
-                    ) if _is_pump_orig_jev else ("lp provider", "low liquidity")
+                    ) if _lp_noise_allowed else ("lp provider", "low liquidity")
 
                     raw_score = float(rc_data.get("score") or 0.0)
                     penalty_to_ignore = sum(
@@ -1492,37 +1517,12 @@ class GrokJevEngine:
                         rk_lvl = str(rk.get("level") or "").lower()
                         if any(k in rk_name for k in ("low liquidity", "creator history", "copycat", "symbol mimic", *_allowed_lp_terms_jev)):
                             continue
-                        if _is_pump_orig_jev and any(lp_k in rk_name for lp_k in ("large amount of lp unlocked", "lp not locked", "unlocked lp")):
+                        if _lp_noise_allowed and any(lp_k in rk_name for lp_k in ("large amount of lp unlocked", "lp not locked", "unlocked lp")):
                             continue
                         if rk_lvl == "danger" and "creator history" not in rk_name:
                             return False, f"rugcheck: critical danger risk '{rk.get('name')}'", _h_stats
                         if any(k in rk_name for k in ("single holder", "high ownership", "top 10 holders")) and rk_lvl == "danger":
                             return False, f"rugcheck: critical hazard '{rk.get('name')}'", _h_stats
-
-                    # Проверка пулов и блокировки LP для не-pump токенов
-                    target_pair = str(pair_data.get("pairAddress") or "").strip()
-                    _dex_rc_low = str(pair_data.get("dexId") or "").lower()
-                    has_verified_locked_lp = False
-                    for mkt in (rc_data.get("markets") or []):
-                        if isinstance(mkt, dict):
-                            mkt_pubkey = str(mkt.get("pubkey") or "").strip()
-                            lp_info = mkt.get("lp") or {}
-                            if isinstance(lp_info, dict):
-                                mkt_quote_usd = float(lp_info.get("quoteUSD") or 0.0)
-                                lp_unlocked = float(lp_info.get("lpUnlocked") or 0.0)
-                                lp_locked_pct = float(lp_info.get("lpLockedPct") or 0.0)
-                                lp_burned_pct = float(lp_info.get("lpBurnedPct") or 0.0)
-                                if (lp_locked_pct >= 80.0 or lp_burned_pct >= 80.0) and (mkt_quote_usd >= 2000 or (target_pair and mkt_pubkey == target_pair)):
-                                    has_verified_locked_lp = True
-                                _is_target = bool(target_pair and mkt_pubkey == target_pair)
-                                # Для канонического выпускника ...pump на любом DEX не блокируем сделку из-за стороннего арбитражного DLMM-пула или задержки индексации сожжения
-                                if not is_canonical_pump and (_is_target or mkt_quote_usd >= 2000):
-                                    if lp_unlocked > 0 and max(lp_locked_pct, lp_burned_pct) < 80.0:
-                                        return False, f"rugcheck: LP not locked ({lp_locked_pct:.1f}%)", _h_stats
-
-                    # Для неизвестных кастомных токенов (не оканчивающихся на 'pump') требуем подтвержденный заблокированный LP >= 80%!
-                    if not is_canonical_pump and not has_verified_locked_lp:
-                        return False, "rugcheck: custom token without verified locked LP (lock < 80%)", _h_stats
 
                     # Проверка держателей и дева (Holders & Sybil analysis)
                     holders = rc_data.get("topHolders", []) or []

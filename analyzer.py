@@ -1557,7 +1557,20 @@ class Analyzer:
                                   "NVDA", "NVIDIA", "GOOG", "AMZN", "META", "NFLX", "ANTHROPIC", "OPENAI", "PERPLEXITY"]
         if any(keyword in symbol for keyword in corporate_scam_keywords) or any(keyword in name for keyword in corporate_scam_keywords):
             if not self._brand_whitelisted(mint):
-                return self._deny(mint, "mimic-corp-scam", f"🚫 Мусор: Токен {symbol} мимикрирует под корпоративный бренд. Это 100% scam.")
+                _tx5_corp = (pair_data.get("txns") or {}).get("m5", {}) or {}
+                _b5_corp = int(_tx5_corp.get("buys", 0) or 0)
+                _s5_corp = int(_tx5_corp.get("sells", 0) or 0)
+                _v5_corp = float((pair_data.get("volume") or {}).get("m5", 0) or 0)
+                _lq_corp = float((pair_data.get("liquidity", {}) or {}).get("usd", 0) or 0)
+                _is_valid_corp_runner = (
+                    (_v5_corp >= 4000.0 and _b5_corp >= _s5_corp and _lq_corp >= 10000.0) or
+                    (_v5_corp >= 2500.0 and _b5_corp >= int(_s5_corp * 1.10) and _lq_corp >= 12000.0) or
+                    (_v5_corp >= 10000.0 and _b5_corp >= _s5_corp)
+                )
+                if _is_valid_corp_runner:
+                    print(f"🔥 [CORP-MEME-RUNNER] {symbol} ({mint[:8]}): подтвержденный пародийный мем (b/s {_b5_corp}/{_s5_corp}, vol5 ${_v5_corp:,.0f}) — пропуск.")
+                else:
+                    return self._deny(mint, "mimic-corp-scam", f"🚫 Мусор: Токен {symbol} мимикрирует под корпоративный бренд без объема. Это 100% scam.")
 
         meme_keywords = ["PEPE", "SHIB", "DOGE", "FLOKI", "BONK", "WIF", "BOME", "POPCAT", "TRUMP", "BIDEN", "ELON", "ELUN", "ELOM", "MUSK",
                          "CLAUDE", "CHATGPT", "DEEPSEEK", "GROK", "GEMINI"]
@@ -1656,9 +1669,10 @@ class Analyzer:
                 f"🚫 [LARGE-CAP-SKIP] {symbol} ({mint[:8]}): FDV ${_fdv_chk_pre:,.0f} > $1.8M — ракета уже тяжёлая.",
             )
         if mint.endswith("pump") and _dex_pre_early not in ("pump", "pumpfun") and 0 < _fdv_chk_pre < 46000.0:
-            _is_real_dump = (_fdv_chk_pre < 12000.0) or (_s5_pre > int(_b5_pre * 1.25) and _m5 < -5.0)
+            _is_rebounding = (_m5 >= 8.0 and _b5_pre >= int(_s5_pre * 1.15) and _vm5_pre >= 2500.0)
+            _is_real_dump = not _is_rebounding and ((_fdv_chk_pre < 12000.0) or (_s5_pre > int(_b5_pre * 1.25) and _m5 < -5.0))
             _is_active_grad = (_vm5_pre >= 2000.0 and _b5_pre >= int(_s5_pre * 1.00) and _m5 >= -4.0)
-            if _is_real_dump or not _is_active_grad:
+            if _is_real_dump or not (_is_active_grad or _is_rebounding):
                 return self._deny(
                     mint,
                     f"post-mig-dumped ${_fdv_chk_pre:.0f}<$46k",
@@ -1814,7 +1828,10 @@ class Analyzer:
         # Разрешаем сильный пробой покупателями (до +120% при 10%+ перевесе покупателей b5/s5 >= 1.10)
         # либо остывающий откат (m1 <= -1.0%). Блокируем чистую покупку хая без перевеса покупателей!
         if _m5 > _max_entry_m5:
-            _is_strong_buyer_breakout = (_m5 <= 120.0 and _b5_pre >= int(_s5_pre * 1.10) and _vm5_pre >= 3500.0 and (_b5_pre + _s5_pre) >= 20)
+            _is_strong_buyer_breakout = (
+                (_m5 <= 200.0 and _b5_pre >= int(_s5_pre * 1.20) and _vm5_pre >= 8000.0 and (_b5_pre - _s5_pre) >= 30) or
+                (_m5 <= 120.0 and _b5_pre >= int(_s5_pre * 1.10) and _vm5_pre >= 3500.0 and (_b5_pre + _s5_pre) >= 20)
+            )
             _is_cooling_pullback = (_m1 <= -1.0 and _m5 <= 90.0 and _b5_pre >= _s5_pre * 1.05)
             if not (_is_strong_buyer_breakout or _is_cooling_pullback):
                 return self._deny(
@@ -1863,19 +1880,19 @@ class Analyzer:
             _vol_liq_r = (_vm5_pre / max(_raw_liq_chk, 1.0)) if _raw_liq_chk > 0 else 0.0
             _txns_tot = _b5_pre + _s5_pre
             _is_organic_stealth = (
-                _raw_liq_chk >= 10000.0
+                _raw_liq_chk >= 6000.0
                 and _vm5_pre >= 1200.0
-                and _vol_liq_r <= 5.5
+                and _vol_liq_r <= 6.5
                 and (
                     (_b5_pre >= 12 and _b5_pre >= _s5_pre * 1.05) or
-                    (_b5_pre >= 8 and _s5_pre <= 30 and _m5 >= 2.0 and _avg_tx_pre >= 20.0) or
-                    (_vm5_pre >= 6000.0 and _b5_pre >= _s5_pre)
+                    (_b5_pre >= 8 and _s5_pre <= 30 and _m5 >= 2.0 and _avg_tx_pre >= 18.0) or
+                    (_vm5_pre >= 5000.0 and _b5_pre >= _s5_pre)
                 )
             )
             _is_viral_stealth = (
-                _vm5_pre >= 25000.0
-                and _b5_pre >= 150
-                and _b5_pre >= int(_s5_pre * 1.20)
+                _vm5_pre >= 15000.0
+                and _b5_pre >= 80
+                and _b5_pre >= int(_s5_pre * 1.15)
             )
             if not (_is_organic_stealth or _is_viral_stealth):
                 _sub_reason = f"no-socials-mature {_age_min_pre:.0f}m" if _age_min_pre >= 12.0 else f"no-socials-dev-rug {_age_min_pre:.0f}m"
@@ -2016,14 +2033,40 @@ class Analyzer:
                     if freeze_authority and freeze_authority not in SAFE_AUTHORITIES:
                         return self._deny(mint, "freeze-authority-scam", f"🚫 [АНТИСКАМ] Freeze Authority у ДЕВ-кошелька {freeze_authority[:8]} у {mint[:8]} → СКАМ")
 
+                    # 1. Проверяем блокировку LP в пулах (Raydium Lock/Burn >= 80% или протокольный PumpSwap AMM)
+                    _lp_ok = False
+                    for _m in (rc_data.get("markets") or []):
+                        if isinstance(_m, dict):
+                            _m_type = str(_m.get("marketType") or "").lower()
+                            _m_lp_info = _m.get("lp") or {}
+                            if isinstance(_m_lp_info, dict):
+                                _m_lp_locked_pct = float(_m_lp_info.get("lpLockedPct", 0) or 0)
+                                _m_lp_burned_pct = float(_m_lp_info.get("lpBurnedPct", 0) or 0)
+                                if _m_lp_locked_pct >= 80.0 or _m_lp_burned_pct >= 80.0:
+                                    _lp_ok = True
+                                    break
+                            if _m_type in ("pump_fun_amm", "pump_amm"):
+                                _lp_ok = True
+                                break
+
+                    # Для кастомных не-pump токенов на ЛЮБОМ DEX требуем подтвержденный заблокированный/сожжённый LP >= 80%!
+                    if not _is_canonical_pump and not _lp_ok:
+                        return self._deny(
+                            mint,
+                            "unlocked-custom-lp",
+                            f"🚫 [CUSTOM-LP-RUG] {symbol} ({mint[:8]}): кастомный токен на {_dex_low_main} без сожжённого/заблокированного LP (<80%) — риск сноса пула (кейсы DEMOCAT/SAFU)!"
+                        )
+
                     _rc_raw_score = float(rc_data.get("score") or 0.0)
 
-                    # Для launchpad bonding curve RugCheck начисляет шум за AMM LP контракт пула.
+                    # Для launchpad bonding curve или пулов с подтверждённым сожжением/локом LP (PumpSwap AMM, Raydium lock >= 80%)
+                    # RugCheck начисляет 11000 шум за AMM LP контракт пула.
                     # ВАЖНО: концентрацию дева и китов ("single holder", "top 10 holders") НИКОГДА не вычитаем как шум!
+                    _lp_noise_allowed = bool(_is_canonical_pump or _lp_ok)
                     _allowed_lp_terms_main = (
                         "large amount of lp unlocked", "lp provider", "single lp provider",
                         "lp not locked", "unlocked lp"
-                    ) if _is_canonical_pump else ("lp provider", "low liquidity")
+                    ) if _lp_noise_allowed else ("lp provider", "low liquidity")
 
                     # Исключаем безвредный шум: низкая ликвидность для молодых пулов, copycat для мемов, и LP контракт пула.
                     _rc_penalty_to_ignore = sum(
@@ -2042,29 +2085,10 @@ class Analyzer:
                     for rk in (rc_data.get("risks") or []):
                         _rk_name = str(rk.get("name", "")).lower()
                         _rk_lvl = str(rk.get("level", "")).lower()
-                        if _is_canonical_pump and any(k in _rk_name for k in ("large amount of lp unlocked", "lp not locked", "unlocked lp")):
+                        if _lp_noise_allowed and any(k in _rk_name for k in ("large amount of lp unlocked", "lp not locked", "unlocked lp")):
                             continue
                         if _rk_lvl == "danger" and any(k in _rk_name for k in ("single holder", "high ownership", "top 10 holders", "large amount of lp unlocked", "freeze authority")):
                             return self._deny(mint, f"rc-danger {_rk_name[:15]}", f"🚫 [АНТИСКАМ-RC] {symbol} ({mint[:8]}): критический риск RugCheck '{rk.get('name')}' — блок скама!")
-
-                    # Для кастомных не-pump токенов (не оканчивающихся на 'pump' и не на сырой кривой pumpfun):
-                    # на ЛЮБОМ DEX (PumpSwap, Raydium, Meteora) требуем подтвержденный заблокированный/сожжённый LP >= 80%!
-                    if not _is_canonical_pump:
-                        _lp_ok = False
-                        for _m in (rc_data.get("markets") or []):
-                            if isinstance(_m, dict):
-                                _m_lp_info = _m.get("lp") or {}
-                                _m_lp_locked_pct = float(_m_lp_info.get("lpLockedPct", 0) or 0)
-                                _m_lp_burned_pct = float(_m_lp_info.get("lpBurnedPct", 0) or 0)
-                                if _m_lp_locked_pct >= 80.0 or _m_lp_burned_pct >= 80.0:
-                                    _lp_ok = True
-                                    break
-                        if not _lp_ok:
-                            return self._deny(
-                                mint,
-                                "unlocked-custom-lp",
-                                f"🚫 [CUSTOM-LP-RUG] {symbol} ({mint[:8]}): кастомный токен на {_dex_low_main} без сожжённого/заблокированного LP (<80%) — риск сноса пула (кейсы DEMOCAT/SAFU)!"
-                            )
 
                     # Проверка холдеров RugCheck
                     top_holders = rc_data.get("topHolders") or []
