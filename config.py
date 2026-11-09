@@ -62,8 +62,8 @@ INFANT_DUMP_PCT = -0.160       # Срез рага на 1-й минуте при
 
 # === ФИЛЬТРЫ ВХОДА (ОТСЕКАЮТ ВЕРШИНЫ И ПАДАЮЩИЕ НОЖИ) ===
 MAX_ENTRY_H1_PCT = 350.0       # Запрет входа в перегретые пампы > +350% за 1ч (строго для всех токенов > 4м!)
-MAX_ENTRY_M5_PCT = 45.0        # Потолок m5: допускаем сильный импульс до +45% (не срезаем взлетающие ракеты вроде FLOAT +29.7%)
-MAX_ENTRY_M1_PCT = 12.0        # Вход в импульс: до +12.0% (до +25% при высоком спросе покупателей)
+MAX_ENTRY_M5_PCT = 65.0        # Потолок m5: допускаем сильный импульс до +65% (до +150% при прорыве объема)
+MAX_ENTRY_M1_PCT = 25.0        # Вход в импульс: до +25.0% (до +35% при высоком спросе покупателей)
 REQUIRE_SOCIALS_MIN_AGE_MIN = 8.0
 
 STREAK_COOLDOWN_ENABLED = False
@@ -127,8 +127,8 @@ PUMP_XGB_ENABLED = False
 RAY_XGB_ENABLED = False
 ROCKET_XGB_ENABLED = True
 ROCKET_XGB_STAGE1_THRESHOLD = 8.0    # Первичный отсев в 0мс (отсекает мертвецов 2-7%)
-ROCKET_XGB_FINAL_THRESHOLD = 18.0    # Финальный порог (отсекает шлак < 18%, пропускает ракеты 20-80%)
-ROCKET_XGB_THRESHOLD = 18.0
+ROCKET_XGB_FINAL_THRESHOLD = 22.0    # Финальный порог (отсекает шлак < 22%, пропускает уверенные ракеты 25-88%)
+ROCKET_XGB_THRESHOLD = 22.0
 
 STALL_TIMER_SEC = 210.0   # 3.5 минуты (быстрый срез стоячего минуса без затягивания убытка до 13м)
 STALL_MAX_LOSS_PCT = -0.075
@@ -149,7 +149,7 @@ SOLANA_MIN_AGE_MIN = 0.25       # Разрешаем молодые ракеты
 SOLANA_MAX_AGE_HOURS = 4.0       # До 4 часов (не срезаем развивающиеся ракеты на пике тренда)
 SOLANA_MAX_AGE_MIN = 240.0       # Торгуем активные монеты до 4 часов
 JEV_MAX_AGE_MIN = 240.0          # В GROK-JEV активные монеты до 4 часов
-JEV_MAX_M1_ENTRY_PCT = 8.0
+JEV_MAX_M1_ENTRY_PCT = 25.0         # Допускаем живой импульс свечи до +25% на 1м при входе
 
 SCALP_TIMEOUT_MIN = 10.0
 STAGNANT_LOSS_MIN = 9.0
@@ -197,7 +197,7 @@ JEV_MAX_DEV_STILL_LOADED = 0.35
 
 JEV_BID_THE_FLUSH_ENABLED = True
 JEV_STOP_UNDER_WICK_ENABLED = True
-JEV_MAX_M1_ENTRY_PCT = 8.0       # Вход в консолидацию/откат: не покупаем вершины 1м свечей > +8.0%
+JEV_MAX_M1_ENTRY_PCT = 25.0         # Допускаем живой импульс свечи до +25% на 1м при входе       # Вход в консолидацию/откат: не покупаем вершины 1м свечей > +8.0%
 JEV_DEFAULT_WICK_STOP_PCT = -0.100
 
 BIRDEYE_API_KEY = os.getenv("BIRDEYE_API_KEY", "")

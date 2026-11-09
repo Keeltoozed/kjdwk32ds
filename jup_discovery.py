@@ -403,11 +403,11 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
     jup_price = await JupiterAPI.get_price(mint)
     if ds_price > 0 and jup_price and jup_price > 0:
         ratio = max(ds_price, jup_price) / min(ds_price, jup_price)
-        if ratio > 1.09:
-            print(f"🚫 [{source_tag}-PRICE-MISMATCH] {_sym_tmp} ({mint[:8]}): Jupiter (${jup_price:.8f}) vs Dex (${ds_price:.8f}) расхождение {ratio:.2f}x (>1.09x) — блок от ложного стопа.")
+        if ratio > 1.35:
+            print(f"🚫 [{source_tag}-PRICE-MISMATCH] {_sym_tmp} ({mint[:8]}): Jupiter (${jup_price:.8f}) vs Dex (${ds_price:.8f}) расхождение {ratio:.2f}x (>1.35x) — блок от ложного стопа.")
             return False
-        if jup_price < ds_price * 0.90:
-            analyzer._deny(mint, "jup-live-dump >10%", f"🚫 [{source_tag}-LIVE-DUMP] {_sym_tmp} ({mint[:8]}): живая котировка Jupiter (${jup_price:.8f}) уже ниже DexScreener (${ds_price:.8f}) на {(1.0 - jup_price/ds_price)*100:.1f}% [>10%] — слив в процессе!")
+        if jup_price < ds_price * 0.82:
+            analyzer._deny(mint, "jup-live-dump >18%", f"🚫 [{source_tag}-LIVE-DUMP] {_sym_tmp} ({mint[:8]}): живая котировка Jupiter (${jup_price:.8f}) уже ниже DexScreener (${ds_price:.8f}) на {(1.0 - jup_price/ds_price)*100:.1f}% [>18%] — слив в процессе!")
             return False
         price = jup_price
     elif ds_price > 0:
@@ -547,12 +547,12 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
                 return False
             _jup_live_px = await JupiterAPI.get_price(mint)
             if _jup_live_px and _jup_live_px > 0 and price > 0:
-                if _jup_live_px < price * 0.975:
+                if _jup_live_px < price * 0.82:
                     print(f"🚫 [{source_tag}-LIVE-DUMP] {_sym_tmp} ({mint[:8]}): живая цена Jupiter (${_jup_live_px:.8f}) уже на {(1.0 - _jup_live_px / price) * 100:.1f}% ниже DexScreener (${price:.8f}) — обвал в моменте, отмена!")
                     return False
                 _jup_ratio = max(_jup_live_px, price) / min(_jup_live_px, price)
-                if _jup_ratio > 1.055:
-                    print(f"🚫 [{source_tag}-PRICE-MISMATCH] {_sym_tmp} ({mint[:8]}): Jupiter vs сигнал расхождение {_jup_ratio:.2f}x (>1.055x) — отмена!")
+                if _jup_ratio > 1.35:
+                    print(f"🚫 [{source_tag}-PRICE-MISMATCH] {_sym_tmp} ({mint[:8]}): Jupiter vs сигнал расхождение {_jup_ratio:.2f}x (>1.35x) — отмена!")
                     return False
                 price = _jup_live_px
                 if _wick_stop_price and _wick_pct:

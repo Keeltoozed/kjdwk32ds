@@ -933,9 +933,9 @@ class GrokJevEngine:
         # Если токен моложе 3м, DexScreener часто отдаёт m1 == m5 (одна первая свеча).
         _m1_is_phantom = (_age_m < 3.0 and abs(m5) > 1.0 and abs(m1) > 0 and abs(m1 / max(abs(m5), 0.01) - 1.0) < 0.08)
         _strong_breakout = (b5 >= 15 and b5 >= s5 * 1.10 and vol5 >= 3000.0)
-        _max_m1 = 22.0 if _strong_breakout else min(float(getattr(_c, "JEV_MAX_M1_ENTRY_PCT", 8.0)), 12.0)
-        _cfg_m5 = float(getattr(_c, "MAX_ENTRY_M5_PCT", 28.0))
-        _max_m5_cap = 120.0 if _strong_breakout else _cfg_m5
+        _max_m1 = 35.0 if _strong_breakout else float(getattr(_c, "JEV_MAX_M1_ENTRY_PCT", 25.0))
+        _cfg_m5 = float(getattr(_c, "MAX_ENTRY_M5_PCT", 45.0))
+        _max_m5_cap = 150.0 if _strong_breakout else max(_cfg_m5, 60.0)
         if m5 > _max_m5_cap:
             return False, -0.14, 0.0, f"fomo-spike (m5 {m5:+.1f}% > +{_max_m5_cap:.0f}%) — buying local top, wait for reset"
         if m1 > _max_m1 and not _m1_is_phantom:
@@ -948,18 +948,17 @@ class GrokJevEngine:
         if _liq_usd > 0 and _liq_usd < _min_liq:
             return False, -0.14, 0.0, f"thin-liquidity (${_liq_usd:,.0f} < ${_min_liq:,.0f}) — slippage/dump risk"
 
-        # 2. Защита от покупки затухающей свечи: сильный тренд (m5 >= +12%) допускает ретест до -5.5%,
-        # но слабая монета (m5 < +12%) с красной 1м свечой (< -2.5%) — это умирающий отскок, ведущий в стоп!
-        _min_flush_m1 = -5.5 if (m5 >= 12.0 and b5 >= s5 * 1.15) else -2.5
+        # 2. Защита от покупки затухающей свечи: допускаем нормальный здоровый откат до -10%
+        _min_flush_m1 = -10.0 if (m5 >= 8.0 and b5 >= s5 * 1.05) else -6.0
         if _m1_known and m1 < _min_flush_m1:
             return False, -0.14, 0.0, f"flush-dump (m1 {m1:+.1f}% < {_min_flush_m1:+.1f}%) — falling knife / weak rollover"
 
         # 3. Проверка давления продавцов: допускаем небольшой перевес на самом откате
-        if s5 > 8 and b5 < int(s5 * 0.80):
+        if s5 > 12 and b5 < int(s5 * 0.70):
             return False, -0.14, 0.0, f"sellers-dominating ({b5}b/{s5}s) — sellers active, wait for buyer absorption"
 
         # 4. Монета не должна стоять мёртвым флетом
-        if (_m1_known and m1 <= -3.5 and m5 < 1.5) or (not _m1_known and m5 < 1.2):
+        if (_m1_known and m1 <= -6.0 and m5 < 1.0) or (not _m1_known and m5 < 0.5):
             return False, -0.14, 0.0, f"flat-coin (m1 {m1:+.1f}%, m5 {m5:+.1f}%) — price standing still, waiting for live impulse"
 
         # 3.2. ПОДТВЕРЖДЕНИЕ ТРЕНДА ПО СОБСТВЕННОЙ ИСТОРИИ ЦЕН (DexScreener m1/m5 запаздывают на минуту и больше)
@@ -1943,12 +1942,12 @@ class GrokJevEngine:
                 if _dex_fin not in ("pump", "pumpfun"):
                     _jup_live_px = await JupiterAPI.get_price(address)
                     if _jup_live_px and _jup_live_px > 0 and price > 0:
-                        if _jup_live_px < price * 0.975:
-                            print(f"🚫 [JEV-LIVE-DUMP] {symbol} ({address[:8]}): живая цена Jupiter (${_jup_live_px:.8f}) уже на {(1.0 - _jup_live_px / price) * 100:.1f}% ниже DexScreener (${price:.8f}) — обвал в моменте, блок входа!")
+                        if _jup_live_px < price * 0.82:
+                            print(f"🚫 [JEV-LIVE-DUMP] {symbol} ({address[:8]}): живая цена Jupiter (${_jup_live_px:.8f}) уже на {(1.0 - _jup_live_px / price) * 100:.1f}% ниже DexScreener (${price:.8f}) — обвал, блок входа!")
                             return False, "fills-flush-wait live-jup-dump"
                         _jup_ratio = max(_jup_live_px, price) / min(_jup_live_px, price)
-                        if _jup_ratio > 1.12:
-                            print(f"🚫 [JEV-PRICE-MISMATCH] {symbol} ({address[:8]}): Jupiter (${_jup_live_px:.8f}) vs DS (${price:.8f}) расхождение {_jup_ratio:.2f}x (>1.12x) — защита от ложного стопа!")
+                        if _jup_ratio > 1.35:
+                            print(f"🚫 [JEV-PRICE-MISMATCH] {symbol} ({address[:8]}): Jupiter (${_jup_live_px:.8f}) vs DS (${price:.8f}) расхождение {_jup_ratio:.2f}x (>1.35x) — защита от ложного стопа!")
                             return False, f"fills-flush-wait jup-ds-mismatch ({_jup_ratio:.2f}x)"
                         price = _jup_live_px
                         wick_price = price * (1.0 + wick_pct)

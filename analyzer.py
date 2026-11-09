@@ -1802,17 +1802,17 @@ class Analyzer:
 
         # Ранний вход в накопление на ликвидных пулах (>= +1.2% при liq >= $14k, EMBER +38%, FUSE +34%)
         # и вход на микро-откате покупателей (до -2.5% при b5 >= s5 * 1.25)
-        _is_buyer_dip_pre = (_b5_pre >= int(_s5_pre * 1.25) and _vm5_pre >= 2500.0 and _m5 >= -2.5)
-        _min_m5_req = 1.2 if (_raw_liq_chk >= 14000.0 and _b5_pre >= _s5_pre * 1.10 and _vm5_pre >= 2500.0) else 2.5
+        _is_buyer_dip_pre = (_b5_pre >= int(_s5_pre * 1.15) and _vm5_pre >= 1500.0 and _m5 >= -4.0)
+        _min_m5_req = 1.0 if (_raw_liq_chk >= 10000.0 and _b5_pre >= _s5_pre and _vm5_pre >= 1500.0) else 1.8
         if _m5 < _min_m5_req and not _is_buyer_dip_pre:
             return self._deny(mint, f"m5-too-weak {_m5:+.1f}%", f"🚫 [WEAK-M5] {symbol} ({mint[:8]}): m5 {_m5:+.1f}% < +{_min_m5_req:.1f}% — нет разгона.")
-        _base_max_m1 = float(getattr(config, "MAX_ENTRY_M1_PCT", 10.0))
-        # Разрешаем импульсный пробой (свеча +12%..+25%) при активном спросе покупателей (b5 >= s5 и vol >= $2500)
-        if _b5_pre >= int(_s5_pre * 1.05) and _vm5_pre >= 2500.0 and _m5 >= 3.0:
-            _max_m1_cfg = 25.0  # Импульсный пробой (кейс MELT m1 +15.8%)
+        _base_max_m1 = float(getattr(config, "MAX_ENTRY_M1_PCT", 25.0))
+        # Разрешаем импульсный пробой (свеча +15%..+35%) при активном спросе покупателей (b5 >= s5 и vol >= $1500)
+        if _b5_pre >= int(_s5_pre * 1.05) and _vm5_pre >= 1500.0 and _m5 >= 2.0:
+            _max_m1_cfg = 35.0  # Импульсный пробой ракеты
         else:
-            _max_m1_cfg = min(_base_max_m1, 14.0)
-        _min_m1_floor = -6.0 if _m5 >= 10.0 else -2.8
+            _max_m1_cfg = min(_base_max_m1, 25.0)
+        _min_m1_floor = -10.0 if _m5 >= 8.0 else -6.0
         if _m1 > _max_m1_cfg or _m1 < _min_m1_floor:
             return self._deny(
                 mint,
@@ -1969,6 +1969,25 @@ class Analyzer:
             _min_grad_liq = float(getattr(config, "MIN_GRADUATED_LIQ_USD", 7500.0))
             _min_liq = 1000.0 if _is_raw_curve else _min_grad_liq
             _eff_pool_liq = liq_val if _is_raw_curve else raw_liq
+            if _eff_pool_liq < _min_liq and not _is_raw_curve:
+                # Восстановление USD-ликвидности при задержке индексации DexScreener
+                _q_info_a = pair_data.get("liquidity", {}) or {}
+                _q_amt_a = float(_q_info_a.get("quote", 0) or 0)
+                _q_sym_a = str((pair_data.get("quoteToken") or {}).get("symbol", "")).upper()
+                if _q_amt_a > 0 and ("SOL" in _q_sym_a or "WSOL" in _q_sym_a):
+                    _eff_pool_liq = _q_amt_a * 2.0 * 185.0
+                    raw_liq = _eff_pool_liq
+                    if isinstance(pair_data.get("liquidity"), dict):
+                        pair_data["liquidity"]["usd"] = _eff_pool_liq
+                else:
+                    _gt_c_a = getattr(self, "_gt_token_cache", {}).get(mint, (0, {}))[1]
+                    if _gt_c_a and isinstance(_gt_c_a, dict):
+                        _gt_l_a = float((_gt_c_a.get("liquidity") or {}).get("usd", 0) or 0)
+                        if _gt_l_a >= _min_liq:
+                            _eff_pool_liq = _gt_l_a
+                            raw_liq = _gt_l_a
+                            if isinstance(pair_data.get("liquidity"), dict):
+                                pair_data["liquidity"]["usd"] = _eff_pool_liq
             if _eff_pool_liq < _min_liq:
                 return self._deny(mint, f"low-liq ${_eff_pool_liq:.0f}<{_min_liq:.0f}", f"🚫 [ANTI-RUG] {symbol} ({mint[:8]}): Реальная ликвидность DEX ${_eff_pool_liq:,.0f} < ${_min_liq:,.0f} — риск дампа/проскальзывания.")
 

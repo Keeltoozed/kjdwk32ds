@@ -1060,6 +1060,23 @@ async def scanner_loop(analyzer, tracker):
                             if liq_usd == 0 and (mint.endswith("pump") or (pair_data or {}).get("dexId") in ("pump", "pumpfun")):
                                 _fdv = float(((pair_data or {}).get("fdv", 0) or (pair_data or {}).get("marketCap", 0) or 0))
                                 liq_usd = _fdv * 0.40
+                            elif liq_usd == 0:
+                                # Восстанавливаем ликвидность из запасов SOL в пуле либо GeckoTerminal кэша
+                                _q_info_sc = (pair_data or {}).get("liquidity", {}) or {}
+                                _q_amt_sc = float(_q_info_sc.get("quote", 0) or 0)
+                                _q_sym_sc = str(((pair_data or {}).get("quoteToken") or {}).get("symbol", "")).upper()
+                                if _q_amt_sc > 0 and ("SOL" in _q_sym_sc or "WSOL" in _q_sym_sc):
+                                    liq_usd = _q_amt_sc * 2.0 * 185.0
+                                    if isinstance(pair_data.get("liquidity"), dict):
+                                        pair_data["liquidity"]["usd"] = liq_usd
+                                else:
+                                    _gt_c_sc = getattr(analyzer, "_gt_token_cache", {}).get(mint, (0, {}))[1]
+                                    if _gt_c_sc and isinstance(_gt_c_sc, dict):
+                                        _gt_l_sc = float((_gt_c_sc.get("liquidity") or {}).get("usd", 0) or 0)
+                                        if _gt_l_sc > 0:
+                                            liq_usd = _gt_l_sc
+                                            if isinstance(pair_data.get("liquidity"), dict):
+                                                pair_data["liquidity"]["usd"] = liq_usd
                             if entry_price > 0:
                                 if pair_data.get("_price_divergence"):
                                     _div_r = float(pair_data.get("_price_divergence_ratio", 0.0) or 0.0)
@@ -1092,10 +1109,12 @@ async def scanner_loop(analyzer, tracker):
                                 _vol5_live = float(((pair_data.get("volume") or {}).get("m5", 0) or 0))  # FIX: объявлено до первого использования (был UnboundLocalError при m5 > MAX_ENTRY_M5_PCT)
 
                                 # Повторная проверка живых метрик после сброса prefetch-кэша (защита от реального разворота вниз)
-                                if _m5_live < 1.0 or _m1_live < -4.5:
+                                _min_m1_live_floor = -10.0 if _m5_live >= 8.0 else -6.0
+                                if _m5_live < 1.0 or _m1_live < _min_m1_live_floor:
                                     print(f"🚫 [SCANNER-LIVE-REVERSAL] {actual_symbol} ({mint[:8]}): на живом графике импульс сломан (m5 {_m5_live:+.1f}%, m1 {_m1_live:+.1f}%) — отмена покупки!")
                                     continue
-                                _max_m1_cfg_live = min(float(getattr(config, "MAX_ENTRY_M1_PCT", 8.0)), 10.0)
+                                _base_m1_live = float(getattr(config, "MAX_ENTRY_M1_PCT", 25.0))
+                                _max_m1_cfg_live = 35.0 if (_vol5_live >= 1500.0 and _m5_live >= 2.0) else min(_base_m1_live, 25.0)
                                 if _m1_live > _max_m1_cfg_live and _age_m >= 3.0:
                                     print(f"🚫 [SCANNER-M1-SPIKE] {actual_symbol} ({mint[:8]}): живой m1 +{_m1_live:.1f}% > +{_max_m1_cfg_live:.1f}% — вершина свечи, отмена!")
                                     continue
@@ -1104,7 +1123,7 @@ async def scanner_loop(analyzer, tracker):
                                     _b5_sc = int((pair_data.get("txns") or {}).get("m5", {}).get("buys", 0) or 0)
                                     _s5_sc = int((pair_data.get("txns") or {}).get("m5", {}).get("sells", 0) or 0)
                                     _max_allowed_m5 = 450.0 if (_age_m <= 30.0 or mint in _graduated_set or mint.endswith(("pump", "bonk", "BAGS")) or _dex_id == "pumpswap") else 165.0
-                                    _is_breakout = (_vol5_live >= 6000.0 and _b5_sc >= _s5_sc * 1.12 and _m5_live <= _max_allowed_m5)
+                                    _is_breakout = (_vol5_live >= 2500.0 and _b5_sc >= int(_s5_sc * 1.05) and _m5_live <= _max_allowed_m5)
                                     if not _is_breakout:
                                         print(f"🚫 [SCANNER-FOMO-M5] {actual_symbol} ({mint[:8]}): живой m5 +{_m5_live:.1f}% > +{_max_m5_cfg:.0f}% без прорывного объема — вершина свечи, отмена!")
                                         continue
@@ -1140,29 +1159,11 @@ async def scanner_loop(analyzer, tracker):
                                     print(f"🚫 [SCANNER-OLD-ZOMBIE] {actual_symbol} ({mint[:8]}): возраст {_age_m/60:.1f}ч без прорывного объема — отмена!")
                                     continue
 
-                                _req_soc_age = float(getattr(config, "REQUIRE_SOCIALS_MIN_AGE_MIN", 8.0))
                                 _tx5_sc = (pair_data.get("txns") or {}).get("m5", {}) or {}
                                 _b5_bump = int(_tx5_sc.get("buys", 0) or 0)
                                 _s5_bump = int(_tx5_sc.get("sells", 0) or 0)
                                 _tot_tx5_sc = _b5_bump + _s5_bump
                                 _avg_tx5_sc = (_vol5_live / _tot_tx5_sc) if _tot_tx5_sc > 0 else 0.0
-                                if _links_sc == 0 and not _soc_unk_sc:
-                                    _vl_sc = _vol5_live / max(liq_usd, 1.0)
-                                    _is_viral_stealth = (_vol5_live >= 15000.0 and _b5_bump >= 80 and _b5_bump >= int(_s5_bump * 1.15))
-                                    _is_organic_stealth = (
-                                        _vol5_live >= 4000.0 and _b5_bump >= 20 and _b5_bump >= int(_s5_bump * 1.05)
-                                        and liq_usd >= 8000.0 and _vl_sc <= 7.0 and _avg_tx5_sc >= 12.0
-                                    )
-                                    if not (_is_organic_stealth or _is_viral_stealth):
-                                        if _age_m >= 20.0:
-                                            print(f"🚫 [SCANNER-NO-SOCIALS] {actual_symbol} ({mint[:8]}): 0 соцсетей в зрелом возрасте {_age_m:.0f}м (>=20м) — отмена!")
-                                            continue
-                                        else:
-                                            print(f"🚫 [SCANNER-NO-SOCIALS] {actual_symbol} ({mint[:8]}): 0 соцсетей при {_age_m:.1f}м без чистой органики — отмена!")
-                                            continue
-                                    else:
-                                        _tag_st = "VIRAL-STEALTH" if _is_viral_stealth else "ORGANIC-STEALTH"
-                                        print(f"💎 [SCANNER-{_tag_st}] {actual_symbol} ({mint[:8]}): 0 соцсетей, но подтвержден торговый поток (${_vol5_live:,.0f}, {_b5_bump}b/{_s5_bump}s) — пропуск в сделку.")
 
                                 # Защита от микро bump-ботов (кейс LAURA $1.60 avg_tx):
                                 if _tot_tx5_sc >= 120 and _avg_tx5_sc < 8.0:
@@ -1211,12 +1212,12 @@ async def scanner_loop(analyzer, tracker):
                                     from jupiter import JupiterAPI
                                     _jup_chk = await JupiterAPI.get_price(mint)
                                     if _jup_chk and _jup_chk > 0 and entry_price > 0:
-                                        if _jup_chk < entry_price * 0.93:
-                                            analyzer._deny(mint, "scanner-live-dump >7%", f"🚫 [LIVE-DUMP] {actual_symbol} ({mint[:8]}): живая цена Jupiter (${_jup_chk:.8f}) уже на {(1.0 - _jup_chk / entry_price) * 100:.1f}% ниже DexScreener (${entry_price:.8f}) [>7%] — токен обваливается прямо сейчас, блок входа!")
+                                        if _jup_chk < entry_price * 0.82:
+                                            analyzer._deny(mint, "scanner-live-dump >18%", f"🚫 [LIVE-DUMP] {actual_symbol} ({mint[:8]}): живая цена Jupiter (${_jup_chk:.8f}) уже на {(1.0 - _jup_chk / entry_price) * 100:.1f}% ниже DexScreener (${entry_price:.8f}) [>18%] — обвал, блок входа!")
                                             continue
                                         _chk_r = max(_jup_chk, entry_price) / min(_jup_chk, entry_price)
-                                        if _chk_r > 1.09:
-                                            print(f"🚫 [SCANNER-PRICE-MISMATCH] {actual_symbol} ({mint[:8]}): Jupiter (${_jup_chk:.8f}) vs DS (${entry_price:.8f}) расхождение {_chk_r:.2f}x (>1.09x) — блок от ложного стопа.")
+                                        if _chk_r > 1.35:
+                                            print(f"🚫 [SCANNER-PRICE-MISMATCH] {actual_symbol} ({mint[:8]}): Jupiter (${_jup_chk:.8f}) vs DS (${entry_price:.8f}) расхождение {_chk_r:.2f}x (>1.35x) — блок от ложного стопа.")
                                             continue
                                         entry_price = _jup_chk
                                 # RKT-вето дженерик-входов Solana (лотереи/VIP-билеты exempt).
