@@ -1487,19 +1487,17 @@ class GrokJevEngine:
                                 lp_burned_pct = float(lp_info.get("lpBurnedPct") or 0.0)
                                 if (lp_locked_pct >= 80.0 or lp_burned_pct >= 80.0) and (mkt_quote_usd >= 2000 or (target_pair and mkt_pubkey == target_pair)):
                                     has_verified_locked_lp = True
-                            if mkt_type in ("pump_fun_amm", "pump_amm"):
-                                has_verified_locked_lp = True
+                                for _lph in (lp_info.get("holders") or []):
+                                    if float(_lph.get("pct", 0) or 0) >= 15.0:
+                                        has_verified_locked_lp = False
 
-                    # Для неизвестных кастомных токенов (не оканчивающихся на 'pump') требуем подтвержденный заблокированный LP >= 80%!
-                    if not is_canonical_pump and not has_verified_locked_lp:
-                        return False, "rugcheck: custom token without verified locked LP (lock < 80%)", _h_stats
+                    # Для неизвестных кастомных токенов (не оканчивающихся на 'pump') или пулов с незалоченным LP — жесткий отказ
+                    if not has_verified_locked_lp and not is_raw_pump_curve:
+                        return False, "rugcheck: unverified unlocked LP (lock < 80%)", _h_stats
 
-                    # Очищенный score RugCheck: вычитаем безвредный шум и AMM LP пула для bonding curve / pump tokens / проверенных пулов с залоченным LP.
-                    _lp_noise_allowed = bool(is_canonical_pump or has_verified_locked_lp)
-                    _allowed_lp_terms_jev = (
-                        "large amount of lp unlocked", "lp provider", "single lp provider",
-                        "lp not locked", "unlocked lp"
-                    ) if _lp_noise_allowed else ("lp provider", "low liquidity")
+                    # Очищенный score RugCheck: вычитаем безвредный шум пула (низкая ликвидность для молодых пулов, копикаты).
+                    # ВАЖНО: 'Large Amount of LP Unlocked' НИКОГДА не вычитается как шум!
+                    _allowed_lp_terms_jev = ("lp provider", "low amount of lp providers", "low liquidity")
 
                     raw_score = float(rc_data.get("score") or 0.0)
                     penalty_to_ignore = sum(
@@ -1519,11 +1517,11 @@ class GrokJevEngine:
                         rk_lvl = str(rk.get("level") or "").lower()
                         if any(k in rk_name for k in ("low liquidity", "creator history", "copycat", "symbol mimic", *_allowed_lp_terms_jev)):
                             continue
-                        if _lp_noise_allowed and any(lp_k in rk_name for lp_k in ("large amount of lp unlocked", "lp not locked", "unlocked lp")):
+                        if has_verified_locked_lp and any(lp_k in rk_name for lp_k in ("large amount of lp unlocked", "lp not locked", "unlocked lp")):
                             continue
                         if rk_lvl == "danger" and "creator history" not in rk_name:
                             return False, f"rugcheck: critical danger risk '{rk.get('name')}'", _h_stats
-                        if any(k in rk_name for k in ("single holder", "high ownership", "top 10 holders")) and rk_lvl == "danger":
+                        if any(k in rk_name for k in ("single holder", "high ownership", "top 10 holders", "large amount of lp unlocked", "unlocked lp")) and rk_lvl == "danger":
                             return False, f"rugcheck: critical hazard '{rk.get('name')}'", _h_stats
 
                     # Проверка держателей и дева (Holders & Sybil analysis)

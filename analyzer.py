@@ -583,7 +583,7 @@ class Analyzer:
         tokens = []
         from http_client import fetch_json
         if True:
-            # 0. Прямой радар активных DEX-пулов Solana (PumpSwap / Meteora / Bonk выпускники, без ожидания платных бустов!)
+            # 0. Прямой радар активных DEX-пулов Solana (PumpSwap / Raydium / Meteora / Bonk выпускники)
             try:
                 import asyncio as _aio_lt
                 _ds_search_urls = (
@@ -591,6 +591,10 @@ class Analyzer:
                     "https://api.dexscreener.com/latest/dex/search?q=SOL%20pump",
                     "https://api.dexscreener.com/latest/dex/search?q=meteora%20SOL",
                     "https://api.dexscreener.com/latest/dex/search?q=bonk%20SOL",
+                    "https://api.dexscreener.com/latest/dex/search?q=raydium%20SOL",
+                    "https://api.dexscreener.com/latest/dex/search?q=pump",
+                    "https://api.dexscreener.com/latest/dex/search?q=SOL",
+                    "https://api.dexscreener.com/latest/dex/search?q=moonshot",
                 )
                 _ds_sr = await _aio_lt.gather(
                     *[fetch_json(u, timeout=6, retries=0) for u in _ds_search_urls],
@@ -613,7 +617,7 @@ class Analyzer:
                         _liq_lt = float((_p_lt.get("liquidity") or {}).get("usd", 0) or 0)
                         _vol5_lt = float((_p_lt.get("volume") or {}).get("m5", 0) or 0)
                         _m5_lt = float((_p_lt.get("priceChange") or {}).get("m5", 0) or 0)
-                        if _liq_lt < 7500.0 or _vol5_lt < 2000.0 or _m5_lt < 1.8:
+                        if _liq_lt < 5000.0 or _vol5_lt < 800.0 or _m5_lt < 1.0:
                             continue
                         _addr_lt = str((_p_lt.get("baseToken") or {}).get("address") or "").strip()
                         if _addr_lt and not _addr_lt.startswith("0x") and 32 <= len(_addr_lt) <= 44:
@@ -630,7 +634,14 @@ class Analyzer:
             except Exception as e:
                 print(f"Dexscreener active search radar error: {e}")
 
-            # 1. Сканируем САМЫЕ СВЕЖИЕ бусты (token-boosts/latest/v1) — ловит новые ⚡-бусты сразу
+            # 1. Сканируем ТОП и САМЫЕ СВЕЖИЕ бусты (ловит самые горячие ракеты)
+            try:
+                status, data = await fetch_json("https://api.dexscreener.com/token-boosts/top/v1", timeout=8, retries=1)
+                if status == 200 and isinstance(data, list):
+                    tokens.extend(data)
+            except Exception as e:
+                print(f"Dexscreener top boosts fetch error: {e}")
+
             try:
                 status, data = await fetch_json("https://api.dexscreener.com/token-boosts/latest/v1", timeout=8, retries=1)
                 if status == 200 and isinstance(data, list):
@@ -2033,11 +2044,14 @@ class Analyzer:
                     if freeze_authority and freeze_authority not in SAFE_AUTHORITIES:
                         return self._deny(mint, "freeze-authority-scam", f"🚫 [АНТИСКАМ] Freeze Authority у ДЕВ-кошелька {freeze_authority[:8]} у {mint[:8]} → СКАМ")
 
-                    # 1. Проверяем блокировку LP в пулах (Raydium Lock/Burn >= 80% или протокольный PumpSwap AMM)
+                    # 1. Проверяем РЕАЛЬНУЮ блокировку/сожжение LP во всех рынках (Raydium, PumpSwap, Meteora Lock/Burn >= 80%)
+                    # ВАЖНО: кастомные пулы на PumpSwap AMM БЕЗ сожжённого LP являются 100% скамом (кейсы JENSEN / 牛逼 / NEX Ai)!
+                    # В официальных выпускниках Pump.fun RugCheck ВСЕГДА возвращает lpLockedPct == 100.0.
+                    # Если lpLockedPct < 80 и lpBurnedPct < 80 — пул разблокирован и дев может выдернуть SOL!
                     _lp_ok = False
+                    _unlocked_lp_holder_danger = False
                     for _m in (rc_data.get("markets") or []):
                         if isinstance(_m, dict):
-                            _m_type = str(_m.get("marketType") or "").lower()
                             _m_lp_info = _m.get("lp") or {}
                             if isinstance(_m_lp_info, dict):
                                 _m_lp_locked_pct = float(_m_lp_info.get("lpLockedPct", 0) or 0)
@@ -2045,28 +2059,24 @@ class Analyzer:
                                 if _m_lp_locked_pct >= 80.0 or _m_lp_burned_pct >= 80.0:
                                     _lp_ok = True
                                     break
-                            if _m_type in ("pump_fun_amm", "pump_amm"):
-                                _lp_ok = True
-                                break
+                                # Проверяем, есть ли индивидуальный кошелек, контролирующий LP пул
+                                for _lph in (_m_lp_info.get("holders") or []):
+                                    if float(_lph.get("pct", 0) or 0) >= 15.0:
+                                        _unlocked_lp_holder_danger = True
 
-                    # Для кастомных не-pump токенов на ЛЮБОМ DEX требуем подтвержденный заблокированный/сожжённый LP >= 80%!
-                    if not _is_canonical_pump and not _lp_ok:
+                    # Для кастомных не-pump токенов или пулов с незалоченным LP — жесткий блок
+                    if not _lp_ok and (not _is_canonical_pump or _unlocked_lp_holder_danger):
                         return self._deny(
                             mint,
                             "unlocked-custom-lp",
-                            f"🚫 [CUSTOM-LP-RUG] {symbol} ({mint[:8]}): кастомный токен на {_dex_low_main} без сожжённого/заблокированного LP (<80%) — риск сноса пула (кейсы DEMOCAT/SAFU)!"
+                            f"🚫 [UNLOCKED-LP-RUG] {symbol} ({mint[:8]}): незаблокированный LP (<80%) — риск сноса пула (кейсы JENSEN/牛逼/DEMOCAT)!"
                         )
 
                     _rc_raw_score = float(rc_data.get("score") or 0.0)
 
-                    # Для launchpad bonding curve или пулов с подтверждённым сожжением/локом LP (PumpSwap AMM, Raydium lock >= 80%)
-                    # RugCheck начисляет 11000 шум за AMM LP контракт пула.
-                    # ВАЖНО: концентрацию дева и китов ("single holder", "top 10 holders") НИКОГДА не вычитаем как шум!
-                    _lp_noise_allowed = bool(_is_canonical_pump or _lp_ok)
-                    _allowed_lp_terms_main = (
-                        "large amount of lp unlocked", "lp provider", "single lp provider",
-                        "lp not locked", "unlocked lp"
-                    ) if _lp_noise_allowed else ("lp provider", "low liquidity")
+                    # Безвредный шум RugCheck: низкая ликвидность для молодых пулов (Low Liquidity) и copycat для мемов.
+                    # ВАЖНО: 'Large Amount of LP Unlocked' НИКОГДА не является шумом при отсутствии подтвержденного лока!
+                    _allowed_lp_terms_main = ("lp provider", "low amount of lp providers", "low liquidity")
 
                     # Исключаем безвредный шум: низкая ликвидность для молодых пулов, copycat для мемов, и LP контракт пула.
                     _rc_penalty_to_ignore = sum(
@@ -2081,13 +2091,13 @@ class Analyzer:
                     if _rc_score >= 2000:
                         return self._deny(mint, f"rugcheck-score {_rc_score:.0f}", f"🚫 [АНТИСКАМ] RugCheck Score {_rc_score:.0f} >= 2000 у {mint[:8]} → СКАМ")
 
-                    # Жёсткий фильтр критических опасностей RugCheck (кейсы AMERICA 87%, DEMOCAT 58.6% drain, SAFU 59% drain)
+                    # Жёсткий фильтр критических опасностей RugCheck (кейсы JENSEN 99% drain, 牛逼 99% drain, AMERICA 87%, DEMOCAT 58.6% drain, SAFU 59% drain)
                     for rk in (rc_data.get("risks") or []):
                         _rk_name = str(rk.get("name", "")).lower()
                         _rk_lvl = str(rk.get("level", "")).lower()
-                        if _lp_noise_allowed and any(k in _rk_name for k in ("large amount of lp unlocked", "lp not locked", "unlocked lp")):
+                        if _lp_ok and any(k in _rk_name for k in ("large amount of lp unlocked", "lp not locked", "unlocked lp")):
                             continue
-                        if _rk_lvl == "danger" and any(k in _rk_name for k in ("single holder", "high ownership", "top 10 holders", "large amount of lp unlocked", "freeze authority")):
+                        if _rk_lvl == "danger" and any(k in _rk_name for k in ("single holder", "high ownership", "top 10 holders", "large amount of lp unlocked", "unlocked lp", "freeze authority")):
                             return self._deny(mint, f"rc-danger {_rk_name[:15]}", f"🚫 [АНТИСКАМ-RC] {symbol} ({mint[:8]}): критический риск RugCheck '{rk.get('name')}' — блок скама!")
 
                     # Проверка холдеров RugCheck

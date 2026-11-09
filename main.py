@@ -72,6 +72,26 @@ async def position_security_auditor_loop(analyzer, tracker):
                             print(f"🚨 [SOL-HONEYPOT] {position.symbol} ({mint[:10]}): {_g_why} — токен непродаваем/заморожен, списание в -100%.")
                             tracker.close_position(mint, 0.0, f"SOL Honeypot / Unsellable ({_g_why})")
                             continue
+
+                        # Ончейн-проверка открытой позиции: если LP на 100% в руках создателя — аварийный выход до сноса пула!
+                        _rc_st_pos, _rc_data_pos = await _gp.fetch_rugcheck_report_cached(mint, ttl=45.0)
+                        if _rc_st_pos == 200 and isinstance(_rc_data_pos, dict):
+                            _m_lp_unlocked_danger = False
+                            for _mp in (_rc_data_pos.get("markets") or []):
+                                if isinstance(_mp, dict):
+                                    _lp_p = _mp.get("lp") or {}
+                                    if isinstance(_lp_p, dict):
+                                        _lck = float(_lp_p.get("lpLockedPct", 0) or 0)
+                                        _brn = float(_lp_p.get("lpBurnedPct", 0) or 0)
+                                        if _lck < 80.0 and _brn < 80.0:
+                                            for _hld in (_lp_p.get("holders") or []):
+                                                if float(_hld.get("pct", 0) or 0) >= 30.0:
+                                                    _m_lp_unlocked_danger = True
+                            if _m_lp_unlocked_danger and not mint.endswith("pump"):
+                                _cur_px_em = float(getattr(position, "current_price_usd", 0.0) or 0.0)
+                                print(f"🚨 [POS-UNLOCKED-LP-RUG] {position.symbol} ({mint[:8]}): 100% LP в руках дева — экстренный выход по рынку до сноса пула!")
+                                tracker.close_position(mint, _cur_px_em, "Emergency Unlocked LP Exit (Dev Holds LP)")
+                                continue
                     except Exception:
                         pass
 
@@ -851,24 +871,24 @@ async def scanner_loop(analyzer, tracker):
                             processed_mints[mint] = time.time() + 3600
                             continue
 
-                        # Старый токен (>4ч) без импульса (<6%): скип на 1 час
+                        # Старый токен (>4ч) без импульса (<6%): скип на 5 мин (было 1 час, упускал внезапные пампы)
                         if _c_age_m > 240.0 and _c_m5 < 6.0 and mint not in _graduated_set:
-                            processed_mints[mint] = time.time() + 3600
+                            processed_mints[mint] = time.time() + 300
                             continue
 
-                        # Токен старше 1ч со слабым импульсом (<4%): скип на 30 мин (ЛЮБОЙ DEX, включая pump.fun!)
+                        # Токен старше 1ч со слабым импульсом (<4%): скип на 3 мин (было 30 мин, пропускал ракеты после консолидации)
                         if _c_age_m > 60.0 and _c_m5 < 4.0 and mint not in _graduated_set:
-                            processed_mints[mint] = time.time() + 1800
+                            processed_mints[mint] = time.time() + 180
                             continue
 
-                        # Мертвый токен старше 3 минут с 0 сделок в m5: скип на 30 мин
+                        # Мертвый токен старше 3 минут с 0 сделок в m5: скип на 5 мин
                         if _c_age_m >= 3.0 and _c_trades == 0 and _c_vol5 == 0 and mint not in _graduated_set:
-                            processed_mints[mint] = time.time() + 1800
+                            processed_mints[mint] = time.time() + 300
                             continue
 
-                        # Слив/флет (m5 < 2.0%) не из миграций: кулдаун 2 мин
+                        # Слив/флет (m5 < 2.0%) не из миграций: кулдаун 1 мин
                         if _c_m5 < 2.0 and mint not in _graduated_set and _c_age_m > 3.0:
-                            processed_mints[mint] = time.time() + 120
+                            processed_mints[mint] = time.time() + 60
                             continue
 
                         _score_rank = (1000.0 if mint in _graduated_set else 0.0) + _c_m5
@@ -905,7 +925,7 @@ async def scanner_loop(analyzer, tracker):
                     if _now_l - processed_mints.get(_m, 0.0) < _cd_l:
                         continue
                     _launch.append(_m)
-                    if len(_launch) >= 60:
+                    if len(_launch) >= 80:
                         break
                 _launch_n = len(_launch)
                 _scan_conc = int(getattr(config, "SCAN_CONCURRENCY", 8))
