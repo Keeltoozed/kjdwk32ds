@@ -78,11 +78,11 @@ class MatureExitManager:
         # =========================================================================
         # 1. ЖЕСТКИЙ КОНТРОЛЬ УБЫТКА (EMERGENCY CAP & STOP LOSS) — ПЕРВЫЙ ПРИОРИТЕТ!
         # =========================================================================
-        _emerg_cap = -abs(float(getattr(config, "EMERGENCY_CAP_PCT", -0.15)))
+        _emerg_cap = -abs(float(getattr(config, "EMERGENCY_CAP_PCT", -0.28)))
         if pnl_pct <= _emerg_cap:
             return f"Mature Emergency Cap ({pnl_pct*100:.1f}%)"
 
-        _base_sl = -abs(float(getattr(config, 'STOP_LOSS_PCT', -0.10)))
+        _base_sl = -abs(float(getattr(config, 'STOP_LOSS_PCT', -0.20)))
         _has_organic_bid = False
         _feats = getattr(position, "ml_features", None) or {}
         if isinstance(_feats, dict) and _feats:
@@ -91,11 +91,11 @@ class MatureExitManager:
             _f_links = int(_feats.get("links_count", 0) or (1 if _feats.get("socials") else 0))
             if _f_liq >= 25000.0 and _f_bs >= 1.35 and _f_links >= 1:
                 _has_organic_bid = True
-        _sl = min(_base_sl, -0.12) if _has_organic_bid else _base_sl
+        _sl = min(_base_sl, -0.22) if _has_organic_bid else _base_sl
         if pnl_pct <= _sl:
             _sl_c = int(getattr(position, "sl_confirm_n", 0) or 0) + 1
             position.sl_confirm_n = _sl_c
-            if _sl_c >= 2 or pnl_pct <= -0.15 or minutes_held >= 0.75:
+            if _sl_c >= 2 or pnl_pct <= -0.26 or minutes_held >= 2.0:
                 return f"Mature Stop Loss ({pnl_pct*100:.1f}%)"
         else:
             position.sl_confirm_n = 0
@@ -104,8 +104,8 @@ class MatureExitManager:
         # 2. РАКЕТНЫЙ ТРЕЙЛИНГ-СТОП И PROFIT FLOOR (ТОЛЬКО ДЛЯ КРУПНЫХ ДВИЖЕНИЙ)
         # =========================================================================
         # Никакой копеечной микро-фиксации на $4 билете!
-        # До +35% пика монета свободно дышит на любых откатах, чтобы не резать ракету на старте.
-        # Трейлинг и полы прибыли включаются ТОЛЬКО от +35% и выше с широкой дистанцией!
+        # До +25% пика монета свободно дышит на любых откатах, чтобы не резать ракету на старте.
+        # Трейлинг и полы прибыли включаются от +25% и выше с широкой дистанцией!
         _floor_pnl = None
         _trail_dist = None
 
@@ -122,8 +122,11 @@ class MatureExitManager:
             _floor_pnl = 0.25           # Гарантируем минимум +25%
             _trail_dist = 0.18          # Трейлинг 18% от пика
         elif max_pnl_pct >= 0.35:       # +35%..+50% (первый рубеж ракеты)
-            _floor_pnl = 0.10           # Гарантируем минимум +10%
-            _trail_dist = 0.18          # Широкий трейлинг 18% от пика
+            _floor_pnl = 0.12           # Гарантируем минимум +12%
+            _trail_dist = 0.16          # Широкий трейлинг 16% от пика
+        elif max_pnl_pct >= 0.25:       # +25%..+35% (ранний импульс — кейсы QUAKE +34.4%, NATO +30.1%)
+            _floor_pnl = 0.08           # Гарантируем минимум +8% чистыми (не сливаем импульс в ноль!)
+            _trail_dist = 0.15          # Трейлинг 15% от пика
 
         if _floor_pnl is not None and minutes_held >= 0.35:
             drop_from_max = (position.max_price_usd - current_price) / position.max_price_usd if position.max_price_usd > 0 else 0.0
@@ -134,11 +137,11 @@ class MatureExitManager:
                 return f"Mature {_tag} Floor ({pnl_pct*100:+.1f}% locked after peak +{max_pnl_pct*100:.1f}%)"
 
         # =========================================================================
-        # 2.5. BREAKEVEN SHIELD (Только после реального разгона >= +30%)
+        # 2.5. BREAKEVEN SHIELD (Только после реального разгона >= +25%)
         # =========================================================================
-        _be_act = float(getattr(config, "BREAKEVEN_PCT", 0.30))
-        if max_pnl_pct >= _be_act and minutes_held >= 0.50:
-            if pnl_pct <= 0.015:
+        _be_act = float(getattr(config, "BREAKEVEN_PCT", 0.25))
+        if max_pnl_pct >= _be_act and minutes_held >= 0.40:
+            if pnl_pct <= 0.030:
                 _sign = "+" if pnl_pct >= 0 else ""
                 return f"Mature Breakeven Shield ({_sign}{pnl_pct*100:.1f}% locked after peak +{max_pnl_pct*100:.1f}%)"
 

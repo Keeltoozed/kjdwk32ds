@@ -298,30 +298,37 @@ async def position_manager_loop(analyzer, tracker):
                     _pnl_str = f"{pnl_pct*100:+.1f}%" if position.entry_price_usd > 0 else "0%"
                     print(f"🛡️ [TRACK] {position.symbol} ({mint[:8]}): цена ${current_price:.8f} ({_pnl_str}) | пик: ${position.max_price_usd:.8f} | держим {minutes_held:.1f}м", flush=True)
 
-                # Infant Dump: не даём монете сложиться на первой минуте (кейс STONKS / DОG™)!
-                # Сразу сверяем провал <= -10% с живой котировкой Jupiter и мгновенно рубим реальный раг без провала в -30%!
+                # Infant Dump: защита от моментального сброса дева в первые 90 секунд (кейс STONKS / DОG™)!
+                # ВАЖНО: не путаем реальный раг со стартовым спредом Solana DEX (4-8% спред + 3-5% slippage = -8%..-15% на 1-м тике).
+                # Кейс SI (+232%): бот вошел в ракету, но ложно срезал её через 21с из-за микро-спреда -12%!
+                # Рубим ТОЛЬКО при катастрофическом раге (<= -28%) или при подтвержденном сливе (2 тика подряд <= -22%).
                 try:
-                    _inf_w = float(getattr(config, "INFANT_WINDOW_MIN", 1.0))
-                    _inf_p = -abs(float(getattr(config, "INFANT_DUMP_PCT", -0.100)))
-                    if minutes_held < _inf_w and pnl_pct <= _inf_p:
-                        _real_inf_dump = True
+                    _inf_w = float(getattr(config, "INFANT_WINDOW_MIN", 1.5))
+                    _inf_dump_thresh = -abs(float(getattr(config, "INFANT_DUMP_PCT", -0.280)))
+                    _inf_warn_thresh = -abs(float(getattr(config, "INFANT_WARN_PCT", -0.220)))
+
+                    if minutes_held < _inf_w and pnl_pct <= _inf_warn_thresh:
                         try:
                             _j_inf_px = await JupiterAPI.get_price(mint)
                             if _j_inf_px and _j_inf_px > 0 and position.entry_price_usd > 0:
                                 _j_inf_pnl = (_j_inf_px - position.entry_price_usd) / position.entry_price_usd
-                                if _j_inf_pnl > -0.080:
-                                    _real_inf_dump = False
-                                    current_price = _j_inf_px
-                                    position.current_price_usd = _j_inf_px
-                                    position.infant_confirm_n = 0
-                                else:
-                                    current_price = _j_inf_px
-                                    pnl_pct = _j_inf_pnl
+                                current_price = _j_inf_px
+                                position.current_price_usd = _j_inf_px
+                                pnl_pct = _j_inf_pnl
                         except Exception:
                             pass
-                        if _real_inf_dump:
+
+                        if pnl_pct <= _inf_dump_thresh:
                             tracker.close_position(mint, current_price, f"Infant Dump ({pnl_pct*100:.1f}%)")
                             continue
+                        elif pnl_pct <= _inf_warn_thresh:
+                            _inf_c = int(getattr(position, "infant_confirm_n", 0) or 0) + 1
+                            position.infant_confirm_n = _inf_c
+                            if _inf_c >= 2:
+                                tracker.close_position(mint, current_price, f"Infant Dump ({pnl_pct*100:.1f}%)")
+                                continue
+                        else:
+                            position.infant_confirm_n = 0
                     else:
                         position.infant_confirm_n = 0
                 except Exception:
@@ -914,10 +921,10 @@ async def scanner_loop(analyzer, tracker):
                     if _now_l - processed_mints.get(_m, 0.0) < _cd_l:
                         continue
                     _launch.append(_m)
-                    if len(_launch) >= 80:
+                    if len(_launch) >= 120:
                         break
                 _launch_n = len(_launch)
-                _scan_conc = int(getattr(config, "SCAN_CONCURRENCY", 8))
+                _scan_conc = int(getattr(config, "SCAN_CONCURRENCY", 16))
                 if _launch and _scan_conc > 1:
                     _scan_win = ScanWindow(analyzer, _launch, _scan_conc)
 
@@ -2472,11 +2479,13 @@ async def async_main():
     from tg_preview import tg_preview_loop
     from smart_money_hunter import smart_money_hunter_loop
     try:
-        from gmgn_bridge import gmgn_bridge_loop
+        from gmgn_api import gmgn_api_loop as gmgn_bridge_loop
     except Exception as e:
-        print(f"⚠️ gmgn_bridge недоступен ({e}) - пропускаю (нужен playwright+chromium)")
-        async def gmgn_bridge_loop(*_a, **_k):
-            return
+        try:
+            from gmgn_bridge import gmgn_bridge_loop
+        except Exception:
+            async def gmgn_bridge_loop(*_a, **_k):
+                return
     
     # Получаем актуальную цену SOL при старте
     await get_sol_price()

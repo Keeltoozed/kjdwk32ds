@@ -432,6 +432,23 @@ class Analyzer:
         except Exception:
             pass
         try:
+            if not hasattr(self, "_decision_cache"):
+                self._decision_cache = {}
+            _d_ctx = getattr(self, "_eval_ctx", {}).get(key, {})
+            self._decision_cache[key] = {
+                "ts": time.time(),
+                "price": _d_ctx.get("price", 0.0),
+                "vol5": _d_ctx.get("vol5", 0.0),
+                "pass": False,
+                "signal": f"SKIP {short}",
+                "score": getattr(self, "last_score", 0.0)
+            }
+            if len(self._decision_cache) > 2500:
+                _cut = time.time() - 90.0
+                self._decision_cache = {k: v for k, v in self._decision_cache.items() if v["ts"] >= _cut}
+        except Exception:
+            pass
+        try:
             from shadow_tracker import shadow_tracker
             ctx = getattr(self, "_eval_ctx", {}).get(key, {})
             feats = (
@@ -807,6 +824,19 @@ class Analyzer:
                     peak_px = max(recent_px)
                     if peak_px > 0:
                         best_pair["_drop_from_peak_5m"] = (px - peak_px) / peak_px * 100.0
+
+                # Расчет дистанции до исторического максимума (ATH) за всю историю наблюдений (Kaiser.charon Rule)
+                overall_ath_cands = [px] + recent_px
+                if sh_peak_px > 0 and 0.02 <= (px / sh_peak_px) <= 20.0:
+                    overall_ath_cands.append(sh_peak_px)
+                all_hist_px = [x[1] for x in hist if x[1] > 0 and _same_pool_obs(x) and 0.02 <= (px / x[1]) <= 20.0]
+                if all_hist_px:
+                    overall_ath_cands.extend(all_hist_px)
+                if overall_ath_cands:
+                    overall_ath = max(overall_ath_cands)
+                    if overall_ath > 0:
+                        best_pair["_ath_price"] = overall_ath
+                        best_pair["_dist_to_ath_pct"] = (px - overall_ath) / overall_ath * 100.0
 
                 recent_liq = [
                     x[2] for x in hist
@@ -1542,14 +1572,32 @@ class Analyzer:
         base_token = pair_data.get("baseToken", {})
         name = base_token.get("name", "").upper()
         symbol = base_token.get("symbol", "").upper()
+        cur_px_eval = float(pair_data.get("priceUsd", 0) or 0.0)
+
+        # === DECISION CACHE (Kaiser.charon Trench Rule) ===
+        # Если монета недавно проверена и отклонена, и цена/объем не изменились (>7% цена, >15% объем),
+        # используем сохраненный вердикт мгновенно (0ms), не перегружая CPU и внешние API!
+        if not hasattr(self, "_decision_cache"):
+            self._decision_cache = {}
+        _cached = self._decision_cache.get(mint)
+        if _cached and (time.time() - _cached["ts"]) < 40.0:
+            _old_px = _cached["price"]
+            _px_d = abs(cur_px_eval - _old_px) / max(_old_px, 1e-9)
+            _vol_d = abs(_vm5_pre - _cached["vol5"]) / max(_cached["vol5"], 1.0)
+            if _px_d < 0.07 and _vol_d < 0.15:
+                if not _cached.get("pass", False):
+                    self.signals[mint] = _cached.get("signal", "")
+                    self.last_score = _cached.get("score", 0.0)
+                    return False
 
         if not hasattr(self, "_eval_ctx"):
             self._eval_ctx = {}
         self._eval_ctx[mint] = {
             "symbol": symbol,
             "chain": "solana",
-            "price": float(pair_data.get("priceUsd", 0) or 0),
+            "price": cur_px_eval,
             "liq": float((pair_data.get("liquidity") or {}).get("usd", 0) or 0),
+            "vol5": _vm5_pre,
             "m5": float((pair_data.get("priceChange") or {}).get("m5", 0) or 0),
             "source": "SOLANA_SCAN"
         }
@@ -1558,9 +1606,12 @@ class Analyzer:
             _div_r = float(pair_data.get("_price_divergence_ratio", 0.0) or 0.0)
             return self._deny(mint, "price-split", f"🚫 [PRICE-SPLIT] {symbol} ({mint[:8]}): рассинхрон цен между пулами {_div_r:.1f}x (миграция/гэп) — блок входа.")
 
-        # === PEAK-MEMORY GUARD: запрет покупки после глубокого краша с пика (отскок дохлой кошки) ===
+        # === ATH DISTANCE & PEAK-MEMORY GUARD (Kaiser.charon Trench Rule) ===
+        _dist_ath = float(pair_data.get("_dist_to_ath_pct", 0.0) or 0.0)
         _drop_from_peak = float(pair_data.get("_drop_from_peak_5m", 0.0) or 0.0)
         _liq_drop_peak = float(pair_data.get("_liq_drop_from_peak", 0.0) or 0.0)
+        if _dist_ath <= -48.0 and _m5 < 10.0:
+            return self._deny(mint, f"ath-dumped {_dist_ath:.0f}%", f"🚫 [ATH-DUMP] {symbol} ({mint[:8]}): цена провалилась на {_dist_ath:.1f}% от ATH — отскок дохлой кошки с бэгхолдерами.")
         if _drop_from_peak <= -38.0:
             return self._deny(mint, f"post-peak-crash {_drop_from_peak:.0f}%", f"🚫 [POST-PEAK-CRASH] {symbol} ({mint[:8]}): цена уже упала на {_drop_from_peak:.1f}% от виденного ботом пика — отскок дохлой кошки после дампа.")
         if _liq_drop_peak <= -45.0:

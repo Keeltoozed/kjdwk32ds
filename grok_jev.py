@@ -641,6 +641,11 @@ class GrokJevEngine:
             if b5 < s5 and (_sell_ratio_g >= 0.50 or (_sell_ratio_g >= 0.46 and _vl_ratio_g >= 3.0)):
                 return False, f"heavy-sell-pressure {_sell_ratio_g*100:.0f}% sells ({s5}/{_tot_tx_g}) v/l {_vl_ratio_g:.1f}x (whale exit dump)"
 
+        # 3.2. Distance to ATH Check (Kaiser.charon Trench Rule):
+        _dist_ath_g = float((pair_data.get("_dist_to_ath_pct") or 0.0) or 0.0)
+        if _dist_ath_g <= -50.0 and m5 < 12.0:
+            return False, f"ath-dumped {_dist_ath_g:.0f}% below ATH (bagholder trap)"
+
         # Остывающий поздний памп: токен старше 20м режем ТОЛЬКО если m5 отрицательный или нулевой (реальный дамп)
         if age_min >= 20.0 and m5 < 1.2:
             return False, f"late-fade age {age_min:.0f}m m5 {m5:+.1f}% < +1.2% (old token cooling off, not a live rocket)"
