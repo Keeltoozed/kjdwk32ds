@@ -450,6 +450,14 @@ class GrokJevEngine:
             else:
                 age_min = 999.0
 
+        txns_m5 = (pair_data.get("txns") or {}).get("m5", {}) or {}
+        txns_h24 = (pair_data.get("txns") or {}).get("h24", {}) or {}
+        b5 = int(txns_m5.get("buys", 0) or 0)
+        s5 = int(txns_m5.get("sells", 0) or 0)
+        vol_m5 = float((pair_data.get("volume") or {}).get("m5", 0) or 0)
+        vol_h24 = float((pair_data.get("volume") or {}).get("h24", 0) or 0)
+        trades_h24 = int(txns_h24.get("buys", 0) or 0) + int(txns_h24.get("sells", 0) or 0)
+
         _min_grad_liq = 5000.0 if (vol_m5 >= 2500.0 and b5 >= s5) else float(getattr(_c, "MIN_GRADUATED_LIQ_USD", 8000.0))
         if dex_id in ("pump", "pumpfun", "meteoradbc") and not getattr(_c, "ALLOW_UNGRADUATED_PUMPFUN", False):
             return False, "raw-pump-curve (wait for graduation to PumpSwap/Raydium with locked LP)"
@@ -462,14 +470,6 @@ class GrokJevEngine:
             return False, f"liq-giant ${eff_liq:,.0f} > ${max_liq:,.0f} (stagnant giant pool, not a meme rocket)"
 
         FUNNEL_STATS["liquidity"] += 1
-
-        txns_m5 = (pair_data.get("txns") or {}).get("m5", {}) or {}
-        txns_h24 = (pair_data.get("txns") or {}).get("h24", {}) or {}
-        b5 = int(txns_m5.get("buys", 0) or 0)
-        s5 = int(txns_m5.get("sells", 0) or 0)
-        vol_m5 = float((pair_data.get("volume") or {}).get("m5", 0) or 0)
-        vol_h24 = float((pair_data.get("volume") or {}).get("h24", 0) or 0)
-        trades_h24 = int(txns_h24.get("buys", 0) or 0) + int(txns_h24.get("sells", 0) or 0)
 
         # 3. Живой импульс ракеты (LIVE ROCKET MOMENTUM)
         pc = pair_data.get("priceChange", {}) or {}

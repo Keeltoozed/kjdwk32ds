@@ -1092,14 +1092,6 @@ async def scanner_loop(analyzer, tracker):
                                 _soc_unk_sc = bool(pair_data.get("_socials_unknown", False))
                                 _b5_sc = int((pair_data.get("txns") or {}).get("m5", {}).get("buys", 0) or 0)
                                 _s5_sc = int((pair_data.get("txns") or {}).get("m5", {}).get("sells", 0) or 0)
-                                if _links_sc == 0 and not _soc_unk_sc:
-                                    if _age_m >= 12.0:
-                                        print(f"🚫 [SCANNER-NO-SOC] {actual_symbol} ({mint[:8]}): 0 соцсетей при возрасте {_age_m:.0f}м (>=12м) — отмена!")
-                                        continue
-                                    _is_stealth_sc = (_vol5_live >= 6000.0 and _b5_sc >= 30 and _b5_sc >= _s5_sc * 1.50 and liq_usd >= 18000.0)
-                                    if not _is_stealth_sc:
-                                        print(f"🚫 [SCANNER-NO-SOC] {actual_symbol} ({mint[:8]}): 0 соцсетей без органики — отмена!")
-                                        continue
                                 _base_max_h1_live = float(getattr(config, "MAX_ENTRY_H1_PCT", 350.0))
                                 _is_fresh_active_sc = (
                                     _age_m <= 4.0
@@ -1136,19 +1128,21 @@ async def scanner_loop(analyzer, tracker):
                                 _avg_tx5_sc = (_vol5_live / _tot_tx5_sc) if _tot_tx5_sc > 0 else 0.0
                                 if _links_sc == 0 and not _soc_unk_sc:
                                     _vl_sc = _vol5_live / max(liq_usd, 1.0)
-                                    if _age_m >= 20.0:
-                                        print(f"🚫 [SCANNER-NO-SOCIALS] {actual_symbol} ({mint[:8]}): 0 соцсетей в зрелом возрасте {_age_m:.0f}м (>=20м) — отмена!")
-                                        continue
+                                    _is_viral_stealth = (_vol5_live >= 15000.0 and _b5_bump >= 80 and _b5_bump >= int(_s5_bump * 1.15))
+                                    _is_organic_stealth = (
+                                        _vol5_live >= 4000.0 and _b5_bump >= 20 and _b5_bump >= int(_s5_bump * 1.05)
+                                        and liq_usd >= 8000.0 and _vl_sc <= 7.0 and _avg_tx5_sc >= 12.0
+                                    )
+                                    if not (_is_organic_stealth or _is_viral_stealth):
+                                        if _age_m >= 20.0:
+                                            print(f"🚫 [SCANNER-NO-SOCIALS] {actual_symbol} ({mint[:8]}): 0 соцсетей в зрелом возрасте {_age_m:.0f}м (>=20м) — отмена!")
+                                            continue
+                                        else:
+                                            print(f"🚫 [SCANNER-NO-SOCIALS] {actual_symbol} ({mint[:8]}): 0 соцсетей при {_age_m:.1f}м без чистой органики — отмена!")
+                                            continue
                                     else:
-                                        _is_organic_stealth = (
-                                            _vol5_live >= 5000.0 and _b5_bump >= 25 and _b5_bump >= _s5_bump * 1.12
-                                            and liq_usd >= 12000.0 and _vl_sc <= 6.0 and _avg_tx5_sc >= 12.0
-                                        )
-                                    if not _is_organic_stealth:
-                                        print(f"🚫 [SCANNER-NO-SOCIALS] {actual_symbol} ({mint[:8]}): 0 соцсетей при {_age_m:.1f}м без чистой органики — отмена!")
-                                        continue
-                                    else:
-                                        print(f"💎 [SCANNER-ORGANIC-STEALTH] {actual_symbol} ({mint[:8]}): 0 соцсетей, но подтвержден органический прорыв — пропуск в анализ.")
+                                        _tag_st = "VIRAL-STEALTH" if _is_viral_stealth else "ORGANIC-STEALTH"
+                                        print(f"💎 [SCANNER-{_tag_st}] {actual_symbol} ({mint[:8]}): 0 соцсетей, но подтвержден торговый поток (${_vol5_live:,.0f}, {_b5_bump}b/{_s5_bump}s) — пропуск в сделку.")
 
                                 # Защита от микро bump-ботов (кейс LAURA $1.60 avg_tx):
                                 if _tot_tx5_sc >= 120 and _avg_tx5_sc < 8.0:
