@@ -1,0 +1,68 @@
+{
+  "GROK": {
+    "source": "DEFAULT_CORE",
+    "added_at": 1794253000,
+    "expires_at": 1796845000,
+    "headline": "Core viral narrative"
+  },
+  "STARSHIP": {
+    "source": "DEFAULT_CORE",
+    "added_at": 1794253000,
+    "expires_at": 1796845000,
+    "headline": "Core viral narrative"
+  },
+  "DOGE": {
+    "source": "DEFAULT_CORE",
+    "added_at": 1794253000,
+    "expires_at": 1796845000,
+    "headline": "Core viral narrative"
+  },
+  "MARS": {
+    "source": "DEFAULT_CORE",
+    "added_at": 1794253000,
+    "expires_at": 1796845000,
+    "headline": "Core viral narrative"
+  },
+  "CYBER": {
+    "source": "DEFAULT_CORE",
+    "added_at": 1794253000,
+    "expires_at": 1796845000,
+    "headline": "Core viral narrative"
+  },
+  "TRUMP": {
+    "source": "DEFAULT_CORE",
+    "added_at": 1794253000,
+    "expires_at": 1796845000,
+    "headline": "Core viral narrative"
+  },
+  "TARIFF": {
+    "source": "DEFAULT_CORE",
+    "added_at": 1794253000,
+    "expires_at": 1796845000,
+    "headline": "Core viral narrative"
+  },
+  "PEACE": {
+    "source": "DEFAULT_CORE",
+    "added_at": 1794253000,
+    "expires_at": 1796845000,
+    "headline": "Core viral narrative"
+  },
+  "MUSK": {
+    "source": "DEFAULT_CORE",
+    "added_at": 1794253000,
+    "expires_at": 1796845000,
+    "headline": "Core viral narrative"
+  },
+  "OPENAI": {
+    "source": "DEFAULT_CORE",
+    "added_at": 1794253000,
+    "expires_at": 1796845000,
+    "headline": "Core viral narrative"
+  },
+  "DEEPSEEK": {
+    "source": "DEFAULT_CORE",
+    "added_at": 1794253000,
+    "expires_at": 1796845000,
+    "headline": "Core viral narrative"
+  }
+}

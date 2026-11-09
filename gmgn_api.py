@@ -117,4 +117,3 @@ async def gmgn_api_loop(analyzer, tracker):
             break
         except Exception as e:
             await asyncio.sleep(15.0)
-

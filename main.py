@@ -21,6 +21,7 @@ import config
 from analyzer import Analyzer
 from tracker import PaperTracker
 from fomo_scanner import fomo_loop
+from news_narrative import news_radar
 
 # === 1. ФОНОВЫЙ ТОРГОВЫЙ БОТ ===
 async def position_security_auditor_loop(analyzer, tracker):
@@ -723,10 +724,45 @@ async def birth_wss_loop(analyzer, tracker):
                 await ws.send(json.dumps(payload))
                 async for message in ws:
                     data = json.loads(message)
-                    mint = data.get("mint")
+                    mint = str(data.get("mint") or "").strip()
+                    symbol = str(data.get("symbol") or "").strip()
+                    name = str(data.get("name") or "").strip()
+                    trader = str(data.get("traderPublicKey") or "").strip()
+                    initial_buy = float(data.get("initialBuy") or 0.0)
+                    v_sol = float(data.get("vSolInBondingCurve") or 30.0)
+                    v_tokens = float(data.get("vTokensInBondingCurve") or 1_073_000_000.0)
+
                     if mint:
-                        # Просто сохраняем монету в базу для scanner_loop (чтобы она "настоялась" 5-20 мин)
+                        # Сохраняем монету в базу для scanner_loop
                         birth_tracker.add_token(mint)
+
+                    # ⚡ МГНОВЕННЫЙ СНАЙПИНГ ПО СЛОВАМ ИЗ X (TWITTER) И НОВОСТЕЙ (0ms)
+                    if getattr(config, "NARRATIVE_SNIPER_ENABLED", True) and mint and symbol and (mint not in tracker.positions):
+                        try:
+                            from news_narrative import news_radar
+                            match = news_radar.match_token(symbol, name)
+                            if match and not birth_tracker.is_bad_creator(trader):
+                                _max_dev = float(getattr(config, "NARRATIVE_MAX_DEV_BUY", 150_000_000))
+                                if initial_buy <= _max_dev and tracker.can_open_new_position(config.MAX_CONCURRENT_POSITIONS):
+                                    sol_px = float(getattr(analyzer, "sol_price", 0.0) or 86.0)
+                                    px_sol = (v_sol / v_tokens) if v_tokens > 0 else 0.000000028
+                                    entry_px = px_sol * sol_px
+                                    _trade_size = float(getattr(config, "NARRATIVE_ENTRY_SIZE_USD", 4.0))
+
+                                    print(f"🚨 [NARRATIVE-SNIPER] Сработал триггер по слову '{match['word']}' ({match['match_type']})!", flush=True)
+                                    print(f"🔥 Токен: {symbol} ({name}) | Mint: {mint[:8]}... | Вход по кривой: ${entry_px:.8f} — МГНОВЕННЫЙ ВХОД!", flush=True)
+
+                                    tracker.add_position(
+                                        symbol=symbol,
+                                        mint=mint,
+                                        entry_price=entry_px,
+                                        amount_usd=_trade_size,
+                                        is_mature=True,
+                                        source=f"NARRATIVE:{match['word']}",
+                                        chain="solana"
+                                    )
+                        except Exception as _nar_e:
+                            print(f"⚠️ Narrative sniper error: {_nar_e}")
         except Exception as e:
             # Не спамим при 502, фоновый поллер подхватывает новые токены
             await asyncio.sleep(15)
@@ -754,6 +790,12 @@ async def scanner_loop(analyzer, tracker):
                 print(f"🛑 KILL-SWITCH: дневной PnL ${day_pnl:.2f} <= -${config.MAX_DAILY_LOSS_USD}. Входы на паузе 5мин.")
                 await asyncio.sleep(int(getattr(config, "KILL_SWITCH_PAUSE", 300)))
                 continue
+            _scanner_open = sum(1 for p in tracker.positions.values() if getattr(p, "status", "") == "open" and str(getattr(p, "source", "")).startswith("SCANNER:"))
+            _max_scanner_slots = int(getattr(config, "MAX_SCANNER_CONCURRENT_POSITIONS", 2))
+            if _scanner_open >= _max_scanner_slots:
+                await asyncio.sleep(2.0)
+                continue
+
             if tracker.can_open_new_position(config.MAX_CONCURRENT_POSITIONS):
                 print(f"🔎 Сканируем монеты... (Открыто: {open_count}/{config.MAX_CONCURRENT_POSITIONS})")
                 
@@ -893,6 +935,9 @@ async def scanner_loop(analyzer, tracker):
                             continue
 
                         _score_rank = (1000.0 if mint in _graduated_set else 0.0) + _c_m5
+                        _is_narr = news_radar.match_token(_sym, str(_base.get("name", "")))
+                        if _is_narr:
+                            _score_rank += 5000.0  # Новостные/X-нарративы получают абсолютный приоритет #1
                         _ranked_mints.append((_score_rank, mint))
                     else:
                         # Если в префетче DS пока нет данных (DexScreener запаздывает / пул на Meteora или PumpSwap):
@@ -2543,6 +2588,7 @@ async def async_main():
         _supervised(lambda: shadow_tracker.price_watcher_loop(), "shadow_tracker"),
         _supervised(lambda: rugpull_feeder_loop(), "rugpull_feeder_loop"),
         _supervised(lambda: sol_price_updater(), "sol_price_updater"),
+        _supervised(lambda: news_radar.run_news_monitor(), "news_narrative_radar"),
     ]
     if not getattr(config, "SOLANA_ONLY", True):
         _core_loops.extend([
@@ -2649,7 +2695,7 @@ def load_dashboard_portfolio():
 st.title("🚀 PhantBot - Alpha Agent Dashboard")
 st.markdown("Панель управления алгоритмическим ботом.")
 
-tab1, tab2 = st.tabs(["📊 Портфель и История", "📡 Радар Рынка (Alpha Scanner)"])
+tab1, tab2, tab3 = st.tabs(["📊 Портфель и История", "📡 Радар Рынка (Alpha Scanner)", "📰 X и Новости (Narrative Sniper)"])
 
 _frag_dec = getattr(st, "fragment", getattr(st, "experimental_fragment", None))
 
@@ -2977,6 +3023,52 @@ with tab2:
             st.info("Бот пока не проанализировал ни одной монеты.")
     except Exception as e:
         st.info("Ожидание данных от сканера...")
+
+with tab3:
+    st.subheader("📰 X (Twitter) и Новостной Нарративный Снайпер")
+    st.markdown("""
+    Бот непрерывно слушает ленты **X (Twitter)** и горячих крипто-новостей, извлекает вирусные ключевые слова и **мгновенно входит (0ms)** в появляющиеся на Pump.fun / DEX токены по этим словам.
+    * **Без требования залоченной LP**: на кривой кёрва Pump.fun ликвидность заблокирована смарт-контрактом.
+    * **Быстрая фиксация прибыли**: автоматический сброс на первом же пампе (+14%..+25%) без пересиживания.
+    """)
+
+    col_in1, col_in2 = st.columns([3, 1])
+    with col_in1:
+        user_kw = st.text_input("🎯 Добавить ключевое слово для ожидания (например: STARSHIP, LIBERTY, DOGE):", key="new_user_kw")
+    with col_in2:
+        st.write("")
+        st.write("")
+        if st.button("➕ Добавить в радар", use_container_width=True):
+            if user_kw:
+                news_radar.add_keyword(user_kw, source="USER_DASHBOARD", ttl_sec=86400.0)
+                st.success(f"Ключевое слово '{user_kw.upper().strip()}' активно! Бот ждет токен.")
+                st.rerun()
+
+    st.markdown("### 🎯 Активные ключевые слова в радаре:")
+    active_kws = news_radar.get_active_keywords()
+    if active_kws:
+        kw_cols = st.columns(4)
+        for i, (kw_name, kw_meta) in enumerate(active_kws.items()):
+            with kw_cols[i % 4]:
+                _src_tag = kw_meta.get("source", "RADAR")
+                _exp_m = max(0, int((kw_meta.get("expires_at", 0) - time.time()) // 60))
+                st.markdown(f"""
+                <div style='background: #222; border-left: 3px solid #00C851; padding: 8px 12px; border-radius: 6px; margin-bottom: 8px;'>
+                    <b style='color: #00FF88; font-size: 1.1em;'>${kw_name}</b><br>
+                    <span style='color: #888; font-size: 0.75em;'>📍 {_src_tag}</span><br>
+                    <span style='color: #666; font-size: 0.7em;'>⏳ осталось {_exp_m}м</span>
+                </div>
+                """, unsafe_allow_html=True)
+    else:
+        st.info("Нет активных ключевых слов.")
+
+    st.markdown("### 📡 Последние перехваченные новости и твиты:")
+    if news_radar.last_news_items:
+        for it in news_radar.last_news_items[:10]:
+            _kws_str = " ".join([f"`${k}`" for k in it.get("keywords", [])])
+            st.markdown(f"• **[{it.get('source', '')}]** {it.get('title', '')} $\\rightarrow$ {_kws_str}")
+    else:
+        st.info("Монитор новостей собирает актуальные заголовки...")
 
 # Автообновление интерфейса (по умолчанию выключено по запросу пользователя)
 if st.checkbox("Включить автообновление (каждые 5 сек)", value=False):

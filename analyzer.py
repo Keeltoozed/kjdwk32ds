@@ -1470,7 +1470,9 @@ class Analyzer:
 
             # 4. Кэшированный RugCheck аудит (концентрация холдеров и блокировка LP на кастомных токенах)
             _dex_low_rc = str((pair_data or {}).get("dexId", "")).lower()
-            _is_pump_origin_chk = mint.endswith("pump") or is_pump_curve
+            from news_narrative import news_radar
+            _is_narr_match = bool(news_radar.match_token(symbol, name))
+            _is_pump_origin_chk = mint.endswith("pump") or is_pump_curve or _is_narr_match
             if rc_st == 200 and isinstance(rc_data, dict):
                 raw_sc = float(rc_data.get("score") or 0.0)
                 _allowed_lp_terms_chk = (
@@ -1958,19 +1960,17 @@ class Analyzer:
                 and _vm5_pre >= 2000.0
             )
             _is_organic_stealth = (
-                _raw_liq_chk >= 6000.0
-                and _vm5_pre >= 1200.0
+                _age_min_pre < 5.0
+                and _raw_liq_chk >= 12000.0
+                and _vm5_pre >= 10000.0
                 and _vol_liq_r <= 6.5
-                and (
-                    (_b5_pre >= 12 and _b5_pre >= _s5_pre * 1.05) or
-                    (_b5_pre >= 8 and _s5_pre <= 30 and _m5 >= 2.0 and _avg_tx_pre >= 18.0) or
-                    (_vm5_pre >= 5000.0 and _b5_pre >= _s5_pre)
-                )
+                and _b5_pre >= 40
+                and _b5_pre >= _s5_pre * 1.30
             )
             _is_viral_stealth = (
-                _vm5_pre >= 15000.0
-                and _b5_pre >= 80
-                and _b5_pre >= int(_s5_pre * 1.15)
+                _vm5_pre >= 40000.0
+                and _b5_pre >= 200
+                and _b5_pre >= int(_s5_pre * 1.35)
             )
             if not (_is_safe_young_pump or _is_organic_stealth or _is_viral_stealth):
                 _sub_reason = f"no-socials-mature {_age_min_pre:.0f}m" if _age_min_pre >= 12.0 else f"no-socials-dev-rug {_age_min_pre:.0f}m"
