@@ -38,6 +38,12 @@ class JupiterAPI:
             return {}
         import market_data
         try:
+            res = await market_data.get_fast_position_prices(mints, pair_hints=pair_hints)
+            if res:
+                return res
+        except Exception:
+            pass
+        try:
             return await market_data.get_bulk_prices(mints, pair_hints=pair_hints)
         except Exception:
             pass

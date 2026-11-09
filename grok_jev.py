@@ -944,6 +944,16 @@ class GrokJevEngine:
             return False, -0.14, 0.0, f"fomo-spike (m5 {m5:+.1f}% > +{_max_m5_cap:.0f}%) — buying local top, wait for reset"
         if m1 > _max_m1 and not _m1_is_phantom:
             return False, -0.14, 0.0, f"m1-spike (m1 {m1:+.1f}% > +{_max_m1:.1f}%) — vertical push, wait for consolidation"
+
+        # 1.1. АНТИ-ХАИ (BID THE FLUSH, NOT THE CANDLE):
+        # Запрет покупать верхушку зеленой свечи после сильного импульса m5:
+        # Если монета уже выросла на m5 >= 18% И текущая минута m1 >= +3.0% —
+        # это покупка на самом хае перед фиксацией прибыли (кейс BMT +31.7% m5, +7.4% m1 -> мгновенный дамп).
+        if m5 >= 18.0 and m1 >= 3.0 and not _m1_is_phantom:
+            return False, -0.10, 0.0, f"fomo-peak-candle (m5 {m5:+.1f}%, m1 {m1:+.1f}%) — local top of green push, wait for pullback/flush"
+
+        if m5 >= 35.0 and m1 >= 1.5 and not _m1_is_phantom:
+            return False, -0.10, 0.0, f"extended-m5-spike (m5 {m5:+.1f}%) — overextended momentum, wait for consolidation"
         _base_max_h1_flush = float(getattr(_c, "MAX_ENTRY_H1_PCT", 350.0))
         _is_active_fresh_flush = (_age_m <= 120.0 and vol5 >= 3000.0 and b5 >= s5 * 1.05 and m5 >= 1.5)
         _max_h1_flush = 2500.0 if _is_active_fresh_flush else _base_max_h1_flush

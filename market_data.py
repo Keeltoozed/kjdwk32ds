@@ -517,6 +517,104 @@ async def _jup_v3_bulk_prices(mints: list) -> dict:
     return out
 
 
+_fast_session = None
+
+async def _get_fast_pos_session():
+    global _fast_session
+    import aiohttp
+    try:
+        curr_loop = asyncio.get_running_loop()
+    except RuntimeError:
+        curr_loop = None
+    sess_loop = getattr(_fast_session, "_loop", None) if _fast_session is not None else None
+    if _fast_session is None or _fast_session.closed or (curr_loop and sess_loop and sess_loop != curr_loop):
+        connector = aiohttp.TCPConnector(limit=50, ttl_dns_cache=300)
+        timeout = aiohttp.ClientTimeout(total=3.0, connect=1.5)
+        _fast_session = aiohttp.ClientSession(connector=connector, timeout=timeout)
+    return _fast_session
+
+
+async def get_fast_position_prices(mints: list, pair_hints: dict = None) -> dict:
+    """Выделенный сверхбыстрый запрос цен ДЛЯ ОТКРЫТЫХ ПОЗИЦИЙ (без очередей и троттлинга сканера).
+    Задержка ~150-250мс:
+      1. Jupiter Price API v3 (api.jup.ag / lite-api.jup.ag)
+      2. DexScreener tokens/v1/solana прямой опрос для недостающих
+    """
+    if not mints:
+        return {}
+    ms = [str(m).strip() for m in dict.fromkeys(mints) if m and not str(m).startswith("0x")]
+    if not ms:
+        return {}
+
+    out = {}
+    try:
+        session = await _get_fast_pos_session()
+    except Exception:
+        return out
+
+    # 1. Запрос в Jupiter Price v3 (батч до 50 токенов)
+    import config
+    jup_key = getattr(config, "JUP_API_KEY", "") or ""
+    headers = {"Accept": "application/json"}
+    if jup_key:
+        headers["x-api-key"] = jup_key
+
+    for i in range(0, len(ms), 50):
+        chunk = ms[i:i + 50]
+        ids_q = ",".join(chunk)
+        urls = [
+            ("https://api.jup.ag/price/v3?ids=" + ids_q, headers if jup_key else {"Accept": "application/json"}),
+            ("https://lite-api.jup.ag/price/v3?ids=" + ids_q, {"Accept": "application/json"})
+        ]
+        if not jup_key:
+            urls.reverse()
+
+        for u, hdrs in urls:
+            try:
+                async with session.get(u, headers=hdrs) as r:
+                    if r.status == 200:
+                        data = await r.json(content_type=None)
+                        if isinstance(data, dict):
+                            for m in chunk:
+                                v = data.get(m)
+                                if isinstance(v, dict):
+                                    px = float(v.get("usdPrice") or v.get("price") or 0.0)
+                                    if px > 0.0:
+                                        out[m] = px
+                        break
+            except Exception:
+                continue
+
+    # 2. Прямой DexScreener для тех токенов, которых нет в Jupiter
+    missing = [m for m in ms if m not in out]
+    if missing:
+        for i in range(0, len(missing), 30):
+            chunk = missing[i:i + 30]
+            try:
+                ds_url = "https://api.dexscreener.com/tokens/v1/solana/" + ",".join(chunk)
+                async with session.get(ds_url) as r:
+                    if r.status == 200:
+                        data = await r.json(content_type=None)
+                        if isinstance(data, list):
+                            _hints = pair_hints or {}
+                            for p in data:
+                                b_addr = (p.get("baseToken") or {}).get("address")
+                                if not b_addr:
+                                    continue
+                                p_addr = p.get("pairAddress")
+                                px = float(p.get("priceUsd") or 0.0)
+                                if px <= 0:
+                                    continue
+                                if _hints.get(b_addr) and p_addr == _hints.get(b_addr):
+                                    out[b_addr] = px
+                                elif b_addr not in out:
+                                    out[b_addr] = px
+            except Exception:
+                pass
+
+    return out
+
+
 async def get_bulk_prices(mints: list, pair_hints: dict = None) -> dict:
     """Балк-цены, цепочка fallback'ов (каждый бесплатный, со своей квотой):
     Jupiter Price v3 (ончейн ~150мс) -> DexScreener (с привязкой к pair_hints) -> CEX -> GeckoTerminal."""

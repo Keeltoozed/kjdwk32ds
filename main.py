@@ -164,7 +164,7 @@ async def position_manager_loop(analyzer, tracker):
                 _cap = tracker.get_total_capital() if hasattr(tracker, "get_total_capital") else getattr(tracker, 'cash', 0.0)
                 print(f"🛡️ [HEARTBEAT] Менеджер позиций активен: {_n_open} открытых позиций, капитал ${_cap:.2f}", flush=True)
             
-            # ОПТИМИЗАЦИЯ СКОРОСТИ: Запрашиваем цены для ВСЕХ позиций ОДНИМ запросом с жестким таймаутом и привязкой к пулу входа.
+            # ОПТИМИЗАЦИЯ СКОРОСТИ: Запрашиваем цены для ВСЕХ позиций через выделенный сверхбыстрый клиент (150-250мс).
             mints_to_fetch = [m for m, p in open_positions.items()
                               if not m.startswith("0x")
                               and getattr(p, "chain", "solana") == "solana"]
@@ -172,9 +172,13 @@ async def position_manager_loop(analyzer, tracker):
             bulk_prices = {}
             if mints_to_fetch:
                 try:
-                    bulk_prices = await asyncio.wait_for(JupiterAPI.get_prices(mints_to_fetch, pair_hints=pair_hints), timeout=2.5)
+                    import market_data as _md_fast
+                    bulk_prices = await asyncio.wait_for(_md_fast.get_fast_position_prices(mints_to_fetch, pair_hints=pair_hints), timeout=3.5)
                 except Exception:
-                    bulk_prices = {}
+                    try:
+                        bulk_prices = await asyncio.wait_for(JupiterAPI.get_prices(mints_to_fetch, pair_hints=pair_hints), timeout=3.0)
+                    except Exception:
+                        bulk_prices = {}
             
             for mint, position in list(open_positions.items()):
                 # Robinhood (0x...) ведёт отдельный robinhood_loop со своими ценами DS
@@ -191,50 +195,39 @@ async def position_manager_loop(analyzer, tracker):
                 if wss_fresh:
                     current_price = wss_px
                 else:
-                    # 2. Берем цену из Raydium/Gecko/DS балка
+                    # 2. Берем цену из сверхбыстрого балка Jupiter v3 / DexScreener
                     api_price = bulk_prices.get(mint, 0.0)
                     if not api_price:
-                        # Добор только если нет цены и с жестким таймаутом 1.5с (не вешаем Stop-Loss луп!)
+                        # Если не пришло в общем батче — одиночный моментальный запрос без очередей
                         try:
-                            import market_data as _md
-                            _td0 = await asyncio.wait_for(_md.get_token_data(mint, max_cache_age=5.0), timeout=1.5)
-                            api_price = float((_td0.get("priceUsd", 0) or 0)) if _td0 else 0.0
+                            import market_data as _md_fast
+                            _one_px = await _md_fast.get_fast_position_prices([mint], pair_hints={mint: getattr(position, "pair_address", "")})
+                            api_price = _one_px.get(mint, 0.0)
                         except Exception:
-                            pass
+                            api_price = 0.0
+
                     if api_price > 0.0:
                         current_price = api_price
                         position.last_live_price_ts = time.time()
                     else:
-                        # Если оба источника не дали цену в этом тике — проверяем насколько стара цена
                         _last_known = float(getattr(position, "current_price_usd", 0.0) or getattr(position, "entry_price_usd", 0.0) or 0.0)
                         _last_live_ts = float(getattr(position, "last_live_price_ts", 0.0) or position.entry_time)
                         _stale_sec = time.time() - _last_live_ts
-                        if _stale_sec > 45.0:
-                            # Пробуем запросить ончейн через Jupiter
-                            try:
-                                from jupiter import JupiterAPI
-                                _j_px = await JupiterAPI.get_price(mint)
-                                if _j_px > 0:
-                                    current_price = _j_px
-                                    position.current_price_usd = _j_px
-                                    position.last_live_price_ts = time.time()
-                                    position.price_updated_at = time.time()
-                                else:
-                                    current_price = _last_known
-                            except Exception:
-                                current_price = _last_known
-                            
-                            # Если котировок нет больше 90 сек — пул вымер / рагнут (предотвращает кейс BRO 28 минут!)
-                            if _stale_sec > 90.0:
-                                tracker.close_position(mint, current_price if current_price > 0 else 0.0, f"Dead Stale Pool Cut ({_stale_sec:.0f}s no quotes)")
-                                continue
-                        else:
-                            current_price = _last_known
+                        current_price = _last_known
+                        
+                        # Если котировок нет больше 60 сек — пул вымер / рагнут
+                        if _stale_sec > 60.0:
+                            tracker.close_position(mint, current_price if current_price > 0 else 0.0, f"Dead Stale Pool Cut ({_stale_sec:.0f}s no quotes)")
+                            continue
                 
                 # Всегда фиксируем время активного мониторинга позиции менеджером
-                position.price_checked_at = time.time()
-                if api_price > 0.0 or wss_fresh:
-                    position.price_updated_at = time.time()
+                _now_tick = time.time()
+                position.price_checked_at = _now_tick
+                if current_price > 0:
+                    position.current_price_usd = current_price
+                    position.price_updated_at = _now_tick
+                    if api_price > 0.0 or wss_fresh:
+                        position.last_live_price_ts = _now_tick
 
                 # Обновляем живую цену для GROWTH/EARLY-позиций прямо здесь (каждую секунду),
                 # а исполнение медленных стопов/стагнантов оставляет growth_loop
@@ -306,10 +299,10 @@ async def position_manager_loop(analyzer, tracker):
                     print(f"🛡️ [TRACK] {position.symbol} ({mint[:8]}): цена ${current_price:.8f} ({_pnl_str}) | пик: ${position.max_price_usd:.8f} | держим {minutes_held:.1f}м", flush=True)
 
                 # Infant Dump: не даём монете сложиться на первой минуте (кейс STONKS / DОG™)!
-                # Сразу сверяем провал <= -9.5% с живой котировкой Jupiter и мгновенно рубим реальный раг без провала в -30%!
+                # Сразу сверяем провал <= -10% с живой котировкой Jupiter и мгновенно рубим реальный раг без провала в -30%!
                 try:
-                    _inf_w = float(getattr(config, "INFANT_WINDOW_MIN", 0.5))
-                    _inf_p = -abs(float(getattr(config, "INFANT_DUMP_PCT", -0.095)))
+                    _inf_w = float(getattr(config, "INFANT_WINDOW_MIN", 1.0))
+                    _inf_p = -abs(float(getattr(config, "INFANT_DUMP_PCT", -0.100)))
                     if minutes_held < _inf_w and pnl_pct <= _inf_p:
                         _real_inf_dump = True
                         try:
@@ -372,9 +365,10 @@ async def position_manager_loop(analyzer, tracker):
                 # Обновляем текущие значения для отображения в интерфейсе
                 position.current_price_usd = current_price
                 position.current_pnl_usd = position.amount_usd * pnl_pct
-                position.price_checked_at = time.time()
-                if current_price > 0 and (api_price > 0.0 or wss_fresh):
-                    position.price_updated_at = time.time()
+                _now_t = time.time()
+                position.price_checked_at = _now_t
+                if current_price > 0:
+                    position.price_updated_at = _now_t
 
                 # === ИНТЕГРАЦИЯ МАТЕМАТИКИ ДЛЯ ЗРЕЛЫХ МОНЕТ (SWING TRADING / RIDE RUNNERS) ===
                 # Исполняется ДО скальперских Early Fade / Stagnant срезов, чтобы ракеты ехали по MatureExitManager!
@@ -640,14 +634,14 @@ async def position_manager_loop(analyzer, tracker):
                         else:
                             position.wick_confirm_n = 0
                                 
-                # 3. АВАРИЙНЫЙ КЭП из config.py (-18% вместо -30%): не даём одной сделке съедать 3 профита!
-                _emerg_cap = -abs(float(getattr(config, "EMERGENCY_CAP_PCT", -0.18)))
+                # 3. АВАРИЙНЫЙ КЭП из config.py (-15%): не даём одной сделке съедать прибыль других
+                _emerg_cap = -abs(float(getattr(config, "EMERGENCY_CAP_PCT", -0.15)))
                 if pnl_pct <= _emerg_cap:
                     tracker.close_position(mint, current_price, f"Emergency Cap ({pnl_pct*100:.0f}%)")
                     continue
 
-                # 3.5 ЖЕСТКИЙ Stop Loss из config.py (-14% после 1.2 мин)
-                if minutes_held >= 1.2 and pnl_pct <= config.STOP_LOSS_PCT:
+                # 3.5 ЖЕСТКИЙ Stop Loss из config.py (-10% после 20 секунд)
+                if minutes_held >= 0.35 and pnl_pct <= config.STOP_LOSS_PCT:
                     tracker.close_position(mint, current_price, f"Hard Stop Loss ({config.STOP_LOSS_PCT*100:.0f}%)")
                     continue
                     
