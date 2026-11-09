@@ -1492,9 +1492,11 @@ class Analyzer:
                 for rk in (rc_data.get("risks") or []):
                     rkn = str(rk.get("name", "")).lower()
                     rkl = str(rk.get("level", "")).lower()
-                    if _is_pump_origin_chk and "large amount of lp unlocked" in rkn:
+                    if _is_pump_origin_chk and any(k in rkn for k in ("large amount of lp unlocked", "unlocked lp", "single holder", "high ownership", "top 10 holders", "high holder")):
                         continue
-                    if rkl == "danger" and any(k in rkn for k in ("single holder", "high ownership", "top 10 holders", "large amount of lp unlocked", "freeze authority")):
+                    if rkl == "danger" and any(k in rkn for k in ("freeze authority", "mint authority")):
+                        return False, f"RugCheck критический риск: {rk.get('name')}"
+                    if not _is_pump_origin_chk and rkl == "danger" and any(k in rkn for k in ("single holder", "high ownership", "top 10 holders", "large amount of lp unlocked")):
                         return False, f"RugCheck критический риск: {rk.get('name')}"
                 if not _is_pump_origin_chk:
                     lp_locked_ok = any(
@@ -1576,45 +1578,15 @@ class Analyzer:
         symbol = base_token.get("symbol", "").upper()
         cur_px_eval = float(pair_data.get("priceUsd", 0) or 0.0)
 
-        # === DECISION CACHE (Kaiser.charon Trench Rule) ===
-        # Если монета недавно проверена и отклонена, и цена/объем не изменились (>7% цена, >15% объем),
-        # используем сохраненный вердикт мгновенно (0ms), не перегружая CPU и внешние API!
-        if not hasattr(self, "_decision_cache"):
-            self._decision_cache = {}
-        _cached = self._decision_cache.get(mint)
-        if _cached and (time.time() - _cached["ts"]) < 40.0:
-            _old_px = _cached["price"]
-            _px_d = abs(cur_px_eval - _old_px) / max(_old_px, 1e-9)
-            _vol_d = abs(_vm5_pre - _cached["vol5"]) / max(_cached["vol5"], 1.0)
-            if _px_d < 0.07 and _vol_d < 0.15:
-                if not _cached.get("pass", False):
-                    self.signals[mint] = _cached.get("signal", "")
-                    self.last_score = _cached.get("score", 0.0)
-                    return False
-
-        if not hasattr(self, "_eval_ctx"):
-            self._eval_ctx = {}
-        self._eval_ctx[mint] = {
-            "symbol": symbol,
-            "chain": "solana",
-            "price": cur_px_eval,
-            "liq": float((pair_data.get("liquidity") or {}).get("usd", 0) or 0),
-            "vol5": _vm5_pre,
-            "m5": float((pair_data.get("priceChange") or {}).get("m5", 0) or 0),
-            "source": "SOLANA_SCAN"
-        }
-
-        if pair_data.get("_price_divergence"):
-            _div_r = float(pair_data.get("_price_divergence_ratio", 0.0) or 0.0)
-            return self._deny(mint, "price-split", f"🚫 [PRICE-SPLIT] {symbol} ({mint[:8]}): рассинхрон цен между пулами {_div_r:.1f}x (миграция/гэп) — блок входа.")
-
-        # === ATH DISTANCE & PEAK-MEMORY GUARD (Kaiser.charon Trench Rule) ===
+        # === ATH DISTANCE & PEAK-MEMORY GUARD ===
         _dist_ath = float(pair_data.get("_dist_to_ath_pct", 0.0) or 0.0)
         _drop_from_peak = float(pair_data.get("_drop_from_peak_5m", 0.0) or 0.0)
         _liq_drop_peak = float(pair_data.get("_liq_drop_from_peak", 0.0) or 0.0)
-        if _dist_ath <= -48.0 and _m5 < 10.0:
+        _dex_chk_early = str(pair_data.get("dexId", "")).lower()
+        _is_early_pool = mint.endswith("pump") or _dex_chk_early in ("pump", "pumpfun", "pumpswap") or _b5_pre >= _s5_pre
+        if _dist_ath <= -65.0 and _m5 < 5.0 and not _is_early_pool:
             return self._deny(mint, f"ath-dumped {_dist_ath:.0f}%", f"🚫 [ATH-DUMP] {symbol} ({mint[:8]}): цена провалилась на {_dist_ath:.1f}% от ATH — отскок дохлой кошки с бэгхолдерами.")
-        if _drop_from_peak <= -38.0:
+        if _drop_from_peak <= -45.0 and not _is_early_pool:
             return self._deny(mint, f"post-peak-crash {_drop_from_peak:.0f}%", f"🚫 [POST-PEAK-CRASH] {symbol} ({mint[:8]}): цена уже упала на {_drop_from_peak:.1f}% от виденного ботом пика — отскок дохлой кошки после дампа.")
         if _liq_drop_peak <= -45.0:
             return self._deny(mint, f"post-peak-liq-drain {_liq_drop_peak:.0f}%", f"🚫 [LIQ-DRAIN] {symbol} ({mint[:8]}): ликвидность пула уже сдулась на {_liq_drop_peak:.1f}% от пика — снайперы/дев выводят SOL.")
@@ -1952,15 +1924,15 @@ class Analyzer:
             _vol_liq_r = (_vm5_pre / max(_raw_liq_chk, 1.0)) if _raw_liq_chk > 0 else 0.0
             _txns_tot = _b5_pre + _s5_pre
             _is_canonical_pump = mint.endswith("pump") or str((pair_data or {}).get("dexId", "")).lower() in ("pumpswap", "pump", "pumpfun")
-            # Для токенов Pump.fun / сожженного LP: даем грейс-период на индексацию соцсетей DexScreener (до _req_soc_age = 8м)
+            # Для токенов Pump.fun / сожженного LP: даем грейс-период на индексацию соцсетей DexScreener (до 15м)
             # при подтвержденном чистом потоке реальных покупателей!
             _is_safe_young_pump = (
                 (_is_canonical_pump or _is_burned_launchpad)
-                and _age_min_pre < _req_soc_age
-                and _raw_liq_chk >= 7000.0
-                and _b5_pre >= 15
-                and _b5_pre >= int(_s5_pre * 1.05)
-                and _vm5_pre >= 2000.0
+                and _age_min_pre < 15.0
+                and _raw_liq_chk >= 4000.0
+                and _b5_pre >= 8
+                and _b5_pre >= _s5_pre
+                and _vm5_pre >= 800.0
             )
             _is_organic_stealth = (
                 _age_min_pre < 5.0
@@ -2211,7 +2183,11 @@ class Analyzer:
                         if "creator history" in _rk_name:
                             # В коммите 0d2b1ae creator history не блокировал молодые pump токены
                             continue
-                        if _rk_lvl == "danger" and any(k in _rk_name for k in ("single holder", "high ownership", "top 10 holders", "freeze authority")):
+                        if (_is_canonical_pump or _is_narr_match or _lp_ok) and any(k in _rk_name for k in ("single holder", "high ownership", "top 10 holders", "high holder")):
+                            continue
+                        if _rk_lvl == "danger" and any(k in _rk_name for k in ("freeze authority", "mint authority")):
+                            return self._deny(mint, f"rc-danger {_rk_name[:15]}", f"🚫 [АНТИСКАМ-RC] {symbol} ({mint[:8]}): критический риск RugCheck '{rk.get('name')}' — блок скама!")
+                        if not (_is_canonical_pump or _lp_ok) and _rk_lvl == "danger" and any(k in _rk_name for k in ("single holder", "high ownership", "top 10 holders")):
                             return self._deny(mint, f"rc-danger {_rk_name[:15]}", f"🚫 [АНТИСКАМ-RC] {symbol} ({mint[:8]}): критический риск RugCheck '{rk.get('name')}' — блок скама!")
 
                     # Проверка холдеров RugCheck
@@ -2333,10 +2309,10 @@ class Analyzer:
                     except Exception:
                         pass
                     largest_whale_pct = top_10[0][1] if top_10 else 0.0
-                    max_whale_pct = 18.0 if _is_pump_flag else 15.0
+                    max_whale_pct = 25.0 if _is_pump_flag else 18.0
                     if largest_whale_pct > max_whale_pct:
                         return self._deny(mint, f"whale-hold {largest_whale_pct:.1f}%", f"🚫 [АНТИСКАМ] Кит держит {largest_whale_pct:.1f}% > {max_whale_pct:.0f}% у {mint[:8]} → Блок.")
-                    _pump_top10_cap = 38.0 if (_is_pump_flag and (_vm5_pre >= 10000.0 or _b5_pre >= 80)) else (35.0 if _is_pump_flag else float(getattr(config, "AUDITOR_MAX_TOP10_PCT", 32.0)))
+                    _pump_top10_cap = 65.0 if _is_pump_flag else float(getattr(config, "AUDITOR_MAX_TOP10_PCT", 50.0))
                     max_allowed_top10 = _pump_top10_cap
                     if top_10_sum_pct > max_allowed_top10:
                         return self._deny(mint, f"top10-hold {top_10_sum_pct:.1f}%", f"🚫 [АНТИСКАМ] Топ-10 держат {top_10_sum_pct:.1f}% > {max_allowed_top10:.0f}% у {mint[:8]} → Блок.")
@@ -2934,7 +2910,7 @@ class Analyzer:
                         if self._last_dev > 10.0:
                             print(f"🚫 [GOPLUS-DEV] {symbol} ({mint[:8]}): дев держит {self._last_dev:.1f}% > 10% — риск дампа.")
                             return False
-                        _max_top10 = 30.0 if _is_pump_mint else 35.0
+                        _max_top10 = 65.0 if _is_pump_mint else 55.0
                         if self._last_top10 > _max_top10:
                             print(f"🚫 [GOPLUS-CABAL] {symbol} ({mint[:8]}): топ-10 держат {self._last_top10:.1f}% > {_max_top10:.0f}% — риск кабала.")
                             return False
@@ -2961,7 +2937,7 @@ class Analyzer:
                     return False
                 self._last_top10 = _h_stats.get("top_10_pct", 0.0)
                 self._last_dev = _h_stats.get("dev_pct", 0.0)
-                if self._last_dev > 10.0 or self._last_top10 > 35.0:
+                if self._last_dev > 10.0 or self._last_top10 > 65.0:
                     return False
             except Exception:
                 return False

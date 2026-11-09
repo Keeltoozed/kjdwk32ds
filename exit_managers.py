@@ -116,13 +116,13 @@ class MatureExitManager:
             return None
 
         # =========================================================================
-        # 1. ЖЕСТКИЙ КОНТРОЛЬ УБЫТКА (EMERGENCY CAP & STOP LOSS) — ПЕРВЫЙ ПРИОРИТЕТ!
+        # 1. ЖЕСТКИЙ КОНТРОЛЬ УБЫТКА (EMERGENCY CAP & STOP LOSS — ИЗ 0d2b1ae)
         # =========================================================================
-        _emerg_cap = -abs(float(getattr(config, "EMERGENCY_CAP_PCT", -0.22)))
+        _emerg_cap = -abs(float(getattr(config, "EMERGENCY_CAP_PCT", -0.12)))
         if pnl_pct <= _emerg_cap:
             return f"Mature Emergency Cap ({pnl_pct*100:.1f}%)"
 
-        _base_sl = -abs(float(getattr(config, 'STOP_LOSS_PCT', -0.16)))
+        _base_sl = -abs(float(getattr(config, 'STOP_LOSS_PCT', -0.10)))
         _has_organic_bid = False
         _feats = getattr(position, "ml_features", None) or {}
         if isinstance(_feats, dict) and _feats:
@@ -131,11 +131,11 @@ class MatureExitManager:
             _f_links = int(_feats.get("links_count", 0) or (1 if _feats.get("socials") else 0))
             if _f_liq >= 25000.0 and _f_bs >= 1.35 and _f_links >= 1:
                 _has_organic_bid = True
-        _sl = min(_base_sl, -0.18) if _has_organic_bid else _base_sl
+        _sl = min(_base_sl, -0.12) if _has_organic_bid else _base_sl
         if pnl_pct <= _sl:
             _sl_c = int(getattr(position, "sl_confirm_n", 0) or 0) + 1
             position.sl_confirm_n = _sl_c
-            if _sl_c >= 2 or pnl_pct <= -0.20 or minutes_held >= 0.5:
+            if _sl_c >= 2 or pnl_pct <= -0.13 or minutes_held >= 0.25:
                 return f"Mature Stop Loss ({pnl_pct*100:.1f}%)"
         else:
             position.sl_confirm_n = 0
@@ -230,22 +230,22 @@ class MatureExitManager:
             return f"Max Hold Expiry ({pnl_pct*100:+.1f}% after {minutes_held:.0f}m)"
 
         # =========================================================================
-        # 7. СТАГНАЦИЯ И МЕРТВЫЙ ИМПУЛЬС (БЫСТРЫЙ СБРОС ЗАВИСШИХ СДЕЛОК 90-120с)
+        # 7. СТАГНАЦИЯ И МЕРТВЫЙ ИМПУЛЬС (КАК В 0d2b1ae: НЕ ДУШИМ РАННИЕ КОНСОЛИДАЦИИ РАКЕТ)
         # =========================================================================
-        _stall_sec = float(getattr(config, "STALL_TIMER_SEC", 120.0))
-        _stall_loss = float(getattr(config, "STALL_MAX_LOSS_PCT", -0.06))
-        # 1. Быстрый сброс мертвого импульса: 90-120 сек без роста и с уходом в минус <= -6%
-        if minutes_held >= (_stall_sec / 60.0) and pnl_pct <= _stall_loss and max_pnl_pct < 0.15:
+        _stall_sec = float(getattr(config, "STALL_TIMER_SEC", 180.0))
+        _stall_loss = float(getattr(config, "STALL_MAX_LOSS_PCT", -0.075))
+        # 1. Сброс абсолютно мертвого минуса: 3 минуты без роста и с уходом в минус <= -7.5%
+        if minutes_held >= (_stall_sec / 60.0) and pnl_pct <= _stall_loss and max_pnl_pct < 0.08:
             return f"Dead Momentum Stall ({minutes_held*60:.0f}s no breakout, pnl {pnl_pct*100:.1f}%)"
 
-        # 2. Сброс ложного пробоя (выросли на +4..+12%, но импульс захлебнулся и ушел в минус)
-        if minutes_held >= 2.5 and max_pnl_pct >= 0.03 and max_pnl_pct < 0.18 and pnl_pct <= -0.05:
+        # 2. Сброс ложного пробоя (был слабый тычок +3..+10%, но импульс слит в минус <= -6%)
+        if minutes_held >= 4.0 and 0.03 <= max_pnl_pct < 0.12 and pnl_pct <= -0.06:
             return f"Failed Breakout Fade ({minutes_held*60:.0f}s, peak +{max_pnl_pct*100:.1f}% -> {pnl_pct*100:.1f}%)"
 
-        # 3. Сброс зависшей в минусе позиции: 4-5 минут без импульса
-        if minutes_held >= 4.0 and pnl_pct <= -0.05 and max_pnl_pct < 0.10:
+        # 3. Сброс зависшей позиции: 10-15 минут без импульса
+        if minutes_held >= 10.0 and pnl_pct <= -0.05 and max_pnl_pct < 0.06:
             return f"Stagnant Loss Cut ({minutes_held:.1f}m, {pnl_pct*100:.1f}%)"
-        if minutes_held >= 7.0 and pnl_pct < 0.015 and max_pnl_pct < 0.08:
+        if minutes_held >= 15.0 and pnl_pct < 0.015 and max_pnl_pct < 0.08:
             return f"Stagnant Cut ({minutes_held:.1f}m, {pnl_pct*100:.1f}%)"
 
         return None

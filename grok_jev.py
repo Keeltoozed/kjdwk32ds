@@ -637,9 +637,9 @@ class GrokJevEngine:
             if b5 < s5 and (_sell_ratio_g >= 0.50 or (_sell_ratio_g >= 0.46 and _vl_ratio_g >= 3.0)):
                 return False, f"heavy-sell-pressure {_sell_ratio_g*100:.0f}% sells ({s5}/{_tot_tx_g}) v/l {_vl_ratio_g:.1f}x (whale exit dump)"
 
-        # 3.2. Distance to ATH Check (Kaiser.charon Trench Rule):
+        # 3.2. Distance to ATH Check:
         _dist_ath_g = float((pair_data.get("_dist_to_ath_pct") or 0.0) or 0.0)
-        if _dist_ath_g <= -50.0 and m5 < 12.0:
+        if _dist_ath_g <= -65.0 and m5 < 5.0 and age_min >= 60.0 and b5 < s5:
             return False, f"ath-dumped {_dist_ath_g:.0f}% below ATH (bagholder trap)"
 
         # Остывающий поздний памп: токен старше 20м режем ТОЛЬКО если m5 отрицательный или нулевой (реальный дамп)
@@ -1567,11 +1567,11 @@ class GrokJevEngine:
                             if not is_canonical_pump and (not has_socials or _tok_age_rc < 20.0 or rk_lvl == "danger"):
                                 return False, f"rugcheck: creator history risk (серийный создатель скамов без соцсетей / <20м)", _h_stats
                             continue
-                        if has_verified_locked_lp and any(lp_k in rk_name for lp_k in ("large amount of lp unlocked", "lp not locked", "unlocked lp")):
+                        if (is_canonical_pump or has_verified_locked_lp) and any(lp_k in rk_name for lp_k in ("large amount of lp unlocked", "lp not locked", "unlocked lp", "single holder", "high ownership", "top 10 holders", "low liquidity", "high holder")):
                             continue
-                        if rk_lvl == "danger":
+                        if rk_lvl == "danger" and any(k in rk_name for k in ("freeze authority", "mint authority")):
                             return False, f"rugcheck: critical danger risk '{rk.get('name')}'", _h_stats
-                        if any(k in rk_name for k in ("single holder", "high ownership", "top 10 holders", "large amount of lp unlocked", "unlocked lp")) and rk_lvl == "danger":
+                        if not (is_canonical_pump or has_verified_locked_lp) and rk_lvl == "danger" and any(k in rk_name for k in ("single holder", "high ownership", "top 10 holders", "large amount of lp unlocked")):
                             return False, f"rugcheck: critical hazard '{rk.get('name')}'", _h_stats
 
                     # Проверка держателей и дева (Holders & Sybil analysis)
