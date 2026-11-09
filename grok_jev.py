@@ -565,15 +565,24 @@ class GrokJevEngine:
         _req_soc_age = float(getattr(_c, "REQUIRE_SOCIALS_MIN_AGE_MIN", 8.0))
         _vol_liq_ratio_g = (vol_m5 / max(eff_liq, 1.0)) if eff_liq > 0 else 0.0
         _avg_tx_g = vol_m5 / max(1, b5 + s5)
-        _is_burned_lp_g = mint.endswith(("pump", "bonk", "BAGS"))
+        _is_burned_lp_g = mint.endswith(("pump", "bonk", "BAGS")) or dex_id in ("pump", "pumpfun", "pumpswap")
         _is_organic_stealth = False
         if _links_cnt_g == 0 and not _soc_unk_g:
-            # ЖЕСТКОЕ ПРАВИЛО GMGN & TRADINGAGENTS: Монета моложе 5.0 минут ОБЯЗАНА иметь соцсети!
-            # Никакого organic-stealth на младенцах < 5м: на Pump.fun любой дев делает 200 накрученных бот-покупок
-            # и дапит в 0 (кейсы STARTPUP 1.7м, JENSEN 4м)!
-            if age_min < 5.0:
+            # Для токенов с сожженным LP или Pump.fun AMM: DexScreener индексирует соцсети с задержкой 1-3 мин.
+            # Если пул защищен (Pump / сожженный LP) и идет чистый поток покупателей — даем окно до _req_soc_age (8м).
+            # Для кастомных Raydium токенов без сожженного LP — строжайший блок с 0 минут (рагпулы LORI, QUACK, MLC)!
+            _is_safe_young_pump_jev = (
+                _is_burned_lp_g
+                and age_min < _req_soc_age
+                and eff_liq >= 7500.0
+                and b5 >= 15
+                and b5 >= int(s5 * 1.05)
+                and vol_m5 >= 2000.0
+            )
+            if not _is_safe_young_pump_jev and age_min < 5.0 and not _is_burned_lp_g:
                 return False, f"sub-5m-zero-socials (age {age_min:.1f}m < 5.0m, 0 socials/websites — disposable dev trap)"
             _is_organic_stealth = (
+                _is_safe_young_pump_jev or
                 (eff_liq >= 14000.0 and vol_m5 >= 5000.0 and _vol_liq_ratio_g <= 4.0 and (
                     (b5 >= 25 and b5 >= s5 * 1.20 and _avg_tx_g >= 15.0) or
                     (vol_m5 >= 15000.0 and b5 >= s5)
@@ -584,7 +593,8 @@ class GrokJevEngine:
                 _sub_reason_g = f"no-socials-mature-rug (age {age_min:.0f}m >= 12m, 0 socials/websites)" if age_min >= 12.0 else f"no-socials-rug (age {age_min:.1f}m, 0 socials/websites, v/l {_vol_liq_ratio_g:.1f}x)"
                 return False, _sub_reason_g
             else:
-                print(f"💎 [JEV-ORGANIC-STEALTH] {symbol} ({mint[:8]}): 0 соцсетей, но доказан чистый органический поток (${vol_m5:,.0f}, {b5}b/{s5}s, v/l {_vol_liq_ratio_g:.2f}) — пропуск.")
+                _stealth_lbl = "JEV-PUMP-INDEXING-GRACE" if _is_safe_young_pump_jev else "JEV-ORGANIC-STEALTH"
+                print(f"💎 [{_stealth_lbl}] {symbol} ({mint[:8]}): 0 соцсетей, но доказан чистый органический поток (${vol_m5:,.0f}, {b5}b/{s5}s, v/l {_vol_liq_ratio_g:.2f}) — пропуск.")
 
         # 2.5. Exhaustion Guard: блокируем перегретые поздние пампы, но пускаем активные ракеты (h1 включает рост на кёрве $5k->$69k!)
         _base_max_h1_jev = float(getattr(_c, "MAX_ENTRY_H1_PCT", 350.0))
@@ -628,7 +638,7 @@ class GrokJevEngine:
         if _tot_tx_g >= 25 and s5 > 0:
             _sell_ratio_g = s5 / _tot_tx_g
             _vl_ratio_g = vol_m5 / max(eff_liq, 1.0)
-            if b5 < int(s5 * 1.15) and (_sell_ratio_g >= 0.46 or (_sell_ratio_g >= 0.42 and _vl_ratio_g >= 2.5)):
+            if b5 < s5 and (_sell_ratio_g >= 0.50 or (_sell_ratio_g >= 0.46 and _vl_ratio_g >= 3.0)):
                 return False, f"heavy-sell-pressure {_sell_ratio_g*100:.0f}% sells ({s5}/{_tot_tx_g}) v/l {_vl_ratio_g:.1f}x (whale exit dump)"
 
         # Остывающий поздний памп: токен старше 20м режем ТОЛЬКО если m5 отрицательный или нулевой (реальный дамп)
@@ -651,14 +661,14 @@ class GrokJevEngine:
         # 4. Объем и давление покупателей:
         # 4.0. Wash-Trading Spike Guard: отличаем симметричную бот-накрутку от реального пробоя покупателями (CHIMPS +59% v/l 1.5x, duge $158k liq 3.82x)!
         _avg_tx5 = vol_m5 / max(1, b5 + s5)
-        if _is_burned_lp_g and eff_liq >= 12000.0:
-            _max_vl_jev = 6.50 if (b5 >= s5 * 1.18) else 3.20
-        elif eff_liq >= 30000.0 and b5 >= s5 * 1.25 and _avg_tx5 >= 35.0:
-            _max_vl_jev = 6.00
-        elif b5 >= s5 * 1.22 and _avg_tx5 >= 20.0 and eff_liq >= 15000.0:
-            _max_vl_jev = 3.80
+        if _is_burned_lp_g and eff_liq >= 8000.0:
+            _max_vl_jev = 7.50 if (b5 >= s5 * 1.05 and _avg_tx5 >= 12.0) else 4.00
+        elif eff_liq >= 25000.0 and b5 >= s5 * 1.15 and _avg_tx5 >= 20.0:
+            _max_vl_jev = 8.00
+        elif b5 >= s5 * 1.05 and _avg_tx5 >= 12.0 and eff_liq >= 8000.0:
+            _max_vl_jev = 7.00
         else:
-            _max_vl_jev = 1.85
+            _max_vl_jev = 2.50
         if eff_liq > 0 and (vol_m5 / eff_liq) > _max_vl_jev:
             return False, f"wash-trading-spike: vol5 ${vol_m5:,.0f} is {(vol_m5/eff_liq):.1f}x > {_max_vl_jev:.2f}x of pool liq ${eff_liq:,.0f} (bot pump trap)"
 

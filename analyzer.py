@@ -1873,12 +1873,12 @@ class Analyzer:
         _avg_tx_pre = (_vm5_pre / max(1, _txns_tot_pre)) if _txns_tot_pre > 0 else 0.0
         if _avg_tx_pre >= 35.0 and _b5_pre >= 150 and _b5_pre >= _s5_pre * 1.20 and _raw_liq_chk >= 15000.0:
             _max_vl_allowed = 30.0
-        elif _is_burned_launchpad and _raw_liq_chk >= 12000.0:
-            _max_vl_allowed = 8.00 if (_b5_pre >= _s5_pre * 1.15) else 4.00
-        elif _raw_liq_chk >= 30000.0 and _b5_pre >= _s5_pre * 1.20 and _avg_tx_pre >= 25.0:
-            _max_vl_allowed = 8.00
-        elif _b5_pre >= _s5_pre * 1.15 and _avg_tx_pre >= 15.0 and _raw_liq_chk >= 12000.0:
-            _max_vl_allowed = 5.50
+        elif _is_burned_launchpad and _raw_liq_chk >= 8000.0:
+            _max_vl_allowed = 8.50 if (_b5_pre >= _s5_pre * 1.05 and _avg_tx_pre >= 12.0) else 4.50
+        elif _raw_liq_chk >= 25000.0 and _b5_pre >= _s5_pre * 1.15 and _avg_tx_pre >= 20.0:
+            _max_vl_allowed = 8.50
+        elif _b5_pre >= _s5_pre * 1.05 and _avg_tx_pre >= 12.0 and _raw_liq_chk >= 8000.0:
+            _max_vl_allowed = 7.50
         else:
             _max_vl_allowed = 2.50
         if _raw_liq_chk > 0 and (_vm5_pre / _raw_liq_chk) > _max_vl_allowed:
@@ -1895,6 +1895,17 @@ class Analyzer:
         if _links_cnt == 0 and not _soc_unknown:
             _vol_liq_r = (_vm5_pre / max(_raw_liq_chk, 1.0)) if _raw_liq_chk > 0 else 0.0
             _txns_tot = _b5_pre + _s5_pre
+            _is_canonical_pump = mint.endswith("pump") or str((pair_data or {}).get("dexId", "")).lower() in ("pumpswap", "pump", "pumpfun")
+            # Для токенов Pump.fun / сожженного LP: даем грейс-период на индексацию соцсетей DexScreener (до _req_soc_age = 8м)
+            # при подтвержденном чистом потоке реальных покупателей!
+            _is_safe_young_pump = (
+                (_is_canonical_pump or _is_burned_launchpad)
+                and _age_min_pre < _req_soc_age
+                and _raw_liq_chk >= 7000.0
+                and _b5_pre >= 15
+                and _b5_pre >= int(_s5_pre * 1.05)
+                and _vm5_pre >= 2000.0
+            )
             _is_organic_stealth = (
                 _raw_liq_chk >= 6000.0
                 and _vm5_pre >= 1200.0
@@ -1910,7 +1921,7 @@ class Analyzer:
                 and _b5_pre >= 80
                 and _b5_pre >= int(_s5_pre * 1.15)
             )
-            if not (_is_organic_stealth or _is_viral_stealth):
+            if not (_is_safe_young_pump or _is_organic_stealth or _is_viral_stealth):
                 _sub_reason = f"no-socials-mature {_age_min_pre:.0f}m" if _age_min_pre >= 12.0 else f"no-socials-dev-rug {_age_min_pre:.0f}m"
                 return self._deny(
                     mint,
@@ -1918,8 +1929,8 @@ class Analyzer:
                     f"🚫 [NO-SOCIALS-GUARD] {symbol} ({mint[:8]}): 0 соцсетей при возрасте {_age_min_pre:.1f}м (v/l {_vol_liq_r:.1f}x, b/s {_b5_pre}/{_s5_pre}) — анонимный дев-раг.",
                 )
             else:
-                _stealth_label = "VIRAL-STEALTH" if _is_viral_stealth else "ORGANIC-STEALTH"
-                print(f"💎 [{_stealth_label}] {symbol} ({mint[:8]}): 0 соцсетей, но подтверждён реальный приток (${_vm5_pre:,.0f}, {_b5_pre}b/{_s5_pre}s, v/l {_vol_liq_r:.2f}) — пропуск в анализ.")
+                _stealth_label = "PUMP-INDEXING-GRACE" if _is_safe_young_pump else ("VIRAL-STEALTH" if _is_viral_stealth else "ORGANIC-STEALTH")
+                print(f"💎 [{_stealth_label}] {symbol} ({mint[:8]}): 0 соцсетей (индексация DexScreener), но подтверждён защищённый пул и чистый приток (${_vm5_pre:,.0f}, {_b5_pre}b/{_s5_pre}s, v/l {_vol_liq_r:.2f}) — пропуск в анализ.")
 
         # =========================================================================
         # 🚀 ЭТАП 1: ROCKET XGBOOST v2 — ПЕРВИЧНЫЙ ML-СКРИНЕР (0ms IN-MEMORY)
