@@ -1840,22 +1840,20 @@ class Analyzer:
                 f"🚫 [EXHAUSTED-TOP] {symbol} ({mint[:8]}): рост за час {_h1:+.1f}% > +{_max_entry_h1:.0f}% — вершина пампа.",
             )
         # Защита от покупки на верхушке вертикальной свечи:
-        # Разрешаем сильный пробой покупателями (до +120% при 10%+ перевесе покупателей b5/s5 >= 1.10)
-        # либо остывающий откат (m1 <= -1.0%). Для свежих миграций (<=30м) допускаем пробой до +480%.
+        # Не покупаем перегретые свечи >+65% (вершина FOMO-палки, кейсы AIB/MAX/yarl/p402).
+        # Пропускаем только здоровый старт ракеты (m5 до +65%, либо до +85% при мощном доминировании покупателей b5/s5 >= 1.35)
+        # либо остывающий откат (m1 <= -1.0%).
         if _m5 > _max_entry_m5:
-            _is_grad_m5 = (_age_min_pre <= 30.0 or mint.endswith("pump") or _is_canonical_pump)
-            _max_breakout_m5 = 480.0 if _is_grad_m5 else 200.0
             _is_strong_buyer_breakout = (
-                (_m5 <= _max_breakout_m5 and _b5_pre >= int(_s5_pre * 1.05) and _vm5_pre >= 2500.0) or
-                (_m5 <= 200.0 and _b5_pre >= int(_s5_pre * 1.20) and _vm5_pre >= 8000.0 and (_b5_pre - _s5_pre) >= 30) or
-                (_m5 <= 120.0 and _b5_pre >= int(_s5_pre * 1.10) and _vm5_pre >= 3500.0 and (_b5_pre + _s5_pre) >= 20)
+                (_m5 <= 65.0 and _b5_pre >= int(_s5_pre * 1.10) and _vm5_pre >= 2500.0) or
+                (_m5 <= 85.0 and _b5_pre >= int(_s5_pre * 1.35) and _vm5_pre >= 12000.0 and (_b5_pre - _s5_pre) >= 30)
             )
-            _is_cooling_pullback = (_m1 <= -1.0 and _m5 <= 90.0 and _b5_pre >= _s5_pre * 1.05)
+            _is_cooling_pullback = (_m1 <= -1.0 and _m5 <= 65.0 and _b5_pre >= _s5_pre * 1.05)
             if not (_is_strong_buyer_breakout or _is_cooling_pullback):
                 return self._deny(
                     mint,
                     f"m5-vertical-spike {_m5:.0f}%>{_max_entry_m5:.0f}%",
-                    f"🚫 [FOMO-VERTICAL] {symbol} ({mint[:8]}): 5м свеча {_m5:+.1f}% > +{_max_entry_m5:.0f}% (покупка вершины зеленой палки без отката) — кейс yarl/p402.",
+                    f"🚫 [FOMO-VERTICAL] {symbol} ({mint[:8]}): 5м свеча {_m5:+.1f}% > +{_max_entry_m5:.0f}% (покупка вершины зеленой палки без отката) — кейс yarl/p402/AIB.",
                 )
 
         # Защита от давления продавцов и скрытого сброса китов (кейсы SOLC 735 продаж, DOG™ 291 продажа):
@@ -2122,14 +2120,17 @@ class Analyzer:
 
                     # Безвредный шум RugCheck: низкая ликвидность для молодых пулов (Low Liquidity) и copycat для мемов.
                     # ВАЖНО: 'Large Amount of LP Unlocked' НИКОГДА не является шумом при отсутствии подтвержденного лока!
-                    _allowed_lp_terms_main = ("lp provider", "low amount of lp providers", "low liquidity")
+                    _allowed_lp_terms_main = ["lp provider", "low amount of lp providers", "low liquidity"]
+                    # "creator history" вычитается как шум ТОЛЬКО если у токена есть соцсети И возраст >= 20м!
+                    if _links_cnt > 0 and _age_min_pre >= 20.0:
+                        _allowed_lp_terms_main.append("creator history")
 
                     # Исключаем безвредный шум: низкая ликвидность для молодых пулов, copycat для мемов, и LP контракт пула.
                     _rc_penalty_to_ignore = sum(
                         float(rk.get("score", 0) or 0)
                         for rk in (rc_data.get("risks") or [])
                         if any(k in str(rk.get("name", "")).lower() for k in (
-                            "low liquidity", "creator history", "copycat", "symbol mimic", *_allowed_lp_terms_main
+                            "low liquidity", "copycat", "symbol mimic", *_allowed_lp_terms_main
                         ))
                     )
 
@@ -2143,6 +2144,10 @@ class Analyzer:
                         _rk_lvl = str(rk.get("level", "")).lower()
                         if _lp_ok and any(k in _rk_name for k in ("large amount of lp unlocked", "lp not locked", "unlocked lp")):
                             continue
+                        if "creator history" in _rk_name:
+                            if _links_cnt == 0 or _age_min_pre < 20.0 or _rk_lvl == "danger":
+                                return self._deny(mint, "rc-creator-history", f"🚫 [АНТИСКАМ-RC] {symbol} ({mint[:8]}): подозрительная история создателя (creator history на монете без соцсетей/<20м) — блок скама!")
+                            continue
                         if _rk_lvl == "danger" and any(k in _rk_name for k in ("single holder", "high ownership", "top 10 holders", "large amount of lp unlocked", "unlocked lp", "freeze authority")):
                             return self._deny(mint, f"rc-danger {_rk_name[:15]}", f"🚫 [АНТИСКАМ-RC] {symbol} ({mint[:8]}): критический риск RugCheck '{rk.get('name')}' — блок скама!")
 
@@ -2150,6 +2155,12 @@ class Analyzer:
                     top_holders = rc_data.get("topHolders") or []
                     dev_holding_pct = 0.0
                     creator = rc_data.get("creator")
+                    try:
+                        from birth_tracker import birth_tracker as _bt_c
+                        if creator and _bt_c.is_bad_creator(creator):
+                            return self._deny(mint, "serial-creator-blacklist", f"🚫 [АНТИСКАМ-DEV] {symbol} ({mint[:8]}): создатель {creator[:8]} в черном списке серийных раггеров — блок скама!")
+                    except Exception:
+                        pass
 
                     # Собираем все известные адреса пулов и маркеров ликвидности (DEX, AMM, Bonding curve, Lockers)
                     pool_accounts = set()

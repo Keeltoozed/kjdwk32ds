@@ -1,4 +1,6 @@
 import time
+import os
+import json
 import threading
 
 
@@ -7,7 +9,46 @@ class BirthTracker:
         self.tokens = {}      # mint -> timestamp
         self.graduated = {}   # mint -> timestamp миграции (приоритет сканера!)
         self.waiting_room = {}  # mint -> {"ts": float, "pool": str, "creator": str, "init_dev_pct": float|None}
+        self.bad_creators = set()  # creator_address -> blacklist
+        self._bad_creators_file = os.path.join(os.path.dirname(__file__), "bad_creators.json")
+        self._load_bad_creators()
         self.lock = threading.Lock()
+
+    def _load_bad_creators(self):
+        try:
+            if os.path.exists(self._bad_creators_file):
+                with open(self._bad_creators_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    if isinstance(data, list):
+                        self.bad_creators = set(str(x).strip() for x in data if str(x).strip())
+                    elif isinstance(data, dict):
+                        self.bad_creators = set(str(k).strip() for k in data.keys() if str(k).strip())
+        except Exception:
+            pass
+
+    def _save_bad_creators(self):
+        try:
+            with open(self._bad_creators_file, "w", encoding="utf-8") as f:
+                json.dump(sorted(list(self.bad_creators)), f, indent=2)
+        except Exception:
+            pass
+
+    def is_bad_creator(self, creator: str) -> bool:
+        if not creator:
+            return False
+        return str(creator).strip() in self.bad_creators
+
+    def mark_bad_creator(self, creator: str, reason: str = ""):
+        if not creator:
+            return
+        c_str = str(creator).strip()
+        if len(c_str) < 20:
+            return
+        with self.lock:
+            if c_str not in self.bad_creators:
+                self.bad_creators.add(c_str)
+                self._save_bad_creators()
+                print(f"🚫 [GMGN-DEV-FIREWALL] Дев {c_str[:8]}... внесён в черный список (причина: {reason})!")
 
     def add_token(self, mint: str):
         with self.lock:

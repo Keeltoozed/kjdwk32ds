@@ -753,6 +753,18 @@ class PaperTracker:
                         "pnl_usd": round(pos.pnl_usd, 2),
                         "peak_pct": round(_mp * 100, 1), "held_sec": round(_dur),
                     }) + "\n")
+
+                # GMGN Anti-Rug: автоматическое занесение создателя в черный список при сливе пула
+                if pnl_pct <= -0.30 or any(k in str(reason).lower() for k in ("emergency cap", "drop escape", "lp rug", "infant dump")):
+                    try:
+                        from birth_tracker import birth_tracker as _bt_close
+                        _c_ban = getattr(pos, "creator", "")
+                        if not _c_ban and isinstance(getattr(pos, "ml_features", None), dict):
+                            _c_ban = pos.ml_features.get("creator", "")
+                        if _c_ban:
+                            _bt_close.mark_bad_creator(_c_ban, f"rug exit {pos.symbol} ({reason})")
+                    except Exception:
+                        pass
             except Exception:
                 pass
             

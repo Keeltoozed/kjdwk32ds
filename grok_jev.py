@@ -550,15 +550,15 @@ class GrokJevEngine:
         if (b5 + s5) >= 120 and _avg_tx_e < 3.0 and not _is_real_bump_runner_g:
             return False, f"fake-bump-wash-bot avg ${_avg_tx_e:.2f} < $3 across {b5+s5} m5 txns"
 
-        # Защита от слитых ниже миграции выпускников Pump.fun (кейс SHANE FDV $35.8k, но пускаем отскоки и живой поток)
+        # Защита от слитых ниже миграции выпускников Pump.fun (кейс STARTPUP $37.7k, SHANE $35.8k)
+        # При миграции токен стоит ~$69k. Если FDV упал ниже $46k — это дамп дева/снайперов.
+        # Пускаем ТОЛЬКО если есть подтвержденный мощный разворот (rebound)!
         if mint.endswith("pump") and dex_id not in ("pump", "pumpfun") and 0 < fdv_mc < 46000.0:
             _is_rebounding = (m5 >= 8.0 and b5 >= int(s5 * 1.15) and vol_m5 >= 2500.0)
-            _is_real_dump = not _is_rebounding and ((fdv_mc < 12000.0) or (s5 > int(b5 * 1.25) and m5 < -5.0))
-            _is_active_grad = (vol_m5 >= 2000.0 and b5 >= int(s5 * 1.00) and m5 >= -5.0)
-            if _is_real_dump or not (_is_active_grad or _is_rebounding):
-                return False, f"post-mig-dumped-fdv ${fdv_mc:,.0f} < $46k"
+            if not _is_rebounding:
+                return False, f"post-mig-dumped-fdv ${fdv_mc:,.0f} < $46k (no active rebound)"
 
-        # 2.4. Защита от безымянных рагпулов без соцсетей на ВСЕХ возрастах (STONKS 12.5м, IPHONEDUO 28.2м, scamsem 25.8м)
+        # 2.4. Защита от безымянных рагпулов без соцсетей на ВСЕХ возрастах (STARTPUP 1.7м, STONKS 12.5м, IPHONEDUO 28.2м)
         _info_g = pair_data.get("info") or {}
         _links_cnt_g = len(_info_g.get("socials", []) or []) + len(_info_g.get("websites", []) or [])
         _soc_unk_g = bool(pair_data.get("_socials_unknown", False))
@@ -568,13 +568,17 @@ class GrokJevEngine:
         _is_burned_lp_g = mint.endswith(("pump", "bonk", "BAGS"))
         _is_organic_stealth = False
         if _links_cnt_g == 0 and not _soc_unk_g:
+            # ЖЕСТКОЕ ПРАВИЛО GMGN & TRADINGAGENTS: Монета моложе 5.0 минут ОБЯЗАНА иметь соцсети!
+            # Никакого organic-stealth на младенцах < 5м: на Pump.fun любой дев делает 200 накрученных бот-покупок
+            # и дапит в 0 (кейсы STARTPUP 1.7м, JENSEN 4м)!
+            if age_min < 5.0:
+                return False, f"sub-5m-zero-socials (age {age_min:.1f}m < 5.0m, 0 socials/websites — disposable dev trap)"
             _is_organic_stealth = (
-                (eff_liq >= 6000.0 and vol_m5 >= 1200.0 and _vol_liq_ratio_g <= 6.5 and (
-                    (b5 >= 12 and b5 >= s5 * 1.05) or
-                    (b5 >= 8 and s5 <= 30 and m5 >= 2.0 and _avg_tx_g >= 18.0) or
-                    (vol_m5 >= 5000.0 and b5 >= s5)
+                (eff_liq >= 14000.0 and vol_m5 >= 5000.0 and _vol_liq_ratio_g <= 4.0 and (
+                    (b5 >= 25 and b5 >= s5 * 1.20 and _avg_tx_g >= 15.0) or
+                    (vol_m5 >= 15000.0 and b5 >= s5)
                 )) or
-                (vol_m5 >= 15000.0 and b5 >= 80 and b5 >= int(s5 * 1.15))
+                (vol_m5 >= 25000.0 and b5 >= 80 and b5 >= int(s5 * 1.25))
             )
             if not _is_organic_stealth:
                 _sub_reason_g = f"no-socials-mature-rug (age {age_min:.0f}m >= 12m, 0 socials/websites)" if age_min >= 12.0 else f"no-socials-rug (age {age_min:.1f}m, 0 socials/websites, v/l {_vol_liq_ratio_g:.1f}x)"
@@ -932,10 +936,10 @@ class GrokJevEngine:
 
         # Если токен моложе 3м, DexScreener часто отдаёт m1 == m5 (одна первая свеча).
         _m1_is_phantom = (_age_m < 3.0 and abs(m5) > 1.0 and abs(m1) > 0 and abs(m1 / max(abs(m5), 0.01) - 1.0) < 0.08)
-        _strong_breakout = (b5 >= 15 and b5 >= s5 * 1.10 and vol5 >= 3000.0)
-        _max_m1 = 35.0 if _strong_breakout else float(getattr(_c, "JEV_MAX_M1_ENTRY_PCT", 25.0))
+        _strong_breakout = (b5 >= 30 and b5 >= s5 * 1.30 and vol5 >= 10000.0)
+        _max_m1 = 18.0 if _strong_breakout else float(getattr(_c, "JEV_MAX_M1_ENTRY_PCT", 14.0))
         _cfg_m5 = float(getattr(_c, "MAX_ENTRY_M5_PCT", 45.0))
-        _max_m5_cap = 150.0 if _strong_breakout else max(_cfg_m5, 60.0)
+        _max_m5_cap = 65.0 if _strong_breakout else max(_cfg_m5, 50.0)
         if m5 > _max_m5_cap:
             return False, -0.14, 0.0, f"fomo-spike (m5 {m5:+.1f}% > +{_max_m5_cap:.0f}%) — buying local top, wait for reset"
         if m1 > _max_m1 and not _m1_is_phantom:
@@ -1509,14 +1513,19 @@ class GrokJevEngine:
 
                     # Очищенный score RugCheck: вычитаем безвредный шум пула (низкая ликвидность для молодых пулов, копикаты).
                     # ВАЖНО: 'Large Amount of LP Unlocked' НИКОГДА не вычитается как шум!
-                    _allowed_lp_terms_jev = ("lp provider", "low amount of lp providers", "low liquidity")
+                    _allowed_lp_terms_jev = ["lp provider", "low amount of lp providers", "low liquidity"]
+                    # "creator history" вычитается как шум ТОЛЬКО если у токена есть подтвержденные соцсети И он старше 20м!
+                    # На монетах без соцсетей или <20м 'creator history' = серийный скамер (кейсы JENSEN / STARTPUP)!
+                    _tok_age_rc = (time.time() * 1000 - (pair_data.get("pairCreatedAt") or 0)) / 60000.0 if pair_data.get("pairCreatedAt") else 0.0
+                    if has_socials and _tok_age_rc >= 20.0:
+                        _allowed_lp_terms_jev.append("creator history")
 
                     raw_score = float(rc_data.get("score") or 0.0)
                     penalty_to_ignore = sum(
                         float(rk.get("score", 0) or 0)
                         for rk in (rc_data.get("risks") or [])
                         if any(k in str(rk.get("name", "")).lower() for k in (
-                            "low liquidity", "creator history", "copycat", "symbol mimic", *_allowed_lp_terms_jev
+                            "low liquidity", "copycat", "symbol mimic", *_allowed_lp_terms_jev
                         ))
                     )
                     clean_score = max(0.0, raw_score - penalty_to_ignore)
@@ -1527,11 +1536,15 @@ class GrokJevEngine:
                     for rk in (rc_data.get("risks") or []):
                         rk_name = str(rk.get("name") or "").lower()
                         rk_lvl = str(rk.get("level") or "").lower()
-                        if any(k in rk_name for k in ("low liquidity", "creator history", "copycat", "symbol mimic", *_allowed_lp_terms_jev)):
+                        if any(k in rk_name for k in ("low liquidity", "copycat", "symbol mimic", *_allowed_lp_terms_jev)):
+                            continue
+                        if "creator history" in rk_name:
+                            if not has_socials or _tok_age_rc < 20.0 or rk_lvl == "danger":
+                                return False, f"rugcheck: creator history risk (серийный создатель скамов без соцсетей / <20м)", _h_stats
                             continue
                         if has_verified_locked_lp and any(lp_k in rk_name for lp_k in ("large amount of lp unlocked", "lp not locked", "unlocked lp")):
                             continue
-                        if rk_lvl == "danger" and "creator history" not in rk_name:
+                        if rk_lvl == "danger":
                             return False, f"rugcheck: critical danger risk '{rk.get('name')}'", _h_stats
                         if any(k in rk_name for k in ("single holder", "high ownership", "top 10 holders", "large amount of lp unlocked", "unlocked lp")) and rk_lvl == "danger":
                             return False, f"rugcheck: critical hazard '{rk.get('name')}'", _h_stats
@@ -1571,6 +1584,12 @@ class GrokJevEngine:
 
                     pool_keywords = ("raydium", "meteora", "pump", "orca", "pool", "vault", "locker", "amm", "pumpswap")
                     real_creator = rc_data.get("creator") or ""
+                    try:
+                        from birth_tracker import birth_tracker as _bt_chk
+                        if real_creator and _bt_chk.is_bad_creator(real_creator):
+                            return False, f"serial-creator-blacklist {real_creator[:8]}... (ранее слил другой токен в -95%)", _h_stats
+                    except Exception:
+                        pass
                     dev_pct = 0.0
                     if real_creator:
                         for h in holders:
@@ -1906,13 +1925,23 @@ class GrokJevEngine:
         pair, price = _fin, _fpx
         wick_price = price * (1.0 + wick_pct)
 
+        # 5.55. 🤝 TRADINGAGENTS CONSENSUS GUARD: Проверка решений Сканера
+        # Если Сканер уже проверял этот токен и вынес вето (SKIP по критическому риску),
+        # GROK-JEV обязан соблюдать вето! Никаких несогласованных входов (кейс STARTPUP).
+        if hasattr(self, "analyzer") and self.analyzer:
+            _sc_sig = str(getattr(self.analyzer, "signals", {}).get(address, "") or "")
+            if _sc_sig.startswith("SKIP"):
+                if any(k in _sc_sig for k in ("rocket-xgb-s2", "rc-danger", "dev-hold", "top10-hold", "rugcheck-score", "jito-bundle", "mimic", "unlocked", "post-mig-dumped")):
+                    print(f"🚫 [CONSENSUS-VETO] {symbol} ({address[:8]}): Сканер отклонил токен ({_sc_sig}) — консенсус-блокировка (TradingAgents)!")
+                    return False, f"consensus-veto ({_sc_sig})"
+
         # 5.6. 🚀 STAGE 2: ROCKET XGBOOST FINAL ML FIREWALL
         # Финальная проверка перед реальным открытием ордера со свежими данными и реальными ончейн холдерами (_h_stats).
         rkt_final = self.score_rocket_xgb(address, pair, _h_stats)
         final_thresh = float(getattr(_c, "ROCKET_XGB_FINAL_THRESHOLD", 14.0))
         _fin_links = len((pair.get("info") or {}).get("socials", []) or []) + len((pair.get("info") or {}).get("websites", []) or [])
         if _fin_links == 0 and not bool(pair.get("_socials_unknown", False)):
-            final_thresh = max(final_thresh, 18.0)
+            final_thresh = max(final_thresh, 22.0)
         if getattr(_c, "ROCKET_XGB_ENABLED", True) and (rkt_final + 0.05) < final_thresh:
             print(f"🚫 [GROK-JEV-ML-VETO] {symbol} ({address[:8]}): Rocket XGB final score {rkt_final:.1f}% < {final_thresh:.0f}% — VETO! (Блокировка дампа)")
             return False, f"rocket-xgb-final-veto {rkt_final:.1f}% < {final_thresh:.0f}%"
