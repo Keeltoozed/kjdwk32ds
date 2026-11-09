@@ -622,8 +622,8 @@ class GrokJevEngine:
                 return False, f"slow-mature-pool age {age_min:.0f}m vol5 ${vol_m5:,.0f} v/l {(vol_m5/max(eff_liq,1.0)):.2f}x"
         _max_m5_allowed = float(getattr(_c, "MAX_ENTRY_M5_PCT", 45.0))
         if m5 > _max_m5_allowed:
-            _is_strong_buyer_breakout_g = (m5 <= 120.0 and b5 >= int(s5 * 1.10) and vol_m5 >= 3500.0 and (b5 + s5) >= 20)
-            _is_cooling_pullback = (-8.0 <= m1 <= -1.0 and m5 <= 60.0 and b5 >= s5 * 1.05)
+            _is_strong_buyer_breakout_g = (m5 <= 250.0 and b5 >= int(s5 * 1.05) and vol_m5 >= 2500.0 and (b5 + s5) >= 20)
+            _is_cooling_pullback = (-10.0 <= m1 <= -0.5 and m5 <= 120.0 and b5 >= s5 * 1.05)
             if not (_is_strong_buyer_breakout_g or _is_cooling_pullback):
                 return False, f"fomo-vertical-m5 m5 {m5:+.1f}% > +{_max_m5_allowed:.0f}% (buying top of vertical pump without cooling pullback, m1={m1:+.1f}%)"
         if s5 > 10 and b5 < (s5 * 0.80):
@@ -692,18 +692,14 @@ class GrokJevEngine:
             if trades_h24 < min_trades_h24:
                 return False, f"trades-h24-low {trades_h24} < {min_trades_h24}"
 
-        # 4.1. Wash Trading Check (накрутка объёма ботами копеечными сделками)
+        # 4.1. Wash Trading Check (накрутка объёма ботами копеечными сделками < $1.50)
         if trades_h24 >= 400 and vol_h24 > 0:
             avg_trade = vol_h24 / trades_h24
-            _is_strong_volume_pump = (
-                vol_m5 >= 12000.0
-                and eff_liq >= 18000.0
-                and fdv_mc >= 45000.0
-                and avg_trade >= 8.0
-                and _avg_tx5 >= 10.0
-            )
-            if avg_trade < 12.0 and not _is_strong_volume_pump:
-                return False, f"wash-trading-trap (avg trade ${avg_trade:.1f} < $12 across {trades_h24} txns, weak pool)"
+            _is_real_meme_flow = (vol_m5 >= 2500.0 and b5 >= int(s5 * 0.90))
+            if avg_trade < 1.50 and not _is_real_meme_flow:
+                return False, f"wash-trading-trap (avg trade ${avg_trade:.2f} < $1.50 across {trades_h24} txns, weak pool)"
+            if avg_trade < 2.00 and _links_cnt_g == 0 and not _is_real_meme_flow:
+                return False, f"wash-trading-trap (avg trade ${avg_trade:.2f} < $2.00 across {trades_h24} txns, no socials)"
 
         # 5. Рыночная капитализация и верхний потолок ликвидности (отсекает HODL $4.2M / $171k liq)
         max_liq = float(getattr(_c, "JEV_MAX_LIQUIDITY_USD", 220000.0))
@@ -948,23 +944,23 @@ class GrokJevEngine:
         # Если токен моложе 3м, DexScreener часто отдаёт m1 == m5 (одна первая свеча).
         _m1_is_phantom = (_age_m < 3.0 and abs(m5) > 1.0 and abs(m1) > 0 and abs(m1 / max(abs(m5), 0.01) - 1.0) < 0.08)
         _strong_breakout = (b5 >= 30 and b5 >= s5 * 1.30 and vol5 >= 10000.0)
-        _max_m1 = 18.0 if _strong_breakout else float(getattr(_c, "JEV_MAX_M1_ENTRY_PCT", 14.0))
+        _is_live_buyer_rocket = (b5 >= int(s5 * 1.05) and vol5 >= 2000.0 and (b5 + s5) >= 20)
+        _max_m1 = 120.0 if (_is_live_buyer_rocket or _age_m <= 30.0) else (35.0 if _strong_breakout else float(getattr(_c, "JEV_MAX_M1_ENTRY_PCT", 25.0)))
         _cfg_m5 = float(getattr(_c, "MAX_ENTRY_M5_PCT", 45.0))
-        _max_m5_cap = 65.0 if _strong_breakout else max(_cfg_m5, 50.0)
+        _max_m5_cap = 200.0 if _is_live_buyer_rocket else (85.0 if _strong_breakout else max(_cfg_m5, 50.0))
         if m5 > _max_m5_cap:
             return False, -0.14, 0.0, f"fomo-spike (m5 {m5:+.1f}% > +{_max_m5_cap:.0f}%) — buying local top, wait for reset"
         if m1 > _max_m1 and not _m1_is_phantom:
             return False, -0.14, 0.0, f"m1-spike (m1 {m1:+.1f}% > +{_max_m1:.1f}%) — vertical push, wait for consolidation"
 
         # 1.1. АНТИ-ХАИ (BID THE FLUSH, NOT THE CANDLE):
-        # Запрет покупать верхушку зеленой свечи после сильного импульса m5:
-        # Если монета уже выросла на m5 >= 18% И текущая минута m1 >= +3.0% —
-        # это покупка на самом хае перед фиксацией прибыли (кейс BMT +31.7% m5, +7.4% m1 -> мгновенный дамп).
-        if m5 >= 18.0 and m1 >= 3.0 and not _m1_is_phantom:
-            return False, -0.10, 0.0, f"fomo-peak-candle (m5 {m5:+.1f}%, m1 {m1:+.1f}%) — local top of green push, wait for pullback/flush"
+        # Отсекаем только иссякающий моментум (когда на хае свечи продавцы догоняют покупателей):
+        if not _is_live_buyer_rocket:
+            if m5 >= 18.0 and m1 >= 3.0 and not _m1_is_phantom:
+                return False, -0.10, 0.0, f"fomo-peak-candle (m5 {m5:+.1f}%, m1 {m1:+.1f}%) — local top of green push, wait for pullback/flush"
 
-        if m5 >= 35.0 and m1 >= 1.5 and not _m1_is_phantom:
-            return False, -0.10, 0.0, f"extended-m5-spike (m5 {m5:+.1f}%) — overextended momentum, wait for consolidation"
+            if m5 >= 35.0 and m1 >= 1.5 and not _m1_is_phantom:
+                return False, -0.10, 0.0, f"extended-m5-spike (m5 {m5:+.1f}%) — overextended momentum, wait for consolidation"
         _base_max_h1_flush = float(getattr(_c, "MAX_ENTRY_H1_PCT", 350.0))
         _is_active_fresh_flush = (_age_m <= 120.0 and vol5 >= 3000.0 and b5 >= s5 * 1.05 and m5 >= 1.5)
         _max_h1_flush = 2500.0 if _is_active_fresh_flush else _base_max_h1_flush
@@ -1476,7 +1472,7 @@ class GrokJevEngine:
             _dex_low_jev = str(pair_data.get("dexId") or "").lower()
             from news_narrative import news_radar
             _is_narr_jev = bool(news_radar.match_token(symbol, name))
-            is_canonical_pump = address.endswith("pump") or _dex_low_jev in ("pump", "pumpfun", "pumpswap") or is_raw_pump_curve or _is_narr_jev
+            is_canonical_pump = address.endswith("pump") or _dex_low_jev in ("pump", "pumpfun", "pumpswap", "meteora", "meteoradbc") or is_raw_pump_curve or _is_narr_jev
             if not is_canonical_pump and (rc_status_pre != 200 or not isinstance(rc_data_pre, dict)):
                 return False, "unverified-custom-token (waiting for rugcheck index)", _h_stats
 
@@ -1534,12 +1530,16 @@ class GrokJevEngine:
                     if not has_verified_locked_lp and not is_canonical_pump:
                         return False, "rugcheck: unverified unlocked LP (lock < 75%)", _h_stats
 
-                    # Очищенный score RugCheck: вычитаем безвредный шум пула (низкая ликвидность для молодых пулов, копикаты).
-                    # ВАЖНО: 'Large Amount of LP Unlocked' вычитается как шум для canonical pump токенов (как в прибыльном коммите 0d2b1ae)!
+                    # Очищенный score RugCheck: вычитаем безвредный шум пула (низкая ликвидность для молодых пулов, копикаты, AMM холдеры).
+                    # ВАЖНО: 'Large Amount of LP Unlocked' и AMM концентрация вычитаются как шум для canonical pump токенов (как в 0d2b1ae)!
                     _allowed_lp_terms_jev = (
                         "large amount of lp unlocked", "lp provider", "single lp provider",
-                        "lp not locked", "unlocked lp", "low liquidity", "copycat", "symbol mimic"
-                    ) if is_canonical_pump else ("lp provider", "low amount of lp providers", "low liquidity", "copycat", "symbol mimic")
+                        "lp not locked", "unlocked lp", "low liquidity", "copycat", "symbol mimic",
+                        "single holder ownership", "high holder concentration", "top 10 holders", "high ownership", "single holder"
+                    ) if is_canonical_pump else (
+                        "lp provider", "low amount of lp providers", "low liquidity", "copycat", "symbol mimic",
+                        "single holder ownership", "high holder concentration", "top 10 holders", "high ownership", "single holder"
+                    )
 
                     _tok_age_rc = (time.time() * 1000 - (pair_data.get("pairCreatedAt") or 0)) / 60000.0 if pair_data.get("pairCreatedAt") else 0.0
 
@@ -1552,7 +1552,7 @@ class GrokJevEngine:
                         ))
                     )
                     clean_score = max(0.0, raw_score - penalty_to_ignore)
-                    if clean_score >= 2000:
+                    if clean_score >= 2000 and not is_canonical_pump:
                         return False, f"rugcheck: high risk score {clean_score:.0f} >= 2000", _h_stats
 
                     # Проверка критических рисков (реальные опасности смарт-контракта и концентрации)
@@ -1661,10 +1661,10 @@ class GrokJevEngine:
                             return False, f"auditor-layer3 {_dump_why}", _h_stats
                     except Exception:
                         pass
-                    max_whale_limit = 18.0 if is_pump else 15.0
+                    max_whale_limit = 25.0 if (is_canonical_pump or is_pump) else 18.0
                     if largest_whale > max_whale_limit:
                         return False, f"whale concentration {largest_whale:.1f}% > {max_whale_limit:.0f}%", _h_stats
-                    max_top10 = 38.0 if (is_pump or vol_m5 >= 10000.0) else float(getattr(_c, "AUDITOR_MAX_TOP10_PCT", 32.0))
+                    max_top10 = 65.0 if (is_canonical_pump or is_pump) else float(getattr(_c, "AUDITOR_MAX_TOP10_PCT", 50.0))
                     if top_10_sum > max_top10:
                         return False, f"top 10 concentration {top_10_sum:.1f}% > {max_top10:.0f}%", _h_stats
 

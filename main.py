@@ -1214,20 +1214,16 @@ async def scanner_loop(analyzer, tracker):
                                 _tot_tx5_sc = _b5_bump + _s5_bump
                                 _avg_tx5_sc = (_vol5_live / _tot_tx5_sc) if _tot_tx5_sc > 0 else 0.0
 
-                                # Защита от микро bump-ботов (кейс LAURA $1.60 avg_tx):
-                                if _tot_tx5_sc >= 120 and _avg_tx5_sc < 8.0:
-                                    print(f"🚫 [SCANNER-WASH-TRAP] {actual_symbol} ({mint[:8]}): накрутка микро-ботом ({_tot_tx5_sc} txns, avg ${_avg_tx5_sc:.2f} < $8) — отмена!")
-                                    continue
-                                _is_deep_launchpad_runner = (
-                                    mint.endswith(("pump", "bonk", "BAGS"))
-                                    and liq_usd >= 20000.0
-                                    and _vol5_live >= 12000.0
-                                    and _avg_tx5_sc >= 10.0
-                                    and _m5_live >= 5.0
-                                    and _b5_bump >= _s5_bump * 1.22
+                                # Защита от микро bump-ботов (накрутка копеечными транзакциями <$1.50):
+                                _is_real_bump_flow = (
+                                    _b5_bump >= int(_s5_bump * 0.90)
+                                    and _vol5_live >= 2500.0
                                 )
-                                if _tot_tx5_sc >= 200 and _avg_tx5_sc < 12.0 and _links_sc == 0 and not _is_deep_launchpad_runner:
-                                    print(f"🚫 [SCANNER-WASH-TRAP] {actual_symbol} ({mint[:8]}): накрутка микро-ботом ({_tot_tx5_sc} txns, avg ${_avg_tx5_sc:.2f} < $12) — отмена!")
+                                if _tot_tx5_sc >= 120 and _avg_tx5_sc < 1.50 and not _is_real_bump_flow:
+                                    print(f"🚫 [SCANNER-WASH-TRAP] {actual_symbol} ({mint[:8]}): накрутка микро-ботом ({_tot_tx5_sc} txns, avg ${_avg_tx5_sc:.2f} < $1.50) — отмена!")
+                                    continue
+                                if _tot_tx5_sc >= 200 and _avg_tx5_sc < 2.00 and _links_sc == 0 and not _is_real_bump_flow:
+                                    print(f"🚫 [SCANNER-WASH-TRAP] {actual_symbol} ({mint[:8]}): накрутка микро-ботом ({_tot_tx5_sc} txns, avg ${_avg_tx5_sc:.2f} < $2.00) — отмена!")
                                     continue
 
                                 # Блок кастомных не-pump контрактов на PumpSwap только при микро-пуле (< $6k)

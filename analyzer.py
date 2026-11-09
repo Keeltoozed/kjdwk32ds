@@ -1661,6 +1661,8 @@ class Analyzer:
             else:
                 _age_min_pre = 999.0
         _dex_pre_early = str(pair_data.get("dexId", "")).lower()
+        is_pump_curve = _dex_pre_early in ("pump", "pumpfun")
+        _is_canonical_pump = mint.endswith("pump") or _dex_pre_early in ("pump", "pumpfun", "pumpswap", "meteora", "meteoradbc") or is_pump_curve
         if _dex_pre_early in ("pump", "pumpfun", "moonshot", "meteoradbc") or mint.endswith("moon"):
             if not getattr(config, "ALLOW_UNGRADUATED_PUMPFUN", False):
                 return self._deny(
@@ -1836,12 +1838,14 @@ class Analyzer:
         _min_m5_req = 1.0 if (_raw_liq_chk >= 10000.0 and _b5_pre >= _s5_pre and _vm5_pre >= 1500.0) else 1.8
         if _m5 < _min_m5_req and not _is_buyer_dip_pre:
             return self._deny(mint, f"m5-too-weak {_m5:+.1f}%", f"🚫 [WEAK-M5] {symbol} ({mint[:8]}): m5 {_m5:+.1f}% < +{_min_m5_req:.1f}% — нет разгона.")
-        _base_max_m1 = float(getattr(config, "MAX_ENTRY_M1_PCT", 25.0))
-        # Разрешаем импульсный пробой (свеча +15%..+35%) при активном спросе покупателей (b5 >= s5 и vol >= $1500)
-        if _b5_pre >= int(_s5_pre * 1.05) and _vm5_pre >= 1500.0 and _m5 >= 2.0:
-            _max_m1_cfg = 35.0  # Импульсный пробой ракеты
+        _base_max_m1 = float(getattr(config, "MAX_ENTRY_M1_PCT", 35.0))
+        # Разрешаем импульсный пробой (свеча +15%..+120%) для молодых ракет и при активном спросе покупателей:
+        if (_is_canonical_pump or _age_min_pre <= 30.0) and _b5_pre >= int(_s5_pre * 0.90) and _vm5_pre >= 1000.0:
+            _max_m1_cfg = 120.0  # Стартовый импульсный пробой ракеты (кейсы TURTLES m1 +82.2%, MOKO +97.7%, VAMP +12%)
+        elif _b5_pre >= int(_s5_pre * 1.05) and _vm5_pre >= 1500.0 and _m5 >= 2.0:
+            _max_m1_cfg = 60.0   # Импульсный пробой зрелой ракеты
         else:
-            _max_m1_cfg = min(_base_max_m1, 25.0)
+            _max_m1_cfg = max(_base_max_m1, 35.0)
         _min_m1_floor = -10.0 if _m5 >= 8.0 else -6.0
         if _m1 > _max_m1_cfg or _m1 < _min_m1_floor:
             return self._deny(
@@ -2064,8 +2068,8 @@ class Analyzer:
             # 2. Защита от Honeypot и искусственных бандлов без реальных продаж (кейс Белка -98%: 12 покупок и 0 продаж)
             if _s5_pre == 0 and _b5_pre >= 5:
                 return self._deny(mint, "zero-sells-dev-bundle", f"🚫 [DEV-BUNDLE] {symbol} ({mint[:8]}): 0 продаж при {_b5_pre} покупках — искусственный бандл дева без живого рынка (кейс Белка -98%)!")
-            _is_canonical_pump = mint.endswith("pump") and dex_id_low in ("pump", "pumpfun", "pumpswap")
-            if not _is_canonical_pump:
+            _is_canonical_pump_narrow = mint.endswith("pump") and dex_id_low in ("pump", "pumpfun", "pumpswap")
+            if not _is_canonical_pump_narrow:
                 if (_b5_pre + _s5_pre) >= 20 and (_s5_pre / (_b5_pre + _s5_pre)) < 0.05:
                     return self._deny(mint, "honeypot-anomaly", f"🚫 [HONEYPOT] {symbol} ({mint[:8]}): аномалия продаж m5 {_s5_pre}s/{_b5_pre}b (<5% продаж) — скрытый honeypot.")
 
@@ -2156,11 +2160,12 @@ class Analyzer:
 
                     _rc_raw_score = float(rc_data.get("score") or 0.0)
 
-                    # Безвредный шум RugCheck: для launchpad bonding curve / pump / Raydium / Meteora пулов вычитаем "Large Amount of LP Unlocked" (как в 0d2b1ae)!
+                    # Безвредный шум RugCheck: для launchpad bonding curve / pump / Raydium / Meteora пулов вычитаем "Large Amount of LP Unlocked" и AMM-концентрацию (как в 0d2b1ae)!
                     _allowed_lp_terms_main = (
                         "large amount of lp unlocked", "lp provider", "single lp provider",
                         "lp not locked", "unlocked lp", "low liquidity", "copycat", "symbol mimic",
-                        "creator history", "low amount of lp providers"
+                        "creator history", "low amount of lp providers",
+                        "single holder ownership", "high holder concentration", "top 10 holders", "high ownership", "single holder"
                     )
 
                     # Исключаем безвредный шум: низкая ликвидность для молодых пулов, copycat для мемов, и LP контракт пула.
@@ -2171,7 +2176,7 @@ class Analyzer:
                     )
 
                     _rc_score = max(0.0, _rc_raw_score - _rc_penalty_to_ignore)
-                    if _rc_score >= 5000:
+                    if _rc_score >= 5000 and not _is_canonical_pump:
                         return self._deny(mint, f"rugcheck-score {_rc_score:.0f}", f"🚫 [АНТИСКАМ] RugCheck Score {_rc_score:.0f} >= 5000 у {mint[:8]} → СКАМ")
 
                     # Жёсткий фильтр критических опасностей RugCheck
@@ -2373,7 +2378,10 @@ class Analyzer:
                 self.last_score = conf
                 self.rocket_scores[mint] = conf
             _final_thr = float(getattr(config, "ROCKET_XGB_FINAL_THRESHOLD", 14.0))
-            if _links_cnt == 0 and not _soc_unknown:
+            # Для монет с подтвержденным притоком покупателей и объёмом допускаем скор от 14% (кейс CNTC 15.7% -> ракета +118%)
+            if _vm5_pre >= 5000.0 and _b5_pre >= int(_s5_pre * 1.05):
+                _final_thr = min(_final_thr, 14.0)
+            elif _links_cnt == 0 and not _soc_unknown and not _is_canonical_pump:
                 _final_thr = max(_final_thr, 18.0)
             if (conf + 0.05) < _final_thr:
                 return self._deny(mint, f"rocket-xgb-s2 {conf:.0f}%", f"🚫 [ROCKET-XGB-S2] {symbol} ({mint[:8]}): скор с учётом холдеров {conf:.1f}% < {_final_thr:.0f}% — отсев.")
