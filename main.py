@@ -98,12 +98,12 @@ async def position_security_auditor_loop(analyzer, tracker):
                                 position.peak_liquidity_usd = _sol_liq
                                 _peak_liq = _sol_liq
 
-                            # Игнорируем пустые/нулевые ответы API (0 ликвидности — это баг Jupiter / лаг DexScreener, а не мгновенный вывод пула!)
-                            if _sol_liq <= 0:
+                            # Игнорируем нулевые ответы API только если ещё не было зафиксировано пиковой ликвидности
+                            if _sol_liq <= 0 and _peak_liq <= 0:
                                 continue
 
-                            _crit_drained = (_q_sym in ("SOL", "WSOL") and 0 < _quote_liq < 3.0) or (0 < _sol_liq < 1500.0)
-                            _drain_pct_drop = (_peak_liq >= 6000.0 and 0 < _sol_liq < _peak_liq * 0.65)
+                            _crit_drained = (_peak_liq >= 3000.0 and _sol_liq < 500.0) or (_q_sym in ("SOL", "WSOL") and 0 <= _quote_liq < 3.0 and _peak_liq >= 3000.0) or (0 < _sol_liq < 1200.0 and _peak_liq >= 5000.0)
+                            _drain_pct_drop = (_peak_liq >= 6000.0 and _sol_liq < _peak_liq * 0.40)
 
                             if _has_liq_data and (_crit_drained or _drain_pct_drop):
                                 _drop_cnt = getattr(position, "_liq_drop_streak", 0) + 1
@@ -111,7 +111,7 @@ async def position_security_auditor_loop(analyzer, tracker):
                                 if _drop_cnt < 2:
                                     # Требуем подтверждения 2 тика подряд (3-4 сек), чтобы единичный сетевой глитч не закрывал позицию!
                                     continue
-                                if _crit_drained and (_sol_liq < 200.0 or _quote_liq < 1.0):
+                                if _crit_drained or _sol_liq < 500.0 or _quote_liq < 2.0:
                                     _px_now = 0.0
                                 else:
                                     _px_now = float(getattr(position, "current_price_usd", 0.0) or getattr(position, "entry_price_usd", 0.0) or 0.0)
@@ -1155,7 +1155,7 @@ async def scanner_loop(analyzer, tracker):
                                     print(f"🚫 [SCANNER-WASH-TRAP] {actual_symbol} ({mint[:8]}): накрутка микро-ботом ({_tot_tx5_sc} txns, avg ${_avg_tx5_sc:.2f} < $8) — отмена!")
                                     continue
                                 _is_deep_launchpad_runner = (
-                                    (mint.endswith(("pump", "bonk", "BAGS")) or _dex_id == "pumpswap")
+                                    mint.endswith(("pump", "bonk", "BAGS"))
                                     and liq_usd >= 20000.0
                                     and _vol5_live >= 12000.0
                                     and _avg_tx5_sc >= 10.0

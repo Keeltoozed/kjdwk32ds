@@ -628,11 +628,12 @@ async def check_solana(mint: str):
                 rc_status, rc_data = await fetch_rugcheck_report_cached(mint, ttl=120.0, timeout=5)
                 if rc_status == 200 and isinstance(rc_data, dict):
                     rc_score = rc_data.get("score", 0) or 0
-                    # Вычитаем штрафы за стандартный шум DEX/AMM-пулов и launchpad (unlocked LP, AMM концентрация, copycat):
+                    # Вычитаем ТОЛЬКО безвредный шум DEX/AMM-пулов (низкая ликва, copycat, AMM провайдер).
+                    # ВАЖНО: концентрацию холдеров ("single holder", "top 10 holders") НИКОГДА не вычитаем как шум!
                     _allowed_rc_noise = (
                         "low liquidity", "creator history", "copycat", "symbol mimic",
                         "large amount of lp unlocked", "lp provider", "single lp provider",
-                        "lp not locked", "unlocked lp", "single holder ownership", "high holder concentration", "top 10 holders"
+                        "lp not locked", "unlocked lp"
                     )
                     rc_noise_penalty = sum(
                         float(rk.get("score", 0) or 0)

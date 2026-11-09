@@ -564,7 +564,7 @@ class GrokJevEngine:
         _req_soc_age = float(getattr(_c, "REQUIRE_SOCIALS_MIN_AGE_MIN", 8.0))
         _vol_liq_ratio_g = (vol_m5 / max(eff_liq, 1.0)) if eff_liq > 0 else 0.0
         _avg_tx_g = vol_m5 / max(1, b5 + s5)
-        _is_burned_lp_g = mint.endswith(("pump", "bonk", "BAGS")) or dex_id == "pumpswap"
+        _is_burned_lp_g = mint.endswith(("pump", "bonk", "BAGS"))
         _is_organic_stealth = False
         if _links_cnt_g == 0 and not _soc_unk_g:
             _is_organic_stealth = (
@@ -1446,9 +1446,9 @@ class GrokJevEngine:
               
             # Токены канонического происхождения Pump.fun (bonding curve / выпускники):
             _dex_low_jev = str(pair_data.get("dexId") or "").lower()
-            is_canonical_pump = address.endswith("pump") or _dex_low_jev in ("pump", "pumpfun", "pumpswap") or is_raw_pump_curve
-            if not is_canonical_pump and (rc_status_pre != 200 or not isinstance(rc_data_pre, dict)):
-                return False, "unverified-custom-token (waiting for rugcheck index)", _h_stats
+            is_canonical_pump = address.endswith("pump") or is_raw_pump_curve
+            if rc_status_pre != 200 or not isinstance(rc_data_pre, dict):
+                return False, "waiting for rugcheck index (auditor safety)", _h_stats
 
             # В) Полный отчет RugCheck API (из общего 120с кэша)
             try:
@@ -1654,17 +1654,11 @@ class GrokJevEngine:
                         max_top10_gp = 35.0 if is_pump else float(getattr(_c, "AUDITOR_MAX_TOP10_PCT", 30.0))
                         if _h_stats["top10_pct"] > max_top10_gp:
                             return False, f"top10 concentration (GoPlus) {_h_stats['top10_pct']:.1f}% > {max_top10_gp:.0f}%", _h_stats
-                    elif address.endswith("pump"):
-                        _h_stats["top10_pct"] = 15.0
-                        _h_stats["dev_pct"] = 2.0
-                        _h_stats["top1_pct"] = 2.0
                     else:
-                        return False, "auditor: cannot verify holders on custom token", _h_stats
+                        return False, "auditor: cannot verify holders (rugcheck missing)", _h_stats
 
             except Exception as e:
-                # Фоллбэк: если RugCheck недоступен, проверяем GoPlus holder stats
-                if not address.endswith("pump"):
-                    return False, f"rugcheck-exception ({e}) on custom token", _h_stats
+                return False, f"rugcheck-exception ({e})", _h_stats
                 _h_raw = _gp.get_solana_holder_stats(address)
                 if _h_raw and _h_raw.get("has_data"):
                     _h_stats["top10_pct"] = float(_h_raw.get("top_10_pct", 0.0) or 0.0)

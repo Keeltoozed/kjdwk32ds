@@ -1427,7 +1427,7 @@ class Analyzer:
 
             # 4. Кэшированный RugCheck аудит (концентрация холдеров и блокировка LP на кастомных токенах)
             _dex_low_rc = str((pair_data or {}).get("dexId", "")).lower()
-            _is_pump_origin_chk = mint.endswith("pump") or _dex_low_rc in ("pump", "pumpfun", "pumpswap") or is_pump_curve
+            _is_pump_origin_chk = mint.endswith("pump") or is_pump_curve
             if rc_st == 200 and isinstance(rc_data, dict):
                 raw_sc = float(rc_data.get("score") or 0.0)
                 _allowed_lp_terms_chk = (
@@ -1687,7 +1687,7 @@ class Analyzer:
         _info_pre = pair_data.get("info") or {}
         _has_soc_pre = bool((_info_pre.get("socials") or []) or (_info_pre.get("websites") or []))
         _raw_liq_chk = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
-        _is_burned_launchpad = mint.endswith(("pump", "bonk", "BAGS")) or _dex_pre_early == "pumpswap"
+        _is_burned_launchpad = mint.endswith(("pump", "bonk", "BAGS"))
         _tot_tx5_pre = _b5_pre + _s5_pre
         _avg_tx_pre = (_vm5_pre / _tot_tx5_pre) if _tot_tx5_pre > 0 else 0.0
         _is_real_bump_runner = (
@@ -1984,7 +1984,7 @@ class Analyzer:
             # Каноничный pump-флаг ставится ТОЛЬКО для монет с bonding curve Pump.fun (оканчивающихся на 'pump' или на сырой кривой).
             # Наличие пула на PumpSwap/Raydium НЕ делает кастомный скам-токен безопасным pump-токеном (кейсы DEMOCAT/SAFU/SOUVENIR)!
             _dex_low_main = str((pair_data or {}).get("dexId", "")).lower()
-            _is_canonical_pump = mint.endswith("pump") or _dex_low_main in ("pump", "pumpfun", "pumpswap") or is_pump_curve
+            _is_canonical_pump = mint.endswith("pump") or is_pump_curve
             _is_pump_flag = 1 if _is_canonical_pump else 0
             _cur_tok_top10 = 0.0
             _cur_tok_dev = 0.0
@@ -1996,12 +1996,12 @@ class Analyzer:
                 elif _rc_st not in (200, 0, 429):
                     print(f"⚠️ RugCheck API вернул {_rc_st} для {mint[:8]}.")
 
-                # Для кастомных токенов (не оканчивающихся на 'pump') требуем обязательный отчёт RugCheck:
-                if not _is_canonical_pump and (_rc_st != 200 or not rc_data):
+                # Требуем подтверждённый отчёт RugCheck для ВСЕХ кандидатов (защита от входа вслепую до индексации дев-бандлов):
+                if _rc_st != 200 or not rc_data:
                     return self._deny(
                         mint,
-                        "unverified-custom-token",
-                        f"⏳ [SECURITY-WAIT] {symbol} ({mint[:8]}): кастомный не-pump токен ожидает индексации RugCheck для проверки блокировки LP..."
+                        "waiting-rugcheck-index",
+                        f"⏳ [SECURITY-WAIT] {symbol} ({mint[:8]}): ожидаем индексации RugCheck (статус {_rc_st}) для проверки холдеров и LP..."
                     )
 
                 if rc_data:
@@ -2226,8 +2226,7 @@ class Analyzer:
                     pass
             except Exception as e:
                 print(f"⚠️ Ошибка проверки безопасности ({e})")
-                if not _is_pump_flag:
-                    return False
+                return False
 
             # 4. Финальная проверка минутных свечей (защита от водопада в моменте)
             if not await self.verify_1m_candles_not_dumping(mint, pair_data, "solana"):

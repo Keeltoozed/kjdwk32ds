@@ -486,7 +486,7 @@ class PaperTracker:
         # переживает рестарты через файл/Supabase.
         _sym = self._norm_symbol(symbol)
         if _sym:
-            _cd = float(getattr(config, "SYMBOL_REBUY_COOLDOWN_SEC", 4 * 3600) or 0)
+            _cd = float(getattr(config, "REBUY_COOLDOWN_SEC", 86400.0) or 86400.0)
             _now = time.time()
             for _k, _p in self.positions.items():
                 if _k == mint:
@@ -538,7 +538,7 @@ class PaperTracker:
                 and not any(k in _er_m_up for k in ("CRASH", "RUG", "HONEYPOT", "EMERGENCY", "BREAKEVEN", "REVERSAL", "STALL", "STAGNANT", "STOP"))
             )
             
-            _req_cd = (15 * 60) if _was_profitable else (4 * 3600)
+            _req_cd = (15 * 60) if _was_profitable else int(float(getattr(config, "REBUY_COOLDOWN_SEC", 86400.0) or 86400.0))
             if time_since_exit < _req_cd:
                 if _was_profitable:
                     print(f"⏳ Кулдаун профитной монеты: {symbol} закрыт в +${_pnl:.2f}. Ждем еще {int(_req_cd - time_since_exit)}с перед возможным перезаходом во 2-ю волну.")
@@ -653,19 +653,23 @@ class PaperTracker:
             except Exception:
                 exit_price = 0.0
             
-            # 1. Жесткий скам / Honeypot / Непродаваемый токен: списание по 0.0 только если exit_price <= 0
+            # 1. Жесткий скам / Honeypot / Непродаваемый токен / Снос ликвидности: списание по 0.0
             _r_up = str(reason or "").upper()
             _is_hard_scam = any(k in _r_up for k in (
-                "HONEYPOT", "CANNOT SELL", "UNSELLABLE", "ZERO-RUG"
+                "HONEYPOT", "CANNOT SELL", "UNSELLABLE", "ZERO-RUG",
+                "LIQUIDITY DROP", "LIQ DROP", "DRAIN", "RUG PULL", "EMERGENCY CAP", "DEAD"
             ))
-            # Если передана реальная рыночная цена продажи (> 0) — ВСЕГДА используем её!
-            # Никакие выходы по ликвидному щиту или стопам не должны принудительно занулять цену в 0.0!
+            # Если передан exit_price <= 0:
             if not (exit_price > 0):
                 if _is_hard_scam:
                     exit_price = 0.0
                 else:
                     exit_price = pos.entry_price_usd
                     reason = f"{reason} [stale→entry]"
+            elif _is_hard_scam and any(k in _r_up for k in ("LIQ DROP $0", "LIQ DROP $1", "DRAIN", "ZERO-RUG", "RUG PULL", "DEAD STALE POOL")):
+                # Защита от фантомных профитов (кейс NEX Ai +249% при сносе пула в $0):
+                # Если ликвидность снесена в 0, любая цена в стакане/DexScreener — фикция, продать невозможно!
+                exit_price = 0.0
 
             # Фантом единиц цены: exit в разы от entry+пика = битые данные, не пишем миллион.
             if not _is_hard_scam:
