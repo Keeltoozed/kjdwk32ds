@@ -1470,29 +1470,31 @@ class GrokJevEngine:
                     if freeze_auth and freeze_auth not in SAFE_AUTHORITIES:
                         return False, f"rugcheck: freeze authority active ({freeze_auth[:8]})", _h_stats
 
-                    # Проверка блокировки LP в пулах (Raydium Lock/Burn >= 80% или официальный Pump.fun AMM)
+                    # Проверка блокировки LP в пулах (Raydium Lock/Burn >= 75% или официальный Pump.fun AMM)
                     has_verified_locked_lp = False
                     has_unlocked_whale_lp = False
                     for mkt in (rc_data.get("markets") or []):
                         if isinstance(mkt, dict):
+                            mkt_type = str(mkt.get("marketType") or "").lower()
+                            if mkt_type in ("pump_fun_amm", "pump_amm"):
+                                has_verified_locked_lp = True
                             lp_info = mkt.get("lp") or {}
                             if isinstance(lp_info, dict):
                                 lp_locked_pct = float(lp_info.get("lpLockedPct") or 0.0)
                                 lp_burned_pct = float(lp_info.get("lpBurnedPct") or 0.0)
                                 lp_holders = lp_info.get("holders") or []
-                                _single_lp_whale = any(float(h.get("pct", 0) or 0) >= 15.0 for h in lp_holders if isinstance(h, dict))
-                                if (lp_locked_pct >= 80.0 or lp_burned_pct >= 80.0) and not _single_lp_whale:
+                                if lp_locked_pct >= 75.0 or lp_burned_pct >= 75.0:
                                     has_verified_locked_lp = True
-                                elif _single_lp_whale:
+                                elif any(float(h.get("pct", 0) or 0) >= 25.0 for h in lp_holders if isinstance(h, dict)):
                                     has_unlocked_whale_lp = True
 
-                    # Если пул контролируется индивидуальным кошельком (LP whale >= 15%) — 100% блок риска сноса пула (кейсы JENSEN / 牛逼)
+                    # Если пул контролируется индивидуальным кошельком (LP whale >= 25%) при незалоченном пуле — 100% блок риска сноса пула (кейсы JENSEN / 牛逼)
                     if has_unlocked_whale_lp:
                         return False, "rugcheck: unlocked LP held by individual wallet (drain risk)", _h_stats
 
-                    # Для токенов вне bonding curve требуем подтвержденный заблокированный/сожженный LP >= 80%
+                    # Для токенов вне bonding curve требуем подтвержденный заблокированный/сожженный LP >= 75%
                     if not has_verified_locked_lp and not is_raw_pump_curve:
-                        return False, "rugcheck: unverified unlocked LP (lock < 80%)", _h_stats
+                        return False, "rugcheck: unverified unlocked LP (lock < 75%)", _h_stats
 
                     # Очищенный score RugCheck: вычитаем безвредный шум пула (низкая ликвидность для молодых пулов, копикаты).
                     # ВАЖНО: 'Large Amount of LP Unlocked' НИКОГДА не вычитается как шум!

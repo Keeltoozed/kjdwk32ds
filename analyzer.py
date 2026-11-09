@@ -1767,7 +1767,9 @@ class Analyzer:
 
         # Запрет входа, если продавцов больше или почти столько же, сколько покупателей (на глубоких пулах >=$25k допускаем 1.08x при зелёном m5/m1)
         _base_bs_cfg = float(getattr(config, "MIN_BUY_SELL_RATIO", 1.08))
-        if _b5_pre >= 150 and _vm5_pre >= 15000.0 and _b5_pre >= _s5_pre:
+        if _b5_pre >= 50 and _vm5_pre >= 8000.0 and _m5 >= 2.0 and (_b5_pre / max(_s5_pre, 1)) >= 0.85:
+            _min_bs_cfg = 0.85  # Здоровая двухсторонняя торговля/консолидация на ракетах с объемом (кейс GINGATO 650b/675s, PERCOLATOR)
+        elif _b5_pre >= 150 and _vm5_pre >= 15000.0 and _b5_pre >= _s5_pre:
             _min_bs_cfg = 1.00  # Массивный встречный объём на ракетах (кейс PERCOLATOR 879b/845s)
         elif _b5_pre >= 40 and _vm5_pre >= 8000.0 and _b5_pre > _s5_pre:
             _min_bs_cfg = 1.05 if (_m5 >= 3.0 and _m1 >= -2.0) else 1.08
@@ -1820,12 +1822,12 @@ class Analyzer:
                 f"🚫 [M1-FILTER] {symbol} ({mint[:8]}): 1м свеча {_m1:+.1f}% вне коридора [{_min_m1_floor:+.1f}%, +{_max_m1_cfg:.0f}%].",
             )
 
-        # 4. Anti-FOMO: Защита от перегретых вершин (для свежих выпускников <=90м допускаем h1 до +2500%, т.к. h1 включает рост на кёрве $5k->$69k!)
+        # 4. Anti-FOMO: Защита от перегретых вершин (для свежих выпускников <=120м допускаем h1 до +2500%, т.к. h1 включает рост на кёрве $5k->$69k!)
         _base_max_entry_h1 = float(getattr(config, "MAX_ENTRY_H1_PCT", 350.0))
         _is_active_fresh_rocket = (
-            _age_min_pre <= 90.0
-            and _vm5_pre >= 5000.0
-            and _b5_pre >= _s5_pre * 1.05
+            _age_min_pre <= 120.0
+            and _vm5_pre >= 2000.0
+            and _b5_pre >= int(_s5_pre * 0.90)
         )
         _max_entry_h1 = 2500.0 if _is_active_fresh_rocket else _base_max_entry_h1
         _max_entry_m5 = float(getattr(config, "MAX_ENTRY_M5_PCT", 45.0))
@@ -2071,15 +2073,19 @@ class Analyzer:
                     _unlocked_lp_holder_danger = False
                     for _m in (rc_data.get("markets") or []):
                         if isinstance(_m, dict):
+                            _m_type = str(_m.get("marketType") or "").lower()
+                            if _m_type in ("pump_fun_amm", "pump_amm"):
+                                _lp_ok = True
                             _m_lp_info = _m.get("lp") or {}
                             if isinstance(_m_lp_info, dict):
                                 _m_lp_locked_pct = float(_m_lp_info.get("lpLockedPct", 0) or 0)
                                 _m_lp_burned_pct = float(_m_lp_info.get("lpBurnedPct", 0) or 0)
                                 _m_holders = _m_lp_info.get("holders") or []
-                                _m_has_whale = any(float(h.get("pct", 0) or 0) >= 15.0 for h in _m_holders if isinstance(h, dict))
-                                if (_m_lp_locked_pct >= 80.0 or _m_lp_burned_pct >= 80.0) and not _m_has_whale:
+                                # Если 75%+ пула сожжено/заблокировано — дев НЕ может снести ликвидность!
+                                if _m_lp_locked_pct >= 75.0 or _m_lp_burned_pct >= 75.0:
                                     _lp_ok = True
-                                elif _m_has_whale:
+                                elif any(float(h.get("pct", 0) or 0) >= 25.0 for h in _m_holders if isinstance(h, dict)):
+                                    # Пул незалочен (<75%) И отдельный кошелек контролирует >= 25% LP — риск выдергивания (JENSEN/STEVE/SI)
                                     _unlocked_lp_holder_danger = True
 
                     # Если пул контролируется индивидуальным кошельком (LP whale >= 15%) — мгновенный блок риска выдергивания пула (кейсы JENSEN / 牛逼)

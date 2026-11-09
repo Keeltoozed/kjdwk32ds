@@ -127,8 +127,8 @@ PUMP_XGB_ENABLED = False
 RAY_XGB_ENABLED = False
 ROCKET_XGB_ENABLED = True
 ROCKET_XGB_STAGE1_THRESHOLD = 8.0    # Первичный отсев в 0мс (отсекает мертвецов 2-7%)
-ROCKET_XGB_FINAL_THRESHOLD = 22.0    # Финальный порог (отсекает шлак < 22%, пропускает уверенные ракеты 25-88%)
-ROCKET_XGB_THRESHOLD = 22.0
+ROCKET_XGB_FINAL_THRESHOLD = 18.0    # Финальный порог (отсекает шлак < 18%, пропускает ракеты 18-88%)
+ROCKET_XGB_THRESHOLD = 18.0
 
 STALL_TIMER_SEC = 210.0   # 3.5 минуты (быстрый срез стоячего минуса без затягивания убытка до 13м)
 STALL_MAX_LOSS_PCT = -0.075

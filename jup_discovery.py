@@ -351,18 +351,18 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
     _m1_j = float(_pc_j.get("m1", 0) or 0)
     if abs(_m1_j) > max(180.0, abs(_m5_j) * 3.0 + 40.0):
         _m1_j = _m5_j / 5.0
-    _max_m1_cfg_j = min(float(getattr(config, "MAX_ENTRY_M1_PCT", 8.0)), 10.0)
+    _max_m1_cfg_j = min(float(getattr(config, "MAX_ENTRY_M1_PCT", 25.0)), 35.0)
     if _m1_j > _max_m1_cfg_j and _age_j >= 3.0:
         print(f"🚫 [{source_tag}-M1-SPIKE] {_sym_tmp} ({mint[:8]}): m1 +{_m1_j:.1f}% > +{_max_m1_cfg_j:.1f}% — вершина свечи, отмена входа.")
         return False
     _h1_j = float(_pc_j.get("h1", 0) or 0)
-    _is_fresh_j = _age_j <= 4.0
-    _max_h1_j = 2500.0 if (_is_fresh_j and _m5_j >= 2.5 and _b5_j >= _s5_j * 1.15) else float(getattr(config, "MAX_ENTRY_H1_PCT", 350.0))
+    _is_fresh_j = _age_j <= 120.0
+    _max_h1_j = 2500.0 if (_is_fresh_j and _m5_j >= 2.0 and _b5_j >= int(_s5_j * 0.90)) else float(getattr(config, "MAX_ENTRY_H1_PCT", 350.0))
     if _h1_j > _max_h1_j and _age_j > 4.0:
         print(f"🚫 [{source_tag}-H1-EXHAUSTED] {_sym_tmp} ({mint[:8]}): h1 {_h1_j:+.0f}% > +{_max_h1_j:.0f}% — памп уже отработал, вход = вершина.")
         return False
-    _min_m1_j = -2.8 if _m5_j < 12.0 else -6.0
-    if _m5_j < 1.5 or _m1_j < _min_m1_j:
+    _min_m1_j = -10.0 if _m5_j >= 8.0 else -6.0
+    if _m5_j < 1.0 or _m1_j < _min_m1_j:
         print(f"🚫 [{source_tag}-MOMENTUM-LOST] {_sym_tmp} ({mint[:8]}): импульс пропал (m5 {_m5_j:+.1f}%, m1 {_m1_j:+.1f}%) — отмена входа.")
         return False
     _pk_drop_j = float((td or {}).get("_drop_from_peak_5m", 0.0) or 0.0)

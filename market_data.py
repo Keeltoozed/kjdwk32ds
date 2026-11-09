@@ -757,17 +757,11 @@ async def get_trending() -> list:
             except Exception:
                 pass
 
-    # Расширенный охват GeckoTerminal: 5м тренды + 1ч раннеры + новые пулы
-    # Охватывает до 160 самых горячих пулов Solana (PumpSwap / Meteora / Raydium).
+    # Быстрый охват GeckoTerminal: 2 страницы самых горячих 5м трендов (40 пулов)
+    # Защищает от 429 Rate Limit на публичном API GeckoTerminal!
     gt_pages = (
         "/networks/solana/trending_pools?duration=5m&page=1",
         "/networks/solana/trending_pools?duration=5m&page=2",
-        "/networks/solana/trending_pools?duration=5m&page=3",
-        "/networks/solana/trending_pools?duration=5m&page=4",
-        "/networks/solana/trending_pools?duration=1h&page=1",
-        "/networks/solana/trending_pools?duration=1h&page=2",
-        "/networks/solana/new_pools?page=1",
-        "/networks/solana/new_pools?page=2",
     )
     for path in gt_pages:
         d = await _gt_get(path, retries=0, timeout=6)

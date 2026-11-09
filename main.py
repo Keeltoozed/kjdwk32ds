@@ -1133,9 +1133,9 @@ async def scanner_loop(analyzer, tracker):
                                 _s5_sc = int((pair_data.get("txns") or {}).get("m5", {}).get("sells", 0) or 0)
                                 _base_max_h1_live = float(getattr(config, "MAX_ENTRY_H1_PCT", 350.0))
                                 _is_fresh_active_sc = (
-                                    _age_m <= 4.0
-                                    and _vol5_live >= 5000.0
-                                    and _b5_sc >= _s5_sc * 1.15
+                                    _age_m <= 120.0
+                                    and _vol5_live >= 2000.0
+                                    and _b5_sc >= int(_s5_sc * 0.90)
                                 )
                                 _max_h1_live = 2500.0 if _is_fresh_active_sc else _base_max_h1_live
                                 if _h1_live > _max_h1_live and _age_m > 4.0:
@@ -1333,8 +1333,11 @@ async def scanner_loop(analyzer, tracker):
                                         continue
                                     _live_jup_px = await JupiterAPI.get_price(mint)
                                     if _live_jup_px and _live_jup_px > 0 and entry_price > 0:
-                                        if _live_jup_px < entry_price * 0.975:
+                                        if _live_jup_px < entry_price * 0.82:
                                             print(f"🚫 [SCANNER LIVE-DUMP BLOCKED] {actual_symbol} ({mint[:8]}): живая цена Jupiter (${_live_jup_px:.8f}) уже на {(1.0 - _live_jup_px / entry_price) * 100:.1f}% ниже цены сигнала (${entry_price:.8f}) — обвал в моменте, отмена входа!")
+                                            continue
+                                        elif _live_jup_px > entry_price * 1.35:
+                                            print(f"🚫 [SCANNER LIVE-PUMP-FOMO BLOCKED] {actual_symbol} ({mint[:8]}): цена улетела на +{(_live_jup_px / entry_price - 1.0) * 100:.1f}% выше сигнала — не покупаем вершину!")
                                             continue
                                         entry_price = _live_jup_px
                                 except Exception:
