@@ -30,8 +30,21 @@ class NewsNarrativeRadar:
         "AFTER", "BEFORE", "WILL", "MORE", "OVER", "INTO", "SAYS", "ABOUT", "PRICE", "MARKET", "FIRST",
         "WHAT", "WHEN", "WHERE", "COULD", "WOULD", "SHOULD", "THEIR", "THERE", "HERE", "THEN", "THAN",
         "USD", "USDC", "USDT", "BTC", "ETH", "SOL", "SEC", "ETF", "FED", "WSJ", "PBS", "CNN", "BBC",
-        "FOX", "CEO", "CFO", "CTO", "COO", "API", "USA", "UK", "EU", "POST", "UPDATE", "LIVE", "BREAKING"
+        "FOX", "CEO", "CFO", "CTO", "COO", "API", "USA", "UK", "EU", "POST", "UPDATE", "LIVE", "BREAKING",
+        "NOTHING", "NYSE", "OCC", "STRC", "ICE", "OKX", "AVAX", "ASAP", "CBS", "NBC", "CNBC", "PNC", "UAE"
     }
+
+    @staticmethod
+    def _is_valid_keyword(w: str) -> bool:
+        if not w or len(w) < 3 or len(w) > 12:
+            return False
+        # Отсекаем денежные суммы и цифры вроде 20M, 188M, 68K, 100X, 500B
+        if re.search(r'^\d', w) or re.search(r'\d+[KMGBTXkmgbtx]?$', w):
+            return False
+        # Требуем хотя бы 3 латинские буквы подряд
+        if not re.search(r'^[A-Z]{3,12}$', w):
+            return False
+        return True
 
     RSS_FEEDS = [
         ("Cointelegraph", "https://cointelegraph.com/rss"),
@@ -84,7 +97,7 @@ class NewsNarrativeRadar:
     def add_keyword(self, word: str, source: str = "USER", ttl_sec: float = 7200.0, headline: str = "") -> bool:
         w = word.upper().strip()
         w = re.sub(r'[^A-Z0-9_]', '', w)
-        if not w or len(w) < 2 or w in self.STOP_WORDS:
+        if not self._is_valid_keyword(w) or w in self.STOP_WORDS:
             return False
         now = time.time()
         self.keywords[w] = {

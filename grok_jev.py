@@ -458,7 +458,7 @@ class GrokJevEngine:
         vol_h24 = float((pair_data.get("volume") or {}).get("h24", 0) or 0)
         trades_h24 = int(txns_h24.get("buys", 0) or 0) + int(txns_h24.get("sells", 0) or 0)
 
-        _is_pump_token_jev = mint.endswith("pump") or dex_id in ("pump", "pumpfun", "pumpswap", "meteoradbc") or is_raw_pump_curve
+        _is_pump_token_jev = mint.endswith("pump") or dex_id in ("pump", "pumpfun", "pumpswap", "meteoradbc") or is_pump
         _min_grad_liq = 4000.0 if (vol_m5 >= 2000.0 and b5 >= s5) else float(getattr(_c, "MIN_GRADUATED_LIQ_USD", 7500.0))
         if dex_id in ("pump", "pumpfun", "meteoradbc") and not getattr(_c, "ALLOW_UNGRADUATED_PUMPFUN", False):
             return False, "raw-pump-curve (wait for graduation to PumpSwap/Raydium with locked LP)"
