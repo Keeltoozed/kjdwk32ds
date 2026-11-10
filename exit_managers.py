@@ -106,25 +106,9 @@ class MatureExitManager:
             position.sl_confirm_n = 0
 
         # =========================================================================
-        # 2. BREAKEVEN SHIELD (ПРАВИЛО ПРОФИ: ЗЕЛЕНАЯ СДЕЛКА НЕ СТАНОВИТСЯ КРАСНОЙ!)
+        # 2. ТРЕЙЛИНГ-СТОП И PROFIT FLOOR (МАКСИМАЛЬНЫЙ ВЫНОС ПРИБЫЛИ ИЗ РАКЕТ)
         # =========================================================================
-        # Активируется ТОЛЬКО после мощного взлета (пик >= +25%), чтобы не душить
-        # ракеты на секундных шумах и спредах в зоне +5%..+15%!
-        _be_act = float(getattr(config, "BREAKEVEN_PCT", 0.25))
-        if max_pnl_pct >= _be_act and minutes_held >= 0.25:
-            if pnl_pct <= 0.020:
-                return f"Mature Breakeven Shield (+{pnl_pct*100:.1f}% locked after peak +{max_pnl_pct*100:.1f}%)"
-
-        # Безубыток для мунбэга:
-        if _is_mb:
-            if pnl_pct <= 0.010:
-                return f"Mature Moonbag Breakeven (+{pnl_pct*100:.1f}% locked after TP1)"
-
-        # =========================================================================
-        # 3. ТРЕЙЛИНГ-СТОП И PROFIT FLOOR (МАКСИМАЛЬНЫЙ ВЫНОС ПРИБЫЛИ ИЗ РАКЕТ)
-        # =========================================================================
-        # Даем ракетам свободно дышать до +25%! Никаких 6% микро-трейлингов!
-        # А когда ракета берет высоту, забираем львиную долю прибыли.
+        # Защищаем реальную прибыль: ракета не может упасть ниже своего гарантированного пола!
         _floor_pnl = None
         _trail_dist = None
 
@@ -140,17 +124,30 @@ class MatureExitManager:
         elif max_pnl_pct >= 0.50:       # +50%..+100% (Horned cat +93%..+150% -> фиксируем +65%..+110%!)
             _floor_pnl = 0.28           # Гарантируем минимум +28%
             _trail_dist = 0.18          # Трейлинг 18% от пика
-        elif max_pnl_pct >= 0.25:       # +25%..+50% (UNEMPLOYED +38% -> фиксируем +20% чистыми!)
+        elif max_pnl_pct >= 0.25:       # +25%..+50% (UNEMPLOYED +38% -> фиксируем +10%..+20% чистыми!)
             _floor_pnl = 0.10           # Гарантируем минимум +10%
             _trail_dist = 0.15          # Трейлинг 15% от пика
 
-        if _floor_pnl is not None and minutes_held >= 0.20:
+        if _floor_pnl is not None and minutes_held >= 0.15:
             drop_from_max = (position.max_price_usd - current_price) / position.max_price_usd if position.max_price_usd > 0 else 0.0
             _tag = "Moonbag" if _is_mb else "Full Runner"
             if _trail_dist is not None and drop_from_max >= _trail_dist and pnl_pct >= _floor_pnl:
                 return f"Mature {_tag} Trailing ({pnl_pct*100:+.1f}% locked after peak +{max_pnl_pct*100:.1f}%)"
             elif pnl_pct <= _floor_pnl:
                 return f"Mature {_tag} Floor (+{pnl_pct*100:.1f}% locked after peak +{max_pnl_pct*100:.1f}%)"
+
+        # =========================================================================
+        # 3. BREAKEVEN SHIELD (ЗАЩИТА ОТ УХОДА В МИНУС ДЛЯ МОНЕТ БЕЗ ТРЕЙЛИНГ-ПОЛА)
+        # =========================================================================
+        _be_act = float(getattr(config, "BREAKEVEN_PCT", 0.20))
+        if max_pnl_pct >= _be_act and minutes_held >= 0.25:
+            if pnl_pct <= 0.020:
+                return f"Mature Breakeven Shield (+{pnl_pct*100:.1f}% locked after peak +{max_pnl_pct*100:.1f}%)"
+
+        # Безубыток для мунбэга:
+        if _is_mb:
+            if pnl_pct <= 0.010:
+                return f"Mature Moonbag Breakeven (+{pnl_pct*100:.1f}% locked after TP1)"
 
         # =========================================================================
         # 4. PARABOLIC MOMENTUM HARVEST (ФИКСАЦИЯ ПРИ ЗАСТРЕВАНИИ НА ВЕРШИНЕ)
