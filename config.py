@@ -79,8 +79,12 @@ DD_THROTTLE_START_USD = 15.0
 # === ВХОД В ЗРЕЛЫЕ КРИВЫЕ PUMP.FUN ДО МИГРАЦИИ + ЗАЩИТА DEX ===
 SNIPER_ENTRIES_ENABLED = False
 ALLOW_UNGRADUATED_PUMPFUN = False         # ОТКЛЮЧЕНО: запрет сырых bonding curves (сливы $KCAT -58%, REVERSE -34%). Ждём миграции на DEX с сожжённым LP!
-MIN_PUMP_CURVE_MCAP_USD = 18000.0         # Минимум $18k FDV (~$7.2k виртуальной ликвидности)
-MAX_PUMP_CURVE_MCAP_USD = 44000.0         # До $44k FDV (не покупаем перед самым обрывом миграции $55k+)
+MIN_PUMP_CURVE_MCAP_USD = 18000.0         # Fallback в USD (если sol_price недоступен)
+MAX_PUMP_CURVE_MCAP_USD = 44000.0         # Fallback в USD
+MIN_PUMP_CURVE_MCAP_SOL = 80.0            # Порог кривой pump.fun в SOL (~$6.6k при SOL $83, ~$12k при SOL $150)
+MAX_PUMP_CURVE_MCAP_SOL = 350.0           # Верх кривой перед миграцией (~350 SOL)
+PUMP_MIGRATION_MCAP_SOL = 410.0           # FDV миграции pump.fun (~410 SOL = ~$34k при SOL $83, ~$61.5k при SOL $150)
+PUMP_DUMP_FLOOR_SOL = 285.0               # Порог post-mig-dumped (~70% миграции = 285 SOL = ~$23.6k при SOL $83)
 JEV_MAX_TICKET_USD = 0.0
 MIN_GRADUATED_LIQ_USD = 10000.0           # На DEX минимум $10k реальной ликвидности (пускает свежие миграции PumpSwap $10.5k+, режет микро-пулы <$9k)
 AUDITOR_STAIRCASE_ENABLED = True

@@ -709,6 +709,50 @@ async def birth_wss_loop(analyzer, tracker):
             # Не спамим при 502, фоновый поллер подхватывает новые токены
             await asyncio.sleep(15)
 
+async def discovery_feeder_loop(analyzer):
+    """Фоновый агрегатор источников (Jupiter 5m/1h/6h, GeckoTerminal, DexScreener search/boosts).
+    Обновляет кэш кандидатов analyzer._cached_discovery_mints каждые 15 сек.
+    Благодаря этому scanner_loop разбирает свежие миграции мгновенно (0с задержки вместо 17-33с)!
+    """
+    print("🛰️ [DISCOVERY-FEEDER] Фоновый агрегатор запущен (Jupiter, GT, DexScreener)...")
+    while True:
+        try:
+            mints = []
+            # 1. Jupiter Discovery (toptrending 5m/1h/6h, toporganicscore, toptraded, recent)
+            try:
+                from jup_discovery import fetch_jup_tokens
+                j_mints = await fetch_jup_tokens()
+                if j_mints:
+                    mints.extend(j_mints)
+            except Exception:
+                pass
+
+            # 2. GeckoTerminal Trending (5m + 1h + new_pools)
+            try:
+                import market_data
+                gt_pools = await market_data.get_trending()
+                if gt_pools:
+                    mints.extend([p.get("tokenAddress") for p in gt_pools if p.get("tokenAddress")])
+            except Exception:
+                pass
+
+            # 3. DexScreener бусты, профили и радар поиска (pumpswap, raydium, orca)
+            try:
+                ds_tokens = await analyzer.fetch_latest_tokens()
+                if ds_tokens:
+                    mints.extend([p.get("tokenAddress") for p in ds_tokens if p.get("tokenAddress")])
+            except Exception:
+                pass
+
+            if mints:
+                deduped = list(dict.fromkeys(m.strip() for m in mints if m and isinstance(m, str) and 32 <= len(m) <= 44))
+                analyzer._cached_discovery_mints = deduped
+                analyzer._cached_discovery_time = time.time()
+        except Exception as e:
+            print(f"⚠️ [DISCOVERY-FEEDER] Ошибка сбора: {e}")
+        await asyncio.sleep(15)
+
+
 async def scanner_loop(analyzer, tracker):
     print("🚀 Запуск PhantBot Scanner (Поиск новых монет)...")
     processed_mints = {}
@@ -733,40 +777,10 @@ async def scanner_loop(analyzer, tracker):
                 await asyncio.sleep(int(getattr(config, "KILL_SWITCH_PAUSE", 300)))
                 continue
             if tracker.can_open_new_position(config.MAX_CONCURRENT_POSITIONS):
-                print(f"🔎 Сканируем монеты... (Открыто: {open_count}/{config.MAX_CONCURRENT_POSITIONS})")
-                
                 mints_to_scan = []
-                # 0. Jupiter Discovery: свежие листинги, топ-5м тренды, органика и объем (80-100 живых ракет)
-                try:
-                    from jup_discovery import fetch_jup_tokens
-                    jup_tokens = await fetch_jup_tokens()
-                    if jup_tokens:
-                        mints_to_scan.extend(jup_tokens)
-                except Exception as _je:
-                    pass
 
-                # 1. Органика Solana: GeckoTerminal Trending (5m + 1h + new_pools + pump.fun)
-                try:
-                    import market_data
-                    trending_pools = await market_data.get_trending()
-                    if trending_pools:
-                        mints_to_scan.extend([p.get("tokenAddress") for p in trending_pools if p.get("tokenAddress")])
-                except Exception as _e:
-                    pass
-
-                # 2. DexScreener бусты и профили (кэш 20 сек)
-                _lt_ttl = float(getattr(config, "SCAN_LATEST_TTL_SEC", 20))
-                if _latest_cache[0] and time.time() - _latest_cache[0] < _lt_ttl:
-                    tokens = _latest_cache[1]
-                else:
-                    tokens = await analyzer.fetch_latest_tokens()
-                    _latest_cache = (time.time(), tokens)
-                if tokens:
-                    mints_to_scan.extend([p.get("tokenAddress") for p in tokens if p.get("tokenAddress")])
-
-                # 0. Миграции ПЕРВЫМИ: только что вышли из кёрва в Raydium-пул —
-                # окно ракеты минуты, DS ещё может не проиндексировать (None → вернём в очередь).
-                # Срез 25/цикл: при панике очередь не блочит VIP-разбор надолго.
+                # 0. СВЕЖИЕ МИГРАЦИИ ПЕРВЫМИ (МГНОВЕННО БЕЗ СЕТЕВЫХ ЗАДЕРЖЕК):
+                # Только что вышли из кёрва в Raydium/PumpSwap пул — окно ракеты секунды!
                 graduated_mints = []
                 try:
                     _raw_grads = birth_tracker.drain_graduated() or []
@@ -776,9 +790,23 @@ async def scanner_loop(analyzer, tracker):
                 except Exception:
                     pass
                 if graduated_mints:
-                    print(f"🏁 Разбираю {len(graduated_mints)} свежих миграций ПЕРВЫМИ!")
-                    mints_to_scan = graduated_mints + mints_to_scan
-                _graduated_set = set(birth_tracker.drain_graduated() or [])
+                    print(f"🏁 Разбираю {len(graduated_mints)} свежих миграций ПЕРВЫМИ (0с задержки)!")
+                    mints_to_scan.extend(graduated_mints)
+                _graduated_set = set(graduated_mints)
+
+                # 1. Готовый кэш дискавери из фонового фидера (Jupiter, GT, DexScreener): 0мс задержки!
+                cached_discovery = getattr(analyzer, "_cached_discovery_mints", None)
+                if not cached_discovery:
+                    # Фоновый сборщик ещё не успел собрать при первом запуске — быстрый разовый опрос
+                    try:
+                        from jup_discovery import fetch_jup_tokens
+                        cached_discovery = await fetch_jup_tokens() or []
+                    except Exception:
+                        cached_discovery = []
+                if cached_discovery:
+                    mints_to_scan.extend(cached_discovery)
+
+                print(f"🔎 Сканируем монеты... (Открыто: {open_count}/{config.MAX_CONCURRENT_POSITIONS}, кандидатов: {len(mints_to_scan)})")
                 
                 # 2. Уличные Токены (Берем созревающие ракеты)
                 if getattr(config, "ALLOW_UNGRADUATED_PUMPFUN", False):
@@ -985,19 +1013,47 @@ async def scanner_loop(analyzer, tracker):
                         if is_good is False:
                             _sig = str(analyzer.get_signal(mint) or "")
                             _sig_l = _sig.lower()
-                            if any(k in _sig_l for k in ("rugcheck", "scam", "unlocked-lp", "bundle", "honeypot", "freeze", "mimic", "dead-token", "мёртвый токен", "sybil", "delegation")):
-                                processed_mints[mint] = time.time() + 3600      # Подтверждённый скам/мертвец: бан на 1 час и убираем из очереди миграций
+                            _is_terminal = any(k in _sig_l for k in (
+                                "rugcheck", "scam", "unlocked-lp", "bundle", "honeypot", 
+                                "freeze", "mimic", "dead-token", "мёртвый токен", "sybil", 
+                                "delegation", "post-mig-dumped", "zombie", "low-liq", 
+                                "deadcat", "dead-cat", "dumped", "ghost-pool", "wash-spike", 
+                                "wash-trap", "mcap-too-large", "price-split"
+                            ))
+                            if _is_terminal:
+                                processed_mints[mint] = time.time() + 3600      # Подтверждённый скам/мертвец: бан на 1 час и навсегда убираем из очереди миграций
                                 try:
-                                    with birth_tracker.lock:
-                                        birth_tracker.graduated.pop(mint, None)
+                                    birth_tracker.remove_graduated(mint)
                                 except Exception:
                                     pass
-                            elif "откат" in _sig_l or "вертикаль" in _sig_l or mint in _graduated_set:
-                                processed_mints[mint] = time.time() - _cd + 35  # Живой выпускник ждёт отката/импульса: перепроверить через 35с
                             elif "ungraduated" in _sig_l or "bonding curve" in _sig_l or "curve" in _sig_l:
-                                processed_mints[mint] = time.time() + 60        # Сырая кривая: ждём 60с (при миграции _graduated_set пробьёт сразу)
+                                processed_mints[mint] = time.time() + 60        # Сырая кривая: ждём 60с
+                            elif "откат" in _sig_l or "вертикаль" in _sig_l or "pullback" in _sig_l:
+                                _pullbacks = getattr(analyzer, "_pullback_retries", {})
+                                _p_cnt = _pullbacks.get(mint, 0) + 1
+                                _pullbacks[mint] = _p_cnt
+                                if _p_cnt <= 6:
+                                    processed_mints[mint] = time.time() - _cd + 35  # Живой выпускник ждёт отката/импульса: перепроверить через 35с (до 6 раз)
+                                else:
+                                    processed_mints[mint] = time.time() + 600
+                                    try:
+                                        birth_tracker.remove_graduated(mint)
+                                    except Exception:
+                                        pass
+                            elif mint in _graduated_set:
+                                _g_retries = getattr(analyzer, "_grad_retries", {})
+                                _g_cnt = _g_retries.get(mint, 0) + 1
+                                _g_retries[mint] = _g_cnt
+                                if _g_cnt <= 3:
+                                    processed_mints[mint] = time.time() - _cd + 35
+                                else:
+                                    processed_mints[mint] = time.time() + 600
+                                    try:
+                                        birth_tracker.remove_graduated(mint)
+                                    except Exception:
+                                        pass
                             else:
-                                processed_mints[mint] = time.time()
+                                processed_mints[mint] = time.time() + 90
                         else:
                             processed_mints[mint] = time.time()
                         _sc_score_m = float(getattr(analyzer, "rocket_scores", {}).get(mint, getattr(analyzer, "last_score", 0.0)) or 0.0)
@@ -1184,8 +1240,12 @@ async def scanner_loop(analyzer, tracker):
                                         print(f"⏳ [SCANNER-MIGRATION] {actual_symbol} ({mint[:8]}): AMM-пул создан {_age_sc:.1f}м назад (< 1.0м) — повтор через 25с.")
                                         continue
                                     _fdv_sc = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
-                                    if 0 < _fdv_sc < 46000.0 and not (_age_sc < 5.0 and _vol5_live >= 20000.0 and _m5_live >= 18.0 and _b5_bump >= _s5_bump * 1.45):
-                                        print(f"🚫 [SCANNER-MIGRATION] {actual_symbol} ({mint[:8]}): FDV ${_fdv_sc:,.0f} < $46,000 — слит ниже уровня миграции (кейс SHANE).")
+                                    from sol_price import get_sol_price_sync
+                                    _sol_p_sc = float(get_sol_price_sync() or 150.0)
+                                    if _sol_p_sc <= 0: _sol_p_sc = 150.0
+                                    _dump_floor_sc = float(getattr(config, "PUMP_DUMP_FLOOR_SOL", 285.0)) * _sol_p_sc
+                                    if 0 < _fdv_sc < _dump_floor_sc and not (_age_sc < 5.0 and _vol5_live >= 20000.0 and _m5_live >= 18.0 and _b5_bump >= _s5_bump * 1.45):
+                                        print(f"🚫 [SCANNER-MIGRATION] {actual_symbol} ({mint[:8]}): FDV ${_fdv_sc:,.0f} < ${_dump_floor_sc:,.0f} [~285 SOL] — слит ниже уровня миграции (кейс SHANE).")
                                         continue
                                     if liq_usd < 8000.0:
                                         print(f"🚫 [SCANNER-MIGRATION] {actual_symbol} ({mint[:8]}): ликвидность ${liq_usd:,.0f} < $8,000 — микро-пул.")
@@ -2514,6 +2574,7 @@ async def async_main():
         _supervised(lambda: position_manager_loop(analyzer, tracker), "position_manager_loop"),
         _supervised(lambda: position_security_auditor_loop(analyzer, tracker), "position_security_auditor_loop"),
         _supervised(lambda: scanner_loop(analyzer, tracker), "scanner_loop"),
+        _supervised(lambda: discovery_feeder_loop(analyzer), "discovery_feeder_loop"),
         _supervised(lambda: copy_trader.listen(), "copy_trader"),
         _supervised(lambda: fomo_signal_loop(analyzer, tracker), "fomo_signal_loop"),
         _supervised(lambda: tg_listener_loop(analyzer, tracker), "tg_listener_loop"),

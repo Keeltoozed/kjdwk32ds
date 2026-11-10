@@ -161,6 +161,14 @@ class BirthTracker:
                 ts = self.waiting_room[mint].get("ts")
             return time.time() - ts if ts else -1.0
 
+    def remove_graduated(self, mint: str):
+        """Удалить токен из очереди graduated и waiting_room навсегда (скам/зомби/слит)."""
+        if not mint:
+            return
+        with self.lock:
+            self.graduated.pop(mint, None)
+            self.waiting_room.pop(mint, None)
+
     def drain_graduated(self, max_age_sec: int = None) -> list:
         """Забрать свежие миграции (дефолт TTL 15 мин) и почистить старые."""
         if max_age_sec is None:

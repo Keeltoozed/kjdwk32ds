@@ -550,12 +550,18 @@ class GrokJevEngine:
         if (b5 + s5) >= 120 and _avg_tx_e < 3.0 and not _is_real_bump_runner_g:
             return False, f"fake-bump-wash-bot avg ${_avg_tx_e:.2f} < $3 across {b5+s5} m5 txns"
 
-        # Защита от слитых ниже миграции выпускников Pump.fun (кейс SHANE FDV $35.8k, но пускаем PERCOLATOR / LOWCAP $34.9k / MEME $40k с живым потоком)
-        if mint.endswith("pump") and dex_id not in ("pump", "pumpfun") and 0 < fdv_mc < 46000.0:
-            _is_real_dump = (fdv_mc < 12000.0) or (s5 > int(b5 * 1.25) and m5 < -5.0)
+        # Защита от слитых ниже миграции выпускников Pump.fun (порог привязан к SOL, ~285 SOL)
+        from sol_price import get_sol_price_sync
+        _sol_p_g = float(get_sol_price_sync() or 150.0)
+        if _sol_p_g <= 0:
+            _sol_p_g = 150.0
+        _dump_floor_g = float(getattr(_c, "PUMP_DUMP_FLOOR_SOL", 285.0)) * _sol_p_g
+        _hard_dump_g = 120.0 * _sol_p_g
+        if mint.endswith("pump") and dex_id not in ("pump", "pumpfun") and 0 < fdv_mc < _dump_floor_g:
+            _is_real_dump = (fdv_mc < _hard_dump_g) or (s5 > int(b5 * 1.25) and m5 < -5.0)
             _is_active_grad = (vol_m5 >= 2000.0 and b5 >= int(s5 * 1.00) and m5 >= -5.0)
             if _is_real_dump or not _is_active_grad:
-                return False, f"post-mig-dumped-fdv ${fdv_mc:,.0f} < $46k"
+                return False, f"post-mig-dumped-fdv ${fdv_mc:,.0f} < ${_dump_floor_g:,.0f}"
 
         # 2.4. Защита от безымянных рагпулов без соцсетей на ВСЕХ возрастах (STONKS 12.5м, IPHONEDUO 28.2м, scamsem 25.8м)
         _info_g = pair_data.get("info") or {}

@@ -412,6 +412,19 @@ class Analyzer:
         """Отказ с записью причины в signals, минутным счетчиком воронки и отправкой в Supabase."""
         print(msg)
         self._set_sig(key, f"SKIP {short}")
+        if not hasattr(self, "_global_scan_cache"):
+            self._global_scan_cache = {}
+        if len(self._global_scan_cache) > 5000:
+            _now_c = time.time()
+            self._global_scan_cache = {k: v for k, v in self._global_scan_cache.items() if _now_c - v[0] < 1800.0}
+        self._global_scan_cache[key] = (
+            time.time(),
+            False,
+            self.signals.get(key, f"SKIP {short}"),
+            float(getattr(self, "last_score", 0.0) or 0.0),
+            float(getattr(self, "_last_top10", 0.0) or 0.0),
+            float(getattr(self, "_last_dev", 0.0) or 0.0),
+        )
         try:
             import collections as _coll
             _f = getattr(self, "_sol_funnel", None)
@@ -591,6 +604,8 @@ class Analyzer:
                     "https://api.dexscreener.com/latest/dex/search?q=SOL%20pump",
                     "https://api.dexscreener.com/latest/dex/search?q=meteora%20SOL",
                     "https://api.dexscreener.com/latest/dex/search?q=bonk%20SOL",
+                    "https://api.dexscreener.com/latest/dex/search?q=raydium%20SOL",
+                    "https://api.dexscreener.com/latest/dex/search?q=orca%20SOL",
                 )
                 _ds_sr = await _aio_lt.gather(
                     *[fetch_json(u, timeout=6, retries=0) for u in _ds_search_urls],
@@ -637,6 +652,14 @@ class Analyzer:
                     tokens.extend(data)
             except Exception as e:
                 print(f"Dexscreener latest boosts fetch error: {e}")
+
+            # 1.1. Сканируем ТОПОВЫЕ бусты (token-boosts/top/v1) — топ-продвигаемые монеты
+            try:
+                status, data = await fetch_json("https://api.dexscreener.com/token-boosts/top/v1", timeout=8, retries=1)
+                if status == 200 and isinstance(data, list):
+                    tokens.extend(data)
+            except Exception as e:
+                print(f"Dexscreener top boosts fetch error: {e}")
 
             # 2. Сканируем новые профили, чтобы не пропускать свежие ракеты
             try:
@@ -1505,6 +1528,29 @@ class Analyzer:
                     "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB"]:
             return False
 
+        # Глобальный дедупликационный кэш: защищает от дублирующих сканов между scanner_loop и jup_loop
+        now = time.time()
+        if not hasattr(self, "_global_scan_cache"):
+            self._global_scan_cache = {}
+        if mint in self._global_scan_cache:
+            _c_ts, _c_res, _c_sig, _c_score, _c_top10, _c_dev = self._global_scan_cache[mint]
+            _sig_l = str(_c_sig or "").lower()
+            _is_term = any(k in _sig_l for k in (
+                "rugcheck", "scam", "unlocked-lp", "bundle", "honeypot", 
+                "freeze", "mimic", "dead-token", "мёртвый токен", "sybil", 
+                "delegation", "post-mig-dumped", "zombie", "low-liq", 
+                "deadcat", "dead-cat", "dumped", "ghost-pool", "wash-spike", 
+                "wash-trap", "mcap-too-large", "price-split"
+            ))
+            _ttl = 1800.0 if _is_term else 45.0
+            if (now - _c_ts) < _ttl:
+                self.last_signal = _c_sig
+                self.last_score = _c_score
+                self.signals[mint] = _c_sig
+                self._last_top10 = _c_top10
+                self._last_dev = _c_dev
+                return _c_res
+
         pair_data = await self.fetch_token_data(mint)
         if not pair_data:
             return None
@@ -1620,19 +1666,23 @@ class Analyzer:
                 _px_calc = float(pair_data.get("priceUsd", 0) or 0)
                 if _px_calc > 0:
                     _fdv_curve_pre = _px_calc * 1_000_000_000.0
-            _min_curve_mcap = float(getattr(config, "MIN_PUMP_CURVE_MCAP_USD", 7500.0))
-            _max_curve_mcap = float(getattr(config, "MAX_PUMP_CURVE_MCAP_USD", 42000.0))
+            from sol_price import get_sol_price_sync
+            _sol_p = float(get_sol_price_sync() or 150.0)
+            if _sol_p <= 0:
+                _sol_p = 150.0
+            _min_curve_mcap = float(getattr(config, "MIN_PUMP_CURVE_MCAP_SOL", 80.0)) * _sol_p
+            _max_curve_mcap = float(getattr(config, "MAX_PUMP_CURVE_MCAP_SOL", 350.0)) * _sol_p
             if _fdv_curve_pre > 0 and _fdv_curve_pre < _min_curve_mcap:
                 return self._deny(
                     mint,
                     f"pump-curve-too-early {_fdv_curve_pre:.0f}<{_min_curve_mcap:.0f}",
-                    f"🚫 [CURVE-FLASH-RUG] {symbol} ({mint[:8]}): FDV ${_fdv_curve_pre:,.0f} < ${_min_curve_mcap:,.0f} (пустой кёрв < 12%) — зона flash-rug с пустым пулом.",
+                    f"🚫 [CURVE-FLASH-RUG] {symbol} ({mint[:8]}): FDV ${_fdv_curve_pre:,.0f} < ${_min_curve_mcap:,.0f} (пустой кёрв < 80 SOL) — зона flash-rug с пустым пулом.",
                 )
             if _fdv_curve_pre > _max_curve_mcap:
                 return self._deny(
                     mint,
                     f"pump-curve-top {_fdv_curve_pre:.0f}>{_max_curve_mcap:.0f}",
-                    f"🚫 [CURVE-CLIFF] {symbol} ({mint[:8]}): FDV ${_fdv_curve_pre:,.0f} > ${_max_curve_mcap:,.0f} (опасная зона обрыва перед миграцией) — ждём выхода на Raydium/PumpSwap.",
+                    f"🚫 [CURVE-CLIFF] {symbol} ({mint[:8]}): FDV ${_fdv_curve_pre:,.0f} > ${_max_curve_mcap:,.0f} (опасная зона обрыва перед миграцией > 350 SOL) — ждём выхода на Raydium/PumpSwap.",
                 )
         # FAST-TRACK ДЛЯ МОЛОДЫХ РАКЕТ (от 90 сек):
         # Требуем хотя бы 90 сек и органические продажи (_s5_pre >= 2), чтобы отсечь 0-секундные дев-бандлы (RIOT/Elun/Белка)
@@ -1655,14 +1705,21 @@ class Analyzer:
                 f"mcap-too-large ${_fdv_chk_pre/1e6:.1f}M",
                 f"🚫 [LARGE-CAP-SKIP] {symbol} ({mint[:8]}): FDV ${_fdv_chk_pre:,.0f} > $1.8M — ракета уже тяжёлая.",
             )
-        if mint.endswith("pump") and _dex_pre_early not in ("pump", "pumpfun") and 0 < _fdv_chk_pre < 46000.0:
-            _is_real_dump = (_fdv_chk_pre < 12000.0) or (_s5_pre > int(_b5_pre * 1.25) and _m5 < -5.0)
+        from sol_price import get_sol_price_sync
+        _sol_p = float(get_sol_price_sync() or 150.0)
+        if _sol_p <= 0:
+            _sol_p = 150.0
+        _dump_floor_sol = float(getattr(config, "PUMP_DUMP_FLOOR_SOL", 285.0)) * _sol_p
+        _hard_dump_sol = 120.0 * _sol_p
+
+        if mint.endswith("pump") and _dex_pre_early not in ("pump", "pumpfun") and 0 < _fdv_chk_pre < _dump_floor_sol:
+            _is_real_dump = (_fdv_chk_pre < _hard_dump_sol) or (_s5_pre > int(_b5_pre * 1.25) and _m5 < -5.0)
             _is_active_grad = (_vm5_pre >= 2000.0 and _b5_pre >= int(_s5_pre * 1.00) and _m5 >= -4.0)
             if _is_real_dump or not _is_active_grad:
                 return self._deny(
                     mint,
-                    f"post-mig-dumped ${_fdv_chk_pre:.0f}<$46k",
-                    f"🚫 [POST-MIGRATION-DUMP] {symbol} ({mint[:8]}): выпускник Pump.fun слит ниже миграции (FDV ${_fdv_chk_pre:,.0f} < $46k) — кейс SHANE.",
+                    f"post-mig-dumped ${_fdv_chk_pre:.0f}<${_dump_floor_sol:.0f}",
+                    f"🚫 [POST-MIGRATION-DUMP] {symbol} ({mint[:8]}): выпускник Pump.fun слит ниже миграции (FDV ${_fdv_chk_pre:,.0f} < ${_dump_floor_sol:,.0f} [~285 SOL]) — кейс SHANE.",
                 )
 
         _max_age_min = float(getattr(config, "SOLANA_MAX_AGE_MIN", 240.0))
@@ -2876,7 +2933,17 @@ class Analyzer:
             ok = await self.analyze_token_raydium(mint, pair_data)
         if ok:
             if not await self.verify_1m_candles_not_dumping(mint, pair_data, "solana"):
-                return False
+                ok = False
+        if not hasattr(self, "_global_scan_cache"):
+            self._global_scan_cache = {}
+        self._global_scan_cache[mint] = (
+            time.time(),
+            ok,
+            self.last_signal,
+            self.last_score,
+            self._last_top10,
+            self._last_dev
+        )
         return ok
 
     async def verify_1m_candles_not_dumping(self, address: str, pair_data: dict, chain: str = "solana") -> bool:

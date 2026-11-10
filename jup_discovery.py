@@ -99,22 +99,28 @@ async def fetch_jup_tokens() -> list:
         headers = _headers()
         allow_raw_curve = bool(getattr(config, "ALLOW_UNGRADUATED_PUMPFUN", False))
 
-        # 1. Jupiter Tokens API v2 (5 параллельных срезов: 5m тренды + 1h тренды + recent)
-        (s1, d1), (s_org, d_org), (s3, d3), (s1h, d1h), (s2, d2) = await asyncio.gather(
+        # 1. Jupiter Tokens API v2 (8 параллельных срезов: 5m, 1h, 6h тренды + органика + объем + recent)
+        (s1, d1), (s_org, d_org), (s3, d3), (s1h, d1h), (s2, d2), (s_tr1h, d_tr1h), (s_org1h, d_org1h), (s6h, d6h) = await asyncio.gather(
             fetch_json(f"{BASE}/toptrending/5m?limit=100", headers=headers, timeout=8, retries=0),
             fetch_json(f"{BASE}/toporganicscore/5m?limit=100", headers=headers, timeout=8, retries=0),
             fetch_json(f"{BASE}/toptraded/5m?limit=100", headers=headers, timeout=8, retries=0),
             fetch_json(f"{BASE}/toptrending/1h?limit=100", headers=headers, timeout=8, retries=0),
             fetch_json(f"{BASE}/recent", headers=headers, timeout=8, retries=0),
+            fetch_json(f"{BASE}/toptraded/1h?limit=100", headers=headers, timeout=8, retries=0),
+            fetch_json(f"{BASE}/toporganicscore/1h?limit=100", headers=headers, timeout=8, retries=0),
+            fetch_json(f"{BASE}/toptrending/6h?limit=100", headers=headers, timeout=8, retries=0),
         )
         # Авто-фоллбэк на бесплатный lite-api.jup.ag при 429/401/403 на основном хосте
         if s1 in (429, 401, 403) and s_org in (429, 401, 403):
-            (s1, d1), (s_org, d_org), (s3, d3), (s1h, d1h), (s2, d2) = await asyncio.gather(
+            (s1, d1), (s_org, d_org), (s3, d3), (s1h, d1h), (s2, d2), (s_tr1h, d_tr1h), (s_org1h, d_org1h), (s6h, d6h) = await asyncio.gather(
                 fetch_json(f"{LITE_BASE}/toptrending/5m?limit=100", timeout=8, retries=0),
                 fetch_json(f"{LITE_BASE}/toporganicscore/5m?limit=100", timeout=8, retries=0),
                 fetch_json(f"{LITE_BASE}/toptraded/5m?limit=100", timeout=8, retries=0),
                 fetch_json(f"{LITE_BASE}/toptrending/1h?limit=100", timeout=8, retries=0),
                 fetch_json(f"{LITE_BASE}/recent", timeout=8, retries=0),
+                fetch_json(f"{LITE_BASE}/toptraded/1h?limit=100", timeout=8, retries=0),
+                fetch_json(f"{LITE_BASE}/toporganicscore/1h?limit=100", timeout=8, retries=0),
+                fetch_json(f"{LITE_BASE}/toptrending/6h?limit=100", timeout=8, retries=0),
             )
 
         ranked = []
@@ -170,6 +176,12 @@ async def fetch_jup_tokens() -> list:
             _add_jup_list(d3, "traded_5m", min_pc5=1.8)
         if s2 == 200:
             _add_jup_list(d2, "recent", min_pc5=1.5)
+        if s_tr1h == 200:
+            _add_jup_list(d_tr1h, "traded_1h", min_pc5=2.0)
+        if s_org1h == 200:
+            _add_jup_list(d_org1h, "organic_1h", min_pc5=2.0)
+        if s6h == 200:
+            _add_jup_list(d6h, "trending_6h", min_pc5=2.5)
 
         # 2. Прямой DexScreener Rocket Radar (300 RPM, 0 нагрузки на GT):
         # Ловит живые выпускники PumpSwap / Meteora / Raydium / Bonk, когда топ-100 Jupiter забит старыми мейджорами!
@@ -179,6 +191,8 @@ async def fetch_jup_tokens() -> list:
                 "https://api.dexscreener.com/latest/dex/search?q=SOL%20pump",
                 "https://api.dexscreener.com/latest/dex/search?q=meteora%20SOL",
                 "https://api.dexscreener.com/latest/dex/search?q=bonk%20SOL",
+                "https://api.dexscreener.com/latest/dex/search?q=raydium%20SOL",
+                "https://api.dexscreener.com/latest/dex/search?q=orca%20SOL",
             )
             ds_results = await asyncio.gather(
                 *[fetch_json(u, timeout=6, retries=0) for u in ds_queries],
@@ -783,7 +797,24 @@ async def jup_loop(analyzer, tracker):
                             if ok is None:
                                 return
 
-                            processed[mint] = _t.time()
+                            _sig_j = str(analyzer.get_signal(mint) or "").lower()
+                            _is_term_j = any(k in _sig_j for k in (
+                                "rugcheck", "scam", "unlocked-lp", "bundle", "honeypot", 
+                                "freeze", "mimic", "dead-token", "мёртвый токен", "sybil", 
+                                "delegation", "post-mig-dumped", "zombie", "low-liq", 
+                                "deadcat", "dead-cat", "dumped", "ghost-pool", "wash-spike", 
+                                "wash-trap", "mcap-too-large", "price-split"
+                            ))
+                            if ok is False:
+                                processed[mint] = _t.time() + (3600 if _is_term_j else 90)
+                                if _is_term_j:
+                                    try:
+                                        from birth_tracker import birth_tracker as _bt_j
+                                        _bt_j.remove_graduated(mint)
+                                    except Exception:
+                                        pass
+                            else:
+                                processed[mint] = _t.time()
                             _j_sc = float(getattr(analyzer, "rocket_scores", {}).get(mint, getattr(analyzer, "last_score", 0.0)) or 0.0)
                             analyzer.log_scan(_sym_val, mint, "JUP", ok, _j_sc)
 
