@@ -69,60 +69,25 @@ class MatureExitManager:
             if _cur_l > _peak_l:
                 position.peak_liquidity_usd = _cur_l
                 _peak_l = _cur_l
-            # Мгновенный выход на 1-м же тике при падении ликвидности > 40% (защита от вывода SOL девом)!
-            if _peak_l >= 5000.0 and 0 < _cur_l < (_peak_l * 0.60):
-                return f"Early Liquidity Drop Escape (Liq dropped to ${_cur_l:.0f} from ${_peak_l:.0f})"
+            # Абсолютная потеря ликвидности (вывод пула девом, ликвидность <= $200 или слив > 75%):
+            if (_peak_l >= 1000.0 and _cur_l <= 200.0) or (_peak_l >= 3000.0 and _cur_l < (_peak_l * 0.25)):
+                return f"Absolute Liquidity Loss (Liq dropped to ${_cur_l:.0f} from ${_peak_l:.0f})"
+            elif _peak_l >= 5000.0 and _cur_l < (_peak_l * 0.60):
+                _drop_cnt_em = getattr(position, "_liq_drop_streak_em", 0) + 1
+                position._liq_drop_streak_em = _drop_cnt_em
+                if _drop_cnt_em >= 2:
+                    return f"Early Liquidity Drop Escape (Liq dropped to ${_cur_l:.0f} from ${_peak_l:.0f})"
             else:
                 position._liq_drop_streak_em = 0
 
         # =========================================================================
-        # 0.5. NARRATIVE / WORD SNIPER FAST EXIT ("НА ПЕРВОЙ ПРИБЫЛИ ПРОДАВАТЬ")
+        # 1. ЖЕСТКИЙ КОНТРОЛЬ УБЫТКА (EMERGENCY CAP & STOP LOSS) — ПЕРВЫЙ ПРИОРИТЕТ!
         # =========================================================================
-        _src = str(getattr(position, "source", "") or "")
-        _is_narrative = _src.startswith("NARRATIVE:")
-        if _is_narrative:
-            # 1. Защита от слива кривой (жесткий быстрый стоп -14%)
-            _nar_sl = float(getattr(config, "NARRATIVE_STOP_LOSS_PCT", -0.14))
-            if pnl_pct <= _nar_sl:
-                return f"Narrative Fast Stop ({pnl_pct*100:.1f}%)"
-
-            # 2. Мгновенный безубыток на стартовом импульсе (+10% пика)
-            if max_pnl_pct >= 0.10 and minutes_held >= 0.05:
-                if pnl_pct <= 0.020:
-                    if pnl_pct >= 0.0:
-                        return f"Narrative Breakeven Shield (+{pnl_pct*100:.1f}% locked after peak +{max_pnl_pct*100:.1f}%)"
-                    else:
-                        return f"Narrative Crash Dump (+{max_pnl_pct*100:.0f}% -> {pnl_pct*100:.1f}%)"
-
-            # 3. Фиксация первой прибыли (быстро забираем плюс на пампе новости)
-            drop = (position.max_price_usd - current_price) / position.max_price_usd if position.max_price_usd > 0 else 0.0
-            if max_pnl_pct >= 0.50:       # Выстрел +50%+
-                if drop >= 0.10 or pnl_pct <= 0.28:
-                    return f"Narrative Moonshot Take (+{pnl_pct*100:.1f}% locked after peak +{max_pnl_pct*100:.1f}%)"
-            elif max_pnl_pct >= 0.25:     # Памп +25%..+50%
-                if drop >= 0.08 or pnl_pct <= 0.14:
-                    return f"Narrative Fast Take (+{pnl_pct*100:.1f}% locked after peak +{max_pnl_pct*100:.1f}%)"
-            elif max_pnl_pct >= 0.14:     # Первый плюс +14%..+25% -> мгновенно фиксируем +6%..+10% чистыми!
-                if drop >= 0.06 or pnl_pct <= 0.06:
-                    return f"Narrative First Profit Take (+{pnl_pct*100:.1f}% locked after peak +{max_pnl_pct*100:.1f}%)"
-
-            # 4. Сброс зависшей новости: если за 90 сек нет пампа и пошёл откат (pnl <= -6%) — выходим
-            _nar_max_hold = float(getattr(config, "NARRATIVE_MAX_HOLD_SEC", 90.0)) / 60.0
-            if minutes_held >= _nar_max_hold and pnl_pct <= -0.06 and max_pnl_pct < 0.08:
-                return f"Narrative Stall Cut ({minutes_held*60:.0f}s no pump, pnl {pnl_pct*100:.1f}%)"
-            if minutes_held >= 5.0 and pnl_pct >= 0.02:
-                return f"Narrative Time Profit (+{pnl_pct*100:.1f}% at {minutes_held:.1f}m)"
-
-            return None
-
-        # =========================================================================
-        # 1. ЖЕСТКИЙ КОНТРОЛЬ УБЫТКА (EMERGENCY CAP & STOP LOSS — ИЗ 0d2b1ae)
-        # =========================================================================
-        _emerg_cap = -abs(float(getattr(config, "EMERGENCY_CAP_PCT", -0.12)))
+        _emerg_cap = -abs(float(getattr(config, "EMERGENCY_CAP_PCT", -0.105)))
         if pnl_pct <= _emerg_cap:
             return f"Mature Emergency Cap ({pnl_pct*100:.1f}%)"
 
-        _base_sl = -abs(float(getattr(config, 'STOP_LOSS_PCT', -0.10)))
+        _base_sl = -abs(float(getattr(config, 'STOP_LOSS_PCT', -0.090)))
         _has_organic_bid = False
         _feats = getattr(position, "ml_features", None) or {}
         if isinstance(_feats, dict) and _feats:
@@ -131,68 +96,63 @@ class MatureExitManager:
             _f_links = int(_feats.get("links_count", 0) or (1 if _feats.get("socials") else 0))
             if _f_liq >= 25000.0 and _f_bs >= 1.35 and _f_links >= 1:
                 _has_organic_bid = True
-        _sl = min(_base_sl, -0.12) if _has_organic_bid else _base_sl
+        _sl = min(_base_sl, -0.105) if _has_organic_bid else _base_sl
         if pnl_pct <= _sl:
             _sl_c = int(getattr(position, "sl_confirm_n", 0) or 0) + 1
             position.sl_confirm_n = _sl_c
-            if _sl_c >= 2 or pnl_pct <= -0.13 or minutes_held >= 0.25:
+            if _sl_c >= 2 or pnl_pct <= -0.100 or minutes_held >= 0.10:
                 return f"Mature Stop Loss ({pnl_pct*100:.1f}%)"
         else:
             position.sl_confirm_n = 0
 
         # =========================================================================
-        # 2. ТРЕЙЛИНГ-СТОП И СТУПЕНЧАТЫЙ PROFIT FLOOR (СЕКРЕТ ПРОФИТА ИЗ 0d2b1ae)
+        # 2. BREAKEVEN SHIELD (ПРАВИЛО ПРОФИ: ЗЕЛЕНАЯ СДЕЛКА НЕ СТАНОВИТСЯ КРАСНОЙ!)
         # =========================================================================
-        # При достижении ступеней фиксации бот гарантирует прибыль и трейлит от пика!
-        _floor_pnl = None
-        _trail_dist = None
-
-        if max_pnl_pct >= 5.00:         # +500%+ (6x+ гипер-ракета)
-            _floor_pnl = round(max_pnl_pct * 0.75, 2)
-            _trail_dist = 0.18
-        elif max_pnl_pct >= 2.50:       # +250%..+500% (Democat +300% -> фиксируем +180%..+240% чистыми!)
-            _floor_pnl = 1.80           # Гарантируем минимум +180%
-            _trail_dist = 0.15          # Плотный трейлинг 15% от пика
-        elif max_pnl_pct >= 1.00:       # +100%..+250% (NEX Ai +249% -> фиксируем +70%..+190% чистыми!)
-            _floor_pnl = 0.70           # Гарантируем минимум +70%
-            _trail_dist = 0.14          # Трейлинг 14% от пика
-        elif max_pnl_pct >= 0.50:       # +50%..+100% (MAYA +85.8%, JENSEN +50.4% -> фиксируем +36%..+70%!)
-            _floor_pnl = 0.36           # Гарантируем минимум +36% чистыми
-            _trail_dist = 0.12          # Трейлинг 12% от пика
-        elif max_pnl_pct >= 0.25:       # +25%..+50% (CAT +44.3%, PAYDAY +35.8%, CLIPCAT +32.9% -> фиксируем +18%..+30%!)
-            _floor_pnl = 0.18           # Гарантируем минимум +18% чистыми
-            _trail_dist = 0.11          # Трейлинг 11% от пика
-        elif max_pnl_pct >= 0.14:       # +14%..+25% (ранний импульс — кейсы HWAN +16.5%, Cupsey +18%)
-            _floor_pnl = 0.07           # Гарантируем минимум +7% чистыми (зеленая сделка не станет красной!)
-            _trail_dist = 0.08          # Трейлинг 8% от пика
-
-        if _floor_pnl is not None and minutes_held >= 0.08:
-            drop_from_max = (position.max_price_usd - current_price) / position.max_price_usd if position.max_price_usd > 0 else 0.0
-            _tag = "Moonbag" if _is_mb else "Full Runner"
-            if _trail_dist is not None and drop_from_max >= _trail_dist:
-                return f"Mature {_tag} Trailing ({pnl_pct*100:+.1f}% locked after peak +{max_pnl_pct*100:.1f}%)"
-            elif pnl_pct <= _floor_pnl:
-                if pnl_pct >= 0:
-                    return f"Mature {_tag} Floor (+{pnl_pct*100:.1f}% locked after peak +{max_pnl_pct*100:.1f}%)"
-                else:
-                    return f"Crash Dump after peak (+{max_pnl_pct*100:.0f}% -> {pnl_pct*100:.1f}%)"
-
-        # =========================================================================
-        # 3. BREAKEVEN SHIELD (ПРАВИЛО ИЗ 0d2b1ae: ЗЕЛЕНАЯ СДЕЛКА НЕ СТАНОВИТСЯ КРАСНОЙ!)
-        # =========================================================================
-        # Если монета брала импульс >= +14%, стоп БЕЗУСЛОВНО переносится в безубыток +3.0% (с учетом DEX комиссий)!
+        # Если монета брала импульс >= +14%, стоп БЕЗУСЛОВНО переносится в +1.5%..+2.0%!
+        # Никакие -42% (кейс SpaceCoin) математически невозможны!
         _be_act = float(getattr(config, "BREAKEVEN_PCT", 0.14))
-        if max_pnl_pct >= _be_act and minutes_held >= 0.08:
-            if pnl_pct <= 0.030:
-                if pnl_pct >= 0.0:
-                    return f"Mature Breakeven Shield (+{pnl_pct*100:.1f}% locked after peak +{max_pnl_pct*100:.1f}%)"
-                else:
-                    return f"Crash Dump after peak (+{max_pnl_pct*100:.0f}% -> {pnl_pct*100:.1f}%)"
+        if max_pnl_pct >= _be_act and minutes_held >= 0.10:
+            if pnl_pct <= 0.020:
+                return f"Mature Breakeven Shield (+{pnl_pct*100:.1f}% locked after peak +{max_pnl_pct*100:.1f}%)"
 
         # Безубыток для мунбэга:
         if _is_mb:
             if pnl_pct <= 0.010:
                 return f"Mature Moonbag Breakeven (+{pnl_pct*100:.1f}% locked after TP1)"
+
+        # =========================================================================
+        # 3. ТРЕЙЛИНГ-СТОП И PROFIT FLOOR (МАКСИМАЛЬНЫЙ ВЫНОС ПРИБЫЛИ ИЗ РАКЕТ)
+        # =========================================================================
+        # На позиции $4 (или без partial TP) летим 100% объема до разворота!
+        _floor_pnl = None
+        _trail_dist = None
+
+        if max_pnl_pct >= 5.00:         # +500%+ (6x+ гипер-ракета)
+            _floor_pnl = round(max_pnl_pct * 0.75, 2)
+            _trail_dist = 0.20
+        elif max_pnl_pct >= 2.50:       # +250%..+500% (Democat +300% -> фиксируем +240% чистыми!)
+            _floor_pnl = 1.50           # Гарантируем минимум +150%
+            _trail_dist = 0.15          # Плотный трейлинг 15% от пика
+        elif max_pnl_pct >= 1.00:       # +100%..+250% (NEX Ai +249% -> фиксируем +190% чистыми!)
+            _floor_pnl = 0.65           # Гарантируем минимум +65%
+            _trail_dist = 0.16          # Трейлинг 16% от пика
+        elif max_pnl_pct >= 0.50:       # +50%..+100% (Horned cat +93%..+150% -> фиксируем +65%..+110%!)
+            _floor_pnl = 0.28           # Гарантируем минимум +28%
+            _trail_dist = 0.16          # Трейлинг 16% от пика
+        elif max_pnl_pct >= 0.25:       # +25%..+50% (UNEMPLOYED +38% -> фиксируем +20% чистыми!)
+            _floor_pnl = 0.12           # Гарантируем минимум +12%
+            _trail_dist = 0.14          # Трейлинг 14% от пика
+        elif max_pnl_pct >= 0.14:       # +14%..+25%
+            _floor_pnl = 0.05
+            _trail_dist = 0.10
+
+        if _floor_pnl is not None and minutes_held >= 0.10:
+            drop_from_max = (position.max_price_usd - current_price) / position.max_price_usd if position.max_price_usd > 0 else 0.0
+            _tag = "Moonbag" if _is_mb else "Full Runner"
+            if _trail_dist is not None and drop_from_max >= _trail_dist and pnl_pct >= _floor_pnl:
+                return f"Mature {_tag} Trailing ({pnl_pct*100:+.1f}% locked after peak +{max_pnl_pct*100:.1f}%)"
+            elif pnl_pct <= _floor_pnl:
+                return f"Mature {_tag} Floor (+{pnl_pct*100:.1f}% locked after peak +{max_pnl_pct*100:.1f}%)"
 
         # =========================================================================
         # 4. PARABOLIC MOMENTUM HARVEST (ФИКСАЦИЯ ПРИ ЗАСТРЕВАНИИ НА ВЕРШИНЕ)
@@ -230,23 +190,17 @@ class MatureExitManager:
             return f"Max Hold Expiry ({pnl_pct*100:+.1f}% after {minutes_held:.0f}m)"
 
         # =========================================================================
-        # 7. СТАГНАЦИЯ И МЕРТВЫЙ ИМПУЛЬС (КАК В 0d2b1ae: НЕ ДУШИМ РАННИЕ КОНСОЛИДАЦИИ РАКЕТ)
+        # 7. СТАГНАЦИЯ И МЕРТВЫЙ ИМПУЛЬС
         # =========================================================================
-        _stall_sec = float(getattr(config, "STALL_TIMER_SEC", 180.0))
+        _stall_sec = float(getattr(config, "STALL_TIMER_SEC", 210.0))
         _stall_loss = float(getattr(config, "STALL_MAX_LOSS_PCT", -0.075))
-        # 1. Сброс абсолютно мертвого минуса: 3 минуты без роста и с уходом в минус <= -7.5%
-        if minutes_held >= (_stall_sec / 60.0) and pnl_pct <= _stall_loss and max_pnl_pct < 0.08:
+        if minutes_held >= (_stall_sec / 60.0) and max_pnl_pct < 0.04 and pnl_pct <= _stall_loss:
             return f"Dead Momentum Stall ({minutes_held*60:.0f}s no breakout, pnl {pnl_pct*100:.1f}%)"
 
-        # 2. Сброс ложного пробоя (был слабый тычок +3..+10%, но импульс слит в минус <= -6%)
-        if minutes_held >= 4.0 and 0.03 <= max_pnl_pct < 0.12 and pnl_pct <= -0.06:
-            return f"Failed Breakout Fade ({minutes_held*60:.0f}s, peak +{max_pnl_pct*100:.1f}% -> {pnl_pct*100:.1f}%)"
-
-        # 3. Сброс зависшей позиции: 10-15 минут без импульса
-        if minutes_held >= 10.0 and pnl_pct <= -0.05 and max_pnl_pct < 0.06:
-            return f"Stagnant Loss Cut ({minutes_held:.1f}m, {pnl_pct*100:.1f}%)"
-        if minutes_held >= 15.0 and pnl_pct < 0.015 and max_pnl_pct < 0.08:
-            return f"Stagnant Cut ({minutes_held:.1f}m, {pnl_pct*100:.1f}%)"
+        if minutes_held >= 15.0 and pnl_pct <= -0.05 and max_pnl_pct < 0.04:
+            return f"Stagnant Loss Cut ({minutes_held:.0f}m, {pnl_pct*100:.1f}%)"
+        if minutes_held >= 20.0 and pnl_pct < 0.015 and max_pnl_pct < 0.06:
+            return f"Stagnant Cut ({minutes_held:.0f}m, {pnl_pct*100:.1f}%)"
 
         return None
 

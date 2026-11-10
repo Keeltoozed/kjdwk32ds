@@ -50,22 +50,19 @@ REINVEST_MIN_POOL_LIQ_USD = 7500.0
 SCOUT_SIZE_USD = 4.0
 LOTTERY_SIZE_USD = 4.0
 MAX_CONCURRENT_POSITIONS = 5
-MAX_SCANNER_CONCURRENT_POSITIONS = 2    # Сканер занимает макс 2 слота, гарантируя 3 слота для ракет GROK-JEV и китов!
-REBUY_COOLDOWN_SEC = 1800.0         # 30 минут кулдаун после закрытия позиции (вместо 24 часов блокировки!)
 
-# === ЖЕСТКОЕ ОГРАНИЧЕНИЕ УБЫТКА (РИСК-МЕНЕДЖМЕНТ ИЗ 0d2b1ae) ===
+# === ЖЕСТКОЕ ОГРАНИЧЕНИЕ УБЫТКА (РИСК-МЕНЕДЖМЕНТ) ===
 MAX_DAILY_LOSS_USD = 1000.0
 KILL_SWITCH_ENABLED = False
-STOP_LOSS_PCT = -0.100        # Стоп -10.0% (жестко режем убытки в зародыше, потеря не более -$0.40 на $4 тикете!)
-EMERGENCY_CAP_PCT = -0.120     # Жёсткий аварийный потолок -12.0% (мгновенный срез дампа без провалов -25%..-32%!)
-INFANT_WINDOW_MIN = 1.0        # Первые 60 секунд под контролем
-INFANT_DUMP_PCT = -0.120       # Срез рага дева на старте (<= -12%)
-INFANT_WARN_PCT = -0.100       # Срез подтвержденного слива (2 тика подряд <= -10%)
+STOP_LOSS_PCT = -0.090        # Стоп -9.0% (жестко режем убытки в зародыше, потеря не более -$0.36..-$0.40 на $4 тикете!)
+EMERGENCY_CAP_PCT = -0.105     # Жёсткий аварийный потолок -10.5% (мгновенный срез дампа без провалов -15%..-32%!)
+INFANT_WINDOW_MIN = 0.5
+INFANT_DUMP_PCT = -0.095       # Срез рага на 1-й минуте при провале <= -9.5%
 
-# === ФИЛЬТРЫ ВХОДА (ОТСЕКАЮТ ВЕРШИНЫ И ПАДАЮЩИЕ НОЖИ — ИЗ 0d2b1ae) ===
+# === ФИЛЬТРЫ ВХОДА (ОТСЕКАЮТ ВЕРШИНЫ И ПАДАЮЩИЕ НОЖИ) ===
 MAX_ENTRY_H1_PCT = 350.0       # Запрет входа в перегретые пампы > +350% за 1ч (строго для всех токенов > 4м!)
-MAX_ENTRY_M5_PCT = 45.0        # Потолок m5: допускаем сильный импульс до +45% (не срезаем взлетающие ракеты вроде FLOAT +29.7%, NEX Ai +34.5%)
-MAX_ENTRY_M1_PCT = 20.0        # Вход в импульс: до +20.0% (пробойные свечи как VAMP +11.6%, PUSSY +7.4%)
+MAX_ENTRY_M5_PCT = 45.0        # Потолок m5: допускаем сильный импульс до +45% (не срезаем взлетающие ракеты вроде FLOAT +29.7%)
+MAX_ENTRY_M1_PCT = 12.0        # Вход в импульс: до +12.0% (до +25% при высоком спросе покупателей)
 REQUIRE_SOCIALS_MIN_AGE_MIN = 8.0
 
 STREAK_COOLDOWN_ENABLED = False
@@ -81,14 +78,14 @@ DD_THROTTLE_START_USD = 15.0
 
 # === ВХОД В ЗРЕЛЫЕ КРИВЫЕ PUMP.FUN ДО МИГРАЦИИ + ЗАЩИТА DEX ===
 SNIPER_ENTRIES_ENABLED = False
-ALLOW_UNGRADUATED_PUMPFUN = True           # ВКЛЮЧЕНО для кривых Pump.fun: находит ранние ракеты до миграции на DEX
-MIN_PUMP_CURVE_MCAP_USD = 7500.0          # Минимум $7.5k FDV (уже набрали ~12% кёрва, есть органическая подушка ликвидности)
-MAX_PUMP_CURVE_MCAP_USD = 58000.0         # До $58k FDV (окно максимального разгона перед миграцией на Raydium/PumpSwap)
+ALLOW_UNGRADUATED_PUMPFUN = False         # ОТКЛЮЧЕНО: запрет сырых bonding curves (сливы $KCAT -58%, REVERSE -34%). Ждём миграции на DEX с сожжённым LP!
+MIN_PUMP_CURVE_MCAP_USD = 18000.0         # Минимум $18k FDV (~$7.2k виртуальной ликвидности)
+MAX_PUMP_CURVE_MCAP_USD = 44000.0         # До $44k FDV (не покупаем перед самым обрывом миграции $55k+)
 JEV_MAX_TICKET_USD = 0.0
-MIN_GRADUATED_LIQ_USD = 5000.0            # На DEX минимум $5k реальной ликвидности (пускает свежие миграции PumpSwap $10.5k+, режет микро-пулы)
+MIN_GRADUATED_LIQ_USD = 10000.0           # На DEX минимум $10k реальной ликвидности (пускает свежие миграции PumpSwap $10.5k+, режет микро-пулы <$9k)
 AUDITOR_STAIRCASE_ENABLED = True
-AUDITOR_MAX_DEV_PCT = 8.0
-AUDITOR_MAX_TOP10_PCT = 55.0
+AUDITOR_MAX_DEV_PCT = 6.0
+AUDITOR_MAX_TOP10_PCT = 32.0
 STREAM_WINDOW_SEC = 60
 STREAM_MIN_UNIQUE_BUYERS = 6
 STREAM_MIN_BUY_SOL = 1.5
@@ -104,19 +101,6 @@ STREAM_DEV_DUMP_RATIO = 0.25
 STREAM_MAX_DEV_BUY_TOKENS = 100_000_000
 STREAM_MIN_ENTRY_PROGRESS = 15.0
 STREAM_MOMENTUM_MIN_RATIO = 0.35
-
-# === NARRATIVE / X (TWITTER) & NEWS SNIPER (СНАЙПИНГ ПО СЛОВАМ ИЗ X И НОВОСТЕЙ) ===
-NARRATIVE_SNIPER_ENABLED = True
-NARRATIVE_AUTO_NEWS_ENABLED = True
-NARRATIVE_WATCHLIST_WORDS = [
-    "GROK", "STARSHIP", "DOGE", "MARS", "CYBER", "TRUMP",
-    "TARIFF", "PEACE", "VANCE", "MUSK", "OPENAI", "DEEPSEEK"
-]
-NARRATIVE_KEYWORD_TTL_SEC = 7200.0   # 2 часа активности для найденного слова
-NARRATIVE_MAX_DEV_BUY = 150_000_000  # Макс 15% у дева на старте (защита от рага)
-NARRATIVE_ENTRY_SIZE_USD = 4.0       # Размер билета на новостной снайпинг
-NARRATIVE_STOP_LOSS_PCT = -0.14      # Быстрый стоп -14% (быстрый срез без затягивания)
-NARRATIVE_MAX_HOLD_SEC = 90.0        # 90 секунд на разгон если нет пампа
 
 VIP_ENTRIES_ENABLED = False
 TIME_EXIT_MINUTES = 40
@@ -142,29 +126,29 @@ PUMP_XGB_ENABLED = False
 RAY_XGB_ENABLED = False
 ROCKET_XGB_ENABLED = True
 ROCKET_XGB_STAGE1_THRESHOLD = 8.0    # Первичный отсев в 0мс (отсекает мертвецов 2-7%)
-ROCKET_XGB_FINAL_THRESHOLD = 18.0    # Финальный порог (как в коммите 0d2b1ae: отсекает шлак < 18%, пропускает ракеты 20-80%)
+ROCKET_XGB_FINAL_THRESHOLD = 18.0    # Финальный порог (отсекает шлак < 18%, пропускает ракеты 20-80%)
 ROCKET_XGB_THRESHOLD = 18.0
 
-STALL_TIMER_SEC = 120.0   # 2.0 минуты (быстрый срез зависшего минуса без затягивания убытка до 10м)
-STALL_MAX_LOSS_PCT = -0.06  # -6.0% (выход из мертвого импульса)
+STALL_TIMER_SEC = 210.0   # 3.5 минуты (быстрый срез стоячего минуса без затягивания убытка до 13м)
+STALL_MAX_LOSS_PCT = -0.075
 
-TRAILING_ACTIVATION_PCT = 0.280
-TRAILING_DISTANCE_PCT = 0.180
-TRAILING_RUNNER_DISTANCE_PCT = 0.18
+TRAILING_ACTIVATION_PCT = 0.100
+TRAILING_DISTANCE_PCT = 0.050
+TRAILING_RUNNER_DISTANCE_PCT = 0.08
 SCALP_PROFIT_ENABLED = False
 
 WHALE_DUMP_GUARD_PCT = 0.22
 EVM_RUNNER_CRASH = 0.25
 EVM_NORMAL_CRASH = 0.22
 
-BREAKEVEN_PCT = 0.140     # Безубыток из 0d2b1ae: после пика >= +14% стоп переносится в безубыток +2%, зеленые сделки не становятся красными!
+BREAKEVEN_PCT = 0.075     # После +7.5% пика включается Breakeven Shield (+1.5%..+3.5% пол) — зеленые сделки больше никогда не уходят в минус!
 
 PREFETCH_TTL_SEC = 35
 SOLANA_MIN_AGE_MIN = 0.25       # Разрешаем молодые ракеты от 15 секунд (TWAP, LEMON, SHADOW)
 SOLANA_MAX_AGE_HOURS = 4.0       # До 4 часов (не срезаем развивающиеся ракеты на пике тренда)
 SOLANA_MAX_AGE_MIN = 240.0       # Торгуем активные монеты до 4 часов
 JEV_MAX_AGE_MIN = 240.0          # В GROK-JEV активные монеты до 4 часов
-JEV_MAX_M1_ENTRY_PCT = 16.0         # Не покупаем верхушку вертикальной 1м свечи > +16%
+JEV_MAX_M1_ENTRY_PCT = 8.0
 
 SCALP_TIMEOUT_MIN = 10.0
 STAGNANT_LOSS_MIN = 9.0
@@ -212,7 +196,7 @@ JEV_MAX_DEV_STILL_LOADED = 0.35
 
 JEV_BID_THE_FLUSH_ENABLED = True
 JEV_STOP_UNDER_WICK_ENABLED = True
-JEV_MAX_M1_ENTRY_PCT = 16.0         # Не покупаем верхушку вертикальной 1м свечи > +16%       # Вход в консолидацию/откат: не покупаем вершины 1м свечей > +8.0%
+JEV_MAX_M1_ENTRY_PCT = 8.0       # Вход в консолидацию/откат: не покупаем вершины 1м свечей > +8.0%
 JEV_DEFAULT_WICK_STOP_PCT = -0.100
 
 BIRDEYE_API_KEY = os.getenv("BIRDEYE_API_KEY", "")
@@ -302,12 +286,12 @@ SNIPER_BUYERS_WINDOW_MIN = 5
 VIP_MAX_M5_PCT = 0.95
 PULLBACK_MIN_M5_PCT = 0.025
 PULLBACK_M1_MIN_PCT = -0.08
-PULLBACK_M1_MAX_PCT = 0.20         # Вход в импульс до +20.0% (как в 0d2b1ae: пускает пробои вроде VAMP +11.6%, PUSSY +7.4%)
+PULLBACK_M1_MAX_PCT = 0.20
 PULLBACK_MAX_H1_PCT = 320.0
 PULLBACK_MAX_M5_PCT = 0.95
-MIN_VOLUME_M5 = 2000                # Минимум $2,000 за 5м (как в коммите 0d2b1ae: пускает активные ракеты вроде DEBTDOG $2,152)
-MIN_TXNS_M5 = 25                    # Минимум 25 сделок за 5м
-MIN_BUY_SELL_RATIO = 1.08           # Покупателей больше продавцов (не душит активные ракеты вроде DUGE 776b/720s)
+MIN_VOLUME_M5 = 2000            # Минимум $2,000 за 5м (пускает активные ракеты вроде DEBTDOG $2,152)
+MIN_TXNS_M5 = 25
+MIN_BUY_SELL_RATIO = 1.08       # Покупателей больше продавцов (не душит активные ракеты вроде DUGE 776b/720s)
 LOTTERY_ENABLED = False
 LOTTERY_MIN_M5_PCT = 0.60
 LOTTERY_SIZE_MULT = 0.30
@@ -360,8 +344,8 @@ GOPLUS_ENABLED = True
 GOPLUS_MAX_SELL_TAX = 0.10
 GOPLUS_CACHE_SEC = 3600
 
-SCAN_CONCURRENCY = 16
-SCAN_LOOP_SLEEP_SEC = 0.5
+SCAN_CONCURRENCY = 10
+SCAN_LOOP_SLEEP_SEC = 1
 SCAN_AFTER_ENTRY_SLEEP_SEC = 3
 SCAN_LATEST_TTL_SEC = 10
 SOLANA_RESCAN_COOLDOWN = 30

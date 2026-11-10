@@ -486,7 +486,7 @@ class PaperTracker:
         # переживает рестарты через файл/Supabase.
         _sym = self._norm_symbol(symbol)
         if _sym:
-            _cd = float(getattr(config, "REBUY_COOLDOWN_SEC", 86400.0) or 86400.0)
+            _cd = float(getattr(config, "SYMBOL_REBUY_COOLDOWN_SEC", 4 * 3600) or 0)
             _now = time.time()
             for _k, _p in self.positions.items():
                 if _k == mint:
@@ -499,21 +499,22 @@ class PaperTracker:
                 if _p.status == "open":
                     print(f"🚫 Отказ: {symbol} уже в рынке (другой контракт, {_k[:10]}). Не удваиваемся в тот же тикер.")
                     return
-                if _p.status == "closed":
+                if _p.status == "closed" and _cd > 0:
                     _xt = float(getattr(_p, "exit_time", 0) or 0)
                     _pnl = float(getattr(_p, "pnl_usd", 0.0) or 0.0)
                     _orig_a = float(getattr(_p, "original_amount_usd", 0.0) or getattr(_p, "amount_usd", 4.0) or 4.0)
+                    _pnl_ratio = (_pnl / _orig_a) if _orig_a > 0 else 0.0
                     _er_up = str(getattr(_p, "exit_reason", "")).upper()
-                    _max_p_usd = float(getattr(_p, "max_price_usd", 0.0) or 0.0)
-                    _entry_p_usd = float(getattr(_p, "entry_price_usd", 0.0) or 0.0)
-                    _peak_ratio = (_max_p_usd - _entry_p_usd) / _entry_p_usd if _entry_p_usd > 0 else 0.0
-                    _was_runner = (_pnl > 0.0 or _peak_ratio >= 0.20) and not any(k in _er_up for k in ("RUG", "HONEYPOT"))
-                    # Для раннеров (кейс GTA +56%) кулдаун всего 10 мин, для остальных символов 15 мин (вместо 24ч блокировки всего тикера!)
-                    _eff_cd = (10 * 60) if _was_runner else (15 * 60)
+                    _was_profitable = (
+                        _pnl_ratio >= 0.08
+                        and not any(k in _er_up for k in ("CRASH", "RUG", "HONEYPOT", "EMERGENCY", "BREAKEVEN", "REVERSAL", "STALL", "STAGNANT", "STOP"))
+                    )
+                    _eff_cd = (15 * 60) if _was_profitable else _cd
                     if _xt and (_now - _xt) < _eff_cd:
-                        _left_m = (_eff_cd - (_now - _xt)) / 60.0
+                        _left = (_eff_cd - (_now - _xt)) / 60 if _was_profitable else (_eff_cd - (_now - _xt)) / 3600
+                        _unit = "м" if _was_profitable else "ч"
                         print(f"⏳ Символьный кулдаун: {symbol} закрыт {_p.pnl_usd:+.2f}$ недавно ({getattr(_p, 'exit_reason', '')}). "
-                              f"Повтор через {_left_m:.1f}м — даём монете отдышаться.")
+                              f"Повтор через {_left:.1f}{_unit} — не покупаем свой же выход.")
                         return
         # БЛОКИРОВКА ПОВТОРНОГО ВХОДА С УМНЫМ КУЛДАУНОМ
         if mint in self.positions:
@@ -530,24 +531,19 @@ class PaperTracker:
             _orig_p = float(getattr(pos, "original_amount_usd", 0.0) or getattr(pos, "amount_usd", 4.0) or 4.0)
             _pnl_ratio_m = (_pnl / _orig_p) if _orig_p > 0 else 0.0
             _er_m_up = str(getattr(pos, "exit_reason", "")).upper()
-            _max_p_m = float(getattr(pos, "max_price_usd", 0.0) or 0.0)
-            _entry_p_m = float(getattr(pos, "entry_price_usd", 0.0) or 0.0)
-            _peak_ratio_m = (_max_p_m - _entry_p_m) / _entry_p_m if _entry_p_m > 0 else 0.0
             _exit_time = float(getattr(pos, "exit_time", 0.0) or pos.entry_time)
             time_since_exit = time.time() - _exit_time
             _was_profitable = (
-                (_pnl > 0.0 or _peak_ratio_m >= 0.20)
-                and not any(k in _er_m_up for k in ("CRASH", "RUG", "HONEYPOT"))
+                _pnl_ratio_m >= 0.08
+                and not any(k in _er_m_up for k in ("CRASH", "RUG", "HONEYPOT", "EMERGENCY", "BREAKEVEN", "REVERSAL", "STALL", "STAGNANT", "STOP"))
             )
             
-            # Для профитных раннеров (кейс GTA +56.1%) даем 10м на консолидацию и разрешаем вход во 2-ю волну!
-            # Для минусовых позиций кулдаун 30 минут (вместо 24 часов), чтобы не хоронить монеты на целый день!
-            _req_cd = (10 * 60) if _was_profitable else int(float(getattr(config, "REBUY_COOLDOWN_SEC", 1800.0) or 1800.0))
+            _req_cd = (15 * 60) if _was_profitable else (4 * 3600)
             if time_since_exit < _req_cd:
                 if _was_profitable:
-                    print(f"⏳ Кулдаун профитной монеты: {symbol} закрыт в +${_pnl:.2f} (пик +{_peak_ratio_m*100:.0f}%). Ждем еще {int(_req_cd - time_since_exit)}с перед возможным перезаходом во 2-ю волну.")
+                    print(f"⏳ Кулдаун профитной монеты: {symbol} закрыт в +${_pnl:.2f}. Ждем еще {int(_req_cd - time_since_exit)}с перед возможным перезаходом во 2-ю волну.")
                 else:
-                    print(f"⏳ Кулдаун: {symbol} закрыт с минусом. Ждем еще {int((_req_cd - time_since_exit)/60)}м перед входом.")
+                    print(f"⏳ Кулдаун: {symbol} закрыт с минусом. Ждем еще {(4*3600 - time_since_exit)/3600:.1f}ч перед входом.")
                 return
                 
             # Если кулдаун прошел, архивируем старую сделку, чтобы не потерять ее из истории PnL
@@ -657,26 +653,23 @@ class PaperTracker:
             except Exception:
                 exit_price = 0.0
             
-            # 1. Жесткий скам / Honeypot / Непродаваемый токен / Снос ликвидности: списание по 0.0
+            # 1. Скам / Honeypot / Непродаваемый токен / Потеря ликвидности (LP Rug, Drain):
+            # При абсолютной потере ликвидности или невозможности продать — ПОЛНАЯ потеря всех вложенных средств (-100%)!
             _r_up = str(reason or "").upper()
-            _is_hard_scam = any(k in _r_up for k in (
-                "HONEYPOT", "CANNOT SELL", "UNSELLABLE", "ZERO-RUG",
-                "LIQUIDITY DROP", "LIQ DROP", "DRAIN", "RUG PULL", "EMERGENCY CAP", "DEAD"
-            ))
-            # Если передан exit_price <= 0:
-            if not (exit_price > 0):
-                if _is_hard_scam:
-                    exit_price = 0.0
-                else:
-                    exit_price = pos.entry_price_usd
-                    reason = f"{reason} [stale→entry]"
-            elif _is_hard_scam and any(k in _r_up for k in ("LIQ DROP $0", "LIQ DROP $1", "DRAIN", "ZERO-RUG", "RUG PULL", "DEAD STALE POOL")):
-                # Защита от фантомных профитов (кейс NEX Ai +249% при сносе пула в $0):
-                # Если ликвидность снесена в 0, любая цена в стакане/DexScreener — фикция, продать невозможно!
+            _is_liq_loss_or_scam = (
+                exit_price <= 0.0
+                or any(k in _r_up for k in (
+                    "HONEYPOT", "CANNOT SELL", "UNSELLABLE", "ZERO-RUG", "RUG",
+                    "LIQ DROP", "LIQUIDITY DROP", "DRAIN", "DRAINED", "ESCAPE",
+                    "ZERO LP", "ZERO-LIQ", "ABSOLUTE LIQUIDITY LOSS", "LOST LIQUIDITY",
+                    "DEAD STALE POOL", "LP RUG", "LIQUIDITY DRAIN", "DEV HOLDS LP", "UNLOCKED LP"
+                ))
+            )
+            if _is_liq_loss_or_scam:
                 exit_price = 0.0
 
             # Фантом единиц цены: exit в разы от entry+пика = битые данные, не пишем миллион.
-            if not _is_hard_scam:
+            if not _is_liq_loss_or_scam:
                 try:
                     _ref = max(pos.entry_price_usd, pos.max_price_usd or 0) or pos.entry_price_usd
                     if _ref > 0 and exit_price / _ref > 50:
@@ -728,17 +721,17 @@ class PaperTracker:
                 original_amount = (_rem / _rem_frac) if (_rem and _rem_frac > 0) else _rem
                 pos.original_amount_usd = original_amount
 
-            # ХАНИПОД / РАГ / UNSELLABLE / ДРЕЙН ЛИКВИДНОСТИ: на реальном блокчейне частичные тейки (TP1/TP2)
-            # физически не исполнились бы! Списываем 100% от ИЗНАЧАЛЬНОГО депозита без иллюзий.
-            if "HONEYPOT" in _r or "UNSELLABLE" in _r or "RUG" in _r or "LIQUIDITY DROP" in _r or "DRAIN" in _r:
+            # ХАНИПОД / РАГ / UNSELLABLE / ПОТЕРЯ ЛИКВИДНОСТИ:
+            # При абсолютной потере ликвидности — полное списание 100% ВСЕХ вложенных денег (-original_amount)!
+            if _is_liq_loss_or_scam or exit_price <= 0.0 or "HONEYPOT" in _r or "UNSELLABLE" in _r or "RUG" in _r:
                 pos.pnl_usd = -original_amount - priority_fee_usd
                 pos.exit_price_usd = 0.0
+                pnl_pct = -1.0
             else:
                 # Добавляем профит от закрытия финального остатка к тому, что уже зафиксировано
                 final_pnl = (pos.amount_usd * price_diff_pct) - priority_fee_usd
                 pos.pnl_usd += final_pnl
-
-            pnl_pct = pos.pnl_usd / original_amount if original_amount > 0 else 0
+                pnl_pct = pos.pnl_usd / original_amount if original_amount > 0 else 0
             
             self.save_portfolio(force_cloud=True)
             print(f"🔒 PAPER SELL: {pos.symbol} ({mint}) | Reason: {reason} | PnL: {pnl_pct*100:.2f}% (${pos.pnl_usd:.2f})")
@@ -757,18 +750,6 @@ class PaperTracker:
                         "pnl_usd": round(pos.pnl_usd, 2),
                         "peak_pct": round(_mp * 100, 1), "held_sec": round(_dur),
                     }) + "\n")
-
-                # GMGN Anti-Rug: автоматическое занесение создателя в черный список при сливе пула
-                if pnl_pct <= -0.30 or any(k in str(reason).lower() for k in ("emergency cap", "drop escape", "lp rug", "infant dump")):
-                    try:
-                        from birth_tracker import birth_tracker as _bt_close
-                        _c_ban = getattr(pos, "creator", "")
-                        if not _c_ban and isinstance(getattr(pos, "ml_features", None), dict):
-                            _c_ban = pos.ml_features.get("creator", "")
-                        if _c_ban:
-                            _bt_close.mark_bad_creator(_c_ban, f"rug exit {pos.symbol} ({reason})")
-                    except Exception:
-                        pass
             except Exception:
                 pass
             

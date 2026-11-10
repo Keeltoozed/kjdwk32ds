@@ -19,7 +19,7 @@ LITE_BASE = "https://lite-api.jup.ag/tokens/v2"
 
 _cache = []
 _cache_time = 0.0
-CACHE_TTL = 20
+CACHE_TTL = 40
 SKIP_SYMBOLS = {
     "SOL", "WSOL", "USDC", "USDT", "USDG", "EURC", "CBBTC", "WBTC", "WETH", "JLP", "PYTH", "JUP", "NEAR",
     "ZEC", "WNEAR", "CARDS", "PUMP", "HYPE", "ZEREBRO", "TTWO", "SPCX", "SPYX", "TSLAX", "NVDAX", "GROKIUS",
@@ -120,7 +120,7 @@ async def fetch_jup_tokens() -> list:
         ranked = []
         seen = set()
 
-        def _add_jup_list(items, tag: str, min_pc5: float = 1.0):
+        def _add_jup_list(items, tag: str, min_pc5: float = 1.8):
             if not isinstance(items, list):
                 return
             for t in items:
@@ -131,10 +131,10 @@ async def fetch_jup_tokens() -> list:
                 if not m or m.startswith("0x") or len(m) < 32 or len(m) > 44 or m in seen or sym in SKIP_SYMBOLS:
                     continue
                 liq = float(t.get("liquidity") or 0.0)
-                is_grad = bool(t.get("graduatedAt") or t.get("graduatedPool") or liq >= 6000.0 or bool(t.get("firstPool")))
+                is_grad = bool(t.get("graduatedAt") or t.get("graduatedPool") or (not m.endswith("pump") and liq >= 7500.0))
                 if not allow_raw_curve and not is_grad:
                     continue
-                if liq < (3500.0 if allow_raw_curve else 5000.0):
+                if liq < (3500.0 if allow_raw_curve else 7500.0):
                     continue
                 st5 = t.get("stats5m") or {}
                 st1h = t.get("stats1h") or {}
@@ -149,27 +149,27 @@ async def fetch_jup_tokens() -> list:
                     continue
                 if age_m > 360.0 and (vol5 < 6000.0 or pc5 < 5.0 or liq < 25000.0):
                     continue
-                if age_m > 60.0 and pc5 < 1.0:
+                if age_m > 60.0 and pc5 < 2.0:
                     continue
                 _is_fresh_jup = age_m <= 4.0
-                _max_pc1h = 2500.0 if (_is_fresh_jup and pc5 >= 1.0 and b5 >= s5) else float(getattr(config, "MAX_ENTRY_H1_PCT", 350.0))
+                _max_pc1h = 2500.0 if (_is_fresh_jup and pc5 >= 2.0 and b5 >= s5) else float(getattr(config, "MAX_ENTRY_H1_PCT", 350.0))
                 if (pc1h > _max_pc1h and age_m > 4.0) or (pc1h < -25.0 and pc5 < 12.0):
                     continue
-                if pc5 < min_pc5 or vol5 < 800.0:
+                if pc5 < min_pc5 or vol5 < 1500.0:
                     continue
                 seen.add(m)
                 ranked.append((pc5, vol5, sym, m, tag))
 
         if s_org == 200:
-            _add_jup_list(d_org, "organic_5m", min_pc5=1.0)
+            _add_jup_list(d_org, "organic_5m", min_pc5=1.8)
         if s1 == 200:
-            _add_jup_list(d1, "trending_5m", min_pc5=1.0)
+            _add_jup_list(d1, "trending_5m", min_pc5=1.8)
         if s1h == 200:
-            _add_jup_list(d1h, "trending_1h", min_pc5=1.5)
+            _add_jup_list(d1h, "trending_1h", min_pc5=2.0)
         if s3 == 200:
-            _add_jup_list(d3, "traded_5m", min_pc5=1.0)
+            _add_jup_list(d3, "traded_5m", min_pc5=1.8)
         if s2 == 200:
-            _add_jup_list(d2, "recent", min_pc5=1.0)
+            _add_jup_list(d2, "recent", min_pc5=1.5)
 
         # 2. Прямой DexScreener Rocket Radar (300 RPM, 0 нагрузки на GT):
         # Ловит живые выпускники PumpSwap / Meteora / Raydium / Bonk, когда топ-100 Jupiter забит старыми мейджорами!
@@ -351,18 +351,18 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
     _m1_j = float(_pc_j.get("m1", 0) or 0)
     if abs(_m1_j) > max(180.0, abs(_m5_j) * 3.0 + 40.0):
         _m1_j = _m5_j / 5.0
-    _max_m1_cfg_j = min(float(getattr(config, "MAX_ENTRY_M1_PCT", 25.0)), 35.0)
+    _max_m1_cfg_j = min(float(getattr(config, "MAX_ENTRY_M1_PCT", 8.0)), 10.0)
     if _m1_j > _max_m1_cfg_j and _age_j >= 3.0:
         print(f"🚫 [{source_tag}-M1-SPIKE] {_sym_tmp} ({mint[:8]}): m1 +{_m1_j:.1f}% > +{_max_m1_cfg_j:.1f}% — вершина свечи, отмена входа.")
         return False
     _h1_j = float(_pc_j.get("h1", 0) or 0)
-    _is_fresh_j = _age_j <= 120.0
-    _max_h1_j = 2500.0 if (_is_fresh_j and _m5_j >= 2.0 and _b5_j >= int(_s5_j * 0.90)) else float(getattr(config, "MAX_ENTRY_H1_PCT", 350.0))
+    _is_fresh_j = _age_j <= 4.0
+    _max_h1_j = 2500.0 if (_is_fresh_j and _m5_j >= 2.5 and _b5_j >= _s5_j * 1.15) else float(getattr(config, "MAX_ENTRY_H1_PCT", 350.0))
     if _h1_j > _max_h1_j and _age_j > 4.0:
         print(f"🚫 [{source_tag}-H1-EXHAUSTED] {_sym_tmp} ({mint[:8]}): h1 {_h1_j:+.0f}% > +{_max_h1_j:.0f}% — памп уже отработал, вход = вершина.")
         return False
-    _min_m1_j = -10.0 if _m5_j >= 8.0 else -6.0
-    if _m5_j < 1.0 or _m1_j < _min_m1_j:
+    _min_m1_j = -2.8 if _m5_j < 12.0 else -6.0
+    if _m5_j < 1.5 or _m1_j < _min_m1_j:
         print(f"🚫 [{source_tag}-MOMENTUM-LOST] {_sym_tmp} ({mint[:8]}): импульс пропал (m5 {_m5_j:+.1f}%, m1 {_m1_j:+.1f}%) — отмена входа.")
         return False
     _pk_drop_j = float((td or {}).get("_drop_from_peak_5m", 0.0) or 0.0)
@@ -403,11 +403,11 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
     jup_price = await JupiterAPI.get_price(mint)
     if ds_price > 0 and jup_price and jup_price > 0:
         ratio = max(ds_price, jup_price) / min(ds_price, jup_price)
-        if ratio > 1.35:
-            print(f"🚫 [{source_tag}-PRICE-MISMATCH] {_sym_tmp} ({mint[:8]}): Jupiter (${jup_price:.8f}) vs Dex (${ds_price:.8f}) расхождение {ratio:.2f}x (>1.35x) — блок от ложного стопа.")
+        if ratio > 1.09:
+            print(f"🚫 [{source_tag}-PRICE-MISMATCH] {_sym_tmp} ({mint[:8]}): Jupiter (${jup_price:.8f}) vs Dex (${ds_price:.8f}) расхождение {ratio:.2f}x (>1.09x) — блок от ложного стопа.")
             return False
-        if jup_price < ds_price * 0.82:
-            analyzer._deny(mint, "jup-live-dump >18%", f"🚫 [{source_tag}-LIVE-DUMP] {_sym_tmp} ({mint[:8]}): живая котировка Jupiter (${jup_price:.8f}) уже ниже DexScreener (${ds_price:.8f}) на {(1.0 - jup_price/ds_price)*100:.1f}% [>18%] — слив в процессе!")
+        if jup_price < ds_price * 0.90:
+            analyzer._deny(mint, "jup-live-dump >10%", f"🚫 [{source_tag}-LIVE-DUMP] {_sym_tmp} ({mint[:8]}): живая котировка Jupiter (${jup_price:.8f}) уже ниже DexScreener (${ds_price:.8f}) на {(1.0 - jup_price/ds_price)*100:.1f}% [>10%] — слив в процессе!")
             return False
         price = jup_price
     elif ds_price > 0:
@@ -547,12 +547,12 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
                 return False
             _jup_live_px = await JupiterAPI.get_price(mint)
             if _jup_live_px and _jup_live_px > 0 and price > 0:
-                if _jup_live_px < price * 0.82:
+                if _jup_live_px < price * 0.975:
                     print(f"🚫 [{source_tag}-LIVE-DUMP] {_sym_tmp} ({mint[:8]}): живая цена Jupiter (${_jup_live_px:.8f}) уже на {(1.0 - _jup_live_px / price) * 100:.1f}% ниже DexScreener (${price:.8f}) — обвал в моменте, отмена!")
                     return False
                 _jup_ratio = max(_jup_live_px, price) / min(_jup_live_px, price)
-                if _jup_ratio > 1.35:
-                    print(f"🚫 [{source_tag}-PRICE-MISMATCH] {_sym_tmp} ({mint[:8]}): Jupiter vs сигнал расхождение {_jup_ratio:.2f}x (>1.35x) — отмена!")
+                if _jup_ratio > 1.055:
+                    print(f"🚫 [{source_tag}-PRICE-MISMATCH] {_sym_tmp} ({mint[:8]}): Jupiter vs сигнал расхождение {_jup_ratio:.2f}x (>1.055x) — отмена!")
                     return False
                 price = _jup_live_px
                 if _wick_stop_price and _wick_pct:
