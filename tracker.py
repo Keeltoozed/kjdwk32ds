@@ -656,14 +656,15 @@ class PaperTracker:
             # 1. Скам / Honeypot / Непродаваемый токен / Потеря ликвидности (LP Rug, Drain):
             # При абсолютной потере ликвидности или невозможности продать — ПОЛНАЯ потеря всех вложенных средств (-100%)!
             _r_up = str(reason or "").upper()
+            _is_profit_exit = any(k in _r_up for k in ("TAKE", "PROFIT", "HARVEST", "TRAILING", "FLOOR", "BREAKEVEN"))
             _is_liq_loss_or_scam = (
-                exit_price <= 0.0
-                or any(k in _r_up for k in (
-                    "HONEYPOT", "CANNOT SELL", "UNSELLABLE", "ZERO-RUG", "RUG",
-                    "LIQ DROP", "LIQUIDITY DROP", "DRAIN", "DRAINED", "ESCAPE",
-                    "ZERO LP", "ZERO-LIQ", "ABSOLUTE LIQUIDITY LOSS", "LOST LIQUIDITY",
-                    "DEAD STALE POOL", "LP RUG", "LIQUIDITY DRAIN", "DEV HOLDS LP", "UNLOCKED LP"
-                ))
+                not _is_profit_exit and (
+                    exit_price <= 0.0
+                    or any(k in _r_up for k in (
+                        "HONEYPOT", "CANNOT SELL", "UNSELLABLE", "ZERO-RUG",
+                        "ABSOLUTE LIQUIDITY LOSS", "ZERO/DRAINED LIQ", "DRAINED LIQ", "DEAD STALE POOL"
+                    ))
+                )
             )
             if _is_liq_loss_or_scam:
                 exit_price = 0.0
@@ -723,7 +724,7 @@ class PaperTracker:
 
             # ХАНИПОД / РАГ / UNSELLABLE / ПОТЕРЯ ЛИКВИДНОСТИ:
             # При абсолютной потере ликвидности — полное списание 100% ВСЕХ вложенных денег (-original_amount)!
-            if _is_liq_loss_or_scam or exit_price <= 0.0 or "HONEYPOT" in _r or "UNSELLABLE" in _r or "RUG" in _r:
+            if not _is_profit_exit and (_is_liq_loss_or_scam or exit_price <= 0.0 or "HONEYPOT" in _r or "UNSELLABLE" in _r or "ABSOLUTE LIQUIDITY LOSS" in _r):
                 pos.pnl_usd = -original_amount - priority_fee_usd
                 pos.exit_price_usd = 0.0
                 pnl_pct = -1.0

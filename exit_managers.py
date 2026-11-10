@@ -145,6 +145,9 @@ class MatureExitManager:
         elif max_pnl_pct >= 0.14:       # +14%..+25%
             _floor_pnl = 0.05
             _trail_dist = 0.10
+        elif max_pnl_pct >= 0.10:       # +10%..+14% (защита кейса BOXCAT +12%!)
+            _floor_pnl = 0.03           # Гарантируем минимум +3%
+            _trail_dist = 0.06          # Трейлинг 6% от пика
 
         if _floor_pnl is not None and minutes_held >= 0.10:
             drop_from_max = (position.max_price_usd - current_price) / position.max_price_usd if position.max_price_usd > 0 else 0.0
@@ -165,8 +168,10 @@ class MatureExitManager:
             return f"Parabolic 2x Harvest (+{pnl_pct*100:.0f}% locked after peak +{max_pnl_pct*100:.0f}%, {_peak_age_min:.1f}m no ATH)"
         if max_pnl_pct >= 0.40 and _peak_age_min >= 3.0:
             return f"Rocket Momentum Harvest (+{pnl_pct*100:.0f}% locked after peak +{max_pnl_pct*100:.0f}%, {_peak_age_min:.1f}m no ATH)"
-        if max_pnl_pct >= 0.20 and _peak_age_min >= 4.0 and pnl_pct >= 0.05:
+        if max_pnl_pct >= 0.20 and _peak_age_min >= 3.5 and pnl_pct >= 0.05:
             return f"Breakout Harvest (+{pnl_pct*100:.0f}% locked after peak +{max_pnl_pct*100:.0f}%, {_peak_age_min:.1f}m no ATH)"
+        if max_pnl_pct >= 0.10 and _peak_age_min >= 2.5 and pnl_pct >= 0.02:
+            return f"Micro Harvest (+{pnl_pct*100:.1f}% locked after peak +{max_pnl_pct*100:.1f}%, {_peak_age_min:.1f}m no ATH)"
 
         # =========================================================================
         # 5. FRONT-RUN PROFIT EXIT (Разворот стакана при профите >= +20%)
@@ -188,7 +193,7 @@ class MatureExitManager:
         # =========================================================================
         # Если позиция в уверенном плюсе (>= +15%), закрываем через 12 минут, не дожидаясь слива пула девом (спасает кейсы 现金牛 24м, NEX AI 18м, SATAN-CAT 18м)!
         if minutes_held >= 12.0 and pnl_pct >= 0.15:
-            return f"Max Hold Rocket Take (+{pnl_pct*100:.1f}% locked at {minutes_held:.0f}m before dev rug window)"
+            return f"Max Hold Rocket Take (+{pnl_pct*100:.1f}% locked at {minutes_held:.0f}m)"
         if minutes_held >= 25.0 and pnl_pct >= 0.02:
             return f"Max Hold Profit Take (+{pnl_pct*100:.1f}% locked at {minutes_held:.0f}m)"
         if minutes_held >= 30.0:
