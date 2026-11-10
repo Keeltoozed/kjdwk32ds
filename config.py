@@ -130,8 +130,8 @@ PUMP_XGB_ENABLED = False
 RAY_XGB_ENABLED = False
 ROCKET_XGB_ENABLED = True
 ROCKET_XGB_STAGE1_THRESHOLD = 15.0   # Первичный отсев в 0мс (отсекает шлак)
-ROCKET_XGB_FINAL_THRESHOLD = 25.0    # Финальный порог: отсекает группу <25% с 0% винрейтом (кейс AICoin 19%), пускает ракеты 25-90%
-ROCKET_XGB_THRESHOLD = 25.0
+ROCKET_XGB_FINAL_THRESHOLD = 28.0    # Финальный порог: отсекает группу <28% с 0% винрейтом (AICoin 19%, PAIRLESS 24%), пускает ракеты 28-90% (AMPED 28.8%, USWR 77%, PIRATE 80%)
+ROCKET_XGB_THRESHOLD = 28.0
 
 STALL_TIMER_SEC = 210.0   # 3.5 минуты (быстрый срез стоячего минуса без затягивания убытка до 13м)
 STALL_MAX_LOSS_PCT = -0.075

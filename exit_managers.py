@@ -69,16 +69,22 @@ class MatureExitManager:
             if _cur_l > _peak_l:
                 position.peak_liquidity_usd = _cur_l
                 _peak_l = _cur_l
-            # Абсолютная потеря ликвидности (вывод пула девом, ликвидность <= $200 или слив > 75%):
-            if (_peak_l >= 1000.0 and _cur_l <= 200.0) or (_peak_l >= 3000.0 and _cur_l < (_peak_l * 0.25)):
+            # Абсолютная потеря ликвидности (вывод пула девом в 0):
+            if (_peak_l >= 1000.0 and _cur_l <= 200.0) or (_peak_l >= 3000.0 and _cur_l < (_peak_l * 0.20)):
                 return f"Absolute Liquidity Loss (Liq dropped to ${_cur_l:.0f} from ${_peak_l:.0f})"
-            elif _peak_l >= 5000.0 and _cur_l < (_peak_l * 0.60):
-                _drop_cnt_em = getattr(position, "_liq_drop_streak_em", 0) + 1
-                position._liq_drop_streak_em = _drop_cnt_em
-                if _drop_cnt_em >= 2:
-                    return f"Early Liquidity Drop Escape (Liq dropped to ${_cur_l:.0f} from ${_peak_l:.0f})"
+            # Ранний срез вывода ликвидности девом (>35% просадки пула) — спасаем деньги ДО полного слива:
+            elif _peak_l >= 3000.0 and _cur_l < (_peak_l * 0.65):
+                return f"Early Liquidity Drop Escape (Liq dropped to ${_cur_l:.0f} from ${_peak_l:.0f})"
             else:
                 position._liq_drop_streak_em = 0
+
+            # Ранний сброс при агрессивном даме продавцов на первых минутах (<2м):
+            if pnl_pct <= -0.070 and minutes_held < 2.0:
+                txns_m5 = (_pd_chk.get("txns") or {}).get("m5") or {}
+                b5_chk = int(txns_m5.get("buys", 0) or 0)
+                s5_chk = int(txns_m5.get("sells", 0) or 0)
+                if s5_chk >= 10 and (b5_chk / max(1, s5_chk)) < 0.40:
+                    return f"Early Seller Dump Cut ({pnl_pct*100:.1f}%, {b5_chk}b/{s5_chk}s)"
 
         # =========================================================================
         # 1. ЖЕСТКИЙ КОНТРОЛЬ УБЫТКА (EMERGENCY CAP & STOP LOSS) — ПЕРВЫЙ ПРИОРИТЕТ!
@@ -113,26 +119,29 @@ class MatureExitManager:
         # =========================================================================
         # 2. ТРЕЙЛИНГ-СТОП И PROFIT FLOOR (МАКСИМАЛЬНЫЙ ВЫНОС ПРИБЫЛИ ИЗ РАКЕТ)
         # =========================================================================
-        # До +25% даем ракете ПОЛНУЮ свободу хода! Никаких копеечных выходов по 1 центу!
-        # От +25% гарантируем фиксацию реальной прибыли (минимум +12%..+150% чистыми).
+        # До +18% даем монете дышать! Никаких копеечных выходов по 1 центу!
+        # От +18% фиксируем РЕАЛЬНУЮ прибыль ($0.60..$15.00+ на $5 тикете), не давая сливать памп.
         _floor_pnl = None
         _trail_dist = None
 
-        if max_pnl_pct >= 5.00:         # +500%+ (6x+ гипер-ракета)
-            _floor_pnl = round(max_pnl_pct * 0.75, 2)
-            _trail_dist = 0.20
-        elif max_pnl_pct >= 2.50:       # +250%..+500% (Democat +300% -> фиксируем +240% чистыми!)
-            _floor_pnl = 1.50           # Гарантируем минимум +150%
-            _trail_dist = 0.18          # Трейлинг 18% от пика
-        elif max_pnl_pct >= 1.00:       # +100%..+250% (NEX Ai +249% -> фиксируем +190% чистыми!)
-            _floor_pnl = 0.65           # Гарантируем минимум +65%
-            _trail_dist = 0.18          # Трейлинг 18% от пика
-        elif max_pnl_pct >= 0.50:       # +50%..+100% (Horned cat +93%..+150% -> фиксируем +65%..+110%!)
-            _floor_pnl = 0.28           # Гарантируем минимум +28%
-            _trail_dist = 0.18          # Трейлинг 18% от пика
-        elif max_pnl_pct >= 0.25:       # +25%..+50% (UNEMPLOYED +38% -> фиксируем +20% чистыми!)
-            _floor_pnl = 0.12           # Гарантируем минимум +12%
-            _trail_dist = 0.14          # Трейлинг 14% от пика
+        if max_pnl_pct >= 4.00:         # +400%+ (5x+ гипер-ракета)
+            _floor_pnl = round(max_pnl_pct * 0.78, 2)
+            _trail_dist = 0.14
+        elif max_pnl_pct >= 2.00:       # +200%..+400% (3x - 5x)
+            _floor_pnl = 1.45           # Гарантируем минимум +145% чистыми
+            _trail_dist = 0.12          # Трейлинг 12% от пика
+        elif max_pnl_pct >= 1.00:       # +100%..+200% (2x - 3x ракета)
+            _floor_pnl = 0.75           # Гарантируем минимум +75% чистыми
+            _trail_dist = 0.10          # Трейлинг 10% от пика
+        elif max_pnl_pct >= 0.50:       # +50%..+100% (Horned cat +93%, DACAT +90%)
+            _floor_pnl = 0.38           # Гарантируем минимум +38% чистыми (+$1.90 на $5!)
+            _trail_dist = 0.09          # Трейлинг 9% от пика (DACAT выходит на +78% = +$3.90!)
+        elif max_pnl_pct >= 0.30:       # +30%..+50% (RWA +40.7%, 6STAR +49%)
+            _floor_pnl = 0.22           # Гарантируем минимум +22% чистыми (+$1.10 на $5!)
+            _trail_dist = 0.08          # Трейлинг 8% от пика (RWA выходит на +32% = +$1.60!)
+        elif max_pnl_pct >= 0.18:       # +18%..+30% (JAZZ +25.2%, LEONIDA +26.0%)
+            _floor_pnl = 0.12           # Гарантируем минимум +12% чистыми (+$0.60 на $5!)
+            _trail_dist = 0.07          # Трейлинг 7% от пика (JAZZ выходит на +18.2% = +$0.91!)
 
         if _floor_pnl is not None and minutes_held >= 0.20:
             drop_from_max = (position.max_price_usd - current_price) / position.max_price_usd if position.max_price_usd > 0 else 0.0

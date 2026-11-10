@@ -411,8 +411,8 @@ async def position_manager_loop(analyzer, tracker):
                     continue
                 if mature_exit_reason:
                     _px_to_close = current_price
-                    if "Liquidity Loss" in mature_exit_reason or "Liquidity Drop" in mature_exit_reason:
-                        # При абсолютной потере ликвидности — цена продажи 0.0 (списание всех вложенных денег):
+                    if "Absolute Liquidity Loss" in mature_exit_reason:
+                        # При абсолютной потере ликвидности (пул $0) — цена продажи 0.0 (списание):
                         _px_to_close = 0.0
                     elif minutes_held < 2.0 and pnl_pct <= -0.10 and ("Emergency Cap" in mature_exit_reason or "Stop Loss" in mature_exit_reason):
                         try:
