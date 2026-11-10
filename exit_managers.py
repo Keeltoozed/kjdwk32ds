@@ -105,10 +105,16 @@ class MatureExitManager:
         else:
             position.sl_confirm_n = 0
 
+        # Безубыток для мунбэга:
+        if _is_mb:
+            if pnl_pct <= 0.010:
+                return f"Mature Moonbag Breakeven (+{pnl_pct*100:.1f}% locked after TP1)"
+
         # =========================================================================
         # 2. ТРЕЙЛИНГ-СТОП И PROFIT FLOOR (МАКСИМАЛЬНЫЙ ВЫНОС ПРИБЫЛИ ИЗ РАКЕТ)
         # =========================================================================
-        # Защищаем реальную прибыль: ракета не может упасть ниже своего гарантированного пола!
+        # До +25% даем ракете ПОЛНУЮ свободу хода! Никаких копеечных выходов по 1 центу!
+        # От +25% гарантируем фиксацию реальной прибыли (минимум +12%..+150% чистыми).
         _floor_pnl = None
         _trail_dist = None
 
@@ -124,11 +130,11 @@ class MatureExitManager:
         elif max_pnl_pct >= 0.50:       # +50%..+100% (Horned cat +93%..+150% -> фиксируем +65%..+110%!)
             _floor_pnl = 0.28           # Гарантируем минимум +28%
             _trail_dist = 0.18          # Трейлинг 18% от пика
-        elif max_pnl_pct >= 0.25:       # +25%..+50% (UNEMPLOYED +38% -> фиксируем +10%..+20% чистыми!)
-            _floor_pnl = 0.10           # Гарантируем минимум +10%
-            _trail_dist = 0.15          # Трейлинг 15% от пика
+        elif max_pnl_pct >= 0.25:       # +25%..+50% (UNEMPLOYED +38% -> фиксируем +20% чистыми!)
+            _floor_pnl = 0.12           # Гарантируем минимум +12%
+            _trail_dist = 0.14          # Трейлинг 14% от пика
 
-        if _floor_pnl is not None and minutes_held >= 0.15:
+        if _floor_pnl is not None and minutes_held >= 0.20:
             drop_from_max = (position.max_price_usd - current_price) / position.max_price_usd if position.max_price_usd > 0 else 0.0
             _tag = "Moonbag" if _is_mb else "Full Runner"
             if _trail_dist is not None and drop_from_max >= _trail_dist and pnl_pct >= _floor_pnl:
@@ -137,20 +143,7 @@ class MatureExitManager:
                 return f"Mature {_tag} Floor (+{pnl_pct*100:.1f}% locked after peak +{max_pnl_pct*100:.1f}%)"
 
         # =========================================================================
-        # 3. BREAKEVEN SHIELD (ЗАЩИТА ОТ УХОДА В МИНУС ДЛЯ МОНЕТ БЕЗ ТРЕЙЛИНГ-ПОЛА)
-        # =========================================================================
-        _be_act = float(getattr(config, "BREAKEVEN_PCT", 0.20))
-        if max_pnl_pct >= _be_act and minutes_held >= 0.25:
-            if pnl_pct <= 0.020:
-                return f"Mature Breakeven Shield (+{pnl_pct*100:.1f}% locked after peak +{max_pnl_pct*100:.1f}%)"
-
-        # Безубыток для мунбэга:
-        if _is_mb:
-            if pnl_pct <= 0.010:
-                return f"Mature Moonbag Breakeven (+{pnl_pct*100:.1f}% locked after TP1)"
-
-        # =========================================================================
-        # 4. PARABOLIC MOMENTUM HARVEST (ФИКСАЦИЯ ПРИ ЗАСТРЕВАНИИ НА ВЕРШИНЕ)
+        # 3. PARABOLIC MOMENTUM HARVEST (ФИКСАЦИЯ ПРИ ЗАСТРЕВАНИИ НА ВЕРШИНЕ)
         # =========================================================================
         # Застревание на хаях без новых ATH больше 4-6 минут — предвестник дев-дампа!
         if max_pnl_pct >= 2.00 and _peak_age_min >= 4.0:
@@ -163,7 +156,7 @@ class MatureExitManager:
             return f"Breakout Harvest (+{pnl_pct*100:.0f}% locked after peak +{max_pnl_pct*100:.0f}%, {_peak_age_min:.0f}m no ATH)"
 
         # =========================================================================
-        # 5. FRONT-RUN PROFIT EXIT (Разворот стакана при профите >= +20%)
+        # 4. FRONT-RUN PROFIT EXIT (Разворот стакана при профите >= +20%)
         # =========================================================================
         _pd = getattr(position, "pair_data", None) or getattr(position, "last_pair_data", None) or {}
         if isinstance(_pd, dict) and _pd:
@@ -178,10 +171,8 @@ class MatureExitManager:
                 return f"Front-Run Profit Exit: Sellers dominating ({b5}b/{s5}s) while in profit (+{pnl_pct*100:.1f}%)"
 
         # =========================================================================
-        # 6. MAX HOLD TIMEOUT (Защита от кейса UNEMPLOYED 57м и пересиживания рагов)
+        # 5. MAX HOLD TIMEOUT (ГЛАВНЫЙ ИСТОЧНИК ПРИБЫЛИ — УДЕРЖАНИЕ ДО 25 МИНУТ!)
         # =========================================================================
-        if minutes_held >= 20.0 and pnl_pct >= 0.15:
-            return f"Max Hold Rocket Take (+{pnl_pct*100:.1f}% locked at {minutes_held:.0f}m)"
         if minutes_held >= 25.0 and pnl_pct >= 0.02:
             return f"Max Hold Profit Take (+{pnl_pct*100:.1f}% locked at {minutes_held:.0f}m)"
         if minutes_held >= 30.0:
