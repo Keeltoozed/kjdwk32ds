@@ -367,3 +367,25 @@ COPY_BAN_ON_FIRST_LOSS = True
 COPY_PREFILTER = True
 COPY_MAX_TX_PER_MIN = 40
 COPY_MIN_PNL = 250.0
+
+# === ФИКСИРОВАННЫЙ БИЛЕТ ===
+# >0: каждый вход (SCANNER/JUP/GROK-JEV/COPY...) открывается ровно на эту сумму, игнорируя компаундинг.
+# 0: выключено, размер считается как раньше.
+FIXED_TICKET_USD = float(os.getenv("FIXED_TICKET_USD", "5.0"))
+
+# === Кастомные токены PumpSwap без LP-лока ===
+# Фильтр в этих трёх файлах не найден (вероятно analyzer.py). Если он там читает эту константу,
+# "off" отключает блокировку по незалоченному LP.
+CUSTOM_PUMPSWAP_LP_MODE = os.getenv("CUSTOM_PUMPSWAP_LP_MODE", "off").strip().lower()
+
+# === PRE-RUG HARVEST (частичная фиксация до слива пула) ===
+# Отдельные от PARTIAL_TP_*/TP1..5 (те работают только при билете >= PARTIAL_TP_MIN_TICKET_USD).
+PRE_RUG_ENABLED = os.getenv("PRE_RUG_ENABLED", "1").strip() != "0"
+PRE_RUG_TP1_PCT = float(os.getenv("PRE_RUG_TP1_PCT", "0.32"))     # +32% -> продано 40% билета
+PRE_RUG_TP1_FRAC = float(os.getenv("PRE_RUG_TP1_FRAC", "0.40"))
+PRE_RUG_TP2_PCT = float(os.getenv("PRE_RUG_TP2_PCT", "0.55"))     # +55% -> продано суммарно 70%
+PRE_RUG_TP2_FRAC = float(os.getenv("PRE_RUG_TP2_FRAC", "0.30"))
+PRE_RUG_TIME_MIN = float(os.getenv("PRE_RUG_TIME_MIN", "10.0"))   # удержание >= 10 мин
+PRE_RUG_TOKEN_AGE_MIN = float(os.getenv("PRE_RUG_TOKEN_AGE_MIN", "18.0"))
+PRE_RUG_TIME_MIN_PNL = float(os.getenv("PRE_RUG_TIME_MIN_PNL", "0.18"))
+PRE_RUG_MIN_CHUNK_USD = float(os.getenv("PRE_RUG_MIN_CHUNK_USD", "0.25"))

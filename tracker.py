@@ -454,6 +454,10 @@ class PaperTracker:
         except Exception:
             print(f"🚫 Отказ: битая цена/сайз {symbol} {mint[:8]}.")
             return
+        # Фиксированный билет (config.FIXED_TICKET_USD > 0) для всех источников входа
+        _fixed_ticket = float(getattr(config, "FIXED_TICKET_USD", 0.0) or 0.0)
+        if _fixed_ticket > 0:
+            amount_usd = _fixed_ticket
         if not (entry_price > 0) or entry_price > 1e6:
             print(f"🚫 Отказ: entry_price ${entry_price} вне диапазона для {symbol}.")
             return
@@ -575,6 +579,8 @@ class PaperTracker:
             stop_under_wick=float(stop_under_wick or 0.0),
             wick_stop_loss_pct=float(wick_stop_loss_pct or 0.0),
             last_security_check_ts=time.time(),
+            pre_rug_tp1_done=False,
+            pre_rug_tp2_done=False,
             unsellable_strikes=0
         )
         self.save_portfolio(force_cloud=True)
@@ -724,9 +730,12 @@ class PaperTracker:
             # ХАНИПОД / РАГ / UNSELLABLE / ПОТЕРЯ ЛИКВИДНОСТИ:
             # При абсолютной потере ликвидности — полное списание 100% ВСЕХ вложенных денег (-original_amount)!
             if _is_liq_loss_or_scam or exit_price <= 0.0 or "HONEYPOT" in _r or "UNSELLABLE" in _r or "RUG" in _r:
-                pos.pnl_usd = -original_amount - priority_fee_usd
+                # Раг/потеря ликвидности: теряется только НЕПРОДАННЫЙ остаток.
+                # Уже зафиксированные partial-тейки (pos.pnl_usd) сохраняются.
+                _remaining_usd = max(0.0, float(pos.amount_usd or 0.0))
+                pos.pnl_usd = float(pos.pnl_usd or 0.0) - _remaining_usd - priority_fee_usd
                 pos.exit_price_usd = 0.0
-                pnl_pct = -1.0
+                pnl_pct = (pos.pnl_usd / original_amount) if original_amount > 0 else -1.0
             else:
                 # Добавляем профит от закрытия финального остатка к тому, что уже зафиксировано
                 final_pnl = (pos.amount_usd * price_diff_pct) - priority_fee_usd
