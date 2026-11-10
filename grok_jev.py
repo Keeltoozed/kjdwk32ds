@@ -1918,7 +1918,7 @@ class GrokJevEngine:
             return False, "max-positions-reached"
 
         # Расчет размера билета (Dynamic Sizing / Compounding)
-        _base_t = float(getattr(_c, "BASE_TRADE_AMOUNT_USD", 4.0) or 4.0)
+        _base_t = float(getattr(_c, "TRADE_AMOUNT_USD", getattr(_c, "BASE_TRADE_AMOUNT_USD", 5.0)) or 5.0)
         ticket_size = _base_t
         if getattr(_c, "DYNAMIC_REINVEST_ENABLED", True) or getattr(_c, "COMPOUNDING_ENABLED", True):
             try:

@@ -352,56 +352,6 @@ async def position_manager_loop(analyzer, tracker):
                 if current_price > 0 and (api_price > 0.0 or wss_fresh):
                     position.price_updated_at = time.time()
 
-                # === PRE-RUG HARVEST: частичная фиксация до слива пула (config.PRE_RUG_*) ===
-                # Продаём через partial_close_position: реализованный PnL копится в pos.pnl_usd,
-                # amount_usd = остаток; при раге close_position теряет только остаток.
-                try:
-                    _orig_pr = float(getattr(position, "original_amount_usd", 0.0) or 0.0)
-                    _ladder_active = (
-                        getattr(config, "PARTIAL_TP_ENABLED", False)
-                        and _orig_pr >= float(getattr(config, "PARTIAL_TP_MIN_TICKET_USD", 20.0))
-                    )  # большая лестница TP1..5 уже работает - не дублируем продажи
-                    if getattr(config, "PRE_RUG_ENABLED", True) and not _ladder_active and _orig_pr > 0:
-                        _rem_pr = float(position.amount_usd or 0.0)
-                        _held_pr = (time.time() - float(position.entry_time or time.time())) / 60.0
-                        _f_pr = getattr(position, "ml_features", None)
-                        _age0_pr = float((_f_pr.get("age_min") if isinstance(_f_pr, dict) else 0.0) or 0.0)
-                        _tokage_pr = _age0_pr + _held_pr
-                        _min_chunk = float(getattr(config, "PRE_RUG_MIN_CHUNK_USD", 0.25))
-
-                        def _pre_rug_sell(_cum_frac, _why):
-                            _rem = float(position.amount_usd or 0.0)
-                            _sold = max(0.0, _orig_pr - _rem)
-                            _target = min(_orig_pr * _cum_frac, _orig_pr * 0.85)
-                            _chunk = _target - _sold
-                            if _chunk < _min_chunk or _chunk >= _rem or _rem <= 0:
-                                return False
-                            tracker.partial_close_position(mint, current_price, _chunk / _rem, _why)
-                            return True
-
-                        _c1 = float(getattr(config, "PRE_RUG_TP1_FRAC", 0.40))
-                        _c2 = _c1 + float(getattr(config, "PRE_RUG_TP2_FRAC", 0.30))
-                        _p1 = float(getattr(config, "PRE_RUG_TP1_PCT", 0.32))
-                        _p2 = float(getattr(config, "PRE_RUG_TP2_PCT", 0.55))
-                        _tm = float(getattr(config, "PRE_RUG_TIME_MIN", 10.0))
-                        _ta = float(getattr(config, "PRE_RUG_TOKEN_AGE_MIN", 18.0))
-                        _tp_pnl = float(getattr(config, "PRE_RUG_TIME_MIN_PNL", 0.18))
-
-                        if not getattr(position, "pre_rug_tp1_done", False) and pnl_pct >= _p1:
-                            if _pre_rug_sell(_c1, f"Pre-Rug Stage 1 (+{pnl_pct*100:.1f}% >= +{_p1*100:.0f}%)"):
-                                position.pre_rug_tp1_done = True
-                        if not getattr(position, "pre_rug_tp2_done", False):
-                            _by_price = pnl_pct >= _p2
-                            _by_time = (_held_pr >= _tm or _tokage_pr >= _ta) and pnl_pct >= _tp_pnl
-                            if _by_price or _by_time:
-                                _tag = "Price" if _by_price else f"Time held {_held_pr:.1f}m/age {_tokage_pr:.1f}m"
-                                if _pre_rug_sell(_c2, f"Pre-Rug Stage 2 {_tag} (+{pnl_pct*100:.1f}%)"):
-                                    position.pre_rug_tp1_done = True
-                                    position.pre_rug_tp2_done = True
-                                    position.is_moonbag = True
-                except Exception as _pre_rug_err:
-                    print(f"⚠️ [PRE-RUG] ошибка блока частичной фиксации: {_pre_rug_err}")
-
                 # === ИНТЕГРАЦИЯ МАТЕМАТИКИ ДЛЯ ЗРЕЛЫХ МОНЕТ (SWING TRADING / RIDE RUNNERS) ===
                 # Исполняется ДО скальперских Early Fade / Stagnant срезов, чтобы ракеты ехали по MatureExitManager!
                 # === ИНТЕГРАЦИЯ МАТЕМАТИКИ ДЛЯ ВСЕХ ПОЗИЦИЙ SOLANA (main.py строки 240-280) ===
@@ -1298,7 +1248,7 @@ async def scanner_loop(analyzer, tracker):
                                         capital = tracker.get_total_capital()
                                         base_position = capital * (config.REINVEST_PERCENT / 100.0)
                                         max_allowed_by_pool = liq_usd * 0.01 if liq_usd > 0 else 99999.0  
-                                        position_size = max(4.0, min(base_position, max_allowed_by_pool, 100.0))
+                                        position_size = max(5.0, min(base_position, max_allowed_by_pool, 100.0))
                                     
                                     _lot_m5 = ((pair_data.get("priceChange") or {}).get("m5", 0) or 0)
                                     _is_lot = _lot_m5 >= getattr(config, "LOTTERY_MIN_M5_PCT", 1.0) * 100

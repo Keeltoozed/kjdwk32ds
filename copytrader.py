@@ -729,7 +729,7 @@ class CopyTrader:
             # 5. Размер позиции ($4.00 базовый вход)
             capital = self.tracker.get_total_capital()
             _pct = float(getattr(config, "COMPOUNDING_PCT", 0.10))
-            _base = float(getattr(config, "BASE_TRADE_AMOUNT_USD", 4.0))
+            _base = float(getattr(config, "TRADE_AMOUNT_USD", getattr(config, "BASE_TRADE_AMOUNT_USD", 5.0)))
             _cap = float(getattr(config, "COPY_MAX_TICKET_USD", 4.0))
             position_size = max(_base, min(_cap, capital * _pct))
 

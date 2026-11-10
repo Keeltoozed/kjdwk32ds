@@ -157,14 +157,16 @@ class MatureExitManager:
         # =========================================================================
         # 4. PARABOLIC MOMENTUM HARVEST (ФИКСАЦИЯ ПРИ ЗАСТРЕВАНИИ НА ВЕРШИНЕ)
         # =========================================================================
-        if max_pnl_pct >= 2.00 and _peak_age_min >= 4.0:
-            return f"Parabolic 3x Harvest (+{pnl_pct*100:.0f}% locked after peak +{max_pnl_pct*100:.0f}%, {_peak_age_min:.0f}m no ATH)"
-        if max_pnl_pct >= 1.00 and _peak_age_min >= 5.0:
-            return f"Parabolic 2x Harvest (+{pnl_pct*100:.0f}% locked after peak +{max_pnl_pct*100:.0f}%, {_peak_age_min:.0f}m no ATH)"
-        if max_pnl_pct >= 0.40 and _peak_age_min >= 7.0:
-            return f"Rocket Momentum Harvest (+{pnl_pct*100:.0f}% locked after peak +{max_pnl_pct*100:.0f}%, {_peak_age_min:.0f}m no ATH)"
-        if max_pnl_pct >= 0.20 and _peak_age_min >= 9.0 and pnl_pct >= 0.05:
-            return f"Breakout Harvest (+{pnl_pct*100:.0f}% locked after peak +{max_pnl_pct*100:.0f}%, {_peak_age_min:.0f}m no ATH)"
+        # На мемкоинах (PumpSwap/Raydium) разработчики обычно сливают пул через 10-18 минут.
+        # Застревание на хаях без новых ATH больше 2.5-3.5 минут — предвестник дев-дампа!
+        if max_pnl_pct >= 2.00 and _peak_age_min >= 2.5:
+            return f"Parabolic 3x Harvest (+{pnl_pct*100:.0f}% locked after peak +{max_pnl_pct*100:.0f}%, {_peak_age_min:.1f}m no ATH)"
+        if max_pnl_pct >= 1.00 and _peak_age_min >= 2.5:
+            return f"Parabolic 2x Harvest (+{pnl_pct*100:.0f}% locked after peak +{max_pnl_pct*100:.0f}%, {_peak_age_min:.1f}m no ATH)"
+        if max_pnl_pct >= 0.40 and _peak_age_min >= 3.0:
+            return f"Rocket Momentum Harvest (+{pnl_pct*100:.0f}% locked after peak +{max_pnl_pct*100:.0f}%, {_peak_age_min:.1f}m no ATH)"
+        if max_pnl_pct >= 0.20 and _peak_age_min >= 4.0 and pnl_pct >= 0.05:
+            return f"Breakout Harvest (+{pnl_pct*100:.0f}% locked after peak +{max_pnl_pct*100:.0f}%, {_peak_age_min:.1f}m no ATH)"
 
         # =========================================================================
         # 5. FRONT-RUN PROFIT EXIT (Разворот стакана при профите >= +20%)
@@ -182,8 +184,11 @@ class MatureExitManager:
                 return f"Front-Run Profit Exit: Sellers dominating ({b5}b/{s5}s) while in profit (+{pnl_pct*100:.1f}%)"
 
         # =========================================================================
-        # 6. MAX HOLD TIMEOUT (Защита от кейса UNEMPLOYED 57м)
+        # 6. MAX HOLD TIMEOUT (Защита от кейса UNEMPLOYED 57м и пересиживания рагов)
         # =========================================================================
+        # Если позиция в уверенном плюсе (>= +15%), закрываем через 12 минут, не дожидаясь слива пула девом (спасает кейсы 现金牛 24м, NEX AI 18м, SATAN-CAT 18м)!
+        if minutes_held >= 12.0 and pnl_pct >= 0.15:
+            return f"Max Hold Rocket Take (+{pnl_pct*100:.1f}% locked at {minutes_held:.0f}m before dev rug window)"
         if minutes_held >= 25.0 and pnl_pct >= 0.02:
             return f"Max Hold Profit Take (+{pnl_pct*100:.1f}% locked at {minutes_held:.0f}m)"
         if minutes_held >= 30.0:

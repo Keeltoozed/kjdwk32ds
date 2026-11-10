@@ -37,18 +37,18 @@ PAPER_PORTFOLIO_FILE = "portfolio.json"
 PORTFOLIO_SNAPSHOT_MINT = (os.getenv("PORTFOLIO_SNAPSHOT_MINT", "") or "").strip().strip('"').strip("'") or "PORTFOLIO_SOLANA_V2"
 INITIAL_BALANCE_USD = 20.0
 REINVEST_PERCENT = 22.0
-VIRTUAL_POSITION_SIZE_USD = 4.0
-TRADE_AMOUNT_USD = 4.0
+VIRTUAL_POSITION_SIZE_USD = 5.0
+TRADE_AMOUNT_USD = 5.0
 
-COMPOUNDING_ENABLED = True
+COMPOUNDING_ENABLED = False
 COMPOUNDING_PCT = 0.20
-MAX_COMPOUNDING_SIZE_USD = 2500.0
-DYNAMIC_REINVEST_ENABLED = True
-BASE_TRADE_AMOUNT_USD = 4.0
-MAX_POSITION_SIZE_USD = 2500.0
+MAX_COMPOUNDING_SIZE_USD = 5.0
+DYNAMIC_REINVEST_ENABLED = False
+BASE_TRADE_AMOUNT_USD = 5.0
+MAX_POSITION_SIZE_USD = 5.0
 REINVEST_MIN_POOL_LIQ_USD = 7500.0
-SCOUT_SIZE_USD = 4.0
-LOTTERY_SIZE_USD = 4.0
+SCOUT_SIZE_USD = 5.0
+LOTTERY_SIZE_USD = 5.0
 MAX_CONCURRENT_POSITIONS = 5
 
 # === ЖЕСТКОЕ ОГРАНИЧЕНИЕ УБЫТКА (РИСК-МЕНЕДЖМЕНТ) ===
@@ -92,7 +92,7 @@ STREAM_MIN_BUY_SOL = 1.5
 STREAM_MAX_TOP_BUYER_RATIO = 0.50
 STREAM_MIN_BS_RATIO = 1.6
 STREAM_MAX_CURVE_PROGRESS = 85.0
-STREAM_ENTRY_SIZE_USD = 4.0
+STREAM_ENTRY_SIZE_USD = 5.0
 STREAM_SLIPPAGE = 0.08
 STREAM_MAX_AGE_SEC = 900
 STREAM_GC_MIN_PROGRESS = 4.0
@@ -278,7 +278,7 @@ GROWTH_TRAIL_ACT = 0.08
 GROWTH_TRAIL_DIST = 0.12
 GROWTH_STAGNANT_MIN = 120
 GROWTH_MAX_POS = 3
-GROWTH_SIZE_USD = 4.0
+GROWTH_SIZE_USD = 5.0
 GROWTH_INTERVAL = 75
 
 SNIPER_MIN_UNIQUE_BUYERS = 8
@@ -318,11 +318,11 @@ FOMO_MIN_USD = 100
 FOMO_BOARDS_INTERVAL = 7200
 USE_FOMO_SIGNALS = False
 MAX_FOMO_BUYS_PER_PASS = 3
-TG_MAX_SIZE_USD = 4.0
-TG_VIP_SIZE_USD = 4.0
+TG_MAX_SIZE_USD = 5.0
+TG_VIP_SIZE_USD = 5.0
 ROB_MAX_SIZE_USD = 10.0
 BSC_MAX_SIZE_USD = 10.0
-BSC_WEAK_SIZE_USD = 4.0
+BSC_WEAK_SIZE_USD = 5.0
 
 EVM_TRACK_INTERVAL = 2.5
 EVM_IDLE_TRACK_INTERVAL = 6.0
@@ -359,7 +359,7 @@ JEV_MIN_H6_PCT = -15.0
 
 USE_COPYTRADE = True
 COPY_MIN_TIER = 3
-COPY_MAX_TICKET_USD = 4.0
+COPY_MAX_TICKET_USD = 5.0
 COPY_MAX_CONCURRENT_POSITIONS = 2  # Максимум 2 слота под копитрейд, чтобы киты никогда не забивали все 5 слотов сканера
 COPY_USE_ANTISCAM = True
 COPY_MAX_ACTIVE_WHALES = 80
@@ -367,25 +367,3 @@ COPY_BAN_ON_FIRST_LOSS = True
 COPY_PREFILTER = True
 COPY_MAX_TX_PER_MIN = 40
 COPY_MIN_PNL = 250.0
-
-# === ФИКСИРОВАННЫЙ БИЛЕТ ===
-# >0: каждый вход (SCANNER/JUP/GROK-JEV/COPY...) открывается ровно на эту сумму, игнорируя компаундинг.
-# 0: выключено, размер считается как раньше.
-FIXED_TICKET_USD = float(os.getenv("FIXED_TICKET_USD", "5.0"))
-
-# === Кастомные токены PumpSwap без LP-лока ===
-# Фильтр в этих трёх файлах не найден (вероятно analyzer.py). Если он там читает эту константу,
-# "off" отключает блокировку по незалоченному LP.
-CUSTOM_PUMPSWAP_LP_MODE = os.getenv("CUSTOM_PUMPSWAP_LP_MODE", "off").strip().lower()
-
-# === PRE-RUG HARVEST (частичная фиксация до слива пула) ===
-# Отдельные от PARTIAL_TP_*/TP1..5 (те работают только при билете >= PARTIAL_TP_MIN_TICKET_USD).
-PRE_RUG_ENABLED = os.getenv("PRE_RUG_ENABLED", "1").strip() != "0"
-PRE_RUG_TP1_PCT = float(os.getenv("PRE_RUG_TP1_PCT", "0.32"))     # +32% -> продано 40% билета
-PRE_RUG_TP1_FRAC = float(os.getenv("PRE_RUG_TP1_FRAC", "0.40"))
-PRE_RUG_TP2_PCT = float(os.getenv("PRE_RUG_TP2_PCT", "0.55"))     # +55% -> продано суммарно 70%
-PRE_RUG_TP2_FRAC = float(os.getenv("PRE_RUG_TP2_FRAC", "0.30"))
-PRE_RUG_TIME_MIN = float(os.getenv("PRE_RUG_TIME_MIN", "10.0"))   # удержание >= 10 мин
-PRE_RUG_TOKEN_AGE_MIN = float(os.getenv("PRE_RUG_TOKEN_AGE_MIN", "18.0"))
-PRE_RUG_TIME_MIN_PNL = float(os.getenv("PRE_RUG_TIME_MIN_PNL", "0.18"))
-PRE_RUG_MIN_CHUNK_USD = float(os.getenv("PRE_RUG_MIN_CHUNK_USD", "0.25"))
