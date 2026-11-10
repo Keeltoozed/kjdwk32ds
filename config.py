@@ -125,23 +125,23 @@ MOONBAG_SELL_FRAC = 0.0
 PUMP_XGB_ENABLED = False
 RAY_XGB_ENABLED = False
 ROCKET_XGB_ENABLED = True
-ROCKET_XGB_STAGE1_THRESHOLD = 8.0    # Первичный отсев в 0мс (отсекает мертвецов 2-7%)
-ROCKET_XGB_FINAL_THRESHOLD = 18.0    # Финальный порог (отсекает шлак < 18%, пропускает ракеты 20-80%)
-ROCKET_XGB_THRESHOLD = 18.0
+ROCKET_XGB_STAGE1_THRESHOLD = 15.0   # Первичный отсев в 0мс (отсекает шлак)
+ROCKET_XGB_FINAL_THRESHOLD = 25.0    # Финальный порог: отсекает группу <25% с 0% винрейтом (кейс AICoin 19%), пускает ракеты 25-90%
+ROCKET_XGB_THRESHOLD = 25.0
 
 STALL_TIMER_SEC = 210.0   # 3.5 минуты (быстрый срез стоячего минуса без затягивания убытка до 13м)
 STALL_MAX_LOSS_PCT = -0.075
 
-TRAILING_ACTIVATION_PCT = 0.100
-TRAILING_DISTANCE_PCT = 0.050
-TRAILING_RUNNER_DISTANCE_PCT = 0.08
+TRAILING_ACTIVATION_PCT = 0.250
+TRAILING_DISTANCE_PCT = 0.150
+TRAILING_RUNNER_DISTANCE_PCT = 0.18
 SCALP_PROFIT_ENABLED = False
 
 WHALE_DUMP_GUARD_PCT = 0.22
 EVM_RUNNER_CRASH = 0.25
 EVM_NORMAL_CRASH = 0.22
 
-BREAKEVEN_PCT = 0.075     # После +7.5% пика включается Breakeven Shield (+1.5%..+3.5% пол) — зеленые сделки больше никогда не уходят в минус!
+BREAKEVEN_PCT = 0.25      # После +25% пика включается Breakeven Shield — дает ракетам свободно дышать и расти, защищая только от слива в минус!
 
 PREFETCH_TTL_SEC = 35
 SOLANA_MIN_AGE_MIN = 0.25       # Разрешаем молодые ракеты от 15 секунд (TWAP, LEMON, SHADOW)

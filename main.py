@@ -1244,50 +1244,56 @@ async def scanner_loop(analyzer, tracker):
                                         position_size = fixed
                                         _is_lot = False
                                         _is_vipsig = False
+                                        try:
+                                            _meme = await analyzer.meme_tag(mint, actual_symbol, pair_data, "solana")
+                                            if _meme:
+                                                analyzer.signals[mint] = analyzer.get_signal(mint) + _meme
+                                        except Exception:
+                                            pass
                                     else:
                                         capital = tracker.get_total_capital()
                                         base_position = capital * (config.REINVEST_PERCENT / 100.0)
                                         max_allowed_by_pool = liq_usd * 0.01 if liq_usd > 0 else 99999.0  
                                         position_size = max(5.0, min(base_position, max_allowed_by_pool, 100.0))
                                     
-                                    _lot_m5 = ((pair_data.get("priceChange") or {}).get("m5", 0) or 0)
-                                    _is_lot = _lot_m5 >= getattr(config, "LOTTERY_MIN_M5_PCT", 1.0) * 100
-                                    
-                                    # Если это настоящая VIP-ракета (огромный объем), входим на полный сайз
-                                    _txns_m5 = pair_data.get("txns", {}).get("m5", {})
-                                    _buys = _txns_m5.get("buys", 0)
-                                    _vol = pair_data.get("volume", {}).get("m5", 0)
-                                    _is_vip = _buys >= 50 and _vol >= 30000
-                                    
-                                    if _is_lot and not _is_vip:
-                                        position_size *= getattr(config, "LOTTERY_SIZE_MULT", 0.25)
+                                        _lot_m5 = ((pair_data.get("priceChange") or {}).get("m5", 0) or 0)
+                                        _is_lot = _lot_m5 >= getattr(config, "LOTTERY_MIN_M5_PCT", 1.0) * 100
+                                        
+                                        # Если это настоящая VIP-ракета (огромный объем), входим на полный сайз
+                                        _txns_m5 = pair_data.get("txns", {}).get("m5", {})
+                                        _buys = _txns_m5.get("buys", 0)
+                                        _vol = pair_data.get("volume", {}).get("m5", 0)
+                                        _is_vip = _buys >= 50 and _vol >= 30000
+                                        
+                                        if _is_lot and not _is_vip:
+                                            position_size *= getattr(config, "LOTTERY_SIZE_MULT", 0.25)
 
-                                    # Conviction-тиринг и ROCKET-mult: только для динамического сайзинга (если TRADE_AMOUNT_USD не задан)
-                                    if not _is_lot and not _is_vip:
-                                        position_size *= analyzer.conviction_size_mult(pair_data)
-                                        try:
-                                            analyzer._rkt_tag(mint, pair_data)
-                                            _rm = analyzer.rocket_size_mult(mint)
-                                            if _rm != 1.0:
-                                                print(f"🚀 SCANNER {actual_symbol}: ROCKET-mult x{_rm}")
-                                            position_size *= _rm
-                                            _meme = await analyzer.meme_tag(mint, actual_symbol, pair_data, "solana")
-                                            if _meme:
-                                                analyzer.signals[mint] = analyzer.get_signal(mint) + _meme
-                                        except Exception:
-                                            pass
-                                    position_size = min(position_size, 100.0)
+                                        # Conviction-тиринг и ROCKET-mult: только для динамического сайзинга (если TRADE_AMOUNT_USD не задан)
+                                        if not _is_lot and not _is_vip:
+                                            position_size *= analyzer.conviction_size_mult(pair_data)
+                                            try:
+                                                analyzer._rkt_tag(mint, pair_data)
+                                                _rm = analyzer.rocket_size_mult(mint)
+                                                if _rm != 1.0:
+                                                    print(f"🚀 SCANNER {actual_symbol}: ROCKET-mult x{_rm}")
+                                                position_size *= _rm
+                                                _meme = await analyzer.meme_tag(mint, actual_symbol, pair_data, "solana")
+                                                if _meme:
+                                                    analyzer.signals[mint] = analyzer.get_signal(mint) + _meme
+                                            except Exception:
+                                                pass
+                                        position_size = min(position_size, 100.0)
 
-                                    # VIP-ШИП = РАЗДАЧА (доказано метками: UNPEG/FIBONACCI/BackCat/Goblin).
-                                    _is_vipsig = "VIP-" in analyzer.get_signal(mint)
-                                    if _is_vipsig:
-                                        if not getattr(config, "VIP_ENTRIES_ENABLED", False):
-                                            print(f"🚫 [VIP-BLOCKED] {actual_symbol}: VIP входы отключены в config.py.")
-                                            continue
-                                        _vip_cap = float(getattr(config, "TG_VIP_SIZE_USD", 5.0))
-                                        position_size = min(position_size, _vip_cap)
+                                        # VIP-ШИП = РАЗДАЧА (доказано метками: UNPEG/FIBONACCI/BackCat/Goblin).
+                                        _is_vipsig = "VIP-" in analyzer.get_signal(mint)
+                                        if _is_vipsig:
+                                            if not getattr(config, "VIP_ENTRIES_ENABLED", False):
+                                                print(f"🚫 [VIP-BLOCKED] {actual_symbol}: VIP входы отключены в config.py.")
+                                                continue
+                                            _vip_cap = float(getattr(config, "TG_VIP_SIZE_USD", 5.0))
+                                            position_size = min(position_size, _vip_cap)
 
-                                _min_ticket = 1.0 if (_is_lot or _is_vipsig) else float(getattr(config, "BASE_TRADE_AMOUNT_USD", 2.0))
+                                _min_ticket = 1.0 if (_is_lot or _is_vipsig or fixed > 0) else float(getattr(config, "BASE_TRADE_AMOUNT_USD", 2.0))
                                 if position_size < _min_ticket:
                                     print(f"🚫 Отказ (Сайз): Размер входа (${position_size:.2f}) меньше минимального билета (${_min_ticket:.2f}).")
                                     continue
