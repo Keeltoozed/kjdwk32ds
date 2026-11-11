@@ -86,7 +86,7 @@ MAX_PUMP_CURVE_MCAP_SOL = 350.0           # Верх кривой перед м�
 PUMP_MIGRATION_MCAP_SOL = 410.0           # FDV миграции pump.fun (~410 SOL = ~$34k при SOL $83, ~$61.5k при SOL $150)
 PUMP_DUMP_FLOOR_SOL = 285.0               # Порог post-mig-dumped (~70% миграции = 285 SOL = ~$23.6k при SOL $83)
 JEV_MAX_TICKET_USD = 0.0
-MIN_GRADUATED_LIQ_USD = 10000.0           # На DEX минимум $10k реальной ликвидности (пускает свежие миграции PumpSwap $10.5k+, режет микро-пулы <$9k)
+MIN_GRADUATED_LIQ_USD = 5000.0           # На DEX минимум $5k реальной ликвидности (пускает свежие миграции PumpSwap и Raydium $5k+, не режет ранние ракеты)
 AUDITOR_STAIRCASE_ENABLED = True
 AUDITOR_MAX_DEV_PCT = 6.0
 AUDITOR_MAX_TOP10_PCT = 32.0
@@ -176,7 +176,7 @@ JEV_MAX_AGE_MIN = 60.0          # Свежие монеты до 60м (защи�
 JEV_MIN_LIQUIDITY_USD = 8000.0  # Минимум $8k ликвидности (пускает MELT $9,981)
 JEV_MAX_LIQUIDITY_USD = 220000.0
 JEV_MIN_VOLUME_H1 = 8000.0
-JEV_MIN_MCAP_USD = 10000.0      # Минимум $10k MCap (ловит ранние Raydium/PumpSwap ракеты вроде CHOO $11.8k FDV / $18.9k liq)
+JEV_MIN_MCAP_USD = 5000.0      # Минимум $5k MCap (ловит ранние Raydium/PumpSwap ракеты вроде FOMO $8.1k, ICC $8.1k)
 JEV_MAX_MCAP_USD = 1800000.0    # Верхняя граница $1.8M MCap (ловим мем-ракеты $48k-$1.8M, а не стоячие mid-caps)
 JEV_MIN_VOLUME_H24 = 15000.0
 JEV_MIN_TRADES_H24 = 60

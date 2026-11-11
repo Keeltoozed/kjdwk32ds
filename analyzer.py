@@ -1455,13 +1455,13 @@ class Analyzer:
                 raw_sc = float(rc_data.get("score") or 0.0)
                 _allowed_lp_terms_chk = (
                     "large amount of lp unlocked", "lp provider", "single lp provider",
-                    "lp not locked", "unlocked lp"
-                ) if _is_pump_origin_chk else ("lp provider",)
+                    "lp not locked", "unlocked lp", "low liquidity"
+                )
                 ign = sum(
                     float(rk.get("score", 0) or 0)
                     for rk in (rc_data.get("risks") or [])
                     if any(k in str(rk.get("name", "")).lower() for k in (
-                        "low liquidity", "creator history", "copycat", "symbol mimic", *_allowed_lp_terms_chk
+                        "creator history", "copycat", "symbol mimic", *_allowed_lp_terms_chk
                     ))
                 )
                 clean_sc = max(0.0, raw_sc - ign)
@@ -1470,19 +1470,10 @@ class Analyzer:
                 for rk in (rc_data.get("risks") or []):
                     rkn = str(rk.get("name", "")).lower()
                     rkl = str(rk.get("level", "")).lower()
-                    if _is_pump_origin_chk and "large amount of lp unlocked" in rkn:
+                    if any(k in rkn for k in ("large amount of lp unlocked", "lp not locked", "unlocked lp")):
                         continue
-                    if rkl == "danger" and any(k in rkn for k in ("single holder", "high ownership", "top 10 holders", "large amount of lp unlocked", "freeze authority")):
+                    if rkl == "danger" and any(k in rkn for k in ("single holder", "high ownership", "top 10 holders", "freeze authority")):
                         return False, f"RugCheck критический риск: {rk.get('name')}"
-                if not _is_pump_origin_chk:
-                    lp_locked_ok = any(
-                        isinstance(m, dict) and (float((m.get("lp") or {}).get("lpLockedPct", 0) or 0) >= 80.0 or float((m.get("lp") or {}).get("lpBurnedPct", 0) or 0) >= 80.0)
-                        for m in (rc_data.get("markets") or [])
-                    )
-                    if not lp_locked_ok:
-                        return False, "Кастомный неизвестный токен без заблокированного LP (<80%)"
-            elif not _is_pump_origin_chk:
-                return False, f"Кастомный неизвестный токен ещё не проиндексирован RugCheck (статус {rc_st})"
         except Exception as e:
             print(f"⚠️ [WHALE-ANALYSIS] Ошибка проверки контракта ({e})")
             if not _is_pump_origin_chk:
@@ -1618,10 +1609,10 @@ class Analyzer:
                 _v_to_l_m = (_v5_mc / max(_lq_mc, 1.0)) if _lq_mc > 0 else 0.0
                 _avg_tx_m = (_v5_mc / max(1, _b5_mc + _s5_mc)) if (_b5_mc + _s5_mc) > 0 else 0.0
                 # Живые вирусные мемы (PEPE69 $172k vol, DUGE, TRUMP, PNUT): пускаем при подтверждённом торговом потоке
+                # Для анонимных токенов (0 ссылок) требуем реальный зрелый поток ($25k+ vol5), чтобы отсекать одноразовые фейки дева (кейс ELON -100%)
                 _is_valid_meme_runner = (
                     (_links_m > 0 and _v5_mc >= 3000.0 and _b5_mc >= _s5_mc) or
-                    (_v5_mc >= 4000.0 and _b5_mc >= _s5_mc and _lq_mc >= 12000.0) or
-                    (_v5_mc >= 2500.0 and _b5_mc >= int(_s5_mc * 1.10) and _lq_mc >= 15000.0)
+                    (_links_m == 0 and _v5_mc >= 25000.0 and _b5_mc >= int(_s5_mc * 1.15) and _lq_mc >= 20000.0)
                 )
                 if _is_valid_meme_runner:
                     print(f"🔥 [MIMIC-FOMO] {symbol} ({mint[:8]}): подтвержденный вирусный мем (b/s {_b5_mc}/{_s5_mc}, vol5 ${_v5_mc:,.0f}, links {_links_m}) — пропуск.")
@@ -2079,15 +2070,15 @@ class Analyzer:
                     # ВАЖНО: концентрацию дева и китов ("single holder", "top 10 holders") НИКОГДА не вычитаем как шум!
                     _allowed_lp_terms_main = (
                         "large amount of lp unlocked", "lp provider", "single lp provider",
-                        "lp not locked", "unlocked lp"
-                    ) if _is_canonical_pump else ("lp provider", "low liquidity")
+                        "lp not locked", "unlocked lp", "low liquidity"
+                    )
 
                     # Исключаем безвредный шум: низкая ликвидность для молодых пулов, copycat для мемов, и LP контракт пула.
                     _rc_penalty_to_ignore = sum(
                         float(rk.get("score", 0) or 0)
                         for rk in (rc_data.get("risks") or [])
                         if any(k in str(rk.get("name", "")).lower() for k in (
-                            "low liquidity", "creator history", "copycat", "symbol mimic", *_allowed_lp_terms_main
+                            "creator history", "copycat", "symbol mimic", *_allowed_lp_terms_main
                         ))
                     )
 
@@ -2095,33 +2086,24 @@ class Analyzer:
                     if _rc_score >= 2000:
                         return self._deny(mint, f"rugcheck-score {_rc_score:.0f}", f"🚫 [АНТИСКАМ] RugCheck Score {_rc_score:.0f} >= 2000 у {mint[:8]} → СКАМ")
 
-                    # Жёсткий фильтр критических опасностей RugCheck (кейсы AMERICA 87%, DEMOCAT 58.6% drain, SAFU 59% drain)
+                    # Жёсткий фильтр критических опасностей RugCheck
                     for rk in (rc_data.get("risks") or []):
                         _rk_name = str(rk.get("name", "")).lower()
                         _rk_lvl = str(rk.get("level", "")).lower()
-                        if _is_canonical_pump and any(k in _rk_name for k in ("large amount of lp unlocked", "lp not locked", "unlocked lp")):
+                        if any(k in _rk_name for k in ("large amount of lp unlocked", "lp not locked", "unlocked lp")):
                             continue
-                        if _rk_lvl == "danger" and any(k in _rk_name for k in ("single holder", "high ownership", "top 10 holders", "large amount of lp unlocked", "freeze authority")):
+                        if _rk_lvl == "danger" and any(k in _rk_name for k in ("single holder", "high ownership", "top 10 holders", "freeze authority")):
                             return self._deny(mint, f"rc-danger {_rk_name[:15]}", f"🚫 [АНТИСКАМ-RC] {symbol} ({mint[:8]}): критический риск RugCheck '{rk.get('name')}' — блок скама!")
 
-                    # Для кастомных не-pump токенов (не оканчивающихся на 'pump' и не на сырой кривой pumpfun):
-                    # на ЛЮБОМ DEX (PumpSwap, Raydium, Meteora) требуем подтвержденный заблокированный/сожжённый LP >= 80%!
-                    if not _is_canonical_pump:
-                        _lp_ok = False
-                        for _m in (rc_data.get("markets") or []):
-                            if isinstance(_m, dict):
-                                _m_lp_info = _m.get("lp") or {}
-                                _m_lp_locked_pct = float(_m_lp_info.get("lpLockedPct", 0) or 0)
-                                _m_lp_burned_pct = float(_m_lp_info.get("lpBurnedPct", 0) or 0)
-                                if _m_lp_locked_pct >= 80.0 or _m_lp_burned_pct >= 80.0:
-                                    _lp_ok = True
-                                    break
-                        if not _lp_ok:
-                            return self._deny(
-                                mint,
-                                "unlocked-custom-lp",
-                                f"🚫 [CUSTOM-LP-RUG] {symbol} ({mint[:8]}): кастомный токен на {_dex_low_main} без сожжённого/заблокированного LP (<80%) — риск сноса пула (кейсы DEMOCAT/SAFU)!"
-                            )
+                    # Проверка пулов и блокировки LP: логируем статус, но не блокируем монеты с незалоченным LP по стратегии пользователя
+                    for _m in (rc_data.get("markets") or []):
+                        if isinstance(_m, dict):
+                            _m_lp_info = _m.get("lp") or {}
+                            _m_lp_locked_pct = float(_m_lp_info.get("lpLockedPct", 0) or 0)
+                            _m_lp_burned_pct = float(_m_lp_info.get("lpBurnedPct", 0) or 0)
+                            _m_unl = float(_m_lp_info.get("lpUnlocked", 0) or 0)
+                            if _m_unl > 0:
+                                print(f"ℹ️ [RUGCHECK-LP] {symbol} ({mint[:8]}): LP lock {_m_lp_locked_pct:.1f}%, burn {_m_lp_burned_pct:.1f}%, unl ${_m_unl:,.0f} — допуск по стратегии охоты за рагами.")
 
                     # Проверка холдеров RugCheck
                     top_holders = rc_data.get("topHolders") or []
@@ -3969,6 +3951,11 @@ class Analyzer:
         if liquidity < _min_ray_liq:
             return self._deny(mint, "ray-micro-liq", f"📉 [RAYDIUM] {mint[:8]}: реальная ликвидность пула ${liquidity:,.0f} < ${_min_ray_liq:,.0f} — микро-пул с риском мгновенного слива.")
 
+        # Защита от фейковых раздутых пулов с мертвым оборотом (кейсы Pinksph $111k liq / $8k vol, EPYCDRG $104k liq / $8k vol):
+        # На глубоком пуле ($50k+) оборот за 5 минут должен быть минимум 15% (vol5 / liq >= 0.15)
+        if liquidity >= 50000.0 and (_vm5 / max(liquidity, 1.0)) < 0.15:
+            return self._deny(mint, "fake-liq-trap", f"🚫 [FAKE-LIQ] {mint[:8]}: пул ${liquidity:,.0f}, но объем 5m всего ${_vm5:,.0f} (оборот {_vm5/liquidity:.2f} < 0.15) — ловушка снайперов / фейковый пул.")
+
         # 2. Защита от картонных пулов: для молодых ракет / pump.fun ($12k liq при росте до $600k+ FDV) лимит до 85x
         _max_hollow_ratio = 85.0 if (_is_fresh_ray and _b5 >= _s5 * 1.15) else 45.0
         if liquidity > 0 and fdv > 0 and (fdv / liquidity) > _max_hollow_ratio:
@@ -3991,8 +3978,9 @@ class Analyzer:
         _dev = getattr(self, '_last_dev', 0.0)
         if _dev > 10.0:
             return self._deny(mint, "ray-dev-hold", f"🚫 [DEV-HOLD] {mint[:8]}: создатель держит {_dev:.1f}% > 10% — дамп-риск.")
-        if _t10 > 35.0:
-            return self._deny(mint, "ray-top10-cabal", f"🚫 [TOP10-CABAL] {mint[:8]}: топ-10 держат {_t10:.1f}% > 35% — кабал/дамп-риск.")
+        _max_t10 = 32.0 if (_dex_low == "pumpswap" or _is_migrated_pump) else 35.0
+        if _t10 > _max_t10:
+            return self._deny(mint, "ray-top10-cabal", f"🚫 [TOP10-CABAL] {mint[:8]}: топ-10 держат {_t10:.1f}% > {_max_t10:.0f}% — кабал/дамп-риск.")
 
         # === ROCKET XGBOOST INFERENCE (20 ФИЧЕЙ БЕЗ ЛИКЕДЖА) ===
         import pandas as pd

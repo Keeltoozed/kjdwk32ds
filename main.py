@@ -281,6 +281,24 @@ async def position_manager_loop(analyzer, tracker):
                     _pnl_str = f"{pnl_pct*100:+.1f}%" if position.entry_price_usd > 0 else "0%"
                     print(f"🛡️ [TRACK] {position.symbol} ({mint[:8]}): цена ${current_price:.8f} ({_pnl_str}) | пик: ${position.max_price_usd:.8f} | держим {minutes_held:.1f}м", flush=True)
 
+                # Периодически обновляем живую ликвидность пула и сделки (каждые 15 сек или при просадке <= -6%)
+                _last_pd_ts = float(getattr(position, "last_pair_data_ts", 0.0) or 0.0)
+                _now_t = time.time()
+                if (_now_t - _last_pd_ts) >= 15.0 or (pnl_pct <= -0.06 and (_now_t - _last_pd_ts) >= 4.0):
+                    try:
+                        import market_data as _md
+                        _live_pd = await asyncio.wait_for(_md.get_token_data(mint, max_cache_age=4.0), timeout=1.2)
+                        if isinstance(_live_pd, dict) and _live_pd:
+                            position.pair_data = _live_pd
+                            position.last_pair_data = _live_pd
+                            position.last_pair_data_ts = _now_t
+                            _cur_l_chk = float(((_live_pd.get("liquidity") or {}).get("usd", 0) or 0))
+                            if _cur_l_chk > 0:
+                                if not hasattr(position, "peak_liquidity_usd") or _cur_l_chk > position.peak_liquidity_usd:
+                                    position.peak_liquidity_usd = _cur_l_chk
+                    except Exception:
+                        pass
+
                 # Infant Dump: не даём монете сложиться на первой минуте (кейс STONKS / DОG™)!
                 # Сразу сверяем провал <= -9.5% с живой котировкой Jupiter и мгновенно рубим реальный раг без провала в -30%!
                 try:
@@ -1396,7 +1414,9 @@ async def scanner_loop(analyzer, tracker):
                                                      source=f"SCANNER:{analyzer.get_signal(mint)}",
                                                      pair_address=pair_data.get("pairAddress", ""),
                                                      stop_under_wick=_wick_stop_price,
-                                                     wick_stop_loss_pct=_wick_pct)
+                                                     wick_stop_loss_pct=_wick_pct,
+                                                     initial_liquidity_usd=liq_usd,
+                                                     pair_data=pair_data)
                                 grok_jev.FUNNEL_STATS["filled"] += 1
                                 print(grok_jev.get_funnel_summary())
                                 _entered = True
@@ -2411,7 +2431,9 @@ async def _evm_chain_loop(analyzer, tracker, chain: str):
                                                  chain=chain,
                                                  pair_address=td.get("pairAddress", ""),
                                                  stop_under_wick=_wick_stop_price,
-                                                 wick_stop_loss_pct=_wick_pct)
+                                                 wick_stop_loss_pct=_wick_pct,
+                                                 initial_liquidity_usd=float(((td or {}).get("liquidity", {}) or {}).get("usd", 0) or 0),
+                                                 pair_data=td)
                                 grok_jev.FUNNEL_STATS["filled"] += 1
                                 print(grok_jev.get_funnel_summary())
                                 print(f"{emoji} {tag} BUY {sym} {addr[:10]} @ ${price}")

@@ -142,6 +142,9 @@ class MatureExitManager:
         elif max_pnl_pct >= 0.18:       # +18%..+30% (JAZZ +25.2%, LEONIDA +26.0%)
             _floor_pnl = 0.12           # Гарантируем минимум +12% чистыми (+$0.60 на $5!)
             _trail_dist = 0.07          # Трейлинг 7% от пика (JAZZ выходит на +18.2% = +$0.91!)
+        elif max_pnl_pct >= 0.10:       # +10%..+18% (FME +15.6%, MOD +13.0%, CATCITY +10.6%)
+            _floor_pnl = 0.055          # Гарантируем минимум +5.5% чистыми (+$0.28..$0.45 на $5!)
+            _trail_dist = 0.040         # Трейлинг 4.0% от пика
 
         if _floor_pnl is not None and minutes_held >= 0.20:
             drop_from_max = (position.max_price_usd - current_price) / position.max_price_usd if position.max_price_usd > 0 else 0.0

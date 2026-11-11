@@ -388,7 +388,7 @@ class GrokJevEngine:
         FAKE_BRAND_BLACKLIST = {
             "BASE", "SP500", "S&P500", "USDC", "USDT", "SOL", "ETH", "BTC", "SOLANA",
             "BINANCE", "COINBASE", "TESLA", "APPLE", "NVDA", "AMAZON", "GOOGLE", "MICROSOFT",
-            "NINTENDO", "PLAYSTATION", "SONY", "DISNEY", "MARVEL", "POKEMON", "SEGA", "XBOX", "ELUN", "ELOM",
+            "NINTENDO", "PLAYSTATION", "SONY", "DISNEY", "MARVEL", "POKEMON", "SEGA", "XBOX", "ELUN", "ELOM", "ELON",
             "STEAM", "VALVE", "ROBLOX", "TIKTOK", "NETFLIX", "SPOTIFY", "PEPSI", "COCACOLA", "MCDONALDS"
         }
         if symbol in FAKE_BRAND_BLACKLIST or any(b in symbol for b in ("NINTENDO", "POKEMON", "PLAYSTATION", "DISNEY", "NVIDIA", "APPLE", "TESLA", "MICROSOFT", "AMAZON")):
@@ -450,7 +450,7 @@ class GrokJevEngine:
             else:
                 age_min = 999.0
 
-        _min_grad_liq = float(getattr(_c, "MIN_GRADUATED_LIQ_USD", 10000.0))
+        _min_grad_liq = float(getattr(_c, "MIN_GRADUATED_LIQ_USD", 5000.0))
         if dex_id in ("pump", "pumpfun", "meteoradbc") and not getattr(_c, "ALLOW_UNGRADUATED_PUMPFUN", False):
             return False, "raw-pump-curve (wait for graduation to PumpSwap/Raydium with locked LP)"
         min_liq = 1500.0 if dex_id in ("pump", "pumpfun", "meteoradbc") else _min_grad_liq
@@ -613,9 +613,9 @@ class GrokJevEngine:
         if m5 < _min_m5_jev and not _is_buyer_dip_g:
             return False, f"no-momentum m5 {m5:+.1f}% < +{_min_m5_jev:.1f}% (coin is flat/standing still)"
         if age_min >= 20.0:
-            _is_massive_mature_flow_g = (vol_m5 >= 10000.0 and eff_liq >= 20000.0 and b5 >= s5 and m5 >= 1.2)
-            _is_strong_jev_breakout = (m5 >= 4.0 and vol_m5 >= 2000.0 and b5 >= s5 * 1.05 and (b5 + s5) >= 20)
-            if not _is_massive_mature_flow_g and not _is_strong_jev_breakout and (vol_m5 < 5000.0 or ((vol_m5 / max(eff_liq, 1.0)) < 0.18 and vol_m5 < 15000.0) or m5 < 3.5 or (b5 + s5) < 30):
+            _is_massive_mature_flow_g = (vol_m5 >= 8000.0 and eff_liq >= 15000.0 and b5 >= s5 and m5 >= 1.0)
+            _is_strong_jev_breakout = (m5 >= 1.5 and vol_m5 >= 1500.0 and b5 >= s5 and (b5 + s5) >= 15)
+            if not _is_massive_mature_flow_g and not _is_strong_jev_breakout and (vol_m5 < 2500.0 or ((vol_m5 / max(eff_liq, 1.0)) < 0.07 and vol_m5 < 8000.0) or m5 < 1.0 or (b5 + s5) < 15):
                 return False, f"slow-mature-pool age {age_min:.0f}m vol5 ${vol_m5:,.0f} v/l {(vol_m5/max(eff_liq,1.0)):.2f}x"
         _max_m5_allowed = float(getattr(_c, "MAX_ENTRY_M5_PCT", 45.0))
         if m5 > _max_m5_allowed:
@@ -704,7 +704,7 @@ class GrokJevEngine:
         mcap = fdv_mc
         if is_pump and mcap > 0 and mcap < 5000.0:
             return False, f"pump-curve-too-early mcap ${mcap:,.0f} < $5k (high dev dump trap risk)"
-        min_mcap = 5000.0 if (dex_id in ("pump", "pumpfun")) else float(getattr(_c, "JEV_MIN_MCAP_USD", 10000.0))
+        min_mcap = 5000.0 if (dex_id in ("pump", "pumpfun")) else float(getattr(_c, "JEV_MIN_MCAP_USD", 5000.0))
         max_mcap = float(getattr(_c, "JEV_MAX_MCAP_USD", 1800000.0))
         if mcap > 0 and not (min_mcap <= mcap <= max_mcap):
             return False, f"mcap-out-of-bounds ${mcap:,.0f} not in [${min_mcap:,.0f}, ${max_mcap:,.0f}]"
@@ -1360,6 +1360,7 @@ class GrokJevEngine:
         """
         import config as _c
         _h_stats = {"top1_pct": 0.0, "top10_pct": 0.0, "dev_pct": 0.0}
+        vol_m5 = float(((pair_data or {}).get("volume") or {}).get("m5", 0) or 0)
         base_info = pair_data.get("baseToken", {}) or {}
         name = str(base_info.get("name", "")).upper()
         symbol_upper = symbol.upper().strip()
@@ -1377,7 +1378,7 @@ class GrokJevEngine:
         # Корпоративные тикеры и знаменитости — фейковые бренды (MrBeast -52%, ELON, TRUMP, AMAZON)
         corporate_scam_keywords = ["AAPL", "S&P", "SP500", "MSFT", "TSLA", "TESLA", "SPACEX", "STARLINK", "XAI", "NEURALINK", "PAYPAL",
                                   "NVDA", "GOOG", "AMZN", "META", "NFLX", "ANTHROPIC", "OPENAI", "PERPLEXITY",
-                                  "MRBEAST", "BEASTMODE", "ELONMUSK", "TRUMPCOIN", "TRUMP2024", "TRUMP2025",
+                                  "MRBEAST", "BEASTMODE", "ELONMUSK", "ELON", "TRUMP", "TRUMPCOIN", "TRUMP2024", "TRUMP2025",
                                   "AMAZON", "MICROSOFT", "GOOGLE", "APPLE"]
         # Проверяем точное совпадение тикера ИЛИ имя содержит бренд
         _name_has_brand = any(k in name for k in corporate_scam_keywords)
@@ -1473,19 +1474,19 @@ class GrokJevEngine:
                     if freeze_auth and freeze_auth not in SAFE_AUTHORITIES:
                         return False, f"rugcheck: freeze authority active ({freeze_auth[:8]})", _h_stats
 
-                    # Очищенный score RugCheck: вычитаем безвредный шум и AMM LP пула для bonding curve / pump tokens.
-                    _is_pump_orig_jev = is_canonical_pump
+                    # Очищенный score RugCheck: вычитаем безвредный шум и AMM LP пула.
+                    # По стратегии пользователя незалоченный LP допустим, поэтому шум LP вычитаем для всех типов токенов:
                     _allowed_lp_terms_jev = (
                         "large amount of lp unlocked", "lp provider", "single lp provider",
-                        "lp not locked", "unlocked lp"
-                    ) if _is_pump_orig_jev else ("lp provider", "low liquidity")
+                        "lp not locked", "unlocked lp", "low liquidity"
+                    )
 
                     raw_score = float(rc_data.get("score") or 0.0)
                     penalty_to_ignore = sum(
                         float(rk.get("score", 0) or 0)
                         for rk in (rc_data.get("risks") or [])
                         if any(k in str(rk.get("name", "")).lower() for k in (
-                            "low liquidity", "creator history", "copycat", "symbol mimic", *_allowed_lp_terms_jev
+                            "creator history", "copycat", "symbol mimic", *_allowed_lp_terms_jev
                         ))
                     )
                     clean_score = max(0.0, raw_score - penalty_to_ignore)
@@ -1496,16 +1497,16 @@ class GrokJevEngine:
                     for rk in (rc_data.get("risks") or []):
                         rk_name = str(rk.get("name") or "").lower()
                         rk_lvl = str(rk.get("level") or "").lower()
-                        if any(k in rk_name for k in ("low liquidity", "creator history", "copycat", "symbol mimic", *_allowed_lp_terms_jev)):
+                        if any(k in rk_name for k in ("creator history", "copycat", "symbol mimic", *_allowed_lp_terms_jev)):
                             continue
-                        if _is_pump_orig_jev and any(lp_k in rk_name for lp_k in ("large amount of lp unlocked", "lp not locked", "unlocked lp")):
+                        if any(lp_k in rk_name for lp_k in ("large amount of lp unlocked", "lp not locked", "unlocked lp")):
                             continue
                         if rk_lvl == "danger" and "creator history" not in rk_name:
                             return False, f"rugcheck: critical danger risk '{rk.get('name')}'", _h_stats
                         if any(k in rk_name for k in ("single holder", "high ownership", "top 10 holders")) and rk_lvl == "danger":
                             return False, f"rugcheck: critical hazard '{rk.get('name')}'", _h_stats
 
-                    # Проверка пулов и блокировки LP для не-pump токенов
+                    # Проверка пулов (логируем статус LP, но не блокируем монеты с незалоченным LP по стратегии ракет)
                     target_pair = str(pair_data.get("pairAddress") or "").strip()
                     _dex_rc_low = str(pair_data.get("dexId") or "").lower()
                     has_verified_locked_lp = False
@@ -1520,15 +1521,8 @@ class GrokJevEngine:
                                 lp_burned_pct = float(lp_info.get("lpBurnedPct") or 0.0)
                                 if (lp_locked_pct >= 80.0 or lp_burned_pct >= 80.0) and (mkt_quote_usd >= 2000 or (target_pair and mkt_pubkey == target_pair)):
                                     has_verified_locked_lp = True
-                                _is_target = bool(target_pair and mkt_pubkey == target_pair)
-                                # Для канонического выпускника ...pump на любом DEX не блокируем сделку из-за стороннего арбитражного DLMM-пула или задержки индексации сожжения
-                                if not is_canonical_pump and (_is_target or mkt_quote_usd >= 2000):
-                                    if lp_unlocked > 0 and max(lp_locked_pct, lp_burned_pct) < 80.0:
-                                        return False, f"rugcheck: LP not locked ({lp_locked_pct:.1f}%)", _h_stats
-
-                    # Для неизвестных кастомных токенов (не оканчивающихся на 'pump') требуем подтвержденный заблокированный LP >= 80%!
-                    if not is_canonical_pump and not has_verified_locked_lp:
-                        return False, "rugcheck: custom token without verified locked LP (lock < 80%)", _h_stats
+                                if lp_unlocked > 0:
+                                    print(f"ℹ️ [RUGCHECK-LP] {symbol} ({address[:8]}): LP lock {lp_locked_pct:.1f}%, burn {lp_burned_pct:.1f}%, unl ${lp_unlocked:,.0f} — допуск по стратегии охоты за рагами.")
 
                     # Проверка держателей и дева (Holders & Sybil analysis)
                     holders = rc_data.get("topHolders", []) or []
@@ -1636,11 +1630,7 @@ class GrokJevEngine:
                     if not _l9_ok:
                         return False, f"auditor-layer9/10 {_l9_why}", _h_stats
                 else:
-                    # Для кастомных токенов (не оканчивающихся на 'pump') без отчёта RugCheck блокируем вход
-                    if not address.endswith("pump"):
-                        return False, "rugcheck: custom token unindexed (cannot verify LP lock)", _h_stats
-
-                    # Фоллбэк: RugCheck API вернул 400/404/429/500 для pump-токена -> проверяем GoPlus holder stats + Layer 8/9/10
+                    # Фоллбэк: RugCheck API вернул 400/404/429/500 -> проверяем GoPlus holder stats + Layer 8/9/10
                     (_l8_fb_ok, _l8_fb_why), (_l9_fb_ok, _l9_fb_why) = await asyncio.gather(
                         _gp.check_spl_holder_delegations(address),
                         _gp.check_staircase_and_sybil_farm(address, pair_address=str(pair_data.get("pairAddress") or "")),
@@ -1657,35 +1647,34 @@ class GrokJevEngine:
                         max_dev_gp = 8.0 if is_pump else float(getattr(_c, "AUDITOR_MAX_DEV_PCT", 6.0))
                         if _h_stats["dev_pct"] > max_dev_gp:
                             return False, f"dev loaded (GoPlus) {_h_stats['dev_pct']:.1f}% > {max_dev_gp:.0f}% (dump risk)", _h_stats
-                        max_top10_gp = 35.0 if is_pump else float(getattr(_c, "AUDITOR_MAX_TOP10_PCT", 30.0))
+                        max_top10_gp = 38.0 if is_pump else float(getattr(_c, "AUDITOR_MAX_TOP10_PCT", 32.0))
                         if _h_stats["top10_pct"] > max_top10_gp:
                             return False, f"top10 concentration (GoPlus) {_h_stats['top10_pct']:.1f}% > {max_top10_gp:.0f}%", _h_stats
-                    elif address.endswith("pump"):
-                        _h_stats["top10_pct"] = 15.0
+                    elif address.endswith("pump") or eff_liq >= 10000.0:
+                        _h_stats["top10_pct"] = 20.0
                         _h_stats["dev_pct"] = 2.0
                         _h_stats["top1_pct"] = 2.0
                     else:
                         return False, "auditor: cannot verify holders on custom token", _h_stats
 
             except Exception as e:
-                # Фоллбэк: если RugCheck недоступен, проверяем GoPlus holder stats
-                if not address.endswith("pump"):
-                    return False, f"rugcheck-exception ({e}) on custom token", _h_stats
+                # Фоллбэк при сетевой ошибке RugCheck: проверяем GoPlus holder stats
+                print(f"⚠️ [RUGCHECK-FALLBACK] {symbol} ({address[:8]}): RugCheck {e} -> проверка через GoPlus & Jupiter")
                 _h_raw = _gp.get_solana_holder_stats(address)
                 if _h_raw and _h_raw.get("has_data"):
                     _h_stats["top10_pct"] = float(_h_raw.get("top_10_pct", 0.0) or 0.0)
                     _h_stats["dev_pct"] = float(_h_raw.get("dev_pct", 0.0) or 0.0)
                     _h_stats["top1_pct"] = _h_stats["dev_pct"]
-                    if _h_stats["dev_pct"] > 4.0:
-                        return False, f"dev loaded (GoPlus) {_h_stats['dev_pct']:.1f}% > 4.0% (dump risk)", _h_stats
-                    if _h_stats["top10_pct"] > 35.0:
-                        return False, f"top10 concentration (GoPlus) {_h_stats['top10_pct']:.1f}% > 35%", _h_stats
-                elif address.endswith("pump"):
-                    _h_stats["top10_pct"] = 15.0
+                    if _h_stats["dev_pct"] > 6.0:
+                        return False, f"dev loaded (GoPlus) {_h_stats['dev_pct']:.1f}% > 6.0% (dump risk)", _h_stats
+                    if _h_stats["top10_pct"] > 38.0:
+                        return False, f"top10 concentration (GoPlus) {_h_stats['top10_pct']:.1f}% > 38%", _h_stats
+                elif address.endswith("pump") or eff_liq >= 10000.0:
+                    _h_stats["top10_pct"] = 20.0
                     _h_stats["dev_pct"] = 2.0
                     _h_stats["top1_pct"] = 2.0
                 else:
-                    return False, "auditor: cannot verify holders on custom token", _h_stats
+                    return False, f"auditor: holder check fallback failed ({e})", _h_stats
 
             # Г) Двухсторонняя симуляция (BUY + SELL) через Jupiter
             # ЖЕСТКАЯ ЗАЩИТА: токен ОБЯЗАН успешно проходить и покупку, и продажу!

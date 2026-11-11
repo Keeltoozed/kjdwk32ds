@@ -47,6 +47,9 @@ class VirtualPosition(BaseModel):
     min_price_usd: float = 0.0 # минимальная цена с момента входа
     max_dd_pct: float = 0.0 # максимальная просадка от входа (0..-1, напр. -0.15)
     pair_address: str = "" # Адрес пула DexScreener для мгновенного балка без 429
+    initial_liquidity_usd: float = 0.0 # Ликвидность на входе
+    peak_liquidity_usd: float = 0.0 # Пиковая ликвидность пула
+    pair_data: dict = {} # Живой снимок данных пула
     # --- GROK BOT x JEV RISK ENGINE ("The stop lives under the wick") ---
     stop_under_wick: float = 0.0 # Динамический стоп-уровень под фитиль отката
     wick_stop_loss_pct: float = 0.0 # % стопа от входа (-0.05..-0.08)
@@ -433,7 +436,7 @@ class PaperTracker:
         print(f"💰 [COMPOUNDING] Вход: ${final_size:.0f} (Капитал: ${capital:.1f}, Свободно: ${free_cash:.1f}, Профит: {net_profit:+.1f}, Пул: ${liq_usd:,.0f})")
         return final_size
 
-    def add_position(self, symbol, mint, entry_price, amount_usd=5.0, ml_features=None, ml_confidence=0.0, is_mature=False, source="", chain="solana", pair_address="", stop_under_wick=0.0, wick_stop_loss_pct=0.0):
+    def add_position(self, symbol, mint, entry_price, amount_usd=5.0, ml_features=None, ml_confidence=0.0, is_mature=False, source="", chain="solana", pair_address="", stop_under_wick=0.0, wick_stop_loss_pct=0.0, initial_liquidity_usd=0.0, pair_data=None):
         # Master Firewall: ТОЛЬКО SOLANA
         if getattr(config, "SOLANA_ONLY", True):
             if chain != "solana" or str(mint or "").startswith("0x"):
@@ -575,7 +578,10 @@ class PaperTracker:
             stop_under_wick=float(stop_under_wick or 0.0),
             wick_stop_loss_pct=float(wick_stop_loss_pct or 0.0),
             last_security_check_ts=time.time(),
-            unsellable_strikes=0
+            unsellable_strikes=0,
+            initial_liquidity_usd=float(initial_liquidity_usd or (pair_data.get("liquidity", {}).get("usd", 0) if isinstance(pair_data, dict) else 0.0) or 0.0),
+            peak_liquidity_usd=float(initial_liquidity_usd or (pair_data.get("liquidity", {}).get("usd", 0) if isinstance(pair_data, dict) else 0.0) or 0.0),
+            pair_data=(pair_data if isinstance(pair_data, dict) else {})
         )
         self.save_portfolio(force_cloud=True)
         print(f"📝 PAPER BUY: {symbol} ({mint}) | Amount: ${amount_usd} | Price: ${entry_price} | Src: {source} | Chain: {chain}")
