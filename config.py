@@ -77,12 +77,12 @@ DD_THROTTLE_ENABLED = False
 DD_THROTTLE_START_USD = 15.0
 
 # === ВХОД В ЗРЕЛЫЕ КРИВЫЕ PUMP.FUN ДО МИГРАЦИИ + ЗАЩИТА DEX ===
-SNIPER_ENTRIES_ENABLED = True             # ВКЛЮЧЕНО: мгновенный снайпинг в оперативной памяти (RAM)
-ALLOW_UNGRADUATED_PUMPFUN = True          # ВКЛЮЧЕНО: ловим ранние ракеты прямо на кёрве Pump.fun до миграции!
-MIN_PUMP_CURVE_MCAP_USD = 4000.0          # Вход от $4k FDV (~45 SOL) — после начальных спам-бандлов
-MAX_PUMP_CURVE_MCAP_USD = 34000.0         # Вход до $34k FDV (~380 SOL) — до стены миграции
-MIN_PUMP_CURVE_MCAP_SOL = 45.0            # Порог кривой pump.fun в SOL (~$3.8k при SOL $85)
-MAX_PUMP_CURVE_MCAP_SOL = 380.0           # Верх кривой перед миграцией (~380 SOL)
+SNIPER_ENTRIES_ENABLED = False            # ВЫКЛЮЧЕНО: защита от мгновенных дев-дампов на пустых кривых
+ALLOW_UNGRADUATED_PUMPFUN = False         # ВЫКЛЮЧЕНО: запрет сырых bonding curves (блокировка рагов Bagpad -99.9%, Percolator $0 liq). Торгуем ТОЛЬКО проверенные миграции Raydium/PumpSwap с сожжённым LP!
+MIN_PUMP_CURVE_MCAP_USD = 18000.0         # Fallback в USD (если sol_price недоступен)
+MAX_PUMP_CURVE_MCAP_USD = 44000.0         # Fallback в USD
+MIN_PUMP_CURVE_MCAP_SOL = 80.0            # Порог кривой pump.fun в SOL
+MAX_PUMP_CURVE_MCAP_SOL = 350.0           # Верх кривой перед миграцией
 PUMP_MIGRATION_MCAP_SOL = 410.0           # FDV миграции pump.fun (~410 SOL = ~$35k при SOL $85)
 PUMP_DUMP_FLOOR_SOL = 160.0               # Порог post-mig-dumped (~40% миграции = 160 SOL, разрешает Dip Reclaim)
 JEV_MAX_TICKET_USD = 0.0
@@ -120,24 +120,22 @@ VIP_KOL_WALLETS = {
 TIME_EXIT_MINUTES = 40
 TIME_EXIT_PROFIT_REQ = 0.015
 
-# === ЛЕСТНИЦА ТЕЙК-ПРОФИТОВ (ЗАЩИТА ОТ РАГОВ + ПРОСТОР ДЛЯ РАКЕТ) ===
+# === ЛЕСТНИЦА ТЕЙК-ПРОФИТОВ (МУНБЭГ СТРОГО ОТ +110%) ===
 PARTIAL_TP_ENABLED = True
-PARTIAL_TP_MIN_TICKET_USD = 4.0      # Включено для всех $5 билетов! Забираем вложенное до того, как дев рагнет!
-TP1_TRIGGER_PCT = 0.180              # На +18% фиксируем 45% позы (возврат $2.65 в кэш — пол-депозита уже спасено!)
-TP1_SELL_FRAC = 0.45
-TP2_TRIGGER_PCT = 0.550              # На +55% фиксируем 35% от остатка (возврат еще $1.85 — сделка 100% БЕЗРИСКОВАЯ!)
+PARTIAL_TP_MIN_TICKET_USD = 4.0      # Включено для всех $5 билетов!
+TP1_TRIGGER_PCT = 1.10               # ТЕЙК-ПРОФИТ 1 И МУНБЭГ: ТОЛЬКО НА +110% (2.1x)! До +110% позиция едет целиком!
+TP1_SELL_FRAC = 0.50                 # На +110% фиксируем 50% ($5.25 кэша) — тело $5 уже возвращено с прибылью!
+TP2_TRIGGER_PCT = 2.50               # На +250% (3.5x) фиксируем 35% от остатка
 TP2_SELL_FRAC = 0.35
-TP3_TRIGGER_PCT = 1.10               # На +110% фиксируем 35% от остатка
-TP3_SELL_FRAC = 0.35
-TP4_TRIGGER_PCT = 3.50               # На +350% фиксируем 40% от остатка
-TP4_SELL_FRAC = 0.40
-TP5_TRIGGER_PCT = 8.00               # На +800% (9x) фиксируем 50%
-TP5_SELL_FRAC = 0.50
-MOONBAG_TRIGGER_PCT = 999.0
+TP3_TRIGGER_PCT = 5.00               # На +500% (6x) фиксируем 40% от остатка
+TP3_SELL_FRAC = 0.40
+TP4_TRIGGER_PCT = 10.00              # На +1000% (11x) фиксируем 50% от остатка
+TP4_SELL_FRAC = 0.50
+TP5_TRIGGER_PCT = 20.00              # На +2000% (21x) закрываем остаток
+TP5_SELL_FRAC = 1.00
+MOONBAG_TRIGGER_PCT = 1.10           # Статус Moonbag начинается СТРОГО от +110%
 MOONBAG_SELL_FRAC = 0.0
-# === МУНБЭГ-ТРЕЙЛИНГ (остаток после TP1 едет до +110%) ===
-# После TP1 (+18%, продано 45%) сделка уже в плюсе. Остаток НЕ режется трейлингом на мелких откатах:
-# держим до пика +110%, и только оттуда включается трейлинг. Ниже — лишь страховочные полы.
+# === МУНБЭГ-ТРЕЙЛИНГ (остаток после TP1 +110% едет до 10x-20x) ===
 MOONBAG_TRAIL_ACTIVATION_PCT = 1.10  # Трейлинг мунбэга включается только от пика +110%
 MOONBAG_TRAIL_DISTANCE_PCT = 0.25    # Дистанция трейлинга 25% от пика (на +110% выход не ниже ~+66%)
 MOONBAG_MAX_HOLD_MIN = 90.0          # Мунбэг может ехать до 90 минут (вместо 45)

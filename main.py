@@ -2859,7 +2859,8 @@ def _render_tab1_content():
 
                         _orig_amt = float(row.get('original_amount_usd') or row.get('amount_usd') or 0.0)
                         _cur_amt = float(row.get('amount_usd') or 0.0)
-                        _is_mb = bool(row.get('is_moonbag', False) or row.get('partial_tp1_done', False) or (_cur_amt < _orig_amt * 0.9))
+                        _max_pnl_val = float(row.get('max_pnl_pct') or 0.0)
+                        _is_mb = bool(row.get('is_moonbag', False) and (_max_pnl_val >= 1.00 or pnl_pct >= 1.00 or _cur_amt < _orig_amt * 0.75))
                         _mb_html = " <span style='background:#6f42c1; color:white; padding:2px 7px; border-radius:4px; font-size:0.75em; font-weight:bold;'>🚀 Moonbag (Фиксация TP)</span>" if _is_mb else ""
                         _size_html = f"<div><span style='color:#888;'>Ордер:</span> <b>${_orig_amt:.1f}</b>" + (f" (В рынке: <b>${_cur_amt:.1f}</b>)" if _is_mb else "") + f"{_mb_html}</div>"
 
