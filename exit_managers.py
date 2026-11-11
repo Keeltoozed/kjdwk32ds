@@ -89,11 +89,11 @@ class MatureExitManager:
         # =========================================================================
         # 1. ЖЕСТКИЙ КОНТРОЛЬ УБЫТКА (EMERGENCY CAP & STOP LOSS) — ПЕРВЫЙ ПРИОРИТЕТ!
         # =========================================================================
-        _emerg_cap = -abs(float(getattr(config, "EMERGENCY_CAP_PCT", -0.105)))
+        _emerg_cap = -abs(float(getattr(config, "EMERGENCY_CAP_PCT", -0.160)))
         if pnl_pct <= _emerg_cap:
             return f"Mature Emergency Cap ({pnl_pct*100:.1f}%)"
 
-        _base_sl = -abs(float(getattr(config, 'STOP_LOSS_PCT', -0.090)))
+        _base_sl = -abs(float(getattr(config, 'STOP_LOSS_PCT', -0.120)))
         _has_organic_bid = False
         _feats = getattr(position, "ml_features", None) or {}
         if isinstance(_feats, dict) and _feats:
@@ -102,11 +102,11 @@ class MatureExitManager:
             _f_links = int(_feats.get("links_count", 0) or (1 if _feats.get("socials") else 0))
             if _f_liq >= 25000.0 and _f_bs >= 1.35 and _f_links >= 1:
                 _has_organic_bid = True
-        _sl = min(_base_sl, -0.105) if _has_organic_bid else _base_sl
+        _sl = min(_base_sl, -0.140) if _has_organic_bid else _base_sl
         if pnl_pct <= _sl:
             _sl_c = int(getattr(position, "sl_confirm_n", 0) or 0) + 1
             position.sl_confirm_n = _sl_c
-            if _sl_c >= 2 or pnl_pct <= -0.100 or minutes_held >= 0.10:
+            if _sl_c >= 2 or pnl_pct <= -0.150 or minutes_held >= 0.50:
                 return f"Mature Stop Loss ({pnl_pct*100:.1f}%)"
         else:
             position.sl_confirm_n = 0
@@ -117,34 +117,27 @@ class MatureExitManager:
                 return f"Mature Moonbag Breakeven (+{pnl_pct*100:.1f}% locked after TP1)"
 
         # =========================================================================
-        # 2. ТРЕЙЛИНГ-СТОП И PROFIT FLOOR (МАКСИМАЛЬНЫЙ ВЫНОС ПРИБЫЛИ ИЗ РАКЕТ)
+        # 2. РАКЕТНЫЙ ТРЕЙЛИНГ-СТОП И PROFIT FLOOR (СТРАТЕГИЯ 1000% РАКЕТ)
         # =========================================================================
-        # До +18% даем монете дышать! Никаких копеечных выходов по 1 центу!
-        # От +18% фиксируем РЕАЛЬНУЮ прибыль ($0.60..$15.00+ на $5 тикете), не давая сливать памп.
+        # ВНИМАНИЕ: До +50% пика монета СВОБОДНО ДЫШИТ на любых откатах!
+        # Никаких микро-полов по 5% и трейлингов по 4%! Они режут ракеты на первой же свече!
+        # Трейлинг включается ТОЛЬКО когда ракета реально полетела (+50%+),
+        # и с ШИРОКОЙ дистанцией (20-25%), чтобы не выбивало на нормальной волатильности мемкоинов.
         _floor_pnl = None
         _trail_dist = None
 
-        if max_pnl_pct >= 4.00:         # +400%+ (5x+ гипер-ракета)
-            _floor_pnl = round(max_pnl_pct * 0.78, 2)
-            _trail_dist = 0.14
-        elif max_pnl_pct >= 2.00:       # +200%..+400% (3x - 5x)
-            _floor_pnl = 1.45           # Гарантируем минимум +145% чистыми
-            _trail_dist = 0.12          # Трейлинг 12% от пика
-        elif max_pnl_pct >= 1.00:       # +100%..+200% (2x - 3x ракета)
-            _floor_pnl = 0.75           # Гарантируем минимум +75% чистыми
-            _trail_dist = 0.10          # Трейлинг 10% от пика
-        elif max_pnl_pct >= 0.50:       # +50%..+100% (Horned cat +93%, DACAT +90%)
-            _floor_pnl = 0.38           # Гарантируем минимум +38% чистыми (+$1.90 на $5!)
-            _trail_dist = 0.09          # Трейлинг 9% от пика (DACAT выходит на +78% = +$3.90!)
-        elif max_pnl_pct >= 0.30:       # +30%..+50% (RWA +40.7%, 6STAR +49%)
-            _floor_pnl = 0.22           # Гарантируем минимум +22% чистыми (+$1.10 на $5!)
-            _trail_dist = 0.08          # Трейлинг 8% от пика (RWA выходит на +32% = +$1.60!)
-        elif max_pnl_pct >= 0.18:       # +18%..+30% (JAZZ +25.2%, LEONIDA +26.0%)
-            _floor_pnl = 0.12           # Гарантируем минимум +12% чистыми (+$0.60 на $5!)
-            _trail_dist = 0.07          # Трейлинг 7% от пика (JAZZ выходит на +18.2% = +$0.91!)
-        elif max_pnl_pct >= 0.10:       # +10%..+18% (FME +15.6%, MOD +13.0%, CATCITY +10.6%)
-            _floor_pnl = 0.055          # Гарантируем минимум +5.5% чистыми (+$0.28..$0.45 на $5!)
-            _trail_dist = 0.040         # Трейлинг 4.0% от пика
+        if max_pnl_pct >= 5.00:         # +500%+ (6x - 11x+ гипер-ракета)
+            _floor_pnl = round(max_pnl_pct * 0.70, 2)  # Забираем 70% от пика (на +1000% выход на +700%!)
+            _trail_dist = 0.18          # Трейлинг 18% от пика
+        elif max_pnl_pct >= 2.50:       # +250%..+500% (3.5x - 6x ракета)
+            _floor_pnl = 1.60           # Гарантируем минимум +160% чистыми (+$8.00 на $5!)
+            _trail_dist = 0.20          # Трейлинг 20% от пика
+        elif max_pnl_pct >= 1.00:       # +100%..+250% (2x - 3.5x ракета)
+            _floor_pnl = 0.60           # Гарантируем минимум +60% чистыми (+$3.00 на $5!)
+            _trail_dist = 0.22          # Широкий трейлинг 22% от пика
+        elif max_pnl_pct >= 0.50:       # +50%..+100% (1.5x - 2x первый взлет)
+            _floor_pnl = 0.25           # Гарантируем минимум +25% чистыми (+$1.25 на $5!)
+            _trail_dist = 0.25          # Трейлинг 25% от пика (дает свободно дышать!)
 
         if _floor_pnl is not None and minutes_held >= 0.20:
             drop_from_max = (position.max_price_usd - current_price) / position.max_price_usd if position.max_price_usd > 0 else 0.0
@@ -157,18 +150,16 @@ class MatureExitManager:
         # =========================================================================
         # 3. PARABOLIC MOMENTUM HARVEST (ФИКСАЦИЯ ПРИ ЗАСТРЕВАНИИ НА ВЕРШИНЕ)
         # =========================================================================
-        # Застревание на хаях без новых ATH больше 4-6 минут — предвестник дев-дампа!
-        if max_pnl_pct >= 2.00 and _peak_age_min >= 4.0:
+        # Застревание на хаях без новых ATH больше 8-15 минут — предвестник дев-дампа:
+        if max_pnl_pct >= 2.00 and _peak_age_min >= 8.0:
             return f"Parabolic 3x Harvest (+{pnl_pct*100:.0f}% locked after peak +{max_pnl_pct*100:.0f}%, {_peak_age_min:.0f}m no ATH)"
-        if max_pnl_pct >= 1.00 and _peak_age_min >= 5.0:
+        if max_pnl_pct >= 1.00 and _peak_age_min >= 10.0:
             return f"Parabolic 2x Harvest (+{pnl_pct*100:.0f}% locked after peak +{max_pnl_pct*100:.0f}%, {_peak_age_min:.0f}m no ATH)"
-        if max_pnl_pct >= 0.40 and _peak_age_min >= 6.0:
+        if max_pnl_pct >= 0.50 and _peak_age_min >= 15.0 and pnl_pct >= 0.20:
             return f"Rocket Momentum Harvest (+{pnl_pct*100:.0f}% locked after peak +{max_pnl_pct*100:.0f}%, {_peak_age_min:.0f}m no ATH)"
-        if max_pnl_pct >= 0.25 and _peak_age_min >= 8.0 and pnl_pct >= 0.08:
-            return f"Breakout Harvest (+{pnl_pct*100:.0f}% locked after peak +{max_pnl_pct*100:.0f}%, {_peak_age_min:.0f}m no ATH)"
 
         # =========================================================================
-        # 4. FRONT-RUN PROFIT EXIT (Разворот стакана при профите >= +20%)
+        # 4. FRONT-RUN PROFIT EXIT (Разворот стакана только при уверенном профите >= +35%)
         # =========================================================================
         _pd = getattr(position, "pair_data", None) or getattr(position, "last_pair_data", None) or {}
         if isinstance(_pd, dict) and _pd:
@@ -179,28 +170,28 @@ class MatureExitManager:
             m1 = float(pc.get("m1", 0) or 0)
             bs_ratio = (b5 / s5) if s5 > 0 else 2.0
             total_tx5 = b5 + s5
-            if minutes_held >= 2.0 and pnl_pct >= 0.20 and total_tx5 >= 20 and bs_ratio < 0.65 and m1 <= -3.5:
+            if minutes_held >= 3.0 and pnl_pct >= 0.35 and total_tx5 >= 25 and bs_ratio < 0.40 and m1 <= -5.0:
                 return f"Front-Run Profit Exit: Sellers dominating ({b5}b/{s5}s) while in profit (+{pnl_pct*100:.1f}%)"
 
         # =========================================================================
-        # 5. MAX HOLD TIMEOUT (ГЛАВНЫЙ ИСТОЧНИК ПРИБЫЛИ — УДЕРЖАНИЕ ДО 25 МИНУТ!)
+        # 5. MAX HOLD TIMEOUT (УДЕРЖАНИЕ ДО 35-45 МИНУТ ДЛЯ РАСКРУТКИ ТРЕНДА)
         # =========================================================================
-        if minutes_held >= 25.0 and pnl_pct >= 0.02:
+        if minutes_held >= 35.0 and pnl_pct >= 0.05 and _peak_age_min >= 15.0:
             return f"Max Hold Profit Take (+{pnl_pct*100:.1f}% locked at {minutes_held:.0f}m)"
-        if minutes_held >= 30.0:
+        if minutes_held >= 45.0:
             return f"Max Hold Expiry ({pnl_pct*100:+.1f}% after {minutes_held:.0f}m)"
 
         # =========================================================================
-        # 7. СТАГНАЦИЯ И МЕРТВЫЙ ИМПУЛЬС
+        # 6. СТАГНАЦИЯ И МЕРТВЫЙ ИМПУЛЬС (Быстрый срез стоячих минусовых монет)
         # =========================================================================
-        _stall_sec = float(getattr(config, "STALL_TIMER_SEC", 210.0))
-        _stall_loss = float(getattr(config, "STALL_MAX_LOSS_PCT", -0.075))
+        _stall_sec = float(getattr(config, "STALL_TIMER_SEC", 240.0))
+        _stall_loss = float(getattr(config, "STALL_MAX_LOSS_PCT", -0.090))
         if minutes_held >= (_stall_sec / 60.0) and max_pnl_pct < 0.04 and pnl_pct <= _stall_loss:
             return f"Dead Momentum Stall ({minutes_held*60:.0f}s no breakout, pnl {pnl_pct*100:.1f}%)"
 
-        if minutes_held >= 15.0 and pnl_pct <= -0.05 and max_pnl_pct < 0.04:
+        if minutes_held >= 20.0 and pnl_pct <= -0.06 and max_pnl_pct < 0.04:
             return f"Stagnant Loss Cut ({minutes_held:.0f}m, {pnl_pct*100:.1f}%)"
-        if minutes_held >= 20.0 and pnl_pct < 0.015 and max_pnl_pct < 0.06:
+        if minutes_held >= 25.0 and pnl_pct < 0.015 and max_pnl_pct < 0.05:
             return f"Stagnant Cut ({minutes_held:.0f}m, {pnl_pct*100:.1f}%)"
 
         return None

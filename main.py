@@ -448,6 +448,23 @@ async def position_manager_loop(analyzer, tracker):
                                 _px_to_close = _live_em_px
                         except Exception:
                             pass
+                    # ЧЕСТНАЯ PAPER-СИМУЛЯЦИЯ: если дев выдернул LP (пул пустой), продать по котировке НЕВОЗМОЖНО.
+                    # DexScreener/Jupiter продолжают показывать последнюю цену, но в пуле 0 SOL -> реальный выход = $0 (кейс mihao-клон).
+                    if _px_to_close > 0:
+                        try:
+                            import market_data as _md_rug
+                            _pd_rug = await asyncio.wait_for(_md_rug.get_token_data(mint, max_cache_age=2.0), timeout=1.5)
+                            _liq_rug = float((((_pd_rug or {}).get("liquidity") or {}).get("usd", 0) or 0)) if (_pd_rug and (_pd_rug.get("liquidity") or {}).get("usd") is not None) else -1.0
+                            _dex_rug = str((_pd_rug or {}).get("dexId") or "").lower()
+                            if _dex_rug in ("pump", "pumpfun", "moonshot", "meteoradbc"):
+                                _liq_rug = -1.0  # bonding curve: у DexScreener ликвидность всегда 0, это не раг
+                            _peak_liq_rug = float(getattr(position, "peak_liquidity_usd", 0.0) or getattr(position, "initial_liquidity_usd", 0.0) or 0.0)
+                            if _liq_rug >= 0 and (_liq_rug < 300.0 or (_peak_liq_rug >= 3000.0 and _liq_rug < _peak_liq_rug * 0.10)):
+                                print(f"🚨 [LP-PULLED] {position.symbol} ({mint[:8]}): пул осушен (liq ${_liq_rug:.0f}, пик ${_peak_liq_rug:,.0f}) — реальная продажа невозможна, списание в $0.")
+                                _px_to_close = 0.0
+                                mature_exit_reason = f"LP Pulled Rug (liq ${_liq_rug:.0f} from ${_peak_liq_rug:,.0f}) | {mature_exit_reason}"
+                        except Exception:
+                            pass
                     tracker.close_position(mint, _px_to_close, mature_exit_reason)
                     continue
 
@@ -546,24 +563,16 @@ async def position_manager_loop(analyzer, tracker):
                         continue
 
                 # 1.5 ГАРАНТИРОВАННЫЙ НЕСНИЖАЕМЫЙ ПОРОГ ПРИБЫЛИ (PROFIT FLOOR LOCK)
-                # На +40..+65% защищаем только безубыток (+5% после 2.5м), давая монете свободно дышать перед 2x-5x!
+                # До +50% монета свободно дышит, никаких микро-полов по 5%!
                 _floor_pnl = None
-                if max_pnl_pct >= 5.00:       # Гипер-ракета (+500%+): держим 68% прибыли
-                    _floor_pnl = round(max_pnl_pct * 0.68, 2)
-                elif max_pnl_pct >= 3.00:     # Мега-ракета (+300%..+500%): держим 62% прибыли
-                    _floor_pnl = round(max_pnl_pct * 0.62, 2)
-                elif max_pnl_pct >= 1.60:     # Пик +160%+ -> 55%
-                    _floor_pnl = round(max_pnl_pct * 0.55, 2)
-                elif max_pnl_pct >= 1.00:     # Пик +100%+ (2x, TP2 взят!) -> 50%
-                    _floor_pnl = round(max_pnl_pct * 0.50, 2)
-                elif max_pnl_pct >= 0.65:     # Пик +65%+ -> гарантируем +28%
-                    _floor_pnl = 0.28
-                elif max_pnl_pct >= 0.25:     # Пик +25%+ (TP1 взят!) -> гарантируем +14% на остаток
-                    _floor_pnl = 0.14
-                elif max_pnl_pct >= 0.18:     # Пик +18%+ -> гарантируем +9% чистыми
-                    _floor_pnl = 0.09
-                elif max_pnl_pct >= 0.12 or getattr(position, "is_moonbag", False):     # Пик +12%+ -> безубыток +5%
-                    _floor_pnl = 0.05
+                if max_pnl_pct >= 5.00:       # Гипер-ракета (+500%+): держим 70% прибыли
+                    _floor_pnl = round(max_pnl_pct * 0.70, 2)
+                elif max_pnl_pct >= 2.50:     # Мега-ракета (+250%..+500%): держим 160% прибыли
+                    _floor_pnl = 1.60
+                elif max_pnl_pct >= 1.00:     # Пик +100%+ -> 60%
+                    _floor_pnl = 0.60
+                elif max_pnl_pct >= 0.50:     # Пик +50%+ -> 25%
+                    _floor_pnl = 0.25
                 if _floor_pnl is not None and pnl_pct <= _floor_pnl:
                     _fc_s = int(getattr(position, "floor_confirm_n", 0) or 0) + 1
                     position.floor_confirm_n = _fc_s
@@ -613,8 +622,8 @@ async def position_manager_loop(analyzer, tracker):
                 if minutes_held >= 8.0 and max_pnl_pct >= 0.25 and pnl_pct <= -0.10:
                     tracker.close_position(mint, current_price, f"Soft Guard (был пик +{max_pnl_pct*100:.0f}%, слив до {pnl_pct*100:.1f}%)")
                     continue
-                _be_sol = float(getattr(config, "BREAKEVEN_PCT", 0.20))
-                if (minutes_held >= 1.0 or max_pnl_pct >= 0.30) and max_pnl_pct >= _be_sol and pnl_pct <= 0.025:
+                _be_sol = float(getattr(config, "BREAKEVEN_PCT", 999.0))
+                if _be_sol < 10.0 and (minutes_held >= 1.0 or max_pnl_pct >= 0.30) and max_pnl_pct >= _be_sol and pnl_pct <= 0.025:
                     tracker.close_position(mint, current_price, f"Breakeven (был пик +{max_pnl_pct*100:.0f}%)")
                     continue
 
@@ -1298,6 +1307,10 @@ async def scanner_loop(analyzer, tracker):
                                 _cc_ok, _cc_why = grok_jev.check_copycat_runner(mint, actual_symbol, pair_data)
                                 if not _cc_ok:
                                     print(f"🚫 [SCANNER-COPYCAT] {actual_symbol} ({mint[:8]}): {_cc_why} — отказ входа.")
+                                    continue
+                                _tc_ok, _tc_why = await grok_jev.check_trending_clone(mint, actual_symbol, pair_data)
+                                if not _tc_ok:
+                                    print(f"🚫 [SCANNER-CLONE] {actual_symbol} ({mint[:8]}): {_tc_why} — отказ входа.")
                                     continue
 
                                 _flush_ok, _wick_pct, _wick_stop_price, _flush_msg = grok_jev.check_flush_and_wick(pair_data, entry_price)

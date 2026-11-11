@@ -54,10 +54,10 @@ MAX_CONCURRENT_POSITIONS = 5
 # === ЖЕСТКОЕ ОГРАНИЧЕНИЕ УБЫТКА (РИСК-МЕНЕДЖМЕНТ) ===
 MAX_DAILY_LOSS_USD = 1000.0
 KILL_SWITCH_ENABLED = False
-STOP_LOSS_PCT = -0.090        # Стоп -9.0% (жестко режем убытки в зародыше, потеря не более -$0.36..-$0.40 на $4 тикете!)
-EMERGENCY_CAP_PCT = -0.105     # Жёсткий аварийный потолок -10.5% (мгновенный срез дампа без провалов -15%..-32%!)
+STOP_LOSS_PCT = -0.120        # Стоп -12.0% (дает дышать на стартовом спреде, режет при реальном сливе)
+EMERGENCY_CAP_PCT = -0.160     # Аварийный потолок -16.0% (мгновенный срез глубокого дампа)
 INFANT_WINDOW_MIN = 0.5
-INFANT_DUMP_PCT = -0.095       # Срез рага на 1-й минуте при провале <= -9.5%
+INFANT_DUMP_PCT = -0.120       # Срез рага на 1-й минуте при провале <= -12.0%
 
 # === ФИЛЬТРЫ ВХОДА (ОТСЕКАЮТ ВЕРШИНЫ И ПАДАЮЩИЕ НОЖИ) ===
 MAX_ENTRY_H1_PCT = 350.0       # Запрет входа в перегретые пампы > +350% за 1ч (строго для всех токенов > 4м!)
@@ -110,18 +110,18 @@ VIP_ENTRIES_ENABLED = False
 TIME_EXIT_MINUTES = 40
 TIME_EXIT_PROFIT_REQ = 0.015
 
-# === ЛЕСТНИЦА ТЕЙК-ПРОФИТОВ (+EV АСИММЕТРИЯ: ГАРАНТИРОВАННЫЙ ПЛЮС + ПРОСТОР ДЛЯ РАКЕТ) ===
+# === ЛЕСТНИЦА ТЕЙК-ПРОФИТОВ (ЗАЩИТА ОТ РАГОВ + ПРОСТОР ДЛЯ РАКЕТ) ===
 PARTIAL_TP_ENABLED = True
-PARTIAL_TP_MIN_TICKET_USD = 20.0     # Дробление на мунбэги включается ТОЛЬКО когда билет >= $20! На билете $4 летим 100% объема в ракете!
-TP1_TRIGGER_PCT = 0.085          # На +8.5% фиксируем 45% позиции (гарантированный плюс для билетов $20+)
-TP1_SELL_FRAC = 0.45
-TP2_TRIGGER_PCT = 0.280          # На +28.0% фиксируем 35% от остатка (солидная прибыль +$0.40..+$0.60)
+PARTIAL_TP_MIN_TICKET_USD = 4.0      # Включено для всех $5 билетов! Забираем вложенное до того, как дев рагнет!
+TP1_TRIGGER_PCT = 0.280              # На +28% фиксируем 40% позы (возврат $2.56 в SOL — пол-депозита уже в кармане!)
+TP1_SELL_FRAC = 0.40
+TP2_TRIGGER_PCT = 0.700              # На +70% фиксируем 35% от остатка (возврат еще $2.04 — сделка 100% БЕЗРИСКОВАЯ!)
 TP2_SELL_FRAC = 0.35
-TP3_TRIGGER_PCT = 0.650          # На +65.0% фиксируем 50% от остатка
-TP3_SELL_FRAC = 0.50
-TP4_TRIGGER_PCT = 1.50          # На +150% фиксируем 50% от остатка
-TP4_SELL_FRAC = 0.50
-TP5_TRIGGER_PCT = 4.00          # На +400% (5x) фиксируем 50% от остатка
+TP3_TRIGGER_PCT = 1.60               # На +160% фиксируем 35% от остатка
+TP3_SELL_FRAC = 0.35
+TP4_TRIGGER_PCT = 3.50               # На +350% фиксируем 40% от остатка
+TP4_SELL_FRAC = 0.40
+TP5_TRIGGER_PCT = 8.00               # На +800% (9x) фиксируем 50%
 TP5_SELL_FRAC = 0.50
 MOONBAG_TRIGGER_PCT = 999.0
 MOONBAG_SELL_FRAC = 0.0
@@ -129,29 +129,29 @@ MOONBAG_SELL_FRAC = 0.0
 PUMP_XGB_ENABLED = False
 RAY_XGB_ENABLED = False
 ROCKET_XGB_ENABLED = True
-ROCKET_XGB_STAGE1_THRESHOLD = 15.0   # Первичный отсев в 0мс (отсекает шлак)
-ROCKET_XGB_FINAL_THRESHOLD = 28.0    # Финальный порог: отсекает группу <28% с 0% винрейтом (AICoin 19%, PAIRLESS 24%), пускает ракеты 28-90% (AMPED 28.8%, USWR 77%, PIRATE 80%)
-ROCKET_XGB_THRESHOLD = 28.0
+ROCKET_XGB_STAGE1_THRESHOLD = 14.0   # Первичный отсев в 0мс (отсекает явный шлак)
+ROCKET_XGB_FINAL_THRESHOLD = 20.0    # Финальный порог 20%: пускает ракеты вроде HOLD (27%) и BUBLUBLU (22%)
+ROCKET_XGB_THRESHOLD = 20.0
 
-STALL_TIMER_SEC = 210.0   # 3.5 минуты (быстрый срез стоячего минуса без затягивания убытка до 13м)
-STALL_MAX_LOSS_PCT = -0.075
+STALL_TIMER_SEC = 240.0   # 4 минуты на консолидацию стоячего минуса
+STALL_MAX_LOSS_PCT = -0.090
 
-TRAILING_ACTIVATION_PCT = 0.250
-TRAILING_DISTANCE_PCT = 0.150
-TRAILING_RUNNER_DISTANCE_PCT = 0.18
+TRAILING_ACTIVATION_PCT = 0.500   # Трейлинг включается только от +50% пика
+TRAILING_DISTANCE_PCT = 0.250     # Широкая дистанция трейлинга 25% (не режет волатильные ракеты)
+TRAILING_RUNNER_DISTANCE_PCT = 0.22
 SCALP_PROFIT_ENABLED = False
 
 WHALE_DUMP_GUARD_PCT = 0.22
 EVM_RUNNER_CRASH = 0.25
 EVM_NORMAL_CRASH = 0.22
 
-BREAKEVEN_PCT = 0.25      # После +25% пика включается Breakeven Shield — дает ракетам свободно дышать и расти, защищая только от слива в минус!
+BREAKEVEN_PCT = 999.0      # Breakeven Shield ОТКЛЮЧЕН (убивал ракеты копеечными выходами)
 
 PREFETCH_TTL_SEC = 35
 SOLANA_MIN_AGE_MIN = 0.25       # Разрешаем молодые ракеты от 15 секунд (TWAP, LEMON, SHADOW)
-SOLANA_MAX_AGE_HOURS = 4.0       # До 4 часов (не срезаем развивающиеся ракеты на пике тренда)
-SOLANA_MAX_AGE_MIN = 240.0       # Торгуем активные монеты до 4 часов
-JEV_MAX_AGE_MIN = 240.0          # В GROK-JEV активные монеты до 4 часов
+SOLANA_MAX_AGE_HOURS = 6.0       # До 6 часов (не срезаем развивающиеся ракеты на пике тренда)
+SOLANA_MAX_AGE_MIN = 360.0       # Торгуем активные монеты до 6 часов
+JEV_MAX_AGE_MIN = 360.0          # В GROK-JEV активные монеты до 6 часов
 JEV_MAX_M1_ENTRY_PCT = 8.0
 
 SCALP_TIMEOUT_MIN = 10.0

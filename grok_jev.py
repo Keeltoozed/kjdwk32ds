@@ -1338,6 +1338,51 @@ class GrokJevEngine:
             pass
         return None
 
+    async def check_trending_clone(self, mint: str, symbol: str, pair_data: dict) -> Tuple[bool, str]:
+        """Клон трендового тикера (кейс mihao: оригинал $13M FDV / $380k liq, клон на PumpSwap с LP ~$40k
+        -> дев выдернул LP через 27 мин). Один кэшированный поиск DexScreener по тикеру (TTL 10 мин).
+        Блокируем, только если существует ДРУГОЙ Solana-токен с тем же тикером, созданный раньше,
+        с ликвидностью >= $100k и >= 5x нашей. Оригиналы и тикеры без старшего брата не трогаем."""
+        _norm = re.sub(r"[^a-z0-9]", "", str(symbol or "").lower())
+        if len(_norm) < 3 or not isinstance(pair_data, dict):
+            return True, ""
+        if not hasattr(self, "_clone_cache"):
+            self._clone_cache = {}
+        _now = time.time()
+        _cached = self._clone_cache.get(_norm)
+        if _cached and (_now - _cached[0]) < 600.0:
+            _pairs = _cached[1]
+        else:
+            _pairs = []
+            try:
+                from http_client import fetch_json
+                st, data = await fetch_json(f"https://api.dexscreener.com/latest/dex/search?q={_norm}", timeout=4, retries=0)
+                if st == 200 and isinstance(data, dict):
+                    _pairs = data.get("pairs") or []
+            except Exception:
+                _pairs = []
+            if len(self._clone_cache) > 800:
+                self._clone_cache.clear()
+            self._clone_cache[_norm] = (_now, _pairs)
+        _my_liq = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
+        _my_ca = int(pair_data.get("pairCreatedAt") or 0)
+        for p in _pairs:
+            try:
+                if str(p.get("chainId")) != "solana":
+                    continue
+                _b = p.get("baseToken") or {}
+                if str(_b.get("address") or "") == mint:
+                    continue
+                if re.sub(r"[^a-z0-9]", "", str(_b.get("symbol") or "").lower()) != _norm:
+                    continue
+                _o_liq = float((p.get("liquidity") or {}).get("usd", 0) or 0)
+                _o_ca = int(p.get("pairCreatedAt") or 0)
+                if _o_liq >= 100000.0 and _o_liq >= _my_liq * 5.0 and (not _my_ca or not _o_ca or _o_ca < _my_ca):
+                    return False, f"clone-of-trending {symbol} (оригинал {str(_b.get('address'))[:6]} liq ${_o_liq:,.0f} vs наш ${_my_liq:,.0f} — риск LP-pull)"
+            except Exception:
+                continue
+        return True, ""
+
     # =========================================================================
     # 6. ANTI-SCAM SUITE: Комплексный аудит на все типы скамов
     # =========================================================================
@@ -1384,6 +1429,11 @@ class GrokJevEngine:
         _name_has_brand = any(k in name for k in corporate_scam_keywords)
         if any(k == symbol_upper for k in corporate_scam_keywords) or _name_has_brand:
             return False, f"corporate-brand-mimic {symbol_upper}", _h_stats
+
+        # Клон трендового тикера с маленьким пулом (кейс mihao-клон: LP выдернут через 27 мин)
+        _tc_ok, _tc_why = await self.check_trending_clone(address, symbol, pair_data)
+        if not _tc_ok:
+            return False, _tc_why, _h_stats
 
         # 2. Аудит соцсетей и анонимности создателя
         info = pair_data.get("info", {}) or {}
