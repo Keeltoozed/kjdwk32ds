@@ -623,10 +623,10 @@ class GrokJevEngine:
             _is_strong_jev_breakout = (m5 >= 1.5 and vol_m5 >= 1500.0 and b5 >= s5 and (b5 + s5) >= 15)
             if not _is_massive_mature_flow_g and not _is_strong_jev_breakout and (vol_m5 < 2500.0 or ((vol_m5 / max(eff_liq, 1.0)) < 0.07 and vol_m5 < 8000.0) or m5 < 1.0 or (b5 + s5) < 15):
                 return False, f"slow-mature-pool age {age_min:.0f}m vol5 ${vol_m5:,.0f} v/l {(vol_m5/max(eff_liq,1.0)):.2f}x"
-        _max_m5_allowed = float(getattr(_c, "MAX_ENTRY_M5_PCT", 120.0))
+        _max_m5_allowed = float(getattr(_c, "MAX_ENTRY_M5_PCT", 150.0))
         if m5 > _max_m5_allowed:
-            _is_strong_buyer_breakout_g = (m5 <= 200.0 and b5 >= int(s5 * 1.05) and vol_m5 >= 2500.0 and (b5 + s5) >= 15)
-            _is_cooling_pullback = (-10.0 <= m1 <= -1.0 and m5 <= 150.0 and b5 >= s5 * 1.02)
+            _is_strong_buyer_breakout_g = (m5 <= 500.0 and b5 >= int(s5 * 1.05) and vol_m5 >= 2000.0 and (b5 + s5) >= 12)
+            _is_cooling_pullback = (-12.0 <= m1 <= -1.0 and m5 <= 200.0 and b5 >= s5 * 1.02)
             if not (_is_strong_buyer_breakout_g or _is_cooling_pullback):
                 return False, f"fomo-vertical-m5 m5 {m5:+.1f}% > +{_max_m5_allowed:.0f}% (buying top of vertical pump without cooling pullback, m1={m1:+.1f}%)"
         if s5 > 10 and b5 < (s5 * 0.80):
@@ -1481,29 +1481,13 @@ class GrokJevEngine:
                 return False, f"pump-curve-migration-cliff (FDV ${fdv:,.0f} > ${_max_c_mc:,.0f})", _h_stats
         eff_liq = max(raw_liq, fdv * 0.40) if is_raw_pump_curve else raw_liq
 
-        # Токены на AMM (PumpSwap / Raydium / Meteora) без соцсетей пускаем ТОЛЬКО при наличии подтвержденного органического потока
-        # (в первые минуты миграции DexScreener часто еще не успел подтянуть Twitter/TG, кейсы LAUNCH +793%, JOCKEY +274%, MBAPPE +166%, SPERM +112%)
-        _tx5 = (pair_data.get("txns") or {}).get("m5", {}) or {}
-        _b5 = int(_tx5.get("buys", 0) or 0)
-        _s5 = int(_tx5.get("sells", 0) or 0)
-        _vol5 = float((pair_data.get("volume") or {}).get("m5", 0) or 0)
-        if not is_raw_pump_curve and not has_socials and eff_liq < 22000.0:
-            _v2l = _vol5 / max(eff_liq, 1.0)
-            _bs = _b5 / float(max(_s5, 1))
-            _avg_tx5 = _vol5 / max(_b5 + _s5, 1)
-            _is_organic_no_soc = (
-                (_avg_tx5 >= 32.0 and _b5 >= 40 and _bs >= 1.25)
-                or (address.endswith(("pump", "bonk", "BAGS")) and eff_liq >= 14000.0 and _bs >= 1.22)
-            )
-            if _v2l > 2.8 and _bs < 1.5 and not _is_organic_no_soc:
-                return False, f"anon-wash-churn-trap (0 socials, liq ${eff_liq:,.0f}, vol5/liq {_v2l:.1f}x, b/s {_bs:.2f})", _h_stats
-        _is_organic_flow = (
-            (_b5 >= 12 and _b5 >= _s5 and _vol5 >= 2000.0 and eff_liq >= float(getattr(_c, "MIN_GRADUATED_LIQ_USD", 7500.0)))
-            or (_b5 >= 35 and _b5 >= _s5 * 1.15 and eff_liq >= 10000.0)
-        )
-
-        if not is_raw_pump_curve and not has_socials and not _is_organic_flow:
-            return False, f"no-socials-amm-scam (0 socials on DEX без органического объема — 100% disposable dev dump)", _h_stats
+        # ЖЕСТКИЙ ОТСЕВ АНОНИМНЫХ ДЕВ-БАНДЛЕРОВ (0 СОЦСЕТЕЙ НА DEX):
+        # В мемкоинах Solana 100% ракет (PNUT, ACT, GOAT, BORIS, POLYCAT, NIZHE) имеют хотя бы Twitter/X или Telegram!
+        # Одноразовые скам-бандлеры создают по 50 токенов в день без соцсетей, накручивают 15 покупок ботами и сливают 100% пула девом (кейсы Democat, OLDCAT, GANG CAT, BRR, 天猫双11).
+        if not is_raw_pump_curve and not has_socials:
+            _smart_n_chk = int(pair_data.get("_smart_buyers_count", 0) or 0)
+            if eff_liq < 100000.0 or _smart_n_chk < 1:
+                return False, f"no-socials-amm-scam (0 соцсетей/сайтов на DEX — анонимный дев-бандлер под слив пула в 0)", _h_stats
 
         # 3. Аудит для сети SOLANA
         if chain == "solana":
@@ -1883,6 +1867,7 @@ class GrokJevEngine:
             (_m5_s1 >= 12.0 and _b5_s1 >= (_s5_s1 * 1.25) and _vm5_s1 >= 8000.0)
             or (_vm5_s1 >= 15000.0 and _b5_s1 >= _s5_s1)
             or (_m5_s1 >= 2.5 and _b5_s1 >= _s5_s1 and _vm5_s1 >= 4000.0 and _b5_s1 >= 20)
+            or (_b5_s1 >= 25 and _b5_s1 >= int(_s5_s1 * 1.10) and _vm5_s1 >= 2500.0)
         )
 
         if getattr(_c, "ROCKET_XGB_ENABLED", True) and not _is_momentum_rocket and (rkt_s1 + 0.05) < s1_thresh:

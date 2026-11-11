@@ -1772,9 +1772,9 @@ class Analyzer:
 
         # 3. ЖЕСТКИЙ ФИЛЬТР ИМПУЛЬСА, СКОРОСТИ ОБОРОТА И ТРЕНДА ДО ROCKET-XGB:
         _base_v5_cfg = float(getattr(config, "MIN_VOLUME_M5", 2000.0))
-        # Для свежих миграций и молодых токенов (<10м) пускаем ранний старт от $600 при живом перевесе покупателей
+        # Для свежих миграций и молодых токенов (<10м) пускаем ранний старт от $350 (кейсы 花 +2591%, 大A +1930%) при живом перевесе покупателей
         if _age_min_pre <= 10.0 or _is_burned_launchpad:
-            _min_v5_cfg = 600.0 if (_b5_pre >= _s5_pre and _tot_tx5_pre >= 12) else 1400.0
+            _min_v5_cfg = 350.0 if (_b5_pre >= _s5_pre and _tot_tx5_pre >= 10) else 1000.0
         else:
             _min_v5_cfg = _base_v5_cfg
         if _vm5_pre < _min_v5_cfg:
@@ -1865,11 +1865,11 @@ class Analyzer:
                 f"🚫 [EXHAUSTED-TOP] {symbol} ({mint[:8]}): рост за час {_h1:+.1f}% > +{_max_entry_h1:.0f}% — вершина пампа.",
             )
         # Защита от покупки на верхушке вертикальной свечи:
-        # Разрешаем сильный пробой покупателями (до +200% при перевесе покупателей b5/s5 >= 1.05)
+        # Разрешаем сильный пробой покупателями до +500% при перевесе покупателей b5/s5 >= 1.05 (кейсы X +1891%, MAX +973%, FOMO +952%)
         # либо остывающий откат (m1 <= -1.0%). Блокируем чистую покупку хая без перевеса покупателей!
         if _m5 > _max_entry_m5:
-            _is_strong_buyer_breakout = (_m5 <= 200.0 and _b5_pre >= int(_s5_pre * 1.05) and _vm5_pre >= 2500.0 and (_b5_pre + _s5_pre) >= 15)
-            _is_cooling_pullback = (_m1 <= -1.0 and _m5 <= 90.0 and _b5_pre >= _s5_pre * 1.05)
+            _is_strong_buyer_breakout = (_m5 <= 500.0 and _b5_pre >= int(_s5_pre * 1.05) and _vm5_pre >= 2000.0 and (_b5_pre + _s5_pre) >= 12)
+            _is_cooling_pullback = (_m1 <= -1.0 and _m5 <= 200.0 and _b5_pre >= _s5_pre * 1.05)
             if not (_is_strong_buyer_breakout or _is_cooling_pullback):
                 return self._deny(
                     mint,
@@ -1890,18 +1890,18 @@ class Analyzer:
                     f"🚫 [SELL-PRESSURE] {symbol} ({mint[:8]}): продавцов {_s5_pre}/{_txns_tot_pre} ({_sell_ratio*100:.0f}%) при v/l {_v2l_pre:.1f}x — сброс китов (кейс SOLC/DOG™).",
                 )
 
-        # 4.9. Wash-Trading Spike Guard: НЕ баним живые ракеты (ELYSIONPAD 25.2x avg $183, CHIMPS 1.5x, CALLCAT 2.2x, WHITEMIHAO), режем реальный симметричный wash-дамп!
+        # 4.9. Wash-Trading Spike Guard:
+        # Для ракет с преобладанием покупателей (b5 >= s5 * 1.05) разрешаем v/l до 18.0x!
+        # (кейсы BANK 4.4x +1494%, 大A 5.2x +1349%, PUSSY 5.6x +1137%, ELYSIONPAD 25.2x).
         _avg_tx_pre = (_vm5_pre / max(1, _txns_tot_pre)) if _txns_tot_pre > 0 else 0.0
-        if _is_burned_launchpad or mint.endswith("pump"):
-            _max_vl_allowed = 12.00 if (_b5_pre >= _s5_pre * 1.10) else 6.00
-        elif _avg_tx_pre >= 35.0 and _b5_pre >= 150 and _b5_pre >= _s5_pre * 1.20 and _raw_liq_chk >= 15000.0:
-            _max_vl_allowed = 30.0
-        elif _raw_liq_chk >= 30000.0 and _b5_pre >= _s5_pre * 1.20 and _avg_tx_pre >= 25.0:
-            _max_vl_allowed = 8.00
-        elif _b5_pre >= _s5_pre * 1.15 and _avg_tx_pre >= 15.0 and _raw_liq_chk >= 12000.0:
-            _max_vl_allowed = 5.50
+        if _b5_pre >= int(_s5_pre * 1.05):
+            _max_vl_allowed = 18.00 if (_is_burned_launchpad or mint.endswith("pump") or _raw_liq_chk >= 10000.0) else 12.00
+        elif _avg_tx_pre >= 35.0 and _b5_pre >= 100 and _raw_liq_chk >= 15000.0:
+            _max_vl_allowed = 25.0
+        elif _raw_liq_chk >= 30000.0 and _avg_tx_pre >= 25.0:
+            _max_vl_allowed = 10.00
         else:
-            _max_vl_allowed = 3.50
+            _max_vl_allowed = 4.50
         if _raw_liq_chk > 0 and (_vm5_pre / _raw_liq_chk) > _max_vl_allowed:
             return self._deny(
                 mint,
@@ -2559,12 +2559,10 @@ class Analyzer:
             _websites = (pair_data.get("info") or {}).get("websites") or []
             _socials_unknown = bool(pair_data.get("_socials_unknown", False))
             _created = pair_data.get("pairCreatedAt") or 0
-            if _created and not _socials_unknown:
-                _age_h = (time.time() * 1000 - _created) / 3.6e6
-                # Для pump.fun токенов socials хостятся на pump.fun, DexScreener не всегда индексирует их в первые минуты
-                _is_organic_flow = (_b5 >= 25 and _b5 >= _s5 and _vm5_pre >= 3000.0)
-                if not mint.endswith("pump") and not _is_organic_flow and _age_h < 6 and isinstance(_socials, list) and len(_socials) == 0 and len(_websites) == 0 and not _lottery and _cur_liq < 35000:
-                    return self._deny(mint, "no-socials", f"🚫 [SOCIAL] {mint}: 0 соцсетей/сайта при возрасте {_age_h:.1f}ч и ликве ${_cur_liq:,.0f} (<$35k) — анонимный бандлер-раг.")
+            if not _socials_unknown:
+                _has_any_link = bool((isinstance(_socials, list) and len(_socials) > 0) or (isinstance(_websites, list) and len(_websites) > 0))
+                if not _has_any_link and _cur_liq < 75000 and not _lottery:
+                    return self._deny(mint, "no-socials", f"🚫 [SOCIAL] {mint[:8]}: 0 соцсетей/сайта на DEX при ликве ${_cur_liq:,.0f} (<$75k) — анонимный дев-бандлер под слив пула.")
             print(f"✅ [ENTRY-CANDIDATE] {mint}: PULLBACK — импульс m5 {_m5:+.1f}%, откат m1 {_m1:+.1f}%, h1 {_h1:+.0f}%, b/s {_b}/{_s}. Кандидат на вход.")
         
         # Защита от микро-пулов:
@@ -2627,10 +2625,11 @@ class Analyzer:
         has_socials = bool(has_twitter or has_tg or has_website)
         
         _socials_unknown = bool(pair_data.get("_socials_unknown", False))
-        _is_pump_mint = mint.endswith("pump") or (_lottery and str(pair_data.get("dexId", "")).lower() in ("pump", "pumpfun"))
-        # Анонимные токены вообще без соцсетей при ликвидности < $35k — это бандлер-фермы, ЕСЛИ это не pump.fun и нет органического потока!
-        if not _socials_unknown and not has_socials and liquidity < 35000 and not _lottery and not _is_pump_mint and not _is_organic_leader:
-            return self._deny(mint, "no-socials-anon-rug", f"🚫 [NO-SOCIALS] У {symbol} ({mint[:8]}) 0 соцсетей/сайтов (Twitter/TG/Web) при ликвидности ${liquidity:,.0f} (<$35k) — анонимный дев-бандлер.")
+        # Анонимные токены вообще без соцсетей на DEX — это 100% одноразовые дев-бандлеры под слив пула в 0!
+        if not _socials_unknown and not has_socials and not _lottery and not is_pump_curve:
+            _smart_n_chk = int(pair_data.get("_smart_buyers_count", 0) or 0)
+            if liquidity < 75000 and _smart_n_chk < 1:
+                return self._deny(mint, "no-socials-anon-rug", f"🚫 [NO-SOCIALS] У {symbol} ({mint[:8]}) 0 соцсетей/сайтов (Twitter/TG/Web) при ликвидности ${liquidity:,.0f} (<$75k) — анонимный дев-бандлер.")
             
         if is_vip:
             print(f"🚀 [VIP] {symbol}: Проверка клонов и соцсетей пройдена!")
@@ -3868,12 +3867,12 @@ class Analyzer:
         if _ray_liq < _min_ray_liq:
             return self._deny(mint, "ray-low-liq", f"🚫 [RAYDIUM] {mint[:8]}: реальная ликвидность AMM ${_ray_liq:,.0f} < ${_min_ray_liq:,.0f}.")
 
-        # Защита от анонимных бандлер-ферм без единой соцсети (не-pump токены с низкой ликвидностью)
+        # Защита от анонимных бандлер-ферм без единой соцсети на DEX
         _ray_info = pair_data.get("info") or {}
         _ray_soc = _ray_info.get("socials") or []
         _ray_web = _ray_info.get("websites") or []
-        if not mint.endswith("pump") and not pair_data.get("_socials_unknown", False) and len(_ray_soc) == 0 and len(_ray_web) == 0 and _ray_liq < 35000.0:
-            return self._deny(mint, "ray-no-socials-anon", f"🚫 [RAY-NO-SOCIALS] {mint[:8]}: 0 соцсетей/сайтов при ликвидности ${_ray_liq:,.0f} (<$35k) — анонимный бандлер-раг.")
+        if not pair_data.get("_socials_unknown", False) and len(_ray_soc) == 0 and len(_ray_web) == 0 and _ray_liq < 75000.0:
+            return self._deny(mint, "ray-no-socials-anon", f"🚫 [RAY-NO-SOCIALS] {mint[:8]}: 0 соцсетей/сайтов при ликвидности ${_ray_liq:,.0f} (<$75k) — анонимный бандлер-раг.")
 
         _pc = pair_data.get("priceChange") or {}
         _m5 = float(_pc.get("m5", 0) or 0)

@@ -668,7 +668,7 @@ class PaperTracker:
                     exit_price <= 0.0
                     or any(k in _r_up for k in (
                         "HONEYPOT", "CANNOT SELL", "UNSELLABLE", "ZERO-RUG",
-                        "ABSOLUTE LIQUIDITY LOSS", "ZERO/DRAINED LIQ", "DRAINED LIQ", "DEAD STALE POOL"
+                        "ABSOLUTE LIQUIDITY LOSS", "ZERO/DRAINED LIQ", "DRAINED LIQ", "LP PULLED RUG"
                     ))
                 )
             )
@@ -729,11 +729,14 @@ class PaperTracker:
                 pos.original_amount_usd = original_amount
 
             # ХАНИПОД / РАГ / UNSELLABLE / ПОТЕРЯ ЛИКВИДНОСТИ:
-            # При абсолютной потере ликвидности — полное списание 100% ВСЕХ вложенных денег (-original_amount)!
+            # При абсолютной потере ликвидности — списание оставшейся в рынке части позиции,
+            # с сохранением уже зафиксированной прибыли от частичных тейков (TP1/TP2):
             if not _is_profit_exit and (_is_liq_loss_or_scam or exit_price <= 0.0 or "HONEYPOT" in _r or "UNSELLABLE" in _r or "ABSOLUTE LIQUIDITY LOSS" in _r):
-                pos.pnl_usd = -original_amount - priority_fee_usd
+                _rem_amt = float(getattr(pos, "amount_usd", 0.0) or 0.0)
+                _already_realized = float(getattr(pos, "pnl_usd", 0.0) or 0.0)
+                pos.pnl_usd = _already_realized - _rem_amt - priority_fee_usd
                 pos.exit_price_usd = 0.0
-                pnl_pct = -1.0
+                pnl_pct = pos.pnl_usd / original_amount if original_amount > 0 else -1.0
             else:
                 # Добавляем профит от закрытия финального остатка к тому, что уже зафиксировано
                 final_pnl = (pos.amount_usd * price_diff_pct) - priority_fee_usd

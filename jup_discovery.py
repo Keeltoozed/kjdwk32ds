@@ -390,13 +390,12 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
         print(f"🚫 [{source_tag}-FAKE-PUMPSWAP] {_sym_tmp} ({mint[:8]}): кастомный не-pump контракт на PumpSwap с микро-ликвой ${_liq_j:,.0f} < $4k — блок.")
         return False
 
-    # Защита от анонимных бандлер-пулов без соцсетей (пропускаем живые органические AMM-пулы вроде NVIDIA 1888b/879s)
+    # Защита от анонимных бандлер-пулов без соцсетей на DEX
     _info_j = (td or {}).get("info") or {}
     _soc_j = _info_j.get("socials") or []
     _web_j = _info_j.get("websites") or []
-    _j_org_flow = (_b5_j >= 20 and _b5_j >= _s5_j and _liq_j >= 8000.0)
-    if not mint.endswith("pump") and not (td or {}).get("_socials_unknown", False) and not _j_org_flow and len(_soc_j) == 0 and len(_web_j) == 0 and _liq_j < 35000:
-        print(f"🚫 [{source_tag}-NO-SOCIALS] {_sym_tmp} ({mint[:8]}): 0 соцсетей/сайтов при ликвидности ${_liq_j:,.0f} (<$35k) — анонимный бандлер-раг.")
+    if not (td or {}).get("_socials_unknown", False) and len(_soc_j) == 0 and len(_web_j) == 0 and _liq_j < 75000:
+        print(f"🚫 [{source_tag}-NO-SOCIALS] {_sym_tmp} ({mint[:8]}): 0 соцсетей/сайтов при ликвидности ${_liq_j:,.0f} (<$75k) — анонимный бандлер-раг.")
         return False
 
     # Защита от миграционного дампа Pump.fun: первые 90с на отстрел instant-снайперов, затем свободный вход
@@ -468,10 +467,10 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
             print(f"🚫 [{source_tag}-ZOMBIE-AGE] {_sym_tmp}: возраст {_age_j:.0f}м > {_max_age_cfg:.0f}м — уставший пул, отмена!")
             return False
 
-    # 2. Anti-FOMO m5: не покупаем вершины пампа без отката (кейсы yarl, p402, ㅤ, Raymond)
+    # 2. Anti-FOMO m5: разрешаем сильный пробой покупателей до +450% (кейсы X +1891%, MAX +973%)
     if _m5_j > _max_m5_cfg:
-        _is_strong_buyer_breakout_j = (_m5_j <= 150.0 and _b5_j >= int(_s5_j * 1.25) and _vm5_j >= 6000.0 and (_b5_j + _s5_j) >= 20)
-        _is_cooling_pullback = (_m1_j <= -1.5 and _m5_j <= 120.0 and _b5_j >= _s5_j * 1.15)
+        _is_strong_buyer_breakout_j = (_m5_j <= 450.0 and _b5_j >= int(_s5_j * 1.10) and _vm5_j >= 4000.0 and (_b5_j + _s5_j) >= 15)
+        _is_cooling_pullback = (_m1_j <= -1.5 and _m5_j <= 200.0 and _b5_j >= _s5_j * 1.05)
         if not (_is_strong_buyer_breakout_j or _is_cooling_pullback):
             print(f"🚫 [{source_tag}-FOMO-M5] {_sym_tmp}: m5 +{_m5_j:.1f}% > +{_max_m5_cfg:.0f}% без отката (m1={_m1_j:+.1f}%) — покупка хая, отмена!")
             return False
