@@ -1645,7 +1645,13 @@ class Analyzer:
             else:
                 _age_min_pre = 999.0
         _dex_pre_early = str(pair_data.get("dexId", "")).lower()
-        if _dex_pre_early in ("pump", "pumpfun", "moonshot", "meteoradbc") or mint.endswith("moon"):
+        _is_known_grad = False
+        try:
+            from birth_tracker import birth_tracker as _bt_kg
+            _is_known_grad = _bt_kg.is_graduated(mint)
+        except Exception:
+            pass
+        if (_dex_pre_early in ("pump", "pumpfun", "moonshot", "meteoradbc") or mint.endswith("moon")) and not _is_known_grad:
             if not getattr(config, "ALLOW_UNGRADUATED_PUMPFUN", False):
                 return self._deny(
                     mint,
@@ -1884,18 +1890,18 @@ class Analyzer:
                     f"🚫 [SELL-PRESSURE] {symbol} ({mint[:8]}): продавцов {_s5_pre}/{_txns_tot_pre} ({_sell_ratio*100:.0f}%) при v/l {_v2l_pre:.1f}x — сброс китов (кейс SOLC/DOG™).",
                 )
 
-        # 4.9. Wash-Trading Spike Guard: НЕ баним живые ракеты (ELYSIONPAD 25.2x avg $183, CHIMPS 1.5x, CALLCAT 2.2x), режем реальный симметричный wash-дамп!
+        # 4.9. Wash-Trading Spike Guard: НЕ баним живые ракеты (ELYSIONPAD 25.2x avg $183, CHIMPS 1.5x, CALLCAT 2.2x, WHITEMIHAO), режем реальный симметричный wash-дамп!
         _avg_tx_pre = (_vm5_pre / max(1, _txns_tot_pre)) if _txns_tot_pre > 0 else 0.0
-        if _avg_tx_pre >= 35.0 and _b5_pre >= 150 and _b5_pre >= _s5_pre * 1.20 and _raw_liq_chk >= 15000.0:
+        if _is_burned_launchpad or mint.endswith("pump"):
+            _max_vl_allowed = 12.00 if (_b5_pre >= _s5_pre * 1.10) else 6.00
+        elif _avg_tx_pre >= 35.0 and _b5_pre >= 150 and _b5_pre >= _s5_pre * 1.20 and _raw_liq_chk >= 15000.0:
             _max_vl_allowed = 30.0
-        elif _is_burned_launchpad and _raw_liq_chk >= 12000.0:
-            _max_vl_allowed = 8.00 if (_b5_pre >= _s5_pre * 1.15) else 4.00
         elif _raw_liq_chk >= 30000.0 and _b5_pre >= _s5_pre * 1.20 and _avg_tx_pre >= 25.0:
             _max_vl_allowed = 8.00
         elif _b5_pre >= _s5_pre * 1.15 and _avg_tx_pre >= 15.0 and _raw_liq_chk >= 12000.0:
             _max_vl_allowed = 5.50
         else:
-            _max_vl_allowed = 2.50
+            _max_vl_allowed = 3.50
         if _raw_liq_chk > 0 and (_vm5_pre / _raw_liq_chk) > _max_vl_allowed:
             return self._deny(
                 mint,
@@ -2020,9 +2026,11 @@ class Analyzer:
             if "SOL" in _quote_sym and 0 < _quote_amt < _min_sol_pool and not is_pump_curve:
                 return self._deny(mint, f"ghost-pool-sol {_quote_amt:.1f}<{_min_sol_pool:.0f}", f"🚫 [AMM-GHOST-POOL] {symbol} ({mint[:8]}): в пуле всего {_quote_amt:.2f} SOL < {_min_sol_pool:.0f} SOL — микро-резерв.")
 
-            # 2. Защита от Honeypot и искусственных бандлов без реальных продаж (кейс Белка -98%: 12 покупок и 0 продаж)
-            if _s5_pre == 0 and _b5_pre >= 5:
+            # 2. Защита от Honeypot и искусственных бандлов без реальных продаж:
+            if not _is_canonical_pump and _s5_pre == 0 and _b5_pre >= 8:
                 return self._deny(mint, "zero-sells-dev-bundle", f"🚫 [DEV-BUNDLE] {symbol} ({mint[:8]}): 0 продаж при {_b5_pre} покупках — искусственный бандл дева без живого рынка (кейс Белка -98%)!")
+            elif _s5_pre == 0 and _b5_pre >= 25 and _age_min_pre >= 2.0:
+                return self._deny(mint, "zero-sells-honeypot", f"🚫 [HONEYPOT] {symbol} ({mint[:8]}): токену {_age_min_pre:.1f}м, 0 продаж при {_b5_pre} покупках — honeypot.")
             _is_canonical_pump = mint.endswith("pump") or (is_pump_curve and dex_id_low in ("pump", "pumpfun"))
             if not _is_canonical_pump:
                 if (_b5_pre + _s5_pre) >= 20 and (_s5_pre / (_b5_pre + _s5_pre)) < 0.05:

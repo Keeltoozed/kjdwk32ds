@@ -407,7 +407,13 @@ class GrokJevEngine:
         # На пустой кривой с 2 SOL резерва любой дамп дева пробивает стоп сразу в -75%!
         # Пускаем Pump.fun кёрвы ТОЛЬКО если они уже набрали базу (прогресс >=15% / FDV >=$9k, кейсы MOBROS $12.5k, OREX $13k)!
         is_pump = dex_id in ("pump", "pumpfun", "moonshot", "meteoradbc") or mint.endswith("moon")
-        if is_pump:
+        _is_grad_ev = False
+        try:
+            from birth_tracker import birth_tracker as _bt_ge
+            _is_grad_ev = _bt_ge.is_graduated(address)
+        except Exception:
+            pass
+        if is_pump and not _is_grad_ev:
             if not getattr(_c, "ALLOW_UNGRADUATED_PUMPFUN", False):
                 return False, "ungraduated-pump-curve (ждём миграции на DEX с сожжённым LP)"
             if fdv_mc <= 0:
@@ -1458,7 +1464,13 @@ class GrokJevEngine:
         dex_id = str(pair_data.get("dexId", "")).lower()
         is_raw_pump_curve = dex_id in ("pump", "pumpfun", "moonshot") or address.endswith("moon")
         is_pump = address.endswith("pump") or is_raw_pump_curve
-        if is_raw_pump_curve:
+        _is_grad_aud = False
+        try:
+            from birth_tracker import birth_tracker as _bt_ga
+            _is_grad_aud = _bt_ga.is_graduated(address)
+        except Exception:
+            pass
+        if is_raw_pump_curve and not _is_grad_aud:
             if not getattr(_c, "ALLOW_UNGRADUATED_PUMPFUN", False):
                 return False, "ungraduated-pump-curve (ждём миграции на DEX с сожжённым LP)", _h_stats
             _min_c_mc = float(getattr(_c, "MIN_PUMP_CURVE_MCAP_USD", 7500.0))
@@ -1867,7 +1879,11 @@ class GrokJevEngine:
         _s5_s1 = int(_txs_s1.get("sells", 0) or 0)
         _vm5_s1 = float((pair.get("volume") or {}).get("m5", 0) or 0)
         _m5_s1 = float((pair.get("priceChange") or {}).get("m5", 0) or 0)
-        _is_momentum_rocket = (_m5_s1 >= 12.0 and _b5_s1 >= (_s5_s1 * 1.25) and _vm5_s1 >= 8000.0)
+        _is_momentum_rocket = (
+            (_m5_s1 >= 12.0 and _b5_s1 >= (_s5_s1 * 1.25) and _vm5_s1 >= 8000.0)
+            or (_vm5_s1 >= 15000.0 and _b5_s1 >= _s5_s1)
+            or (_m5_s1 >= 2.5 and _b5_s1 >= _s5_s1 and _vm5_s1 >= 4000.0 and _b5_s1 >= 20)
+        )
 
         if getattr(_c, "ROCKET_XGB_ENABLED", True) and not _is_momentum_rocket and (rkt_s1 + 0.05) < s1_thresh:
             print(f"🚫 [GROK-JEV-ML-S1] {symbol} ({address[:8]}): Rocket XGB score {rkt_s1:.1f}% < {s1_thresh:.0f}% — отсев дампа в 0мс.")
