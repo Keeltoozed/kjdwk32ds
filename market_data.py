@@ -518,27 +518,49 @@ async def _jup_v3_bulk_prices(mints: list) -> dict:
 
 
 async def get_bulk_prices(mints: list, pair_hints: dict = None) -> dict:
-    """Балк-цены, цепочка fallback'ов (каждый бесплатный, со своей квотой):
-    Jupiter Price v3 (ончейн ~150мс) -> DexScreener (с привязкой к pair_hints) -> CEX -> GeckoTerminal."""
+    """Сверхбыстрые балк-цены для мемкоинов (задержка < 0.5с).
+    Приоритет: DexScreener (tokens/v1/solana) за 250-350мс для всех активных DEX (PumpSwap, Raydium, Meteora).
+    Если токен не найден — мгновенный параллельный фоллбэк на GeckoTerminal / Jupiter v3."""
     out = {}
     if not mints:
         return out
     ms = [m for m in dict.fromkeys(mints) if m]
 
-    # 1. Приоритет №1: Jupiter Price API v3 (прямой ончейн за 150мс, без 60с кэша DexScreener)
+    # 1. Приоритет №1: DexScreener bulk tokens/v1/solana (работает со всеми DEX за ~250-350мс)
     try:
-        out = await _jup_v3_bulk_prices(ms)
+        out = await _ds_bulk_prices(ms, pair_hints=pair_hints)
     except Exception:
         out = {}
 
-    # 2. Если какие-то токены не нашлись в Jupiter (например, bonding curve до миграции) -> DexScreener
     missing = [m for m in ms if m not in out]
     if missing:
+        # 2. Добираем недостающие через GeckoTerminal и Jupiter v3 параллельно с жестким таймаутом
+        async def _try_gt():
+            try:
+                from http_client import fetch_json
+                url = f"https://api.geckoterminal.com/api/v2/simple/networks/solana/token_price/{','.join(missing[:30])}"
+                status, data = await fetch_json(url, timeout=1.2, retries=0)
+                if status == 200 and isinstance(data, dict):
+                    prices = data.get("data", {}).get("attributes", {}).get("token_prices", {})
+                    return {k: float(v) for k, v in prices.items() if float(v or 0) > 0}
+            except Exception:
+                pass
+            return {}
+
+        async def _try_jup():
+            try:
+                return await asyncio.wait_for(_jup_v3_bulk_prices(missing), timeout=1.0)
+            except Exception:
+                return {}
+
         try:
-            ds_res = await _ds_bulk_prices(missing, pair_hints=pair_hints)
-            out.update(ds_res)
-        except Exception as e:
-            print(f"DS bulk error: {type(e).__name__} {e}")
+            gt_res, jup_res = await asyncio.gather(_try_gt(), _try_jup(), return_exceptions=True)
+            if isinstance(gt_res, dict):
+                out.update({k: v for k, v in gt_res.items() if k not in out and v > 0})
+            if isinstance(jup_res, dict):
+                out.update({k: v for k, v in jup_res.items() if k not in out and v > 0})
+        except Exception:
+            pass
 
     # 3. Fallback: CEX для SOL
     missing = [m for m in ms if m not in out]
@@ -594,12 +616,20 @@ async def _ds_bulk_prices(mints: list, pair_hints: dict = None) -> dict:
                     _locked_exact.add(addr)
                     _liq[addr] = liq
                     out[addr] = px
+                    try:
+                        _TD_CACHE[addr] = (time.monotonic(), p)
+                    except Exception:
+                        pass
                     continue
                 if addr in _locked_exact:
                     continue
                 if liq > _liq.get(addr, -1):
                     _liq[addr] = liq
                     out[addr] = px
+                    try:
+                        _TD_CACHE[addr] = (time.monotonic(), p)
+                    except Exception:
+                        pass
         # Если часть токенов из чанка не получила цену (напр. редкий quoteToken или мультипул) — добираем через latest/dex/tokens
         missing_chunk = [m for m in chunk if m not in out]
         if missing_chunk:
@@ -631,6 +661,10 @@ async def _ds_bulk_prices(mints: list, pair_hints: dict = None) -> dict:
                             if liq > _liq.get(addr, -1):
                                 _liq[addr] = liq
                                 out[addr] = px
+                                try:
+                                    _TD_CACHE[addr] = (time.monotonic(), p)
+                                except Exception:
+                                    pass
             except Exception:
                 pass
     return out

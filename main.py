@@ -200,9 +200,25 @@ async def position_manager_loop(analyzer, tracker):
                             except Exception:
                                 current_price = _last_known
                             
-                            # Если котировок нет больше 90 сек — пул вымер / рагнут (предотвращает кейс BRO 28 минут!)
-                            if _stale_sec > 90.0:
-                                tracker.close_position(mint, current_price if current_price > 0 else 0.0, f"Dead Stale Pool Cut ({_stale_sec:.0f}s no quotes)")
+                            # Если котировок нет больше 180 сек — проверяем продаваемость через Jupiter
+                            if _stale_sec > 180.0:
+                                try:
+                                    from jupiter import JupiterAPI
+                                    _sell_ok, _sell_why = await JupiterAPI.is_token_sellable(mint)
+                                    if not _sell_ok:
+                                        tracker.close_position(mint, 0.0, f"Dead Stale Pool Cut ({_stale_sec:.0f}s no quotes / {_sell_why})")
+                                        continue
+                                    else:
+                                        _j_live = await JupiterAPI.get_price(mint)
+                                        if _j_live > 0:
+                                            current_price = _j_live
+                                            position.current_price_usd = _j_live
+                                            position.last_live_price_ts = time.time()
+                                            position.price_updated_at = time.time()
+                                            continue
+                                except Exception:
+                                    pass
+                                tracker.close_position(mint, current_price if current_price > 0 else _last_known, f"Dead Stale Pool Cut ({_stale_sec:.0f}s no quotes)")
                                 continue
                         else:
                             current_price = _last_known
@@ -287,7 +303,11 @@ async def position_manager_loop(analyzer, tracker):
                 if (_now_t - _last_pd_ts) >= 15.0 or (pnl_pct <= -0.06 and (_now_t - _last_pd_ts) >= 4.0):
                     try:
                         import market_data as _md
-                        _live_pd = await asyncio.wait_for(_md.get_token_data(mint, max_cache_age=4.0), timeout=1.2)
+                        _cached_td = getattr(_md, "_TD_CACHE", {}).get(mint)
+                        if _cached_td and isinstance(_cached_td[1], dict) and (time.monotonic() - _cached_td[0]) < 15.0:
+                            _live_pd = _cached_td[1]
+                        else:
+                            _live_pd = await asyncio.wait_for(_md.get_token_data(mint, max_cache_age=4.0), timeout=0.8)
                         if isinstance(_live_pd, dict) and _live_pd:
                             position.pair_data = _live_pd
                             position.last_pair_data = _live_pd
@@ -677,9 +697,9 @@ async def position_manager_loop(analyzer, tracker):
             tracker.save_portfolio()
         except Exception as e:
             print(f"Ошибка в менеджере позиций: {e}")
-        # Балк-цены Jupiter+DS: 1 запрос на все позиции за цикл, квоту не жрёт.
-        # 1.0 сек: максимальная скорость трекинга открытых позиций (без лагов на стопах и пиках).
-        await asyncio.sleep(1.0)
+        # Балк-цены DexScreener/GT: сверхбыстрый запрос за ~300мс на все позиции за цикл.
+        # 0.5 сек: субсекундная скорость трекинга открытых позиций для мемкоинов.
+        await asyncio.sleep(0.5)
 from birth_tracker import BirthTracker, birth_tracker
 from scan_pipeline import ScanWindow, MISSING as _SCAN_MISSING, apply_result as _scan_apply
 
@@ -2968,7 +2988,7 @@ def _render_tab1_content():
         st.info("Бот еще не совершил первую сделку.")
 
 if _frag_dec:
-    _render_tab1_content = _frag_dec(run_every="4s")(_render_tab1_content)
+    _render_tab1_content = _frag_dec(run_every="2s")(_render_tab1_content)
 
 with tab1:
     _render_tab1_content()
@@ -3061,9 +3081,9 @@ with tab2:
     except Exception as e:
         st.info("Ожидание данных от сканера...")
 
-# Автообновление интерфейса (по умолчанию выключено по запросу пользователя)
-if st.checkbox("Включить автообновление (каждые 5 сек)", value=False):
-    time.sleep(5)
+# Автообновление интерфейса (каждые 2 сек)
+if st.checkbox("Включить автообновление (каждые 2 сек)", value=True):
+    time.sleep(2)
     st.rerun()
 
 if __name__ == "__main__":

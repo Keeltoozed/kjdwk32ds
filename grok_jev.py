@@ -1377,7 +1377,16 @@ class GrokJevEngine:
                     continue
                 _o_liq = float((p.get("liquidity") or {}).get("usd", 0) or 0)
                 _o_ca = int(p.get("pairCreatedAt") or 0)
-                if _o_liq >= 100000.0 and _o_liq >= _my_liq * 5.0 and (not _my_ca or not _o_ca or _o_ca < _my_ca):
+                _now_ms = time.time() * 1000
+                _o_age_h = (_now_ms - _o_ca) / 3600000.0 if _o_ca else 999.0
+
+                # Если старый токен был создан больше 24 часов назад — это просто старый мертвый токен из прошлого,
+                # совпадение обычного слова (CAT, PEPE, DOG, JUMP). Не трогаем и не блокируем новую монету!
+                if _o_age_h > 24.0:
+                    continue
+
+                # Кейс mihao: если существует старший брат СЕГОДНЯ с ликвидностью >= $60k и >= 2.0x нашей:
+                if _o_liq >= 60000.0 and _o_liq >= _my_liq * 2.0 and (not _my_ca or not _o_ca or _o_ca < _my_ca):
                     return False, f"clone-of-trending {symbol} (оригинал {str(_b.get('address'))[:6]} liq ${_o_liq:,.0f} vs наш ${_my_liq:,.0f} — риск LP-pull)"
             except Exception:
                 continue
@@ -1502,8 +1511,10 @@ class GrokJevEngine:
                 return False, f"goplus-sol-reject {sec_why}", _h_stats
               
             # Токены канонического происхождения Pump.fun (bonding curve / выпускники):
+            # ВАЖНО: Настоящий токен Pump.fun ВСЕГДА заканчивается на 'pump' (mint authority PDA).
+            # Кастомные токены (даже если DexScreener пишет dexId 'pumpswap') не защищены протоколом pump.fun!
             _dex_low_jev = str(pair_data.get("dexId") or "").lower()
-            is_canonical_pump = address.endswith("pump") or _dex_low_jev in ("pump", "pumpfun", "pumpswap") or is_raw_pump_curve
+            is_canonical_pump = address.endswith("pump") or (is_raw_pump_curve and _dex_low_jev in ("pump", "pumpfun"))
             if not is_canonical_pump and (rc_status_pre != 200 or not isinstance(rc_data_pre, dict)):
                 return False, "unverified-custom-token (waiting for rugcheck index)", _h_stats
 
