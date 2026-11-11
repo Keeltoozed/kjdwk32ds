@@ -104,16 +104,22 @@ async def position_security_auditor_loop(analyzer, tracker):
                             _drain_pct_drop = (_peak_liq >= 3000.0 and _sol_liq < _peak_liq * 0.30) or (_peak_liq >= 6000.0 and _sol_liq < _peak_liq * 0.60)
 
                             if _has_liq_data and (_is_zero_liq or _crit_drained or _drain_pct_drop):
-                                _drop_cnt = getattr(position, "_liq_drop_streak", 0) + 1
-                                position._liq_drop_streak = _drop_cnt
-                                if _drop_cnt < 2:
-                                    # Требуем подтверждения 2 тика подряд (3-4 сек), чтобы единичный сетевой глитч не закрывал позицию!
-                                    continue
+                                # Экстренный случай: мгновенный дев-дамп (лик рухнула > 60% за 1 тик)
+                                # Не ждём 2 тика — выходим НЕМЕДЛЕННО пока цена ещё есть!
+                                _liq_crash_pct = ((_peak_liq - _sol_liq) / _peak_liq) if _peak_liq > 0 else 0.0
+                                _emergency_exit = _is_zero_liq or _crit_drained or (_liq_crash_pct >= 0.60 and _peak_liq >= 5000.0)
+                                if not _emergency_exit:
+                                    _drop_cnt = getattr(position, "_liq_drop_streak", 0) + 1
+                                    position._liq_drop_streak = _drop_cnt
+                                    if _drop_cnt < 2:
+                                        # Требуем подтверждения 2 тика подряд (3-4 сек) только при небольшом дропе
+                                        continue
                                 # При абсолютной потере ликвидности (<= $200 или 0) цена продажи 0.0 -> списание ВСЕХ вложенных средств (-100%)!
                                 _px_now = 0.0 if (_is_zero_liq or _crit_drained or _sol_liq <= 250.0) else float(getattr(position, "current_price_usd", 0.0) or 0.0)
-                                _msg = f"Zero/Drained Liq ${_sol_liq:.0f}" if (_is_zero_liq or _crit_drained) else f"Liq Drop ${_sol_liq:.0f} (было ${_peak_liq:.0f})"
-                                print(f"🚨 [ABSOLUTE-LIQ-LOSS] {position.symbol} ({mint[:8]}): вывод пула ({_msg}) — списание всех вложенных средств (-100%)!")
-                                tracker.close_position(mint, _px_now, f"Absolute Liquidity Loss / Rug ({_msg})")
+                                _msg = f"Zero/Drained Liq ${_sol_liq:.0f}" if (_is_zero_liq or _crit_drained) else f"Liq Drop ${_sol_liq:.0f} from ${_peak_liq:.0f} (-{_liq_crash_pct*100:.0f}%)"
+                                _tag = "Early Liquidity Drop Escape" if _emergency_exit else "Absolute Liquidity Loss"
+                                print(f"🚨 [LIQ-LOSS] {position.symbol} ({mint[:8]}): {_msg} — выход {'МГНОВЕННО' if _emergency_exit else 'подтверждён'}!")
+                                tracker.close_position(mint, _px_now, f"{_tag} (Liq dropped to ${_sol_liq:.0f} from ${_peak_liq:.0f})")
                                 continue
                             else:
                                 position._liq_drop_streak = 0

@@ -171,9 +171,45 @@ class MatureExitManager:
             return f"Rocket Momentum Harvest (+{pnl_pct*100:.0f}% locked after peak +{max_pnl_pct*100:.0f}%, {_peak_age_min:.0f}m no ATH)"
 
         # =========================================================================
-        # 4. FRONT-RUN PROFIT EXIT (Разворот стакана только при уверенном профите >= +35%)
+        # 4. CRASH VELOCITY GUARD (Дев-дамп / аномальное обрушение за 1 минуту)
         # =========================================================================
+        # Если 1-минутная свеча упала > 25% — это не обычная коррекция, это дамп!
+        # Нормальные Solana-откаты: -5%..-15% за минуту. -25%+ = дев выходит / кит сливает.
+        # Выходим немедленно если мы в профите — не ждём трейлинга.
+        # Если мы в убытке — уже есть стоп-лосс, он поймает.
         _pd = getattr(position, "pair_data", None) or getattr(position, "last_pair_data", None) or {}
+        _m1_crash = None
+        _vol_spike = False
+        if isinstance(_pd, dict) and _pd:
+            pc = _pd.get("priceChange") or {}
+            _m1_crash = float(pc.get("m1", 0) or 0)
+            txns_m5 = (_pd.get("txns") or {}).get("m5") or {}
+            b5 = int(txns_m5.get("buys", 0) or 0)
+            s5 = int(txns_m5.get("sells", 0) or 0)
+            vol_m5 = float((_pd.get("volume") or {}).get("m5", 0) or 0)
+            vol_h1 = float((_pd.get("volume") or {}).get("h1", 0) or 0)
+            # Всплеск объёма продаж: объём за 5 минут > 40% часового → аномалия
+            _vol_spike = (vol_m5 > vol_h1 * 0.40) if vol_h1 > 0 else False
+            bs_ratio = (b5 / s5) if s5 > 0 else 2.0
+
+            # === СЛУЧАЙ 1: ПОЛНЫЙ ДЕВ-ДАМП (-50%+ за 1 минуту) ===
+            # Это однозначно не откат — уходим при любом PnL кроме глубокого стопа
+            if _m1_crash <= -50.0 and minutes_held >= 0.5:
+                return f"🚨 Crash Guard: Dev Dump ({_m1_crash:.0f}% за 1m, PnL {pnl_pct*100:+.1f}%)"
+
+            # === СЛУЧАЙ 2: СИЛЬНЫЙ КРАШ (-25%..-50%) + МЫ В ПРОФИТЕ ===
+            # Мог быть кит, мог быть дев. Если мы в плюсе — выходим, не рискуем.
+            if _m1_crash <= -25.0 and pnl_pct >= 0.05 and minutes_held >= 0.5:
+                return f"🚨 Crash Guard: Price Crash ({_m1_crash:.0f}% за 1m, locked {pnl_pct*100:+.1f}%)"
+
+            # === СЛУЧАЙ 3: УМЕРЕННЫЙ КРАШ (-15%) + ДОМИНИРОВАНИЕ ПРОДАВЦОВ + ВСПЛЕСК ===
+            # Классика: кит начал аккуратно сливать, после него придёт дев.
+            if _m1_crash <= -15.0 and pnl_pct >= 0.15 and bs_ratio < 0.30 and _vol_spike:
+                return f"🚨 Crash Guard: Coordinated Sell ({_m1_crash:.0f}% 1m, {b5}b/{s5}s, vol spike, {pnl_pct*100:+.1f}%)"
+
+        # =========================================================================
+        # 5. FRONT-RUN PROFIT EXIT (Разворот стакана только при уверенном профите >= +35%)
+        # =========================================================================
         if isinstance(_pd, dict) and _pd:
             txns_m5 = (_pd.get("txns") or {}).get("m5") or {}
             b5 = int(txns_m5.get("buys", 0) or 0)
