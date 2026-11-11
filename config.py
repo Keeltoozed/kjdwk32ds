@@ -86,7 +86,7 @@ MAX_PUMP_CURVE_MCAP_SOL = 350.0           # Верх кривой перед м�
 PUMP_MIGRATION_MCAP_SOL = 410.0           # FDV миграции pump.fun (~410 SOL = ~$35k при SOL $85)
 PUMP_DUMP_FLOOR_SOL = 160.0               # Порог post-mig-dumped (~40% миграции = 160 SOL, разрешает Dip Reclaim)
 JEV_MAX_TICKET_USD = 0.0
-MIN_GRADUATED_LIQ_USD = 5000.0           # На DEX минимум $5k реальной ликвидности (пускает свежие миграции PumpSwap и Raydium $5k+, не режет ранние ракеты)
+MIN_GRADUATED_LIQ_USD = 20000.0          # На DEX минимум $20k реальной ликвидности — отсекает дампы $14k пулов (кейс MIBULL $14.4k → $1.7k)
 AUDITOR_STAIRCASE_ENABLED = True
 AUDITOR_MAX_DEV_PCT = 6.0
 AUDITOR_MAX_TOP10_PCT = 32.0
