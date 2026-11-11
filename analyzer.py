@@ -1382,10 +1382,12 @@ class Analyzer:
                 if fdv > 2_000_000.0 or liq > 250_000.0:
                     return False, f"Крупная капа / не мем-ракета (FDV ${fdv:,.0f}, liq ${liq:,.0f}) — пропуск без штрафа киту"
                 if is_pump_curve:
-                    if 0 < fdv < 18000.0:
-                        return False, f"Слишком ранняя кривая Pump.fun (FDV ${fdv:,.0f} < $18,000)"
-                    if fdv > 48000.0:
-                        return False, f"Кривая Pump.fun перед обрывом миграции (FDV ${fdv:,.0f} > $48,000)"
+                    _min_c_mc = float(getattr(config, "MIN_PUMP_CURVE_MCAP_USD", 4000.0))
+                    _max_c_mc = float(getattr(config, "MAX_PUMP_CURVE_MCAP_USD", 34000.0))
+                    if 0 < fdv < _min_c_mc:
+                        return False, f"Слишком ранняя кривая Pump.fun (FDV ${fdv:,.0f} < ${_min_c_mc:,.0f})"
+                    if fdv > _max_c_mc:
+                        return False, f"Кривая Pump.fun перед обрывом миграции (FDV ${fdv:,.0f} > ${_max_c_mc:,.0f})"
                 else:
                     if liq < 8000.0:
                         return False, f"Слишком низкая ликвидность AMM пула (${liq:,.0f} < $8,000)"
@@ -1766,18 +1768,21 @@ class Analyzer:
             and _m5 >= 5.0
             and _b5_pre >= _s5_pre * 1.22
         )
-        if _tot_tx5_pre >= 200 and _avg_tx_pre < 12.0 and not _has_soc_pre and not _is_deep_launchpad_runner and not _is_real_bump_runner:
+        # Разрешаем шумные ранние сделки розницы (avg >= $3.5 при перевесе покупателей b5 >= s5)
+        _is_retail_flow = (_b5_pre >= int(_s5_pre * 1.02) and _vm5_pre >= 2000.0)
+        if _tot_tx5_pre >= 200 and _avg_tx_pre < 4.0 and not _is_retail_flow and not _is_deep_launchpad_runner and not _is_real_bump_runner:
             return self._deny(
                 mint,
                 f"fake-bump-wash-bot avg ${_avg_tx_pre:.1f}",
-                f"🚫 [WASH-BUMP-TRAP] {symbol} ({mint[:8]}): накрутка микро-ботом ({_tot_tx5_pre} txns, avg ${_avg_tx_pre:.2f} < $12).",
+                f"🚫 [WASH-BUMP-TRAP] {symbol} ({mint[:8]}): накрутка микро-ботом ({_tot_tx5_pre} txns, avg ${_avg_tx_pre:.2f} < $4).",
             )
 
         # 3. ЖЕСТКИЙ ФИЛЬТР ИМПУЛЬСА, СКОРОСТИ ОБОРОТА И ТРЕНДА ДО ROCKET-XGB:
-        _base_v5_cfg = float(getattr(config, "MIN_VOLUME_M5", 5000.0))
-        # Для свежих миграций и молодых токенов (<10м) пускаем ранний старт от $2,000 при чистом перевесе покупателей (b5 >= s5 * 1.15 и txns >= 15)
-        if _age_min_pre <= 10.0 or _is_burned_launchpad:
-            _min_v5_cfg = 2000.0 if (_b5_pre >= int(_s5_pre * 1.15) and _tot_tx5_pre >= 15) else 4000.0
+        _base_v5_cfg = float(getattr(config, "MIN_VOLUME_M5", 2500.0))
+        # Для свежих миграций, кривых pump.fun и молодых токенов (<10м) пускаем ранний старт от $1,500 при перевесе покупателей
+        _is_pump_curve_pre = _dex_pre_early in ("pump", "pumpfun")
+        if _age_min_pre <= 10.0 or _is_burned_launchpad or _is_pump_curve_pre:
+            _min_v5_cfg = 1500.0 if (_b5_pre >= _s5_pre and _tot_tx5_pre >= 10) else 2500.0
         else:
             _min_v5_cfg = _base_v5_cfg
         if _vm5_pre < _min_v5_cfg:
@@ -1787,24 +1792,26 @@ class Analyzer:
                 f"🚫 [LOW-MOMENTUM] {symbol} ({mint[:8]}): 5м объем ${_vm5_pre:,.0f} < ${_min_v5_cfg:,.0f} — слабый стоячий токен.",
             )
         if _age_min_pre >= 20.0:
-            _is_massive_mature_flow = (_vm5_pre >= 15000.0 and _b5_pre >= _s5_pre)
-            _is_strong_mature_breakout = (_m5 >= 3.0 and _vm5_pre >= 3000.0 and _b5_pre >= _s5_pre * 1.05 and _tot_tx5_pre >= 15)
+            _is_massive_mature_flow = (_vm5_pre >= 10000.0 and _b5_pre >= _s5_pre)
+            _is_strong_mature_breakout = (_m5 >= 2.0 and _vm5_pre >= 2500.0 and _b5_pre >= _s5_pre * 1.02 and _tot_tx5_pre >= 12)
             _v2l_mat = (_vm5_pre / max(_raw_liq_chk, 1.0)) if _raw_liq_chk > 0 else 0.0
-            if not _is_massive_mature_flow and not _is_strong_mature_breakout and (_vm5_pre < 4000.0 or _m5 < 1.0 or _tot_tx5_pre < 20):
+            if not _is_massive_mature_flow and not _is_strong_mature_breakout and (_vm5_pre < 2500.0 or _m5 < 0.5 or _tot_tx5_pre < 12):
                 return self._deny(
                     mint,
                     f"slow-mature-pool v5=${_vm5_pre:.0f} v/l={_v2l_mat:.2f}x",
                     f"🚫 [MATURE-STALL-GUARD] {symbol} ({mint[:8]}): токену {_age_min_pre:.0f}м, но оборот вялый (vol5 ${_vm5_pre:,.0f}, v/l {_v2l_mat:.2f}x, m5 {_m5:+.1f}%) — кейс PROPFUN.",
                 )
 
-        # Запрет входа, если продавцов больше или почти столько же, сколько покупателей (на глубоких пулах >=$25k допускаем 1.08x при зелёном m5/m1)
-        _base_bs_cfg = float(getattr(config, "MIN_BUY_SELL_RATIO", 1.08))
-        if _b5_pre >= 150 and _vm5_pre >= 15000.0 and _b5_pre >= _s5_pre:
-            _min_bs_cfg = 1.00  # Массивный встречный объём на ракетах (кейс PERCOLATOR 879b/845s)
-        elif _b5_pre >= 40 and _vm5_pre >= 8000.0 and _b5_pre > _s5_pre:
-            _min_bs_cfg = 1.05 if (_m5 >= 3.0 and _m1 >= -2.0) else 1.08
-        elif _raw_liq_chk >= 20000.0 and _m5 >= 4.0 and _m1 >= 0.0:
-            _min_bs_cfg = 1.06
+        # Запрет входа, если продавцов больше, чем покупателей (для активных ракет допускаем 1.00x - 1.02x при зеленом m5)
+        _base_bs_cfg = float(getattr(config, "MIN_BUY_SELL_RATIO", 1.02))
+        if _b5_pre >= 100 and _vm5_pre >= 8000.0 and _b5_pre >= _s5_pre:
+            _min_bs_cfg = 1.00  # Массивный встречный объём на ракетах (кейс PERCOLATOR, CULT 9013b/6702s)
+        elif _vm5_pre >= 3500.0 and _b5_pre >= _s5_pre:
+            _min_bs_cfg = 1.01  # Активная двухсторонняя торговля
+        elif _b5_pre >= 30 and _vm5_pre >= 4000.0 and _b5_pre > _s5_pre:
+            _min_bs_cfg = 1.02 if (_m5 >= 2.0 and _m1 >= -3.0) else 1.04
+        elif _raw_liq_chk >= 15000.0 and _m5 >= 3.0 and _m1 >= -1.0:
+            _min_bs_cfg = 1.03
         else:
             _min_bs_cfg = _base_bs_cfg
         if _s5_pre > 0 and (_b5_pre / _s5_pre) < _min_bs_cfg:
@@ -1912,30 +1919,31 @@ class Analyzer:
                 f"🚫 [WASH-SPIKE] {symbol} ({mint[:8]}): 5м объем (${_vm5_pre:,.0f}) в {(_vm5_pre/_raw_liq_chk):.1f}x > {_max_vl_allowed:.2f}x пула ликвидности — накрутка ботами.",
             )
 
-        # 5. Соцсети на ВСЕХ возрастах: раньше проверка выключалась после 8м (STONKS 12.5м -42.3%, scamsem 25.8м, LAURA 88.6м)!
+        # 5. Соцсети: требуем ТОЛЬКО для зрелых токенов (>= 25 мин)!
+        # Молодые токены (< 25 мин) часто не имеют соцсетей в индексе DexScreener, но являются взлетающими ракетами
         _links_cnt = len((pair_data or {}).get("info", {}).get("socials", []) or []) + len((pair_data or {}).get("info", {}).get("websites", []) or [])
         _soc_unknown = bool((pair_data or {}).get("_socials_unknown", False))
-        _req_soc_age = float(getattr(config, "REQUIRE_SOCIALS_MIN_AGE_MIN", 8.0))
-        if _links_cnt == 0 and not _soc_unknown:
+        _req_soc_age = float(getattr(config, "REQUIRE_SOCIALS_MIN_AGE_MIN", 25.0))
+        if _age_min_pre >= _req_soc_age and _links_cnt == 0 and not _soc_unknown:
             _vol_liq_r = (_vm5_pre / max(_raw_liq_chk, 1.0)) if _raw_liq_chk > 0 else 0.0
             _txns_tot = _b5_pre + _s5_pre
             _is_organic_stealth = (
-                _raw_liq_chk >= 10000.0
+                (_raw_liq_chk >= 5000.0 or _is_pump_curve_pre)
                 and _vm5_pre >= 1200.0
-                and _vol_liq_r <= 5.5
+                and _vol_liq_r <= 8.5
                 and (
-                    (_b5_pre >= 12 and _b5_pre >= _s5_pre * 1.05) or
-                    (_b5_pre >= 8 and _s5_pre <= 30 and _m5 >= 2.0 and _avg_tx_pre >= 20.0) or
-                    (_vm5_pre >= 6000.0 and _b5_pre >= _s5_pre)
+                    (_b5_pre >= 12 and _b5_pre >= _s5_pre * 1.02) or
+                    (_b5_pre >= 8 and _s5_pre <= 30 and _m5 >= 1.5 and _avg_tx_pre >= 10.0) or
+                    (_vm5_pre >= 4000.0 and _b5_pre >= _s5_pre)
                 )
             )
             _is_viral_stealth = (
-                _vm5_pre >= 25000.0
-                and _b5_pre >= 150
-                and _b5_pre >= int(_s5_pre * 1.20)
+                _vm5_pre >= 15000.0
+                and _b5_pre >= 80
+                and _b5_pre >= int(_s5_pre * 1.05)
             )
             if not (_is_organic_stealth or _is_viral_stealth):
-                _sub_reason = f"no-socials-mature {_age_min_pre:.0f}m" if _age_min_pre >= 12.0 else f"no-socials-dev-rug {_age_min_pre:.0f}m"
+                _sub_reason = f"no-socials-mature {_age_min_pre:.0f}m"
                 return self._deny(
                     mint,
                     _sub_reason,
@@ -2054,7 +2062,6 @@ class Analyzer:
                 mint.endswith("pump")
                 or mint.endswith("moon")
                 or (is_pump_curve and _dex_low_main in ("pump", "pumpfun", "pumpswap"))
-                or _dex_low_main in ("pump", "pumpfun", "pumpswap", "moonshot", "meteoradbc", "letsbonk")
                 or _is_grad_check
             )
             _is_pump_flag = 1 if _is_canonical_pump else 0

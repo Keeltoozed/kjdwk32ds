@@ -759,19 +759,26 @@ class CopyTrader:
             self._copy_wallets[mint].add(wallet)
             self.consensus_done.add(mint)
 
-            _copy_ml_conf = 35.0 if is_vip else 25.0
+            _copy_ml_conf = 50.0 if is_vip else 25.0
             _copy_ml_feats = {}
-            if self.analyzer and pair_data:
+            if self.analyzer and pair_data and not is_vip:
                 try:
-                    _copy_ml_conf = float(getattr(self.analyzer, "rocket_scores", {}).get(mint, getattr(self.analyzer, "last_score", 0.0)) or 0.0)
-                    if _copy_ml_conf <= 0.0:
-                        _copy_ml_conf = float(self.analyzer.score_rocket_xgb(mint, pair_data) or 0.0)
+                    _sc = float(getattr(self.analyzer, "rocket_scores", {}).get(mint, getattr(self.analyzer, "last_score", 0.0)) or 0.0)
+                    if _sc <= 0.0:
+                        _sc = float(self.analyzer.score_rocket_xgb(mint, pair_data) or 0.0)
+                    if _sc > 0.0:
+                        _copy_ml_conf = _sc
+                    _copy_ml_feats = self.analyzer.pack_features(pair_data)
+                except Exception:
+                    pass
+            elif self.analyzer and pair_data:
+                try:
                     _copy_ml_feats = self.analyzer.pack_features(pair_data)
                 except Exception:
                     pass
 
             _src_tag = f"COPY:VIP:{trader_name}" if is_vip else f"COPY:{trader_name}"
-            self.tracker.add_position(
+            _ok = self.tracker.add_position(
                 clean_symbol,
                 mint,
                 price_usd,
@@ -782,7 +789,10 @@ class CopyTrader:
                 source=_src_tag,
                 pair_address=((pair_data or {}).get("pairAddress", "") or ""),
             )
-            print(f"✅ 👑 🐋 [COPY-EXECUTED] Успешно вошли по сделке {'VIP-кита' if is_vip else 'кита'} {trader_name} в {clean_symbol} на ${position_size:.2f} (цена: ${price_usd})!")
+            if _ok is not False:
+                print(f"✅ 👑 🐋 [COPY-EXECUTED] Успешно вошли по сделке {'VIP-кита' if is_vip else 'кита'} {trader_name} в {clean_symbol} на ${position_size:.2f} (цена: ${price_usd})!")
+            else:
+                print(f"⚠️ [COPY-FAILED] Позиция {clean_symbol} для {trader_name} не была добавлена трекером.")
         finally:
             self._mint_eval_lock.discard(mint)
 

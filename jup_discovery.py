@@ -390,10 +390,11 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
     _m1_j = float(_pc_j.get("m1", 0) or 0)
     if abs(_m1_j) > max(180.0, abs(_m5_j) * 3.0 + 40.0):
         _m1_j = _m5_j / 5.0
-    _max_m1_cfg_j = min(float(getattr(config, "MAX_ENTRY_M1_PCT", 8.0)), 10.0)
+    _max_m1_cfg_j = float(getattr(config, "MAX_ENTRY_M1_PCT", 28.0))
     if _m1_j > _max_m1_cfg_j and _age_j >= 3.0:
-        print(f"🚫 [{source_tag}-M1-SPIKE] {_sym_tmp} ({mint[:8]}): m1 +{_m1_j:.1f}% > +{_max_m1_cfg_j:.1f}% — вершина свечи, отмена входа.")
-        return False
+        if not (_b5_j >= int(_s5_j * 1.15) and _m1_j <= 45.0):
+            print(f"🚫 [{source_tag}-M1-SPIKE] {_sym_tmp} ({mint[:8]}): m1 +{_m1_j:.1f}% > +{_max_m1_cfg_j:.1f}% без перевеса покупателей — отмена входа.")
+            return False
     _h1_j = float(_pc_j.get("h1", 0) or 0)
     _is_fresh_j = _age_j <= 4.0
     _max_h1_j = 2500.0 if (_is_fresh_j and _m5_j >= 2.5 and _b5_j >= _s5_j * 1.15) else float(getattr(config, "MAX_ENTRY_H1_PCT", 350.0))
@@ -410,10 +411,29 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
         print(f"🚫 [{source_tag}-POST-PEAK-CRASH] {_sym_tmp} ({mint[:8]}): токен уже слился от пика (цена {_pk_drop_j:+.1f}%, ликва {_lq_drop_j:+.1f}%) — дохлая кошка.")
         return False
 
-    # Защита от кастомных фейк-пулов с разблокированным LP на PumpSwap (только при микро-ликве < $4k)
-    if _dex_j == "pumpswap" and not mint.endswith("pump") and _liq_j < 4000.0:
-        print(f"🚫 [{source_tag}-FAKE-PUMPSWAP] {_sym_tmp} ({mint[:8]}): кастомный не-pump контракт на PumpSwap с микро-ликвой ${_liq_j:,.0f} < $4k — блок.")
-        return False
+    # Защита от кастомных фейк-пулов с разблокированным LP (Meteora, PumpSwap, кастомные пулы без .endswith("pump"))
+    _is_grad_jup = False
+    try:
+        from birth_tracker import birth_tracker as _bt_j
+        _is_grad_jup = _bt_j.is_graduated(mint)
+    except Exception:
+        pass
+    if not mint.endswith("pump") and not mint.endswith("moon") and not _is_grad_jup:
+        try:
+            import goplus as _gp_jup
+            _rc_st, _rc_d = await _gp_jup.fetch_rugcheck_report_cached(mint, ttl=120.0, timeout=5)
+            _lp_ok = False
+            if _rc_d:
+                for _m in (_rc_d.get("markets") or []):
+                    if isinstance(_m, dict):
+                        _lp_inf = _m.get("lp") or {}
+                        if float(_lp_inf.get("lpLockedPct", 0) or 0) >= 80.0 or float(_lp_inf.get("lpBurnedPct", 0) or 0) >= 80.0:
+                            _lp_ok = True
+            if not _lp_ok:
+                print(f"🚫 [{source_tag}-UNLOCKED-LP] {_sym_tmp} ({mint[:8]}): кастомный не-pump токен на {_dex_j} без подтвержденной блокировки LP — рагпул!")
+                return False
+        except Exception:
+            pass
 
     # Защита от анонимных бандлер-пулов без соцсетей на DEX
     _info_j = (td or {}).get("info") or {}
@@ -500,12 +520,12 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
             print(f"🚫 [{source_tag}-FOMO-M5] {_sym_tmp}: m5 +{_m5_j:.1f}% > +{_max_m5_cfg:.0f}% без отката (m1={_m1_j:+.1f}%) — покупка хая, отмена!")
             return False
 
-    # 3. Защита от давления продавцов (кейс SOLC 735 продаж, DOG™ 291 продажа)
+    # 3. Защита от давления продавцов: блокируем ТОЛЬКО если продавцы реально преобладают
     _tot_tx_j = _b5_j + _s5_j
     if _tot_tx_j >= 25 and _s5_j > 0:
         _sell_ratio_j = _s5_j / _tot_tx_j
         _vl_ratio_j = (_vm5_j / max(_liq_j, 1.0)) if _liq_j > 0 else 0.0
-        if _b5_j < int(_s5_j * 1.15) and (_sell_ratio_j >= 0.46 or (_sell_ratio_j >= 0.42 and _vl_ratio_j >= 2.5)):
+        if _b5_j < _s5_j and (_sell_ratio_j >= 0.52 or (_sell_ratio_j >= 0.48 and _vl_ratio_j >= 3.5)):
             print(f"🚫 [{source_tag}-SELL-PRESSURE] {_sym_tmp}: продавцов {_s5_j}/{_tot_tx_j} ({_sell_ratio_j*100:.0f}%) при v/l {_vl_ratio_j:.1f}x — сброс китов, отмена!")
             return False
 
@@ -515,16 +535,12 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
         return False
     _links_j = len((td or {}).get("info", {}).get("socials", []) or []) + len((td or {}).get("info", {}).get("websites", []) or [])
     _soc_unk_j = bool((td or {}).get("_socials_unknown", False))
-    if _links_j == 0 and not _soc_unk_j:
+    if _age_j >= _req_soc_age and _links_j == 0 and not _soc_unk_j:
         _avg_j = _vm5_j / max(1, _b5_j + _s5_j)
         _vl_j = _vm5_j / max(_liq_j, 1.0)
-        if _age_j >= 12.0:
-            print(f"🚫 [{source_tag}-NO-SOCIALS] {_sym_tmp}: 0 соцсетей в зрелом возрасте {_age_j:.0f}м (>=12м) — отмена!")
-            return False
-        else:
-            _is_organic_stealth = (_vm5_j >= 6000.0 and _b5_j >= 30 and _b5_j >= _s5_j * 1.50 and _liq_j >= 18000.0 and _avg_j >= 15.0 and _vl_j <= 1.8)
+        _is_organic_stealth = (_vm5_j >= 4000.0 and _b5_j >= 20 and _b5_j >= _s5_j * 1.05 and _liq_j >= 8000.0 and _avg_j >= 8.0 and _vl_j <= 8.0)
         if not _is_organic_stealth:
-            print(f"🚫 [{source_tag}-NO-SOCIALS] {_sym_tmp}: 0 соцсетей при возрасте {_age_j:.1f}м без чистой органики — отмена!")
+            print(f"🚫 [{source_tag}-NO-SOCIALS] {_sym_tmp}: 0 соцсетей в зрелом возрасте {_age_j:.0f}м (>={_req_soc_age:.0f}м) без чистой органики — отмена!")
             return False
         else:
             print(f"💎 [{source_tag}-ORGANIC-STEALTH] {_sym_tmp}: 0 соцсетей, но подтвержден органический прорыв — пропуск.")

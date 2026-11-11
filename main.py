@@ -1255,42 +1255,38 @@ async def scanner_loop(analyzer, tracker):
                                     print(f"🚫 [SCANNER-OLD-ZOMBIE] {actual_symbol} ({mint[:8]}): возраст {_age_m/60:.1f}ч без прорывного объема — отмена!")
                                     continue
 
-                                _req_soc_age = float(getattr(config, "REQUIRE_SOCIALS_MIN_AGE_MIN", 8.0))
+                                _req_soc_age = float(getattr(config, "REQUIRE_SOCIALS_MIN_AGE_MIN", 25.0))
                                 _tx5_sc = (pair_data.get("txns") or {}).get("m5", {}) or {}
                                 _b5_bump = int(_tx5_sc.get("buys", 0) or 0)
                                 _s5_bump = int(_tx5_sc.get("sells", 0) or 0)
                                 _tot_tx5_sc = _b5_bump + _s5_bump
                                 _avg_tx5_sc = (_vol5_live / _tot_tx5_sc) if _tot_tx5_sc > 0 else 0.0
-                                if _links_sc == 0 and not _soc_unk_sc:
+                                if _age_m >= _req_soc_age and _links_sc == 0 and not _soc_unk_sc:
                                     _vl_sc = _vol5_live / max(liq_usd, 1.0)
-                                    if _age_m >= 20.0:
-                                        print(f"🚫 [SCANNER-NO-SOCIALS] {actual_symbol} ({mint[:8]}): 0 соцсетей в зрелом возрасте {_age_m:.0f}м (>=20м) — отмена!")
-                                        continue
-                                    else:
-                                        _is_organic_stealth = (
-                                            _vol5_live >= 5000.0 and _b5_bump >= 25 and _b5_bump >= _s5_bump * 1.12
-                                            and liq_usd >= 12000.0 and _vl_sc <= 6.0 and _avg_tx5_sc >= 12.0
-                                        )
+                                    _is_organic_stealth = (
+                                        _vol5_live >= 3500.0 and _b5_bump >= 15 and _b5_bump >= _s5_bump * 1.02
+                                        and liq_usd >= 6000.0 and _vl_sc <= 8.0 and _avg_tx5_sc >= 8.0
+                                    )
                                     if not _is_organic_stealth:
-                                        print(f"🚫 [SCANNER-NO-SOCIALS] {actual_symbol} ({mint[:8]}): 0 соцсетей при {_age_m:.1f}м без чистой органики — отмена!")
+                                        print(f"🚫 [SCANNER-NO-SOCIALS] {actual_symbol} ({mint[:8]}): 0 соцсетей в зрелом возрасте {_age_m:.0f}м (>={_req_soc_age:.0f}м) — отмена!")
                                         continue
                                     else:
                                         print(f"💎 [SCANNER-ORGANIC-STEALTH] {actual_symbol} ({mint[:8]}): 0 соцсетей, но подтвержден органический прорыв — пропуск в анализ.")
 
-                                # Защита от микро bump-ботов (кейс LAURA $1.60 avg_tx):
-                                if _tot_tx5_sc >= 120 and _avg_tx5_sc < 8.0:
-                                    print(f"🚫 [SCANNER-WASH-TRAP] {actual_symbol} ({mint[:8]}): накрутка микро-ботом ({_tot_tx5_sc} txns, avg ${_avg_tx5_sc:.2f} < $8) — отмена!")
+                                # Защита от микро bump-ботов: не блокируем реальный розничный поток при покупках >= продаж
+                                _is_retail_flow_sc = (_b5_bump >= _s5_bump and _vol5_live >= 2000.0)
+                                if _tot_tx5_sc >= 150 and _avg_tx5_sc < 3.5 and not _is_retail_flow_sc:
+                                    print(f"🚫 [SCANNER-WASH-TRAP] {actual_symbol} ({mint[:8]}): накрутка микро-ботом ({_tot_tx5_sc} txns, avg ${_avg_tx5_sc:.2f} < $3.5) — отмена!")
                                     continue
                                 _is_deep_launchpad_runner = (
-                                    (mint.endswith(("pump", "bonk", "BAGS")) or _dex_id == "pumpswap")
-                                    and liq_usd >= 20000.0
-                                    and _vol5_live >= 12000.0
-                                    and _avg_tx5_sc >= 10.0
-                                    and _m5_live >= 5.0
-                                    and _b5_bump >= _s5_bump * 1.22
+                                    (mint.endswith(("pump", "bonk", "BAGS")) or _dex_id in ("pumpswap", "pump", "pumpfun"))
+                                    and liq_usd >= 12000.0
+                                    and _vol5_live >= 8000.0
+                                    and _m5_live >= 3.0
+                                    and _b5_bump >= _s5_bump * 1.05
                                 )
-                                if _tot_tx5_sc >= 200 and _avg_tx5_sc < 12.0 and _links_sc == 0 and not _is_deep_launchpad_runner:
-                                    print(f"🚫 [SCANNER-WASH-TRAP] {actual_symbol} ({mint[:8]}): накрутка микро-ботом ({_tot_tx5_sc} txns, avg ${_avg_tx5_sc:.2f} < $12) — отмена!")
+                                if _tot_tx5_sc >= 200 and _avg_tx5_sc < 4.0 and _links_sc == 0 and not _is_deep_launchpad_runner and not _is_retail_flow_sc:
+                                    print(f"🚫 [SCANNER-WASH-TRAP] {actual_symbol} ({mint[:8]}): накрутка микро-ботом ({_tot_tx5_sc} txns, avg ${_avg_tx5_sc:.2f} < $4) — отмена!")
                                     continue
 
                                 # Блок кастомных не-pump контрактов на PumpSwap только при микро-пуле (< $6k)
@@ -1318,9 +1314,9 @@ async def scanner_loop(analyzer, tracker):
                                     from sol_price import get_sol_price_sync
                                     _sol_p_sc = float(get_sol_price_sync() or 150.0)
                                     if _sol_p_sc <= 0: _sol_p_sc = 150.0
-                                    _dump_floor_sc = float(getattr(config, "PUMP_DUMP_FLOOR_SOL", 285.0)) * _sol_p_sc
-                                    if 0 < _fdv_sc < _dump_floor_sc and not (_age_sc < 5.0 and _vol5_live >= 20000.0 and _m5_live >= 18.0 and _b5_bump >= _s5_bump * 1.45):
-                                        print(f"🚫 [SCANNER-MIGRATION] {actual_symbol} ({mint[:8]}): FDV ${_fdv_sc:,.0f} < ${_dump_floor_sc:,.0f} [~285 SOL] — слит ниже уровня миграции (кейс SHANE).")
+                                    _dump_floor_sc = float(getattr(config, "PUMP_DUMP_FLOOR_SOL", 160.0)) * _sol_p_sc
+                                    if 0 < _fdv_sc < _dump_floor_sc and not (_age_sc < 5.0 and _vol5_live >= 4000.0 and _m5_live >= 8.0 and _b5_bump >= _s5_bump * 1.10):
+                                        print(f"🚫 [SCANNER-MIGRATION] {actual_symbol} ({mint[:8]}): FDV ${_fdv_sc:,.0f} < ${_dump_floor_sc:,.0f} [~160 SOL] — слит ниже уровня миграции.")
                                         continue
                                     if liq_usd < 8000.0:
                                         print(f"🚫 [SCANNER-MIGRATION] {actual_symbol} ({mint[:8]}): ликвидность ${liq_usd:,.0f} < $8,000 — микро-пул.")

@@ -63,7 +63,7 @@ INFANT_DUMP_PCT = -0.180       # Срез рага на 1-й минуте при
 MAX_ENTRY_H1_PCT = 1500.0       # Разрешаем сильные пампы до +1500% за 1ч (не срезаем взлетающие ракеты!)
 MAX_ENTRY_M5_PCT = 120.0        # Потолок m5: до +120% (ловим взлетающие ракеты, а не только стоячие монеты!)
 MAX_ENTRY_M1_PCT = 28.0         # Вход в импульс: до +28.0% (вместо 12%)
-REQUIRE_SOCIALS_MIN_AGE_MIN = 8.0
+REQUIRE_SOCIALS_MIN_AGE_MIN = 25.0  # Требуем соцсети ТОЛЬКО после 25 минут (на старте DexScreener не успевает индексировать)
 
 STREAK_COOLDOWN_ENABLED = False
 STREAK_MAX_CONSECUTIVE_LOSSES = 5
@@ -77,13 +77,13 @@ DD_THROTTLE_ENABLED = False
 DD_THROTTLE_START_USD = 15.0
 
 # === ВХОД В ЗРЕЛЫЕ КРИВЫЕ PUMP.FUN ДО МИГРАЦИИ + ЗАЩИТА DEX ===
-SNIPER_ENTRIES_ENABLED = False
-ALLOW_UNGRADUATED_PUMPFUN = False         # ОТКЛЮЧЕНО: запрет сырых bonding curves (сливы $KCAT -58%, REVERSE -34%). Ждём миграции на DEX с сожжённым LP!
-MIN_PUMP_CURVE_MCAP_USD = 18000.0         # Fallback в USD (если sol_price недоступен)
-MAX_PUMP_CURVE_MCAP_USD = 44000.0         # Fallback в USD
-MIN_PUMP_CURVE_MCAP_SOL = 80.0            # Порог кривой pump.fun в SOL (~$6.6k при SOL $83, ~$12k при SOL $150)
-MAX_PUMP_CURVE_MCAP_SOL = 350.0           # Верх кривой перед миграцией (~350 SOL)
-PUMP_MIGRATION_MCAP_SOL = 410.0           # FDV миграции pump.fun (~410 SOL = ~$34k при SOL $83, ~$61.5k при SOL $150)
+SNIPER_ENTRIES_ENABLED = True             # ВКЛЮЧЕНО: мгновенный снайпинг в оперативной памяти (RAM)
+ALLOW_UNGRADUATED_PUMPFUN = True          # ВКЛЮЧЕНО: ловим ранние ракеты прямо на кёрве Pump.fun до миграции!
+MIN_PUMP_CURVE_MCAP_USD = 4000.0          # Вход от $4k FDV (~45 SOL) — после начальных спам-бандлов
+MAX_PUMP_CURVE_MCAP_USD = 34000.0         # Вход до $34k FDV (~380 SOL) — до стены миграции
+MIN_PUMP_CURVE_MCAP_SOL = 45.0            # Порог кривой pump.fun в SOL (~$3.8k при SOL $85)
+MAX_PUMP_CURVE_MCAP_SOL = 380.0           # Верх кривой перед миграцией (~380 SOL)
+PUMP_MIGRATION_MCAP_SOL = 410.0           # FDV миграции pump.fun (~410 SOL = ~$35k при SOL $85)
 PUMP_DUMP_FLOOR_SOL = 160.0               # Порог post-mig-dumped (~40% миграции = 160 SOL, разрешает Dip Reclaim)
 JEV_MAX_TICKET_USD = 0.0
 MIN_GRADUATED_LIQ_USD = 5000.0           # На DEX минимум $5k реальной ликвидности (пускает свежие миграции PumpSwap и Raydium $5k+, не режет ранние ракеты)
@@ -91,10 +91,10 @@ AUDITOR_STAIRCASE_ENABLED = True
 AUDITOR_MAX_DEV_PCT = 6.0
 AUDITOR_MAX_TOP10_PCT = 32.0
 STREAM_WINDOW_SEC = 60
-STREAM_MIN_UNIQUE_BUYERS = 6
-STREAM_MIN_BUY_SOL = 1.5
+STREAM_MIN_UNIQUE_BUYERS = 5
+STREAM_MIN_BUY_SOL = 1.2
 STREAM_MAX_TOP_BUYER_RATIO = 0.50
-STREAM_MIN_BS_RATIO = 1.6
+STREAM_MIN_BS_RATIO = 1.4
 STREAM_MAX_CURVE_PROGRESS = 85.0
 STREAM_ENTRY_SIZE_USD = 5.0
 STREAM_SLIPPAGE = 0.08
@@ -103,7 +103,7 @@ STREAM_GC_MIN_PROGRESS = 4.0
 STREAM_GC_IDLE_SEC = 180
 STREAM_DEV_DUMP_RATIO = 0.25
 STREAM_MAX_DEV_BUY_TOKENS = 100_000_000
-STREAM_MIN_ENTRY_PROGRESS = 15.0
+STREAM_MIN_ENTRY_PROGRESS = 8.0
 STREAM_MOMENTUM_MIN_RATIO = 0.35
 
 VIP_ENTRIES_ENABLED = True
@@ -127,7 +127,7 @@ TP1_TRIGGER_PCT = 0.180              # На +18% фиксируем 45% позы
 TP1_SELL_FRAC = 0.45
 TP2_TRIGGER_PCT = 0.550              # На +55% фиксируем 35% от остатка (возврат еще $1.85 — сделка 100% БЕЗРИСКОВАЯ!)
 TP2_SELL_FRAC = 0.35
-TP3_TRIGGER_PCT = 1.60               # На +160% фиксируем 35% от остатка
+TP3_TRIGGER_PCT = 1.10               # На +110% фиксируем 35% от остатка
 TP3_SELL_FRAC = 0.35
 TP4_TRIGGER_PCT = 3.50               # На +350% фиксируем 40% от остатка
 TP4_SELL_FRAC = 0.40
@@ -135,19 +135,19 @@ TP5_TRIGGER_PCT = 8.00               # На +800% (9x) фиксируем 50%
 TP5_SELL_FRAC = 0.50
 MOONBAG_TRIGGER_PCT = 999.0
 MOONBAG_SELL_FRAC = 0.0
-# === МУНБЭГ-ТРЕЙЛИНГ (остаток после TP1 едет до +200%) ===
+# === МУНБЭГ-ТРЕЙЛИНГ (остаток после TP1 едет до +110%) ===
 # После TP1 (+18%, продано 45%) сделка уже в плюсе. Остаток НЕ режется трейлингом на мелких откатах:
-# держим до пика +200%, и только оттуда включается трейлинг. Ниже — лишь страховочные полы.
-MOONBAG_TRAIL_ACTIVATION_PCT = 2.00  # Трейлинг мунбэга включается только от пика +200%
-MOONBAG_TRAIL_DISTANCE_PCT = 0.25    # Дистанция трейлинга 25% от пика (на +200% выход не ниже ~+125%)
+# держим до пика +110%, и только оттуда включается трейлинг. Ниже — лишь страховочные полы.
+MOONBAG_TRAIL_ACTIVATION_PCT = 1.10  # Трейлинг мунбэга включается только от пика +110%
+MOONBAG_TRAIL_DISTANCE_PCT = 0.25    # Дистанция трейлинга 25% от пика (на +110% выход не ниже ~+66%)
 MOONBAG_MAX_HOLD_MIN = 90.0          # Мунбэг может ехать до 90 минут (вместо 45)
 
 PUMP_XGB_ENABLED = False
 RAY_XGB_ENABLED = False
 ROCKET_XGB_ENABLED = True
 ROCKET_XGB_STAGE1_THRESHOLD = 18.0   # Первичный отсев в 0мс (отсекает шлак с <18%)
-ROCKET_XGB_FINAL_THRESHOLD = 30.0    # Финальный порог 30%: отсекает вялые BRO (25%), пускает реальные ракеты 30%+
-ROCKET_XGB_THRESHOLD = 30.0
+ROCKET_XGB_FINAL_THRESHOLD = 22.0    # Финальный порог 22%: пускает свежие импульсные ракеты 22%+ (не держит слоты пустыми)
+ROCKET_XGB_THRESHOLD = 22.0
 
 STALL_TIMER_SEC = 240.0   # 4 минуты на консолидацию стоячего минуса
 STALL_MAX_LOSS_PCT = -0.090
@@ -309,9 +309,9 @@ PULLBACK_M1_MIN_PCT = -0.08
 PULLBACK_M1_MAX_PCT = 0.20
 PULLBACK_MAX_H1_PCT = 320.0
 PULLBACK_MAX_M5_PCT = 0.95
-MIN_VOLUME_M5 = 5000            # Минимум $5,000 за 5м (отсекает вялые стоячие монеты вроде BRO, пускает живые ракеты)
-MIN_TXNS_M5 = 25
-MIN_BUY_SELL_RATIO = 1.08       # Покупателей больше продавцов (не душит активные ракеты вроде DUGE 776b/720s)
+MIN_VOLUME_M5 = 2500            # Минимум $2,500 за 5м (ранние ракеты пускает от $1,500, не отсекает взлетающие гемы)
+MIN_TXNS_M5 = 14                # 14 транзакций за 5м (вместо 25 — ловит ранний старт)
+MIN_BUY_SELL_RATIO = 1.02       # Покупателей >= продавцов (не душит активные двухсторонние ракеты)
 LOTTERY_ENABLED = False
 LOTTERY_MIN_M5_PCT = 0.60
 LOTTERY_SIZE_MULT = 0.30

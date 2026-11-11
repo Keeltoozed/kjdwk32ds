@@ -441,14 +441,14 @@ class PaperTracker:
         if getattr(config, "SOLANA_ONLY", True):
             if chain != "solana" or str(mint or "").startswith("0x"):
                 print(f"🚫 [SOLANA-ONLY-FIREWALL] Отказ входа: {symbol} ({str(mint)[:10]}) не Solana (chain={chain}).")
-                return
+                return False
 
         # Валидация адреса минта Solana: валидный Base58 адрес должен быть длиной от 32 до 44 символов
         if chain == "solana":
             mint_str = str(mint or "").strip()
             if len(mint_str) < 32 or len(mint_str) > 44 or not re.match(r'^[1-9A-HJ-NP-Za-km-z]+$', mint_str):
                 print(f"🚫 Отказ: невалидный адрес Solana mint '{mint_str}' (длина {len(mint_str)}, ожидается 32-44 Base58).")
-                return
+                return False
 
         # Валидация входа: мусорный entry ~0 давал фантомы +586М% и $1.6M.
         try:
@@ -456,30 +456,32 @@ class PaperTracker:
             amount_usd = float(amount_usd or 0)
         except Exception:
             print(f"🚫 Отказ: битая цена/сайз {symbol} {mint[:8]}.")
-            return
+            return False
         if not (entry_price > 0) or entry_price > 1e6:
             print(f"🚫 Отказ: entry_price ${entry_price} вне диапазона для {symbol}.")
-            return
+            return False
         if not (0.5 <= amount_usd <= 50000.0):
             print(f"🚫 Отказ: сайз ${amount_usd:.2f} вне [0.5, 50000] для {symbol}.")
-            return
+            return False
         # Защита от серии минусов (Streak Circuit Breaker)
         is_cooling, reason = self.is_streak_cooldown_active()
         if is_cooling:
             print(f"🚫 Отказ входа {symbol}: {reason}")
-            return
+            return False
 
         # ЗАЩИТА ML FIREWALL: Ни одна сделка с низким скором Rocket XGBoost не может быть открыта!
-        min_conf = float(getattr(config, "ROCKET_XGB_FINAL_THRESHOLD", 28.0))
+        # ИСКЛЮЧЕНИЕ: VIP KOL сделки (Ansem, Chairman и др.) идут с 100% обходом ML-фильтров по прямому требованию!
         _is_copy_src = str(source or "").startswith("COPY")
+        _is_vip = "VIP" in str(source or "")
+        min_conf = float(getattr(config, "ROCKET_XGB_FINAL_THRESHOLD", 28.0))
         _eff_min_conf = float(getattr(config, "ROCKET_XGB_STAGE1_THRESHOLD", 18.0)) if _is_copy_src else min_conf
-        if getattr(config, "ROCKET_XGB_ENABLED", True):
+        if getattr(config, "ROCKET_XGB_ENABLED", True) and not _is_vip:
             if ml_confidence > 0 and (ml_confidence + 0.05) < _eff_min_conf:
                 print(f"🚫 [FIREWALL] Отказ входа {symbol} ({mint[:8]}): Rocket XGB скор {ml_confidence:.1f}% < {_eff_min_conf:.0f}% (блокировка убыточного дампа)")
-                return
+                return False
             if (source == "GROK-JEV" or _is_copy_src) and ml_confidence <= 0.0:
                 print(f"🚫 [FIREWALL] Отказ входа {symbol} ({mint[:8]}): {source} попытка входа без ML скоринга!")
-                return
+                return False
         # СИМВОЛЬНЫЙ КУЛДАУН (кейс VRAX: +5% → перезаход в клона → -32%).
         # Все старые гарды keyed by mint (адрес), а клоны выходят под тем же
         # тикером с другим адресом. Баним тикер целиком: открыт такой же —
@@ -488,7 +490,7 @@ class PaperTracker:
         # История закрытых живёт в positions (включая архив *_old_*), поэтому
         # переживает рестарты через файл/Supabase.
         _sym = self._norm_symbol(symbol)
-        if _sym:
+        if _sym and not _is_vip:
             _cd = float(getattr(config, "SYMBOL_REBUY_COOLDOWN_SEC", 4 * 3600) or 0)
             _now = time.time()
             for _k, _p in self.positions.items():
@@ -501,7 +503,7 @@ class PaperTracker:
                     continue
                 if _p.status == "open":
                     print(f"🚫 Отказ: {symbol} уже в рынке (другой контракт, {_k[:10]}). Не удваиваемся в тот же тикер.")
-                    return
+                    return False
                 if _p.status == "closed" and _cd > 0:
                     _xt = float(getattr(_p, "exit_time", 0) or 0)
                     _pnl = float(getattr(_p, "pnl_usd", 0.0) or 0.0)
@@ -518,13 +520,13 @@ class PaperTracker:
                         _unit = "м" if _was_profitable else "ч"
                         print(f"⏳ Символьный кулдаун: {symbol} закрыт {_p.pnl_usd:+.2f}$ недавно ({getattr(_p, 'exit_reason', '')}). "
                               f"Повтор через {_left:.1f}{_unit} — не покупаем свой же выход.")
-                        return
+                        return False
         # БЛОКИРОВКА ПОВТОРНОГО ВХОДА С УМНЫМ КУЛДАУНОМ
         if mint in self.positions:
             pos = self.positions[mint]
             if pos.status == "open":
                 print(f"⚠️ Позиция {symbol} уже открыта. Отмена повторного входа.")
-                return
+                return False
                 
             # Умный кулдаун:
             # 1. Только уверенный профит (>= +8% по Trailing / Profit Floor, БЕЗ Breakeven-сливов вроде IPHONEDUO -37.7%!)
@@ -542,12 +544,12 @@ class PaperTracker:
             )
             
             _req_cd = (15 * 60) if _was_profitable else (4 * 3600)
-            if time_since_exit < _req_cd:
+            if not _is_vip and time_since_exit < _req_cd:
                 if _was_profitable:
                     print(f"⏳ Кулдаун профитной монеты: {symbol} закрыт в +${_pnl:.2f}. Ждем еще {int(_req_cd - time_since_exit)}с перед возможным перезаходом во 2-ю волну.")
                 else:
                     print(f"⏳ Кулдаун: {symbol} закрыт с минусом. Ждем еще {(4*3600 - time_since_exit)/3600:.1f}ч перед входом.")
-                return
+                return False
                 
             # Если кулдаун прошел, архивируем старую сделку, чтобы не потерять ее из истории PnL
             archive_key = f"{mint}_old_{int(time.time())}"
@@ -609,6 +611,7 @@ class PaperTracker:
                 threading.Thread(target=lambda: asyncio.run(logger.log_entry(mint, entry_features, ml_confidence, is_mature)), daemon=True).start()
         except Exception as e:
             print(f"⚠️ Ошибка логирования входа: {e}")
+        return True
 
     def partial_close_position(self, mint: str, exit_price: float, sell_pct: float, reason: str):
         """Частичная фиксация позиции (Moonbags)"""

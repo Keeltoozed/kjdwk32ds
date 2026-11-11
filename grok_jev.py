@@ -569,28 +569,28 @@ class GrokJevEngine:
             if _is_real_dump or not _is_active_grad:
                 return False, f"post-mig-dumped-fdv ${fdv_mc:,.0f} < ${_dump_floor_g:,.0f}"
 
-        # 2.4. Защита от безымянных рагпулов без соцсетей на ВСЕХ возрастах (STONKS 12.5м, IPHONEDUO 28.2м, scamsem 25.8м)
+        # 2.4. Защита от безымянных рагпулов без соцсетей: требуем соцсети ТОЛЬКО после 25 минут!
         _info_g = pair_data.get("info") or {}
         _links_cnt_g = len(_info_g.get("socials", []) or []) + len(_info_g.get("websites", []) or [])
         _soc_unk_g = bool(pair_data.get("_socials_unknown", False))
-        _req_soc_age = float(getattr(_c, "REQUIRE_SOCIALS_MIN_AGE_MIN", 8.0))
+        _req_soc_age = float(getattr(_c, "REQUIRE_SOCIALS_MIN_AGE_MIN", 25.0))
         _vol_liq_ratio_g = (vol_m5 / max(eff_liq, 1.0)) if eff_liq > 0 else 0.0
         _avg_tx_g = vol_m5 / max(1, b5 + s5)
-        _is_burned_lp_g = mint.endswith(("pump", "bonk", "BAGS")) or dex_id == "pumpswap"
+        _is_burned_lp_g = mint.endswith(("pump", "bonk", "BAGS")) or dex_id in ("pumpswap", "pump", "pumpfun")
         _is_organic_stealth = False
-        if _links_cnt_g == 0 and not _soc_unk_g:
+        if age_min >= _req_soc_age and _links_cnt_g == 0 and not _soc_unk_g:
             _is_organic_stealth = (
-                eff_liq >= 10000.0
+                (eff_liq >= 5000.0 or is_pump)
                 and vol_m5 >= 1200.0
-                and _vol_liq_ratio_g <= 5.5
+                and _vol_liq_ratio_g <= 8.5
                 and (
-                    (b5 >= 12 and b5 >= s5 * 1.05) or
-                    (b5 >= 8 and s5 <= 30 and m5 >= 2.0 and _avg_tx_g >= 20.0) or
-                    (vol_m5 >= 6000.0 and b5 >= s5)
+                    (b5 >= 12 and b5 >= s5 * 1.02) or
+                    (b5 >= 8 and s5 <= 30 and m5 >= 1.5 and _avg_tx_g >= 10.0) or
+                    (vol_m5 >= 4000.0 and b5 >= s5)
                 )
             )
             if not _is_organic_stealth:
-                _sub_reason_g = f"no-socials-mature-rug (age {age_min:.0f}m >= 12m, 0 socials/websites)" if age_min >= 12.0 else f"no-socials-rug (age {age_min:.1f}m, 0 socials/websites, v/l {_vol_liq_ratio_g:.1f}x)"
+                _sub_reason_g = f"no-socials-mature-rug (age {age_min:.0f}m >= 25m, 0 socials/websites)"
                 return False, _sub_reason_g
             else:
                 print(f"💎 [JEV-ORGANIC-STEALTH] {symbol} ({mint[:8]}): 0 соцсетей, но доказан чистый органический поток (${vol_m5:,.0f}, {b5}b/{s5}s, v/l {_vol_liq_ratio_g:.2f}) — пропуск.")
@@ -658,26 +658,32 @@ class GrokJevEngine:
                     return False, f"h6-downtrend {float(_h6_raw or 0):+.1f}% < {_min_h6:+.1f}% (monet is bleeding)"
 
         # 4. Объем и давление покупателей:
-        # 4.0. Wash-Trading Spike Guard: отличаем симметричную бот-накрутку от реального пробоя покупателями (CHIMPS +59% v/l 1.5x, duge $158k liq 3.82x)!
+        # 4.0. Wash-Trading Spike Guard: отличаем симметричную бот-накрутку от реального пробоя покупателями
         _avg_tx5 = vol_m5 / max(1, b5 + s5)
-        if _is_burned_lp_g and eff_liq >= 12000.0:
-            _max_vl_jev = 6.50 if (b5 >= s5 * 1.18) else 3.20
-        elif eff_liq >= 30000.0 and b5 >= s5 * 1.25 and _avg_tx5 >= 35.0:
-            _max_vl_jev = 6.00
-        elif b5 >= s5 * 1.22 and _avg_tx5 >= 20.0 and eff_liq >= 15000.0:
-            _max_vl_jev = 3.80
+        if _is_burned_lp_g or is_pump:
+            _max_vl_jev = 18.0 if (b5 >= s5 * 1.02) else 10.0
+        elif eff_liq >= 12000.0:
+            _max_vl_jev = 15.0 if (b5 >= s5 * 1.05) else 8.0
+        elif eff_liq >= 30000.0 and b5 >= s5 * 1.10 and _avg_tx5 >= 20.0:
+            _max_vl_jev = 12.0
+        elif b5 >= s5 * 1.05:
+            _max_vl_jev = 8.0
         else:
-            _max_vl_jev = 1.85
+            _max_vl_jev = 4.50
         if eff_liq > 0 and (vol_m5 / eff_liq) > _max_vl_jev:
             return False, f"wash-trading-spike: vol5 ${vol_m5:,.0f} is {(vol_m5/eff_liq):.1f}x > {_max_vl_jev:.2f}x of pool liq ${eff_liq:,.0f} (bot pump trap)"
 
-        _min_vol_m5 = float(getattr(_c, "MIN_VOLUME_M5", 2000.0))
+        _min_vol_m5 = float(getattr(_c, "MIN_VOLUME_M5", 2500.0))
+        if is_pump or age_min <= 10.0:
+            _min_vol_m5 = 1500.0 if (b5 >= s5 and (b5 + s5) >= 10) else min(_min_vol_m5, 2000.0)
         if vol_m5 < _min_vol_m5:
             return False, f"vol5-low ${vol_m5:.0f} < ${_min_vol_m5:.0f} (inactive dead pool)"
-        _min_tx5 = int(getattr(_c, "MIN_TXNS_M5", 20))
+        _min_tx5 = int(getattr(_c, "MIN_TXNS_M5", 14))
         if (b5 + s5) < _min_tx5:
             return False, f"tx5-low {b5+s5} < {_min_tx5} (too few transactions)"
-        _req_bs = float(getattr(_c, "MIN_BUY_SELL_RATIO", 1.15))
+        _req_bs = float(getattr(_c, "MIN_BUY_SELL_RATIO", 1.02))
+        if vol_m5 >= 5000.0 and b5 >= s5:
+            _req_bs = 1.00
         if s5 > 0 and (b5 / s5) < _req_bs:
             return False, f"sellers-dominating {b5}b/{s5}s (ratio {b5/s5:.2f} < {_req_bs:.2f})"
 
@@ -1493,7 +1499,7 @@ class GrokJevEngine:
             except Exception:
                 pass
             _dex_id_aud = str(pair_data.get("dexId", "")).lower()
-            _is_launchpad_aud = is_pump or address.endswith("pump") or address.endswith("moon") or _is_grad_aud or _dex_id_aud in ("pump", "pumpfun", "pumpswap", "moonshot", "meteoradbc")
+            _is_launchpad_aud = is_pump or address.endswith("pump") or address.endswith("moon") or _is_grad_aud or (is_raw_pump_curve and _dex_id_aud in ("pump", "pumpfun", "pumpswap"))
             _txs_m5_aud = (pair_data.get("txns") or {}).get("m5") or {}
             _b5_aud = int(_txs_m5_aud.get("buys", 0) or 0)
             _s5_aud = int(_txs_m5_aud.get("sells", 0) or 0)

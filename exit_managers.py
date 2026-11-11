@@ -129,16 +129,16 @@ class MatureExitManager:
         _trail_dist = None
 
         if _is_mb:
-            # === МУНБЭГ-ТРЕЙЛИНГ НА +200% ===
+            # === МУНБЭГ-ТРЕЙЛИНГ НА +110% ===
             # TP1 уже забрал 45% на +18% — сделка в плюсе. Остаток едет свободно:
-            # трейлинг включается только от пика +200%, ниже — лишь страховочные полы (без трейлинга).
-            _mb_act = float(getattr(config, "MOONBAG_TRAIL_ACTIVATION_PCT", 2.00))
+            # трейлинг включается только от пика +110%, ниже — лишь страховочные полы (без трейлинга).
+            _mb_act = float(getattr(config, "MOONBAG_TRAIL_ACTIVATION_PCT", 1.10))
             _mb_dist = float(getattr(config, "MOONBAG_TRAIL_DISTANCE_PCT", 0.25))
             if max_pnl_pct >= 5.00:
                 _floor_pnl = round(max_pnl_pct * 0.70, 2)
                 _trail_dist = min(_mb_dist, 0.20)
             elif max_pnl_pct >= _mb_act:
-                _floor_pnl = round(_mb_act * 0.60, 2)   # на +200% пол +120%
+                _floor_pnl = round(_mb_act * 0.60, 2)   # на +110% пол +66%
                 _trail_dist = _mb_dist
             elif max_pnl_pct >= 1.00:
                 _floor_pnl = 0.50                        # страховка: не отдаём 2x обратно
