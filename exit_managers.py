@@ -182,8 +182,14 @@ class MatureExitManager:
             return f"Max Hold Expiry ({pnl_pct*100:+.1f}% after {minutes_held:.0f}m)"
 
         # =========================================================================
-        # 6. СТАГНАЦИЯ И МЕРТВЫЙ ИМПУЛЬС (Быстрый срез стоячих минусовых монет)
+        # 6. СТАГНАЦИЯ И МЕРТВЫЙ ИМПУЛЬС (Срез стоячих монет до дев-дампа)
         # =========================================================================
+        # Если монета в рынке 6+ минут, её пик был слабым (< +20%), и новых ATH нет 4.5+ минут:
+        # выходим немедленно! В мемкоинах затухание импульса означает скорый раг/дамп дева (кейс 牛逼 13м).
+        if minutes_held >= 6.0 and max_pnl_pct < 0.20 and _peak_age_min >= 4.5:
+            _sign = "+" if pnl_pct >= 0 else ""
+            return f"Stalled Momentum Escape ({_sign}{pnl_pct*100:.1f}%, no ATH {_peak_age_min:.0f}m at {minutes_held:.0f}m)"
+
         _stall_sec = float(getattr(config, "STALL_TIMER_SEC", 240.0))
         _stall_loss = float(getattr(config, "STALL_MAX_LOSS_PCT", -0.090))
         if minutes_held >= (_stall_sec / 60.0) and max_pnl_pct < 0.04 and pnl_pct <= _stall_loss:

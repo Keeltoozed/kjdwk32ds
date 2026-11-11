@@ -617,10 +617,10 @@ class GrokJevEngine:
             _is_strong_jev_breakout = (m5 >= 1.5 and vol_m5 >= 1500.0 and b5 >= s5 and (b5 + s5) >= 15)
             if not _is_massive_mature_flow_g and not _is_strong_jev_breakout and (vol_m5 < 2500.0 or ((vol_m5 / max(eff_liq, 1.0)) < 0.07 and vol_m5 < 8000.0) or m5 < 1.0 or (b5 + s5) < 15):
                 return False, f"slow-mature-pool age {age_min:.0f}m vol5 ${vol_m5:,.0f} v/l {(vol_m5/max(eff_liq,1.0)):.2f}x"
-        _max_m5_allowed = float(getattr(_c, "MAX_ENTRY_M5_PCT", 45.0))
+        _max_m5_allowed = float(getattr(_c, "MAX_ENTRY_M5_PCT", 120.0))
         if m5 > _max_m5_allowed:
-            _is_strong_buyer_breakout_g = (m5 <= 120.0 and b5 >= int(s5 * 1.10) and vol_m5 >= 3500.0 and (b5 + s5) >= 20)
-            _is_cooling_pullback = (-8.0 <= m1 <= -1.0 and m5 <= 60.0 and b5 >= s5 * 1.05)
+            _is_strong_buyer_breakout_g = (m5 <= 200.0 and b5 >= int(s5 * 1.05) and vol_m5 >= 2500.0 and (b5 + s5) >= 15)
+            _is_cooling_pullback = (-10.0 <= m1 <= -1.0 and m5 <= 150.0 and b5 >= s5 * 1.02)
             if not (_is_strong_buyer_breakout_g or _is_cooling_pullback):
                 return False, f"fomo-vertical-m5 m5 {m5:+.1f}% > +{_max_m5_allowed:.0f}% (buying top of vertical pump without cooling pullback, m1={m1:+.1f}%)"
         if s5 > 10 and b5 < (s5 * 0.80):
@@ -939,10 +939,10 @@ class GrokJevEngine:
 
         # Если токен моложе 3м, DexScreener часто отдаёт m1 == m5 (одна первая свеча).
         _m1_is_phantom = (_age_m < 3.0 and abs(m5) > 1.0 and abs(m1) > 0 and abs(m1 / max(abs(m5), 0.01) - 1.0) < 0.08)
-        _strong_breakout = (b5 >= 15 and b5 >= s5 * 1.10 and vol5 >= 3000.0)
-        _max_m1 = 22.0 if _strong_breakout else min(float(getattr(_c, "JEV_MAX_M1_ENTRY_PCT", 8.0)), 12.0)
-        _cfg_m5 = float(getattr(_c, "MAX_ENTRY_M5_PCT", 28.0))
-        _max_m5_cap = 120.0 if _strong_breakout else _cfg_m5
+        _strong_breakout = (b5 >= 10 and b5 >= s5 * 1.05 and vol5 >= 2000.0)
+        _max_m1 = 35.0 if _strong_breakout else float(getattr(_c, "JEV_MAX_M1_ENTRY_PCT", 25.0))
+        _cfg_m5 = float(getattr(_c, "MAX_ENTRY_M5_PCT", 120.0))
+        _max_m5_cap = 200.0 if _strong_breakout else _cfg_m5
         if m5 > _max_m5_cap:
             return False, -0.14, 0.0, f"fomo-spike (m5 {m5:+.1f}% > +{_max_m5_cap:.0f}%) — buying local top, wait for reset"
         if m1 > _max_m1 and not _m1_is_phantom:
@@ -1572,7 +1572,13 @@ class GrokJevEngine:
                                 if (lp_locked_pct >= 80.0 or lp_burned_pct >= 80.0) and (mkt_quote_usd >= 2000 or (target_pair and mkt_pubkey == target_pair)):
                                     has_verified_locked_lp = True
                                 if lp_unlocked > 0:
-                                    print(f"ℹ️ [RUGCHECK-LP] {symbol} ({address[:8]}): LP lock {lp_locked_pct:.1f}%, burn {lp_burned_pct:.1f}%, unl ${lp_unlocked:,.0f} — допуск по стратегии охоты за рагами.")
+                                    print(f"ℹ️ [RUGCHECK-LP] {symbol} ({address[:8]}): LP lock {lp_locked_pct:.1f}%, burn {lp_burned_pct:.1f}%, unl ${lp_unlocked:,.0f} — проверка.")
+
+                    # Токены Pump.fun защищены протоколом (девы не могут вытащить LP).
+                    # НО если это КАСТОМНЫЙ Raydium/Meteora пул (не pump.fun) и его LP НЕ заблокирован:
+                    # это 100% ловушка с выводом ликвидности девом (кейс 牛逼 -$130k pull)!
+                    if not is_canonical_pump and not has_verified_locked_lp:
+                        return False, f"unlocked-custom-lp (custom non-pump pool with unlocked LP is guaranteed dev pull)", _h_stats
 
                     # Проверка держателей и дева (Holders & Sybil analysis)
                     holders = rc_data.get("topHolders", []) or []

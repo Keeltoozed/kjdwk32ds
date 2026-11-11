@@ -59,10 +59,10 @@ EMERGENCY_CAP_PCT = -0.160     # Аварийный потолок -16.0% (мг�
 INFANT_WINDOW_MIN = 0.5
 INFANT_DUMP_PCT = -0.120       # Срез рага на 1-й минуте при провале <= -12.0%
 
-# === ФИЛЬТРЫ ВХОДА (ОТСЕКАЮТ ВЕРШИНЫ И ПАДАЮЩИЕ НОЖИ) ===
-MAX_ENTRY_H1_PCT = 350.0       # Запрет входа в перегретые пампы > +350% за 1ч (строго для всех токенов > 4м!)
-MAX_ENTRY_M5_PCT = 45.0        # Потолок m5: допускаем сильный импульс до +45% (не срезаем взлетающие ракеты вроде FLOAT +29.7%)
-MAX_ENTRY_M1_PCT = 12.0        # Вход в импульс: до +12.0% (до +25% при высоком спросе покупателей)
+# === ФИЛЬТРЫ ВХОДА (РАЗРЕШАЕМ ВХОД В БЫСТРЫЕ РАКЕТЫ) ===
+MAX_ENTRY_H1_PCT = 1500.0       # Разрешаем сильные пампы до +1500% за 1ч (не срезаем взлетающие ракеты!)
+MAX_ENTRY_M5_PCT = 120.0        # Потолок m5: до +120% (ловим взлетающие ракеты, а не только стоячие монеты!)
+MAX_ENTRY_M1_PCT = 28.0         # Вход в импульс: до +28.0% (вместо 12%)
 REQUIRE_SOCIALS_MIN_AGE_MIN = 8.0
 
 STREAK_COOLDOWN_ENABLED = False
@@ -152,7 +152,7 @@ SOLANA_MIN_AGE_MIN = 0.25       # Разрешаем молодые ракеты
 SOLANA_MAX_AGE_HOURS = 6.0       # До 6 часов (не срезаем развивающиеся ракеты на пике тренда)
 SOLANA_MAX_AGE_MIN = 360.0       # Торгуем активные монеты до 6 часов
 JEV_MAX_AGE_MIN = 360.0          # В GROK-JEV активные монеты до 6 часов
-JEV_MAX_M1_ENTRY_PCT = 8.0
+JEV_MAX_M1_ENTRY_PCT = 25.0
 
 SCALP_TIMEOUT_MIN = 10.0
 STAGNANT_LOSS_MIN = 9.0
@@ -200,7 +200,7 @@ JEV_MAX_DEV_STILL_LOADED = 0.35
 
 JEV_BID_THE_FLUSH_ENABLED = True
 JEV_STOP_UNDER_WICK_ENABLED = True
-JEV_MAX_M1_ENTRY_PCT = 8.0       # Вход в консолидацию/откат: не покупаем вершины 1м свечей > +8.0%
+JEV_MAX_M1_ENTRY_PCT = 25.0       # Вход в импульс m1: разрешаем до +25% (не блокируем быстрые ракеты)
 JEV_DEFAULT_WICK_STOP_PCT = -0.100
 
 BIRDEYE_API_KEY = os.getenv("BIRDEYE_API_KEY", "")

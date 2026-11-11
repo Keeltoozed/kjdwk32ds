@@ -1829,12 +1829,12 @@ class Analyzer:
         _min_m5_req = 1.2 if (_raw_liq_chk >= 14000.0 and _b5_pre >= _s5_pre * 1.10 and _vm5_pre >= 2500.0) else 2.5
         if _m5 < _min_m5_req and not _is_buyer_dip_pre:
             return self._deny(mint, f"m5-too-weak {_m5:+.1f}%", f"🚫 [WEAK-M5] {symbol} ({mint[:8]}): m5 {_m5:+.1f}% < +{_min_m5_req:.1f}% — нет разгона.")
-        _base_max_m1 = float(getattr(config, "MAX_ENTRY_M1_PCT", 10.0))
-        # Разрешаем импульсный пробой (свеча +12%..+25%) при активном спросе покупателей (b5 >= s5 и vol >= $2500)
-        if _b5_pre >= int(_s5_pre * 1.05) and _vm5_pre >= 2500.0 and _m5 >= 3.0:
-            _max_m1_cfg = 25.0  # Импульсный пробой (кейс MELT m1 +15.8%)
+        _base_max_m1 = float(getattr(config, "MAX_ENTRY_M1_PCT", 28.0))
+        # Разрешаем импульсный пробой (свеча +15%..+35%) при активном спросе покупателей (b5 >= s5 и vol >= $2000)
+        if _b5_pre >= int(_s5_pre * 1.05) and _vm5_pre >= 2000.0 and _m5 >= 3.0:
+            _max_m1_cfg = 35.0  # Импульсный пробой ракеты
         else:
-            _max_m1_cfg = min(_base_max_m1, 14.0)
+            _max_m1_cfg = max(_base_max_m1, 28.0)
         _min_m1_floor = -6.0 if _m5 >= 10.0 else -2.8
         if _m1 > _max_m1_cfg or _m1 < _min_m1_floor:
             return self._deny(
@@ -1844,14 +1844,14 @@ class Analyzer:
             )
 
         # 4. Anti-FOMO: Защита от перегретых вершин (для свежих выпускников <=90м допускаем h1 до +2500%, т.к. h1 включает рост на кёрве $5k->$69k!)
-        _base_max_entry_h1 = float(getattr(config, "MAX_ENTRY_H1_PCT", 350.0))
+        _base_max_entry_h1 = float(getattr(config, "MAX_ENTRY_H1_PCT", 1500.0))
         _is_active_fresh_rocket = (
             _age_min_pre <= 90.0
-            and _vm5_pre >= 5000.0
+            and _vm5_pre >= 3000.0
             and _b5_pre >= _s5_pre * 1.05
         )
         _max_entry_h1 = 2500.0 if _is_active_fresh_rocket else _base_max_entry_h1
-        _max_entry_m5 = float(getattr(config, "MAX_ENTRY_M5_PCT", 45.0))
+        _max_entry_m5 = float(getattr(config, "MAX_ENTRY_M5_PCT", 120.0))
         if _h1 > _max_entry_h1 and _age_min_pre > 4.0:
             return self._deny(
                 mint,
@@ -1859,10 +1859,10 @@ class Analyzer:
                 f"🚫 [EXHAUSTED-TOP] {symbol} ({mint[:8]}): рост за час {_h1:+.1f}% > +{_max_entry_h1:.0f}% — вершина пампа.",
             )
         # Защита от покупки на верхушке вертикальной свечи:
-        # Разрешаем сильный пробой покупателями (до +120% при 10%+ перевесе покупателей b5/s5 >= 1.10)
+        # Разрешаем сильный пробой покупателями (до +200% при перевесе покупателей b5/s5 >= 1.05)
         # либо остывающий откат (m1 <= -1.0%). Блокируем чистую покупку хая без перевеса покупателей!
         if _m5 > _max_entry_m5:
-            _is_strong_buyer_breakout = (_m5 <= 120.0 and _b5_pre >= int(_s5_pre * 1.10) and _vm5_pre >= 3500.0 and (_b5_pre + _s5_pre) >= 20)
+            _is_strong_buyer_breakout = (_m5 <= 200.0 and _b5_pre >= int(_s5_pre * 1.05) and _vm5_pre >= 2500.0 and (_b5_pre + _s5_pre) >= 15)
             _is_cooling_pullback = (_m1 <= -1.0 and _m5 <= 90.0 and _b5_pre >= _s5_pre * 1.05)
             if not (_is_strong_buyer_breakout or _is_cooling_pullback):
                 return self._deny(
@@ -2437,16 +2437,16 @@ class Analyzer:
             if _m5 >= getattr(config, "LOTTERY_MIN_M5_PCT", 0.60) * 100:
                 if _is_runner or (_vm5_pre >= 2500.0 and _b5_pre >= 15 and _b5_pre >= _s5_pre * 1.05):
                     # Настоящая ракета с высокой ликвидностью и объемом (не микро-лотерейный раг)
-                    _m1_max = getattr(config, "PULLBACK_M1_MAX_PCT", 0.12) * 100
+                    _m1_max = getattr(config, "PULLBACK_M1_MAX_PCT", 0.35) * 100
                     if _m1 > _m1_max:
                         return self._deny(mint, "runner-m1-spike", f"🚫 [RUNNER-SPIKE] {mint}: m1 {_m1:+.1f}% > +{_m1_max:.0f}% — свеча-прострел в моменте, ждём откат.")
                     if _m1 < getattr(config, "PULLBACK_M1_MIN_PCT", -0.15) * 100:
                         return self._deny(mint, "runner-m1-dump", f"🚫 [RUNNER-DUMP] {mint}: m1 {_m1:+.1f}% — импульс схлопнулся, это дамп.")
-                    if _m5 > 450.0:
-                        return self._deny(mint, "runner-m5-overheat", f"🚫 [RUNNER-EXHAUSTION] {mint}: m5 {_m5:+.0f}% > +450% — экстремальный перегрев 5м свечи.")
-                    _max_h1_cfg = float(getattr(config, "PULLBACK_MAX_H1_PCT", 160.0))
+                    if _m5 > 650.0:
+                        return self._deny(mint, "runner-m5-overheat", f"🚫 [RUNNER-EXHAUSTION] {mint}: m5 {_m5:+.0f}% > +650% — экстремальный перегрев 5м свечи.")
+                    _max_h1_cfg = float(getattr(config, "PULLBACK_MAX_H1_PCT", 1500.0))
                     _max_h1_pct = (_max_h1_cfg * 100.0) if _max_h1_cfg <= 20.0 else _max_h1_cfg
-                    _max_h1_allowed = min(350.0, _max_h1_pct * 1.4)
+                    _max_h1_allowed = min(2500.0, _max_h1_pct * 1.5)
                     if _h1 > _max_h1_allowed:
                         return self._deny(mint, "runner-h1-gone", f"🚫 [ENTRY] {mint}: h1 {_h1:+.0f}% > +{_max_h1_allowed:.0f}% — ракета уже выдохлась/перегрета, поздно.")
                     print(f"🚀 [RUNNER-MOMENTUM] {mint}: мощный импульс m5 {_m5:+.0f}%, m1 {_m1:+.1f}%, liq ${_cur_liq_pre:,.0f}, vol5 ${_vm5_pre:,.0f} — ракета допущена к отбору.")
