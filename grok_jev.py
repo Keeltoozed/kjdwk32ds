@@ -1486,7 +1486,22 @@ class GrokJevEngine:
         # Одноразовые скам-бандлеры создают по 50 токенов в день без соцсетей, накручивают 15 покупок ботами и сливают 100% пула девом (кейсы Democat, OLDCAT, GANG CAT, BRR, 天猫双11).
         if not is_raw_pump_curve and not has_socials:
             _smart_n_chk = int(pair_data.get("_smart_buyers_count", 0) or 0)
-            if eff_liq < 100000.0 or _smart_n_chk < 1:
+            _is_grad_aud = False
+            try:
+                from birth_tracker import birth_tracker as _bt_aud
+                _is_grad_aud = _bt_aud.is_graduated(address)
+            except Exception:
+                pass
+            _dex_id_aud = str(pair_data.get("dexId", "")).lower()
+            _is_launchpad_aud = is_pump or address.endswith("pump") or address.endswith("moon") or _is_grad_aud or _dex_id_aud in ("pump", "pumpfun", "pumpswap", "moonshot", "meteoradbc")
+            _txs_m5_aud = (pair_data.get("txns") or {}).get("m5") or {}
+            _b5_aud = int(_txs_m5_aud.get("buys", 0) or 0)
+            _s5_aud = int(_txs_m5_aud.get("sells", 0) or 0)
+            _vm5_aud = float((pair_data.get("volume") or {}).get("m5", 0) or 0)
+            _has_organic_flow = (_b5_aud >= 20 and _b5_aud >= int(_s5_aud * 1.10) and _vm5_aud >= 3500.0)
+
+            # Пропускаем монеты с протокольных лаунчпадов (PumpSwap/Pump.fun) и монеты с доказанной органикой/смарт-баерами
+            if not _is_launchpad_aud and not _has_organic_flow and _smart_n_chk < 1 and eff_liq < 100000.0:
                 return False, f"no-socials-amm-scam (0 соцсетей/сайтов на DEX — анонимный дев-бандлер под слив пула в 0)", _h_stats
 
         # 3. Аудит для сети SOLANA
@@ -1750,8 +1765,11 @@ class GrokJevEngine:
                     if jup_sim.get("rate_limited", False) or "429" in str(reason) or "rate limit" in str(reason).lower():
                         # Если Jupiter временно вернул 429, НЕ клеймим токен скамом на 10 минут!
                         # Если токен уже прошёл RPC On-Chain + GoPlus + RugCheck и имеет >= 8 реальных продаж за 5м — пул доказанно продаваем
-                        if (is_pump and _s5 >= 5 and _b5 >= 12) or (_s5 >= 8 and _b5 >= 15 and eff_liq >= 15000.0):
-                            print(f"⚠️ [JUPITER-429-FALLBACK] {symbol}: Jupiter 429, но токен прошёл RPC+RugCheck+GoPlus и имеет {_b5}b/{_s5}s за 5м — пропуск разрешён")
+                        _txs5_j = (pair_data.get("txns") or {}).get("m5") or {}
+                        _b5_j = int(_txs5_j.get("buys", 0) or 0)
+                        _s5_j = int(_txs5_j.get("sells", 0) or 0)
+                        if (is_pump and _s5_j >= 5 and _b5_j >= 12) or (_s5_j >= 8 and _b5_j >= 15 and eff_liq >= 15000.0):
+                            print(f"⚠️ [JUPITER-429-FALLBACK] {symbol}: Jupiter 429, но токен прошёл RPC+RugCheck+GoPlus и имеет {_b5_j}b/{_s5_j}s за 5м — пропуск разрешён")
                         else:
                             return False, f"jupiter-rate-limit-429-retry ({reason})", _h_stats
                     else:

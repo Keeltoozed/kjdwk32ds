@@ -125,7 +125,11 @@ class CopyTrader:
         4. Обновляет Supabase: ставит tier = -1 (персистентный бан в облаке)
         """
         import os
+        import config as _cf
         if not wallet or wallet in self._banned:
+            return
+        if wallet in getattr(_cf, "VIP_KOL_WALLETS", {}):
+            print(f"👑 [VIP-IMMUNITY] {wallet[:8]} — VIP KOL кошелёк, защищён от бана!")
             return
         self._banned.add(wallet)
 
@@ -389,10 +393,17 @@ class CopyTrader:
         # Сортируем: сверху самые прибыльные и проверенные киты
         valid_whales.sort(key=lambda x: x[1], reverse=True)
 
-        # Отбираем ТОП-N для активной WSS подписки
+        # Отбираем ТОП-N для активной WSS подписки (VIP KOLs ВСЕГДА первыми!)
         active_wallets = {}
-        for w, _, tier, pnl, trades in valid_whales[:max_active]:
-            active_wallets[w] = f"@Tier{tier}_{w[:4]}_+${pnl:,.0f}"
+        for w, name in getattr(_cf, "VIP_KOL_WALLETS", {}).items():
+            if w not in self._banned:
+                active_wallets[w] = name
+
+        for w, _, tier, pnl, trades in valid_whales:
+            if w not in active_wallets:
+                active_wallets[w] = f"@Tier{tier}_{w[:4]}_+${pnl:,.0f}"
+            if len(active_wallets) >= max_active:
+                break
 
         # Дефолтный fallback если база пуста
         if not active_wallets:
@@ -423,12 +434,15 @@ class CopyTrader:
             return
 
         for w in whales:
+            trader_name = self.wallets.get(w, f"@{w[:6]}")
+            if w in getattr(_c, "VIP_KOL_WALLETS", {}):
+                print(f"👑 [VIP-IMMUNITY] {trader_name} — постоянный VIP-иммунитет от бана. Оставляем в топе!")
+                continue
             st = self._wstat.setdefault(w, [0, 0])
             cum_pnl = float(self._whale_cum_pnl.get(w, 0.0)) + float(pnl_pct)
             self._whale_cum_pnl[w] = cum_pnl
             if pnl_pct > 0.0: # Любая чистая прибыль > $0 после комиссий DEX и Jito = победа кита
                 st[0] += 1
-                trader_name = self.wallets.get(w, f"@{w[:6]}")
                 print(
                     f"🏆 [WHALE PROFIT] Кит {trader_name} принёс чистую прибыль {pnl_pct:+.2f}% на {symbol} "
                     f"(суммарно {cum_pnl:+.2f}%)! Статистика: {st[0]} побед / {st[1]} поражений. Оставляем в топе."
@@ -437,7 +451,6 @@ class CopyTrader:
                 # Кит уже принёс нам ощутимый плюс (например PAWS +18.2%) и закрыл царапину на комиссиях (-0.7%):
                 # мы по-прежнему в чистом плюсе по этому киту (+17.5%) — НЕ баним проверенного снайпера!
                 st[1] += 1
-                trader_name = self.wallets.get(w, f"@{w[:6]}")
                 print(
                     f"🛡️ [WHALE SURPLUS SHIELD] Кит {trader_name} закрыл {symbol} в {pnl_pct:+.2f}%, "
                     f"но его чистый профит для нас остаётся +{cum_pnl:.2f}% — сохраняем кита в строю!"
@@ -445,7 +458,6 @@ class CopyTrader:
             else:
                 # Суммарно мы на ките не заработали (<= 0%) или словили жесткий слив (<= -5%) -> БАН НАВСЕГДА!
                 st[1] += 1
-                trader_name = self.wallets.get(w, f"@{w[:6]}")
                 reason = f"Сигнал на {symbol} дал {pnl_pct:+.2f}% (суммарно {cum_pnl:+.2f}%). Причина выхода: {exit_reason}"
                 self.ban_whale_permanently(w, reason=reason, symbol=symbol, pnl_pct=pnl_pct)
         self._copy_wallets.pop(mint, None)
@@ -613,11 +625,17 @@ class CopyTrader:
         return None
 
     async def _execute_copy_buy(self, wallet: str, trader_name: str, mint: str, symbol: str, cur_price: float = 0.0):
-        """Единая логика безопасного входа в сделку по сигналу кита (из WSS или PumpPortal).
-        Принцип: если проверенный прибыльный кит покупает — мы покупаем за ним!
-        Проверяем только безопасность (не ханипот / не фриз / не дрейн).
-        Если сделка закрывается в минус — кит навсегда банится в Supabase (tier = -1)."""
+        """Единая логика безопасного входа в сделку по сигналу кита или VIP KOL (из WSS или PumpPortal).
+        Для VIP KOLs (Ansem, etc.):
+        - Мгновенный вход без задержки
+        - Полный обход сканерных фильтров (объём, возраст, свечи, ML)
+        - Проверка только критической ончейн безопасности (не ханипот / не фриз-авторити / есть маршрут выхода)
+        - Постоянный иммунитет от банов
+        """
         import config
+
+        _vip_wallets = getattr(config, "VIP_KOL_WALLETS", {})
+        is_vip = (wallet in _vip_wallets) or any(k in str(trader_name) for k in ("Ansem", "faceofsol", "bronbroncore", "wirelyss", "chairman", "VIP"))
 
         if mint in SKIP_COPY_MINTS:
             return
@@ -625,19 +643,19 @@ class CopyTrader:
         now_c = time.time()
         if len(self._mint_skip_until) > 1500:
             self._mint_skip_until = {m: ts for m, ts in self._mint_skip_until.items() if ts > now_c}
-        if now_c < self._mint_skip_until.get(mint, 0.0):
+        if not is_vip and now_c < self._mint_skip_until.get(mint, 0.0):
             return
         if mint in self._mint_eval_lock:
             return
 
-        # 1. Проверка общего лимита позиций, квоты копитрейдера (<=2 слотов) и лимита 1 сделка на 1 кита
+        # 1. Проверка общего лимита позиций, квоты копитрейдера
         open_positions = self.tracker.get_open_positions()
         if len(open_positions) >= config.MAX_CONCURRENT_POSITIONS:
             print(f"🚫 [COPY] Лимит позиций ({len(open_positions)}/{config.MAX_CONCURRENT_POSITIONS}). Пропускаем копитрейд {mint[:8]}.")
             return
-        max_copy_slots = int(getattr(config, "COPY_MAX_CONCURRENT_POSITIONS", 2))
+        max_copy_slots = int(getattr(config, "COPY_MAX_CONCURRENT_POSITIONS", 3))
         open_copy_positions = [p for p in open_positions.values() if str(getattr(p, "source", "")).startswith("COPY")]
-        if len(open_copy_positions) >= max_copy_slots:
+        if not is_vip and len(open_copy_positions) >= max_copy_slots:
             print(f"🚫 [COPY] Заняты все слоты копитрейда ({len(open_copy_positions)}/{max_copy_slots}) — бережём слоты для основного сканера ракет.")
             return
         for _op_m, _op_p in open_positions.items():
@@ -678,17 +696,17 @@ class CopyTrader:
             if not price_usd or price_usd <= 0:
                 price_usd = await self.get_token_price(mint)
 
-            # 3. Глубокий ИИ-анализ токена кита через Analyzer
+            # 3. Глубокий аудит безопасности токена через Analyzer
             if self.analyzer:
-                print(f"🤖 Передаем токен {clean_symbol} ({mint[:8]}) кита {trader_name} ИИ на глубокий анализ...")
-                is_safe, ai_reason = await self.analyzer.analyze_whale_token(mint, trader_name=trader_name, prefetched_pair=pair_data)
+                print(f"🤖 Передаем токен {clean_symbol} ({mint[:8]}) кита {trader_name} на аудит безопасности (is_vip={is_vip})...")
+                is_safe, ai_reason = await self.analyzer.analyze_whale_token(mint, trader_name=trader_name, prefetched_pair=pair_data, is_vip=is_vip)
                 if not is_safe:
                     self._mint_skip_until[mint] = time.time() + 180.0
-                    print(f"🚫 [WHALE-SKIP] ИИ забраковал токен {clean_symbol} ({mint[:8]}) кита {trader_name}: {ai_reason}. Сделка пропущена, кит остаётся активен.")
+                    print(f"🚫 [WHALE-SKIP] Аудит забраковал токен {clean_symbol} ({mint[:8]}) кита {trader_name}: {ai_reason}. Сделка пропущена, кит остаётся активен.")
                     return
                 else:
-                    print(f"✅ ИИ одобрил токен {clean_symbol} кита {trader_name} ({ai_reason})! Покупаем!")
-            elif getattr(config, "COPY_USE_ANTISCAM", True) and pair_data:
+                    print(f"✅ Аудит одобрил токен {clean_symbol} кита {trader_name} ({ai_reason})! Покупаем!")
+            elif getattr(config, "COPY_USE_ANTISCAM", True) and pair_data and not is_vip:
                 try:
                     from grok_jev import grok_jev as _gj
                     _ok, _why, _hs = await _gj.full_anti_scam_audit(mint, clean_symbol, "solana", pair_data)
@@ -699,8 +717,8 @@ class CopyTrader:
                 except Exception as _e:
                     print(f"⚠️ [COPY] Антискам-проверка ({type(_e).__name__}), продолжаем: {_e}")
 
-            # 4. Проверка ликвидности пула и синхронизация с живой ценой Jupiter
-            if pair_data:
+            # 4. Проверка ликвидности пула и синхронизация с живой ценой Jupiter (для обычных китов)
+            if pair_data and not is_vip:
                 liq = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
                 if 0 < liq < 500.0:
                     self._mint_skip_until[mint] = time.time() + 120.0
@@ -708,14 +726,14 @@ class CopyTrader:
                     return
 
             dex_id_cp = str((pair_data or {}).get("dexId") or "").lower()
-            if dex_id_cp not in ("pump", "pumpfun"):
+            if dex_id_cp not in ("pump", "pumpfun") and not is_vip:
                 try:
                     from jupiter import JupiterAPI
                     j_px = await JupiterAPI.get_price(mint)
                     if j_px and j_px > 0:
                         if price_usd > 0:
                             r_cp = max(j_px, price_usd) / min(j_px, price_usd)
-                            if r_cp > 1.12:
+                            if r_cp > 1.15:
                                 self._mint_skip_until[mint] = time.time() + 90.0
                                 print(f"🚫 [COPY-PRICE-MISMATCH] {clean_symbol} ({mint[:8]}): расхождение Jupiter (${j_px:.8f}) vs DS (${price_usd:.8f}) {r_cp:.2f}x — защита от ложного стопа, пропуск.")
                                 return
@@ -724,13 +742,15 @@ class CopyTrader:
                     pass
 
             if not price_usd or price_usd <= 0:
+                price_usd = await self.get_token_price(mint)
+            if not price_usd or price_usd <= 0:
                 return
 
-            # 5. Размер позиции ($4.00 базовый вход)
+            # 5. Размер позиции ($5.00 вход по требованию юзера)
             capital = self.tracker.get_total_capital()
             _pct = float(getattr(config, "COMPOUNDING_PCT", 0.10))
             _base = float(getattr(config, "TRADE_AMOUNT_USD", getattr(config, "BASE_TRADE_AMOUNT_USD", 5.0)))
-            _cap = float(getattr(config, "COPY_MAX_TICKET_USD", 4.0))
+            _cap = float(getattr(config, "COPY_MAX_TICKET_USD", 5.0))
             position_size = max(_base, min(_cap, capital * _pct))
 
             # 6. Запоминаем кошелёк кита для этого минта и открываем позицию (с полными фичами и ML-скором!)
@@ -739,7 +759,7 @@ class CopyTrader:
             self._copy_wallets[mint].add(wallet)
             self.consensus_done.add(mint)
 
-            _copy_ml_conf = 25.0
+            _copy_ml_conf = 35.0 if is_vip else 25.0
             _copy_ml_feats = {}
             if self.analyzer and pair_data:
                 try:
@@ -750,6 +770,7 @@ class CopyTrader:
                 except Exception:
                     pass
 
+            _src_tag = f"COPY:VIP:{trader_name}" if is_vip else f"COPY:{trader_name}"
             self.tracker.add_position(
                 clean_symbol,
                 mint,
@@ -758,10 +779,10 @@ class CopyTrader:
                 is_mature=True,
                 ml_features=_copy_ml_feats,
                 ml_confidence=_copy_ml_conf,
-                source=f"COPY:{trader_name}",
+                source=_src_tag,
                 pair_address=((pair_data or {}).get("pairAddress", "") or ""),
             )
-            print(f"✅ 🐋 [COPY-EXECUTED] Успешно вошли по сделке кита {trader_name} в {clean_symbol} на ${position_size:.2f} (цена: ${price_usd})!")
+            print(f"✅ 👑 🐋 [COPY-EXECUTED] Успешно вошли по сделке {'VIP-кита' if is_vip else 'кита'} {trader_name} в {clean_symbol} на ${position_size:.2f} (цена: ${price_usd})!")
         finally:
             self._mint_eval_lock.discard(mint)
 
@@ -773,18 +794,23 @@ class CopyTrader:
         open_pos = self.tracker.get_open_positions()
         if mint in open_pos:
             return
-        trader_name = self.wallets.get(wallet, f"@Tier1_{wallet[:4]}")
+        import config as _cfg
+        _vip_wallets = getattr(_cfg, "VIP_KOL_WALLETS", {})
+        is_vip = (wallet in _vip_wallets) or any(k in str(wallet) for k in _vip_wallets)
+        trader_name = _vip_wallets.get(wallet) or self.wallets.get(wallet, f"@Tier1_{wallet[:4]}")
         cur_price = await self.get_token_price(mint)
         now = time.time()
         self.whale_buys.setdefault(mint, {})
         self.whale_buys[mint][wallet] = now
         self.whale_buys[mint] = {w: t for w, t in self.whale_buys[mint].items() if now - t <= 600}
         n_whales = len(self.whale_buys[mint])
-        import config as _cfg
-        _consensus = getattr(_cfg, 'WHALE_CONSENSUS', 1)
+        _consensus = 1 if is_vip else getattr(_cfg, 'WHALE_CONSENSUS', 1)
         if n_whales < _consensus:
             return
-        print(f"🐋 [PUMP WHALE COPY] Сигнал кита {trader_name} на {symbol} ({mint[:8]}) -> исполняем копирование!")
+        if is_vip:
+            print(f"👑 🚨 [VIP PUMP SIGNAL] {trader_name} купил {symbol} ({mint[:8]}) на {sol_amount:.2f} SOL -> МГНОВЕННЫЙ ВХОД БЕЗ ФИЛЬТРОВ!")
+        else:
+            print(f"🐋 [PUMP WHALE COPY] Сигнал кита {trader_name} на {symbol} ({mint[:8]}) -> исполняем копирование!")
         await self._execute_copy_buy(wallet, trader_name, mint, symbol, cur_price)
 
     async def process_transaction(self, signature, hint_wallet: str = None):
@@ -867,24 +893,29 @@ class CopyTrader:
                     self.whale_buys[mint][wallet] = now
                     self.whale_buys[mint] = {w: t for w, t in self.whale_buys[mint].items() if now - t <= 600}
                     n_whales = len(self.whale_buys[mint])
-                    _consensus = getattr(config, 'WHALE_CONSENSUS', 1)
+                    import config as _cfg
+                    _vip_wallets = getattr(_cfg, "VIP_KOL_WALLETS", {})
+                    is_vip = (wallet in _vip_wallets) or any(k in str(trader_name) for k in ("Ansem", "faceofsol", "bronbroncore", "wirelyss", "chairman", "VIP"))
+                    _consensus = 1 if is_vip else getattr(_cfg, 'WHALE_CONSENSUS', 1)
                     if n_whales == 1:
                         self.whale_first_price[mint] = await self.get_token_price(mint)
-                        if _consensus > 1:
+                        if is_vip:
+                            print(f"👑 🚨 [VIP WSS SIGNAL] {trader_name} купил {mint[:12]}... МГНОВЕННЫЙ ВХОД (consensus=1)!")
+                        elif _consensus > 1:
                             print(f"👁️ WHALE WATCH: {trader_name} купил {mint[:12]}... слежу за ценой (вход на {_consensus}-м ките).")
                         else:
                             print(f"🐋 WHALE SIGNAL: {trader_name} купил {mint[:12]}... мгновенный вход (consensus=1)!")
-                    print(f"🚨 COPYTRADE: {trader_name} купил {mint[:12]}... (китов за 10 мин: {n_whales}/{_consensus})")
-                    if n_whales < _consensus:
+                    print(f"🚨 {'👑 VIP' if is_vip else 'COPYTRADE'}: {trader_name} купил {mint[:12]}... (китов за 10 мин: {n_whales}/{_consensus})")
+                    if not is_vip and n_whales < _consensus:
                         continue  # ждём раннего консенсуса
                     # Guard от опоздания: цена не должна улететь от точки входа первого кита
                     cur_price = await self.get_token_price(mint)
                     first_price = self.whale_first_price.get(mint, 0)
-                    max_runup = getattr(config, 'WHALE_MAX_RUNUP', 1.35)
+                    max_runup = 2.5 if is_vip else getattr(_cfg, 'WHALE_MAX_RUNUP', 1.35)
                     if first_price > 0 and cur_price > first_price * max_runup:
-                        print(f"🚫 [WHALE LATE] {mint[:12]}: цена +{(cur_price/first_price-1)*100:.0f}% с покупки 1-го кита — киты уже надули, входим в их выход.")
+                        print(f"🚫 [WHALE LATE] {mint[:12]}: цена +{(cur_price/first_price-1)*100:.0f}% с покупки 1-го кита — пропуск.")
                         continue
-                    print(f"🐋 SMART MONEY CONSENSUS: {n_whales} кита, цена ещё не улетела (+{(cur_price/first_price-1)*100:.0f}%) — РАННИЙ вход!")
+                    print(f"🐋 {'👑 VIP' if is_vip else 'SMART MONEY'} SIGNAL: {trader_name}, цена +{(cur_price/first_price-1)*100:.0f}% — РАННИЙ вход!")
                     await self._execute_copy_buy(wallet, trader_name, mint, "", cur_price)
 
     async def _listen_single_socket(self, wss_url: str, wallet_subset: dict):

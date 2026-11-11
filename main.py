@@ -1214,10 +1214,16 @@ async def scanner_loop(analyzer, tracker):
                                 _b5_sc = int((pair_data.get("txns") or {}).get("m5", {}).get("buys", 0) or 0)
                                 _s5_sc = int((pair_data.get("txns") or {}).get("m5", {}).get("sells", 0) or 0)
                                 if _links_sc == 0 and not _soc_unk_sc:
-                                    if _age_m >= 12.0:
-                                        print(f"🚫 [SCANNER-NO-SOC] {actual_symbol} ({mint[:8]}): 0 соцсетей при возрасте {_age_m:.0f}м (>=12м) — отмена!")
+                                    if _age_m >= 15.0:
+                                        print(f"🚫 [SCANNER-NO-SOC] {actual_symbol} ({mint[:8]}): 0 соцсетей при возрасте {_age_m:.0f}м (>=15м) — отмена!")
                                         continue
-                                    _is_stealth_sc = (_vol5_live >= 6000.0 and _b5_sc >= 30 and _b5_sc >= _s5_sc * 1.50 and liq_usd >= 18000.0)
+                                    _dex_sc_low = str(pair_data.get("dexId", "")).lower()
+                                    _is_lp_or_pump = mint.endswith("pump") or mint.endswith("moon") or _dex_sc_low in ("pump", "pumpfun", "pumpswap")
+                                    _is_stealth_sc = (
+                                        _is_lp_or_pump
+                                        or (_vol5_live >= 3500.0 and _b5_sc >= 20 and _b5_sc >= int(_s5_sc * 1.10))
+                                        or (liq_usd >= 15000.0 and _b5_sc >= 25 and _b5_sc >= _s5_sc)
+                                    )
                                     if not _is_stealth_sc:
                                         print(f"🚫 [SCANNER-NO-SOC] {actual_symbol} ({mint[:8]}): 0 соцсетей без органики — отмена!")
                                         continue

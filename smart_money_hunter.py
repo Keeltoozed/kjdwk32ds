@@ -131,6 +131,25 @@ class SmartMoneyHunter:
             cur = db.get(w)
             if (not cur) or (len(d.get("winning_tokens", [])), d.get("total_pnl", 0)) > (len(cur.get("winning_tokens", [])), cur.get("total_pnl", 0)):
                 db[w] = d
+
+        # Гарантируем наличие VIP KOL кошельков (Ansem, etc.) из config.py
+        try:
+            import config as _cfg
+            for w, name in getattr(_cfg, "VIP_KOL_WALLETS", {}).items():
+                if w not in db or int(db[w].get("tier", 3) or 3) != 1:
+                    db[w] = {
+                        "chain": "solana",
+                        "first_seen": time.time(),
+                        "total_pnl": 1000000.0,
+                        "winning_tokens": ["CULT / SOL", "Mao / SOL"],
+                        "trade_count": 50,
+                        "tier": 1,
+                        "vip": True,
+                        "name": name,
+                    }
+        except Exception:
+            pass
+
         return db
 
     def _save_db(self):

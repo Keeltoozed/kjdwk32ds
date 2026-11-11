@@ -1326,20 +1326,18 @@ class Analyzer:
             return True
         return False
         
-    async def analyze_whale_token(self, mint: str, trader_name: str = "", prefetched_pair=None) -> tuple:
-        """Специализированный глубокий аудит безопасности токена, выбранного смарт-китом.
-        НЕ режет токен сканерными фильтрами (0 соцсетей на старте, низкий 5м объём или покупка на кривой Pump.fun),
-        потому что киты покупают ДО розничного пампа!
-        Строго блокирует ТОЛЬКО реальные смарт-контракт ловушки:
-        1. Freeze Authority / Mint Authority / Token-2022 Permanent Delegate (прямой RPC ончейн).
-        2. GoPlus Honeypot / Blacklist / Sell Tax.
-        3. RugCheck Score >= 2500, концентрацию у 1 кошелька и кастомный незаблокированный LP (<80%).
-        4. Непродаваемые AMM-пулы (Jupiter sell simulation) и мёртвые после дампа монеты (-65% от пика).
+    async def analyze_whale_token(self, mint: str, trader_name: str = "", prefetched_pair=None, is_vip: bool = False) -> tuple:
+        """Специализированный глубокий аудит безопасности токена, выбранного смарт-китом или VIP KOL.
+        Для VIP KOLs (Ansem, etc.) действует полный обход сканерных фильтров (объём, возраст, свечи, ML)
+        с сохранением строжайшей ончейн-защиты от ханипотов, фриз-авторити и скам-ловушек.
         """
         if mint in ["So11111111111111111111111111111111111111112",
                     "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
                     "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB"]:
             return False, "Native / Stablecoin"
+
+        if not is_vip:
+            is_vip = any(k in str(trader_name) for k in ("Ansem", "faceofsol", "bronbroncore", "wirelyss", "chairman", "VIP"))
 
         pair_data = prefetched_pair if isinstance(prefetched_pair, dict) and prefetched_pair else None
         if not pair_data:
@@ -1366,64 +1364,67 @@ class Analyzer:
         if _is_tokenized_stock:
             return False, f"tokenized-equity-skip (токенизированная акция {clean_symbol} — не мем-токен, пропуск без штрафа киту)"
 
-        # 1. Защита от краха, стоячих majors и неликвидных/старых пулов
+        # 1. Защита от краха, стоячих majors и неликвидных/старых пулов (только для обычных китов; VIP обходит!)
         dex_id_low = str((pair_data or {}).get("dexId") or "").lower()
         is_pump_curve = dex_id_low in ("pump", "pumpfun")
-        if is_pump_curve and not getattr(config, "ALLOW_UNGRADUATED_PUMPFUN", False):
-            return False, "Сырая кривая Pump.fun до миграции на DEX (ALLOW_UNGRADUATED_PUMPFUN=False)"
-        if pair_data:
-            drop_peak = float(pair_data.get("_drop_from_peak_5m", 0.0) or 0.0)
-            if drop_peak <= -40.0:
-                return False, f"Цена уже упала на {drop_peak:.0f}% с пика — отскок дохлой кошки после дампа"
-
-            liq = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
-            fdv = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
-            if fdv > 2_000_000.0 or liq > 250_000.0:
-                return False, f"Крупная капа / не мем-ракета (FDV ${fdv:,.0f}, liq ${liq:,.0f}) — пропуск без штрафа киту"
-            if is_pump_curve:
-                if 0 < fdv < 18000.0:
-                    return False, f"Слишком ранняя кривая Pump.fun (FDV ${fdv:,.0f} < $18,000)"
-                if fdv > 48000.0:
-                    return False, f"Кривая Pump.fun перед обрывом миграции (FDV ${fdv:,.0f} > $48,000)"
-            else:
-                if liq < 8000.0:
-                    return False, f"Слишком низкая ликвидность AMM пула (${liq:,.0f} < $8,000)"
-                if mint.endswith("pump") and 0 < fdv < 44000.0:
-                    return False, f"Слитый после миграции токен (FDV ${fdv:,.0f} < $44,000)"
-                if not mint.endswith("pump") and 0 < fdv < 10000.0:
-                    return False, f"Микро-капа токена (FDV ${fdv:,.0f} < $10,000)"
-
-            # 1.5. Фильтр живого импульса мем-ракеты (отсекает 18-минутные флеты CLAUDIA, HOOKED, DACITY, FUSE, NOS)
-            _pc_w = pair_data.get("priceChange") or {}
-            _m5_w = float(_pc_w.get("m5", 0) or 0)
-            _h1_w = float(_pc_w.get("h1", 0) or 0)
-            _vm5_w = float((pair_data.get("volume") or {}).get("m5", 0) or 0)
-            _tx5_w = (pair_data.get("txns") or {}).get("m5") or {}
-            _b5_w = int(_tx5_w.get("buys", 0) or 0)
-            _s5_w = int(_tx5_w.get("sells", 0) or 0)
-            _tot_w = _b5_w + _s5_w
-            _avg_w = (_vm5_w / _tot_w) if _tot_w > 0 else 0.0
-            _cat_w = pair_data.get("pairCreatedAt") or 0
-            _age_w = ((time.time() * 1000 - _cat_w) / 60000.0) if _cat_w else 30.0
-            if _age_w > 360.0 and not (_age_w <= 1440.0 and _vm5_w >= 15000.0 and _m5_w >= 10.0 and _b5_w >= _s5_w * 1.25):
-                return False, f"Старый стоячий токен ({_age_w/60:.1f}ч > 6ч без прорывного объёма)"
-            if _vm5_w < 3500.0 or _tot_w < 20:
-                return False, f"Вялый стакан без объёма (vol5 ${_vm5_w:,.0f} < $3,500, txns {_tot_w})"
-            if _m5_w < 2.5 or _m5_w > 135.0:
-                return False, f"Нет живого импульса / перегрев (m5 {_m5_w:+.1f}% вне [+2.5%, +135%])"
-            if _h1_w < 0.0:
-                return False, f"Часовой тренд в минусе (h1 {_h1_w:+.1f}%)"
-            if _s5_w > 0 and (_b5_w / _s5_w) < 1.12:
-                return False, f"Слабый поток покупателей ({_b5_w}b/{_s5_w}s < 1.12x)"
-            if _tot_w >= 100 and _avg_w < 8.0:
-                return False, f"Накрутка микро-ботом (avg ${_avg_w:.2f} < $8)"
-            if _age_w >= 20.0 and _vm5_w < 6000.0 and (_vm5_w / max(liq, 1.0)) < 0.20:
-                return False, f"Низкий оборот зрелого пула (vol5 ${_vm5_w:,.0f}, v/l {_vm5_w/max(liq,1.0):.2f}x)"
-            _links_w = len((pair_data.get("info") or {}).get("socials", []) or []) + len((pair_data.get("info") or {}).get("websites", []) or [])
-            if _age_w >= 20.0 and _links_w == 0 and not bool(pair_data.get("_socials_unknown", False)):
-                return False, f"Зрелый токен ({_age_w:.0f}м) без единой соцсети/сайта"
+        if is_vip:
+            print(f"👑 [VIP-DIRECT-BYPASS] {clean_symbol} ({mint[:8]}): Сигнал VIP-трейдера {trader_name} — полный обход фильтров объёма, возраста, соцсетей и свечей!")
         else:
-            return False, "Нет рыночных данных пула (DexScreener)"
+            if is_pump_curve and not getattr(config, "ALLOW_UNGRADUATED_PUMPFUN", False):
+                return False, "Сырая кривая Pump.fun до миграции на DEX (ALLOW_UNGRADUATED_PUMPFUN=False)"
+            if pair_data:
+                drop_peak = float(pair_data.get("_drop_from_peak_5m", 0.0) or 0.0)
+                if drop_peak <= -40.0:
+                    return False, f"Цена уже упала на {drop_peak:.0f}% с пика — отскок дохлой кошки после дампа"
+
+                liq = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
+                fdv = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
+                if fdv > 2_000_000.0 or liq > 250_000.0:
+                    return False, f"Крупная капа / не мем-ракета (FDV ${fdv:,.0f}, liq ${liq:,.0f}) — пропуск без штрафа киту"
+                if is_pump_curve:
+                    if 0 < fdv < 18000.0:
+                        return False, f"Слишком ранняя кривая Pump.fun (FDV ${fdv:,.0f} < $18,000)"
+                    if fdv > 48000.0:
+                        return False, f"Кривая Pump.fun перед обрывом миграции (FDV ${fdv:,.0f} > $48,000)"
+                else:
+                    if liq < 8000.0:
+                        return False, f"Слишком низкая ликвидность AMM пула (${liq:,.0f} < $8,000)"
+                    if mint.endswith("pump") and 0 < fdv < 44000.0:
+                        return False, f"Слитый после миграции токен (FDV ${fdv:,.0f} < $44,000)"
+                    if not mint.endswith("pump") and 0 < fdv < 10000.0:
+                        return False, f"Микро-капа токена (FDV ${fdv:,.0f} < $10,000)"
+
+                # 1.5. Фильтр живого импульса мем-ракеты (отсекает 18-минутные флеты CLAUDIA, HOOKED, DACITY, FUSE, NOS)
+                _pc_w = pair_data.get("priceChange") or {}
+                _m5_w = float(_pc_w.get("m5", 0) or 0)
+                _h1_w = float(_pc_w.get("h1", 0) or 0)
+                _vm5_w = float((pair_data.get("volume") or {}).get("m5", 0) or 0)
+                _tx5_w = (pair_data.get("txns") or {}).get("m5") or {}
+                _b5_w = int(_tx5_w.get("buys", 0) or 0)
+                _s5_w = int(_tx5_w.get("sells", 0) or 0)
+                _tot_w = _b5_w + _s5_w
+                _avg_w = (_vm5_w / _tot_w) if _tot_w > 0 else 0.0
+                _cat_w = pair_data.get("pairCreatedAt") or 0
+                _age_w = ((time.time() * 1000 - _cat_w) / 60000.0) if _cat_w else 30.0
+                if _age_w > 360.0 and not (_age_w <= 1440.0 and _vm5_w >= 15000.0 and _m5_w >= 10.0 and _b5_w >= _s5_w * 1.25):
+                    return False, f"Старый стоячий токен ({_age_w/60:.1f}ч > 6ч без прорывного объёма)"
+                if _vm5_w < 3500.0 or _tot_w < 20:
+                    return False, f"Вялый стакан без объёма (vol5 ${_vm5_w:,.0f} < $3,500, txns {_tot_w})"
+                if _m5_w < 2.5 or _m5_w > 135.0:
+                    return False, f"Нет живого импульса / перегрев (m5 {_m5_w:+.1f}% вне [+2.5%, +135%])"
+                if _h1_w < 0.0:
+                    return False, f"Часовой тренд в минусе (h1 {_h1_w:+.1f}%)"
+                if _s5_w > 0 and (_b5_w / _s5_w) < 1.12:
+                    return False, f"Слабый поток покупателей ({_b5_w}b/{_s5_w}s < 1.12x)"
+                if _tot_w >= 100 and _avg_w < 8.0:
+                    return False, f"Накрутка микро-ботом (avg ${_avg_w:.2f} < $8)"
+                if _age_w >= 20.0 and _vm5_w < 6000.0 and (_vm5_w / max(liq, 1.0)) < 0.20:
+                    return False, f"Низкий оборот зрелого пула (vol5 ${_vm5_w:,.0f}, v/l {_vm5_w/max(liq,1.0):.2f}x)"
+                _links_w = len((pair_data.get("info") or {}).get("socials", []) or []) + len((pair_data.get("info") or {}).get("websites", []) or [])
+                if _age_w >= 20.0 and _links_w == 0 and not bool(pair_data.get("_socials_unknown", False)):
+                    return False, f"Зрелый токен ({_age_w:.0f}м) без единой соцсети/сайта"
+            else:
+                return False, "Нет рыночных данных пула (DexScreener)"
 
         # 2. Корпоративный фейк-скам
         corp_scams = ["AAPL", "S&P", "SP500", "MSFT", "TSLA", "TESLA", "SPACEX", "STARLINK", "NVDA", "OPENAI"]
@@ -1500,11 +1501,13 @@ class Analyzer:
                 if not hasattr(self, "rocket_scores"):
                     self.rocket_scores = {}
                 self.rocket_scores[mint] = ml_score
-                if ml_score < _whale_ml_thr:
+                if not is_vip and ml_score < _whale_ml_thr:
                     return False, f"Rocket XGB низкий скор {ml_score:.1f}% < {_whale_ml_thr:.0f}%"
             except Exception:
                 pass
 
+        if is_vip:
+            return True, f"👑 VIP Direct Execution for {trader_name} (ML: {ml_score:.1f}%)"
         return True, f"Passed Whale Contract & Momentum Audit (ML: {ml_score:.1f}%)"
 
     async def analyze_token(self, mint: str) -> bool:
@@ -1958,6 +1961,7 @@ class Analyzer:
 
             dex_id_low = str(pair_data.get("dexId", "")).lower()
             is_pump_curve = dex_id_low in ("pump", "pumpfun")
+            _is_canonical_pump = mint.endswith("pump") or (is_pump_curve and dex_id_low in ("pump", "pumpfun"))
             raw_liq = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
             fdv_val = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
             curve_liq = fdv_val * 0.35 if fdv_val > 0 else 0.0
@@ -2040,7 +2044,19 @@ class Analyzer:
             # Каноничный pump-флаг ставится ТОЛЬКО для монет с bonding curve Pump.fun (оканчивающихся на 'pump' или на сырой кривой).
             # Наличие пула на PumpSwap/Raydium НЕ делает кастомный скам-токен безопасным pump-токеном (кейсы DEMOCAT/SAFU/SOUVENIR)!
             _dex_low_main = str((pair_data or {}).get("dexId", "")).lower()
-            _is_canonical_pump = mint.endswith("pump") or (is_pump_curve and _dex_low_main in ("pump", "pumpfun"))
+            _is_grad_check = False
+            try:
+                from birth_tracker import birth_tracker as _bt_chk
+                _is_grad_check = _bt_chk.is_graduated(mint)
+            except Exception:
+                pass
+            _is_canonical_pump = (
+                mint.endswith("pump")
+                or mint.endswith("moon")
+                or (is_pump_curve and _dex_low_main in ("pump", "pumpfun", "pumpswap"))
+                or _dex_low_main in ("pump", "pumpfun", "pumpswap", "moonshot", "meteoradbc", "letsbonk")
+                or _is_grad_check
+            )
             _is_pump_flag = 1 if _is_canonical_pump else 0
             _cur_tok_top10 = 0.0
             _cur_tok_dev = 0.0

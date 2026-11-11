@@ -1921,5 +1921,69 @@
     ],
     "trade_count": 1,
     "tier": 3
+  },
+  "GV6UUmNxz2RpKxmNAPadYKb7uQpszwqQAu3qLJxVdC52": {
+    "chain": "solana",
+    "first_seen": 1794418113.441206,
+    "total_pnl": 1374000.0,
+    "winning_tokens": [
+      "CULT / SOL",
+      "Mao / SOL",
+      "PNUT / SOL",
+      "GOAT / SOL"
+    ],
+    "trade_count": 50,
+    "tier": 1,
+    "vip": true,
+    "name": "@Ansem"
+  },
+  "9tH2zRYdS3X7PEcsPno3GST1EHe8GX8CSNih1pKpamAp": {
+    "chain": "solana",
+    "first_seen": 1794418113.441207,
+    "total_pnl": 728000.0,
+    "winning_tokens": [
+      "mihao / SOL",
+      "WAKEUP / SOL"
+    ],
+    "trade_count": 50,
+    "tier": 1,
+    "vip": true,
+    "name": "@faceofsol"
+  },
+  "2EJPiGHWCddwUnoWoRHD3dfycjQwDV9iQceshn2HDpht": {
+    "chain": "solana",
+    "first_seen": 1794418113.441207,
+    "total_pnl": 575000.0,
+    "winning_tokens": [
+      "mihao / SOL"
+    ],
+    "trade_count": 50,
+    "tier": 1,
+    "vip": true,
+    "name": "@bronbroncore"
+  },
+  "AvGiSdrkwtGYhrrFXZPtdhNhV4pASUR67TmRjfaKGdMP": {
+    "chain": "solana",
+    "first_seen": 1794418113.441207,
+    "total_pnl": 449000.0,
+    "winning_tokens": [
+      "CATE / SOL"
+    ],
+    "trade_count": 50,
+    "tier": 1,
+    "vip": true,
+    "name": "@wirelyss"
+  },
+  "Be24Gbf5KisDk1LcWWZsBn8dvB816By7YzYF5zWZnRR6": {
+    "chain": "solana",
+    "first_seen": 1794418113.441207,
+    "total_pnl": 500000.0,
+    "winning_tokens": [
+      "ANSEM / SOL"
+    ],
+    "trade_count": 50,
+    "tier": 1,
+    "vip": true,
+    "name": "@chairman"
   }
 }

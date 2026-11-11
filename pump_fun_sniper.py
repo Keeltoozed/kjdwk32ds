@@ -308,7 +308,8 @@ class PumpFunSniper:
         while self.running:
             await asyncio.sleep(0.5)
             try:
-                if self._trade_stream_blocked:
+                _has_pp_key = bool(getattr(config, "PUMPPORTAL_API_KEY", "") or os.getenv("PUMPPORTAL_API_KEY", ""))
+                if self._trade_stream_blocked or not _has_pp_key:
                     self._pending_sub.clear()
                     self._pending_unsub.clear()
                     continue
@@ -393,11 +394,13 @@ class PumpFunSniper:
                     for _t in self._bg_tasks:
                         _t.cancel()
                     self._bg_tasks = []
-                    _keys = [m for m, st in self.trackers.items() if not st.is_dead]
-                    for _i in range(0, len(_keys), 50):
-                        await ws.send(json.dumps({"method": "subscribeTokenTrade", "keys": _keys[_i:_i + 50]}))
-                    if _keys:
-                        print(f"🔁 [STREAM] переподписка на {len(_keys)} токенов после реконнекта.")
+                    _has_pp_key = bool(getattr(config, "PUMPPORTAL_API_KEY", "") or os.getenv("PUMPPORTAL_API_KEY", ""))
+                    if _has_pp_key and not self._trade_stream_blocked:
+                        _keys = [m for m, st in self.trackers.items() if not st.is_dead]
+                        for _i in range(0, len(_keys), 50):
+                            await ws.send(json.dumps({"method": "subscribeTokenTrade", "keys": _keys[_i:_i + 50]}))
+                        if _keys:
+                            print(f"🔁 [STREAM] переподписка на {len(_keys)} токенов после реконнекта.")
 
                     # 2. Запуск фоновых задач: батч-подписка, очистка RAM и синхронизация открытых позиций
                     self._bg_tasks.append(asyncio.create_task(self.subscription_flusher(ws)))
@@ -465,6 +468,22 @@ class PumpFunSniper:
                         # --- СОБЫТИЕ: ПОКУПКА ИЛИ ПРОДАЖА (ТРЕЙД) ---
                         elif tx_type in ["buy", "sell"]:
                             mint = data.get("mint")
+                            trader = data.get("traderPublicKey") or ""
+                            # Если покупку совершил VIP KOL (Ansem и т.д.) — перехватываем моментально, даже если токена ещё нет в trackers!
+                            try:
+                                import config as _cfg
+                                _vip_wallets = getattr(_cfg, "VIP_KOL_WALLETS", {})
+                                if tx_type == "buy" and trader in _vip_wallets and mint:
+                                    _vip_name = _vip_wallets[trader]
+                                    _sym = str(data.get("symbol") or mint[:8])
+                                    _sol_amt = float(data.get("solAmount") or 0.0)
+                                    _mc = float(data.get("marketCapSol") or 0.0)
+                                    print(f"👑 🚨 [VIP INSTANT PUMP BUY] {_vip_name} ({trader[:8]}) купил {_sym} ({mint[:8]}) на {_sol_amt:.2f} SOL!")
+                                    if getattr(self, "copy_trader", None):
+                                        asyncio.create_task(self.copy_trader.handle_whale_buy(trader, mint, _sym, _sol_amt, _mc))
+                            except Exception:
+                                pass
+
                             state = self.trackers.get(mint)
                             if not state:
                                 # Если позиция открыта в портфеле (куплена сканером/ботом) — подключаем лайв-трекинг на лету
@@ -509,10 +528,15 @@ class PumpFunSniper:
                                 if (now - state.start_time) <= 2.5:
                                     state.first_2s_buyers.add(trader)
                                 try:
+                                    import config as _cfg
+                                    _vip_wallets = getattr(_cfg, "VIP_KOL_WALLETS", {})
                                     from smart_money_hunter import smart_money_hunter as _smh
-                                    if trader in _smh.db and int(_smh.db[trader].get("tier", 3) or 3) > 0:
-                                        _w_pnl = float(_smh.db[trader].get("total_pnl", 0.0) or 0.0)
-                                        print(f"🐋 [WHALE ON PUMP] Кит {trader[:8]}... (PnL +${_w_pnl:,.0f}) купил {state.symbol} ({mint[:8]}) на {sol_amount:.2f} SOL!")
+                                    _is_vip = trader in _vip_wallets
+                                    _is_smart = trader in _smh.db and int(_smh.db[trader].get("tier", 3) or 3) > 0
+                                    if _is_vip or _is_smart:
+                                        _name = _vip_wallets.get(trader) or f"@{trader[:6]}"
+                                        _w_pnl = float((_smh.db.get(trader) or {}).get("total_pnl", 0.0) or 0.0)
+                                        print(f"👑 🐋 [VIP/WHALE ON PUMP] {_name} ({trader[:8]}...) купил {state.symbol} ({mint[:8]}) на {sol_amount:.2f} SOL!")
                                         state.whale_buyer = trader
                                         if getattr(self, "copy_trader", None):
                                             asyncio.create_task(self.copy_trader.handle_whale_buy(trader, mint, state.symbol, sol_amount, mc_sol))

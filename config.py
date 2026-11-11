@@ -54,10 +54,10 @@ MAX_CONCURRENT_POSITIONS = 5
 # === ЖЕСТКОЕ ОГРАНИЧЕНИЕ УБЫТКА (РИСК-МЕНЕДЖМЕНТ) ===
 MAX_DAILY_LOSS_USD = 1000.0
 KILL_SWITCH_ENABLED = False
-STOP_LOSS_PCT = -0.120        # Стоп -12.0% (дает дышать на стартовом спреде, режет при реальном сливе)
-EMERGENCY_CAP_PCT = -0.160     # Аварийный потолок -16.0% (мгновенный срез глубокого дампа)
+STOP_LOSS_PCT = -0.180        # Стоп -18.0% (дает дышать волатильности Solana и не выбивает ракеты вроде CULT -12.9%)
+EMERGENCY_CAP_PCT = -0.250     # Аварийный потолок -25.0% (мгновенный срез реального глубокого дампа)
 INFANT_WINDOW_MIN = 0.5
-INFANT_DUMP_PCT = -0.120       # Срез рага на 1-й минуте при провале <= -12.0%
+INFANT_DUMP_PCT = -0.180       # Срез рага на 1-й минуте при провале <= -18.0%
 
 # === ФИЛЬТРЫ ВХОДА (РАЗРЕШАЕМ ВХОД В БЫСТРЫЕ РАКЕТЫ) ===
 MAX_ENTRY_H1_PCT = 1500.0       # Разрешаем сильные пампы до +1500% за 1ч (не срезаем взлетающие ракеты!)
@@ -106,7 +106,17 @@ STREAM_MAX_DEV_BUY_TOKENS = 100_000_000
 STREAM_MIN_ENTRY_PROGRESS = 15.0
 STREAM_MOMENTUM_MIN_RATIO = 0.35
 
-VIP_ENTRIES_ENABLED = False
+VIP_ENTRIES_ENABLED = True
+
+# === VIP ALPHA TRADERS & KOL WALLETS (Прямой снайпинг топ-трейдеров Pump.fun) ===
+# При покупке этими кошельками бот моментально копирует сделку с обходом фильтров (объём, возраст, свечи, ML)
+VIP_KOL_WALLETS = {
+    "GV6UUmNxz2RpKxmNAPadYKb7uQpszwqQAu3qLJxVdC52": "@Ansem (Top KOL / Caller #1, +$1.37M)",
+    "9tH2zRYdS3X7PEcsPno3GST1EHe8GX8CSNih1pKpamAp": "@faceofsol (Top Trader #2, +$728k)",
+    "2EJPiGHWCddwUnoWoRHD3dfycjQwDV9iQceshn2HDpht": "@bronbroncore (Top Trader #3, +$575k)",
+    "AvGiSdrkwtGYhrrFXZPtdhNhV4pASUR67TmRjfaKGdMP": "@wirelyss (Top Caller / KOL #4, +$449k)",
+    "Be24Gbf5KisDk1LcWWZsBn8dvB816By7YzYF5zWZnRR6": "@chairman (Top KOL Household Name, 140k followers)",
+}
 TIME_EXIT_MINUTES = 40
 TIME_EXIT_PROFIT_REQ = 0.015
 
@@ -370,10 +380,10 @@ JEV_MIN_H6_PCT = -15.0
 USE_COPYTRADE = True
 COPY_MIN_TIER = 3
 COPY_MAX_TICKET_USD = 5.0
-COPY_MAX_CONCURRENT_POSITIONS = 2  # Максимум 2 слота под копитрейд, чтобы киты никогда не забивали все 5 слотов сканера
+COPY_MAX_CONCURRENT_POSITIONS = 3  # До 3 слотов под копитрейд/VIP
 COPY_USE_ANTISCAM = True
 COPY_MAX_ACTIVE_WHALES = 80
-COPY_BAN_ON_FIRST_LOSS = True
+COPY_BAN_ON_FIRST_LOSS = False  # Не банить проверенных китов и KOL на первом же стопе!
 COPY_PREFILTER = True
 COPY_MAX_TX_PER_MIN = 40
 COPY_MIN_PNL = 250.0

@@ -89,24 +89,25 @@ class MatureExitManager:
         # =========================================================================
         # 1. ЖЕСТКИЙ КОНТРОЛЬ УБЫТКА (EMERGENCY CAP & STOP LOSS) — ПЕРВЫЙ ПРИОРИТЕТ!
         # =========================================================================
-        _emerg_cap = -abs(float(getattr(config, "EMERGENCY_CAP_PCT", -0.160)))
+        _emerg_cap = -abs(float(getattr(config, "EMERGENCY_CAP_PCT", -0.250)))
         if pnl_pct <= _emerg_cap:
             return f"Mature Emergency Cap ({pnl_pct*100:.1f}%)"
 
-        _base_sl = -abs(float(getattr(config, 'STOP_LOSS_PCT', -0.120)))
+        _base_sl = -abs(float(getattr(config, 'STOP_LOSS_PCT', -0.180)))
         _has_organic_bid = False
         _feats = getattr(position, "ml_features", None) or {}
         if isinstance(_feats, dict) and _feats:
             _f_liq = float(_feats.get("liquidity", 0) or 0)
             _f_bs = float(_feats.get("buy_sell_ratio", 0) or 0)
-            _f_links = int(_feats.get("links_count", 0) or (1 if _feats.get("socials") else 0))
-            if _f_liq >= 25000.0 and _f_bs >= 1.35 and _f_links >= 1:
+            if _f_liq >= 15000.0 and _f_bs >= 1.15:
                 _has_organic_bid = True
-        _sl = min(_base_sl, -0.140) if _has_organic_bid else _base_sl
+        _sl = min(_base_sl, -0.220) if _has_organic_bid else _base_sl
         if pnl_pct <= _sl:
             _sl_c = int(getattr(position, "sl_confirm_n", 0) or 0) + 1
             position.sl_confirm_n = _sl_c
-            if _sl_c >= 2 or pnl_pct <= -0.150 or minutes_held >= 0.50:
+            # Требуем минимум 2 тика подтверждения (или глубокий провал на 5% ниже стопа),
+            # чтобы мгновенный спред/вик DEX на 2-й минуте не выбивал ракету вроде CULT или PINCHE!
+            if _sl_c >= 2 or pnl_pct <= (_sl - 0.05):
                 return f"Mature Stop Loss ({pnl_pct*100:.1f}%)"
         else:
             position.sl_confirm_n = 0
@@ -157,14 +158,9 @@ class MatureExitManager:
             _floor_pnl = 0.25           # Гарантируем минимум +25% чистыми (+$1.25 на $5!)
             _trail_dist = 0.22          # Трейлинг 22% от пика (дает свободно дышать)
         elif max_pnl_pct >= 0.35:       # +35%..+50% (уверенный взлет, кейсы Democat +41%, PIRATE +48%, 牛逼 +42%)
-            _floor_pnl = 0.15           # Фиксируем минимум +15% чистой прибыли!
-            _trail_dist = 0.18          # Трейлинг 18% от пика (с +48% выход при откате до +30%)
-        elif max_pnl_pct >= 0.20:       # +20%..+35% (первичный импульс, кейсы BRR +20%, 天猫 +21%, MUSKRATHT +23%)
-            _floor_pnl = 0.06           # Фиксируем минимум +6% (покрывает любые комиссии DEX)
-            _trail_dist = 0.14          # Трейлинг 14% от пика (с +23% выход при откате до +9%)
-        elif max_pnl_pct >= 0.12:       # +12%..+20% (защита от разворота в минус)
-            _floor_pnl = 0.02           # Жесткий безубыток +2% (никогда не уходим в минус!)
-            _trail_dist = 0.10          # Трейлинг 10% от пика
+            _floor_pnl = 0.12           # Фиксируем минимум +12% чистой прибыли
+            _trail_dist = 0.20          # Широкий трейлинг 20% от пика (не душим нормальные откаты)
+        # До +35% пика не режем позицию микро-трейлингом 10%! Даём дойти до TP1 (+18%) и превратиться в Moonbag!
 
         if _floor_pnl is not None and minutes_held >= 0.20:
             drop_from_max = (position.max_price_usd - current_price) / position.max_price_usd if position.max_price_usd > 0 else 0.0
