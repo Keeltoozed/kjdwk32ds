@@ -2356,7 +2356,7 @@ class Analyzer:
                 _b5_rc = int(_tx5_rc.get("buys", 0) or 0)
                 _s5_rc = int(_tx5_rc.get("sells", 0) or 0)
                 if mint.endswith("pump") and _age_min_pre < 2.0:
-                    _has_launch_mom = (_vm5_check >= 3000.0 and _m5_check >= 4.0 and _b5_rc >= 8)
+                    _has_launch_mom = (_vm5_check >= 1500.0 and _m5_check >= -2.0 and _b5_rc >= 6 and _b5_rc >= _s5_rc)
                     if not _has_launch_mom:
                         return self._deny(mint, "post-migration-dump-zone", f"🚫 [POST-MIGRATION-DUMP] {mint[:8]}: возраст {_age_min_pre:.1f}м < 2.0м — опасная зона сброса снайперов кривой.")
                 if mint.endswith("pump") and 0 < _fdv_pre < 35000:

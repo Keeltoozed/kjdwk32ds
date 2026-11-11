@@ -107,8 +107,8 @@ class BirthTracker:
                 for _km, _ in stale:
                     self.waiting_room.pop(_km, None)
 
-    def get_waiting_room_graduates(self, min_age_sec: float = 90.0, max_age_sec: float = 2700.0) -> list:
-        """Возвращает мигрировавшие монеты, пережившие первые 90с сброса снайперов (Waiting Room)."""
+    def get_waiting_room_graduates(self, min_age_sec: float = 20.0, max_age_sec: float = 2700.0) -> list:
+        """Возвращает мигрировавшие монеты для быстрого снайпинга пробоя миграции (Waiting Room)."""
         now = time.time()
         with self.lock:
             expired = [m for m, info in self.waiting_room.items() if (now - info.get("ts", 0.0)) > self.WAIT_ROOM_TTL]

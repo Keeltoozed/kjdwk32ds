@@ -1277,15 +1277,18 @@ async def scanner_loop(analyzer, tracker):
                                 if mint.endswith("pump") and _dex_id in ("pumpswap", "raydium", "meteora", "orca"):
                                     _c_ms_sc = pair_data.get("pairCreatedAt") or 0
                                     _age_sc = ((time.time() * 1000 - _c_ms_sc) / 60000.0) if _c_ms_sc else 0.5
-                                    if _age_sc < 1.0:
-                                        processed_mints[mint] = time.time() - _cd + 25
+                                    _has_launch_surge = (_vol5_live >= 2000.0 and _b5_bump >= _s5_bump and _b5_bump >= 6 and _m5_live >= -2.0)
+                                    if _age_sc < 1.0 and not _has_launch_surge:
+                                        processed_mints[mint] = time.time() - _cd + 15
                                         try:
                                             from birth_tracker import birth_tracker as _bt_sc
                                             _bt_sc.add_to_waiting_room(mint)
                                         except Exception:
                                             pass
-                                        print(f"⏳ [SCANNER-MIGRATION] {actual_symbol} ({mint[:8]}): AMM-пул создан {_age_sc:.1f}м назад (< 1.0м) — повтор через 25с.")
+                                        print(f"⏳ [SCANNER-MIGRATION] {actual_symbol} ({mint[:8]}): AMM-пул создан {_age_sc:.1f}м назад (< 1.0м) без импульса — повтор через 15с.")
                                         continue
+                                    elif _age_sc < 1.0 and _has_launch_surge:
+                                        print(f"🚀 [MIGRATION-SURGE] {actual_symbol} ({mint[:8]}): прорыв миграции на 1-й минуте (vol5 ${_vol5_live:,.0f}, {_b5_bump}b/{_s5_bump}s, m5 {_m5_live:+.1f}%) — мгновенный вход в ракету!")
                                     _fdv_sc = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
                                     from sol_price import get_sol_price_sync
                                     _sol_p_sc = float(get_sol_price_sync() or 150.0)

@@ -453,7 +453,7 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
     _c_at_j = (td or {}).get("pairCreatedAt") or 0
     _age_j = ((time.time() * 1000 - _c_at_j) / 60000.0) if _c_at_j else 30.0
     _max_h1_cfg = float(getattr(config, "MAX_ENTRY_H1_PCT", 350.0))
-    _max_m5_cfg = float(getattr(config, "MAX_ENTRY_M5_PCT", 28.0))
+    _max_m5_cfg = float(getattr(config, "MAX_ENTRY_M5_PCT", 120.0))
     _max_age_cfg = float(getattr(config, "SOLANA_MAX_AGE_MIN", 60.0))
     _req_soc_age = float(getattr(config, "REQUIRE_SOCIALS_MIN_AGE_MIN", 20.0))
     _vm5_j = float(((td or {}).get("volume") or {}).get("m5", 0) or 0)
@@ -470,8 +470,8 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
 
     # 2. Anti-FOMO m5: не покупаем вершины пампа без отката (кейсы yarl, p402, ㅤ, Raymond)
     if _m5_j > _max_m5_cfg:
-        _is_strong_buyer_breakout_j = (_m5_j <= 45.0 and _b5_j >= int(_s5_j * 1.30) and _vm5_j >= 6000.0 and (_b5_j + _s5_j) >= 25)
-        _is_cooling_pullback = (_m1_j <= -1.5 and _m5_j <= 42.0 and _b5_j >= _s5_j * 1.15)
+        _is_strong_buyer_breakout_j = (_m5_j <= 150.0 and _b5_j >= int(_s5_j * 1.25) and _vm5_j >= 6000.0 and (_b5_j + _s5_j) >= 20)
+        _is_cooling_pullback = (_m1_j <= -1.5 and _m5_j <= 120.0 and _b5_j >= _s5_j * 1.15)
         if not (_is_strong_buyer_breakout_j or _is_cooling_pullback):
             print(f"🚫 [{source_tag}-FOMO-M5] {_sym_tmp}: m5 +{_m5_j:.1f}% > +{_max_m5_cfg:.0f}% без отката (m1={_m1_j:+.1f}%) — покупка хая, отмена!")
             return False
