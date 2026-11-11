@@ -1771,17 +1771,17 @@ class Analyzer:
             )
 
         # 3. ЖЕСТКИЙ ФИЛЬТР ИМПУЛЬСА, СКОРОСТИ ОБОРОТА И ТРЕНДА ДО ROCKET-XGB:
-        _base_v5_cfg = float(getattr(config, "MIN_VOLUME_M5", 2000.0))
-        # Для свежих миграций и молодых токенов (<10м) пускаем ранний старт от $350 (кейсы 花 +2591%, 大A +1930%) при живом перевесе покупателей
+        _base_v5_cfg = float(getattr(config, "MIN_VOLUME_M5", 5000.0))
+        # Для свежих миграций и молодых токенов (<10м) пускаем ранний старт от $2,000 при чистом перевесе покупателей (b5 >= s5 * 1.15 и txns >= 15)
         if _age_min_pre <= 10.0 or _is_burned_launchpad:
-            _min_v5_cfg = 350.0 if (_b5_pre >= _s5_pre and _tot_tx5_pre >= 10) else 1000.0
+            _min_v5_cfg = 2000.0 if (_b5_pre >= int(_s5_pre * 1.15) and _tot_tx5_pre >= 15) else 4000.0
         else:
             _min_v5_cfg = _base_v5_cfg
         if _vm5_pre < _min_v5_cfg:
             return self._deny(
                 mint,
                 f"low-vol5 ${_vm5_pre:.0f}<${_min_v5_cfg:.0f}",
-                f"🚫 [LOW-MOMENTUM] {symbol} ({mint[:8]}): 5м объем ${_vm5_pre:,.0f} < ${_min_v5_cfg:,.0f} — слабый пул.",
+                f"🚫 [LOW-MOMENTUM] {symbol} ({mint[:8]}): 5м объем ${_vm5_pre:,.0f} < ${_min_v5_cfg:,.0f} — слабый стоячий токен.",
             )
         if _age_min_pre >= 20.0:
             _is_massive_mature_flow = (_vm5_pre >= 15000.0 and _b5_pre >= _s5_pre)

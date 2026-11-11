@@ -37,18 +37,18 @@ PAPER_PORTFOLIO_FILE = "portfolio.json"
 PORTFOLIO_SNAPSHOT_MINT = (os.getenv("PORTFOLIO_SNAPSHOT_MINT", "") or "").strip().strip('"').strip("'") or "PORTFOLIO_SOLANA_V2"
 INITIAL_BALANCE_USD = 20.0
 REINVEST_PERCENT = 22.0
-VIRTUAL_POSITION_SIZE_USD = 5.0
-TRADE_AMOUNT_USD = 5.0
+VIRTUAL_POSITION_SIZE_USD = 3.5
+TRADE_AMOUNT_USD = 3.5
 
 COMPOUNDING_ENABLED = False
 COMPOUNDING_PCT = 0.20
-MAX_COMPOUNDING_SIZE_USD = 5.0
+MAX_COMPOUNDING_SIZE_USD = 3.5
 DYNAMIC_REINVEST_ENABLED = False
-BASE_TRADE_AMOUNT_USD = 5.0
-MAX_POSITION_SIZE_USD = 5.0
+BASE_TRADE_AMOUNT_USD = 3.5
+MAX_POSITION_SIZE_USD = 3.5
 REINVEST_MIN_POOL_LIQ_USD = 7500.0
-SCOUT_SIZE_USD = 5.0
-LOTTERY_SIZE_USD = 5.0
+SCOUT_SIZE_USD = 3.5
+LOTTERY_SIZE_USD = 3.5
 MAX_CONCURRENT_POSITIONS = 5
 
 # === ЖЕСТКОЕ ОГРАНИЧЕНИЕ УБЫТКА (РИСК-МЕНЕДЖМЕНТ) ===
@@ -112,7 +112,7 @@ TIME_EXIT_PROFIT_REQ = 0.015
 
 # === ЛЕСТНИЦА ТЕЙК-ПРОФИТОВ (ЗАЩИТА ОТ РАГОВ + ПРОСТОР ДЛЯ РАКЕТ) ===
 PARTIAL_TP_ENABLED = True
-PARTIAL_TP_MIN_TICKET_USD = 4.0      # Включено для всех $5 билетов! Забираем вложенное до того, как дев рагнет!
+PARTIAL_TP_MIN_TICKET_USD = 2.5      # Включено для всех $3.5 билетов! Забираем вложенное до того, как дев рагнет!
 TP1_TRIGGER_PCT = 0.180              # На +18% фиксируем 45% позы (возврат $2.65 в кэш — пол-депозита уже спасено!)
 TP1_SELL_FRAC = 0.45
 TP2_TRIGGER_PCT = 0.550              # На +55% фиксируем 35% от остатка (возврат еще $1.85 — сделка 100% БЕЗРИСКОВАЯ!)
@@ -129,9 +129,9 @@ MOONBAG_SELL_FRAC = 0.0
 PUMP_XGB_ENABLED = False
 RAY_XGB_ENABLED = False
 ROCKET_XGB_ENABLED = True
-ROCKET_XGB_STAGE1_THRESHOLD = 14.0   # Первичный отсев в 0мс (отсекает явный шлак)
-ROCKET_XGB_FINAL_THRESHOLD = 20.0    # Финальный порог 20%: пускает ракеты вроде HOLD (27%) и BUBLUBLU (22%)
-ROCKET_XGB_THRESHOLD = 20.0
+ROCKET_XGB_STAGE1_THRESHOLD = 18.0   # Первичный отсев в 0мс (отсекает шлак с <18%)
+ROCKET_XGB_FINAL_THRESHOLD = 30.0    # Финальный порог 30%: отсекает вялые BRO (25%), пускает реальные ракеты 30%+
+ROCKET_XGB_THRESHOLD = 30.0
 
 STALL_TIMER_SEC = 240.0   # 4 минуты на консолидацию стоячего минуса
 STALL_MAX_LOSS_PCT = -0.090
@@ -293,7 +293,7 @@ PULLBACK_M1_MIN_PCT = -0.08
 PULLBACK_M1_MAX_PCT = 0.20
 PULLBACK_MAX_H1_PCT = 320.0
 PULLBACK_MAX_M5_PCT = 0.95
-MIN_VOLUME_M5 = 2000            # Минимум $2,000 за 5м (пускает активные ракеты вроде DEBTDOG $2,152)
+MIN_VOLUME_M5 = 5000            # Минимум $5,000 за 5м (отсекает вялые стоячие монеты вроде BRO, пускает живые ракеты)
 MIN_TXNS_M5 = 25
 MIN_BUY_SELL_RATIO = 1.08       # Покупателей больше продавцов (не душит активные ракеты вроде DUGE 776b/720s)
 LOTTERY_ENABLED = False

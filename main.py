@@ -940,19 +940,35 @@ async def scanner_loop(analyzer, tracker):
                             processed_mints[mint] = time.time() + 1800
                             continue
 
+                        # Отсекаем вялые стоячие токены старше 5 минут с объёмом < $2,500 (не тратим слоты на BRO)
+                        if _c_age_m >= 5.0 and _c_vol5 < 2500.0 and mint not in _graduated_set:
+                            processed_mints[mint] = time.time() + 300
+                            continue
+
                         # Слив/флет (m5 < 2.0%) не из миграций: кулдаун 2 мин
                         if _c_m5 < 2.0 and mint not in _graduated_set and _c_age_m > 3.0:
                             processed_mints[mint] = time.time() + 120
                             continue
 
-                        _score_rank = (1000.0 if mint in _graduated_set else 0.0) + _c_m5
+                        # РОКЕТ-ВЕЛОСИТИ РАНЖИРОВАНИЕ:
+                        # Свеча % × Логарифм объёма 5м × Преобладание покупателей b/s
+                        # Настоящие ракеты с объёмом $50k-$500k и перевесом покупателей ВСЕГДА первыми в очереди!
+                        import math
+                        _c_b5 = int(_c_tx.get("buys", 0) or 0)
+                        _c_s5 = int(_c_tx.get("sells", 0) or 0)
+                        _vol_log = math.log10(max(_c_vol5, 100.0))
+                        _bs_ratio = (_c_b5 / max(_c_s5, 1)) if _c_s5 > 0 else 1.5
+                        _bs_ratio = min(max(_bs_ratio, 0.5), 3.0)
+                        _rkt_vel = _c_m5 * _vol_log * _bs_ratio
+
+                        _score_rank = (1000.0 if mint in _graduated_set else 0.0) + _rkt_vel
                         _ranked_mints.append((_score_rank, mint))
                     else:
                         # Если данных в префетче нет: пускаем только свежие миграции, ручной вотчлист или молодой токен из роддома
                         if mint in _graduated_set:
                             _ranked_mints.append((1000.0, mint))
                         elif mint in getattr(config, "USER_WATCHLIST", []):
-                            _ranked_mints.append((50.0, mint))
+                            _ranked_mints.append((500.0, mint))
                         elif mint.endswith("pump") and birth_tracker.get_age(mint) is not None and birth_tracker.get_age(mint) <= 30.0:
                             _ranked_mints.append((10.0, mint))
                         else:

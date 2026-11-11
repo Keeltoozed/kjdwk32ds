@@ -260,10 +260,33 @@ async def fetch_jup_tokens() -> list:
         except Exception:
             pass
 
-        # Сортируем все импульсные монеты по силе 5м движения и объёму:
-        ranked.sort(key=lambda x: (x[0], x[1]), reverse=True)
+        # 4. DexScreener Top Boosts & Latest Profiles ВСЕГДА (не только fallback!):
+        # Именно здесь крутятся вирусные хайп-монеты с реальным маркетингом и вниманием рынка!
+        try:
+            ds_boost_urls = (
+                "https://api.dexscreener.com/token-boosts/top/v1",
+                "https://api.dexscreener.com/token-boosts/latest/v1",
+                getattr(config, "DEXSCREENER_LATEST", "https://api.dexscreener.com/token-boosts/latest/v1"),
+            )
+            ds_b_res = await asyncio.gather(
+                *[fetch_json(u, timeout=5, retries=0) for u in ds_boost_urls],
+                return_exceptions=True
+            )
+            for res in ds_b_res:
+                if isinstance(res, tuple) and len(res) == 2 and res[0] == 200 and isinstance(res[1], list):
+                    for item in res[1]:
+                        if item.get("chainId") != "solana":
+                            continue
+                        addr = str(item.get("tokenAddress") or "").strip()
+                        if not addr or addr.startswith("0x") or len(addr) < 32 or len(addr) > 44 or addr in seen or str(item.get("symbol") or "").upper() in SKIP_SYMBOLS:
+                            continue
+                        seen.add(addr)
+                        # Топ-бусты получают высокий базовый моментум для попадания в топ очереди
+                        ranked.append((8.0, 25000.0, addr[:6], addr, "ds_top_boost"))
+        except Exception:
+            pass
 
-        # 4. Свежие мигрировавшие листинги (recent) — для отправки молодых выпускников в реестр созревания
+        # 5. Свежие мигрировавшие листинги (recent) — для отправки молодых выпускников в реестр созревания
         if s2 == 200 and isinstance(d2, list):
             for t in d2:
                 if not isinstance(t, dict):
@@ -282,23 +305,19 @@ async def fetch_jup_tokens() -> list:
                 pc5 = float(st5.get("priceChange") or 0.0)
                 seen.add(m)
                 ranked.append((pc5, 0.0, sym, m, "recent"))
-                
-        if not ranked:
-            # Fallback через DexScreener boosts/profiles (300 RPM, без добивания лимита GeckoTerminal 429!)
-            try:
-                for ds_url in (config.DEXSCREENER_LATEST, config.DEXSCREENER_PROFILES):
-                    st_ds, d_ds = await fetch_json(ds_url, timeout=6, retries=0)
-                    if st_ds == 200 and isinstance(d_ds, list):
-                        for item in d_ds:
-                            if item.get("chainId") != "solana":
-                                continue
-                            addr = str(item.get("tokenAddress") or "").strip()
-                            if not addr or addr.startswith("0x") or len(addr) < 32 or len(addr) > 44 or addr in seen:
-                                continue
-                            seen.add(addr)
-                            ranked.append((3.0, 0.0, addr[:6], addr, "ds_boost"))
-            except Exception as e:
-                pass
+
+        # Сортируем все импульсные монеты по РОКЕТ-ВЕЛОСИТИ (импульс свечи * логарифм объема * тег-бонус):
+        # Настоящие ракеты с объёмом $50k-$500k и бустами ВСЕГДА идут первыми перед тихими $1k щиткоинами!
+        import math
+        def _rocket_velocity(x):
+            # x = (pc5, vol5, sym, m, tag)
+            pc = max(float(x[0]), 0.1)
+            vol = max(float(x[1]), 100.0)
+            tag = str(x[4])
+            tag_mult = 2.0 if ("top_boost" in tag or "ds_radar" in tag) else 1.0
+            return pc * math.log10(vol) * tag_mult
+
+        ranked.sort(key=_rocket_velocity, reverse=True)
 
         out = [m for _, _, _, m, _ in ranked][:120]
         _cache, _cache_time = out, time.time()
@@ -355,8 +374,14 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
     if _liq_j < _min_liq_req:
         print(f"🚫 [{source_tag}-LOW-LIQ] {_sym_tmp} ({mint[:8]}): реальная ликвидность ${_liq_j:.0f} < ${_min_liq_req:.0f} — микро-пул/риск слива.")
         return False
-    if (_b5_j + _s5_j) < 6:
-        print(f"🚫 [{source_tag}-LOW-TXNS] {_sym_tmp} ({mint[:8]}): всего {_b5_j + _s5_j} сделок в m5 — нет активности.")
+    _tot_tx_j = _b5_j + _s5_j
+    if _tot_tx_j < 16:
+        print(f"🚫 [{source_tag}-LOW-TXNS] {_sym_tmp} ({mint[:8]}): всего {_tot_tx_j} сделок в m5 (<16) — вялый боковой стакан.")
+        return False
+    _vol5_j = float(((td or {}).get("volume") or {}).get("m5", 0) or 0)
+    _min_vol_j = 3000.0 if (_b5_j >= int(_s5_j * 1.20) and _age_j <= 10.0) else 5000.0
+    if _vol5_j < _min_vol_j:
+        print(f"🚫 [{source_tag}-LOW-VOL] {_sym_tmp} ({mint[:8]}): 5м объем ${_vol5_j:,.0f} < ${_min_vol_j:,.0f} — слабый стоячий токен (кейс BRO).")
         return False
 
     # Защита от перегретого хая, падающего ножа и слива от пика
@@ -462,7 +487,7 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
 
     # 1. Защита от уставших зомби-монет (кейс GIGAHUG, INVEST, HABIBI)
     if _age_j > _max_age_cfg:
-        _is_active_breakout_j = (_age_j <= 90.0 and _liq_j >= 40000.0 and _vm5_j >= 25000.0 and _b5_j >= _s5_j * 1.25)
+        _is_active_breakout_j = (_liq_j >= 40000.0 and _vm5_j >= 25000.0 and _b5_j >= int(_s5_j * 1.20))
         if not _is_active_breakout_j:
             print(f"🚫 [{source_tag}-ZOMBIE-AGE] {_sym_tmp}: возраст {_age_j:.0f}м > {_max_age_cfg:.0f}м — уставший пул, отмена!")
             return False
