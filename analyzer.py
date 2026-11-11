@@ -2027,11 +2027,11 @@ class Analyzer:
                 return self._deny(mint, f"ghost-pool-sol {_quote_amt:.1f}<{_min_sol_pool:.0f}", f"🚫 [AMM-GHOST-POOL] {symbol} ({mint[:8]}): в пуле всего {_quote_amt:.2f} SOL < {_min_sol_pool:.0f} SOL — микро-резерв.")
 
             # 2. Защита от Honeypot и искусственных бандлов без реальных продаж:
+            _is_canonical_pump = mint.endswith("pump") or (is_pump_curve and dex_id_low in ("pump", "pumpfun"))
             if not _is_canonical_pump and _s5_pre == 0 and _b5_pre >= 8:
                 return self._deny(mint, "zero-sells-dev-bundle", f"🚫 [DEV-BUNDLE] {symbol} ({mint[:8]}): 0 продаж при {_b5_pre} покупках — искусственный бандл дева без живого рынка (кейс Белка -98%)!")
             elif _s5_pre == 0 and _b5_pre >= 25 and _age_min_pre >= 2.0:
                 return self._deny(mint, "zero-sells-honeypot", f"🚫 [HONEYPOT] {symbol} ({mint[:8]}): токену {_age_min_pre:.1f}м, 0 продаж при {_b5_pre} покупках — honeypot.")
-            _is_canonical_pump = mint.endswith("pump") or (is_pump_curve and dex_id_low in ("pump", "pumpfun"))
             if not _is_canonical_pump:
                 if (_b5_pre + _s5_pre) >= 20 and (_s5_pre / (_b5_pre + _s5_pre)) < 0.05:
                     return self._deny(mint, "honeypot-anomaly", f"🚫 [HONEYPOT] {symbol} ({mint[:8]}): аномалия продаж m5 {_s5_pre}s/{_b5_pre}b (<5% продаж) — скрытый honeypot.")
