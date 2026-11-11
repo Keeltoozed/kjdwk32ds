@@ -1199,7 +1199,7 @@ class GrokJevEngine:
         # 0. ПРИОРИТЕТ №1: Живой поток миграций PumpPortal (subscribeMigration + Waiting Room 90с..45м)
         try:
             from birth_tracker import birth_tracker
-            grad_ready = birth_tracker.get_waiting_room_graduates(min_age_sec=90.0, max_age_sec=2700.0)
+            grad_ready = birth_tracker.get_waiting_room_graduates(min_age_sec=15.0, max_age_sec=2700.0)
             for gm in (grad_ready or []):
                 if gm and gm not in seen:
                     seen.add(gm)
@@ -1734,12 +1734,8 @@ class GrokJevEngine:
                         max_top10_gp = 38.0 if is_pump else float(getattr(_c, "AUDITOR_MAX_TOP10_PCT", 32.0))
                         if _h_stats["top10_pct"] > max_top10_gp:
                             return False, f"top10 concentration (GoPlus) {_h_stats['top10_pct']:.1f}% > {max_top10_gp:.0f}%", _h_stats
-                    elif address.endswith("pump") or eff_liq >= 10000.0:
-                        _h_stats["top10_pct"] = 20.0
-                        _h_stats["dev_pct"] = 2.0
-                        _h_stats["top1_pct"] = 2.0
                     else:
-                        return False, "auditor: cannot verify holders on custom token", _h_stats
+                        return False, "auditor-pending: holder report not indexed yet by RugCheck/GoPlus (wait 25s for verification)", _h_stats
 
             except Exception as e:
                 # Фоллбэк при сетевой ошибке RugCheck: проверяем GoPlus holder stats
@@ -1753,12 +1749,8 @@ class GrokJevEngine:
                         return False, f"dev loaded (GoPlus) {_h_stats['dev_pct']:.1f}% > 6.0% (dump risk)", _h_stats
                     if _h_stats["top10_pct"] > 38.0:
                         return False, f"top10 concentration (GoPlus) {_h_stats['top10_pct']:.1f}% > 38%", _h_stats
-                elif address.endswith("pump") or eff_liq >= 10000.0:
-                    _h_stats["top10_pct"] = 20.0
-                    _h_stats["dev_pct"] = 2.0
-                    _h_stats["top1_pct"] = 2.0
                 else:
-                    return False, f"auditor: holder check fallback failed ({e})", _h_stats
+                    return False, f"auditor-pending: holder report not ready yet ({e}), wait for verification", _h_stats
 
             # Г) Двухсторонняя симуляция (BUY + SELL) через Jupiter
             # ЖЕСТКАЯ ЗАЩИТА: токен ОБЯЗАН успешно проходить и покупку, и продажу!
