@@ -511,6 +511,10 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
     if not _cc_ok:
         print(f"🚫 [{source_tag}-COPYCAT] {_sym_tmp} ({mint[:8]}): {_cc_why} — отказ входа.")
         return False
+    _tc_ok, _tc_why = await grok_jev.check_trending_clone(mint, _sym_tmp, td or {})
+    if not _tc_ok:
+        print(f"🚫 [{source_tag}-CLONE] {_sym_tmp} ({mint[:8]}): {_tc_why} — отказ входа.")
+        return False
 
     _flush_ok, _wick_pct, _wick_stop_price, _flush_msg = grok_jev.check_flush_and_wick(td or {}, price)
     if not _flush_ok:

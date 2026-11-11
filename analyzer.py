@@ -2023,7 +2023,7 @@ class Analyzer:
             # 2. Защита от Honeypot и искусственных бандлов без реальных продаж (кейс Белка -98%: 12 покупок и 0 продаж)
             if _s5_pre == 0 and _b5_pre >= 5:
                 return self._deny(mint, "zero-sells-dev-bundle", f"🚫 [DEV-BUNDLE] {symbol} ({mint[:8]}): 0 продаж при {_b5_pre} покупках — искусственный бандл дева без живого рынка (кейс Белка -98%)!")
-            _is_canonical_pump = mint.endswith("pump") and dex_id_low in ("pump", "pumpfun", "pumpswap")
+            _is_canonical_pump = mint.endswith("pump") or (is_pump_curve and dex_id_low in ("pump", "pumpfun"))
             if not _is_canonical_pump:
                 if (_b5_pre + _s5_pre) >= 20 and (_s5_pre / (_b5_pre + _s5_pre)) < 0.05:
                     return self._deny(mint, "honeypot-anomaly", f"🚫 [HONEYPOT] {symbol} ({mint[:8]}): аномалия продаж m5 {_s5_pre}s/{_b5_pre}b (<5% продаж) — скрытый honeypot.")
@@ -2032,7 +2032,7 @@ class Analyzer:
             # Каноничный pump-флаг ставится ТОЛЬКО для монет с bonding curve Pump.fun (оканчивающихся на 'pump' или на сырой кривой).
             # Наличие пула на PumpSwap/Raydium НЕ делает кастомный скам-токен безопасным pump-токеном (кейсы DEMOCAT/SAFU/SOUVENIR)!
             _dex_low_main = str((pair_data or {}).get("dexId", "")).lower()
-            _is_canonical_pump = mint.endswith("pump") or _dex_low_main in ("pump", "pumpfun", "pumpswap") or is_pump_curve
+            _is_canonical_pump = mint.endswith("pump") or (is_pump_curve and _dex_low_main in ("pump", "pumpfun"))
             _is_pump_flag = 1 if _is_canonical_pump else 0
             _cur_tok_top10 = 0.0
             _cur_tok_dev = 0.0
@@ -2095,15 +2095,30 @@ class Analyzer:
                         if _rk_lvl == "danger" and any(k in _rk_name for k in ("single holder", "high ownership", "top 10 holders", "freeze authority")):
                             return self._deny(mint, f"rc-danger {_rk_name[:15]}", f"🚫 [АНТИСКАМ-RC] {symbol} ({mint[:8]}): критический риск RugCheck '{rk.get('name')}' — блок скама!")
 
-                    # Проверка пулов и блокировки LP: логируем статус, но не блокируем монеты с незалоченным LP по стратегии пользователя
+                    # Проверка пулов и блокировки LP
+                    _target_pair_rc = str((pair_data or {}).get("pairAddress") or "").strip()
+                    has_verified_locked_lp = False
                     for _m in (rc_data.get("markets") or []):
                         if isinstance(_m, dict):
+                            _m_pub = str(_m.get("pubkey") or "").strip()
                             _m_lp_info = _m.get("lp") or {}
                             _m_lp_locked_pct = float(_m_lp_info.get("lpLockedPct", 0) or 0)
                             _m_lp_burned_pct = float(_m_lp_info.get("lpBurnedPct", 0) or 0)
+                            _m_quote_usd = float(_m_lp_info.get("quoteUSD", 0) or 0)
                             _m_unl = float(_m_lp_info.get("lpUnlocked", 0) or 0)
+                            if (_m_lp_locked_pct >= 80.0 or _m_lp_burned_pct >= 80.0) and (_m_quote_usd >= 2000 or (_target_pair_rc and _m_pub == _target_pair_rc)):
+                                has_verified_locked_lp = True
                             if _m_unl > 0:
-                                print(f"ℹ️ [RUGCHECK-LP] {symbol} ({mint[:8]}): LP lock {_m_lp_locked_pct:.1f}%, burn {_m_lp_burned_pct:.1f}%, unl ${_m_unl:,.0f} — допуск по стратегии охоты за рагами.")
+                                print(f"ℹ️ [RUGCHECK-LP] {symbol} ({mint[:8]}): LP lock {_m_lp_locked_pct:.1f}%, burn {_m_lp_burned_pct:.1f}%, unl ${_m_unl:,.0f}.")
+
+                    # Токены Pump.fun защищены смарт-контрактом программы pump.fun (LP дев вытащить не может).
+                    # НО кастомные пулы (Raydium / Meteora) без 100% заблокированного/сожженного LP — это 100% рагпулы девов!
+                    if not _is_canonical_pump and not has_verified_locked_lp:
+                        return self._deny(
+                            mint,
+                            "unlocked-custom-lp",
+                            f"🚫 [АНТИСКАМ-LP] {symbol} ({mint[:8]}): кастомный не-pump токен с незаблокированным LP — гарантированный вывод ликвидности девом (кейсы OldCat/Dacity/BRR/TI)!"
+                        )
 
                     # Проверка холдеров RugCheck
                     top_holders = rc_data.get("topHolders") or []
@@ -2604,7 +2619,7 @@ class Analyzer:
         has_socials = bool(has_twitter or has_tg or has_website)
         
         _socials_unknown = bool(pair_data.get("_socials_unknown", False))
-        _is_pump_mint = mint.endswith("pump") or str(pair_data.get("dexId", "")).lower() in ("pumpswap", "pump", "pumpfun", "meteora", "meteoradbc", "raydium", "moonshot")
+        _is_pump_mint = mint.endswith("pump") or (_lottery and str(pair_data.get("dexId", "")).lower() in ("pump", "pumpfun"))
         # Анонимные токены вообще без соцсетей при ликвидности < $35k — это бандлер-фермы, ЕСЛИ это не pump.fun и нет органического потока!
         if not _socials_unknown and not has_socials and liquidity < 35000 and not _lottery and not _is_pump_mint and not _is_organic_leader:
             return self._deny(mint, "no-socials-anon-rug", f"🚫 [NO-SOCIALS] У {symbol} ({mint[:8]}) 0 соцсетей/сайтов (Twitter/TG/Web) при ликвидности ${liquidity:,.0f} (<$35k) — анонимный дев-бандлер.")
@@ -2671,11 +2686,12 @@ class Analyzer:
                             _mkt_quote_usd = float(_lp_info.get("quoteUSD") or 0.0)
                             _lp_unlocked = float(_lp_info.get("lpUnlocked") or 0.0)
                             _lp_locked_pct = float(_lp_info.get("lpLockedPct") or 0.0)
-                            if _lp_locked_pct >= 80.0 and (_mkt_quote_usd >= 2000 or (_target_pair and _mkt_pubkey == _target_pair)):
+                            _lp_burned_pct = float(_lp_info.get("lpBurnedPct") or 0.0)
+                            if (_lp_locked_pct >= 80.0 or _lp_burned_pct >= 80.0) and (_mkt_quote_usd >= 2000 or (_target_pair and _mkt_pubkey == _target_pair)):
                                 _has_verified_locked_lp = True
                             if (_target_pair and _mkt_pubkey == _target_pair) or _mkt_quote_usd >= 2000:
-                                if _lp_unlocked > 0 and _lp_locked_pct < 80.0:
-                                    print(f"🚫 [АНТИСКАМ] LP пула не заблокирован ({_lp_locked_pct:.1f}% locked) у {mint[:8]} → СКАМ")
+                                if _lp_unlocked > 0 and (_lp_locked_pct < 80.0 and _lp_burned_pct < 80.0):
+                                    print(f"🚫 [АНТИСКАМ] LP пула не заблокирован ({_lp_locked_pct:.1f}% locked, {_lp_burned_pct:.1f}% burned) у {mint[:8]} → СКАМ")
                                     return False
                 if not _is_pump_mint and not _has_verified_locked_lp:
                     print(f"🚫 [АНТИСКАМ] У кастомного не-pump токена {symbol} ({mint[:8]}) не подтвержден заблокированный LP в RugCheck → СКАМ")
