@@ -127,7 +127,24 @@ class MatureExitManager:
         _floor_pnl = None
         _trail_dist = None
 
-        if max_pnl_pct >= 5.00:         # +500%+ (6x - 11x+ гипер-ракета)
+        if _is_mb:
+            # === МУНБЭГ-ТРЕЙЛИНГ НА +200% ===
+            # TP1 уже забрал 45% на +18% — сделка в плюсе. Остаток едет свободно:
+            # трейлинг включается только от пика +200%, ниже — лишь страховочные полы (без трейлинга).
+            _mb_act = float(getattr(config, "MOONBAG_TRAIL_ACTIVATION_PCT", 2.00))
+            _mb_dist = float(getattr(config, "MOONBAG_TRAIL_DISTANCE_PCT", 0.25))
+            if max_pnl_pct >= 5.00:
+                _floor_pnl = round(max_pnl_pct * 0.70, 2)
+                _trail_dist = min(_mb_dist, 0.20)
+            elif max_pnl_pct >= _mb_act:
+                _floor_pnl = round(_mb_act * 0.60, 2)   # на +200% пол +120%
+                _trail_dist = _mb_dist
+            elif max_pnl_pct >= 1.00:
+                _floor_pnl = 0.50                        # страховка: не отдаём 2x обратно
+            elif max_pnl_pct >= 0.50:
+                _floor_pnl = 0.15                        # страховка: не отдаём +50% обратно
+            # ниже +50% пика — только безубыток +2% (выше)
+        elif max_pnl_pct >= 5.00:         # +500%+ (6x - 11x+ гипер-ракета)
             _floor_pnl = round(max_pnl_pct * 0.70, 2)  # Забираем 70% от пика (на +1000% выход на +700%!)
             _trail_dist = 0.18          # Трейлинг 18% от пика
         elif max_pnl_pct >= 2.50:       # +250%..+500% (3.5x - 6x ракета)
@@ -161,11 +178,13 @@ class MatureExitManager:
         # 3. PARABOLIC MOMENTUM HARVEST (ФИКСАЦИЯ ПРИ ЗАСТРЕВАНИИ НА ВЕРШИНЕ)
         # =========================================================================
         # Застревание на хаях без новых ATH больше 8-15 минут — предвестник дев-дампа:
+        # Мунбэг ниже +200% не режем «харвестом» — его страхуют полы выше.
+        _mb_free_ride = _is_mb and max_pnl_pct < float(getattr(config, "MOONBAG_TRAIL_ACTIVATION_PCT", 2.00))
         if max_pnl_pct >= 2.00 and _peak_age_min >= 8.0:
             return f"Parabolic 3x Harvest (+{pnl_pct*100:.0f}% locked after peak +{max_pnl_pct*100:.0f}%, {_peak_age_min:.0f}m no ATH)"
-        if max_pnl_pct >= 1.00 and _peak_age_min >= 10.0:
+        if not _mb_free_ride and max_pnl_pct >= 1.00 and _peak_age_min >= 10.0:
             return f"Parabolic 2x Harvest (+{pnl_pct*100:.0f}% locked after peak +{max_pnl_pct*100:.0f}%, {_peak_age_min:.0f}m no ATH)"
-        if max_pnl_pct >= 0.50 and _peak_age_min >= 15.0 and pnl_pct >= 0.20:
+        if not _mb_free_ride and max_pnl_pct >= 0.50 and _peak_age_min >= 15.0 and pnl_pct >= 0.20:
             return f"Rocket Momentum Harvest (+{pnl_pct*100:.0f}% locked after peak +{max_pnl_pct*100:.0f}%, {_peak_age_min:.0f}m no ATH)"
 
         # =========================================================================
@@ -186,9 +205,12 @@ class MatureExitManager:
         # =========================================================================
         # 5. MAX HOLD TIMEOUT (УДЕРЖАНИЕ ДО 35-45 МИНУТ ДЛЯ РАСКРУТКИ ТРЕНДА)
         # =========================================================================
-        if minutes_held >= 35.0 and pnl_pct >= 0.05 and _peak_age_min >= 15.0:
+        _mb_max_hold = float(getattr(config, "MOONBAG_MAX_HOLD_MIN", 90.0)) if _is_mb else 45.0
+        if not _is_mb and minutes_held >= 35.0 and pnl_pct >= 0.05 and _peak_age_min >= 15.0:
             return f"Max Hold Profit Take (+{pnl_pct*100:.1f}% locked at {minutes_held:.0f}m)"
-        if minutes_held >= 45.0:
+        if _is_mb and minutes_held >= 60.0 and _peak_age_min >= 25.0:
+            return f"Moonbag Max Hold Take ({pnl_pct*100:+.1f}% at {minutes_held:.0f}m, {_peak_age_min:.0f}m no ATH)"
+        if minutes_held >= _mb_max_hold:
             return f"Max Hold Expiry ({pnl_pct*100:+.1f}% after {minutes_held:.0f}m)"
 
         # =========================================================================
@@ -196,7 +218,7 @@ class MatureExitManager:
         # =========================================================================
         # Если монета в рынке 6+ минут, её пик был слабым (< +20%), и новых ATH нет 4.5+ минут:
         # выходим немедленно! В мемкоинах затухание импульса означает скорый раг/дамп дева (кейс 牛逼 13м).
-        if minutes_held >= 6.0 and max_pnl_pct < 0.20 and _peak_age_min >= 4.5:
+        if not _is_mb and minutes_held >= 6.0 and max_pnl_pct < 0.20 and _peak_age_min >= 4.5:
             _sign = "+" if pnl_pct >= 0 else ""
             return f"Stalled Momentum Escape ({_sign}{pnl_pct*100:.1f}%, no ATH {_peak_age_min:.0f}m at {minutes_held:.0f}m)"
 

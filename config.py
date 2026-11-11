@@ -37,18 +37,18 @@ PAPER_PORTFOLIO_FILE = "portfolio.json"
 PORTFOLIO_SNAPSHOT_MINT = (os.getenv("PORTFOLIO_SNAPSHOT_MINT", "") or "").strip().strip('"').strip("'") or "PORTFOLIO_SOLANA_V2"
 INITIAL_BALANCE_USD = 20.0
 REINVEST_PERCENT = 22.0
-VIRTUAL_POSITION_SIZE_USD = 3.5
-TRADE_AMOUNT_USD = 3.5
+VIRTUAL_POSITION_SIZE_USD = 5.0
+TRADE_AMOUNT_USD = 5.0
 
 COMPOUNDING_ENABLED = False
 COMPOUNDING_PCT = 0.20
-MAX_COMPOUNDING_SIZE_USD = 3.5
+MAX_COMPOUNDING_SIZE_USD = 5.0
 DYNAMIC_REINVEST_ENABLED = False
-BASE_TRADE_AMOUNT_USD = 3.5
-MAX_POSITION_SIZE_USD = 3.5
+BASE_TRADE_AMOUNT_USD = 5.0
+MAX_POSITION_SIZE_USD = 5.0
 REINVEST_MIN_POOL_LIQ_USD = 7500.0
-SCOUT_SIZE_USD = 3.5
-LOTTERY_SIZE_USD = 3.5
+SCOUT_SIZE_USD = 5.0
+LOTTERY_SIZE_USD = 5.0
 MAX_CONCURRENT_POSITIONS = 5
 
 # === ЖЕСТКОЕ ОГРАНИЧЕНИЕ УБЫТКА (РИСК-МЕНЕДЖМЕНТ) ===
@@ -112,7 +112,7 @@ TIME_EXIT_PROFIT_REQ = 0.015
 
 # === ЛЕСТНИЦА ТЕЙК-ПРОФИТОВ (ЗАЩИТА ОТ РАГОВ + ПРОСТОР ДЛЯ РАКЕТ) ===
 PARTIAL_TP_ENABLED = True
-PARTIAL_TP_MIN_TICKET_USD = 2.5      # Включено для всех $3.5 билетов! Забираем вложенное до того, как дев рагнет!
+PARTIAL_TP_MIN_TICKET_USD = 4.0      # Включено для всех $5 билетов! Забираем вложенное до того, как дев рагнет!
 TP1_TRIGGER_PCT = 0.180              # На +18% фиксируем 45% позы (возврат $2.65 в кэш — пол-депозита уже спасено!)
 TP1_SELL_FRAC = 0.45
 TP2_TRIGGER_PCT = 0.550              # На +55% фиксируем 35% от остатка (возврат еще $1.85 — сделка 100% БЕЗРИСКОВАЯ!)
@@ -125,6 +125,12 @@ TP5_TRIGGER_PCT = 8.00               # На +800% (9x) фиксируем 50%
 TP5_SELL_FRAC = 0.50
 MOONBAG_TRIGGER_PCT = 999.0
 MOONBAG_SELL_FRAC = 0.0
+# === МУНБЭГ-ТРЕЙЛИНГ (остаток после TP1 едет до +200%) ===
+# После TP1 (+18%, продано 45%) сделка уже в плюсе. Остаток НЕ режется трейлингом на мелких откатах:
+# держим до пика +200%, и только оттуда включается трейлинг. Ниже — лишь страховочные полы.
+MOONBAG_TRAIL_ACTIVATION_PCT = 2.00  # Трейлинг мунбэга включается только от пика +200%
+MOONBAG_TRAIL_DISTANCE_PCT = 0.25    # Дистанция трейлинга 25% от пика (на +200% выход не ниже ~+125%)
+MOONBAG_MAX_HOLD_MIN = 90.0          # Мунбэг может ехать до 90 минут (вместо 45)
 
 PUMP_XGB_ENABLED = False
 RAY_XGB_ENABLED = False
