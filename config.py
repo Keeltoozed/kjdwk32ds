@@ -106,7 +106,7 @@ STREAM_MAX_DEV_BUY_TOKENS = 100_000_000
 STREAM_MIN_ENTRY_PROGRESS = 8.0
 STREAM_MOMENTUM_MIN_RATIO = 0.35
 
-VIP_ENTRIES_ENABLED = True
+VIP_ENTRIES_ENABLED = False
 
 # === VIP ALPHA TRADERS & KOL WALLETS (Прямой снайпинг топ-трейдеров Pump.fun) ===
 # При покупке этими кошельками бот моментально копирует сделку с обходом фильтров (объём, возраст, свечи, ML)
@@ -143,9 +143,9 @@ MOONBAG_MAX_HOLD_MIN = 90.0          # Мунбэг может ехать до 9
 PUMP_XGB_ENABLED = False
 RAY_XGB_ENABLED = False
 ROCKET_XGB_ENABLED = True
-ROCKET_XGB_STAGE1_THRESHOLD = 18.0   # Первичный отсев в 0мс (отсекает шлак с <18%)
-ROCKET_XGB_FINAL_THRESHOLD = 22.0    # Финальный порог 22%: пускает свежие импульсные ракеты 22%+ (не держит слоты пустыми)
-ROCKET_XGB_THRESHOLD = 22.0
+ROCKET_XGB_STAGE1_THRESHOLD = 22.0   # Первичный отсев 22% (отсекает конкретный шлак)
+ROCKET_XGB_FINAL_THRESHOLD = 28.0    # Финальный порог 28%: только уверенные ракеты — снижает кол-во помоек
+ROCKET_XGB_THRESHOLD = 28.0
 
 STALL_TIMER_SEC = 240.0   # 4 минуты на консолидацию стоячего минуса
 STALL_MAX_LOSS_PCT = -0.090
@@ -174,7 +174,7 @@ STAGNANT_LOSS_MIN_FAST = 7.0
 STAGNANT_HOLD_MIN = 12.0
 
 AI_MODE = "degen"
-MIN_LIQUIDITY = 8000.0          # Минимум $8,000 реальной ликвидности на DEX (пускает MELT с $9,981)
+MIN_LIQUIDITY = 20000.0         # Минимум $20,000 ликвидности — отсекает помойки с $8-15k лика (кейс konnichiwa $15k → rug)
 MAX_LIQUIDITY = 50000000
 
 GROQ_API_KEY = (os.getenv("GROQ_API_KEY") or os.getenv("GROK_API_KEY") or os.getenv("XAI_API_KEY") or "").strip().strip('"').strip("'")
@@ -187,7 +187,7 @@ JEV_WICK_STOP_ENABLED = False
 JEV_EARLY_MIN_AGE_MIN = 0.25    # Сверхбыстрый вход в горячие ракеты с объемом от 15 секунд
 JEV_MIN_AGE_MIN = 0.35          # Базовый карантин от 20 секунд (не срезаем TWAP 0.4m)
 JEV_MAX_AGE_MIN = 60.0          # Свежие монеты до 60м (защита от зомби-монет GIGAHUG/INVEST)
-JEV_MIN_LIQUIDITY_USD = 8000.0  # Минимум $8k ликвидности (пускает MELT $9,981)
+JEV_MIN_LIQUIDITY_USD = 20000.0  # Минимум $20k ликвидности — реальные ракеты всегда имеют $20k+ лика (GREG, BERNIAO, COLONY)
 JEV_MAX_LIQUIDITY_USD = 220000.0
 JEV_MIN_VOLUME_H1 = 8000.0
 JEV_MIN_MCAP_USD = 5000.0      # Минимум $5k MCap (ловит ранние Raydium/PumpSwap ракеты вроде FOMO $8.1k, ICC $8.1k)
@@ -307,9 +307,9 @@ PULLBACK_M1_MIN_PCT = -0.08
 PULLBACK_M1_MAX_PCT = 0.20
 PULLBACK_MAX_H1_PCT = 320.0
 PULLBACK_MAX_M5_PCT = 0.95
-MIN_VOLUME_M5 = 2500            # Минимум $2,500 за 5м (ранние ракеты пускает от $1,500, не отсекает взлетающие гемы)
-MIN_TXNS_M5 = 14                # 14 транзакций за 5м (вместо 25 — ловит ранний старт)
-MIN_BUY_SELL_RATIO = 1.02       # Покупателей >= продавцов (не душит активные двухсторонние ракеты)
+MIN_VOLUME_M5 = 5000            # Минимум $5,000 за 5м — реальные ракеты всегда $5k+ (отсекает зомби с $2-3k оборота)
+MIN_TXNS_M5 = 20                # 20 транзакций за 5м — активный интерес (меньше = мертвая монета)
+MIN_BUY_SELL_RATIO = 1.05       # Покупателей на 5%+ больше продавцов (настоящий импульс вверх)
 LOTTERY_ENABLED = False
 LOTTERY_MIN_M5_PCT = 0.60
 LOTTERY_SIZE_MULT = 0.30
@@ -363,7 +363,7 @@ GOPLUS_MAX_SELL_TAX = 0.10
 GOPLUS_CACHE_SEC = 3600
 
 SCAN_CONCURRENCY = 10
-SCAN_LOOP_SLEEP_SEC = 1
+SCAN_LOOP_SLEEP_SEC = 3
 SCAN_AFTER_ENTRY_SLEEP_SEC = 3
 SCAN_LATEST_TTL_SEC = 10
 SOLANA_RESCAN_COOLDOWN = 30
@@ -375,7 +375,7 @@ JEV_MIN_M1_ENTRY_FLOOR_PCT = -4.0
 JEV_MIN_H1_PCT = -8.0              # Разрешаем плоскую консолидацию и разворот от -8% (не режет MEME +3% и GORP +3.8%)
 JEV_MIN_H6_PCT = -15.0
 
-USE_COPYTRADE = True
+USE_COPYTRADE = False
 COPY_MIN_TIER = 3
 COPY_MAX_TICKET_USD = 5.0
 COPY_MAX_CONCURRENT_POSITIONS = 3  # До 3 слотов под копитрейд/VIP

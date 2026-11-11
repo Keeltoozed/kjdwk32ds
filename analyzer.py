@@ -628,7 +628,7 @@ class Analyzer:
                         _liq_lt = float((_p_lt.get("liquidity") or {}).get("usd", 0) or 0)
                         _vol5_lt = float((_p_lt.get("volume") or {}).get("m5", 0) or 0)
                         _m5_lt = float((_p_lt.get("priceChange") or {}).get("m5", 0) or 0)
-                        if _liq_lt < 7500.0 or _vol5_lt < 2000.0 or _m5_lt < 1.8:
+                        if _liq_lt < 6000.0 or _vol5_lt < 1200.0 or _m5_lt < 1.0:
                             continue
                         _addr_lt = str((_p_lt.get("baseToken") or {}).get("address") or "").strip()
                         if _addr_lt and not _addr_lt.startswith("0x") and 32 <= len(_addr_lt) <= 44:

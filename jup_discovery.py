@@ -161,27 +161,27 @@ async def fetch_jup_tokens() -> list:
                 _max_pc1h = 2500.0 if (_is_fresh_jup and pc5 >= 2.0 and b5 >= s5) else float(getattr(config, "MAX_ENTRY_H1_PCT", 350.0))
                 if (pc1h > _max_pc1h and age_m > 4.0) or (pc1h < -25.0 and pc5 < 12.0):
                     continue
-                if pc5 < min_pc5 or vol5 < 1500.0:
+                if pc5 < min_pc5 or vol5 < 1000.0:
                     continue
                 seen.add(m)
                 ranked.append((pc5, vol5, sym, m, tag))
 
         if s_org == 200:
-            _add_jup_list(d_org, "organic_5m", min_pc5=1.8)
+            _add_jup_list(d_org, "organic_5m", min_pc5=1.0)
         if s1 == 200:
-            _add_jup_list(d1, "trending_5m", min_pc5=1.8)
+            _add_jup_list(d1, "trending_5m", min_pc5=1.0)
         if s1h == 200:
-            _add_jup_list(d1h, "trending_1h", min_pc5=2.0)
+            _add_jup_list(d1h, "trending_1h", min_pc5=1.2)
         if s3 == 200:
-            _add_jup_list(d3, "traded_5m", min_pc5=1.8)
+            _add_jup_list(d3, "traded_5m", min_pc5=1.0)
         if s2 == 200:
-            _add_jup_list(d2, "recent", min_pc5=1.5)
+            _add_jup_list(d2, "recent", min_pc5=0.5)
         if s_tr1h == 200:
-            _add_jup_list(d_tr1h, "traded_1h", min_pc5=2.0)
+            _add_jup_list(d_tr1h, "traded_1h", min_pc5=1.2)
         if s_org1h == 200:
-            _add_jup_list(d_org1h, "organic_1h", min_pc5=2.0)
+            _add_jup_list(d_org1h, "organic_1h", min_pc5=1.2)
         if s6h == 200:
-            _add_jup_list(d6h, "trending_6h", min_pc5=2.5)
+            _add_jup_list(d6h, "trending_6h", min_pc5=1.8)
 
         # 2. Прямой DexScreener Rocket Radar (300 RPM, 0 нагрузки на GT):
         # Ловит живые выпускники PumpSwap / Meteora / Raydium / Bonk, когда топ-100 Jupiter забит старыми мейджорами!

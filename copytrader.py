@@ -634,8 +634,14 @@ class CopyTrader:
         """
         import config
 
+        if not getattr(config, "USE_COPYTRADE", False):
+            return
+
         _vip_wallets = getattr(config, "VIP_KOL_WALLETS", {})
         is_vip = (wallet in _vip_wallets) or any(k in str(trader_name) for k in ("Ansem", "faceofsol", "bronbroncore", "wirelyss", "chairman", "VIP"))
+
+        if is_vip and not getattr(config, "VIP_ENTRIES_ENABLED", False):
+            return
 
         if mint in SKIP_COPY_MINTS:
             return
@@ -805,8 +811,12 @@ class CopyTrader:
         if mint in open_pos:
             return
         import config as _cfg
+        if not getattr(_cfg, "USE_COPYTRADE", False):
+            return
         _vip_wallets = getattr(_cfg, "VIP_KOL_WALLETS", {})
         is_vip = (wallet in _vip_wallets) or any(k in str(wallet) for k in _vip_wallets)
+        if is_vip and not getattr(_cfg, "VIP_ENTRIES_ENABLED", False):
+            return
         trader_name = _vip_wallets.get(wallet) or self.wallets.get(wallet, f"@Tier1_{wallet[:4]}")
         cur_price = await self.get_token_price(mint)
         now = time.time()

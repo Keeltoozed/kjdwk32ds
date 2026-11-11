@@ -812,6 +812,8 @@ async def scanner_loop(analyzer, tracker):
     _grad_none = {}  # mint -> число None от DS (скам/нестандарт: после 3 — хороним, не жрём циклы)
     _latest_cache = (0.0, [])   # (ts, tokens): кэш fetch_latest_tokens
     _last_idle_log = 0.0
+    _last_scan_log = 0.0
+    _last_wr_log = 0.0
     while True:
         _scan_win = None
         _entered = False
@@ -859,7 +861,10 @@ async def scanner_loop(analyzer, tracker):
                 if cached_discovery:
                     mints_to_scan.extend(cached_discovery)
 
-                print(f"🔎 Сканируем монеты... (Открыто: {open_count}/{config.MAX_CONCURRENT_POSITIONS}, кандидатов: {len(mints_to_scan)})")
+                _now_scan_ts = time.time()
+                if graduated_mints or (_now_scan_ts - _last_scan_log) >= 30.0:
+                    _last_scan_log = _now_scan_ts
+                    print(f"🔎 Сканируем монеты... (Открыто: {open_count}/{config.MAX_CONCURRENT_POSITIONS}, кандидатов: {len(mints_to_scan)})")
                 
                 # 2. Уличные Токены (Берем созревающие ракеты)
                 if getattr(config, "ALLOW_UNGRADUATED_PUMPFUN", False):
@@ -869,7 +874,9 @@ async def scanner_loop(analyzer, tracker):
                     _wr_mints = list(getattr(birth_tracker, "waiting_room", {}).keys())
                     mature_mints = [m for m in _wr_mints if m not in _graduated_set]
                 if mature_mints:
-                    print(f"🎂 Найдено {len(mature_mints)} созревающих монет (waiting room)!")
+                    if graduated_mints or (_now_scan_ts - _last_wr_log) >= 30.0:
+                        _last_wr_log = _now_scan_ts
+                        print(f"🎂 В Waiting Room созревает {len(mature_mints)} миграций (ожидают индексации DEX и появления объёма)")
                     mints_to_scan.extend(mature_mints)
 
                 # 3. Ручной вотчлист юзера (увидел рано на fomo - бот исполняет по своим гейтам)
@@ -936,24 +943,25 @@ async def scanner_loop(analyzer, tracker):
                             processed_mints[mint] = time.time() + 3600
                             continue
 
-                        # Токен старше 1ч со слабым импульсом (<4%): скип на 30 мин (ЛЮБОЙ DEX, включая pump.fun!)
+                        # Токен старше 1ч со слабым импульсом (<4%): скип на 3 мин (вместо 30 мин)
                         if _c_age_m > 60.0 and _c_m5 < 4.0 and mint not in _graduated_set:
-                            processed_mints[mint] = time.time() + 1800
+                            processed_mints[mint] = time.time() + 180
                             continue
 
-                        # Мертвый токен старше 3 минут с 0 сделок в m5: скип на 30 мин
+                        # Мертвый токен старше 3 минут с 0 сделок в m5: скип на 5 мин
                         if _c_age_m >= 3.0 and _c_trades == 0 and _c_vol5 == 0 and mint not in _graduated_set:
-                            processed_mints[mint] = time.time() + 1800
-                            continue
-
-                        # Отсекаем вялые стоячие токены старше 5 минут с объёмом < $2,500 (не тратим слоты на BRO)
-                        if _c_age_m >= 5.0 and _c_vol5 < 2500.0 and mint not in _graduated_set:
                             processed_mints[mint] = time.time() + 300
                             continue
 
-                        # Слив/флет (m5 < 2.0%) не из миграций: кулдаун 2 мин
+                        # Отсекаем вялые стоячие токены с объёмом < $2,500: быстрый переопрос через 45с (вместо 5 минут!)
+                        # Токен может проснуться и набрать объём за полминуты
+                        if _c_age_m >= 5.0 and _c_vol5 < 2500.0 and mint not in _graduated_set:
+                            processed_mints[mint] = time.time() + 45
+                            continue
+
+                        # Слив/флет (m5 < 2.0%) не из миграций: кулдаун 25с (вместо 2 мин!)
                         if _c_m5 < 2.0 and mint not in _graduated_set and _c_age_m > 3.0:
-                            processed_mints[mint] = time.time() + 120
+                            processed_mints[mint] = time.time() + 25
                             continue
 
                         # РОКЕТ-ВЕЛОСИТИ РАНЖИРОВАНИЕ:
@@ -997,7 +1005,7 @@ async def scanner_loop(analyzer, tracker):
                     _ca_l = _pre_l.get("pairCreatedAt") or 0 if isinstance(_pre_l, dict) else 0
                     _age_l = (time.time() * 1000 - _ca_l) / 60000.0 if _ca_l else 999.0
                     _is_fresh_l = _m in _graduated_set or _age_l <= 30.0
-                    _cd_l = int(getattr(config, "SOLANA_FRESH_RESCAN_COOLDOWN", 45)) if _is_fresh_l else int(getattr(config, "SOLANA_RESCAN_COOLDOWN", 180))
+                    _cd_l = int(getattr(config, "SOLANA_FRESH_RESCAN_COOLDOWN", 12)) if _is_fresh_l else int(getattr(config, "SOLANA_RESCAN_COOLDOWN", 35))
                     if _now_l - processed_mints.get(_m, 0.0) < _cd_l:
                         continue
                     _launch.append(_m)
@@ -1032,7 +1040,7 @@ async def scanner_loop(analyzer, tracker):
                             pass
                         _age_m = float(_bt_age_m) if _bt_age_m is not None else (0.2 if mint.endswith("pump") else 999.0)
                     _is_fresh_m = mint in _graduated_set or _age_m <= 30.0
-                    _cd = int(getattr(config, "SOLANA_FRESH_RESCAN_COOLDOWN", 45)) if _is_fresh_m else int(getattr(config, "SOLANA_RESCAN_COOLDOWN", 180))
+                    _cd = int(getattr(config, "SOLANA_FRESH_RESCAN_COOLDOWN", 12)) if _is_fresh_m else int(getattr(config, "SOLANA_RESCAN_COOLDOWN", 35))
                     if time.time() - processed_mints.get(mint, 0.0) < _cd:
                         continue
                     
