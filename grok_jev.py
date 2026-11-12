@@ -456,7 +456,7 @@ class GrokJevEngine:
             else:
                 age_min = 999.0
 
-        _min_grad_liq = float(getattr(_c, "MIN_GRADUATED_LIQ_USD", 6000.0))
+        _min_grad_liq = float(getattr(_c, "MIN_GRADUATED_LIQ_USD", 20000.0))
         if dex_id in ("pump", "pumpfun", "meteoradbc") and not getattr(_c, "ALLOW_UNGRADUATED_PUMPFUN", False):
             return False, "raw-pump-curve (wait for graduation to PumpSwap/Raydium with locked LP)"
         min_liq = 1500.0 if (dex_id in ("pump", "pumpfun", "meteoradbc") and getattr(_c, "ALLOW_UNGRADUATED_PUMPFUN", False)) else _min_grad_liq
@@ -931,7 +931,7 @@ class GrokJevEngine:
         _base_addr = str(((pair_data.get("baseToken") or {}).get("address")) or "")
         _dex_id = str(pair_data.get("dexId", "")).lower()
         _is_raw_curve_only = (_dex_id in ("pump", "pumpfun") and getattr(_c, "ALLOW_UNGRADUATED_PUMPFUN", False))
-        _min_liq = 1500.0 if _is_raw_curve_only else float(getattr(_c, "MIN_GRADUATED_LIQ_USD", 6000.0))
+        _min_liq = 1500.0 if _is_raw_curve_only else float(getattr(_c, "MIN_GRADUATED_LIQ_USD", 20000.0))
         _base_max_m1 = float(getattr(_c, "JEV_MAX_M1_ENTRY_PCT", 28.0))
 
         # Если DexScreener не отдал m1 (0.0 / None) — берем реальный sub-minute m1 из нашей живой истории сканов

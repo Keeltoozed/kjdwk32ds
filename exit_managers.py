@@ -86,6 +86,21 @@ class MatureExitManager:
                 if s5_chk >= 10 and (b5_chk / max(1, s5_chk)) < 0.40:
                     return f"Early Seller Dump Cut ({pnl_pct*100:.1f}%, {b5_chk}b/{s5_chk}s)"
 
+            # СБРОС МОМЕНТАЛЬНОГО РАГА НА ПЕРВОЙ СВЕЧЕ (First Candle Rug Exit)
+            # На ракетах (SWEATER, MUSTACHE) первая свеча зелёная, покупатели льют объём и pnl в плюсе.
+            # Если токен — раг: на первой свече (0.5..3м) дев сливает стек, m1 падает > 18% или продавцы давят в одну калитку.
+            # Сбрасываем ТОЛЬКО РАГ сразу на первой свече с минимальным убытком (-6%..-9%), не дожидаясь -25%..-35%!
+            if 0.4 <= minutes_held <= 3.0 and pnl_pct <= -0.060:
+                _pc_chk = _pd_chk.get("priceChange") or {}
+                _m1_c = float(_pc_chk.get("m1", 0) or 0)
+                _txns = (_pd_chk.get("txns") or {}).get("m5") or {}
+                _b5 = int(_txns.get("buys", 0) or 0)
+                _s5 = int(_txns.get("sells", 0) or 0)
+                if _m1_c <= -18.0:
+                    return f"🚨 First Candle Rug Dump: 1m crash ({_m1_c:.0f}%, PnL {pnl_pct*100:.1f}%)"
+                if _s5 >= 8 and (_b5 / max(1, _s5)) < 0.35:
+                    return f"🚨 First Candle Rug Cut: Sellers dominating ({_b5}b/{_s5}s, PnL {pnl_pct*100:.1f}%)"
+
         # =========================================================================
         # 1. ЖЕСТКИЙ КОНТРОЛЬ УБЫТКА (EMERGENCY CAP & STOP LOSS) — ПЕРВЫЙ ПРИОРИТЕТ!
         # =========================================================================

@@ -86,7 +86,7 @@ MAX_PUMP_CURVE_MCAP_SOL = 350.0           # Верх кривой перед м�
 PUMP_MIGRATION_MCAP_SOL = 410.0           # FDV миграции pump.fun (~410 SOL = ~$35k при SOL $85)
 PUMP_DUMP_FLOOR_SOL = 160.0               # Порог post-mig-dumped (~40% миграции = 160 SOL, разрешает Dip Reclaim)
 JEV_MAX_TICKET_USD = 0.0
-MIN_GRADUATED_LIQ_USD = 6000.0           # На DEX минимум $6k реальной ликвидности — пускает свежие миграции PumpSwap и Raydium ($10-15k лика, кейс SWEATER $40k MCap)
+MIN_GRADUATED_LIQ_USD = 20000.0          # На DEX минимум $20k реальной ликвидности — отсекает дампы $14k пулов (кейс MIBULL $14.4k → $1.7k)
 AUDITOR_STAIRCASE_ENABLED = True
 AUDITOR_MAX_DEV_PCT = 6.0
 AUDITOR_MAX_TOP10_PCT = 32.0
@@ -143,9 +143,9 @@ MOONBAG_MAX_HOLD_MIN = 90.0          # Мунбэг может ехать до 9
 PUMP_XGB_ENABLED = False
 RAY_XGB_ENABLED = False
 ROCKET_XGB_ENABLED = True
-ROCKET_XGB_STAGE1_THRESHOLD = 18.0   # Первичный отсев 18% в 0мс
-ROCKET_XGB_FINAL_THRESHOLD = 22.0    # Финальный порог 22%: пускает свежие импульсные ракеты 22%+ (как SWEATER)
-ROCKET_XGB_THRESHOLD = 22.0
+ROCKET_XGB_STAGE1_THRESHOLD = 22.0   # Первичный отсев 22% (отсекает конкретный шлак)
+ROCKET_XGB_FINAL_THRESHOLD = 28.0    # Финальный порог 28%: только уверенные ракеты — снижает кол-во помоек
+ROCKET_XGB_THRESHOLD = 28.0
 
 STALL_TIMER_SEC = 240.0   # 4 минуты на консолидацию стоячего минуса
 STALL_MAX_LOSS_PCT = -0.090
@@ -174,7 +174,7 @@ STAGNANT_LOSS_MIN_FAST = 7.0
 STAGNANT_HOLD_MIN = 12.0
 
 AI_MODE = "degen"
-MIN_LIQUIDITY = 7500.0          # Минимум $7,500 ликвидности — пускает свежие миграции с $10-15k (кейс SWEATER), отсекает мертвые пулы < $7k
+MIN_LIQUIDITY = 20000.0         # Минимум $20,000 ликвидности — отсекает помойки с $8-15k лика (кейс konnichiwa $15k → rug)
 MAX_LIQUIDITY = 50000000
 
 GROQ_API_KEY = (os.getenv("GROQ_API_KEY") or os.getenv("GROK_API_KEY") or os.getenv("XAI_API_KEY") or "").strip().strip('"').strip("'")
@@ -187,7 +187,7 @@ JEV_WICK_STOP_ENABLED = False
 JEV_EARLY_MIN_AGE_MIN = 0.25    # Сверхбыстрый вход в горячие ракеты с объемом от 15 секунд
 JEV_MIN_AGE_MIN = 0.35          # Базовый карантин от 20 секунд (не срезаем TWAP 0.4m)
 JEV_MAX_AGE_MIN = 60.0          # Свежие монеты до 60м (защита от зомби-монет GIGAHUG/INVEST)
-JEV_MIN_LIQUIDITY_USD = 7500.0   # Минимум $7.5k ликвидности — пускает свежие ракеты PumpSwap ($11k-$15k лика при рождении)
+JEV_MIN_LIQUIDITY_USD = 20000.0  # Минимум $20k ликвидности — реальные ракеты всегда имеют $20k+ лика (GREG, BERNIAO, COLONY)
 JEV_MAX_LIQUIDITY_USD = 220000.0
 JEV_MIN_VOLUME_H1 = 8000.0
 JEV_MIN_MCAP_USD = 5000.0      # Минимум $5k MCap (ловит ранние Raydium/PumpSwap ракеты вроде FOMO $8.1k, ICC $8.1k)
@@ -307,9 +307,9 @@ PULLBACK_M1_MIN_PCT = -0.08
 PULLBACK_M1_MAX_PCT = 0.20
 PULLBACK_MAX_H1_PCT = 320.0
 PULLBACK_MAX_M5_PCT = 0.95
-MIN_VOLUME_M5 = 2000            # Минимум $2,000 за 5м — ловит ранний старт ракет вроде SWEATER
-MIN_TXNS_M5 = 14                # 14 транзакций за 5м (ловит ранний импульс)
-MIN_BUY_SELL_RATIO = 1.02       # Покупателей >= продавцов (активный импульс вверх)
+MIN_VOLUME_M5 = 5000            # Минимум $5,000 за 5м — реальные ракеты всегда $5k+ (отсекает зомби с $2-3k оборота)
+MIN_TXNS_M5 = 20                # 20 транзакций за 5м — активный интерес (меньше = мертвая монета)
+MIN_BUY_SELL_RATIO = 1.05       # Покупателей на 5%+ больше продавцов (настоящий импульс вверх)
 LOTTERY_ENABLED = False
 LOTTERY_MIN_M5_PCT = 0.60
 LOTTERY_SIZE_MULT = 0.30
