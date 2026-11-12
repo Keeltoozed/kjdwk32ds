@@ -303,10 +303,18 @@ async def position_manager_loop(analyzer, tracker):
                     _pnl_str = f"{pnl_pct*100:+.1f}%" if position.entry_price_usd > 0 else "0%"
                     print(f"🛡️ [TRACK] {position.symbol} ({mint[:8]}): цена ${current_price:.8f} ({_pnl_str}) | пик: ${position.max_price_usd:.8f} | держим {minutes_held:.1f}м", flush=True)
 
-                # Периодически обновляем живую ликвидность пула и сделки (каждые 15 сек или при просадке <= -6%)
+                # Периодически обновляем живую ликвидность пула и сделки.
+                # JENSENHAO урок: LP rug снимает лику за 1 транзакцию — нужен быстрый мониторинг!
+                # Нормально: каждые 12с. При убытке или подозрении на слив лики — каждые 2с.
                 _last_pd_ts = float(getattr(position, "last_pair_data_ts", 0.0) or 0.0)
                 _now_t = time.time()
-                if (_now_t - _last_pd_ts) >= 15.0 or (pnl_pct <= -0.06 and (_now_t - _last_pd_ts) >= 4.0):
+                _init_liq_chk = float(getattr(position, "initial_liquidity_usd", 0.0) or 0.0)
+                _peak_liq_chk = float(getattr(position, "peak_liquidity_usd", 0.0) or _init_liq_chk)
+                _last_liq_chk = float((((getattr(position, "pair_data", None) or getattr(position, "last_pair_data", None) or {}).get("liquidity") or {}).get("usd", 0) or 0))
+                # Быстрое обновление если лика уже начала падать (> 10% слива от пика) — ловим LP rug заранее!
+                _liq_draining = _peak_liq_chk >= 3000.0 and _last_liq_chk > 0 and _last_liq_chk < (_peak_liq_chk * 0.90)
+                _refresh_interval = 2.0 if (_liq_draining or pnl_pct <= -0.06) else 12.0
+                if (_now_t - _last_pd_ts) >= _refresh_interval:
                     try:
                         import market_data as _md
                         _cached_td = getattr(_md, "_TD_CACHE", {}).get(mint)
@@ -1206,6 +1214,13 @@ async def scanner_loop(analyzer, tracker):
                                 # Повторная проверка живых метрик после сброса prefetch-кэша (защита от реального разворота вниз)
                                 if _m5_live < 1.0 or _m1_live < -4.5:
                                     print(f"🚫 [SCANNER-LIVE-REVERSAL] {actual_symbol} ({mint[:8]}): на живом графике импульс сломан (m5 {_m5_live:+.1f}%, m1 {_m1_live:+.1f}%) — отмена покупки!")
+                                    continue
+                                # POST-PEAK DUMP GUARD: монета летела вверх (h1 > 30%) но m5 уже падает —
+                                # классика AMC (h1=+95%, m5=-37%), DID (h1=+39%, m5=-50%). У настоящих ракет
+                                # (SWEATER, MUSTACHE, 1JENSEN) m5 всегда позитивный даже при высоком h1.
+                                # ТОЛЬКО m5 < 0% блокируем. m5=+2% при h1=+147% — MUSTACHE, нормально!
+                                if _m5_live < 0.0 and _h1_live >= 30.0:
+                                    print(f"🚫 [SCANNER-POST-PEAK] {actual_symbol} ({mint[:8]}): пик уже прошёл — h1 {_h1_live:+.0f}% но m5 {_m5_live:+.1f}% (дамп после пика) — отмена!")
                                     continue
                                 _max_m1_cfg_live = float(getattr(config, "MAX_ENTRY_M1_PCT", 28.0))
                                 if _m1_live > _max_m1_cfg_live and _age_m >= 3.0:

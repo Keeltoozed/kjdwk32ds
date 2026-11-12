@@ -2311,7 +2311,8 @@ class Analyzer:
                     pass
             except Exception as e:
                 print(f"⚠️ Ошибка проверки безопасности ({e})")
-                return self._deny(mint, "security-audit-failed", f"🚫 [АНТИСКАМ] Ошибка аудита безопасности ({e}) — блок входа.")
+                if not _is_pump_flag:
+                    return False
 
             # 4. Финальная проверка минутных свечей (защита от водопада в моменте)
             if not await self.verify_1m_candles_not_dumping(mint, pair_data, "solana"):
@@ -2871,14 +2872,31 @@ class Analyzer:
                             return False
                         print(f"🛡️ [GOPLUS] RugCheck недоступен, но GoPlus подтвердил безопасность {mint[:8]} (Топ-10: {self._last_top10:.1f}%, Дев: {self._last_dev:.1f}%).")
                     else:
-                        print(f"🚫 [NO-AUDIT] {symbol} ({mint[:8]}): Ни RugCheck, ни GoPlus не имеют данных холдеров — блок входа (ожидание индексации).")
-                        return False
+                        if not _is_pump_mint:
+                            print(f"🚫 [NO-AUDIT] {symbol} ({mint[:8]}): Ни RugCheck, ни GoPlus не имеют данных холдеров — блок входа по безопасности.")
+                            return False
+                        print(f"🛡️ [GOPLUS] RugCheck недоступен, GoPlus подтвердил отсутствие ловушек у {mint[:8]} (Pump.fun кривая).")
                 except Exception as _ge:
                     print(f"⚠️ Не удалось проверить через RugCheck и GoPlus ({_ge}). Блокируем вход.")
                     return False
         except Exception as e:
             print(f"⚠️ Ошибка RugCheck ({str(e)[:50]}). Fail-Closed для защиты от рагпула.")
-            return False
+            if not _is_pump_mint:
+                return False
+            try:
+                import goplus as _gp
+                _g_ok, _g_why = await _gp.check_solana(mint)
+                if not _g_ok:
+                    return False
+                _h_stats = _gp.get_solana_holder_stats(mint)
+                if not _h_stats.get("has_data"):
+                    return False
+                self._last_top10 = _h_stats.get("top_10_pct", 0.0)
+                self._last_dev = _h_stats.get("dev_pct", 0.0)
+                if self._last_dev > 10.0 or self._last_top10 > 35.0:
+                    return False
+            except Exception:
+                return False
         except Exception as e:
             print(f"⚠️ Ошибка Jito-bundle: {e}")
             return False

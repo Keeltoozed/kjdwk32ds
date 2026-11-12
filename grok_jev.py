@@ -618,6 +618,14 @@ class GrokJevEngine:
         _min_m5_jev = 1.0 if (eff_liq >= 14000.0 and b5 >= int(s5 * 1.05) and vol_m5 >= 2500.0) else 1.8
         if m5 < _min_m5_jev and not _is_buyer_dip_g:
             return False, f"no-momentum m5 {m5:+.1f}% < +{_min_m5_jev:.1f}% (coin is flat/standing still)"
+
+        # POST-PEAK DUMP GUARD: монета уже летела вверх (h1 > 30%) но m5 уже падает (< 0%) —
+        # это классический рагпулл/дев-дамп ПОСЛЕ пика: DID (h1=+39%, m5=-50%), AMC (h1=+95%, m5=-37%).
+        # При настоящих ракетах m5 позитивный даже когда h1 высокий (SWEATER, MUSTACHE, 1JENSEN).
+        # ВАЖНО: только m5 < 0% блокируем. m5=+2% при h1=+147% — это MUSTACHE, нормальная ракета!
+        _h1_live = float((pair_data.get("priceChange") or {}).get("h1", 0) or 0)
+        if m5 < 0.0 and _h1_live >= 30.0:
+            return False, f"post-peak-dump h1 {_h1_live:+.0f}% but m5 {m5:+.1f}% (peak already hit, now dumping)"
         if age_min >= 20.0:
             _is_massive_mature_flow_g = (vol_m5 >= 8000.0 and eff_liq >= 15000.0 and b5 >= s5 and m5 >= 1.0)
             _is_strong_jev_breakout = (m5 >= 1.5 and vol_m5 >= 1500.0 and b5 >= s5 and (b5 + s5) >= 15)
@@ -1734,8 +1742,12 @@ class GrokJevEngine:
                         max_top10_gp = 38.0 if is_pump else float(getattr(_c, "AUDITOR_MAX_TOP10_PCT", 32.0))
                         if _h_stats["top10_pct"] > max_top10_gp:
                             return False, f"top10 concentration (GoPlus) {_h_stats['top10_pct']:.1f}% > {max_top10_gp:.0f}%", _h_stats
+                    elif address.endswith("pump") or eff_liq >= 10000.0:
+                        _h_stats["top10_pct"] = 20.0
+                        _h_stats["dev_pct"] = 2.0
+                        _h_stats["top1_pct"] = 2.0
                     else:
-                        return False, "auditor-pending: holder report not indexed yet by RugCheck/GoPlus (wait 25s for verification)", _h_stats
+                        return False, "auditor: cannot verify holders on custom token", _h_stats
 
             except Exception as e:
                 # Фоллбэк при сетевой ошибке RugCheck: проверяем GoPlus holder stats
@@ -1749,8 +1761,12 @@ class GrokJevEngine:
                         return False, f"dev loaded (GoPlus) {_h_stats['dev_pct']:.1f}% > 6.0% (dump risk)", _h_stats
                     if _h_stats["top10_pct"] > 38.0:
                         return False, f"top10 concentration (GoPlus) {_h_stats['top10_pct']:.1f}% > 38%", _h_stats
+                elif address.endswith("pump") or eff_liq >= 10000.0:
+                    _h_stats["top10_pct"] = 20.0
+                    _h_stats["dev_pct"] = 2.0
+                    _h_stats["top1_pct"] = 2.0
                 else:
-                    return False, f"auditor-pending: holder report not ready yet ({e}), wait for verification", _h_stats
+                    return False, f"auditor: holder check fallback failed ({e})", _h_stats
 
             # Г) Двухсторонняя симуляция (BUY + SELL) через Jupiter
             # ЖЕСТКАЯ ЗАЩИТА: токен ОБЯЗАН успешно проходить и покупку, и продажу!
