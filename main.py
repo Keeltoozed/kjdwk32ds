@@ -1186,6 +1186,9 @@ async def scanner_loop(analyzer, tracker):
                                     print(f"🚫 [SCANNER-PRICE-SPLIT] {actual_symbol} ({mint[:8]}): рассинхрон пулов {_div_r:.1f}x — блок.")
                                     continue
                                 _dex_id = str((pair_data.get("dexId") or "")).lower()
+                                if _dex_id == "pumpswap" and not mint.endswith("pump"):
+                                    print(f"🚫 [SCANNER-FAKE-PUMPSWAP] {actual_symbol} ({mint[:8]}): кастомный не-pump токен на PumpSwap — 100% вывод ликвидности девом (кейс plumber), отмена!")
+                                    continue
                                 if _dex_id in ("pump", "pumpfun", "moonshot", "meteoradbc") or mint.endswith("moon"):
                                     _fdv_m_sc = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
                                     _min_c_sc = float(getattr(config, "MIN_PUMP_CURVE_MCAP_USD", 7500.0))

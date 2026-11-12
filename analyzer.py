@@ -112,7 +112,7 @@ def score_token_with_rocket_xgb(mint: str, pair_data: dict, holders_info: dict =
             else:
                 _age_min = 999.0
         _dex_low = str(pair_data.get("dexId", "")).lower()
-        _is_pump = 1 if (str(mint).endswith("pump") or _dex_low in ("pump", "pumpfun", "pumpswap")) else 0
+        _is_pump = 1 if (str(mint).endswith("pump") or _dex_low in ("pump", "pumpfun")) else 0
 
         raw_liq = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
         fdv_val = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
@@ -1746,7 +1746,7 @@ class Analyzer:
         _info_pre = pair_data.get("info") or {}
         _has_soc_pre = bool((_info_pre.get("socials") or []) or (_info_pre.get("websites") or []))
         _raw_liq_chk = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
-        _is_burned_launchpad = mint.endswith(("pump", "bonk", "BAGS")) or _dex_pre_early == "pumpswap"
+        _is_burned_launchpad = mint.endswith(("pump", "bonk", "BAGS")) or (_dex_pre_early == "pumpswap" and mint.endswith("pump"))
         _tot_tx5_pre = _b5_pre + _s5_pre
         _avg_tx_pre = (_vm5_pre / _tot_tx5_pre) if _tot_tx5_pre > 0 else 0.0
         _is_real_bump_runner = (
@@ -2027,8 +2027,8 @@ class Analyzer:
                     return self._deny(mint, f"anon-wash-churn {_v2l_a:.1f}x", f"🚫 [WASH-TRAP] {symbol} ({mint[:8]}): 0 соцсетей, liq ${raw_liq:,.0f}, оборот 5м {_v2l_a:.1f}x пула (b/s {_bs_a:.2f}, avg ${_avg_tx5_a:.0f}) — анонимный wash-дамп!")
 
             # Блок кастомных не-pump токенов на PumpSwap с микропулом
-            if dex_id_low == "pumpswap" and not mint.endswith("pump") and raw_liq < _min_grad_liq:
-                return self._deny(mint, "fake-pumpswap-unlocked-lp", f"🚫 [FAKE-PUMPSWAP] {symbol} ({mint[:8]}): кастомный токен на PumpSwap с микропулом (${raw_liq:.0f} < ${_min_grad_liq:.0f}) — блок!")
+            if dex_id_low == "pumpswap" and not mint.endswith("pump"):
+                return self._deny(mint, "fake-pumpswap-unlocked-lp", f"🚫 [FAKE-PUMPSWAP] {symbol} ({mint[:8]}): кастомный не-pump токен на PumpSwap — 100% скам с выводом ликвидности девом (кейс plumber 904 SOL pull)!")
 
             # Защита от фантомных пулов с мизерным остатком реального SOL
             _quote_info = pair_data.get("liquidity", {}) or {}
@@ -2607,8 +2607,8 @@ class Analyzer:
         # БЛОК КАСТОМНЫХ ФЕЙК-ПУЛОВ НА PUMPSWAP:
         # Блокируем только микро-пулы скамеров (< $6,000 ликвидности),
         # но НЕ режем органические ракеты с реальной ликвой (10/29 +114%, AISI +222%, GTA AI +205%, PODCAT +196%, GANG +176%, CPU +118%)
-        if dex_id == "pumpswap" and not mint.endswith("pump") and liquidity < 6000.0:
-            return self._deny(mint, "fake-pumpswap-unlocked-lp", f"🚫 [FAKE-PUMPSWAP] {symbol} ({mint[:8]}): кастомный не-pump контракт на PumpSwap с микро-пулом (${liquidity:.0f} < $6k) — блок!")
+        if dex_id == "pumpswap" and not mint.endswith("pump"):
+            return self._deny(mint, "fake-pumpswap-unlocked-lp", f"🚫 [FAKE-PUMPSWAP] {symbol} ({mint[:8]}): кастомный не-pump контракт на PumpSwap — 100% скам с выводом ликвидности девом (кейс plumber 904 SOL pull)!")
 
         if liquidity < _min_liq:
             print(f"📉 Изоляция: {symbol} имеет микро-пул (${liquidity:.0f} < ${_min_liq//1000}k). Риск 100% проскальзывания.")
@@ -3256,7 +3256,7 @@ class Analyzer:
                 pass
             if _bt_age is not None:
                 _age_min = float(_bt_age)
-            elif str(address).endswith("pump") or str(pair_data.get("dexId", "")).lower() in ("pump", "pumpfun", "pumpswap"):
+            elif str(address).endswith("pump") or str(pair_data.get("dexId", "")).lower() in ("pump", "pumpfun"):
                 _age_min = 0.1
             else:
                 _age_min = 999.0
@@ -4035,7 +4035,7 @@ class Analyzer:
         if _m1 > 35.0:
             return self._deny(mint, "fomo-exhaustion", f"🚫 [EXHAUSTION] {mint[:8]}: 1m свеча +{_m1:.1f}% > 35% перегрета — ждём отката (bid the flush).")
 
-        _is_pump = 1 if (mint.endswith("pump") or _dex_low in ("pump", "pumpfun", "pumpswap")) else 0
+        _is_pump = 1 if (mint.endswith("pump") or _dex_low in ("pump", "pumpfun")) else 0
         _curve_liq = fdv * 0.35 if _is_pump else 0.0
         _eff_liq = max(liquidity, _curve_liq) if _is_pump else liquidity
 

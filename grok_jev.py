@@ -382,7 +382,12 @@ class GrokJevEngine:
         base = pair_data.get("baseToken", {}) or {}
         symbol = str(base.get("symbol", "")).upper().strip()
         dex_id = str(pair_data.get("dexId", "")).lower()
-        is_pump = dex_id in ("pump", "pumpfun", "pumpswap") or mint.endswith("pump")
+        # КАТАСТРОФА PLUMBER ($147k -> $0): на PumpSwap можно создать кастомный пул для токена, НЕ являющегося pump.fun токеном!
+        # Девы кладут 900 SOL, накручивают объем, а потом вызывают Remove Liquidity и воруют 100% денег!
+        # Каноничные токены Pump.fun ВСЕГДА оканчиваются на 'pump' — кастомный SPL токен на PumpSwap это 100% скам!
+        if dex_id == "pumpswap" and not mint.endswith("pump"):
+            return False, f"fake-pumpswap-unlocked-lp {symbol} (custom SPL mint without pump suffix on PumpSwap is 100% LP pull scam)"
+        is_pump = mint.endswith("pump") or dex_id in ("pump", "pumpfun")
         
         # 0. Защита от фейковых клонов брендов и системных тикеров
         FAKE_BRAND_BLACKLIST = {
@@ -576,7 +581,7 @@ class GrokJevEngine:
         _req_soc_age = float(getattr(_c, "REQUIRE_SOCIALS_MIN_AGE_MIN", 25.0))
         _vol_liq_ratio_g = (vol_m5 / max(eff_liq, 1.0)) if eff_liq > 0 else 0.0
         _avg_tx_g = vol_m5 / max(1, b5 + s5)
-        _is_burned_lp_g = mint.endswith(("pump", "bonk", "BAGS")) or dex_id in ("pumpswap", "pump", "pumpfun")
+        _is_burned_lp_g = mint.endswith(("pump", "bonk", "BAGS")) or dex_id in ("pump", "pumpfun")
         _is_organic_stealth = False
         if age_min >= _req_soc_age and _links_cnt_g == 0 and not _soc_unk_g:
             _is_organic_stealth = (
@@ -1951,7 +1956,7 @@ class GrokJevEngine:
             return False, f"anti-scam-reject {sec_why}"
 
         # 4.5. Нет данных о холдерах (RugCheck/GoPlus молчат) -> не входим вслепую (для не-pump токенов):
-        _is_pump_token = address.endswith("pump") or str(pair.get("dexId", "")).lower() in ("pump", "pumpfun", "pumpswap")
+        _is_pump_token = address.endswith("pump") or str(pair.get("dexId", "")).lower() in ("pump", "pumpfun")
         if getattr(_c, "JEV_REQUIRE_HOLDER_DATA", True) and not _is_pump_token:
             if not (float((_h_stats or {}).get("top1_pct", 0) or 0) > 0 or float((_h_stats or {}).get("top10_pct", 0) or 0) > 0):
                 return False, "anti-scam-reject holders-no-data (нет данных о холдерах)"

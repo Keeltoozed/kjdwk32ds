@@ -504,7 +504,13 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
     _b5_j = int((((td or {}).get("txns") or {}).get("m5") or {}).get("buys", 0) or 0)
     _s5_j = int((((td or {}).get("txns") or {}).get("m5") or {}).get("sells", 0) or 0)
 
-    # 0. Защита от падающего ножа (кейс AMC: m5 -37.6% летит вниз)
+    # 0. Блок фейковых пулов PumpSwap (кейс plumber $147k -> $0, 904 SOL pull)
+    _dex_j = str(((td or {}).get("dexId", "")) or "").lower()
+    if _dex_j == "pumpswap" and not mint.endswith("pump"):
+        print(f"🚫 [{source_tag}-FAKE-PUMPSWAP] {_sym_tmp}: кастомный не-pump токен на PumpSwap — 100% скам с выводом LP девом (кейс plumber), отмена!")
+        return False
+
+    # 0.1 Защита от падающего ножа (кейс AMC: m5 -37.6% летит вниз)
     if _m5_j < 1.0:
         print(f"🚫 [{source_tag}-DOWNTREND] {_sym_tmp}: m5 {_m5_j:+.1f}% < +1.0% — падающий нож, отмена входа!")
         return False
