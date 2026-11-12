@@ -502,7 +502,22 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
     _req_soc_age = float(getattr(config, "REQUIRE_SOCIALS_MIN_AGE_MIN", 20.0))
     _vm5_j = float(((td or {}).get("volume") or {}).get("m5", 0) or 0)
     _b5_j = int((((td or {}).get("txns") or {}).get("m5") or {}).get("buys", 0) or 0)
-    _s5_j = int((((td or {}).get("txns") or {}).get("sells", 0) or 0))
+    _s5_j = int((((td or {}).get("txns") or {}).get("m5") or {}).get("sells", 0) or 0)
+
+    # 0. Защита от падающего ножа (кейс AMC: m5 -37.6% летит вниз)
+    if _m5_j < 1.0:
+        print(f"🚫 [{source_tag}-DOWNTREND] {_sym_tmp}: m5 {_m5_j:+.1f}% < +1.0% — падающий нож, отмена входа!")
+        return False
+    if _m1_j < -4.0:
+        print(f"🚫 [{source_tag}-1M-DUMP] {_sym_tmp}: 1м свеча {_m1_j:+.1f}% летит вниз — отмена входа!")
+        return False
+
+    # 0.1 Защита от накрутки микро-покупками / wash-trading (кейс AMC: 5370 покупок по $0.15)
+    _tot_tx_j = _b5_j + _s5_j
+    _avg_tx_j = (_vm5_j / max(1, _tot_tx_j)) if _tot_tx_j > 0 else 0.0
+    if _tot_tx_j >= 50 and _avg_tx_j < 8.0:
+        print(f"🚫 [{source_tag}-WASH-TRADING] {_sym_tmp}: средний чек ${_avg_tx_j:.1f} < $8 (микро-пыль спам-ботов) — отмена!")
+        return False
     _liq_j = float(((td or {}).get("liquidity") or {}).get("usd", 0) or 0)
 
     # 1. Защита от уставших зомби-монет (кейс GIGAHUG, INVEST, HABIBI)
@@ -626,7 +641,9 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
             source=f"{source_tag}:{analyzer.get_signal(mint)}",
             pair_address=((td or {}).get("pairAddress", "") or ""),
             stop_under_wick=_wick_stop_price,
-            wick_stop_loss_pct=_wick_pct)
+            wick_stop_loss_pct=_wick_pct,
+            initial_liquidity_usd=_j_liq,
+            pair_data=td)
         grok_jev.FUNNEL_STATS["filled"] += 1
         print(grok_jev.get_funnel_summary())
         print(f"🪐 {source_tag} BUY {_sym_tmp} ({mint[:8]}) @ ${price} [size: ${min(size, 100.0):.1f}] | Wick Stop: ${_wick_stop_price:.8f} ({_wick_pct*100:.1f}%)")

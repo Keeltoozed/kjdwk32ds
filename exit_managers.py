@@ -104,6 +104,12 @@ class MatureExitManager:
         # =========================================================================
         # 1. ЖЕСТКИЙ КОНТРОЛЬ УБЫТКА (EMERGENCY CAP & STOP LOSS) — ПЕРВЫЙ ПРИОРИТЕТ!
         # =========================================================================
+        # СБРОС ДЕВ-ДАМПА НА ПЕРВОЙ СВЕЧЕ: если в первые 2.5 минуты монета пробивает -12%,
+        # это моментальный раг (кейс AMC: обвал девом на 1-й минуте).
+        # Режем на -12%, не давая провалиться в -40% Emergency Cap!
+        if minutes_held <= 2.5 and pnl_pct <= -0.120:
+            return f"🚨 First Candle Rug Cut ({pnl_pct*100:.1f}% в первые {minutes_held*60:.0f}с)"
+
         _emerg_cap = -abs(float(getattr(config, "EMERGENCY_CAP_PCT", -0.250)))
         if pnl_pct <= _emerg_cap:
             return f"Mature Emergency Cap ({pnl_pct*100:.1f}%)"
