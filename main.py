@@ -1227,7 +1227,7 @@ async def scanner_loop(analyzer, tracker):
                                         print(f"🚫 [SCANNER-CURVE-CLIFF] {actual_symbol} ({mint[:8]}): FDV ${_fdv_m_sc:,.0f} > ${_max_c_sc:,.0f} (обрыв перед миграцией) — отмена!")
                                         continue
                                 _min_grad_sc = float(getattr(config, "MIN_GRADUATED_LIQ_USD", 7500.0))
-                                if _dex_id not in ("pump", "pumpfun", "meteoradbc") and liq_usd < _min_grad_sc:
+                                if _dex_id not in ("pump", "pumpfun") and liq_usd < _min_grad_sc:
                                     print(f"🚫 [SCANNER-LOW-LIQ] {actual_symbol} ({mint[:8]}): ликвидность DEX ${liq_usd:,.0f} < ${_min_grad_sc:,.0f} — отмена!")
                                     continue
                                 _pc_live = pair_data.get("priceChange") or {}
@@ -1237,6 +1237,16 @@ async def scanner_loop(analyzer, tracker):
                                 _pk_drop_live = float(pair_data.get("_drop_from_peak_5m", 0.0) or 0.0)
                                 _lq_drop_live = float(pair_data.get("_liq_drop_from_peak", 0.0) or 0.0)
                                 _vol5_live = float(((pair_data.get("volume") or {}).get("m5", 0) or 0))  # FIX: объявлено до первого использования (был UnboundLocalError при m5 > MAX_ENTRY_M5_PCT)
+
+                                # Блок: токен уже на полу — h1 сильно отрицательный при возрасте > 5 мин
+                                if _h1_live < -60.0 and _age_m > 5.0:
+                                    print(f"🚫 [SCANNER-FLOOR-TOKEN] {actual_symbol} ({mint[:8]}): h1 {_h1_live:.0f}% — токен уже на полу, входить нельзя!")
+                                    continue
+                                # Блок: Meteora пул слишком свежий (< 1.5 мин) — потенциальный drain
+                                if _dex_id in ("meteora", "meteoradbc", "meteoradlmm") and _age_m < 1.5:
+                                    print(f"⏳ [SCANNER-METEORA-WARMUP] {actual_symbol} ({mint[:8]}): Meteora пул {_age_m:.1f}м — ждём созревания до 1.5м.")
+                                    processed_mints[mint] = time.time() - _cd + 20
+                                    continue
 
                                 # Повторная проверка живых метрик после сброса prefetch-кэша (защита от реального разворота вниз)
                                 if _m5_live < 1.0 or _m1_live < -4.5:
@@ -1349,17 +1359,24 @@ async def scanner_loop(analyzer, tracker):
                                     _c_ms_sc = pair_data.get("pairCreatedAt") or 0
                                     _age_sc = ((time.time() * 1000 - _c_ms_sc) / 60000.0) if _c_ms_sc else 0.5
                                     _has_launch_surge = (_vol5_live >= 2000.0 and _b5_bump >= _s5_bump and _b5_bump >= 6 and _m5_live >= -2.0)
-                                    if _age_sc < 1.0 and not _has_launch_surge:
+                                    # Сильный surge: нужен РЕАЛЬНО мощный импульс чтобы войти раньше 1.5м
+                                    _strong_surge = (_vol5_live >= 5000.0 and _b5_bump >= 40 and _b5_bump >= _s5_bump * 1.30 and _m5_live >= 5.0)
+                                    if _age_sc < 1.5 and not _has_launch_surge:
                                         processed_mints[mint] = time.time() - _cd + 15
                                         try:
                                             from birth_tracker import birth_tracker as _bt_sc
                                             _bt_sc.add_to_waiting_room(mint)
                                         except Exception:
                                             pass
-                                        print(f"⏳ [SCANNER-MIGRATION] {actual_symbol} ({mint[:8]}): AMM-пул создан {_age_sc:.1f}м назад (< 1.0м) без импульса — повтор через 15с.")
+                                        print(f"⏳ [SCANNER-MIGRATION] {actual_symbol} ({mint[:8]}): AMM-пул создан {_age_sc:.1f}м назад (< 1.5м) без импульса — повтор через 15с.")
                                         continue
-                                    elif _age_sc < 1.0 and _has_launch_surge:
-                                        print(f"🚀 [MIGRATION-SURGE] {actual_symbol} ({mint[:8]}): прорыв миграции на 1-й минуте (vol5 ${_vol5_live:,.0f}, {_b5_bump}b/{_s5_bump}s, m5 {_m5_live:+.1f}%) — мгновенный вход в ракету!")
+                                    elif _age_sc < 1.5 and _has_launch_surge and not _strong_surge:
+                                        # Слабый surge (< 40 байев, < $5k vol) — ждём созревания до 1.5 мин
+                                        processed_mints[mint] = time.time() - _cd + 20
+                                        print(f"⏳ [SCANNER-MIGRATION-WAIT] {actual_symbol} ({mint[:8]}): surge слабый (b5={_b5_bump}, vol=${_vol5_live:,.0f}) — ждём 1.5м от создания пула.")
+                                        continue
+                                    elif _age_sc < 1.5 and _strong_surge:
+                                        print(f"🚀 [MIGRATION-SURGE] {actual_symbol} ({mint[:8]}): СИЛЬНЫЙ прорыв миграции (vol5 ${_vol5_live:,.0f}, {_b5_bump}b/{_s5_bump}s, m5 {_m5_live:+.1f}%) — ранний вход!")
                                     _fdv_sc = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
                                     from sol_price import get_sol_price_sync
                                     _sol_p_sc = float(get_sol_price_sync() or 150.0)

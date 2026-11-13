@@ -1694,7 +1694,7 @@ class Analyzer:
         _is_early_rocket = (_raw_liq_age >= 12000.0 and _vm5_pre >= 6000.0 and _b5_pre >= 30
                             and _b5_pre >= _s5_pre * 1.30 and _avg_tx_age >= 25.0)
         # СТАЛО (замени строки 543-605 в analyzer.py):
-        _sol_min_age = float(getattr(config, "SOLANA_MIN_AGE_MIN", 0.5))
+        _sol_min_age = float(getattr(config, "SOLANA_MIN_AGE_MIN", 1.5))
         if _age_min_pre < _sol_min_age:
             print(f"⏳ [ENTRY] {mint[:8]}: возраст {_age_min_pre:.1f}м < {_sol_min_age}м — выдерживаем карантин.")
             return None
