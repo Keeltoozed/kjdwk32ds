@@ -214,11 +214,11 @@ class JupiterAPI:
                             continue
                         return False, f"HONEYPOT: cannot sell token back to SOL ({err_code})"
                     else:
-                        # 5xx или временный сбой API — не считаем рагпуллом
-                        return True, f"Jupiter API temporary status {resp.status} (assumed sellable)"
+                        # 5xx или временный сбой API — НЕ считаем продаваемым, требуем повторную проверку
+                        return False, f"Jupiter API temporary status {resp.status} (not assumed sellable)"
             except Exception as e:
-                return True, f"Network error during check ({e}) (assumed sellable)"
-        return True, "Jupiter rate limit 429 (assumed sellable)"
+                return False, f"Network error during check ({e}) (not assumed sellable)"
+        return False, "Jupiter rate limit 429 (not assumed sellable)"
 
     @staticmethod
     async def get_swap_transaction(mint: str, is_sell: bool = False, amount_lamports: int = 0, is_emergency: bool = False) -> dict:

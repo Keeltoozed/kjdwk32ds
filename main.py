@@ -19,6 +19,8 @@ import streamlit as st
 import pandas as pd
 import config
 from analyzer import Analyzer
+from rug_wallet_analysis import quick_rug_check, full_rug_wallet_audit
+from wallet_behavior_monitor import init_position_wallet_state, remove_position_state, monitor_position_wallets
 from tracker import PaperTracker
 from fomo_scanner import fomo_loop
 
@@ -32,6 +34,11 @@ async def position_security_auditor_loop(analyzer, tracker):
     while True:
         try:
             open_positions = tracker.get_open_positions()
+            # Очищаем состояния мониторинга кошельков для закрытых позиций
+            _open_mints = set(open_positions.keys())
+            for _stale_mint in list(_POSITION_WALLET_STATE.keys()):
+                if _stale_mint not in _open_mints:
+                    remove_position_state(_stale_mint)
             for mint, position in list(open_positions.items()):
                 if mint.startswith("0x") or getattr(position, "chain", "solana") != "solana":
                     continue
@@ -75,9 +82,9 @@ async def position_security_auditor_loop(analyzer, tracker):
                     except Exception:
                         pass
 
-                # 2. Ранний перехват вывода ликвидности (Early Liquidity Drain Escape - 1.5s Live Protection)
+                # 2. Ранний перехват вывода ликвидности (Early Liquidity Drain Escape - 0.5s Live Protection)
                 _last_lchk = getattr(position, "last_liq_chk", 0.0)
-                if (now_ts - _last_lchk) > 1.5:
+                if (now_ts - _last_lchk) > 0.5:
                     position.last_liq_chk = now_ts
                     try:
                         import market_data as _md
@@ -101,33 +108,59 @@ async def position_security_auditor_loop(analyzer, tracker):
                             # Проверка потери ликвидности (0 ликвидности, слив девом или падение пула):
                             _is_zero_liq = (_sol_liq <= 0.0)
                             _crit_drained = (_sol_liq <= 200.0) or (_q_sym in ("SOL", "WSOL") and _quote_liq < 1.0)
-                            _drain_pct_drop = (_peak_liq >= 3000.0 and _sol_liq < _peak_liq * 0.30) or (_peak_liq >= 6000.0 and _sol_liq < _peak_liq * 0.60)
+                            _liq_crash_pct = ((_peak_liq - _sol_liq) / _peak_liq) if _peak_liq > 0 else 0.0
+                            _cfg_drain_exit = float(getattr(config, "LIQ_DRAIN_EXIT_PCT", 0.40))
+                            _cfg_drain_fast = float(getattr(config, "LIQ_DRAIN_FAST_PCT", 0.30))
 
-                            if _has_liq_data and (_is_zero_liq or _crit_drained or _drain_pct_drop):
-                                # Экстренный случай: мгновенный дев-дамп (лик рухнула > 60% за 1 тик)
-                                # Не ждём 2 тика — выходим НЕМЕДЛЕННО пока цена ещё есть!
-                                _liq_crash_pct = ((_peak_liq - _sol_liq) / _peak_liq) if _peak_liq > 0 else 0.0
-                                _emergency_exit = _is_zero_liq or _crit_drained or (_liq_crash_pct >= 0.60 and _peak_liq >= 5000.0)
-                                if not _emergency_exit:
-                                    _drop_cnt = getattr(position, "_liq_drop_streak", 0) + 1
-                                    position._liq_drop_streak = _drop_cnt
-                                    if _drop_cnt < 2:
-                                        # Требуем подтверждения 2 тика подряд (3-4 сек) только при небольшом дропе
-                                        continue
-                                # При абсолютной потере ликвидности (<= $200 или 0) цена продажи 0.0 -> списание ВСЕХ вложенных средств (-100%)!
+                            # МГНОВЕННЫЙ выход: ликва просела больше чем на LIQ_DRAIN_EXIT_PCT от пика — не ждём обнуления!
+                            _emergency_exit = _is_zero_liq or _crit_drained or (_liq_crash_pct >= _cfg_drain_exit and _peak_liq >= 3000.0)
+                            # Экстренный случай: за один тик ликва обвалилась на 30%+ — паник-сейл сразу
+                            _fast_drain = _liq_crash_pct >= _cfg_drain_fast and _peak_liq >= 3000.0
+
+                            if _has_liq_data and (_emergency_exit or _fast_drain):
+                                # Выходим НЕМЕДЛЕННО пока цена ещё есть, не ждём 2 тика подтверждения
                                 _px_now = 0.0 if (_is_zero_liq or _crit_drained or _sol_liq <= 250.0) else float(getattr(position, "current_price_usd", 0.0) or 0.0)
-                                _msg = f"Zero/Drained Liq ${_sol_liq:.0f}" if (_is_zero_liq or _crit_drained) else f"Liq Drop ${_sol_liq:.0f} from ${_peak_liq:.0f} (-{_liq_crash_pct*100:.0f}%)"
-                                _tag = "Early Liquidity Drop Escape" if _emergency_exit else "Absolute Liquidity Loss"
-                                print(f"🚨 [LIQ-LOSS] {position.symbol} ({mint[:8]}): {_msg} — выход {'МГНОВЕННО' if _emergency_exit else 'подтверждён'}!")
+                                _msg = f"Zero/Drained Liq ${_sol_liq:.0f}" if (_is_zero_liq or _crit_drained) else f"Liq Crash ${_sol_liq:.0f} from ${_peak_liq:.0f} (-{_liq_crash_pct*100:.0f}%)"
+                                _tag = "Liquidity Drain Escape" if _emergency_exit else "Fast Liquidity Drain Panic"
+                                print(f"🚨 [LIQ-LOSS] {position.symbol} ({mint[:8]}): {_msg} — выход МГНОВЕННО!")
                                 tracker.close_position(mint, _px_now, f"{_tag} (Liq dropped to ${_sol_liq:.0f} from ${_peak_liq:.0f})")
                                 continue
+                            elif _has_liq_data and _liq_crash_pct >= 0.15 and _peak_liq >= 3000.0:
+                                # Умеренный дроп 15%+: требуем всего 1 тик подтверждения (вместо 2)
+                                _drop_cnt = getattr(position, "_liq_drop_streak", 0) + 1
+                                position._liq_drop_streak = _drop_cnt
+                                if _drop_cnt >= 1:
+                                    _px_now = float(getattr(position, "current_price_usd", 0.0) or 0.0)
+                                    print(f"🚨 [LIQ-LOSS] {position.symbol} ({mint[:8]}): Liq Drop ${_sol_liq:.0f} from ${_peak_liq:.0f} (-{_liq_crash_pct*100:.0f}%) — подтверждённый выход!")
+                                    tracker.close_position(mint, _px_now, f"Confirmed Liquidity Drop (Liq ${_sol_liq:.0f} from ${_peak_liq:.0f})")
+                                    continue
                             else:
                                 position._liq_drop_streak = 0
+
+                            # 3. Мониторинг кошельков (сиビル, флипперы, аномальная активность после входа)
+                            _wm_chk = getattr(position, "last_wallet_mon_chk", 0.0)
+                            if (now_ts - _wm_chk) > float(getattr(config, "WALLET_MONITOR_INTERVAL_SEC", 10)):
+                                position.last_wallet_mon_chk = now_ts
+                                try:
+                                    from solana.rpc.async_api import AsyncClient as _AC
+                                    _wm_client = _AC(config.HELIUS_RPC_URL)
+                                    _wm_exit, _wm_why, _wm_det = await monitor_position_wallets(_wm_client, mint)
+                                    try:
+                                        await _wm_client.close()
+                                    except Exception:
+                                        pass
+                                    if _wm_exit:
+                                        _px_now = float(getattr(position, "current_price_usd", 0.0) or 0.0)
+                                        print(f"🚨 [WALLET-MON] {position.symbol} ({mint[:8]}): {_wm_why} — выход по поведению кошельков!")
+                                        tracker.close_position(mint, _px_now, f"Wallet Behavior Alert ({_wm_why})")
+                                        continue
+                                except Exception as _wm_e:
+                                    print(f"⚠️ [WALLET-MON] {position.symbol} ({mint[:8]}): {type(_wm_e).__name__}: {_wm_e}")
                     except Exception:
                         pass
         except Exception as e:
             print(f"⚠️ Ошибка в position_security_auditor_loop: {e}")
-        await asyncio.sleep(1.0)
+        await asyncio.sleep(0.5)
 
 
 async def position_manager_loop(analyzer, tracker):
@@ -1253,7 +1286,8 @@ async def scanner_loop(analyzer, tracker):
                                     print(f"🚫 [SCANNER-LIVE-EXHAUSTED] {actual_symbol} ({mint[:8]}): живой h1 {_h1_live:+.0f}% > +{_max_h1_live:.0f}% — перегретая вершина, отмена!")
                                     continue
                                 # СТАЛО (в main.py строки 506-524):
-                                if _pk_drop_live <= -18.0 or _lq_drop_live <= -18.0:
+                                # ЖЁСТКИЙ фильтр: не входим, если ликва уже просела от пика (признак вывода девом)
+                                if _pk_drop_live <= -15.0 or _lq_drop_live <= -15.0:
                                     print(f"🚫 [SCANNER-POST-PEAK] {actual_symbol} ({mint[:8]}): токен слился от пика (цена {_pk_drop_live:+.1f}%, ликва {_lq_drop_live:+.1f}%) — отмена!")
                                     continue
 
@@ -1480,6 +1514,27 @@ async def scanner_loop(analyzer, tracker):
                                 except Exception:
                                     pass
 
+                                # PRE-FLIGHT GOPLUS: ещё раз сверяем токен на ханипот/фриз/непродаваемость прямо перед входом
+                                try:
+                                    import goplus as _gp
+                                    _g_ok, _g_why = await _gp.check_solana(mint)
+                                    _w_low = str(_g_why or "").lower()
+                                    if not _g_ok and any(k in _w_low for k in ("honeypot", "cannot_sell", "freeze", "freezable", "closable", "balance_mutable", "frozen", "non_transferable", "transfer_hook", "default_account")):
+                                        print(f"🚫 [SCANNER PRE-FLIGHT GOPLUS] {actual_symbol} ({mint[:8]}): {_g_why} — вход заблокирован!")
+                                        continue
+                                except Exception:
+                                    pass
+
+                                # PRE-FLIGHT RUG WALLET AUDIT: анализ кошельков дева, autorités, холдеров, бандлов
+                                if getattr(config, "RUG_WALLET_AUDIT_ENABLED", True):
+                                    try:
+                                        _rw_safe, _rw_why = await quick_rug_check(mint)
+                                        if not _rw_safe:
+                                            print(f"🚫 [SCANNER PRE-FLIGHT RUG-WALLET] {actual_symbol} ({mint[:8]}): {_rw_why} — вход заблокирован аудитом кошельков!")
+                                            continue
+                                    except Exception as _e:
+                                        print(f"⚠️ [SCANNER PRE-FLIGHT RUG-WALLET] {actual_symbol} ({mint[:8]}): audit error {type(_e).__name__} — вход разрешён (fail-open).")
+
                                 tracker.add_position(actual_symbol, mint, entry_price, position_size, is_mature=True,
                                                      ml_features=analyzer.pack_features(pair_data),
                                                      ml_confidence=_final_sc_conf,
@@ -1489,6 +1544,11 @@ async def scanner_loop(analyzer, tracker):
                                                      wick_stop_loss_pct=_wick_pct,
                                                      initial_liquidity_usd=liq_usd,
                                                      pair_data=pair_data)
+                                # Инициализируем мониторинг кошельков для новой позиции
+                                try:
+                                    init_position_wallet_state(mint, time.time())
+                                except Exception:
+                                    pass
                                 grok_jev.FUNNEL_STATS["filled"] += 1
                                 print(grok_jev.get_funnel_summary())
                                 _entered = True
