@@ -188,13 +188,35 @@ class MatureExitManager:
             return f"Parabolic 3x Harvest (+{pnl_pct*100:.0f}% locked after peak +{max_pnl_pct*100:.0f}%, {_peak_age_min:.0f}m no ATH)"
         if not _mb_free_ride and max_pnl_pct >= 1.00 and _peak_age_min >= 10.0:
             return f"Parabolic 2x Harvest (+{pnl_pct*100:.0f}% locked after peak +{max_pnl_pct*100:.0f}%, {_peak_age_min:.0f}m no ATH)"
-        # ATH Exhaustion: пик +40-100%, нет нового ATH 5 мин — классика перед LP drain!
-        # Дев ждёт восстановления после первой коррекции, потом выдёргивает ликву.
-        # Мы выходим ДО этого момента с прибылью.
-        if not _mb_free_ride and max_pnl_pct >= 0.40 and _peak_age_min >= 5.0 and pnl_pct >= 0.15:
-            return f"ATH Exhaustion Exit (+{pnl_pct*100:.0f}% locked after peak +{max_pnl_pct*100:.0f}%, {_peak_age_min:.0f}m no ATH — dev rug window)"
-        if not _mb_free_ride and max_pnl_pct >= 0.50 and _peak_age_min >= 15.0 and pnl_pct >= 0.20:
-            return f"Rocket Momentum Harvest (+{pnl_pct*100:.0f}% locked after peak +{max_pnl_pct*100:.0f}%, {_peak_age_min:.0f}m no ATH)"
+
+        # === УРОВНИ ВЫХОДА ПО ЗАСТРЕВАНИЮ ATH (от агрессивного к мягкому) ===
+        # Логика: чем дольше нет нового ATH при наличии прибыли — тем опаснее держать.
+        # Дев ждёт восстановления цены / окончания пампа → снимает LP или делает скоординированный дамп.
+        # CRO (+8.8% пик, 7.5м держали), NEX AI (+10% пик, 8м держали), BREAD (4м) — все рагнулись именно так.
+
+        if not _mb_free_ride:
+            # 1. Micro-ATH Churn Exit: монета сделала микро-пик (+4%..+15%), но уже 2+ мин болтается без нового ATH
+            # Забираем профит (+2%..+12%) и выходим, не дожидаясь слива дева!
+            if max_pnl_pct >= 0.04 and _peak_age_min >= 2.0 and pnl_pct >= 0.02 and minutes_held >= 2.5:
+                return f"Micro-ATH Churn Exit (+{pnl_pct*100:.1f}% locked, болтанка {_peak_age_min:.1f}м без ATH при удержании {minutes_held:.1f}м)"
+
+            # 2. Dead Churn Escape: монета застряла вокруг 0% (от -5% до +4%) и 2.5м нет прогресса
+            # В мемкоинах стояние на месте = скорый раг/дамп дева.
+            if minutes_held >= 3.0 and _peak_age_min >= 2.5 and max_pnl_pct < 0.12 and pnl_pct >= -0.06:
+                return f"Dead Churn Escape ({pnl_pct*100:+.1f}%, болтанка {_peak_age_min:.1f}м на месте — выход до слива дева)"
+
+            # 3. Mid-ATH Stagnation Exit: пик +15%..+40%, нет нового ATH 2.5 мин
+            if max_pnl_pct >= 0.15 and _peak_age_min >= 2.5 and pnl_pct >= 0.05 and minutes_held >= 3.0:
+                return f"Mid-ATH Stagnation Exit (+{pnl_pct*100:.1f}% locked after peak +{max_pnl_pct*100:.0f}%, {_peak_age_min:.1f}м без ATH)"
+
+            # 4. ATH Exhaustion Exit: пик +40%+, нет нового ATH 3 мин
+            if max_pnl_pct >= 0.40 and _peak_age_min >= 3.0 and pnl_pct >= 0.10:
+                return f"ATH Exhaustion Exit (+{pnl_pct*100:.0f}% locked after peak +{max_pnl_pct*100:.0f}%, {_peak_age_min:.1f}м без ATH)"
+
+            # 5. Rocket Momentum Harvest: пик +50%+, 10 мин без ATH
+            if max_pnl_pct >= 0.50 and _peak_age_min >= 10.0 and pnl_pct >= 0.18:
+                return f"Rocket Momentum Harvest (+{pnl_pct*100:.0f}% locked after peak +{max_pnl_pct*100:.0f}%, {_peak_age_min:.0f}м без ATH)"
+
 
         # =========================================================================
         # 4. CRASH VELOCITY GUARD (Дев-дамп / аномальное обрушение за 1 минуту)
@@ -270,11 +292,11 @@ class MatureExitManager:
         # =========================================================================
         # 6. СТАГНАЦИЯ И МЕРТВЫЙ ИМПУЛЬС (Срез стоячих монет до дев-дампа)
         # =========================================================================
-        # Если монета в рынке 6+ минут, её пик был слабым (< +20%), и новых ATH нет 4.5+ минут:
-        # выходим немедленно! В мемкоинах затухание импульса означает скорый раг/дамп дева (кейс 牛逼 13м).
-        if not _is_mb and minutes_held >= 6.0 and max_pnl_pct < 0.20 and _peak_age_min >= 4.5:
+        # Если монета в рынке 3.5+ минут, её пик был слабым (< +20%), и новых ATH нет 2+ минут:
+        # выходим немедленно! В мемкоинах затухание импульса означает скорый раг/дамп дева (кейс 牛逼 13м, CRO 7м).
+        if not _is_mb and minutes_held >= 3.5 and max_pnl_pct < 0.20 and _peak_age_min >= 2.0:
             _sign = "+" if pnl_pct >= 0 else ""
-            return f"Stalled Momentum Escape ({_sign}{pnl_pct*100:.1f}%, no ATH {_peak_age_min:.0f}m at {minutes_held:.0f}m)"
+            return f"Stalled Momentum Escape ({_sign}{pnl_pct*100:.1f}%, no ATH {_peak_age_min:.1f}m at {minutes_held:.1f}m)"
 
         _stall_sec = float(getattr(config, "STALL_TIMER_SEC", 240.0))
         _stall_loss = float(getattr(config, "STALL_MAX_LOSS_PCT", -0.090))

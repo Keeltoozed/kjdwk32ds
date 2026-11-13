@@ -43,7 +43,16 @@ async def _rpc(client: AsyncClient, method: str, *args, **kwargs):
         resp = await fn(*args, **kwargs)
         return resp
     except Exception as e:
-        print(f"⚠️ [WALLET-MON] RPC {method} error: {type(e).__name__}: {e}")
+        # Фоллбэк на публичный узел при ошибке/лимите Helius
+        try:
+            fb_client = AsyncClient("https://api.mainnet-beta.solana.com")
+            fn_fb = getattr(fb_client, method)
+            resp_fb = await asyncio.wait_for(fn_fb(*args, **kwargs), timeout=4.0)
+            await fb_client.close()
+            if resp_fb is not None:
+                return resp_fb
+        except Exception:
+            pass
         return None
 
 

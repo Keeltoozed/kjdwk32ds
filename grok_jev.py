@@ -1524,7 +1524,7 @@ class GrokJevEngine:
             sec_why_low = str(sec_why or "").lower()
             rc_status_pre, rc_data_pre = await _gp.fetch_rugcheck_report_cached(address, ttl=120.0, timeout=6)
             _gp_is_holder = ("кит держит" in sec_why_low or "топ-10 китов" in sec_why_low)
-            if not sec_ok and "rugcheck-score" not in sec_why_low and not (_gp_is_holder and (rc_status_pre == 200 or eff_liq >= 20000.0)):
+            if not sec_ok and not (_gp_is_holder and (rc_status_pre == 200 or eff_liq >= 20000.0)):
                 return False, f"goplus-sol-reject {sec_why}", _h_stats
               
             # Токены канонического происхождения Pump.fun (bonding curve / выпускники):
@@ -1571,8 +1571,8 @@ class GrokJevEngine:
                         ))
                     )
                     clean_score = max(0.0, raw_score - penalty_to_ignore)
-                    if clean_score >= 2000:
-                        return False, f"rugcheck: high risk score {clean_score:.0f} >= 2000", _h_stats
+                    if clean_score >= 1200:
+                        return False, f"rugcheck: high risk score {clean_score:.0f} >= 1200", _h_stats
 
                     # Проверка критических рисков (реальные опасности смарт-контракта и концентрации)
                     for rk in (rc_data.get("risks") or []):

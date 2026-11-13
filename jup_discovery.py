@@ -418,10 +418,30 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
         _is_grad_jup = _bt_j.is_graduated(mint)
     except Exception:
         pass
-    if not mint.endswith("pump") and not mint.endswith("moon") and not _is_grad_jup:
+    # ОСОБОЕ правило: Meteora DYN2 всегда проверяем LP даже для pump.fun токенов!
+    # Pump.fun → Meteora DYN2: дев может вытащить ликву одной транзакцией в любой момент.
+    # Это самый опасный тип рага (BREAD, PINCHE, DEMOCAT, 内个一 — все Meteora DYN2).
+    _is_meteora_dyn = _dex_j in ("meteora", "meteoradbc", "meteoradlmm", "meteoradyn2")
+    _skip_lp_check = mint.endswith("moon")  # moon токены пропускаем
+    if not _skip_lp_check and (_is_meteora_dyn or (not mint.endswith("pump") and not _is_grad_jup)):
         try:
             import goplus as _gp_jup
             _rc_st, _rc_d = await _gp_jup.fetch_rugcheck_report_cached(mint, ttl=120.0, timeout=5)
+            if _rc_d:
+                # 1. Проверка критической концентрации монет у одного кошелька (кейсы CRO, NEX AI)
+                for _rk in (_rc_d.get("risks") or []):
+                    _rkn = str(_rk.get("name", "")).lower()
+                    _rkl = str(_rk.get("level", "")).lower()
+                    if _rkl == "danger" and any(k in _rkn for k in ("single holder", "high ownership", "creator holding")):
+                        print(f"🚫 [{source_tag}-SINGLE-HOLDER] {_sym_tmp} ({mint[:8]}): RugCheck خطر '{_rk.get('name')}' — дев контролирует эмиссию!")
+                        return False
+                # 2. Очищенный score RugCheck
+                _raw_sc = float(_rc_d.get("score") or 0.0)
+                _ign_sc = sum(float(rk.get("score", 0) or 0) for rk in (_rc_d.get("risks") or []) if any(k in str(rk.get("name", "")).lower() for k in ("low liquidity", "creator history", "copycat", "symbol mimic", "large amount of lp unlocked", "lp not locked", "unlocked lp")))
+                if (_raw_sc - _ign_sc) >= 1200:
+                    print(f"🚫 [{source_tag}-HIGH-RISK] {_sym_tmp} ({mint[:8]}): RugCheck Score {(_raw_sc - _ign_sc):.0f} >= 1200 — блок скама!")
+                    return False
+
             _lp_ok = False
             if _rc_d:
                 for _m in (_rc_d.get("markets") or []):
@@ -429,8 +449,11 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
                         _lp_inf = _m.get("lp") or {}
                         if float(_lp_inf.get("lpLockedPct", 0) or 0) >= 80.0 or float(_lp_inf.get("lpBurnedPct", 0) or 0) >= 80.0:
                             _lp_ok = True
-            if not _lp_ok:
-                print(f"🚫 [{source_tag}-UNLOCKED-LP] {_sym_tmp} ({mint[:8]}): кастомный не-pump токен на {_dex_j} без подтвержденной блокировки LP — рагпул!")
+            if _rc_d and not _lp_ok:
+                # Для Meteora DYN2 блокируем всегда — LP drain слишком быстрый
+                # Для других dex: блокируем только если ругчек вернул данные (fail-open на таймаут)
+                _lp_deny_reason = "Meteora DYN2 — LP не заблокирован, дев может вывести в любой момент!" if _is_meteora_dyn else f"кастомный не-pump токен на {_dex_j} без подтвержденной блокировки LP — рагпул!"
+                print(f"🚫 [{source_tag}-UNLOCKED-LP] {_sym_tmp} ({mint[:8]}): {_lp_deny_reason}")
                 return False
         except Exception:
             pass

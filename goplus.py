@@ -628,11 +628,13 @@ async def check_solana(mint: str):
                 rc_status, rc_data = await fetch_rugcheck_report_cached(mint, ttl=120.0, timeout=5)
                 if rc_status == 200 and isinstance(rc_data, dict):
                     rc_score = rc_data.get("score", 0) or 0
-                    # Вычитаем штрафы за стандартный шум DEX/AMM-пулов и launchpad (unlocked LP, AMM концентрация, copycat):
+                    # Вычитаем штрафы за стандартный шум DEX/AMM-пулов и launchpad (unlocked LP, copycat):
+                    # ВАЖНО: концентрацию дева и холдеров ("single holder ownership", "top 10 holders")
+                    # НИКОГДА не вычитаем как шум! Это прямой признак рага (кейсы CRO, NEX AI).
                     _allowed_rc_noise = (
                         "low liquidity", "creator history", "copycat", "symbol mimic",
                         "large amount of lp unlocked", "lp provider", "single lp provider",
-                        "lp not locked", "unlocked lp", "single holder ownership", "high holder concentration", "top 10 holders"
+                        "lp not locked", "unlocked lp"
                     )
                     rc_noise_penalty = sum(
                         float(rk.get("score", 0) or 0)
@@ -643,12 +645,20 @@ async def check_solana(mint: str):
                     tok_meta = rc_data.get("token") if isinstance(rc_data.get("token"), dict) else rc_data
                     freeze_val = tok_meta.get("freezeAuthority") or rc_data.get("freezeAuthority")
                     mint_val = tok_meta.get("mintAuthority") or rc_data.get("mintAuthority")
-                    if clean_score >= 2000:
-                        verdict = (False, f"rugcheck-score {clean_score:.0f} >= 2000 (высокий риск скама/слива)")
+                    if clean_score >= 1200:
+                        verdict = (False, f"rugcheck-score {clean_score:.0f} >= 1200 (высокий риск скама/слива)")
                     elif freeze_val and str(freeze_val) not in ("11111111111111111111111111111111", "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"):
                         verdict = (False, "rugcheck: freeze authority не отозвана")
                     elif mint_val and str(mint_val) not in ("11111111111111111111111111111111", "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"):
                         verdict = (False, "rugcheck: mint authority не отозвана")
+                    else:
+                        # Проверка критических рисков концентрации у единичных кошельков
+                        for rk in (rc_data.get("risks") or []):
+                            _rkn = str(rk.get("name", "")).lower()
+                            _rkl = str(rk.get("level", "")).lower()
+                            if _rkl == "danger" and any(k in _rkn for k in ("single holder", "high ownership", "creator holding")):
+                                verdict = (False, f"rugcheck: {rk.get('name')} (опасная концентрация у одного кошелька)")
+                                break
             except Exception:
                 pass
     except Exception:

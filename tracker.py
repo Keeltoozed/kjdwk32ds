@@ -910,7 +910,7 @@ class PaperTracker:
         # блокируем открытие новой позиции (защита от входа на деньги, которых нет)
         capital = self.get_total_capital()
         open_cost = sum(p.amount_usd for p in self.get_open_positions().values())
-        free_cash = capital - open_cost
+        free_cash = max(0.0, capital - open_cost)  # не уходим в минус при рагах
         base_size = float(getattr(config, "BASE_TRADE_AMOUNT_USD", 15.0) or 15.0)
         if free_cash < base_size:
             print(f"🛑 [CASH GUARD] Свободный кэш ${free_cash:.1f} < базового входа ${base_size:.1f}. Вход заблокирован.")

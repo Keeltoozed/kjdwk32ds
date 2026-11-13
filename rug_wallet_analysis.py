@@ -43,9 +43,9 @@ async def _rpc(client: AsyncClient, method: str, *args, **kwargs):
     except Exception as e:
         print(f"⚠️ [RUG-AUDIT] Primary RPC {method} error: {type(e).__name__}: {e}")
 
-    # Фоллбэк на publicnode если основной RPC (Helius) вернул 429 или упал
+    # Фоллбэк на публичный узел если основной RPC (Helius) вернул 429 или упал
     try:
-        fallback_client = AsyncClient("https://solana-rpc.publicnode.com")
+        fallback_client = AsyncClient("https://api.mainnet-beta.solana.com")
         fn_fb = getattr(fallback_client, method)
         resp_fb = await asyncio.wait_for(fn_fb(*args, **kwargs), timeout=4.0)
         await fallback_client.close()
@@ -120,7 +120,13 @@ async def check_dev_and_holders(client: AsyncClient, mint: str) -> dict:
         if not accounts:
             return {"ok": False, "reason": "no-holders", "details": {}}
 
-        total_supply = accounts[0].amount if accounts else 0
+        # Получаем реальную эмиссию токена через get_token_supply
+        supply_resp = await _rpc(client, "get_token_supply", mint_pubkey)
+        total_supply = 0
+        if supply_resp and hasattr(supply_resp, "value") and supply_resp.value:
+            total_supply = int(getattr(supply_resp.value, "amount", 0) or 0)
+        if total_supply <= 0:
+            total_supply = 1_000_000_000_000_000 if mint.endswith("pump") else sum(int(getattr(a, "amount", 0) or 0) for a in accounts)
         if total_supply <= 0:
             return {"ok": False, "reason": "zero-supply", "details": {}}
 

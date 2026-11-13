@@ -1448,7 +1448,7 @@ class Analyzer:
             rc_st, rc_data = await goplus.fetch_rugcheck_report_cached(mint, ttl=120.0, timeout=6)
             _gp_is_holder_str = ("кит держит" in gp_why_low or "топ-10 китов" in gp_why_low)
             _liq_w = float(((pair_data or {}).get("liquidity") or {}).get("usd", 0) or 0)
-            if not gp_ok and "rugcheck-score" not in gp_why_low and not (_gp_is_holder_str and (rc_st == 200 or _liq_w >= 20000.0)):
+            if not gp_ok and not (_gp_is_holder_str and (rc_st == 200 or _liq_w >= 20000.0)):
                 return False, f"GoPlus Honeypot/Tax: {gp_why}"
 
             # 4. Кэшированный RugCheck аудит (концентрация холдеров и блокировка LP на кастомных токенах)
@@ -2114,8 +2114,8 @@ class Analyzer:
                     )
 
                     _rc_score = max(0.0, _rc_raw_score - _rc_penalty_to_ignore)
-                    if _rc_score >= 2000:
-                        return self._deny(mint, f"rugcheck-score {_rc_score:.0f}", f"🚫 [АНТИСКАМ] RugCheck Score {_rc_score:.0f} >= 2000 у {mint[:8]} → СКАМ")
+                    if _rc_score >= 1200:
+                        return self._deny(mint, f"rugcheck-score {_rc_score:.0f}", f"🚫 [АНТИСКАМ] RugCheck Score {_rc_score:.0f} >= 1200 у {mint[:8]} → СКАМ")
 
                     # Жёсткий фильтр критических опасностей RugCheck
                     for rk in (rc_data.get("risks") or []):
