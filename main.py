@@ -20,7 +20,8 @@ import pandas as pd
 import config
 from analyzer import Analyzer
 from rug_wallet_analysis import quick_rug_check, full_rug_wallet_audit
-from wallet_behavior_monitor import init_position_wallet_state, remove_position_state, monitor_position_wallets
+from wallet_behavior_monitor import (init_position_wallet_state, remove_position_state,
+                                    monitor_position_wallets, _POSITION_WALLET_STATE)
 from tracker import PaperTracker
 from fomo_scanner import fomo_loop
 
@@ -1538,6 +1539,7 @@ async def scanner_loop(analyzer, tracker):
                                 # PRE-FLIGHT FIRST-CANDLE RUG GUARD: ловит мгновенный раг первой свечи.
                                 # Анализирует когорту кошельков, ищет кластеры «одного источника
                                 # финансирования» (сколько кошельков, сколько % эмиссии они держат).
+                                _fcr_feat = {}  # дефолт до включения FCR (fail-open / флаг выкл)
                                 if getattr(config, "FCR_ENABLED", True):
                                     try:
                                         from first_candle_rug_guard import pre_entry_rug_check
@@ -2996,7 +2998,7 @@ def _render_tab1_content():
                             <div style='margin-top: 6px; font-size: 0.85em; color: #DDD;'>{_size_html}</div>
                             {_updated_badge}
                             <div style='margin-top: 6px; font-size: 0.78em;'><span style='color:#888;'>🔍 FCR (First-Candle-Rug): </span>
-                            {str(row.get('ml_features') or {}).get('fcr_verdict') if isinstance(row.get('ml_features'), dict) else ''}
+                            {str((row.get('ml_features') or {}).get('fcr_verdict') or '') if isinstance(row.get('ml_features'), dict) else ''}
                             </div>
                             <div style='display: flex; justify-content: space-between; margin-top: 8px; font-size: 0.85em; color: #BBB;'>
                                 <div><span style='color:#888;'>Вход:</span><br>${row['entry_price_usd']:.8f}</div>

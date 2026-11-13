@@ -1765,6 +1765,7 @@ class GrokJevEngine:
             # Д) FIRST-CANDLE RUG GUARD: анализ когорты кошельков ДО входа.
             # Ищем кластеры «одного источника финансирования»: сколько кошельков
             # профинансировано одним адресом и сколько % эмиссии они держат.
+            _fcr_feat = {}
             if getattr(_c, "FCR_ENABLED", True):
                 try:
                     from first_candle_rug_guard import pre_entry_rug_check, compact_summary
