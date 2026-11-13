@@ -189,40 +189,22 @@ class MatureExitManager:
         if not _mb_free_ride and max_pnl_pct >= 1.00 and _peak_age_min >= 10.0:
             return f"Parabolic 2x Harvest (+{pnl_pct*100:.0f}% locked after peak +{max_pnl_pct*100:.0f}%, {_peak_age_min:.0f}m no ATH)"
 
-        # === УРОВНИ ВЫХОДА ПО ЗАСТРЕВАНИЮ ATH (от агрессивного к мягкому) ===
-        # Логика: чем дольше нет нового ATH при наличии прибыли — тем опаснее держать.
-        # Дев ждёт восстановления цены / окончания пампа → снимает LP или делает скоординированный дамп.
-        # CRO (+8.8% пик, 7.5м держали), NEX AI (+10% пик, 8м держали), BREAD (4м) — все рагнулись именно так.
-
+        # === СБОР ПРИБЫЛИ И ЗАЩИТА ОТ ЗАСТРЕВАНИЯ ===
+        # Даём ракетам свободно дышать до +110% (где включается Full Runner Trailing).
+        # Не срезаем растущие монеты на микро-профитах (+6%..+15%)!
         if not _mb_free_ride:
-            # 1. Micro-ATH Churn Exit: монета сделала микро-пик (+4%..+15%), но уже 2+ мин болтается без нового ATH
-            # Забираем профит (+2%..+12%) и выходим, не дожидаясь слива дева!
-            if max_pnl_pct >= 0.04 and _peak_age_min >= 2.0 and pnl_pct >= 0.02 and minutes_held >= 2.5:
-                return f"Micro-ATH Churn Exit (+{pnl_pct*100:.1f}% locked, болтанка {_peak_age_min:.1f}м без ATH при удержании {minutes_held:.1f}м)"
+            # 1. Dead Churn Escape: ТОЛЬКО для дохлых монет, которые вообще не дали импульса (пик < +8%)
+            # и стоят на месте в нуле/минусе 3+ минут (кейс XBT -1.4%) — режем стоячий мусор, не трогая ракеты!
+            if minutes_held >= 3.5 and _peak_age_min >= 2.5 and max_pnl_pct < 0.08 and pnl_pct <= 0.02:
+                return f"Dead Churn Escape ({pnl_pct*100:+.1f}%, застрял без импульса {_peak_age_min:.1f}м — выход)"
 
-            # 2. Dead Churn Escape: монета застряла вокруг 0% (от -5% до +4%) и 2.5м нет прогресса
-            # В мемкоинах стояние на месте = скорый раг/дамп дева.
-            if minutes_held >= 3.0 and _peak_age_min >= 2.5 and max_pnl_pct < 0.12 and pnl_pct >= -0.06:
-                return f"Dead Churn Escape ({pnl_pct*100:+.1f}%, болтанка {_peak_age_min:.1f}м на месте — выход до слива дева)"
+            # 2. ATH Exhaustion Exit: пик был сильным (+40%+), но 5+ минут нет нового ATH — забираем +15%+ профита
+            if max_pnl_pct >= 0.40 and _peak_age_min >= 5.0 and pnl_pct >= 0.15:
+                return f"ATH Exhaustion Exit (+{pnl_pct*100:.0f}% locked after peak +{max_pnl_pct*100:.0f}%, {_peak_age_min:.0f}m no ATH)"
 
-            # 3. Mid-ATH Stagnation Exit: пик +15%..+40%, нет нового ATH 2.5 мин
-            if max_pnl_pct >= 0.15 and _peak_age_min >= 2.5 and pnl_pct >= 0.05 and minutes_held >= 3.0:
-                return f"Mid-ATH Stagnation Exit (+{pnl_pct*100:.1f}% locked after peak +{max_pnl_pct*100:.0f}%, {_peak_age_min:.1f}м без ATH)"
-
-            # 4. ATH Exhaustion Exit: пик +40%+, нет нового ATH 3 мин
-            if max_pnl_pct >= 0.40 and _peak_age_min >= 3.0 and pnl_pct >= 0.10:
-                return f"ATH Exhaustion Exit (+{pnl_pct*100:.0f}% locked after peak +{max_pnl_pct*100:.0f}%, {_peak_age_min:.1f}м без ATH)"
-
-            # 5. Rocket Momentum Harvest: пик +50%+, 10 мин без ATH
-            if max_pnl_pct >= 0.50 and _peak_age_min >= 10.0 and pnl_pct >= 0.18:
-                return f"Rocket Momentum Harvest (+{pnl_pct*100:.0f}% locked after peak +{max_pnl_pct*100:.0f}%, {_peak_age_min:.0f}м без ATH)"
-
-            # 6. Staircase Grind Cap (Защита от искусственной лесенки wash-бота):
-            # Монета ползёт вверх микро-шажками (+0.5%..+1.5% в минуту), постоянно обновляя micro-ATH и не давая сработать таймеру застревания.
-            # Настоящая ракета даёт импульс 2x-5x (+100%..+400%) за 3-5 минут.
-            # Если монета держится >= 5.0 минут и дала профит от +12% до +50% — фиксируем прибыль и выходим до того, как дев сделает Remove LP!
-            if minutes_held >= 5.0 and pnl_pct >= 0.12 and max_pnl_pct <= 0.50:
-                return f"Staircase Grind Take-Profit (+{pnl_pct*100:.1f}% locked at {minutes_held:.1f}m — выход до Remove LP)"
+            # 3. Rocket Momentum Harvest: пик +50%+, 8+ минут без ATH — забираем +20%+ профита
+            if max_pnl_pct >= 0.50 and _peak_age_min >= 8.0 and pnl_pct >= 0.20:
+                return f"Rocket Momentum Harvest (+{pnl_pct*100:.0f}% locked after peak +{max_pnl_pct*100:.0f}%, {_peak_age_min:.0f}m no ATH)"
 
 
         # =========================================================================
@@ -299,9 +281,9 @@ class MatureExitManager:
         # =========================================================================
         # 6. СТАГНАЦИЯ И МЕРТВЫЙ ИМПУЛЬС (Срез стоячих монет до дев-дампа)
         # =========================================================================
-        # Если монета в рынке 3.5+ минут, её пик был слабым (< +20%), и новых ATH нет 2+ минут:
-        # выходим немедленно! В мемкоинах затухание импульса означает скорый раг/дамп дева (кейс 牛逼 13м, CRO 7м).
-        if not _is_mb and minutes_held >= 3.5 and max_pnl_pct < 0.20 and _peak_age_min >= 2.0:
+        # Если монета в рынке 6+ минут, её пик был слабым (< +15%), и новых ATH нет 4+ минут:
+        # выходим! В мемкоинах полное затухание импульса означает скорый раг дева.
+        if not _is_mb and minutes_held >= 6.0 and max_pnl_pct < 0.15 and _peak_age_min >= 4.0:
             _sign = "+" if pnl_pct >= 0 else ""
             return f"Stalled Momentum Escape ({_sign}{pnl_pct*100:.1f}%, no ATH {_peak_age_min:.1f}m at {minutes_held:.1f}m)"
 
