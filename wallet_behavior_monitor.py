@@ -219,13 +219,12 @@ async def check_position_wallet_behavior(client: AsyncClient, mint: str,
     else:
         tx_per_min = sig_count
 
-    # Если слишком много активности за короткое время — возможно бандл ботов
+    # ВАЖНО: Высокая активность (много транзакций в минуту) — это признак ракеты и объема торгов,
+    # а НЕ повод для сброса позиции! Ранее tx_per_min > 20 резал 100% ракет на 0-1 минуте.
+    # Никогда не выходим по чистой активности торгов!
     alert_reasons = []
-    if tx_per_min > config.WALLET_MAX_NEW_BUYERS_PER_MIN:
-        alert_reasons.append(f"Высокая активность: {tx_per_min:.0f} tx/мин (> {config.WALLET_MAX_NEW_BUYERS_PER_MIN})")
 
     # Анализируем кошельки (если бы мы могли извлечь адреса из транзакций)
-    # Пока используем heuristic: простое количество подписей
     suspicious_info = {
         "sig_count": sig_count,
         "tx_per_min": tx_per_min,
@@ -233,7 +232,7 @@ async def check_position_wallet_behavior(client: AsyncClient, mint: str,
         "alert_reasons": alert_reasons,
     }
 
-    should_exit = len(alert_reasons) > 0
+    should_exit = False
     reason = "; ".join(alert_reasons) if alert_reasons else ""
 
     return should_exit, reason, suspicious_info

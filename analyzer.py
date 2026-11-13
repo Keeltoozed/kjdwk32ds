@@ -2346,7 +2346,7 @@ class Analyzer:
                 self.rocket_scores[mint] = conf
             _final_thr = float(getattr(config, "ROCKET_XGB_FINAL_THRESHOLD", 14.0))
             if _links_cnt == 0 and not _soc_unknown:
-                _final_thr = max(_final_thr, 18.0)
+                _final_thr = max(_final_thr, 16.0)
             if (conf + 0.05) < _final_thr:
                 return self._deny(mint, f"rocket-xgb-s2 {conf:.0f}%", f"🚫 [ROCKET-XGB-S2] {symbol} ({mint[:8]}): скор с учётом холдеров {conf:.1f}% < {_final_thr:.0f}% — отсев.")
 

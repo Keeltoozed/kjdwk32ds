@@ -150,9 +150,9 @@ MOONBAG_MAX_HOLD_MIN = 90.0          # Мунбэг может ехать до 9
 PUMP_XGB_ENABLED = False
 RAY_XGB_ENABLED = False
 ROCKET_XGB_ENABLED = True
-ROCKET_XGB_STAGE1_THRESHOLD = 12.0   # Первичный отсев 12%: пускает BELIEVE (+555%), FLC (+736%), REVIVE (+264%)
-ROCKET_XGB_FINAL_THRESHOLD = 20.0    # Финальный порог 20%: отсекает откровенный мусор, но ловит ракеты
-ROCKET_XGB_THRESHOLD = 20.0
+ROCKET_XGB_STAGE1_THRESHOLD = 10.0   # Первичный отсев 10%: пускает BELIEVE (+555%), FLC (+736%), REVIVE (+264%)
+ROCKET_XGB_FINAL_THRESHOLD = 14.0    # Финальный порог 14%: отсекает откровенный мусор, но ловит ракеты (GTA 19%, SWEATER)
+ROCKET_XGB_THRESHOLD = 14.0
 
 STALL_TIMER_SEC = 240.0   # 4 минуты на консолидацию стоячего минуса
 STALL_MAX_LOSS_PCT = -0.090
@@ -443,7 +443,7 @@ FCR_SIG_PAGE_LIMIT = 200              # Сколько подписей тяну
 FCR_GENESIS_MIN_PCT = 1.0            # Догружать точную genesis-транзакцию только для холдеров с долей >= 1%
 
 # === ПОСТВХОДОВОЙ МОНИТОРИНГ КОШЕЛЬКОВ (после входа в позицию) ===
-WALLET_MONITOR_ENABLED = True             # Включить отслеживание кошельков после входа
+WALLET_MONITOR_ENABLED = False            # Отключено: tx_per_min резал ракеты на 0-1м из-за высокой активности торговли!
 WALLET_MONITOR_INTERVAL_SEC = 10          # Каждые 10 секунд проверять новые транзакции по минту
 WALLET_NEW_TX_LIMIT = 50                  # Сколько последних подписей проверять за один заход
 WALLET_MAX_NEW_BUYERS_PER_MIN = 20        # Максимум новых уникальных покупателей в минуту (больше = боты/сибил)

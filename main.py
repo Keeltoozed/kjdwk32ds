@@ -126,13 +126,13 @@ async def position_security_auditor_loop(analyzer, tracker):
                                 print(f"🚨 [LIQ-LOSS] {position.symbol} ({mint[:8]}): {_msg} — выход МГНОВЕННО!")
                                 tracker.close_position(mint, _px_now, f"{_tag} (Liq dropped to ${_sol_liq:.0f} from ${_peak_liq:.0f})")
                                 continue
-                            elif _has_liq_data and _liq_crash_pct >= 0.15 and _peak_liq >= 3000.0:
-                                # Умеренный дроп 15%+: требуем всего 1 тик подтверждения (вместо 2)
+                            elif _has_liq_data and _liq_crash_pct >= 0.25 and _peak_liq >= 3000.0:
+                                # Умеренный дроп 25%+: требуем 3 тика устойчивого подтверждения (не режем на рыночных шумах и кэше DexScreener)
                                 _drop_cnt = getattr(position, "_liq_drop_streak", 0) + 1
                                 position._liq_drop_streak = _drop_cnt
-                                if _drop_cnt >= 1:
+                                if _drop_cnt >= 3:
                                     _px_now = float(getattr(position, "current_price_usd", 0.0) or 0.0)
-                                    print(f"🚨 [LIQ-LOSS] {position.symbol} ({mint[:8]}): Liq Drop ${_sol_liq:.0f} from ${_peak_liq:.0f} (-{_liq_crash_pct*100:.0f}%) — подтверждённый выход!")
+                                    print(f"🚨 [LIQ-LOSS] {position.symbol} ({mint[:8]}): Liq Drop ${_sol_liq:.0f} from ${_peak_liq:.0f} (-{_liq_crash_pct*100:.0f}%) — подтверждённый выход (3 тика)!")
                                     tracker.close_position(mint, _px_now, f"Confirmed Liquidity Drop (Liq ${_sol_liq:.0f} from ${_peak_liq:.0f})")
                                     continue
                             else:

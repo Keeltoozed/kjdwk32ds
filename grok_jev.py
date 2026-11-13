@@ -2024,7 +2024,7 @@ class GrokJevEngine:
         final_thresh = float(getattr(_c, "ROCKET_XGB_FINAL_THRESHOLD", 14.0))
         _fin_links = len((pair.get("info") or {}).get("socials", []) or []) + len((pair.get("info") or {}).get("websites", []) or [])
         if _fin_links == 0 and not bool(pair.get("_socials_unknown", False)):
-            final_thresh = max(final_thresh, 18.0)
+            final_thresh = max(final_thresh, 16.0)
         if getattr(_c, "ROCKET_XGB_ENABLED", True) and (rkt_final + 0.05) < final_thresh:
             print(f"🚫 [GROK-JEV-ML-VETO] {symbol} ({address[:8]}): Rocket XGB final score {rkt_final:.1f}% < {final_thresh:.0f}% — VETO! (Блокировка дампа)")
             return False, f"rocket-xgb-final-veto {rkt_final:.1f}% < {final_thresh:.0f}%"
