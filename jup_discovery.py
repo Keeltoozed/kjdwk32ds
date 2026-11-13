@@ -421,6 +421,13 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
     # ОСОБОЕ правило: Meteora DYN2 всегда проверяем LP даже для pump.fun токенов!
     # Pump.fun → Meteora DYN2: дев может вытащить ликву одной транзакцией в любой момент.
     # Это самый опасный тип рага (BREAD, PINCHE, DEMOCAT, 内个一 — все Meteora DYN2).
+    # ЖЁСТКИЙ БЛОК кастомных не-pump токенов на PumpSwap:
+    # Все канонические токены Pump.fun заканчиваются на 'pump'.
+    # Токены на PumpSwap без 'pump' — это кастомные фальшивки со скрытым Remove LP дева (кейсы CRO, NEX AI, 42, SI)!
+    if _dex_j == "pumpswap" and not mint.endswith("pump"):
+        print(f"🚫 [{source_tag}-FAKE-PUMPSWAP] {_sym_tmp} ({mint[:8]}): кастомный токен на PumpSwap без окончания pump — фальшивый пул с Remove LP!")
+        return False
+
     _is_meteora_dyn = _dex_j in ("meteora", "meteoradbc", "meteoradlmm", "meteoradyn2")
     _skip_lp_check = mint.endswith("moon")  # moon токены пропускаем
     if not _skip_lp_check and (_is_meteora_dyn or (not mint.endswith("pump") and not _is_grad_jup)):

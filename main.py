@@ -1230,6 +1230,9 @@ async def scanner_loop(analyzer, tracker):
                                 if _dex_id not in ("pump", "pumpfun") and liq_usd < _min_grad_sc:
                                     print(f"🚫 [SCANNER-LOW-LIQ] {actual_symbol} ({mint[:8]}): ликвидность DEX ${liq_usd:,.0f} < ${_min_grad_sc:,.0f} — отмена!")
                                     continue
+                                if _dex_id == "pumpswap" and not mint.endswith("pump"):
+                                    print(f"🚫 [SCANNER-FAKE-PUMPSWAP] {actual_symbol} ({mint[:8]}): кастомный не-pump токен на PumpSwap — риск Remove LP!")
+                                    continue
                                 _pc_live = pair_data.get("priceChange") or {}
                                 _m5_live = float(_pc_live.get("m5", 0) or 0)
                                 _m1_live = float(_pc_live.get("m1", 0) or 0)

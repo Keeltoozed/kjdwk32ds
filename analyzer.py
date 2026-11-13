@@ -2026,9 +2026,11 @@ class Analyzer:
                 if _v2l_a > 2.6 and _bs_a < 1.5 and not _is_organic_trades:
                     return self._deny(mint, f"anon-wash-churn {_v2l_a:.1f}x", f"🚫 [WASH-TRAP] {symbol} ({mint[:8]}): 0 соцсетей, liq ${raw_liq:,.0f}, оборот 5м {_v2l_a:.1f}x пула (b/s {_bs_a:.2f}, avg ${_avg_tx5_a:.0f}) — анонимный wash-дамп!")
 
-            # Блок кастомных не-pump токенов на PumpSwap с микропулом (< $10k)
-            if dex_id_low == "pumpswap" and not mint.endswith("pump") and raw_liq < 10000.0:
-                return self._deny(mint, "fake-pumpswap-unlocked-lp", f"🚫 [FAKE-PUMPSWAP] {symbol} ({mint[:8]}): кастомный токен на PumpSwap с микропулом (${raw_liq:.0f} < $10k) — блок!")
+            # Блок кастомных не-pump токенов на PumpSwap ЛЮБОЙ ликвидности:
+            # Настоящие токены Pump.fun ВСЕГДА заканчиваются на 'pump'.
+            # Токены без 'pump' на PumpSwap — это 100% фальшивые пулы со скрытым Remove LP (кейсы CRO, NEX AI, 42, SI)!
+            if dex_id_low == "pumpswap" and not mint.endswith("pump"):
+                return self._deny(mint, "fake-pumpswap-unlocked-lp", f"🚫 [FAKE-PUMPSWAP] {symbol} ({mint[:8]}): кастомный не-pump токен на PumpSwap — незалоченный LP дева, риск мгновенного Remove LP!")
 
             # Защита от фантомных пулов с мизерным остатком реального SOL
             _quote_info = pair_data.get("liquidity", {}) or {}

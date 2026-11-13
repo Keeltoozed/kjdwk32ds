@@ -217,6 +217,13 @@ class MatureExitManager:
             if max_pnl_pct >= 0.50 and _peak_age_min >= 10.0 and pnl_pct >= 0.18:
                 return f"Rocket Momentum Harvest (+{pnl_pct*100:.0f}% locked after peak +{max_pnl_pct*100:.0f}%, {_peak_age_min:.0f}м без ATH)"
 
+            # 6. Staircase Grind Cap (Защита от искусственной лесенки wash-бота):
+            # Монета ползёт вверх микро-шажками (+0.5%..+1.5% в минуту), постоянно обновляя micro-ATH и не давая сработать таймеру застревания.
+            # Настоящая ракета даёт импульс 2x-5x (+100%..+400%) за 3-5 минут.
+            # Если монета держится >= 5.0 минут и дала профит от +12% до +50% — фиксируем прибыль и выходим до того, как дев сделает Remove LP!
+            if minutes_held >= 5.0 and pnl_pct >= 0.12 and max_pnl_pct <= 0.50:
+                return f"Staircase Grind Take-Profit (+{pnl_pct*100:.1f}% locked at {minutes_held:.1f}m — выход до Remove LP)"
+
 
         # =========================================================================
         # 4. CRASH VELOCITY GUARD (Дев-дамп / аномальное обрушение за 1 минуту)

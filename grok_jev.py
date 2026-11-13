@@ -1531,6 +1531,8 @@ class GrokJevEngine:
             # ВАЖНО: Настоящий токен Pump.fun ВСЕГДА заканчивается на 'pump' (mint authority PDA).
             # Кастомные токены (даже если DexScreener пишет dexId 'pumpswap') не защищены протоколом pump.fun!
             _dex_low_jev = str(pair_data.get("dexId") or "").lower()
+            if _dex_low_jev == "pumpswap" and not address.endswith("pump"):
+                return False, "fake-pumpswap-unlocked-lp (кастомный не-pump токен на PumpSwap с риском Remove LP)", _h_stats
             is_canonical_pump = address.endswith("pump") or (is_raw_pump_curve and _dex_low_jev in ("pump", "pumpfun"))
             if not is_canonical_pump and (rc_status_pre != 200 or not isinstance(rc_data_pre, dict)):
                 _raw_l_pre = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
