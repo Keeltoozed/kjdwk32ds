@@ -188,6 +188,11 @@ class MatureExitManager:
             return f"Parabolic 3x Harvest (+{pnl_pct*100:.0f}% locked after peak +{max_pnl_pct*100:.0f}%, {_peak_age_min:.0f}m no ATH)"
         if not _mb_free_ride and max_pnl_pct >= 1.00 and _peak_age_min >= 10.0:
             return f"Parabolic 2x Harvest (+{pnl_pct*100:.0f}% locked after peak +{max_pnl_pct*100:.0f}%, {_peak_age_min:.0f}m no ATH)"
+        # ATH Exhaustion: пик +40-100%, нет нового ATH 5 мин — классика перед LP drain!
+        # Дев ждёт восстановления после первой коррекции, потом выдёргивает ликву.
+        # Мы выходим ДО этого момента с прибылью.
+        if not _mb_free_ride and max_pnl_pct >= 0.40 and _peak_age_min >= 5.0 and pnl_pct >= 0.15:
+            return f"ATH Exhaustion Exit (+{pnl_pct*100:.0f}% locked after peak +{max_pnl_pct*100:.0f}%, {_peak_age_min:.0f}m no ATH — dev rug window)"
         if not _mb_free_ride and max_pnl_pct >= 0.50 and _peak_age_min >= 15.0 and pnl_pct >= 0.20:
             return f"Rocket Momentum Harvest (+{pnl_pct*100:.0f}% locked after peak +{max_pnl_pct*100:.0f}%, {_peak_age_min:.0f}m no ATH)"
 
@@ -241,6 +246,12 @@ class MatureExitManager:
             total_tx5 = b5 + s5
             if minutes_held >= 3.0 and pnl_pct >= 0.35 and total_tx5 >= 25 and bs_ratio < 0.40 and m1 <= -5.0:
                 return f"Front-Run Profit Exit: Sellers dominating ({b5}b/{s5}s) while in profit (+{pnl_pct*100:.1f}%)"
+            # Тихое угасание: объём упал, продажи доминируют, цена вниз — дев готовится к дрейну
+            vol_m5_now = float((_pd.get("volume") or {}).get("m5", 0) or 0)
+            vol_h1_now = float((_pd.get("volume") or {}).get("h1", 0) or 0)
+            _vol_dying = vol_h1_now > 0 and vol_m5_now < vol_h1_now * 0.08  # объём за 5м < 8% часового
+            if minutes_held >= 2.0 and pnl_pct >= 0.25 and bs_ratio < 0.50 and _vol_dying and m1 <= -3.0:
+                return f"Volume Exhaustion Exit: торги утихли ({b5}b/{s5}s, vol 5m ${vol_m5_now:.0f} vs h1 ${vol_h1_now:.0f}) в профите +{pnl_pct*100:.1f}%"
 
         # =========================================================================
         # 5. MAX HOLD TIMEOUT (УДЕРЖАНИЕ ДО 28 МИНУТ — ВЫХОД ДО РАГА НА 40-Й МИНУТЕ)

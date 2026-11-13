@@ -519,6 +519,11 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
     if _m1_j < -4.0:
         print(f"🚫 [{source_tag}-1M-DUMP] {_sym_tmp}: 1м свеча {_m1_j:+.1f}% летит вниз — отмена входа!")
         return False
+    # Блок: токен уже на полу — h1 сильно отрицательный при возрасте > 5 мин (кейс JENSEN)
+    if _h1_j < -60.0 and _age_j > 5.0:
+        print(f"🚫 [{source_tag}-FLOOR-TOKEN] {_sym_tmp} ({mint[:8]}): h1 {_h1_j:.0f}% — токен уже на полу, входить нельзя!")
+        return False
+
 
     # 0.2 Защита от накрутки микро-покупками / wash-trading (кейс AMC: 5370 покупок по $0.15)
     _tot_tx_j = _b5_j + _s5_j
@@ -542,6 +547,17 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
         if not (_is_strong_buyer_breakout_j or _is_cooling_pullback):
             print(f"🚫 [{source_tag}-FOMO-M5] {_sym_tmp}: m5 +{_m5_j:.1f}% > +{_max_m5_cfg:.0f}% без отката (m1={_m1_j:+.1f}%) — покупка хая, отмена!")
             return False
+
+    # 2.1 Spike Detection: зрелый токен (> 10 мин) вдруг спайкует на m5 >= 150% — классика pump-and-dump координированного!
+    # STARSHIP: старый токен, кто-то разогнал за 1 свечу, бот покупает на пике — всё рушится (кейс -96%).
+    # Свежие монеты (< 10 мин) могут законно показывать такие свечи — они на старте.
+    if _age_j >= 10.0 and _m5_j >= 150.0:
+        # Разрешаем только если это подтверждённый органический прорыв: большой объём, много байеров
+        _organic_spike_j = (_vm5_j >= 20000.0 and _b5_j >= 80 and _b5_j >= _s5_j * 1.5 and (_b5_j + _s5_j) >= 100)
+        if not _organic_spike_j:
+            print(f"🚫 [{source_tag}-OLD-SPIKE] {_sym_tmp} ({mint[:8]}): зрелый токен {_age_j:.0f}м вдруг +{_m5_j:.0f}% за 5м (b5={_b5_j}, vol=${_vm5_j:.0f}) — координированный памп-дамп, отмена!")
+            return False
+
 
     # 3. Защита от давления продавцов: блокируем ТОЛЬКО если продавцы реально преобладают
     _tot_tx_j = _b5_j + _s5_j
