@@ -506,13 +506,13 @@ class GrokJevEngine:
                 (vol_m5 >= 2000.0 and b5 >= 15 and b5 >= s5 * 1.08)
                 or (age_min >= 1.2 and eff_liq >= 12000.0 and vol_m5 >= 4000.0 and m5 >= 2.5 and b5 >= s5 * 1.05)
             )
-            if age_min < 0.6 and not has_breakout_momentum:
+            if age_min < 1.5 and not (has_breakout_momentum and b5 >= 35):
                 try:
                     from birth_tracker import birth_tracker as _bt_mig
                     _bt_mig.add_to_waiting_room(mint)
                 except Exception:
                     pass
-                return False, f"post-migration-dump-zone {age_min:.1f}m < 0.6m"
+                return False, f"post-migration-dump-zone {age_min:.1f}m < 1.5m"
             _has_reclaim_mig = (m5 >= 5.0 and b5 >= s5 * 1.30 and vol_m5 >= 800.0)
             if not has_breakout_momentum and not _has_reclaim_mig and (m5 < 2.0 or (s5 > 0 and (b5 / s5) < 1.08) or vol_m5 < 1500.0):
                 return False, f"post-migration-no-reclaim (m5 {m5:+.1f}%, vol5 ${vol_m5:,.0f}, {b5}b/{s5}s)"
@@ -523,8 +523,8 @@ class GrokJevEngine:
             (eff_liq >= 10000.0 and vol_m5 >= 3000.0 and b5 >= 15 and b5 >= s5 * 1.05 and m5 >= 1.5)
             or (vol_m5 >= 15000.0 and b5 >= s5)
         )
-        _early_min_age = max(0.25, float(getattr(_c, "JEV_EARLY_MIN_AGE_MIN", 0.25)))
-        _std_min_age = max(0.35, float(getattr(_c, "JEV_MIN_AGE_MIN", 0.35)))
+        _early_min_age = max(1.2, float(getattr(_c, "JEV_EARLY_MIN_AGE_MIN", 1.2)))
+        _std_min_age = max(1.5, float(getattr(_c, "JEV_MIN_AGE_MIN", 1.5)))
         min_age = _early_min_age if _is_early_rocket else _std_min_age
         max_age = float(getattr(_c, "SOLANA_MAX_AGE_MIN", 240.0))  # Ракеты до 240м (4 часа)
         _is_jev_breakout = (
@@ -1780,6 +1780,8 @@ class GrokJevEngine:
                 except Exception as _fcr_e:
                     print(f"⚠️ [FCR] {symbol} ({address[:8]}): {type(_fcr_e).__name__} — fail-open (вход разрешён).")
                     _fcr_feat = {}
+            if isinstance(_h_stats, dict):
+                _h_stats["fcr_features"] = _fcr_feat
 
             # Г) Двухсторонняя симуляция (BUY + SELL) через Jupiter
             # ЖЕСТКАЯ ЗАЩИТА: токен ОБЯЗАН успешно проходить и покупку, и продажу!
@@ -2069,6 +2071,7 @@ class GrokJevEngine:
             except Exception:
                 pass
 
+        _fcr_feat = (_h_stats or {}).get("fcr_features", {}) if isinstance(_h_stats, dict) else {}
         tracker.add_position(
             symbol=symbol,
             mint=address,

@@ -504,7 +504,15 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
     _b5_j = int((((td or {}).get("txns") or {}).get("m5") or {}).get("buys", 0) or 0)
     _s5_j = int((((td or {}).get("txns") or {}).get("m5") or {}).get("sells", 0) or 0)
 
-    # 0. Защита от падающего ножа (кейс AMC: m5 -37.6% летит вниз)
+    # 0. Защита от моментального рага первой свечи (<90 секунд) для PumpSwap / миграций / кастомных пулов:
+    # Дев-софт сливает бандл в первые 30-80 секунд. Ждём завершения 1-й свечи (age >= 1.5м),
+    # чтобы дев-дамп проявился, а мы вошли в чистую ракету (кейсы 1JENSEN/HUANG).
+    if _age_j < 1.5:
+        if _b5_j < 35 or (_s5_j > 0 and (_b5_j / _s5_j) < 1.25) or _m1_j < 0.0 or _vm5_j < 3000.0:
+            print(f"⏳ [{source_tag}-AGE-WARMUP] {_sym_tmp}: возраст {_age_j*60:.0f}с < 90с — созревание 1-й свечи (защита от бандл-рага дева)")
+            return False
+
+    # 0.1 Защита от падающего ножа (кейс AMC: m5 -37.6% летит вниз)
     if _m5_j < 1.0:
         print(f"🚫 [{source_tag}-DOWNTREND] {_sym_tmp}: m5 {_m5_j:+.1f}% < +1.0% — падающий нож, отмена входа!")
         return False
@@ -512,7 +520,7 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
         print(f"🚫 [{source_tag}-1M-DUMP] {_sym_tmp}: 1м свеча {_m1_j:+.1f}% летит вниз — отмена входа!")
         return False
 
-    # 0.1 Защита от накрутки микро-покупками / wash-trading (кейс AMC: 5370 покупок по $0.15)
+    # 0.2 Защита от накрутки микро-покупками / wash-trading (кейс AMC: 5370 покупок по $0.15)
     _tot_tx_j = _b5_j + _s5_j
     _avg_tx_j = (_vm5_j / max(1, _tot_tx_j)) if _tot_tx_j > 0 else 0.0
     if _tot_tx_j >= 50 and _avg_tx_j < 4.0:
@@ -577,6 +585,17 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
         return False
     else:
         print(f"🎯 [JEV-FILLS] {_sym_tmp} ({mint[:8]}): {_flush_msg}")
+
+    # Предвходовой анализ на мгновенный раг первой свечи (FCR Guard)
+    if getattr(config, "FCR_ENABLED", True):
+        try:
+            from first_candle_rug_guard import pre_entry_rug_check
+            _fcr = await pre_entry_rug_check(mint, pair_data=td or {}, symbol=_sym_tmp)
+            if _fcr.get("verdict") == "BLOCK":
+                print(f"🚫 [{source_tag}-FCR] {_sym_tmp} ({mint[:8]}): {_fcr.get('report', '')} — вход заблокирован (мгновенный раг)!")
+                return False
+        except Exception:
+            pass
 
     async with _get_buy_lock():
         if len(tracker.get_open_positions()) >= config.MAX_CONCURRENT_POSITIONS:

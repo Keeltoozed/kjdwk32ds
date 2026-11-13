@@ -1531,8 +1531,14 @@ async def scanner_loop(analyzer, tracker):
                                     try:
                                         _rw_safe, _rw_why = await quick_rug_check(mint)
                                         if not _rw_safe:
-                                            print(f"🚫 [SCANNER PRE-FLIGHT RUG-WALLET] {actual_symbol} ({mint[:8]}): {_rw_why} — вход заблокирован аудитом кошельков!")
-                                            continue
+                                            # Защита от блокировки из-за RPC 429: если данные просто не получены по сети, не блочим проверенную ракету
+                                            _why_low = str(_rw_why or "").lower()
+                                            _only_rpc_errors = all(k in _why_low for k in ("no-mint-account", "no-holder-data")) or "rpc" in _why_low or "timeout" in _why_low
+                                            if _only_rpc_errors and not any(k in _why_low for k in ("mint_authority_enabled", "freeze_authority_enabled", "top1_pct_high", "sybil", "fresh bot")):
+                                                print(f"⚠️ [SCANNER PRE-FLIGHT RUG-WALLET] {actual_symbol} ({mint[:8]}): RPC 429/timeout ({_rw_why}) — вход разрешён (fail-open).")
+                                            else:
+                                                print(f"🚫 [SCANNER PRE-FLIGHT RUG-WALLET] {actual_symbol} ({mint[:8]}): {_rw_why} — вход заблокирован аудитом кошельков!")
+                                                continue
                                     except Exception as _e:
                                         print(f"⚠️ [SCANNER PRE-FLIGHT RUG-WALLET] {actual_symbol} ({mint[:8]}): audit error {type(_e).__name__} — вход разрешён (fail-open).")
 
@@ -1542,9 +1548,9 @@ async def scanner_loop(analyzer, tracker):
                                 _fcr_feat = {}  # дефолт до включения FCR (fail-open / флаг выкл)
                                 if getattr(config, "FCR_ENABLED", True):
                                     try:
-                                        from first_candle_rug_guard import pre_entry_rug_check
+                                        from first_candle_rug_guard import pre_entry_rug_check, compact_summary
                                         _fcr = await pre_entry_rug_check(mint, pair_data=pair_data, symbol=actual_symbol)
-                                        _fcr_compact = pre_entry_rug_guard.compact_summary(_fcr)
+                                        _fcr_compact = compact_summary(_fcr)
                                         if _fcr.get("verdict") == "BLOCK":
                                             print(f"🚫 [SCANNER PRE-FLIGHT FCR] {actual_symbol} ({mint[:8]}): {_fcr.get('report', '')} — вход заблокирован первоочередно по мгновенному рагу!")
                                             continue
@@ -2988,25 +2994,27 @@ def _render_tab1_content():
                         except Exception:
                             _updated_badge = ""
 
-                        st.markdown(f"""
-                        <div style='background-color: #1E1E1E; padding: 15px; border-radius: 8px; border-left: 5px solid {color}; margin-bottom: 10px; font-family: sans-serif;'>
-                            <div style='display: flex; justify-content: space-between; align-items: center;'>
-                                <h3 style='margin:0; color: #FFF;'>{row['symbol'] if str(row['symbol']).strip() else row['mint'][:6] + '...'}</h3>
-                                {_right}
-                            </div>
-                            <div style='margin-top: 6px; font-size: 0.75em; color: #888;'>🔖 {row.get('source', '') if str(row.get('source', '')).strip() else '—'} {chain_badge(row.get('chain', 'solana'), True)}</div>
-                            <div style='margin-top: 6px; font-size: 0.85em; color: #DDD;'>{_size_html}</div>
-                            {_updated_badge}
-                            <div style='margin-top: 6px; font-size: 0.78em;'><span style='color:#888;'>🔍 FCR (First-Candle-Rug): </span>
-                            {str((row.get('ml_features') or {}).get('fcr_verdict') or '') if isinstance(row.get('ml_features'), dict) else ''}
-                            </div>
-                            <div style='display: flex; justify-content: space-between; margin-top: 8px; font-size: 0.85em; color: #BBB;'>
-                                <div><span style='color:#888;'>Вход:</span><br>${row['entry_price_usd']:.8f}</div>
-                                <div><span style='color:#888;'>Сейчас:</span><br>${row['current_price_usd']:.8f}</div>
-                                <div><span style='color:#888;'>Пик:</span><br>${row['max_price_usd']:.8f}</div>
-                            </div>
-                        </div>
-                        """, unsafe_allow_html=True)
+                        _fcr_v = str((row.get('ml_features') or {}).get('fcr_verdict') or '') if isinstance(row.get('ml_features'), dict) else ''
+                        _fcr_badge = f"<div style='margin-top: 6px; font-size: 0.78em;'><span style='color:#888;'>🔍 FCR: </span><b style='color:#00C851;'>{_fcr_v}</b></div>" if _fcr_v else ""
+
+                        card_html = (
+                            f"<div style='background-color: #1E1E1E; padding: 15px; border-radius: 8px; border-left: 5px solid {color}; margin-bottom: 10px; font-family: sans-serif;'>"
+                            f"<div style='display: flex; justify-content: space-between; align-items: center;'>"
+                            f"<h3 style='margin:0; color: #FFF;'>{row['symbol'] if str(row['symbol']).strip() else row['mint'][:6] + '...'}</h3>"
+                            f"{_right}"
+                            f"</div>"
+                            f"<div style='margin-top: 6px; font-size: 0.75em; color: #888;'>🔖 {row.get('source', '') if str(row.get('source', '')).strip() else '—'} {chain_badge(row.get('chain', 'solana'), True)}</div>"
+                            f"<div style='margin-top: 6px; font-size: 0.85em; color: #DDD;'>{_size_html}</div>"
+                            f"{_updated_badge}"
+                            f"{_fcr_badge}"
+                            f"<div style='display: flex; justify-content: space-between; margin-top: 8px; font-size: 0.85em; color: #BBB;'>"
+                            f"<div><span style='color:#888;'>Вход:</span><br>${row['entry_price_usd']:.8f}</div>"
+                            f"<div><span style='color:#888;'>Сейчас:</span><br>${row['current_price_usd']:.8f}</div>"
+                            f"<div><span style='color:#888;'>Пик:</span><br>${row['max_price_usd']:.8f}</div>"
+                            f"</div>"
+                            f"</div>"
+                        )
+                        st.markdown(card_html, unsafe_allow_html=True)
                 else:
                     st.info("Нет активных сделок.")
                     
@@ -3092,18 +3100,19 @@ def _render_tab1_content():
                             c_color = "#00C851" if p_usd >= 0 else "#FF4444"
                             c_sign = "+" if p_usd > 0 else ""
 
-                            st.markdown(f"""
-                            <div style='background-color: #1A1A1A; padding: 10px 15px; border-radius: 6px; border-right: 4px solid {c_color}; margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center;'>
-                                <div>
-                                    <div style='color: #FFF; font-weight: bold;'>{row['symbol'] if str(row['symbol']).strip() else row.name[:6] + '...'} <span style='font-size: 0.7em; color: #888;'>{chain_badge(row.get('chain', 'solana'))}</span></div>
-                                    <div style='color: #666; font-size: 0.75em;'>{row.get('exit_reason', 'Closed')} {row.get('held', '')}</div>
-                                    <div style='color: #555; font-size: 0.7em;'>🔖 {row.get('source', '') if str(row.get('source', '')).strip() else '—'}</div>
-                                </div>
-                                <div style='text-align: right; color: {c_color}; font-weight: bold;'>
-                                    {c_sign}${p_usd:.2f} <br> <span style='font-size: 0.8em;'>({c_sign}{p_pct:.2f}%)</span>
-                                </div>
-                            </div>
-                            """, unsafe_allow_html=True)
+                            closed_card_html = (
+                                f"<div style='background-color: #1A1A1A; padding: 10px 15px; border-radius: 6px; border-right: 4px solid {c_color}; margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center;'>"
+                                f"<div>"
+                                f"<div style='color: #FFF; font-weight: bold;'>{row['symbol'] if str(row['symbol']).strip() else row.name[:6] + '...'} <span style='font-size: 0.7em; color: #888;'>{chain_badge(row.get('chain', 'solana'))}</span></div>"
+                                f"<div style='color: #666; font-size: 0.75em;'>{row.get('exit_reason', 'Closed')} {row.get('held', '')}</div>"
+                                f"<div style='color: #555; font-size: 0.7em;'>🔖 {row.get('source', '') if str(row.get('source', '')).strip() else '—'}</div>"
+                                f"</div>"
+                                f"<div style='text-align: right; color: {c_color}; font-weight: bold;'>"
+                                f"{c_sign}${p_usd:.2f} <br> <span style='font-size: 0.8em;'>({c_sign}{p_pct:.2f}%)</span>"
+                                f"</div>"
+                                f"</div>"
+                            )
+                            st.markdown(closed_card_html, unsafe_allow_html=True)
                 else:
                     st.info("История пуста.")
         else:

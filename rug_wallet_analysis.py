@@ -34,13 +34,23 @@ def _cache_set(mint: str, verdict: dict):
 
 
 async def _rpc(client: AsyncClient, method: str, *args, **kwargs):
-    """Обёртка над RPC с обработкой исключений."""
+    """Обёртка над RPC с обработкой исключений и фоллбэком на публичный узел при 429."""
     try:
         fn = getattr(client, method)
         resp = await fn(*args, **kwargs)
-        return resp
+        if resp is not None:
+            return resp
     except Exception as e:
-        print(f"⚠️ [RUG-AUDIT] RPC {method} error: {type(e).__name__}: {e}")
+        print(f"⚠️ [RUG-AUDIT] Primary RPC {method} error: {type(e).__name__}: {e}")
+
+    # Фоллбэк на publicnode если основной RPC (Helius) вернул 429 или упал
+    try:
+        fallback_client = AsyncClient("https://solana-rpc.publicnode.com")
+        fn_fb = getattr(fallback_client, method)
+        resp_fb = await asyncio.wait_for(fn_fb(*args, **kwargs), timeout=4.0)
+        await fallback_client.close()
+        return resp_fb
+    except Exception as e_fb:
         return None
 
 
@@ -56,7 +66,7 @@ async def check_mint_authorities(client: AsyncClient, mint: str) -> dict:
         mint_pubkey = Pubkey.from_string(mint)
         resp = await _rpc(client, "get_account_info_json_parsed", mint_pubkey)
         if not resp or not resp.value or not resp.value.data:
-            return {"ok": False, "reason": "no-mint-account", "details": {}}
+            return {"ok": True, "reason": "mint-account-pending-index", "degraded": True, "details": {}}
 
         parsed = resp.value.data.parsed if hasattr(resp.value.data, 'parsed') else {}
         info = parsed.get("info", {}) if isinstance(parsed, dict) else {}
@@ -104,7 +114,7 @@ async def check_dev_and_holders(client: AsyncClient, mint: str) -> dict:
         mint_pubkey = Pubkey.from_string(mint)
         resp = await _rpc(client, "get_token_largest_accounts", mint_pubkey)
         if not resp or not resp.value:
-            return {"ok": False, "reason": "no-holder-data", "details": {}}
+            return {"ok": True, "reason": "holder-data-pending-index", "degraded": True, "details": {}}
 
         accounts = resp.value
         if not accounts:
@@ -299,10 +309,10 @@ async def check_rugcheck_api(mint: str) -> dict:
         risk = data.get("risk", "unknown")
         flags = data.get("flags", [])
 
-        # RugCheck score: 0-100, чем ниже — хуже
+        # RugCheck score: 0 = идеальная безопасность (0 риска), > 1000 = опасный раг
         issues = []
-        if score < 40:
-            issues.append(f"rugcheck-score-low ({score})")
+        if score >= 1000:
+            issues.append(f"rugcheck-score-high ({score})")
         if risk in ("high", "critical"):
             issues.append(f"rugcheck-risk-high ({risk})")
         for flag in flags:
@@ -353,17 +363,23 @@ async def full_rug_wallet_audit(mint: str, dev_wallet: str = None) -> dict:
         auth_check = await check_mint_authorities(client, mint)
         verdict["checks"]["authorities"] = auth_check
         if not auth_check["ok"]:
-            verdict["safe"] = False
-            verdict["score"] += 0.30
-            verdict["reasons"].append(f"Authorities: {auth_check['reason']}")
+            if auth_check.get("degraded") or any(k in str(auth_check.get("reason", "")).lower() for k in ("rpc", "timeout", "pending", "no-mint-account")):
+                pass
+            else:
+                verdict["safe"] = False
+                verdict["score"] += 0.30
+                verdict["reasons"].append(f"Authorities: {auth_check['reason']}")
 
         # 2. Держатели и дев
         holders_check = await check_dev_and_holders(client, mint)
         verdict["checks"]["holders"] = holders_check
         if not holders_check["ok"]:
-            verdict["safe"] = False
-            verdict["score"] += 0.25
-            verdict["reasons"].append(f"Holders: {holders_check['reason']}")
+            if holders_check.get("degraded") or any(k in str(holders_check.get("reason", "")).lower() for k in ("rpc", "timeout", "pending", "no-holder-data")):
+                pass
+            else:
+                verdict["safe"] = False
+                verdict["score"] += 0.25
+                verdict["reasons"].append(f"Holders: {holders_check['reason']}")
 
         # 3. Анализ кошельков топ-холдеров (свежие боты?)
         top_accounts = holders_check.get("details", {}).get("top_accounts", [])

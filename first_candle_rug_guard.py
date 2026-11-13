@@ -1076,7 +1076,7 @@ def analyze_microstructure(mint: str, pair_data: dict, cohort: List[dict]) -> di
                          "text": f"продажи доминируют: {buys}b/{sells}s (ratio {ratio:.2f})"})
 
     # c) Тонкий пул (раг стоит дёшево)
-    min_liq = float(_cfg("FCR_MIN_LIQ_USD", 25000.0))
+    min_liq = float(_cfg("FCR_MIN_LIQ_USD", 10000.0))
     if 0 < liq < min_liq:
         w = 0.16 if liq < min_liq * 0.6 else 0.10
         score += w
@@ -1092,11 +1092,11 @@ def analyze_microstructure(mint: str, pair_data: dict, cohort: List[dict]) -> di
                          "text": f"v/l = {vol_to_liq:.1f}x — шторм сделок при малой глубине"})
 
     # e) Монета ещё в окне запуска (дев может дёрнуть ликвидность в любую секунду)
-    min_age = float(_cfg("FCR_MIN_AGE_MIN", 12.0))
+    min_age = float(_cfg("FCR_MIN_AGE_MIN", 1.5))
     if 0 < age_min < min_age:
         score += 0.10
         sigs.append({"key": "too_young", "weight": 0.10,
-                     "text": f"монета молодая: {age_min:.1f} мин (< {min_age:.0f}) — дев ещё может дёрнуть"})
+                     "text": f"монета молодая: {age_min:.1f} мин (< {min_age:.1f}) — дев ещё может дёрнуть"})
 
     # f) FDV >> ликвидности
     if fdv > 0 and liq > 0:
