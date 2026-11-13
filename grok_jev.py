@@ -1762,6 +1762,24 @@ class GrokJevEngine:
                 else:
                     return False, f"auditor-pending: holder report not ready yet ({e}), wait for verification", _h_stats
 
+            # Д) FIRST-CANDLE RUG GUARD: анализ когорты кошельков ДО входа.
+            # Ищем кластеры «одного источника финансирования»: сколько кошельков
+            # профинансировано одним адресом и сколько % эмиссии они держат.
+            if getattr(_c, "FCR_ENABLED", True):
+                try:
+                    from first_candle_rug_guard import pre_entry_rug_check, compact_summary
+                    _fcr = await pre_entry_rug_check(address, pair_data=pair_data, symbol=symbol)
+                    _fcr_compact = compact_summary(_fcr)
+                    if _fcr.get("verdict") == "BLOCK":
+                        print(f"🚫 [FCR-BLOCK] {symbol} ({address[:8]}): {_fcr.get('report', '')}")
+                        return False, "fcr-first-candle-rug: " + "; ".join(_fcr.get("reasons", [])[:3]), _h_stats
+                    if _fcr.get("verdict") == "WARN":
+                        print(f"⚠️ [FCR-WARN] {symbol} ({address[:8]}): {_fcr.get('report', '')}")
+                    _fcr_feat = dict(_fcr_compact or {})
+                except Exception as _fcr_e:
+                    print(f"⚠️ [FCR] {symbol} ({address[:8]}): {type(_fcr_e).__name__} — fail-open (вход разрешён).")
+                    _fcr_feat = {}
+
             # Г) Двухсторонняя симуляция (BUY + SELL) через Jupiter
             # ЖЕСТКАЯ ЗАЩИТА: токен ОБЯЗАН успешно проходить и покупку, и продажу!
             # Никаких поблажек для pump.fun (кейс LAUNCH / RICK / CRACKED — без обратного маршрута вход ЗАПРЕЩЕН)
@@ -2062,7 +2080,7 @@ class GrokJevEngine:
             stop_under_wick=wick_price,
             wick_stop_loss_pct=wick_pct,
             ml_confidence=rkt_final,
-            ml_features=_entry_features(pair, _h_stats, jev_data)
+            ml_features={**_entry_features(pair, _h_stats, jev_data), **_fcr_feat}
         )
 
         FUNNEL_STATS["filled"] += 1

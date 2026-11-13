@@ -1535,8 +1535,27 @@ async def scanner_loop(analyzer, tracker):
                                     except Exception as _e:
                                         print(f"⚠️ [SCANNER PRE-FLIGHT RUG-WALLET] {actual_symbol} ({mint[:8]}): audit error {type(_e).__name__} — вход разрешён (fail-open).")
 
+                                # PRE-FLIGHT FIRST-CANDLE RUG GUARD: ловит мгновенный раг первой свечи.
+                                # Анализирует когорту кошельков, ищет кластеры «одного источника
+                                # финансирования» (сколько кошельков, сколько % эмиссии они держат).
+                                if getattr(config, "FCR_ENABLED", True):
+                                    try:
+                                        from first_candle_rug_guard import pre_entry_rug_check
+                                        _fcr = await pre_entry_rug_check(mint, pair_data=pair_data, symbol=actual_symbol)
+                                        _fcr_compact = pre_entry_rug_guard.compact_summary(_fcr)
+                                        if _fcr.get("verdict") == "BLOCK":
+                                            print(f"🚫 [SCANNER PRE-FLIGHT FCR] {actual_symbol} ({mint[:8]}): {_fcr.get('report', '')} — вход заблокирован первоочередно по мгновенному рагу!")
+                                            continue
+                                        if _fcr.get("verdict") == "WARN":
+                                            print(f"⚠️ [SCANNER PRE-FLIGHT FCR] {actual_symbol} ({mint[:8]}): {_fcr.get('report', '')}")
+                                        # Сохраняем сводку в фичи позиции: дашборд / лог сделок.
+                                        _fcr_feat = dict(_fcr_compact or {})
+                                    except Exception as _e:
+                                        print(f"⚠️ [SCANNER PRE-FLIGHT FCR] {actual_symbol} ({mint[:8]}): error {type(_e).__name__} — вход разрешён (fail-open).")
+                                        _fcr_feat = {}
+
                                 tracker.add_position(actual_symbol, mint, entry_price, position_size, is_mature=True,
-                                                     ml_features=analyzer.pack_features(pair_data),
+                                                     ml_features={**analyzer.pack_features(pair_data), **_fcr_feat},
                                                      ml_confidence=_final_sc_conf,
                                                      source=f"SCANNER:{analyzer.get_signal(mint)}",
                                                      pair_address=pair_data.get("pairAddress", ""),
@@ -2976,6 +2995,9 @@ def _render_tab1_content():
                             <div style='margin-top: 6px; font-size: 0.75em; color: #888;'>🔖 {row.get('source', '') if str(row.get('source', '')).strip() else '—'} {chain_badge(row.get('chain', 'solana'), True)}</div>
                             <div style='margin-top: 6px; font-size: 0.85em; color: #DDD;'>{_size_html}</div>
                             {_updated_badge}
+                            <div style='margin-top: 6px; font-size: 0.78em;'><span style='color:#888;'>🔍 FCR (First-Candle-Rug): </span>
+                            {str(row.get('ml_features') or {}).get('fcr_verdict') if isinstance(row.get('ml_features'), dict) else ''}
+                            </div>
                             <div style='display: flex; justify-content: space-between; margin-top: 8px; font-size: 0.85em; color: #BBB;'>
                                 <div><span style='color:#888;'>Вход:</span><br>${row['entry_price_usd']:.8f}</div>
                                 <div><span style='color:#888;'>Сейчас:</span><br>${row['current_price_usd']:.8f}</div>
