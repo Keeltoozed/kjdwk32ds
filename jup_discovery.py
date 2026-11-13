@@ -428,9 +428,17 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
         print(f"🚫 [{source_tag}-FAKE-PUMPSWAP] {_sym_tmp} ({mint[:8]}): кастомный токен на PumpSwap без окончания pump — фальшивый пул с Remove LP!")
         return False
 
-    _is_meteora_dyn = _dex_j in ("meteora", "meteoradbc", "meteoradlmm", "meteoradyn2")
+    # Meteora Dynamic Pools (DYN2, DAMM, DLMM) — дев ВСЕГДА может сделать Remove LP независимо от lock%!
+    # Залоченный LP не означает защиту: "Remove LP" работает через смарт-контракт пула, минуя локер.
+    # Кейсы: HI (-99.99% за 4м), FLY (-99.99% за 6м) — оба Meteora DYN2.
+    # ИСКЛЮЧЕНИЕ: канонический pump.fun токен (...pump) — LP там реально сожжён навсегда протоколом pump.fun.
+    if _dex_j in ("meteora", "meteoradbc", "meteoradlmm", "meteoradyn2", "meteoradamm") and not mint.endswith("pump"):
+        print(f"🚫 [{source_tag}-METEORA-RUG] {_sym_tmp} ({mint[:8]}): кастомный не-pump токен на Meteora DYN2 — дев выдёргивает LP одной tx (кейсы HI/FLY -99.99%)!")
+        return False
+
+    _is_meteora_dyn = False  # уже заблокировали выше, дальнейший LP-чек только для не-pump/не-meteora токенов
     _skip_lp_check = mint.endswith("moon")  # moon токены пропускаем
-    if not _skip_lp_check and (_is_meteora_dyn or (not mint.endswith("pump") and not _is_grad_jup)):
+    if not _skip_lp_check and (not mint.endswith("pump") and not _is_grad_jup):
         try:
             import goplus as _gp_jup
             _rc_st, _rc_d = await _gp_jup.fetch_rugcheck_report_cached(mint, ttl=120.0, timeout=5)

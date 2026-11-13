@@ -1233,6 +1233,10 @@ async def scanner_loop(analyzer, tracker):
                                 if _dex_id == "pumpswap" and not mint.endswith("pump"):
                                     print(f"🚫 [SCANNER-FAKE-PUMPSWAP] {actual_symbol} ({mint[:8]}): кастомный не-pump токен на PumpSwap — риск Remove LP!")
                                     continue
+                                # Meteora DYN2 — дев выдёргивает LP одной tx независимо от lock% (HI -99.99%, FLY -99.99%)
+                                if _dex_id in ("meteora", "meteoradbc", "meteoradlmm", "meteoradyn2", "meteoradamm") and not mint.endswith("pump"):
+                                    print(f"🚫 [SCANNER-METEORA-RUG] {actual_symbol} ({mint[:8]}): кастомный не-pump токен на Meteora DYN2 — блок Remove LP рага!")
+                                    continue
                                 _pc_live = pair_data.get("priceChange") or {}
                                 _m5_live = float(_pc_live.get("m5", 0) or 0)
                                 _m1_live = float(_pc_live.get("m1", 0) or 0)

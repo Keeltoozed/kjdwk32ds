@@ -2032,6 +2032,13 @@ class Analyzer:
             if dex_id_low == "pumpswap" and not mint.endswith("pump"):
                 return self._deny(mint, "fake-pumpswap-unlocked-lp", f"🚫 [FAKE-PUMPSWAP] {symbol} ({mint[:8]}): кастомный не-pump токен на PumpSwap — незалоченный LP дева, риск мгновенного Remove LP!")
 
+            # Meteora Dynamic Pools (DYN2, DAMM, DLMM) — дев ВСЕГДА может сделать Remove LP независимо от lock%!
+            # Факт: в интерфейсе Meteora "Lock LP" не запрещает "Remove LP" через смарт-контракт пула.
+            # Кейсы: HI (-99.99% за 4м), FLY (-99.99% за 6м) — оба Meteora DYN2 с видимым "Remove" в транзакциях.
+            # ЕДИНСТВЕННОЕ исключение: канонический pump.fun токен (...pump) мигрировавший на Meteora — LP там сожжён навсегда протоколом pump.fun.
+            if dex_id_low in ("meteora", "meteoradlmm", "meteoradyn2", "meteoradamm") and not mint.endswith("pump"):
+                return self._deny(mint, "meteora-dyn2-remove-lp", f"🚫 [METEORA-RUG] {symbol} ({mint[:8]}): кастомный не-pump токен на Meteora DYN2 — дев выдёргивает LP одной tx (кейсы HI/FLY -99.99%)!")
+
             # Защита от фантомных пулов с мизерным остатком реального SOL
             _quote_info = pair_data.get("liquidity", {}) or {}
             _quote_amt = float(_quote_info.get("quote", 0) or 0)

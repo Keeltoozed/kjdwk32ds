@@ -1533,6 +1533,12 @@ class GrokJevEngine:
             _dex_low_jev = str(pair_data.get("dexId") or "").lower()
             if _dex_low_jev == "pumpswap" and not address.endswith("pump"):
                 return False, "fake-pumpswap-unlocked-lp (кастомный не-pump токен на PumpSwap с риском Remove LP)", _h_stats
+            # Meteora Dynamic Pools (DYN2, DAMM V2, DLMM) — дев ВСЕГДА может сделать Remove LP,
+            # вне зависимости от процента залога (locked/burned не означает защиту от Remove LP!).
+            # HI (-99.99%), FLY (-99.99%) — оба Meteora DYN2 с видимым "Remove" в транзакциях.
+            # ЕДИНСТВЕННОЕ исключение: канонический pump.fun токен (mint.endswith("pump")) на Meteora — там LP сожжён навсегда протоколом.
+            if _dex_low_jev in ("meteora", "meteoradlmm", "meteoradyn2", "meteoradamm") and not address.endswith("pump"):
+                return False, "meteora-dyn2-remove-lp-risk (кастомный не-pump токен на Meteora — дев выдёргивает LP одной tx, кейсы HI/FLY -99.99%)", _h_stats
             is_canonical_pump = address.endswith("pump") or (is_raw_pump_curve and _dex_low_jev in ("pump", "pumpfun"))
             if not is_canonical_pump and (rc_status_pre != 200 or not isinstance(rc_data_pre, dict)):
                 _raw_l_pre = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
