@@ -86,7 +86,7 @@ MAX_PUMP_CURVE_MCAP_SOL = 350.0           # Верх кривой перед м�
 PUMP_MIGRATION_MCAP_SOL = 410.0           # FDV миграции pump.fun (~410 SOL = ~$35k при SOL $85)
 PUMP_DUMP_FLOOR_SOL = 160.0               # Порог post-mig-dumped (~40% миграции = 160 SOL, разрешает Dip Reclaim)
 JEV_MAX_TICKET_USD = 0.0
-MIN_GRADUATED_LIQ_USD = 20000.0          # На DEX минимум $20k реальной ликвидности — отсекает дампы $14k пулов (кейс MIBULL $14.4k → $1.7k)
+MIN_GRADUATED_LIQ_USD = 10000.0          # На DEX минимум $10k реальной ликвидности — пускает свежие миграции $11k-$18k (AI, AMD, HOUSE, SCAT, BELIEVE) и отсекает микро-пулы <$10k
 AUDITOR_STAIRCASE_ENABLED = True
 AUDITOR_MAX_DEV_PCT = 6.0
 AUDITOR_MAX_TOP10_PCT = 32.0
@@ -143,9 +143,9 @@ MOONBAG_MAX_HOLD_MIN = 90.0          # Мунбэг может ехать до 9
 PUMP_XGB_ENABLED = False
 RAY_XGB_ENABLED = False
 ROCKET_XGB_ENABLED = True
-ROCKET_XGB_STAGE1_THRESHOLD = 22.0   # Первичный отсев 22% (отсекает конкретный шлак)
-ROCKET_XGB_FINAL_THRESHOLD = 28.0    # Финальный порог 28%: только уверенные ракеты — снижает кол-во помоек
-ROCKET_XGB_THRESHOLD = 28.0
+ROCKET_XGB_STAGE1_THRESHOLD = 12.0   # Первичный отсев 12%: пускает BELIEVE (+555%), FLC (+736%), REVIVE (+264%)
+ROCKET_XGB_FINAL_THRESHOLD = 20.0    # Финальный порог 20%: отсекает откровенный мусор, но ловит ракеты
+ROCKET_XGB_THRESHOLD = 20.0
 
 STALL_TIMER_SEC = 240.0   # 4 минуты на консолидацию стоячего минуса
 STALL_MAX_LOSS_PCT = -0.090
@@ -174,7 +174,7 @@ STAGNANT_LOSS_MIN_FAST = 7.0
 STAGNANT_HOLD_MIN = 12.0
 
 AI_MODE = "degen"
-MIN_LIQUIDITY = 20000.0         # Минимум $20,000 ликвидности — отсекает помойки с $8-15k лика (кейс konnichiwa $15k → rug)
+MIN_LIQUIDITY = 10000.0         # Минимум $10,000 ликвидности — пускает ранние ракеты $11k-$18k и отсекает микро-пулы
 MAX_LIQUIDITY = 50000000
 
 GROQ_API_KEY = (os.getenv("GROQ_API_KEY") or os.getenv("GROK_API_KEY") or os.getenv("XAI_API_KEY") or "").strip().strip('"').strip("'")
@@ -187,7 +187,7 @@ JEV_WICK_STOP_ENABLED = False
 JEV_EARLY_MIN_AGE_MIN = 0.25    # Сверхбыстрый вход в горячие ракеты с объемом от 15 секунд
 JEV_MIN_AGE_MIN = 0.35          # Базовый карантин от 20 секунд (не срезаем TWAP 0.4m)
 JEV_MAX_AGE_MIN = 60.0          # Свежие монеты до 60м (защита от зомби-монет GIGAHUG/INVEST)
-JEV_MIN_LIQUIDITY_USD = 20000.0  # Минимум $20k ликвидности — реальные ракеты всегда имеют $20k+ лика (GREG, BERNIAO, COLONY)
+JEV_MIN_LIQUIDITY_USD = 10000.0  # Минимум $10k ликвидности — пускает ранние ракеты (AI, AMD, HOUSE, SCAT)
 JEV_MAX_LIQUIDITY_USD = 220000.0
 JEV_MIN_VOLUME_H1 = 8000.0
 JEV_MIN_MCAP_USD = 5000.0      # Минимум $5k MCap (ловит ранние Raydium/PumpSwap ракеты вроде FOMO $8.1k, ICC $8.1k)

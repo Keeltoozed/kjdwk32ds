@@ -62,9 +62,6 @@ class MatureExitManager:
         # =========================================================================
         # 0. МГНОВЕННЫЙ СБРОС ПРИ ДАМПЕ ПУЛА / ВЫВОДЕ ЛИКВИДНОСТИ (0ms Liquidity Shield)
         # =========================================================================
-        # КЕЙС JENSENHAO: лика $33K → $1.9K (−94%) за 37 минут, бот вышел с -99.99%.
-        # DexScreener обновляет лику с задержкой 10-15с, поэтому срабатывать нужно при -40% (не -35%),
-        # а для незалоченных LP (PumpSwap/non-burned) ещё жёстче — при -30% слива пула!
         _pd_chk = getattr(position, "pair_data", None) or getattr(position, "last_pair_data", None) or {}
         if isinstance(_pd_chk, dict) and _pd_chk:
             _cur_l = float(((_pd_chk.get("liquidity") or {}).get("usd", 0) or 0))
@@ -75,12 +72,9 @@ class MatureExitManager:
             # Абсолютная потеря ликвидности (вывод пула девом в 0):
             if (_peak_l >= 1000.0 and _cur_l <= 200.0) or (_peak_l >= 3000.0 and _cur_l < (_peak_l * 0.20)):
                 return f"Absolute Liquidity Loss (Liq dropped to ${_cur_l:.0f} from ${_peak_l:.0f})"
-            # Ранний срез: лика упала > 40% от пика — дев начинает выводить LP (кейс JENSENHAO)
-            elif _peak_l >= 3000.0 and _cur_l < (_peak_l * 0.60):
-                return f"Early Liquidity Drop Escape -40% (Liq dropped to ${_cur_l:.0f} from ${_peak_l:.0f})"
-            # Сверхранний срез: лика упала > 25% от пика И позиция в убытке — явный слив пула
-            elif _peak_l >= 5000.0 and _cur_l < (_peak_l * 0.75) and pnl_pct <= -0.05:
-                return f"Early Liquidity Drain -25% (Liq dropped to ${_cur_l:.0f} from ${_peak_l:.0f}, PnL {pnl_pct*100:.1f}%)"
+            # Ранний срез вывода ликвидности девом (>35% просадки пула) — спасаем деньги ДО полного слива:
+            elif _peak_l >= 3000.0 and _cur_l < (_peak_l * 0.65):
+                return f"Early Liquidity Drop Escape (Liq dropped to ${_cur_l:.0f} from ${_peak_l:.0f})"
             else:
                 position._liq_drop_streak_em = 0
 
@@ -249,11 +243,14 @@ class MatureExitManager:
                 return f"Front-Run Profit Exit: Sellers dominating ({b5}b/{s5}s) while in profit (+{pnl_pct*100:.1f}%)"
 
         # =========================================================================
-        # 5. MAX HOLD TIMEOUT (УДЕРЖАНИЕ ДО 35-45 МИНУТ ДЛЯ РАСКРУТКИ ТРЕНДА)
+        # 5. MAX HOLD TIMEOUT (УДЕРЖАНИЕ ДО 28 МИНУТ — ВЫХОД ДО РАГА НА 40-Й МИНУТЕ)
         # =========================================================================
-        _mb_max_hold = float(getattr(config, "MOONBAG_MAX_HOLD_MIN", 90.0)) if _is_mb else 45.0
-        if not _is_mb and minutes_held >= 35.0 and pnl_pct >= 0.05 and _peak_age_min >= 15.0:
-            return f"Max Hold Profit Take (+{pnl_pct*100:.1f}% locked at {minutes_held:.0f}m)"
+        # Ракеты разгоняются в первые 3-25 минут. Монеты, которые рагаются, обычно выдергивают ликву на 35-45 минуте.
+        # Выходим по таймауту на 28 минуте (или на 20-22 минуте при застревании без ATH),
+        # забирая прибыль ДО того как дев выдернет ликвидность!
+        _mb_max_hold = float(getattr(config, "MOONBAG_MAX_HOLD_MIN", 90.0)) if _is_mb else 28.0
+        if not _is_mb and minutes_held >= 20.0 and pnl_pct >= 0.05 and _peak_age_min >= 8.0:
+            return f"Max Hold Profit Take (+{pnl_pct*100:.1f}% locked at {minutes_held:.0f}m, {_peak_age_min:.0f}m no ATH)"
         if _is_mb and minutes_held >= 60.0 and _peak_age_min >= 25.0:
             return f"Moonbag Max Hold Take ({pnl_pct*100:+.1f}% at {minutes_held:.0f}m, {_peak_age_min:.0f}m no ATH)"
         if minutes_held >= _mb_max_hold:
@@ -267,12 +264,6 @@ class MatureExitManager:
         if not _is_mb and minutes_held >= 6.0 and max_pnl_pct < 0.20 and _peak_age_min >= 4.5:
             _sign = "+" if pnl_pct >= 0 else ""
             return f"Stalled Momentum Escape ({_sign}{pnl_pct*100:.1f}%, no ATH {_peak_age_min:.0f}m at {minutes_held:.0f}m)"
-
-        # Защита от слива после локального пампа (кейс JENSENHAO: пик +43%, затем 37 минут сползания в -99%):
-        # Если монета брала +20%..+80% пика, но нового ATH нет уже 7+ минут, и прибыль почти растеряна (pnl <= +2%):
-        # фиксируем выход в безубыток/микро-плюс, не дожидаясь стоп-лосса или рага!
-        if not _is_mb and 0.20 <= max_pnl_pct < 0.80 and _peak_age_min >= 7.0 and pnl_pct <= 0.02:
-            return f"Faded Pump Breakeven Escape ({pnl_pct*100:+.1f}%, peak +{max_pnl_pct*100:.0f}% was {_peak_age_min:.0f}m ago)"
 
         _stall_sec = float(getattr(config, "STALL_TIMER_SEC", 240.0))
         _stall_loss = float(getattr(config, "STALL_MAX_LOSS_PCT", -0.090))

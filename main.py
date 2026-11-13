@@ -303,22 +303,15 @@ async def position_manager_loop(analyzer, tracker):
                     _pnl_str = f"{pnl_pct*100:+.1f}%" if position.entry_price_usd > 0 else "0%"
                     print(f"🛡️ [TRACK] {position.symbol} ({mint[:8]}): цена ${current_price:.8f} ({_pnl_str}) | пик: ${position.max_price_usd:.8f} | держим {minutes_held:.1f}м", flush=True)
 
-                # Периодически обновляем живую ликвидность пула и сделки.
-                # JENSENHAO урок: LP rug снимает лику за 1 транзакцию — нужен быстрый мониторинг!
-                # Нормально: каждые 12с. При убытке или подозрении на слив лики — каждые 2с.
+                # Периодически обновляем живую ликвидность пула и сделки (каждые 8 сек или при просадке <= -4% каждые 2.5 сек)
                 _last_pd_ts = float(getattr(position, "last_pair_data_ts", 0.0) or 0.0)
                 _now_t = time.time()
-                _init_liq_chk = float(getattr(position, "initial_liquidity_usd", 0.0) or 0.0)
-                _peak_liq_chk = float(getattr(position, "peak_liquidity_usd", 0.0) or _init_liq_chk)
-                _last_liq_chk = float((((getattr(position, "pair_data", None) or getattr(position, "last_pair_data", None) or {}).get("liquidity") or {}).get("usd", 0) or 0))
-                # Быстрое обновление если лика уже начала падать (> 10% слива от пика) — ловим LP rug заранее!
-                _liq_draining = _peak_liq_chk >= 3000.0 and _last_liq_chk > 0 and _last_liq_chk < (_peak_liq_chk * 0.90)
-                _refresh_interval = 2.0 if (_liq_draining or pnl_pct <= -0.06) else 12.0
+                _refresh_interval = 2.5 if pnl_pct <= -0.04 else 8.0
                 if (_now_t - _last_pd_ts) >= _refresh_interval:
                     try:
                         import market_data as _md
                         _cached_td = getattr(_md, "_TD_CACHE", {}).get(mint)
-                        if _cached_td and isinstance(_cached_td[1], dict) and (time.monotonic() - _cached_td[0]) < 15.0:
+                        if _cached_td and isinstance(_cached_td[1], dict) and (time.monotonic() - _cached_td[0]) < 8.0:
                             _live_pd = _cached_td[1]
                         else:
                             _live_pd = await asyncio.wait_for(_md.get_token_data(mint, max_cache_age=4.0), timeout=0.8)
@@ -1186,9 +1179,6 @@ async def scanner_loop(analyzer, tracker):
                                     print(f"🚫 [SCANNER-PRICE-SPLIT] {actual_symbol} ({mint[:8]}): рассинхрон пулов {_div_r:.1f}x — блок.")
                                     continue
                                 _dex_id = str((pair_data.get("dexId") or "")).lower()
-                                if _dex_id == "pumpswap" and not mint.endswith("pump"):
-                                    print(f"🚫 [SCANNER-FAKE-PUMPSWAP] {actual_symbol} ({mint[:8]}): кастомный не-pump токен на PumpSwap — 100% вывод ликвидности девом (кейс plumber), отмена!")
-                                    continue
                                 if _dex_id in ("pump", "pumpfun", "moonshot", "meteoradbc") or mint.endswith("moon"):
                                     _fdv_m_sc = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
                                     _min_c_sc = float(getattr(config, "MIN_PUMP_CURVE_MCAP_USD", 7500.0))
@@ -1217,13 +1207,6 @@ async def scanner_loop(analyzer, tracker):
                                 # Повторная проверка живых метрик после сброса prefetch-кэша (защита от реального разворота вниз)
                                 if _m5_live < 1.0 or _m1_live < -4.5:
                                     print(f"🚫 [SCANNER-LIVE-REVERSAL] {actual_symbol} ({mint[:8]}): на живом графике импульс сломан (m5 {_m5_live:+.1f}%, m1 {_m1_live:+.1f}%) — отмена покупки!")
-                                    continue
-                                # POST-PEAK DUMP GUARD: монета летела вверх (h1 > 30%) но m5 уже падает —
-                                # классика AMC (h1=+95%, m5=-37%), DID (h1=+39%, m5=-50%). У настоящих ракет
-                                # (SWEATER, MUSTACHE, 1JENSEN) m5 всегда позитивный даже при высоком h1.
-                                # ТОЛЬКО m5 < 0% блокируем. m5=+2% при h1=+147% — MUSTACHE, нормально!
-                                if _m5_live < 0.0 and _h1_live >= 30.0:
-                                    print(f"🚫 [SCANNER-POST-PEAK] {actual_symbol} ({mint[:8]}): пик уже прошёл — h1 {_h1_live:+.0f}% но m5 {_m5_live:+.1f}% (дамп после пика) — отмена!")
                                     continue
                                 _max_m1_cfg_live = float(getattr(config, "MAX_ENTRY_M1_PCT", 28.0))
                                 if _m1_live > _max_m1_cfg_live and _age_m >= 3.0:

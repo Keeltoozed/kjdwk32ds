@@ -112,7 +112,7 @@ def score_token_with_rocket_xgb(mint: str, pair_data: dict, holders_info: dict =
             else:
                 _age_min = 999.0
         _dex_low = str(pair_data.get("dexId", "")).lower()
-        _is_pump = 1 if (str(mint).endswith("pump") or _dex_low in ("pump", "pumpfun")) else 0
+        _is_pump = 1 if (str(mint).endswith("pump") or _dex_low in ("pump", "pumpfun", "pumpswap")) else 0
 
         raw_liq = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
         fdv_val = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
@@ -1746,7 +1746,7 @@ class Analyzer:
         _info_pre = pair_data.get("info") or {}
         _has_soc_pre = bool((_info_pre.get("socials") or []) or (_info_pre.get("websites") or []))
         _raw_liq_chk = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
-        _is_burned_launchpad = mint.endswith(("pump", "bonk", "BAGS")) or (_dex_pre_early == "pumpswap" and mint.endswith("pump"))
+        _is_burned_launchpad = mint.endswith(("pump", "bonk", "BAGS")) or _dex_pre_early == "pumpswap"
         _tot_tx5_pre = _b5_pre + _s5_pre
         _avg_tx_pre = (_vm5_pre / _tot_tx5_pre) if _tot_tx5_pre > 0 else 0.0
         _is_real_bump_runner = (
@@ -2026,9 +2026,9 @@ class Analyzer:
                 if _v2l_a > 2.6 and _bs_a < 1.5 and not _is_organic_trades:
                     return self._deny(mint, f"anon-wash-churn {_v2l_a:.1f}x", f"🚫 [WASH-TRAP] {symbol} ({mint[:8]}): 0 соцсетей, liq ${raw_liq:,.0f}, оборот 5м {_v2l_a:.1f}x пула (b/s {_bs_a:.2f}, avg ${_avg_tx5_a:.0f}) — анонимный wash-дамп!")
 
-            # Блок кастомных не-pump токенов на PumpSwap с микропулом
-            if dex_id_low == "pumpswap" and not mint.endswith("pump"):
-                return self._deny(mint, "fake-pumpswap-unlocked-lp", f"🚫 [FAKE-PUMPSWAP] {symbol} ({mint[:8]}): кастомный не-pump токен на PumpSwap — 100% скам с выводом ликвидности девом (кейс plumber 904 SOL pull)!")
+            # Блок кастомных не-pump токенов на PumpSwap с микропулом (< $10k)
+            if dex_id_low == "pumpswap" and not mint.endswith("pump") and raw_liq < 10000.0:
+                return self._deny(mint, "fake-pumpswap-unlocked-lp", f"🚫 [FAKE-PUMPSWAP] {symbol} ({mint[:8]}): кастомный токен на PumpSwap с микропулом (${raw_liq:.0f} < $10k) — блок!")
 
             # Защита от фантомных пулов с мизерным остатком реального SOL
             _quote_info = pair_data.get("liquidity", {}) or {}
@@ -2143,13 +2143,21 @@ class Analyzer:
                                 print(f"ℹ️ [RUGCHECK-LP] {symbol} ({mint[:8]}): LP lock {_m_lp_locked_pct:.1f}%, burn {_m_lp_burned_pct:.1f}%, unl ${_m_unl:,.0f}.")
 
                     # Токены Pump.fun защищены смарт-контрактом программы pump.fun (LP дев вытащить не может).
-                    # НО кастомные пулы (Raydium / Meteora) без 100% заблокированного/сожженного LP — это 100% рагпулы девов!
+                    # Для кастомных пулов (Raydium / Meteora / PumpSwap) без залоченного LP:
+                    # По стратегии ракет пускаем монеты с достаточной ликвидностью ($10k+) и объемом ($2k+),
+                    # так как мы выходим по таймауту/трейлингу задолго до 40-минутного рага дева!
                     if not _is_canonical_pump and not has_verified_locked_lp:
-                        return self._deny(
-                            mint,
-                            "unlocked-custom-lp",
-                            f"🚫 [АНТИСКАМ-LP] {symbol} ({mint[:8]}): кастомный не-pump токен с незаблокированным LP — гарантированный вывод ликвидности девом (кейсы OldCat/Dacity/BRR/TI)!"
-                        )
+                        _vm5_a = float(((pair_data.get("volume") or {}).get("m5", 0) or 0))
+                        _tx_a = ((pair_data.get("txns") or {}).get("m5") or {})
+                        _b5_a = int(_tx_a.get("buys", 0) or 0)
+                        _s5_a = int(_tx_a.get("sells", 0) or 0)
+                        if raw_liq < 10000.0 or _vm5_a < 2000.0 or (_s5_a > 0 and (_b5_a / _s5_a) < 1.02):
+                            return self._deny(
+                                mint,
+                                "unlocked-custom-lp",
+                                f"🚫 [АНТИСКАМ-LP] {symbol} ({mint[:8]}): кастомный незалоченный LP с низкой ликвидностью/объемом (${raw_liq:.0f}, vol ${_vm5_a:.0f}) — отсев."
+                            )
+                        print(f"💎 [ANALYZER-UNLOCKED-RUNNER] {symbol} ({mint[:8]}): кастомный незалоченный LP допущен (liq ${raw_liq:,.0f}, vol ${_vm5_a:,.0f}, {_b5_a}b/{_s5_a}s) — контроль по таймауту выхода!")
 
                     # Проверка холдеров RugCheck
                     top_holders = rc_data.get("topHolders") or []
@@ -2311,8 +2319,7 @@ class Analyzer:
                     pass
             except Exception as e:
                 print(f"⚠️ Ошибка проверки безопасности ({e})")
-                if not _is_pump_flag:
-                    return False
+                return self._deny(mint, "security-audit-failed", f"🚫 [АНТИСКАМ] Ошибка аудита безопасности ({e}) — блок входа.")
 
             # 4. Финальная проверка минутных свечей (защита от водопада в моменте)
             if not await self.verify_1m_candles_not_dumping(mint, pair_data, "solana"):
@@ -2607,8 +2614,8 @@ class Analyzer:
         # БЛОК КАСТОМНЫХ ФЕЙК-ПУЛОВ НА PUMPSWAP:
         # Блокируем только микро-пулы скамеров (< $6,000 ликвидности),
         # но НЕ режем органические ракеты с реальной ликвой (10/29 +114%, AISI +222%, GTA AI +205%, PODCAT +196%, GANG +176%, CPU +118%)
-        if dex_id == "pumpswap" and not mint.endswith("pump"):
-            return self._deny(mint, "fake-pumpswap-unlocked-lp", f"🚫 [FAKE-PUMPSWAP] {symbol} ({mint[:8]}): кастомный не-pump контракт на PumpSwap — 100% скам с выводом ликвидности девом (кейс plumber 904 SOL pull)!")
+        if dex_id == "pumpswap" and not mint.endswith("pump") and liquidity < 6000.0:
+            return self._deny(mint, "fake-pumpswap-unlocked-lp", f"🚫 [FAKE-PUMPSWAP] {symbol} ({mint[:8]}): кастомный не-pump контракт на PumpSwap с микро-пулом (${liquidity:.0f} < $6k) — блок!")
 
         if liquidity < _min_liq:
             print(f"📉 Изоляция: {symbol} имеет микро-пул (${liquidity:.0f} < ${_min_liq//1000}k). Риск 100% проскальзывания.")
@@ -2872,31 +2879,14 @@ class Analyzer:
                             return False
                         print(f"🛡️ [GOPLUS] RugCheck недоступен, но GoPlus подтвердил безопасность {mint[:8]} (Топ-10: {self._last_top10:.1f}%, Дев: {self._last_dev:.1f}%).")
                     else:
-                        if not _is_pump_mint:
-                            print(f"🚫 [NO-AUDIT] {symbol} ({mint[:8]}): Ни RugCheck, ни GoPlus не имеют данных холдеров — блок входа по безопасности.")
-                            return False
-                        print(f"🛡️ [GOPLUS] RugCheck недоступен, GoPlus подтвердил отсутствие ловушек у {mint[:8]} (Pump.fun кривая).")
+                        print(f"🚫 [NO-AUDIT] {symbol} ({mint[:8]}): Ни RugCheck, ни GoPlus не имеют данных холдеров — блок входа (ожидание индексации).")
+                        return False
                 except Exception as _ge:
                     print(f"⚠️ Не удалось проверить через RugCheck и GoPlus ({_ge}). Блокируем вход.")
                     return False
         except Exception as e:
             print(f"⚠️ Ошибка RugCheck ({str(e)[:50]}). Fail-Closed для защиты от рагпула.")
-            if not _is_pump_mint:
-                return False
-            try:
-                import goplus as _gp
-                _g_ok, _g_why = await _gp.check_solana(mint)
-                if not _g_ok:
-                    return False
-                _h_stats = _gp.get_solana_holder_stats(mint)
-                if not _h_stats.get("has_data"):
-                    return False
-                self._last_top10 = _h_stats.get("top_10_pct", 0.0)
-                self._last_dev = _h_stats.get("dev_pct", 0.0)
-                if self._last_dev > 10.0 or self._last_top10 > 35.0:
-                    return False
-            except Exception:
-                return False
+            return False
         except Exception as e:
             print(f"⚠️ Ошибка Jito-bundle: {e}")
             return False
@@ -3256,7 +3246,7 @@ class Analyzer:
                 pass
             if _bt_age is not None:
                 _age_min = float(_bt_age)
-            elif str(address).endswith("pump") or str(pair_data.get("dexId", "")).lower() in ("pump", "pumpfun"):
+            elif str(address).endswith("pump") or str(pair_data.get("dexId", "")).lower() in ("pump", "pumpfun", "pumpswap"):
                 _age_min = 0.1
             else:
                 _age_min = 999.0
@@ -4035,7 +4025,7 @@ class Analyzer:
         if _m1 > 35.0:
             return self._deny(mint, "fomo-exhaustion", f"🚫 [EXHAUSTION] {mint[:8]}: 1m свеча +{_m1:.1f}% > 35% перегрета — ждём отката (bid the flush).")
 
-        _is_pump = 1 if (mint.endswith("pump") or _dex_low in ("pump", "pumpfun")) else 0
+        _is_pump = 1 if (mint.endswith("pump") or _dex_low in ("pump", "pumpfun", "pumpswap")) else 0
         _curve_liq = fdv * 0.35 if _is_pump else 0.0
         _eff_liq = max(liquidity, _curve_liq) if _is_pump else liquidity
 

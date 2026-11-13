@@ -379,7 +379,7 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
         print(f"🚫 [{source_tag}-LOW-TXNS] {_sym_tmp} ({mint[:8]}): всего {_tot_tx_j} сделок в m5 (<16) — вялый боковой стакан.")
         return False
     _vol5_j = float(((td or {}).get("volume") or {}).get("m5", 0) or 0)
-    _min_vol_j = 3000.0 if (_b5_j >= int(_s5_j * 1.20) and _age_j <= 10.0) else 5000.0
+    _min_vol_j = 2000.0 if (_b5_j >= int(_s5_j * 1.05) or _age_j <= 15.0) else 4000.0
     if _vol5_j < _min_vol_j:
         print(f"🚫 [{source_tag}-LOW-VOL] {_sym_tmp} ({mint[:8]}): 5м объем ${_vol5_j:,.0f} < ${_min_vol_j:,.0f} — слабый стоячий токен (кейс BRO).")
         return False
@@ -504,13 +504,7 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
     _b5_j = int((((td or {}).get("txns") or {}).get("m5") or {}).get("buys", 0) or 0)
     _s5_j = int((((td or {}).get("txns") or {}).get("m5") or {}).get("sells", 0) or 0)
 
-    # 0. Блок фейковых пулов PumpSwap (кейс plumber $147k -> $0, 904 SOL pull)
-    _dex_j = str(((td or {}).get("dexId", "")) or "").lower()
-    if _dex_j == "pumpswap" and not mint.endswith("pump"):
-        print(f"🚫 [{source_tag}-FAKE-PUMPSWAP] {_sym_tmp}: кастомный не-pump токен на PumpSwap — 100% скам с выводом LP девом (кейс plumber), отмена!")
-        return False
-
-    # 0.1 Защита от падающего ножа (кейс AMC: m5 -37.6% летит вниз)
+    # 0. Защита от падающего ножа (кейс AMC: m5 -37.6% летит вниз)
     if _m5_j < 1.0:
         print(f"🚫 [{source_tag}-DOWNTREND] {_sym_tmp}: m5 {_m5_j:+.1f}% < +1.0% — падающий нож, отмена входа!")
         return False
@@ -521,8 +515,8 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
     # 0.1 Защита от накрутки микро-покупками / wash-trading (кейс AMC: 5370 покупок по $0.15)
     _tot_tx_j = _b5_j + _s5_j
     _avg_tx_j = (_vm5_j / max(1, _tot_tx_j)) if _tot_tx_j > 0 else 0.0
-    if _tot_tx_j >= 50 and _avg_tx_j < 8.0:
-        print(f"🚫 [{source_tag}-WASH-TRADING] {_sym_tmp}: средний чек ${_avg_tx_j:.1f} < $8 (микро-пыль спам-ботов) — отмена!")
+    if _tot_tx_j >= 50 and _avg_tx_j < 4.0:
+        print(f"🚫 [{source_tag}-WASH-TRADING] {_sym_tmp}: средний чек ${_avg_tx_j:.1f} < $4 (микро-пыль спам-ботов) — отмена!")
         return False
     _liq_j = float(((td or {}).get("liquidity") or {}).get("usd", 0) or 0)
 
