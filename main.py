@@ -1296,7 +1296,7 @@ async def scanner_loop(analyzer, tracker):
                                     print(f"🚫 [SCANNER-POST-PEAK] {actual_symbol} ({mint[:8]}): токен слился от пика (цена {_pk_drop_live:+.1f}%, ликва {_lq_drop_live:+.1f}%) — отмена!")
                                     continue
 
-                                _max_age_live = float(getattr(config, "SOLANA_MAX_AGE_MIN", 360.0))
+                                _max_age_live = float(getattr(config, "SOLANA_MAX_AGE_MIN", 720.0))
                                 _vol5_live = float(((pair_data.get("volume") or {}).get("m5", 0) or 0))
                                 _is_active_breakout_live = (
                                     _age_m <= 1440.0

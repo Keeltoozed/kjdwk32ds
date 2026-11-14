@@ -1701,7 +1701,7 @@ class Analyzer:
         _is_early_rocket = (_raw_liq_age >= 12000.0 and _vm5_pre >= 6000.0 and _b5_pre >= 30
                             and _b5_pre >= _s5_pre * 1.30 and _avg_tx_age >= 25.0)
         # СТАЛО (замени строки 543-605 в analyzer.py):
-        _sol_min_age = float(getattr(config, "SOLANA_MIN_AGE_MIN", 2.0))
+        _sol_min_age = float(getattr(config, "SOLANA_MIN_AGE_MIN", 1.0))
         if _age_min_pre < _sol_min_age:
             print(f"⏳ [ENTRY] {mint[:8]}: возраст {_age_min_pre:.1f}м < {_sol_min_age}м — выдерживаем карантин первой свечи.")
             return None
@@ -1784,13 +1784,13 @@ class Analyzer:
                 f"🚫 [WASH-BUMP-TRAP] {symbol} ({mint[:8]}): накрутка микро-ботом ({_tot_tx5_pre} txns, avg ${_avg_tx_pre:.2f} < $4).",
             )
 
-        # 3. ЖЕСТКИЙ ФИЛЬТР ИМПУЛЬСА, СКОРОСТИ ОБОРОТА И ТРЕНДА ДО ROCKET-XGB:
-        _base_v5_cfg = float(getattr(config, "MIN_VOLUME_M5", 7500.0))
-        # Для свежих миграций (<5м) требуем минимум $6,000 и перевес покупателей, для остальных — от $7,500 (полностью отсекает дохлые монеты $1k-$3k)
-        if _age_min_pre <= 5.0 and _b5_pre >= int(_s5_pre * 1.15) and _tot_tx5_pre >= 25:
-            _min_v5_cfg = 6000.0
+        # 3. ФИЛЬТР ИМПУЛЬСА, СКОРОСТИ ОБОРОТА И ТРЕНДА ДО ROCKET-XGB:
+        _base_v5_cfg = float(getattr(config, "MIN_VOLUME_M5", 2000.0))
+        # Для свежих миграций (<5м) требуем минимум $1,500 и перевес покупателей, для остальных — от $2,000
+        if _age_min_pre <= 5.0 and _b5_pre >= _s5_pre and _tot_tx5_pre >= 10:
+            _min_v5_cfg = 1500.0
         else:
-            _min_v5_cfg = max(6500.0, _base_v5_cfg)
+            _min_v5_cfg = _base_v5_cfg
         if _vm5_pre < _min_v5_cfg:
             return self._deny(
                 mint,

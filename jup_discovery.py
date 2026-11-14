@@ -165,7 +165,7 @@ async def fetch_jup_tokens() -> list:
                 _max_pc1h = 2500.0 if (_is_fresh_jup and pc5 >= 2.0 and b5 >= s5) else float(getattr(config, "MAX_ENTRY_H1_PCT", 350.0))
                 if (pc1h > _max_pc1h and age_m > 4.0) or (pc1h < -25.0 and pc5 < 12.0):
                     continue
-                _min_v5_req = 4500.0 if _is_fresh_jup else float(getattr(config, "MIN_VOLUME_M5", 7500.0))
+                _min_v5_req = 800.0 if _is_fresh_jup else float(getattr(config, "MIN_VOLUME_M5", 2000.0))
                 if pc5 < min_pc5 or vol5 < _min_v5_req:
                     continue
                 seen.add(m)
@@ -550,17 +550,15 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
     _age_j = ((time.time() * 1000 - _c_at_j) / 60000.0) if _c_at_j else 30.0
     _max_h1_cfg = float(getattr(config, "MAX_ENTRY_H1_PCT", 350.0))
     _max_m5_cfg = float(getattr(config, "MAX_ENTRY_M5_PCT", 120.0))
-    _max_age_cfg = float(getattr(config, "SOLANA_MAX_AGE_MIN", 60.0))
+    _max_age_cfg = float(getattr(config, "SOLANA_MAX_AGE_MIN", 720.0))
     _req_soc_age = float(getattr(config, "REQUIRE_SOCIALS_MIN_AGE_MIN", 20.0))
     _vm5_j = float(((td or {}).get("volume") or {}).get("m5", 0) or 0)
     _b5_j = int((((td or {}).get("txns") or {}).get("m5") or {}).get("buys", 0) or 0)
     _s5_j = int((((td or {}).get("txns") or {}).get("m5") or {}).get("sells", 0) or 0)
 
-    # 0. ЖЕСТКИЙ КАРАНТИН ПЕРВОЙ СВЕЧИ (минимум 2.0 минуты / 120 секунд):
-    # В первые 90-120 секунд девы и снайперы сливают свои бандлы (кейсы BREASTCOIN, MAYA, DACAT, HANK, AUTISM).
-    # Любой обход по b5 >= 35 был ловушкой, т.к. бандл дева сам генерирует 35+ покупок!
-    # Настоящие ракеты (WILL, UP, WISHMAS, BELIEVE) бегут 15-60+ минут и легко ловятся на 2.5-10м.
-    _min_age_jup = float(getattr(config, "SOLANA_MIN_AGE_MIN", 2.0))
+    # 0. КАРАНТИН БЛОКА 0 (минимум 1.0 минута / 60 секунд со 2-й свечи):
+    # Защищает от снайперских бандлов блока 0, но не задерживает вход со 2-й свечи ракеты.
+    _min_age_jup = float(getattr(config, "SOLANA_MIN_AGE_MIN", 1.0))
     if _age_j < _min_age_jup:
         print(f"⏳ [{source_tag}-AGE-WARMUP] {_sym_tmp}: возраст {_age_j*60:.0f}с < {_min_age_jup*60:.0f}с — карантин 1-й свечи (защита от снайперов и бандл-рага дева)")
         return False

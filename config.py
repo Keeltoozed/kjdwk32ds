@@ -169,10 +169,10 @@ EVM_NORMAL_CRASH = 0.22
 BREAKEVEN_PCT = 999.0      # Breakeven Shield ОТКЛЮЧЕН (убивал ракеты копеечными выходами)
 
 PREFETCH_TTL_SEC = 35
-SOLANA_MIN_AGE_MIN = 2.0        # 120 секунд: защита от мгновенного рага 1-й свечи и бандл-дампа дева
-SOLANA_MAX_AGE_HOURS = 6.0       # До 6 часов (не срезаем развивающиеся ракеты на пике тренда)
-SOLANA_MAX_AGE_MIN = 360.0       # Торгуем активные монеты до 6 часов
-JEV_MAX_AGE_MIN = 360.0          # В GROK-JEV активные монеты до 6 часов
+SOLANA_MIN_AGE_MIN = 1.0        # 60 секунд: созревание после блока 0 (свободный вход в ракеты со 2-й свечи)
+SOLANA_MAX_AGE_HOURS = 12.0      # До 12 часов (не срезаем развивающиеся ракеты вроде ASTRALIS/Sakura)
+SOLANA_MAX_AGE_MIN = 720.0       # Торгуем активные монеты до 12 часов
+JEV_MAX_AGE_MIN = 720.0          # В GROK-JEV активные монеты до 12 часов
 JEV_MAX_M1_ENTRY_PCT = 25.0
 
 SCALP_TIMEOUT_MIN = 10.0
@@ -191,8 +191,8 @@ GEMINI_API_KEY = (os.getenv("GEMINI_API_KEY") or "").strip()
 # === GROK BOT x JEV ENGINE ===
 JEV_ENABLED = True
 JEV_WICK_STOP_ENABLED = False
-JEV_EARLY_MIN_AGE_MIN = 2.0    # Минимум 2.0м: исключает снайперские ловушки 0-1м (BREASTCOIN, MAYA, DACAT, HANK)
-JEV_MIN_AGE_MIN = 2.0          # Карантин созревания первой свечи 2.0м (120 секунд)
+JEV_EARLY_MIN_AGE_MIN = 1.0    # Ранний вход от 60 секунд (не пропускаем ракеты!)
+JEV_MIN_AGE_MIN = 1.2          # Базовый карантин 72 секунды
 JEV_MAX_AGE_MIN = 60.0          # Свежие монеты до 60м (защита от зомби-монет GIGAHUG/INVEST)
 JEV_MIN_LIQUIDITY_USD = 10000.0  # Минимум $10k ликвидности — пускает ранние ракеты (AI, AMD, HOUSE, SCAT)
 JEV_MAX_LIQUIDITY_USD = 220000.0
@@ -314,7 +314,7 @@ PULLBACK_M1_MIN_PCT = -0.08
 PULLBACK_M1_MAX_PCT = 0.20
 PULLBACK_MAX_H1_PCT = 320.0
 PULLBACK_MAX_M5_PCT = 0.95
-MIN_VOLUME_M5 = 7500            # Минимум $7,500 за 5м — реальные ракеты всегда $7.5k+ (полностью отсекает мертвый боковик $1-3k AURA/PEACEFROG)
+MIN_VOLUME_M5 = 2000            # Минимум $2,000 за 5м — ловит ранние ракеты (WILL, FOOD, BUFFAPE, SYRUP)
 MIN_TXNS_M5 = 20                # 20 транзакций за 5м — активный интерес (меньше = мертвая монета)
 MIN_BUY_SELL_RATIO = 1.05       # Покупателей на 5%+ больше продавцов (настоящий импульс вверх)
 LOTTERY_ENABLED = False

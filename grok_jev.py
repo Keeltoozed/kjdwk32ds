@@ -499,7 +499,7 @@ class GrokJevEngine:
         # КАТЕГОРИЧЕСКИЙ БЛОК: СМЕРТЕЛЬНАЯ ЗОНА МИГРАЦИИ И СНАЙПЕРОВ (0 - 2.0 МИНУТ)
         # В первые 90-120с снайперы и дев сливают начальные бандлы (кейсы BREASTCOIN, MAYA, DACAT, HANK).
         # Настоящие ракеты (WILL, UP, WISHMAS, BELIEVE, FLC) живут и летят 15-60+ минут!
-        _sol_min_age_g = float(getattr(_c, "SOLANA_MIN_AGE_MIN", 2.0))
+        _sol_min_age_g = float(getattr(_c, "SOLANA_MIN_AGE_MIN", 1.0))
         if age_min < _sol_min_age_g:
             try:
                 from birth_tracker import birth_tracker as _bt_mig
@@ -511,16 +511,16 @@ class GrokJevEngine:
         # 2. Возраст токена и запрет старых стоячих гигантов (кейс HODL 940.7м $4.2M FDV, DUGE 224.7м m5 +1.9%)
         _avg_tx_e = vol_m5 / max(1, b5 + s5)
         min_age = _sol_min_age_g
-        max_age = float(getattr(_c, "SOLANA_MAX_AGE_MIN", 240.0))  # Ракеты до 240м (4 часа)
+        max_age = float(getattr(_c, "SOLANA_MAX_AGE_MIN", 720.0))  # Ракеты до 720м (12 часов)
         _is_jev_breakout = (
-            age_min <= 360.0
-            and fdv_mc <= 1500000.0
-            and eff_liq >= 25000.0
-            and vol_m5 >= 10000.0
-            and (vol_m5 / max(eff_liq, 1.0)) >= 0.15
-            and m5 >= 4.0
-            and _avg_tx_e >= 10.0
-            and b5 >= s5 * 1.05
+            age_min <= 1440.0
+            and fdv_mc <= 2500000.0
+            and eff_liq >= 15000.0
+            and vol_m5 >= 4000.0
+            and (vol_m5 / max(eff_liq, 1.0)) >= 0.10
+            and m5 >= 2.5
+            and _avg_tx_e >= 8.0
+            and b5 >= s5
         )
         if age_min < min_age:
             try:
@@ -658,9 +658,9 @@ class GrokJevEngine:
         if eff_liq > 0 and (vol_m5 / eff_liq) > _max_vl_jev:
             return False, f"wash-trading-spike: vol5 ${vol_m5:,.0f} is {(vol_m5/eff_liq):.1f}x > {_max_vl_jev:.2f}x of pool liq ${eff_liq:,.0f} (bot pump trap)"
 
-        _base_vol_m5 = float(getattr(_c, "MIN_VOLUME_M5", 7500.0))
-        # Для свежих миграций (<5м) требуем минимум $6,000 и перевес покупателей, для остальных — от $7,500 (отсекает дохлый штиль $1-3k)
-        _min_vol_m5 = 6000.0 if (age_min <= 5.0 and b5 >= s5 * 1.15 and (b5 + s5) >= 25) else _base_vol_m5
+        _base_vol_m5 = float(getattr(_c, "MIN_VOLUME_M5", 2000.0))
+        # Для свежих миграций (<5м) требуем минимум $1,500 и перевес покупателей, для остальных — от $2,000
+        _min_vol_m5 = 1500.0 if (age_min <= 5.0 and b5 >= s5 and (b5 + s5) >= 10) else _base_vol_m5
         if vol_m5 < _min_vol_m5:
             return False, f"vol5-low ${vol_m5:.0f} < ${_min_vol_m5:.0f} (inactive dead pool — нет реального объема для ракеты)"
         _min_tx5 = int(getattr(_c, "MIN_TXNS_M5", 14))
