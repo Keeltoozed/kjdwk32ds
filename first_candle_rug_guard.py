@@ -1643,11 +1643,38 @@ async def _analyze(mint: str, pair_data: Optional[dict], verdict: dict) -> dict:
     verdict["wallet_analysis"]["hard_score"] = round(hard_score, 3)
 
     # 5. Вердикт
-    block_at = float(_cfg("FCR_BLOCK_SCORE", 0.55))
+    block_at = float(_cfg("FCR_BLOCK_SCORE", 0.58))
     warn_at = float(_cfg("FCR_WARN_SCORE", 0.32))
+    _m_fcr = verdict.get("metrics") or {}
+    _fcr_dev_pct = max(
+        (float(c.get("pct", 0.0) or 0.0) for c in cohort if str(c.get("source") or "") == "creator"),
+        default=0.0,
+    )
+    _fcr_is_dist_runner = False
+    try:
+        import config as _cfg_mod
+        if hasattr(_cfg_mod, "is_distributed_safe_runner") and _cfg_mod.is_launchpad_mint(mint):
+            _fcr_is_dist_runner = _cfg_mod.is_distributed_safe_runner(
+                liq_usd=float(_m_fcr.get("liquidity", 0.0) or 0.0),
+                age_min=float(_m_fcr.get("age_min", 0.0) or 0.0),
+                vol5_usd=float(_m_fcr.get("volume_m5", 0.0) or 0.0),
+                buys5=int(_m_fcr.get("buys_m5", 0) or 0),
+                sells5=int(_m_fcr.get("sells_m5", 0) or 0),
+                top1_pct=float(_m_fcr.get("top1_pct", 0.0) or 0.0),
+                top10_pct=float(_m_fcr.get("top10_pct", 0.0) or 0.0),
+                dev_pct=_fcr_dev_pct,
+                is_lp_safe=True,
+            )
+    except Exception:
+        _fcr_is_dist_runner = False
     if total >= block_at:
-        verdict["verdict"] = "BLOCK"
-        verdict["safe"] = False
+        if _fcr_is_dist_runner:
+            verdict["verdict"] = "WARN"
+            verdict["safe"] = True
+            reasons.append("допущен как распределённый ликвидный раннер")
+        else:
+            verdict["verdict"] = "BLOCK"
+            verdict["safe"] = False
     elif total >= warn_at:
         verdict["verdict"] = "WARN"
         verdict["safe"] = True

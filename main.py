@@ -542,8 +542,8 @@ async def position_manager_loop(analyzer, tracker):
                 _hold_min = float(getattr(config, "STAGNANT_HOLD_MIN", 25.0) or 25.0)
                 _loss_min = (float(getattr(config, "STAGNANT_LOSS_MIN", 15.0) or 15.0)
                              if max_pnl_pct >= 0.05 else
-                             float(getattr(config, "STAGNANT_LOSS_MIN_FAST", 10.0) or 10.0))
-                if minutes_held >= _loss_min and pnl_pct <= -0.05 and max_pnl_pct < 0.05:
+                             float(getattr(config, "STAGNANT_LOSS_MIN_FAST", 12.0) or 12.0))
+                if minutes_held >= _loss_min and pnl_pct <= -0.075 and max_pnl_pct < 0.05:
                     _graces = getattr(position, "stagnant_graces", 0)
                     try:
                         _td = await analyzer.fetch_token_data(mint)
@@ -1273,10 +1273,21 @@ async def scanner_loop(analyzer, tracker):
                                     processed_mints[mint] = time.time() - _cd + 20
                                     continue
 
-                                # Повторная проверка живых метрик после сброса prefetch-кэша (защита от реального разворота вниз)
-                                _min_sc_m1 = -12.0 if _m5_live >= 8.0 else (-6.0 if _m5_live >= 4.0 else -3.5)
-                                if _m5_live < 1.0 or _m1_live < _min_sc_m1:
-                                    print(f"🚫 [SCANNER-LIVE-REVERSAL] {actual_symbol} ({mint[:8]}): на живом графике импульс сломан (m5 {_m5_live:+.1f}%, m1 {_m1_live:+.1f}% < {_min_sc_m1:+.1f}%) — отмена покупки!")
+                                # Повторная проверка живых метрик после сброса prefetch-кэша (единый классификатор пропускает откат покупателей и V-развороты)
+                                _b5_live = int(((pair_data.get("txns") or {}).get("m5") or {}).get("buys", 0) or 0)
+                                _s5_live = int(((pair_data.get("txns") or {}).get("m5") or {}).get("sells", 0) or 0)
+                                _h6_live = _pc_live.get("h6")
+                                _mom_live_ok, _mom_live_why = config.evaluate_entry_momentum(
+                                    m5=_m5_live, m1=_m1_live, h1=_h1_live,
+                                    h6=(float(_h6_live) if _h6_live is not None else None),
+                                    age_min=_age_m, vol5_usd=_vol5_live, liq_usd=liq_usd,
+                                    buys5=_b5_live, sells5=_s5_live,
+                                    min_h1=float(getattr(config, "JEV_MIN_H1_PCT", -8.0)),
+                                    min_h6=float(getattr(config, "JEV_MIN_H6_PCT", -25.0)),
+                                )
+                                _min_sc_m1 = -12.0 if _m5_live >= 8.0 else (-6.0 if _m5_live >= 4.0 else -4.0)
+                                if not _mom_live_ok or _m1_live < _min_sc_m1:
+                                    print(f"🚫 [SCANNER-LIVE-REVERSAL] {actual_symbol} ({mint[:8]}): на живом графике импульс сломан ({_mom_live_why}, m5 {_m5_live:+.1f}%, m1 {_m1_live:+.1f}% < {_min_sc_m1:+.1f}%) — отмена покупки!")
                                     continue
                                 _max_m1_cfg_live = float(getattr(config, "MAX_ENTRY_M1_PCT", 28.0))
                                 if _m1_live > _max_m1_cfg_live and _age_m >= 3.0:
@@ -1340,8 +1351,10 @@ async def scanner_loop(analyzer, tracker):
                                 _avg_tx5_sc = (_vol5_live / _tot_tx5_sc) if _tot_tx5_sc > 0 else 0.0
                                 if _age_m >= _req_soc_age and _links_sc == 0 and not _soc_unk_sc:
                                     _vl_sc = _vol5_live / max(liq_usd, 1.0)
+                                    _is_lp_mint_sc = config.is_launchpad_mint(mint) or _dex_id in ("pump", "pumpfun")
                                     _is_organic_stealth = (
-                                        _vol5_live >= 3500.0 and _b5_bump >= 15 and _b5_bump >= _s5_bump * 1.02
+                                        _is_lp_mint_sc
+                                        and _vol5_live >= 3500.0 and _b5_bump >= 15 and _b5_bump >= _s5_bump * 1.02
                                         and liq_usd >= 6000.0 and _vl_sc <= 8.0 and _avg_tx5_sc >= 8.0
                                     )
                                     if not _is_organic_stealth:
@@ -1356,7 +1369,7 @@ async def scanner_loop(analyzer, tracker):
                                     print(f"🚫 [SCANNER-WASH-TRAP] {actual_symbol} ({mint[:8]}): накрутка микро-ботом ({_tot_tx5_sc} txns, avg ${_avg_tx5_sc:.2f} < $3.5) — отмена!")
                                     continue
                                 _is_deep_launchpad_runner = (
-                                    (mint.endswith(("pump", "bonk", "BAGS")) or _dex_id in ("pumpswap", "pump", "pumpfun"))
+                                    (config.is_launchpad_mint(mint) or _dex_id in ("pump", "pumpfun"))
                                     and liq_usd >= 12000.0
                                     and _vol5_live >= 8000.0
                                     and _m5_live >= 3.0

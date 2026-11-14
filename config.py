@@ -1,4 +1,5 @@
 import os
+from typing import Optional, Tuple
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -93,15 +94,58 @@ def get_max_entry_h1_pct(
 
 
 LAUNCHPAD_MINT_SUFFIXES = ("pump", "moon", "bonk", "bags")
-UNLOCKED_CUSTOM_MIN_LIQ_USD = 25000.0
-UNLOCKED_CUSTOM_MIN_AGE_MIN = 10.0
-UNLOCKED_CUSTOM_MIN_VOL5_USD = 6000.0
-UNLOCKED_CUSTOM_MIN_BUYS5 = 25
+UNLOCKED_CUSTOM_MIN_LIQ_USD = 60000.0
+UNLOCKED_CUSTOM_MIN_AGE_MIN = 45.0
+UNLOCKED_CUSTOM_MIN_VOL5_USD = 15000.0
+UNLOCKED_CUSTOM_MIN_BUYS5 = 50
 
 
 def is_launchpad_mint(mint: str) -> bool:
     """Return True if mint belongs to a canonical Solana launchpad (pump, moon, bonk, BAGS)."""
     return str(mint or "").strip().lower().endswith(LAUNCHPAD_MINT_SUFFIXES)
+
+
+def verify_rugcheck_lp_markets(
+    markets: list,
+    target_pair: str = "",
+    raw_liq: float = 0.0,
+    symbol: str = "",
+    mint: str = "",
+    log_unlocked: bool = True,
+) -> bool:
+    """Return True only when RugCheck reports genuinely burned or non-phantom locked LP."""
+    has_verified = False
+    for mkt in (markets or []):
+        if not isinstance(mkt, dict):
+            continue
+        mkt_pubkey = str(mkt.get("pubkey") or "").strip()
+        mkt_type = str(mkt.get("marketType") or "").lower()
+        lp_info = mkt.get("lp") or {}
+        if not isinstance(lp_info, dict):
+            continue
+        mkt_quote_usd = float(lp_info.get("quoteUSD") or 0.0)
+        lp_unlocked = float(lp_info.get("lpUnlocked") or 0.0)
+        lp_locked_pct = float(lp_info.get("lpLockedPct") or 0.0)
+        lp_burned_pct = float(lp_info.get("lpBurnedPct") or 0.0)
+        # PumpSwap custom pools / DAMM v2 can report lpLockedPct=100 with tokenSupply=0 and currentSupply=0
+        # while still allowing the LP creator to call withdraw (Remove LP).
+        lp_cur_supply = float(lp_info.get("currentSupply") or lp_info.get("lpLocked") or 0.0)
+        lp_tot_supply = float(lp_info.get("tokenSupply") or lp_info.get("lpTotalSupply") or 0.0)
+        is_phantom_amm = any(k in mkt_type for k in ("meteora", "pump_fun_amm", "pumpswap"))
+        has_real_lock = lp_locked_pct >= 80.0 and (not is_phantom_amm or (lp_tot_supply > 0.0 and lp_cur_supply > 0.0))
+        safe_lp = (lp_burned_pct >= 80.0) or ("meteora" not in mkt_type and has_real_lock)
+        # Reject dust side pools (e.g. $0.0038) even if locked; require real backing liquidity.
+        real_liquidity = (mkt_quote_usd >= 5000.0) or (
+            bool(target_pair) and mkt_pubkey == target_pair and mkt_quote_usd <= 0.0 and raw_liq >= 15000.0
+        )
+        if safe_lp and real_liquidity:
+            has_verified = True
+        if log_unlocked and lp_unlocked > 0:
+            print(
+                f"ℹ️ [RUGCHECK-LP] {symbol} ({mint[:8]}): LP lock {lp_locked_pct:.1f}%, "
+                f"burn {lp_burned_pct:.1f}%, unl ${lp_unlocked:,.0f}."
+            )
+    return has_verified
 
 
 def is_safe_unlocked_custom_runner(
@@ -110,8 +154,11 @@ def is_safe_unlocked_custom_runner(
     vol5_usd: float,
     buys5: int,
     sells5: int,
+    has_socials: bool = False,
 ) -> bool:
-    """Allow liquid, established non-launchpad DEX tokens even if LP is unlocked, while blocking young/thin Remove-LP traps."""
+    """Allow liquid, established non-launchpad DEX tokens with verified socials, blocking anonymous Remove-LP traps."""
+    if not has_socials:
+        return False
     if liq_usd < UNLOCKED_CUSTOM_MIN_LIQ_USD:
         return False
     if age_min < UNLOCKED_CUSTOM_MIN_AGE_MIN:
@@ -121,6 +168,114 @@ def is_safe_unlocked_custom_runner(
     if buys5 < UNLOCKED_CUSTOM_MIN_BUYS5:
         return False
     return sells5 == 0 or (buys5 / max(sells5, 1)) >= 1.10
+
+
+def is_distributed_safe_runner(
+    liq_usd: float,
+    age_min: float,
+    vol5_usd: float,
+    buys5: int,
+    sells5: int,
+    top1_pct: float = 0.0,
+    top10_pct: float = 0.0,
+    dev_pct: float = 0.0,
+    is_lp_safe: bool = False,
+) -> bool:
+    """Exempt liquid, broadly distributed runners on safe LP from soft sybil/graph false positives."""
+    if not is_lp_safe:
+        return False
+    if age_min < 2.0 or liq_usd < 15000.0 or vol5_usd < 15000.0:
+        return False
+    if buys5 < 80 or (sells5 > 0 and buys5 < int(sells5 * 0.90)):
+        return False
+    if top1_pct <= 0.0 or top10_pct <= 0.0:
+        return False
+    if top1_pct > 8.0 or top10_pct > 30.0 or dev_pct >= 8.0:
+        return False
+    return True
+
+
+def evaluate_entry_momentum(
+    m5: float,
+    m1: float,
+    h1: float,
+    h6: Optional[float],
+    age_min: float,
+    vol5_usd: float,
+    liq_usd: float,
+    buys5: int,
+    sells5: int,
+    min_h1: float = -8.0,
+    min_h6: float = -25.0,
+) -> Tuple[bool, str]:
+    """Unified rocket momentum, pullback & V-reversal classifier across scanners."""
+    tot_tx = buys5 + sells5
+    is_micro_buyer_dip = (
+        buys5 >= int(sells5 * 1.25)
+        and vol5_usd >= 2500.0
+        and tot_tx >= 20
+        and m5 >= -2.5
+    )
+    is_deep_buyer_pullback = (
+        liq_usd >= 14000.0
+        and vol5_usd >= 5000.0
+        and tot_tx >= 35
+        and buys5 >= sells5
+        and m5 >= -14.0
+        and (h1 >= 10.0 or (m5 >= -4.0 and h1 >= -5.0) or m1 >= -4.0)
+    )
+    is_buyer_pullback = is_micro_buyer_dip or is_deep_buyer_pullback
+
+    _v_rev_liq = 8000.0 if m5 >= 15.0 else 10000.0
+    _v_rev_m1_floor = -4.0 if m5 >= 20.0 else -2.0
+    is_v_reversal = (
+        m5 >= 12.0
+        and vol5_usd >= 5000.0
+        and liq_usd >= _v_rev_liq
+        and buys5 >= int(sells5 * 1.25)
+        and h1 >= -35.0
+        and m1 >= _v_rev_m1_floor
+    )
+    is_dual_green_breakout = (
+        m5 >= 5.0
+        and h1 >= 5.0
+        and buys5 >= sells5
+        and vol5_usd >= 3500.0
+    )
+    is_young_stabilizing_runner = (
+        age_min < 45.0
+        and m5 >= 3.0
+        and vol5_usd >= 8000.0
+        and liq_usd >= 10000.0
+        and buys5 >= int(sells5 * 1.20)
+        and h1 >= -40.0
+        and m1 >= 0.0
+    )
+
+    min_m5 = 1.0 if (liq_usd >= 14000.0 and buys5 >= int(sells5 * 1.05) and vol5_usd >= 2500.0) else 1.8
+    if m5 < min_m5 and not (is_buyer_pullback or is_v_reversal):
+        return False, f"no-momentum m5 {m5:+.1f}% < +{min_m5:.1f}% (coin is flat/standing still)"
+
+    if age_min >= 20.0:
+        is_massive_flow = (vol5_usd >= 8000.0 and liq_usd >= 15000.0 and buys5 >= sells5 and m5 >= 1.0)
+        is_strong_breakout = (m5 >= 1.5 and vol5_usd >= 1500.0 and buys5 >= sells5 and tot_tx >= 15)
+        if not (is_buyer_pullback or is_v_reversal or is_massive_flow or is_strong_breakout):
+            return False, f"slow-mature-pool age {age_min:.0f}m vol5 ${vol5_usd:,.0f} v/l {(vol5_usd / max(liq_usd, 1.0)):.2f}x"
+        if m5 < 1.2 and not is_buyer_pullback:
+            return False, f"late-fade age {age_min:.0f}m m5 {m5:+.1f}% < +1.2% (old token cooling off, not a live rocket)"
+
+    if 3.0 <= age_min < 45.0 and h1 < -15.0:
+        if not (is_v_reversal or is_young_stabilizing_runner or is_deep_buyer_pullback):
+            return False, f"young-dead-cat-bleed h1 {h1:+.1f}% < -15.0% at age {age_min:.1f}m (post-pump distribution bleed)"
+
+    if age_min >= 45.0:
+        if h1 < min_h1 and not is_v_reversal and not (is_buyer_pullback and h1 >= 10.0):
+            return False, f"hourly-downtrend h1 {h1:+.1f}% < {min_h1:+.1f}% (dead-cat bounce)"
+        if h6 is not None and age_min >= 90.0:
+            if float(h6 or 0) < min_h6 and not (is_dual_green_breakout or is_v_reversal or (is_buyer_pullback and h1 >= 10.0)):
+                return False, f"h6-downtrend {float(h6 or 0):+.1f}% < {min_h6:+.1f}% (monet is bleeding)"
+
+    return True, "ok"
 
 STREAK_COOLDOWN_ENABLED = False
 STREAK_MAX_CONSECUTIVE_LOSSES = 5
@@ -177,25 +332,25 @@ VIP_KOL_WALLETS = {
 TIME_EXIT_MINUTES = 40
 TIME_EXIT_PROFIT_REQ = 0.015
 
-# === ЛЕСТНИЦА ТЕЙК-ПРОФИТОВ (МУНБЭГ СТРОГО ОТ +110%) ===
+# === ЛЕСТНИЦА ТЕЙК-ПРОФИТОВ (ФИКСИРУЕМ ПРИБЫЛЬ ДО ПОЗДНЕГО РАГА, ОСТАВЛЯЕМ МУНБЭГ 60%) ===
 PARTIAL_TP_ENABLED = True
 PARTIAL_TP_MIN_TICKET_USD = 4.0      # Включено для всех $5 билетов!
-TP1_TRIGGER_PCT = 0.55               # ТЕЙК-ПРОФИТ 1 И МУНБЭГ: НА +55% (1.55x) фиксируем 45% позы — резко поднимаем Win Rate и возврат кэша!
-TP1_SELL_FRAC = 0.45                 # На +55% фиксируем 45% (~$3.49 кэша, оставляя бесплатный мунбэг ехать до 2x-20x)
-TP2_TRIGGER_PCT = 1.25               # На +125% (2.25x) фиксируем 35% от остатка
+TP1_TRIGGER_PCT = 0.25               # ТЕЙК-ПРОФИТ 1: на +25% (1.25x) фиксируем 40% позы — забираем прибыль до позднего дампа на Солане и резко поднимаем Win Rate!
+TP1_SELL_FRAC = 0.40                 # На +25% фиксируем 40%, оставляя 60% ехать в +65%..+1000%
+TP2_TRIGGER_PCT = 0.65               # На +65% (1.65x) фиксируем 35% от остатка
 TP2_SELL_FRAC = 0.35
-TP3_TRIGGER_PCT = 3.00               # На +300% (4x) фиксируем 40% от остатка
+TP3_TRIGGER_PCT = 1.50               # На +150% (2.5x) фиксируем 40% от остатка
 TP3_SELL_FRAC = 0.40
-TP4_TRIGGER_PCT = 7.00               # На +700% (8x) фиксируем 50% от остатка
+TP4_TRIGGER_PCT = 3.50               # На +350% (4.5x) фиксируем 50% от остатка
 TP4_SELL_FRAC = 0.50
-TP5_TRIGGER_PCT = 15.00              # На +1500% (16x) закрываем остаток
+TP5_TRIGGER_PCT = 9.00               # На +900% (10x) закрываем остаток
 TP5_SELL_FRAC = 1.00
-MOONBAG_TRIGGER_PCT = 0.55           # Статус Moonbag начинается от TP1 (+55%)
+MOONBAG_TRIGGER_PCT = 0.25           # Статус Moonbag начинается от TP1 (+25%)
 MOONBAG_SELL_FRAC = 0.0
-# === МУНБЭГ-ТРЕЙЛИНГ (остаток после TP1 +55% защищён полом и едет до 10x-16x) ===
-MOONBAG_TRAIL_ACTIVATION_PCT = 0.55  # Трейлинг мунбэга включается от пика +55%
-MOONBAG_TRAIL_DISTANCE_PCT = 0.22    # Дистанция трейлинга 22% от пика (на +55% пол +30%, на +110% пол +72%)
-MOONBAG_MAX_HOLD_MIN = 90.0          # Мунбэг может ехать до 90 минут (вместо 45)
+# === МУНБЭГ-ТРЕЙЛИНГ (остаток после TP1 +25% защищён полом и едет до 2x-10x) ===
+MOONBAG_TRAIL_ACTIVATION_PCT = 0.38  # Трейлинг мунбэга включается от пика +38%
+MOONBAG_TRAIL_DISTANCE_PCT = 0.20    # Дистанция трейлинга 20% от пика
+MOONBAG_MAX_HOLD_MIN = 45.0          # Мунбэг может ехать до 45 минут (выходим раньше часовой волны поздних рагов)
 
 PUMP_XGB_ENABLED = False
 RAY_XGB_ENABLED = False
@@ -204,31 +359,31 @@ ROCKET_XGB_STAGE1_THRESHOLD = 4.0    # Первичный отсев 4%: пус�
 ROCKET_XGB_FINAL_THRESHOLD = 8.0     # Финальный порог 8% с реальными ончейн-холдерами (плюс байпас сильного объёма/импульса)
 ROCKET_XGB_THRESHOLD = 10.0
 
-STALL_TIMER_SEC = 240.0   # 4 минуты на консолидацию стоячего минуса
-STALL_MAX_LOSS_PCT = -0.090
+STALL_TIMER_SEC = 420.0   # 7 минут на консолидацию до среза по стагнации
+STALL_MAX_LOSS_PCT = -0.105
 
-TRAILING_ACTIVATION_PCT = 0.500   # Трейлинг включается только от +50% пика
-TRAILING_DISTANCE_PCT = 0.250     # Широкая дистанция трейлинга 25% (не режет волатильные ракеты)
-TRAILING_RUNNER_DISTANCE_PCT = 0.22
+TRAILING_ACTIVATION_PCT = 0.320   # Трейлинг включается от +32% пика (фиксирует волны +32..+50% вместо 0%)
+TRAILING_DISTANCE_PCT = 0.200     # Дистанция трейлинга 20% от пика
+TRAILING_RUNNER_DISTANCE_PCT = 0.20
 SCALP_PROFIT_ENABLED = False
 
 WHALE_DUMP_GUARD_PCT = 0.22
 EVM_RUNNER_CRASH = 0.25
 EVM_NORMAL_CRASH = 0.22
 
-BREAKEVEN_PCT = 999.0      # Breakeven Shield ОТКЛЮЧЕН (убивал ракеты копеечными выходами)
+BREAKEVEN_PCT = 999.0      # Breakeven Shield ОТКЛЮЧЕН (защиту ведут прогрессивные этажи exit_managers)
 
 PREFETCH_TTL_SEC = 12
-SOLANA_MIN_AGE_MIN = 1.0        # 60 секунд: карантин первой минутной свечи после миграции (ранний вход на 2-й свече при живом объеме)
+SOLANA_MIN_AGE_MIN = 0.5        # 30 секунд: быстрый вход в ракеты как в 0d2b1ae при строгой проверке LP/холдеров/Jupiter sellability
 SOLANA_MAX_AGE_HOURS = 12.0      # До 12 часов (не срезаем развивающиеся ракеты вроде ASTRALIS/Sakura)
 SOLANA_MAX_AGE_MIN = 720.0       # Торгуем активные монеты до 12 часов
 JEV_MAX_AGE_MIN = 720.0          # В GROK-JEV активные монеты до 12 часов
 JEV_MAX_M1_ENTRY_PCT = 25.0
 
 SCALP_TIMEOUT_MIN = 10.0
-STAGNANT_LOSS_MIN = 9.0
-STAGNANT_LOSS_MIN_FAST = 7.0
-STAGNANT_HOLD_MIN = 12.0
+STAGNANT_LOSS_MIN = 15.0
+STAGNANT_LOSS_MIN_FAST = 12.0
+STAGNANT_HOLD_MIN = 20.0
 
 AI_MODE = "degen"
 MIN_LIQUIDITY = 10000.0         # Минимум $10,000 ликвидности — пускает ранние ракеты $11k-$18k и отсекает микро-пулы
@@ -241,8 +396,8 @@ GEMINI_API_KEY = (os.getenv("GEMINI_API_KEY") or "").strip()
 # === GROK BOT x JEV ENGINE ===
 JEV_ENABLED = True
 JEV_WICK_STOP_ENABLED = False
-JEV_EARLY_MIN_AGE_MIN = 0.8    # Ранний вход от 48 секунд для мощных миграций
-JEV_MIN_AGE_MIN = 1.0          # Базовый карантин 60 секунд (1 полная свеча после миграции)
+JEV_EARLY_MIN_AGE_MIN = 0.5    # Ранний вход от 30 секунд для мощных миграций
+JEV_MIN_AGE_MIN = 0.75         # Базовый карантин 45 секунд для зрелых миграций
 JEV_MAX_AGE_MIN = 720.0          # В GROK-JEV активные монеты до 12 часов (не срезаем зрелые ракеты вроде ASTRALIS/Sakura)
 JEV_MIN_LIQUIDITY_USD = 5000.0   # Минимум $5k ликвидности — пускает ранние ракеты (SWAMIS $6k, AI, AMD, HOUSE, SCAT)
 JEV_MAX_LIQUIDITY_USD = 500000.0
@@ -430,7 +585,7 @@ JEV_TREND_CONFIRM_ENABLED = False
 JEV_FRESH_RECHECK_ENABLED = True   # Включена финальная проверка цены перед покупкой (защищает от покупки на падающей свече!)
 JEV_MIN_M1_ENTRY_FLOOR_PCT = -4.0
 JEV_MIN_H1_PCT = -8.0              # Разрешаем плоскую консолидацию и разворот от -8% (не режет MEME +3% и GORP +3.8%)
-JEV_MIN_H6_PCT = -15.0
+JEV_MIN_H6_PCT = -25.0             # Разрешаем просадку до -25% на 6ч если сейчас идёт живой импульс (V-разворот/пробой пропускается отдельно)
 
 USE_COPYTRADE = False
 COPY_MIN_TIER = 3
@@ -462,7 +617,7 @@ RUG_WALLET_RPC_TIMEOUT = 5.0              # Таймаут RPC-запросов 
 # Анализ ДО входа: когорта кошельков -> источник финансирования -> кластеры «одного
 # источника» (сколько кошельков, сколько % эмиссии держат) + микроструктура рынка.
 FCR_ENABLED = True                      # Включить предвходовой анализ мгновенного рага
-FCR_BLOCK_SCORE = 0.55                 # score >= этого значения -> вход блокируется
+FCR_BLOCK_SCORE = 0.58                 # score >= этого значения -> вход блокируется (сохраняем блок при 30% дев-холде hard=0.60, убираем ложные срабатывания)
 FCR_WARN_SCORE = 0.32                  # score >= этого значения -> предупреждение (лог, не блок)
 FCR_COHORT_SIZE = 8                    # Сколько кошельков когорты анализировать максимум
 FCR_HOLDER_COUNT = 6                   # Сколько топ-холдеров брать в когорту
@@ -480,7 +635,7 @@ FCR_DEEP_FIRST_ACTION = True           # Проверять, что первым
 FCR_MAX_TX_BATCH = 30                  # Ограничение батча getTransaction за раз
 FCR_MIN_LIQ_USD = 10000.0             # Ниже — тонкий пул, раг стоит дёшево
 FCR_MAX_VOL_TO_LIQ = 8.0               # v/l выше — шторм сделок при малой глубине
-FCR_MIN_AGE_MIN = 1.5                  # Моложе 1.5м — зона 1-минутного бандл-рага дева
+FCR_MIN_AGE_MIN = 0.6                  # Моложе 36с — зона мгновенного бандл-рага первой свечи
 FCR_SPIKE_M5 = 90.0                    # Памп за 5м...
 FCR_STALL_M1 = 3.0                     # ...при мёртвом m1 = дев разгружает стек в толпу
 FCR_SELL_DOMINANCE = 0.85              # sells/buys за 5м для сигнала "продавцы давят"

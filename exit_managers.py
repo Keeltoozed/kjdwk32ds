@@ -72,18 +72,21 @@ class MatureExitManager:
             # Абсолютная потеря ликвидности (вывод пула девом в 0):
             if (_peak_l >= 1000.0 and _cur_l <= 200.0) or (_peak_l >= 3000.0 and _cur_l < (_peak_l * 0.20)):
                 return f"Absolute Liquidity Loss (Liq dropped to ${_cur_l:.0f} from ${_peak_l:.0f})"
-            # Ранний срез вывода ликвидности девом (>35% просадки пула) — спасаем деньги ДО полного слива:
-            elif _peak_l >= 3000.0 and _cur_l < (_peak_l * 0.65):
-                return f"Early Liquidity Drop Escape (Liq dropped to ${_cur_l:.0f} from ${_peak_l:.0f})"
+            # Ранний срез вывода ликвидности девом (>45% просадки пула 2 тика подряд) — не режем от единичного спайка DS:
+            elif _peak_l >= 3000.0 and _cur_l < (_peak_l * 0.55):
+                _drop_s = int(getattr(position, "_liq_drop_streak_em", 0) or 0) + 1
+                position._liq_drop_streak_em = _drop_s
+                if _drop_s >= 2:
+                    return f"Early Liquidity Drop Escape (Liq dropped to ${_cur_l:.0f} from ${_peak_l:.0f})"
             else:
                 position._liq_drop_streak_em = 0
 
             # Ранний сброс при агрессивном даме продавцов на первых минутах (<2м):
-            if pnl_pct <= -0.070 and minutes_held < 2.0:
+            if pnl_pct <= -0.095 and minutes_held < 2.0:
                 txns_m5 = (_pd_chk.get("txns") or {}).get("m5") or {}
                 b5_chk = int(txns_m5.get("buys", 0) or 0)
                 s5_chk = int(txns_m5.get("sells", 0) or 0)
-                if s5_chk >= 10 and (b5_chk / max(1, s5_chk)) < 0.40:
+                if s5_chk >= 12 and (b5_chk / max(1, s5_chk)) < 0.35:
                     return f"Early Seller Dump Cut ({pnl_pct*100:.1f}%, {b5_chk}b/{s5_chk}s)"
 
             # СБРОС МОМЕНТАЛЬНОГО РАГА НА ПЕРВОЙ СВЕЧЕ (First Candle Rug Exit)
@@ -160,22 +163,22 @@ class MatureExitManager:
             # До +38% позиция дышит свободно (не выбиваем ракеты вроде DOGCOIN/YOUNGBULL на откате -15%..-20%,
             # а застрявшие без нового ATH +22%+ страхует Mid-Peak Profit Shield после 2.0м).
             if max_pnl_pct >= 5.00:         # +500%+ (6x - 11x+ гипер-ракета)
-                _floor_pnl = round(max_pnl_pct * 0.70, 2)
+                _floor_pnl = round(max_pnl_pct * 0.72, 2)
                 _trail_dist = 0.18
             elif max_pnl_pct >= 2.50:       # +250%..+500% (3.5x - 6x ракета)
                 _floor_pnl = 1.60
                 _trail_dist = 0.20
-            elif max_pnl_pct >= 1.10:       # +110%..+250% (первый взлет)
-                _floor_pnl = 0.66           # пол +66% (TP1 уже в кармане)
-                _trail_dist = 0.25
-            elif max_pnl_pct >= 0.70:       # +70%..+109% (сильный импульс перед 2x)
-                _floor_pnl = round(max_pnl_pct * 0.55, 2)  # фиксируем 55% от пика (+38%..+60%)
+            elif max_pnl_pct >= 1.10:       # +110%..+250% (второй взлет)
+                _floor_pnl = 0.66           # пол +66% (TP1 и TP2 уже в кармане)
                 _trail_dist = 0.22
-            elif max_pnl_pct >= 0.55:       # +55%..+69% (зона TP1, оставляем запас 22% под вторую волну)
-                _floor_pnl = round(max_pnl_pct * 0.45, 2)  # пол +25%..+31%
-                _trail_dist = 0.22
-            elif max_pnl_pct >= 0.38:       # +38%..+54% (крупный разгон перед TP1 — широкий аварийный пол +10% без тесного трейлинга)
-                _floor_pnl = 0.10
+            elif max_pnl_pct >= 0.55:       # +55%..+109% (сильный импульс, защищаем половину пика)
+                _floor_pnl = round(max_pnl_pct * 0.50, 2)  # пол +28%..+54%
+                _trail_dist = 0.20
+            elif max_pnl_pct >= 0.32:       # +32%..+54% (TP1 уже рядом/сработал — ставим пол +14% и 18% трейлинг)
+                _floor_pnl = 0.14
+                _trail_dist = 0.18
+            elif max_pnl_pct >= 0.18 and minutes_held >= 1.0:  # +18%..+31% (ранний плюс не отдаём обратно в минус)
+                _floor_pnl = 0.05
                 _trail_dist = None
 
         if _floor_pnl is not None and minutes_held >= 0.20:
@@ -208,7 +211,7 @@ class MatureExitManager:
 
             # 2. Mid-Peak Profit Shield: если монета давала хороший импульс (+22%..+39%, как ZAPZEKE +22.9%),
             # но 2+ минуты не обновляет хай и начала сползать к точке входа (<= +5%) — забираем плюс, не ждём 0% или минуса!
-            if max_pnl_pct >= 0.22 and _peak_age_min >= 3.5 and pnl_pct <= 0.05:
+            if max_pnl_pct >= 0.16 and _peak_age_min >= 2.5 and pnl_pct <= 0.04:
                 return f"Mid-Peak Profit Shield ({pnl_pct*100:+.1f}% locked after peak +{max_pnl_pct*100:.0f}%, {_peak_age_min:.1f}m no ATH)"
 
             # 2b. Faded Impulse Stop: импульс был (+8%..+39%), но затух (2.5+ мин без нового ATH) и сполз в минус (-4%)
@@ -288,8 +291,8 @@ class MatureExitManager:
         # Ракеты разгоняются в первые 3-25 минут. Монеты, которые рагаются, обычно выдергивают ликву на 35-45 минуте.
         # Выходим по таймауту на 28 минуте (или на 20-22 минуте при застревании без ATH),
         # забирая прибыль ДО того как дев выдернет ликвидность!
-        _mb_max_hold = float(getattr(config, "MOONBAG_MAX_HOLD_MIN", 90.0)) if _is_mb else 28.0
-        if not _is_mb and minutes_held >= 20.0 and pnl_pct >= 0.05 and _peak_age_min >= 8.0:
+        _mb_max_hold = float(getattr(config, "MOONBAG_MAX_HOLD_MIN", 45.0)) if _is_mb else 22.0
+        if not _is_mb and minutes_held >= 15.0 and pnl_pct >= 0.03 and _peak_age_min >= 6.0:
             return f"Max Hold Profit Take (+{pnl_pct*100:.1f}% locked at {minutes_held:.0f}m, {_peak_age_min:.0f}m no ATH)"
         if _is_mb and minutes_held >= 60.0 and _peak_age_min >= 25.0:
             return f"Moonbag Max Hold Take ({pnl_pct*100:+.1f}% at {minutes_held:.0f}m, {_peak_age_min:.0f}m no ATH)"

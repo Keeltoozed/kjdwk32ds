@@ -197,22 +197,38 @@ async def check_dev_and_holders(client: AsyncClient, mint: str) -> dict:
         except Exception:
             pass
 
-        # Резолвим owner для top_accounts (из кэша RugCheck или через 1 RPC getMultipleAccounts jsonParsed)
+        # Резолвим owner для top_accounts (из кэша RugCheck или через прямой JSON-RPC getMultipleAccounts jsonParsed,
+        # в обход бага десериализации solders SerdeJSONError в get_multiple_accounts_json_parsed)
         need_ata_resolve = [a["address"] for a in top_accounts[:15] if a["address"] not in rc_owner_by_ata]
         if need_ata_resolve:
             try:
-                _ata_pks = [Pubkey.from_string(x) for x in need_ata_resolve]
-                _ma_resp = await _rpc(client, "get_multiple_accounts_json_parsed", _ata_pks)
-                if _ma_resp and getattr(_ma_resp, "value", None):
-                    for _ata_addr, _acct_info in zip(need_ata_resolve, _ma_resp.value):
-                        try:
-                            _parsed = getattr(getattr(_acct_info, "data", None), "parsed", None)
-                            if isinstance(_parsed, dict):
-                                _own = ((_parsed.get("info") or {}).get("owner")) or ""
+                from http_client import fetch_json
+                rpc_urls = [
+                    getattr(config, "QUICKNODE_RPC", ""),
+                    getattr(config, "HELIUS_RPC_URL", ""),
+                    getattr(client, "_provider", None) and getattr(client._provider, "endpoint_uri", ""),
+                    "https://api.mainnet-beta.solana.com",
+                ]
+                endpoint = next((str(u) for u in rpc_urls if u and str(u).startswith("http")), "https://api.mainnet-beta.solana.com")
+                payload = {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "getMultipleAccounts",
+                    "params": [
+                        need_ata_resolve,
+                        {"encoding": "jsonParsed"}
+                    ]
+                }
+                _st, _resp_data = await fetch_json(endpoint, method="POST", json_payload=payload, timeout=6, retries=1)
+                if _st == 200 and isinstance(_resp_data, dict):
+                    _raw_values = (_resp_data.get("result") or {}).get("value", []) or []
+                    for _ata_addr, _acct_item in zip(need_ata_resolve, _raw_values):
+                        if isinstance(_acct_item, dict):
+                            _p_data = (_acct_item.get("data") or {}).get("parsed") if isinstance(_acct_item.get("data"), dict) else None
+                            if isinstance(_p_data, dict):
+                                _own = ((_p_data.get("info") or {}).get("owner")) or ""
                                 if _own:
                                     rc_owner_by_ata[_ata_addr] = str(_own)
-                        except Exception:
-                            pass
             except Exception:
                 pass
 
@@ -609,6 +625,42 @@ async def full_rug_wallet_audit(mint: str, dev_wallet: str = None) -> dict:
 
     _cache_set(mint, verdict)
     return verdict
+
+
+async def verify_program_owned_accounts(pubkeys: list[str]) -> set[str]:
+    """Return subset of pubkeys owned on-chain by a DEX/program PDA (excludes System/Token wallets)."""
+    clean = [str(pk).strip() for pk in (pubkeys or []) if pk and len(str(pk).strip()) >= 32]
+    if not clean:
+        return set()
+    _NON_POOL_OWNERS = {
+        "",
+        "11111111111111111111111111111111",
+        "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+        "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+    }
+    try:
+        from http_client import fetch_json
+        rpc_urls = [u for u in (SOLANA_RPC_URL, getattr(config, "SOLANA_FALLBACK_RPC_URL", "")) if u]
+        for rpc_url in rpc_urls:
+            payload = {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "getMultipleAccounts",
+                "params": [clean[:20], {"encoding": "base64", "dataSlice": {"offset": 0, "length": 0}}],
+            }
+            st, body = await fetch_json(rpc_url, method="POST", json_payload=payload, timeout=5, retries=0)
+            if st == 200 and isinstance(body, dict) and not body.get("error"):
+                values = (body.get("result") or {}).get("value") or []
+                program_owned = set()
+                for pk, acc in zip(clean[:20], values):
+                    if isinstance(acc, dict):
+                        acc_owner = str(acc.get("owner") or "").strip()
+                        if acc_owner not in _NON_POOL_OWNERS:
+                            program_owned.add(pk)
+                return program_owned
+    except Exception:
+        pass
+    return set()
 
 
 async def quick_rug_check(mint: str) -> tuple:

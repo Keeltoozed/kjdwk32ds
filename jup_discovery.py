@@ -459,9 +459,18 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
     if _h1_j > _max_h1_j:
         print(f"🚫 [{source_tag}-H1-EXHAUSTED] {_sym_tmp} ({mint[:8]}): h1 {_h1_j:+.0f}% > +{_max_h1_j:.0f}% — памп уже отработал, вход = вершина.")
         return False
+    _h6_j_raw = _pc_j.get("h6")
+    _mom_j_ok, _mom_j_why = config.evaluate_entry_momentum(
+        m5=_m5_j, m1=_m1_j, h1=_h1_j,
+        h6=(float(_h6_j_raw) if _h6_j_raw is not None else None),
+        age_min=_age_j, vol5_usd=_vol5_j, liq_usd=_liq_j,
+        buys5=_b5_j, sells5=_s5_j,
+        min_h1=float(getattr(config, "JEV_MIN_H1_PCT", -8.0)),
+        min_h6=float(getattr(config, "JEV_MIN_H6_PCT", -25.0)),
+    )
     _min_m1_j = -12.0 if (_m5_j >= 8.0 and _b5_j >= _s5_j) else (-8.0 if _m5_j >= 5.0 else -4.0)
-    if _m5_j < 1.5 or _m1_j < _min_m1_j:
-        print(f"🚫 [{source_tag}-MOMENTUM-LOST] {_sym_tmp} ({mint[:8]}): импульс пропал (m5 {_m5_j:+.1f}%, m1 {_m1_j:+.1f}%) — отмена входа.")
+    if not _mom_j_ok or _m1_j < _min_m1_j:
+        print(f"🚫 [{source_tag}-MOMENTUM-LOST] {_sym_tmp} ({mint[:8]}): импульс отклонён ({_mom_j_why}, m5 {_m5_j:+.1f}%, m1 {_m1_j:+.1f}%) — отмена входа.")
         return False
     _pk_drop_j = float((td or {}).get("_drop_from_peak_5m", 0.0) or 0.0)
     _lq_drop_j = float((td or {}).get("_liq_drop_from_peak", 0.0) or 0.0)
@@ -530,10 +539,11 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
         print(f"🚫 [{source_tag}-NO-SOCIALS] {_sym_tmp} ({mint[:8]}): 0 соцсетей/сайтов при ликвидности ${_liq_j:,.0f} (<$25k) — анонимный бандлер-раг.")
         return False
 
-    # Защита от миграционного дампа Pump.fun: первые 90с на отстрел instant-снайперов, затем свободный вход
+    # Защита от миграционного дампа Pump.fun: выдерживаем минимум SOLANA_MIN_AGE_MIN (30с), далее вход под полным ончейн-аудитом
     if mint.endswith("pump") and _dex_j in ("pumpswap", "raydium", "meteora", "orca"):
-        if _age_j < 1.0:
-            print(f"⏳ [{source_tag}-MIGRATION-DUMP] {_sym_tmp} ({mint[:8]}): AMM-пул создан {_age_j:.1f}м назад (< 1.0м) — зона сброса снайперов pump.fun.")
+        _min_mig_age_j = float(getattr(config, "SOLANA_MIN_AGE_MIN", 0.5))
+        if _age_j < _min_mig_age_j:
+            print(f"⏳ [{source_tag}-MIGRATION-DUMP] {_sym_tmp} ({mint[:8]}): AMM-пул создан {_age_j:.1f}м назад (< {_min_mig_age_j:.1f}м) — зона сброса снайперов pump.fun.")
             return False
         _fdv_j = float((td or {}).get("fdv", 0) or (td or {}).get("marketCap", 0) or 0)
         if 0 < _fdv_j < 5000.0:
@@ -597,9 +607,19 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
         print(f"⏳ [{source_tag}-AGE-WARMUP] {_sym_tmp}: возраст {_age_j*60:.0f}с < {_min_age_jup*60:.0f}с — карантин 1-й свечи (защита от снайперов и бандл-рага дева)")
         return False
 
-    # 0.1 Защита от падающего ножа (кейс AMC: m5 -37.6% летит вниз)
-    if _m5_j < 1.0:
-        print(f"🚫 [{source_tag}-DOWNTREND] {_sym_tmp}: m5 {_m5_j:+.1f}% < +1.0% — падающий нож, отмена входа!")
+    # 0.1 Защита от падающего ножа (единый классификатор — пропускает живые откаты покупателей и V-развороты)
+    _h6_j2_raw = ((td or {}).get("priceChange") or {}).get("h6")
+    _liq_j2 = float(((td or {}).get("liquidity") or {}).get("usd", 0) or 0)
+    _mom_j2_ok, _mom_j2_why = config.evaluate_entry_momentum(
+        m5=_m5_j, m1=_m1_j, h1=_h1_j,
+        h6=(float(_h6_j2_raw) if _h6_j2_raw is not None else None),
+        age_min=_age_j, vol5_usd=_vm5_j, liq_usd=_liq_j2,
+        buys5=_b5_j, sells5=_s5_j,
+        min_h1=float(getattr(config, "JEV_MIN_H1_PCT", -8.0)),
+        min_h6=float(getattr(config, "JEV_MIN_H6_PCT", -25.0)),
+    )
+    if not _mom_j2_ok:
+        print(f"🚫 [{source_tag}-DOWNTREND] {_sym_tmp}: {_mom_j2_why} — отмена входа!")
         return False
     _min_jup_m1 = -12.0 if _m5_j >= 8.0 else (-6.0 if _m5_j >= 4.0 else -3.5)
     if _m1_j < _min_jup_m1:
@@ -946,8 +966,18 @@ async def jup_loop(analyzer, tracker):
                                 processed[m] = _now_t + 600
                                 continue
 
-                        # Отсекаем флет m5 < 1.8%
-                        if _m5 < 1.8:
+                        # Отсекаем флет m5 < 1.8%, но ПРОПУСКАЕМ активный откат покупателей (BILL/NUREMBERG) в отбор!
+                        _tx_cand = (td.get("txns") or {}).get("m5") or {}
+                        _b5_cand = int(_tx_cand.get("buys", 0) or 0)
+                        _s5_cand = int(_tx_cand.get("sells", 0) or 0)
+                        _is_buyer_pullback_cand = (
+                            -14.0 <= _m5 < 1.8
+                            and _lq_cand >= 14000.0
+                            and _v5_cand >= 5000.0
+                            and (_b5_cand + _s5_cand) >= 35
+                            and _b5_cand >= _s5_cand
+                        )
+                        if _m5 < 1.8 and not _is_buyer_pullback_cand:
                             skipped_flat += 1
                             processed[m] = _now_t
                             continue

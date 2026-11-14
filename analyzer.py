@@ -1786,7 +1786,7 @@ class Analyzer:
         _info_pre = pair_data.get("info") or {}
         _has_soc_pre = bool((_info_pre.get("socials") or []) or (_info_pre.get("websites") or []))
         _raw_liq_chk = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
-        _is_burned_launchpad = mint.endswith(("pump", "bonk", "BAGS")) or _dex_pre_early == "pumpswap"
+        _is_burned_launchpad = config.is_launchpad_mint(mint) or _dex_pre_early in ("pump", "pumpfun")
         _tot_tx5_pre = _b5_pre + _s5_pre
         _avg_tx_pre = (_vm5_pre / _tot_tx5_pre) if _tot_tx5_pre > 0 else 0.0
         _is_real_bump_runner = (
@@ -1862,39 +1862,22 @@ class Analyzer:
                 f"🚫 [WEAK-BUYERS] {symbol} ({mint[:8]}): покупки/продажи 5м {_b5_pre}/{_s5_pre} ({_b5_pre/_s5_pre:.2f}x < {_min_bs_cfg:.2f}x) — продавцы давят!",
             )
 
-        # Защита от молодых «дохлых кошек» (кейс GETAJOB: пик $255k на 1-й минуте -> обвал -85% -> отскок в сливе h1=-22% на 8-й минуте -> финальный раг -98.6%):
-        if 3.0 <= _age_min_pre < 45.0 and _h1 < -15.0:
-            _is_young_v_rev_a = (_m5 >= 18.0 and _vm5_pre >= 18000.0 and _raw_liq_chk >= 18000.0 and _b5_pre >= _s5_pre * 1.35 and _m1 >= 1.0)
-            if not _is_young_v_rev_a:
-                return self._deny(
-                    mint,
-                    f"young-dead-cat-bleed {_h1:+.0f}%",
-                    f"🚫 [YOUNG-DEAD-CAT] {symbol} ({mint[:8]}): монета ({_age_min_pre:.1f}м) слита ниже цены открытия пула (h1 {_h1:+.1f}% < -15%) — дистрибуция в раг (кейс GETAJOB)!",
-                )
-
-        # Запрет покупки «дохлых кошек» в часовом сливе, КРОМЕ подтверждённого V-образного разворота с объёмом (SCAMSEM +122%)
-        # Проверяем часовой тренд для монет >= 45 минут:
-        if _age_min_pre >= 45.0:
-            _min_h1_cfg = float(getattr(config, "JEV_MIN_H1_PCT", -8.0))
-            _h6_pre_val = float(_pc.get("h6", 0) or 0)
-            _is_v_reversal = (
-                _h1 >= -25.0 and _h6_pre_val >= -30.0
-                and _m5 >= 12.0 and _vm5_pre >= 15000.0
-                and _raw_liq_chk >= 18000.0 and _b5_pre >= _s5_pre * 1.30
+        # Единый классификатор импульса, откатов и V-разворотов (пропускает BILL-откаты, J*B V-развороты и Angel-пробои)
+        _h6_pre_raw = _pc.get("h6")
+        _h6_pre_opt = float(_h6_pre_raw) if _h6_pre_raw is not None else None
+        _min_h1_cfg = float(getattr(config, "JEV_MIN_H1_PCT", -8.0))
+        _min_h6_cfg = float(getattr(config, "JEV_MIN_H6_PCT", -25.0))
+        _mom_ok_a, _mom_why_a = config.evaluate_entry_momentum(
+            m5=_m5, m1=_m1, h1=_h1, h6=_h6_pre_opt,
+            age_min=_age_min_pre, vol5_usd=_vm5_pre, liq_usd=_raw_liq_chk,
+            buys5=_b5_pre, sells5=_s5_pre, min_h1=_min_h1_cfg, min_h6=_min_h6_cfg,
+        )
+        if not _mom_ok_a:
+            return self._deny(
+                mint,
+                _mom_why_a.split("(")[0].strip()[:48],
+                f"🚫 [MOMENTUM-GATE] {symbol} ({mint[:8]}): {_mom_why_a}",
             )
-            if not _is_v_reversal and (_h1 < _min_h1_cfg or (_age_min_pre >= 90.0 and _h6_pre_val < -25.0)):
-                return self._deny(
-                    mint,
-                    f"downtrend-h1 {_h1:+.0f}%",
-                    f"🚫 [DEAD-CAT-DUMP] {symbol} ({mint[:8]}): часовой тренд в сливе (h1 {_h1:+.1f}%, h6 {_h6_pre_val:+.1f}%) — падающий нож!",
-                )
-
-        # Ранний вход в накопление на ликвидных пулах (>= +1.2% при liq >= $14k, EMBER +38%, FUSE +34%)
-        # и вход на микро-откате покупателей (до -2.5% при b5 >= s5 * 1.25)
-        _is_buyer_dip_pre = (_b5_pre >= int(_s5_pre * 1.25) and _vm5_pre >= 2500.0 and _m5 >= -2.5)
-        _min_m5_req = 1.2 if (_raw_liq_chk >= 14000.0 and _b5_pre >= _s5_pre * 1.10 and _vm5_pre >= 2500.0) else 2.5
-        if _m5 < _min_m5_req and not _is_buyer_dip_pre:
-            return self._deny(mint, f"m5-too-weak {_m5:+.1f}%", f"🚫 [WEAK-M5] {symbol} ({mint[:8]}): m5 {_m5:+.1f}% < +{_min_m5_req:.1f}% — нет разгона.")
         _base_max_m1 = float(getattr(config, "MAX_ENTRY_M1_PCT", 28.0))
         # Разрешаем импульсный пробой (свеча +15%..+45%) при активном спросе покупателей (b5 >= s5 и vol >= $2000)
         if _b5_pre >= int(_s5_pre * 1.05) and _vm5_pre >= 2000.0 and _m5 >= 3.0:
@@ -1980,7 +1963,8 @@ class Analyzer:
             _vol_liq_r = (_vm5_pre / max(_raw_liq_chk, 1.0)) if _raw_liq_chk > 0 else 0.0
             _txns_tot = _b5_pre + _s5_pre
             _is_organic_stealth = (
-                (_raw_liq_chk >= 5000.0 or _is_pump_curve_pre)
+                _is_burned_launchpad
+                and (_raw_liq_chk >= 5000.0 or _is_pump_curve_pre)
                 and _vm5_pre >= 1200.0
                 and 0.45 <= _vol_liq_r <= 8.5
                 and (
@@ -1990,7 +1974,8 @@ class Analyzer:
                 )
             )
             _is_viral_stealth = (
-                _vm5_pre >= 15000.0
+                _is_burned_launchpad
+                and _vm5_pre >= 15000.0
                 and _b5_pre >= 80
                 and _b5_pre >= int(_s5_pre * 1.05)
             )
@@ -2114,8 +2099,8 @@ class Analyzer:
                 pass
             _is_canonical_pump = (
                 config.is_launchpad_mint(mint)
-                or (is_pump_curve and _dex_low_main in ("pump", "pumpfun", "pumpswap"))
-                or _is_grad_check
+                or (is_pump_curve and _dex_low_main in ("pump", "pumpfun"))
+                or (_is_grad_check and config.is_launchpad_mint(mint))
             )
             _is_pump_flag = 1 if _is_canonical_pump else 0
             _cur_tok_top10 = 0.0
@@ -2183,34 +2168,28 @@ class Analyzer:
 
                     # Проверка пулов и блокировки LP
                     _target_pair_rc = str((pair_data or {}).get("pairAddress") or "").strip()
-                    has_verified_locked_lp = False
-                    for _m in (rc_data.get("markets") or []):
-                        if isinstance(_m, dict):
-                            _m_pub = str(_m.get("pubkey") or "").strip()
-                            _m_type = str(_m.get("marketType", "")).lower()
-                            _m_lp_info = _m.get("lp") or {}
-                            _m_lp_locked_pct = float(_m_lp_info.get("lpLockedPct", 0) or 0)
-                            _m_lp_burned_pct = float(_m_lp_info.get("lpBurnedPct", 0) or 0)
-                            _m_quote_usd = float(_m_lp_info.get("quoteUSD", 0) or 0)
-                            _m_unl = float(_m_lp_info.get("lpUnlocked", 0) or 0)
-                            _m_safe_lp = (_m_lp_burned_pct >= 80.0) or ("meteora" not in _m_type and _m_lp_locked_pct >= 80.0)
-                            if _m_safe_lp and (_m_quote_usd >= 2000 or (_target_pair_rc and _m_pub == _target_pair_rc)):
-                                has_verified_locked_lp = True
-                            if _m_unl > 0:
-                                print(f"ℹ️ [RUGCHECK-LP] {symbol} ({mint[:8]}): LP lock {_m_lp_locked_pct:.1f}%, burn {_m_lp_burned_pct:.1f}%, unl ${_m_unl:,.0f}.")
+                    has_verified_locked_lp = config.verify_rugcheck_lp_markets(
+                        rc_data.get("markets") or [],
+                        target_pair=_target_pair_rc,
+                        raw_liq=raw_liq,
+                        symbol=symbol,
+                        mint=mint,
+                        log_unlocked=True,
+                    )
 
-                    # Не-launchpad пулы без залоченного/сожжённого LP пускаем ТОЛЬКО если это зрелый и высоколиквидный DEX-раннер
-                    # (отсекаем тонкие молодые Remove-LP ловушки вроде HI/FLY/SIRIUS/CRO <$25k / <10м).
+                    # Не-launchpad пулы без подтверждённого сожжённого/залоченного LP пускаем ТОЛЬКО если это зрелый и высоколиквидный DEX-раннер с соцсетями
                     if not _is_canonical_pump and not has_verified_locked_lp:
                         _vm5_a = float(((pair_data.get("volume") or {}).get("m5", 0) or 0))
                         _tx_a = ((pair_data.get("txns") or {}).get("m5") or {})
                         _b5_a = int(_tx_a.get("buys", 0) or 0)
                         _s5_a = int(_tx_a.get("sells", 0) or 0)
-                        if not config.is_safe_unlocked_custom_runner(raw_liq, _age_min_pre, _vm5_a, _b5_a, _s5_a):
+                        _info_a = (pair_data or {}).get("info") or {}
+                        _has_soc_a = bool((_info_a.get("socials") or []) or (_info_a.get("websites") or []))
+                        if not config.is_safe_unlocked_custom_runner(raw_liq, _age_min_pre, _vm5_a, _b5_a, _s5_a, has_socials=_has_soc_a):
                             return self._deny(
                                 mint,
                                 "unlocked-custom-lp",
-                                f"🚫 [АНТИСКАМ-LP] {symbol} ({mint[:8]}): кастомный незалоченный LP не прошёл фильтр зрелого пула (liq ${raw_liq:,.0f}, age {_age_min_pre:.1f}m, vol ${_vm5_a:,.0f}) — риск Remove LP."
+                                f"🚫 [АНТИСКАМ-LP] {symbol} ({mint[:8]}): кастомный незалоченный LP не прошёл фильтр зрелого пула (liq ${raw_liq:,.0f}, age {_age_min_pre:.1f}m, vol ${_vm5_a:,.0f}, soc={int(_has_soc_a)}) — риск Remove LP."
                             )
                         print(f"💎 [ANALYZER-UNLOCKED-RUNNER] {symbol} ({mint[:8]}): кастомный незалоченный LP допущен (liq ${raw_liq:,.0f}, age {_age_min_pre:.0f}м, vol ${_vm5_a:,.0f}, {_b5_a}b/{_s5_a}s)!")
 
@@ -2306,27 +2285,32 @@ class Analyzer:
                     top_10 = non_curve_accounts[:10]
                     # Jito bundles sybil check
                     bundle_suspects = [round(pct, 1) for (amt, pct, owner) in top_10 if pct >= 2.5]
-                    if len(bundle_suspects) >= 4:
+                    top_10_sum_pct = sum([x[1] for x in top_10])
+                    largest_whale_pct_pre = top_10[0][1] if top_10 else 0.0
+                    _dist_runner_a = config.is_distributed_safe_runner(
+                        raw_liq, _age_min_pre, _vm5_pre, _b5_pre, _s5_pre,
+                        top1_pct=largest_whale_pct_pre, top10_pct=top_10_sum_pct, dev_pct=dev_holding_pct,
+                        is_lp_safe=(_is_canonical_pump or has_verified_locked_lp),
+                    )
+                    if len(bundle_suspects) >= 4 and not (_dist_runner_a and _age_min_pre >= 3.0):
                         from collections import Counter
                         counts = Counter(bundle_suspects)
                         most_common_pct, count = counts.most_common(1)[0]
                         if count >= 4 and most_common_pct >= 2.5 and (most_common_pct * count) >= 12.0:
                             return self._deny(mint, "jito-bundle-sybil", f"🚫 [АНТИСКАМ] Jito-бандл ({count} кошельков по ~{most_common_pct:.1f}%) у {mint[:8]} → Блок.")
-                    top_10_sum_pct = sum([x[1] for x in top_10])
-                    largest_whale_pct_pre = top_10[0][1] if top_10 else 0.0
 
-                    # Детектор ультра-атомизированной сибил-сетки дева: не блокируем здоровый высокооборотный ритейл (кейс OTHERM $102k vol5, 543b/354s, top10=5.3%)
-                    _is_viral_retail_a = (_vm5_pre >= 25000.0 and _b5_pre >= 150 and _b5_pre >= _s5_pre)
-                    if 0 < pool_pct_sum <= 38.0 and len(top_10) >= 8 and not _is_viral_retail_a:
-                        if top_10_sum_pct < 7.0 and largest_whale_pct_pre < 0.85:
+                    # Детектор ультра-атомизированной сибил-сетки дева: не блокируем здоровый высокооборотный ритейл (OTHERM $102k vol5, 543b/354s)
+                    _is_viral_retail_a = (_vm5_pre >= 15000.0 and _b5_pre >= 80 and _b5_pre >= _s5_pre and raw_liq >= 15000.0)
+                    if 0 < pool_pct_sum <= 38.0 and len(top_10) >= 8 and not (_is_viral_retail_a or _dist_runner_a):
+                        if top_10_sum_pct < 6.0 and largest_whale_pct_pre < 0.70:
                             return self._deny(
                                 mint,
                                 f"atomized-sybil-supply pool={pool_pct_sum:.0f}% top10={top_10_sum_pct:.1f}%",
                                 f"🚫 [ATOMIZED-SYBIL] {symbol} ({mint[:8]}): в пуле всего {pool_pct_sum:.1f}% эмиссии ({100.0 - pool_pct_sum:.1f}% снаружи), но топ-1={largest_whale_pct_pre:.2f}%, топ-10={top_10_sum_pct:.1f}% — эмиссия спрятана на 100+ микро-кошельках дева (кейс CARDANO)!",
                             )
 
-                    # Детектор равномерной сибил-нарезки стека дева (кейс BALLFIN: 19 кошельков по 1.88%..2.71%, CV=0.08, h10/h1=0.82, top20=43%):
-                    if len(top_10) >= 8 and top_10_sum_pct >= 18.0:
+                    # Детектор равномерной сибил-нарезки стека дева (кейс BALLFIN: top20=43%), пропускаем уже распределённые ликвидные ракеты
+                    if len(top_10) >= 8 and top_10_sum_pct >= 18.0 and not _dist_runner_a:
                         import statistics as _st_an
                         _t10_p = [x[1] for x in top_10]
                         _t10_m = _st_an.mean(_t10_p)
@@ -2339,7 +2323,7 @@ class Analyzer:
                                 f"🚫 [FLAT-SYBIL-SPLIT] {symbol} ({mint[:8]}): топ-10 ({top_10_sum_pct:.1f}%) нарезаны равномерно (CV={_t10_cv:.2f}, h10/h1={_h10_r:.2f}) — сибил-сетка дева (кейс BALLFIN)!",
                             )
                     _mid_syb_a = [x[1] for x in non_curve_accounts[:20] if 1.5 <= x[1] <= 4.5]
-                    if len(_mid_syb_a) >= 12 and sum(_mid_syb_a) >= 28.0:
+                    if len(_mid_syb_a) >= 12 and sum(_mid_syb_a) >= 28.0 and not _dist_runner_a:
                         _mid_r_a = max(_mid_syb_a) / max(min(_mid_syb_a), 0.1)
                         if _mid_r_a <= 1.65:
                             return self._deny(
@@ -2387,12 +2371,18 @@ class Analyzer:
                             _gp_aud.check_spl_holder_delegations(mint, holder_token_accounts=_h_accs, total_supply_ui=_ui_s),
                             _gp_aud.check_staircase_and_sybil_farm(mint, pair_address=str(pair_data.get("pairAddress") or ""), holder_owners=_h_owners),
                         )
-                        if not _l7_ok:
-                            return self._deny(mint, "insider-graph-bundle", f"🚫 [АНТИСКАМ-L7] {symbol} ({mint[:8]}): {_l7_why} → Блок.")
                         if not _l8_ok:
                             return self._deny(mint, "spl-delegation-drain", f"🚫 [АНТИСКАМ-L8] {symbol} ({mint[:8]}): {_l8_why} → Скрытый дрейнер!")
+                        if not _l7_ok:
+                            if _dist_runner_a:
+                                print(f"⚠️ [АНТИСКАМ-L7-WARN] {symbol} ({mint[:8]}): {_l7_why} — допущен как распределённый ликвидный раннер.")
+                            else:
+                                return self._deny(mint, "insider-graph-bundle", f"🚫 [АНТИСКАМ-L7] {symbol} ({mint[:8]}): {_l7_why} → Блок.")
                         if not _l9_ok:
-                            return self._deny(mint, "staircase-sybil-farm", f"🚫 [АНТИСКАМ-L9/10] {symbol} ({mint[:8]}): {_l9_why} → Ботоферма дева!")
+                            if _dist_runner_a:
+                                print(f"⚠️ [АНТИСКАМ-L9-WARN] {symbol} ({mint[:8]}): {_l9_why} — допущен как распределённый ликвидный раннер.")
+                            else:
+                                return self._deny(mint, "staircase-sybil-farm", f"🚫 [АНТИСКАМ-L9/10] {symbol} ({mint[:8]}): {_l9_why} → Ботоферма дева!")
                     except Exception:
                         pass
                 else:
@@ -2750,8 +2740,8 @@ class Analyzer:
         # Канонические токены pump.fun с сожжённым LP и реальным объёмом допускаются без соцсетей на DS
         if not _socials_unknown and not has_socials and not _lottery and not is_pump_curve and not config.is_launchpad_mint(mint):
             _smart_n_chk = int(pair_data.get("_smart_buyers_count", 0) or 0)
-            if liquidity < 25000 and _smart_n_chk < 1:
-                return self._deny(mint, "no-socials-anon-rug", f"🚫 [NO-SOCIALS] У {symbol} ({mint[:8]}) 0 соцсетей/сайтов (Twitter/TG/Web) при ликвидности ${liquidity:,.0f} (<$25k) — анонимный дев-бандлер.")
+            if _smart_n_chk < 2:
+                return self._deny(mint, "no-socials-anon-rug", f"🚫 [NO-SOCIALS] У {symbol} ({mint[:8]}) 0 соцсетей/сайтов (Twitter/TG/Web) на кастомном DEX-пуле — анонимный дев-бандлер.")
             
         if is_vip:
             print(f"🚀 [VIP] {symbol}: Проверка клонов и соцсетей пройдена!")
@@ -2889,7 +2879,7 @@ class Analyzer:
                         continue
                     if any(w in owner.lower() for w in pool_keywords) or any(w in addr.lower() for w in pool_keywords):
                         continue
-                    if pct > 80.0:  # Первичный кёрв Pump.fun
+                    if pct > 80.0 and str((pair_data or {}).get("dexId", "")).lower() in ("pump", "pumpfun"):  # Первичный кёрв Pump.fun
                         continue
                     non_curve_accounts.append((amt, pct, owner))
                 

@@ -561,11 +561,12 @@ class GrokJevEngine:
         _req_soc_age = float(getattr(_c, "REQUIRE_SOCIALS_MIN_AGE_MIN", 25.0))
         _vol_liq_ratio_g = (vol_m5 / max(eff_liq, 1.0)) if eff_liq > 0 else 0.0
         _avg_tx_g = vol_m5 / max(1, b5 + s5)
-        _is_burned_lp_g = mint.endswith(("pump", "bonk", "BAGS")) or dex_id in ("pumpswap", "pump", "pumpfun")
+        _is_burned_lp_g = _c.is_launchpad_mint(mint) or dex_id in ("pump", "pumpfun")
         _is_organic_stealth = False
         if age_min >= _req_soc_age and _links_cnt_g == 0 and not _soc_unk_g:
             _is_organic_stealth = (
-                (eff_liq >= 5000.0 or is_pump)
+                _is_burned_lp_g
+                and (eff_liq >= 5000.0 or is_pump)
                 and vol_m5 >= 1200.0
                 and (_vol_liq_ratio_g >= 0.45 or vol_m5 >= 15000.0)
                 and _vol_liq_ratio_g <= 8.5
@@ -590,18 +591,21 @@ class GrokJevEngine:
         if fdv_mc > 100000.0 and eff_liq < 35000.0 and eff_liq < 0.02 * fdv_mc:
             return False, f"fdv-liquidity-trap liq ${eff_liq:,.0f} < 2% of FDV ${fdv_mc:,.0f} (phantom valuation)"
 
-        # 3. Живой импульс ракеты (LIVE ROCKET MOMENTUM)
-        # Разрешаем моментум от +1.0% (вместо 2.5%), а при преобладании покупателей (b5 >= s5 * 1.25)
-        # разрешаем вход на микро-откате покупателей до -2.5% (кейсы TAOLF +86%, BTC BANK +145%)
-        _is_buyer_dip_g = (b5 >= int(s5 * 1.25) and vol_m5 >= 2500.0 and (b5 + s5) >= 20 and m5 >= -2.5)
-        _min_m5_jev = 1.0 if (eff_liq >= 14000.0 and b5 >= int(s5 * 1.05) and vol_m5 >= 2500.0) else 1.8
-        if m5 < _min_m5_jev and not _is_buyer_dip_g:
-            return False, f"no-momentum m5 {m5:+.1f}% < +{_min_m5_jev:.1f}% (coin is flat/standing still)"
-        if age_min >= 20.0:
-            _is_massive_mature_flow_g = (vol_m5 >= 8000.0 and eff_liq >= 15000.0 and b5 >= s5 and m5 >= 1.0)
-            _is_strong_jev_breakout = (m5 >= 1.5 and vol_m5 >= 1500.0 and b5 >= s5 and (b5 + s5) >= 15)
-            if not _is_massive_mature_flow_g and not _is_strong_jev_breakout and (vol_m5 < 2500.0 or ((vol_m5 / max(eff_liq, 1.0)) < 0.07 and vol_m5 < 8000.0) or m5 < 1.0 or (b5 + s5) < 15):
-                return False, f"slow-mature-pool age {age_min:.0f}m vol5 ${vol_m5:,.0f} v/l {(vol_m5/max(eff_liq,1.0)):.2f}x"
+        # 3. Живой импульс ракеты (единый классификатор: пробои, V-развороты и откаты покупателей)
+        _h6_raw_g = pc.get("h6")
+        _h6_val_g = float(_h6_raw_g) if _h6_raw_g is not None else None
+        _min_h1_g = float(getattr(_c, "JEV_MIN_H1_PCT", -8.0))
+        _min_h6_g = float(getattr(_c, "JEV_MIN_H6_PCT", -25.0))
+        _mom_ok_g, _mom_why_g = _c.evaluate_entry_momentum(
+            m5=m5, m1=m1, h1=h1, h6=_h6_val_g,
+            age_min=age_min, vol5_usd=vol_m5, liq_usd=eff_liq,
+            buys5=b5, sells5=s5, min_h1=_min_h1_g, min_h6=_min_h6_g,
+        )
+        if not _mom_ok_g and (
+            _mom_why_g.startswith("no-momentum") or _mom_why_g.startswith("slow-mature-pool")
+        ):
+            return False, _mom_why_g
+
         _max_m5_allowed = float(getattr(_c, "MAX_ENTRY_M5_PCT", 150.0))
         if m5 > _max_m5_allowed:
             # Для свежих выпускников (<8м, FDV <= $140k) m5 в DexScreener считается от начальной цены бондинг-кривой ($2.5k -> $20k-$70k = +600%..+1400%, кейс NOFOMO +687% на $17k FDV перед 3x!)
@@ -622,28 +626,8 @@ class GrokJevEngine:
             if b5 < s5 and (_sell_ratio_g >= 0.55 or (_sell_ratio_g >= 0.50 and _vl_ratio_g >= 3.5)):
                 return False, f"heavy-sell-pressure {_sell_ratio_g*100:.0f}% sells ({s5}/{_tot_tx_g}) v/l {_vl_ratio_g:.1f}x (whale exit dump)"
 
-        # Остывающий поздний памп: токен старше 20м режем ТОЛЬКО если m5 отрицательный или нулевой (реальный дамп)
-        if age_min >= 20.0 and m5 < 1.2:
-            return False, f"late-fade age {age_min:.0f}m m5 {m5:+.1f}% < +1.2% (old token cooling off, not a live rocket)"
-        
-        # Защита от молодых «дохлых кошек» (кейс GETAJOB: пик $255k на 1-й минуте -> обвал -85% -> отскок в сливе h1=-22% на 8-й минуте -> финальный раг -98.6%):
-        # На молодых токенах (<45м) h1 показывает изменение цены от открытия DEX-пула. Если монете >= 3.0м и h1 < -15%, значит пул уже слили ниже цены миграции!
-        if 3.0 <= age_min < 45.0 and h1 < -15.0:
-            _is_young_v_rev = (m5 >= 18.0 and vol_m5 >= 18000.0 and eff_liq >= 18000.0 and b5 >= s5 * 1.35 and m1 >= 1.0)
-            if not _is_young_v_rev:
-                return False, f"young-dead-cat-bleed h1 {h1:+.1f}% < -15.0% at age {age_min:.1f}m (post-pump distribution bleed)"
-
-        # Проверяем часовой тренд для монет >= 45 минут:
-        if age_min >= 45.0:
-            _min_h1 = float(getattr(_c, "JEV_MIN_H1_PCT", -8.0))
-            _is_jev_v_rev = (h1 >= -25.0 and m5 >= 12.0 and vol_m5 >= 15000.0 and eff_liq >= 18000.0 and b5 >= s5 * 1.30)
-            if h1 < _min_h1 and not _is_jev_v_rev:
-                return False, f"hourly-downtrend h1 {h1:+.1f}% < {_min_h1:+.1f}% (dead-cat bounce)"
-            _h6_raw = pc.get("h6")
-            if _h6_raw is not None and age_min >= 90.0:
-                _min_h6 = float(getattr(_c, "JEV_MIN_H6_PCT", -25.0))
-                if float(_h6_raw or 0) < _min_h6 and not _is_jev_v_rev:
-                    return False, f"h6-downtrend {float(_h6_raw or 0):+.1f}% < {_min_h6:+.1f}% (monet is bleeding)"
+        if not _mom_ok_g:
+            return False, _mom_why_g
 
         # 4. Объем и давление покупателей:
         # 4.0. Wash-Trading Spike Guard: отличаем симметричную бот-накрутку от реального пробоя покупателями
@@ -1510,16 +1494,13 @@ class GrokJevEngine:
             except Exception:
                 pass
             _dex_id_aud = str(pair_data.get("dexId", "")).lower()
-            _is_launchpad_aud = is_pump or address.endswith("pump") or address.endswith("moon") or _is_grad_aud or (is_raw_pump_curve and _dex_id_aud in ("pump", "pumpfun", "pumpswap"))
-            _txs_m5_aud = (pair_data.get("txns") or {}).get("m5") or {}
-            _b5_aud = int(_txs_m5_aud.get("buys", 0) or 0)
-            _s5_aud = int(_txs_m5_aud.get("sells", 0) or 0)
-            _vm5_aud = float((pair_data.get("volume") or {}).get("m5", 0) or 0)
-            _has_organic_flow = (_b5_aud >= 20 and _b5_aud >= int(_s5_aud * 1.10) and _vm5_aud >= 3500.0)
+            _is_launchpad_aud = _c.is_launchpad_mint(address) or (
+                _is_grad_aud and _c.is_launchpad_mint(address)
+            ) or (is_raw_pump_curve and _dex_id_aud in ("pump", "pumpfun"))
 
-            # Пропускаем монеты с протокольных лаунчпадов (PumpSwap/Pump.fun) и монеты с доказанной органикой/смарт-баерами
-            if not _is_launchpad_aud and not _has_organic_flow and _smart_n_chk < 1 and eff_liq < 100000.0:
-                return False, f"no-socials-amm-scam (0 соцсетей/сайтов на DEX — анонимный дев-бандлер под слив пула в 0)", _h_stats
+            # Кастомные не-launchpad токены без соцсетей — главный источник одноразовых Remove-LP рагов (кейс WASTED $109k -> $0)
+            if not _is_launchpad_aud and not bool(pair_data.get("_socials_unknown", False)) and _smart_n_chk < 2:
+                return False, f"no-socials-amm-scam (0 соцсетей/сайтов на кастомном DEX-пуле — анонимный дев-раг под Remove LP)", _h_stats
 
         # 3. Аудит для сети SOLANA
         if chain == "solana":
@@ -1597,23 +1578,16 @@ class GrokJevEngine:
                     target_pair = str(pair_data.get("pairAddress") or "").strip()
                     _dex_rc_low = str(pair_data.get("dexId") or "").lower()
                     has_verified_locked_lp = False
-                    for mkt in (rc_data.get("markets") or []):
-                        if isinstance(mkt, dict):
-                            mkt_pubkey = str(mkt.get("pubkey") or "").strip()
-                            mkt_type = str(mkt.get("marketType") or "").lower()
-                            lp_info = mkt.get("lp") or {}
-                            if isinstance(lp_info, dict):
-                                mkt_quote_usd = float(lp_info.get("quoteUSD") or 0.0)
-                                lp_unlocked = float(lp_info.get("lpUnlocked") or 0.0)
-                                lp_locked_pct = float(lp_info.get("lpLockedPct") or 0.0)
-                                lp_burned_pct = float(lp_info.get("lpBurnedPct") or 0.0)
-                                _safe_lp = (lp_burned_pct >= 80.0) or ("meteora" not in mkt_type and lp_locked_pct >= 80.0)
-                                if _safe_lp and (mkt_quote_usd >= 2000 or (target_pair and mkt_pubkey == target_pair)):
-                                    has_verified_locked_lp = True
-                                if lp_unlocked > 0:
-                                    print(f"ℹ️ [RUGCHECK-LP] {symbol} ({address[:8]}): LP lock {lp_locked_pct:.1f}%, burn {lp_burned_pct:.1f}%, unl ${lp_unlocked:,.0f} — проверка.")
+                    has_verified_locked_lp = _c.verify_rugcheck_lp_markets(
+                        rc_data.get("markets") or [],
+                        target_pair=target_pair,
+                        raw_liq=raw_liq,
+                        symbol=symbol,
+                        mint=address,
+                        log_unlocked=True,
+                    )
 
-                    # Для кастомных не-launchpad пулов без залоченного/сожжённого LP пускаем только зрелые и ликвидные DEX-раннеры
+                    # Для кастомных не-launchpad пулов без подтверждённого сожжённого/залоченного LP пускаем только зрелые и ликвидные DEX-раннеры с соцсетями
                     if not is_canonical_pump and not has_verified_locked_lp:
                         _eff_l_rc = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
                         _vm5_rc = float((pair_data.get("volume") or {}).get("m5", 0) or 0)
@@ -1622,8 +1596,8 @@ class GrokJevEngine:
                         _s5_rc = int(_tx_rc.get("sells", 0) or 0)
                         _ca_rc = float(pair_data.get("pairCreatedAt") or 0)
                         _age_rc = ((time.time() * 1000.0 - _ca_rc) / 60000.0) if _ca_rc > 0 else 0.0
-                        if not _c.is_safe_unlocked_custom_runner(_eff_l_rc, _age_rc, _vm5_rc, _b5_rc, _s5_rc):
-                            return False, f"unlocked-custom-lp (liq ${_eff_l_rc:.0f}, age {_age_rc:.1f}m, vol ${_vm5_rc:.0f})", _h_stats
+                        if not _c.is_safe_unlocked_custom_runner(_eff_l_rc, _age_rc, _vm5_rc, _b5_rc, _s5_rc, has_socials=has_socials):
+                            return False, f"unlocked-custom-lp (liq ${_eff_l_rc:.0f}, age {_age_rc:.1f}m, vol ${_vm5_rc:.0f}, soc={int(bool(has_socials))})", _h_stats
                         print(f"💎 [GROK-JEV-UNLOCKED-RUNNER] {symbol} ({address[:8]}): кастомный незалоченный LP допущен (liq ${_eff_l_rc:,.0f}, age {_age_rc:.0f}м, vol5 ${_vm5_rc:,.0f}, {_b5_rc}b/{_s5_rc}s)!")
 
                     # Проверка держателей и дева (Holders & Sybil analysis)
@@ -1668,6 +1642,32 @@ class GrokJevEngine:
                                 dev_pct = float(h.get("pct", 0) or 0.0)
                                 break
 
+                    _unk_large_pks = []
+                    for h in holders:
+                        _pct_chk = float(h.get("pct", 0) or 0.0)
+                        _own_chk = str(h.get("owner") or "")
+                        _adr_chk = str(h.get("address") or "")
+                        if (
+                            _pct_chk > 50.0
+                            and not is_raw_pump_curve
+                            and _own_chk not in pool_accounts
+                            and _adr_chk not in pool_accounts
+                            and _own_chk not in DEX_POOL_AUTHORITIES
+                            and _adr_chk not in DEX_POOL_AUTHORITIES
+                            and not any(w in _own_chk.lower() for w in pool_keywords)
+                            and not any(w in _adr_chk.lower() for w in pool_keywords)
+                        ):
+                            _cand_pk = _own_chk or _adr_chk
+                            if _cand_pk:
+                                _unk_large_pks.append(_cand_pk)
+                    _verified_prog_pools = set()
+                    if _unk_large_pks:
+                        try:
+                            from rug_wallet_analysis import verify_program_owned_accounts as _verify_pool_pks
+                            _verified_prog_pools = await _verify_pool_pks(_unk_large_pks)
+                        except Exception:
+                            _verified_prog_pools = set()
+
                     non_curve = []
                     pool_pct_sum = 0.0
                     for h in holders:
@@ -1681,40 +1681,46 @@ class GrokJevEngine:
                         if any(w in owner.lower() for w in pool_keywords) or any(w in addr.lower() for w in pool_keywords):
                             pool_pct_sum += pct
                             continue
-                        if pct > 50.0:
+                        if pct > 50.0 and (is_raw_pump_curve or owner in _verified_prog_pools or addr in _verified_prog_pools):
                             pool_pct_sum += pct
                             continue
                         non_curve.append((amt, pct, owner))
 
                     top_10 = non_curve[:10]
-                    # Jito-бандл (Сивил-атака дева: 4+ кошельков с одинаковым %)
+                    top_10_sum = sum(x[1] for x in top_10)
+                    largest_whale = top_10[0][1] if top_10 else 0.0
+                    _tx_syb = (pair_data.get("txns") or {}).get("m5") or {}
+                    _b5_syb = int(_tx_syb.get("buys", 0) or 0)
+                    _s5_syb = int(_tx_syb.get("sells", 0) or 0)
+                    _ca_aud = float(pair_data.get("pairCreatedAt") or 0)
+                    _age_aud = ((time.time() * 1000.0 - _ca_aud) / 60000.0) if _ca_aud > 0 else 0.0
+                    _liq_aud = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
+                    _dist_runner_g = _c.is_distributed_safe_runner(
+                        _liq_aud, _age_aud, vol_m5, _b5_syb, _s5_syb,
+                        top1_pct=largest_whale, top10_pct=top_10_sum, dev_pct=dev_pct,
+                        is_lp_safe=(is_canonical_pump or has_verified_locked_lp),
+                    )
+                    # Jito-бандл (Сивил-атака дева: 4+ кошельков с одинаковым %; сохраняем строгий блок для <3м и без массовой дистрибуции)
                     bundle_suspects = [round(pct, 1) for (amt, pct, owner) in top_10 if pct >= 2.5]
-                    if len(bundle_suspects) >= 4:
+                    if len(bundle_suspects) >= 4 and not (_dist_runner_g and _age_aud >= 3.0):
                         from collections import Counter
                         counts = Counter(bundle_suspects)
                         most_common_pct, count = counts.most_common(1)[0]
                         if count >= 4 and most_common_pct >= 2.5 and (most_common_pct * count) >= 12.0:
                             return False, f"jito-bundle sybil attack ({count} wallets with ~{most_common_pct:.1f}%)", _h_stats
 
-                    top_10_sum = sum(x[1] for x in top_10)
-                    largest_whale = top_10[0][1] if top_10 else 0.0
-
-                    # Детектор распылённой сибил-лесенки: не блокируем здоровый высокооборотный ритейл (кейс OTHERM $102k vol5, 543b/354s, top10=5.3%)
-                    _tx_syb = (pair_data.get("txns") or {}).get("m5") or {}
-                    _b5_syb = int(_tx_syb.get("buys", 0) or 0)
-                    _s5_syb = int(_tx_syb.get("sells", 0) or 0)
-                    _is_viral_retail_g = (vol_m5 >= 25000.0 and _b5_syb >= 150 and _b5_syb >= _s5_syb)
-                    if 0.0 < pool_pct_sum <= 38.0 and len(top_10) >= 8 and not _is_viral_retail_g:
-                        if top_10_sum < 7.0 and largest_whale < 0.85:
+                    # Детектор распылённой сибил-лесенки: не блокируем здоровый высокооборотный ритейл (OTHERM $102k vol5, 543b/354s)
+                    _is_viral_retail_g = (vol_m5 >= 15000.0 and _b5_syb >= 80 and _b5_syb >= _s5_syb and _liq_aud >= 15000.0)
+                    if 0.0 < pool_pct_sum <= 38.0 and len(top_10) >= 8 and not (_is_viral_retail_g or _dist_runner_g):
+                        if top_10_sum < 6.0 and largest_whale < 0.70:
                             return (
                                 False,
                                 f"atomized-sybil-supply (pool={pool_pct_sum:.1f}%, but top10={top_10_sum:.1f}% / top1={largest_whale:.2f}% — 120+ wallet staircase split)",
                                 _h_stats,
                             )
 
-                    # Детектор равномерной сибил-нарезки стека дева (кейс BALLFIN: 19 кошельков по 1.88%..2.71%, CV=0.08, h10/h1=0.82, top20=43%):
-                    # В живых ракетах (VICECITY, FYAT, mihao, CATE, FOOD) распределение степенное: CV >= 0.17, h10/h1 <= 0.60.
-                    if len(top_10) >= 8 and top_10_sum >= 18.0:
+                    # Детектор равномерной сибил-нарезки стека дева (кейс BALLFIN: top20=43%), не режем уже распределённые ликвидные ракеты
+                    if len(top_10) >= 8 and top_10_sum >= 18.0 and not _dist_runner_g:
                         import statistics as _st_jev
                         _t10_pcts = [x[1] for x in top_10]
                         _t10_mean = _st_jev.mean(_t10_pcts)
@@ -1723,7 +1729,7 @@ class GrokJevEngine:
                         if _t10_cv <= 0.14 or (_h10_ratio >= 0.68 and _t10_pcts[-1] >= 1.5):
                             return False, f"flat-sybil-split (top10 {top_10_sum:.1f}% across uniform wallets: CV={_t10_cv:.2f}, h10/h1={_h10_ratio:.2f})", _h_stats
                     _mid_sybils = [x[1] for x in non_curve[:20] if 1.5 <= x[1] <= 4.5]
-                    if len(_mid_sybils) >= 12 and sum(_mid_sybils) >= 28.0:
+                    if len(_mid_sybils) >= 12 and sum(_mid_sybils) >= 28.0 and not _dist_runner_g:
                         _mid_ratio = max(_mid_sybils) / max(min(_mid_sybils), 0.1)
                         if _mid_ratio <= 1.65:
                             return False, f"top20-sybil-swarm ({len(_mid_sybils)} wallets holding 1.5-4.5% = {sum(_mid_sybils):.1f}% supply)", _h_stats
@@ -1751,7 +1757,7 @@ class GrokJevEngine:
 
                     # Layer 7 (insiders/graph) + Layer 8 (SPL Delegations) + Layer 9/10 (Staircase & Sybil Farm) параллельно!
                     _holder_tok_accs = [str(h.get("address") or "") for h in holders[:20] if h.get("address") and str(h.get("address")) not in pool_accounts]
-                    _holder_owners = [str(h.get("owner") or "") for h in holders[:20] if h.get("owner") and str(h.get("owner")) not in pool_accounts and float(h.get("pct") or 0) <= 50.0]
+                    _holder_owners = [str(h.get("owner") or "") for h in holders[:20] if h.get("owner") and str(h.get("owner")) not in pool_accounts and str(h.get("owner")) not in _verified_prog_pools]
                     _raw_sup = float((token_info.get("supply") or 0.0))
                     _dec_sup = int(token_info.get("decimals") or 6)
                     _ui_sup = (_raw_sup / (10 ** _dec_sup)) if _raw_sup > 0 else 1_000_000_000.0
@@ -1760,12 +1766,18 @@ class GrokJevEngine:
                         _gp.check_spl_holder_delegations(address, holder_token_accounts=_holder_tok_accs, total_supply_ui=_ui_sup),
                         _gp.check_staircase_and_sybil_farm(address, pair_address=str(pair_data.get("pairAddress") or ""), holder_owners=_holder_owners),
                     )
-                    if not _l7_ok:
-                        return False, f"auditor-layer7 {_l7_why}", _h_stats
                     if not _l8_ok:
                         return False, f"auditor-layer8 {_l8_why}", _h_stats
+                    if not _l7_ok:
+                        if _dist_runner_g:
+                            print(f"⚠️ [AUDITOR-L7-WARN] {symbol} ({address[:8]}): {_l7_why} — допущен как распределённый ликвидный раннер (top1={largest_whale:.1f}%, top10={top_10_sum:.1f}%).")
+                        else:
+                            return False, f"auditor-layer7 {_l7_why}", _h_stats
                     if not _l9_ok:
-                        return False, f"auditor-layer9/10 {_l9_why}", _h_stats
+                        if _dist_runner_g:
+                            print(f"⚠️ [AUDITOR-L9-WARN] {symbol} ({address[:8]}): {_l9_why} — допущен как распределённый ликвидный раннер (vol5=${vol_m5:,.0f}).")
+                        else:
+                            return False, f"auditor-layer9/10 {_l9_why}", _h_stats
                 else:
                     # Фоллбэк: RugCheck API вернул 400/404/429/500 -> проверяем GoPlus holder stats + Layer 8/9/10
                     (_l8_fb_ok, _l8_fb_why), (_l9_fb_ok, _l9_fb_why) = await asyncio.gather(
@@ -1815,9 +1827,12 @@ class GrokJevEngine:
                     _fcr = await pre_entry_rug_check(address, pair_data=pair_data, symbol=symbol)
                     _fcr_compact = compact_summary(_fcr)
                     if _fcr.get("verdict") == "BLOCK":
-                        print(f"🚫 [FCR-BLOCK] {symbol} ({address[:8]}): {_fcr.get('report', '')}")
-                        return False, "fcr-first-candle-rug: " + "; ".join(_fcr.get("reasons", [])[:3]), _h_stats
-                    if _fcr.get("verdict") == "WARN":
+                        if locals().get("_dist_runner_g", False):
+                            print(f"⚠️ [FCR-WARN-RUNNER] {symbol} ({address[:8]}): {_fcr.get('report', '')} — пропуск ликвидного распределённого раннера.")
+                        else:
+                            print(f"🚫 [FCR-BLOCK] {symbol} ({address[:8]}): {_fcr.get('report', '')}")
+                            return False, "fcr-first-candle-rug: " + "; ".join(_fcr.get("reasons", [])[:3]), _h_stats
+                    elif _fcr.get("verdict") == "WARN":
                         print(f"⚠️ [FCR-WARN] {symbol} ({address[:8]}): {_fcr.get('report', '')}")
                     _fcr_feat = dict(_fcr_compact or {})
                 except Exception as _fcr_e:
@@ -2018,7 +2033,7 @@ class GrokJevEngine:
             return False, f"anti-scam-reject {sec_why}"
 
         # 4.5. Нет данных о холдерах (RugCheck/GoPlus молчат) -> не входим вслепую (для не-pump токенов):
-        _is_pump_token = address.endswith("pump") or str(pair.get("dexId", "")).lower() in ("pump", "pumpfun", "pumpswap")
+        _is_pump_token = _c.is_launchpad_mint(address) or str(pair.get("dexId", "")).lower() in ("pump", "pumpfun")
         if getattr(_c, "JEV_REQUIRE_HOLDER_DATA", True) and not _is_pump_token:
             if not (float((_h_stats or {}).get("top1_pct", 0) or 0) > 0 or float((_h_stats or {}).get("top10_pct", 0) or 0) > 0):
                 return False, "anti-scam-reject holders-no-data (нет данных о холдерах)"
