@@ -793,7 +793,7 @@ async def get_trending() -> list:
             age_h = (time.time() * 1000 - created_ms) / 3600000.0
             tx = attrs.get("transactions") or {}
             m5_tx = int((tx.get("m5") or {}).get("buys", 0) or 0) + int((tx.get("m5") or {}).get("sells", 0) or 0)
-            if age_h > 4.0 and vol5_usd < 5000.0:
+            if age_h > 4.0 and (vol5_usd < 2000.0 or m5_tx < 12):
                 return
             if age_h > 12.0:
                 return
@@ -815,7 +815,7 @@ async def get_trending() -> list:
     # Охватывает ТОП-80 самых горячих 5м пулов Solana (PumpSwap / Meteora / Raydium).
     gt_pages = (
         "/networks/solana/trending_pools?duration=5m&page=1",
-        "/networks/solana/new_pools?page=1",
+        "/networks/solana/trending_pools?duration=1h&page=1",
     )
     for path in gt_pages:
         d = await _gt_get(path, retries=0, timeout=6)

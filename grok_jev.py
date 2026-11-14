@@ -1221,7 +1221,7 @@ class GrokJevEngine:
         except Exception:
             pass
 
-        # 1.1 Solana: Market Data Organic Trending
+        # 1.1 Solana: Market Data Organic Trending + Gainers
         try:
             import market_data
             tr_pools = await market_data.get_trending()
@@ -1230,13 +1230,24 @@ class GrokJevEngine:
                 if m and str(m).endswith(("pump", "moon")) and m not in seen:
                     seen.add(m)
                     candidates.append((m, "solana"))
+            ds_g = await market_data.fetch_dexscreener_gainers("solana", "5m")
+            for g in (ds_g or []):
+                m = g.get("mint")
+                liq_g = float(g.get("liquidity", 0) or 0)
+                age_g = float(g.get("age_m", 999) or 999)
+                if m and str(m).endswith(("pump", "moon")) and liq_g >= 4500.0 and age_g <= 720.0 and m not in seen:
+                    seen.add(m)
+                    candidates.append((m, "solana"))
         except Exception:
             pass
 
-        # 2. DexScreener Top Boosts (Строго проверенный топ SOLANA, исключая мусорные 0-минутные спам-профили)
+        # 2. DexScreener Top/Latest Boosts, Profiles, Takeovers & PumpSwap Search
         from http_client import fetch_json
         for url in [
-            "https://api.dexscreener.com/token-boosts/top/v1"
+            "https://api.dexscreener.com/token-boosts/top/v1",
+            "https://api.dexscreener.com/token-boosts/latest/v1",
+            "https://api.dexscreener.com/token-profiles/latest/v1",
+            "https://api.dexscreener.com/community-takeovers/latest/v1",
         ]:
             try:
                 st, data = await fetch_json(url, timeout=5, retries=0)
@@ -1249,6 +1260,19 @@ class GrokJevEngine:
                             candidates.append((tok, "solana"))
             except Exception:
                 pass
+        try:
+            st_s, data_s = await fetch_json("https://api.dexscreener.com/latest/dex/search?q=pumpswap", timeout=5, retries=0)
+            if st_s == 200 and isinstance(data_s, dict):
+                for p in (data_s.get("pairs") or []):
+                    if str(p.get("chainId", "")).lower() != "solana":
+                        continue
+                    tok = str(((p.get("baseToken") or {}).get("address")) or "").strip()
+                    liq_s = float(((p.get("liquidity") or {}).get("usd", 0)) or 0)
+                    if tok and tok.endswith(("pump", "moon")) and liq_s >= 4500.0 and tok not in seen:
+                        seen.add(tok)
+                        candidates.append((tok, "solana"))
+        except Exception:
+            pass
 
         # Примечание: тренды GeckoTerminal уже подтянуты на шаге 1.1 через общий кэш market_data.get_trending() (без дублирования запросов и 429)
         FUNNEL_STATS["universe"] += len(candidates)

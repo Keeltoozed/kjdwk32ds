@@ -1062,20 +1062,31 @@ async def analyze_funding_clusters(mint: str, cohort: List[dict]) -> dict:
     #      если >= 3 кошельков когорты профинансированы одноразовыми прокладками (<= 5 tx),
     #      объединяем их в единый сибил-кластер burner-relay!
     burner_relay_members: List[dict] = []
+    public_relayer_funders: set = set()
     candidate_funders: List[str] = []
     for f in groups.keys():
         if f and f not in _KNOWN_LIQUIDITY_SOURCES and _known_source_label(f) == "unknown":
             candidate_funders.append(f)
-    if len(candidate_funders) >= 2:
+    if len(candidate_funders) >= 1:
         try:
+            _check_funders = candidate_funders[:12]
             f_sigs_res = await _rpc_batch([
-                ("getSignaturesForAddress", [f_addr, {"limit": 10}])
-                for f_addr in candidate_funders
+                ("getSignaturesForAddress", [f_addr, {"limit": 30}])
+                for f_addr in _check_funders
             ], timeout=4.0)
             burner_funders = set()
-            for f_addr, sigs in zip(candidate_funders, f_sigs_res or []):
-                if isinstance(sigs, list) and 1 <= len(sigs) <= 6:
-                    burner_funders.add(f_addr)
+            for f_addr, sigs in zip(_check_funders, f_sigs_res or []):
+                if isinstance(sigs, list):
+                    if 1 <= len(sigs) <= 6:
+                        burner_funders.add(f_addr)
+                    elif len(sigs) >= 25:
+                        times = [
+                            int(s.get("blockTime") or 0)
+                            for s in sigs
+                            if isinstance(s, dict) and s.get("blockTime")
+                        ]
+                        if len(times) >= 2 and (max(times) - min(times)) <= 180:
+                            public_relayer_funders.add(f_addr)
             if len(burner_funders) >= 2:
                 for f_addr in burner_funders:
                     burner_relay_members.extend(groups.get(f_addr, []))
@@ -1162,7 +1173,7 @@ async def analyze_funding_clusters(mint: str, cohort: List[dict]) -> dict:
         cluster = {
             "source": "funding",
             "funder": f,
-            "funder_label": _known_source_label(f),
+            "funder_label": "known-public-relayer" if f in public_relayer_funders else _known_source_label(f),
             "wallets": [m["wallet"] for m in members],
             "wallet_count": len(members),
             "total_pct": round(total_pct, 3),
@@ -1369,9 +1380,14 @@ def _score_clusters(clusters: List[dict]) -> Tuple[float, List[dict]]:
         is_burner_relay = src_type == "burner_relay"
 
         if not is_graph and not is_burner_relay:
-            # Источник — DEX/агрегатор: «общий SOL-источник» ничего не значит
+            # Источник — DEX/агрегатор/глобальный публичный релейер терминала: «общий SOL-источник» ничего не значит
             if label == "known-dex":
                 continue
+            if label == "known-public-relayer":
+                if float(c.get("launch_prep_ratio", 0.0) or 0.0) >= 0.75 and float(c.get("fresh_ratio", 0.0) or 0.0) >= 0.60:
+                    pass
+                else:
+                    continue
             if c.get("funder") in set(_cfg("FCR_TRUSTED_FUNDERS", []) or []):
                 continue
 
@@ -1399,6 +1415,9 @@ def _score_clusters(clusters: List[dict]) -> Tuple[float, List[dict]]:
             discount = 1.0
         elif label in _EXCHANGE_LABELS:
             discount = 0.45
+        elif fresh_ratio == 0.0 and equal_ratio < 0.60 and n < 5:
+            # Все кошельки кластера зрелые (>8 tx) с разными суммами SOL — обычные активные трейдеры через общий релейер
+            discount = 0.35 if burst else 0.30
         elif not burst and fresh_ratio < 0.34 and n < 5:
             # Не бурст + не одноразовые (при малом числе кошельков <5): скорее всего честные люди с общим кошельком
             # (вывод с биржи). Если же 5+ топ-холдеров одного мемкоина профинансированы с одного неизвестного кошелька — скидку не даём!

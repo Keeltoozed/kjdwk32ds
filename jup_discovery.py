@@ -237,7 +237,7 @@ async def fetch_jup_tokens() -> list:
                     if not addr.endswith(("pump", "moon")):
                         continue
                     liq_p = float((p.get("liquidity") or {}).get("usd", 0) or 0)
-                    if liq_p < 7500.0:
+                    if liq_p < max(4500.0, float(getattr(config, "MIN_GRADUATED_LIQ_USD", 5000.0)) * 0.9):
                         continue
                     vol5_p = float((p.get("volume") or {}).get("m5", 0) or 0)
                     if vol5_p < 2000.0:
@@ -288,8 +288,7 @@ async def fetch_jup_tokens() -> list:
         except Exception:
             pass
 
-        # 4. DexScreener Top Boosts & Latest Profiles ВСЕГДА (не только fallback!):
-        # Именно здесь крутятся вирусные хайп-монеты с реальным маркетингом и вниманием рынка!
+        # 4. DexScreener Token Boosts + Profiles + Takeovers (с пакетной предвалидацией пулов без мусора)
         try:
             ds_boost_urls = (
                 "https://api.dexscreener.com/token-boosts/top/v1",
@@ -301,6 +300,7 @@ async def fetch_jup_tokens() -> list:
                 *[fetch_json(u, timeout=5, retries=0) for u in ds_boost_urls],
                 return_exceptions=True
             )
+            boost_mints = []
             for res in ds_b_res:
                 if isinstance(res, tuple) and len(res) == 2 and res[0] == 200 and isinstance(res[1], list):
                     for item in res[1]:
@@ -310,8 +310,43 @@ async def fetch_jup_tokens() -> list:
                         if not addr or addr.startswith("0x") or len(addr) < 32 or len(addr) > 44 or addr in seen or not addr.endswith(("pump", "moon")) or str(item.get("symbol") or "").upper() in SKIP_SYMBOLS:
                             continue
                         seen.add(addr)
-                        # Умеренный базовый вес для бустов, чтобы реальные 5m ракеты с подтверждённым объёмом ($50k+) шли ПЕРВЫМИ
-                        ranked.append((2.5, 1500.0, addr[:6], addr, "ds_top_boost"))
+                        boost_mints.append(addr)
+            min_boost_liq = max(4500.0, float(getattr(config, "MIN_GRADUATED_LIQ_USD", 5000.0)) * 0.9)
+            now_ms_b = time.time() * 1000
+            for i_b in range(0, min(len(boost_mints), 90), 30):
+                chunk_b = boost_mints[i_b:i_b + 30]
+                st_b, pairs_b = await fetch_json(f"https://api.dexscreener.com/tokens/v1/solana/{','.join(chunk_b)}", timeout=6, retries=0)
+                if st_b != 200 or not isinstance(pairs_b, list):
+                    continue
+                best_b = {}
+                for p in pairs_b:
+                    if not isinstance(p, dict) or str(p.get("chainId", "")).lower() != "solana":
+                        continue
+                    bm = str(((p.get("baseToken") or {}).get("address")) or "").strip()
+                    if not bm:
+                        continue
+                    liq_b = float((p.get("liquidity") or {}).get("usd", 0) or 0)
+                    vol_b = float((p.get("volume") or {}).get("m5", 0) or 0)
+                    prev_b = best_b.get(bm)
+                    if not prev_b or (liq_b, vol_b) > (float((prev_b.get("liquidity") or {}).get("usd", 0) or 0), float((prev_b.get("volume") or {}).get("m5", 0) or 0)):
+                        best_b[bm] = p
+                for bm, p in best_b.items():
+                    dex_b = str(p.get("dexId", "")).lower()
+                    if not allow_raw_curve and dex_b in ("pump", "pumpfun", "moonshot", "meteoradbc"):
+                        continue
+                    liq_b = float((p.get("liquidity") or {}).get("usd", 0) or 0)
+                    if liq_b < min_boost_liq:
+                        continue
+                    ca_b = float(p.get("pairCreatedAt") or 0)
+                    age_b = ((now_ms_b - ca_b) / 60000.0) if ca_b > 0 else 999.0
+                    if age_b > 720.0:
+                        continue
+                    vol5_b = float((p.get("volume") or {}).get("m5", 0) or 0)
+                    m5_b = float((p.get("priceChange") or {}).get("m5", 0) or 0)
+                    if vol5_b < 1500.0 or m5_b < 1.0:
+                        continue
+                    sym_b = str(((p.get("baseToken") or {}).get("symbol")) or bm[:6]).upper().strip()
+                    ranked.append((m5_b, vol5_b, sym_b, bm, "ds_top_boost"))
         except Exception:
             pass
 
