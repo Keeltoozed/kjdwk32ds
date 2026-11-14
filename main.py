@@ -360,32 +360,21 @@ async def position_manager_loop(analyzer, tracker):
                     except Exception:
                         pass
 
-                # Infant Dump: не даём монете сложиться на первой минуте (кейс STONKS / DОG™)!
-                # Сразу сверяем провал <= -9.5% с живой котировкой Jupiter и мгновенно рубим реальный раг без провала в -30%!
+                # Infant Dump: применяется ТОЛЬКО для нематурных токенов (сырых кривых pump.fun).
+                # Зрелые токены (is_mature=True, вроде ASTRALIS) оцениваются ИСКЛЮЧИТЕЛЬНО через MatureExitManager,
+                # чтобы обычный спред Bid-Ask (-5%..-10%) на первых секундах не выбивал ракету до её пампа!
                 try:
-                    _inf_w = float(getattr(config, "INFANT_WINDOW_MIN", 0.5))
-                    _inf_p = -abs(float(getattr(config, "INFANT_DUMP_PCT", -0.095)))
-                    if minutes_held < _inf_w and pnl_pct <= _inf_p:
-                        _real_inf_dump = True
-                        try:
-                            _j_inf_px = await JupiterAPI.get_price(mint)
-                            if _j_inf_px and _j_inf_px > 0 and position.entry_price_usd > 0:
-                                _j_inf_pnl = (_j_inf_px - position.entry_price_usd) / position.entry_price_usd
-                                if _j_inf_pnl > -0.080:
-                                    _real_inf_dump = False
-                                    current_price = _j_inf_px
-                                    position.current_price_usd = _j_inf_px
-                                    position.infant_confirm_n = 0
-                                else:
-                                    current_price = _j_inf_px
-                                    pnl_pct = _j_inf_pnl
-                        except Exception:
-                            pass
-                        if _real_inf_dump:
-                            tracker.close_position(mint, current_price, f"Infant Dump ({pnl_pct*100:.1f}%)")
-                            continue
-                    else:
-                        position.infant_confirm_n = 0
+                    if not getattr(position, "is_mature", False):
+                        _inf_w = float(getattr(config, "INFANT_WINDOW_MIN", 0.5))
+                        _inf_p = -abs(float(getattr(config, "INFANT_DUMP_PCT", -0.180)))
+                        if minutes_held < _inf_w and pnl_pct <= _inf_p:
+                            _inf_c = int(getattr(position, "infant_confirm_n", 0) or 0) + 1
+                            position.infant_confirm_n = _inf_c
+                            if _inf_c >= 2:
+                                tracker.close_position(mint, current_price, f"Infant Dump ({pnl_pct*100:.1f}%)")
+                                continue
+                        else:
+                            position.infant_confirm_n = 0
                 except Exception:
                     pass
                 

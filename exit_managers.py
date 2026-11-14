@@ -104,16 +104,16 @@ class MatureExitManager:
         # =========================================================================
         # 1. ЖЕСТКИЙ КОНТРОЛЬ УБЫТКА (EMERGENCY CAP & STOP LOSS) — ПЕРВЫЙ ПРИОРИТЕТ!
         # =========================================================================
-        # СБРОС ДЕВ-ДАМПА НА ПЕРВОЙ СВЕЧЕ: если в первые 2.5 минуты монета пробивает -10%,
-        # это дамп — режем на -10% (макс loss -$0.50 на $5), не давая сползать в -25%..-50%!
-        if minutes_held <= 2.5 and pnl_pct <= -0.100:
+        # СБРОС ДЕВ-ДАМПА НА ПЕРВОЙ СВЕЧЕ: только при реальном обвале <= -15.0%
+        # (не выбиваем ракеты на обычном Bid-Ask спреде -5%..-10%)!
+        if minutes_held <= 2.5 and pnl_pct <= -0.150:
             return f"🚨 First Candle Rug Cut ({pnl_pct*100:.1f}% в первые {minutes_held*60:.0f}с)"
 
-        _emerg_cap = -abs(float(getattr(config, "EMERGENCY_CAP_PCT", -0.140)))
+        _emerg_cap = -abs(float(getattr(config, "EMERGENCY_CAP_PCT", -0.180)))
         if pnl_pct <= _emerg_cap:
             return f"Mature Emergency Cap ({pnl_pct*100:.1f}%)"
 
-        _base_sl = -abs(float(getattr(config, 'STOP_LOSS_PCT', -0.100)))
+        _base_sl = -abs(float(getattr(config, 'STOP_LOSS_PCT', -0.130)))
         _has_organic_bid = False
         _feats = getattr(position, "ml_features", None) or {}
         if isinstance(_feats, dict) and _feats:
@@ -121,12 +121,12 @@ class MatureExitManager:
             _f_bs = float(_feats.get("buy_sell_ratio", 0) or 0)
             if _f_liq >= 15000.0 and _f_bs >= 1.15:
                 _has_organic_bid = True
-        _sl = min(_base_sl, -0.120) if _has_organic_bid else _base_sl
+        _sl = min(_base_sl, -0.150) if _has_organic_bid else _base_sl
         if pnl_pct <= _sl:
             _sl_c = int(getattr(position, "sl_confirm_n", 0) or 0) + 1
             position.sl_confirm_n = _sl_c
-            # Требуем 2 тика подтверждения (или глубокий провал на 3% ниже стопа)
-            if _sl_c >= 2 or pnl_pct <= (_sl - 0.030):
+            # Требуем 2 тика подтверждения (или глубокий провал на 4% ниже стопа)
+            if _sl_c >= 2 or pnl_pct <= (_sl - 0.040):
                 return f"Mature Stop Loss ({pnl_pct*100:.1f}%)"
         else:
             position.sl_confirm_n = 0
