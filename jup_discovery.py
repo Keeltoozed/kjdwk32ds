@@ -136,6 +136,10 @@ async def fetch_jup_tokens() -> list:
                 sym = str(t.get("symbol") or "").upper().strip()
                 if not m or m.startswith("0x") or len(m) < 32 or len(m) > 44 or m in seen or sym in SKIP_SYMBOLS:
                     continue
+                # На Solana торгуем ТОЛЬКО канонические launchpad-токены с сожжённым LP (pump.fun / moonshot)
+                # Блокирует 100% кастомных рагпуллов (FRONK, SWJ, SIRIUS, HI, FLY, CRO, SI) прямо на входе в дискавери!
+                if not m.endswith(("pump", "moon")):
+                    continue
                 liq = float(t.get("liquidity") or 0.0)
                 is_grad = bool(t.get("graduatedAt") or t.get("graduatedPool") or (not m.endswith("pump") and liq >= 7500.0))
                 if not allow_raw_curve and not is_grad:
@@ -161,7 +165,8 @@ async def fetch_jup_tokens() -> list:
                 _max_pc1h = 2500.0 if (_is_fresh_jup and pc5 >= 2.0 and b5 >= s5) else float(getattr(config, "MAX_ENTRY_H1_PCT", 350.0))
                 if (pc1h > _max_pc1h and age_m > 4.0) or (pc1h < -25.0 and pc5 < 12.0):
                     continue
-                if pc5 < min_pc5 or vol5 < 1000.0:
+                _min_v5_req = 4500.0 if _is_fresh_jup else float(getattr(config, "MIN_VOLUME_M5", 7500.0))
+                if pc5 < min_pc5 or vol5 < _min_v5_req:
                     continue
                 seen.add(m)
                 ranked.append((pc5, vol5, sym, m, tag))
@@ -295,6 +300,10 @@ async def fetch_jup_tokens() -> list:
                 sym = str(t.get("symbol") or "").upper().strip()
                 if not m or m.startswith("0x") or len(m) < 32 or len(m) > 44 or m in seen or sym in SKIP_SYMBOLS:
                     continue
+                # На Solana торгуем ТОЛЬКО канонические launchpad-токены с сожжённым LP (pump.fun / moonshot)
+                # Блокирует 100% кастомных рагпуллов (FRONK, SWJ, SIRIUS, HI, FLY, CRO, SI) прямо на входе в дискавери!
+                if not m.endswith(("pump", "moon")):
+                    continue
                 liq = float(t.get("liquidity") or 0.0)
                 is_grad_r = bool(t.get("graduatedAt") or t.get("graduatedPool") or (not m.endswith("pump") and liq >= 7500.0))
                 if not allow_raw_curve and not is_grad_r:
@@ -409,6 +418,11 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
     _lq_drop_j = float((td or {}).get("_liq_drop_from_peak", 0.0) or 0.0)
     if _pk_drop_j <= -18.0 or _lq_drop_j <= -18.0:
         print(f"🚫 [{source_tag}-POST-PEAK-CRASH] {_sym_tmp} ({mint[:8]}): токен уже слился от пика (цена {_pk_drop_j:+.1f}%, ликва {_lq_drop_j:+.1f}%) — дохлая кошка.")
+        return False
+
+    # 🛑 CANONICAL PUMP-MINT FIREWALL: на Solana торгуем ТОЛЬКО канонические launchpad-токены с сожжённым LP
+    if not mint.endswith(("pump", "moon")):
+        print(f"🚫 [{source_tag}-CANONICAL-FIREWALL] {_sym_tmp} ({mint[:8]}): кастомный не-pump токен на Solana — 100% Remove LP риск (кейсы FRONK, SWJ, SIRIUS, HI, FLY, CRO, SI -99.99%)!")
         return False
 
     # Защита от кастомных фейк-пулов с разблокированным LP (Meteora, PumpSwap, кастомные пулы без .endswith("pump"))
@@ -542,13 +556,14 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
     _b5_j = int((((td or {}).get("txns") or {}).get("m5") or {}).get("buys", 0) or 0)
     _s5_j = int((((td or {}).get("txns") or {}).get("m5") or {}).get("sells", 0) or 0)
 
-    # 0. Защита от моментального рага первой свечи (<90 секунд) для PumpSwap / миграций / кастомных пулов:
-    # Дев-софт сливает бандл в первые 30-80 секунд. Ждём завершения 1-й свечи (age >= 1.5м),
-    # чтобы дев-дамп проявился, а мы вошли в чистую ракету (кейсы 1JENSEN/HUANG).
-    if _age_j < 1.5:
-        if _b5_j < 35 or (_s5_j > 0 and (_b5_j / _s5_j) < 1.25) or _m1_j < 0.0 or _vm5_j < 3000.0:
-            print(f"⏳ [{source_tag}-AGE-WARMUP] {_sym_tmp}: возраст {_age_j*60:.0f}с < 90с — созревание 1-й свечи (защита от бандл-рага дева)")
-            return False
+    # 0. ЖЕСТКИЙ КАРАНТИН ПЕРВОЙ СВЕЧИ (минимум 2.0 минуты / 120 секунд):
+    # В первые 90-120 секунд девы и снайперы сливают свои бандлы (кейсы BREASTCOIN, MAYA, DACAT, HANK, AUTISM).
+    # Любой обход по b5 >= 35 был ловушкой, т.к. бандл дева сам генерирует 35+ покупок!
+    # Настоящие ракеты (WILL, UP, WISHMAS, BELIEVE) бегут 15-60+ минут и легко ловятся на 2.5-10м.
+    _min_age_jup = float(getattr(config, "SOLANA_MIN_AGE_MIN", 2.0))
+    if _age_j < _min_age_jup:
+        print(f"⏳ [{source_tag}-AGE-WARMUP] {_sym_tmp}: возраст {_age_j*60:.0f}с < {_min_age_jup*60:.0f}с — карантин 1-й свечи (защита от снайперов и бандл-рага дева)")
+        return False
 
     # 0.1 Защита от падающего ножа (кейс AMC: m5 -37.6% летит вниз)
     if _m5_j < 1.0:

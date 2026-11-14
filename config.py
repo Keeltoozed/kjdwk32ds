@@ -54,10 +54,10 @@ MAX_CONCURRENT_POSITIONS = 5
 # === ЖЕСТКОЕ ОГРАНИЧЕНИЕ УБЫТКА (РИСК-МЕНЕДЖМЕНТ) ===
 MAX_DAILY_LOSS_USD = 1000.0
 KILL_SWITCH_ENABLED = False
-STOP_LOSS_PCT = -0.180        # Базовый стоп -18.0%
-EMERGENCY_CAP_PCT = -0.250     # Аварийный потолок -25.0%
+STOP_LOSS_PCT = -0.100        # Базовый стоп -10.0% (макс loss -$0.50 на $5, пресекает медленное сползание)
+EMERGENCY_CAP_PCT = -0.140     # Аварийный потолок -14.0% (макс loss -$0.70 на $5, жесткий барьер вместо -28%)
 INFANT_WINDOW_MIN = 0.5
-INFANT_DUMP_PCT = -0.180       # Срез рага на 1-й минуте при провале <= -18.0%
+INFANT_DUMP_PCT = -0.100       # Срез рага на 1-й минуте при провале <= -10.0%
 
 # === ЗАЩИТА ОТ МГНОВЕННОГО ВЫВОДА ЛИКВИДНОСТИ (девы выдергивают пул в 0) ===
 LIQ_DRAIN_EXIT_PCT = 0.40      # Выход если ликвидность упала на 40% от пика (режем до полного обнуления)
@@ -169,7 +169,7 @@ EVM_NORMAL_CRASH = 0.22
 BREAKEVEN_PCT = 999.0      # Breakeven Shield ОТКЛЮЧЕН (убивал ракеты копеечными выходами)
 
 PREFETCH_TTL_SEC = 35
-SOLANA_MIN_AGE_MIN = 1.5        # 90 секунд: защита от моментального рага 1-й свечи (сброс instant-ботов дева)
+SOLANA_MIN_AGE_MIN = 2.0        # 120 секунд: защита от мгновенного рага 1-й свечи и бандл-дампа дева
 SOLANA_MAX_AGE_HOURS = 6.0       # До 6 часов (не срезаем развивающиеся ракеты на пике тренда)
 SOLANA_MAX_AGE_MIN = 360.0       # Торгуем активные монеты до 6 часов
 JEV_MAX_AGE_MIN = 360.0          # В GROK-JEV активные монеты до 6 часов
@@ -191,8 +191,8 @@ GEMINI_API_KEY = (os.getenv("GEMINI_API_KEY") or "").strip()
 # === GROK BOT x JEV ENGINE ===
 JEV_ENABLED = True
 JEV_WICK_STOP_ENABLED = False
-JEV_EARLY_MIN_AGE_MIN = 0.25    # Сверхбыстрый вход в горячие ракеты с объемом от 15 секунд
-JEV_MIN_AGE_MIN = 0.35          # Базовый карантин от 20 секунд (не срезаем TWAP 0.4m)
+JEV_EARLY_MIN_AGE_MIN = 2.0    # Минимум 2.0м: исключает снайперские ловушки 0-1м (BREASTCOIN, MAYA, DACAT, HANK)
+JEV_MIN_AGE_MIN = 2.0          # Карантин созревания первой свечи 2.0м (120 секунд)
 JEV_MAX_AGE_MIN = 60.0          # Свежие монеты до 60м (защита от зомби-монет GIGAHUG/INVEST)
 JEV_MIN_LIQUIDITY_USD = 10000.0  # Минимум $10k ликвидности — пускает ранние ракеты (AI, AMD, HOUSE, SCAT)
 JEV_MAX_LIQUIDITY_USD = 220000.0
@@ -314,7 +314,7 @@ PULLBACK_M1_MIN_PCT = -0.08
 PULLBACK_M1_MAX_PCT = 0.20
 PULLBACK_MAX_H1_PCT = 320.0
 PULLBACK_MAX_M5_PCT = 0.95
-MIN_VOLUME_M5 = 5000            # Минимум $5,000 за 5м — реальные ракеты всегда $5k+ (отсекает зомби с $2-3k оборота)
+MIN_VOLUME_M5 = 7500            # Минимум $7,500 за 5м — реальные ракеты всегда $7.5k+ (полностью отсекает мертвый боковик $1-3k AURA/PEACEFROG)
 MIN_TXNS_M5 = 20                # 20 транзакций за 5м — активный интерес (меньше = мертвая монета)
 MIN_BUY_SELL_RATIO = 1.05       # Покупателей на 5%+ больше продавцов (настоящий импульс вверх)
 LOTTERY_ENABLED = False

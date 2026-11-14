@@ -1230,12 +1230,9 @@ async def scanner_loop(analyzer, tracker):
                                 if _dex_id not in ("pump", "pumpfun") and liq_usd < _min_grad_sc:
                                     print(f"🚫 [SCANNER-LOW-LIQ] {actual_symbol} ({mint[:8]}): ликвидность DEX ${liq_usd:,.0f} < ${_min_grad_sc:,.0f} — отмена!")
                                     continue
-                                if _dex_id == "pumpswap" and not mint.endswith("pump"):
-                                    print(f"🚫 [SCANNER-FAKE-PUMPSWAP] {actual_symbol} ({mint[:8]}): кастомный не-pump токен на PumpSwap — риск Remove LP!")
-                                    continue
-                                # Meteora DYN2 — дев выдёргивает LP одной tx независимо от lock% (HI -99.99%, FLY -99.99%)
-                                if _dex_id in ("meteora", "meteoradbc", "meteoradlmm", "meteoradyn2", "meteoradamm") and not mint.endswith("pump"):
-                                    print(f"🚫 [SCANNER-METEORA-RUG] {actual_symbol} ({mint[:8]}): кастомный не-pump токен на Meteora DYN2 — блок Remove LP рага!")
+                                # 🛑 CANONICAL PUMP-MINT FIREWALL: на Solana торгуем ТОЛЬКО канонические launchpad-токены с сожжённым LP
+                                if not mint.endswith(("pump", "moon")):
+                                    print(f"🚫 [SCANNER-NON-PUMP] {actual_symbol} ({mint[:8]}): кастомный не-pump токен на Solana — 100% Remove LP риск!")
                                     continue
                                 _pc_live = pair_data.get("priceChange") or {}
                                 _m5_live = float(_pc_live.get("m5", 0) or 0)
@@ -1249,9 +1246,10 @@ async def scanner_loop(analyzer, tracker):
                                 if _h1_live < -60.0 and _age_m > 5.0:
                                     print(f"🚫 [SCANNER-FLOOR-TOKEN] {actual_symbol} ({mint[:8]}): h1 {_h1_live:.0f}% — токен уже на полу, входить нельзя!")
                                     continue
-                                # Блок: Meteora пул слишком свежий (< 1.5 мин) — потенциальный drain
-                                if _dex_id in ("meteora", "meteoradbc", "meteoradlmm") and _age_m < 1.5:
-                                    print(f"⏳ [SCANNER-METEORA-WARMUP] {actual_symbol} ({mint[:8]}): Meteora пул {_age_m:.1f}м — ждём созревания до 1.5м.")
+                                # Блок: токен слишком свежий (< 2.0 мин) — зона снайперов и бандл-дампа дева
+                                _min_sc_age = float(getattr(config, "SOLANA_MIN_AGE_MIN", 2.0))
+                                if _age_m < _min_sc_age:
+                                    print(f"⏳ [SCANNER-WARMUP] {actual_symbol} ({mint[:8]}): пул {_age_m:.1f}м < {_min_sc_age:.1f}м — ждём созревания 1-й свечи.")
                                     processed_mints[mint] = time.time() - _cd + 20
                                     continue
 

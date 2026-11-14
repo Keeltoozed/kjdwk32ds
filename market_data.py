@@ -270,7 +270,7 @@ async def _jup_token_data(mint: str) -> dict:
             else (str(grad_pool_raw) if grad_pool_raw else str(first_pool_obj.get("id", "") or ""))
         )
         created_ts_raw = t.get("graduatedAt") or first_pool_obj.get("createdAt") or t.get("createdAt")
-        dex_out = ("pumpswap" if mint.endswith("pump") else "raydium") if graduated else "pump"
+        dex_out = ("pumpswap" if mint.endswith("pump") else "meteora") if graduated else "pump"
         return {
             "chainId": "solana",
             "dexId": dex_out,

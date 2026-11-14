@@ -1583,6 +1583,13 @@ class Analyzer:
             "source": "SOLANA_SCAN"
         }
 
+        # 🛑 CANONICAL PUMP-MINT FIREWALL (100% ЗАЩИТА ОТ РАГОВ REMOVE LP)
+        # Настоящие токены Pump.fun ВСЕГДА заканчиваются на 'pump'.
+        # При миграции на Raydium/PumpSwap протокол pump.fun НАВСЕГДА сжигает LP — дев не может сделать Remove LP!
+        # Кастомные не-pump токены (Meteora DYN2, кастомный PumpSwap) создаются девами-скамерами со 100% Remove LP риском (FRONK, SWJ, SIRIUS, HI, FLY -99.99%)!
+        if not mint.endswith(("pump", "moon")):
+            return self._deny(mint, "non-pump-custom-token", f"🛑 [CANONICAL-FIREWALL] {symbol} ({mint[:8]}): кастомный не-pump токен на Solana — 100% риск Remove LP девом!")
+
         if pair_data.get("_price_divergence"):
             _div_r = float(pair_data.get("_price_divergence_ratio", 0.0) or 0.0)
             return self._deny(mint, "price-split", f"🚫 [PRICE-SPLIT] {symbol} ({mint[:8]}): рассинхрон цен между пулами {_div_r:.1f}x (миграция/гэп) — блок входа.")
@@ -1694,9 +1701,9 @@ class Analyzer:
         _is_early_rocket = (_raw_liq_age >= 12000.0 and _vm5_pre >= 6000.0 and _b5_pre >= 30
                             and _b5_pre >= _s5_pre * 1.30 and _avg_tx_age >= 25.0)
         # СТАЛО (замени строки 543-605 в analyzer.py):
-        _sol_min_age = float(getattr(config, "SOLANA_MIN_AGE_MIN", 1.5))
+        _sol_min_age = float(getattr(config, "SOLANA_MIN_AGE_MIN", 2.0))
         if _age_min_pre < _sol_min_age:
-            print(f"⏳ [ENTRY] {mint[:8]}: возраст {_age_min_pre:.1f}м < {_sol_min_age}м — выдерживаем карантин.")
+            print(f"⏳ [ENTRY] {mint[:8]}: возраст {_age_min_pre:.1f}м < {_sol_min_age}м — выдерживаем карантин первой свечи.")
             return None
 
         # 1. Защита от старых увядающих зомби (> 6ч без активного пробоя ликвидного пула и все > 24ч) и переросших mid-caps (> $1.8M)
@@ -1778,18 +1785,17 @@ class Analyzer:
             )
 
         # 3. ЖЕСТКИЙ ФИЛЬТР ИМПУЛЬСА, СКОРОСТИ ОБОРОТА И ТРЕНДА ДО ROCKET-XGB:
-        _base_v5_cfg = float(getattr(config, "MIN_VOLUME_M5", 2500.0))
-        # Для свежих миграций, кривых pump.fun и молодых токенов (<10м) пускаем ранний старт от $1,500 при перевесе покупателей
-        _is_pump_curve_pre = _dex_pre_early in ("pump", "pumpfun")
-        if _age_min_pre <= 10.0 or _is_burned_launchpad or _is_pump_curve_pre:
-            _min_v5_cfg = 1500.0 if (_b5_pre >= _s5_pre and _tot_tx5_pre >= 10) else 2500.0
+        _base_v5_cfg = float(getattr(config, "MIN_VOLUME_M5", 7500.0))
+        # Для свежих миграций (<5м) требуем минимум $6,000 и перевес покупателей, для остальных — от $7,500 (полностью отсекает дохлые монеты $1k-$3k)
+        if _age_min_pre <= 5.0 and _b5_pre >= int(_s5_pre * 1.15) and _tot_tx5_pre >= 25:
+            _min_v5_cfg = 6000.0
         else:
-            _min_v5_cfg = _base_v5_cfg
+            _min_v5_cfg = max(6500.0, _base_v5_cfg)
         if _vm5_pre < _min_v5_cfg:
             return self._deny(
                 mint,
                 f"low-vol5 ${_vm5_pre:.0f}<${_min_v5_cfg:.0f}",
-                f"🚫 [LOW-MOMENTUM] {symbol} ({mint[:8]}): 5м объем ${_vm5_pre:,.0f} < ${_min_v5_cfg:,.0f} — слабый стоячий токен.",
+                f"🚫 [LOW-MOMENTUM] {symbol} ({mint[:8]}): 5м объем ${_vm5_pre:,.0f} < ${_min_v5_cfg:,.0f} — слабый стоячий токен (нет объема для ракеты).",
             )
         if _age_min_pre >= 20.0:
             _is_massive_mature_flow = (_vm5_pre >= 10000.0 and _b5_pre >= _s5_pre)

@@ -451,10 +451,8 @@ class GrokJevEngine:
                 pass
             if _bt_age is not None:
                 age_min = float(_bt_age)
-            elif is_pump:
-                age_min = 0.2
             else:
-                age_min = 999.0
+                age_min = 0.0 if is_pump else 999.0
 
         _min_grad_liq = float(getattr(_c, "MIN_GRADUATED_LIQ_USD", 10000.0))
         if dex_id in ("pump", "pumpfun", "meteoradbc") and not getattr(_c, "ALLOW_UNGRADUATED_PUMPFUN", False):
@@ -498,34 +496,21 @@ class GrokJevEngine:
                 m1 = max(-25.0, min(25.0, m5 * 0.15))
         h1 = float(pc.get("h1", 0) or 0)
 
-        # КАТЕГОРИЧЕСКИЙ БЛОК: СМЕРТЕЛЬНАЯ ЗОНА МИГРАЦИИ (0 - 2.0 МИНУТ)
-        # Отсекаем только мгновенный сброс дева без объема, но пускаем реальные ракеты с объемом (MBAPPE, SAFU, OMNI, DEMOCAT, LUCKY)
-        is_migrated_pump = (dex_id not in ("pump", "pumpfun")) and (mint.endswith("pump") or "pump" in dex_id) and age_min <= 10.0
-        if is_migrated_pump:
-            has_breakout_momentum = (
-                (vol_m5 >= 2000.0 and b5 >= 15 and b5 >= s5 * 1.08)
-                or (age_min >= 1.2 and eff_liq >= 12000.0 and vol_m5 >= 4000.0 and m5 >= 2.5 and b5 >= s5 * 1.05)
-            )
-            if age_min < 1.5 and not (has_breakout_momentum and b5 >= 35):
-                try:
-                    from birth_tracker import birth_tracker as _bt_mig
-                    _bt_mig.add_to_waiting_room(mint)
-                except Exception:
-                    pass
-                return False, f"post-migration-dump-zone {age_min:.1f}m < 1.5m"
-            _has_reclaim_mig = (m5 >= 5.0 and b5 >= s5 * 1.30 and vol_m5 >= 800.0)
-            if not has_breakout_momentum and not _has_reclaim_mig and (m5 < 2.0 or (s5 > 0 and (b5 / s5) < 1.08) or vol_m5 < 1500.0):
-                return False, f"post-migration-no-reclaim (m5 {m5:+.1f}%, vol5 ${vol_m5:,.0f}, {b5}b/{s5}s)"
+        # КАТЕГОРИЧЕСКИЙ БЛОК: СМЕРТЕЛЬНАЯ ЗОНА МИГРАЦИИ И СНАЙПЕРОВ (0 - 2.0 МИНУТ)
+        # В первые 90-120с снайперы и дев сливают начальные бандлы (кейсы BREASTCOIN, MAYA, DACAT, HANK).
+        # Настоящие ракеты (WILL, UP, WISHMAS, BELIEVE, FLC) живут и летят 15-60+ минут!
+        _sol_min_age_g = float(getattr(_c, "SOLANA_MIN_AGE_MIN", 2.0))
+        if age_min < _sol_min_age_g:
+            try:
+                from birth_tracker import birth_tracker as _bt_mig
+                _bt_mig.add_to_waiting_room(mint)
+            except Exception:
+                pass
+            return False, f"post-migration-dump-zone {age_min:.1f}m < {_sol_min_age_g:.1f}m (wait for 1st candle close)"
 
         # 2. Возраст токена и запрет старых стоячих гигантов (кейс HODL 940.7м $4.2M FDV, DUGE 224.7м m5 +1.9%)
         _avg_tx_e = vol_m5 / max(1, b5 + s5)
-        _is_early_rocket = (
-            (eff_liq >= 10000.0 and vol_m5 >= 3000.0 and b5 >= 15 and b5 >= s5 * 1.05 and m5 >= 1.5)
-            or (vol_m5 >= 15000.0 and b5 >= s5)
-        )
-        _early_min_age = max(1.2, float(getattr(_c, "JEV_EARLY_MIN_AGE_MIN", 1.2)))
-        _std_min_age = max(1.5, float(getattr(_c, "JEV_MIN_AGE_MIN", 1.5)))
-        min_age = _early_min_age if _is_early_rocket else _std_min_age
+        min_age = _sol_min_age_g
         max_age = float(getattr(_c, "SOLANA_MAX_AGE_MIN", 240.0))  # Ракеты до 240м (4 часа)
         _is_jev_breakout = (
             age_min <= 360.0
@@ -673,11 +658,11 @@ class GrokJevEngine:
         if eff_liq > 0 and (vol_m5 / eff_liq) > _max_vl_jev:
             return False, f"wash-trading-spike: vol5 ${vol_m5:,.0f} is {(vol_m5/eff_liq):.1f}x > {_max_vl_jev:.2f}x of pool liq ${eff_liq:,.0f} (bot pump trap)"
 
-        _min_vol_m5 = float(getattr(_c, "MIN_VOLUME_M5", 2500.0))
-        if is_pump or age_min <= 10.0:
-            _min_vol_m5 = 1500.0 if (b5 >= s5 and (b5 + s5) >= 10) else min(_min_vol_m5, 2000.0)
+        _base_vol_m5 = float(getattr(_c, "MIN_VOLUME_M5", 7500.0))
+        # Для свежих миграций (<5м) требуем минимум $6,000 и перевес покупателей, для остальных — от $7,500 (отсекает дохлый штиль $1-3k)
+        _min_vol_m5 = 6000.0 if (age_min <= 5.0 and b5 >= s5 * 1.15 and (b5 + s5) >= 25) else _base_vol_m5
         if vol_m5 < _min_vol_m5:
-            return False, f"vol5-low ${vol_m5:.0f} < ${_min_vol_m5:.0f} (inactive dead pool)"
+            return False, f"vol5-low ${vol_m5:.0f} < ${_min_vol_m5:.0f} (inactive dead pool — нет реального объема для ракеты)"
         _min_tx5 = int(getattr(_c, "MIN_TXNS_M5", 14))
         if (b5 + s5) < _min_tx5:
             return False, f"tx5-low {b5+s5} < {_min_tx5} (too few transactions)"
@@ -1224,7 +1209,7 @@ class GrokJevEngine:
             tr_pools = await market_data.get_trending()
             for item in (tr_pools or []):
                 m = item.get("tokenAddress")
-                if m and m not in seen:
+                if m and str(m).endswith(("pump", "moon")) and m not in seen:
                     seen.add(m)
                     candidates.append((m, "solana"))
         except Exception:
@@ -1241,7 +1226,7 @@ class GrokJevEngine:
                     for item in data:
                         ch = str(item.get("chainId", "")).lower()
                         tok = str(item.get("tokenAddress", "")).strip()
-                        if ch == "solana" and tok and tok not in seen:
+                        if ch == "solana" and tok and tok.endswith(("pump", "moon")) and tok not in seen:
                             seen.add(tok)
                             candidates.append((tok, "solana"))
             except Exception:
@@ -1537,8 +1522,8 @@ class GrokJevEngine:
             # вне зависимости от процента залога (locked/burned не означает защиту от Remove LP!).
             # HI (-99.99%), FLY (-99.99%) — оба Meteora DYN2 с видимым "Remove" в транзакциях.
             # ЕДИНСТВЕННОЕ исключение: канонический pump.fun токен (mint.endswith("pump")) на Meteora — там LP сожжён навсегда протоколом.
-            if _dex_low_jev in ("meteora", "meteoradlmm", "meteoradyn2", "meteoradamm") and not address.endswith("pump"):
-                return False, "meteora-dyn2-remove-lp-risk (кастомный не-pump токен на Meteora — дев выдёргивает LP одной tx, кейсы HI/FLY -99.99%)", _h_stats
+            if _dex_low_jev in ("meteora", "meteoradbc", "meteoradlmm", "meteoradyn2", "meteoradamm") and not address.endswith("pump"):
+                return False, "meteora-dyn2-remove-lp-risk (кастомный не-pump токен на Meteora — дев выдёргивает LP одной tx, кейсы HI/FLY/HEDGE -99.99%)", _h_stats
             is_canonical_pump = address.endswith("pump") or (is_raw_pump_curve and _dex_low_jev in ("pump", "pumpfun"))
             if not is_canonical_pump and (rc_status_pre != 200 or not isinstance(rc_data_pre, dict)):
                 _raw_l_pre = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
@@ -1880,6 +1865,9 @@ class GrokJevEngine:
 
         if chain != "solana":
             return False, "non-solana-chain-disabled"
+        # 🛑 CANONICAL PUMP-MINT FIREWALL: на Solana торгуем ТОЛЬКО канонические launchpad-токены с сожжённым LP
+        if not address.endswith(("pump", "moon")):
+            return False, "non-pump-custom-token (100% Remove LP rug risk — кейсы FRONK, SWJ, SIRIUS, HI, FLY, CRO, SI -99.99%)"
         if not address or address in tracker.get_open_positions():
             return False, "already-held"
         if len(tracker.get_open_positions()) >= getattr(_c, "MAX_CONCURRENT_POSITIONS", 10):

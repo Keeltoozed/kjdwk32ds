@@ -104,17 +104,16 @@ class MatureExitManager:
         # =========================================================================
         # 1. ЖЕСТКИЙ КОНТРОЛЬ УБЫТКА (EMERGENCY CAP & STOP LOSS) — ПЕРВЫЙ ПРИОРИТЕТ!
         # =========================================================================
-        # СБРОС ДЕВ-ДАМПА НА ПЕРВОЙ СВЕЧЕ: если в первые 2.5 минуты монета пробивает -12%,
-        # это моментальный раг (кейс AMC: обвал девом на 1-й минуте).
-        # Режем на -12%, не давая провалиться в -40% Emergency Cap!
-        if minutes_held <= 2.5 and pnl_pct <= -0.120:
+        # СБРОС ДЕВ-ДАМПА НА ПЕРВОЙ СВЕЧЕ: если в первые 2.5 минуты монета пробивает -10%,
+        # это дамп — режем на -10% (макс loss -$0.50 на $5), не давая сползать в -25%..-50%!
+        if minutes_held <= 2.5 and pnl_pct <= -0.100:
             return f"🚨 First Candle Rug Cut ({pnl_pct*100:.1f}% в первые {minutes_held*60:.0f}с)"
 
-        _emerg_cap = -abs(float(getattr(config, "EMERGENCY_CAP_PCT", -0.250)))
+        _emerg_cap = -abs(float(getattr(config, "EMERGENCY_CAP_PCT", -0.140)))
         if pnl_pct <= _emerg_cap:
             return f"Mature Emergency Cap ({pnl_pct*100:.1f}%)"
 
-        _base_sl = -abs(float(getattr(config, 'STOP_LOSS_PCT', -0.180)))
+        _base_sl = -abs(float(getattr(config, 'STOP_LOSS_PCT', -0.100)))
         _has_organic_bid = False
         _feats = getattr(position, "ml_features", None) or {}
         if isinstance(_feats, dict) and _feats:
@@ -122,13 +121,12 @@ class MatureExitManager:
             _f_bs = float(_feats.get("buy_sell_ratio", 0) or 0)
             if _f_liq >= 15000.0 and _f_bs >= 1.15:
                 _has_organic_bid = True
-        _sl = min(_base_sl, -0.220) if _has_organic_bid else _base_sl
+        _sl = min(_base_sl, -0.120) if _has_organic_bid else _base_sl
         if pnl_pct <= _sl:
             _sl_c = int(getattr(position, "sl_confirm_n", 0) or 0) + 1
             position.sl_confirm_n = _sl_c
-            # Требуем минимум 2 тика подтверждения (или глубокий провал на 5% ниже стопа),
-            # чтобы мгновенный спред/вик DEX на 2-й минуте не выбивал ракету вроде CULT или PINCHE!
-            if _sl_c >= 2 or pnl_pct <= (_sl - 0.05):
+            # Требуем 2 тика подтверждения (или глубокий провал на 3% ниже стопа)
+            if _sl_c >= 2 or pnl_pct <= (_sl - 0.030):
                 return f"Mature Stop Loss ({pnl_pct*100:.1f}%)"
         else:
             position.sl_confirm_n = 0
@@ -198,11 +196,16 @@ class MatureExitManager:
             if minutes_held >= 3.5 and _peak_age_min >= 2.5 and max_pnl_pct < 0.08 and pnl_pct <= 0.02:
                 return f"Dead Churn Escape ({pnl_pct*100:+.1f}%, застрял без импульса {_peak_age_min:.1f}м — выход)"
 
-            # 2. ATH Exhaustion Exit: пик был сильным (+40%+), но 5+ минут нет нового ATH — забираем +15%+ профита
+            # 2. Faded Impulse Stop: импульс был (+8%..+39%), но затух (3+ мин без нового ATH) и сполз в минус (-5%)
+            # Спасает от 10-минутного медленного сползания в -28% (кейс SPEED -$1.45)!
+            if max_pnl_pct >= 0.08 and _peak_age_min >= 3.0 and pnl_pct <= -0.05:
+                return f"Faded Impulse Stop ({pnl_pct*100:+.1f}%, затухание импульса после пика +{max_pnl_pct*100:.0f}%)"
+
+            # 3. ATH Exhaustion Exit: пик был сильным (+40%+), но 5+ минут нет нового ATH — забираем +15%+ профита
             if max_pnl_pct >= 0.40 and _peak_age_min >= 5.0 and pnl_pct >= 0.15:
                 return f"ATH Exhaustion Exit (+{pnl_pct*100:.0f}% locked after peak +{max_pnl_pct*100:.0f}%, {_peak_age_min:.0f}m no ATH)"
 
-            # 3. Rocket Momentum Harvest: пик +50%+, 8+ минут без ATH — забираем +20%+ профита
+            # 4. Rocket Momentum Harvest: пик +50%+, 8+ минут без ATH — забираем +20%+ профита
             if max_pnl_pct >= 0.50 and _peak_age_min >= 8.0 and pnl_pct >= 0.20:
                 return f"Rocket Momentum Harvest (+{pnl_pct*100:.0f}% locked after peak +{max_pnl_pct*100:.0f}%, {_peak_age_min:.0f}m no ATH)"
 

@@ -450,6 +450,22 @@ class PaperTracker:
                 print(f"🚫 Отказ: невалидный адрес Solana mint '{mint_str}' (длина {len(mint_str)}, ожидается 32-44 Base58).")
                 return False
 
+            # =========================================================================
+            # 🛑 CANONICAL LAUNCHPAD FIREWALL (100% ЗАЩИТА ОТ РАГОВ REMOVE LP)
+            # =========================================================================
+            # ФАКТ: 100% катастрофических рагпуллов (-99.99%) в истории бота (FRONK, SWJ, SIRIUS,
+            # HI, FLY, CRO, SI, 42, NEX AI, BREAD) произошли на КАСТОМНЫХ токенах без суффикса 'pump'.
+            # Настоящие токены Pump.fun ВСЕГДА заканчиваются на 'pump'. При миграции на DEX
+            # протокол pump.fun НАВСЕГДА сжигает LP в мёртвом адресе — дев физически не может
+            # сделать Remove LP!
+            # Кастомные токены (особенно на Meteora DYN2 / фейковом PumpSwap) создаются девами-скамерами,
+            # которые выдергивают ликвидность одной транзакцией.
+            # ВСЕ прибыльные ракеты бота (WILL +62%, UP +23%, WISHMAS +86%, TEDDY, BUFFAPE, SYRUP)
+            # заканчиваются строго на 'pump'!
+            if not mint_str.endswith(("pump", "moon")):
+                print(f"🛑 [FIREWALL-RUG-BLOCK] {symbol} ({mint_str[:8]}): отказ входа — кастомный не-pump токен на Solana! (100% блок Remove LP скамов: кейсы FRONK, SWJ, SIRIUS, HI, FLY, CRO, SI -99.99%)")
+                return False
+
         # Валидация входа: мусорный entry ~0 давал фантомы +586М% и $1.6M.
         try:
             entry_price = float(entry_price or 0)
