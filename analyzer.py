@@ -1534,11 +1534,11 @@ class Analyzer:
             _is_term = any(k in _sig_l for k in (
                 "rugcheck", "scam", "unlocked-lp", "bundle", "honeypot", 
                 "freeze", "mimic", "dead-token", "мёртвый токен", "sybil", 
-                "delegation", "post-mig-dumped", "zombie", 
-                "deadcat", "dead-cat", "dumped", "ghost-pool", "wash-spike", 
+                "delegation", "zombie", 
+                "deadcat", "dead-cat", "ghost-pool", "wash-spike", 
                 "wash-trap", "mcap-too-large", "price-split"
             ))
-            _ttl = 1800.0 if _is_term else 45.0
+            _ttl = 1800.0 if _is_term else 12.0
             if (now - _c_ts) < _ttl:
                 self.last_signal = _c_sig
                 self.last_score = _c_score
@@ -1718,17 +1718,17 @@ class Analyzer:
         _sol_p = float(get_sol_price_sync() or 150.0)
         if _sol_p <= 0:
             _sol_p = 150.0
-        _dump_floor_sol = float(getattr(config, "PUMP_DUMP_FLOOR_SOL", 285.0)) * _sol_p
-        _hard_dump_sol = 120.0 * _sol_p
+        _dump_floor_sol = float(getattr(config, "PUMP_DUMP_FLOOR_SOL", 100.0)) * _sol_p
+        _hard_dump_sol = 65.0 * _sol_p
 
         if mint.endswith("pump") and _dex_pre_early not in ("pump", "pumpfun") and 0 < _fdv_chk_pre < _dump_floor_sol:
             _is_real_dump = (_fdv_chk_pre < _hard_dump_sol) or (_s5_pre > int(_b5_pre * 1.25) and _m5 < -5.0)
-            _is_active_grad = (_vm5_pre >= 2000.0 and _b5_pre >= int(_s5_pre * 1.00) and _m5 >= -4.0)
+            _is_active_grad = (_vm5_pre >= 1500.0 and _b5_pre >= int(_s5_pre * 1.00) and _m5 >= -4.0)
             if _is_real_dump or not _is_active_grad:
                 return self._deny(
                     mint,
                     f"post-mig-dumped ${_fdv_chk_pre:.0f}<${_dump_floor_sol:.0f}",
-                    f"🚫 [POST-MIGRATION-DUMP] {symbol} ({mint[:8]}): выпускник Pump.fun слит ниже миграции (FDV ${_fdv_chk_pre:,.0f} < ${_dump_floor_sol:,.0f} [~285 SOL]) — кейс SHANE.",
+                    f"🚫 [POST-MIGRATION-DUMP] {symbol} ({mint[:8]}): выпускник Pump.fun слит ниже миграции (FDV ${_fdv_chk_pre:,.0f} < ${_dump_floor_sol:,.0f} [~100 SOL]) — кейс SHANE.",
                 )
 
         _max_age_min = float(getattr(config, "SOLANA_MAX_AGE_MIN", 240.0))

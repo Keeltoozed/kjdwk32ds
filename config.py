@@ -91,7 +91,7 @@ MAX_PUMP_CURVE_MCAP_USD = 44000.0         # Fallback в USD
 MIN_PUMP_CURVE_MCAP_SOL = 80.0            # Порог кривой pump.fun в SOL
 MAX_PUMP_CURVE_MCAP_SOL = 350.0           # Верх кривой перед миграцией
 PUMP_MIGRATION_MCAP_SOL = 410.0           # FDV миграции pump.fun (~410 SOL = ~$35k при SOL $85)
-PUMP_DUMP_FLOOR_SOL = 160.0               # Порог post-mig-dumped (~40% миграции = 160 SOL, разрешает Dip Reclaim)
+PUMP_DUMP_FLOOR_SOL = 100.0               # Порог post-mig-dumped (~100 SOL = ~$7.5k, разрешает Dip Reclaim ракеты вроде SCRAP/FOMO/ICC)
 JEV_MAX_TICKET_USD = 0.0
 MIN_GRADUATED_LIQ_USD = 5000.0           # На DEX минимум $5k реальной ликвидности — пускает свежие миграции PumpSwap/Raydium ($5k-$12k при SOL $75-$150) и отсекает пустые микро-пулы
 AUDITOR_STAIRCASE_ENABLED = True
@@ -168,7 +168,7 @@ EVM_NORMAL_CRASH = 0.22
 
 BREAKEVEN_PCT = 999.0      # Breakeven Shield ОТКЛЮЧЕН (убивал ракеты копеечными выходами)
 
-PREFETCH_TTL_SEC = 35
+PREFETCH_TTL_SEC = 12
 SOLANA_MIN_AGE_MIN = 1.0        # 60 секунд: созревание после блока 0 (свободный вход в ракеты со 2-й свечи)
 SOLANA_MAX_AGE_HOURS = 12.0      # До 12 часов (не срезаем развивающиеся ракеты вроде ASTRALIS/Sakura)
 SOLANA_MAX_AGE_MIN = 720.0       # Торгуем активные монеты до 12 часов

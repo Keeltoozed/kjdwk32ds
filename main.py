@@ -867,8 +867,20 @@ async def scanner_loop(analyzer, tracker):
                 try:
                     _raw_grads = birth_tracker.drain_graduated() or []
                     _now_g = time.time()
-                    _fresh_cd_g = int(getattr(config, "SOLANA_FRESH_RESCAN_COOLDOWN", 10))
-                    graduated_mints = [m for m in _raw_grads if _now_g - processed_mints.get(m, 0.0) >= _fresh_cd_g][:25]
+                    _fresh_cd_g = int(getattr(config, "SOLANA_FRESH_RESCAN_COOLDOWN", 8))
+                    _open_set_g = set(tracker.positions.keys())
+                    for _gm in _raw_grads:
+                        if not _gm or not str(_gm).strip().endswith(("pump", "moon")) or _gm in _open_set_g:
+                            birth_tracker.remove_graduated(_gm)
+                            continue
+                        _pl_g = tracker.last_loss_pct(_gm)
+                        if _pl_g is not None and _pl_g <= getattr(config, "RUG_REBUY_MAX_LOSS", -0.15):
+                            birth_tracker.remove_graduated(_gm)
+                            continue
+                        if _now_g - processed_mints.get(_gm, 0.0) >= _fresh_cd_g:
+                            graduated_mints.append(_gm)
+                            if len(graduated_mints) >= 25:
+                                break
                 except Exception:
                     pass
                 if graduated_mints:
@@ -921,8 +933,14 @@ async def scanner_loop(analyzer, tracker):
                 # ⚡ Пакетный префетч: вся очередь за ceil(N/30) запросов к DexScreener
                 # вместо N одиночных. analyze_token() дальше читает из кэша без сети.
                 try:
-                    _pf_list = [m for m in mints_to_scan if m not in tracker.positions
-                                and time.time() - processed_mints.get(m, 0.0) >= 25][:300]
+                    _now_pf = time.time()
+                    _base_cd_pf = int(getattr(config, "SOLANA_RESCAN_COOLDOWN", 30))
+                    _fresh_cd_pf = int(getattr(config, "SOLANA_FRESH_RESCAN_COOLDOWN", 8))
+                    _pf_list = [
+                        m for m in mints_to_scan
+                        if m not in tracker.positions
+                        and (_now_pf - processed_mints.get(m, 0.0)) >= (_fresh_cd_pf if m in _graduated_set else 15)
+                    ][:300]
                     _pf_n = await analyzer.prefetch_token_data(_pf_list)
                     if _pf_list:
                         print(f"⚡ Префетч: {_pf_n}/{len(_pf_list)} токенов за {(len(_pf_list) + 29) // 30} запрос(а) DS.")
@@ -935,24 +953,34 @@ async def scanner_loop(analyzer, tracker):
                     "USDC", "USDT", "USDH", "DAI", "SOL", "WSOL", "ORE", "NEET", "GYAT"
                 }
                 _ranked_mints = []
+                _now_r = time.time()
+                _base_cd_r = int(getattr(config, "SOLANA_RESCAN_COOLDOWN", 30))
+                _fresh_cd_r = int(getattr(config, "SOLANA_FRESH_RESCAN_COOLDOWN", 8))
                 for mint in mints_to_scan:
                     if not mint or mint in tracker.positions:
                         continue
                     _c_pre = getattr(analyzer, "_prefetch_cache", {}).get(mint, (0, {}))[1]
+                    _ca_r = (_c_pre.get("pairCreatedAt") or 0) if isinstance(_c_pre, dict) else 0
+                    _age_r = (_now_r * 1000 - _ca_r) / 60000.0 if _ca_r else 999.0
+                    _is_fresh_r = (mint in _graduated_set) or (_age_r <= 30.0)
+                    _cd_r = _fresh_cd_r if _is_fresh_r else _base_cd_r
+                    # ВАЖНО: Если токен ещё на кулдауне — НЕ перезаписываем processed_mints[mint] старыми данными из кэша каждые 3с!
+                    if (_now_r - processed_mints.get(mint, 0.0)) < _cd_r:
+                        continue
                     if _c_pre and isinstance(_c_pre, dict):
                         _base = _c_pre.get("baseToken", {}) or {}
                         _sym = str(_base.get("symbol", "")).upper().strip()
                         if _sym in _SKIP_ZOMBIE_SYMBOLS:
-                            processed_mints[mint] = time.time() + 86400
+                            processed_mints[mint] = _now_r + 86400
                             continue
 
                         _c_dex = str(_c_pre.get("dexId", "")).lower()
                         if not getattr(config, "ALLOW_UNGRADUATED_PUMPFUN", False) and _c_dex in ("pump", "pumpfun", "moonshot", "meteoradbc") and mint not in _graduated_set:
-                            processed_mints[mint] = time.time() + 60
+                            processed_mints[mint] = _now_r - _cd_r + 30
                             continue
 
                         _c_at = _c_pre.get("pairCreatedAt") or 0
-                        _c_age_m = (time.time() * 1000 - _c_at) / 60000.0 if _c_at else 999.0
+                        _c_age_m = (_now_r * 1000 - _c_at) / 60000.0 if _c_at else 999.0
                         _c_pc = _c_pre.get("priceChange") or {}
                         _c_m5 = float(_c_pc.get("m5", 0) or 0)
                         _c_tx = (_c_pre.get("txns") or {}).get("m5", {}) or {}
@@ -962,36 +990,36 @@ async def scanner_loop(analyzer, tracker):
 
                         # Древний токен старше 24ч или >6ч без ликвидного пробоя: скип до входа в окно ТОП-60!
                         if _c_age_m > 1440.0 and mint not in _graduated_set:
-                            processed_mints[mint] = time.time() + 86400
+                            processed_mints[mint] = _now_r + 86400
                             continue
                         if _c_age_m > 360.0 and (_c_vol5 < 6000.0 or _c_m5 < 5.0 or _c_liq < 25000.0) and mint not in _graduated_set:
-                            processed_mints[mint] = time.time() + 3600
+                            processed_mints[mint] = _now_r + 3600
                             continue
 
                         # Старый токен (>4ч) без импульса (<6%): скип на 1 час
                         if _c_age_m > 240.0 and _c_m5 < 6.0 and mint not in _graduated_set:
-                            processed_mints[mint] = time.time() + 3600
+                            processed_mints[mint] = _now_r + 3600
                             continue
 
-                        # Токен старше 1ч со слабым импульсом (<4%): скип на 3 мин (вместо 30 мин)
+                        # Токен старше 1ч со слабым импульсом (<4%): скип на 90с
                         if _c_age_m > 60.0 and _c_m5 < 4.0 and mint not in _graduated_set:
-                            processed_mints[mint] = time.time() + 180
+                            processed_mints[mint] = _now_r - _cd_r + 90
                             continue
 
-                        # Мертвый токен старше 3 минут с 0 сделок в m5: скип на 5 мин
+                        # Мертвый токен старше 3 минут с 0 сделок в m5: скип на 90с
                         if _c_age_m >= 3.0 and _c_trades == 0 and _c_vol5 == 0 and mint not in _graduated_set:
-                            processed_mints[mint] = time.time() + 300
+                            processed_mints[mint] = _now_r - _cd_r + 90
                             continue
 
-                        # Отсекаем вялые стоячие токены с объёмом < $2,500: быстрый переопрос через 45с (вместо 5 минут!)
+                        # Отсекаем вялые стоячие токены с объёмом < $2,000: быстрый переопрос через 20с
                         # Токен может проснуться и набрать объём за полминуты
-                        if _c_age_m >= 5.0 and _c_vol5 < 2500.0 and mint not in _graduated_set:
-                            processed_mints[mint] = time.time() + 45
+                        if _c_age_m >= 5.0 and _c_vol5 < 2000.0 and mint not in _graduated_set:
+                            processed_mints[mint] = _now_r - _cd_r + 20
                             continue
 
-                        # Слив/флет (m5 < 2.0%) не из миграций: кулдаун 25с (вместо 2 мин!)
-                        if _c_m5 < 2.0 and mint not in _graduated_set and _c_age_m > 3.0:
-                            processed_mints[mint] = time.time() + 25
+                        # Слив/флет (m5 < 1.5%) не из миграций: кулдаун 18с
+                        if _c_m5 < 1.5 and mint not in _graduated_set and _c_age_m > 3.0:
+                            processed_mints[mint] = _now_r - _cd_r + 18
                             continue
 
                         # РОКЕТ-ВЕЛОСИТИ РАНЖИРОВАНИЕ:
@@ -1016,8 +1044,8 @@ async def scanner_loop(analyzer, tracker):
                         elif mint.endswith("pump") and birth_tracker.get_age(mint) is not None and birth_tracker.get_age(mint) <= 30.0:
                             _ranked_mints.append((10.0, mint))
                         else:
-                            # Токен вне текущего окна префетча — быстрый кулдаун 15с вместо заморозки на 5 минут
-                            processed_mints[mint] = time.time() + 15
+                            # Токен вне текущего окна префетча — быстрый кулдаун 15с вместо вечной блокировки
+                            processed_mints[mint] = _now_r - _cd_r + 15
 
                 _ranked_mints.sort(key=lambda x: x[0], reverse=True)
                 mints_to_scan = [m for _, m in _ranked_mints]
@@ -1123,8 +1151,8 @@ async def scanner_loop(analyzer, tracker):
                             _is_terminal = any(k in _sig_l for k in (
                                 "rugcheck", "scam", "unlocked-lp", "bundle", "honeypot", 
                                 "freeze", "mimic", "dead-token", "мёртвый токен", "sybil", 
-                                "delegation", "post-mig-dumped", "zombie", 
-                                "deadcat", "dead-cat", "dumped", "ghost-pool", "wash-spike", 
+                                "delegation", "zombie", 
+                                "deadcat", "dead-cat", "ghost-pool", "wash-spike", 
                                 "wash-trap", "mcap-too-large", "price-split"
                             ))
                             if _is_terminal:

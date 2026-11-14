@@ -413,13 +413,13 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
     if _h1_j > _max_h1_j and _age_j > 4.0:
         print(f"🚫 [{source_tag}-H1-EXHAUSTED] {_sym_tmp} ({mint[:8]}): h1 {_h1_j:+.0f}% > +{_max_h1_j:.0f}% — памп уже отработал, вход = вершина.")
         return False
-    _min_m1_j = -2.8 if _m5_j < 12.0 else -6.0
+    _min_m1_j = -12.0 if (_m5_j >= 8.0 and _b5_j >= _s5_j) else (-8.0 if _m5_j >= 5.0 else -4.0)
     if _m5_j < 1.5 or _m1_j < _min_m1_j:
         print(f"🚫 [{source_tag}-MOMENTUM-LOST] {_sym_tmp} ({mint[:8]}): импульс пропал (m5 {_m5_j:+.1f}%, m1 {_m1_j:+.1f}%) — отмена входа.")
         return False
     _pk_drop_j = float((td or {}).get("_drop_from_peak_5m", 0.0) or 0.0)
     _lq_drop_j = float((td or {}).get("_liq_drop_from_peak", 0.0) or 0.0)
-    if _pk_drop_j <= -18.0 or _lq_drop_j <= -18.0:
+    if _pk_drop_j <= -38.0 or _lq_drop_j <= -45.0:
         print(f"🚫 [{source_tag}-POST-PEAK-CRASH] {_sym_tmp} ({mint[:8]}): токен уже слился от пика (цена {_pk_drop_j:+.1f}%, ликва {_lq_drop_j:+.1f}%) — дохлая кошка.")
         return False
 
@@ -505,8 +505,8 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
             print(f"⏳ [{source_tag}-MIGRATION-DUMP] {_sym_tmp} ({mint[:8]}): AMM-пул создан {_age_j:.1f}м назад (< 1.0м) — зона сброса снайперов pump.fun.")
             return False
         _fdv_j = float((td or {}).get("fdv", 0) or (td or {}).get("marketCap", 0) or 0)
-        if 0 < _fdv_j < 12000.0:
-            print(f"🚫 [{source_tag}-MIGRATION-LOW-FDV] {_sym_tmp} ({mint[:8]}): FDV ${_fdv_j:,.0f} < $12,000 — токен слит ниже уровня миграции pump.fun.")
+        if 0 < _fdv_j < 5000.0:
+            print(f"🚫 [{source_tag}-MIGRATION-LOW-FDV] {_sym_tmp} ({mint[:8]}): FDV ${_fdv_j:,.0f} < $5,000 — токен слит ниже уровня миграции pump.fun.")
             return False
         if _liq_j < 3500.0:
             print(f"🚫 [{source_tag}-MIGRATION-LOW-LIQ] {_sym_tmp} ({mint[:8]}): ликвидность ${_liq_j:,.0f} < $3,500 — дев/снайперы высосали SOL.")
@@ -825,9 +825,9 @@ async def jup_loop(analyzer, tracker):
                     print(f"🪐 [JUPITER] Получено {len(mints)} кандидатов (toptrending + recent). Пакетный анализ...")
                     open_jup = set(tracker.get_open_positions().keys())
                     try:
-                        _to_pf = [m for m in mints if m not in open_jup and (_t.time() - processed.get(m, 0.0)) >= 35]
+                        _to_pf = [m for m in mints if m not in open_jup and (_t.time() - processed.get(m, 0.0)) >= 18]
                         if _to_pf:
-                            await analyzer.prefetch_token_data(_to_pf, ttl=60.0)
+                            await analyzer.prefetch_token_data(_to_pf, ttl=12.0)
                     except Exception:
                         pass
 
@@ -850,7 +850,7 @@ async def jup_loop(analyzer, tracker):
                             _cext = float(getattr(_cp, "exit_time", 0.0) or 0.0)
                             if (_now_t - _cext) < (300.0 if _cpnl > 0 else 600.0):
                                 continue
-                        if _now_t - processed.get(m, 0.0) < 35:
+                        if _now_t - processed.get(m, 0.0) < 18:
                             continue
 
                         hit = getattr(analyzer, "_prefetch_cache", {}).get(m)
@@ -902,7 +902,7 @@ async def jup_loop(analyzer, tracker):
                         # Отсекаем флет m5 < 1.8%
                         if _m5 < 1.8:
                             skipped_flat += 1
-                            processed[m] = _now_t + 90
+                            processed[m] = _now_t
                             continue
                         _turnover = (_v5_cand / max(_lq_cand, 1.0))
                         # Оценка ракеты: если включена Rocket XGBoost v2, ранжируем строго по ML-скору
@@ -953,12 +953,12 @@ async def jup_loop(analyzer, tracker):
                             _is_term_j = any(k in _sig_j for k in (
                                 "rugcheck", "scam", "unlocked-lp", "bundle", "honeypot", 
                                 "freeze", "mimic", "dead-token", "мёртвый токен", "sybil", 
-                                "delegation", "post-mig-dumped", "zombie", 
-                                "deadcat", "dead-cat", "dumped", "ghost-pool", "wash-spike", 
+                                "delegation", "zombie", 
+                                "deadcat", "dead-cat", "ghost-pool", "wash-spike", 
                                 "wash-trap", "mcap-too-large", "price-split"
                             ))
                             if ok is False:
-                                processed[mint] = _t.time() + (3600 if _is_term_j else 90)
+                                processed[mint] = _t.time() + (3600 if _is_term_j else 0)
                                 if _is_term_j:
                                     try:
                                         from birth_tracker import birth_tracker as _bt_j

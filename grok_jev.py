@@ -410,7 +410,7 @@ class GrokJevEngine:
         _is_grad_ev = False
         try:
             from birth_tracker import birth_tracker as _bt_ge
-            _is_grad_ev = _bt_ge.is_graduated(address)
+            _is_grad_ev = _bt_ge.is_graduated(mint)
         except Exception:
             pass
         if is_pump and not _is_grad_ev:
@@ -546,11 +546,11 @@ class GrokJevEngine:
         _sol_p_g = float(get_sol_price_sync() or 150.0)
         if _sol_p_g <= 0:
             _sol_p_g = 150.0
-        _dump_floor_g = float(getattr(_c, "PUMP_DUMP_FLOOR_SOL", 285.0)) * _sol_p_g
-        _hard_dump_g = 120.0 * _sol_p_g
+        _dump_floor_g = float(getattr(_c, "PUMP_DUMP_FLOOR_SOL", 100.0)) * _sol_p_g
+        _hard_dump_g = 65.0 * _sol_p_g
         if mint.endswith("pump") and dex_id not in ("pump", "pumpfun") and 0 < fdv_mc < _dump_floor_g:
             _is_real_dump = (fdv_mc < _hard_dump_g) or (s5 > int(b5 * 1.25) and m5 < -5.0)
-            _is_active_grad = (vol_m5 >= 2000.0 and b5 >= int(s5 * 1.00) and m5 >= -5.0)
+            _is_active_grad = (vol_m5 >= 1500.0 and b5 >= int(s5 * 1.00) and m5 >= -5.0)
             if _is_real_dump or not _is_active_grad:
                 return False, f"post-mig-dumped-fdv ${fdv_mc:,.0f} < ${_dump_floor_g:,.0f}"
 
