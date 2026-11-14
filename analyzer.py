@@ -1827,9 +1827,18 @@ class Analyzer:
                 f"🚫 [WEAK-BUYERS] {symbol} ({mint[:8]}): покупки/продажи 5м {_b5_pre}/{_s5_pre} ({_b5_pre/_s5_pre:.2f}x < {_min_bs_cfg:.2f}x) — продавцы давят!",
             )
 
+        # Защита от молодых «дохлых кошек» (кейс GETAJOB: пик $255k на 1-й минуте -> обвал -85% -> отскок в сливе h1=-22% на 8-й минуте -> финальный раг -98.6%):
+        if 3.0 <= _age_min_pre < 45.0 and _h1 < -15.0:
+            _is_young_v_rev_a = (_m5 >= 18.0 and _vm5_pre >= 18000.0 and _raw_liq_chk >= 18000.0 and _b5_pre >= _s5_pre * 1.35 and _m1 >= 1.0)
+            if not _is_young_v_rev_a:
+                return self._deny(
+                    mint,
+                    f"young-dead-cat-bleed {_h1:+.0f}%",
+                    f"🚫 [YOUNG-DEAD-CAT] {symbol} ({mint[:8]}): монета ({_age_min_pre:.1f}м) слита ниже цены открытия пула (h1 {_h1:+.1f}% < -15%) — дистрибуция в раг (кейс GETAJOB)!",
+                )
+
         # Запрет покупки «дохлых кошек» в часовом сливе, КРОМЕ подтверждённого V-образного разворота с объёмом (SCAMSEM +122%)
-        # Проверяем часовой тренд ТОЛЬКО если монете реально >= 45 минут!
-        # Молодые токены (<45м) не имеют полноценной 1ч истории, а h1 отражает кривую Pump.fun (кейсы MEME +342%, GORP +100%)
+        # Проверяем часовой тренд для монет >= 45 минут:
         if _age_min_pre >= 45.0:
             _min_h1_cfg = float(getattr(config, "JEV_MIN_H1_PCT", -8.0))
             _h6_pre_val = float(_pc.get("h6", 0) or 0)
@@ -2131,7 +2140,7 @@ class Analyzer:
                         float(rk.get("score", 0) or 0)
                         for rk in (rc_data.get("risks") or [])
                         if any(k in str(rk.get("name", "")).lower() for k in (
-                            "creator history", "copycat", "symbol mimic", *_allowed_lp_terms_main
+                            "copycat", "symbol mimic", *_allowed_lp_terms_main
                         ))
                     )
 
@@ -2139,13 +2148,13 @@ class Analyzer:
                     if _rc_score >= 2000:
                         return self._deny(mint, f"rugcheck-score {_rc_score:.0f}", f"🚫 [АНТИСКАМ] RugCheck Score {_rc_score:.0f} >= 2000 у {mint[:8]} → СКАМ")
 
-                    # Жёсткий фильтр критических опасностей смарт-контракта RugCheck
+                    # Жёсткий фильтр критических опасностей смарт-контракта и серийных рагеров RugCheck
                     for rk in (rc_data.get("risks") or []):
                         _rk_name = str(rk.get("name", "")).lower()
                         _rk_lvl = str(rk.get("level", "")).lower()
-                        if any(k in _rk_name for k in ("creator history", "copycat", "symbol mimic", *_allowed_lp_terms_main)):
+                        if any(k in _rk_name for k in ("copycat", "symbol mimic", *_allowed_lp_terms_main)):
                             continue
-                        if _rk_lvl == "danger" and any(k in _rk_name for k in ("freeze authority", "mint authority", "mutable", "honeypot", "transfer fee", "permanent delegate")):
+                        if _rk_lvl == "danger" and any(k in _rk_name for k in ("freeze authority", "mint authority", "mutable", "honeypot", "transfer fee", "permanent delegate", "creator history")):
                             return self._deny(mint, f"rc-danger {_rk_name[:15]}", f"🚫 [АНТИСКАМ-RC] {symbol} ({mint[:8]}): критический риск RugCheck '{rk.get('name')}' — блок скама!")
 
                     # Проверка пулов и блокировки LP
@@ -2277,6 +2286,29 @@ class Analyzer:
                         if count >= 4 and most_common_pct >= 2.5 and (most_common_pct * count) >= 12.0:
                             return self._deny(mint, "jito-bundle-sybil", f"🚫 [АНТИСКАМ] Jito-бандл ({count} кошельков по ~{most_common_pct:.1f}%) у {mint[:8]} → Блок.")
                     top_10_sum_pct = sum([x[1] for x in top_10])
+
+                    # Детектор равномерной сибил-нарезки стека дева (кейс BALLFIN: 19 кошельков по 1.88%..2.71%, CV=0.08, h10/h1=0.82, top20=43%):
+                    if len(top_10) >= 8 and top_10_sum_pct >= 18.0:
+                        import statistics as _st_an
+                        _t10_p = [x[1] for x in top_10]
+                        _t10_m = _st_an.mean(_t10_p)
+                        _t10_cv = (_st_an.pstdev(_t10_p) / _t10_m) if _t10_m > 0 else 9.9
+                        _h10_r = (_t10_p[-1] / _t10_p[0]) if _t10_p[0] > 0 else 0.0
+                        if _t10_cv <= 0.14 or (_h10_r >= 0.68 and _t10_p[-1] >= 1.5):
+                            return self._deny(
+                                mint,
+                                f"flat-sybil-split CV={_t10_cv:.2f}",
+                                f"🚫 [FLAT-SYBIL-SPLIT] {symbol} ({mint[:8]}): топ-10 ({top_10_sum_pct:.1f}%) нарезаны равномерно (CV={_t10_cv:.2f}, h10/h1={_h10_r:.2f}) — сибил-сетка дева (кейс BALLFIN)!",
+                            )
+                    _mid_syb_a = [x[1] for x in non_curve_accounts[:20] if 1.5 <= x[1] <= 4.5]
+                    if len(_mid_syb_a) >= 12 and sum(_mid_syb_a) >= 28.0:
+                        _mid_r_a = max(_mid_syb_a) / max(min(_mid_syb_a), 0.1)
+                        if _mid_r_a <= 2.2:
+                            return self._deny(
+                                mint,
+                                f"top20-sybil-swarm {len(_mid_syb_a)}w",
+                                f"🚫 [TOP20-SYBIL-SWARM] {symbol} ({mint[:8]}): {len(_mid_syb_a)} суб-кошельков держат по 1.5-4.5% ({sum(_mid_syb_a):.1f}% эмиссии) — сибил-рои дева!",
+                            )
                     _cur_tok_top10 = top_10_sum_pct
                     _cur_tok_dev = dev_holding_pct
                     self._last_top10 = top_10_sum_pct

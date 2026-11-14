@@ -169,7 +169,7 @@ EVM_NORMAL_CRASH = 0.22
 BREAKEVEN_PCT = 999.0      # Breakeven Shield ОТКЛЮЧЕН (убивал ракеты копеечными выходами)
 
 PREFETCH_TTL_SEC = 12
-SOLANA_MIN_AGE_MIN = 1.0        # 60 секунд: созревание после блока 0 (свободный вход в ракеты со 2-й свечи)
+SOLANA_MIN_AGE_MIN = 2.0        # 120 секунд: карантин первых 2 свечей после миграции (защита от 90-секундных снайпер-рагов вроде BALLFIN)
 SOLANA_MAX_AGE_HOURS = 12.0      # До 12 часов (не срезаем развивающиеся ракеты вроде ASTRALIS/Sakura)
 SOLANA_MAX_AGE_MIN = 720.0       # Торгуем активные монеты до 12 часов
 JEV_MAX_AGE_MIN = 720.0          # В GROK-JEV активные монеты до 12 часов
@@ -191,8 +191,8 @@ GEMINI_API_KEY = (os.getenv("GEMINI_API_KEY") or "").strip()
 # === GROK BOT x JEV ENGINE ===
 JEV_ENABLED = True
 JEV_WICK_STOP_ENABLED = False
-JEV_EARLY_MIN_AGE_MIN = 1.0    # Ранний вход от 60 секунд (не пропускаем ракеты!)
-JEV_MIN_AGE_MIN = 1.2          # Базовый карантин 72 секунды
+JEV_EARLY_MIN_AGE_MIN = 1.8    # Ранний вход от 108 секунд (переживаем сброс первых снайперов 0-90с)
+JEV_MIN_AGE_MIN = 2.0          # Базовый карантин 120 секунд (2 полные свечи после миграции)
 JEV_MAX_AGE_MIN = 720.0          # В GROK-JEV активные монеты до 12 часов (не срезаем зрелые ракеты вроде ASTRALIS/Sakura)
 JEV_MIN_LIQUIDITY_USD = 5000.0   # Минимум $5k ликвидности — пускает ранние ракеты (SWAMIS $6k, AI, AMD, HOUSE, SCAT)
 JEV_MAX_LIQUIDITY_USD = 220000.0

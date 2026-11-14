@@ -171,21 +171,25 @@ _RPC_LAST_CALL: Dict[str, float] = {}
 
 def _rpc_endpoints() -> List[str]:
     """
-    Приоритет RPC-эндпоинтов: Helius (если есть ключ) → publicnode → mainnet-beta.
-    ankr без ключа не работает (отдаёт 403), mainnet-beta агрессивно рейтлимитит
-    тяжёлые батчи, поэтому publicnode идёт первым.
+    Приоритет RPC-эндпоинтов: publicnode → mainnet-beta → Helius (только если не в 429-бане).
+    Важно: Helius при исчерпании лимита часто возвращает HTTP 200 с JSON-ошибкой -32429 (max usage reached),
+    поэтому ставим быстрые публичные ноды первыми и учитываем глобальный кулдаун Helius из goplus.
     """
-    urls: List[str] = []
+    urls: List[str] = [
+        "https://solana-rpc.publicnode.com",
+        "https://api.mainnet-beta.solana.com",
+    ]
+    try:
+        import goplus as _gp
+        helius_ok = time.time() >= float(getattr(_gp, "_HELIUS_429_UNTIL", 0.0) or 0.0)
+    except Exception:
+        helius_ok = True
     try:
         helius = getattr(config, "HELIUS_RPC_URL", "") or ""
-        if helius and "api.mainnet-beta" not in helius:
+        if helius and "api.mainnet-beta" not in helius and helius_ok:
             urls.append(helius)
     except Exception:
         pass
-    urls.extend([
-        "https://solana-rpc.publicnode.com",
-        "https://api.mainnet-beta.solana.com",
-    ])
     seen, out = set(), []
     for u in urls:
         if u and u not in seen:
@@ -204,7 +208,9 @@ def _rpc_sem() -> asyncio.Semaphore:
 async def _rpc_batch(calls: List[Tuple[str, list]], timeout: float = 9.0) -> List[Any]:
     """
     Батч JSON-RPC: [(method, params), ...] -> [result | None, ...].
-    Один HTTP- запрос на весь батч — критично для скорости входа (иначе 2*N запросов).
+    Один HTTP-запрос на весь батч — критично для скорости входа (иначе 2*N запросов).
+    Если RPC вернул HTTP 200 с JSON-RPC error (например Helius -32429 max usage reached)
+    или пустые результаты — автоматически переключается на следующий RPC в списке!
     """
     if not calls:
         return []
@@ -231,20 +237,43 @@ async def _rpc_batch(calls: List[Tuple[str, list]], timeout: float = 9.0) -> Lis
                 ) as resp:
                     if resp.status != 200:
                         last_err = f"HTTP {resp.status}"
+                        try:
+                            import goplus as _gp
+                            _gp._note_rpc_status(url, resp.status)
+                        except Exception:
+                            pass
                         continue
                     body = await resp.json(content_type=None)
             if isinstance(body, dict):
+                if body.get("error"):
+                    err_str = str(body.get("error")).lower()
+                    last_err = f"rpc-error:{err_str[:40]}"
+                    if "429" in err_str or "max usage" in err_str or "rate" in err_str:
+                        try:
+                            import goplus as _gp
+                            _gp._note_rpc_status(url, 429)
+                        except Exception:
+                            pass
+                    continue
                 body = [body]
             if not isinstance(body, list):
                 last_err = "bad-body"
                 continue
             by_id: Dict[int, Any] = {}
+            err_cnt = 0
             for item in body:
-                if isinstance(item, dict) and "id" in item:
-                    try:
-                        by_id[int(item["id"])] = item.get("result")
-                    except Exception:
-                        continue
+                if isinstance(item, dict):
+                    if item.get("error"):
+                        err_cnt += 1
+                    if "id" in item and item.get("result") is not None:
+                        try:
+                            by_id[int(item["id"])] = item.get("result")
+                        except Exception:
+                            continue
+            # Если ни один вызов в батче не вернул result (все упали с error) — пробуем следующий RPC!
+            if not by_id and err_cnt > 0:
+                last_err = f"all-{err_cnt}-items-errored"
+                continue
             return [by_id.get(i) for i in range(len(calls))]
         except asyncio.CancelledError:
             raise
@@ -697,7 +726,7 @@ async def _trace_all_funders(wallet_list: List[str], mint: str,
                 info["error"] = "no-genesis-tx"
                 continue
             meta = tx.get("meta") or {}
-            info["funding_ts"] = int(meta.get("blockTime") or 0)
+            info["funding_ts"] = int(tx.get("blockTime") or meta.get("blockTime") or 0)
             funder, amount = _find_funder(tx, w, mint)
             info["funder"] = funder
             info["amount_sol"] = round(amount / 1e9, 6)
@@ -777,14 +806,19 @@ async def _insider_graph_clusters(mint: str, report: dict = None) -> List[dict]:
         st, data = 0, None
 
     clusters: List[dict] = []
+    collector_hub_wallets: List[str] = []
+    collector_hub_pct = 0.0
+    collector_hub_nets = 0
     if st == 200 and isinstance(data, list):
         for net in data:
             if not isinstance(net, dict):
                 continue
             nodes = net.get("nodes") or []
+            links = net.get("links") or []
             if len(nodes) < 2:
                 continue
             wallets: List[str] = []
+            all_participant_wallets: List[str] = []
             seen_w = set()
             holdings_raw = 0.0
             for nd in nodes:
@@ -800,6 +834,8 @@ async def _insider_graph_clusters(mint: str, report: dict = None) -> List[dict]:
                     continue
                 if nid in pool_addrs or _is_pool_like(nid):
                     continue
+                seen_w.add(nid)
+                all_participant_wallets.append(nid)
                 try:
                     hold = float(nd.get("holdings") or 0.0)
                 except Exception:
@@ -807,17 +843,22 @@ async def _insider_graph_clusters(mint: str, report: dict = None) -> List[dict]:
                 if hold <= 0:
                     continue
                 node_pct = (hold / supply) * 100.0
-                if node_pct < min_node_pct:
+                if node_pct < min_node_pct or node_pct > 50.0:
                     continue
-                seen_w.add(nid)
                 holdings_raw += hold
                 wallets.append(nid)
 
-            if len(wallets) < 2:
-                continue
             total_pct = (holdings_raw / supply) * 100.0
             # >100% = двойной счёт (wallet + его токен-аккаунт) — данным не верим
-            if total_pct > 100.0:
+            if total_pct > 100.0 or total_pct <= 0.0:
+                continue
+            # Collector-Hub сеть (кейсы SOLFLY и FYAT): 4-12 суб-кошельков перевели токены на 1 хаб-кошелёк
+            if len(wallets) == 1 and len(all_participant_wallets) >= 4 and len(links) >= 3 and 0.35 <= total_pct <= 35.0:
+                collector_hub_nets += 1
+                collector_hub_pct += total_pct
+                collector_hub_wallets.extend(wallets)
+                wallets = all_participant_wallets[:12]
+            if len(wallets) < 2:
                 continue
             clusters.append({
                 "source": "rugcheck_graph",
@@ -837,6 +878,28 @@ async def _insider_graph_clusters(mint: str, report: dict = None) -> List[dict]:
                 "fresh_ratio": 0.0,
                 "min_funding_sol": 0.0,
                 "has_creator": any(w == creator for w in wallets),
+                "decimals": decimals,
+            })
+
+        if collector_hub_nets >= 3 and collector_hub_pct >= 8.0:
+            clusters.append({
+                "source": "rugcheck_graph",
+                "funder": "collector-hub-swarm",
+                "funder_label": f"graph:collector-hubs({collector_hub_nets})",
+                "wallets": list(dict.fromkeys(collector_hub_wallets))[:15],
+                "wallet_count": max(len(collector_hub_wallets), collector_hub_nets),
+                "total_pct": round(min(collector_hub_pct, 100.0), 3),
+                "max_pct": 0.0,
+                "total_amount_sol": 0.0,
+                "funding_spread_sec": 0,
+                "funding_burst": True,
+                "equal_funding_ratio": 0.0,
+                "launch_prep_count": 0,
+                "launch_prep_ratio": 0.0,
+                "fresh_wallet_count": 0,
+                "fresh_ratio": 0.0,
+                "min_funding_sol": 0.0,
+                "has_creator": False,
                 "decimals": decimals,
             })
 
@@ -944,7 +1007,6 @@ async def analyze_funding_clusters(mint: str, cohort: List[dict]) -> dict:
         result["wallets"].append(w)
 
     # 2) Группируем по источнику
-    # 2) Группируем по источнику
     groups: Dict[str, List[dict]] = defaultdict(list)
     for w in wallets:
         f = (w.get("funding") or {}).get("funder")
@@ -955,15 +1017,84 @@ async def analyze_funding_clusters(mint: str, cohort: List[dict]) -> dict:
     if not groups and not graph_clusters:
         return result
 
+    # 2.5) Детектор 2-hop Burner-Relay фермы (кейс GETAJOB: дев пропускает раздачу SOL
+    #      через одноразовые транзитные кошельки-прокладки по 2 транзакции: 1 вход -> 1 выход).
+    #      Для всех уникальных funder-адресов когорты за 1 RPC-батч проверяем число транзакций:
+    #      если >= 3 кошельков когорты профинансированы одноразовыми прокладками (<= 5 tx),
+    #      объединяем их в единый сибил-кластер burner-relay!
+    burner_relay_members: List[dict] = []
+    candidate_funders: List[str] = []
+    for f in groups.keys():
+        if f and f not in _KNOWN_LIQUIDITY_SOURCES and _known_source_label(f) == "unknown":
+            candidate_funders.append(f)
+    if len(candidate_funders) >= 2:
+        try:
+            f_sigs_res = await _rpc_batch([
+                ("getSignaturesForAddress", [f_addr, {"limit": 10}])
+                for f_addr in candidate_funders
+            ], timeout=4.0)
+            burner_funders = set()
+            for f_addr, sigs in zip(candidate_funders, f_sigs_res or []):
+                if isinstance(sigs, list) and 1 <= len(sigs) <= 5:
+                    burner_funders.add(f_addr)
+            if len(burner_funders) >= 2:
+                for f_addr in burner_funders:
+                    burner_relay_members.extend(groups.get(f_addr, []))
+        except Exception:
+            pass
+
     # 3) Глубокая проверка для кластеров с 2+ кошельками (первое действие = покупка токена)
     deep_enabled = bool(_cfg("FCR_DEEP_FIRST_ACTION", True))
     if deep_enabled:
         deep_members = [m for members in groups.values() if len(members) >= 2 for m in members]
+        if len(burner_relay_members) >= 2:
+            seen_dm = {m["wallet"] for m in deep_members}
+            for bm in burner_relay_members:
+                if bm["wallet"] not in seen_dm:
+                    deep_members.append(bm)
+                    seen_dm.add(bm["wallet"])
         if deep_members:
             await _deep_first_action_batch(deep_members, mint)
 
     # 4) Считаем метрики кластеров
     burst_window = float(_cfg("FCR_CLUSTER_BURST_SEC", 3600))
+
+    if len(burner_relay_members) >= 2:
+        br_pcts = [float(m.get("pct", 0.0) or 0.0) for m in burner_relay_members]
+        br_total_pct = sum(br_pcts)
+        br_ts = [int((m.get("funding") or {}).get("funding_ts") or 0) for m in burner_relay_members]
+        br_ts = [t for t in br_ts if t > 0]
+        br_spread = (max(br_ts) - min(br_ts)) if len(br_ts) >= 2 else 0
+        br_amounts = [float((m.get("funding") or {}).get("amount_sol", 0.0) or 0.0) for m in burner_relay_members]
+        br_amounts = [a for a in br_amounts if a > 0]
+        br_launch_prep = sum(
+            1 for m in burner_relay_members
+            if bool((m.get("funding") or {}).get("touched_mint"))
+            or bool((m.get("deep") or {}).get("first_action_mint"))
+        )
+        br_fresh = sum(
+            1 for m in burner_relay_members
+            if int((m.get("funding") or {}).get("tx_count", 0) or 0) <= int(_cfg("FCR_FRESH_TX_MAX", 8))
+        )
+        result["clusters"].append({
+            "source": "burner_relay",
+            "funder": "burner-relay",
+            "funder_label": "burner-relay-hop",
+            "wallets": [m["wallet"] for m in burner_relay_members],
+            "wallet_count": len(burner_relay_members),
+            "total_pct": round(br_total_pct, 3),
+            "max_pct": round(max(br_pcts) if br_pcts else 0.0, 3),
+            "total_amount_sol": round(sum(br_amounts), 4),
+            "funding_spread_sec": br_spread,
+            "funding_burst": bool(br_spread and br_spread <= burst_window),
+            "equal_funding_ratio": 0.0,
+            "launch_prep_count": br_launch_prep,
+            "launch_prep_ratio": round(br_launch_prep / float(len(burner_relay_members)), 3),
+            "fresh_wallet_count": br_fresh,
+            "fresh_ratio": round(br_fresh / float(len(burner_relay_members)), 3),
+            "min_funding_sol": round(min(br_amounts) if br_amounts else 0.0, 4),
+            "has_creator": False,
+        })
 
     for f, members in groups.items():
         pcts = [float(m.get("pct", 0.0) or 0.0) for m in members]
@@ -1134,6 +1265,24 @@ def analyze_microstructure(mint: str, pair_data: dict, cohort: List[dict]) -> di
         sigs.append({"key": "dev_loaded", "weight": w,
                      "text": f"дев (создатель) держит {dev_pct:.1f}% эмиссии — может продать на первой свече"})
 
+    # i) Плоское сибил-распределение топ-холдеров (кейс BALLFIN: 19 кошельков по 1.88%..2.71%, CV=0.08):
+    # В органическом токене доли топ-холдеров подчиняются степенному закону (CV >= 0.17, h10/h1 <= 0.60).
+    holder_pcts = sorted([float(c.get("pct", 0.0) or 0.0) for c in cohort if float(c.get("pct", 0.0) or 0.0) >= 1.2], reverse=True)
+    if len(holder_pcts) >= 6:
+        import statistics as _st_fcr
+        _top_slice = holder_pcts[:10]
+        _sum_slice = sum(_top_slice)
+        _mean_slice = _st_fcr.mean(_top_slice)
+        _cv_slice = (_st_fcr.pstdev(_top_slice) / _mean_slice) if _mean_slice > 0 else 9.9
+        _last_ratio = (_top_slice[-1] / _top_slice[0]) if _top_slice[0] > 0 else 0.0
+        if _sum_slice >= 14.0 and (_cv_slice <= 0.14 or (_last_ratio >= 0.68 and _top_slice[-1] >= 1.5)):
+            hard_score = max(hard_score, 0.60)
+            sigs.append({
+                "key": "flat_sybil_split",
+                "weight": 0.60,
+                "text": f"равномерная нарезка стека дева: {len(_top_slice)} холдеров держат {_sum_slice:.1f}% (CV={_cv_slice:.2f}, min/max={_last_ratio:.2f})"
+            })
+
     return {
         "signals": sigs,
         "score": round(min(score, 1.0), 3),
@@ -1176,9 +1325,11 @@ def _score_clusters(clusters: List[dict]) -> Tuple[float, List[dict]]:
         n = int(c.get("wallet_count", 0))
         pct = float(c.get("total_pct", 0.0))
         label = str(c.get("funder_label") or "unknown")
-        is_graph = str(c.get("source") or "") == "rugcheck_graph"
+        src_type = str(c.get("source") or "")
+        is_graph = src_type == "rugcheck_graph"
+        is_burner_relay = src_type == "burner_relay"
 
-        if not is_graph:
+        if not is_graph and not is_burner_relay:
             # Источник — DEX/агрегатор: «общий SOL-источник» ничего не значит
             if label == "known-dex":
                 continue
@@ -1205,17 +1356,21 @@ def _score_clusters(clusters: List[dict]) -> Tuple[float, List[dict]]:
                 discount = 0.3
             if n > 60:
                 continue
+        elif is_burner_relay:
+            discount = 1.0
         elif label in _EXCHANGE_LABELS:
             discount = 0.45
-        elif not burst and fresh_ratio < 0.34:
-            # Не бурст + не одноразовые: скорее всего честные люди с общим кошельком
-            # (вывод с биржи). Сигнал слабее, но не обнуляем.
+        elif not burst and fresh_ratio < 0.34 and n < 5:
+            # Не бурст + не одноразовые (при малом числе кошельков <5): скорее всего честные люди с общим кошельком
+            # (вывод с биржи). Если же 5+ топ-холдеров одного мемкоина профинансированы с одного неизвестного кошелька — скидку не даём!
             discount = 0.75
 
         if n >= min_wallets and pct >= min_pct:
             w = 0.45
             w += min(0.18, (n - min_wallets) * 0.06)       # каждый кошелёк сверх порога
             w += min(0.15, max(0.0, pct - min_pct) * 0.02)  # каждый % сверх порога
+            if is_burner_relay:
+                w += 0.15
             w *= discount
             if is_graph:
                 reasons.append({
@@ -1223,6 +1378,13 @@ def _score_clusters(clusters: List[dict]) -> Tuple[float, List[dict]]:
                     "weight": round(w, 3),
                     "text": (f"инсайдерская сеть RugCheck: {n} связанных кошельков "
                              f"держат {pct:.1f}% эмиссии"),
+                })
+            elif is_burner_relay:
+                reasons.append({
+                    "key": "burner_relay_cluster",
+                    "weight": round(w, 3),
+                    "text": (f"2-hop сибил-прокладки: {n} топ-холдеров профинансированы через "
+                             f"одноразовые транзитные кошельки (<=5 tx) и держат {pct:.1f}% эмиссии"),
                 })
             else:
                 reasons.append({

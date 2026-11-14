@@ -460,16 +460,16 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
             import goplus as _gp_jup
             _rc_st, _rc_d = await _gp_jup.fetch_rugcheck_report_cached(mint, ttl=120.0, timeout=5)
             if _rc_d:
-                # 1. Проверка критической концентрации монет у одного кошелька (кейсы CRO, NEX AI)
+                # 1. Проверка критической концентрации монет у одного кошелька (кейсы CRO, NEX AI) и серийных рагеров
                 for _rk in (_rc_d.get("risks") or []):
                     _rkn = str(_rk.get("name", "")).lower()
                     _rkl = str(_rk.get("level", "")).lower()
-                    if _rkl == "danger" and any(k in _rkn for k in ("single holder", "high ownership", "creator holding")):
-                        print(f"🚫 [{source_tag}-SINGLE-HOLDER] {_sym_tmp} ({mint[:8]}): RugCheck خطر '{_rk.get('name')}' — дев контролирует эмиссию!")
+                    if _rkl == "danger" and any(k in _rkn for k in ("single holder", "high ownership", "creator holding", "creator history")):
+                        print(f"🚫 [{source_tag}-SINGLE-HOLDER] {_sym_tmp} ({mint[:8]}): RugCheck '{_rk.get('name')}' — дев-рагер или контролирует эмиссию!")
                         return False
                 # 2. Очищенный score RugCheck
                 _raw_sc = float(_rc_d.get("score") or 0.0)
-                _ign_sc = sum(float(rk.get("score", 0) or 0) for rk in (_rc_d.get("risks") or []) if any(k in str(rk.get("name", "")).lower() for k in ("low liquidity", "creator history", "copycat", "symbol mimic", "large amount of lp unlocked", "lp not locked", "unlocked lp")))
+                _ign_sc = sum(float(rk.get("score", 0) or 0) for rk in (_rc_d.get("risks") or []) if any(k in str(rk.get("name", "")).lower() for k in ("low liquidity", "copycat", "symbol mimic", "large amount of lp unlocked", "lp not locked", "unlocked lp")))
                 if (_raw_sc - _ign_sc) >= 1200:
                     print(f"🚫 [{source_tag}-HIGH-RISK] {_sym_tmp} ({mint[:8]}): RugCheck Score {(_raw_sc - _ign_sc):.0f} >= 1200 — блок скама!")
                     return False

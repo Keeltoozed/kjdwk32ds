@@ -153,9 +153,9 @@ class MatureExitManager:
                 _trail_dist = _mb_dist
             # Ниже +110% пика мунбэг тоже дышит свободно — стоп-лосс его держит
         else:
-            # === ОБЫЧНАЯ ПОЗИЦИЯ (ДО МУНБЭГА): ТРЕЙЛИНГ ТОЛЬКО ОТ +110% ПИКА ===
-            # Ниже +110% — НЕТ никаких полов и трейлингов!
-            # Ракета может откатить на -30% от локального хая и продолжить на 10x.
+            # === ОБЫЧНАЯ ПОЗИЦИЯ (ДО МУНБЭГА): МНОГОУРОВНЕВАЯ ЗАЩИТА ПРИБЫЛИ + РАКЕТНЫЙ ТРЕЙЛИНГ ===
+            # До +40% позиция дышит свободно (чтобы не выбивать ракеты на стандартном откате -20%),
+            # а начиная с +40%..+110% включаем ступенчатую страховку прибыли!
             if max_pnl_pct >= 5.00:         # +500%+ (6x - 11x+ гипер-ракета)
                 _floor_pnl = round(max_pnl_pct * 0.70, 2)
                 _trail_dist = 0.18
@@ -165,8 +165,12 @@ class MatureExitManager:
             elif max_pnl_pct >= 1.10:       # +110%..+250% (первый взлет)
                 _floor_pnl = 0.66           # пол +66% (TP1 уже в кармане)
                 _trail_dist = 0.25
-            # max_pnl_pct < +110%: _floor_pnl = None, _trail_dist = None
-            # Позиция дышит свободно! Только стоп-лосс снизу.
+            elif max_pnl_pct >= 0.70:       # +70%..+109% (сильный импульс перед 2x)
+                _floor_pnl = 0.35           # гарантируем минимум +35% чистыми
+                _trail_dist = 0.28
+            elif max_pnl_pct >= 0.40:       # +40%..+69% (уверенный разгон)
+                _floor_pnl = 0.16           # гарантируем минимум +16% чистыми (не отдаём профит обратно в 0/-13%!)
+                _trail_dist = 0.32
 
         if _floor_pnl is not None and minutes_held >= 0.20:
             drop_from_max = (position.max_price_usd - current_price) / position.max_price_usd if position.max_price_usd > 0 else 0.0
@@ -196,9 +200,14 @@ class MatureExitManager:
             if minutes_held >= 3.5 and _peak_age_min >= 2.5 and max_pnl_pct < 0.08 and pnl_pct <= 0.02:
                 return f"Dead Churn Escape ({pnl_pct*100:+.1f}%, застрял без импульса {_peak_age_min:.1f}м — выход)"
 
-            # 2. Faded Impulse Stop: импульс был (+8%..+39%), но затух (3+ мин без нового ATH) и сполз в минус (-5%)
+            # 2. Mid-Peak Profit Shield: если монета давала хороший импульс (+22%..+39%, как ZAPZEKE +22.9%),
+            # но 2+ минуты не обновляет хай и начала сползать к точке входа (<= +5%) — забираем плюс, не ждём 0% или минуса!
+            if max_pnl_pct >= 0.22 and _peak_age_min >= 2.0 and pnl_pct <= 0.05:
+                return f"Mid-Peak Profit Shield ({pnl_pct*100:+.1f}% locked after peak +{max_pnl_pct*100:.0f}%, {_peak_age_min:.1f}m no ATH)"
+
+            # 2b. Faded Impulse Stop: импульс был (+8%..+39%), но затух (2.5+ мин без нового ATH) и сполз в минус (-4%)
             # Спасает от 10-минутного медленного сползания в -28% (кейс SPEED -$1.45)!
-            if max_pnl_pct >= 0.08 and _peak_age_min >= 3.0 and pnl_pct <= -0.05:
+            if max_pnl_pct >= 0.08 and _peak_age_min >= 2.5 and pnl_pct <= -0.04:
                 return f"Faded Impulse Stop ({pnl_pct*100:+.1f}%, затухание импульса после пика +{max_pnl_pct*100:.0f}%)"
 
             # 3. ATH Exhaustion Exit: пик был сильным (+40%+), но 5+ минут нет нового ATH — забираем +15%+ профита

@@ -632,7 +632,7 @@ async def check_solana(mint: str):
                     # а также текстовые предупреждения о концентрации, где RugCheck путает пул PumpSwap с китом —
                     # реальных холдеров мы уже проверили выше в п.3 с точным исключением DEX_POOL_AUTHORITIES!):
                     _allowed_rc_noise = (
-                        "low liquidity", "creator history", "copycat", "symbol mimic",
+                        "low liquidity", "copycat", "symbol mimic",
                         "large amount of lp unlocked", "lp provider", "single lp provider",
                         "lp not locked", "unlocked lp",
                         "single holder", "high holder concentration", "top 10 holders", "high ownership"
@@ -657,7 +657,7 @@ async def check_solana(mint: str):
                         for rk in (rc_data.get("risks") or []):
                             _rkn = str(rk.get("name", "")).lower()
                             _rkl = str(rk.get("level", "")).lower()
-                            if _rkl == "danger" and any(k in _rkn for k in ("creator holding", "honeypot", "transfer fee", "permanent delegate")):
+                            if _rkl == "danger" and any(k in _rkn for k in ("creator holding", "creator history", "honeypot", "transfer fee", "permanent delegate")):
                                 verdict = (False, f"rugcheck: {rk.get('name')} (опасный риск контракта/дева)")
                                 break
             except Exception:
@@ -1239,13 +1239,19 @@ async def check_rugcheck_insider_graph(mint: str, total_supply_raw: float = 0.0,
         if 0 < eff_supply < 1e12 and mint.endswith("pump"):
             eff_supply = eff_supply * 1e6
 
+        hub_nets_count = 0
+        hub_total_nodes = 0
+        hub_total_pct = 0.0
+
         for net in data:
             if not isinstance(net, dict):
                 continue
             nodes = net.get("nodes") or []
+            links = net.get("links") or []
             if len(nodes) < 4:
                 continue
             real_Cluster_pcts = []
+            valid_participants = 0
             seen_ids = set()
             for nd in nodes:
                 if not isinstance(nd, dict) or not nd.get("participant", True):
@@ -1256,12 +1262,13 @@ async def check_rugcheck_insider_graph(mint: str, total_supply_raw: float = 0.0,
                 if not nid or nid in excl or nid in seen_ids:
                     continue
                 seen_ids.add(nid)
+                valid_participants += 1
                 hold_raw = float(nd.get("holdings") or 0.0)
                 if hold_raw <= 0:
                     continue
                 pct = (hold_raw / eff_supply) * 100.0
-                # Игнорируем пул (>70%) и пылевые аирдроп-кошельки (<0.35% эмиссии), чтобы не резать живые ракеты вроде ANSEM/REGRETAMINE
-                if 0.35 <= pct <= 70.0:
+                # Игнорируем пул (>50%) и пылевые аирдроп-кошельки (<0.35% эмиссии), чтобы не резать живые ракеты вроде ANSEM/REGRETAMINE
+                if 0.35 <= pct <= 50.0:
                     real_Cluster_pcts.append(pct)
 
             n_real = len(real_Cluster_pcts)
@@ -1270,6 +1277,25 @@ async def check_rugcheck_insider_graph(mint: str, total_supply_raw: float = 0.0,
                 res = (False, f"insider-graph-bundle: {n_real} linked wallets hold {sum_pct:.1f}% supply")
                 _INSIDER_GRAPH_CACHE[mint] = (now, res)
                 return res
+
+            # Детектор Collector-Hub сетей (кейсы SOLFLY и FYAT: по 10-12 суб-кошельков покупают лесенкой и сливают токены на 1 хаб-кошелёк,
+            # поэтому у отправителей holdings=0, а на хабе аккумулируется 0.7%..5% эмиссии в каждой из 4-10 сетей):
+            if valid_participants >= 4 and len(links) >= 3 and 0.35 <= sum_pct <= 35.0:
+                hub_nets_count += 1
+                hub_total_nodes += valid_participants
+                hub_total_pct += sum_pct
+                if valid_participants >= 8 and sum_pct >= 8.0:
+                    res = (False, f"insider-collector-hub: {valid_participants} linked sub-wallets consolidated {sum_pct:.1f}% supply into hub")
+                    _INSIDER_GRAPH_CACHE[mint] = (now, res)
+                    return res
+
+        if hub_nets_count >= 3 and hub_total_nodes >= 15 and hub_total_pct >= 8.0:
+            res = (
+                False,
+                f"insider-collector-swarm: {hub_nets_count} transfer hubs ({hub_total_nodes} linked sub-wallets) consolidated {hub_total_pct:.1f}% supply (staircase rug)",
+            )
+            _INSIDER_GRAPH_CACHE[mint] = (now, res)
+            return res
 
         res = (True, "")
         _INSIDER_GRAPH_CACHE[mint] = (now, res)
@@ -1309,7 +1335,7 @@ def analyze_trade_tape_staircase(trades_raw: list) -> tuple:
         elif kind == "sell":
             sells.append(attrs)
 
-    # 1. Синхронный сброс суб-кошельков в одну и ту же секунду (Jito Sell-All / Skim Burst)
+    # 1. Синхронный сброс суб-кошельков в одну и ту же секунду (Jito Sell-All / Skim Burst: кейсы NOTHING 73/s, GETAJOB 16/s, 14/s, 14/s)
     sell_by_sec = defaultdict(set)
     for s in sells:
         ts = str(s.get("block_timestamp") or "")
@@ -1319,10 +1345,49 @@ def analyze_trade_tape_staircase(trades_raw: list) -> tuple:
     if sell_by_sec:
         top_s_ts, top_s_wallets = max(sell_by_sec.items(), key=lambda kv: len(kv[1]))
         max_s_1s = len(top_s_wallets)
-        # Блокируем только явный оптовый сброс бандла: 18+ продаж в 1с или >=35% всех продаж в одну секунду при 8+ кошельках (кейс NOTHING: 73 продажи в 1с)
-        # Обычный рыночный шум (MEV-арбитраж / снайперы 4-10 сделок в секунду на ракетах вроде OREX и MOBROS) НЕ блокируется!
-        if max_s_1s >= 18 or (len(sells) >= 20 and (max_s_1s / float(len(sells))) >= 0.35 and max_s_1s >= 8):
-            return False, f"bundler-sync-sells: {max_s_1s} wallets sold in 1s ({top_s_ts})", []
+        multi_sec_bursts = sum(1 for ws in sell_by_sec.values() if len(ws) >= 6)
+        # 10+ уникальных продавцов в одну секунду ИЛИ 2+ секунды с синхронными пачками по 6+ продавцов (кейс GETAJOB: 16, 14, 14, 11)
+        # На реальных ракетах (ASTRALIS max=3, FYAT max=6 один раз) этого не бывает!
+        if max_s_1s >= 10 or multi_sec_bursts >= 2 or (len(sells) >= 20 and (max_s_1s / float(len(sells))) >= 0.35 and max_s_1s >= 7):
+            return False, f"bundler-sync-sells: {max_s_1s} wallets sold in 1s ({top_s_ts}, bursts={multi_sec_bursts})", []
+
+    # 1.5. Детектор 1-Shot Fast-Flip Wash Bot (кейс BALLFIN: 54 из 126 кошельков сделали ровно 1 buy >= $35 и 1 sell через 1-30с для накрутки фейкового объёма $60k/m перед рагом)
+    try:
+        from datetime import datetime as _dt_tape
+        w_tape = defaultdict(list)
+        for t_item in trades_raw:
+            t_attrs = (t_item.get("attributes") if isinstance(t_item, dict) else None) or t_item
+            if not isinstance(t_attrs, dict):
+                continue
+            w_addr = str(t_attrs.get("tx_from_address") or "")
+            k_type = str(t_attrs.get("kind") or "").lower()
+            ts_str = str(t_attrs.get("block_timestamp") or "")
+            u_val = float(t_attrs.get("volume_in_usd") or 0.0)
+            if w_addr and k_type in ("buy", "sell") and ts_str:
+                try:
+                    t_epoch = _dt_tape.fromisoformat(ts_str.replace("Z", "+00:00")).timestamp()
+                    w_tape[w_addr].append((t_epoch, k_type, u_val))
+                except Exception:
+                    pass
+        if len(w_tape) >= 12:
+            fast_flip_1shot = 0
+            for w_addr, evs in w_tape.items():
+                evs.sort(key=lambda x: x[0])
+                b_evs = [e for e in evs if e[1] == "buy"]
+                s_evs = [e for e in evs if e[1] == "sell"]
+                if len(b_evs) == 1 and len(s_evs) == 1 and b_evs[0][2] >= 35.0:
+                    dt_flip = s_evs[0][0] - b_evs[0][0]
+                    if 0.0 <= dt_flip <= 30.0:
+                        fast_flip_1shot += 1
+            flip_ratio = fast_flip_1shot / float(len(w_tape))
+            if fast_flip_1shot >= 8 or (fast_flip_1shot >= 5 and flip_ratio >= 0.20):
+                return (
+                    False,
+                    f"wash-volume-fast-flip-bot: {fast_flip_1shot}/{len(w_tape)} ({flip_ratio*100:.0f}%) one-shot wallets bought & sold within <=30s",
+                    [],
+                )
+    except Exception:
+        pass
 
     # 2. Синхронный закуп бандлера в одну секунду
     buy_by_sec = defaultdict(set)

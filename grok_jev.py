@@ -629,8 +629,14 @@ class GrokJevEngine:
         if age_min >= 20.0 and m5 < 1.2:
             return False, f"late-fade age {age_min:.0f}m m5 {m5:+.1f}% < +1.2% (old token cooling off, not a live rocket)"
         
-        # Проверяем часовой тренд ТОЛЬКО если монете реально >= 45 минут!
-        # Молодые токены (<45м) не имеют 1ч истории, а h1 отражает кёрву Pump.fun (кейс MEME +342%, GORP +100%)
+        # Защита от молодых «дохлых кошек» (кейс GETAJOB: пик $255k на 1-й минуте -> обвал -85% -> отскок в сливе h1=-22% на 8-й минуте -> финальный раг -98.6%):
+        # На молодых токенах (<45м) h1 показывает изменение цены от открытия DEX-пула. Если монете >= 3.0м и h1 < -15%, значит пул уже слили ниже цены миграции!
+        if 3.0 <= age_min < 45.0 and h1 < -15.0:
+            _is_young_v_rev = (m5 >= 18.0 and vol_m5 >= 18000.0 and eff_liq >= 18000.0 and b5 >= s5 * 1.35 and m1 >= 1.0)
+            if not _is_young_v_rev:
+                return False, f"young-dead-cat-bleed h1 {h1:+.1f}% < -15.0% at age {age_min:.1f}m (post-pump distribution bleed)"
+
+        # Проверяем часовой тренд для монет >= 45 минут:
         if age_min >= 45.0:
             _min_h1 = float(getattr(_c, "JEV_MIN_H1_PCT", -8.0))
             _is_jev_v_rev = (h1 >= -25.0 and m5 >= 12.0 and vol_m5 >= 15000.0 and eff_liq >= 18000.0 and b5 >= s5 * 1.30)
@@ -1562,20 +1568,20 @@ class GrokJevEngine:
                         float(rk.get("score", 0) or 0)
                         for rk in (rc_data.get("risks") or [])
                         if any(k in str(rk.get("name", "")).lower() for k in (
-                            "creator history", "copycat", "symbol mimic", *_allowed_lp_terms_jev
+                            "copycat", "symbol mimic", *_allowed_lp_terms_jev
                         ))
                     )
                     clean_score = max(0.0, raw_score - penalty_to_ignore)
                     if clean_score >= 2000:
                         return False, f"rugcheck: high risk score {clean_score:.0f} >= 2000", _h_stats
 
-                    # Проверка критических рисков смарт-контракта
+                    # Проверка критических рисков смарт-контракта и серийных скам-девов (Creator history of rugged tokens)
                     for rk in (rc_data.get("risks") or []):
                         rk_name = str(rk.get("name") or "").lower()
                         rk_lvl = str(rk.get("level") or "").lower()
-                        if any(k in rk_name for k in ("creator history", "copycat", "symbol mimic", *_allowed_lp_terms_jev)):
+                        if any(k in rk_name for k in ("copycat", "symbol mimic", *_allowed_lp_terms_jev)):
                             continue
-                        if rk_lvl == "danger" and "creator history" not in rk_name:
+                        if rk_lvl == "danger":
                             return False, f"rugcheck: critical danger risk '{rk.get('name')}'", _h_stats
 
                     # Проверка пулов (логируем статус LP, но не блокируем монеты с незалоченным LP по стратегии ракет)
@@ -1675,6 +1681,22 @@ class GrokJevEngine:
 
                     top_10_sum = sum(x[1] for x in top_10)
                     largest_whale = top_10[0][1] if top_10 else 0.0
+
+                    # Детектор равномерной сибил-нарезки стека дева (кейс BALLFIN: 19 кошельков по 1.88%..2.71%, CV=0.08, h10/h1=0.82, top20=43%):
+                    # В живых ракетах (VICECITY, FYAT, mihao, CATE, FOOD) распределение степенное: CV >= 0.17, h10/h1 <= 0.60.
+                    if len(top_10) >= 8 and top_10_sum >= 18.0:
+                        import statistics as _st_jev
+                        _t10_pcts = [x[1] for x in top_10]
+                        _t10_mean = _st_jev.mean(_t10_pcts)
+                        _t10_cv = (_st_jev.pstdev(_t10_pcts) / _t10_mean) if _t10_mean > 0 else 9.9
+                        _h10_ratio = (_t10_pcts[-1] / _t10_pcts[0]) if _t10_pcts[0] > 0 else 0.0
+                        if _t10_cv <= 0.14 or (_h10_ratio >= 0.68 and _t10_pcts[-1] >= 1.5):
+                            return False, f"flat-sybil-split (top10 {top_10_sum:.1f}% across uniform wallets: CV={_t10_cv:.2f}, h10/h1={_h10_ratio:.2f})", _h_stats
+                    _mid_sybils = [x[1] for x in non_curve[:20] if 1.5 <= x[1] <= 4.5]
+                    if len(_mid_sybils) >= 12 and sum(_mid_sybils) >= 28.0:
+                        _mid_ratio = max(_mid_sybils) / max(min(_mid_sybils), 0.1)
+                        if _mid_ratio <= 2.2:
+                            return False, f"top20-sybil-swarm ({len(_mid_sybils)} wallets holding 1.5-4.5% = {sum(_mid_sybils):.1f}% supply)", _h_stats
 
                     _h_stats["top10_pct"] = top_10_sum
                     _h_stats["dev_pct"] = dev_pct
