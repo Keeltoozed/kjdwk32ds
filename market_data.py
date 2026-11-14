@@ -757,7 +757,7 @@ async def get_trending() -> list:
     global _trending_cache, _trending_cache_time
 
     # Кэшируем результаты на 60 секунд (снижает нагрузку на GeckoTerminal API и защищает от 429)
-    if time.time() - _trending_cache_time < 60 and _trending_cache:
+    if time.time() - _trending_cache_time < 75 and _trending_cache:
         return _trending_cache
 
     out, seen = [], set()
@@ -815,9 +815,7 @@ async def get_trending() -> list:
     # Охватывает ТОП-80 самых горячих 5м пулов Solana (PumpSwap / Meteora / Raydium).
     gt_pages = (
         "/networks/solana/trending_pools?duration=5m&page=1",
-        "/networks/solana/trending_pools?duration=5m&page=2",
-        "/networks/solana/trending_pools?duration=5m&page=3",
-        "/networks/solana/trending_pools?duration=5m&page=4",
+        "/networks/solana/new_pools?page=1",
     )
     for path in gt_pages:
         d = await _gt_get(path, retries=0, timeout=6)

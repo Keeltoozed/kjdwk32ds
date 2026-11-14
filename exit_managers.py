@@ -142,14 +142,17 @@ class MatureExitManager:
         _trail_dist = None
 
         if _is_mb:
-            # === МУНБЭГ-ТРЕЙЛИНГ (ТОЛЬКО ДЛЯ ПОЗИЦИЙ, ВЗЯВШИХ +110%) ===
-            _mb_act = float(getattr(config, "MOONBAG_TRAIL_ACTIVATION_PCT", 1.10))
-            _mb_dist = float(getattr(config, "MOONBAG_TRAIL_DISTANCE_PCT", 0.25))
+            # === МУНБЭГ-ТРЕЙЛИНГ (ПОСЛЕ TP1 +55%) ===
+            _mb_act = float(getattr(config, "MOONBAG_TRAIL_ACTIVATION_PCT", 0.55))
+            _mb_dist = float(getattr(config, "MOONBAG_TRAIL_DISTANCE_PCT", 0.22))
             if max_pnl_pct >= 5.00:                      # +500%+ (6x): жёсткий трейлинг
-                _floor_pnl = round(max_pnl_pct * 0.70, 2)
+                _floor_pnl = round(max_pnl_pct * 0.72, 2)
                 _trail_dist = min(_mb_dist, 0.20)
-            elif max_pnl_pct >= _mb_act:                 # от +110% до +500%: 25% трейлинг
-                _floor_pnl = round(_mb_act * 0.60, 2)   # пол +66% от TP1
+            elif max_pnl_pct >= 1.10:                    # от +110% до +500%: плотная защита +65% от пика (минимум +72%)
+                _floor_pnl = round(max_pnl_pct * 0.65, 2)
+                _trail_dist = min(_mb_dist, 0.22)
+            elif max_pnl_pct >= _mb_act:                 # от +55% до +110%: фиксируем пол +55% от пика (~+30%)
+                _floor_pnl = round(max_pnl_pct * 0.55, 2)
                 _trail_dist = _mb_dist
             # Ниже +110% пика мунбэг тоже дышит свободно — стоп-лосс его держит
         else:

@@ -567,6 +567,7 @@ class GrokJevEngine:
             _is_organic_stealth = (
                 (eff_liq >= 5000.0 or is_pump)
                 and vol_m5 >= 1200.0
+                and (_vol_liq_ratio_g >= 0.45 or vol_m5 >= 15000.0)
                 and _vol_liq_ratio_g <= 8.5
                 and (
                     (b5 >= 12 and b5 >= s5 * 1.02) or
@@ -619,9 +620,10 @@ class GrokJevEngine:
         if s5 > 10 and b5 < (s5 * 0.80):
             return False, f"sellers-dominating {b5}b/{s5}s (more sellers than buyers in m5)"
 
-        # Давление продаж и сброс китов (кейс SOLC/DOG™)
+        # Давление продаж и сброс китов (кейс SOLC/DOG™), не режем скоростные пробойные ракеты при фиксации профита (GREGORY b/s 0.94x, m5 +45%)
         _tot_tx_g = b5 + s5
-        if _tot_tx_g >= 25 and s5 > 0:
+        _is_hi_vel_rocket_g = (vol_m5 >= 20000.0 and m5 >= 8.0 and b5 >= 100 and m1 >= -4.0 and (s5 == 0 or b5 >= s5 * 0.90))
+        if _tot_tx_g >= 25 and s5 > 0 and not _is_hi_vel_rocket_g:
             _sell_ratio_g = s5 / _tot_tx_g
             _vl_ratio_g = vol_m5 / max(eff_liq, 1.0)
             if b5 < s5 and (_sell_ratio_g >= 0.55 or (_sell_ratio_g >= 0.50 and _vl_ratio_g >= 3.5)):
@@ -675,7 +677,9 @@ class GrokJevEngine:
         if (b5 + s5) < _min_tx5:
             return False, f"tx5-low {b5+s5} < {_min_tx5} (too few transactions)"
         _req_bs = float(getattr(_c, "MIN_BUY_SELL_RATIO", 1.02))
-        if vol_m5 >= 5000.0 and b5 >= s5:
+        if vol_m5 >= 20000.0 and m5 >= 8.0 and b5 >= 100 and m1 >= -4.0:
+            _req_bs = 0.90
+        elif vol_m5 >= 5000.0 and b5 >= s5:
             _req_bs = 1.00
         if s5 > 0 and (b5 / s5) < _req_bs:
             return False, f"sellers-dominating {b5}b/{s5}s (ratio {b5/s5:.2f} < {_req_bs:.2f})"
@@ -1713,7 +1717,7 @@ class GrokJevEngine:
                     _mid_sybils = [x[1] for x in non_curve[:20] if 1.5 <= x[1] <= 4.5]
                     if len(_mid_sybils) >= 12 and sum(_mid_sybils) >= 28.0:
                         _mid_ratio = max(_mid_sybils) / max(min(_mid_sybils), 0.1)
-                        if _mid_ratio <= 2.2:
+                        if _mid_ratio <= 1.65:
                             return False, f"top20-sybil-swarm ({len(_mid_sybils)} wallets holding 1.5-4.5% = {sum(_mid_sybils):.1f}% supply)", _h_stats
 
                     _h_stats["top10_pct"] = top_10_sum
@@ -1730,7 +1734,7 @@ class GrokJevEngine:
                             return False, f"auditor-layer3 {_dump_why}", _h_stats
                     except Exception:
                         pass
-                    max_whale_limit = 18.0 if is_pump else 15.0
+                    max_whale_limit = 12.5 if is_pump else 11.0
                     if largest_whale > max_whale_limit:
                         return False, f"whale concentration {largest_whale:.1f}% > {max_whale_limit:.0f}%", _h_stats
                     max_top10 = 38.0 if (is_pump or vol_m5 >= 10000.0) else float(getattr(_c, "AUDITOR_MAX_TOP10_PCT", 32.0))

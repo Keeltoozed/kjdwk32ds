@@ -1358,6 +1358,7 @@ def analyze_trade_tape_staircase(trades_raw: list) -> tuple:
     if sell_by_sec:
         top_s_ts, top_s_wallets = max(sell_by_sec.items(), key=lambda kv: len(kv[1]))
         max_s_1s = len(top_s_wallets)
+        top_s_buys = len(buy_by_sec.get(top_s_ts, set()))
         max_sig_s_1s = 0
         top_sig_ts = top_s_ts
         if sig_sell_by_sec:
@@ -1369,13 +1370,15 @@ def analyze_trade_tape_staircase(trades_raw: list) -> tuple:
             1 for ts_k, ws in sig_sell_by_sec.items()
             if len(ws) >= 8 and sell_usd_by_sec.get(ts_k, 0.0) >= 600.0 and len(buy_by_sec.get(ts_k, set())) <= 1
         )
-        # Массовый Jito Sell-All (22+ любых кошельков в 1с ИЛИ 12+ значимых продавцов >=$20 на сумму >=$1200 без встречных покупок ИЛИ 2+ синхронных залпа по 8+ значимых продавцов)
+        # Массовый Jito Sell-All (22+ продавцов в 1с без сопоставимых встречных покупок — не путаем с двусторонним боем 22s/20b!)
+        # ИЛИ 12+ значимых продавцов >=$20 на сумму >=$1200 без встречных покупок ИЛИ 2+ синхронных залпа по 8+ значимых продавцов
+        _unanswered_mass_sell = max_s_1s >= 22 and (top_s_buys <= 3 or max_s_1s >= max(24, top_s_buys * 3))
         if (
-            max_s_1s >= 22
+            _unanswered_mass_sell
             or (max_sig_s_1s >= 12 and top_sig_usd >= 1200.0 and top_sig_buys <= 2)
             or sig_bursts >= 2
         ):
-            return False, f"bundler-sync-sells: {max_s_1s} wallets ({max_sig_s_1s} >=$20, ${top_sig_usd:.0f}) sold in 1s ({top_sig_ts}, bursts={sig_bursts})", []
+            return False, f"bundler-sync-sells: {max_s_1s} wallets (b={top_s_buys}, {max_sig_s_1s} >=$20, ${top_sig_usd:.0f}) sold in 1s ({top_sig_ts}, bursts={sig_bursts})", []
 
     # 1.5. Детектор 1-Shot Fast-Flip Wash Bot (кейс BALLFIN: 54 из 126 кошельков сделали ровно 1 buy >= $35 и 1 sell через 1-30с для накрутки фейкового объёма $60k/m перед рагом)
     try:
@@ -1441,8 +1444,9 @@ def analyze_trade_tape_staircase(trades_raw: list) -> tuple:
 
     if buy_by_sec and len(buys) <= 120:
         top_b_ts, top_b_wallets = max(buy_by_sec.items(), key=lambda kv: len(kv[1]))
-        if len(top_b_wallets) >= 12:
-            return False, f"bundler-sync-buys: {len(top_b_wallets)} wallets bought in 1s ({top_b_ts})", []
+        top_b_sells = len(sell_by_sec.get(top_b_ts, set()))
+        if len(top_b_wallets) >= 12 and (top_b_sells <= 2 or len(top_b_wallets) >= max(16, top_b_sells * 3)):
+            return False, f"bundler-sync-buys: {len(top_b_wallets)} wallets (s={top_b_sells}) bought in 1s ({top_b_ts})", []
 
     # 3. Клонированные некруглые покупки бота (например 0.8459 SOL с 6+ разных суб-кошельков дева, как в NOTHING)
     if nonround_sol_wallets:

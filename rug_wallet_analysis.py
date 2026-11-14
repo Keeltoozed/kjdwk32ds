@@ -132,10 +132,15 @@ async def check_dev_and_holders(client: AsyncClient, mint: str) -> dict:
 
         top_accounts = []
         for acc in accounts[:20]:
-            pct = acc.amount / total_supply if total_supply > 0 else 0
+            _raw_amt = getattr(acc.amount, "amount", acc.amount)
+            try:
+                _amt_int = int(_raw_amt or 0)
+            except (TypeError, ValueError):
+                _amt_int = 0
+            pct = _amt_int / total_supply if total_supply > 0 else 0
             top_accounts.append({
                 "address": str(acc.address),
-                "amount": acc.amount,
+                "amount": _amt_int,
                 "pct": pct,
             })
 

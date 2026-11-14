@@ -1826,7 +1826,9 @@ class Analyzer:
 
         # Запрет входа, если продавцов больше, чем покупателей (для активных ракет допускаем 1.00x - 1.02x при зеленом m5)
         _base_bs_cfg = float(getattr(config, "MIN_BUY_SELL_RATIO", 1.02))
-        if _b5_pre >= 100 and _vm5_pre >= 8000.0 and _b5_pre >= _s5_pre:
+        if _vm5_pre >= 20000.0 and _m5 >= 8.0 and _b5_pre >= 100 and _m1 >= -4.0:
+            _min_bs_cfg = 0.90  # Скоростные ракеты при фиксации профита (кейс GREGORY +161% при 2549b/2726s = 0.94x)
+        elif _b5_pre >= 100 and _vm5_pre >= 8000.0 and _b5_pre >= _s5_pre:
             _min_bs_cfg = 1.00  # Массивный встречный объём на ракетах (кейс PERCOLATOR, CULT 9013b/6702s)
         elif _vm5_pre >= 3500.0 and _b5_pre >= _s5_pre:
             _min_bs_cfg = 1.01  # Активная двухсторонняя торговля
@@ -1926,9 +1928,10 @@ class Analyzer:
                 )
 
         # Защита от давления продавцов и скрытого сброса китов (кейсы SOLC 735 продаж, DOG™ 291 продажа):
-        # Блокируем ТОЛЬКО если продавцы реально давят (sells >= 52% и покупателей меньше чем продавцов)
+        # Блокируем ТОЛЬКО если продавцы реально давят (не режем скоростные ракеты при фиксации профита: b/s >= 0.90, vol5 >= $20k, m5 >= 8%)
         _txns_tot_pre = _b5_pre + _s5_pre
-        if _txns_tot_pre >= 30 and _s5_pre > 0:
+        _is_hi_vel_rocket_a = (_vm5_pre >= 20000.0 and _m5 >= 8.0 and _b5_pre >= 100 and _m1 >= -4.0 and (_s5_pre == 0 or _b5_pre >= _s5_pre * 0.90))
+        if _txns_tot_pre >= 30 and _s5_pre > 0 and not _is_hi_vel_rocket_a:
             _sell_ratio = _s5_pre / _txns_tot_pre
             _v2l_pre = (_vm5_pre / max(_raw_liq_chk, 1.0)) if _raw_liq_chk > 0 else 0.0
             if _b5_pre < _s5_pre and (_sell_ratio >= 0.52 or (_sell_ratio >= 0.48 and _v2l_pre >= 3.5)):
@@ -1968,7 +1971,7 @@ class Analyzer:
             _is_organic_stealth = (
                 (_raw_liq_chk >= 5000.0 or _is_pump_curve_pre)
                 and _vm5_pre >= 1200.0
-                and _vol_liq_r <= 8.5
+                and 0.45 <= _vol_liq_r <= 8.5
                 and (
                     (_b5_pre >= 12 and _b5_pre >= _s5_pre * 1.02) or
                     (_b5_pre >= 8 and _s5_pre <= 30 and _m5 >= 1.5 and _avg_tx_pre >= 10.0) or
@@ -2013,7 +2016,11 @@ class Analyzer:
             curve_liq = fdv_val * 0.35 if fdv_val > 0 else 0.0
             liq_val = max(raw_liq, curve_liq) if is_pump_curve else raw_liq
 
-            if (conf + 0.05) < threshold:
+            _is_momentum_rocket_a = (
+                (_m5 >= 12.0 and _b5_pre >= _s5_pre * 1.15 and _vm5_pre >= 8000.0)
+                or (_vm5_pre >= 15000.0 and _b5_pre >= _s5_pre and _m5 >= 5.0)
+            )
+            if (conf + 0.05) < threshold and not _is_momentum_rocket_a:
                 self._deny(mint, f"rocket-xgb {conf:.0f}%", f"· [ROCKET-XGB] {symbol} ({mint[:8]}): уверенность модели {conf:.1f}% < {threshold:.0f}% — отсеян до тяжелых проверок (0ms).")
                 try:
                     from shadow_tracker import shadow_tracker
@@ -2334,7 +2341,7 @@ class Analyzer:
                     _mid_syb_a = [x[1] for x in non_curve_accounts[:20] if 1.5 <= x[1] <= 4.5]
                     if len(_mid_syb_a) >= 12 and sum(_mid_syb_a) >= 28.0:
                         _mid_r_a = max(_mid_syb_a) / max(min(_mid_syb_a), 0.1)
-                        if _mid_r_a <= 2.2:
+                        if _mid_r_a <= 1.65:
                             return self._deny(
                                 mint,
                                 f"top20-sybil-swarm {len(_mid_syb_a)}w",
@@ -2357,7 +2364,7 @@ class Analyzer:
                     except Exception:
                         pass
                     largest_whale_pct = top_10[0][1] if top_10 else 0.0
-                    max_whale_pct = 18.0 if _is_pump_flag else 15.0
+                    max_whale_pct = 12.5 if _is_pump_flag else 11.0
                     if largest_whale_pct > max_whale_pct:
                         return self._deny(mint, f"whale-hold {largest_whale_pct:.1f}%", f"🚫 [АНТИСКАМ] Кит держит {largest_whale_pct:.1f}% > {max_whale_pct:.0f}% у {mint[:8]} → Блок.")
                     _pump_top10_cap = 38.0 if (_is_pump_flag and (_vm5_pre >= 10000.0 or _b5_pre >= 80)) else (35.0 if _is_pump_flag else float(getattr(config, "AUDITOR_MAX_TOP10_PCT", 32.0)))

@@ -294,7 +294,8 @@ async def fetch_jup_tokens() -> list:
             ds_boost_urls = (
                 "https://api.dexscreener.com/token-boosts/top/v1",
                 "https://api.dexscreener.com/token-boosts/latest/v1",
-                getattr(config, "DEXSCREENER_LATEST", "https://api.dexscreener.com/token-boosts/latest/v1"),
+                "https://api.dexscreener.com/token-profiles/latest/v1",
+                "https://api.dexscreener.com/community-takeovers/latest/v1",
             )
             ds_b_res = await asyncio.gather(
                 *[fetch_json(u, timeout=5, retries=0) for u in ds_boost_urls],
@@ -636,9 +637,11 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
             return False
 
 
-    # 3. Защита от давления продавцов: блокируем ТОЛЬКО если продавцы реально преобладают
+    # 3. Защита от давления продавцов: блокируем ТОЛЬКО если продавцы реально преобладают (не режем скоростные пробойные ракеты GREGORY b/s >= 0.90)
     _tot_tx_j = _b5_j + _s5_j
-    if _tot_tx_j >= 25 and _s5_j > 0:
+    _m1_j = float((_pc_j or {}).get("m1", 0) or 0)
+    _is_hi_vel_j = (_vm5_j >= 20000.0 and _m5_j >= 8.0 and _b5_j >= 100 and _m1_j >= -4.0 and (_s5_j == 0 or _b5_j >= _s5_j * 0.90))
+    if _tot_tx_j >= 25 and _s5_j > 0 and not _is_hi_vel_j:
         _sell_ratio_j = _s5_j / _tot_tx_j
         _vl_ratio_j = (_vm5_j / max(_liq_j, 1.0)) if _liq_j > 0 else 0.0
         if _b5_j < _s5_j and (_sell_ratio_j >= 0.52 or (_sell_ratio_j >= 0.48 and _vl_ratio_j >= 3.5)):
@@ -654,7 +657,7 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
     if _age_j >= _req_soc_age and _links_j == 0 and not _soc_unk_j:
         _avg_j = _vm5_j / max(1, _b5_j + _s5_j)
         _vl_j = _vm5_j / max(_liq_j, 1.0)
-        _is_organic_stealth = (_vm5_j >= 4000.0 and _b5_j >= 20 and _b5_j >= _s5_j * 1.05 and _liq_j >= 8000.0 and _avg_j >= 8.0 and _vl_j <= 8.0)
+        _is_organic_stealth = (_vm5_j >= 4000.0 and (_vl_j >= 0.50 or _vm5_j >= 20000.0) and _b5_j >= 20 and _b5_j >= _s5_j * 1.05 and _liq_j >= 8000.0 and _avg_j >= 8.0 and _vl_j <= 8.0)
         if not _is_organic_stealth:
             print(f"🚫 [{source_tag}-NO-SOCIALS] {_sym_tmp}: 0 соцсетей в зрелом возрасте {_age_j:.0f}м (>={_req_soc_age:.0f}м) без чистой органики — отмена!")
             return False
@@ -678,6 +681,20 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
         return False
     else:
         print(f"🎯 [JEV-FILLS] {_sym_tmp} ({mint[:8]}): {_flush_msg}")
+
+    # Ончейн аудит бандлов/холдеров/дева (синхронизировано со scanner_loop, чтобы не покупать отклонённые BILLIE-раги)
+    if getattr(config, "RUG_WALLET_ANALYSIS_ENABLED", True):
+        try:
+            from rug_wallet_analysis import quick_rug_check
+            _is_ok_rw, _rw_reason, _rw_score, _ = await quick_rug_check(mint)
+            if not _is_ok_rw:
+                _rw_l = str(_rw_reason).lower()
+                _rw_rpc_err = any(e in _rw_l for e in ("429", "403", "timeout", "error", "none", "rpc", "http", "retry"))
+                if not _rw_rpc_err:
+                    print(f"🚫 [{source_tag}-RUG-WALLET] {_sym_tmp} ({mint[:8]}): {_rw_reason} (Score: {_rw_score}/100) — вход заблокирован.")
+                    return False
+        except Exception:
+            pass
 
     # Предвходовой анализ на мгновенный раг первой свечи (FCR Guard)
     if getattr(config, "FCR_ENABLED", True):
