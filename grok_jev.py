@@ -508,19 +508,24 @@ class GrokJevEngine:
                 pass
             return False, f"post-migration-dump-zone {age_min:.1f}m < {_sol_min_age_g:.1f}m (wait for 1st candle close)"
 
-        # 2. Возраст токена и запрет старых стоячих гигантов (кейс HODL 940.7м $4.2M FDV, DUGE 224.7м m5 +1.9%)
+        # 2. Возраст токена, потолок FDV <= $320k и запрет старых отработанных монет (кейс BILL 202m $473k)
         _avg_tx_e = vol_m5 / max(1, b5 + s5)
         min_age = _sol_min_age_g
-        max_age = float(getattr(_c, "SOLANA_MAX_AGE_MIN", 720.0))  # Ракеты до 720м (12 часов)
+        max_age = float(getattr(_c, "JEV_MAX_AGE_MIN", 60.0))
+        _max_scan_age_g = float(getattr(_c, "SOLANA_MAX_AGE_MIN", 90.0))
+        _max_mcap_g = float(getattr(_c, "JEV_MAX_MCAP_USD", 320000.0))
+        if fdv_mc > _max_mcap_g:
+            return False, f"mcap-too-large ${fdv_mc:,.0f} > ${_max_mcap_g:,.0f}"
         _is_jev_breakout = (
-            age_min <= 1440.0
-            and fdv_mc <= 2500000.0
+            age_min <= _max_scan_age_g
+            and fdv_mc <= _max_mcap_g
             and eff_liq >= 15000.0
-            and vol_m5 >= 4000.0
-            and (vol_m5 / max(eff_liq, 1.0)) >= 0.10
-            and m5 >= 2.5
+            and vol_m5 >= 8000.0
+            and (vol_m5 / max(eff_liq, 1.0)) >= 0.25
+            and m5 >= 6.0
+            and m1 >= float(getattr(_c, "JEV_MIN_M1_ENTRY_FLOOR_PCT", -2.5))
             and _avg_tx_e >= 8.0
-            and b5 >= s5
+            and b5 >= int(s5 * 1.15)
         )
         if age_min < min_age:
             try:
@@ -530,7 +535,7 @@ class GrokJevEngine:
                 pass
             return False, f"age-out-of-bounds {age_min:.1f}m < {min_age:.1f}m (wait for maturation)"
         if age_min > max_age and not _is_jev_breakout:
-            return False, f"age-out-of-bounds {age_min:.1f}m > {max_age:.1f}m (old token without breakout)"
+            return False, f"age-out-of-bounds {age_min:.1f}m > {max_age:.1f}m (old token without fresh breakout)"
 
         # Защита от микро bump-ботов в m5 (LAURA $1.60, HODL $3.10, IPHONEDUO $5.00)
         _is_real_bump_runner_g = (
@@ -591,27 +596,27 @@ class GrokJevEngine:
         if fdv_mc > 100000.0 and eff_liq < 35000.0 and eff_liq < 0.02 * fdv_mc:
             return False, f"fdv-liquidity-trap liq ${eff_liq:,.0f} < 2% of FDV ${fdv_mc:,.0f} (phantom valuation)"
 
-        # 3. Живой импульс ракеты (единый классификатор: пробои, V-развороты и откаты покупателей)
+        # 3. Живой импульс 2x+ ракеты (единый классификатор: блокирует отработанные топы и пилы)
         _h6_raw_g = pc.get("h6")
         _h6_val_g = float(_h6_raw_g) if _h6_raw_g is not None else None
-        _min_h1_g = float(getattr(_c, "JEV_MIN_H1_PCT", -8.0))
-        _min_h6_g = float(getattr(_c, "JEV_MIN_H6_PCT", -25.0))
+        _min_h1_g = float(getattr(_c, "JEV_MIN_H1_PCT", -12.0))
+        _min_h6_g = float(getattr(_c, "JEV_MIN_H6_PCT", -20.0))
         _mom_ok_g, _mom_why_g = _c.evaluate_entry_momentum(
             m5=m5, m1=m1, h1=h1, h6=_h6_val_g,
             age_min=age_min, vol5_usd=vol_m5, liq_usd=eff_liq,
             buys5=b5, sells5=s5, min_h1=_min_h1_g, min_h6=_min_h6_g,
+            fdv_usd=fdv_mc,
         )
         if not _mom_ok_g and (
-            _mom_why_g.startswith("no-momentum") or _mom_why_g.startswith("slow-mature-pool")
+            _mom_why_g.startswith(("mcap-too-large", "too-old", "h6-exhausted", "m1-falling-knife", "no-rocket-ignition", "no-momentum", "slow-mature-pool"))
         ):
             return False, _mom_why_g
 
-        _max_m5_allowed = float(getattr(_c, "MAX_ENTRY_M5_PCT", 150.0))
+        _max_m5_allowed = float(getattr(_c, "MAX_ENTRY_M5_PCT", 120.0))
         if m5 > _max_m5_allowed:
-            # Для свежих выпускников (<8м, FDV <= $140k) m5 в DexScreener считается от начальной цены бондинг-кривой ($2.5k -> $20k-$70k = +600%..+1400%, кейс NOFOMO +687% на $17k FDV перед 3x!)
             _fresh_grad_m5_cap = 1500.0 if (age_min <= 8.0 and fdv_mc <= 140000.0) else 500.0
-            _is_strong_buyer_breakout_g = (m5 <= _fresh_grad_m5_cap and b5 >= int(s5 * 1.05) and vol_m5 >= 2000.0 and (b5 + s5) >= 12)
-            _is_cooling_pullback = (-12.0 <= m1 <= -1.0 and m5 <= 250.0 and b5 >= s5 * 1.02)
+            _is_strong_buyer_breakout_g = (m5 <= _fresh_grad_m5_cap and b5 >= int(s5 * 1.10) and vol_m5 >= 2500.0 and (b5 + s5) >= 12)
+            _is_cooling_pullback = (-2.5 <= m1 <= -0.5 and m5 <= 250.0 and b5 >= s5 * 1.05)
             if not (_is_strong_buyer_breakout_g or _is_cooling_pullback):
                 return False, f"fomo-vertical-m5 m5 {m5:+.1f}% > +{_max_m5_allowed:.0f}% (buying top of vertical pump without cooling pullback, m1={m1:+.1f}%)"
         if s5 > 10 and b5 < (s5 * 0.80):
@@ -683,15 +688,15 @@ class GrokJevEngine:
             if avg_trade < 12.0 and not _is_strong_volume_pump:
                 return False, f"wash-trading-trap (avg trade ${avg_trade:.1f} < $12 across {trades_h24} txns, weak pool)"
 
-        # 5. Рыночная капитализация и верхний потолок ликвидности (отсекает HODL $4.2M / $171k liq)
-        max_liq = float(getattr(_c, "JEV_MAX_LIQUIDITY_USD", 220000.0))
+        # 5. Рыночная капитализация и верхний потолок ликвидности (отсекает $320k+ топы без запаса 2x)
+        max_liq = float(getattr(_c, "JEV_MAX_LIQUIDITY_USD", 180000.0))
         if eff_liq > max_liq:
             return False, f"liq-too-heavy ${eff_liq:,.0f} > ${max_liq:,.0f} (mid-cap pool, slow moves)"
         mcap = fdv_mc
         if is_pump and mcap > 0 and mcap < 5000.0:
             return False, f"pump-curve-too-early mcap ${mcap:,.0f} < $5k (high dev dump trap risk)"
         min_mcap = 5000.0 if (dex_id in ("pump", "pumpfun")) else float(getattr(_c, "JEV_MIN_MCAP_USD", 5000.0))
-        max_mcap = float(getattr(_c, "JEV_MAX_MCAP_USD", 1800000.0))
+        max_mcap = float(getattr(_c, "JEV_MAX_MCAP_USD", 320000.0))
         if mcap > 0 and not (min_mcap <= mcap <= max_mcap):
             return False, f"mcap-out-of-bounds ${mcap:,.0f} not in [${min_mcap:,.0f}, ${max_mcap:,.0f}]"
 
@@ -945,9 +950,9 @@ class GrokJevEngine:
         if _liq_usd > 0 and _liq_usd < _min_liq:
             return False, -0.14, 0.0, f"thin-liquidity (${_liq_usd:,.0f} < ${_min_liq:,.0f}) — slippage/dump risk"
 
-        # 2. Защита от покупки затухающей свечи: сильный тренд (m5 >= +8%) допускает ретест до -12.0% (кейс REKT -8.3% перед +124%),
-        # но слабая монета (m5 < +5%) с красной 1м свечой (< -3.0%) — это умирающий отскок, ведущий в стоп!
-        _min_flush_m1 = -12.0 if (m5 >= 8.0 and b5 >= s5) else (-6.0 if m5 >= 5.0 else -3.0)
+        # 2. Защита от покупки падающего ножа: максимум -2.5% на 1м свече (никаких -12% дампов!)
+        _flush_floor = float(getattr(_c, "JEV_MIN_M1_ENTRY_FLOOR_PCT", -2.5))
+        _min_flush_m1 = _flush_floor if (m5 >= 8.0 and b5 >= s5) else max(_flush_floor, -2.0)
         if _m1_known and m1 < _min_flush_m1:
             return False, -0.14, 0.0, f"flush-dump (m1 {m1:+.1f}% < {_min_flush_m1:+.1f}%) — falling knife / weak rollover"
 
@@ -1210,7 +1215,8 @@ class GrokJevEngine:
                 m = str(g.get("mint") or "").strip()
                 liq_g = float(g.get("liquidity", 0) or 0)
                 age_g = float(g.get("age_m", 999) or 999)
-                if m and 32 <= len(m) <= 44 and not m.startswith("0x") and liq_g >= 4500.0 and age_g <= 720.0 and m not in seen:
+                fdv_g = float(g.get("fdv", 0) or g.get("market_cap", 0) or 0)
+                if m and 32 <= len(m) <= 44 and not m.startswith("0x") and liq_g >= 4500.0 and age_g <= float(getattr(_c, "SOLANA_MAX_AGE_MIN", 90.0)) and fdv_g <= 350000.0 and m not in seen:
                     seen.add(m)
                     candidates.append((m, "solana"))
         except Exception:
@@ -1482,25 +1488,20 @@ class GrokJevEngine:
                 return False, f"pump-curve-migration-cliff (FDV ${fdv:,.0f} > ${_max_c_mc:,.0f})", _h_stats
         eff_liq = max(raw_liq, fdv * 0.40) if is_raw_pump_curve else raw_liq
 
-        # ЖЕСТКИЙ ОТСЕВ АНОНИМНЫХ ДЕВ-БАНДЛЕРОВ (0 СОЦСЕТЕЙ НА DEX):
-        # В мемкоинах Solana 100% ракет (PNUT, ACT, GOAT, BORIS, POLYCAT, NIZHE) имеют хотя бы Twitter/X или Telegram!
-        # Одноразовые скам-бандлеры создают по 50 токенов в день без соцсетей, накручивают 15 покупок ботами и сливают 100% пула девом (кейсы Democat, OLDCAT, GANG CAT, BRR, 天猫双11).
-        if not is_raw_pump_curve and not has_socials:
-            _smart_n_chk = int(pair_data.get("_smart_buyers_count", 0) or 0)
-            _is_grad_aud = False
-            try:
-                from birth_tracker import birth_tracker as _bt_aud
-                _is_grad_aud = _bt_aud.is_graduated(address)
-            except Exception:
-                pass
-            _dex_id_aud = str(pair_data.get("dexId", "")).lower()
-            _is_launchpad_aud = _c.is_launchpad_mint(address) or (
-                _is_grad_aud and _c.is_launchpad_mint(address)
-            ) or (is_raw_pump_curve and _dex_id_aud in ("pump", "pumpfun"))
-
-            # Кастомные не-launchpad токены без соцсетей — главный источник одноразовых Remove-LP рагов (кейс WASTED $109k -> $0)
-            if not _is_launchpad_aud and not bool(pair_data.get("_socials_unknown", False)) and _smart_n_chk < 2:
-                return False, f"no-socials-amm-scam (0 соцсетей/сайтов на кастомном DEX-пуле — анонимный дев-раг под Remove LP)", _h_stats
+        # Готовим флаги соцсетей/launchpad для отложенной проверки ПОСЛЕ RugCheck LP Lock Verify:
+        # сначала даём RugCheck подтвердить, сожжён ли/залочен LP (>=80%), чтобы не резать чистые пулы с 0 соцсетей <25м,
+        # но по-прежнему 100% блокируем анонимные незалоченные кастомные AMM-ловушки!
+        _smart_n_chk = int(pair_data.get("_smart_buyers_count", 0) or 0)
+        _is_grad_aud = False
+        try:
+            from birth_tracker import birth_tracker as _bt_aud
+            _is_grad_aud = _bt_aud.is_graduated(address)
+        except Exception:
+            pass
+        _dex_id_aud = str(pair_data.get("dexId", "")).lower()
+        _is_launchpad_aud = _c.is_launchpad_mint(address) or (
+            _is_grad_aud and _c.is_launchpad_mint(address)
+        ) or (is_raw_pump_curve and _dex_id_aud in ("pump", "pumpfun"))
 
         # 3. Аудит для сети SOLANA
         if chain == "solana":
@@ -1587,8 +1588,11 @@ class GrokJevEngine:
                         log_unlocked=True,
                     )
 
-                    # Для кастомных не-launchpad пулов без подтверждённого сожжённого/залоченного LP пускаем только зрелые и ликвидные DEX-раннеры с соцсетями
+                    # Если LP не сожжён и не подтверждён лок — анонимные кастомные DEX-пулы без соцсетей режутся сразу,
+                    # а пулы с соцсетями допускаются только при строгих параметрах is_safe_unlocked_custom_runner.
                     if not is_canonical_pump and not has_verified_locked_lp:
+                        if not is_raw_pump_curve and not has_socials and not _is_launchpad_aud and not bool(pair_data.get("_socials_unknown", False)) and _smart_n_chk < 2:
+                            return False, "no-socials-amm-scam (0 соцсетей на кастомном DEX-пуле без подтверждённого лока LP)", _h_stats
                         _eff_l_rc = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
                         _vm5_rc = float((pair_data.get("volume") or {}).get("m5", 0) or 0)
                         _tx_rc = (pair_data.get("txns") or {}).get("m5") or {}
@@ -1933,11 +1937,17 @@ class GrokJevEngine:
         # Не-launchpad токены (не pump/moon/bonk/BAGS) НЕ отсеиваются вслепую — проверяются в run_security_audit + FCR + L7-L10!
         if not address or address in tracker.get_open_positions():
             return False, "already-held"
-        # Запрет повторного перезахода в уже закрытую монету (кейс YOUNGBULL: закрыли +10% после пика +40.4%, а через 5м перезашли в затухание на -6.7%)
-        if hasattr(tracker, "positions") and address in tracker.positions:
-            _prev_pos = tracker.positions.get(address)
-            _prev_ext = float(getattr(_prev_pos, "exit_time", 0.0) or 0.0)
-            if _prev_ext > 0 and (time.time() - _prev_ext) < 2700.0:
+        # Запрет повторного перезахода: 4ч бан после убыточной сделки по минту (защита от 3x слива BILL) + 45м на остальные закрытые
+        if hasattr(tracker, "is_loss_cooldown_active") and tracker.is_loss_cooldown_active(address, 14400.0):
+            return False, "already-traded-loss-cooldown"
+        if hasattr(tracker, "positions"):
+            _latest_prev_ext = max(
+                (float(getattr(_p, "exit_time", 0.0) or 0.0)
+                 for _k, _p in tracker.positions.items()
+                 if (_k == address or _k.startswith(address + "_old_")) and getattr(_p, "status", "") == "closed"),
+                default=0.0,
+            )
+            if _latest_prev_ext > 0 and (time.time() - _latest_prev_ext) < 2700.0:
                 return False, "already-traded-cooldown"
         if len(tracker.get_open_positions()) >= getattr(_c, "MAX_CONCURRENT_POSITIONS", 10):
             return False, "max-positions-reached"
@@ -1974,14 +1984,26 @@ class GrokJevEngine:
         _b5_s1 = int(_txs_s1.get("buys", 0) or 0)
         _s5_s1 = int(_txs_s1.get("sells", 0) or 0)
         _vm5_s1 = float((pair.get("volume") or {}).get("m5", 0) or 0)
-        _m5_s1 = float((pair.get("priceChange") or {}).get("m5", 0) or 0)
-        _is_momentum_rocket = (
-            (_m5_s1 >= 12.0 and _b5_s1 >= (_s5_s1 * 1.25) and _vm5_s1 >= 8000.0)
-            or (_vm5_s1 >= 15000.0 and _b5_s1 >= _s5_s1)
-            or (_m5_s1 >= 8.0 and _vm5_s1 >= 10000.0 and _b5_s1 >= max(12, int(_s5_s1 * 0.70)))
-            or (_vm5_s1 >= 25000.0 and _b5_s1 >= max(15, int(_s5_s1 * 0.70)))
-            or (_m5_s1 >= 2.5 and _b5_s1 >= _s5_s1 and _vm5_s1 >= 4000.0 and _b5_s1 >= 20)
-            or (_b5_s1 >= 25 and _b5_s1 >= int(_s5_s1 * 1.10) and _vm5_s1 >= 2500.0)
+        _pc_s1 = pair.get("priceChange") or {}
+        _m5_s1 = float(_pc_s1.get("m5", 0) or 0)
+        _m1_s1 = float(_pc_s1.get("m1", 0) or 0)
+        _h1_s1 = float(_pc_s1.get("h1", 0) or 0)
+        _h6_s1 = _pc_s1.get("h6")
+        _fdv_s1 = float(pair.get("fdv", 0) or pair.get("marketCap", 0) or 0)
+        _ca_s1 = float(pair.get("pairCreatedAt") or 0)
+        _age_s1 = ((time.time() * 1000.0 - _ca_s1) / 60000.0) if _ca_s1 > 0 else 999.0
+        _s1_fresh_ok = (
+            _age_s1 <= float(getattr(_c, "SOLANA_MAX_AGE_MIN", 90.0))
+            and _fdv_s1 <= float(getattr(_c, "JEV_MAX_MCAP_USD", 320000.0))
+            and (_age_s1 < 20.0 or _h6_s1 is None or float(_h6_s1 or 0) <= float(getattr(_c, "MAX_ENTRY_H6_PCT", 450.0)))
+            and _m1_s1 >= float(getattr(_c, "JEV_MIN_M1_ENTRY_FLOOR_PCT", -2.5))
+            and _h1_s1 >= float(getattr(_c, "JEV_MIN_H1_PCT", -12.0))
+        )
+        _is_momentum_rocket = _s1_fresh_ok and (
+            (_m5_s1 >= 12.0 and _b5_s1 >= int(_s5_s1 * 1.25) and _vm5_s1 >= 8000.0)
+            or (_vm5_s1 >= 15000.0 and _b5_s1 >= int(_s5_s1 * 1.15) and _m5_s1 >= 6.0)
+            or (_m5_s1 >= 8.0 and _vm5_s1 >= 10000.0 and _b5_s1 >= max(12, int(_s5_s1 * 1.15)))
+            or (_m5_s1 >= 5.0 and _b5_s1 >= int(_s5_s1 * 1.20) and _vm5_s1 >= 4000.0 and _b5_s1 >= 20)
         )
 
         if getattr(_c, "ROCKET_XGB_ENABLED", True) and not _is_momentum_rocket and (rkt_s1 + 0.05) < s1_thresh:

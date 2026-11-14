@@ -774,14 +774,15 @@ async def birth_wss_loop(analyzer, tracker):
             _ws_kw = "additional_headers" if "additional_headers" in inspect.signature(websockets.connect).parameters else "extra_headers"
             _ws_opts = {_ws_kw: headers}
             async with websockets.connect(uri, **_ws_opts) as ws:
-                payload = {"method": "subscribeNewToken"}
-                await ws.send(json.dumps(payload))
+                await ws.send(json.dumps({"method": "subscribeNewToken"}))
+                await ws.send(json.dumps({"method": "subscribeMigration"}))
                 async for message in ws:
                     data = json.loads(message)
                     mint = data.get("mint")
                     if mint:
-                        # Просто сохраняем монету в базу для scanner_loop (чтобы она "настоялась" 5-20 мин)
                         birth_tracker.add_token(mint)
+                        if str(data.get("txType") or "").lower() == "migrate" or data.get("pool"):
+                            birth_tracker.add_graduated(mint, str(data.get("pool") or ""))
         except Exception as e:
             # Не спамим при 502, фоновый поллер подхватывает новые токены
             await asyncio.sleep(15)
@@ -873,8 +874,7 @@ async def scanner_loop(analyzer, tracker):
                         if not _gm or str(_gm).strip().startswith("0x") or _gm in _open_set_g:
                             birth_tracker.remove_graduated(_gm)
                             continue
-                        _pl_g = tracker.last_loss_pct(_gm)
-                        if _pl_g is not None and _pl_g <= getattr(config, "RUG_REBUY_MAX_LOSS", -0.15):
+                        if hasattr(tracker, "is_loss_cooldown_active") and tracker.is_loss_cooldown_active(_gm, 14400.0):
                             birth_tracker.remove_graduated(_gm)
                             continue
                         if _now_g - processed_mints.get(_gm, 0.0) >= _fresh_cd_g:
@@ -987,22 +987,20 @@ async def scanner_loop(analyzer, tracker):
                         _c_trades = int(_c_tx.get("buys", 0) or 0) + int(_c_tx.get("sells", 0) or 0)
                         _c_vol5 = float((_c_pre.get("volume") or {}).get("m5", 0) or 0)
                         _c_liq = float((_c_pre.get("liquidity") or {}).get("usd", 0) or 0)
+                        _c_fdv = float(_c_pre.get("fdv", 0) or _c_pre.get("marketCap", 0) or 0)
+                        _max_sc_age = float(getattr(config, "SOLANA_MAX_AGE_MIN", 90.0))
+                        _max_sc_fdv = float(getattr(config, "JEV_MAX_MCAP_USD", 320000.0)) + 30000.0
 
-                        # Древний токен старше 24ч или >6ч без ликвидного пробоя: скип до входа в окно ТОП-60!
-                        if _c_age_m > 1440.0 and mint not in _graduated_set:
-                            processed_mints[mint] = _now_r + 86400
+                        # Отсекаем тяжёлые (>$350k FDV) и старые (>90м) токены до входа в окно ТОП-60 (никаких BILL!):
+                        if _c_fdv > _max_sc_fdv and mint not in _graduated_set:
+                            processed_mints[mint] = _now_r + 300
                             continue
-                        if _c_age_m > 360.0 and (_c_vol5 < 6000.0 or _c_m5 < 5.0 or _c_liq < 25000.0) and mint not in _graduated_set:
-                            processed_mints[mint] = _now_r + 3600
-                            continue
-
-                        # Старый токен (>4ч) без импульса (<6%): скип на 1 час
-                        if _c_age_m > 240.0 and _c_m5 < 6.0 and mint not in _graduated_set:
-                            processed_mints[mint] = _now_r + 3600
+                        if _c_age_m > _max_sc_age and mint not in _graduated_set:
+                            processed_mints[mint] = _now_r + 600
                             continue
 
-                        # Токен старше 1ч со слабым импульсом (<4%): скип на 90с
-                        if _c_age_m > 60.0 and _c_m5 < 4.0 and mint not in _graduated_set:
+                        # Токен старше 45м без свежего импульса (<4%): скип на 90с
+                        if _c_age_m > 45.0 and _c_m5 < 4.0 and mint not in _graduated_set:
                             processed_mints[mint] = _now_r - _cd_r + 90
                             continue
 
@@ -1012,26 +1010,24 @@ async def scanner_loop(analyzer, tracker):
                             continue
 
                         # Отсекаем вялые стоячие токены с объёмом < $2,000: быстрый переопрос через 20с
-                        # Токен может проснуться и набрать объём за полминуты
                         if _c_age_m >= 5.0 and _c_vol5 < 2000.0 and mint not in _graduated_set:
                             processed_mints[mint] = _now_r - _cd_r + 20
                             continue
 
-                        # Слив/флет (m5 < 1.5%) не из миграций: кулдаун 18с
-                        if _c_m5 < 1.5 and mint not in _graduated_set and _c_age_m > 3.0:
+                        # Слив/флет (m5 < 2.0%) не из миграций: кулдаун 18с
+                        if _c_m5 < 2.0 and mint not in _graduated_set and _c_age_m > 3.0:
                             processed_mints[mint] = _now_r - _cd_r + 18
                             continue
 
-                        # РОКЕТ-ВЕЛОСИТИ РАНЖИРОВАНИЕ:
-                        # Свеча % × Логарифм объёма 5м × Преобладание покупателей b/s
-                        # Настоящие ракеты с объёмом $50k-$500k и перевесом покупателей ВСЕГДА первыми в очереди!
+                        # РОКЕТ-ВЕЛОСИТИ РАНЖИРОВАНИЕ С ПРИОРИТЕТОМ СВЕЖЕСТИ (<=15м x2.5, <=45м x1.8):
                         import math
                         _c_b5 = int(_c_tx.get("buys", 0) or 0)
                         _c_s5 = int(_c_tx.get("sells", 0) or 0)
                         _vol_log = math.log10(max(_c_vol5, 100.0))
                         _bs_ratio = (_c_b5 / max(_c_s5, 1)) if _c_s5 > 0 else 1.5
                         _bs_ratio = min(max(_bs_ratio, 0.5), 3.0)
-                        _rkt_vel = _c_m5 * _vol_log * _bs_ratio
+                        _fresh_sc_mult = 2.5 if _c_age_m <= 15.0 else (1.8 if _c_age_m <= 45.0 else 1.0)
+                        _rkt_vel = _c_m5 * _vol_log * _bs_ratio * _fresh_sc_mult
 
                         _score_rank = (1000.0 if mint in _graduated_set else 0.0) + _rkt_vel
                         _ranked_mints.append((_score_rank, mint))
@@ -1056,8 +1052,7 @@ async def scanner_loop(analyzer, tracker):
                 for _m in mints_to_scan:
                     if not _m or _m in tracker.positions:
                         continue
-                    _pl_l = tracker.last_loss_pct(_m)
-                    if _pl_l is not None and _pl_l <= getattr(config, "RUG_REBUY_MAX_LOSS", -0.15):
+                    if hasattr(tracker, "is_loss_cooldown_active") and tracker.is_loss_cooldown_active(_m, 14400.0):
                         continue
                     _pre_l = getattr(analyzer, "_prefetch_cache", {}).get(_m, (0, {}))[1]
                     _ca_l = _pre_l.get("pairCreatedAt") or 0 if isinstance(_pre_l, dict) else 0
@@ -1079,10 +1074,7 @@ async def scanner_loop(analyzer, tracker):
                 for mint in (_launch if _launch else mints_to_scan[:30]):
                     if not mint or mint in tracker.positions:
                         continue
-                    _pl = tracker.last_loss_pct(mint)
-                    if _pl is not None and _pl <= getattr(config, "RUG_REBUY_MAX_LOSS", -0.15):
-                        if time.time() - processed_mints.get(mint, 0.0) >= 86400:
-                            print(f"🚫 SCANNER {mint[:8]}: прошлый лосс {_pl*100:.0f}% — второй раз не входим.")
+                    if hasattr(tracker, "is_loss_cooldown_active") and tracker.is_loss_cooldown_active(mint, 14400.0):
                         processed_mints[mint] = time.time()
                         continue
                     _pre_m = getattr(analyzer, "_prefetch_cache", {}).get(mint, (0, {}))[1]
@@ -1277,30 +1269,32 @@ async def scanner_loop(analyzer, tracker):
                                 _b5_live = int(((pair_data.get("txns") or {}).get("m5") or {}).get("buys", 0) or 0)
                                 _s5_live = int(((pair_data.get("txns") or {}).get("m5") or {}).get("sells", 0) or 0)
                                 _h6_live = _pc_live.get("h6")
+                                _fdv_live_sc = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
                                 _mom_live_ok, _mom_live_why = config.evaluate_entry_momentum(
                                     m5=_m5_live, m1=_m1_live, h1=_h1_live,
                                     h6=(float(_h6_live) if _h6_live is not None else None),
                                     age_min=_age_m, vol5_usd=_vol5_live, liq_usd=liq_usd,
                                     buys5=_b5_live, sells5=_s5_live,
-                                    min_h1=float(getattr(config, "JEV_MIN_H1_PCT", -8.0)),
-                                    min_h6=float(getattr(config, "JEV_MIN_H6_PCT", -25.0)),
+                                    min_h1=float(getattr(config, "JEV_MIN_H1_PCT", -12.0)),
+                                    min_h6=float(getattr(config, "JEV_MIN_H6_PCT", -20.0)),
+                                    fdv_usd=_fdv_live_sc,
                                 )
-                                _min_sc_m1 = -12.0 if _m5_live >= 8.0 else (-6.0 if _m5_live >= 4.0 else -4.0)
+                                _min_sc_m1 = float(getattr(config, "JEV_MIN_M1_ENTRY_FLOOR_PCT", -2.5))
                                 if not _mom_live_ok or _m1_live < _min_sc_m1:
                                     print(f"🚫 [SCANNER-LIVE-REVERSAL] {actual_symbol} ({mint[:8]}): на живом графике импульс сломан ({_mom_live_why}, m5 {_m5_live:+.1f}%, m1 {_m1_live:+.1f}% < {_min_sc_m1:+.1f}%) — отмена покупки!")
                                     continue
-                                _max_m1_cfg_live = float(getattr(config, "MAX_ENTRY_M1_PCT", 28.0))
+                                _max_m1_cfg_live = float(getattr(config, "MAX_ENTRY_M1_PCT", 25.0))
                                 if _m1_live > _max_m1_cfg_live and _age_m >= 3.0:
                                     _b5_sc = int((pair_data.get("txns") or {}).get("m5", {}).get("buys", 0) or 0)
                                     _s5_sc = int((pair_data.get("txns") or {}).get("m5", {}).get("sells", 0) or 0)
                                     if not (_b5_sc >= _s5_sc * 1.15 and _m1_live <= 45.0):
                                         print(f"🚫 [SCANNER-M1-SPIKE] {actual_symbol} ({mint[:8]}): живой m1 +{_m1_live:.1f}% > +{_max_m1_cfg_live:.1f}% без перевеса покупателей — вершина свечи, отмена!")
                                         continue
-                                _max_m5_cfg = float(getattr(config, "MAX_ENTRY_M5_PCT", 110.0))
+                                _max_m5_cfg = float(getattr(config, "MAX_ENTRY_M5_PCT", 120.0))
                                 if _m5_live > _max_m5_cfg:
                                     _b5_sc = int((pair_data.get("txns") or {}).get("m5", {}).get("buys", 0) or 0)
                                     _s5_sc = int((pair_data.get("txns") or {}).get("m5", {}).get("sells", 0) or 0)
-                                    _max_allowed_m5 = 450.0 if (_age_m <= 30.0 or mint in _graduated_set or mint.endswith(("pump", "bonk", "BAGS")) or _dex_id == "pumpswap") else 165.0
+                                    _max_allowed_m5 = 450.0 if (_age_m <= 30.0 or mint in _graduated_set or mint.lower().endswith(("pump", "bonk", "bags")) or _dex_id == "pumpswap") else 165.0
                                     _is_breakout = (_vol5_live >= 6000.0 and _b5_sc >= _s5_sc * 1.12 and _m5_live <= _max_allowed_m5)
                                     if not _is_breakout:
                                         print(f"🚫 [SCANNER-FOMO-M5] {actual_symbol} ({mint[:8]}): живой m5 +{_m5_live:.1f}% > +{_max_m5_cfg:.0f}% без прорывного объема — вершина свечи, отмена!")
@@ -1330,17 +1324,23 @@ async def scanner_loop(analyzer, tracker):
                                     print(f"🚫 [SCANNER-POST-PEAK] {actual_symbol} ({mint[:8]}): токен слился от пика (цена {_pk_drop_live:+.1f}%, ликва {_lq_drop_live:+.1f}%) — отмена!")
                                     continue
 
-                                _max_age_live = float(getattr(config, "SOLANA_MAX_AGE_MIN", 720.0))
+                                _max_age_live = float(getattr(config, "SOLANA_MAX_AGE_MIN", 90.0))
+                                _max_fdv_live = float(getattr(config, "JEV_MAX_MCAP_USD", 320000.0))
+                                _fdv_sc_live = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
                                 _vol5_live = float(((pair_data.get("volume") or {}).get("m5", 0) or 0))
+                                if _fdv_sc_live > _max_fdv_live:
+                                    print(f"🚫 [SCANNER-LARGE-CAP] {actual_symbol} ({mint[:8]}): FDV ${_fdv_sc_live:,.0f} > ${_max_fdv_live:,.0f} — нет запаса хода 2x+.")
+                                    continue
                                 _is_active_breakout_live = (
-                                    _age_m <= 1440.0
-                                    and liq_usd >= 25000.0
-                                    and _vol5_live >= 6000.0
-                                    and _m5_live >= 5.0
+                                    _age_m <= _max_age_live
+                                    and _fdv_sc_live <= _max_fdv_live
+                                    and liq_usd >= 15000.0
+                                    and _vol5_live >= 8000.0
+                                    and _m5_live >= 6.0
                                     and _b5_sc >= _s5_sc * 1.20
                                 )
                                 if _age_m > _max_age_live and not _is_active_breakout_live:
-                                    print(f"🚫 [SCANNER-OLD-ZOMBIE] {actual_symbol} ({mint[:8]}): возраст {_age_m/60:.1f}ч без прорывного объема — отмена!")
+                                    print(f"🚫 [SCANNER-OLD-ZOMBIE] {actual_symbol} ({mint[:8]}): возраст {_age_m:.0f}м > {_max_age_live:.0f}м — старый пул, отмена!")
                                     continue
 
                                 _req_soc_age = float(getattr(config, "REQUIRE_SOCIALS_MIN_AGE_MIN", 25.0))

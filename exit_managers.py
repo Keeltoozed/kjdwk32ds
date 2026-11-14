@@ -105,81 +105,62 @@ class MatureExitManager:
                     return f"🚨 First Candle Rug Cut: Sellers dominating ({_b5}b/{_s5}s, PnL {pnl_pct*100:.1f}%)"
 
         # =========================================================================
-        # 1. ЖЕСТКИЙ КОНТРОЛЬ УБЫТКА (EMERGENCY CAP & STOP LOSS) — ПЕРВЫЙ ПРИОРИТЕТ!
+        # 1. ЖЕСТКИЙ КОНТРОЛЬ УБЫТКА (EMERGENCY CAP & STOP LOSS) — БЕЗ РАСТЯГИВАНИЯ ДО -24%!
         # =========================================================================
-        # СБРОС ДЕВ-ДАМПА НА ПЕРВОЙ СВЕЧЕ: только при реальном обвале <= -15.0%
-        # (не выбиваем ракеты на обычном Bid-Ask спреде -5%..-10%)!
-        if minutes_held <= 2.5 and pnl_pct <= -0.150:
+        # СБРОС ДЕВ-ДАМПА НА ПЕРВОЙ СВЕЧЕ: режем резкий обвал <= -14.0% в первые 2.5 минуты
+        if minutes_held <= 2.5 and pnl_pct <= -0.140:
             return f"🚨 First Candle Rug Cut ({pnl_pct*100:.1f}% в первые {minutes_held*60:.0f}с)"
 
-        _emerg_cap = -abs(float(getattr(config, "EMERGENCY_CAP_PCT", -0.180)))
+        _emerg_cap = -abs(float(getattr(config, "EMERGENCY_CAP_PCT", -0.165)))
         if pnl_pct <= _emerg_cap:
             return f"Mature Emergency Cap ({pnl_pct*100:.1f}%)"
 
-        _base_sl = -abs(float(getattr(config, 'STOP_LOSS_PCT', -0.130)))
-        _has_organic_bid = False
-        _feats = getattr(position, "ml_features", None) or {}
-        if isinstance(_feats, dict) and _feats:
-            _f_liq = float(_feats.get("liquidity", 0) or 0)
-            _f_bs = float(_feats.get("buy_sell_ratio", 0) or 0)
-            if _f_liq >= 15000.0 and _f_bs >= 1.15:
-                _has_organic_bid = True
-        _sl = min(_base_sl, -0.150) if _has_organic_bid else _base_sl
+        _sl = -abs(float(getattr(config, "STOP_LOSS_PCT", -0.125)))
         if pnl_pct <= _sl:
             _sl_c = int(getattr(position, "sl_confirm_n", 0) or 0) + 1
             position.sl_confirm_n = _sl_c
-            # Требуем 2 тика подтверждения (или глубокий провал на 4% ниже стопа)
-            if _sl_c >= 2 or pnl_pct <= (_sl - 0.040):
+            # На глубоком проливе (<= -14.5%) выходим за 1 тик, на -12.5%..-14.4% ждём 2 тика
+            if _sl_c >= 2 or pnl_pct <= -0.145:
                 return f"Mature Stop Loss ({pnl_pct*100:.1f}%)"
         else:
             position.sl_confirm_n = 0
 
         # =========================================================================
-        # 2. РАКЕТНЫЙ ТРЕЙЛИНГ-СТОП И PROFIT FLOOR (СТРАТЕГИЯ 10x-20x РАКЕТ)
+        # 2. РАКЕТНЫЙ ТРЕЙЛИНГ-СТОП ДЛЯ 2x-10x (СВОБОДНЫЙ ПОЛЁТ ДО +90%!)
         # =========================================================================
-        # ПРАВИЛО: ДО +110% ПИКА — ПОЗИЦИЯ ДЫШИТ СВОБОДНО!
-        # Трейлинг и полы включаются СТРОГО от +110% (TP1) и выше.
-        # Downside защищён только стоп-лоссом (-12%) — макс. потеря -$0.60 на $5.
-        # Это даёт ракетам (CULT +4294%, Mão +10287%) не быть выбитыми на 20-30% дипах!
+        # ПРАВИЛО: ДО +90% ПИКА НЕ ДУШИМ РАКЕТЫ ТЕЙЛ-ПОЛАМИ (+18%/+32%), КАК ЭТО БЫЛО НА DOGCOIN!
+        # Позиция спокойно пересиживает 20-25% откаты и едет в 2x-10x; защита до 2x — стоп -12.5%
+        # и Anti-Roundtrip Shield (срабатывает ТОЛЬКО если +35%+ ракета вернулась обратно к +5%).
         _floor_pnl = None
         _trail_dist = None
 
         if _is_mb:
-            # === МУНБЭГ-ТРЕЙЛИНГ (ПОСЛЕ TP1 +55%) ===
-            _mb_act = float(getattr(config, "MOONBAG_TRAIL_ACTIVATION_PCT", 0.55))
-            _mb_dist = float(getattr(config, "MOONBAG_TRAIL_DISTANCE_PCT", 0.22))
-            if max_pnl_pct >= 5.00:                      # +500%+ (6x): жёсткий трейлинг
-                _floor_pnl = round(max_pnl_pct * 0.72, 2)
+            # === МУНБЭГ-ТРЕЙЛИНГ (ПОСЛЕ TP1 +55%, ТРЕЙЛИНГ ТОЛЬКО ОТ 2x +100%) ===
+            _mb_act = float(getattr(config, "MOONBAG_TRAIL_ACTIVATION_PCT", 1.00))
+            _mb_dist = float(getattr(config, "MOONBAG_TRAIL_DISTANCE_PCT", 0.25))
+            if max_pnl_pct >= 3.50:                      # +350%+ (4.5x+): защита 70% пика
+                _floor_pnl = round(max_pnl_pct * 0.70, 2)
                 _trail_dist = min(_mb_dist, 0.20)
-            elif max_pnl_pct >= 1.10:                    # от +110% до +500%: плотная защита +65% от пика (минимум +72%)
-                _floor_pnl = round(max_pnl_pct * 0.65, 2)
-                _trail_dist = min(_mb_dist, 0.22)
-            elif max_pnl_pct >= _mb_act:                 # от +55% до +110%: фиксируем пол +55% от пика (~+30%)
-                _floor_pnl = round(max_pnl_pct * 0.55, 2)
+            elif max_pnl_pct >= 1.50:                    # +150%..+350% (2.5x - 4.5x)
+                _floor_pnl = 0.95
+                _trail_dist = min(_mb_dist, 0.23)
+            elif max_pnl_pct >= _mb_act:                 # от 2x (+100%) до 2.5x: гарантируем +48%, трейл 25%
+                _floor_pnl = 0.48
                 _trail_dist = _mb_dist
-            # Ниже +110% пика мунбэг тоже дышит свободно — стоп-лосс его держит
-        else:
-            # === ОБЫЧНАЯ ПОЗИЦИЯ (ДО МУНБЭГА): ЗАЩИТА ПРИБЫЛИ БЕЗ УДУШЕНИЯ РАКЕТ ===
-            # До +38% позиция дышит свободно (не выбиваем ракеты вроде DOGCOIN/YOUNGBULL на откате -15%..-20%,
-            # а застрявшие без нового ATH +22%+ страхует Mid-Peak Profit Shield после 2.0м).
-            if max_pnl_pct >= 5.00:         # +500%+ (6x - 11x+ гипер-ракета)
-                _floor_pnl = round(max_pnl_pct * 0.72, 2)
-                _trail_dist = 0.18
-            elif max_pnl_pct >= 2.50:       # +250%..+500% (3.5x - 6x ракета)
-                _floor_pnl = 1.60
-                _trail_dist = 0.20
-            elif max_pnl_pct >= 1.10:       # +110%..+250% (второй взлет)
-                _floor_pnl = 0.66           # пол +66% (TP1 и TP2 уже в кармане)
-                _trail_dist = 0.22
-            elif max_pnl_pct >= 0.55:       # +55%..+109% (сильный импульс, защищаем половину пика)
-                _floor_pnl = round(max_pnl_pct * 0.50, 2)  # пол +28%..+54%
-                _trail_dist = 0.20
-            elif max_pnl_pct >= 0.32:       # +32%..+54% (TP1 уже рядом/сработал — ставим пол +14% и 18% трейлинг)
-                _floor_pnl = 0.14
-                _trail_dist = 0.18
-            elif max_pnl_pct >= 0.18 and minutes_held >= 1.0:  # +18%..+31% (ранний плюс не отдаём обратно в минус)
-                _floor_pnl = 0.05
+            elif max_pnl_pct >= 0.55:                    # ПОСЛЕ TP1 (+55%): страховка +8% (не отдаём остаток в стоп, но свободно переживаем -30% откат!)
+                _floor_pnl = 0.08
                 _trail_dist = None
+        else:
+            # === ОСНОВНАЯ ПОЗИЦИЯ: ЖДЁМ НАСТОЯЩИЕ 2x-10x ПРОРЫВЫ ===
+            if max_pnl_pct >= 3.50:         # +350%+ (4.5x - 10x+ гипер-ракета)
+                _floor_pnl = round(max_pnl_pct * 0.70, 2)
+                _trail_dist = 0.20
+            elif max_pnl_pct >= 1.50:       # +150%..+350% (2.5x - 4.5x ракета)
+                _floor_pnl = 0.95
+                _trail_dist = 0.23
+            elif max_pnl_pct >= 0.90:       # от +90% пика (зона 2x): фиксируем минимум +48%, трейлинг 25%
+                _floor_pnl = 0.48
+                _trail_dist = 0.25
 
         if _floor_pnl is not None and minutes_held >= 0.20:
             drop_from_max = (position.max_price_usd - current_price) / position.max_price_usd if position.max_price_usd > 0 else 0.0
@@ -190,42 +171,27 @@ class MatureExitManager:
                 return f"Mature {_tag} Floor (+{pnl_pct*100:.1f}% locked after peak +{max_pnl_pct*100:.1f}%)"
 
         # =========================================================================
-        # 3. PARABOLIC MOMENTUM HARVEST (ФИКСАЦИЯ ПРИ ЗАСТРЕВАНИИ НА ВЕРШИНЕ)
+        # 3. PARABOLIC MOMENTUM HARVEST (ФИКСАЦИЯ 2x-3x ТОЛЬКО ПРИ ДОЛГОМ ЗАСТРЕВАНИИ)
         # =========================================================================
-        # Застревание на хаях без новых ATH больше 8-15 минут — предвестник дев-дампа:
-        # Мунбэг ниже +200% не режем «харвестом» — его страхуют полы выше.
-        _mb_free_ride = _is_mb and max_pnl_pct < float(getattr(config, "MOONBAG_TRAIL_ACTIVATION_PCT", 2.00))
-        if max_pnl_pct >= 2.00 and _peak_age_min >= 8.0:
+        _mb_free_ride = _is_mb and max_pnl_pct < float(getattr(config, "MOONBAG_TRAIL_ACTIVATION_PCT", 1.00))
+        if max_pnl_pct >= 2.00 and _peak_age_min >= 10.0:
             return f"Parabolic 3x Harvest (+{pnl_pct*100:.0f}% locked after peak +{max_pnl_pct*100:.0f}%, {_peak_age_min:.0f}m no ATH)"
-        if not _mb_free_ride and max_pnl_pct >= 1.00 and _peak_age_min >= 10.0:
+        if not _mb_free_ride and max_pnl_pct >= 1.00 and _peak_age_min >= 12.0:
             return f"Parabolic 2x Harvest (+{pnl_pct*100:.0f}% locked after peak +{max_pnl_pct*100:.0f}%, {_peak_age_min:.0f}m no ATH)"
 
-        # === СБОР ПРИБЫЛИ И ЗАЩИТА ОТ ЗАСТРЕВАНИЯ ===
-        # Даём ракетам свободно дышать до +110% (где включается Full Runner Trailing).
-        # Не срезаем растущие монеты на микро-профитах (+6%..+15%)!
+        # === ЗАЩИТА ОТ ОТКАТА В МИНУС И СРЕЗ СТОЯЧЕГО МУСОРА (НЕ ТРОГАЕМ РАСТУЩИЕ +20..+85% ВОЛНЫ!) ===
         if not _mb_free_ride:
-            # 1. Dead Churn Escape: ТОЛЬКО для дохлых монет, которые вообще не дали импульса (пик < +8%)
-            # и стоят на месте в нуле/минусе 3+ минут (кейс XBT -1.4%) — режем стоячий мусор, не трогая ракеты!
-            if minutes_held >= 7.0 and _peak_age_min >= 5.0 and max_pnl_pct < 0.05 and pnl_pct <= -0.02:
+            # 1. Dead Churn Escape: ТОЛЬКО для плоских лузеров (пик < +6% и уже в минусе 5+ мин)
+            if minutes_held >= 5.0 and _peak_age_min >= 4.0 and max_pnl_pct < 0.06 and pnl_pct <= -0.02:
                 return f"Dead Churn Escape ({pnl_pct*100:+.1f}%, застрял без импульса {_peak_age_min:.1f}м — выход)"
 
-            # 2. Mid-Peak Profit Shield: если монета давала хороший импульс (+22%..+39%, как ZAPZEKE +22.9%),
-            # но 2+ минуты не обновляет хай и начала сползать к точке входа (<= +5%) — забираем плюс, не ждём 0% или минуса!
-            if max_pnl_pct >= 0.16 and _peak_age_min >= 2.5 and pnl_pct <= 0.04:
+            # 2. Anti-Roundtrip Shield: если монета улетала на +35%+, но 2.5м+ без ATH и вернулась почти в 0 (<= +5%) — забираем +5%, не отдаём в минус!
+            if max_pnl_pct >= 0.35 and _peak_age_min >= 2.5 and pnl_pct <= 0.05:
                 return f"Mid-Peak Profit Shield ({pnl_pct*100:+.1f}% locked after peak +{max_pnl_pct*100:.0f}%, {_peak_age_min:.1f}m no ATH)"
 
-            # 2b. Faded Impulse Stop: импульс был (+8%..+39%), но затух (2.5+ мин без нового ATH) и сполз в минус (-4%)
-            # Спасает от 10-минутного медленного сползания в -28% (кейс SPEED -$1.45)!
+            # 2b. Faded Impulse Stop: импульс был (+15%+), но затух (4.5м без ATH) и ушёл в минус (-8%)
             if max_pnl_pct >= 0.15 and _peak_age_min >= 4.5 and pnl_pct <= -0.08:
                 return f"Faded Impulse Stop ({pnl_pct*100:+.1f}%, затухание импульса после пика +{max_pnl_pct*100:.0f}%)"
-
-            # 3. ATH Exhaustion Exit: пик был сильным (+40%+), но 5+ минут нет нового ATH — забираем +15%+ профита
-            if max_pnl_pct >= 0.40 and _peak_age_min >= 5.0 and pnl_pct >= 0.15:
-                return f"ATH Exhaustion Exit (+{pnl_pct*100:.0f}% locked after peak +{max_pnl_pct*100:.0f}%, {_peak_age_min:.0f}m no ATH)"
-
-            # 4. Rocket Momentum Harvest: пик +50%+, 8+ минут без ATH — забираем +20%+ профита
-            if max_pnl_pct >= 0.50 and _peak_age_min >= 8.0 and pnl_pct >= 0.20:
-                return f"Rocket Momentum Harvest (+{pnl_pct*100:.0f}% locked after peak +{max_pnl_pct*100:.0f}%, {_peak_age_min:.0f}m no ATH)"
 
 
         # =========================================================================
@@ -260,13 +226,12 @@ class MatureExitManager:
             if _m1_crash <= -25.0 and pnl_pct >= 0.05 and minutes_held >= 0.5:
                 return f"🚨 Crash Guard: Price Crash ({_m1_crash:.0f}% за 1m, locked {pnl_pct*100:+.1f}%)"
 
-            # === СЛУЧАЙ 3: УМЕРЕННЫЙ КРАШ (-15%) + ДОМИНИРОВАНИЕ ПРОДАВЦОВ + ВСПЛЕСК ===
-            # Классика: кит начал аккуратно сливать, после него придёт дев.
-            if _m1_crash <= -15.0 and pnl_pct >= 0.15 and bs_ratio < 0.30 and _vol_spike:
+            # === СЛУЧАЙ 3: УМЕРЕННЫЙ КРАШ (-18%) + ДОМИНИРОВАНИЕ ПРОДАВЦОВ + ВСПЛЕСК ===
+            if _m1_crash <= -18.0 and pnl_pct >= 0.20 and bs_ratio < 0.30 and _vol_spike:
                 return f"🚨 Crash Guard: Coordinated Sell ({_m1_crash:.0f}% 1m, {b5}b/{s5}s, vol spike, {pnl_pct*100:+.1f}%)"
 
         # =========================================================================
-        # 5. FRONT-RUN PROFIT EXIT (Разворот стакана только при уверенном профите >= +35%)
+        # 5. FRONT-RUN PROFIT EXIT (Разворот стакана только при +65%+ — не режем волны на пути к 2x)
         # =========================================================================
         if isinstance(_pd, dict) and _pd:
             txns_m5 = (_pd.get("txns") or {}).get("m5") or {}
@@ -276,23 +241,19 @@ class MatureExitManager:
             m1 = float(pc.get("m1", 0) or 0)
             bs_ratio = (b5 / s5) if s5 > 0 else 2.0
             total_tx5 = b5 + s5
-            if minutes_held >= 3.0 and pnl_pct >= 0.35 and total_tx5 >= 25 and bs_ratio < 0.40 and m1 <= -5.0:
+            if minutes_held >= 4.0 and pnl_pct >= 0.65 and total_tx5 >= 30 and bs_ratio < 0.35 and m1 <= -8.0:
                 return f"Front-Run Profit Exit: Sellers dominating ({b5}b/{s5}s) while in profit (+{pnl_pct*100:.1f}%)"
-            # Тихое угасание: объём упал, продажи доминируют, цена вниз — дев готовится к дрейну
             vol_m5_now = float((_pd.get("volume") or {}).get("m5", 0) or 0)
             vol_h1_now = float((_pd.get("volume") or {}).get("h1", 0) or 0)
-            _vol_dying = vol_h1_now > 0 and vol_m5_now < vol_h1_now * 0.08  # объём за 5м < 8% часового
-            if minutes_held >= 2.0 and pnl_pct >= 0.25 and bs_ratio < 0.50 and _vol_dying and m1 <= -3.0:
+            _vol_dying = vol_h1_now > 0 and vol_m5_now < vol_h1_now * 0.05
+            if minutes_held >= 5.0 and pnl_pct >= 0.60 and bs_ratio < 0.40 and _vol_dying and m1 <= -5.0:
                 return f"Volume Exhaustion Exit: торги утихли ({b5}b/{s5}s, vol 5m ${vol_m5_now:.0f} vs h1 ${vol_h1_now:.0f}) в профите +{pnl_pct*100:.1f}%"
 
         # =========================================================================
-        # 5. MAX HOLD TIMEOUT (УДЕРЖАНИЕ ДО 28 МИНУТ — ВЫХОД ДО РАГА НА 40-Й МИНУТЕ)
+        # 5. MAX HOLD TIMEOUT (ДАЁМ РАКЕТАМ ДО 38-55 МИНУТ НА РАЗГОН 2x-10x)
         # =========================================================================
-        # Ракеты разгоняются в первые 3-25 минут. Монеты, которые рагаются, обычно выдергивают ликву на 35-45 минуте.
-        # Выходим по таймауту на 28 минуте (или на 20-22 минуте при застревании без ATH),
-        # забирая прибыль ДО того как дев выдернет ликвидность!
-        _mb_max_hold = float(getattr(config, "MOONBAG_MAX_HOLD_MIN", 45.0)) if _is_mb else 22.0
-        if not _is_mb and minutes_held >= 15.0 and pnl_pct >= 0.03 and _peak_age_min >= 6.0:
+        _mb_max_hold = float(getattr(config, "MOONBAG_MAX_HOLD_MIN", 55.0)) if _is_mb else 38.0
+        if not _is_mb and minutes_held >= 20.0 and 0.03 <= pnl_pct < 0.25 and _peak_age_min >= 8.0:
             return f"Max Hold Profit Take (+{pnl_pct*100:.1f}% locked at {minutes_held:.0f}m, {_peak_age_min:.0f}m no ATH)"
         if _is_mb and minutes_held >= 60.0 and _peak_age_min >= 25.0:
             return f"Moonbag Max Hold Take ({pnl_pct*100:+.1f}% at {minutes_held:.0f}m, {_peak_age_min:.0f}m no ATH)"

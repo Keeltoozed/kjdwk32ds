@@ -321,9 +321,14 @@ async def get_token_data(mint: str, max_cache_age: float = TD_TTL) -> dict:
     # 1. DexScreener первым: 300 зап/мин, самый надёжный, даёт m5/h1/h24 + соцсети.
     ds = await _ds_token_data(mint)
     if ds and float(ds.get("priceUsd", 0) or 0) > 0:
-        # Если токен ТОЛЬКО ЧТО мигрировал (subscribeMigration), а DS ещё отдаёт старый кёрв "pump",
-        # проваливаемся в Jupiter v2 / GeckoTerminal за живым пулом PumpSwap!
-        if not (_is_grad_md and str(ds.get("dexId", "")).lower() in ("pump", "pumpfun")):
+        # Если токен ТОЛЬКО ЧТО мигрировал (subscribeMigration), а DS ещё отдаёт старый кёрв "pump"
+        # или отдаёт liq=0 в первые 5 минут после миграции — проваливаемся в Jupiter v2 / GeckoTerminal!
+        _ds_liq = float((ds.get("liquidity") or {}).get("usd", 0) or 0)
+        _ds_created = float(ds.get("pairCreatedAt", 0) or 0)
+        _ds_young_no_liq = (_ds_liq <= 0.0) and (
+            _is_grad_md or (_ds_created > 0 and (now * 1000.0 - _ds_created) <= 300_000.0)
+        )
+        if not (_is_grad_md and str(ds.get("dexId", "")).lower() in ("pump", "pumpfun")) and not _ds_young_no_liq:
             _TD_CACHE[mint] = (now, ds)
             if len(_TD_CACHE) > 2000:
                 _TD_CACHE.clear()
@@ -756,8 +761,8 @@ async def get_trending() -> list:
     Формат как у DexScreener boosts: [{'tokenAddress','chainId'}]."""
     global _trending_cache, _trending_cache_time
 
-    # Кэшируем результаты на 60 секунд (снижает нагрузку на GeckoTerminal API и защищает от 429)
-    if time.time() - _trending_cache_time < 75 and _trending_cache:
+    # Кэшируем результаты на 50 секунд (снижает нагрузку на GeckoTerminal API и исключает 429)
+    if time.time() - _trending_cache_time < 50 and _trending_cache:
         return _trending_cache
 
     out, seen = [], set()
@@ -787,15 +792,18 @@ async def get_trending() -> list:
             vol5_usd = float(vol.get("m5", 0) or 0)
         except Exception:
             vol5_usd = 0.0
-        # Защита от старых трупов и мамонтов прямо на входе дискавери:
+        # Защита от старых (>90м), тяжёлых (> $380k FDV) и стоячих пулов прямо на входе дискавери:
+        _fdv_pool = float(attrs.get("fdv_usd") or attrs.get("market_cap_usd") or 0)
+        if _fdv_pool > 380000.0:
+            return
         created_ms = _parse_ms(attrs.get("pool_created_at"))
         if created_ms:
             age_h = (time.time() * 1000 - created_ms) / 3600000.0
             tx = attrs.get("transactions") or {}
             m5_tx = int((tx.get("m5") or {}).get("buys", 0) or 0) + int((tx.get("m5") or {}).get("sells", 0) or 0)
-            if age_h > 4.0 and (vol5_usd < 2000.0 or m5_tx < 12):
+            if age_h > 1.5:
                 return
-            if age_h > 12.0:
+            if age_h > 0.75 and (vol5_usd < 2000.0 or m5_tx < 12):
                 return
         seen.add(mint)
         out.append({"tokenAddress": mint, "chainId": "solana"})
@@ -814,8 +822,9 @@ async def get_trending() -> list:
     # 4 страницы живых 5м трендов GT (~9с с пейсером 3.0с — гарантированно без HTTP 429!):
     # Охватывает ТОП-80 самых горячих 5м пулов Solana (PumpSwap / Meteora / Raydium).
     gt_pages = (
+        "/networks/solana/new_pools?page=1",
+        "/networks/solana/new_pools?page=2",
         "/networks/solana/trending_pools?duration=5m&page=1",
-        "/networks/solana/trending_pools?duration=1h&page=1",
     )
     for path in gt_pages:
         d = await _gt_get(path, retries=0, timeout=6)

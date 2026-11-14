@@ -231,6 +231,24 @@ class PaperTracker:
                 worst = pct
         return worst
 
+    def is_loss_cooldown_active(self, mint: str, cooldown_sec: float = 14400.0) -> bool:
+        """Вернуть True при жестком раге (<= -15% бессрочно) или любой убыточной сделке за последние cooldown_sec (4ч)."""
+        worst = self.last_loss_pct(mint)
+        if worst is not None and worst <= float(getattr(config, "RUG_REBUY_MAX_LOSS", -0.15)):
+            return True
+        now_t = time.time()
+        for k, pos in self.positions.items():
+            if k != mint and not k.startswith(mint + "_old_"):
+                continue
+            if pos.status != "closed":
+                continue
+            pct = ((pos.exit_price_usd - pos.entry_price_usd) / pos.entry_price_usd) if pos.entry_price_usd else 0.0
+            if pct < 0.0 or float(getattr(pos, "pnl_usd", 0.0) or 0.0) < 0.0:
+                exit_t = float(getattr(pos, "exit_time", 0.0) or 0.0)
+                if exit_t and (now_t - exit_t) < cooldown_sec:
+                    return True
+        return False
+
     @staticmethod
     def _norm_symbol(s) -> str:
         """Тикер к каноническому виду для символьного кулдауна."""

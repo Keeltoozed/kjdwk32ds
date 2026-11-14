@@ -628,7 +628,12 @@ class Analyzer:
                         _liq_lt = float((_p_lt.get("liquidity") or {}).get("usd", 0) or 0)
                         _vol5_lt = float((_p_lt.get("volume") or {}).get("m5", 0) or 0)
                         _m5_lt = float((_p_lt.get("priceChange") or {}).get("m5", 0) or 0)
-                        if _liq_lt < 6000.0 or _vol5_lt < 1200.0 or _m5_lt < 1.0:
+                        _fdv_lt = float(_p_lt.get("fdv", 0) or _p_lt.get("marketCap", 0) or 0)
+                        _ca_lt = float(_p_lt.get("pairCreatedAt") or 0)
+                        _age_lt = ((time.time() * 1000.0 - _ca_lt) / 60000.0) if _ca_lt > 0 else 999.0
+                        if _liq_lt < 6000.0 or _vol5_lt < 1200.0 or _m5_lt < 2.0:
+                            continue
+                        if _age_lt > float(getattr(config, "SOLANA_MAX_AGE_MIN", 90.0)) or _fdv_lt > 350000.0:
                             continue
                         _addr_lt = str((_p_lt.get("baseToken") or {}).get("address") or "").strip()
                         if _addr_lt and not _addr_lt.startswith("0x") and 32 <= len(_addr_lt) <= 44:
@@ -1739,13 +1744,14 @@ class Analyzer:
             print(f"⏳ [ENTRY] {mint[:8]}: возраст {_age_min_pre:.1f}м < {_sol_min_age}м — выдерживаем карантин первой свечи.")
             return None
 
-        # 1. Защита от старых увядающих зомби (> 6ч без активного пробоя ликвидного пула и все > 24ч) и переросших mid-caps (> $1.8M)
+        # 1. Защита от старых отработанных пулов (> 90м) и переросших mid-caps (> JEV_MAX_MCAP_USD = $320k)
         _fdv_chk_pre = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
-        if _fdv_chk_pre > float(getattr(config, "JEV_MAX_MCAP_USD", 1800000.0)):
+        _max_mcap_pre = float(getattr(config, "JEV_MAX_MCAP_USD", 320000.0))
+        if _fdv_chk_pre > _max_mcap_pre:
             return self._deny(
                 mint,
-                f"mcap-too-large ${_fdv_chk_pre/1e6:.1f}M",
-                f"🚫 [LARGE-CAP-SKIP] {symbol} ({mint[:8]}): FDV ${_fdv_chk_pre:,.0f} > $1.8M — ракета уже тяжёлая.",
+                f"mcap-too-large ${_fdv_chk_pre/1000:.0f}k",
+                f"🚫 [LARGE-CAP-SKIP] {symbol} ({mint[:8]}): FDV ${_fdv_chk_pre:,.0f} > ${_max_mcap_pre:,.0f} — нет запаса хода 2x+.",
             )
         from sol_price import get_sol_price_sync
         _sol_p = float(get_sol_price_sync() or 150.0)
@@ -1764,22 +1770,22 @@ class Analyzer:
                     f"🚫 [POST-MIGRATION-DUMP] {symbol} ({mint[:8]}): выпускник Pump.fun слит ниже миграции (FDV ${_fdv_chk_pre:,.0f} < ${_dump_floor_sol:,.0f} [~100 SOL]) — кейс SHANE.",
                 )
 
-        _max_age_min = float(getattr(config, "SOLANA_MAX_AGE_MIN", 240.0))
-        # Разрешаем монеты до 360м ТОЛЬКО при огромной ликвидности ($40k+) и мощном притоке покупателей
+        _max_age_min = float(getattr(config, "SOLANA_MAX_AGE_MIN", 90.0))
+        # Окно живого пробоя строго в пределах свежих 90м и <= JEV_MAX_MCAP_USD ($320k), без 360м BILL-ловушек
         _is_active_breakout_pool = (
-            _age_min_pre <= 360.0
-            and _fdv_chk_pre <= 1500000.0
-            and _raw_liq_age >= 25000.0
+            _age_min_pre <= _max_age_min
+            and _fdv_chk_pre <= _max_mcap_pre
+            and _raw_liq_age >= 15000.0
             and _vm5_pre >= 12000.0
-            and (_vm5_pre / max(_raw_liq_age, 1.0)) >= 0.15
-            and _m5 >= 3.0
-            and _b5_pre >= _s5_pre * 1.10
+            and (_vm5_pre / max(_raw_liq_age, 1.0)) >= 0.25
+            and _m5 >= 5.0
+            and _b5_pre >= _s5_pre * 1.15
         )
         if _age_min_pre > _max_age_min and not _is_active_breakout_pool:
             return self._deny(
                 mint,
                 f"zombie-old-token {_age_min_pre:.0f}m",
-                f"🚫 [ZOMBIE-AGE] {symbol} ({mint[:8]}): возраст {_age_min_pre:.0f}м > {_max_age_min:.0f}м — уставший старый пул (кейс GIGAHUG/INVEST).",
+                f"🚫 [ZOMBIE-AGE] {symbol} ({mint[:8]}): возраст {_age_min_pre:.0f}м > {_max_age_min:.0f}м — старый пул (ищем свежие 2x-10x ракеты).",
             )
 
         # 2. Защита от фейковых микро bump-ботов (кейсы LAURA $1.60 avg_tx, HODL $3.10, IPHONEDUO $5.00)
@@ -1862,15 +1868,16 @@ class Analyzer:
                 f"🚫 [WEAK-BUYERS] {symbol} ({mint[:8]}): покупки/продажи 5м {_b5_pre}/{_s5_pre} ({_b5_pre/_s5_pre:.2f}x < {_min_bs_cfg:.2f}x) — продавцы давят!",
             )
 
-        # Единый классификатор импульса, откатов и V-разворотов (пропускает BILL-откаты, J*B V-развороты и Angel-пробои)
+        # Единый классификатор 2x+ ракетного разгона (блокирует отработанные вершины и падающие ножи)
         _h6_pre_raw = _pc.get("h6")
         _h6_pre_opt = float(_h6_pre_raw) if _h6_pre_raw is not None else None
-        _min_h1_cfg = float(getattr(config, "JEV_MIN_H1_PCT", -8.0))
-        _min_h6_cfg = float(getattr(config, "JEV_MIN_H6_PCT", -25.0))
+        _min_h1_cfg = float(getattr(config, "JEV_MIN_H1_PCT", -12.0))
+        _min_h6_cfg = float(getattr(config, "JEV_MIN_H6_PCT", -20.0))
         _mom_ok_a, _mom_why_a = config.evaluate_entry_momentum(
             m5=_m5, m1=_m1, h1=_h1, h6=_h6_pre_opt,
             age_min=_age_min_pre, vol5_usd=_vm5_pre, liq_usd=_raw_liq_chk,
             buys5=_b5_pre, sells5=_s5_pre, min_h1=_min_h1_cfg, min_h6=_min_h6_cfg,
+            fdv_usd=_fdv_chk_pre,
         )
         if not _mom_ok_a:
             return self._deny(
@@ -1878,18 +1885,13 @@ class Analyzer:
                 _mom_why_a.split("(")[0].strip()[:48],
                 f"🚫 [MOMENTUM-GATE] {symbol} ({mint[:8]}): {_mom_why_a}",
             )
-        _base_max_m1 = float(getattr(config, "MAX_ENTRY_M1_PCT", 28.0))
-        # Разрешаем импульсный пробой (свеча +15%..+45%) при активном спросе покупателей (b5 >= s5 и vol >= $2000)
-        if _b5_pre >= int(_s5_pre * 1.05) and _vm5_pre >= 2000.0 and _m5 >= 3.0:
+        _base_max_m1 = float(getattr(config, "MAX_ENTRY_M1_PCT", 25.0))
+        # Разрешаем импульсный пробой (свеча +15%..+45%) при активном спросе покупателей (b5 >= 1.15*s5 и vol >= $2000)
+        if _b5_pre >= int(_s5_pre * 1.15) and _vm5_pre >= 2000.0 and _m5 >= 5.0:
             _max_m1_cfg = 45.0  # Импульсный пробой ракеты
         else:
-            _max_m1_cfg = max(_base_max_m1, 28.0)
-        if _m5 >= 8.0 and _b5_pre >= _s5_pre:
-            _min_m1_floor = -12.0  # Здоровый 1м откат внутри мощного 5м аптренда (кейс REKT -8.3% перед взлётом на +124%)
-        elif _m5 >= 5.0:
-            _min_m1_floor = -8.0
-        else:
-            _min_m1_floor = -3.5
+            _max_m1_cfg = max(_base_max_m1, 25.0)
+        _min_m1_floor = float(getattr(config, "JEV_MIN_M1_ENTRY_FLOOR_PCT", -2.5))
         if _m1 > _max_m1_cfg or _m1 < _min_m1_floor:
             return self._deny(
                 mint,
@@ -1898,7 +1900,7 @@ class Analyzer:
             )
 
         # 4. Anti-FOMO: Защита от перегретых вершин (для свежих миграций <=15м допускаем h1 до +2500%, т.к. h1 включает рост на кёрве!)
-        _max_entry_h1 = config.get_max_entry_h1_pct(_age_min_pre, _vm5_pre, _b5_pre, _s5_pre, _raw_liq_chk)
+        _max_entry_h1 = config.get_max_entry_h1_pct(_age_min_pre, _vm5_pre, _b5_pre, _s5_pre, _raw_liq_chk, _m5)
         _max_entry_m5 = float(getattr(config, "MAX_ENTRY_M5_PCT", 120.0))
         if _h1 > _max_entry_h1 and _age_min_pre > 4.0:
             return self._deny(
@@ -2013,8 +2015,13 @@ class Analyzer:
             liq_val = max(raw_liq, curve_liq) if is_pump_curve else raw_liq
 
             _is_momentum_rocket_a = (
-                (_m5 >= 12.0 and _b5_pre >= _s5_pre * 1.15 and _vm5_pre >= 8000.0)
-                or (_vm5_pre >= 15000.0 and _b5_pre >= _s5_pre and _m5 >= 5.0)
+                _age_min_pre <= _max_age_min
+                and _fdv_chk_pre <= _max_mcap_pre
+                and (_age_min_pre < 20.0 or _h6_pre_opt is None or _h6_pre_opt <= float(getattr(config, "MAX_ENTRY_H6_PCT", 450.0)))
+                and (
+                    (_m5 >= 12.0 and _m1 >= -2.5 and _b5_pre >= _s5_pre * 1.20 and _vm5_pre >= 8000.0)
+                    or (_vm5_pre >= 15000.0 and _b5_pre >= _s5_pre * 1.15 and _m5 >= 6.0 and _m1 >= -2.5)
+                )
             )
             if (conf + 0.05) < threshold and not _is_momentum_rocket_a:
                 self._deny(mint, f"rocket-xgb {conf:.0f}%", f"· [ROCKET-XGB] {symbol} ({mint[:8]}): уверенность модели {conf:.1f}% < {threshold:.0f}% — отсеян до тяжелых проверок (0ms).")
