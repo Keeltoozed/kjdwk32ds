@@ -1534,7 +1534,7 @@ class Analyzer:
             _is_term = any(k in _sig_l for k in (
                 "rugcheck", "scam", "unlocked-lp", "bundle", "honeypot", 
                 "freeze", "mimic", "dead-token", "мёртвый токен", "sybil", 
-                "delegation", "post-mig-dumped", "zombie", "low-liq", 
+                "delegation", "post-mig-dumped", "zombie", 
                 "deadcat", "dead-cat", "dumped", "ghost-pool", "wash-spike", 
                 "wash-trap", "mcap-too-large", "price-split"
             ))
@@ -1857,7 +1857,12 @@ class Analyzer:
             _max_m1_cfg = 35.0  # Импульсный пробой ракеты
         else:
             _max_m1_cfg = max(_base_max_m1, 28.0)
-        _min_m1_floor = -6.0 if _m5 >= 10.0 else -2.8
+        if _m5 >= 8.0 and _b5_pre >= _s5_pre:
+            _min_m1_floor = -12.0  # Здоровый 1м откат внутри мощного 5м аптренда (кейс REKT -8.3% перед взлётом на +124%)
+        elif _m5 >= 5.0:
+            _min_m1_floor = -8.0
+        else:
+            _min_m1_floor = -3.5
         if _m1 > _max_m1_cfg or _m1 < _min_m1_floor:
             return self._deny(
                 mint,
@@ -2010,7 +2015,7 @@ class Analyzer:
 
             # 1. Защита от микрованночек, сырых кёрвов и фейковых AMM-пулов
             _is_raw_curve = dex_id_low in ("pump", "pumpfun")
-            _min_grad_liq = float(getattr(config, "MIN_GRADUATED_LIQ_USD", 7500.0))
+            _min_grad_liq = float(getattr(config, "MIN_GRADUATED_LIQ_USD", 5000.0))
             _min_liq = 1000.0 if _is_raw_curve else _min_grad_liq
             _eff_pool_liq = liq_val if _is_raw_curve else raw_liq
             if _eff_pool_liq < _min_liq:
@@ -2386,8 +2391,9 @@ class Analyzer:
                 _max_vip_m5 = 120.0
             if _m5 > _max_vip_m5:
                 return self._deny(mint, "vip-overheat", f"🚫 [VIP OVERHEAT] {mint}: m5 {_m5:+.0f}% > +{_max_vip_m5:.0f}% — вертикаль уже прошла, вход = вершина.")
-            if _m1 < -8.0:
-                return self._deny(mint, "vip-reversal", f"🚫 [VIP REVERSAL] {mint}: m1 {_m1:+.1f}% — глубокий дамп за 1м, отмена.")
+            _min_vip_m1 = -12.0 if (_m5 >= 8.0 and _b_v >= _s_v) else -8.0
+            if _m1 < _min_vip_m1:
+                return self._deny(mint, "vip-reversal", f"🚫 [VIP REVERSAL] {mint}: m1 {_m1:+.1f}% < {_min_vip_m1:+.1f}% — глубокий дамп за 1м, отмена.")
             _max_vip_m1 = 28.0
             if _m1 > _max_vip_m1:
                 return self._deny(mint, "vip-spike", f"🚫 [VIP SPIKE] {mint}: m1 {_m1:+.1f}% > +{_max_vip_m1:.0f}% — свеча-spike в моменте, вход = вершина. Ждём.")
@@ -3953,8 +3959,9 @@ class Analyzer:
                     print(f"⚡ [RAY-PULLBACK] {mint[:8]}: молодой токен ({_age_min:.1f}м) h1 {_h1:+.1f}%, отскок m5 {_m5:+.1f}% — дохлая кошка пропущена, пишется в shadow.")
                 except Exception:
                     pass
-        if _m1 < -8.0:
-            return self._deny(mint, "ray-m1-drop", f"🚫 [RAYDIUM] {mint[:8]}: m1 {_m1:+.1f}% — активный сброс в моменте (падающий нож).")
+        _min_ray_m1 = -12.0 if (_m5 >= 8.0 and _b5 >= _s5) else -8.0
+        if _m1 < _min_ray_m1:
+            return self._deny(mint, "ray-m1-drop", f"🚫 [RAYDIUM] {mint[:8]}: m1 {_m1:+.1f}% < {_min_ray_m1:+.1f}% — активный сброс в моменте (падающий нож).")
         if _m1 > 22.0:
             return self._deny(mint, "ray-m1-blowoff", f"🚫 [RAYDIUM] {mint[:8]}: m1 {_m1:+.1f}% > +22% — вертикальный прострел за 1м, вход = вершина.")
         if _m5 < 2.5:

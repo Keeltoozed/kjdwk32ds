@@ -1117,7 +1117,7 @@ async def scanner_loop(analyzer, tracker):
                             _is_terminal = any(k in _sig_l for k in (
                                 "rugcheck", "scam", "unlocked-lp", "bundle", "honeypot", 
                                 "freeze", "mimic", "dead-token", "мёртвый токен", "sybil", 
-                                "delegation", "post-mig-dumped", "zombie", "low-liq", 
+                                "delegation", "post-mig-dumped", "zombie", 
                                 "deadcat", "dead-cat", "dumped", "ghost-pool", "wash-spike", 
                                 "wash-trap", "mcap-too-large", "price-split"
                             ))
@@ -1215,7 +1215,7 @@ async def scanner_loop(analyzer, tracker):
                                     if _fdv_m_sc > _max_c_sc:
                                         print(f"🚫 [SCANNER-CURVE-CLIFF] {actual_symbol} ({mint[:8]}): FDV ${_fdv_m_sc:,.0f} > ${_max_c_sc:,.0f} (обрыв перед миграцией) — отмена!")
                                         continue
-                                _min_grad_sc = float(getattr(config, "MIN_GRADUATED_LIQ_USD", 7500.0))
+                                _min_grad_sc = float(getattr(config, "MIN_GRADUATED_LIQ_USD", 5000.0))
                                 if _dex_id not in ("pump", "pumpfun") and liq_usd < _min_grad_sc:
                                     print(f"🚫 [SCANNER-LOW-LIQ] {actual_symbol} ({mint[:8]}): ликвидность DEX ${liq_usd:,.0f} < ${_min_grad_sc:,.0f} — отмена!")
                                     continue
@@ -1243,8 +1243,9 @@ async def scanner_loop(analyzer, tracker):
                                     continue
 
                                 # Повторная проверка живых метрик после сброса prefetch-кэша (защита от реального разворота вниз)
-                                if _m5_live < 1.0 or _m1_live < -4.5:
-                                    print(f"🚫 [SCANNER-LIVE-REVERSAL] {actual_symbol} ({mint[:8]}): на живом графике импульс сломан (m5 {_m5_live:+.1f}%, m1 {_m1_live:+.1f}%) — отмена покупки!")
+                                _min_sc_m1 = -12.0 if _m5_live >= 8.0 else (-6.0 if _m5_live >= 4.0 else -3.5)
+                                if _m5_live < 1.0 or _m1_live < _min_sc_m1:
+                                    print(f"🚫 [SCANNER-LIVE-REVERSAL] {actual_symbol} ({mint[:8]}): на живом графике импульс сломан (m5 {_m5_live:+.1f}%, m1 {_m1_live:+.1f}% < {_min_sc_m1:+.1f}%) — отмена покупки!")
                                     continue
                                 _max_m1_cfg_live = float(getattr(config, "MAX_ENTRY_M1_PCT", 28.0))
                                 if _m1_live > _max_m1_cfg_live and _age_m >= 3.0:

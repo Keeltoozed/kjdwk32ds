@@ -93,7 +93,7 @@ MAX_PUMP_CURVE_MCAP_SOL = 350.0           # Верх кривой перед м�
 PUMP_MIGRATION_MCAP_SOL = 410.0           # FDV миграции pump.fun (~410 SOL = ~$35k при SOL $85)
 PUMP_DUMP_FLOOR_SOL = 160.0               # Порог post-mig-dumped (~40% миграции = 160 SOL, разрешает Dip Reclaim)
 JEV_MAX_TICKET_USD = 0.0
-MIN_GRADUATED_LIQ_USD = 10000.0          # На DEX минимум $10k реальной ликвидности — пускает свежие миграции $11k-$18k (AI, AMD, HOUSE, SCAT, BELIEVE) и отсекает микро-пулы <$10k
+MIN_GRADUATED_LIQ_USD = 5000.0           # На DEX минимум $5k реальной ликвидности — пускает свежие миграции PumpSwap/Raydium ($5k-$12k при SOL $75-$150) и отсекает пустые микро-пулы
 AUDITOR_STAIRCASE_ENABLED = True
 AUDITOR_MAX_DEV_PCT = 6.0
 AUDITOR_MAX_TOP10_PCT = 32.0
@@ -194,7 +194,7 @@ JEV_WICK_STOP_ENABLED = False
 JEV_EARLY_MIN_AGE_MIN = 1.0    # Ранний вход от 60 секунд (не пропускаем ракеты!)
 JEV_MIN_AGE_MIN = 1.2          # Базовый карантин 72 секунды
 JEV_MAX_AGE_MIN = 720.0          # В GROK-JEV активные монеты до 12 часов (не срезаем зрелые ракеты вроде ASTRALIS/Sakura)
-JEV_MIN_LIQUIDITY_USD = 10000.0  # Минимум $10k ликвидности — пускает ранние ракеты (AI, AMD, HOUSE, SCAT)
+JEV_MIN_LIQUIDITY_USD = 5000.0   # Минимум $5k ликвидности — пускает ранние ракеты (SWAMIS $6k, AI, AMD, HOUSE, SCAT)
 JEV_MAX_LIQUIDITY_USD = 220000.0
 JEV_MIN_VOLUME_H1 = 8000.0
 JEV_MIN_MCAP_USD = 5000.0      # Минимум $5k MCap (ловит ранние Raydium/PumpSwap ракеты вроде FOMO $8.1k, ICC $8.1k)

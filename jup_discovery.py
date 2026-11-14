@@ -144,7 +144,8 @@ async def fetch_jup_tokens() -> list:
                 is_grad = bool(t.get("graduatedAt") or t.get("graduatedPool") or (not m.endswith("pump") and liq >= 7500.0))
                 if not allow_raw_curve and not is_grad:
                     continue
-                if liq < (3500.0 if allow_raw_curve else 7500.0):
+                _min_jup_l = 3500.0 if allow_raw_curve else float(getattr(config, "MIN_GRADUATED_LIQ_USD", 5000.0))
+                if liq < _min_jup_l:
                     continue
                 st5 = t.get("stats5m") or {}
                 st1h = t.get("stats1h") or {}
@@ -379,7 +380,7 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
         _liq_j = max(_raw_liq_j, _fdv_j * 0.40)
     else:
         _liq_j = _raw_liq_j
-    _min_liq_req = 1000.0 if _is_raw_curve_j else float(getattr(config, "MIN_GRADUATED_LIQ_USD", 7500.0))
+    _min_liq_req = 1000.0 if _is_raw_curve_j else float(getattr(config, "MIN_GRADUATED_LIQ_USD", 5000.0))
     if _liq_j < _min_liq_req:
         print(f"🚫 [{source_tag}-LOW-LIQ] {_sym_tmp} ({mint[:8]}): реальная ликвидность ${_liq_j:.0f} < ${_min_liq_req:.0f} — микро-пул/риск слива.")
         return False
@@ -568,8 +569,9 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
     if _m5_j < 1.0:
         print(f"🚫 [{source_tag}-DOWNTREND] {_sym_tmp}: m5 {_m5_j:+.1f}% < +1.0% — падающий нож, отмена входа!")
         return False
-    if _m1_j < -4.0:
-        print(f"🚫 [{source_tag}-1M-DUMP] {_sym_tmp}: 1м свеча {_m1_j:+.1f}% летит вниз — отмена входа!")
+    _min_jup_m1 = -12.0 if _m5_j >= 8.0 else (-6.0 if _m5_j >= 4.0 else -3.5)
+    if _m1_j < _min_jup_m1:
+        print(f"🚫 [{source_tag}-1M-DUMP] {_sym_tmp}: 1м свеча {_m1_j:+.1f}% < {_min_jup_m1:+.1f}% — отмена входа!")
         return False
     # Блок: токен уже на полу — h1 сильно отрицательный при возрасте > 5 мин (кейс JENSEN)
     if _h1_j < -60.0 and _age_j > 5.0:
@@ -844,7 +846,7 @@ async def jup_loop(analyzer, tracker):
                             _cp = tracker.positions.get(m)
                             _cpnl = float(getattr(_cp, "pnl_usd", 0.0) or 0.0)
                             _cext = float(getattr(_cp, "exit_time", 0.0) or 0.0)
-                            if (_now_t - _cext) < (300.0 if _cpnl > 0 else 14400.0):
+                            if (_now_t - _cext) < (300.0 if _cpnl > 0 else 600.0):
                                 continue
                         if _now_t - processed.get(m, 0.0) < 35:
                             continue
@@ -949,7 +951,7 @@ async def jup_loop(analyzer, tracker):
                             _is_term_j = any(k in _sig_j for k in (
                                 "rugcheck", "scam", "unlocked-lp", "bundle", "honeypot", 
                                 "freeze", "mimic", "dead-token", "мёртвый токен", "sybil", 
-                                "delegation", "post-mig-dumped", "zombie", "low-liq", 
+                                "delegation", "post-mig-dumped", "zombie", 
                                 "deadcat", "dead-cat", "dumped", "ghost-pool", "wash-spike", 
                                 "wash-trap", "mcap-too-large", "price-split"
                             ))

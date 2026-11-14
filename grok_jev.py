@@ -454,7 +454,7 @@ class GrokJevEngine:
             else:
                 age_min = 0.0 if is_pump else 999.0
 
-        _min_grad_liq = float(getattr(_c, "MIN_GRADUATED_LIQ_USD", 10000.0))
+        _min_grad_liq = float(getattr(_c, "MIN_GRADUATED_LIQ_USD", 5000.0))
         if dex_id in ("pump", "pumpfun", "meteoradbc") and not getattr(_c, "ALLOW_UNGRADUATED_PUMPFUN", False):
             return False, "raw-pump-curve (wait for graduation to PumpSwap/Raydium with locked LP)"
         min_liq = 1500.0 if (dex_id in ("pump", "pumpfun", "meteoradbc") and getattr(_c, "ALLOW_UNGRADUATED_PUMPFUN", False)) else _min_grad_liq
@@ -916,7 +916,7 @@ class GrokJevEngine:
         _base_addr = str(((pair_data.get("baseToken") or {}).get("address")) or "")
         _dex_id = str(pair_data.get("dexId", "")).lower()
         _is_raw_curve_only = (_dex_id in ("pump", "pumpfun") and getattr(_c, "ALLOW_UNGRADUATED_PUMPFUN", False))
-        _min_liq = 1500.0 if _is_raw_curve_only else float(getattr(_c, "MIN_GRADUATED_LIQ_USD", 10000.0))
+        _min_liq = 1500.0 if _is_raw_curve_only else float(getattr(_c, "MIN_GRADUATED_LIQ_USD", 5000.0))
         _base_max_m1 = float(getattr(_c, "JEV_MAX_M1_ENTRY_PCT", 28.0))
 
         # Если DexScreener не отдал m1 (0.0 / None) — берем реальный sub-minute m1 из нашей живой истории сканов
@@ -952,9 +952,9 @@ class GrokJevEngine:
         if _liq_usd > 0 and _liq_usd < _min_liq:
             return False, -0.14, 0.0, f"thin-liquidity (${_liq_usd:,.0f} < ${_min_liq:,.0f}) — slippage/dump risk"
 
-        # 2. Защита от покупки затухающей свечи: сильный тренд (m5 >= +12%) допускает ретест до -5.5%,
-        # но слабая монета (m5 < +12%) с красной 1м свечой (< -2.5%) — это умирающий отскок, ведущий в стоп!
-        _min_flush_m1 = -5.5 if (m5 >= 12.0 and b5 >= s5 * 1.15) else -2.5
+        # 2. Защита от покупки затухающей свечи: сильный тренд (m5 >= +8%) допускает ретест до -12.0% (кейс REKT -8.3% перед +124%),
+        # но слабая монета (m5 < +5%) с красной 1м свечой (< -3.0%) — это умирающий отскок, ведущий в стоп!
+        _min_flush_m1 = -12.0 if (m5 >= 8.0 and b5 >= s5) else (-6.0 if m5 >= 5.0 else -3.0)
         if _m1_known and m1 < _min_flush_m1:
             return False, -0.14, 0.0, f"flush-dump (m1 {m1:+.1f}% < {_min_flush_m1:+.1f}%) — falling knife / weak rollover"
 
@@ -2174,7 +2174,7 @@ async def grok_bot_jev_loop(tracker, analyzer=None):
                     _cp = tracker.positions.get(addr)
                     _c_pnl = float(getattr(_cp, "pnl_usd", 0.0) or 0.0)
                     _c_ext = float(getattr(_cp, "exit_time", 0.0) or 0.0)
-                    _req_w = 300.0 if _c_pnl > 0 else 14400.0
+                    _req_w = 300.0 if _c_pnl > 0 else 600.0
                     if (now - _c_ext) < _req_w:
                         continue
                 active_batch.append(addr)
@@ -2196,7 +2196,7 @@ async def grok_bot_jev_loop(tracker, analyzer=None):
                     _cp = tracker.positions.get(address)
                     _c_pnl = float(getattr(_cp, "pnl_usd", 0.0) or 0.0)
                     _c_ext = float(getattr(_cp, "exit_time", 0.0) or 0.0)
-                    if (now - _c_ext) < (300.0 if _c_pnl > 0 else 14400.0):
+                    if (now - _c_ext) < (300.0 if _c_pnl > 0 else 600.0):
                         continue
                 _hit = _pf_map.get(address)
                 _td_c = _hit[1] if (_hit and len(_hit) > 1 and isinstance(_hit[1], dict)) else None
