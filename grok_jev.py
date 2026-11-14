@@ -1217,16 +1217,16 @@ class GrokJevEngine:
             import market_data
             tr_pools = await market_data.get_trending()
             for item in (tr_pools or []):
-                m = item.get("tokenAddress")
-                if m and str(m).endswith(("pump", "moon")) and m not in seen:
+                m = str(item.get("tokenAddress") or "").strip()
+                if m and 32 <= len(m) <= 44 and not m.startswith("0x") and m not in seen:
                     seen.add(m)
                     candidates.append((m, "solana"))
             ds_g = await market_data.fetch_dexscreener_gainers("solana", "5m")
             for g in (ds_g or []):
-                m = g.get("mint")
+                m = str(g.get("mint") or "").strip()
                 liq_g = float(g.get("liquidity", 0) or 0)
                 age_g = float(g.get("age_m", 999) or 999)
-                if m and str(m).endswith(("pump", "moon")) and liq_g >= 4500.0 and age_g <= 720.0 and m not in seen:
+                if m and 32 <= len(m) <= 44 and not m.startswith("0x") and liq_g >= 4500.0 and age_g <= 720.0 and m not in seen:
                     seen.add(m)
                     candidates.append((m, "solana"))
         except Exception:
@@ -1246,7 +1246,7 @@ class GrokJevEngine:
                     for item in data:
                         ch = str(item.get("chainId", "")).lower()
                         tok = str(item.get("tokenAddress", "")).strip()
-                        if ch == "solana" and tok and tok.endswith(("pump", "moon")) and tok not in seen:
+                        if ch == "solana" and tok and 32 <= len(tok) <= 44 and not tok.startswith("0x") and tok not in seen:
                             seen.add(tok)
                             candidates.append((tok, "solana"))
             except Exception:
@@ -1259,7 +1259,7 @@ class GrokJevEngine:
                         continue
                     tok = str(((p.get("baseToken") or {}).get("address")) or "").strip()
                     liq_s = float(((p.get("liquidity") or {}).get("usd", 0)) or 0)
-                    if tok and tok.endswith(("pump", "moon")) and liq_s >= 4500.0 and tok not in seen:
+                    if tok and 32 <= len(tok) <= 44 and not tok.startswith("0x") and liq_s >= 4500.0 and tok not in seen:
                         seen.add(tok)
                         candidates.append((tok, "solana"))
         except Exception:
@@ -1480,7 +1480,7 @@ class GrokJevEngine:
         fdv = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
         dex_id = str(pair_data.get("dexId", "")).lower()
         is_raw_pump_curve = dex_id in ("pump", "pumpfun", "moonshot") or address.endswith("moon")
-        is_pump = address.endswith("pump") or is_raw_pump_curve
+        is_pump = _c.is_launchpad_mint(address) or is_raw_pump_curve
         _is_grad_aud = False
         try:
             from birth_tracker import birth_tracker as _bt_ga
@@ -1542,20 +1542,9 @@ class GrokJevEngine:
             # ВАЖНО: Настоящий токен Pump.fun ВСЕГДА заканчивается на 'pump' (mint authority PDA).
             # Кастомные токены (даже если DexScreener пишет dexId 'pumpswap') не защищены протоколом pump.fun!
             _dex_low_jev = str(pair_data.get("dexId") or "").lower()
-            if _dex_low_jev == "pumpswap" and not address.endswith("pump"):
-                return False, "fake-pumpswap-unlocked-lp (кастомный не-pump токен на PumpSwap с риском Remove LP)", _h_stats
-            # Meteora Dynamic Pools (DYN2, DAMM V2, DLMM) — дев ВСЕГДА может сделать Remove LP,
-            # вне зависимости от процента залога (locked/burned не означает защиту от Remove LP!).
-            # HI (-99.99%), FLY (-99.99%) — оба Meteora DYN2 с видимым "Remove" в транзакциях.
-            # ЕДИНСТВЕННОЕ исключение: канонический pump.fun токен (mint.endswith("pump")) на Meteora — там LP сожжён навсегда протоколом.
-            if _dex_low_jev in ("meteora", "meteoradbc", "meteoradlmm", "meteoradyn2", "meteoradamm") and not address.endswith("pump"):
-                return False, "meteora-dyn2-remove-lp-risk (кастомный не-pump токен на Meteora — дев выдёргивает LP одной tx, кейсы HI/FLY/HEDGE -99.99%)", _h_stats
-            is_canonical_pump = address.endswith("pump") or (is_raw_pump_curve and _dex_low_jev in ("pump", "pumpfun"))
+            is_canonical_pump = _c.is_launchpad_mint(address) or (is_raw_pump_curve and _dex_low_jev in ("pump", "pumpfun"))
             if not is_canonical_pump and (rc_status_pre != 200 or not isinstance(rc_data_pre, dict)):
-                _raw_l_pre = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
-                _vm5_pre = float((pair_data.get("volume") or {}).get("m5", 0) or 0)
-                if not (_raw_l_pre >= 10000.0 and _vm5_pre >= 2000.0):
-                    return False, "unverified-custom-token (waiting for rugcheck index)", _h_stats
+                return False, "unverified-custom-token (waiting for rugcheck index)", _h_stats
 
             # В) Полный отчет RugCheck API (из общего 120с кэша)
             try:
@@ -1611,29 +1600,31 @@ class GrokJevEngine:
                     for mkt in (rc_data.get("markets") or []):
                         if isinstance(mkt, dict):
                             mkt_pubkey = str(mkt.get("pubkey") or "").strip()
+                            mkt_type = str(mkt.get("marketType") or "").lower()
                             lp_info = mkt.get("lp") or {}
                             if isinstance(lp_info, dict):
                                 mkt_quote_usd = float(lp_info.get("quoteUSD") or 0.0)
                                 lp_unlocked = float(lp_info.get("lpUnlocked") or 0.0)
                                 lp_locked_pct = float(lp_info.get("lpLockedPct") or 0.0)
                                 lp_burned_pct = float(lp_info.get("lpBurnedPct") or 0.0)
-                                if (lp_locked_pct >= 80.0 or lp_burned_pct >= 80.0) and (mkt_quote_usd >= 2000 or (target_pair and mkt_pubkey == target_pair)):
+                                _safe_lp = (lp_burned_pct >= 80.0) or ("meteora" not in mkt_type and lp_locked_pct >= 80.0)
+                                if _safe_lp and (mkt_quote_usd >= 2000 or (target_pair and mkt_pubkey == target_pair)):
                                     has_verified_locked_lp = True
                                 if lp_unlocked > 0:
                                     print(f"ℹ️ [RUGCHECK-LP] {symbol} ({address[:8]}): LP lock {lp_locked_pct:.1f}%, burn {lp_burned_pct:.1f}%, unl ${lp_unlocked:,.0f} — проверка.")
 
-                    # Токены Pump.fun защищены протоколом (девы не могут вытащить LP).
-                    # Для кастомных пулов без залоченного LP: пускаем ракеты с ликвидностью >= $10k и объемом >= $2k,
-                    # так как мы выходим по таймауту/трейлингу до того, как дев рагнет через 40 минут!
+                    # Для кастомных не-launchpad пулов без залоченного/сожжённого LP пускаем только зрелые и ликвидные DEX-раннеры
                     if not is_canonical_pump and not has_verified_locked_lp:
                         _eff_l_rc = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
                         _vm5_rc = float((pair_data.get("volume") or {}).get("m5", 0) or 0)
                         _tx_rc = (pair_data.get("txns") or {}).get("m5") or {}
                         _b5_rc = int(_tx_rc.get("buys", 0) or 0)
                         _s5_rc = int(_tx_rc.get("sells", 0) or 0)
-                        if _eff_l_rc < 10000.0 or _vm5_rc < 2000.0 or (_s5_rc > 0 and (_b5_rc / _s5_rc) < 1.02):
-                            return False, f"unlocked-custom-lp (low liq ${_eff_l_rc:.0f} or low vol ${_vm5_rc:.0f})", _h_stats
-                        print(f"💎 [GROK-JEV-UNLOCKED-RUNNER] {symbol} ({address[:8]}): кастомный незалоченный LP допущен (liq ${_eff_l_rc:,.0f}, vol5 ${_vm5_rc:,.0f}, {_b5_rc}b/{_s5_rc}s) — контроль по таймауту выхода!")
+                        _ca_rc = float(pair_data.get("pairCreatedAt") or 0)
+                        _age_rc = ((time.time() * 1000.0 - _ca_rc) / 60000.0) if _ca_rc > 0 else 0.0
+                        if not _c.is_safe_unlocked_custom_runner(_eff_l_rc, _age_rc, _vm5_rc, _b5_rc, _s5_rc):
+                            return False, f"unlocked-custom-lp (liq ${_eff_l_rc:.0f}, age {_age_rc:.1f}m, vol ${_vm5_rc:.0f})", _h_stats
+                        print(f"💎 [GROK-JEV-UNLOCKED-RUNNER] {symbol} ({address[:8]}): кастомный незалоченный LP допущен (liq ${_eff_l_rc:,.0f}, age {_age_rc:.0f}м, vol5 ${_vm5_rc:,.0f}, {_b5_rc}b/{_s5_rc}s)!")
 
                     # Проверка держателей и дева (Holders & Sybil analysis)
                     holders = rc_data.get("topHolders", []) or []
@@ -1708,11 +1699,13 @@ class GrokJevEngine:
                     top_10_sum = sum(x[1] for x in top_10)
                     largest_whale = top_10[0][1] if top_10 else 0.0
 
-                    # Детектор распылённой 120-кошельковой сибил-лесенки ДО консолидации в хабы (кейсы CARDANO, SOLFLY, FYAT, JENSEN, NOFOMO):
-                    # Если в пуле лежит <= 48% эмиссии (т.е. >= 52% токенов на руках), но ТОП-10 холдеров суммарно держат < 9.5%
-                    # (или крупнейший холдер < 1.1%), значит 55-80% эмиссии искусственно нарезаны по 0.15%-0.50% на 120-300 ботов!
-                    if 0.0 < pool_pct_sum <= 48.0 and len(top_10) >= 8:
-                        if top_10_sum < 9.5 or largest_whale < 1.10:
+                    # Детектор распылённой сибил-лесенки: не блокируем здоровый высокооборотный ритейл (кейс OTHERM $102k vol5, 543b/354s, top10=5.3%)
+                    _tx_syb = (pair_data.get("txns") or {}).get("m5") or {}
+                    _b5_syb = int(_tx_syb.get("buys", 0) or 0)
+                    _s5_syb = int(_tx_syb.get("sells", 0) or 0)
+                    _is_viral_retail_g = (vol_m5 >= 25000.0 and _b5_syb >= 150 and _b5_syb >= _s5_syb)
+                    if 0.0 < pool_pct_sum <= 38.0 and len(top_10) >= 8 and not _is_viral_retail_g:
+                        if top_10_sum < 7.0 and largest_whale < 0.85:
                             return (
                                 False,
                                 f"atomized-sybil-supply (pool={pool_pct_sum:.1f}%, but top10={top_10_sum:.1f}% / top1={largest_whale:.2f}% — 120+ wallet staircase split)",
@@ -1922,9 +1915,7 @@ class GrokJevEngine:
 
         if chain != "solana":
             return False, "non-solana-chain-disabled"
-        # 🛑 CANONICAL PUMP-MINT FIREWALL: на Solana торгуем ТОЛЬКО канонические launchpad-токены с сожжённым LP
-        if not address.endswith(("pump", "moon")):
-            return False, "non-pump-custom-token (100% Remove LP rug risk — кейсы FRONK, SWJ, SIRIUS, HI, FLY, CRO, SI -99.99%)"
+        # Не-launchpad токены (не pump/moon/bonk/BAGS) НЕ отсеиваются вслепую — проверяются в run_security_audit + FCR + L7-L10!
         if not address or address in tracker.get_open_positions():
             return False, "already-held"
         # Запрет повторного перезахода в уже закрытую монету (кейс YOUNGBULL: закрыли +10% после пика +40.4%, а через 5м перезашли в затухание на -6.7%)
@@ -2147,6 +2138,8 @@ class GrokJevEngine:
             stop_under_wick=wick_price,
             wick_stop_loss_pct=wick_pct,
             ml_confidence=rkt_final,
+            initial_liquidity_usd=_fliq,
+            pair_data=pair,
             ml_features={**_entry_features(pair, _h_stats, jev_data), **_fcr_feat}
         )
 

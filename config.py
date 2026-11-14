@@ -91,6 +91,37 @@ def get_max_entry_h1_pct(
         return max(base, 600.0)
     return base
 
+
+LAUNCHPAD_MINT_SUFFIXES = ("pump", "moon", "bonk", "bags")
+UNLOCKED_CUSTOM_MIN_LIQ_USD = 25000.0
+UNLOCKED_CUSTOM_MIN_AGE_MIN = 10.0
+UNLOCKED_CUSTOM_MIN_VOL5_USD = 6000.0
+UNLOCKED_CUSTOM_MIN_BUYS5 = 25
+
+
+def is_launchpad_mint(mint: str) -> bool:
+    """Return True if mint belongs to a canonical Solana launchpad (pump, moon, bonk, BAGS)."""
+    return str(mint or "").strip().lower().endswith(LAUNCHPAD_MINT_SUFFIXES)
+
+
+def is_safe_unlocked_custom_runner(
+    liq_usd: float,
+    age_min: float,
+    vol5_usd: float,
+    buys5: int,
+    sells5: int,
+) -> bool:
+    """Allow liquid, established non-launchpad DEX tokens even if LP is unlocked, while blocking young/thin Remove-LP traps."""
+    if liq_usd < UNLOCKED_CUSTOM_MIN_LIQ_USD:
+        return False
+    if age_min < UNLOCKED_CUSTOM_MIN_AGE_MIN:
+        return False
+    if vol5_usd < UNLOCKED_CUSTOM_MIN_VOL5_USD:
+        return False
+    if buys5 < UNLOCKED_CUSTOM_MIN_BUYS5:
+        return False
+    return sells5 == 0 or (buys5 / max(sells5, 1)) >= 1.10
+
 STREAK_COOLDOWN_ENABLED = False
 STREAK_MAX_CONSECUTIVE_LOSSES = 5
 STREAK_COOLDOWN_MINUTES = 5.0

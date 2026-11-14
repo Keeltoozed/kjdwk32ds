@@ -824,7 +824,7 @@ async def discovery_feeder_loop(analyzer):
             if mints:
                 deduped = list(dict.fromkeys(
                     m.strip() for m in mints
-                    if m and isinstance(m, str) and 32 <= len(m.strip()) <= 44 and m.strip().endswith(("pump", "moon"))
+                    if m and isinstance(m, str) and 32 <= len(m.strip()) <= 44 and not m.strip().startswith("0x")
                 ))
                 analyzer._cached_discovery_mints = deduped
                 analyzer._cached_discovery_time = time.time()
@@ -870,7 +870,7 @@ async def scanner_loop(analyzer, tracker):
                     _fresh_cd_g = int(getattr(config, "SOLANA_FRESH_RESCAN_COOLDOWN", 8))
                     _open_set_g = set(tracker.positions.keys())
                     for _gm in _raw_grads:
-                        if not _gm or not str(_gm).strip().endswith(("pump", "moon")) or _gm in _open_set_g:
+                        if not _gm or str(_gm).strip().startswith("0x") or _gm in _open_set_g:
                             birth_tracker.remove_graduated(_gm)
                             continue
                         _pl_g = tracker.last_loss_pct(_gm)
@@ -923,11 +923,11 @@ async def scanner_loop(analyzer, tracker):
                     if _w and _w not in mints_to_scan:
                         mints_to_scan.append(_w)
 
-                # Удаляем дубликаты, отсекаем уже открытые позиции и не-pump кастомные токены, порядок сохраняем (миграции остаются первыми)
+                # Удаляем дубликаты и уже открытые позиции, порядок сохраняем (миграции остаются первыми)
                 _open_mints_set = set(tracker.positions.keys())
                 mints_to_scan = list(dict.fromkeys(
                     m.strip() for m in mints_to_scan
-                    if m and m.strip() and m.strip() not in _open_mints_set and m.strip().endswith(("pump", "moon"))
+                    if m and m.strip() and 32 <= len(m.strip()) <= 44 and not m.strip().startswith("0x") and m.strip() not in _open_mints_set
                 ))
 
                 # ⚡ Пакетный префетч: вся очередь за ceil(N/30) запросов к DexScreener
@@ -1253,10 +1253,7 @@ async def scanner_loop(analyzer, tracker):
                                 if _dex_id not in ("pump", "pumpfun") and liq_usd < _min_grad_sc:
                                     print(f"🚫 [SCANNER-LOW-LIQ] {actual_symbol} ({mint[:8]}): ликвидность DEX ${liq_usd:,.0f} < ${_min_grad_sc:,.0f} — отмена!")
                                     continue
-                                # 🛑 CANONICAL PUMP-MINT FIREWALL: на Solana торгуем ТОЛЬКО канонические launchpad-токены с сожжённым LP
-                                if not mint.endswith(("pump", "moon")):
-                                    print(f"🚫 [SCANNER-NON-PUMP] {actual_symbol} ({mint[:8]}): кастомный не-pump токен на Solana — 100% Remove LP риск!")
-                                    continue
+                                # Не-launchpad токены (не pump/moon/bonk/BAGS) проверяются далее через RugCheck LP-lock/burn и аудит рисков!
                                 _pc_live = pair_data.get("priceChange") or {}
                                 _m5_live = float(_pc_live.get("m5", 0) or 0)
                                 _m1_live = float(_pc_live.get("m1", 0) or 0)
@@ -1312,13 +1309,7 @@ async def scanner_loop(analyzer, tracker):
                                     if not _is_stealth_sc:
                                         print(f"🚫 [SCANNER-NO-SOC] {actual_symbol} ({mint[:8]}): 0 соцсетей без органики — отмена!")
                                         continue
-                                _base_max_h1_live = float(getattr(config, "MAX_ENTRY_H1_PCT", 350.0))
-                                _is_fresh_active_sc = (
-                                    _age_m <= 120.0
-                                    and _vol5_live >= 3000.0
-                                    and _b5_sc >= _s5_sc * 1.05
-                                )
-                                _max_h1_live = 2500.0 if _is_fresh_active_sc else _base_max_h1_live
+                                _max_h1_live = config.get_max_entry_h1_pct(_age_m, _vol5_live, _b5_sc, _s5_sc, liq_usd, _m5_live)
                                 if _h1_live > _max_h1_live:
                                     print(f"🚫 [SCANNER-LIVE-EXHAUSTED] {actual_symbol} ({mint[:8]}): живой h1 {_h1_live:+.0f}% > +{_max_h1_live:.0f}% — перегретая вершина, отмена!")
                                     continue
@@ -1375,8 +1366,8 @@ async def scanner_loop(analyzer, tracker):
                                     print(f"🚫 [SCANNER-WASH-TRAP] {actual_symbol} ({mint[:8]}): накрутка микро-ботом ({_tot_tx5_sc} txns, avg ${_avg_tx5_sc:.2f} < $4) — отмена!")
                                     continue
 
-                                # Блок кастомных не-pump контрактов на PumpSwap только при микро-пуле (< $6k)
-                                if _dex_id == "pumpswap" and not mint.endswith("pump") and liq_usd < 6000.0:
+                                # Блок кастомных не-launchpad контрактов на PumpSwap при пуле < $10k (выше $10k LP/безопасность проверяет RugCheck + Analyzer)
+                                if _dex_id == "pumpswap" and not config.is_launchpad_mint(mint) and liq_usd < 10000.0:
                                     print(f"🚫 [SCANNER-FAKE-PUMPSWAP] {actual_symbol} ({mint[:8]}): кастомный не-pump контракт на PumpSwap с микро-пулом (${liq_usd:,.0f} < $6k) — отмена!")
                                     continue
 

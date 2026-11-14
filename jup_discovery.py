@@ -141,10 +141,7 @@ async def fetch_jup_tokens() -> list:
                 sym = str(t.get("symbol") or "").upper().strip()
                 if not m or m.startswith("0x") or len(m) < 32 or len(m) > 44 or m in seen or sym in SKIP_SYMBOLS:
                     continue
-                # На Solana торгуем ТОЛЬКО канонические launchpad-токены с сожжённым LP (pump.fun / moonshot)
-                # Блокирует 100% кастомных рагпуллов (FRONK, SWJ, SIRIUS, HI, FLY, CRO, SI) прямо на входе в дискавери!
-                if not m.endswith(("pump", "moon")):
-                    continue
+                # Пускаем все валидные Solana токены (pump, moon, bonk, BAGS и DEX-пулы — безопасность и LP проверяются в аудите)
                 liq = float(t.get("liquidity") or 0.0)
                 is_grad = bool(t.get("graduatedAt") or t.get("graduatedPool") or (not m.endswith("pump") and liq >= 7500.0))
                 if not allow_raw_curve and not is_grad:
@@ -233,8 +230,6 @@ async def fetch_jup_tokens() -> list:
                     sym_p = str(bt.get("symbol") or "").upper().strip()
                     if not addr or addr.startswith("0x") or len(addr) < 32 or len(addr) > 44 or addr in seen or sym_p in SKIP_SYMBOLS:
                         continue
-                    if not addr.endswith(("pump", "moon")):
-                        continue
                     liq_p = float((p.get("liquidity") or {}).get("usd", 0) or 0)
                     if liq_p < max(4500.0, float(getattr(config, "MIN_GRADUATED_LIQ_USD", 5000.0)) * 0.9):
                         continue
@@ -257,9 +252,8 @@ async def fetch_jup_tokens() -> list:
                         continue
                     if age_p > 360.0 and (vol5_p < 6000.0 or m5_p < 5.0 or liq_p < 25000.0):
                         continue
-                    _is_fresh_ds = age_p <= 120.0
-                    _max_h1_ds = 2500.0 if (_is_fresh_ds and b5_p >= s5_p * 1.05 and vol5_p >= 3000.0) else float(getattr(config, "MAX_ENTRY_H1_PCT", 350.0))
-                    if h1_p > _max_h1_ds and age_p > 120.0:
+                    _max_h1_ds = config.get_max_entry_h1_pct(age_p, vol5_p, b5_p, s5_p, liq_p, m5_p)
+                    if h1_p > _max_h1_ds:
                         continue
                     seen.add(addr)
                     ranked.append((m5_p, vol5_p, sym_p, addr, "ds_radar"))
@@ -273,7 +267,7 @@ async def fetch_jup_tokens() -> list:
             _td_cache_gt = getattr(market_data, "_TD_CACHE", {}) or {}
             for item in (gt_items or []):
                 addr = str(item.get("tokenAddress") or "").strip()
-                if not addr or addr.startswith("0x") or len(addr) < 32 or len(addr) > 44 or addr in seen or not addr.endswith(("pump", "moon")):
+                if not addr or addr.startswith("0x") or len(addr) < 32 or len(addr) > 44 or addr in seen:
                     continue
                 _gt_hit = _td_cache_gt.get(addr)
                 _gt_td = _gt_hit[1] if (isinstance(_gt_hit, tuple) and len(_gt_hit) >= 2 and isinstance(_gt_hit[1], dict)) else {}
@@ -306,7 +300,7 @@ async def fetch_jup_tokens() -> list:
                         if item.get("chainId") != "solana":
                             continue
                         addr = str(item.get("tokenAddress") or "").strip()
-                        if not addr or addr.startswith("0x") or len(addr) < 32 or len(addr) > 44 or addr in seen or not addr.endswith(("pump", "moon")) or str(item.get("symbol") or "").upper() in SKIP_SYMBOLS:
+                        if not addr or addr.startswith("0x") or len(addr) < 32 or len(addr) > 44 or addr in seen or str(item.get("symbol") or "").upper() in SKIP_SYMBOLS:
                             continue
                         seen.add(addr)
                         boost_mints.append(addr)
@@ -358,10 +352,7 @@ async def fetch_jup_tokens() -> list:
                 sym = str(t.get("symbol") or "").upper().strip()
                 if not m or m.startswith("0x") or len(m) < 32 or len(m) > 44 or m in seen or sym in SKIP_SYMBOLS:
                     continue
-                # На Solana торгуем ТОЛЬКО канонические launchpad-токены с сожжённым LP (pump.fun / moonshot)
-                # Блокирует 100% кастомных рагпуллов (FRONK, SWJ, SIRIUS, HI, FLY, CRO, SI) прямо на входе в дискавери!
-                if not m.endswith(("pump", "moon")):
-                    continue
+                # Пускаем все валидные Solana токены (pump, moon, bonk, BAGS и DEX-пулы — безопасность и LP проверяются в аудите)
                 liq = float(t.get("liquidity") or 0.0)
                 is_grad_r = bool(t.get("graduatedAt") or t.get("graduatedPool") or (not m.endswith("pump") and liq >= 7500.0))
                 if not allow_raw_curve and not is_grad_r:
@@ -478,80 +469,65 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
         print(f"🚫 [{source_tag}-POST-PEAK-CRASH] {_sym_tmp} ({mint[:8]}): токен уже слился от пика (цена {_pk_drop_j:+.1f}%, ликва {_lq_drop_j:+.1f}%) — дохлая кошка.")
         return False
 
-    # 🛑 CANONICAL PUMP-MINT FIREWALL: на Solana торгуем ТОЛЬКО канонические launchpad-токены с сожжённым LP
-    if not mint.endswith(("pump", "moon")):
-        print(f"🚫 [{source_tag}-CANONICAL-FIREWALL] {_sym_tmp} ({mint[:8]}): кастомный не-pump токен на Solana — 100% Remove LP риск (кейсы FRONK, SWJ, SIRIUS, HI, FLY, CRO, SI -99.99%)!")
-        return False
-
-    # Защита от кастомных фейк-пулов с разблокированным LP (Meteora, PumpSwap, кастомные пулы без .endswith("pump"))
+    # Защита от кастомных фейк-пулов и Remove-LP ловушек (PumpSwap/Meteora/Raydium без launchpad-суффикса)
     _is_grad_jup = False
     try:
         from birth_tracker import birth_tracker as _bt_j
         _is_grad_jup = _bt_j.is_graduated(mint)
     except Exception:
         pass
-    # ОСОБОЕ правило: Meteora DYN2 всегда проверяем LP даже для pump.fun токенов!
-    # Pump.fun → Meteora DYN2: дев может вытащить ликву одной транзакцией в любой момент.
-    # Это самый опасный тип рага (BREAD, PINCHE, DEMOCAT, 内个一 — все Meteora DYN2).
-    # ЖЁСТКИЙ БЛОК кастомных не-pump токенов на PumpSwap:
-    # Все канонические токены Pump.fun заканчиваются на 'pump'.
-    # Токены на PumpSwap без 'pump' — это кастомные фальшивки со скрытым Remove LP дева (кейсы CRO, NEX AI, 42, SI)!
-    if _dex_j == "pumpswap" and not mint.endswith("pump"):
-        print(f"🚫 [{source_tag}-FAKE-PUMPSWAP] {_sym_tmp} ({mint[:8]}): кастомный токен на PumpSwap без окончания pump — фальшивый пул с Remove LP!")
-        return False
-
-    # Meteora Dynamic Pools (DYN2, DAMM, DLMM) — дев ВСЕГДА может сделать Remove LP независимо от lock%!
-    # Залоченный LP не означает защиту: "Remove LP" работает через смарт-контракт пула, минуя локер.
-    # Кейсы: HI (-99.99% за 4м), FLY (-99.99% за 6м) — оба Meteora DYN2.
-    # ИСКЛЮЧЕНИЕ: канонический pump.fun токен (...pump) — LP там реально сожжён навсегда протоколом pump.fun.
-    if _dex_j in ("meteora", "meteoradbc", "meteoradlmm", "meteoradyn2", "meteoradamm") and not mint.endswith("pump"):
-        print(f"🚫 [{source_tag}-METEORA-RUG] {_sym_tmp} ({mint[:8]}): кастомный не-pump токен на Meteora DYN2 — дев выдёргивает LP одной tx (кейсы HI/FLY -99.99%)!")
-        return False
-
-    _is_meteora_dyn = False  # уже заблокировали выше, дальнейший LP-чек только для не-pump/не-meteora токенов
-    _skip_lp_check = mint.endswith("moon")  # moon токены пропускаем
-    if not _skip_lp_check and (not mint.endswith("pump") and not _is_grad_jup):
+    _is_launchpad_jup = config.is_launchpad_mint(mint)
+    if not _is_launchpad_jup and not _is_grad_jup:
         try:
             import goplus as _gp_jup
             _rc_st, _rc_d = await _gp_jup.fetch_rugcheck_report_cached(mint, ttl=120.0, timeout=5)
-            if _rc_d:
-                # 1. Проверка критической концентрации монет у одного кошелька (кейсы CRO, NEX AI) и серийных рагеров
-                for _rk in (_rc_d.get("risks") or []):
-                    _rkn = str(_rk.get("name", "")).lower()
-                    _rkl = str(_rk.get("level", "")).lower()
-                    if _rkl == "danger" and any(k in _rkn for k in ("single holder", "high ownership", "creator holding", "creator history")):
-                        print(f"🚫 [{source_tag}-SINGLE-HOLDER] {_sym_tmp} ({mint[:8]}): RugCheck '{_rk.get('name')}' — дев-рагер или контролирует эмиссию!")
-                        return False
-                # 2. Очищенный score RugCheck
-                _raw_sc = float(_rc_d.get("score") or 0.0)
-                _ign_sc = sum(float(rk.get("score", 0) or 0) for rk in (_rc_d.get("risks") or []) if any(k in str(rk.get("name", "")).lower() for k in ("low liquidity", "copycat", "symbol mimic", "large amount of lp unlocked", "lp not locked", "unlocked lp")))
-                if (_raw_sc - _ign_sc) >= 1200:
-                    print(f"🚫 [{source_tag}-HIGH-RISK] {_sym_tmp} ({mint[:8]}): RugCheck Score {(_raw_sc - _ign_sc):.0f} >= 1200 — блок скама!")
+            if _rc_st != 200 or not isinstance(_rc_d, dict):
+                print(f"⏳ [{source_tag}-RC-WAIT] {_sym_tmp} ({mint[:8]}): кастомный не-launchpad токен ожидает индексации RugCheck (HTTP {_rc_st}).")
+                return False
+            _tok_rc = _rc_d.get("token") or {}
+            _SAFE_AUTHS = {"6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P", "11111111111111111111111111111111", None, ""}
+            if _tok_rc.get("mintAuthority") not in _SAFE_AUTHS or _tok_rc.get("freezeAuthority") not in _SAFE_AUTHS:
+                print(f"🚫 [{source_tag}-AUTH-SCAM] {_sym_tmp} ({mint[:8]}): активный mint/freeze authority — блок входа!")
+                return False
+            # 1. Проверка критической концентрации монет у одного кошелька (кейсы CRO, NEX AI) и серийных рагеров
+            for _rk in (_rc_d.get("risks") or []):
+                _rkn = str(_rk.get("name", "")).lower()
+                _rkl = str(_rk.get("level", "")).lower()
+                if _rkl == "danger" and any(k in _rkn for k in ("single holder", "high ownership", "creator holding", "creator history")):
+                    print(f"🚫 [{source_tag}-SINGLE-HOLDER] {_sym_tmp} ({mint[:8]}): RugCheck '{_rk.get('name')}' — дев-рагер или контролирует эмиссию!")
                     return False
+            # 2. Очищенный score RugCheck
+            _raw_sc = float(_rc_d.get("score") or 0.0)
+            _ign_sc = sum(float(rk.get("score", 0) or 0) for rk in (_rc_d.get("risks") or []) if any(k in str(rk.get("name", "")).lower() for k in ("low liquidity", "copycat", "symbol mimic", "large amount of lp unlocked", "lp not locked", "unlocked lp")))
+            if (_raw_sc - _ign_sc) >= 1200:
+                print(f"🚫 [{source_tag}-HIGH-RISK] {_sym_tmp} ({mint[:8]}): RugCheck Score {(_raw_sc - _ign_sc):.0f} >= 1200 — блок скама!")
+                return False
 
             _lp_ok = False
-            if _rc_d:
-                for _m in (_rc_d.get("markets") or []):
-                    if isinstance(_m, dict):
-                        _lp_inf = _m.get("lp") or {}
-                        if float(_lp_inf.get("lpLockedPct", 0) or 0) >= 80.0 or float(_lp_inf.get("lpBurnedPct", 0) or 0) >= 80.0:
-                            _lp_ok = True
-            if _rc_d and not _lp_ok:
-                # Для Meteora DYN2 блокируем всегда — LP drain слишком быстрый
-                # Для других dex: блокируем только если ругчек вернул данные (fail-open на таймаут)
-                _lp_deny_reason = "Meteora DYN2 — LP не заблокирован, дев может вывести в любой момент!" if _is_meteora_dyn else f"кастомный не-pump токен на {_dex_j} без подтвержденной блокировки LP — рагпул!"
-                print(f"🚫 [{source_tag}-UNLOCKED-LP] {_sym_tmp} ({mint[:8]}): {_lp_deny_reason}")
-                return False
-        except Exception:
-            pass
+            for _m in (_rc_d.get("markets") or []):
+                if isinstance(_m, dict):
+                    _m_type_j = str(_m.get("marketType") or "").lower()
+                    _lp_inf = _m.get("lp") or {}
+                    _lp_burn_j = float(_lp_inf.get("lpBurnedPct", 0) or 0)
+                    _lp_lock_j = float(_lp_inf.get("lpLockedPct", 0) or 0)
+                    if _lp_burn_j >= 80.0 or ("meteora" not in _m_type_j and _lp_lock_j >= 80.0):
+                        _lp_ok = True
+            if not _lp_ok:
+                if not config.is_safe_unlocked_custom_runner(_liq_j, _age_j, _vol5_j, _b5_j, _s5_j):
+                    print(f"🚫 [{source_tag}-UNLOCKED-LP] {_sym_tmp} ({mint[:8]}): незалоченный LP на {_dex_j} (liq ${_liq_j:,.0f}, age {_age_j:.1f}m, vol ${_vol5_j:,.0f}) — риск Remove LP!")
+                    return False
+                print(f"💎 [{source_tag}-UNLOCKED-RUNNER] {_sym_tmp} ({mint[:8]}): зрелый ликвидный пул допущен (liq ${_liq_j:,.0f}, age {_age_j:.0f}м, vol ${_vol5_j:,.0f})!")
+        except Exception as _lp_ex:
+            print(f"⏳ [{source_tag}-RC-ERR] {_sym_tmp} ({mint[:8]}): ошибка проверки RugCheck ({_lp_ex}) — пропуск цикла.")
+            return False
 
     # Защита от анонимных бандлер-пулов без соцсетей на DEX
-    # Канонические pump-токены с сожжённым LP и живым объёмом допускаются без соцсетей на DS
+    # Канонические launchpad-токены (pump, moon, bonk, BAGS) и ликвидные пулы >$25k допускаются
     _info_j = (td or {}).get("info") or {}
     _soc_j = _info_j.get("socials") or []
     _web_j = _info_j.get("websites") or []
-    if not mint.endswith(("pump", "moon")) and not (td or {}).get("_socials_unknown", False) and len(_soc_j) == 0 and len(_web_j) == 0 and _liq_j < 75000:
-        print(f"🚫 [{source_tag}-NO-SOCIALS] {_sym_tmp} ({mint[:8]}): 0 соцсетей/сайтов при ликвидности ${_liq_j:,.0f} (<$75k) — анонимный бандлер-раг.")
+    if not _is_launchpad_jup and not (td or {}).get("_socials_unknown", False) and len(_soc_j) == 0 and len(_web_j) == 0 and _liq_j < 25000:
+        print(f"🚫 [{source_tag}-NO-SOCIALS] {_sym_tmp} ({mint[:8]}): 0 соцсетей/сайтов при ликвидности ${_liq_j:,.0f} (<$25k) — анонимный бандлер-раг.")
         return False
 
     # Защита от миграционного дампа Pump.fun: первые 90с на отстрел instant-снайперов, затем свободный вход
@@ -913,7 +889,7 @@ async def jup_loop(analyzer, tracker):
                     _min_age = float(getattr(config, "SOLANA_MIN_AGE_MIN", 1.0))
 
                     for m in mints:
-                        if not m or m in open_jup or not m.endswith(("pump", "moon")):
+                        if not m or m in open_jup or m.startswith("0x"):
                             continue
                         if m in tracker.positions:
                             _cp = tracker.positions.get(m)

@@ -1409,7 +1409,7 @@ def analyze_trade_tape_staircase(trades_raw: list) -> tuple:
                     if 0.0 <= dt_flip <= 30.0:
                         fast_flip_1shot += 1
             flip_ratio = fast_flip_1shot / float(len(w_tape))
-            if fast_flip_1shot >= 8 or (fast_flip_1shot >= 5 and flip_ratio >= 0.20):
+            if (fast_flip_1shot >= 8 and flip_ratio >= 0.15) or (fast_flip_1shot >= 5 and flip_ratio >= 0.22):
                 return (
                     False,
                     f"wash-volume-fast-flip-bot: {fast_flip_1shot}/{len(w_tape)} ({flip_ratio*100:.0f}%) one-shot wallets bought & sold within <=30s",

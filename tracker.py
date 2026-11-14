@@ -462,9 +462,13 @@ class PaperTracker:
             # которые выдергивают ликвидность одной транзакцией.
             # ВСЕ прибыльные ракеты бота (WILL +62%, UP +23%, WISHMAS +86%, TEDDY, BUFFAPE, SYRUP)
             # заканчиваются строго на 'pump'!
-            if not mint_str.endswith(("pump", "moon")):
-                print(f"🛑 [FIREWALL-RUG-BLOCK] {symbol} ({mint_str[:8]}): отказ входа — кастомный не-pump токен на Solana! (100% блок Remove LP скамов: кейсы FRONK, SWJ, SIRIUS, HI, FLY, CRO, SI -99.99%)")
-                return False
+            _pd_liq = float(((pair_data or {}).get("liquidity") or {}).get("usd", 0) or 0) if isinstance(pair_data, dict) else 0.0
+            _eff_init_liq = max(float(initial_liquidity_usd or 0.0), _pd_liq)
+            _is_vip_or_copy = ("VIP" in str(source or "")) or str(source or "").startswith("COPY")
+            if not config.is_launchpad_mint(mint_str) and not _is_vip_or_copy:
+                if float(ml_confidence or 0.0) <= 0.0 and _eff_init_liq < 5000.0:
+                    print(f"🛑 [FIREWALL-RUG-BLOCK] {symbol} ({mint_str[:8]}): отказ входа — неаудированный кастомный не-launchpad токен (liq ${_eff_init_liq:,.0f}, ML {float(ml_confidence or 0):.1f}%)!")
+                    return False
 
         # Валидация входа: мусорный entry ~0 давал фантомы +586М% и $1.6M.
         try:

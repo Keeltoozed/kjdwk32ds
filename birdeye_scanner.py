@@ -64,7 +64,7 @@ async def birdeye_loop(analyzer, tracker):
                 for addr, ch in await fetch_birdeye_trending(chain):
                     if not addr or addr in tracker.positions:
                         continue
-                    if ch == "solana" and not str(addr).strip().endswith(("pump", "moon")):
+                    if ch == "solana" and (str(addr).startswith("0x") or len(str(addr).strip()) < 32):
                         continue
                     if time.time() - processed.get(addr, 0.0) < 3600:
                         continue

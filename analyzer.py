@@ -693,13 +693,13 @@ class Analyzer:
             except Exception as e:
                 print(f"Dexscreener CTO fetch error: {e}")
                 
-        # Возвращаем уникальные токены (по tokenAddress) — только канонические launchpad-токены (pump / moon)
+        # Возвращаем уникальные токены Solana (pump, moon, bonk, BAGS и токены DEX — безопасность/LP проверяется далее)
         seen = set()
         unique_tokens = []
         for t in tokens:
             addr = str(t.get("tokenAddress") or "").strip()
             chain = t.get("chainId")
-            if addr and addr not in seen and chain == "solana" and addr.endswith(("pump", "moon")):
+            if addr and addr not in seen and chain == "solana" and not addr.startswith("0x"):
                 seen.add(addr)
                 unique_tokens.append(t)
         return unique_tokens
@@ -1599,12 +1599,7 @@ class Analyzer:
             "source": "SOLANA_SCAN"
         }
 
-        # 🛑 CANONICAL PUMP-MINT FIREWALL (100% ЗАЩИТА ОТ РАГОВ REMOVE LP)
-        # Настоящие токены Pump.fun ВСЕГДА заканчиваются на 'pump'.
-        # При миграции на Raydium/PumpSwap протокол pump.fun НАВСЕГДА сжигает LP — дев не может сделать Remove LP!
-        # Кастомные не-pump токены (Meteora DYN2, кастомный PumpSwap) создаются девами-скамерами со 100% Remove LP риском (FRONK, SWJ, SIRIUS, HI, FLY -99.99%)!
-        if not mint.endswith(("pump", "moon")):
-            return self._deny(mint, "non-pump-custom-token", f"🛑 [CANONICAL-FIREWALL] {symbol} ({mint[:8]}): кастомный не-pump токен на Solana — 100% риск Remove LP девом!")
+        # Кастомные не-launchpad токены (не pump/moon/bonk/BAGS) НЕ отсеиваем вслепую — проверяем ниже через RugCheck (LP burn/lock или ликвидный зрелый раннер), GoPlus и FCR!
 
         if pair_data.get("_price_divergence"):
             _div_r = float(pair_data.get("_price_divergence_ratio", 0.0) or 0.0)
@@ -2065,18 +2060,7 @@ class Analyzer:
                 if _v2l_a > 2.6 and _bs_a < 1.5 and not _is_organic_trades:
                     return self._deny(mint, f"anon-wash-churn {_v2l_a:.1f}x", f"🚫 [WASH-TRAP] {symbol} ({mint[:8]}): 0 соцсетей, liq ${raw_liq:,.0f}, оборот 5м {_v2l_a:.1f}x пула (b/s {_bs_a:.2f}, avg ${_avg_tx5_a:.0f}) — анонимный wash-дамп!")
 
-            # Блок кастомных не-pump токенов на PumpSwap ЛЮБОЙ ликвидности:
-            # Настоящие токены Pump.fun ВСЕГДА заканчиваются на 'pump'.
-            # Токены без 'pump' на PumpSwap — это 100% фальшивые пулы со скрытым Remove LP (кейсы CRO, NEX AI, 42, SI)!
-            if dex_id_low == "pumpswap" and not mint.endswith("pump"):
-                return self._deny(mint, "fake-pumpswap-unlocked-lp", f"🚫 [FAKE-PUMPSWAP] {symbol} ({mint[:8]}): кастомный не-pump токен на PumpSwap — незалоченный LP дева, риск мгновенного Remove LP!")
-
-            # Meteora Dynamic Pools (DYN2, DAMM, DLMM) — дев ВСЕГДА может сделать Remove LP независимо от lock%!
-            # Факт: в интерфейсе Meteora "Lock LP" не запрещает "Remove LP" через смарт-контракт пула.
-            # Кейсы: HI (-99.99% за 4м), FLY (-99.99% за 6м) — оба Meteora DYN2 с видимым "Remove" в транзакциях.
-            # ЕДИНСТВЕННОЕ исключение: канонический pump.fun токен (...pump) мигрировавший на Meteora — LP там сожжён навсегда протоколом pump.fun.
-            if dex_id_low in ("meteora", "meteoradlmm", "meteoradyn2", "meteoradamm") and not mint.endswith("pump"):
-                return self._deny(mint, "meteora-dyn2-remove-lp", f"🚫 [METEORA-RUG] {symbol} ({mint[:8]}): кастомный не-pump токен на Meteora DYN2 — дев выдёргивает LP одной tx (кейсы HI/FLY -99.99%)!")
+            # Кастомные не-launchpad токены на PumpSwap / Meteora проверяются ниже через RugCheck LP burn/lock и is_safe_unlocked_custom_runner.
 
             # Защита от фантомных пулов с мизерным остатком реального SOL
             _quote_info = pair_data.get("liquidity", {}) or {}
@@ -2107,8 +2091,7 @@ class Analyzer:
             except Exception:
                 pass
             _is_canonical_pump = (
-                mint.endswith("pump")
-                or mint.endswith("moon")
+                config.is_launchpad_mint(mint)
                 or (is_pump_curve and _dex_low_main in ("pump", "pumpfun", "pumpswap"))
                 or _is_grad_check
             )
@@ -2182,32 +2165,32 @@ class Analyzer:
                     for _m in (rc_data.get("markets") or []):
                         if isinstance(_m, dict):
                             _m_pub = str(_m.get("pubkey") or "").strip()
+                            _m_type = str(_m.get("marketType", "")).lower()
                             _m_lp_info = _m.get("lp") or {}
                             _m_lp_locked_pct = float(_m_lp_info.get("lpLockedPct", 0) or 0)
                             _m_lp_burned_pct = float(_m_lp_info.get("lpBurnedPct", 0) or 0)
                             _m_quote_usd = float(_m_lp_info.get("quoteUSD", 0) or 0)
                             _m_unl = float(_m_lp_info.get("lpUnlocked", 0) or 0)
-                            if (_m_lp_locked_pct >= 80.0 or _m_lp_burned_pct >= 80.0) and (_m_quote_usd >= 2000 or (_target_pair_rc and _m_pub == _target_pair_rc)):
+                            _m_safe_lp = (_m_lp_burned_pct >= 80.0) or ("meteora" not in _m_type and _m_lp_locked_pct >= 80.0)
+                            if _m_safe_lp and (_m_quote_usd >= 2000 or (_target_pair_rc and _m_pub == _target_pair_rc)):
                                 has_verified_locked_lp = True
                             if _m_unl > 0:
                                 print(f"ℹ️ [RUGCHECK-LP] {symbol} ({mint[:8]}): LP lock {_m_lp_locked_pct:.1f}%, burn {_m_lp_burned_pct:.1f}%, unl ${_m_unl:,.0f}.")
 
-                    # Токены Pump.fun защищены смарт-контрактом программы pump.fun (LP дев вытащить не может).
-                    # Для кастомных пулов (Raydium / Meteora / PumpSwap) без залоченного LP:
-                    # По стратегии ракет пускаем монеты с достаточной ликвидностью ($10k+) и объемом ($2k+),
-                    # так как мы выходим по таймауту/трейлингу задолго до 40-минутного рага дева!
+                    # Не-launchpad пулы без залоченного/сожжённого LP пускаем ТОЛЬКО если это зрелый и высоколиквидный DEX-раннер
+                    # (отсекаем тонкие молодые Remove-LP ловушки вроде HI/FLY/SIRIUS/CRO <$25k / <10м).
                     if not _is_canonical_pump and not has_verified_locked_lp:
                         _vm5_a = float(((pair_data.get("volume") or {}).get("m5", 0) or 0))
                         _tx_a = ((pair_data.get("txns") or {}).get("m5") or {})
                         _b5_a = int(_tx_a.get("buys", 0) or 0)
                         _s5_a = int(_tx_a.get("sells", 0) or 0)
-                        if raw_liq < 10000.0 or _vm5_a < 2000.0 or (_s5_a > 0 and (_b5_a / _s5_a) < 1.02):
+                        if not config.is_safe_unlocked_custom_runner(raw_liq, _age_min_pre, _vm5_a, _b5_a, _s5_a):
                             return self._deny(
                                 mint,
                                 "unlocked-custom-lp",
-                                f"🚫 [АНТИСКАМ-LP] {symbol} ({mint[:8]}): кастомный незалоченный LP с низкой ликвидностью/объемом (${raw_liq:.0f}, vol ${_vm5_a:.0f}) — отсев."
+                                f"🚫 [АНТИСКАМ-LP] {symbol} ({mint[:8]}): кастомный незалоченный LP не прошёл фильтр зрелого пула (liq ${raw_liq:,.0f}, age {_age_min_pre:.1f}m, vol ${_vm5_a:,.0f}) — риск Remove LP."
                             )
-                        print(f"💎 [ANALYZER-UNLOCKED-RUNNER] {symbol} ({mint[:8]}): кастомный незалоченный LP допущен (liq ${raw_liq:,.0f}, vol ${_vm5_a:,.0f}, {_b5_a}b/{_s5_a}s) — контроль по таймауту выхода!")
+                        print(f"💎 [ANALYZER-UNLOCKED-RUNNER] {symbol} ({mint[:8]}): кастомный незалоченный LP допущен (liq ${raw_liq:,.0f}, age {_age_min_pre:.0f}м, vol ${_vm5_a:,.0f}, {_b5_a}b/{_s5_a}s)!")
 
                     # Проверка холдеров RugCheck
                     top_holders = rc_data.get("topHolders") or []
@@ -2310,9 +2293,10 @@ class Analyzer:
                     top_10_sum_pct = sum([x[1] for x in top_10])
                     largest_whale_pct_pre = top_10[0][1] if top_10 else 0.0
 
-                    # Детектор ультра-атомизированной сибил-сетки дева (кейс CARDANO: 82% эмиссии вне пула, но top1=0.91%, top10=8.27% — 120 кошельков по 0.65%):
-                    if 0 < pool_pct_sum <= 48.0 and len(top_10) >= 8:
-                        if top_10_sum_pct < 9.5 or largest_whale_pct_pre < 1.10:
+                    # Детектор ультра-атомизированной сибил-сетки дева: не блокируем здоровый высокооборотный ритейл (кейс OTHERM $102k vol5, 543b/354s, top10=5.3%)
+                    _is_viral_retail_a = (_vm5_pre >= 25000.0 and _b5_pre >= 150 and _b5_pre >= _s5_pre)
+                    if 0 < pool_pct_sum <= 38.0 and len(top_10) >= 8 and not _is_viral_retail_a:
+                        if top_10_sum_pct < 7.0 and largest_whale_pct_pre < 0.85:
                             return self._deny(
                                 mint,
                                 f"atomized-sybil-supply pool={pool_pct_sum:.0f}% top10={top_10_sum_pct:.1f}%",
@@ -2676,8 +2660,8 @@ class Analyzer:
             _created = pair_data.get("pairCreatedAt") or 0
             if not _socials_unknown:
                 _has_any_link = bool((isinstance(_socials, list) and len(_socials) > 0) or (isinstance(_websites, list) and len(_websites) > 0))
-                if not mint.endswith(("pump", "moon")) and not _has_any_link and _cur_liq < 75000 and not _lottery:
-                    return self._deny(mint, "no-socials", f"🚫 [SOCIAL] {mint[:8]}: 0 соцсетей/сайта на DEX при ликве ${_cur_liq:,.0f} (<$75k) — анонимный дев-бандлер под слив пула.")
+                if not config.is_launchpad_mint(mint) and not _has_any_link and _cur_liq < 25000 and not _lottery:
+                    return self._deny(mint, "no-socials", f"🚫 [SOCIAL] {mint[:8]}: 0 соцсетей/сайта на DEX при ликве ${_cur_liq:,.0f} (<$25k) — анонимный дев-бандлер под слив пула.")
             print(f"✅ [ENTRY-CANDIDATE] {mint}: PULLBACK — импульс m5 {_m5:+.1f}%, откат m1 {_m1:+.1f}%, h1 {_h1:+.0f}%, b/s {_b}/{_s}. Кандидат на вход.")
         
         # Защита от микро-пулов:
@@ -2742,10 +2726,10 @@ class Analyzer:
         _socials_unknown = bool(pair_data.get("_socials_unknown", False))
         # Анонимные токены вообще без соцсетей на DEX — это 100% одноразовые дев-бандлеры под слив пула в 0!
         # Канонические токены pump.fun с сожжённым LP и реальным объёмом допускаются без соцсетей на DS
-        if not _socials_unknown and not has_socials and not _lottery and not is_pump_curve and not mint.endswith(("pump", "moon")):
+        if not _socials_unknown and not has_socials and not _lottery and not is_pump_curve and not config.is_launchpad_mint(mint):
             _smart_n_chk = int(pair_data.get("_smart_buyers_count", 0) or 0)
-            if liquidity < 75000 and _smart_n_chk < 1:
-                return self._deny(mint, "no-socials-anon-rug", f"🚫 [NO-SOCIALS] У {symbol} ({mint[:8]}) 0 соцсетей/сайтов (Twitter/TG/Web) при ликвидности ${liquidity:,.0f} (<$75k) — анонимный дев-бандлер.")
+            if liquidity < 25000 and _smart_n_chk < 1:
+                return self._deny(mint, "no-socials-anon-rug", f"🚫 [NO-SOCIALS] У {symbol} ({mint[:8]}) 0 соцсетей/сайтов (Twitter/TG/Web) при ликвидности ${liquidity:,.0f} (<$25k) — анонимный дев-бандлер.")
             
         if is_vip:
             print(f"🚀 [VIP] {symbol}: Проверка клонов и соцсетей пройдена!")
