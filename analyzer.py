@@ -693,13 +693,13 @@ class Analyzer:
             except Exception as e:
                 print(f"Dexscreener CTO fetch error: {e}")
                 
-        # Возвращаем уникальные токены (по tokenAddress)
+        # Возвращаем уникальные токены (по tokenAddress) — только канонические launchpad-токены (pump / moon)
         seen = set()
         unique_tokens = []
         for t in tokens:
-            addr = t.get("tokenAddress")
+            addr = str(t.get("tokenAddress") or "").strip()
             chain = t.get("chainId")
-            if addr and addr not in seen and chain == "solana":
+            if addr and addr not in seen and chain == "solana" and addr.endswith(("pump", "moon")):
                 seen.add(addr)
                 unique_tokens.append(t)
         return unique_tokens
@@ -2117,11 +2117,13 @@ class Analyzer:
 
                     _rc_raw_score = float(rc_data.get("score") or 0.0)
 
-                    # Для launchpad bonding curve RugCheck начисляет шум за AMM LP контракт пула.
-                    # ВАЖНО: концентрацию дева и китов ("single holder", "top 10 holders") НИКОГДА не вычитаем как шум!
+                    # Для launchpad bonding curve и свежих PumpSwap AMM пулов RugCheck часто считает сам AMM-пул
+                    # как "Single holder ownership" / "Top 10 holders high ownership", начисляя ложные +2500..+3500 баллов.
+                    # Реальную концентрацию дева и китов мы проверяем отдельно ниже по массиву topHolders с точным исключением pairAddress и DEX_POOL_AUTHORITIES!
                     _allowed_lp_terms_main = (
                         "large amount of lp unlocked", "lp provider", "single lp provider",
-                        "lp not locked", "unlocked lp", "low liquidity"
+                        "lp not locked", "unlocked lp", "low liquidity",
+                        "single holder", "high holder concentration", "top 10 holders", "high ownership"
                     )
 
                     # Исключаем безвредный шум: низкая ликвидность для молодых пулов, copycat для мемов, и LP контракт пула.
@@ -2134,16 +2136,16 @@ class Analyzer:
                     )
 
                     _rc_score = max(0.0, _rc_raw_score - _rc_penalty_to_ignore)
-                    if _rc_score >= 1200:
-                        return self._deny(mint, f"rugcheck-score {_rc_score:.0f}", f"🚫 [АНТИСКАМ] RugCheck Score {_rc_score:.0f} >= 1200 у {mint[:8]} → СКАМ")
+                    if _rc_score >= 2000:
+                        return self._deny(mint, f"rugcheck-score {_rc_score:.0f}", f"🚫 [АНТИСКАМ] RugCheck Score {_rc_score:.0f} >= 2000 у {mint[:8]} → СКАМ")
 
-                    # Жёсткий фильтр критических опасностей RugCheck
+                    # Жёсткий фильтр критических опасностей смарт-контракта RugCheck
                     for rk in (rc_data.get("risks") or []):
                         _rk_name = str(rk.get("name", "")).lower()
                         _rk_lvl = str(rk.get("level", "")).lower()
-                        if any(k in _rk_name for k in ("large amount of lp unlocked", "lp not locked", "unlocked lp")):
+                        if any(k in _rk_name for k in ("creator history", "copycat", "symbol mimic", *_allowed_lp_terms_main)):
                             continue
-                        if _rk_lvl == "danger" and any(k in _rk_name for k in ("single holder", "high ownership", "top 10 holders", "freeze authority")):
+                        if _rk_lvl == "danger" and any(k in _rk_name for k in ("freeze authority", "mint authority", "mutable", "honeypot", "transfer fee", "permanent delegate")):
                             return self._deny(mint, f"rc-danger {_rk_name[:15]}", f"🚫 [АНТИСКАМ-RC] {symbol} ({mint[:8]}): критический риск RugCheck '{rk.get('name')}' — блок скама!")
 
                     # Проверка пулов и блокировки LP

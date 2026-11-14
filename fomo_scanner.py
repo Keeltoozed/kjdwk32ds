@@ -46,7 +46,7 @@ async def fomo_loop(analyzer, tracker):
             except Exception:
                 pass
             
-            mints = [m for m in mints if m and len(m) > 30]
+            mints = [m for m in mints if m and len(m) > 30 and str(m).strip().endswith(("pump", "moon"))]
             new_mints = list(set(mints) - seen)
             
             from fomo_api import push_signal

@@ -822,7 +822,10 @@ async def discovery_feeder_loop(analyzer):
                 pass
 
             if mints:
-                deduped = list(dict.fromkeys(m.strip() for m in mints if m and isinstance(m, str) and 32 <= len(m) <= 44))
+                deduped = list(dict.fromkeys(
+                    m.strip() for m in mints
+                    if m and isinstance(m, str) and 32 <= len(m.strip()) <= 44 and m.strip().endswith(("pump", "moon"))
+                ))
                 analyzer._cached_discovery_mints = deduped
                 analyzer._cached_discovery_time = time.time()
         except Exception as e:
@@ -908,9 +911,12 @@ async def scanner_loop(analyzer, tracker):
                     if _w and _w not in mints_to_scan:
                         mints_to_scan.append(_w)
 
-                # Удаляем дубликаты, отсекаем уже открытые позиции, порядок сохраняем (миграции остаются первыми)
+                # Удаляем дубликаты, отсекаем уже открытые позиции и не-pump кастомные токены, порядок сохраняем (миграции остаются первыми)
                 _open_mints_set = set(tracker.positions.keys())
-                mints_to_scan = list(dict.fromkeys(m.strip() for m in mints_to_scan if m and m.strip() and m.strip() not in _open_mints_set))
+                mints_to_scan = list(dict.fromkeys(
+                    m.strip() for m in mints_to_scan
+                    if m and m.strip() and m.strip() not in _open_mints_set and m.strip().endswith(("pump", "moon"))
+                ))
 
                 # ⚡ Пакетный префетч: вся очередь за ceil(N/30) запросов к DexScreener
                 # вместо N одиночных. analyze_token() дальше читает из кэша без сети.

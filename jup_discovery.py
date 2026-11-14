@@ -222,6 +222,8 @@ async def fetch_jup_tokens() -> list:
                     sym_p = str(bt.get("symbol") or "").upper().strip()
                     if not addr or addr.startswith("0x") or len(addr) < 32 or len(addr) > 44 or addr in seen or sym_p in SKIP_SYMBOLS:
                         continue
+                    if not addr.endswith(("pump", "moon")):
+                        continue
                     liq_p = float((p.get("liquidity") or {}).get("usd", 0) or 0)
                     if liq_p < 7500.0:
                         continue
@@ -258,8 +260,8 @@ async def fetch_jup_tokens() -> list:
             import market_data
             gt_items = await market_data.get_trending()
             for item in (gt_items or []):
-                addr = item.get("tokenAddress") or ""
-                if not addr or addr.startswith("0x") or len(addr) < 32 or len(addr) > 44 or addr in seen:
+                addr = str(item.get("tokenAddress") or "").strip()
+                if not addr or addr.startswith("0x") or len(addr) < 32 or len(addr) > 44 or addr in seen or not addr.endswith(("pump", "moon")):
                     continue
                 seen.add(addr)
                 ranked.append((5.0, 0.0, addr[:6], addr, "gt_trending"))
@@ -284,7 +286,7 @@ async def fetch_jup_tokens() -> list:
                         if item.get("chainId") != "solana":
                             continue
                         addr = str(item.get("tokenAddress") or "").strip()
-                        if not addr or addr.startswith("0x") or len(addr) < 32 or len(addr) > 44 or addr in seen or str(item.get("symbol") or "").upper() in SKIP_SYMBOLS:
+                        if not addr or addr.startswith("0x") or len(addr) < 32 or len(addr) > 44 or addr in seen or not addr.endswith(("pump", "moon")) or str(item.get("symbol") or "").upper() in SKIP_SYMBOLS:
                             continue
                         seen.add(addr)
                         # Топ-бусты получают высокий базовый моментум для попадания в топ очереди
@@ -840,7 +842,7 @@ async def jup_loop(analyzer, tracker):
                     _min_age = float(getattr(config, "SOLANA_MIN_AGE_MIN", 2.0))
 
                     for m in mints:
-                        if not m or m in open_jup:
+                        if not m or m in open_jup or not m.endswith(("pump", "moon")):
                             continue
                         if m in tracker.positions:
                             _cp = tracker.positions.get(m)

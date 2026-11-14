@@ -1508,7 +1508,7 @@ class GrokJevEngine:
             sec_ok, sec_why = await _gp.check_solana(address)
             sec_why_low = str(sec_why or "").lower()
             rc_status_pre, rc_data_pre = await _gp.fetch_rugcheck_report_cached(address, ttl=120.0, timeout=6)
-            _gp_is_holder = ("кит держит" in sec_why_low or "топ-10 китов" in sec_why_low)
+            _gp_is_holder = ("кит держит" in sec_why_low or "топ-10 китов" in sec_why_low or "rugcheck-score" in sec_why_low)
             if not sec_ok and not (_gp_is_holder and (rc_status_pre == 200 or eff_liq >= 20000.0)):
                 return False, f"goplus-sol-reject {sec_why}", _h_stats
               
@@ -1549,10 +1549,12 @@ class GrokJevEngine:
                         return False, f"rugcheck: freeze authority active ({freeze_auth[:8]})", _h_stats
 
                     # Очищенный score RugCheck: вычитаем безвредный шум и AMM LP пула.
-                    # По стратегии пользователя незалоченный LP допустим, поэтому шум LP вычитаем для всех типов токенов:
+                    # Для свежих пулов PumpSwap RugCheck часто маркирует сам AMM-пул как "Single holder ownership" (+2500..+3500 баллов).
+                    # Реальных холдеров (топ-1, дев, топ-10) мы проверяем ниже по topHolders с точным исключением pairAddress и DEX_POOL_AUTHORITIES!
                     _allowed_lp_terms_jev = (
                         "large amount of lp unlocked", "lp provider", "single lp provider",
-                        "lp not locked", "unlocked lp", "low liquidity"
+                        "lp not locked", "unlocked lp", "low liquidity",
+                        "single holder", "high holder concentration", "top 10 holders", "high ownership"
                     )
 
                     raw_score = float(rc_data.get("score") or 0.0)
@@ -1564,21 +1566,17 @@ class GrokJevEngine:
                         ))
                     )
                     clean_score = max(0.0, raw_score - penalty_to_ignore)
-                    if clean_score >= 1200:
-                        return False, f"rugcheck: high risk score {clean_score:.0f} >= 1200", _h_stats
+                    if clean_score >= 2000:
+                        return False, f"rugcheck: high risk score {clean_score:.0f} >= 2000", _h_stats
 
-                    # Проверка критических рисков (реальные опасности смарт-контракта и концентрации)
+                    # Проверка критических рисков смарт-контракта
                     for rk in (rc_data.get("risks") or []):
                         rk_name = str(rk.get("name") or "").lower()
                         rk_lvl = str(rk.get("level") or "").lower()
                         if any(k in rk_name for k in ("creator history", "copycat", "symbol mimic", *_allowed_lp_terms_jev)):
                             continue
-                        if any(lp_k in rk_name for lp_k in ("large amount of lp unlocked", "lp not locked", "unlocked lp")):
-                            continue
                         if rk_lvl == "danger" and "creator history" not in rk_name:
                             return False, f"rugcheck: critical danger risk '{rk.get('name')}'", _h_stats
-                        if any(k in rk_name for k in ("single holder", "high ownership", "top 10 holders")) and rk_lvl == "danger":
-                            return False, f"rugcheck: critical hazard '{rk.get('name')}'", _h_stats
 
                     # Проверка пулов (логируем статус LP, но не блокируем монеты с незалоченным LP по стратегии ракет)
                     target_pair = str(pair_data.get("pairAddress") or "").strip()
