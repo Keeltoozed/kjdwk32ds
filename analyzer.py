@@ -886,10 +886,8 @@ class Analyzer:
             if not isinstance(res, tuple) or len(res) != 2:
                 continue
             chunk, pairs_list = res
-            if not pairs_list:
-                continue
             by_mint = {}
-            for p in pairs_list:
+            for p in (pairs_list or []):
                 a = (p.get("baseToken") or {}).get("address")
                 if a:
                     by_mint.setdefault(a, []).append(p)
@@ -898,6 +896,8 @@ class Analyzer:
                 if best:
                     self._prefetch_cache[m] = (ts, best)
                     got += 1
+                else:
+                    self._prefetch_cache[m] = (ts, None)
         if len(self._prefetch_cache) > 3000:
             cutoff = time.time() - 120
             self._prefetch_cache = {k: v for k, v in self._prefetch_cache.items() if v[0] >= cutoff}
@@ -1861,9 +1861,9 @@ class Analyzer:
         if _m5 < _min_m5_req and not _is_buyer_dip_pre:
             return self._deny(mint, f"m5-too-weak {_m5:+.1f}%", f"🚫 [WEAK-M5] {symbol} ({mint[:8]}): m5 {_m5:+.1f}% < +{_min_m5_req:.1f}% — нет разгона.")
         _base_max_m1 = float(getattr(config, "MAX_ENTRY_M1_PCT", 28.0))
-        # Разрешаем импульсный пробой (свеча +15%..+35%) при активном спросе покупателей (b5 >= s5 и vol >= $2000)
+        # Разрешаем импульсный пробой (свеча +15%..+45%) при активном спросе покупателей (b5 >= s5 и vol >= $2000)
         if _b5_pre >= int(_s5_pre * 1.05) and _vm5_pre >= 2000.0 and _m5 >= 3.0:
-            _max_m1_cfg = 35.0  # Импульсный пробой ракеты
+            _max_m1_cfg = 45.0  # Импульсный пробой ракеты
         else:
             _max_m1_cfg = max(_base_max_m1, 28.0)
         if _m5 >= 8.0 and _b5_pre >= _s5_pre:
@@ -1895,11 +1895,13 @@ class Analyzer:
                 f"🚫 [EXHAUSTED-TOP] {symbol} ({mint[:8]}): рост за час {_h1:+.1f}% > +{_max_entry_h1:.0f}% — вершина пампа.",
             )
         # Защита от покупки на верхушке вертикальной свечи:
-        # Разрешаем сильный пробой покупателями до +500% при перевесе покупателей b5/s5 >= 1.05 (кейсы X +1891%, MAX +973%, FOMO +952%)
+        # Для свежих выпускников (<8м, FDV <= $140k) m5 в DexScreener считается от начальной цены бондинг-кривой ($2.5k -> $20k-$70k = +600%..+1400%, кейс NOFOMO +687% на $17k FDV перед 3x!)
+        # Разрешаем сильный пробой покупателями до +500% (+1500% для свежих миграций <=8м) при перевесе покупателей b5/s5 >= 1.05
         # либо остывающий откат (m1 <= -1.0%). Блокируем чистую покупку хая без перевеса покупателей!
         if _m5 > _max_entry_m5:
-            _is_strong_buyer_breakout = (_m5 <= 500.0 and _b5_pre >= int(_s5_pre * 1.05) and _vm5_pre >= 2000.0 and (_b5_pre + _s5_pre) >= 12)
-            _is_cooling_pullback = (_m1 <= -1.0 and _m5 <= 200.0 and _b5_pre >= _s5_pre * 1.05)
+            _fresh_grad_m5_cap_a = 1500.0 if (_age_min_pre <= 8.0 and _fdv_chk_pre <= 140000.0) else 500.0
+            _is_strong_buyer_breakout = (_m5 <= _fresh_grad_m5_cap_a and _b5_pre >= int(_s5_pre * 1.05) and _vm5_pre >= 2000.0 and (_b5_pre + _s5_pre) >= 12)
+            _is_cooling_pullback = (_m1 <= -1.0 and _m5 <= 250.0 and _b5_pre >= _s5_pre * 1.05)
             if not (_is_strong_buyer_breakout or _is_cooling_pullback):
                 return self._deny(
                     mint,

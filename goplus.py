@@ -1335,21 +1335,47 @@ def analyze_trade_tape_staircase(trades_raw: list) -> tuple:
         elif kind == "sell":
             sells.append(attrs)
 
-    # 1. Синхронный сброс суб-кошельков в одну и ту же секунду (Jito Sell-All / Skim Burst: кейсы NOTHING 73/s, GETAJOB 16/s, 14/s, 14/s)
+    # 1. Синхронный сброс суб-кошельков в одну и ту же секунду (Jito Sell-All / Skim Burst: кейсы NOTHING 73/s, SOLFLY 105/s, BALLFIN 35/s)
+    # Важно: не блокировать высокооборотистые живые ракеты (YOUNGBULL, NOFOMO), где в 1 секунду проходит 8-14 мелких розничных продаж ($0.5-$18) на фоне покупок!
     sell_by_sec = defaultdict(set)
+    sig_sell_by_sec = defaultdict(set)
+    sell_usd_by_sec = defaultdict(float)
+    buy_by_sec = defaultdict(set)
+    for b in buys:
+        ts_b = str(b.get("block_timestamp") or "")
+        w_b = str(b.get("tx_from_address") or "")
+        if ts_b and w_b:
+            buy_by_sec[ts_b].add(w_b)
     for s in sells:
         ts = str(s.get("block_timestamp") or "")
         w = str(s.get("tx_from_address") or "")
+        u_s = float(s.get("volume_in_usd") or 0.0)
         if ts and w:
             sell_by_sec[ts].add(w)
+            sell_usd_by_sec[ts] += u_s
+            if u_s >= 20.0:
+                sig_sell_by_sec[ts].add(w)
     if sell_by_sec:
         top_s_ts, top_s_wallets = max(sell_by_sec.items(), key=lambda kv: len(kv[1]))
         max_s_1s = len(top_s_wallets)
-        multi_sec_bursts = sum(1 for ws in sell_by_sec.values() if len(ws) >= 6)
-        # 10+ уникальных продавцов в одну секунду ИЛИ 2+ секунды с синхронными пачками по 6+ продавцов (кейс GETAJOB: 16, 14, 14, 11)
-        # На реальных ракетах (ASTRALIS max=3, FYAT max=6 один раз) этого не бывает!
-        if max_s_1s >= 10 or multi_sec_bursts >= 2 or (len(sells) >= 20 and (max_s_1s / float(len(sells))) >= 0.35 and max_s_1s >= 7):
-            return False, f"bundler-sync-sells: {max_s_1s} wallets sold in 1s ({top_s_ts}, bursts={multi_sec_bursts})", []
+        max_sig_s_1s = 0
+        top_sig_ts = top_s_ts
+        if sig_sell_by_sec:
+            top_sig_ts, top_sig_wallets = max(sig_sell_by_sec.items(), key=lambda kv: len(kv[1]))
+            max_sig_s_1s = len(top_sig_wallets)
+        top_sig_usd = sell_usd_by_sec.get(top_sig_ts, 0.0)
+        top_sig_buys = len(buy_by_sec.get(top_sig_ts, set()))
+        sig_bursts = sum(
+            1 for ts_k, ws in sig_sell_by_sec.items()
+            if len(ws) >= 8 and sell_usd_by_sec.get(ts_k, 0.0) >= 600.0 and len(buy_by_sec.get(ts_k, set())) <= 1
+        )
+        # Массовый Jito Sell-All (22+ любых кошельков в 1с ИЛИ 12+ значимых продавцов >=$20 на сумму >=$1200 без встречных покупок ИЛИ 2+ синхронных залпа по 8+ значимых продавцов)
+        if (
+            max_s_1s >= 22
+            or (max_sig_s_1s >= 12 and top_sig_usd >= 1200.0 and top_sig_buys <= 2)
+            or sig_bursts >= 2
+        ):
+            return False, f"bundler-sync-sells: {max_s_1s} wallets ({max_sig_s_1s} >=$20, ${top_sig_usd:.0f}) sold in 1s ({top_sig_ts}, bursts={sig_bursts})", []
 
     # 1.5. Детектор 1-Shot Fast-Flip Wash Bot (кейс BALLFIN: 54 из 126 кошельков сделали ровно 1 buy >= $35 и 1 sell через 1-30с для накрутки фейкового объёма $60k/m перед рагом)
     try:

@@ -610,8 +610,10 @@ class GrokJevEngine:
                 return False, f"slow-mature-pool age {age_min:.0f}m vol5 ${vol_m5:,.0f} v/l {(vol_m5/max(eff_liq,1.0)):.2f}x"
         _max_m5_allowed = float(getattr(_c, "MAX_ENTRY_M5_PCT", 150.0))
         if m5 > _max_m5_allowed:
-            _is_strong_buyer_breakout_g = (m5 <= 500.0 and b5 >= int(s5 * 1.05) and vol_m5 >= 2000.0 and (b5 + s5) >= 12)
-            _is_cooling_pullback = (-12.0 <= m1 <= -1.0 and m5 <= 200.0 and b5 >= s5 * 1.02)
+            # Для свежих выпускников (<8м, FDV <= $140k) m5 в DexScreener считается от начальной цены бондинг-кривой ($2.5k -> $20k-$70k = +600%..+1400%, кейс NOFOMO +687% на $17k FDV перед 3x!)
+            _fresh_grad_m5_cap = 1500.0 if (age_min <= 8.0 and fdv_mc <= 140000.0) else 500.0
+            _is_strong_buyer_breakout_g = (m5 <= _fresh_grad_m5_cap and b5 >= int(s5 * 1.05) and vol_m5 >= 2000.0 and (b5 + s5) >= 12)
+            _is_cooling_pullback = (-12.0 <= m1 <= -1.0 and m5 <= 250.0 and b5 >= s5 * 1.02)
             if not (_is_strong_buyer_breakout_g or _is_cooling_pullback):
                 return False, f"fomo-vertical-m5 m5 {m5:+.1f}% > +{_max_m5_allowed:.0f}% (buying top of vertical pump without cooling pullback, m1={m1:+.1f}%)"
         if s5 > 10 and b5 < (s5 * 0.80):
@@ -942,10 +944,16 @@ class GrokJevEngine:
 
         # Если токен моложе 3м, DexScreener часто отдаёт m1 == m5 (одна первая свеча).
         _m1_is_phantom = (_age_m < 3.0 and abs(m5) > 1.0 and abs(m1) > 0 and abs(m1 / max(abs(m5), 0.01) - 1.0) < 0.08)
+        _fdv_flush = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
         _strong_breakout = (b5 >= 10 and b5 >= s5 * 1.05 and vol5 >= 2000.0)
-        _max_m1 = 35.0 if _strong_breakout else float(getattr(_c, "JEV_MAX_M1_ENTRY_PCT", 25.0))
+        _max_m1 = 45.0 if _strong_breakout else float(getattr(_c, "JEV_MAX_M1_ENTRY_PCT", 25.0))
         _cfg_m5 = float(getattr(_c, "MAX_ENTRY_M5_PCT", 120.0))
-        _max_m5_cap = 200.0 if _strong_breakout else _cfg_m5
+        if _strong_breakout and _age_m <= 8.0 and (0 < _fdv_flush <= 140000.0):
+            _max_m5_cap = 1500.0
+        elif _strong_breakout:
+            _max_m5_cap = 500.0
+        else:
+            _max_m5_cap = _cfg_m5
         if m5 > _max_m5_cap:
             return False, -0.14, 0.0, f"fomo-spike (m5 {m5:+.1f}% > +{_max_m5_cap:.0f}%) — buying local top, wait for reset"
         if m1 > _max_m1 and not _m1_is_phantom:
@@ -2002,26 +2010,30 @@ class GrokJevEngine:
             print(f"🚫 [GROK+JEV] {symbol} ({chain}): JEV soft-reject ➔ {soft_why}")
             return False, f"jev-soft-reject {soft_why}"
 
-        # 5.5. ФИНАЛЬНАЯ ПРОВЕРКА ПЕРЕД ИСПОЛНЕНИЕМ: аудит+LLM занимают секунды, цена в pair устарела.
-        # Все минусы (OREN/GTA/ELOOONG/HYPERCAT) куплены на пике входа (peak == entry) по устаревшим данным.
+        # 5.5. ФИНАЛЬНАЯ ПРОВЕРКА ПЕРЕД ИСПОЛНЕНИЕМ: аудит+LLM занимают несколько секунд.
+        # Важно: не убивать живые ракеты (кейс YOUNGBULL после JEV/GROK-PASS) из-за микро-колебаний -3.5%..+12% или сбоя сети!
         _scan_price, _scan_liq = price, float((pair.get("liquidity") or {}).get("usd", 0) or 0)
-        _fin = await self.fetch_pair_fresh(address, chain)
-        if not _fin:
-            return False, "fills-flush-wait final-recheck no-fresh-data"
-        _fpx = float(_fin.get("priceUsd", 0) or 0)
-        _fliq = float((_fin.get("liquidity") or {}).get("usd", 0) or 0)
+        _fin = await self.fetch_pair_fresh(address, chain) or pair
+        _fpx = float(_fin.get("priceUsd", 0) or 0) or _scan_price
+        _fliq = float((_fin.get("liquidity") or {}).get("usd", 0) or 0) or _scan_liq
         _fm1 = float(((_fin.get("priceChange") or {}).get("m1", 0)) or 0)
         if _fpx <= 0:
+            print(f"🚫 [FINAL-RECHECK] {symbol} ({address[:8]}): некорректная цена при финальной проверке.")
             return False, "fills-flush-wait final-recheck invalid-price"
         if _fin.get("_price_divergence"):
+            print(f"🚫 [FINAL-RECHECK] {symbol} ({address[:8]}): расхождение цены пулов (price-divergence).")
             return False, "fills-flush-wait final-recheck price-divergence-pool-split"
-        if _fpx < _scan_price * 0.965:
+        if _fpx < _scan_price * 0.88:
+            print(f"🚫 [FINAL-RECHECK] {symbol} ({address[:8]}): обвал цены на {(_fpx/_scan_price-1)*100:+.1f}% за время аудита — отмена входа!")
             return False, f"fills-flush-wait final-recheck price falling ({(_fpx/_scan_price-1)*100:+.1f}% since scan)"
-        if _fpx > _scan_price * 1.12:
+        if _fpx > _scan_price * 1.35:
+            print(f"🚫 [FINAL-RECHECK] {symbol} ({address[:8]}): цена улетела на {(_fpx/_scan_price-1)*100:+.1f}% за время аудита — не догоняем хай!")
             return False, f"fills-flush-wait final-recheck price ran away ({(_fpx/_scan_price-1)*100:+.1f}% since scan, no chase)"
-        if _scan_liq > 0 and _fliq > 0 and _fliq < _scan_liq * 0.85:
+        if _scan_liq > 0 and _fliq > 0 and _fliq < _scan_liq * 0.75:
+            print(f"🚫 [FINAL-RECHECK] {symbol} ({address[:8]}): отток ликвидности (${_scan_liq:,.0f} -> ${_fliq:,.0f}) — отмена входа!")
             return False, f"fills-flush-wait final-recheck liquidity draining ({_scan_liq:,.0f}->{_fliq:,.0f})"
-        if _fm1 < -3.5:
+        if _fm1 < -12.0:
+            print(f"🚫 [FINAL-RECHECK] {symbol} ({address[:8]}): резкий слив 1м свечи ({_fm1:+.1f}%) — отмена входа!")
             return False, f"fills-flush-wait final-recheck m1 {_fm1:+.1f}% falling"
         pair, price = _fin, _fpx
         wick_price = price * (1.0 + wick_pct)
