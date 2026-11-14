@@ -1235,8 +1235,8 @@ async def scanner_loop(analyzer, tracker):
                                 if _h1_live < -60.0 and _age_m > 5.0:
                                     print(f"🚫 [SCANNER-FLOOR-TOKEN] {actual_symbol} ({mint[:8]}): h1 {_h1_live:.0f}% — токен уже на полу, входить нельзя!")
                                     continue
-                                # Блок: токен слишком свежий (< 2.0 мин) — зона снайперов и бандл-дампа дева
-                                _min_sc_age = float(getattr(config, "SOLANA_MIN_AGE_MIN", 2.0))
+                                # Блок: токен созревает со 2-й свечи (карантин блока 0)
+                                _min_sc_age = float(getattr(config, "SOLANA_MIN_AGE_MIN", 1.0))
                                 if _age_m < _min_sc_age:
                                     print(f"⏳ [SCANNER-WARMUP] {actual_symbol} ({mint[:8]}): пул {_age_m:.1f}м < {_min_sc_age:.1f}м — ждём созревания 1-й свечи.")
                                     processed_mints[mint] = time.time() - _cd + 20
@@ -1392,8 +1392,8 @@ async def scanner_loop(analyzer, tracker):
                                             analyzer._deny(mint, "scanner-live-dump >7%", f"🚫 [LIVE-DUMP] {actual_symbol} ({mint[:8]}): живая цена Jupiter (${_jup_chk:.8f}) уже на {(1.0 - _jup_chk / entry_price) * 100:.1f}% ниже DexScreener (${entry_price:.8f}) [>7%] — токен обваливается прямо сейчас, блок входа!")
                                             continue
                                         _chk_r = max(_jup_chk, entry_price) / min(_jup_chk, entry_price)
-                                        if _chk_r > 1.09:
-                                            print(f"🚫 [SCANNER-PRICE-MISMATCH] {actual_symbol} ({mint[:8]}): Jupiter (${_jup_chk:.8f}) vs DS (${entry_price:.8f}) расхождение {_chk_r:.2f}x (>1.09x) — блок от ложного стопа.")
+                                        if _chk_r > 1.15:
+                                            print(f"🚫 [SCANNER-PRICE-MISMATCH] {actual_symbol} ({mint[:8]}): Jupiter (${_jup_chk:.8f}) vs DS (${entry_price:.8f}) расхождение {_chk_r:.2f}x (>1.15x) — блок от ложного стопа.")
                                             continue
                                         entry_price = _jup_chk
                                 # RKT-вето дженерик-входов Solana (лотереи/VIP-билеты exempt).

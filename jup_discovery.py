@@ -488,10 +488,11 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
             pass
 
     # Защита от анонимных бандлер-пулов без соцсетей на DEX
+    # Канонические pump-токены с сожжённым LP и живым объёмом допускаются без соцсетей на DS
     _info_j = (td or {}).get("info") or {}
     _soc_j = _info_j.get("socials") or []
     _web_j = _info_j.get("websites") or []
-    if not (td or {}).get("_socials_unknown", False) and len(_soc_j) == 0 and len(_web_j) == 0 and _liq_j < 75000:
+    if not mint.endswith(("pump", "moon")) and not (td or {}).get("_socials_unknown", False) and len(_soc_j) == 0 and len(_web_j) == 0 and _liq_j < 75000:
         print(f"🚫 [{source_tag}-NO-SOCIALS] {_sym_tmp} ({mint[:8]}): 0 соцсетей/сайтов при ликвидности ${_liq_j:,.0f} (<$75k) — анонимный бандлер-раг.")
         return False
 
@@ -513,8 +514,8 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
     jup_price = await JupiterAPI.get_price(mint)
     if ds_price > 0 and jup_price and jup_price > 0:
         ratio = max(ds_price, jup_price) / min(ds_price, jup_price)
-        if ratio > 1.09:
-            print(f"🚫 [{source_tag}-PRICE-MISMATCH] {_sym_tmp} ({mint[:8]}): Jupiter (${jup_price:.8f}) vs Dex (${ds_price:.8f}) расхождение {ratio:.2f}x (>1.09x) — блок от ложного стопа.")
+        if ratio > 1.16:
+            print(f"🚫 [{source_tag}-PRICE-MISMATCH] {_sym_tmp} ({mint[:8]}): Jupiter (${jup_price:.8f}) vs Dex (${ds_price:.8f}) расхождение {ratio:.2f}x (>1.16x) — блок от ложного стопа.")
             return False
         if jup_price < ds_price * 0.90:
             analyzer._deny(mint, "jup-live-dump >10%", f"🚫 [{source_tag}-LIVE-DUMP] {_sym_tmp} ({mint[:8]}): живая котировка Jupiter (${jup_price:.8f}) уже ниже DexScreener (${ds_price:.8f}) на {(1.0 - jup_price/ds_price)*100:.1f}% [>10%] — слив в процессе!")
@@ -710,8 +711,8 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
                     print(f"🚫 [{source_tag}-LIVE-DUMP] {_sym_tmp} ({mint[:8]}): живая цена Jupiter (${_jup_live_px:.8f}) уже на {(1.0 - _jup_live_px / price) * 100:.1f}% ниже DexScreener (${price:.8f}) — обвал в моменте, отмена!")
                     return False
                 _jup_ratio = max(_jup_live_px, price) / min(_jup_live_px, price)
-                if _jup_ratio > 1.055:
-                    print(f"🚫 [{source_tag}-PRICE-MISMATCH] {_sym_tmp} ({mint[:8]}): Jupiter vs сигнал расхождение {_jup_ratio:.2f}x (>1.055x) — отмена!")
+                if _jup_ratio > 1.15:
+                    print(f"🚫 [{source_tag}-PRICE-MISMATCH] {_sym_tmp} ({mint[:8]}): Jupiter vs сигнал расхождение {_jup_ratio:.2f}x (>1.15x) — отмена!")
                     return False
                 price = _jup_live_px
                 if _wick_stop_price and _wick_pct:
@@ -886,7 +887,7 @@ async def jup_loop(analyzer, tracker):
                         _v5_cand = float((td.get("volume") or {}).get("m5", 0) or 0)
 
                         # Отсекаем уставшие зомби-монеты синхронно с ZOMBIE-AGE в analyzer.py
-                        _max_age_cand = float(getattr(config, "SOLANA_MAX_AGE_MIN", 240.0))
+                        _max_age_cand = float(getattr(config, "SOLANA_MAX_AGE_MIN", 720.0))
                         if _ag > _max_age_cand:
                             _is_big_cand = (_ag <= 360.0 and _lq_cand >= 25000.0 and _v5_cand >= 15000.0)
                             if not _is_big_cand:

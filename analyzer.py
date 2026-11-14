@@ -2606,7 +2606,7 @@ class Analyzer:
             _created = pair_data.get("pairCreatedAt") or 0
             if not _socials_unknown:
                 _has_any_link = bool((isinstance(_socials, list) and len(_socials) > 0) or (isinstance(_websites, list) and len(_websites) > 0))
-                if not _has_any_link and _cur_liq < 75000 and not _lottery:
+                if not mint.endswith(("pump", "moon")) and not _has_any_link and _cur_liq < 75000 and not _lottery:
                     return self._deny(mint, "no-socials", f"🚫 [SOCIAL] {mint[:8]}: 0 соцсетей/сайта на DEX при ликве ${_cur_liq:,.0f} (<$75k) — анонимный дев-бандлер под слив пула.")
             print(f"✅ [ENTRY-CANDIDATE] {mint}: PULLBACK — импульс m5 {_m5:+.1f}%, откат m1 {_m1:+.1f}%, h1 {_h1:+.0f}%, b/s {_b}/{_s}. Кандидат на вход.")
         
@@ -2671,7 +2671,8 @@ class Analyzer:
         
         _socials_unknown = bool(pair_data.get("_socials_unknown", False))
         # Анонимные токены вообще без соцсетей на DEX — это 100% одноразовые дев-бандлеры под слив пула в 0!
-        if not _socials_unknown and not has_socials and not _lottery and not is_pump_curve:
+        # Канонические токены pump.fun с сожжённым LP и реальным объёмом допускаются без соцсетей на DS
+        if not _socials_unknown and not has_socials and not _lottery and not is_pump_curve and not mint.endswith(("pump", "moon")):
             _smart_n_chk = int(pair_data.get("_smart_buyers_count", 0) or 0)
             if liquidity < 75000 and _smart_n_chk < 1:
                 return self._deny(mint, "no-socials-anon-rug", f"🚫 [NO-SOCIALS] У {symbol} ({mint[:8]}) 0 соцсетей/сайтов (Twitter/TG/Web) при ликвидности ${liquidity:,.0f} (<$75k) — анонимный дев-бандлер.")
