@@ -530,7 +530,7 @@ class PaperTracker:
                         _pnl_ratio >= 0.08
                         and not any(k in _er_up for k in ("CRASH", "RUG", "HONEYPOT", "EMERGENCY", "BREAKEVEN", "REVERSAL", "STALL", "STAGNANT", "STOP"))
                     )
-                    _eff_cd = (15 * 60) if _was_profitable else _cd
+                    _eff_cd = (45 * 60) if _was_profitable else _cd
                     if _xt and (_now - _xt) < _eff_cd:
                         _left = (_eff_cd - (_now - _xt)) / 60 if _was_profitable else (_eff_cd - (_now - _xt)) / 3600
                         _unit = "м" if _was_profitable else "ч"
@@ -559,7 +559,7 @@ class PaperTracker:
                 and not any(k in _er_m_up for k in ("CRASH", "RUG", "HONEYPOT", "EMERGENCY", "BREAKEVEN", "REVERSAL", "STALL", "STAGNANT", "STOP"))
             )
             
-            _req_cd = (15 * 60) if _was_profitable else (4 * 3600)
+            _req_cd = (45 * 60) if _was_profitable else (4 * 3600)
             if not _is_vip and time_since_exit < _req_cd:
                 if _was_profitable:
                     print(f"⏳ Кулдаун профитной монеты: {symbol} закрыт в +${_pnl:.2f}. Ждем еще {int(_req_cd - time_since_exit)}с перед возможным перезаходом во 2-ю волну.")

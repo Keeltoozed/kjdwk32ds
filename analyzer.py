@@ -1897,14 +1897,8 @@ class Analyzer:
                 f"🚫 [M1-FILTER] {symbol} ({mint[:8]}): 1м свеча {_m1:+.1f}% вне коридора [{_min_m1_floor:+.1f}%, +{_max_m1_cfg:.0f}%].",
             )
 
-        # 4. Anti-FOMO: Защита от перегретых вершин (для свежих выпускников <=90м допускаем h1 до +2500%, т.к. h1 включает рост на кёрве $5k->$69k!)
-        _base_max_entry_h1 = float(getattr(config, "MAX_ENTRY_H1_PCT", 1500.0))
-        _is_active_fresh_rocket = (
-            _age_min_pre <= 90.0
-            and _vm5_pre >= 3000.0
-            and _b5_pre >= _s5_pre * 1.05
-        )
-        _max_entry_h1 = 2500.0 if _is_active_fresh_rocket else _base_max_entry_h1
+        # 4. Anti-FOMO: Защита от перегретых вершин (для свежих миграций <=15м допускаем h1 до +2500%, т.к. h1 включает рост на кёрве!)
+        _max_entry_h1 = config.get_max_entry_h1_pct(_age_min_pre, _vm5_pre, _b5_pre, _s5_pre, _raw_liq_chk)
         _max_entry_m5 = float(getattr(config, "MAX_ENTRY_M5_PCT", 120.0))
         if _h1 > _max_entry_h1 and _age_min_pre > 4.0:
             return self._deny(

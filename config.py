@@ -67,10 +67,29 @@ DEV_MAX_TOKEN_PCT = 0.10       # Дев не должен держать бол�
 LIQ_LOCKED_BURNED_MIN_PCT = 0.50  # Минимум 50% ликвидности залокировано или сожжено (LP токены дева)
 
 # === ФИЛЬТРЫ ВХОДА (РАЗРЕШАЕМ ВХОД В БЫСТРЫЕ РАКЕТЫ) ===
-MAX_ENTRY_H1_PCT = 1500.0       # Разрешаем сильные пампы до +1500% за 1ч (не срезаем взлетающие ракеты!)
+MAX_ENTRY_H1_PCT = 350.0        # Потолок роста за 1ч для зрелых токенов (+350%): блок перегретых вершин (свежим миграциям <=15м отдельный допуск)
 MAX_ENTRY_M5_PCT = 120.0        # Потолок m5: до +120% (ловим взлетающие ракеты, а не только стоячие монеты!)
 MAX_ENTRY_M1_PCT = 28.0         # Вход в импульс: до +28.0% (вместо 12%)
 REQUIRE_SOCIALS_MIN_AGE_MIN = 25.0  # Требуем соцсети ТОЛЬКО после 25 минут (на старте DexScreener не успевает индексировать)
+
+
+def get_max_entry_h1_pct(
+    age_min: float,
+    vol_m5: float = 0.0,
+    buys_m5: int = 0,
+    sells_m5: int = 0,
+    liq_usd: float = 0.0,
+    m5_pct: float = 1.5,
+) -> float:
+    """Return dynamic max h1% entry cap: permit curve runup only for fresh migrations (<=15m)."""
+    base = float(MAX_ENTRY_H1_PCT)
+    _m5_ok = True if m5_pct is None else (float(m5_pct) >= 1.5)
+    _flow_ok = vol_m5 >= 3000.0 and buys_m5 >= int(sells_m5 * 1.05) and _m5_ok
+    if age_min <= 15.0 and _flow_ok:
+        return max(base, 2500.0)
+    if age_min <= 45.0 and liq_usd >= 20000.0 and vol_m5 >= 10000.0 and buys_m5 >= int(sells_m5 * 1.15) and _m5_ok:
+        return max(base, 600.0)
+    return base
 
 STREAK_COOLDOWN_ENABLED = False
 STREAK_MAX_CONSECUTIVE_LOSSES = 5

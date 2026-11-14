@@ -156,9 +156,9 @@ class MatureExitManager:
                 _trail_dist = _mb_dist
             # Ниже +110% пика мунбэг тоже дышит свободно — стоп-лосс его держит
         else:
-            # === ОБЫЧНАЯ ПОЗИЦИЯ (ДО МУНБЭГА): МНОГОУРОВНЕВАЯ ЗАЩИТА ПРИБЫЛИ + РАКЕТНЫЙ ТРЕЙЛИНГ ===
-            # До +40% позиция дышит свободно (чтобы не выбивать ракеты на стандартном откате -20%),
-            # а начиная с +40%..+110% включаем ступенчатую страховку прибыли!
+            # === ОБЫЧНАЯ ПОЗИЦИЯ (ДО МУНБЭГА): ЗАЩИТА ПРИБЫЛИ БЕЗ УДУШЕНИЯ РАКЕТ ===
+            # До +38% позиция дышит свободно (не выбиваем ракеты вроде DOGCOIN/YOUNGBULL на откате -15%..-20%,
+            # а застрявшие без нового ATH +22%+ страхует Mid-Peak Profit Shield после 2.0м).
             if max_pnl_pct >= 5.00:         # +500%+ (6x - 11x+ гипер-ракета)
                 _floor_pnl = round(max_pnl_pct * 0.70, 2)
                 _trail_dist = 0.18
@@ -169,14 +169,14 @@ class MatureExitManager:
                 _floor_pnl = 0.66           # пол +66% (TP1 уже в кармане)
                 _trail_dist = 0.25
             elif max_pnl_pct >= 0.70:       # +70%..+109% (сильный импульс перед 2x)
-                _floor_pnl = round(max_pnl_pct * 0.62, 2)  # фиксируем 62% от пика (минимум +43%..+67%)
-                _trail_dist = 0.18
-            elif max_pnl_pct >= 0.40:       # +40%..+69% (уверенный разгон — кейсы YOUNGBULL +40.4%, ANGEL +46.7%)
-                _floor_pnl = round(max_pnl_pct * 0.60, 2)  # фиксируем 60% от пика (+24% при пике +40%, +28% при пике +47%, не отдаём профит до +3.9%!)
-                _trail_dist = 0.16
-            elif max_pnl_pct >= 0.25:       # +25%..+39% (средний импульс)
-                _floor_pnl = round(max_pnl_pct * 0.50, 2)  # фиксируем половину импульса (+12.5%..+19.5%)
-                _trail_dist = 0.16
+                _floor_pnl = round(max_pnl_pct * 0.55, 2)  # фиксируем 55% от пика (+38%..+60%)
+                _trail_dist = 0.22
+            elif max_pnl_pct >= 0.55:       # +55%..+69% (зона TP1, оставляем запас 22% под вторую волну)
+                _floor_pnl = round(max_pnl_pct * 0.45, 2)  # пол +25%..+31%
+                _trail_dist = 0.22
+            elif max_pnl_pct >= 0.38:       # +38%..+54% (крупный разгон перед TP1 — широкий аварийный пол +10% без тесного трейлинга)
+                _floor_pnl = 0.10
+                _trail_dist = None
 
         if _floor_pnl is not None and minutes_held >= 0.20:
             drop_from_max = (position.max_price_usd - current_price) / position.max_price_usd if position.max_price_usd > 0 else 0.0

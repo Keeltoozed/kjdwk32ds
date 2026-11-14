@@ -167,11 +167,10 @@ async def fetch_jup_tokens() -> list:
                     continue
                 if age_m > 60.0 and pc5 < 2.0 and vol5 < 15000.0:
                     continue
-                # В Jupiter API v2 stats1h.priceChange считается от стартовой цены кривой ($2.8k FDV -> $68k+ FDV = +1500..+3000%).
-                # Поэтому для свежих выпускников (<= 120м) с живым объёмом разрешаем pc1h до 3500%!
-                _is_fresh_jup = age_m <= 120.0
-                _max_pc1h = 3500.0 if (_is_fresh_jup and vol5 >= 2500.0 and b5 >= int(s5 * 0.85)) else float(getattr(config, "MAX_ENTRY_H1_PCT", 350.0))
-                if (pc1h > _max_pc1h and age_m > 120.0) or (pc1h > _max_pc1h and not _is_fresh_jup) or (pc1h < -25.0 and pc5 < 12.0):
+                # Поэтому для свежих выпускников (<= 15м) с живым объёмом разрешаем pc1h до 2500%!
+                _is_fresh_jup = age_m <= 15.0
+                _max_pc1h = config.get_max_entry_h1_pct(age_m, vol5, b5, s5, liq, None)
+                if pc1h > _max_pc1h or (pc1h < -25.0 and pc5 < 12.0):
                     continue
                 _min_v5_req = 800.0 if age_m <= 15.0 else float(getattr(config, "MIN_VOLUME_M5", 2000.0))
                 if vol5 < _min_v5_req:
@@ -465,8 +464,7 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
             print(f"🚫 [{source_tag}-M1-SPIKE] {_sym_tmp} ({mint[:8]}): m1 +{_m1_j:.1f}% > +{_max_m1_cfg_j:.1f}% без перевеса покупателей — отмена входа.")
             return False
     _h1_j = float(_pc_j.get("h1", 0) or 0)
-    _is_fresh_j = _age_j <= 120.0
-    _max_h1_j = 2500.0 if (_is_fresh_j and _m5_j >= 2.0 and _b5_j >= _s5_j * 1.05) else float(getattr(config, "MAX_ENTRY_H1_PCT", 350.0))
+    _max_h1_j = config.get_max_entry_h1_pct(_age_j, _vol5_j, _b5_j, _s5_j, _liq_j, _m5_j)
     if _h1_j > _max_h1_j:
         print(f"🚫 [{source_tag}-H1-EXHAUSTED] {_sym_tmp} ({mint[:8]}): h1 {_h1_j:+.0f}% > +{_max_h1_j:.0f}% — памп уже отработал, вход = вершина.")
         return False
@@ -577,8 +575,8 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
         if ratio > 1.16:
             print(f"🚫 [{source_tag}-PRICE-MISMATCH] {_sym_tmp} ({mint[:8]}): Jupiter (${jup_price:.8f}) vs Dex (${ds_price:.8f}) расхождение {ratio:.2f}x (>1.16x) — блок от ложного стопа.")
             return False
-        if jup_price < ds_price * 0.90:
-            analyzer._deny(mint, "jup-live-dump >10%", f"🚫 [{source_tag}-LIVE-DUMP] {_sym_tmp} ({mint[:8]}): живая котировка Jupiter (${jup_price:.8f}) уже ниже DexScreener (${ds_price:.8f}) на {(1.0 - jup_price/ds_price)*100:.1f}% [>10%] — слив в процессе!")
+        if jup_price < ds_price * 0.965:
+            analyzer._deny(mint, "jup-live-dump >3.5%", f"🚫 [{source_tag}-LIVE-DUMP] {_sym_tmp} ({mint[:8]}): живая котировка Jupiter (${jup_price:.8f}) уже ниже DexScreener (${ds_price:.8f}) на {(1.0 - jup_price/ds_price)*100:.1f}% [>3.5%] — слив в процессе!")
             return False
         price = jup_price
     elif ds_price > 0:
@@ -608,8 +606,7 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
     _m1_j = float(((td or {}).get("priceChange") or {}).get("m1", 0) or 0)
     _h1_j = float(((td or {}).get("priceChange") or {}).get("h1", 0) or 0)
     _c_at_j = (td or {}).get("pairCreatedAt") or 0
-    _age_j = ((time.time() * 1000 - _c_at_j) / 60000.0) if _c_at_j else 30.0
-    _max_h1_cfg = float(getattr(config, "MAX_ENTRY_H1_PCT", 350.0))
+    _age_j = ((time.time() * 1000 - _c_at_j) / 60000.0) if _c_at_j else float((td or {}).get("_gt_age_min") or 0.0)
     _max_m5_cfg = float(getattr(config, "MAX_ENTRY_M5_PCT", 120.0))
     _max_age_cfg = float(getattr(config, "SOLANA_MAX_AGE_MIN", 720.0))
     _req_soc_age = float(getattr(config, "REQUIRE_SOCIALS_MIN_AGE_MIN", 20.0))
@@ -683,7 +680,7 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
             print(f"🚫 [{source_tag}-SELL-PRESSURE] {_sym_tmp}: продавцов {_s5_j}/{_tot_tx_j} ({_sell_ratio_j*100:.0f}%) при v/l {_vl_ratio_j:.1f}x — сброс китов, отмена!")
             return False
 
-    _eff_max_h1_j = 2500.0 if (_age_j <= 120.0 and _vm5_j >= 3000.0 and _b5_j >= _s5_j * 1.05) else _max_h1_cfg
+    _eff_max_h1_j = config.get_max_entry_h1_pct(_age_j, _vm5_j, _b5_j, _s5_j, _liq_j, _m5_j)
     if _h1_j > _eff_max_h1_j:
         print(f"🚫 [{source_tag}-FOMO-H1] {_sym_tmp}: h1 +{_h1_j:.0f}% > +{_eff_max_h1_j:.0f}% — перегретый часовой памп, отмена!")
         return False
@@ -784,8 +781,9 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
                 return False
             _jup_live_px = await JupiterAPI.get_price(mint)
             if _jup_live_px and _jup_live_px > 0 and price > 0:
-                if _jup_live_px < price * 0.975:
-                    print(f"🚫 [{source_tag}-LIVE-DUMP] {_sym_tmp} ({mint[:8]}): живая цена Jupiter (${_jup_live_px:.8f}) уже на {(1.0 - _jup_live_px / price) * 100:.1f}% ниже DexScreener (${price:.8f}) — обвал в моменте, отмена!")
+                _ref_dump_px = min(price, ds_price) if ds_price > 0 else price
+                if _jup_live_px < _ref_dump_px * 0.965:
+                    print(f"🚫 [{source_tag}-LIVE-DUMP] {_sym_tmp} ({mint[:8]}): живая цена Jupiter (${_jup_live_px:.8f}) уже на {(1.0 - _jup_live_px / _ref_dump_px) * 100:.1f}% ниже ориентира (${_ref_dump_px:.8f}) — обвал в моменте, отмена!")
                     return False
                 _jup_ratio = max(_jup_live_px, price) / min(_jup_live_px, price)
                 if _jup_ratio > 1.15:

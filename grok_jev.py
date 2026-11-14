@@ -581,15 +581,8 @@ class GrokJevEngine:
             else:
                 print(f"💎 [JEV-ORGANIC-STEALTH] {symbol} ({mint[:8]}): 0 соцсетей, но доказан чистый органический поток (${vol_m5:,.0f}, {b5}b/{s5}s, v/l {_vol_liq_ratio_g:.2f}) — пропуск.")
 
-        # 2.5. Exhaustion Guard: блокируем перегретые поздние пампы, но пускаем активные ракеты (h1 включает рост на кёрве $5k->$69k!)
-        _base_max_h1_jev = float(getattr(_c, "MAX_ENTRY_H1_PCT", 350.0))
-        _is_active_fresh_jev = (
-            age_min <= 120.0
-            and vol_m5 >= 3000.0
-            and b5 >= int(s5 * 1.05)
-            and m5 >= 1.5
-        )
-        _max_h1_allowed = 2500.0 if _is_active_fresh_jev else _base_max_h1_jev
+        # 2.5. Exhaustion Guard: блокируем перегретые поздние пампы, но пускаем свежие миграции <=15м (h1 включает рост на кёрве)
+        _max_h1_allowed = _c.get_max_entry_h1_pct(age_min, vol_m5, b5, s5, eff_liq, m5)
         if _links_cnt_g == 0 and not _soc_unk_g and not _is_organic_stealth and not (is_pump or age_min <= 10.0) and (h1 > 160.0 or m5 > 110.0):
             return False, f"exhaustion-no-soc-top h1 {h1:+.0f}%, m5 {m5:+.0f}% (0 socials pump-and-dump top)"
         if h1 > _max_h1_allowed and age_min > 4.0:
@@ -962,9 +955,7 @@ class GrokJevEngine:
             return False, -0.14, 0.0, f"fomo-spike (m5 {m5:+.1f}% > +{_max_m5_cap:.0f}%) — buying local top, wait for reset"
         if m1 > _max_m1 and not _m1_is_phantom:
             return False, -0.14, 0.0, f"m1-spike (m1 {m1:+.1f}% > +{_max_m1:.1f}%) — vertical push, wait for consolidation"
-        _base_max_h1_flush = float(getattr(_c, "MAX_ENTRY_H1_PCT", 350.0))
-        _is_active_fresh_flush = (_age_m <= 120.0 and vol5 >= 3000.0 and b5 >= s5 * 1.05 and m5 >= 1.5)
-        _max_h1_flush = 2500.0 if _is_active_fresh_flush else _base_max_h1_flush
+        _max_h1_flush = _c.get_max_entry_h1_pct(_age_m, vol5, b5, s5, _liq_usd, m5)
         if _h1 > _max_h1_flush and _age_m > 4.0:
             return False, -0.14, 0.0, f"h1-exhaustion (h1 {_h1:+.1f}% > +{_max_h1_flush:.0f}% at {_age_m:.0f}m) — pump already exhausted"
         if _liq_usd > 0 and _liq_usd < _min_liq:
