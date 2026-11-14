@@ -387,10 +387,31 @@ async def get_token_data(mint: str, max_cache_age: float = TD_TTL) -> dict:
 _ALLOWED_SOL_QUOTES = {
     "so11111111111111111111111111111111111111112",
     "epjfwdd5aufqssqem2qn1xzybapc8g4weggkzwytdt1v",
-    "es9vmfrzacerjmffrff4h2fyd4kconky11mcce8benwnyb",
+    "es9vmfrzacermjfrf4h2fyd4kconky11mcce8benwnyb",
     "xs8s1uus1zvs2p7iwtsg3b6fkhpvmwz4gyu3gwamwhz",  # QQQx (Nasdaq xStock)
+    "ttwofwage91ofhzs7kpqdyrvrkmevgm88xijgvqfbko",  # TTWO (Take-Two xStock)
+    "spcxxcqxj6e5djdvnovhn8744zkbhm2byudu45bimgb",  # SPCX (SpaceX xStock)
+    "3nz9jmvbmgaqocybic2c7lqcjscmgaz6vqqtdzcqmjh",  # WBTC
 }
-_ALLOWED_SOL_SYMBOLS = {"SOL", "WSOL", "USDC", "USDT", "QQQX", "SPYX", "USD"}
+_ALLOWED_SOL_SYMBOLS = {
+    "SOL", "WSOL", "USDC", "USDT", "USD1", "USDS", "PYUSD",
+    "WBTC", "WETH", "QQQX", "SPYX", "TTWO", "SPCX", "TSLAX", "NVDAX", "USD",
+}
+
+
+def _is_allowed_sol_quote(p: dict, mint: str, min_ps_liq: float = 4000.0) -> bool:
+    """Разрешает SOL/USDC/USDT/xStocks и официальные не-мемные PumpSwap пулы."""
+    q_addr = str((p.get("quoteToken") or {}).get("address") or "").lower()
+    q_sym = str((p.get("quoteToken") or {}).get("symbol") or "").upper()
+    if not q_addr or q_addr in _ALLOWED_SOL_QUOTES or q_sym in _ALLOWED_SOL_SYMBOLS:
+        return True
+    _dex_low_q = str(p.get("dexId") or "").lower()
+    return (
+        _dex_low_q == "pumpswap"
+        and mint.endswith("pump")
+        and not q_addr.endswith(("pump", "moon", "bonk", "bags"))
+        and float(((p.get("liquidity") or {}).get("usd", 0) or 0)) >= min_ps_liq
+    )
 
 
 async def _ds_token_data(mint: str) -> dict:
@@ -409,7 +430,15 @@ async def _ds_token_data(mint: str) -> dict:
                     continue
                 q_addr = str((p.get("quoteToken") or {}).get("address") or "").lower()
                 q_sym = str((p.get("quoteToken") or {}).get("symbol") or "").upper()
-                if q_addr and q_addr not in _ALLOWED_SOL_QUOTES and q_sym not in _ALLOWED_SOL_SYMBOLS:
+                _dex_low_q = str(p.get("dexId") or "").lower()
+                _is_official_ps = (
+                    _dex_low_q == "pumpswap"
+                    and mint.endswith("pump")
+                    and q_addr
+                    and not q_addr.endswith(("pump", "moon", "bonk", "bags"))
+                    and float(((p.get("liquidity") or {}).get("usd", 0) or 0)) >= 4000.0
+                )
+                if q_addr and q_addr not in _ALLOWED_SOL_QUOTES and q_sym not in _ALLOWED_SOL_SYMBOLS and not _is_official_ps:
                     continue
                 sol.append(p)
             if sol:
@@ -597,9 +626,7 @@ async def _ds_bulk_prices(mints: list, pair_hints: dict = None) -> dict:
                 addr = (p.get("baseToken") or {}).get("address", "")
                 if not addr or addr not in _mset:
                     continue
-                q_addr = str((p.get("quoteToken") or {}).get("address") or "").lower()
-                q_sym = str((p.get("quoteToken") or {}).get("symbol") or "").upper()
-                if q_addr and q_addr not in _ALLOWED_SOL_QUOTES and q_sym not in _ALLOWED_SOL_SYMBOLS:
+                if not _is_allowed_sol_quote(p, addr):
                     continue
                 px = float(p.get("priceUsd", 0) or 0)
                 liq = float((p.get("liquidity") or {}).get("usd", 0) or 0)
@@ -636,9 +663,7 @@ async def _ds_bulk_prices(mints: list, pair_hints: dict = None) -> dict:
                             addr = (p.get("baseToken") or {}).get("address", "")
                             if not addr or addr not in _mset:
                                 continue
-                            q_addr = str((p.get("quoteToken") or {}).get("address") or "").lower()
-                            q_sym = str((p.get("quoteToken") or {}).get("symbol") or "").upper()
-                            if q_addr and q_addr not in _ALLOWED_SOL_QUOTES and q_sym not in _ALLOWED_SOL_SYMBOLS:
+                            if not _is_allowed_sol_quote(p, addr):
                                 continue
                             px = float(p.get("priceUsd", 0) or 0)
                             liq = float((p.get("liquidity") or {}).get("usd", 0) or 0)

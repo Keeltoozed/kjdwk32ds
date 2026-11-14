@@ -99,29 +99,34 @@ async def fetch_jup_tokens() -> list:
         headers = _headers()
         allow_raw_curve = bool(getattr(config, "ALLOW_UNGRADUATED_PUMPFUN", False))
 
-        # 1. Jupiter Tokens API v2 (8 параллельных срезов: 5m, 1h, 6h тренды + органика + объем + recent)
-        (s1, d1), (s_org, d_org), (s3, d3), (s1h, d1h), (s2, d2), (s_tr1h, d_tr1h), (s_org1h, d_org1h), (s6h, d6h) = await asyncio.gather(
-            fetch_json(f"{BASE}/toptrending/5m?limit=100", headers=headers, timeout=8, retries=0),
-            fetch_json(f"{BASE}/toporganicscore/5m?limit=100", headers=headers, timeout=8, retries=0),
-            fetch_json(f"{BASE}/toptraded/5m?limit=100", headers=headers, timeout=8, retries=0),
-            fetch_json(f"{BASE}/toptrending/1h?limit=100", headers=headers, timeout=8, retries=0),
-            fetch_json(f"{BASE}/recent", headers=headers, timeout=8, retries=0),
-            fetch_json(f"{BASE}/toptraded/1h?limit=100", headers=headers, timeout=8, retries=0),
-            fetch_json(f"{BASE}/toporganicscore/1h?limit=100", headers=headers, timeout=8, retries=0),
-            fetch_json(f"{BASE}/toptrending/6h?limit=100", headers=headers, timeout=8, retries=0),
+        # 1. Jupiter Tokens API v2 (5 главных срезов, чередуем pro/lite + stagger 0.22s без 429 на recent):
+        _jup_sem = asyncio.Semaphore(2)
+
+        async def _jup_get(subpath: str, prefer_lite: bool = False):
+            async with _jup_sem:
+                primary = f"{LITE_BASE}/{subpath}" if prefer_lite else f"{BASE}/{subpath}"
+                primary_h = None if prefer_lite else headers
+                fallback = f"{BASE}/{subpath}" if prefer_lite else f"{LITE_BASE}/{subpath}"
+                fallback_h = headers if prefer_lite else None
+                st, data = await fetch_json(primary, headers=primary_h, timeout=8, retries=0)
+                if st != 200 or not isinstance(data, list):
+                    await asyncio.sleep(0.25)
+                    st_l, data_l = await fetch_json(fallback, headers=fallback_h, timeout=8, retries=0)
+                    if st_l == 200 and isinstance(data_l, list):
+                        return st_l, data_l
+                await asyncio.sleep(0.22)
+                return st, data
+
+        (s1, d1), (s_org, d_org), (s3, d3), (s1h, d1h), (s2, d2) = await asyncio.gather(
+            _jup_get("toptrending/5m?limit=100", prefer_lite=False),
+            _jup_get("toporganicscore/5m?limit=100", prefer_lite=True),
+            _jup_get("toptraded/5m?limit=100", prefer_lite=False),
+            _jup_get("toptrending/1h?limit=100", prefer_lite=True),
+            _jup_get("recent", prefer_lite=False),
         )
-        # Авто-фоллбэк на бесплатный lite-api.jup.ag при 429/401/403 на основном хосте
-        if s1 in (429, 401, 403) and s_org in (429, 401, 403):
-            (s1, d1), (s_org, d_org), (s3, d3), (s1h, d1h), (s2, d2), (s_tr1h, d_tr1h), (s_org1h, d_org1h), (s6h, d6h) = await asyncio.gather(
-                fetch_json(f"{LITE_BASE}/toptrending/5m?limit=100", timeout=8, retries=0),
-                fetch_json(f"{LITE_BASE}/toporganicscore/5m?limit=100", timeout=8, retries=0),
-                fetch_json(f"{LITE_BASE}/toptraded/5m?limit=100", timeout=8, retries=0),
-                fetch_json(f"{LITE_BASE}/toptrending/1h?limit=100", timeout=8, retries=0),
-                fetch_json(f"{LITE_BASE}/recent", timeout=8, retries=0),
-                fetch_json(f"{LITE_BASE}/toptraded/1h?limit=100", timeout=8, retries=0),
-                fetch_json(f"{LITE_BASE}/toporganicscore/1h?limit=100", timeout=8, retries=0),
-                fetch_json(f"{LITE_BASE}/toptrending/6h?limit=100", timeout=8, retries=0),
-            )
+        s_tr1h, d_tr1h = 0, []
+        s_org1h, d_org1h = 0, []
+        s6h, d6h = 0, []
 
         ranked = []
         seen = set()
@@ -160,17 +165,24 @@ async def fetch_jup_tokens() -> list:
                     continue
                 if age_m > 360.0 and (vol5 < 6000.0 or pc5 < 5.0 or liq < 25000.0):
                     continue
-                if age_m > 60.0 and pc5 < 2.0:
+                if age_m > 60.0 and pc5 < 2.0 and vol5 < 15000.0:
                     continue
-                _is_fresh_jup = age_m <= 4.0
-                _max_pc1h = 2500.0 if (_is_fresh_jup and pc5 >= 2.0 and b5 >= s5) else float(getattr(config, "MAX_ENTRY_H1_PCT", 350.0))
-                if (pc1h > _max_pc1h and age_m > 4.0) or (pc1h < -25.0 and pc5 < 12.0):
+                # В Jupiter API v2 stats1h.priceChange считается от стартовой цены кривой ($2.8k FDV -> $68k+ FDV = +1500..+3000%).
+                # Поэтому для свежих выпускников (<= 120м) с живым объёмом разрешаем pc1h до 3500%!
+                _is_fresh_jup = age_m <= 120.0
+                _max_pc1h = 3500.0 if (_is_fresh_jup and vol5 >= 2500.0 and b5 >= int(s5 * 0.85)) else float(getattr(config, "MAX_ENTRY_H1_PCT", 350.0))
+                if (pc1h > _max_pc1h and age_m > 120.0) or (pc1h > _max_pc1h and not _is_fresh_jup) or (pc1h < -25.0 and pc5 < 12.0):
                     continue
-                _min_v5_req = 800.0 if _is_fresh_jup else float(getattr(config, "MIN_VOLUME_M5", 2000.0))
-                if pc5 < min_pc5 or vol5 < _min_v5_req:
+                _min_v5_req = 800.0 if age_m <= 15.0 else float(getattr(config, "MIN_VOLUME_M5", 2000.0))
+                if vol5 < _min_v5_req:
+                    continue
+                # Пропускаем высокообъёмные ракеты (vol5 >= $8k, b5 >= 85% s5) даже на локальном 1м откате (pc5 >= -12%),
+                # чтобы DexScreener префетч и стратегия "We bid the flush" в grok_jev могли забрать откат!
+                _is_high_vol_pullback = (vol5 >= 8000.0 and b5 >= int(s5 * 0.85) and pc5 >= -12.0 and pc1h >= 10.0)
+                if pc5 < min_pc5 and not _is_high_vol_pullback:
                     continue
                 seen.add(m)
-                ranked.append((pc5, vol5, sym, m, tag))
+                ranked.append((max(pc5, 3.5 if _is_high_vol_pullback else pc5), vol5, sym, m, tag))
 
         if s_org == 200:
             _add_jup_list(d_org, "organic_5m", min_pc5=1.0)
@@ -246,9 +258,9 @@ async def fetch_jup_tokens() -> list:
                         continue
                     if age_p > 360.0 and (vol5_p < 6000.0 or m5_p < 5.0 or liq_p < 25000.0):
                         continue
-                    _is_fresh_ds = age_p <= 4.0
-                    _max_h1_ds = 2500.0 if (_is_fresh_ds and b5_p >= s5_p * 1.15) else float(getattr(config, "MAX_ENTRY_H1_PCT", 350.0))
-                    if h1_p > _max_h1_ds and age_p > 4.0:
+                    _is_fresh_ds = age_p <= 120.0
+                    _max_h1_ds = 2500.0 if (_is_fresh_ds and b5_p >= s5_p * 1.05 and vol5_p >= 3000.0) else float(getattr(config, "MAX_ENTRY_H1_PCT", 350.0))
+                    if h1_p > _max_h1_ds and age_p > 120.0:
                         continue
                     seen.add(addr)
                     ranked.append((m5_p, vol5_p, sym_p, addr, "ds_radar"))
@@ -259,12 +271,20 @@ async def fetch_jup_tokens() -> list:
         try:
             import market_data
             gt_items = await market_data.get_trending()
+            _td_cache_gt = getattr(market_data, "_TD_CACHE", {}) or {}
             for item in (gt_items or []):
                 addr = str(item.get("tokenAddress") or "").strip()
                 if not addr or addr.startswith("0x") or len(addr) < 32 or len(addr) > 44 or addr in seen or not addr.endswith(("pump", "moon")):
                     continue
+                _gt_hit = _td_cache_gt.get(addr)
+                _gt_td = _gt_hit[1] if (isinstance(_gt_hit, tuple) and len(_gt_hit) >= 2 and isinstance(_gt_hit[1], dict)) else {}
+                _gt_m5 = float(((_gt_td.get("priceChange") or {}).get("m5", 0) or 0)) if _gt_td else 5.0
+                _gt_v5 = float(((_gt_td.get("volume") or {}).get("m5", 0) or 0)) if _gt_td else 5000.0
+                _gt_sym = str(((_gt_td.get("baseToken") or {}).get("symbol") or addr[:6])).upper() if _gt_td else addr[:6]
+                if _gt_td and (_gt_v5 < 1500.0 or _gt_m5 < -10.0):
+                    continue
                 seen.add(addr)
-                ranked.append((5.0, 0.0, addr[:6], addr, "gt_trending"))
+                ranked.append((max(_gt_m5, 4.0), max(_gt_v5, 5000.0), _gt_sym, addr, "gt_trending"))
         except Exception:
             pass
 
@@ -289,8 +309,8 @@ async def fetch_jup_tokens() -> list:
                         if not addr or addr.startswith("0x") or len(addr) < 32 or len(addr) > 44 or addr in seen or not addr.endswith(("pump", "moon")) or str(item.get("symbol") or "").upper() in SKIP_SYMBOLS:
                             continue
                         seen.add(addr)
-                        # Топ-бусты получают высокий базовый моментум для попадания в топ очереди
-                        ranked.append((8.0, 25000.0, addr[:6], addr, "ds_top_boost"))
+                        # Умеренный базовый вес для бустов, чтобы реальные 5m ракеты с подтверждённым объёмом ($50k+) шли ПЕРВЫМИ
+                        ranked.append((2.5, 1500.0, addr[:6], addr, "ds_top_boost"))
         except Exception:
             pass
 
@@ -315,18 +335,19 @@ async def fetch_jup_tokens() -> list:
                     continue
                 st5 = t.get("stats5m") or {}
                 pc5 = float(st5.get("priceChange") or 0.0)
+                vol5_r = float(st5.get("buyVolume") or 0.0) + float(st5.get("sellVolume") or 0.0)
                 seen.add(m)
-                ranked.append((pc5, 0.0, sym, m, "recent"))
+                ranked.append((max(pc5, 2.0), max(vol5_r, 2000.0), sym, m, "recent"))
 
         # Сортируем все импульсные монеты по РОКЕТ-ВЕЛОСИТИ (импульс свечи * логарифм объема * тег-бонус):
-        # Настоящие ракеты с объёмом $50k-$500k и бустами ВСЕГДА идут первыми перед тихими $1k щиткоинами!
+        # Настоящие ракеты с объёмом $50k-$500k ВСЕГДА идут первыми перед спящими бустами!
         import math
         def _rocket_velocity(x):
             # x = (pc5, vol5, sym, m, tag)
             pc = max(float(x[0]), 0.1)
             vol = max(float(x[1]), 100.0)
             tag = str(x[4])
-            tag_mult = 2.0 if ("top_boost" in tag or "ds_radar" in tag) else 1.0
+            tag_mult = 2.0 if ("ds_radar" in tag or "gt_trending" in tag or "organic_5m" in tag or "trending_5m" in tag) else 1.0
             return pc * math.log10(vol) * tag_mult
 
         ranked.sort(key=_rocket_velocity, reverse=True)
@@ -408,9 +429,9 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
             print(f"🚫 [{source_tag}-M1-SPIKE] {_sym_tmp} ({mint[:8]}): m1 +{_m1_j:.1f}% > +{_max_m1_cfg_j:.1f}% без перевеса покупателей — отмена входа.")
             return False
     _h1_j = float(_pc_j.get("h1", 0) or 0)
-    _is_fresh_j = _age_j <= 4.0
-    _max_h1_j = 2500.0 if (_is_fresh_j and _m5_j >= 2.5 and _b5_j >= _s5_j * 1.15) else float(getattr(config, "MAX_ENTRY_H1_PCT", 350.0))
-    if _h1_j > _max_h1_j and _age_j > 4.0:
+    _is_fresh_j = _age_j <= 120.0
+    _max_h1_j = 2500.0 if (_is_fresh_j and _m5_j >= 2.0 and _b5_j >= _s5_j * 1.05) else float(getattr(config, "MAX_ENTRY_H1_PCT", 350.0))
+    if _h1_j > _max_h1_j:
         print(f"🚫 [{source_tag}-H1-EXHAUSTED] {_sym_tmp} ({mint[:8]}): h1 {_h1_j:+.0f}% > +{_max_h1_j:.0f}% — памп уже отработал, вход = вершина.")
         return False
     _min_m1_j = -12.0 if (_m5_j >= 8.0 and _b5_j >= _s5_j) else (-8.0 if _m5_j >= 5.0 else -4.0)
@@ -624,8 +645,8 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
             print(f"🚫 [{source_tag}-SELL-PRESSURE] {_sym_tmp}: продавцов {_s5_j}/{_tot_tx_j} ({_sell_ratio_j*100:.0f}%) при v/l {_vl_ratio_j:.1f}x — сброс китов, отмена!")
             return False
 
-    _eff_max_h1_j = 2500.0 if (_age_j <= 4.0 and _vm5_j >= 4000.0 and _b5_j >= _s5_j * 1.15) else _max_h1_cfg
-    if _h1_j > _eff_max_h1_j and _age_j > 4.0:
+    _eff_max_h1_j = 2500.0 if (_age_j <= 120.0 and _vm5_j >= 3000.0 and _b5_j >= _s5_j * 1.05) else _max_h1_cfg
+    if _h1_j > _eff_max_h1_j:
         print(f"🚫 [{source_tag}-FOMO-H1] {_sym_tmp}: h1 +{_h1_j:.0f}% > +{_eff_max_h1_j:.0f}% — перегретый часовой памп, отмена!")
         return False
     _links_j = len((td or {}).get("info", {}).get("socials", []) or []) + len((td or {}).get("info", {}).get("websites", []) or [])
@@ -839,7 +860,7 @@ async def jup_loop(analyzer, tracker):
                     skipped_nodata = 0
                     immature_count = 0
                     _now_t = _t.time()
-                    _min_age = float(getattr(config, "SOLANA_MIN_AGE_MIN", 2.0))
+                    _min_age = float(getattr(config, "SOLANA_MIN_AGE_MIN", 1.0))
 
                     for m in mints:
                         if not m or m in open_jup or not m.endswith(("pump", "moon")):

@@ -1267,12 +1267,7 @@ class GrokJevEngine:
             matching = [p for p in pairs if str(p.get("chainId", "")).lower() == chain.lower()]
             return max(matching if matching else pairs, key=lambda p: float((p.get("liquidity") or {}).get("usd", 0) or 0)) if (matching or pairs) else None
 
-        ALLOWED_SOL_QUOTES = {
-            "so11111111111111111111111111111111111111112",  # WSOL/SOL
-            "epjfwdd5aufqssqem2qnxzybapc8g4weggkzwytdt1v",  # USDC
-            "es9vmfrzacerjmffrff4h2fyd4kconky11mcce8benwnyb",  # USDT
-        }
-        ALLOWED_SOL_SYMBOLS = {"SOL", "WSOL", "USDC", "USDT"}
+        from market_data import _is_allowed_sol_quote
         sol_pairs = []
         for p in pairs:
             if (p.get("chainId") or "").lower() != "solana":
@@ -1280,9 +1275,7 @@ class GrokJevEngine:
             base_addr = str((p.get("baseToken") or {}).get("address") or "").strip()
             if base_addr and base_addr != address:
                 continue
-            q_addr = str((p.get("quoteToken") or {}).get("address") or "").lower()
-            q_sym = str((p.get("quoteToken") or {}).get("symbol") or "").upper()
-            if q_addr and q_addr not in ALLOWED_SOL_QUOTES and q_sym not in ALLOWED_SOL_SYMBOLS:
+            if not _is_allowed_sol_quote(p, address):
                 continue
             sol_pairs.append(p)
 
@@ -1666,14 +1659,20 @@ class GrokJevEngine:
                                 break
 
                     non_curve = []
+                    pool_pct_sum = 0.0
                     for h in holders:
                         pct = float(h.get("pct", 0) or 0.0)
                         amt = float(h.get("uiAmount", 0) or 0.0)
                         owner = str(h.get("owner") or "")
                         addr = str(h.get("address") or "")
                         if owner in pool_accounts or addr in pool_accounts or owner in DEX_POOL_AUTHORITIES or addr in DEX_POOL_AUTHORITIES:
+                            pool_pct_sum += pct
                             continue
                         if any(w in owner.lower() for w in pool_keywords) or any(w in addr.lower() for w in pool_keywords):
+                            pool_pct_sum += pct
+                            continue
+                        if pct > 50.0:
+                            pool_pct_sum += pct
                             continue
                         non_curve.append((amt, pct, owner))
 
@@ -1689,6 +1688,17 @@ class GrokJevEngine:
 
                     top_10_sum = sum(x[1] for x in top_10)
                     largest_whale = top_10[0][1] if top_10 else 0.0
+
+                    # Детектор распылённой 120-кошельковой сибил-лесенки ДО консолидации в хабы (кейсы CARDANO, SOLFLY, FYAT, JENSEN, NOFOMO):
+                    # Если в пуле лежит <= 48% эмиссии (т.е. >= 52% токенов на руках), но ТОП-10 холдеров суммарно держат < 9.5%
+                    # (или крупнейший холдер < 1.1%), значит 55-80% эмиссии искусственно нарезаны по 0.15%-0.50% на 120-300 ботов!
+                    if 0.0 < pool_pct_sum <= 48.0 and len(top_10) >= 8:
+                        if top_10_sum < 9.5 or largest_whale < 1.10:
+                            return (
+                                False,
+                                f"atomized-sybil-supply (pool={pool_pct_sum:.1f}%, but top10={top_10_sum:.1f}% / top1={largest_whale:.2f}% — 120+ wallet staircase split)",
+                                _h_stats,
+                            )
 
                     # Детектор равномерной сибил-нарезки стека дева (кейс BALLFIN: 19 кошельков по 1.88%..2.71%, CV=0.08, h10/h1=0.82, top20=43%):
                     # В живых ракетах (VICECITY, FYAT, mihao, CATE, FOOD) распределение степенное: CV >= 0.17, h10/h1 <= 0.60.
@@ -1898,6 +1908,12 @@ class GrokJevEngine:
             return False, "non-pump-custom-token (100% Remove LP rug risk — кейсы FRONK, SWJ, SIRIUS, HI, FLY, CRO, SI -99.99%)"
         if not address or address in tracker.get_open_positions():
             return False, "already-held"
+        # Запрет повторного перезахода в уже закрытую монету (кейс YOUNGBULL: закрыли +10% после пика +40.4%, а через 5м перезашли в затухание на -6.7%)
+        if hasattr(tracker, "positions") and address in tracker.positions:
+            _prev_pos = tracker.positions.get(address)
+            _prev_ext = float(getattr(_prev_pos, "exit_time", 0.0) or 0.0)
+            if _prev_ext > 0 and (time.time() - _prev_ext) < 2700.0:
+                return False, "already-traded-cooldown"
         if len(tracker.get_open_positions()) >= getattr(_c, "MAX_CONCURRENT_POSITIONS", 10):
             return False, "max-positions-reached"
 
@@ -2241,16 +2257,23 @@ async def grok_bot_jev_loop(tracker, analyzer=None):
                             evaluated_cooldown[(address, chain)] = now + 86400.0
                             continue
                     _m5_c = float((_td_c.get("priceChange") or {}).get("m5", 0) or 0)
+                    _v5_c = float((_td_c.get("volume") or {}).get("m5", 0) or 0)
+                    _liq_c = float((_td_c.get("liquidity") or {}).get("usd", 0) or 0)
                     _dex_c = str(_td_c.get("dexId", "")).lower()
                     if _dex_c in ("pump", "pumpfun") and not getattr(_c, "ALLOW_UNGRADUATED_PUMPFUN", False):
                         evaluated_cooldown[(address, chain)] = now + 45.0
                         continue
-                    if _m5_c < 1.0 and idx > 15:
-                        evaluated_cooldown[(address, chain)] = now + 60.0
+                    if _liq_c > 0 and _liq_c < float(getattr(_c, "MIN_GRADUATED_LIQ_USD", 2500.0)) * 0.7:
+                        evaluated_cooldown[(address, chain)] = now + 120.0
                         continue
-                    _prio = _m5_c + (50.0 if idx < 15 else 0.0)
+                    if _m5_c < 1.0 and _v5_c < 2000.0:
+                        evaluated_cooldown[(address, chain)] = now + 45.0
+                        continue
+                    import math
+                    _prio = _m5_c + (math.log10(max(_v5_c, 10.0)) * 3.0) + (8.0 if idx < 10 else 0.0)
                 else:
-                    _prio = 25.0 if idx < 25 else 0.0
+                    # Не отдаём слепой +25 приоритет пустышкам из бустов выше реальных муверов с m5 + объёмом
+                    _prio = 2.0 if idx < 15 else 0.0
                 _ranked_cands.append((_prio, address, chain))
 
             _ranked_cands.sort(key=lambda x: x[0], reverse=True)

@@ -208,20 +208,59 @@ def _rpc_sem() -> asyncio.Semaphore:
 async def _rpc_batch(calls: List[Tuple[str, list]], timeout: float = 9.0) -> List[Any]:
     """
     Батч JSON-RPC: [(method, params), ...] -> [result | None, ...].
-    Один HTTP-запрос на весь батч — критично для скорости входа (иначе 2*N запросов).
-    Если RPC вернул HTTP 200 с JSON-RPC error (например Helius -32429 max usage reached)
-    или пустые результаты — автоматически переключается на следующий RPC в списке!
+    Важно: publicnode.com возвращает HTTP 400 ("Maximum number of 'getTransaction' calls in a batch request is 1")
+    при отправке массива getTransaction, а mainnet-beta отклоняет v=1 транзакции с -32015 если maxSupportedTransactionVersion=0.
+    Поэтому для батчей с getTransaction отправляем одиночные запросы конкурентно через asyncio.gather с авто-повтором v=1!
     """
     if not calls:
         return []
     if get_session is None:
         return [None] * len(calls)
 
+    session = await get_session()
+    has_get_tx = any(m == "getTransaction" for m, _ in calls)
+    if has_get_tx:
+        endpoints = _rpc_endpoints()
+        tx_sem = asyncio.Semaphore(8)
+
+        async def _fetch_single_tx(idx: int, method: str, params: list) -> Any:
+            async with tx_sem:
+                for url in endpoints:
+                    try:
+                        req_params = list(params)
+                        if method == "getTransaction" and len(req_params) >= 2 and isinstance(req_params[1], dict):
+                            req_params[1] = dict(req_params[1])
+                        single_payload = {"jsonrpc": "2.0", "id": idx, "method": method, "params": req_params}
+                        async with session.post(
+                            url, json=single_payload, timeout=aiohttp.ClientTimeout(total=min(timeout, 5.0))
+                        ) as resp:
+                            if resp.status != 200:
+                                continue
+                            js = await resp.json(content_type=None)
+                        if isinstance(js, dict) and js.get("error") and "-32015" in str(js.get("error")):
+                            if method == "getTransaction" and len(req_params) >= 2 and isinstance(req_params[1], dict):
+                                req_params[1]["maxSupportedTransactionVersion"] = 1
+                                single_payload["params"] = req_params
+                                async with session.post(
+                                    url, json=single_payload, timeout=aiohttp.ClientTimeout(total=min(timeout, 5.0))
+                                ) as resp2:
+                                    if resp2.status == 200:
+                                        js = await resp2.json(content_type=None)
+                        if isinstance(js, dict) and js.get("result") is not None:
+                            return js.get("result")
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception:
+                        continue
+                return None
+
+        results = await asyncio.gather(*[_fetch_single_tx(i, m, p) for i, (m, p) in enumerate(calls)])
+        return list(results)
+
     payload = [
         {"jsonrpc": "2.0", "id": i, "method": m, "params": p}
         for i, (m, p) in enumerate(calls)
     ]
-    session = await get_session()
     last_err = "?"
     for url in _rpc_endpoints():
         try:
@@ -1035,7 +1074,7 @@ async def analyze_funding_clusters(mint: str, cohort: List[dict]) -> dict:
             ], timeout=4.0)
             burner_funders = set()
             for f_addr, sigs in zip(candidate_funders, f_sigs_res or []):
-                if isinstance(sigs, list) and 1 <= len(sigs) <= 5:
+                if isinstance(sigs, list) and 1 <= len(sigs) <= 6:
                     burner_funders.add(f_addr)
             if len(burner_funders) >= 2:
                 for f_addr in burner_funders:
@@ -1365,12 +1404,21 @@ def _score_clusters(clusters: List[dict]) -> Tuple[float, List[dict]]:
             # (вывод с биржи). Если же 5+ топ-холдеров одного мемкоина профинансированы с одного неизвестного кошелька — скидку не даём!
             discount = 0.75
 
-        if n >= min_wallets and pct >= min_pct:
+        if is_burner_relay and n >= 3:
+            # 2-hop Burner-Relay ферма (кейсы GETAJOB, CARDANO, NOFOMO, JENSEN, SOLFLY, FYAT):
+            # В 120-кошельковых лесенках каждый суб-кошелёк держит всего 0.15%..0.35% (или 0% для ранних покупателей из ленты),
+            # поэтому суммарный pct по 8 кошелькам когорты < 4%, но 3..8 из 8 кошельков профинансированы одноразовыми прокладками (<=6 tx)!
+            w = 0.60 + min(0.30, (n - 3) * 0.08) + min(0.10, max(0.0, pct - 2.0) * 0.01)
+            reasons.append({
+                "key": "burner_relay_cluster",
+                "weight": round(w, 3),
+                "text": (f"2-hop сибил-прокладки: {n} кошельков когорты профинансированы через "
+                         f"одноразовые транзитные кошельки (<=6 tx, доля {pct:.1f}%)"),
+            })
+        elif n >= min_wallets and pct >= min_pct:
             w = 0.45
             w += min(0.18, (n - min_wallets) * 0.06)       # каждый кошелёк сверх порога
             w += min(0.15, max(0.0, pct - min_pct) * 0.02)  # каждый % сверх порога
-            if is_burner_relay:
-                w += 0.15
             w *= discount
             if is_graph:
                 reasons.append({
@@ -1378,13 +1426,6 @@ def _score_clusters(clusters: List[dict]) -> Tuple[float, List[dict]]:
                     "weight": round(w, 3),
                     "text": (f"инсайдерская сеть RugCheck: {n} связанных кошельков "
                              f"держат {pct:.1f}% эмиссии"),
-                })
-            elif is_burner_relay:
-                reasons.append({
-                    "key": "burner_relay_cluster",
-                    "weight": round(w, 3),
-                    "text": (f"2-hop сибил-прокладки: {n} топ-холдеров профинансированы через "
-                             f"одноразовые транзитные кошельки (<=5 tx) и держат {pct:.1f}% эмиссии"),
                 })
             else:
                 reasons.append({

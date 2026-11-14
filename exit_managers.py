@@ -166,11 +166,14 @@ class MatureExitManager:
                 _floor_pnl = 0.66           # пол +66% (TP1 уже в кармане)
                 _trail_dist = 0.25
             elif max_pnl_pct >= 0.70:       # +70%..+109% (сильный импульс перед 2x)
-                _floor_pnl = 0.35           # гарантируем минимум +35% чистыми
-                _trail_dist = 0.28
-            elif max_pnl_pct >= 0.40:       # +40%..+69% (уверенный разгон)
-                _floor_pnl = 0.16           # гарантируем минимум +16% чистыми (не отдаём профит обратно в 0/-13%!)
-                _trail_dist = 0.32
+                _floor_pnl = round(max_pnl_pct * 0.62, 2)  # фиксируем 62% от пика (минимум +43%..+67%)
+                _trail_dist = 0.18
+            elif max_pnl_pct >= 0.40:       # +40%..+69% (уверенный разгон — кейсы YOUNGBULL +40.4%, ANGEL +46.7%)
+                _floor_pnl = round(max_pnl_pct * 0.60, 2)  # фиксируем 60% от пика (+24% при пике +40%, +28% при пике +47%, не отдаём профит до +3.9%!)
+                _trail_dist = 0.16
+            elif max_pnl_pct >= 0.25:       # +25%..+39% (средний импульс)
+                _floor_pnl = round(max_pnl_pct * 0.50, 2)  # фиксируем половину импульса (+12.5%..+19.5%)
+                _trail_dist = 0.16
 
         if _floor_pnl is not None and minutes_held >= 0.20:
             drop_from_max = (position.max_price_usd - current_price) / position.max_price_usd if position.max_price_usd > 0 else 0.0

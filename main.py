@@ -1063,7 +1063,7 @@ async def scanner_loop(analyzer, tracker):
                     _ca_l = _pre_l.get("pairCreatedAt") or 0 if isinstance(_pre_l, dict) else 0
                     _age_l = (time.time() * 1000 - _ca_l) / 60000.0 if _ca_l else 999.0
                     _is_fresh_l = _m in _graduated_set or _age_l <= 30.0
-                    _cd_l = int(getattr(config, "SOLANA_FRESH_RESCAN_COOLDOWN", 12)) if _is_fresh_l else int(getattr(config, "SOLANA_RESCAN_COOLDOWN", 35))
+                    _cd_l = int(getattr(config, "SOLANA_FRESH_RESCAN_COOLDOWN", 8)) if _is_fresh_l else int(getattr(config, "SOLANA_RESCAN_COOLDOWN", 30))
                     if _now_l - processed_mints.get(_m, 0.0) < _cd_l:
                         continue
                     _launch.append(_m)
@@ -1098,7 +1098,7 @@ async def scanner_loop(analyzer, tracker):
                             pass
                         _age_m = float(_bt_age_m) if _bt_age_m is not None else (0.2 if mint.endswith("pump") else 999.0)
                     _is_fresh_m = mint in _graduated_set or _age_m <= 30.0
-                    _cd = int(getattr(config, "SOLANA_FRESH_RESCAN_COOLDOWN", 12)) if _is_fresh_m else int(getattr(config, "SOLANA_RESCAN_COOLDOWN", 35))
+                    _cd = int(getattr(config, "SOLANA_FRESH_RESCAN_COOLDOWN", 8)) if _is_fresh_m else int(getattr(config, "SOLANA_RESCAN_COOLDOWN", 30))
                     if time.time() - processed_mints.get(mint, 0.0) < _cd:
                         continue
                     
@@ -1301,10 +1301,7 @@ async def scanner_loop(analyzer, tracker):
                                 _soc_unk_sc = bool(pair_data.get("_socials_unknown", False))
                                 _b5_sc = int((pair_data.get("txns") or {}).get("m5", {}).get("buys", 0) or 0)
                                 _s5_sc = int((pair_data.get("txns") or {}).get("m5", {}).get("sells", 0) or 0)
-                                if _links_sc == 0 and not _soc_unk_sc:
-                                    if _age_m >= 15.0:
-                                        print(f"🚫 [SCANNER-NO-SOC] {actual_symbol} ({mint[:8]}): 0 соцсетей при возрасте {_age_m:.0f}м (>=15м) — отмена!")
-                                        continue
+                                if _links_sc == 0 and not _soc_unk_sc and _age_m < float(getattr(config, "REQUIRE_SOCIALS_MIN_AGE_MIN", 25.0)):
                                     _dex_sc_low = str(pair_data.get("dexId", "")).lower()
                                     _is_lp_or_pump = mint.endswith("pump") or mint.endswith("moon") or _dex_sc_low in ("pump", "pumpfun", "pumpswap")
                                     _is_stealth_sc = (
@@ -1317,12 +1314,12 @@ async def scanner_loop(analyzer, tracker):
                                         continue
                                 _base_max_h1_live = float(getattr(config, "MAX_ENTRY_H1_PCT", 350.0))
                                 _is_fresh_active_sc = (
-                                    _age_m <= 4.0
-                                    and _vol5_live >= 5000.0
-                                    and _b5_sc >= _s5_sc * 1.15
+                                    _age_m <= 120.0
+                                    and _vol5_live >= 3000.0
+                                    and _b5_sc >= _s5_sc * 1.05
                                 )
                                 _max_h1_live = 2500.0 if _is_fresh_active_sc else _base_max_h1_live
-                                if _h1_live > _max_h1_live and _age_m > 4.0:
+                                if _h1_live > _max_h1_live:
                                     print(f"🚫 [SCANNER-LIVE-EXHAUSTED] {actual_symbol} ({mint[:8]}): живой h1 {_h1_live:+.0f}% > +{_max_h1_live:.0f}% — перегретая вершина, отмена!")
                                     continue
                                 # СТАЛО (в main.py строки 506-524):

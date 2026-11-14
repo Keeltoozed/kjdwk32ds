@@ -715,10 +715,17 @@ class Analyzer:
         """
         ALLOWED_SOL_QUOTES = {
             "so11111111111111111111111111111111111111112",  # WSOL/SOL
-            "epjfwdd5aufqssqem2qnxzybapc8g4weggkzwytdt1v",  # USDC
-            "es9vmfrzacerjmffrff4h2fyd4kconky11mcce8benwnyb",  # USDT
+            "epjfwdd5aufqssqem2qn1xzybapc8g4weggkzwytdt1v",  # USDC
+            "es9vmfrzacermjfrf4h2fyd4kconky11mcce8benwnyb",  # USDT
+            "ttwofwage91ofhzs7kpqdyrvrkmevgm88xijgvqfbko",  # TTWO (xStock / PumpSwap quote)
+            "spcxxcqxj6e5djdvnovhn8744zkbhm2byudu45bimgb",  # SPCX (xStock / PumpSwap quote)
+            "3nz9jmvbmgaqocybic2c7lqcjscmgaz6vqqtdzcqmjh",  # WBTC
+            "xs8s1uus1zvs2p7iwtsg3b6fkhpvmwz4gyu3gwamwhz",  # QQQx
         }
-        ALLOWED_SOL_SYMBOLS = {"SOL", "WSOL", "USDC", "USDT"}
+        ALLOWED_SOL_SYMBOLS = {
+            "SOL", "WSOL", "USDC", "USDT", "USD1", "USDS", "PYUSD",
+            "WBTC", "WETH", "TTWO", "SPCX", "QQQX", "SPYX", "TSLAX", "NVDAX",
+        }
         sol_pairs = []
         for p in (pairs or []):
             if (p.get("chainId") or "").lower() != "solana":
@@ -727,7 +734,16 @@ class Analyzer:
                 continue
             q_addr = str((p.get("quoteToken") or {}).get("address") or "").lower()
             q_sym = str((p.get("quoteToken") or {}).get("symbol") or "").upper()
-            if q_addr and q_addr not in ALLOWED_SOL_QUOTES and q_sym not in ALLOWED_SOL_SYMBOLS:
+            _dex_low_q = str(p.get("dexId") or "").lower()
+            # На PumpSwap разрешаем официальные мультивалютные пулы выпускников (...pump), кроме пар с другими мем-токенами (...pump)
+            _is_official_pumpswap_quote = (
+                _dex_low_q == "pumpswap"
+                and mint.endswith("pump")
+                and q_addr
+                and not q_addr.endswith(("pump", "moon", "bonk", "bags"))
+                and float(((p.get("liquidity") or {}).get("usd", 0) or 0)) >= 4000.0
+            )
+            if q_addr and q_addr not in ALLOWED_SOL_QUOTES and q_sym not in ALLOWED_SOL_SYMBOLS and not _is_official_pumpswap_quote:
                 continue
             sol_pairs.append(p)
         if not sol_pairs:
@@ -2264,6 +2280,7 @@ class Analyzer:
 
                     pool_keywords = ["raydium", "pool", "vault", "pump", "amm", "meteora", "orca", "locker"]
                     non_curve_accounts = []
+                    pool_pct_sum = 0.0
                     for h in top_holders:
                         owner = str(h.get("address") or "")
                         owner_wallet = str(h.get("owner") or "")
@@ -2274,8 +2291,10 @@ class Analyzer:
 
                         # Исключаем адреса пулов ликвидности, AMM и системные адреса Raydium/Pump/Meteora
                         if owner in pool_accounts or owner_wallet in pool_accounts or owner in DEX_POOL_AUTHORITIES or owner_wallet in DEX_POOL_AUTHORITIES:
+                            pool_pct_sum += pct
                             continue
                         if any(w in owner.lower() for w in pool_keywords) or any(w in owner_wallet.lower() for w in pool_keywords):
+                            pool_pct_sum += pct
                             continue
                         non_curve_accounts.append((amt, pct, owner))
                     top_10 = non_curve_accounts[:10]
@@ -2288,6 +2307,16 @@ class Analyzer:
                         if count >= 4 and most_common_pct >= 2.5 and (most_common_pct * count) >= 12.0:
                             return self._deny(mint, "jito-bundle-sybil", f"🚫 [АНТИСКАМ] Jito-бандл ({count} кошельков по ~{most_common_pct:.1f}%) у {mint[:8]} → Блок.")
                     top_10_sum_pct = sum([x[1] for x in top_10])
+                    largest_whale_pct_pre = top_10[0][1] if top_10 else 0.0
+
+                    # Детектор ультра-атомизированной сибил-сетки дева (кейс CARDANO: 82% эмиссии вне пула, но top1=0.91%, top10=8.27% — 120 кошельков по 0.65%):
+                    if 0 < pool_pct_sum <= 48.0 and len(top_10) >= 8:
+                        if top_10_sum_pct < 9.5 or largest_whale_pct_pre < 1.10:
+                            return self._deny(
+                                mint,
+                                f"atomized-sybil-supply pool={pool_pct_sum:.0f}% top10={top_10_sum_pct:.1f}%",
+                                f"🚫 [ATOMIZED-SYBIL] {symbol} ({mint[:8]}): в пуле всего {pool_pct_sum:.1f}% эмиссии ({100.0 - pool_pct_sum:.1f}% снаружи), но топ-1={largest_whale_pct_pre:.2f}%, топ-10={top_10_sum_pct:.1f}% — эмиссия спрятана на 100+ микро-кошельках дева (кейс CARDANO)!",
+                            )
 
                     # Детектор равномерной сибил-нарезки стека дева (кейс BALLFIN: 19 кошельков по 1.88%..2.71%, CV=0.08, h10/h1=0.82, top20=43%):
                     if len(top_10) >= 8 and top_10_sum_pct >= 18.0:
@@ -2474,11 +2503,9 @@ class Analyzer:
             _h1 = _pc.get("h1", 0) or 0
             _txm5_pre = (pair_data.get("txns") or {}).get("m5", {}) or {}
             _vm5_pre = float((pair_data.get("volume") or {}).get("m5", 0) or 0)
-            # h1-exhausted: режем покупки на излете пампа (вход на хаях)
-            if _h1 > 250.0 and _age_min_pre > 10.0:
-                return self._deny(mint, f"h1-exhausted {_h1:+.0f}%", f"🚫 [H1-EXHAUSTED] {mint[:8]}: h1 {_h1:+.0f}% > +250% при возрасте {_age_min_pre:.1f}м — памп уже отработал, вход на вершине запрещён.")
-            _is_fresh_pump = mint.endswith("pump") or _age_min_pre < 90.0
-            _max_h1_limit = 400.0 if not _is_fresh_pump else 800.0
+            # h1-exhausted: режем покупки на излете пампа, но для свежих выпускников (<= 120м) с живым объёмом разрешаем h1 до 2500%
+            _is_fresh_pump = (mint.endswith("pump") or _age_min_pre <= 120.0) and _vm5_pre >= 3000.0
+            _max_h1_limit = 2500.0 if _is_fresh_pump else 350.0
             if _h1 > _max_h1_limit:
                 return self._deny(mint, f"h1-exhausted {_h1:+.0f}%", f"🚫 [H1-EXHAUSTED] {mint[:8]}: h1 {_h1:+.0f}% > +{_max_h1_limit:.0f}% — памп уже отработал, вход на хаях запрещён.")
 
