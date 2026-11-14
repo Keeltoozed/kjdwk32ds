@@ -1542,7 +1542,7 @@ async def scanner_loop(analyzer, tracker):
                                         continue
                                     _live_jup_px = await JupiterAPI.get_price(mint)
                                     if _live_jup_px and _live_jup_px > 0 and entry_price > 0:
-                                        if _live_jup_px < entry_price * 0.975:
+                                        if _live_jup_px < entry_price * 0.925:
                                             print(f"🚫 [SCANNER LIVE-DUMP BLOCKED] {actual_symbol} ({mint[:8]}): живая цена Jupiter (${_live_jup_px:.8f}) уже на {(1.0 - _live_jup_px / entry_price) * 100:.1f}% ниже цены сигнала (${entry_price:.8f}) — обвал в моменте, отмена входа!")
                                             continue
                                         entry_price = _live_jup_px

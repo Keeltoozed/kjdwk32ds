@@ -1125,12 +1125,28 @@ class Analyzer:
         # Если существует старый (>48ч) настоящий гигант с FDV > $500k и liq > $60k,
         # а наш токен — свежая микро-капа с тем же именем, это фишинг-подделка.
         # =========================================================================
+        # Если сам токен уже имеет крупную живую ликвидность и высокий 5м объём (кейс MIHAO CfwKvFrT: $119k liq, $385k vol5),
+        # или в 3+ раза опережает старый токен по живому vol5 — это самостоятельный вирусный запуск, а не микро-клон.
         for c in competitors:
             c_age_hours = (now_ms - c["created_at"]) / (3600.0 * 1000.0) if c["created_at"] > 0 else 999.0
             if c_age_hours > 48.0:
-                if c["fdv"] >= 500000.0 and c["liq"] >= 60000.0 and (c["vol24"] >= 25000.0 or c["liq"] >= 100000.0):
+                _self_viral = (current_vol5 >= 40000.0 and current_liq >= 30000.0) or (
+                    current_vol5 >= 15000.0 and current_liq >= 20000.0 and current_vol5 > (c.get("vol5", 0.0) * 3.0)
+                )
+                if _self_viral:
+                    continue
+                # Фильтр фантомных пулов (кейс BFp3xwBK BILL: FDV $246M == Liq $246M при vol24/liq = 0.0009):
+                # настоящий устоявшийся гигант обязан иметь реальный суточный оборот (>= $25k и >= 3% от liq)
+                # и нормальное соотношение ликвидности к FDV (liq <= 80% FDV).
+                if (
+                    c["fdv"] >= 500000.0
+                    and c["liq"] >= 60000.0
+                    and c["vol24"] >= 25000.0
+                    and c["liq"] <= c["fdv"] * 0.80
+                    and c["vol24"] >= c["liq"] * 0.03
+                ):
                     if current_fdv < c["fdv"] * 0.15:
-                        print(f"🚫 [GIANT-IMPERSONATION] {sym_up} ({current_mint[:8]}): попытка мимикрировать под устоявшийся гигант {c['mint'][:8]} (FDV ${c['fdv']:,.0f}, liq ${c['liq']:,.0f}) — блок!")
+                        print(f"🚫 [GIANT-IMPERSONATION] {sym_up} ({current_mint[:8]}): попытка мимикрировать под устоявшийся гигант {c['mint'][:8]} (FDV ${c['fdv']:,.0f}, liq ${c['liq']:,.0f}, vol24 ${c['vol24']:,.0f}) — блок!")
                         return True
 
         # =========================================================================
@@ -1197,6 +1213,12 @@ class Analyzer:
             p_fdv = c["fdv"]
 
             if p_liq < 5000 and c["vol24"] < 8000:
+                continue
+
+            # Если наш токен старше конкурента с более высоким FDV, либо уже сам имеет глубокую ликвидность/объём — не блокируем как микро-клон
+            if current_created_at and p_created_at and current_created_at < p_created_at and current_fdv >= p_fdv:
+                continue
+            if current_liq >= 40000.0 and current_vol5 >= 20000.0 and current_fdv >= p_fdv * 0.5:
                 continue
 
             # Другой токен текущей волны заметно крупнее по ликвидности и объему

@@ -551,8 +551,8 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
         if ratio > 1.16:
             print(f"🚫 [{source_tag}-PRICE-MISMATCH] {_sym_tmp} ({mint[:8]}): Jupiter (${jup_price:.8f}) vs Dex (${ds_price:.8f}) расхождение {ratio:.2f}x (>1.16x) — блок от ложного стопа.")
             return False
-        if jup_price < ds_price * 0.965:
-            analyzer._deny(mint, "jup-live-dump >3.5%", f"🚫 [{source_tag}-LIVE-DUMP] {_sym_tmp} ({mint[:8]}): живая котировка Jupiter (${jup_price:.8f}) уже ниже DexScreener (${ds_price:.8f}) на {(1.0 - jup_price/ds_price)*100:.1f}% [>3.5%] — слив в процессе!")
+        if jup_price < ds_price * 0.925:
+            analyzer._deny(mint, "jup-live-dump >7.5%", f"🚫 [{source_tag}-LIVE-DUMP] {_sym_tmp} ({mint[:8]}): живая котировка Jupiter (${jup_price:.8f}) уже ниже DexScreener (${ds_price:.8f}) на {(1.0 - jup_price/ds_price)*100:.1f}% [>7.5%] — слив в процессе!")
             return False
         price = jup_price
     elif ds_price > 0:
@@ -694,7 +694,7 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
     if getattr(config, "RUG_WALLET_ANALYSIS_ENABLED", True):
         try:
             from rug_wallet_analysis import quick_rug_check
-            _is_ok_rw, _rw_reason, _rw_score, _ = await quick_rug_check(mint)
+            _is_ok_rw, _rw_reason = await quick_rug_check(mint)
             if not _is_ok_rw:
                 _rw_l = str(_rw_reason).lower()
                 _rw_rpc_err = any(e in _rw_l for e in ("429", "403", "timeout", "error", "none", "rpc", "http", "retry"))
@@ -758,7 +758,7 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
             _jup_live_px = await JupiterAPI.get_price(mint)
             if _jup_live_px and _jup_live_px > 0 and price > 0:
                 _ref_dump_px = min(price, ds_price) if ds_price > 0 else price
-                if _jup_live_px < _ref_dump_px * 0.965:
+                if _jup_live_px < _ref_dump_px * 0.925:
                     print(f"🚫 [{source_tag}-LIVE-DUMP] {_sym_tmp} ({mint[:8]}): живая цена Jupiter (${_jup_live_px:.8f}) уже на {(1.0 - _jup_live_px / _ref_dump_px) * 100:.1f}% ниже ориентира (${_ref_dump_px:.8f}) — обвал в моменте, отмена!")
                     return False
                 _jup_ratio = max(_jup_live_px, price) / min(_jup_live_px, price)

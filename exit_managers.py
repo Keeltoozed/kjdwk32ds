@@ -90,7 +90,7 @@ class MatureExitManager:
             # На ракетах (SWEATER, MUSTACHE) первая свеча зелёная, покупатели льют объём и pnl в плюсе.
             # Если токен — раг: на первой свече (0.5..3м) дев сливает стек, m1 падает > 18% или продавцы давят в одну калитку.
             # Сбрасываем ТОЛЬКО РАГ сразу на первой свече с минимальным убытком (-6%..-9%), не дожидаясь -25%..-35%!
-            if 0.4 <= minutes_held <= 3.0 and pnl_pct <= -0.060:
+            if 0.4 <= minutes_held <= 3.0 and pnl_pct <= -0.100:
                 _pc_chk = _pd_chk.get("priceChange") or {}
                 _m1_c = float(_pc_chk.get("m1", 0) or 0)
                 _txns = (_pd_chk.get("txns") or {}).get("m5") or {}
@@ -203,17 +203,17 @@ class MatureExitManager:
         if not _mb_free_ride:
             # 1. Dead Churn Escape: ТОЛЬКО для дохлых монет, которые вообще не дали импульса (пик < +8%)
             # и стоят на месте в нуле/минусе 3+ минут (кейс XBT -1.4%) — режем стоячий мусор, не трогая ракеты!
-            if minutes_held >= 3.5 and _peak_age_min >= 2.5 and max_pnl_pct < 0.08 and pnl_pct <= 0.02:
+            if minutes_held >= 7.0 and _peak_age_min >= 5.0 and max_pnl_pct < 0.05 and pnl_pct <= -0.02:
                 return f"Dead Churn Escape ({pnl_pct*100:+.1f}%, застрял без импульса {_peak_age_min:.1f}м — выход)"
 
             # 2. Mid-Peak Profit Shield: если монета давала хороший импульс (+22%..+39%, как ZAPZEKE +22.9%),
             # но 2+ минуты не обновляет хай и начала сползать к точке входа (<= +5%) — забираем плюс, не ждём 0% или минуса!
-            if max_pnl_pct >= 0.22 and _peak_age_min >= 2.0 and pnl_pct <= 0.05:
+            if max_pnl_pct >= 0.22 and _peak_age_min >= 3.5 and pnl_pct <= 0.05:
                 return f"Mid-Peak Profit Shield ({pnl_pct*100:+.1f}% locked after peak +{max_pnl_pct*100:.0f}%, {_peak_age_min:.1f}m no ATH)"
 
             # 2b. Faded Impulse Stop: импульс был (+8%..+39%), но затух (2.5+ мин без нового ATH) и сполз в минус (-4%)
             # Спасает от 10-минутного медленного сползания в -28% (кейс SPEED -$1.45)!
-            if max_pnl_pct >= 0.08 and _peak_age_min >= 2.5 and pnl_pct <= -0.04:
+            if max_pnl_pct >= 0.15 and _peak_age_min >= 4.5 and pnl_pct <= -0.08:
                 return f"Faded Impulse Stop ({pnl_pct*100:+.1f}%, затухание импульса после пика +{max_pnl_pct*100:.0f}%)"
 
             # 3. ATH Exhaustion Exit: пик был сильным (+40%+), но 5+ минут нет нового ATH — забираем +15%+ профита

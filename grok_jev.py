@@ -1963,6 +1963,8 @@ class GrokJevEngine:
         _is_momentum_rocket = (
             (_m5_s1 >= 12.0 and _b5_s1 >= (_s5_s1 * 1.25) and _vm5_s1 >= 8000.0)
             or (_vm5_s1 >= 15000.0 and _b5_s1 >= _s5_s1)
+            or (_m5_s1 >= 8.0 and _vm5_s1 >= 10000.0 and _b5_s1 >= max(12, int(_s5_s1 * 0.70)))
+            or (_vm5_s1 >= 25000.0 and _b5_s1 >= max(15, int(_s5_s1 * 0.70)))
             or (_m5_s1 >= 2.5 and _b5_s1 >= _s5_s1 and _vm5_s1 >= 4000.0 and _b5_s1 >= 20)
             or (_b5_s1 >= 25 and _b5_s1 >= int(_s5_s1 * 1.10) and _vm5_s1 >= 2500.0)
         )
@@ -2071,7 +2073,7 @@ class GrokJevEngine:
         _fin_links = len((pair.get("info") or {}).get("socials", []) or []) + len((pair.get("info") or {}).get("websites", []) or [])
         if _fin_links == 0 and not bool(pair.get("_socials_unknown", False)):
             final_thresh = max(final_thresh, 16.0)
-        if getattr(_c, "ROCKET_XGB_ENABLED", True) and (rkt_final + 0.05) < final_thresh:
+        if getattr(_c, "ROCKET_XGB_ENABLED", True) and not _is_momentum_rocket and (rkt_final + 0.05) < final_thresh:
             print(f"🚫 [GROK-JEV-ML-VETO] {symbol} ({address[:8]}): Rocket XGB final score {rkt_final:.1f}% < {final_thresh:.0f}% — VETO! (Блокировка дампа)")
             return False, f"rocket-xgb-final-veto {rkt_final:.1f}% < {final_thresh:.0f}%"
 
@@ -2113,7 +2115,7 @@ class GrokJevEngine:
                 if _dex_fin not in ("pump", "pumpfun"):
                     _jup_live_px = await JupiterAPI.get_price(address)
                     if _jup_live_px and _jup_live_px > 0 and price > 0:
-                        if _jup_live_px < price * 0.975:
+                        if _jup_live_px < price * 0.925:
                             print(f"🚫 [JEV-LIVE-DUMP] {symbol} ({address[:8]}): живая цена Jupiter (${_jup_live_px:.8f}) уже на {(1.0 - _jup_live_px / price) * 100:.1f}% ниже DexScreener (${price:.8f}) — обвал в моменте, блок входа!")
                             return False, "fills-flush-wait live-jup-dump"
                         _jup_ratio = max(_jup_live_px, price) / min(_jup_live_px, price)

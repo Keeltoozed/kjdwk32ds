@@ -1075,10 +1075,14 @@ async def analyze_funding_clusters(mint: str, cohort: List[dict]) -> dict:
                 for f_addr in _check_funders
             ], timeout=4.0)
             burner_funders = set()
+            _now_ts_br = time.time()
             for f_addr, sigs in zip(_check_funders, f_sigs_res or []):
                 if isinstance(sigs, list):
-                    if 1 <= len(sigs) <= 6:
-                        burner_funders.add(f_addr)
+                    if 1 <= len(sigs) <= 4:
+                        # Берём в одноразовые прокладки только реально свежие фондеры (<= 72ч), чтобы не склеивать старые розничные кошельки
+                        _bts = [int(s.get("blockTime") or 0) for s in sigs if isinstance(s, dict) and s.get("blockTime")]
+                        if not _bts or (_now_ts_br - min(_bts)) <= 259200:
+                            burner_funders.add(f_addr)
                     elif len(sigs) >= 25:
                         times = [
                             int(s.get("blockTime") or 0)
@@ -1424,15 +1428,14 @@ def _score_clusters(clusters: List[dict]) -> Tuple[float, List[dict]]:
             discount = 0.75
 
         if is_burner_relay and n >= 3:
-            # 2-hop Burner-Relay ферма (кейсы GETAJOB, CARDANO, NOFOMO, JENSEN, SOLFLY, FYAT):
-            # В 120-кошельковых лесенках каждый суб-кошелёк держит всего 0.15%..0.35% (или 0% для ранних покупателей из ленты),
-            # поэтому суммарный pct по 8 кошелькам когорты < 4%, но 3..8 из 8 кошельков профинансированы одноразовыми прокладками (<=6 tx)!
-            w = 0.60 + min(0.30, (n - 3) * 0.08) + min(0.10, max(0.0, pct - 2.0) * 0.01)
+            # 2-hop Burner-Relay ферма: для 3 мелких случайных кошельков даём умеренный скор (0.42),
+            # а при >= 4 свежих прокладках или высокой суммарной доле даём жёсткий блок (>= 0.55..1.00).
+            w = 0.42 + min(0.38, (n - 3) * 0.12) + min(0.20, max(0.0, pct - 3.0) * 0.025)
             reasons.append({
                 "key": "burner_relay_cluster",
                 "weight": round(w, 3),
                 "text": (f"2-hop сибил-прокладки: {n} кошельков когорты профинансированы через "
-                         f"одноразовые транзитные кошельки (<=6 tx, доля {pct:.1f}%)"),
+                         f"свежие транзитные кошельки (<=4 tx, доля {pct:.1f}%)"),
             })
         elif n >= min_wallets and pct >= min_pct:
             w = 0.45

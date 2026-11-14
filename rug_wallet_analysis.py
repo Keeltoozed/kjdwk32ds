@@ -144,6 +144,109 @@ async def check_dev_and_holders(client: AsyncClient, mint: str) -> dict:
                 "pct": pct,
             })
 
+        # Исключаем AMM LP пулы / известные DEX vaults и резолвим реальных владельцев (owners),
+        # чтобы не путать пул PumpSwap/Raydium/Meteora с девом и не чекать баланс ATA (всегда ~0.002 SOL rent).
+        DEX_POOL_AUTHORITIES = {
+            "5Q544fKrFoe6tsEbD7S8EmxGTJYAKtTVhAW5Q5pge4j1",  # Raydium Authority V4
+            "39azUYFWPz3VHgKCf3VChUwbpURdCHRxjWVowf5jUJjg",  # Raydium Migration
+            "GpMZbSM2GgvTKHJirzeGfMFoaZ8UR2X7F4v8vHTvxFbL",  # Raydium CPMM
+            "pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA",   # PumpSwap AMM
+            "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P",   # Pump.fun Bonding
+            "Ce6TQqeHC9p8KetsN6JsjHK7UTZk7nasjjnr7XxXp9F1",   # Pump.fun Fee
+            "Eo7WjKq67rjJQSZxS6z3YkapzY3eMj6Xy8X5EQVn5UaB",  # Meteora Pools
+            "LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo",   # Meteora DLMM
+            "whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc",   # Orca Whirlpool
+            "11111111111111111111111111111111",              # Burn / System null
+            "1nc1nerator11111111111111111111111111111111",   # Incinerator burn
+        }
+        DEX_PROGRAM_OWNERS = {
+            "pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA",   # PumpSwap AMM
+            "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8",  # Raydium AMM V4
+            "CPMMoo8L3F4NbTegBCKVNunggL7H1ZpdTHKxQB5qKP1C",  # Raydium CPMM
+            "CAMMCzo5YL8w4VFF8KVHrK22GGUsp5VTaW7grrKgrWqK",  # Raydium CLMM
+            "LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo",   # Meteora DLMM
+            "Eo7WjKq67rjJQSZxS6z3YkapzY3eMj6Xy8X5EQVn5UaB",  # Meteora Pools
+            "cpamdpZCGKUy5JxQXB4dcpGPiikHawvSWAd6mEn1sGG",   # Meteora DAMM v2
+            "whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc",   # Orca Whirlpool
+            "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P",   # Pump.fun
+        }
+        pool_accounts = set(DEX_POOL_AUTHORITIES)
+        rc_owner_by_ata = {}
+        try:
+            import goplus as _gp_rw
+            rc_st, rc_data = await _gp_rw.fetch_rugcheck_report_cached(mint, ttl=120.0, timeout=5)
+            if rc_st == 200 and isinstance(rc_data, dict):
+                for _ka_addr, _ka_info in (rc_data.get("knownAccounts") or {}).items():
+                    _kt = str((_ka_info or {}).get("type", "") or "").lower()
+                    _kn = str((_ka_info or {}).get("name", "") or "").lower()
+                    if _kt in ("amm", "lp", "pool", "vault", "burn") or any(
+                        w in _kn for w in ("pool", "amm", "raydium", "pumpswap", "meteora", "orca", "pump.fun", "lp", "vault", "bonding")
+                    ):
+                        pool_accounts.add(str(_ka_addr))
+                for _mkt in (rc_data.get("markets") or []):
+                    if isinstance(_mkt, dict):
+                        for _mf in ("pubkey", "owner", "lp", "liquidityA", "liquidityB"):
+                            _mv = _mkt.get(_mf)
+                            if isinstance(_mv, str) and len(_mv) > 20:
+                                pool_accounts.add(_mv)
+                            elif isinstance(_mv, dict) and _mv.get("address"):
+                                pool_accounts.add(str(_mv["address"]))
+                for _rh in (rc_data.get("topHolders") or []):
+                    if isinstance(_rh, dict) and _rh.get("address") and _rh.get("owner"):
+                        rc_owner_by_ata[str(_rh["address"])] = str(_rh["owner"])
+        except Exception:
+            pass
+
+        # Резолвим owner для top_accounts (из кэша RugCheck или через 1 RPC getMultipleAccounts jsonParsed)
+        need_ata_resolve = [a["address"] for a in top_accounts[:15] if a["address"] not in rc_owner_by_ata]
+        if need_ata_resolve:
+            try:
+                _ata_pks = [Pubkey.from_string(x) for x in need_ata_resolve]
+                _ma_resp = await _rpc(client, "get_multiple_accounts_json_parsed", _ata_pks)
+                if _ma_resp and getattr(_ma_resp, "value", None):
+                    for _ata_addr, _acct_info in zip(need_ata_resolve, _ma_resp.value):
+                        try:
+                            _parsed = getattr(getattr(_acct_info, "data", None), "parsed", None)
+                            if isinstance(_parsed, dict):
+                                _own = ((_parsed.get("info") or {}).get("owner")) or ""
+                                if _own:
+                                    rc_owner_by_ata[_ata_addr] = str(_own)
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+
+        # Дополнительно проверяем program owner у резолвленных кошельков: DEX Pool PDA принадлежат программам DEX, а не SystemProgram
+        _unique_owners = list(dict.fromkeys(
+            rc_owner_by_ata[a["address"]]
+            for a in top_accounts[:15]
+            if a["address"] in rc_owner_by_ata and rc_owner_by_ata[a["address"]] not in pool_accounts
+        ))
+        if _unique_owners:
+            try:
+                _own_pks = [Pubkey.from_string(x) for x in _unique_owners]
+                _own_resp = await _rpc(client, "get_multiple_accounts", _own_pks)
+                if _own_resp and getattr(_own_resp, "value", None):
+                    for _o_addr, _o_info in zip(_unique_owners, _own_resp.value):
+                        if _o_info is not None:
+                            _prog_owner = str(getattr(_o_info, "owner", "") or "")
+                            if _prog_owner in DEX_PROGRAM_OWNERS:
+                                pool_accounts.add(_o_addr)
+            except Exception:
+                pass
+
+        filtered_accounts = []
+        for a in top_accounts:
+            _ata = a.get("address", "")
+            _own = rc_owner_by_ata.get(_ata, "")
+            if _ata in pool_accounts or (_own and _own in pool_accounts):
+                continue
+            _acc_copy = dict(a)
+            if _own:
+                _acc_copy["owner"] = _own
+            filtered_accounts.append(_acc_copy)
+        top_accounts = filtered_accounts
+
         top1_pct = top_accounts[0]["pct"] if top_accounts else 0
         top10_pct = sum(a["pct"] for a in top_accounts[:10])
 
@@ -203,19 +306,26 @@ async def analyze_wallet(client: AsyncClient, wallet: str) -> dict:
 
         # Последние подписи
         sigs_resp = await _rpc(client, "get_signatures_for_address", wallet_pubkey, limit=50)
-        sigs = sigs_resp.value if sigs_resp and sigs_resp.value else []
-
-        # Баланс SOL
         bal_resp = await _rpc(client, "get_balance", wallet_pubkey)
-        balance_lamports = bal_resp.value if bal_resp else 0
-        balance_sol = balance_lamports / 1e9
+        if sigs_resp is None or bal_resp is None:
+            return {
+                "wallet": wallet,
+                "tx_count": 0,
+                "balance_sol": 0.0,
+                "is_fresh_bot": False,
+                "rpc_degraded": True,
+            }
 
+        sigs = sigs_resp.value if sigs_resp.value else []
+        balance_lamports = bal_resp.value if bal_resp.value is not None else 0
+        balance_sol = balance_lamports / 1e9
         tx_count = len(sigs)
 
-        # Кошелек считается "свежим/ботом", если мало транзакций и маленький баланс
+        # Кошелек считается "свежим/ботом", если реально мало транзакций (<5),
+        # либо (<10 tx И почти пустой баланс <0.02 SOL); активный трейдер с >=10 tx не считается ботом
         is_fresh_bot = (
-            tx_count < config.WALLET_MIN_TX_FOR_REAL_WALLET or
-            balance_sol < 0.05
+            tx_count < config.WALLET_MIN_TX_FOR_REAL_WALLET
+            or (tx_count < 10 and balance_sol < 0.02)
         )
 
         info = {
@@ -229,7 +339,7 @@ async def analyze_wallet(client: AsyncClient, wallet: str) -> dict:
         _wallet_cache_set(wallet, info)
         return info
     except Exception as e:
-        return {"wallet": wallet, "tx_count": 0, "balance_sol": 0.0, "is_fresh_bot": True, "error": str(e)}
+        return {"wallet": wallet, "tx_count": 0, "balance_sol": 0.0, "is_fresh_bot": False, "error": str(e)}
 
 
 # =============================================================================
@@ -277,8 +387,9 @@ async def trace_wallet_funding(client: AsyncClient, wallet: str, depth: int = 0,
 # =============================================================================
 async def detect_bundle_buyers(client: AsyncClient, mint: str, window_sec: int = 30) -> dict:
     """
-    Обнаруживает бандл покупок: смотрит последние подписи по минту.
-    Если очень много подписей за короткое время — подозрительно.
+    Обнаруживает Jito/sniper-бандл покупок: проверяет реальную кластеризацию
+    транзакций в одном и том же слоте (~400ms) или аномальный всплеск на запуске,
+    а не просто наличие >= 30 исторических транзакций за всё время.
     """
     try:
         mint_pubkey = Pubkey.from_string(mint)
@@ -287,7 +398,21 @@ async def detect_bundle_buyers(client: AsyncClient, mint: str, window_sec: int =
             return {"ok": True, "bundle_detected": False, "details": {}}
 
         recent_sigs = [str(sig_info.signature) for sig_info in resp.value]
-        bundle_suspected = len(recent_sigs) >= 30
+        slot_counts = {}
+        times = []
+        for sig_info in resp.value:
+            sl = getattr(sig_info, "slot", None)
+            if sl is not None:
+                slot_counts[sl] = slot_counts.get(sl, 0) + 1
+            bt = getattr(sig_info, "block_time", None)
+            if bt is not None:
+                times.append(int(bt))
+
+        same_slot_max = max(slot_counts.values()) if slot_counts else 0
+        span_sec = (max(times) - min(times)) if len(times) >= 2 else 0
+        # Реальный бандл — когда >= 12 транзакций прилетело в один-единственный 400ms слот,
+        # либо >= 45 транзакций уместилось в крошечное окно <= 2 сек сразу при старте
+        bundle_suspected = (same_slot_max >= 12) or (len(recent_sigs) >= 45 and len(times) >= 40 and span_sec <= 2)
 
         return {
             "ok": True,
@@ -310,25 +435,51 @@ async def check_rugcheck_api(mint: str) -> dict:
     Возвращает (ok: bool, reason: str, details: dict).
     """
     try:
-        from http_client import fetch_json
-        url = f"https://api.rugcheck.xyz/v1/tokens/{mint}/report/summary"
-        status, data = await fetch_json(url, timeout=10, retries=1)
-        if status != 200 or not data:
+        data = None
+        try:
+            import goplus as _gp_rc
+            rc_st, rc_full = await _gp_rc.fetch_rugcheck_report_cached(mint, ttl=120.0, timeout=5)
+            if rc_st == 200 and isinstance(rc_full, dict):
+                data = rc_full
+        except Exception:
+            pass
+        if not data:
+            from http_client import fetch_json
+            url = f"https://api.rugcheck.xyz/v1/tokens/{mint}/report/summary"
+            status, summary_data = await fetch_json(url, timeout=8, retries=1)
+            if status == 200 and isinstance(summary_data, dict):
+                data = summary_data
+        if not data:
             return {"ok": True, "reason": "rugcheck-unavailable", "details": {}}
 
-        score = data.get("score", 0)
-        risk = data.get("risk", "unknown")
-        flags = data.get("flags", [])
+        score = float(data.get("score", 0) or 0)
+        risks = data.get("risks") if isinstance(data.get("risks"), list) else (data.get("flags") or [])
+        _allowed_rc_noise = (
+            "low liquidity", "copycat", "symbol mimic",
+            "large amount of lp unlocked", "lp provider", "single lp provider",
+            "lp not locked", "unlocked lp",
+            "single holder", "high holder concentration", "top 10 holders", "high ownership",
+        )
+        noise_penalty = sum(
+            float(rk.get("score", 0) or 0)
+            for rk in risks
+            if isinstance(rk, dict) and any(k in str(rk.get("name", "")).lower() for k in _allowed_rc_noise)
+        )
+        clean_score = max(0.0, score - noise_penalty)
 
-        # RugCheck score: 0 = идеальная безопасность (0 риска), > 1000 = опасный раг
+        # RugCheck clean_score: 0 = безопасно, >= 2000 = опасный раг (после вычета шума незалоченного пула PumpSwap/Raydium)
         issues = []
-        if score >= 1000:
-            issues.append(f"rugcheck-score-high ({score})")
-        if risk in ("high", "critical"):
-            issues.append(f"rugcheck-risk-high ({risk})")
-        for flag in flags:
+        if clean_score >= 2000:
+            issues.append(f"rugcheck-score-high ({clean_score:.0f})")
+        for flag in risks:
             flag_name = flag.get("name", "") if isinstance(flag, dict) else str(flag)
-            if any(k in flag_name.lower() for k in ("mint", "freeze", "bundled", "sybil", "honeypot")):
+            flag_level = str(flag.get("level", "")).lower() if isinstance(flag, dict) else ""
+            _fl = flag_name.lower()
+            if any(k in _fl for k in _allowed_rc_noise):
+                continue
+            if flag_level == "danger" and any(k in _fl for k in ("mint", "freeze", "bundled", "sybil", "honeypot", "transfer fee", "permanent delegate", "creator holding", "creator history")):
+                issues.append(f"rugcheck-flag ({flag_name})")
+            elif any(k in _fl for k in ("mint authority", "freeze authority", "honeypot", "bundled", "sybil")):
                 issues.append(f"rugcheck-flag ({flag_name})")
 
         ok = len(issues) == 0
@@ -337,9 +488,10 @@ async def check_rugcheck_api(mint: str) -> dict:
             "ok": ok,
             "reason": "; ".join(issues) if issues else "rugcheck-clean",
             "details": {
-                "score": score,
-                "risk": risk,
-                "flags": flags[:5] if flags else [],
+                "score": clean_score,
+                "raw_score": score,
+                "risk": data.get("risk", "unknown"),
+                "risks": [r.get("name", "") if isinstance(r, dict) else str(r) for r in risks[:5]],
             },
         }
     except Exception as e:
@@ -392,25 +544,28 @@ async def full_rug_wallet_audit(mint: str, dev_wallet: str = None) -> dict:
                 verdict["score"] += 0.25
                 verdict["reasons"].append(f"Holders: {holders_check['reason']}")
 
-        # 3. Анализ кошельков топ-холдеров (свежие боты?)
+        # 3. Анализ реальных кошельков топ-холдеров (свежие боты?) — НИКОГДА не чекаем баланс ATA!
         top_accounts = holders_check.get("details", {}).get("top_accounts", [])
         suspicious_wallets = 0
         for acc in top_accounts[:5]:
-            w_info = await analyze_wallet(client, acc["address"])
+            _owner_addr = acc.get("owner") or ""
+            if not _owner_addr:
+                continue
+            w_info = await analyze_wallet(client, _owner_addr)
             if w_info.get("is_fresh_bot"):
                 suspicious_wallets += 1
-        if suspicious_wallets >= 2:
+        if suspicious_wallets >= 3:
             verdict["safe"] = False
-            verdict["score"] += 0.20
+            verdict["score"] += 0.25
             verdict["reasons"].append(f"{suspicious_wallets} топ-кошельков — свежие боты (<{config.WALLET_MIN_TX_FOR_REAL_WALLET} tx или <0.05 SOL)")
 
-        # 4. Бандл покупок
+        # 4. Бандл покупок (Jito/same-slot burst)
         bundle_check = await detect_bundle_buyers(client, mint,
                                                    window_sec=config.RUG_BUNDLE_WINDOW_SEC)
         verdict["checks"]["bundle"] = bundle_check
         if bundle_check.get("bundle_detected"):
-            verdict["score"] += 0.15
-            verdict["reasons"].append("Bundle buyers detected (many wallets bought at launch)")
+            verdict["score"] += 0.20
+            verdict["reasons"].append("Bundle buyers detected (many txs in single slot at launch)")
 
         # 5. RugCheck API
         rc_check = await check_rugcheck_api(mint)
