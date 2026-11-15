@@ -71,7 +71,7 @@ def _parse_jup_age_min(t: dict) -> float:
             or ""
         ).strip()
         if not ca:
-            return 999.0
+            return 1.5
         from datetime import datetime
         s = ca.replace("Z", "+00:00")
         try:
@@ -80,7 +80,7 @@ def _parse_jup_age_min(t: dict) -> float:
             dt = datetime.fromisoformat(re.sub(r"\.\d+", "", s))
         return max(0.0, (time.time() - dt.timestamp()) / 60.0)
     except Exception:
-        return 999.0
+        return 1.5
 
 
 async def fetch_jup_tokens() -> list:
@@ -132,7 +132,7 @@ async def fetch_jup_tokens() -> list:
         seen = set()
         _age_by_mint = {}
         _max_disc_age = float(getattr(config, "SOLANA_MAX_AGE_MIN", 90.0))
-        _max_disc_fdv = float(getattr(config, "JEV_MAX_MCAP_USD", 220000.0)) + 30000.0
+        _max_disc_fdv = float(getattr(config, "JEV_MAX_MCAP_USD", 850000.0)) + 250000.0
 
         def _add_jup_list(items, tag: str, min_pc5: float = 1.8):
             if not isinstance(items, list):
@@ -149,7 +149,7 @@ async def fetch_jup_tokens() -> list:
                 fdv_j = float(t.get("fdv") or t.get("mcap") or 0.0)
                 if fdv_j > _max_disc_fdv:
                     continue
-                is_grad = bool(t.get("graduatedAt") or t.get("graduatedPool") or (not m.endswith("pump") and liq >= 7500.0))
+                is_grad = bool(t.get("graduatedAt") or t.get("graduatedPool") or liq >= 4500.0)
                 if not allow_raw_curve and not is_grad:
                     continue
                 _min_jup_l = 3500.0 if allow_raw_curve else float(getattr(config, "MIN_GRADUATED_LIQ_USD", 5000.0))
@@ -205,12 +205,15 @@ async def fetch_jup_tokens() -> list:
             _add_jup_list(d6h, "trending_6h", min_pc5=1.8)
 
         # 2. Прямой DexScreener Rocket Radar (300 RPM, 0 нагрузки на GT):
-        # Ловит живые выпускники PumpSwap / Meteora / Raydium / Bonk, когда топ-100 Jupiter забит старыми мейджорами!
+        # Ловит живые выпускники PumpSwap / Meteora / Raydium / Bonk, а также свежие бусты и профили!
         try:
             ds_queries = (
+                "https://api.dexscreener.com/token-boosts/latest/v1",
+                "https://api.dexscreener.com/token-boosts/top/v1",
+                "https://api.dexscreener.com/token-profiles/latest/v1",
                 "https://api.dexscreener.com/latest/dex/search?q=pumpswap",
                 "https://api.dexscreener.com/latest/dex/search?q=SOL%20pump",
-                "https://api.dexscreener.com/latest/dex/search?q=meteora%20SOL",
+                "https://api.dexscreener.com/latest/dex/search?q=pumpswap%20SOL",
                 "https://api.dexscreener.com/latest/dex/search?q=bonk%20SOL",
                 "https://api.dexscreener.com/latest/dex/search?q=raydium%20SOL",
                 "https://api.dexscreener.com/latest/dex/search?q=orca%20SOL",
@@ -224,7 +227,19 @@ async def fetch_jup_tokens() -> list:
                 if not isinstance(res, tuple) or len(res) != 2:
                     continue
                 st_q, d_q = res
-                if st_q != 200 or not isinstance(d_q, dict):
+                if st_q != 200:
+                    continue
+                # Обработка списков бустов/профилей:
+                if isinstance(d_q, list):
+                    for item_b in d_q:
+                        if not isinstance(item_b, dict) or str(item_b.get("chainId") or "").lower() != "solana":
+                            continue
+                        addr_b = str(item_b.get("tokenAddress") or "").strip()
+                        if addr_b and not addr_b.startswith("0x") and 32 <= len(addr_b) <= 44 and addr_b not in seen:
+                            seen.add(addr_b)
+                            ranked.append((3.0, 5000.0, "", addr_b, "dex_boost"))
+                    continue
+                if not isinstance(d_q, dict):
                     continue
                 for p in (d_q.get("pairs") or []):
                     if not isinstance(p, dict) or str(p.get("chainId") or "").lower() != "solana":
@@ -238,21 +253,21 @@ async def fetch_jup_tokens() -> list:
                     if not addr or addr.startswith("0x") or len(addr) < 32 or len(addr) > 44 or addr in seen or sym_p in SKIP_SYMBOLS:
                         continue
                     liq_p = float((p.get("liquidity") or {}).get("usd", 0) or 0)
-                    if liq_p < max(4500.0, float(getattr(config, "MIN_GRADUATED_LIQ_USD", 5000.0)) * 0.9):
+                    if liq_p < max(4000.0, float(getattr(config, "MIN_GRADUATED_LIQ_USD", 5000.0)) * 0.8):
                         continue
                     ca_p = float(p.get("pairCreatedAt") or 0)
-                    age_p = ((now_ms_ds - ca_p) / 60000.0) if ca_p > 0 else 999.0
+                    age_p = ((now_ms_ds - ca_p) / 60000.0) if ca_p > 0 else 1.5
                     if age_p > _max_disc_age:
                         continue
                     vol5_p = float((p.get("volume") or {}).get("m5", 0) or 0)
-                    _min_v5_ds = 600.0 if age_p <= 2.5 else (1000.0 if age_p <= 5.0 else (1400.0 if age_p <= 10.0 else 2000.0))
+                    _min_v5_ds = 500.0 if age_p <= 2.5 else (800.0 if age_p <= 5.0 else (1200.0 if age_p <= 10.0 else 1600.0))
                     if vol5_p < _min_v5_ds:
                         continue
                     tx5_p = (p.get("txns") or {}).get("m5") or {}
                     b5_p = int(tx5_p.get("buys", 0) or 0)
                     s5_p = int(tx5_p.get("sells", 0) or 0)
-                    _min_tx_ds = 5 if age_p <= 2.5 else (8 if age_p <= 5.0 else 12)
-                    _min_bs_ds = 0.95 if age_p <= 5.0 else 1.05
+                    _min_tx_ds = 4 if age_p <= 2.5 else (6 if age_p <= 5.0 else 10)
+                    _min_bs_ds = 0.90 if age_p <= 5.0 else 1.00
                     if (b5_p + s5_p) < _min_tx_ds or (s5_p > 0 and (b5_p / s5_p) < _min_bs_ds):
                         continue
                     pc_p = p.get("priceChange") or {}

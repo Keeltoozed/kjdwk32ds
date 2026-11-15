@@ -792,18 +792,20 @@ async def get_trending() -> list:
             vol5_usd = float(vol.get("m5", 0) or 0)
         except Exception:
             vol5_usd = 0.0
-        # Защита от старых (>90м), тяжёлых (> $380k FDV) и стоячих пулов прямо на входе дискавери:
+        # Защита от старых (>240м), сверх-тяжёлых (> $850k FDV) и стоячих пулов прямо на входе дискавери:
         _fdv_pool = float(attrs.get("fdv_usd") or attrs.get("market_cap_usd") or 0)
-        if _fdv_pool > 380000.0:
+        _max_fdv_gt = float(getattr(_tr_cfg, "JEV_MAX_MCAP_USD", 850000.0))
+        if _fdv_pool > _max_fdv_gt:
             return
         created_ms = _parse_ms(attrs.get("pool_created_at"))
         if created_ms:
             age_h = (time.time() * 1000 - created_ms) / 3600000.0
             tx = attrs.get("transactions") or {}
             m5_tx = int((tx.get("m5") or {}).get("buys", 0) or 0) + int((tx.get("m5") or {}).get("sells", 0) or 0)
-            if age_h > 1.5:
+            _max_age_gt_h = float(getattr(_tr_cfg, "SOLANA_MAX_AGE_MIN", 240.0)) / 60.0
+            if age_h > _max_age_gt_h:
                 return
-            if age_h > 0.75 and (vol5_usd < 2000.0 or m5_tx < 12):
+            if age_h > 1.5 and (vol5_usd < 2000.0 or m5_tx < 12):
                 return
         seen.add(mint)
         out.append({"tokenAddress": mint, "chainId": "solana"})

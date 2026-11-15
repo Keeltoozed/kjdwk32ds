@@ -280,12 +280,25 @@ def evaluate_entry_momentum(
     min_h6: float = -25.0,
     fdv_usd: float = 0.0,
 ) -> Tuple[bool, str]:
-    """Balanced 0d2b1ae rocket classifier: catches waves and reclaims, blocks vertical tops & falling knives."""
+    """Strict green-momentum rocket classifier: captures explosive runs & healthy reclaims, strictly eliminates falling knives and dumping coins."""
     tot_tx = buys5 + sells5
     vel_ratio = vol5_usd / max(liq_usd, 1.0)
 
-    if fdv_usd > 0.0 and fdv_usd > JEV_MAX_MCAP_USD:
-        return False, f"mcap-too-large ${fdv_usd:,.0f} > ${JEV_MAX_MCAP_USD:,.0f} (limited 2x+ upside)"
+    # 1. HARD NO-FALLING-KNIFE GATE:
+    # A meme coin dropping in 5m (m5 < 1.0%) or dumping in 1m (m1 < -2.2%) is a falling knife (VI, billy cases).
+    # Never buy red dumping candles under any circumstances!
+    if m5 < 1.0:
+        return False, f"m5-falling-knife {m5:+.1f}% < +1.0% (red 5m candle, falling dump)"
+    if m1 < -2.2:
+        return False, f"m1-falling-knife {m1:+.1f}% < -2.2% (1m candle dumping)"
+
+    # 2. Buyers must dominate sellers
+    if sells5 > 0 and buys5 < int(sells5 * 1.02):
+        return False, f"sellers-dominating {buys5}b/{sells5}s (more sellers than buyers in 5m)"
+
+    _max_fdv_allowed = 1500000.0 if (vol5_usd >= 8000.0 and buys5 >= int(sells5 * 1.10) and m5 >= 2.0) else float(globals().get("JEV_MAX_MCAP_USD", 850000.0))
+    if fdv_usd > 0.0 and fdv_usd > _max_fdv_allowed:
+        return False, f"mcap-too-large ${fdv_usd:,.0f} > ${_max_fdv_allowed:,.0f} (limited 2x+ upside)"
     if age_min > SOLANA_MAX_AGE_MIN:
         return False, f"too-old age {age_min:.0f}m > {SOLANA_MAX_AGE_MIN:.0f}m (stale runner)"
     if age_min >= 45.0 and h6 is not None and float(h6 or 0.0) > MAX_ENTRY_H6_PCT:
@@ -295,50 +308,36 @@ def evaluate_entry_momentum(
     if h1 > _max_h1_allowed:
         return False, f"h1-exhausted {h1:+.0f}% > +{_max_h1_allowed:.0f}% (buying late parabolic top, dump risk)"
 
-    # Block vertical top-chasing and active falling knives
+    # Block vertical top-chasing (FOMO into huge 1m/5m green candles)
     _max_m1_dyn = 30.0 if (buys5 >= max(10, int(sells5 * 1.15)) and vol5_usd >= 3000.0 and m5 >= 4.0) else float(globals().get("MAX_ENTRY_M1_PCT", 22.0))
-    if age_min <= 15.0 and (buys5 >= sells5 or m5 >= 0.5):
-        _min_m1_dyn = -5.0
-    elif (vol5_usd >= 10000.0 and buys5 >= int(sells5 * 1.15)) or (h1 >= 25.0 and buys5 >= int(sells5 * 1.25) and vol5_usd >= 4500.0):
-        _min_m1_dyn = -4.5
-    elif m5 >= 5.0 and buys5 >= sells5:
-        _min_m1_dyn = -4.0
-    else:
-        _min_m1_dyn = -3.5
-
     _max_m5_dyn = 400.0 if (age_min <= 15.0 and buys5 >= max(12, int(sells5 * 1.12)) and vol5_usd >= 3500.0) else (
         350.0 if (buys5 >= max(10, int(sells5 * 1.10)) and vol5_usd >= 3000.0) else max(float(globals().get("MAX_ENTRY_M5_PCT", 120.0)), 135.0)
     )
     if m1 > _max_m1_dyn:
         return False, f"m1-vertical-top {m1:+.1f}% > +{_max_m1_dyn:.0f}%"
-    if m1 < _min_m1_dyn:
-        return False, f"m1-falling-knife {m1:+.1f}% < {_min_m1_dyn:+.1f}%"
     if m5 > _max_m5_dyn:
         return False, f"m5-parabolic-top {m5:+.1f}% > +{_max_m5_dyn:.0f}%"
 
-    # 1. Раннее накопление / ретест свежей миграции (золотая зона входа $40k-$135k FDV):
-    # Токен только вышел на DEX (<=25м), ликвидность на месте (>= $5k), объём идёт,
-    # покупатели активны (buys >= sells * 0.90), цена не падает лавиной (m5 >= -6.5%, m1 >= -4.5%):
+    # 1. Свежая миграция / накопление покупателей ($40k-$160k FDV):
     _fma_vol_req = 800.0 if age_min <= 2.5 else 1200.0
     is_fresh_migration_accumulation = (
         age_min <= 25.0
-        and (fdv_usd <= 0.0 or fdv_usd <= 135000.0)
+        and (fdv_usd <= 0.0 or fdv_usd <= 160000.0)
         and liq_usd >= 5000.0
-        and buys5 >= max(4, int(sells5 * 0.90))
+        and buys5 >= max(4, int(sells5 * 1.05))
         and vol5_usd >= _fma_vol_req
-        and m5 >= -6.5
-        and m1 >= -4.5
+        and m5 >= 1.0
+        and m1 >= -2.0
     )
 
     # 1.1 Свежий запуск / реактивный разгон молодых токенов (<10м):
     _uf_vol_req = 600.0 if age_min <= 2.0 else (900.0 if age_min <= 4.0 else 1200.0)
-    _uf_m1_floor = -5.0 if (buys5 >= sells5 or m5 >= 1.0) else -3.0
     _uf_min_tx = 5 if age_min <= 2.0 else 7
     is_ultra_fresh_launch = (
         age_min <= 10.0
-        and m5 >= 0.8
-        and m1 >= _uf_m1_floor
-        and buys5 >= max(4, int(sells5 * 0.95))
+        and m5 >= 1.0
+        and m1 >= -2.0
+        and buys5 >= max(4, int(sells5 * 1.02))
         and vol5_usd >= _uf_vol_req
         and tot_tx >= _uf_min_tx
     )
@@ -347,63 +346,59 @@ def evaluate_entry_momentum(
     is_fresh_pullback_entry = (
         age_min <= 35.0
         and m5 >= 2.5
-        and -5.0 <= m1 <= -0.5
-        and buys5 >= max(6, int(sells5 * 1.00))
+        and -2.0 <= m1 <= -0.2
+        and buys5 >= max(6, int(sells5 * 1.05))
         and vol5_usd >= 1200.0
     )
 
+    # 1.3 Первичное зажигание ракеты (свежий импульс)
     is_fresh_ignition = (
-        (
-            age_min <= 45.0
-            and m5 >= 0.8
-            and m1 >= -3.5
-            and buys5 >= max(5, int(sells5 * 0.98))
-            and vol5_usd >= 1400.0
-            and tot_tx >= 7
-        )
-        or (
-            age_min <= 45.0
-            and m5 >= -2.5
-            and m1 >= -1.0
-            and buys5 >= max(6, int(sells5 * 1.02))
-            and vol5_usd >= 1000.0
-            and tot_tx >= 8
-        )
+        age_min <= 45.0
+        and m5 >= 1.5
+        and m1 >= -2.0
+        and buys5 >= max(5, int(sells5 * 1.05))
+        and vol5_usd >= 1200.0
+        and tot_tx >= 7
     )
+
+    # 1.4 Гипер-зажигание (сильный пробой)
     is_hyper_ignition = (
-        m5 >= 8.0
-        and m1 >= -3.5
-        and buys5 >= max(6, int(sells5 * 1.02))
+        m5 >= 7.0
+        and m1 >= -2.2
+        and buys5 >= max(6, int(sells5 * 1.05))
         and vol5_usd >= 2000.0
     )
-    # Healthy dip / post-migration reclaim & active second-wave consolidation (catches Socks, HOGE, DOJE without dead bleeders)
+
+    # 1.5 Здоровый второй импульс / реклейм уровня
     is_turned_green_dip = (
         age_min <= 90.0
-        and (fdv_usd <= 0.0 or fdv_usd <= 220000.0)
-        and buys5 >= max(8, int(sells5 * 1.05))
+        and (fdv_usd <= 0.0 or fdv_usd <= 350000.0)
+        and buys5 >= max(8, int(sells5 * 1.10))
         and vol5_usd >= 3000.0
         and liq_usd >= 7500.0
-        and (
-            (m5 >= -3.5 and m1 >= -2.5 and h1 >= 5.0)
-            or (h1 >= 10.0 and m5 >= -15.0 and m1 >= -4.5)
-            or (m5 >= -4.5 and m1 >= -4.5 and vol5_usd >= 8000.0 and buys5 >= max(20, int(sells5 * 1.10)))
-        )
+        and m5 >= 1.5
+        and m1 >= -1.8
+        and (h1 >= 5.0 or vol5_usd >= 8000.0)
     )
+
+    # 1.6 V-образный разворот покупателями
     is_fresh_v_reversal = (
         age_min <= 45.0
-        and m5 >= 6.0
+        and m5 >= 5.0
         and m1 >= -1.5
         and buys5 >= int(sells5 * 1.15)
         and vol5_usd >= 3500.0
         and liq_usd >= 7500.0
-        and h1 >= -25.0
+        and h1 >= -20.0
     )
+
+    # 1.7 Зрелый пробой (зрелые капы с импульсом)
     is_mature_breakout = (
         age_min <= SOLANA_MAX_AGE_MIN
-        and m5 >= 1.5
-        and h1 >= -12.0
-        and m1 >= -3.5
-        and buys5 >= max(8, int(sells5 * 1.02))
+        and m5 >= 2.0
+        and h1 >= -10.0
+        and m1 >= -2.0
+        and buys5 >= max(8, int(sells5 * 1.05))
         and vol5_usd >= 2200.0
         and (vel_ratio >= 0.08 or vol5_usd >= 6000.0)
     )
@@ -510,9 +505,9 @@ MOONBAG_MAX_HOLD_MIN = 55.0          # Мунбэг может ехать до 5
 PUMP_XGB_ENABLED = False
 RAY_XGB_ENABLED = False
 ROCKET_XGB_ENABLED = True
-ROCKET_XGB_STAGE1_THRESHOLD = 5.0    # Первичный отсев 5%: возвращает поток 0d2b1ae/d57dc079, отсекая лишь полный мертвяк
-ROCKET_XGB_FINAL_THRESHOLD = 8.0     # Финальный порог 8%: не режет ранние 2x+ ракеты (UPCAT 12%, CHICK 13.6% и т.д.)
-ROCKET_XGB_THRESHOLD = 8.0
+ROCKET_XGB_STAGE1_THRESHOLD = 10.0   # Первичный отсев 10%: отсекает мертвяк и скам (скор < 10%)
+ROCKET_XGB_FINAL_THRESHOLD = 15.0    # Финальный порог 15%: чистый отсев 1-7% мусора, свободный проход для 20-60% ракет
+ROCKET_XGB_THRESHOLD = 15.0
 
 STALL_TIMER_SEC = 420.0   # 7 минут на консолидацию до среза по стагнации
 STALL_MAX_LOSS_PCT = -0.055
@@ -537,7 +532,7 @@ UNLOCKED_FAST_STOP_PCT = -0.075          # Быстрый стоп-лосс -7.5
 PREFETCH_TTL_SEC = 12
 SOLANA_MIN_AGE_MIN = 0.75        # 45 секунд: отсекает 41-секундные флеш-раги первых секунд (SURVIVE/HOPE/GTACOIN), ловя все ранние ракеты (TAOTAO 49с, HOGE 51с, AXIOM 60с)
 SOLANA_MAX_AGE_HOURS = 1.5        # До 1.5 часов (90м) — защита от захода в отработавшие и сливающиеся топы
-SOLANA_MAX_AGE_MIN = 90.0         # Потолок 90 минут для сканера (не покупаем старые измученные монеты)
+SOLANA_MAX_AGE_MIN = 240.0        # Потолок 4 часа (240м) для сканера: позволяет ловить мощные многоволновые разгоны и пробои ATH!
 JEV_MAX_AGE_MIN = 60.0            # В GROK-JEV свежие монеты до 60м (защита от зомби-монет)
 JEV_MAX_M1_ENTRY_PCT = 25.0
 
@@ -564,7 +559,7 @@ JEV_MIN_LIQUIDITY_USD = 6000.0   # Минимум $6k ликвидности —
 JEV_MAX_LIQUIDITY_USD = 450000.0
 JEV_MIN_VOLUME_H1 = 8000.0
 JEV_MIN_MCAP_USD = 6000.0      # Минимум $6k MCap
-JEV_MAX_MCAP_USD = 220000.0    # Верхняя граница $220k FDV: покупаем на старте/разгоне ($40k-$140k), строго блокируем покупку на вершине ($450k+)!
+JEV_MAX_MCAP_USD = 850000.0    # Верхняя граница $850k FDV (до $1.5M для пробоев): позволяет ловить мощные 2x-10x ракеты и не резать тренд!
 JEV_MIN_VOLUME_H24 = 15000.0
 JEV_MIN_TRADES_H24 = 60
 JEV_MIN_TRADES_H1 = 20

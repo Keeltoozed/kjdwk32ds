@@ -631,10 +631,10 @@ class Analyzer:
                         _m5_lt = float((_p_lt.get("priceChange") or {}).get("m5", 0) or 0)
                         _fdv_lt = float(_p_lt.get("fdv", 0) or _p_lt.get("marketCap", 0) or 0)
                         _ca_lt = float(_p_lt.get("pairCreatedAt") or 0)
-                        _age_lt = ((time.time() * 1000.0 - _ca_lt) / 60000.0) if _ca_lt > 0 else 999.0
-                        if _liq_lt < 6000.0 or _vol5_lt < 1200.0 or _m5_lt < 2.0:
+                        _age_lt = ((time.time() * 1000.0 - _ca_lt) / 60000.0) if _ca_lt > 0 else 1.5
+                        if _liq_lt < 4000.0 or _vol5_lt < 500.0 or _m5_lt < 1.0:
                             continue
-                        if _age_lt > float(getattr(config, "SOLANA_MAX_AGE_MIN", 90.0)) or _fdv_lt > float(getattr(config, "JEV_MAX_MCAP_USD", 220000.0)):
+                        if _age_lt > float(getattr(config, "SOLANA_MAX_AGE_MIN", 240.0)) or _fdv_lt > float(getattr(config, "JEV_MAX_MCAP_USD", 850000.0)):
                             continue
                         _addr_lt = str((_p_lt.get("baseToken") or {}).get("address") or "").strip()
                         if _addr_lt and not _addr_lt.startswith("0x") and 32 <= len(_addr_lt) <= 44:
@@ -1757,9 +1757,9 @@ class Analyzer:
             print(f"⏳ [ENTRY] {mint[:8]}: возраст {_age_min_pre:.1f}м < {_sol_min_age}м — выдерживаем карантин первой свечи.")
             return None
 
-        # 1. Защита от старых отработанных пулов (> 90м) и переросших mid-caps (> JEV_MAX_MCAP_USD = $220k)
+        # 1. Защита от старых отработанных пулов (> 240м) и переросших mid-caps
         _fdv_chk_pre = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
-        _max_mcap_pre = float(getattr(config, "JEV_MAX_MCAP_USD", 220000.0))
+        _max_mcap_pre = 1500000.0 if (_vm5_pre >= 8000.0 and _b5_pre >= int(_s5_pre * 1.10) and _m5 >= 2.0) else float(getattr(config, "JEV_MAX_MCAP_USD", 850000.0))
         if _fdv_chk_pre > _max_mcap_pre:
             return self._deny(
                 mint,
@@ -1783,16 +1783,16 @@ class Analyzer:
                     f"🚫 [POST-MIGRATION-DUMP] {symbol} ({mint[:8]}): выпускник Pump.fun слит ниже миграции (FDV ${_fdv_chk_pre:,.0f} < ${_dump_floor_sol:,.0f} [~100 SOL]) — кейс SHANE.",
                 )
 
-        _max_age_min = float(getattr(config, "SOLANA_MAX_AGE_MIN", 90.0))
-        # Окно живого пробоя строго в пределах свежих 90м и <= JEV_MAX_MCAP_USD ($320k), без 360м BILL-ловушек
+        _max_age_min = float(getattr(config, "SOLANA_MAX_AGE_MIN", 240.0))
+        # Окно живого пробоя строго в пределах свежих 240м (до $1.5M при активном объеме)
         _is_active_breakout_pool = (
-            _age_min_pre <= _max_age_min
+            _age_min_pre <= 360.0
             and _fdv_chk_pre <= _max_mcap_pre
-            and _raw_liq_age >= 15000.0
-            and _vm5_pre >= 12000.0
-            and (_vm5_pre / max(_raw_liq_age, 1.0)) >= 0.25
-            and _m5 >= 5.0
-            and _b5_pre >= _s5_pre * 1.15
+            and _raw_liq_age >= 12000.0
+            and _vm5_pre >= 8000.0
+            and (_vm5_pre / max(_raw_liq_age, 1.0)) >= 0.20
+            and _m5 >= 3.0
+            and _b5_pre >= _s5_pre * 1.10
         )
         if _age_min_pre > _max_age_min and not _is_active_breakout_pool:
             return self._deny(
@@ -1858,8 +1858,8 @@ class Analyzer:
             _is_strong_mature_breakout = (_m5 >= 1.5 and _vm5_pre >= 2500.0 and _b5_pre >= _s5_pre * 1.02 and _tot_tx5_pre >= 12)
             _is_mature_active_pullback = (
                 _h1 >= 15.0
-                and _m5 >= -15.0
-                and _m1 >= -4.5
+                and _m5 >= 1.5
+                and _m1 >= -2.0
                 and _b5_pre >= int(_s5_pre * 1.08)
                 and _vm5_pre >= 4000.0
                 and _raw_liq_chk >= 9000.0
@@ -1918,13 +1918,9 @@ class Analyzer:
             _max_m1_cfg = max(_base_max_m1, 30.0)
         else:
             _max_m1_cfg = _base_max_m1
-        _min_m1_floor = float(getattr(config, "JEV_MIN_M1_ENTRY_FLOOR_PCT", -3.5))
-        if _age_min_pre <= 15.0 and (_b5_pre >= _s5_pre or _m5 >= 0.5):
-            _min_m1_floor = min(_min_m1_floor, -5.0)
-        elif _vm5_pre >= 10000.0 and _b5_pre >= int(_s5_pre * 1.15):
-            _min_m1_floor = min(_min_m1_floor, -4.5)
-        elif _h1 >= 25.0 and _b5_pre >= int(_s5_pre * 1.25) and _vm5_pre >= 4500.0:
-            _min_m1_floor = min(_min_m1_floor, -4.5)
+        _min_m1_floor = float(getattr(config, "JEV_MIN_M1_ENTRY_FLOOR_PCT", -2.2))
+        if _vm5_pre >= 15000.0 and _b5_pre >= int(_s5_pre * 1.25) and _m5 >= 6.0:
+            _min_m1_floor = -2.5
         _m1_is_phantom_a = (_age_min_pre < 3.0 and abs(_m5) > 1.0 and abs(_m1) > 0 and abs(_m1 / max(abs(_m5), 0.01) - 1.0) < 0.08)
         if (_m1 > _max_m1_cfg and not _m1_is_phantom_a) or _m1 < _min_m1_floor:
             return self._deny(
@@ -2327,12 +2323,7 @@ class Analyzer:
                             _is_target_mkt = bool(_target_pair_rc and _m_pub == _target_pair_rc)
                             _is_meteora_pool = ("meteora" in _m_type and (_is_target_mkt or "meteora" in dex_id_low or (not _is_canonical_pump and _m_quote_usd >= 2000.0)))
                             if _is_meteora_pool and _m_lp_safe < 80.0:
-                                _has_crit_rug = bool(rc_data.get("freezeAuthority")) or bool(rc_data.get("mintAuthority")) or any(
-                                    rk.get("level") == "danger" and any(w in str(rk.get("name", "")).lower() for w in ("single holder", "high ownership", "creator holding"))
-                                    for rk in (rc_data.get("risks") or [])
-                                )
-                                if _has_crit_rug:
-                                    return self._deny(mint, "meteora-unlocked-lp", f"🚫 [METEORA-RUG] {symbol} ({mint[:8]}): незаблокированный пул Meteora {_m_type} (lock/burn {_m_lp_safe:.0f}% < 80%) с критическим риском — дев выдернет SOL (кейсы PEPEBOT/Smiley)!")
+                                return self._deny(mint, "meteora-unlocked-lp", f"🚫 [METEORA-RUG] {symbol} ({mint[:8]}): незаблокированный пул Meteora {_m_type} (lock/burn {_m_lp_safe:.0f}% < 80%) — риск вывода SOL девом (кейсы AXIOMCOIN/MULT/PUNCHAO)!")
                             if not _is_pump_flag and "raydium" in _m_type and (_is_target_mkt or _m_quote_usd >= 2000.0) and _m_lp_safe < 80.0:
                                 _has_crit_rug_ray = bool(rc_data.get("freezeAuthority")) or bool(rc_data.get("mintAuthority"))
                                 if _has_crit_rug_ray:
@@ -2342,15 +2333,10 @@ class Analyzer:
                                 if _mkt.get(_m_field):
                                     pool_accounts.add(_mkt[_m_field])
 
-                    if dex_id_low == "meteora":
+                    if dex_id_low in ("meteora", "meteoradbc"):
                         _met_locked = any("meteora" in str(m.get("marketType", "")).lower() and (float((m.get("lp") or {}).get("lpLockedPct", 0) or 0) >= 80.0 or float((m.get("lp") or {}).get("lpBurnedPct", 0) or 0) >= 80.0) for m in (rc_data.get("markets") or []))
                         if not _met_locked:
-                            _has_crit_met = bool(rc_data.get("freezeAuthority")) or bool(rc_data.get("mintAuthority")) or any(
-                                rk.get("level") == "danger" and any(w in str(rk.get("name", "")).lower() for w in ("single holder", "high ownership", "creator holding"))
-                                for rk in (rc_data.get("risks") or [])
-                            )
-                            if _has_crit_met:
-                                return self._deny(mint, "meteora-unlocked-lp", f"🚫 [METEORA-RUG] {symbol} ({mint[:8]}): токен на Meteora без заблокированного LP с критическим риском манипуляции (кейс PEPEBOT)!")
+                            return self._deny(mint, "meteora-unlocked-lp", f"🚫 [METEORA-RUG] {symbol} ({mint[:8]}): токен на Meteora без заблокированного/сожжённого LP — риск Remove LP девом (кейсы AXIOMCOIN/MULT/PUNCHAO)!")
 
                     DEX_POOL_AUTHORITIES = {
                         "5Q544fKrFoe6tsEbD7S8EmxGTJYAKtTVhAW5Q5pge4j1", # Raydium AMM V4
@@ -2522,12 +2508,11 @@ class Analyzer:
                 conf = self.score_rocket_xgb(mint, pair_data, holders_info=_real_holders)
                 self.last_score = conf
                 self.rocket_scores[mint] = conf
-            _final_thr = float(getattr(config, "ROCKET_XGB_FINAL_THRESHOLD", 8.0))
+            _final_thr = float(getattr(config, "ROCKET_XGB_FINAL_THRESHOLD", 15.0))
             _req_soc_age_a = float(getattr(config, "REQUIRE_SOCIALS_MIN_AGE_MIN", 25.0))
             if _links_cnt == 0 and not _soc_unknown and _age_min_pre >= _req_soc_age_a:
                 _final_thr = max(_final_thr, _final_thr + 1.0)
-            _s1_thr_a = float(getattr(config, "ROCKET_XGB_STAGE1_THRESHOLD", 5.0))
-            if (conf + 0.05) < _final_thr and not (_is_momentum_rocket_a and (conf + 0.05) >= _s1_thr_a):
+            if (conf + 0.05) < _final_thr:
                 return self._deny(mint, f"rocket-xgb-s2 {conf:.0f}%", f"🚫 [ROCKET-XGB-S2] {symbol} ({mint[:8]}): скор с учётом холдеров {conf:.1f}% < {_final_thr:.0f}% — отсев.")
 
             self._set_sig(mint, f"ROCKET-XGB {conf:.0f}%")
@@ -3162,7 +3147,7 @@ class Analyzer:
         symbol = ((pair_data.get("baseToken") or {}).get("symbol") or address[:8])
         # 1. Проверяем просадку от уже виденного 5м-пика в памяти бота
         drop_seen = float(pair_data.get("_drop_from_peak_5m", 0.0) or 0.0)
-        if drop_seen <= -12.0:
+        if drop_seen <= -8.0:
             print(f"🚫 [PEAK-DUMP] {symbol} ({address[:8]}): цена уже упала на {drop_seen:.1f}% от недавнего пика — падающий нож.")
             return False
 
@@ -3213,10 +3198,8 @@ class Analyzer:
             low_5m = min(lows_5m) if lows_5m else 0.0
             drawdown_5m_pct = ((eff_close - high_5m) / high_5m * 100.0) if high_5m > 0 else 0.0
 
-            # А) Активная красная свеча прямо сейчас (реальный слив >= -7.5% за текущую минуту)
-        
-            # Расширяем до -12.0%: для мемкоинов откат на 7-10% — это нормальный ретест, а не смерть
-            if c0_pct <= -12.0:
+            # А) Активная красная свеча прямо сейчас (слив >= -3.5% за текущую минуту)
+            if c0_pct <= -3.5:
                 print(f"🚫 [1M-DUMP] {symbol} ({address[:8]}): текущая 1м свеча летит вниз ({c0_pct:+.1f}%) — падающий нож, отмена входа.")
                 return False
 
@@ -4132,7 +4115,7 @@ class Analyzer:
                     print(f"⚡ [RAY-PULLBACK] {mint[:8]}: молодой токен ({_age_min:.1f}м) h1 {_h1:+.1f}%, отскок m5 {_m5:+.1f}% — дохлая кошка пропущена, пишется в shadow.")
                 except Exception:
                     pass
-        _min_ray_m1 = -12.0 if (_m5 >= 8.0 and _b5 >= _s5) else -8.0
+        _min_ray_m1 = -2.5 if (_m5 >= 8.0 and _b5 >= _s5) else -2.0
         if _m1 < _min_ray_m1:
             return self._deny(mint, "ray-m1-drop", f"🚫 [RAYDIUM] {mint[:8]}: m1 {_m1:+.1f}% < {_min_ray_m1:+.1f}% — активный сброс в моменте (падающий нож).")
         if _m1 > 22.0:

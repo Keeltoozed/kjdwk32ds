@@ -1048,12 +1048,12 @@ async def scanner_loop(analyzer, tracker):
                         _c_liq = float((_c_pre.get("liquidity") or {}).get("usd", 0) or 0)
                         _c_fdv = float(_c_pre.get("fdv", 0) or _c_pre.get("marketCap", 0) or 0)
                         _max_sc_age = float(getattr(config, "SOLANA_MAX_AGE_MIN", 90.0))
-                        _max_sc_fdv = float(getattr(config, "JEV_MAX_MCAP_USD", 220000.0)) + 30000.0
+                        _max_sc_fdv = 450000.0 if (_c_vol5 >= 10000.0 and _c_trades >= 30 and _c_m5 >= 3.0) else (float(getattr(config, "JEV_MAX_MCAP_USD", 320000.0)) + 30000.0)
 
                         # Свежая миграция (только что вышедшая на DEX в пределах раннего окна):
                         _is_fresh_grad = ((mint in _graduated_set) or (_c_age_m <= 20.0 and (config.is_launchpad_mint(mint) or _c_dex == "pumpswap"))) and (_c_age_m <= 25.0) and (_c_fdv <= _max_sc_fdv)
 
-                        # Отсекаем перегретые топы (>$250k FDV) — блокируем покупку на вершине (в т.ч. старых миграций вроде Socks на $450k!):
+                        # Отсекаем перегретые топы — блокируем покупку на вершине:
                         if _c_fdv > _max_sc_fdv:
                             processed_mints[mint] = _now_r + 300
                             continue
@@ -1076,9 +1076,9 @@ async def scanner_loop(analyzer, tracker):
                             processed_mints[mint] = _now_r - _cd_r + 20
                             continue
 
-                        # Слив/флет (m5 < 2.0%) не из миграций: кулдаун 18с
-                        if _c_m5 < 2.0 and not _is_fresh_grad and _c_age_m > 3.0:
-                            processed_mints[mint] = _now_r - _cd_r + 18
+                        # Слив/флет (m5 < 1.0%): не тратим слоты сканера на красные свечи
+                        if _c_m5 < 1.0 and _c_age_m > 1.5:
+                            processed_mints[mint] = _now_r - _cd_r + 15
                             continue
 
                         # РОКЕТ-ВЕЛОСИТИ РАНЖИРОВАНИЕ С ПРИОРИТЕТОМ СВЕЖЕСТИ (<=15м x2.5, <=45м x1.8):
@@ -1293,6 +1293,9 @@ async def scanner_loop(analyzer, tracker):
                                 if mint.endswith("pump") and ("meteora" in _dex_id or _dex_id == "meteoradbc"):
                                     print(f"🚫 [SCANNER-FAKE-METEORA] {actual_symbol} ({mint[:8]}): .pump токен на пуле Meteora — неофициальный скам-пул, отмена!")
                                     continue
+                                if ("meteora" in _dex_id or _dex_id == "meteoradbc") and not pair_data.get("_lp_verified", False):
+                                    print(f"🚫 [SCANNER-METEORA-UNBURNED] {actual_symbol} ({mint[:8]}): пул Meteora без сожжённого/залоченного LP — риск Remove LP, отмена!")
+                                    continue
                                 if config.is_permissionless_liq_fdv_trap(pair_data):
                                     print(f"🚫 [SCANNER-LIQ-TRAP] {actual_symbol} ({mint[:8]}): seeded trap pool (liq/fdv drain risk) — отмена!")
                                     continue
@@ -1347,13 +1350,17 @@ async def scanner_loop(analyzer, tracker):
                                     min_h6=float(getattr(config, "JEV_MIN_H6_PCT", -20.0)),
                                     fdv_usd=_fdv_live_sc,
                                 )
-                                _min_sc_m1 = float(getattr(config, "JEV_MIN_M1_ENTRY_FLOOR_PCT", -3.5))
-                                if _age_m <= 15.0 and (_b5_live >= _s5_live or _m5_live >= 0.5):
-                                    _min_sc_m1 = min(_min_sc_m1, -5.0)
-                                elif (_vol5_live >= 10000.0 and _b5_live >= int(_s5_live * 1.15)) or (_h1_live >= 25.0 and _b5_live >= int(_s5_live * 1.25) and _vol5_live >= 4500.0):
-                                    _min_sc_m1 = min(_min_sc_m1, -4.5)
+                                _min_sc_m1 = float(getattr(config, "JEV_MIN_M1_ENTRY_FLOOR_PCT", -2.2))
+                                if _vol5_live >= 15000.0 and _b5_live >= int(_s5_live * 1.25) and _m5_live >= 6.0:
+                                    _min_sc_m1 = -2.5
                                 if not _mom_live_ok or _m1_live < _min_sc_m1:
                                     print(f"🚫 [SCANNER-LIVE-REVERSAL] {actual_symbol} ({mint[:8]}): на живом графике импульс сломан ({_mom_live_why}, m5 {_m5_live:+.1f}%, m1 {_m1_live:+.1f}% < {_min_sc_m1:+.1f}%) — отмена покупки!")
+                                    continue
+                                if _m5_live < 1.0:
+                                    print(f"🚫 [SCANNER-LIVE-FALLING] {actual_symbol} ({mint[:8]}): живой m5 {_m5_live:+.1f}% < +1.0% — падающий нож перед входом, отмена покупки!")
+                                    continue
+                                if _m1_live < -2.0:
+                                    print(f"🚫 [SCANNER-LIVE-M1-DUMP] {actual_symbol} ({mint[:8]}): живой m1 {_m1_live:+.1f}% < -2.0% — резкий сброс за 1м, отмена покупки!")
                                     continue
                                 _max_m1_cfg_live = float(getattr(config, "MAX_ENTRY_M1_PCT", 22.0))
                                 if _m1_live > _max_m1_cfg_live:

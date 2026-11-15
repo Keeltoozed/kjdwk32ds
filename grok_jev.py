@@ -1237,15 +1237,19 @@ class GrokJevEngine:
                 if m and 32 <= len(m) <= 44 and not m.startswith("0x") and m not in seen:
                     seen.add(m)
                     candidates.append((m, "solana"))
-            ds_g = await market_data.fetch_dexscreener_gainers("solana", "5m")
-            for g in (ds_g or []):
-                m = str(g.get("mint") or "").strip()
-                liq_g = float(g.get("liquidity", 0) or 0)
-                age_g = float(g.get("age_m", 999) or 999)
-                fdv_g = float(g.get("fdv", 0) or g.get("market_cap", 0) or 0)
-                if m and 32 <= len(m) <= 44 and not m.startswith("0x") and liq_g >= 4500.0 and age_g <= float(getattr(_c, "SOLANA_MAX_AGE_MIN", 90.0)) and fdv_g <= float(getattr(_c, "JEV_MAX_MCAP_USD", 220000.0)) and m not in seen:
-                    seen.add(m)
-                    candidates.append((m, "solana"))
+            # Топ-гейнеры 5m и 1h (живые ракеты с импульсом):
+            for _tf_g in ("5m", "1h"):
+                ds_g = await market_data.fetch_dexscreener_gainers(timeframe=_tf_g, network="solana")
+                for g in (ds_g or []):
+                    m = str(g.get("mint") or "").strip()
+                    liq_g = float(g.get("liquidity", 0) or 0)
+                    age_g = float(g.get("age_m", 999) or 999)
+                    fdv_g = float(g.get("fdv", 0) or g.get("market_cap", 0) or 0)
+                    _max_a_g = float(getattr(_c, "SOLANA_MAX_AGE_MIN", 240.0))
+                    _max_f_g = float(getattr(_c, "JEV_MAX_MCAP_USD", 850000.0))
+                    if m and 32 <= len(m) <= 44 and not m.startswith("0x") and liq_g >= 4000.0 and age_g <= _max_a_g and fdv_g <= _max_f_g and m not in seen:
+                        seen.add(m)
+                        candidates.append((m, "solana"))
         except Exception:
             pass
 
@@ -1635,6 +1639,10 @@ class GrokJevEngine:
                     # .pump токен на пуле Meteora без сожжённого LP — неофициальный скам-пул мимо PumpSwap (кейс SURVIVE -96%)
                     if address.endswith("pump") and "meteora" in _dex_rc_low and not has_verified_locked_lp:
                         return False, "pump-token-unlocked-meteora (.pump токен на пуле Meteora без сожжённого LP — кейс SURVIVE)", _h_stats
+
+                    # Любой токен на Meteora без подтверждённого сожжённого/залоченного LP блокируется на 100% (кейсы AXIOMCOIN/MULT/PUNCHAO/BUTTHOLE)
+                    if ("meteora" in _dex_rc_low or _dex_rc_low == "meteoradbc") and not has_verified_locked_lp:
+                        return False, "meteora-unlocked-lp (токен на пуле Meteora без подтверждённого сожжённого LP — риск Remove LP девом)", _h_stats
 
                     # По каноничному режиму Commit 0d2b1ae: свежие DEX-раннеры (Raydium, Meteora, PumpSwap)
                     # НЕ требуют стороннего сертификата лока LP в RugCheck, если ликвидность >= $5k,
@@ -2064,9 +2072,9 @@ class GrokJevEngine:
         _age_s1 = ((time.time() * 1000.0 - _ca_s1) / 60000.0) if _ca_s1 > 0 else 0.2
         _s1_fresh_ok = (
             _age_s1 <= float(getattr(_c, "SOLANA_MAX_AGE_MIN", 90.0))
-            and _fdv_s1 <= float(getattr(_c, "JEV_MAX_MCAP_USD", 220000.0))
+            and _fdv_s1 <= float(getattr(_c, "JEV_MAX_MCAP_USD", 320000.0))
             and (_age_s1 < 45.0 or _h6_s1 is None or float(_h6_s1 or 0) <= float(getattr(_c, "MAX_ENTRY_H6_PCT", 2500.0)))
-            and (_m1_s1 >= -5.0 if (_age_s1 <= 15.0 and (_b5_s1 >= _s5_s1 or _m5_s1 >= 0.5)) else _m1_s1 >= float(getattr(_c, "JEV_MIN_M1_ENTRY_FLOOR_PCT", -3.5)))
+            and _m1_s1 >= float(getattr(_c, "JEV_MIN_M1_ENTRY_FLOOR_PCT", -2.2))
             and _h1_s1 >= float(getattr(_c, "JEV_MIN_H1_PCT", -15.0))
         )
         _is_momentum_rocket = _s1_fresh_ok and (rkt_s1 + 0.05) >= max(3.5, s1_thresh - 2.0) and (
