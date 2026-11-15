@@ -71,8 +71,8 @@ LIQ_LOCKED_BURNED_MIN_PCT = 0.0   # Режим 0d2b1ae: блокировка/с�
 ALLOW_UNLOCKED_LP_POOLS = True             # Разрешены любые пулы без лока/сжигания LP (Raydium, Meteora, PumpSwap CreatePool)
 BLOCK_PERMISSIONLESS_LIQ_FDV_TRAP = False  # Не блокировать кастомные пулы по соотношению liq/fdv и отсутствию соцсетей
 REQUIRE_SOCIALS_ENABLED = False            # Не требовать соцсети на старте/зрелости (важна только живая ликвидность и импульс)
-MAX_ENTRY_H1_PCT = 2500.0      # Высокий потолок h1: мигрировавшие ракеты ($5k->$200k) всегда имеют +400%..+1500%
-MAX_ENTRY_H6_PCT = 3500.0      # Потолок 6h: не душим вторую волну 2x-10x ракет
+MAX_ENTRY_H1_PCT = 1500.0      # Высокий потолок h1 для свежих миграций (<15м); старые (>30м) режутся в get_max_entry_h1_pct
+MAX_ENTRY_H6_PCT = 500.0       # Потолок 6h: не входим в уже отработавшие 6x-20x памп-топы
 MAX_ENTRY_M5_PCT = 180.0       # Потолок m5: ловим зажигание и быстрый разгон без раннего отсева
 MAX_ENTRY_M1_PCT = 35.0        # Потолок m1: допускаем быстрые 1м пробои до +35%
 REQUIRE_SOCIALS_MIN_AGE_MIN = 9999.0  # Соцсети не обязательны (отключено)
@@ -86,25 +86,23 @@ def get_max_entry_h1_pct(
     liq_usd: float = 0.0,
     m5_pct: float = 1.5,
 ) -> float:
-    """Return dynamic max h1% entry cap: allow strong explosive rockets while avoiding dead tops."""
+    """Return dynamic max h1% entry cap: allow ultra-fresh launches/migrations while rejecting spent tops."""
     _m5_ok = True if m5_pct is None else (float(m5_pct) >= 1.0)
     _flow_ok = vol_m5 >= 2500.0 and buys_m5 >= int(sells_m5 * 1.05) and _m5_ok
     if age_min <= 15.0:
-        return 3000.0 if _flow_ok else 2000.0
-    if age_min <= 35.0:
-        return 850.0 if _flow_ok else 500.0
+        return 2500.0 if _flow_ok else 1800.0
+    if age_min <= 30.0:
+        return 600.0 if _flow_ok else 350.0
     if age_min <= 60.0:
-        return 750.0 if _flow_ok else 350.0
-    if age_min <= 120.0:
-        return 550.0 if _flow_ok else 250.0
-    return 300.0 if _flow_ok else 180.0
+        return 400.0 if _flow_ok else 220.0
+    return 250.0 if _flow_ok else 150.0
 
 
 LAUNCHPAD_MINT_SUFFIXES = ("pump", "moon", "bonk", "bags")
-UNLOCKED_CUSTOM_MIN_LIQ_USD = 3000.0
+UNLOCKED_CUSTOM_MIN_LIQ_USD = 2500.0
 UNLOCKED_CUSTOM_MIN_AGE_MIN = 0.0
-UNLOCKED_CUSTOM_MIN_VOL5_USD = 300.0
-UNLOCKED_CUSTOM_MIN_BUYS5 = 3
+UNLOCKED_CUSTOM_MIN_VOL5_USD = 200.0
+UNLOCKED_CUSTOM_MIN_BUYS5 = 2
 
 
 def is_launchpad_mint(mint: str) -> bool:
@@ -317,7 +315,7 @@ def evaluate_entry_momentum(
     if sells5 > 8 and buys5 < int(sells5 * 0.88) and not _is_hi_vol_rocket:
         return False, f"sellers-dominating {buys5}b/{sells5}s (more sellers than buyers in 5m)"
 
-    _max_fdv_allowed = 2000000.0 if (vol5_usd >= 5000.0 and buys5 >= int(sells5 * 0.95)) else float(globals().get("JEV_MAX_MCAP_USD", 1200000.0))
+    _max_fdv_allowed = (float(globals().get("JEV_MAX_MCAP_USD", 220000.0)) * 1.25) if (vol5_usd >= 5000.0 and buys5 >= int(sells5 * 0.95) and age_min <= 20.0) else float(globals().get("JEV_MAX_MCAP_USD", 220000.0))
     if fdv_usd > 0.0 and fdv_usd > _max_fdv_allowed:
         return False, f"mcap-too-large ${fdv_usd:,.0f} > ${_max_fdv_allowed:,.0f} (limited 2x+ upside)"
     if age_min > SOLANA_MAX_AGE_MIN:
@@ -372,29 +370,30 @@ def evaluate_entry_momentum(
 
     # 1.3 Первичное зажигание ракеты (свежий импульс)
     is_fresh_ignition = (
-        age_min <= 60.0
-        and m5 >= 1.0
+        age_min <= 35.0
+        and m5 >= 0.6
         and m1 >= -4.0
-        and buys5 >= max(4, int(sells5 * 0.90))
-        and vol5_usd >= 500.0
-        and tot_tx >= 5
+        and buys5 >= max(3, int(sells5 * 0.90))
+        and vol5_usd >= 250.0
+        and tot_tx >= 3
     )
 
     # 1.4 Гипер-зажигание (сильный пробой)
     is_hyper_ignition = (
-        m5 >= 4.0
+        age_min <= SOLANA_MAX_AGE_MIN
+        and m5 >= 4.0
         and m1 >= -3.5
-        and buys5 >= max(4, int(sells5 * 0.90))
-        and vol5_usd >= 600.0
+        and buys5 >= max(3, int(sells5 * 0.90))
+        and vol5_usd >= 350.0
     )
 
     # 1.5 Здоровый второй импульс / реклейм уровня
     is_turned_green_dip = (
-        age_min <= 120.0
-        and (fdv_usd <= 0.0 or fdv_usd <= 500000.0)
-        and buys5 >= max(5, int(sells5 * 0.90))
-        and vol5_usd >= 1000.0
-        and liq_usd >= 3000.0
+        age_min <= SOLANA_MAX_AGE_MIN
+        and (fdv_usd <= 0.0 or fdv_usd <= float(globals().get("JEV_MAX_MCAP_USD", 220000.0)))
+        and buys5 >= max(4, int(sells5 * 0.90))
+        and vol5_usd >= 500.0
+        and liq_usd >= 2500.0
         and m5 >= 1.0
         and m1 >= -4.5
         and (h1 >= -5.0 or vol5_usd >= 3000.0)
@@ -402,44 +401,44 @@ def evaluate_entry_momentum(
 
     # 1.6 V-образный разворот покупателями
     is_fresh_v_reversal = (
-        age_min <= 60.0
+        age_min <= SOLANA_MAX_AGE_MIN
         and m5 >= 3.0
         and m1 >= -4.0
         and buys5 >= max(4, int(sells5 * 0.95))
-        and vol5_usd >= 1000.0
-        and liq_usd >= 3000.0
+        and vol5_usd >= 500.0
+        and liq_usd >= 2500.0
         and h1 >= -25.0
     )
 
-    # 1.7 Зрелый пробой (зрелые капы с импульсом)
+    # 1.7 Зрелый пробой (свежие капы с импульсом)
     is_mature_breakout = (
         age_min <= SOLANA_MAX_AGE_MIN
         and m5 >= 1.0
         and h1 >= -20.0
         and m1 >= -4.5
-        and buys5 >= max(4, int(sells5 * 0.90))
-        and vol5_usd >= 500.0
-        and (vel_ratio >= 0.02 or vol5_usd >= 1000.0)
+        and buys5 >= max(3, int(sells5 * 0.90))
+        and vol5_usd >= 350.0
+        and (vel_ratio >= 0.02 or vol5_usd >= 750.0)
     )
 
-    # 1.8 Импульсный прорыв консолидации / повторный разгон (раннеры любого возраста до 240м)
-    _cb_max_mcap = float(globals().get("JEV_MAX_MCAP_USD", 1200000.0))
+    # 1.8 Импульсный прорыв консолидации / повторный разгон
+    _cb_max_mcap = float(globals().get("JEV_MAX_MCAP_USD", 220000.0))
     is_consolidation_breakout = (
         age_min <= SOLANA_MAX_AGE_MIN
-        and 0.8 <= m5 <= _max_m5_dyn
+        and 0.6 <= m5 <= _max_m5_dyn
         and m1 >= -4.0
-        and buys5 >= max(4, int(sells5 * 0.90))
-        and vol5_usd >= 400.0
+        and buys5 >= max(3, int(sells5 * 0.90))
+        and vol5_usd >= 250.0
         and (fdv_usd <= 0.0 or fdv_usd <= _cb_max_mcap)
     )
 
     # 1.9 Взрывной старт 1-минутной свечи (момент зажигания до того, как m5 успела раздуться):
     is_m1_rocket_blast = (
         age_min <= SOLANA_MAX_AGE_MIN
-        and m1 >= 1.0
+        and m1 >= 0.8
         and m5 >= 0.0
-        and buys5 >= max(4, int(sells5 * 0.90))
-        and vol5_usd >= 500.0
+        and buys5 >= max(3, int(sells5 * 0.90))
+        and vol5_usd >= 250.0
         and (fdv_usd <= 0.0 or fdv_usd <= _cb_max_mcap)
     )
 
@@ -481,25 +480,25 @@ DD_THROTTLE_ENABLED = False
 DD_THROTTLE_START_USD = 15.0
 
 # === ВХОД В ЗРЕЛЫЕ КРИВЫЕ PUMP.FUN ДО МИГРАЦИИ + ЗАЩИТА DEX ===
-SNIPER_ENTRIES_ENABLED = False            # ВЫКЛЮЧЕНО: защита от мгновенных дев-дампов на пустых кривых
+SNIPER_ENTRIES_ENABLED = True             # ВКЛЮЧЕНО: мгновенный вход в свежие кривые/миграции со стрима
 ALLOW_UNGRADUATED_PUMPFUN = True          # ВКЛЮЧЕНО: ловим живые разгоны Pump.fun кривых до миграции с быстрым сбором иксов
-MIN_PUMP_CURVE_MCAP_USD = 5000.0          # Fallback в USD (если sol_price недоступен)
+MIN_PUMP_CURVE_MCAP_USD = 3500.0          # Ранний порог кривой в USD (от ~$3.5k)
 MAX_PUMP_CURVE_MCAP_USD = 65000.0         # Fallback в USD (до миграционного обрыва $69k)
-MIN_PUMP_CURVE_MCAP_SOL = 35.0            # Порог кривой pump.fun в SOL
+MIN_PUMP_CURVE_MCAP_SOL = 22.0            # Ранний порог кривой pump.fun в SOL (~22 SOL)
 MAX_PUMP_CURVE_MCAP_SOL = 480.0           # Верх кривой перед миграцией
 PUMP_MIGRATION_MCAP_SOL = 410.0           # FDV миграции pump.fun
 PUMP_DUMP_FLOOR_SOL = 50.0                # Порог post-mig-dumped (~50 SOL, разрешает быстрые реклеймы)
 JEV_MAX_TICKET_USD = 0.0
-MIN_GRADUATED_LIQ_USD = 3000.0            # Минимум $3k ликвидности на DEX (пускает ранние Raydium/Meteora/PumpSwap пулы)
+MIN_GRADUATED_LIQ_USD = 2500.0            # Минимум $2.5k ликвидности на DEX (ультра-ранние Raydium/Meteora/PumpSwap пулы)
 AUDITOR_STAIRCASE_ENABLED = False
 AUDITOR_MAX_DEV_PCT = 15.0
 AUDITOR_MAX_WHALE_PCT = 25.0
 AUDITOR_MAX_TOP10_PCT = 55.0
 STREAM_WINDOW_SEC = 60
-STREAM_MIN_UNIQUE_BUYERS = 5
-STREAM_MIN_BUY_SOL = 1.2
+STREAM_MIN_UNIQUE_BUYERS = 3
+STREAM_MIN_BUY_SOL = 0.6
 STREAM_MAX_TOP_BUYER_RATIO = 0.50
-STREAM_MIN_BS_RATIO = 1.4
+STREAM_MIN_BS_RATIO = 1.2
 STREAM_MAX_CURVE_PROGRESS = 85.0
 STREAM_ENTRY_SIZE_USD = 5.0
 STREAM_SLIPPAGE = 0.08
@@ -508,7 +507,7 @@ STREAM_GC_MIN_PROGRESS = 4.0
 STREAM_GC_IDLE_SEC = 180
 STREAM_DEV_DUMP_RATIO = 0.25
 STREAM_MAX_DEV_BUY_TOKENS = 100_000_000
-STREAM_MIN_ENTRY_PROGRESS = 8.0
+STREAM_MIN_ENTRY_PROGRESS = 3.0
 STREAM_MOMENTUM_MIN_RATIO = 0.35
 
 VIP_ENTRIES_ENABLED = False
@@ -551,7 +550,7 @@ ROCKET_XGB_ENABLED = True
 ROCKET_XGB_STAGE1_THRESHOLD = 5.0    # Первичный отсев 5%: широкий пропуск импульсных пулов без потери скорости
 ROCKET_XGB_FINAL_THRESHOLD = 7.0     # Финальный порог 7%: свободный пропуск ранних и незалоченных раннеров
 ROCKET_XGB_THRESHOLD = 7.0
-JEV_MAX_AGE_MIN = 240.0              # Разрешаем тренд-раннеры до 4 часов (синхронизировано с SOLANA_MAX_AGE_MIN)
+JEV_MAX_AGE_MIN = 45.0               # Ультра-ранний фокус: свежие запуски и пробои до 45м (освобождаем слоты от старых 2ч+ топов)
 
 STALL_TIMER_SEC = 420.0   # 7 минут на консолидацию до среза по стагнации
 STALL_MAX_LOSS_PCT = -0.055
@@ -574,10 +573,10 @@ UNLOCKED_ENTRY_SCRATCH_SEC = 35.0        # 35 секунд без импульс
 UNLOCKED_FAST_STOP_PCT = -0.075          # Быстрый стоп-лосс -7.5% (1 тик)
 
 PREFETCH_TTL_SEC = 12
-SOLANA_MIN_AGE_MIN = 0.15        # 9 секунд: входим рано на первой волне до сброса создателями
-SOLANA_MAX_AGE_HOURS = 4.0         # До 4 часов (240м)
-SOLANA_MAX_AGE_MIN = 240.0        # Потолок 4 часа (240м) для сканера: позволяет ловить мощные многоволновые разгоны и пробои ATH!
-JEV_MAX_AGE_MIN = 240.0           # В GROK-JEV ловим монеты до 240м (допускаем разгоны и пробои до 4 часов, кейс sOHM 2h)
+SOLANA_MIN_AGE_MIN = 0.05        # 3 секунды: мгновенный старт на самой ранней волне
+SOLANA_MAX_AGE_HOURS = 0.75        # До 45 минут
+SOLANA_MAX_AGE_MIN = 45.0         # Потолок 45м: слоты не забиваются старыми отработавшими 1-2ч монетами
+JEV_MAX_AGE_MIN = 45.0            # В GROK-JEV фокус строго на свежих запусках и первых пробоях <= 45м
 JEV_MAX_M1_ENTRY_PCT = 35.0
 
 SCALP_TIMEOUT_MIN = 10.0
@@ -586,7 +585,7 @@ STAGNANT_LOSS_MIN_FAST = 12.0
 STAGNANT_HOLD_MIN = 20.0
 
 AI_MODE = "degen"
-MIN_LIQUIDITY = 3500.0          # Минимум $3,500 ликвидности — пускает свежие и незалоченные пулы на раннем входе
+MIN_LIQUIDITY = 2500.0          # Минимум $2,500 ликвидности — пускает самые свежие и незалоченные пулы на старте
 MAX_LIQUIDITY = 50000000
 
 GROQ_API_KEY = (os.getenv("GROQ_API_KEY") or os.getenv("GROK_API_KEY") or os.getenv("XAI_API_KEY") or "").strip().strip('"').strip("'")
@@ -596,18 +595,18 @@ GEMINI_API_KEY = (os.getenv("GEMINI_API_KEY") or "").strip()
 # === GROK BOT x JEV ENGINE ===
 JEV_ENABLED = True
 JEV_WICK_STOP_ENABLED = False
-JEV_EARLY_MIN_AGE_MIN = 0.10   # Быстрый ранний вход от 6с
-JEV_MIN_AGE_MIN = 0.15         # Ранний карантин 9 секунд для быстрого входа до рага
-JEV_MAX_AGE_MIN = 240.0        # В GROK-JEV ловим монеты до 240м (до 4 часов, кейс sOHM 2h)
-JEV_MIN_LIQUIDITY_USD = 3000.0   # Минимум $3k ликвидности — пускает ранние/незалоченные пулы
-JEV_MAX_LIQUIDITY_USD = 650000.0
-JEV_MIN_VOLUME_H1 = 1500.0
-JEV_MIN_MCAP_USD = 4000.0      # Минимум $4k MCap
-JEV_MAX_MCAP_USD = 1200000.0   # Верхняя граница $1.2M FDV
-JEV_MIN_VOLUME_H24 = 2000.0
-JEV_MIN_TRADES_H24 = 15
-JEV_MIN_TRADES_H1 = 6
-JEV_MIN_HOLDERS = 15
+JEV_EARLY_MIN_AGE_MIN = 0.05   # Ультра-ранний вход от 3с
+JEV_MIN_AGE_MIN = 0.08         # Мгновенный вход от 5 секунд (до разгона ракеты)
+JEV_MAX_AGE_MIN = 45.0         # В GROK-JEV фокус на свежих запусках <= 45м
+JEV_MIN_LIQUIDITY_USD = 2500.0   # Минимум $2.5k ликвидности — пускает ультра-ранние/незалоченные пулы
+JEV_MAX_LIQUIDITY_USD = 180000.0
+JEV_MIN_VOLUME_H1 = 350.0
+JEV_MIN_MCAP_USD = 3500.0      # Минимум $3.5k MCap для самых ранних ракет
+JEV_MAX_MCAP_USD = 220000.0    # Верхняя граница $220k FDV: не покупаем отработанные $600k+ хаи
+JEV_MIN_VOLUME_H24 = 350.0
+JEV_MIN_TRADES_H24 = 4
+JEV_MIN_TRADES_H1 = 3
+JEV_MIN_HOLDERS = 8
 JEV_MAX_TOP_WALLET = 0.30
 JEV_MAX_TOP_10 = 0.65
 JEV_REQUIRE_HOLDER_DATA = False  # Не ждём индексации холдеров в RugCheck/GoPlus на свежих пулах
@@ -720,9 +719,9 @@ PULLBACK_M1_MIN_PCT = -0.08
 PULLBACK_M1_MAX_PCT = 0.20
 PULLBACK_MAX_H1_PCT = 320.0
 PULLBACK_MAX_M5_PCT = 0.95
-MIN_VOLUME_M5 = 600             # Минимум $600 за 5м — широкий захват ранних и свежих импульсов
-MIN_TXNS_M5 = 6                 # 6 транзакций за 5м — пропускает ранние пулы сразу со старта
-MIN_BUY_SELL_RATIO = 0.90       # Допускаем активную двухстороннюю торговлю с ранним перевесом или паритетом
+MIN_VOLUME_M5 = 250             # Минимум $250 за 5м — мгновенный захват зарождения импульса
+MIN_TXNS_M5 = 3                 # 3 сделки за 5м — входим с первых секунд жизни пула
+MIN_BUY_SELL_RATIO = 0.85       # Допускаем активную двухстороннюю торговлю с ранним перевесом или паритетом
 LOTTERY_ENABLED = False
 LOTTERY_MIN_M5_PCT = 0.60
 LOTTERY_SIZE_MULT = 0.30
@@ -731,8 +730,8 @@ WHALE_MAX_RUNUP = 1.35
 
 FAST_STREAM_ENABLED = True
 FAST_WINDOW_SEC = 120
-FAST_MIN_BUYERS = 5
-FAST_MIN_TRADES = 8
+FAST_MIN_BUYERS = 3
+FAST_MIN_TRADES = 5
 FAST_EARLY_MAX_AGE_SEC = 180
 
 JUP_API_KEY = (os.getenv("JUPITER_API") or os.getenv("JUP_API_KEY") or os.getenv("JUPITER_API_KEY") or "").strip().strip('"').strip("'")
@@ -761,26 +760,26 @@ EVM_IDLE_TRACK_INTERVAL = 6.0
 COINGECKO_ENABLED = True
 
 SCOUT_ENABLED = True
-SCOUT_INTERVAL = 20
-SCOUT_MIN_AGE_SEC = 60
-SCOUT_MAX_AGE_SEC = 720
-SCOUT_MIN_BUYERS = 5
-SCOUT_MIN_TRADES = 12
-SCOUT_MIN_LIQ = 12000
+SCOUT_INTERVAL = 10
+SCOUT_MIN_AGE_SEC = 10
+SCOUT_MAX_AGE_SEC = 300
+SCOUT_MIN_BUYERS = 3
+SCOUT_MIN_TRADES = 5
+SCOUT_MIN_LIQ = 2500
 SCOUT_MAX_POS = 3
-SCOUT_RECOOLDOWN = 180
+SCOUT_RECOOLDOWN = 60
 SCOUT_BIRTH_FALLBACK = False
 
 GOPLUS_ENABLED = True
 GOPLUS_MAX_SELL_TAX = 0.10
 GOPLUS_CACHE_SEC = 3600
 
-SCAN_CONCURRENCY = 10
-SCAN_LOOP_SLEEP_SEC = 3
-SCAN_AFTER_ENTRY_SLEEP_SEC = 3
-SCAN_LATEST_TTL_SEC = 10
-SOLANA_RESCAN_COOLDOWN = 30
-SOLANA_FRESH_RESCAN_COOLDOWN = 8
+SCAN_CONCURRENCY = 12
+SCAN_LOOP_SLEEP_SEC = 2
+SCAN_AFTER_ENTRY_SLEEP_SEC = 1
+SCAN_LATEST_TTL_SEC = 5
+SOLANA_RESCAN_COOLDOWN = 15
+SOLANA_FRESH_RESCAN_COOLDOWN = 4
 
 JEV_TREND_CONFIRM_ENABLED = False
 JEV_FRESH_RECHECK_ENABLED = True   # Включена финальная проверка цены перед покупкой (защищает от покупки на падающей свече!)

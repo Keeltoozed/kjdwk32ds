@@ -420,8 +420,8 @@ class GrokJevEngine:
                 _cur_p = float(pair_data.get("priceUsd", 0) or 0)
                 if _cur_p > 0:
                     fdv_mc = _cur_p * 1_000_000_000.0
-            _min_curve_mc = float(getattr(_c, "MIN_PUMP_CURVE_MCAP_USD", 7500.0))
-            _max_curve_mc = float(getattr(_c, "MAX_PUMP_CURVE_MCAP_USD", 42000.0))
+            _min_curve_mc = float(getattr(_c, "MIN_PUMP_CURVE_MCAP_USD", 3500.0))
+            _max_curve_mc = float(getattr(_c, "MAX_PUMP_CURVE_MCAP_USD", 65000.0))
             if fdv_mc > 0 and fdv_mc < _min_curve_mc:
                 return False, f"pump-curve-flash-rug: FDV ${fdv_mc:,.0f} < ${_min_curve_mc:,.0f} (пустой кёрв <12%, риск мгновенного сноса в -75%)"
             if fdv_mc > _max_curve_mc:
@@ -454,14 +454,14 @@ class GrokJevEngine:
             else:
                 age_min = 0.1 if is_pump else 0.2
 
-        _min_grad_liq = float(getattr(_c, "MIN_GRADUATED_LIQ_USD", 3000.0))
+        _min_grad_liq = float(getattr(_c, "MIN_GRADUATED_LIQ_USD", 2500.0))
         if _c.is_pumpswap_liq_fdv_trap(pair_data):
             return False, "permissionless-liq-fdv-trap (seeded pool with >=70% liq/fdv and 0 socials, drain risk)"
         if not getattr(_c, "ALLOW_UNLOCKED_LP_POOLS", True) and ("meteora" in dex_id or dex_id == "meteoradbc"):
             return False, "meteora-unlocked-pool (Meteora pools allow dev LP withdrawal, scam-trap cases: AXIOMCOIN/MULT/PUNCHAO)"
         if dex_id in ("pump", "pumpfun") and not getattr(_c, "ALLOW_UNGRADUATED_PUMPFUN", False):
             return False, "raw-pump-curve (wait for graduation to PumpSwap/Raydium with locked LP)"
-        min_liq = 1500.0 if (dex_id in ("pump", "pumpfun") and getattr(_c, "ALLOW_UNGRADUATED_PUMPFUN", False)) else _min_grad_liq
+        min_liq = 1000.0 if (dex_id in ("pump", "pumpfun") and getattr(_c, "ALLOW_UNGRADUATED_PUMPFUN", False)) else _min_grad_liq
         if eff_liq < min_liq:
             return False, f"liq-depth-low ${eff_liq:.0f} < ${min_liq:.0f} (micro-cap dump trap)"
             
@@ -515,19 +515,19 @@ class GrokJevEngine:
         # 2. Возраст токена, потолок FDV <= $320k и запрет старых отработанных монет (кейс BILL 202m $473k)
         _avg_tx_e = vol_m5 / max(1, b5 + s5)
         min_age = _sol_min_age_g
-        max_age = float(getattr(_c, "JEV_MAX_AGE_MIN", getattr(_c, "SOLANA_MAX_AGE_MIN", 240.0)))
-        _max_scan_age_g = float(getattr(_c, "SOLANA_MAX_AGE_MIN", 240.0))
-        _max_mcap_g = float(getattr(_c, "JEV_MAX_MCAP_USD", 850000.0))
+        max_age = float(getattr(_c, "JEV_MAX_AGE_MIN", getattr(_c, "SOLANA_MAX_AGE_MIN", 45.0)))
+        _max_scan_age_g = float(getattr(_c, "SOLANA_MAX_AGE_MIN", 45.0))
+        _max_mcap_g = float(getattr(_c, "JEV_MAX_MCAP_USD", 220000.0))
         if fdv_mc > _max_mcap_g:
             return False, f"mcap-too-large ${fdv_mc:,.0f} > ${_max_mcap_g:,.0f}"
         _is_jev_breakout = (
-            age_min <= _max_scan_age_g
+            age_min <= min(max_age, _max_scan_age_g)
             and fdv_mc <= _max_mcap_g
-            and eff_liq >= 3500.0
-            and vol_m5 >= 750.0
+            and eff_liq >= 2500.0
+            and vol_m5 >= 250.0
             and (
-                (1.2 <= m5 <= 85.0 and m1 >= float(getattr(_c, "JEV_MIN_M1_ENTRY_FLOOR_PCT", -3.5)))
-                or (m1 >= 1.5 and m5 >= 0.4 and vol_m5 >= 1500.0)
+                (0.8 <= m5 <= 120.0 and m1 >= float(getattr(_c, "JEV_MIN_M1_ENTRY_FLOOR_PCT", -5.0)))
+                or (m1 >= 0.8 and m5 >= 0.3 and vol_m5 >= 350.0)
             )
             and b5 >= s5
         )
@@ -538,7 +538,7 @@ class GrokJevEngine:
             except Exception:
                 pass
             return False, f"age-out-of-bounds {age_min:.1f}m < {min_age:.1f}m (wait for maturation)"
-        if age_min > max_age and not _is_jev_breakout:
+        if age_min > max_age:
             return False, f"age-out-of-bounds {age_min:.1f}m > {max_age:.1f}m (old token without fresh breakout)"
 
         # Защита от микро bump-ботов в m5 (LAURA $1.60, HODL $3.10, IPHONEDUO $5.00)
@@ -656,18 +656,18 @@ class GrokJevEngine:
         if eff_liq > 0 and (vol_m5 / eff_liq) > _max_vl_jev:
             return False, f"wash-trading-spike: vol5 ${vol_m5:,.0f} is {(vol_m5/eff_liq):.1f}x > {_max_vl_jev:.2f}x of pool liq ${eff_liq:,.0f} (bot pump trap)"
 
-        _base_vol_m5 = float(getattr(_c, "MIN_VOLUME_M5", 600.0))
-        if age_min <= 1.5 and b5 >= int(s5 * 0.90) and (b5 + s5) >= 4:
-            _min_vol_m5 = min(_base_vol_m5, 300.0)
+        _base_vol_m5 = float(getattr(_c, "MIN_VOLUME_M5", 250.0))
+        if age_min <= 2.5 and b5 >= int(s5 * 0.85) and (b5 + s5) >= 3:
+            _min_vol_m5 = min(_base_vol_m5, 150.0)
         elif age_min <= 5.0 and b5 >= int(s5 * 0.90):
-            _min_vol_m5 = min(_base_vol_m5, 500.0)
+            _min_vol_m5 = min(_base_vol_m5, 250.0)
         else:
             _min_vol_m5 = _base_vol_m5
         if vol_m5 < _min_vol_m5:
             return False, f"vol5-low ${vol_m5:.0f} < ${_min_vol_m5:.0f} (inactive dead pool — нет реального объема для ракеты)"
-        _min_tx5 = int(getattr(_c, "MIN_TXNS_M5", 6))
-        if age_min <= 1.5:
-            _min_tx5 = min(_min_tx5, 4)
+        _min_tx5 = int(getattr(_c, "MIN_TXNS_M5", 3))
+        if age_min <= 2.5:
+            _min_tx5 = min(_min_tx5, 3)
         if (b5 + s5) < _min_tx5:
             return False, f"tx5-low {b5+s5} < {_min_tx5} (too few transactions)"
         _req_bs = float(getattr(_c, "MIN_BUY_SELL_RATIO", 0.90))
@@ -707,9 +707,10 @@ class GrokJevEngine:
         if eff_liq > max_liq:
             return False, f"liq-too-heavy ${eff_liq:,.0f} > ${max_liq:,.0f} (mid-cap pool, slow moves)"
         mcap = fdv_mc
-        if is_pump and mcap > 0 and mcap < 5000.0:
-            return False, f"pump-curve-too-early mcap ${mcap:,.0f} < $5k (high dev dump trap risk)"
-        min_mcap = 5000.0 if (dex_id in ("pump", "pumpfun")) else float(getattr(_c, "JEV_MIN_MCAP_USD", 5000.0))
+        _min_curve_mc_hg = float(getattr(_c, "MIN_PUMP_CURVE_MCAP_USD", 3500.0))
+        if is_pump and mcap > 0 and mcap < _min_curve_mc_hg:
+            return False, f"pump-curve-too-early mcap ${mcap:,.0f} < ${_min_curve_mc_hg:,.0f} (high dev dump trap risk)"
+        min_mcap = _min_curve_mc_hg if (dex_id in ("pump", "pumpfun")) else float(getattr(_c, "JEV_MIN_MCAP_USD", 3500.0))
         max_mcap = float(getattr(_c, "JEV_MAX_MCAP_USD", 220000.0))
         if mcap > 0 and not (min_mcap <= mcap <= max_mcap):
             return False, f"mcap-out-of-bounds ${mcap:,.0f} not in [${min_mcap:,.0f}, ${max_mcap:,.0f}]"
@@ -924,7 +925,7 @@ class GrokJevEngine:
         _base_addr = str(((pair_data.get("baseToken") or {}).get("address")) or "")
         _dex_id = str(pair_data.get("dexId", "")).lower()
         _is_raw_curve_only = (_dex_id in ("pump", "pumpfun") and getattr(_c, "ALLOW_UNGRADUATED_PUMPFUN", False))
-        _min_liq = 1500.0 if _is_raw_curve_only else float(getattr(_c, "MIN_GRADUATED_LIQ_USD", 5000.0))
+        _min_liq = 1000.0 if _is_raw_curve_only else float(getattr(_c, "MIN_GRADUATED_LIQ_USD", 2500.0))
         _base_max_m1 = float(getattr(_c, "JEV_MAX_M1_ENTRY_PCT", 28.0))
 
         # Если DexScreener не отдал m1 (0.0 / None) — берем реальный sub-minute m1 из нашей живой истории сканов
@@ -972,7 +973,7 @@ class GrokJevEngine:
             return False, -0.14, 0.0, f"sellers-dominating ({b5}b/{s5}s) — sellers active, wait for buyer absorption"
 
         # 4. Монета не должна стоять мёртвым флетом
-        _is_live_blast = (m1 >= 1.0 and vol5 >= 400.0 and b5 >= int(s5 * 0.85))
+        _is_live_blast = (m1 >= 0.5 and vol5 >= 200.0 and b5 >= int(s5 * 0.85))
         if not _is_live_blast and (((_m1_known and m1 <= -3.5 and m5 < 0.5) or m5 < 0.0)):
             return False, -0.14, 0.0, f"flat-coin (m1 {m1:+.1f}%, m5 {m5:+.1f}%) — price standing still, waiting for live impulse"
 
@@ -1191,11 +1192,14 @@ class GrokJevEngine:
         candidates = []
         seen = set()
 
-        # 0. ПРИОРИТЕТ №1: Живой поток миграций PumpPortal (subscribeMigration + Waiting Room 90с..45м)
+        # 0. ПРИОРИТЕТ №1: Живой поток запусков и миграций PumpPortal (subscribeNewToken + subscribeMigration)
         try:
+            import config as _c_bt
             from birth_tracker import birth_tracker
-            grad_ready = birth_tracker.get_waiting_room_graduates(min_age_sec=15.0, max_age_sec=2700.0)
-            for gm in (grad_ready or []):
+            grad_ready = birth_tracker.get_waiting_room_graduates(min_age_sec=3.0, max_age_sec=1800.0)
+            fresh_births = birth_tracker.get_mature_tokens(float(getattr(_c_bt, "SOLANA_MIN_AGE_MIN", 0.05)), 20)
+            fresh_births.sort(key=lambda _bm: float(birth_tracker.get_age(_bm) or 999.0))
+            for gm in list(grad_ready or []) + fresh_births:
                 if gm and gm not in seen:
                     seen.add(gm)
                     candidates.append((gm, "solana"))
@@ -1230,9 +1234,10 @@ class GrokJevEngine:
                     liq_g = float(g.get("liquidity", 0) or 0)
                     age_g = float(g.get("age_m", 999) or 999)
                     fdv_g = float(g.get("fdv", 0) or g.get("market_cap", 0) or 0)
-                    _max_a_g = float(getattr(_c, "SOLANA_MAX_AGE_MIN", 240.0))
-                    _max_f_g = float(getattr(_c, "JEV_MAX_MCAP_USD", 850000.0))
-                    if m and 32 <= len(m) <= 44 and not m.startswith("0x") and liq_g >= 4000.0 and age_g <= _max_a_g and fdv_g <= _max_f_g and m not in seen:
+                    _max_a_g = float(getattr(_c, "SOLANA_MAX_AGE_MIN", 45.0))
+                    _max_f_g = float(getattr(_c, "JEV_MAX_MCAP_USD", 220000.0))
+                    _min_l_g = float(getattr(_c, "MIN_GRADUATED_LIQ_USD", 2500.0))
+                    if m and 32 <= len(m) <= 44 and not m.startswith("0x") and liq_g >= _min_l_g and age_g <= _max_a_g and fdv_g <= _max_f_g and m not in seen:
                         seen.add(m)
                         candidates.append((m, "solana"))
         except Exception:
@@ -1496,8 +1501,8 @@ class GrokJevEngine:
         if is_raw_pump_curve and not _is_grad_aud:
             if not getattr(_c, "ALLOW_UNGRADUATED_PUMPFUN", False):
                 return False, "ungraduated-pump-curve (ждём миграции на DEX с сожжённым LP)", _h_stats
-            _min_c_mc = float(getattr(_c, "MIN_PUMP_CURVE_MCAP_USD", 7500.0))
-            _max_c_mc = float(getattr(_c, "MAX_PUMP_CURVE_MCAP_USD", 42000.0))
+            _min_c_mc = float(getattr(_c, "MIN_PUMP_CURVE_MCAP_USD", 3500.0))
+            _max_c_mc = float(getattr(_c, "MAX_PUMP_CURVE_MCAP_USD", 65000.0))
             if fdv > 0 and fdv < _min_c_mc:
                 return False, f"pump-curve-flash-rug (FDV ${fdv:,.0f} < ${_min_c_mc:,.0f})", _h_stats
             if fdv > _max_c_mc:
@@ -2008,7 +2013,7 @@ class GrokJevEngine:
         if not address or address in tracker.get_open_positions():
             return False, "already-held"
         # Запрет повторного перезахода: 4ч бан после убыточной сделки по минту (защита от 3x слива BILL) + 45м на остальные закрытые
-        if hasattr(tracker, "is_loss_cooldown_active") and tracker.is_loss_cooldown_active(address, 14400.0):
+        if hasattr(tracker, "is_loss_cooldown_active") and tracker.is_loss_cooldown_active(address, float(getattr(_c, "MINT_LOSS_COOLDOWN_SEC", 1800.0))):
             return False, "already-traded-loss-cooldown"
         if hasattr(tracker, "positions"):
             _latest_prev_ext = max(
@@ -2063,18 +2068,18 @@ class GrokJevEngine:
         _ca_s1 = float(pair.get("pairCreatedAt") or 0)
         _age_s1 = ((time.time() * 1000.0 - _ca_s1) / 60000.0) if _ca_s1 > 0 else 0.2
         _s1_fresh_ok = (
-            _age_s1 <= float(getattr(_c, "SOLANA_MAX_AGE_MIN", 240.0))
-            and _fdv_s1 <= float(getattr(_c, "JEV_MAX_MCAP_USD", 850000.0))
-            and (_age_s1 < 45.0 or _h6_s1 is None or float(_h6_s1 or 0) <= float(getattr(_c, "MAX_ENTRY_H6_PCT", 2500.0)))
-            and _m1_s1 >= float(getattr(_c, "JEV_MIN_M1_ENTRY_FLOOR_PCT", -2.2))
-            and _h1_s1 >= float(getattr(_c, "JEV_MIN_H1_PCT", -15.0))
+            _age_s1 <= float(getattr(_c, "SOLANA_MAX_AGE_MIN", 45.0))
+            and _fdv_s1 <= float(getattr(_c, "JEV_MAX_MCAP_USD", 220000.0))
+            and (_age_s1 < 20.0 or _h6_s1 is None or float(_h6_s1 or 0) <= float(getattr(_c, "MAX_ENTRY_H6_PCT", 500.0)))
+            and _m1_s1 >= float(getattr(_c, "JEV_MIN_M1_ENTRY_FLOOR_PCT", -5.0))
+            and _h1_s1 >= float(getattr(_c, "JEV_MIN_H1_PCT", -25.0))
         )
-        _is_momentum_rocket = _s1_fresh_ok and (rkt_s1 + 0.05) >= max(10.0, s1_thresh - 2.0) and _m1_s1 >= 0.0 and (
+        _is_momentum_rocket = _s1_fresh_ok and (rkt_s1 + 0.05) >= max(8.0, s1_thresh - 2.0) and _m1_s1 >= 0.0 and (
             (_m5_s1 >= 10.0 and _b5_s1 >= int(_s5_s1 * 1.20) and _vm5_s1 >= 4000.0)
             or (_vm5_s1 >= 8000.0 and _b5_s1 >= int(_s5_s1 * 1.15) and _m5_s1 >= 4.0)
-            or (_m5_s1 >= 6.0 and _vm5_s1 >= 4000.0 and _b5_s1 >= max(12, int(_s5_s1 * 1.15)))
-            or (_m5_s1 >= 3.0 and _b5_s1 >= int(_s5_s1 * 1.15) and _vm5_s1 >= 2500.0 and _b5_s1 >= 12)
-            or (_age_s1 <= 5.0 and _m5_s1 >= 2.5 and _b5_s1 >= int(_s5_s1 * 1.15) and _vm5_s1 >= 1200.0 and _b5_s1 >= 8)
+            or (_m5_s1 >= 6.0 and _vm5_s1 >= 4000.0 and _b5_s1 >= max(10, int(_s5_s1 * 1.15)))
+            or (_m5_s1 >= 3.0 and _b5_s1 >= int(_s5_s1 * 1.15) and _vm5_s1 >= 1500.0 and _b5_s1 >= 8)
+            or (_age_s1 <= 5.0 and _m5_s1 >= 0.8 and _b5_s1 >= int(_s5_s1 * 1.05) and _vm5_s1 >= 250.0 and _b5_s1 >= 3)
         )
 
         if getattr(_c, "ROCKET_XGB_ENABLED", True) and not _is_momentum_rocket and (rkt_s1 + 0.05) < s1_thresh:
@@ -2426,12 +2431,16 @@ async def grok_bot_jev_loop(tracker, analyzer=None):
                 _td_c = _hit[1] if (_hit and len(_hit) > 1 and isinstance(_hit[1], dict)) else None
                 if _td_c:
                     _ca_c = _td_c.get("pairCreatedAt") or 0
+                    _age_val_c = ((now * 1000 - _ca_c) / 60000.0) if _ca_c else 5.0
                     if _ca_c:
-                        _age_c_m = (now * 1000 - _ca_c) / 60000.0
-                        _max_loop_age = float(getattr(_c, "SOLANA_MAX_AGE_MIN", 240.0))
-                        if _age_c_m > _max_loop_age:
+                        _max_loop_age = float(getattr(_c, "SOLANA_MAX_AGE_MIN", 45.0))
+                        if _age_val_c > _max_loop_age:
                             evaluated_cooldown[(address, chain)] = now + 86400.0
                             continue
+                    _fdv_c = float(_td_c.get("fdv", 0) or _td_c.get("marketCap", 0) or 0)
+                    if _fdv_c > float(getattr(_c, "JEV_MAX_MCAP_USD", 220000.0)):
+                        evaluated_cooldown[(address, chain)] = now + 300.0
+                        continue
                     _m5_c = float((_td_c.get("priceChange") or {}).get("m5", 0) or 0)
                     _v5_c = float((_td_c.get("volume") or {}).get("m5", 0) or 0)
                     _liq_c = float((_td_c.get("liquidity") or {}).get("usd", 0) or 0)
@@ -2440,16 +2449,18 @@ async def grok_bot_jev_loop(tracker, analyzer=None):
                         evaluated_cooldown[(address, chain)] = now + 45.0
                         continue
                     if _liq_c > 0 and _liq_c < float(getattr(_c, "MIN_GRADUATED_LIQ_USD", 2500.0)) * 0.7:
-                        evaluated_cooldown[(address, chain)] = now + 120.0
+                        evaluated_cooldown[(address, chain)] = now + 20.0
                         continue
-                    if _m5_c < 1.0 and _v5_c < 2000.0:
-                        evaluated_cooldown[(address, chain)] = now + 45.0
+                    if _m5_c < 0.4 and _v5_c < float(getattr(_c, "MIN_VOLUME_M5", 250.0)):
+                        evaluated_cooldown[(address, chain)] = now + 12.0
                         continue
                     import math
-                    _prio = _m5_c + (math.log10(max(_v5_c, 10.0)) * 3.0) + (8.0 if idx < 10 else 0.0)
+                    _fresh_boost_c = 45.0 if _age_val_c <= 3.0 else (25.0 if _age_val_c <= 10.0 else (-20.0 if _age_val_c > 30.0 else 0.0))
+                    _smallcap_boost_c = 20.0 if (0 < _fdv_c <= 45000.0) else (-15.0 if _fdv_c > 140000.0 else 0.0)
+                    _prio = (_m5_c * 0.8) + (math.log10(max(_v5_c, 10.0)) * 3.0) + _fresh_boost_c + _smallcap_boost_c + (10.0 if idx < 10 else 0.0)
                 else:
-                    # Не отдаём слепой +25 приоритет пустышкам из бустов выше реальных муверов с m5 + объёмом
-                    _prio = 2.0 if idx < 15 else 0.0
+                    # Свежие PumpPortal-запуски и миграции (idx < 10) должны сразу попадать на живую проверку
+                    _prio = 55.0 if idx < 10 else (25.0 if idx < 25 else 5.0)
                 _ranked_cands.append((_prio, address, chain))
 
             _ranked_cands.sort(key=lambda x: x[0], reverse=True)
@@ -2468,13 +2479,13 @@ async def grok_bot_jev_loop(tracker, analyzer=None):
                     elif "llm-unavailable" in why_low:
                         evaluated_cooldown[(address, chain)] = now + 60.0    # Судья недоступен: не долбим аудит
                     elif "rate-limit" in why_low or "429" in why_low:
-                        evaluated_cooldown[(address, chain)] = now + 20.0    # Повтор через 20с при 429
+                        evaluated_cooldown[(address, chain)] = now + 15.0    # Повтор через 15с при 429
                     elif "candle-spike" in why_low or "flush" in why_low or "pullback" in why_low or "post-migration-dump-zone" in why_low or "maturation" in why_low:
-                        evaluated_cooldown[(address, chain)] = now + 25.0    # Ждем откат / созревание миграции 25 секунд!
+                        evaluated_cooldown[(address, chain)] = now + 6.0     # Ждем откат / созревание 6 секунд!
                     elif any(k in why_low for k in ["vol5", "tx5", "buys5", "sellers", "momentum", "downtrend", "liq", "sol-reserve", "too-young", "mcap", "fills"]):
-                        evaluated_cooldown[(address, chain)] = now + 60.0    # Рыночная динамика: перепроверка через 60с (токен может набрать объем)
+                        evaluated_cooldown[(address, chain)] = now + 10.0    # Быстрая перепроверка через 10с (токен набирает объем/кривую)
                     elif "max-positions" in why_low:
-                        evaluated_cooldown[(address, chain)] = now + 30.0    # Ждем слота 30с
+                        evaluated_cooldown[(address, chain)] = now + 10.0    # Ждем слота 10с
                     elif any(k in why_low for k in ["rugcheck", "honeypot", "goplus", "freeze", "mint-auth", "clone", "copycat-of-runner", "auditor-layer", "delegation", "insider-graph", "impersonation", "dev-dump", "cabal", "top-wallet", "top-10"]):
                         evaluated_cooldown[(address, chain)] = now + 1200.0  # Подтвержденный скам / опасный контракт — 20 минут бана
                     else:

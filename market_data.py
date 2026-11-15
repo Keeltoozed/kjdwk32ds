@@ -34,12 +34,12 @@ def _get_lock():
 _last_call = 0.0
 MIN_INTERVAL = 2.5  # ~24/мин на весь процесс: квота GT ~30/мин, запас от 429
 _jlast = 0.0
-J_MIN_INTERVAL = 1.2  # пауза между Token API запросами к Jupiter
+J_MIN_INTERVAL = 0.8  # пауза между Token API запросами к Jupiter
 
 # Кэш данных токенов: сканер и FOMO запрашивают одни и те же минты по кругу.
 # Без кэша свежие токены съедают весь лимит 30/мин и всё падает с 429.
 _TD_CACHE = {}  # mint -> (timestamp_monotonic, data)
-TD_TTL = 90.0  # секунд свежие данные считаются годными
+TD_TTL = 20.0  # секунд свежие данные считаются годными
 
 
 _gt_consecutive_fails = 0
@@ -762,7 +762,7 @@ async def get_trending() -> list:
     global _trending_cache, _trending_cache_time
 
     # Кэшируем результаты на 50 секунд (снижает нагрузку на GeckoTerminal API и исключает 429)
-    if time.time() - _trending_cache_time < 50 and _trending_cache:
+    if time.time() - _trending_cache_time < 15 and _trending_cache:
         return _trending_cache
 
     out, seen = [], set()
@@ -805,7 +805,7 @@ async def get_trending() -> list:
             _max_age_gt_h = float(getattr(_tr_cfg, "SOLANA_MAX_AGE_MIN", 240.0)) / 60.0
             if age_h > _max_age_gt_h:
                 return
-            if age_h > 1.5 and (vol5_usd < 2000.0 or m5_tx < 12):
+            if age_h > 0.75:
                 return
         seen.add(mint)
         out.append({"tokenAddress": mint, "chainId": "solana"})

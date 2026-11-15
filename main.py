@@ -885,7 +885,7 @@ async def discovery_feeder_loop(analyzer):
                 analyzer._cached_discovery_time = time.time()
         except Exception as e:
             print(f"⚠️ [DISCOVERY-FEEDER] Ошибка сбора: {e}")
-        await asyncio.sleep(15)
+        await asyncio.sleep(5)
 
 
 async def scanner_loop(analyzer, tracker):
@@ -928,7 +928,7 @@ async def scanner_loop(analyzer, tracker):
                         if not _gm or str(_gm).strip().startswith("0x") or _gm in _open_set_g:
                             birth_tracker.remove_graduated(_gm)
                             continue
-                        if hasattr(tracker, "is_loss_cooldown_active") and tracker.is_loss_cooldown_active(_gm, 14400.0):
+                        if hasattr(tracker, "is_loss_cooldown_active") and tracker.is_loss_cooldown_active(_gm, float(getattr(config, "MINT_LOSS_COOLDOWN_SEC", 1800.0))):
                             birth_tracker.remove_graduated(_gm)
                             continue
                         if _now_g - processed_mints.get(_gm, 0.0) >= _fresh_cd_g:
@@ -961,7 +961,8 @@ async def scanner_loop(analyzer, tracker):
                 
                 # 2. Уличные Токены (Берем созревающие ракеты)
                 if getattr(config, "ALLOW_UNGRADUATED_PUMPFUN", False):
-                    mature_mints = birth_tracker.get_mature_tokens(2, 30)
+                    mature_mints = birth_tracker.get_mature_tokens(float(getattr(config, "SOLANA_MIN_AGE_MIN", 0.05)), 25)
+                    mature_mints.sort(key=lambda _bm: float(birth_tracker.get_age(_bm) or 999.0))
                 else:
                     # Если сырые кёрвы выключены — берём только проверенные миграции / waiting room
                     _wr_mints = list(getattr(birth_tracker, "waiting_room", {}).keys())
@@ -1043,7 +1044,7 @@ async def scanner_loop(analyzer, tracker):
                         _c_liq = float((_c_pre.get("liquidity") or {}).get("usd", 0) or 0)
                         _c_fdv = float(_c_pre.get("fdv", 0) or _c_pre.get("marketCap", 0) or 0)
                         _max_sc_age = float(getattr(config, "SOLANA_MAX_AGE_MIN", 90.0))
-                        _max_sc_fdv = 450000.0 if (_c_vol5 >= 10000.0 and _c_trades >= 30 and _c_m5 >= 3.0) else (float(getattr(config, "JEV_MAX_MCAP_USD", 320000.0)) + 30000.0)
+                        _max_sc_fdv = float(getattr(config, "JEV_MAX_MCAP_USD", 220000.0))
 
                         # Свежая миграция (только что вышедшая на DEX в пределах раннего окна):
                         _is_fresh_grad = ((mint in _graduated_set) or (_c_age_m <= 20.0 and (config.is_launchpad_mint(mint) or _c_dex == "pumpswap"))) and (_c_age_m <= 25.0) and (_c_fdv <= _max_sc_fdv)
@@ -1067,7 +1068,7 @@ async def scanner_loop(analyzer, tracker):
                             continue
 
                         # Отсекаем вялые стоячие токены с объёмом < $2,000: быстрый переопрос через 20с
-                        if _c_age_m >= 5.0 and _c_vol5 < 2000.0 and not _is_fresh_grad:
+                        if _c_age_m >= 5.0 and _c_vol5 < max(500.0, float(getattr(config, "MIN_VOLUME_M5", 250.0)) * 2.0) and not _is_fresh_grad:
                             processed_mints[mint] = _now_r - _cd_r + 20
                             continue
 
@@ -1083,7 +1084,7 @@ async def scanner_loop(analyzer, tracker):
                         _vol_log = math.log10(max(_c_vol5, 100.0))
                         _bs_ratio = (_c_b5 / max(_c_s5, 1)) if _c_s5 > 0 else 1.5
                         _bs_ratio = min(max(_bs_ratio, 0.5), 3.0)
-                        _fresh_sc_mult = 2.5 if _c_age_m <= 15.0 else (1.8 if _c_age_m <= 45.0 else 1.0)
+                        _fresh_sc_mult = 6.0 if _c_age_m <= 2.0 else (4.0 if _c_age_m <= 5.0 else (2.2 if _c_age_m <= 15.0 else (0.4 if _c_age_m > 30.0 else 1.0)))
                         _rkt_vel = _c_m5 * _vol_log * _bs_ratio * _fresh_sc_mult
 
                         _score_rank = (1000.0 if _is_fresh_grad else 0.0) + _rkt_vel
@@ -1109,7 +1110,7 @@ async def scanner_loop(analyzer, tracker):
                 for _m in mints_to_scan:
                     if not _m or _m in tracker.positions:
                         continue
-                    if hasattr(tracker, "is_loss_cooldown_active") and tracker.is_loss_cooldown_active(_m, 14400.0):
+                    if hasattr(tracker, "is_loss_cooldown_active") and tracker.is_loss_cooldown_active(_m, float(getattr(config, "MINT_LOSS_COOLDOWN_SEC", 1800.0))):
                         continue
                     _pre_l = getattr(analyzer, "_prefetch_cache", {}).get(_m, (0, {}))[1]
                     _ca_l = _pre_l.get("pairCreatedAt") or 0 if isinstance(_pre_l, dict) else 0
@@ -1179,7 +1180,7 @@ async def scanner_loop(analyzer, tracker):
                             except Exception:
                                 pass
                         if is_good is None:
-                            processed_mints[mint] = time.time() - _cd + 25  # Перепроверить через 25с вместо долгого пропуска
+                            processed_mints[mint] = time.time() - _cd + 6   # Быстрая перепроверка через 6с (ловим свежий памп)
                             if mint in _graduated_set:
                                 # DS ещё не проиндексировал новый пул — вернём в очередь, не теряем.
                                 # Но после 3 пустых — это не лаг, а скам/нестандарт: хороним.
@@ -1211,7 +1212,7 @@ async def scanner_loop(analyzer, tracker):
                                 except Exception:
                                     pass
                             elif "ungraduated" in _sig_l or "bonding curve" in _sig_l or "curve" in _sig_l:
-                                processed_mints[mint] = time.time() + 60        # Сырая кривая: ждём 60с
+                                processed_mints[mint] = time.time() + 10        # Сырая кривая: перепроверка через 10с
                             elif "откат" in _sig_l or "вертикаль" in _sig_l or "pullback" in _sig_l:
                                 _pullbacks = getattr(analyzer, "_pullback_retries", {})
                                 _p_cnt = _pullbacks.get(mint, 0) + 1
@@ -1335,10 +1336,10 @@ async def scanner_loop(analyzer, tracker):
                                     print(f"🚫 [SCANNER-FLOOR-TOKEN] {actual_symbol} ({mint[:8]}): h1 {_h1_live:.0f}% — токен уже на полу, входить нельзя!")
                                     continue
                                 # Блок: токен созревает со 2-й свечи (карантин блока 0)
-                                _min_sc_age = float(getattr(config, "SOLANA_MIN_AGE_MIN", 0.40))
+                                _min_sc_age = float(getattr(config, "SOLANA_MIN_AGE_MIN", 0.05))
                                 if _age_m < _min_sc_age:
-                                    print(f"⏳ [SCANNER-WARMUP] {actual_symbol} ({mint[:8]}): пул {_age_m:.1f}м < {_min_sc_age:.1f}м — ждём созревания 1-й свечи.")
-                                    processed_mints[mint] = time.time() - _cd + 12
+                                    print(f"⏳ [SCANNER-WARMUP] {actual_symbol} ({mint[:8]}): пул {_age_m:.1f}м < {_min_sc_age:.1f}м — ждём первых сделок.")
+                                    processed_mints[mint] = time.time() - _cd + 4
                                     continue
 
                                 # Повторная проверка живых метрик после сброса prefetch-кэша (единый классификатор пропускает откат покупателей и V-развороты)

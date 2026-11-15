@@ -19,7 +19,7 @@ LITE_BASE = "https://lite-api.jup.ag/tokens/v2"
 
 _cache = []
 _cache_time = 0.0
-CACHE_TTL = 40
+CACHE_TTL = 10
 SKIP_SYMBOLS = {
     "SOL", "WSOL", "USDC", "USDT", "USDG", "EURC", "CBBTC", "WBTC", "WETH", "JLP", "PYTH", "JUP", "NEAR",
     "ZEC", "WNEAR", "CARDS", "PUMP", "HYPE", "ZEREBRO", "TTWO", "SPCX", "SPYX", "TSLAX", "NVDAX", "GROKIUS",
@@ -132,7 +132,7 @@ async def fetch_jup_tokens() -> list:
         seen = set()
         _age_by_mint = {}
         _max_disc_age = float(getattr(config, "SOLANA_MAX_AGE_MIN", 90.0))
-        _max_disc_fdv = float(getattr(config, "JEV_MAX_MCAP_USD", 850000.0)) + 250000.0
+        _max_disc_fdv = float(getattr(config, "JEV_MAX_MCAP_USD", 220000.0))
 
         def _add_jup_list(items, tag: str, min_pc5: float = 1.8):
             if not isinstance(items, list):
@@ -152,7 +152,7 @@ async def fetch_jup_tokens() -> list:
                 is_grad = bool(t.get("graduatedAt") or t.get("graduatedPool") or liq >= 4500.0)
                 if not allow_raw_curve and not is_grad:
                     continue
-                _min_jup_l = 3500.0 if allow_raw_curve else float(getattr(config, "MIN_GRADUATED_LIQ_USD", 5000.0))
+                _min_jup_l = 1500.0 if allow_raw_curve else float(getattr(config, "MIN_GRADUATED_LIQ_USD", 2500.0))
                 if liq < _min_jup_l:
                     continue
                 st5 = t.get("stats5m") or {}
@@ -254,20 +254,20 @@ async def fetch_jup_tokens() -> list:
                     if not addr or addr.startswith("0x") or len(addr) < 32 or len(addr) > 44 or addr in seen or sym_p in SKIP_SYMBOLS:
                         continue
                     liq_p = float((p.get("liquidity") or {}).get("usd", 0) or 0)
-                    if liq_p < max(4000.0, float(getattr(config, "MIN_GRADUATED_LIQ_USD", 5000.0)) * 0.8):
+                    if liq_p < float(getattr(config, "MIN_GRADUATED_LIQ_USD", 2500.0)):
                         continue
                     ca_p = float(p.get("pairCreatedAt") or 0)
                     age_p = ((now_ms_ds - ca_p) / 60000.0) if ca_p > 0 else 1.5
                     if age_p > _max_disc_age:
                         continue
                     vol5_p = float((p.get("volume") or {}).get("m5", 0) or 0)
-                    _min_v5_ds = 500.0 if age_p <= 2.5 else (800.0 if age_p <= 5.0 else (1200.0 if age_p <= 10.0 else 1600.0))
+                    _min_v5_ds = 150.0 if age_p <= 2.5 else (300.0 if age_p <= 5.0 else (600.0 if age_p <= 15.0 else float(getattr(config, "MIN_VOLUME_M5", 250.0))))
                     if vol5_p < _min_v5_ds:
                         continue
                     tx5_p = (p.get("txns") or {}).get("m5") or {}
                     b5_p = int(tx5_p.get("buys", 0) or 0)
                     s5_p = int(tx5_p.get("sells", 0) or 0)
-                    _min_tx_ds = 4 if age_p <= 2.5 else (6 if age_p <= 5.0 else 10)
+                    _min_tx_ds = 2 if age_p <= 2.5 else (4 if age_p <= 5.0 else int(getattr(config, "MIN_TXNS_M5", 3)))
                     _min_bs_ds = 0.90 if age_p <= 5.0 else 1.00
                     if (b5_p + s5_p) < _min_tx_ds or (s5_p > 0 and (b5_p / s5_p) < _min_bs_ds):
                         continue
@@ -310,7 +310,7 @@ async def fetch_jup_tokens() -> list:
                 _gt_m5 = float(((_gt_td.get("priceChange") or {}).get("m5", 0) or 0)) if _gt_td else 5.0
                 _gt_v5 = float(((_gt_td.get("volume") or {}).get("m5", 0) or 0)) if _gt_td else 5000.0
                 _gt_sym = str(((_gt_td.get("baseToken") or {}).get("symbol") or addr[:6])).upper() if _gt_td else addr[:6]
-                if _gt_td and (_gt_v5 < 1500.0 or _gt_m5 < -1.5):
+                if _gt_td and (_gt_v5 < float(getattr(config, "MIN_VOLUME_M5", 250.0)) or _gt_m5 < -1.5):
                     continue
                 seen.add(addr)
                 _age_by_mint[addr] = _gt_age
@@ -341,7 +341,7 @@ async def fetch_jup_tokens() -> list:
                             continue
                         seen.add(addr)
                         boost_mints.append(addr)
-            min_boost_liq = max(4500.0, float(getattr(config, "MIN_GRADUATED_LIQ_USD", 5000.0)) * 0.9)
+            min_boost_liq = float(getattr(config, "MIN_GRADUATED_LIQ_USD", 2500.0))
             now_ms_b = time.time() * 1000
             for i_b in range(0, min(len(boost_mints), 90), 30):
                 chunk_b = boost_mints[i_b:i_b + 30]
@@ -376,7 +376,7 @@ async def fetch_jup_tokens() -> list:
                         continue
                     vol5_b = float((p.get("volume") or {}).get("m5", 0) or 0)
                     m5_b = float((p.get("priceChange") or {}).get("m5", 0) or 0)
-                    if vol5_b < 1500.0 or m5_b < 2.0:
+                    if vol5_b < float(getattr(config, "MIN_VOLUME_M5", 250.0)) or m5_b < 0.5:
                         continue
                     sym_b = str(((p.get("baseToken") or {}).get("symbol")) or bm[:6]).upper().strip()
                     _age_by_mint[bm] = age_b
@@ -413,7 +413,7 @@ async def fetch_jup_tokens() -> list:
                 is_grad_r = bool(t.get("graduatedAt") or t.get("graduatedPool") or (not m.endswith("pump") and liq >= 7500.0))
                 if not allow_raw_curve and not is_grad_r:
                     continue
-                if liq < 5000.0:
+                if liq < float(getattr(config, "MIN_GRADUATED_LIQ_USD", 2500.0)):
                     continue
                 st5 = t.get("stats5m") or {}
                 pc5 = float(st5.get("priceChange") or 0.0)
@@ -431,7 +431,7 @@ async def fetch_jup_tokens() -> list:
             m_id = str(x[3])
             tag = str(x[4])
             _ag_x = _age_by_mint.get(m_id, 60.0)
-            fresh_mult = 2.5 if _ag_x <= 15.0 else (1.8 if _ag_x <= 45.0 else 1.0)
+            fresh_mult = 6.0 if _ag_x <= 2.0 else (4.0 if _ag_x <= 5.0 else (2.2 if _ag_x <= 15.0 else (0.5 if _ag_x > 30.0 else 1.2)))
             tag_mult = 2.0 if ("ds_radar" in tag or "gt_trending" in tag or "organic_5m" in tag or "trending_5m" in tag) else 1.0
             return pc * math.log10(vol) * tag_mult * fresh_mult
 
@@ -477,8 +477,8 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
             print(f"🚫 [{source_tag}-RAW-CURVE] {_sym_tmp} ({mint[:8]}): сырая кривая bonding curve без миграции на DEX — вход запрещён.")
             return False
         _fdv_j = float((td or {}).get("fdv", 0) or (td or {}).get("marketCap", 0) or 0)
-        _min_c_mc = float(getattr(config, "MIN_PUMP_CURVE_MCAP_USD", 7500.0))
-        _max_c_mc = float(getattr(config, "MAX_PUMP_CURVE_MCAP_USD", 42000.0))
+        _min_c_mc = float(getattr(config, "MIN_PUMP_CURVE_MCAP_USD", 3500.0))
+        _max_c_mc = float(getattr(config, "MAX_PUMP_CURVE_MCAP_USD", 65000.0))
         if _fdv_j > 0 and _fdv_j < _min_c_mc:
             print(f"🚫 [{source_tag}-CURVE-FLASH-RUG] {_sym_tmp} ({mint[:8]}): FDV ${_fdv_j:,.0f} < ${_min_c_mc:,.0f} (пустой кёрв, flash-rug риск) — блок.")
             return False
@@ -488,26 +488,26 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
         _liq_j = max(_raw_liq_j, _fdv_j * 0.40)
     else:
         _liq_j = _raw_liq_j
-    _min_liq_req = 1000.0 if _is_raw_curve_j else float(getattr(config, "MIN_GRADUATED_LIQ_USD", 5000.0))
+    _min_liq_req = 1000.0 if _is_raw_curve_j else float(getattr(config, "MIN_GRADUATED_LIQ_USD", 2500.0))
     if _liq_j < _min_liq_req:
         print(f"🚫 [{source_tag}-LOW-LIQ] {_sym_tmp} ({mint[:8]}): реальная ликвидность ${_liq_j:.0f} < ${_min_liq_req:.0f} — микро-пул/риск слива.")
         return False
     _tot_tx_j = _b5_j + _s5_j
-    _cfg_min_tx_j = int(getattr(config, "MIN_TXNS_M5", 6))
-    _min_tx_req_j = min(_cfg_min_tx_j, 3) if _age_j <= 2.5 else (min(_cfg_min_tx_j, 6) if _age_j <= 10.0 else _cfg_min_tx_j)
+    _cfg_min_tx_j = int(getattr(config, "MIN_TXNS_M5", 3))
+    _min_tx_req_j = min(_cfg_min_tx_j, 2) if _age_j <= 2.5 else (min(_cfg_min_tx_j, 4) if _age_j <= 10.0 else _cfg_min_tx_j)
     if _tot_tx_j < _min_tx_req_j:
         print(f"🚫 [{source_tag}-LOW-TXNS] {_sym_tmp} ({mint[:8]}): всего {_tot_tx_j} сделок в m5 (<{_min_tx_req_j}) — вялый боковой стакан.")
         return False
     _vol5_j = float(((td or {}).get("volume") or {}).get("m5", 0) or 0)
-    _cfg_min_v5_j = float(getattr(config, "MIN_VOLUME_M5", 600.0))
+    _cfg_min_v5_j = float(getattr(config, "MIN_VOLUME_M5", 250.0))
     if _age_j <= 2.5:
-        _min_vol_j = min(_cfg_min_v5_j, 250.0)
+        _min_vol_j = min(_cfg_min_v5_j, 150.0)
     elif _age_j <= 5.0:
-        _min_vol_j = min(_cfg_min_v5_j, 500.0)
+        _min_vol_j = min(_cfg_min_v5_j, 250.0)
     elif _age_j <= 15.0:
         _min_vol_j = _cfg_min_v5_j
     else:
-        _min_vol_j = _cfg_min_v5_j if _b5_j >= int(_s5_j * 1.05) else max(_cfg_min_v5_j, 1200.0)
+        _min_vol_j = _cfg_min_v5_j if _b5_j >= int(_s5_j * 1.05) else max(_cfg_min_v5_j, 800.0)
     if _vol5_j < _min_vol_j:
         print(f"🚫 [{source_tag}-LOW-VOL] {_sym_tmp} ({mint[:8]}): 5м объем ${_vol5_j:,.0f} < ${_min_vol_j:,.0f} — слабый стоячий токен (кейс BRO).")
         return False
@@ -1070,8 +1070,8 @@ async def jup_loop(analyzer, tracker):
                         _dex_cand = str(td.get("dexId", "")).lower()
                         if _dex_cand in ("pump", "pumpfun", "moonshot", "meteoradbc"):
                             _fdv_cand = float(td.get("fdv", 0) or td.get("marketCap", 0) or 0)
-                            _min_c = float(getattr(config, "MIN_PUMP_CURVE_MCAP_USD", 7500.0))
-                            _max_c = float(getattr(config, "MAX_PUMP_CURVE_MCAP_USD", 42000.0))
+                            _min_c = float(getattr(config, "MIN_PUMP_CURVE_MCAP_USD", 3500.0))
+                            _max_c = float(getattr(config, "MAX_PUMP_CURVE_MCAP_USD", 65000.0))
                             if not getattr(config, "ALLOW_UNGRADUATED_PUMPFUN", False) or (0 < _fdv_cand < _min_c) or (_fdv_cand > _max_c):
                                 processed[m] = _now_t
                                 continue
@@ -1080,7 +1080,7 @@ async def jup_loop(analyzer, tracker):
                         if _ag < _min_age:
                             immature_count += 1
                             created_sec = (_cr / 1000.0) if _cr else (_now_t - _ag * 60.0)
-                            ready_at = created_sec + (_min_age * 60.0) + 5.0
+                            ready_at = created_sec + (_min_age * 60.0) + 1.0
                             _immature_registry[m] = {
                                 "ready_at": ready_at,
                                 "sym": _sym,
@@ -1097,45 +1097,47 @@ async def jup_loop(analyzer, tracker):
                         _h6_cand = (td.get("priceChange") or {}).get("h6")
                         _m1_cand = float((td.get("priceChange") or {}).get("m1", 0) or 0)
 
-                        # Отсекаем тяжёлые (> $320k FDV) и отработанные 6h (+450%+) топы вроде BILL до оценки ML:
+                        # Отсекаем тяжёлые (> $220k FDV) и отработанные 6h (+500%+) топы до оценки ML:
                         if _fdv_dex > float(getattr(config, "JEV_MAX_MCAP_USD", 220000.0)):
                             skipped_ancient += 1
                             processed[m] = _now_t + 180
                             continue
-                        if _ag >= 20.0 and _h6_cand is not None and float(_h6_cand or 0) > float(getattr(config, "MAX_ENTRY_H6_PCT", 450.0)):
+                        if _ag >= 20.0 and _h6_cand is not None and float(_h6_cand or 0) > float(getattr(config, "MAX_ENTRY_H6_PCT", 500.0)):
                             skipped_ancient += 1
                             processed[m] = _now_t + 180
                             continue
 
-                        # Жестко режем старые >90м токены (убрано исключение для 6ч мамонтов вроде BILL):
-                        _max_age_cand = float(getattr(config, "SOLANA_MAX_AGE_MIN", 90.0))
+                        # Режем старые токены > SOLANA_MAX_AGE_MIN:
+                        _max_age_cand = float(getattr(config, "SOLANA_MAX_AGE_MIN", 45.0))
                         if _ag > _max_age_cand:
                             skipped_ancient += 1
                             processed[m] = _now_t + 600
                             continue
 
-                        # Только реальный восходящий импульс m5 >= +2% (или молодой разворот >= +0.8% m1) — БЕЗ -14% падающих ножей!
+                        # Ультра-ранний захват старта + живой восходящий импульс:
                         _tx_cand = (td.get("txns") or {}).get("m5") or {}
                         _b5_cand = int(_tx_cand.get("buys", 0) or 0)
                         _s5_cand = int(_tx_cand.get("sells", 0) or 0)
                         _is_turned_green_cand = (
                             -1.5 <= _m5 < 2.0
-                            and _ag <= 45.0
-                            and _m1_cand >= 0.8
-                            and _lq_cand >= 10000.0
-                            and _v5_cand >= 8000.0
-                            and _b5_cand >= int(_s5_cand * 1.35)
+                            and _ag <= 30.0
+                            and _m1_cand >= 0.5
+                            and _lq_cand >= float(getattr(config, "MIN_GRADUATED_LIQ_USD", 2500.0))
+                            and _v5_cand >= 1500.0
+                            and _b5_cand >= max(3, _s5_cand)
                         )
-                        if (_m5 < 2.0 and not _is_turned_green_cand) or _m1_cand < -2.5:
+                        _min_m5_cand = 0.4 if _ag <= 3.0 else 1.2
+                        if (_m5 < _min_m5_cand and not _is_turned_green_cand) or _m1_cand < -3.0:
                             skipped_flat += 1
                             processed[m] = _now_t
                             continue
                         _turnover = (_v5_cand / max(_lq_cand, 1.0))
-                        # Оценка ракеты: если включена Rocket XGBoost v2, ранжируем с приоритетом свежести
+                        _age_fdv_boost = (50.0 if _ag <= 3.0 else (25.0 if _ag <= 10.0 else (-20.0 if _ag > 30.0 else 0.0))) + (20.0 if 0 < _fdv_dex <= 45000.0 else 0.0)
+                        # Оценка ракеты: если включена Rocket XGBoost v2, ранжируем с жёстким приоритетом ультра-свежести
                         if getattr(config, "ROCKET_XGB_ENABLED", True) and hasattr(analyzer, "score_rocket_xgb"):
-                            _rkt_score = analyzer.score_rocket_xgb(m, td) + (20.0 if _ag <= 35.0 else 0.0)
+                            _rkt_score = analyzer.score_rocket_xgb(m, td) + _age_fdv_boost
                         else:
-                            _rkt_score = (_m5 * 1.5) + min(_turnover * 30.0, 60.0) + (35.0 if _ag <= 35.0 else 0.0)
+                            _rkt_score = (_m5 * 1.5) + min(_turnover * 30.0, 60.0) + _age_fdv_boost
                         hot_candidates.append((_rkt_score, _m5, _ag, _sym, m, td))
 
                     # Сортируем по максимальному импульсу ракеты (скорость, оборот, свежесть)
@@ -1155,7 +1157,7 @@ async def jup_loop(analyzer, tracker):
                                 return
 
                             # Баним повторный вход на 4 часа после ЛЮБОЙ убыточной сделки по минту (предотвращает 3x сливы BILL):
-                            if hasattr(tracker, "is_loss_cooldown_active") and tracker.is_loss_cooldown_active(mint, 14400.0):
+                            if hasattr(tracker, "is_loss_cooldown_active") and tracker.is_loss_cooldown_active(mint, float(getattr(config, "MINT_LOSS_COOLDOWN_SEC", 1800.0))):
                                 return
 
                             print(f"🪐 [JUP] Анализирую {_sym_val} ({mint[:8]}): возраст {_ag_val:.1f}м, m5 {_m5_val:+.1f}%...")

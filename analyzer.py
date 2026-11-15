@@ -632,11 +632,11 @@ class Analyzer:
                         _fdv_lt = float(_p_lt.get("fdv", 0) or _p_lt.get("marketCap", 0) or 0)
                         _ca_lt = float(_p_lt.get("pairCreatedAt") or 0)
                         _age_lt = ((time.time() * 1000.0 - _ca_lt) / 60000.0) if _ca_lt > 0 else 1.5
-                        _min_liq_lt = 1500.0 if (_allow_raw_lt and _dex_lt in ("pump", "pumpfun")) else 3500.0
-                        _min_vol_lt = 250.0 if (_age_lt <= 3.0 or (_allow_raw_lt and _dex_lt in ("pump", "pumpfun"))) else 450.0
-                        if _liq_lt < _min_liq_lt or _vol5_lt < _min_vol_lt or _m5_lt < 1.0:
+                        _min_liq_lt = 1500.0 if (_allow_raw_lt and _dex_lt in ("pump", "pumpfun")) else 2500.0
+                        _min_vol_lt = 150.0 if (_age_lt <= 3.0 or (_allow_raw_lt and _dex_lt in ("pump", "pumpfun"))) else 300.0
+                        if _liq_lt < _min_liq_lt or _vol5_lt < _min_vol_lt or _m5_lt < 0.3:
                             continue
-                        if _age_lt > float(getattr(config, "SOLANA_MAX_AGE_MIN", 240.0)) or _fdv_lt > float(getattr(config, "JEV_MAX_MCAP_USD", 850000.0)):
+                        if _age_lt > float(getattr(config, "SOLANA_MAX_AGE_MIN", 45.0)) or _fdv_lt > float(getattr(config, "JEV_MAX_MCAP_USD", 220000.0)):
                             continue
                         _addr_lt = str((_p_lt.get("baseToken") or {}).get("address") or "").strip()
                         if _addr_lt and not _addr_lt.startswith("0x") and 32 <= len(_addr_lt) <= 44:
@@ -1743,36 +1743,34 @@ class Analyzer:
             _sol_p = float(get_sol_price_sync() or 150.0)
             if _sol_p <= 0:
                 _sol_p = 150.0
-            _min_curve_mcap = float(getattr(config, "MIN_PUMP_CURVE_MCAP_SOL", 80.0)) * _sol_p
-            _max_curve_mcap = float(getattr(config, "MAX_PUMP_CURVE_MCAP_SOL", 350.0)) * _sol_p
+            _min_curve_mcap = float(getattr(config, "MIN_PUMP_CURVE_MCAP_SOL", 22.0)) * _sol_p
+            _max_curve_mcap = float(getattr(config, "MAX_PUMP_CURVE_MCAP_SOL", 480.0)) * _sol_p
             if _fdv_curve_pre > 0 and _fdv_curve_pre < _min_curve_mcap:
                 return self._deny(
                     mint,
                     f"pump-curve-too-early {_fdv_curve_pre:.0f}<{_min_curve_mcap:.0f}",
-                    f"🚫 [CURVE-FLASH-RUG] {symbol} ({mint[:8]}): FDV ${_fdv_curve_pre:,.0f} < ${_min_curve_mcap:,.0f} (пустой кёрв < 80 SOL) — зона flash-rug с пустым пулом.",
+                    f"🚫 [CURVE-FLASH-RUG] {symbol} ({mint[:8]}): FDV ${_fdv_curve_pre:,.0f} < ${_min_curve_mcap:,.0f} — пустой кёрв.",
                 )
             if _fdv_curve_pre > _max_curve_mcap:
                 return self._deny(
                     mint,
                     f"pump-curve-top {_fdv_curve_pre:.0f}>{_max_curve_mcap:.0f}",
-                    f"🚫 [CURVE-CLIFF] {symbol} ({mint[:8]}): FDV ${_fdv_curve_pre:,.0f} > ${_max_curve_mcap:,.0f} (опасная зона обрыва перед миграцией > 350 SOL) — ждём выхода на Raydium/PumpSwap.",
+                    f"🚫 [CURVE-CLIFF] {symbol} ({mint[:8]}): FDV ${_fdv_curve_pre:,.0f} > ${_max_curve_mcap:,.0f} (обрыв перед миграцией).",
                 )
-        # FAST-TRACK ДЛЯ МОЛОДЫХ РАКЕТ (от 90 сек):
-        # Требуем хотя бы 90 сек и органические продажи (_s5_pre >= 2), чтобы отсечь 0-секундные дев-бандлы (RIOT/Elun/Белка)
-        _is_fast_rocket = (_age_min_pre >= 1.5 and _vm5_pre >= 4000.0 and _b5_pre >= 12 and _s5_pre >= 2 and _b5_pre >= _s5_pre * 1.2 and _m5 >= 2.5)
+        # FAST-TRACK ДЛЯ МОЛОДЫХ РАКЕТ:
+        _is_fast_rocket = (_age_min_pre >= 0.25 and _vm5_pre >= 1500.0 and _b5_pre >= 8 and _s5_pre >= 1 and _b5_pre >= _s5_pre and _m5 >= 2.0)
         _raw_liq_age = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
         _avg_tx_age = _vm5_pre / max(1, _b5_pre + _s5_pre)
-        _is_early_rocket = (_raw_liq_age >= 12000.0 and _vm5_pre >= 6000.0 and _b5_pre >= 30
-                            and _b5_pre >= _s5_pre * 1.30 and _avg_tx_age >= 25.0)
-        # СТАЛО (замени строки 543-605 в analyzer.py):
-        _sol_min_age = float(getattr(config, "SOLANA_MIN_AGE_MIN", 1.0))
+        _is_early_rocket = (_raw_liq_age >= 8000.0 and _vm5_pre >= 4000.0 and _b5_pre >= 20
+                            and _b5_pre >= _s5_pre * 1.20 and _avg_tx_age >= 20.0)
+        _sol_min_age = float(getattr(config, "SOLANA_MIN_AGE_MIN", 0.05))
         if _age_min_pre < _sol_min_age:
-            print(f"⏳ [ENTRY] {mint[:8]}: возраст {_age_min_pre:.1f}м < {_sol_min_age}м — выдерживаем карантин первой свечи.")
+            print(f"⏳ [ENTRY] {mint[:8]}: возраст {_age_min_pre:.1f}м < {_sol_min_age}м — ждём первых сделок.")
             return None
 
-        # 1. Защита от старых отработанных пулов (> 240м) и переросших mid-caps
+        # 1. Защита от старых отработанных пулов и переросших mid-caps
         _fdv_chk_pre = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
-        _max_mcap_pre = 1500000.0 if (_vm5_pre >= 8000.0 and _b5_pre >= int(_s5_pre * 1.10) and _m5 >= 2.0) else float(getattr(config, "JEV_MAX_MCAP_USD", 850000.0))
+        _max_mcap_pre = float(getattr(config, "JEV_MAX_MCAP_USD", 220000.0))
         if _fdv_chk_pre > _max_mcap_pre:
             return self._deny(
                 mint,
@@ -1796,18 +1794,8 @@ class Analyzer:
                     f"🚫 [POST-MIGRATION-DUMP] {symbol} ({mint[:8]}): выпускник Pump.fun слит ниже миграции (FDV ${_fdv_chk_pre:,.0f} < ${_dump_floor_sol:,.0f} [~100 SOL]) — кейс SHANE.",
                 )
 
-        _max_age_min = float(getattr(config, "SOLANA_MAX_AGE_MIN", 240.0))
-        # Окно живого пробоя строго в пределах свежих 240м (до $1.5M при активном объеме)
-        _is_active_breakout_pool = (
-            _age_min_pre <= 360.0
-            and _fdv_chk_pre <= _max_mcap_pre
-            and _raw_liq_age >= 12000.0
-            and _vm5_pre >= 8000.0
-            and (_vm5_pre / max(_raw_liq_age, 1.0)) >= 0.20
-            and _m5 >= 3.0
-            and _b5_pre >= _s5_pre * 1.10
-        )
-        if _age_min_pre > _max_age_min and not _is_active_breakout_pool:
+        _max_age_min = float(getattr(config, "SOLANA_MAX_AGE_MIN", 45.0))
+        if _age_min_pre > _max_age_min:
             return self._deny(
                 mint,
                 f"zombie-old-token {_age_min_pre:.0f}m",
@@ -1850,12 +1838,12 @@ class Analyzer:
             )
 
         # 3. ФИЛЬТР ИМПУЛЬСА, СКОРОСТИ ОБОРОТА И ТРЕНДА ДО ROCKET-XGB:
-        _base_v5_cfg = float(getattr(config, "MIN_VOLUME_M5", 600.0))
-        # Масштабируем порог объёма под возраст (не выше базового MIN_VOLUME_M5)
-        if _age_min_pre <= 1.5:
-            _min_v5_cfg = min(_base_v5_cfg, 300.0 if (_b5_pre >= _s5_pre and _b5_pre >= 4) else 500.0)
+        _base_v5_cfg = float(getattr(config, "MIN_VOLUME_M5", 250.0))
+        # Масштабируем порог объёма под возраст (ультра-ранний старт с первых сделок)
+        if _age_min_pre <= 2.5:
+            _min_v5_cfg = min(_base_v5_cfg, 150.0 if (_b5_pre >= _s5_pre and _b5_pre >= 3) else 250.0)
         elif _age_min_pre <= 5.0:
-            _min_v5_cfg = min(_base_v5_cfg, 600.0)
+            _min_v5_cfg = min(_base_v5_cfg, 350.0)
         else:
             _min_v5_cfg = _base_v5_cfg
         if _vm5_pre < _min_v5_cfg:
@@ -1915,15 +1903,15 @@ class Analyzer:
                 _mom_why_a.split("(")[0].strip()[:48],
                 f"🚫 [MOMENTUM-GATE] {symbol} ({mint[:8]}): {_mom_why_a}",
             )
-        _base_max_m1 = float(getattr(config, "MAX_ENTRY_M1_PCT", 22.0))
-        # Гибкий потолок 1м свечи: +22% базово и до +30% при сильном пробое с перевесом покупателей
+        _base_max_m1 = float(getattr(config, "MAX_ENTRY_M1_PCT", 35.0))
+        # Гибкий потолок 1м свечи: +35% базово
         if _b5_pre >= int(_s5_pre * 1.15) and _vm5_pre >= 3000.0 and _m5 >= 4.0:
-            _max_m1_cfg = max(_base_max_m1, 30.0)
+            _max_m1_cfg = max(_base_max_m1, 35.0)
         else:
             _max_m1_cfg = _base_max_m1
-        _min_m1_floor = float(getattr(config, "JEV_MIN_M1_ENTRY_FLOOR_PCT", -2.2))
+        _min_m1_floor = float(getattr(config, "JEV_MIN_M1_ENTRY_FLOOR_PCT", -5.0))
         if _vm5_pre >= 15000.0 and _b5_pre >= int(_s5_pre * 1.25) and _m5 >= 6.0:
-            _min_m1_floor = -2.5
+            _min_m1_floor = -5.0
         _m1_is_phantom_a = (_age_min_pre < 3.0 and abs(_m5) > 1.0 and abs(_m1) > 0 and abs(_m1 / max(abs(_m5), 0.01) - 1.0) < 0.08)
         if (_m1 > _max_m1_cfg and not _m1_is_phantom_a) or _m1 < _min_m1_floor:
             return self._deny(
@@ -1934,18 +1922,18 @@ class Analyzer:
 
         # 4. Anti-FOMO: Защита от перегретых вершин
         _max_entry_h1 = config.get_max_entry_h1_pct(_age_min_pre, _vm5_pre, _b5_pre, _s5_pre, _raw_liq_chk, _m5)
-        _max_entry_m5 = float(getattr(config, "MAX_ENTRY_M5_PCT", 75.0))
+        _max_entry_m5 = float(getattr(config, "MAX_ENTRY_M5_PCT", 180.0))
         if _h1 > _max_entry_h1 and _age_min_pre > 4.0:
             return self._deny(
                 mint,
                 f"h1-exhausted {_h1:.0f}%>{_max_entry_h1:.0f}%",
                 f"🚫 [EXHAUSTED-TOP] {symbol} ({mint[:8]}): рост за час {_h1:+.1f}% > +{_max_entry_h1:.0f}% — вершина пампа.",
             )
-        # Блокируем покупку на вершине перегретой свечи: входим строго на раннем разгоне (+1.5%..+65%)
+        # Потолок перегретой свечи синхронизирован с MAX_ENTRY_M5_PCT
         if _m5 > _max_entry_m5:
-            _fresh_grad_m5_cap_a = 90.0 if (_age_min_pre <= 15.0 and _fdv_chk_pre <= 260000.0) else 80.0
-            _is_strong_buyer_breakout = (_m5 <= _fresh_grad_m5_cap_a and _b5_pre >= int(_s5_pre * 1.12) and _vm5_pre >= 2500.0 and (_b5_pre + _s5_pre) >= 15)
-            _is_cooling_pullback = (_m1 <= -0.5 and _m5 <= 85.0 and _b5_pre >= _s5_pre * 1.05)
+            _fresh_grad_m5_cap_a = max(_max_entry_m5, 180.0)
+            _is_strong_buyer_breakout = (_m5 <= _fresh_grad_m5_cap_a and _b5_pre >= int(_s5_pre * 1.05) and _vm5_pre >= 1500.0 and (_b5_pre + _s5_pre) >= 8)
+            _is_cooling_pullback = (_m1 <= -0.5 and _m5 <= _fresh_grad_m5_cap_a and _b5_pre >= _s5_pre * 0.95)
             if not (_is_strong_buyer_breakout or _is_cooling_pullback):
                 return self._deny(
                     mint,
@@ -2049,13 +2037,13 @@ class Analyzer:
                 (conf + 0.05) >= max(8.0, threshold - 2.0)
                 and _age_min_pre <= _max_age_min
                 and _fdv_chk_pre <= _max_mcap_pre
-                and (_age_min_pre < 45.0 or _h6_pre_opt is None or _h6_pre_opt <= float(getattr(config, "MAX_ENTRY_H6_PCT", 2500.0)))
-                and _m1 >= -1.5
+                and (_age_min_pre < 20.0 or _h6_pre_opt is None or _h6_pre_opt <= float(getattr(config, "MAX_ENTRY_H6_PCT", 500.0)))
+                and _m1 >= -2.5
                 and (
                     (_m5 >= 10.0 and _b5_pre >= int(_s5_pre * 1.05) and _vm5_pre >= 3500.0)
                     or (_vm5_pre >= 8000.0 and _b5_pre >= _s5_pre and _m5 >= 3.0)
-                    or (_m5 >= 4.0 and _b5_pre >= _s5_pre and _vm5_pre >= 2000.0 and _b5_pre >= 10)
-                    or (_age_min_pre <= 5.0 and _m5 >= 1.5 and _b5_pre >= _s5_pre and _vm5_pre >= 800.0 and _b5_pre >= 6)
+                    or (_m5 >= 4.0 and _b5_pre >= _s5_pre and _vm5_pre >= 1500.0 and _b5_pre >= 8)
+                    or (_age_min_pre <= 5.0 and _m5 >= 0.8 and _b5_pre >= _s5_pre and _vm5_pre >= 250.0 and _b5_pre >= 3)
                 )
             )
             if (conf + 0.05) < threshold and not _is_momentum_rocket_a:
@@ -2087,7 +2075,7 @@ class Analyzer:
 
             # 1. Защита от микрованночек, сырых кёрвов и фейковых AMM-пулов
             _is_raw_curve = dex_id_low in ("pump", "pumpfun")
-            _min_grad_liq = float(getattr(config, "MIN_GRADUATED_LIQ_USD", 5000.0))
+            _min_grad_liq = float(getattr(config, "MIN_GRADUATED_LIQ_USD", 2500.0))
             _min_liq = 1000.0 if _is_raw_curve else _min_grad_liq
             _eff_pool_liq = liq_val if _is_raw_curve else raw_liq
             if _eff_pool_liq < _min_liq:
@@ -2660,11 +2648,11 @@ class Analyzer:
             _dex_lower = str(pair_data.get("dexId", "")).lower()
             _is_pump_curve = _dex_lower in ("pump", "pumpfun")
             # Защита от зомби: отсекаем только реально стоячие старые монеты без импульса
-            if not _is_pump_curve and _age_min_pre > 60.0 and _m5 < 2.5 and _h1 < 15.0:
-                return self._deny(mint, "too-old-slow", f"🚫 [ZOMBIE] {mint[:8]}: возраст {_age_min_pre:.0f}м > 60м, но импульс слабый ({_m5:+.1f}% < +2.5%)")
-            _max_age = getattr(config, "SOLANA_MAX_AGE_MIN", 240.0)
-            if _age_min_pre > _max_age and _m5 < 3.5:
-                return self._deny(mint, "zombie-age", f"🚫 [ZOMBIE-AGE] {mint[:8]}: возраст {_age_min_pre:.0f}м > {_max_age:.0f}м, m5 {_m5:+.1f}% < +3.5% — слабый импульс для старого токена.")
+            if not _is_pump_curve and _age_min_pre > float(getattr(config, "SOLANA_MAX_AGE_MIN", 45.0)):
+                return self._deny(mint, "too-old-slow", f"🚫 [ZOMBIE] {mint[:8]}: возраст {_age_min_pre:.0f}м > {float(getattr(config, 'SOLANA_MAX_AGE_MIN', 45.0)):.0f}м")
+            _max_age = float(getattr(config, "SOLANA_MAX_AGE_MIN", 45.0))
+            if _age_min_pre > _max_age:
+                return self._deny(mint, "zombie-age", f"🚫 [ZOMBIE-AGE] {mint[:8]}: возраст {_age_min_pre:.0f}м > {_max_age:.0f}м — старый токен.")
             if _age_min_pre > 1440.0 and _m5 < 5.0:
                 return self._deny(mint, "zombie-ancient", f"🚫 [ZOMBIE-ANCIENT] {mint[:8]}: возраст {_age_min_pre:.0f}м (>24ч), m5 {_m5:+.1f}% < +5% — старый токен без пробоя.")
             _cur_liq_pre = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
@@ -3901,19 +3889,21 @@ class Analyzer:
         if _fdv_curve > 58000:
             return self._deny(mint, "pump-graduation-cliff", f"🚫 [GRADUATION-CLIFF] {mint[:8]}: кривая Pump.fun (FDV ${_fdv_curve:,.0f} > $58k) в зоне разгрузки снайперов перед миграцией — ждём выхода на AMM.")
 
-        # Защита от фантомных дев-дампов на старте (кейс 404: $3.1k cap, 5% кривой, мгновенный сброс дева)
-        if _fdv_curve < 7500:
-            return self._deny(mint, "pump-curve-too-early", f"🚫 [CURVE-TOO-EARLY] {mint[:8]}: капитализация ${_fdv_curve:,.0f} < $7.5k (~8% прогресса) — нет подушки ликвидности, зона мгновенного дев-дампа.")
+        # Порог ранней кривой берём из config.MIN_PUMP_CURVE_MCAP_USD
+        _min_c_xgb = float(getattr(config, "MIN_PUMP_CURVE_MCAP_USD", 3500.0))
+        if _fdv_curve > 0 and _fdv_curve < _min_c_xgb:
+            return self._deny(mint, "pump-curve-too-early", f"🚫 [CURVE-TOO-EARLY] {mint[:8]}: капитализация ${_fdv_curve:,.0f} < ${_min_c_xgb:,.0f} — зона мгновенного дев-дампа.")
 
         created_at = pair_data.get("pairCreatedAt")
         age_minutes = ((time.time() * 1000 - created_at) / (1000 * 60)) if created_at else 0.0
-        # Защита от застрявших мёртвых кривых (кейсы B1DPPH -40% при 20м/$11.5k и TIMECHAIN -16.5% при 79м/$17.3k):
+        # Защита от застрявших мёртвых кривых:
         if age_minutes > 15.0 and _fdv_curve < 18000:
             return self._deny(mint, "pump-stale-curve", f"🚫 [CURVE-STALE-FAIL] {mint[:8]}: возраст {age_minutes:.1f}м > 15м при FDV ${_fdv_curve:,.0f} < $18k — токен не смог выйти из кривой, 100% слив.")
 
         _vm5 = float((pair_data.get("volume") or {}).get("m5", 0) or 0)
-        if _vm5 < 800:
-            print(f"🚫 [PUMP-LOW-VOL] {mint[:8]}: объём 5m ${_vm5:,.0f} < $800 — фантомная активность, риск дев-дампа.")
+        _min_vm5_xgb = min(float(getattr(config, "MIN_VOLUME_M5", 250.0)), 300.0)
+        if _vm5 < _min_vm5_xgb:
+            print(f"🚫 [PUMP-LOW-VOL] {mint[:8]}: объём 5m ${_vm5:,.0f} < ${_min_vm5_xgb:,.0f} — слабая активность.")
             return False
             
         is_vip = self.check_hyper_rocket_momentum(pair_data)
