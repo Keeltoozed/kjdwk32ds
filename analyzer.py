@@ -1839,9 +1839,13 @@ class Analyzer:
 
         # 3. ФИЛЬТР ИМПУЛЬСА, СКОРОСТИ ОБОРОТА И ТРЕНДА ДО ROCKET-XGB:
         _base_v5_cfg = float(getattr(config, "MIN_VOLUME_M5", 2000.0))
-        # Для свежих миграций (<5м) требуем минимум $1,500 и перевес покупателей, для остальных — от $2,000
-        if _age_min_pre <= 5.0 and _b5_pre >= _s5_pre and _tot_tx5_pre >= 10:
-            _min_v5_cfg = 1500.0
+        # Масштабируем порог объёма под возраст: 1-минутный токен физически не может иметь $2,000 в 5м окне
+        if _age_min_pre <= 2.5 and _b5_pre >= int(_s5_pre * 0.95) and _tot_tx5_pre >= 5:
+            _min_v5_cfg = 600.0
+        elif _age_min_pre <= 5.0 and _b5_pre >= int(_s5_pre * 0.95) and _tot_tx5_pre >= 8:
+            _min_v5_cfg = 1000.0
+        elif _age_min_pre <= 10.0 and _b5_pre >= int(_s5_pre * 0.95):
+            _min_v5_cfg = 1400.0
         else:
             _min_v5_cfg = _base_v5_cfg
         if _vm5_pre < _min_v5_cfg:
@@ -1879,6 +1883,8 @@ class Analyzer:
             _min_bs_cfg = 1.01  # Активная двухсторонняя торговля
         elif _b5_pre >= 30 and _vm5_pre >= 4000.0 and _b5_pre > _s5_pre:
             _min_bs_cfg = 1.02 if (_m5 >= 2.0 and _m1 >= -3.0) else 1.04
+        elif _age_min_pre <= 10.0 and _m5 >= 2.0 and _b5_pre >= 6:
+            _min_bs_cfg = 0.95  # На свежих ракетах не душим при единичных продажах снайперов
         elif _raw_liq_chk >= 15000.0 and _m5 >= 3.0 and _m1 >= -1.0:
             _min_bs_cfg = 1.03
         else:
@@ -1914,7 +1920,9 @@ class Analyzer:
         else:
             _max_m1_cfg = _base_max_m1
         _min_m1_floor = float(getattr(config, "JEV_MIN_M1_ENTRY_FLOOR_PCT", -3.5))
-        if _vm5_pre >= 10000.0 and _b5_pre >= int(_s5_pre * 1.15):
+        if _age_min_pre <= 15.0 and (_b5_pre >= _s5_pre or _m5 >= 0.5):
+            _min_m1_floor = min(_min_m1_floor, -5.0)
+        elif _vm5_pre >= 10000.0 and _b5_pre >= int(_s5_pre * 1.15):
             _min_m1_floor = min(_min_m1_floor, -4.5)
         elif _h1 >= 25.0 and _b5_pre >= int(_s5_pre * 1.25) and _vm5_pre >= 4500.0:
             _min_m1_floor = min(_min_m1_floor, -4.5)
@@ -2050,6 +2058,7 @@ class Analyzer:
                     (_m5 >= 12.0 and _m1 >= -4.0 and _b5_pre >= _s5_pre * 1.15 and _vm5_pre >= 6000.0)
                     or (_vm5_pre >= 15000.0 and _b5_pre >= _s5_pre * 1.15 and _m5 >= 5.0 and _m1 >= -4.0)
                     or (_m5 >= 5.0 and _b5_pre >= int(_s5_pre * 1.20) and _vm5_pre >= 4000.0 and _b5_pre >= 20 and _m1 >= -3.5)
+                    or (_age_min_pre <= 10.0 and _m5 >= 3.0 and _b5_pre >= int(_s5_pre * 1.05) and _vm5_pre >= 1000.0 and _b5_pre >= 5)
                 )
             )
             if (conf + 0.05) < threshold and not _is_momentum_rocket_a:

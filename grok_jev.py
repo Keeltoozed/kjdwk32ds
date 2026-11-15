@@ -525,7 +525,7 @@ class GrokJevEngine:
             and vol_m5 >= 8000.0
             and (vol_m5 / max(eff_liq, 1.0)) >= 0.25
             and m5 >= 6.0
-            and m1 >= float(getattr(_c, "JEV_MIN_M1_ENTRY_FLOOR_PCT", -2.5))
+            and m1 >= float(getattr(_c, "JEV_MIN_M1_ENTRY_FLOOR_PCT", -3.5))
             and _avg_tx_e >= 8.0
             and b5 >= int(s5 * 1.15)
         )
@@ -653,16 +653,31 @@ class GrokJevEngine:
             return False, f"wash-trading-spike: vol5 ${vol_m5:,.0f} is {(vol_m5/eff_liq):.1f}x > {_max_vl_jev:.2f}x of pool liq ${eff_liq:,.0f} (bot pump trap)"
 
         _base_vol_m5 = float(getattr(_c, "MIN_VOLUME_M5", 2000.0))
-        # Для свежих миграций (<5м) требуем минимум $1,500 и перевес покупателей, для остальных — от $2,000
-        _min_vol_m5 = 1500.0 if (age_min <= 5.0 and b5 >= s5 and (b5 + s5) >= 10) else _base_vol_m5
+        # Масштабируем порог объёма под возраст: 1-минутный токен физически не может иметь $2,000 в 5м окне
+        if age_min <= 2.5 and b5 >= int(s5 * 0.95) and (b5 + s5) >= 5:
+            _min_vol_m5 = 600.0
+        elif age_min <= 5.0 and b5 >= int(s5 * 0.95) and (b5 + s5) >= 8:
+            _min_vol_m5 = 1000.0
+        elif age_min <= 10.0 and b5 >= int(s5 * 0.95):
+            _min_vol_m5 = 1400.0
+        else:
+            _min_vol_m5 = _base_vol_m5
         if vol_m5 < _min_vol_m5:
             return False, f"vol5-low ${vol_m5:.0f} < ${_min_vol_m5:.0f} (inactive dead pool — нет реального объема для ракеты)"
         _min_tx5 = int(getattr(_c, "MIN_TXNS_M5", 14))
+        if age_min <= 2.5:
+            _min_tx5 = 5
+        elif age_min <= 5.0:
+            _min_tx5 = 8
+        elif age_min <= 10.0:
+            _min_tx5 = 10
         if (b5 + s5) < _min_tx5:
             return False, f"tx5-low {b5+s5} < {_min_tx5} (too few transactions)"
         _req_bs = float(getattr(_c, "MIN_BUY_SELL_RATIO", 1.02))
         if vol_m5 >= 20000.0 and m5 >= 8.0 and b5 >= 100 and m1 >= -4.0:
             _req_bs = 0.90
+        elif age_min <= 10.0 and m5 >= 2.0 and b5 >= 6:
+            _req_bs = 0.95
         elif vol_m5 >= 5000.0 and b5 >= s5:
             _req_bs = 1.00
         if s5 > 0 and (b5 / s5) < _req_bs:
@@ -953,11 +968,16 @@ class GrokJevEngine:
         if _liq_usd > 0 and _liq_usd < _min_liq:
             return False, -0.14, 0.0, f"thin-liquidity (${_liq_usd:,.0f} < ${_min_liq:,.0f}) — slippage/dump risk"
 
-        # 2. Защита от покупки падающего ножа: максимум -2.5%..-3.5% (или -4.5% при мощном выкупе просадки)
+        # 2. Защита от покупки падающего ножа: максимум -3.5% (или -5.0% для свежих ракет на микро-пуллбэке)
         _flush_floor = float(getattr(_c, "JEV_MIN_M1_ENTRY_FLOOR_PCT", -3.5))
-        if (vol5 >= 10000.0 and b5 >= int(s5 * 1.15)) or (_h1 >= 25.0 and b5 >= int(s5 * 1.25) and vol5 >= 4500.0):
-            _flush_floor = min(_flush_floor, -4.5)
-        _min_flush_m1 = _flush_floor if ((m5 >= 8.0 and b5 >= s5) or (b5 >= int(s5 * 1.10) and vol5 >= 4000.0)) else max(_flush_floor, -2.5)
+        if _age_m <= 15.0 and (b5 >= s5 or m5 >= 0.5):
+            _min_flush_m1 = -5.0
+        elif (vol5 >= 10000.0 and b5 >= int(s5 * 1.15)) or (_h1 >= 25.0 and b5 >= int(s5 * 1.25) and vol5 >= 4500.0):
+            _min_flush_m1 = min(_flush_floor, -4.5)
+        elif (m5 >= 6.0 and b5 >= s5) or (b5 >= int(s5 * 1.05) and vol5 >= 2500.0):
+            _min_flush_m1 = min(_flush_floor, -4.0)
+        else:
+            _min_flush_m1 = _flush_floor
         if _m1_known and m1 < _min_flush_m1:
             return False, -0.14, 0.0, f"flush-dump (m1 {m1:+.1f}% < {_min_flush_m1:+.1f}%) — falling knife / weak rollover"
 
@@ -2014,7 +2034,7 @@ class GrokJevEngine:
             _age_s1 <= float(getattr(_c, "SOLANA_MAX_AGE_MIN", 90.0))
             and _fdv_s1 <= float(getattr(_c, "JEV_MAX_MCAP_USD", 220000.0))
             and (_age_s1 < 45.0 or _h6_s1 is None or float(_h6_s1 or 0) <= float(getattr(_c, "MAX_ENTRY_H6_PCT", 2500.0)))
-            and _m1_s1 >= float(getattr(_c, "JEV_MIN_M1_ENTRY_FLOOR_PCT", -3.5))
+            and (_m1_s1 >= -5.0 if (_age_s1 <= 15.0 and (_b5_s1 >= _s5_s1 or _m5_s1 >= 0.5)) else _m1_s1 >= float(getattr(_c, "JEV_MIN_M1_ENTRY_FLOOR_PCT", -3.5)))
             and _h1_s1 >= float(getattr(_c, "JEV_MIN_H1_PCT", -15.0))
         )
         _is_momentum_rocket = _s1_fresh_ok and (rkt_s1 + 0.05) >= max(3.5, s1_thresh - 2.0) and (
@@ -2022,6 +2042,7 @@ class GrokJevEngine:
             or (_vm5_s1 >= 15000.0 and _b5_s1 >= int(_s5_s1 * 1.15) and _m5_s1 >= 6.0)
             or (_m5_s1 >= 8.0 and _vm5_s1 >= 10000.0 and _b5_s1 >= max(12, int(_s5_s1 * 1.15)))
             or (_m5_s1 >= 5.0 and _b5_s1 >= int(_s5_s1 * 1.20) and _vm5_s1 >= 4000.0 and _b5_s1 >= 20)
+            or (_age_s1 <= 10.0 and _m5_s1 >= 2.5 and _b5_s1 >= int(_s5_s1 * 1.05) and _vm5_s1 >= 1000.0 and _b5_s1 >= 5)
         )
 
         if getattr(_c, "ROCKET_XGB_ENABLED", True) and not _is_momentum_rocket and (rkt_s1 + 0.05) < s1_thresh:

@@ -1040,7 +1040,7 @@ async def scanner_loop(analyzer, tracker):
                         _max_sc_fdv = float(getattr(config, "JEV_MAX_MCAP_USD", 220000.0)) + 30000.0
 
                         # Свежая миграция (только что вышедшая на DEX в пределах раннего окна):
-                        _is_fresh_grad = (mint in _graduated_set) and (_c_age_m <= 25.0) and (_c_fdv <= _max_sc_fdv)
+                        _is_fresh_grad = ((mint in _graduated_set) or (_c_age_m <= 20.0 and (config.is_launchpad_mint(mint) or _c_dex == "pumpswap"))) and (_c_age_m <= 25.0) and (_c_fdv <= _max_sc_fdv)
 
                         # Отсекаем перегретые топы (>$250k FDV) — блокируем покупку на вершине (в т.ч. старых миграций вроде Socks на $450k!):
                         if _c_fdv > _max_sc_fdv:
@@ -1331,6 +1331,10 @@ async def scanner_loop(analyzer, tracker):
                                     fdv_usd=_fdv_live_sc,
                                 )
                                 _min_sc_m1 = float(getattr(config, "JEV_MIN_M1_ENTRY_FLOOR_PCT", -3.5))
+                                if _age_m <= 15.0 and (_b5_live >= _s5_live or _m5_live >= 0.5):
+                                    _min_sc_m1 = min(_min_sc_m1, -5.0)
+                                elif (_vol5_live >= 10000.0 and _b5_live >= int(_s5_live * 1.15)) or (_h1_live >= 25.0 and _b5_live >= int(_s5_live * 1.25) and _vol5_live >= 4500.0):
+                                    _min_sc_m1 = min(_min_sc_m1, -4.5)
                                 if not _mom_live_ok or _m1_live < _min_sc_m1:
                                     print(f"🚫 [SCANNER-LIVE-REVERSAL] {actual_symbol} ({mint[:8]}): на живом графике импульс сломан ({_mom_live_why}, m5 {_m5_live:+.1f}%, m1 {_m1_live:+.1f}% < {_min_sc_m1:+.1f}%) — отмена покупки!")
                                     continue

@@ -240,25 +240,29 @@ async def fetch_jup_tokens() -> list:
                     liq_p = float((p.get("liquidity") or {}).get("usd", 0) or 0)
                     if liq_p < max(4500.0, float(getattr(config, "MIN_GRADUATED_LIQ_USD", 5000.0)) * 0.9):
                         continue
+                    ca_p = float(p.get("pairCreatedAt") or 0)
+                    age_p = ((now_ms_ds - ca_p) / 60000.0) if ca_p > 0 else 999.0
+                    if age_p > _max_disc_age:
+                        continue
                     vol5_p = float((p.get("volume") or {}).get("m5", 0) or 0)
-                    if vol5_p < 2000.0:
+                    _min_v5_ds = 600.0 if age_p <= 2.5 else (1000.0 if age_p <= 5.0 else (1400.0 if age_p <= 10.0 else 2000.0))
+                    if vol5_p < _min_v5_ds:
                         continue
                     tx5_p = (p.get("txns") or {}).get("m5") or {}
                     b5_p = int(tx5_p.get("buys", 0) or 0)
                     s5_p = int(tx5_p.get("sells", 0) or 0)
-                    if (b5_p + s5_p) < 12 or (s5_p > 0 and (b5_p / s5_p) < 1.08):
+                    _min_tx_ds = 5 if age_p <= 2.5 else (8 if age_p <= 5.0 else 12)
+                    _min_bs_ds = 0.95 if age_p <= 5.0 else 1.05
+                    if (b5_p + s5_p) < _min_tx_ds or (s5_p > 0 and (b5_p / s5_p) < _min_bs_ds):
                         continue
                     pc_p = p.get("priceChange") or {}
                     m5_p = float(pc_p.get("m5", 0) or 0)
                     h1_p = float(pc_p.get("h1", 0) or 0)
-                    if m5_p < 2.0:
+                    _min_m5_ds = 1.0 if age_p <= 5.0 else 2.0
+                    if m5_p < _min_m5_ds:
                         continue
                     fdv_p = float(p.get("fdv") or p.get("marketCap") or 0)
                     if fdv_p > _max_disc_fdv:
-                        continue
-                    ca_p = float(p.get("pairCreatedAt") or 0)
-                    age_p = ((now_ms_ds - ca_p) / 60000.0) if ca_p > 0 else 999.0
-                    if age_p > _max_disc_age:
                         continue
                     _max_h1_ds = config.get_max_entry_h1_pct(age_p, vol5_p, b5_p, s5_p, liq_p, m5_p)
                     if h1_p > _max_h1_ds:
@@ -510,7 +514,9 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
         fdv_usd=_fdv_j1,
     )
     _min_m1_j = float(getattr(config, "JEV_MIN_M1_ENTRY_FLOOR_PCT", -3.5))
-    if (_vol5_j >= 10000.0 and _b5_j >= int(_s5_j * 1.15)) or (_h1_j >= 25.0 and _b5_j >= int(_s5_j * 1.25) and _vol5_j >= 4500.0):
+    if _age_j <= 15.0 and (_b5_j >= _s5_j or _m5_j >= 0.5):
+        _min_m1_j = min(_min_m1_j, -5.0)
+    elif (_vol5_j >= 10000.0 and _b5_j >= int(_s5_j * 1.15)) or (_h1_j >= 25.0 and _b5_j >= int(_s5_j * 1.25) and _vol5_j >= 4500.0):
         _min_m1_j = min(_min_m1_j, -4.5)
     if not _mom_j_ok or _m1_j < _min_m1_j:
         print(f"🚫 [{source_tag}-MOMENTUM-LOST] {_sym_tmp} ({mint[:8]}): импульс отклонён ({_mom_j_why}, m5 {_m5_j:+.1f}%, m1 {_m1_j:+.1f}%) — отмена входа.")
@@ -689,6 +695,8 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
         print(f"🚫 [{source_tag}-DOWNTREND] {_sym_tmp}: {_mom_j2_why} — отмена входа!")
         return False
     _min_jup_m1 = float(getattr(config, "JEV_MIN_M1_ENTRY_FLOOR_PCT", -3.5))
+    if _age_j <= 15.0 and (_b5_j >= _s5_j or _m5_j >= 0.5):
+        _min_jup_m1 = min(_min_jup_m1, -5.0)
     if _m1_j < _min_jup_m1:
         print(f"🚫 [{source_tag}-1M-DUMP] {_sym_tmp}: 1м свеча {_m1_j:+.1f}% < {_min_jup_m1:+.1f}% — отмена входа!")
         return False

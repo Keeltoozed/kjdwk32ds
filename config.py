@@ -266,7 +266,15 @@ def evaluate_entry_momentum(
 
     # Block vertical top-chasing and active falling knives
     _max_m1_dyn = 30.0 if (buys5 >= max(10, int(sells5 * 1.15)) and vol5_usd >= 3000.0 and m5 >= 4.0) else float(globals().get("MAX_ENTRY_M1_PCT", 22.0))
-    _min_m1_dyn = -4.5 if ((vol5_usd >= 10000.0 and buys5 >= int(sells5 * 1.15)) or (h1 >= 25.0 and buys5 >= int(sells5 * 1.25) and vol5_usd >= 4500.0)) else -3.5
+    if age_min <= 15.0 and (buys5 >= sells5 or m5 >= 0.5):
+        _min_m1_dyn = -5.0
+    elif (vol5_usd >= 10000.0 and buys5 >= int(sells5 * 1.15)) or (h1 >= 25.0 and buys5 >= int(sells5 * 1.25) and vol5_usd >= 4500.0):
+        _min_m1_dyn = -4.5
+    elif m5 >= 5.0 and buys5 >= sells5:
+        _min_m1_dyn = -4.0
+    else:
+        _min_m1_dyn = -3.5
+
     _max_m5_dyn = 400.0 if (age_min <= 15.0 and buys5 >= max(12, int(sells5 * 1.12)) and vol5_usd >= 3500.0) else (
         350.0 if (buys5 >= max(10, int(sells5 * 1.10)) and vol5_usd >= 3000.0) else max(float(globals().get("MAX_ENTRY_M5_PCT", 120.0)), 135.0)
     )
@@ -278,84 +286,101 @@ def evaluate_entry_momentum(
         return False, f"m5-parabolic-top {m5:+.1f}% > +{_max_m5_dyn:.0f}%"
 
     # 1. Раннее накопление / ретест свежей миграции (золотая зона входа $40k-$135k FDV):
-    # Токен только вышел на DEX (<=25м), ликвидность на месте (>= $7.5k), объём идёт (>= $2k),
-    # покупатели активны (buys >= sells * 0.95), цена не падает лавиной (m5 >= -6.5%, m1 >= -2.0%):
+    # Токен только вышел на DEX (<=25м), ликвидность на месте (>= $5k), объём идёт,
+    # покупатели активны (buys >= sells * 0.90), цена не падает лавиной (m5 >= -6.5%, m1 >= -4.5%):
+    _fma_vol_req = 800.0 if age_min <= 2.5 else 1200.0
     is_fresh_migration_accumulation = (
         age_min <= 25.0
         and (fdv_usd <= 0.0 or fdv_usd <= 135000.0)
-        and liq_usd >= 7500.0
-        and buys5 >= max(4, int(sells5 * 0.95))
-        and vol5_usd >= 2000.0
+        and liq_usd >= 5000.0
+        and buys5 >= max(4, int(sells5 * 0.90))
+        and vol5_usd >= _fma_vol_req
         and m5 >= -6.5
-        and m1 >= -2.0
+        and m1 >= -4.5
     )
+
+    # 1.1 Свежий запуск / реактивный разгон молодых токенов (<10м):
+    _uf_vol_req = 600.0 if age_min <= 2.0 else (900.0 if age_min <= 4.0 else 1200.0)
+    _uf_m1_floor = -5.0 if (buys5 >= sells5 or m5 >= 1.0) else -3.0
+    _uf_min_tx = 5 if age_min <= 2.0 else 7
+    is_ultra_fresh_launch = (
+        age_min <= 10.0
+        and m5 >= 0.8
+        and m1 >= _uf_m1_floor
+        and buys5 >= max(4, int(sells5 * 0.95))
+        and vol5_usd >= _uf_vol_req
+        and tot_tx >= _uf_min_tx
+    )
+
+    # 1.2 Вход на откате молодой ракеты (1м микро-пуллбэк на разгоняющемся токене):
+    is_fresh_pullback_entry = (
+        age_min <= 35.0
+        and m5 >= 2.5
+        and -5.0 <= m1 <= -0.5
+        and buys5 >= max(6, int(sells5 * 1.00))
+        and vol5_usd >= 1200.0
+    )
+
     is_fresh_ignition = (
         (
             age_min <= 45.0
             and m5 >= 0.8
-            and m1 >= -2.5
-            and buys5 >= max(5, int(sells5 * 1.02))
-            and vol5_usd >= 1800.0
-            and tot_tx >= 8
+            and m1 >= -3.5
+            and buys5 >= max(5, int(sells5 * 0.98))
+            and vol5_usd >= 1400.0
+            and tot_tx >= 7
         )
         or (
             age_min <= 45.0
             and m5 >= -2.5
-            and m1 >= 0.5
-            and buys5 >= max(8, int(sells5 * 1.05))
-            and vol5_usd >= 1400.0
-            and tot_tx >= 10
+            and m1 >= -1.0
+            and buys5 >= max(6, int(sells5 * 1.02))
+            and vol5_usd >= 1000.0
+            and tot_tx >= 8
         )
     )
     is_hyper_ignition = (
-        m5 >= 10.0
-        and m1 >= -2.0
-        and buys5 >= int(sells5 * 1.05)
-        and vol5_usd >= 3000.0
-    )
-    is_ultra_fresh_launch = (
-        age_min < 8.0
-        and m5 >= 1.5
-        and m1 >= -2.5
-        and buys5 >= max(4, int(sells5 * 1.05))
-        and vol5_usd >= 1800.0
-        and tot_tx >= 8
+        m5 >= 8.0
+        and m1 >= -3.5
+        and buys5 >= max(6, int(sells5 * 1.02))
+        and vol5_usd >= 2000.0
     )
     # Healthy dip / post-migration reclaim & active second-wave consolidation (catches Socks, HOGE, DOJE without dead bleeders)
     is_turned_green_dip = (
         age_min <= 90.0
         and (fdv_usd <= 0.0 or fdv_usd <= 220000.0)
-        and buys5 >= max(10, int(sells5 * 1.10))
-        and vol5_usd >= 4000.0
-        and liq_usd >= 9000.0
+        and buys5 >= max(8, int(sells5 * 1.05))
+        and vol5_usd >= 3000.0
+        and liq_usd >= 7500.0
         and (
-            (m5 >= -2.5 and m1 >= -1.0 and h1 >= 8.0)
-            or (h1 >= 15.0 and m5 >= -15.0 and m1 >= -4.5)
-            or (m5 >= -4.5 and m1 >= -3.5 and vol5_usd >= 10000.0 and buys5 >= max(30, int(sells5 * 1.15)))
+            (m5 >= -3.5 and m1 >= -2.5 and h1 >= 5.0)
+            or (h1 >= 10.0 and m5 >= -15.0 and m1 >= -4.5)
+            or (m5 >= -4.5 and m1 >= -4.5 and vol5_usd >= 8000.0 and buys5 >= max(20, int(sells5 * 1.10)))
         )
     )
     is_fresh_v_reversal = (
         age_min <= 45.0
-        and m5 >= 8.0
-        and m1 >= 0.0
-        and buys5 >= int(sells5 * 1.25)
-        and vol5_usd >= 5000.0
-        and liq_usd >= 9000.0
-        and h1 >= -22.0
+        and m5 >= 6.0
+        and m1 >= -1.5
+        and buys5 >= int(sells5 * 1.15)
+        and vol5_usd >= 3500.0
+        and liq_usd >= 7500.0
+        and h1 >= -25.0
     )
     is_mature_breakout = (
         age_min <= SOLANA_MAX_AGE_MIN
         and m5 >= 1.5
-        and h1 >= -10.0
-        and m1 >= -2.5
+        and h1 >= -12.0
+        and m1 >= -3.5
         and buys5 >= max(8, int(sells5 * 1.02))
-        and vol5_usd >= 2500.0
-        and (vel_ratio >= 0.09 or vol5_usd >= 8000.0)
+        and vol5_usd >= 2200.0
+        and (vel_ratio >= 0.08 or vol5_usd >= 6000.0)
     )
 
     if not (
         is_ultra_fresh_launch
         or is_fresh_migration_accumulation
+        or is_fresh_pullback_entry
         or is_fresh_ignition
         or is_hyper_ignition
         or is_turned_green_dip
