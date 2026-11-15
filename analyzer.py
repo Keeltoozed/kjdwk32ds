@@ -1815,11 +1815,11 @@ class Analyzer:
             or (_b5_pre >= _s5_pre * 1.30 and (_b5_pre - _s5_pre) >= 60 and _vm5_pre >= 2500.0)
             or (_vm5_pre >= 10000.0 and _b5_pre >= _s5_pre)
         )
-        if _tot_tx5_pre >= 120 and _avg_tx_pre < 3.0 and not _is_real_bump_runner:
+        if _tot_tx5_pre >= 10 and _avg_tx_pre < 4.0 and not _is_real_bump_runner:
             return self._deny(
                 mint,
                 f"fake-bump-wash-bot avg ${_avg_tx_pre:.1f}",
-                f"🚫 [WASH-BUMP-TRAP] {symbol} ({mint[:8]}): накрутка микро-ботом ({_tot_tx5_pre} txns, avg ${_avg_tx_pre:.2f} < $3) — блок!",
+                f"🚫 [WASH-BUMP-TRAP] {symbol} ({mint[:8]}): накрутка микро-ботом ({_tot_tx5_pre} txns, avg ${_avg_tx_pre:.2f} < $4.00) — блок!",
             )
         _is_deep_launchpad_runner = (
             _is_burned_launchpad
@@ -1829,26 +1829,26 @@ class Analyzer:
             and _m5 >= 5.0
             and _b5_pre >= _s5_pre * 1.22
         )
-        # Разрешаем шумные ранние сделки розницы (avg >= $3.5 при перевесе покупателей b5 >= s5)
-        _is_retail_flow = (_b5_pre >= int(_s5_pre * 1.02) and _vm5_pre >= 2000.0)
-        if _tot_tx5_pre >= 200 and _avg_tx_pre < 4.0 and not _is_retail_flow and not _is_deep_launchpad_runner and not _is_real_bump_runner:
+        # Разрешаем шумные ранние сделки розницы (avg >= $4.5 при перевесе покупателей b5 >= s5)
+        _is_retail_flow = (_b5_pre >= int(_s5_pre * 1.05) and _vm5_pre >= 3000.0 and _avg_tx_pre >= 4.5)
+        if _tot_tx5_pre >= 80 and _avg_tx_pre < 4.5 and not _is_retail_flow and not _is_deep_launchpad_runner and not _is_real_bump_runner:
             return self._deny(
                 mint,
                 f"fake-bump-wash-bot avg ${_avg_tx_pre:.1f}",
-                f"🚫 [WASH-BUMP-TRAP] {symbol} ({mint[:8]}): накрутка микро-ботом ({_tot_tx5_pre} txns, avg ${_avg_tx_pre:.2f} < $4).",
+                f"🚫 [WASH-BUMP-TRAP] {symbol} ({mint[:8]}): накрутка микро-ботом ({_tot_tx5_pre} txns, avg ${_avg_tx_pre:.2f} < $4.50).",
             )
 
         # 3. ФИЛЬТР ИМПУЛЬСА, СКОРОСТИ ОБОРОТА И ТРЕНДА ДО ROCKET-XGB:
         _base_v5_cfg = float(getattr(config, "MIN_VOLUME_M5", 2000.0))
-        # Масштабируем порог объёма под возраст: 1-минутный токен физически не может иметь $2,000 в 5м окне
+        # Масштабируем порог объёма под возраст: реальный поток SOL для настоящих ракет
         if _age_min_pre <= 2.0:
-            _min_v5_cfg = 200.0 if (_b5_pre >= int(_s5_pre * 0.95) and _tot_tx5_pre >= 2) else 350.0
+            _min_v5_cfg = 1000.0 if (_b5_pre >= int(_s5_pre * 1.15) and _b5_pre >= 8) else 1500.0
         elif _age_min_pre <= 5.0:
-            _min_v5_cfg = 450.0 if _b5_pre >= int(_s5_pre * 0.95) else 700.0
+            _min_v5_cfg = 1400.0 if _b5_pre >= int(_s5_pre * 1.10) else 1800.0
         elif _age_min_pre <= 15.0:
-            _min_v5_cfg = 800.0
+            _min_v5_cfg = 1800.0
         elif _age_min_pre <= 30.0:
-            _min_v5_cfg = 1200.0
+            _min_v5_cfg = 2000.0
         else:
             _min_v5_cfg = _base_v5_cfg
         if _vm5_pre < _min_v5_cfg:
@@ -2049,15 +2049,16 @@ class Analyzer:
             liq_val = max(raw_liq, curve_liq) if is_pump_curve else raw_liq
 
             _is_momentum_rocket_a = (
-                (conf + 0.05) >= max(2.5, threshold - 2.0)
+                (conf + 0.05) >= max(10.0, threshold - 2.0)
                 and _age_min_pre <= _max_age_min
                 and _fdv_chk_pre <= _max_mcap_pre
                 and (_age_min_pre < 45.0 or _h6_pre_opt is None or _h6_pre_opt <= float(getattr(config, "MAX_ENTRY_H6_PCT", 2500.0)))
+                and _m1 >= 0.0
                 and (
-                    (_m5 >= 10.0 and _m1 >= -4.0 and _b5_pre >= _s5_pre * 1.10 and _vm5_pre >= 4000.0)
-                    or (_vm5_pre >= 10000.0 and _b5_pre >= _s5_pre * 1.10 and _m5 >= 4.0 and _m1 >= -4.0)
-                    or (_m5 >= 4.0 and _b5_pre >= int(_s5_pre * 1.15) and _vm5_pre >= 2500.0 and _b5_pre >= 15 and _m1 >= -3.5)
-                    or (_age_min_pre <= 10.0 and _m5 >= 2.0 and _b5_pre >= int(_s5_pre * 1.02) and _vm5_pre >= 600.0 and _b5_pre >= 3)
+                    (_m5 >= 10.0 and _b5_pre >= _s5_pre * 1.20 and _vm5_pre >= 4000.0)
+                    or (_vm5_pre >= 10000.0 and _b5_pre >= _s5_pre * 1.15 and _m5 >= 4.0)
+                    or (_m5 >= 5.0 and _b5_pre >= int(_s5_pre * 1.20) and _vm5_pre >= 3000.0 and _b5_pre >= 15)
+                    or (_age_min_pre <= 5.0 and _m5 >= 2.5 and _b5_pre >= int(_s5_pre * 1.15) and _vm5_pre >= 1500.0 and _b5_pre >= 10)
                 )
             )
             if (conf + 0.05) < threshold and not _is_momentum_rocket_a:

@@ -291,16 +291,21 @@ def evaluate_entry_momentum(
     tot_tx = buys5 + sells5
     vel_ratio = vol5_usd / max(liq_usd, 1.0)
 
-    # 1. HARD NO-FALLING-KNIFE GATE:
-    # A meme coin dropping in 5m (m5 < 1.0%) or dumping in 1m (m1 < -2.2%) is a falling knife (VI, billy cases).
-    # Never buy red dumping candles under any circumstances!
-    if m5 < 1.0:
-        return False, f"m5-falling-knife {m5:+.1f}% < +1.0% (red 5m candle, falling dump)"
-    if m1 < -2.2:
-        return False, f"m1-falling-knife {m1:+.1f}% < -2.2% (1m candle dumping)"
+    # 0. АНТИ-BUMP-БОТ / WASH-TRADE ФИЛЬТР:
+    # Если на монете >= 10 сделок, но средний чек < $4.00 — это накрутка микро-ботом (кейс Tagoh: 489 сделок по $0.35)!
+    if tot_tx >= 10 and (vol5_usd / max(1, tot_tx)) < 4.0:
+        return False, f"fake-bump-wash-bot avg ${vol5_usd/max(1, tot_tx):.2f} < $4.00 across {tot_tx} txns"
 
-    # 2. Buyers must dominate sellers
-    if sells5 > 0 and buys5 < int(sells5 * 1.02):
+    # 1. HARD NO-FALLING-KNIFE GATE:
+    # Никогда не покупаем красные падающие свечи!
+    # Падение за 5м (m5 < 2.0%) или дамп за 1м (m1 < -0.8%) — это не зажигание ракеты!
+    if m5 < 2.0:
+        return False, f"m5-falling-knife {m5:+.1f}% < +2.0% (red or flat 5m candle)"
+    if m1 < -0.8:
+        return False, f"m1-falling-knife {m1:+.1f}% < -0.8% (1m candle dumping)"
+
+    # 2. Покупатели обязаны доминировать над продавцами (минимум на 10% больше)
+    if sells5 > 0 and buys5 < int(sells5 * 1.10):
         return False, f"sellers-dominating {buys5}b/{sells5}s (more sellers than buyers in 5m)"
 
     _max_fdv_allowed = 1500000.0 if (vol5_usd >= 8000.0 and buys5 >= int(sells5 * 1.10) and m5 >= 2.0) else float(globals().get("JEV_MAX_MCAP_USD", 850000.0))
@@ -326,25 +331,25 @@ def evaluate_entry_momentum(
         return False, f"m5-parabolic-top {m5:+.1f}% > +{_max_m5_dyn:.0f}%"
 
     # 1. Свежая миграция / накопление покупателей ($40k-$160k FDV):
-    _fma_vol_req = 400.0 if age_min <= 2.5 else 800.0
+    _fma_vol_req = 1000.0 if age_min <= 2.5 else 1600.0
     is_fresh_migration_accumulation = (
         age_min <= 25.0
         and (fdv_usd <= 0.0 or fdv_usd <= 160000.0)
         and liq_usd >= 4500.0
-        and buys5 >= max(3, int(sells5 * 1.02))
+        and buys5 >= max(8, int(sells5 * 1.15))
         and vol5_usd >= _fma_vol_req
-        and m5 >= 1.0
-        and m1 >= -2.0
+        and m5 >= 2.0
+        and m1 >= 0.0
     )
 
     # 1.1 Свежий запуск / реактивный разгон молодых токенов (<10м):
-    _uf_vol_req = 250.0 if age_min <= 2.0 else (450.0 if age_min <= 4.0 else 750.0)
-    _uf_min_tx = 3 if age_min <= 2.0 else 5
+    _uf_vol_req = 1000.0 if age_min <= 2.5 else (1500.0 if age_min <= 5.0 else 2000.0)
+    _uf_min_tx = 8 if age_min <= 2.5 else 10
     is_ultra_fresh_launch = (
         age_min <= 10.0
-        and m5 >= 1.0
-        and m1 >= -2.0
-        and buys5 >= max(3, int(sells5 * 1.02))
+        and m5 >= 2.5
+        and m1 >= 0.0
+        and buys5 >= max(8, int(sells5 * 1.15))
         and vol5_usd >= _uf_vol_req
         and tot_tx >= _uf_min_tx
     )
@@ -352,27 +357,27 @@ def evaluate_entry_momentum(
     # 1.2 Вход на откате молодой ракеты (1м микро-пуллбэк на разгоняющемся токене):
     is_fresh_pullback_entry = (
         age_min <= 35.0
-        and m5 >= 2.0
-        and -2.2 <= m1 <= -0.2
-        and buys5 >= max(4, int(sells5 * 1.02))
-        and vol5_usd >= 800.0
+        and m5 >= 3.5
+        and -0.8 <= m1 <= -0.1
+        and buys5 >= max(8, int(sells5 * 1.15))
+        and vol5_usd >= 1400.0
     )
 
     # 1.3 Первичное зажигание ракеты (свежий импульс)
     is_fresh_ignition = (
         age_min <= 45.0
-        and m5 >= 1.5
-        and m1 >= -2.0
-        and buys5 >= max(4, int(sells5 * 1.02))
-        and vol5_usd >= 800.0
-        and tot_tx >= 5
+        and m5 >= 2.5
+        and m1 >= 0.0
+        and buys5 >= max(8, int(sells5 * 1.15))
+        and vol5_usd >= 1200.0
+        and tot_tx >= 10
     )
 
     # 1.4 Гипер-зажигание (сильный пробой)
     is_hyper_ignition = (
         m5 >= 5.0
-        and m1 >= -2.2
-        and buys5 >= max(4, int(sells5 * 1.02))
+        and m1 >= -0.5
+        and buys5 >= max(8, int(sells5 * 1.15))
         and vol5_usd >= 1000.0
     )
 
@@ -512,9 +517,9 @@ MOONBAG_MAX_HOLD_MIN = 55.0          # Мунбэг может ехать до 5
 PUMP_XGB_ENABLED = False
 RAY_XGB_ENABLED = False
 ROCKET_XGB_ENABLED = True
-ROCKET_XGB_STAGE1_THRESHOLD = 5.0    # Первичный отсев 5%: отсекает чистый мертвяк (<5%), даёт шанс ранним ракетам
-ROCKET_XGB_FINAL_THRESHOLD = 10.0    # Финальный порог 10%: чистый отсев 1-4% мусора, свободный проход для ракет
-ROCKET_XGB_THRESHOLD = 10.0
+ROCKET_XGB_STAGE1_THRESHOLD = 12.0   # Первичный отсев 12%: отсекает чистый скам и бот-ловушки (Tagoh 11%, VI 7%, SURVIVE 9%), пропуская ракеты
+ROCKET_XGB_FINAL_THRESHOLD = 16.0    # Финальный порог 16%: надёжный пропуск реальных ракет (TOYCOIN 28%, GO 40%, Fug 58%, STRIPCOIN 60%)
+ROCKET_XGB_THRESHOLD = 16.0
 
 STALL_TIMER_SEC = 420.0   # 7 минут на консолидацию до среза по стагнации
 STALL_MAX_LOSS_PCT = -0.055

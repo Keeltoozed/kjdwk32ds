@@ -401,15 +401,10 @@ async def position_manager_loop(analyzer, tracker):
                 try:
                     if not getattr(position, "is_mature", False):
                         _inf_w = float(getattr(config, "INFANT_WINDOW_MIN", 0.5))
-                        _inf_p = -abs(float(getattr(config, "INFANT_DUMP_PCT", -0.180)))
+                        _inf_p = -abs(float(getattr(config, "INFANT_DUMP_PCT", -0.090)))
                         if minutes_held < _inf_w and pnl_pct <= _inf_p:
-                            _inf_c = int(getattr(position, "infant_confirm_n", 0) or 0) + 1
-                            position.infant_confirm_n = _inf_c
-                            if _inf_c >= 2:
-                                tracker.close_position(mint, current_price, f"Infant Dump ({pnl_pct*100:.1f}%)")
-                                continue
-                        else:
-                            position.infant_confirm_n = 0
+                            tracker.close_position(mint, current_price, f"Infant Dump ({pnl_pct*100:.1f}%)")
+                            continue
                 except Exception:
                     pass
                 

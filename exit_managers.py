@@ -105,7 +105,22 @@ class MatureExitManager:
                     return f"🚨 First Candle Rug Cut: Sellers dominating ({_b5}b/{_s5}s, PnL {pnl_pct*100:.1f}%)"
 
         # =========================================================================
-        # 0.5. БЫСТРЫЙ СБОР ПРИБЫЛИ И ЗАЩИТА ОТ РАГА / ЗАТУХАНИЯ (FAST PROFIT HARVEST)
+        # 0.5. ЖЕСТКИЙ СТОП-ЛОСС И ЗАЩИТА ОТ ОБВАЛА НА 1-М ТИКЕ (LOSS CONTROL FIRST)
+        # =========================================================================
+        # Любой резкий дамп режется В ПЕРВУЮ ОЧЕРЕДЬ, до логики фиксаций и скретчей!
+        _fast_sl = -abs(float(getattr(config, "STOP_LOSS_PCT", -0.075)))
+        if pnl_pct <= _fast_sl:
+            return f"🚨 Fast Stop Loss ({pnl_pct*100:.1f}%)"
+
+        if minutes_held <= 2.5 and pnl_pct <= -0.070:
+            return f"🚨 First Candle Rug Cut ({pnl_pct*100:.1f}% в первые {minutes_held*60:.0f}с)"
+
+        _emerg_cap = -abs(float(getattr(config, "EMERGENCY_CAP_PCT", -0.090)))
+        if pnl_pct <= _emerg_cap:
+            return f"Mature Emergency Cap ({pnl_pct*100:.1f}%)"
+
+        # =========================================================================
+        # 0.6. БЫСТРЫЙ СБОР ПРИБЫЛИ ПРИ ЗАТУХАНИИ ИМПУЛЬСА (FAST PROFIT HARVEST)
         # =========================================================================
         # На мемкоинах Solana окно максимальной прибыли длится 15-45 секунд.
         # Если монета сделала скачок и замерла — фиксируем прибыль СРАЗУ,
@@ -125,43 +140,27 @@ class MatureExitManager:
         # А. Фиксация прибыли при затухании импульса (для ЛЮБЫХ монет):
         if not _is_mb:
             if max_pnl_pct >= 0.50:
-                # Памп +50%..+100%: если нет нового ATH 15 сек или откат >= 8% от пика — забираем прибыль!
-                if (_peak_age_min >= 0.25 and pnl_pct <= max_pnl_pct * 0.92) or pnl_pct <= max_pnl_pct * 0.85:
+                # Памп +50%..+100%: если нет нового ATH 12 сек или откат >= 7% от пика — забираем прибыль!
+                if (_peak_age_min >= 0.20 and pnl_pct <= max_pnl_pct * 0.93) or pnl_pct <= max_pnl_pct * 0.86:
                     return f"⚡ Runner Stall Harvest (+{pnl_pct*100:.1f}%, застой {_peak_age_min*60:.0f}с после пика +{max_pnl_pct*100:.1f}%)"
             elif max_pnl_pct >= 0.25:
-                # Памп +25%..+50%: если нет нового ATH 14 сек или откат >= 7% от пика — забираем прибыль!
-                if (_peak_age_min >= 0.23 and pnl_pct <= max_pnl_pct * 0.90) or pnl_pct <= max_pnl_pct * 0.82:
+                # Памп +25%..+50%: если нет нового ATH 12 сек или откат >= 6% от пика — забираем прибыль!
+                if (_peak_age_min >= 0.20 and pnl_pct <= max_pnl_pct * 0.92) or pnl_pct <= max_pnl_pct * 0.84:
                     return f"⚡ Momentum Stall Harvest (+{pnl_pct*100:.1f}%, застой {_peak_age_min*60:.0f}с после пика +{max_pnl_pct*100:.1f}%)"
             elif max_pnl_pct >= 0.15:
-                # Памп +15%..+25%: если нет нового ATH 16 сек или откат до +8% — забираем прибыль!
-                if (_peak_age_min >= 0.27 and pnl_pct >= 0.08) or pnl_pct <= 0.08:
+                # Памп +15%..+25%: если нет нового ATH 14 сек или откат до +8% — забираем прибыль!
+                if (_peak_age_min >= 0.23 and pnl_pct >= 0.08) or pnl_pct <= 0.08:
                     return f"⚡ Fast Profit Harvest (+{pnl_pct*100:.1f}%, застой {_peak_age_min*60:.0f}с после пика +{max_pnl_pct*100:.1f}%)"
             elif max_pnl_pct >= 0.08:
-                # Малый отскок +8%..+15%: если застой 20 сек и цена сползает к +3% — фиксируем!
-                if _peak_age_min >= 0.33 and pnl_pct <= 0.035:
+                # Малый отскок +8%..+15%: если застой 18 сек и цена сползает к +3.5% — фиксируем!
+                if _peak_age_min >= 0.30 and pnl_pct <= 0.035:
                     return f"⚡ Quick Pop Lock (+{pnl_pct*100:.1f}%, откат после пика +{max_pnl_pct*100:.1f}%)"
 
         # Б. УНИВЕРСАЛЬНЫЙ СРЕЗ ЗАВИСШИХ МОНЕТ БЕЗ ИМПУЛЬСА (Zero-Momentum Scratch):
-        # Если монета куплена, прошло 35 секунд, а импульса нет (пик < +4% и pnl <= 0.0%):
-        # ВЫХОДИМ НЕМЕДЛЕННО! Это освобождает слот для настоящих ракет и спасает от рагпула дева!
-        if minutes_held >= 0.58 and max_pnl_pct < 0.04 and pnl_pct <= 0.005:
+        # Строго в диапазоне около нуля: -4.5% <= pnl_pct <= +0.5%!
+        # ДАМПЫ (pnl < -4.5%) УЖЕ перехвачены Stop Loss / Rug Cut выше!
+        if minutes_held >= 0.58 and max_pnl_pct < 0.04 and -0.045 <= pnl_pct <= 0.005:
             return f"⚡ Zero-Momentum Scratch ({pnl_pct*100:+.1f}%, 0 импульса за {minutes_held*60:.0f}с — сброс до дампа дева)"
-
-        # В. БЫСТРЫЙ СТОП-ЛОСС (-7.5% на 1-м тике):
-        _fast_sl = -abs(float(getattr(config, "STOP_LOSS_PCT", -0.075)))
-        if pnl_pct <= _fast_sl:
-            return f"🚨 Fast Stop Loss ({pnl_pct*100:.1f}%)"
-
-        # =========================================================================
-        # 1. ЖЕСТКИЙ КОНТРОЛЬ УБЫТКА (EMERGENCY CAP & STOP LOSS) — ПО СТАНДАРТУ 0d2b1ae
-        # =========================================================================
-        # СБРОС ДЕВ-ДАМПА НА ПЕРВОЙ СВЕЧЕ: режем резкий обвал <= -10.5% в первые 2.5 минуты
-        if minutes_held <= 2.5 and pnl_pct <= -0.105:
-            return f"🚨 First Candle Rug Cut ({pnl_pct*100:.1f}% в первые {minutes_held*60:.0f}с)"
-
-        _emerg_cap = -abs(float(getattr(config, "EMERGENCY_CAP_PCT", -0.115)))
-        if pnl_pct <= _emerg_cap:
-            return f"Mature Emergency Cap ({pnl_pct*100:.1f}%)"
 
         _sl = -abs(float(getattr(config, "STOP_LOSS_PCT", -0.095)))
         if pnl_pct <= _sl:
