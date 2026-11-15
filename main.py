@@ -485,10 +485,10 @@ async def position_manager_loop(analyzer, tracker):
                 # === ИНТЕГРАЦИЯ МАТЕМАТИКИ ДЛЯ ЗРЕЛЫХ МОНЕТ (SWING TRADING / RIDE RUNNERS) ===
                 # Исполняется ДО скальперских Early Fade / Stagnant срезов, чтобы ракеты ехали по MatureExitManager!
                 # === ИНТЕГРАЦИЯ МАТЕМАТИКИ ДЛЯ ВСЕХ ПОЗИЦИЙ SOLANA (main.py строки 240-280) ===
-                _tp1_sol_thr = float(getattr(config, "TP1_TRIGGER_PCT", 0.35))
-                _tp1_sell = float(getattr(config, "TP1_SELL_FRAC", 0.42))
-                _tp2 = float(getattr(config, "TP2_TRIGGER_PCT", 0.65))
-                _tp2_sell = float(getattr(config, "TP2_SELL_FRAC", 0.52))
+                _tp1_sol_thr = float(getattr(config, "TP1_TRIGGER_PCT", 0.25))
+                _tp1_sell = float(getattr(config, "TP1_SELL_FRAC", 0.45))
+                _tp2 = float(getattr(config, "TP2_TRIGGER_PCT", 0.60))
+                _tp2_sell = float(getattr(config, "TP2_SELL_FRAC", 0.50))
                 _tp3 = float(getattr(config, "TP3_TRIGGER_PCT", 1.60))
                 _tp3_sell = float(getattr(config, "TP3_SELL_FRAC", 0.35))
                 _tp4 = float(getattr(config, "TP4_TRIGGER_PCT", 3.50))
@@ -1309,6 +1309,29 @@ async def scanner_loop(analyzer, tracker):
                                 if not _allow_unl_sc and ("meteora" in _dex_id or _dex_id == "meteoradbc") and not pair_data.get("_lp_verified", False):
                                     print(f"🚫 [SCANNER-METEORA-UNBURNED] {actual_symbol} ({mint[:8]}): пул Meteora без сожжённого/залоченного LP — риск Remove LP, отмена!")
                                     continue
+                                _is_canon_m_sc = (mint.endswith("pump") and _dex_id in ("pump", "pumpfun", "pumpswap")) or bool(pair_data.get("_pumpswap_canonical"))
+                                _is_lp_safe_sc = bool(pair_data.get("_lp_verified")) or bool(pair_data.get("_pumpswap_lp_burned")) or _is_canon_m_sc
+                                if not _is_lp_safe_sc:
+                                    _ca_sc = float(pair_data.get("pairCreatedAt") or 0)
+                                    _age_sc_unl = ((time.time() * 1000.0 - _ca_sc) / 60000.0) if _ca_sc > 0 else 0.1
+                                    _tx5_sc_u = (pair_data.get("txns") or {}).get("m5") or {}
+                                    _b5_sc_u = int(_tx5_sc_u.get("buys", 0) or 0)
+                                    _s5_sc_u = int(_tx5_sc_u.get("sells", 0) or 0)
+                                    _vol5_sc_u = float(((pair_data.get("volume") or {}).get("m5", 0) or 0))
+                                    _sc_xgb_sc = float(getattr(analyzer, "rocket_scores", {}).get(mint, getattr(analyzer, "last_score", 0.0)) or 0.0)
+                                    _min_unl_xgb = float(getattr(config, "ROCKET_XGB_UNLOCKED_CUSTOM_MIN", 18.0))
+                                    if _sc_xgb_sc < _min_unl_xgb:
+                                        print(f"🚫 [SCANNER-UNLOCKED-XGB] {actual_symbol} ({mint[:8]}): незалоченный кастомный пул XGB {_sc_xgb_sc:.1f}% < {_min_unl_xgb:.0f}% — отмена (риск мгновенного слива пула)!")
+                                        continue
+                                    if not config.is_safe_unlocked_custom_runner(
+                                        liq_usd=liq_usd,
+                                        age_min=_age_sc_unl,
+                                        vol5_usd=_vol5_sc_u,
+                                        buys5=_b5_sc_u,
+                                        sells5=_s5_sc_u,
+                                    ):
+                                        print(f"🚫 [SCANNER-UNLOCKED-GATE] {actual_symbol} ({mint[:8]}): незалоченный пул без достаточной активности/возраста (age {_age_sc_unl:.2f}м, vol5 ${_vol5_sc_u:,.0f}, {_b5_sc_u}b/{_s5_sc_u}s) — отмена!")
+                                        continue
                                 if config.is_permissionless_liq_fdv_trap(pair_data):
                                     print(f"🚫 [SCANNER-LIQ-TRAP] {actual_symbol} ({mint[:8]}): seeded trap pool (liq/fdv drain risk) — отмена!")
                                     continue

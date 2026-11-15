@@ -205,24 +205,21 @@ class MatureExitManager:
             elif max_pnl_pct >= 0.55:       # +55%..+110%: фиксируем минимум +26%, трейл 20% от ATH
                 _floor_pnl = 0.26
                 _trail_dist = 0.20
-            elif max_pnl_pct >= 0.35 and getattr(position, "tp1_done", False):
-                # После частичной фиксации TP1 (+35%) защищаем прибыль отката: минимум +14% (или +6% первые 45с)
-                _floor_pnl = 0.14 if minutes_held >= 0.75 else 0.06
-                _trail_dist = 0.18 if minutes_held >= 1.0 else None
-            elif max_pnl_pct >= 0.28:       # +28%..+55%: Wave-1 Shield (+12% пол после 75с, трейл 18%)
-                if minutes_held >= 1.25:
-                    _floor_pnl = 0.12
-                    _trail_dist = 0.18
+            elif max_pnl_pct >= float(getattr(config, "TP1_TRIGGER_PCT", 0.25)) and getattr(position, "tp1_done", False):
+                # После частичной фиксации TP1 (+25%) защищаем прибыль отката: пол +5% (или +2% первые 45с)
+                _floor_pnl = 0.05 if minutes_held >= 0.75 else 0.02
+                _trail_dist = 0.20 if minutes_held >= 1.0 else None
+            elif max_pnl_pct >= 0.28:       # +28%..+55%: Wave-1 Shield (+6% пол после 90с, трейл 22%)
+                if minutes_held >= 1.50:
+                    _floor_pnl = 0.06
+                    _trail_dist = 0.22
                 else:
-                    _floor_pnl = 0.05
+                    _floor_pnl = 0.02
                     _trail_dist = None
             elif max_pnl_pct >= float(getattr(config, "BREAKEVEN_PCT", 0.16) or 0.16):
                 # Breakeven Shield: позиция с пиком >= +16% НЕ МОЖЕТ закрыться в минус!
-                # Оставляем простор +1.5%..+3.5% для ретеста перед второй волной в 2x-5x
-                if minutes_held >= 1.50 and _peak_age_min >= 0.50:
-                    _floor_pnl = 0.035
-                else:
-                    _floor_pnl = 0.015
+                # Чистый безубыток +0.5% (покрытие комиссий) — даём монете пережить нормальный ретест в 2x-5x, не убивая ракеты на +2.9%!
+                _floor_pnl = 0.005
                 _trail_dist = None
 
         if _floor_pnl is not None and minutes_held >= 0.20:
