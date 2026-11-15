@@ -1703,11 +1703,9 @@ class Analyzer:
                 pass
             if _bt_age is not None:
                 _age_min_pre = float(_bt_age)
-            elif mint.endswith("pump") or str(pair_data.get("dexId", "")).lower() in ("pump", "pumpfun", "pumpswap"):
-                # Если метки времени нет у токена pump.fun — это новорожденный токен (<30 сек), а НЕ 999 минут!
-                _age_min_pre = 0.2
             else:
-                _age_min_pre = 999.0
+                # Если метки времени нет у любого токена — это новорожденный токен (<30 сек), а НЕ 999 минут!
+                _age_min_pre = 0.2
         _dex_pre_early = str(pair_data.get("dexId", "")).lower()
         _is_known_grad = False
         try:
@@ -2238,15 +2236,49 @@ class Analyzer:
                         allow_pump_amm_lock=_allow_ps_lock_main,
                     )
 
-                    # Строгая защита от Remove LP: кастомные пулы (.bonk/.bags/Meteora/Raydium) обязаны иметь verified burn/lock LP!
-                    if not _is_canonical_pump and not has_verified_locked_lp:
+                    # Для токенов .pump на пулах Meteora: Pump.fun никогда не мигрирует на Meteora!
+                    # Любой пул Meteora для .pump токена — это кастомная неофициальная ловушка (кейс SURVIVE -96%),
+                    # если LP на Meteora не сожжён/не залочен на 100%.
+                    if mint.endswith("pump") and "meteora" in _dex_low_main and not has_verified_locked_lp:
                         return self._deny(
                             mint,
-                            "unlocked-custom-lp",
-                            f"🚫 [АНТИСКАМ-LP] {symbol} ({mint[:8]}): LP на {_dex_low_main or 'DEX'} не сожжён/не залочен (риск Remove LP)."
+                            "pump-token-unlocked-meteora",
+                            f"🚫 [FAKE-METEORA-POOL] {symbol} ({mint[:8]}): .pump токен на пуле Meteora без сожжённого LP — неофициальный скам-пул мимо PumpSwap (кейс SURVIVE -96%)!"
                         )
+
+                    # Проверка блокировки LP:
+                    # По каноничному режиму Commit 0d2b1ae: свежие DEX-раннеры (Raydium, Meteora, PumpSwap)
+                    # НЕ требуют стороннего сертификата лока LP в RugCheck, если ликвидность >= $5k,
+                    # есть поток реальных покупателей и нет ловушки CreatePool liq/fdv drain.
+                    _is_unlocked_runner_ok = False
+                    if not _is_canonical_pump and not has_verified_locked_lp:
+                        _ca_main = float((pair_data or {}).get("pairCreatedAt") or 0)
+                        _age_main = ((time.time() * 1000.0 - _ca_main) / 60000.0) if _ca_main > 0 else 0.2
+                        _liq_main = float(((pair_data or {}).get("liquidity") or {}).get("usd", 0) or 0)
+                        _v5_main = float(((pair_data or {}).get("volume") or {}).get("m5", 0) or 0)
+                        _tx_main = ((pair_data or {}).get("txns") or {}).get("m5") or {}
+                        _b5_main = int(_tx_main.get("buys", 0) or 0)
+                        _s5_main = int(_tx_main.get("sells", 0) or 0)
+                        _is_trap_main = config.is_pumpswap_liq_fdv_trap(pair_data or {})
+                        
+                        if config.is_safe_unlocked_custom_runner(
+                            liq_usd=_liq_main,
+                            age_min=_age_main,
+                            vol5_usd=_v5_main,
+                            buys5=_b5_main,
+                            sells5=_s5_main,
+                            is_trap=_is_trap_main,
+                        ):
+                            _is_unlocked_runner_ok = True
+                            print(f"🔓 [UNLOCKED-LP-ALLOWED] {symbol} ({mint[:8]}): свежий DEX-раннер (age {_age_main:.1f}м, liq ${_liq_main:,.0f}, vol5 ${_v5_main:,.0f}, {_b5_main}b/{_s5_main}s) — лок LP не требуется (режим 0d2b1ae).")
+                        else:
+                            return self._deny(
+                                mint,
+                                "unlocked-custom-lp",
+                                f"🚫 [АНТИСКАМ-LP] {symbol} ({mint[:8]}): LP на {_dex_low_main or 'DEX'} не сожжён/не залочен (риск Remove LP)."
+                            )
                     if isinstance(pair_data, dict):
-                        _lp_ok_m = bool(_is_canonical_pump or has_verified_locked_lp)
+                        _lp_ok_m = bool(_is_canonical_pump or has_verified_locked_lp or _is_unlocked_runner_ok)
                         pair_data["_lp_verified"] = _lp_ok_m
                         if _lp_ok_m:
                             if not hasattr(self, "_verified_lp_meta"):
@@ -2357,8 +2389,13 @@ class Analyzer:
                     _dist_runner_a = config.is_distributed_safe_runner(
                         raw_liq, _age_min_pre, _vm5_pre, _b5_pre, _s5_pre,
                         top1_pct=largest_whale_pct_pre, top10_pct=top_10_sum_pct, dev_pct=dev_holding_pct,
-                        is_lp_safe=(_is_canonical_pump or has_verified_locked_lp),
+                        is_lp_safe=(_is_canonical_pump or has_verified_locked_lp or _is_unlocked_runner_ok),
                     )
+                    if _is_unlocked_runner_ok:
+                        if dev_holding_pct > 10.0:
+                            return self._deny(mint, f"unlocked-dev-too-high {dev_holding_pct:.1f}%", f"🚫 [DEV-CONCENTRATION] {symbol} ({mint[:8]}): дев держит {dev_holding_pct:.1f}% > 10% на незалоченном пуле!")
+                        if top_10_sum_pct > 35.0:
+                            return self._deny(mint, f"unlocked-top10-too-high {top_10_sum_pct:.1f}%", f"🚫 [TOP10-CONCENTRATION] {symbol} ({mint[:8]}): топ-10 держат {top_10_sum_pct:.1f}% > 35% на незалоченном пуле!")
                     if len(bundle_suspects) >= 4 and not (_dist_runner_a and _age_min_pre >= 3.0):
                         from collections import Counter
                         counts = Counter(bundle_suspects)
@@ -3076,7 +3113,7 @@ class Analyzer:
 
         dex_id = pair_data.get("dexId")
         created_at = pair_data.get("pairCreatedAt", 0)
-        age_minutes = (time.time() * 1000 - created_at) / (1000 * 60) if created_at else 999
+        age_minutes = (time.time() * 1000 - created_at) / (1000 * 60) if created_at else 0.2
         
         # Глобальная защита от дешевых скрамов/рагпуллов
         liq = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
@@ -3796,7 +3833,7 @@ class Analyzer:
             vh = (pair_data.get("volume") or {}).get("h24", 0) or 0
             info = pair_data.get("info") or {}
             links_n = len(info.get("socials") or []) + len(info.get("websites") or [])
-            age_min = 999.0
+            age_min = 0.2
             try:
                 _created = pair_data.get("pairCreatedAt") or 0
                 if _created:
@@ -4003,7 +4040,7 @@ class Analyzer:
 
         _c_ms = pair_data.get("pairCreatedAt") or 0
         import time as _t
-        _age_min = ((_t.time() * 1000 - _c_ms) / 60000.0) if _c_ms else (0.5 if _is_migrated_pump else 999.0)
+        _age_min = ((_t.time() * 1000 - _c_ms) / 60000.0) if _c_ms else 0.2
 
         # === ЗАЩИТА ОТ ДАМПА МИГРАЦИИ PUMP.FUN ===
         if _is_migrated_pump:

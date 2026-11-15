@@ -179,9 +179,40 @@ def is_safe_unlocked_custom_runner(
     buys5: int,
     sells5: int,
     has_socials: bool = False,
+    is_trap: bool = False,
+    dev_pct: float = 0.0,
+    top10_pct: float = 0.0,
+    **kwargs,
 ) -> bool:
-    """Strictly disabled: unlocked-LP custom pools caused $0 Remove-LP rugs (e.g. WASTED $109k->0)."""
-    return False
+    """
+    Allow fresh Solana DEX runners (Raydium, Meteora, PumpSwap) to trade without
+    a 3rd-party locked LP certificate, matching the canonical Commit 0d2b1ae behavior.
+    
+    Rugs like WASTED ($109k fake liq) are blocked by is_trap (is_pumpswap_liq_fdv_trap).
+    Flash rugs like SURVIVE are blocked by the initial quarantine (age_min >= SOLANA_MIN_AGE_MIN).
+    Artificial dev bundles are blocked by requiring real organic sell transactions (sells5 >= 1).
+    """
+    if is_trap:
+        return False
+    # Fresh runners window: up to 60 minutes
+    if age_min > 60.0:
+        return False
+    # Must have minimum real liquidity ($5,000+)
+    if liq_usd < 5000.0:
+        return False
+    # Must have active trading volume
+    if vol5_usd < 800.0:
+        return False
+    # Must have active organic trading (buyers and sellers, not 0 sells honeypot)
+    if buys5 < 12 or (sells5 == 0 and buys5 >= 5):
+        return False
+    # Must not be dominated by heavy selling
+    if sells5 > 0 and buys5 < int(sells5 * 0.65):
+        return False
+    # Dev & top 10 concentration safety
+    if dev_pct > 10.0 or (top10_pct > 0.0 and top10_pct > 35.0):
+        return False
+    return True
 
 
 def is_distributed_safe_runner(
@@ -498,7 +529,7 @@ EVM_NORMAL_CRASH = 0.22
 BREAKEVEN_PCT = 0.16       # Breakeven Shield ВКЛЮЧЕН как в 0d2b1ae: пик >= +16% -> сделка не может закрыться в минус!
 
 PREFETCH_TTL_SEC = 12
-SOLANA_MIN_AGE_MIN = 0.50        # 30 секунд: отсекает мгновенные снайпер-раги первых секунд (HOPE/GTACOIN), ловя ранние ракеты
+SOLANA_MIN_AGE_MIN = 0.75        # 45 секунд: отсекает 41-секундные флеш-раги первых секунд (SURVIVE/HOPE/GTACOIN), ловя все ранние ракеты (TAOTAO 49с, HOGE 51с, AXIOM 60с)
 SOLANA_MAX_AGE_HOURS = 1.5        # До 1.5 часов (90м) — защита от захода в отработавшие и сливающиеся топы
 SOLANA_MAX_AGE_MIN = 90.0         # Потолок 90 минут для сканера (не покупаем старые измученные монеты)
 JEV_MAX_AGE_MIN = 60.0            # В GROK-JEV свежие монеты до 60м (защита от зомби-монет)

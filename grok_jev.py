@@ -1630,17 +1630,42 @@ class GrokJevEngine:
                         allow_pump_amm_lock=_allow_ps_lock_jev,
                     )
 
-                    # Если LP не сожжён и не подтверждён лок — кастомный незалоченный DEX-пул отклоняется сразу (защита от LP drain вроде WASTED).
+                    # .pump токен на пуле Meteora без сожжённого LP — неофициальный скам-пул мимо PumpSwap (кейс SURVIVE -96%)
+                    if address.endswith("pump") and "meteora" in _dex_rc_low and not has_verified_locked_lp:
+                        return False, "pump-token-unlocked-meteora (.pump токен на пуле Meteora без сожжённого LP — кейс SURVIVE)", _h_stats
+
+                    # По каноничному режиму Commit 0d2b1ae: свежие DEX-раннеры (Raydium, Meteora, PumpSwap)
+                    # НЕ требуют стороннего сертификата лока LP в RugCheck, если ликвидность >= $5k,
+                    # есть поток реальных покупателей и нет ловушки CreatePool liq/fdv drain.
+                    _is_unlocked_safe = False
                     if not is_canonical_pump and not has_verified_locked_lp:
                         _eff_l_rc = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
                         _vm5_rc = float((pair_data.get("volume") or {}).get("m5", 0) or 0)
                         _ca_rc = float(pair_data.get("pairCreatedAt") or 0)
-                        _age_rc = ((time.time() * 1000.0 - _ca_rc) / 60000.0) if _ca_rc > 0 else 0.0
-                        if not is_raw_pump_curve and not has_socials and not _is_launchpad_aud and not bool(pair_data.get("_socials_unknown", False)) and _smart_n_chk < 2:
-                            return False, "no-socials-amm-scam (0 соцсетей на кастомном DEX-пуле без подтверждённого лока LP)", _h_stats
-                        return False, f"unlocked-custom-lp (liq ${_eff_l_rc:.0f}, age {_age_rc:.1f}m, vol ${_vm5_rc:.0f}, soc={int(bool(has_socials))})", _h_stats
+                        _age_rc = ((time.time() * 1000.0 - _ca_rc) / 60000.0) if _ca_rc > 0 else 0.2
+                        _tx_rc = (pair_data.get("txns") or {}).get("m5") or {}
+                        _b5_rc = int(_tx_rc.get("buys", 0) or 0)
+                        _s5_rc = int(_tx_rc.get("sells", 0) or 0)
+                        _is_trap_rc = _c.is_pumpswap_liq_fdv_trap(pair_data)
+                        
+                        _is_unlocked_safe = _c.is_safe_unlocked_custom_runner(
+                            liq_usd=_eff_l_rc,
+                            age_min=_age_rc,
+                            vol5_usd=_vm5_rc,
+                            buys5=_b5_rc,
+                            sells5=_s5_rc,
+                            has_socials=has_socials,
+                            is_trap=_is_trap_rc,
+                        )
+                        if _is_unlocked_safe:
+                            print(f"🔓 [GROK-JEV-UNLOCKED-LP] {symbol} ({address[:8]}): свежий DEX-раннер (age {_age_rc:.1f}м, liq ${_eff_l_rc:,.0f}, vol5 ${_vm5_rc:,.0f}) — лок LP не требуется (режим 0d2b1ae).")
+                        else:
+                            _req_soc_min = float(getattr(_c, "REQUIRE_SOCIALS_MIN_AGE_MIN", 25.0))
+                            if not is_raw_pump_curve and not has_socials and not _is_launchpad_aud and not bool(pair_data.get("_socials_unknown", False)) and _smart_n_chk < 2 and _age_rc > _req_soc_min:
+                                return False, "no-socials-amm-scam (0 соцсетей на кастомном DEX-пуле без подтверждённого лока LP)", _h_stats
+                            return False, f"unlocked-custom-lp (liq ${_eff_l_rc:.0f}, age {_age_rc:.1f}m, vol ${_vm5_rc:.0f}, soc={int(bool(has_socials))})", _h_stats
                     if isinstance(pair_data, dict):
-                        pair_data["_lp_verified"] = bool(is_canonical_pump or has_verified_locked_lp)
+                        pair_data["_lp_verified"] = bool(is_canonical_pump or has_verified_locked_lp or _is_unlocked_safe)
 
                     # Проверка держателей и дева (Holders & Sybil analysis)
                     holders = rc_data.get("topHolders", []) or []
@@ -1740,8 +1765,13 @@ class GrokJevEngine:
                     _dist_runner_g = _c.is_distributed_safe_runner(
                         _liq_aud, _age_aud, vol_m5, _b5_syb, _s5_syb,
                         top1_pct=largest_whale, top10_pct=top_10_sum, dev_pct=dev_pct,
-                        is_lp_safe=(is_canonical_pump or has_verified_locked_lp),
+                        is_lp_safe=(is_canonical_pump or has_verified_locked_lp or _is_unlocked_safe),
                     )
+                    if _is_unlocked_safe:
+                        if dev_pct > 10.0:
+                            return False, f"unlocked-dev-too-high {dev_pct:.1f}% > 10%", _h_stats
+                        if top_10_sum > 35.0:
+                            return False, f"unlocked-top10-too-high {top_10_sum:.1f}% > 35%", _h_stats
                     # Jito-бандл (Сивил-атака дева: 4+ кошельков с одинаковым %; сохраняем строгий блок для <3м и без массовой дистрибуции)
                     bundle_suspects = [round(pct, 1) for (amt, pct, owner) in top_10 if pct >= 2.5]
                     if len(bundle_suspects) >= 4 and not (_dist_runner_g and _age_aud >= 3.0):
@@ -2029,7 +2059,7 @@ class GrokJevEngine:
         _h6_s1 = _pc_s1.get("h6")
         _fdv_s1 = float(pair.get("fdv", 0) or pair.get("marketCap", 0) or 0)
         _ca_s1 = float(pair.get("pairCreatedAt") or 0)
-        _age_s1 = ((time.time() * 1000.0 - _ca_s1) / 60000.0) if _ca_s1 > 0 else 999.0
+        _age_s1 = ((time.time() * 1000.0 - _ca_s1) / 60000.0) if _ca_s1 > 0 else 0.2
         _s1_fresh_ok = (
             _age_s1 <= float(getattr(_c, "SOLANA_MAX_AGE_MIN", 90.0))
             and _fdv_s1 <= float(getattr(_c, "JEV_MAX_MCAP_USD", 220000.0))

@@ -507,9 +507,25 @@ class PaperTracker:
                 or (_pd_dex == "pumpswap" and (not isinstance(pair_data, dict) or not pair_data.get("_pumpswap_checked") or _ps_canon_flag or _ps_rpc_unv_flag))
             )
             if not _is_native_pump_dex and not _lp_preverified and not _is_vip_or_copy:
-                # Легаси-совместимость для unit-тестов/ручных вызовов без pair_data: если явно не передан сторонний DEX,
-                # проверяем хотя бы наличие ML-аудита и минимального пула; при наличии pair_data требуем _lp_verified.
-                if isinstance(pair_data, dict) and pair_data:
+                _ca_tr = float((pair_data or {}).get("pairCreatedAt") or 0)
+                _age_tr = ((time.time() * 1000.0 - _ca_tr) / 60000.0) if _ca_tr > 0 else 0.2
+                _v5_tr = float(((pair_data or {}).get("volume") or {}).get("m5", 0) or 0)
+                _tx_tr = ((pair_data or {}).get("txns") or {}).get("m5") or {}
+                _b5_tr = int(_tx_tr.get("buys", 0) or 0)
+                _s5_tr = int(_tx_tr.get("sells", 0) or 0)
+                _unl_tr_ok = config.is_safe_unlocked_custom_runner(
+                    liq_usd=_eff_init_liq,
+                    age_min=_age_tr,
+                    vol5_usd=_v5_tr,
+                    buys5=_b5_tr,
+                    sells5=_s5_tr,
+                    is_trap=config.is_pumpswap_liq_fdv_trap(pair_data or {}),
+                )
+                if _unl_tr_ok:
+                    _lp_preverified = True
+                    if isinstance(pair_data, dict):
+                        pair_data["_lp_verified"] = True
+                elif isinstance(pair_data, dict) and pair_data:
                     print(f"🛑 [FIREWALL-RUG-BLOCK] {symbol} ({mint_str[:8]}): отказ входа — не подтверждён LP burn/lock для кастомного пула (dex={_pd_dex}, liq ${_eff_init_liq:,.0f})!")
                     return False
                 if float(ml_confidence or 0.0) <= 0.0 and _eff_init_liq < 5000.0:

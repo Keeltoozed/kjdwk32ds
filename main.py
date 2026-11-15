@@ -1009,7 +1009,7 @@ async def scanner_loop(analyzer, tracker):
                         continue
                     _c_pre = getattr(analyzer, "_prefetch_cache", {}).get(mint, (0, {}))[1]
                     _ca_r = (_c_pre.get("pairCreatedAt") or 0) if isinstance(_c_pre, dict) else 0
-                    _age_r = (_now_r * 1000 - _ca_r) / 60000.0 if _ca_r else 999.0
+                    _age_r = (_now_r * 1000 - _ca_r) / 60000.0 if _ca_r else 0.2
                     _is_fresh_r = (mint in _graduated_set) or (_age_r <= 30.0)
                     _cd_r = _fresh_cd_r if _is_fresh_r else _base_cd_r
                     # ВАЖНО: Если токен ещё на кулдауне — НЕ перезаписываем processed_mints[mint] старыми данными из кэша каждые 3с!
@@ -1028,7 +1028,7 @@ async def scanner_loop(analyzer, tracker):
                             continue
 
                         _c_at = _c_pre.get("pairCreatedAt") or 0
-                        _c_age_m = (_now_r * 1000 - _c_at) / 60000.0 if _c_at else 999.0
+                        _c_age_m = (_now_r * 1000 - _c_at) / 60000.0 if _c_at else 0.2
                         _c_pc = _c_pre.get("priceChange") or {}
                         _c_m5 = float(_c_pc.get("m5", 0) or 0)
                         _c_tx = (_c_pre.get("txns") or {}).get("m5", {}) or {}
@@ -1107,7 +1107,7 @@ async def scanner_loop(analyzer, tracker):
                         continue
                     _pre_l = getattr(analyzer, "_prefetch_cache", {}).get(_m, (0, {}))[1]
                     _ca_l = _pre_l.get("pairCreatedAt") or 0 if isinstance(_pre_l, dict) else 0
-                    _age_l = (time.time() * 1000 - _ca_l) / 60000.0 if _ca_l else 999.0
+                    _age_l = (time.time() * 1000 - _ca_l) / 60000.0 if _ca_l else 0.2
                     _is_fresh_l = _m in _graduated_set or _age_l <= 30.0
                     _cd_l = int(getattr(config, "SOLANA_FRESH_RESCAN_COOLDOWN", 8)) if _is_fresh_l else int(getattr(config, "SOLANA_RESCAN_COOLDOWN", 30))
                     if _now_l - processed_mints.get(_m, 0.0) < _cd_l:
@@ -1139,7 +1139,7 @@ async def scanner_loop(analyzer, tracker):
                             _bt_age_m = _bt_c.get_age(mint)
                         except Exception:
                             pass
-                        _age_m = float(_bt_age_m) if _bt_age_m is not None else (0.2 if mint.endswith("pump") else 999.0)
+                        _age_m = float(_bt_age_m) if _bt_age_m is not None else 0.2
                     _is_fresh_m = mint in _graduated_set or _age_m <= 30.0
                     _cd = int(getattr(config, "SOLANA_FRESH_RESCAN_COOLDOWN", 8)) if _is_fresh_m else int(getattr(config, "SOLANA_RESCAN_COOLDOWN", 30))
                     if time.time() - processed_mints.get(mint, 0.0) < _cd:

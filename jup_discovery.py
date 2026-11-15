@@ -592,9 +592,28 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
                 log_unlocked=True,
                 allow_pump_amm_lock=_allow_ps_lock_j,
             )
-            if not _lp_ok:
-                print(f"🚫 [{source_tag}-UNLOCKED-LP] {_sym_tmp} ({mint[:8]}): незалоченный/несожжённый LP на {_dex_j_low or 'DEX'} (liq ${_liq_j:,.0f}, age {_age_j:.1f}m) — риск Remove LP!")
+            if mint.endswith("pump") and "meteora" in _dex_j_low and not _lp_ok:
+                print(f"🚫 [{source_tag}-FAKE-METEORA] {_sym_tmp} ({mint[:8]}): .pump токен на пуле Meteora без сожжённого LP — неофициальный скам-пул мимо PumpSwap (кейс SURVIVE -96%)!")
                 return False
+
+            if not _lp_ok:
+                _b5_j = int((((td or {}).get("txns") or {}).get("m5") or {}).get("buys", 0) or 0)
+                _s5_j = int((((td or {}).get("txns") or {}).get("m5") or {}).get("sells", 0) or 0)
+                _is_unl_safe_j = config.is_safe_unlocked_custom_runner(
+                    liq_usd=_liq_j,
+                    age_min=_age_j,
+                    vol5_usd=_vol5_j,
+                    buys5=_b5_j,
+                    sells5=_s5_j,
+                    has_socials=bool(len((td or {}).get("info", {}).get("socials", []) or [])),
+                    is_trap=config.is_pumpswap_liq_fdv_trap(td or {}),
+                )
+                if _is_unl_safe_j:
+                    print(f"🔓 [{source_tag}-UNLOCKED-LP-ALLOWED] {_sym_tmp} ({mint[:8]}): свежий DEX-раннер (age {_age_j:.1f}м, liq ${_liq_j:,.0f}, vol5 ${_vol5_j:,.0f}) — лок LP не требуется (режим 0d2b1ae).")
+                    _lp_ok = True
+                else:
+                    print(f"🚫 [{source_tag}-UNLOCKED-LP] {_sym_tmp} ({mint[:8]}): незалоченный/несожжённый LP на {_dex_j_low or 'DEX'} (liq ${_liq_j:,.0f}, age {_age_j:.1f}m) — риск Remove LP!")
+                    return False
             _lp_verified_jup = True
         except Exception as _lp_ex:
             print(f"⏳ [{source_tag}-RC-ERR] {_sym_tmp} ({mint[:8]}): ошибка проверки RugCheck ({_lp_ex}) — пропуск цикла.")
@@ -607,7 +626,8 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
     _info_j = (td or {}).get("info") or {}
     _soc_j = _info_j.get("socials") or []
     _web_j = _info_j.get("websites") or []
-    if not _is_launchpad_jup and not (td or {}).get("_socials_unknown", False) and len(_soc_j) == 0 and len(_web_j) == 0 and _liq_j < 25000:
+    _req_soc_min_j = float(getattr(config, "REQUIRE_SOCIALS_MIN_AGE_MIN", 25.0))
+    if not _is_launchpad_jup and not (td or {}).get("_socials_unknown", False) and len(_soc_j) == 0 and len(_web_j) == 0 and _liq_j < 25000 and _age_j > _req_soc_min_j:
         print(f"🚫 [{source_tag}-NO-SOCIALS] {_sym_tmp} ({mint[:8]}): 0 соцсетей/сайтов при ликвидности ${_liq_j:,.0f} (<$25k) — анонимный бандлер-раг.")
         return False
 
