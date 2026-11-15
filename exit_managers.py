@@ -105,6 +105,55 @@ class MatureExitManager:
                     return f"🚨 First Candle Rug Cut: Sellers dominating ({_b5}b/{_s5}s, PnL {pnl_pct*100:.1f}%)"
 
         # =========================================================================
+        # 0.5. UNLOCKED POOL STALL GUARD (Защита от сноса ликвидности при остановке цены)
+        # =========================================================================
+        # На незалоченных пулах (Meteora DYN2, Raydium CPMM, кастомный DEX) дев держит 100% LP
+        # в своём кошельке. Как только волна покупок останавливается и цена замирает на 20-30с,
+        # дев видит остановку стакана и нажимает "Remove Liquidity" (кейс PUNCHAO 220 SOL).
+        # Фиксируем прибыль НЕМЕДЛЕННО при первых признаках затухания импульса!
+        _pd_pos = getattr(position, "pair_data", None) or getattr(position, "last_pair_data", None) or {}
+        _is_unlocked = getattr(position, "is_unlocked_pool", None)
+        if _is_unlocked is None:
+            if isinstance(_pd_pos, dict) and _pd_pos:
+                _dex_p = str(_pd_pos.get("dexId", "") or "").lower()
+                _base_a = str(((_pd_pos.get("baseToken") or {}).get("address")) or getattr(position, "mint", "") or "")
+                _is_p_canon = bool(_pd_pos.get("_pumpswap_canonical"))
+                if _base_a.endswith("pump") and _dex_p in ("pump", "pumpfun"):
+                    _is_unlocked = False
+                elif _dex_p == "pumpswap" and _is_p_canon:
+                    _is_unlocked = False
+                else:
+                    _is_unlocked = not bool(getattr(position, "is_lp_locked_80", False))
+            else:
+                _is_unlocked = True
+            position.is_unlocked_pool = _is_unlocked
+
+        if _is_unlocked:
+            _u_prof_age = float(getattr(config, "UNLOCKED_STALL_PROFIT_AGE_SEC", 20.0)) / 60.0
+            _u_mid_age = float(getattr(config, "UNLOCKED_STALL_MID_AGE_SEC", 24.0)) / 60.0
+            _u_scratch_held = float(getattr(config, "UNLOCKED_ENTRY_SCRATCH_SEC", 35.0)) / 60.0
+            _u_fast_sl = -abs(float(getattr(config, "UNLOCKED_FAST_STOP_PCT", -0.075)))
+
+            # А. Фиксация пампа при затухании импульса (кейс PUNCHAO +40.3% -> застой 20с -> Remove 220 SOL)
+            if max_pnl_pct >= 0.18:
+                if _peak_age_min >= _u_prof_age and pnl_pct >= 0.10:
+                    return f"⚡ Unlocked Momentum Stall (+{pnl_pct*100:.1f}%, застой {_peak_age_min*60:.0f}с после пика +{max_pnl_pct*100:.1f}% — фиксация до Remove LP)"
+            elif max_pnl_pct >= 0.10:
+                if _peak_age_min >= _u_mid_age and pnl_pct >= 0.04:
+                    return f"⚡ Unlocked Stall Profit Lock (+{pnl_pct*100:.1f}%, застой {_peak_age_min*60:.0f}с после пика +{max_pnl_pct*100:.1f}%)"
+            elif max_pnl_pct >= 0.05:
+                if _peak_age_min >= (_u_mid_age * 1.25) and pnl_pct <= 0.02:
+                    return f"⚡ Unlocked Pop Fade (+{pnl_pct*100:.1f}%, застой {_peak_age_min*60:.0f}с)"
+
+            # Б. Срез зависшей позиции без импульса (Stall at Entry)
+            if minutes_held >= _u_scratch_held and max_pnl_pct < 0.04 and pnl_pct <= 0.005:
+                return f"⚡ Unlocked Zero-Momentum Scratch ({pnl_pct*100:+.1f}%, 0 импульса за {minutes_held*60:.0f}с на незалоченном пуле)"
+
+            # В. Быстрый стоп-лосс на незалоченном пуле (-7.5% вместо -11.5%)
+            if pnl_pct <= _u_fast_sl:
+                return f"⚡ Unlocked Fast Stop Loss ({pnl_pct*100:.1f}%)"
+
+        # =========================================================================
         # 1. ЖЕСТКИЙ КОНТРОЛЬ УБЫТКА (EMERGENCY CAP & STOP LOSS) — ПО СТАНДАРТУ 0d2b1ae
         # =========================================================================
         # СБРОС ДЕВ-ДАМПА НА ПЕРВОЙ СВЕЧЕ: режем резкий обвал <= -10.5% в первые 2.5 минуты

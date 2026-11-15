@@ -528,6 +528,12 @@ EVM_NORMAL_CRASH = 0.22
 
 BREAKEVEN_PCT = 0.16       # Breakeven Shield ВКЛЮЧЕН как в 0d2b1ae: пик >= +16% -> сделка не может закрыться в минус!
 
+# === ЗАЩИТА ОТ СНОСА ЛИКВИДНОСТИ НА НЕЗАЛОЧЕННЫХ ПУЛАХ (UNLOCKED POOL STALL GUARD) ===
+UNLOCKED_STALL_PROFIT_AGE_SEC = 20.0     # 20 секунд застоя цены после пика >= +18% -> мгновенный выход с прибылью (кейс PUNCHAO +40.3% до Remove LP)
+UNLOCKED_STALL_MID_AGE_SEC = 24.0        # 24 секунды застоя после пика +10%..+18% -> фиксация прибыли
+UNLOCKED_ENTRY_SCRATCH_SEC = 35.0        # 35 секунд без импульса (< +4%) на старте -> срез в безубыток
+UNLOCKED_FAST_STOP_PCT = -0.075          # Быстрый стоп-лосс -7.5% на незалоченном пуле (1 тик)
+
 PREFETCH_TTL_SEC = 12
 SOLANA_MIN_AGE_MIN = 0.75        # 45 секунд: отсекает 41-секундные флеш-раги первых секунд (SURVIVE/HOPE/GTACOIN), ловя все ранние ракеты (TAOTAO 49с, HOGE 51с, AXIOM 60с)
 SOLANA_MAX_AGE_HOURS = 1.5        # До 1.5 часов (90м) — защита от захода в отработавшие и сливающиеся топы
