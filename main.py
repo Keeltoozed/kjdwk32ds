@@ -164,6 +164,43 @@ async def position_security_auditor_loop(analyzer, tracker):
         await asyncio.sleep(0.5)
 
 
+def _update_confirmed_peak_px(position, current_price: float, prev_price: float) -> tuple:
+    """Confirm >=18% single-tick upward spikes over 2 ticks before raising max_price_usd.
+    Returns (suppress_eval_peak, pre_tick_confirmed_px) so 1-tick wicks do not arm tight ATH floors."""
+    _pre_conf = float(getattr(position, "_confirmed_px", 0.0) or prev_price or getattr(position, "entry_price_usd", 0.0) or 0.0)
+    if getattr(position, "max_price_usd", 0.0) <= 0:
+        position.max_price_usd = current_price
+        position.peak_time = time.time()
+        return False, _pre_conf
+    _peak_ref = max(float(position.max_price_usd or 0.0), _pre_conf, float(getattr(position, "entry_price_usd", 0.0) or 0.0))
+    _pend_px = float(getattr(position, "_pending_peak_px", 0.0) or 0.0)
+    if _pend_px > 0.0:
+        if current_price >= _pend_px * 0.88:
+            if current_price > _pend_px * 1.18:
+                # Confirm Tick 1 (_pend_px), but require another tick before trusting the new +18% jump
+                if _pend_px > position.max_price_usd:
+                    position.max_price_usd = _pend_px
+                    position.peak_time = time.time()
+                _new_conf = max(_pre_conf, _pend_px)
+                position._confirmed_px = _new_conf
+                position._pending_peak_px = current_price
+                return True, _new_conf
+            _hi = max(float(position.max_price_usd or 0.0), _pend_px, current_price)
+            if _hi > position.max_price_usd:
+                position.max_price_usd = _hi
+                position.peak_time = time.time()
+            position._pending_peak_px = 0.0
+            return False, _pre_conf
+        position._pending_peak_px = 0.0
+    if current_price > position.max_price_usd:
+        if _peak_ref > 0 and current_price > _peak_ref * 1.18:
+            position._pending_peak_px = current_price
+            return True, _pre_conf
+        position.max_price_usd = current_price
+        position.peak_time = time.time()
+    return False, _pre_conf
+
+
 async def position_manager_loop(analyzer, tracker):
     from jupiter import JupiterAPI
     print("🛡️ Запуск менеджера позиций (быстрый трекинг Stop-Loss)...")
@@ -319,9 +356,7 @@ async def position_manager_loop(analyzer, tracker):
                         position._last_phantom_log = _cur_t
                         print(f"⚠️ Phantom price {mint[:8]}: x{current_price/position.entry_price_usd:.0f} за тик — аномалия отфильтрована (игнор).")
                     continue
-                if current_price > position.max_price_usd:
-                    position.max_price_usd = current_price
-                    position.peak_time = time.time()
+                _suppress_eval_peak, _pre_tick_conf = _update_confirmed_peak_px(position, current_price, prev_price)
 
                 pnl_pct = (current_price - position.entry_price_usd) / position.entry_price_usd if position.entry_price_usd > 0 else 0.0
                 max_pnl_pct = (position.max_price_usd - position.entry_price_usd) / position.entry_price_usd if position.entry_price_usd > 0 else 0.0
@@ -385,32 +420,42 @@ async def position_manager_loop(analyzer, tracker):
                 # 1-тиковый фильтр аномального провала котировки (>45% за 1 тик ТОЛЬКО при наличии прибыли >=15%):
                 # защищает от ложного тика побочного пула (кейс MAKERS +213% -> -100.0% на 1 тик),
                 # НЕ задерживает стопы/дампы при реальном минусе!
-                if prev_ts > 0 and (time.time() - prev_ts) < 60 and prev_price > 0 \
-                        and current_price <= prev_price * 0.78 and max_pnl_pct >= 0.15 and pnl_pct > -0.20:
+                _anchor_px = float(getattr(position, "_crash_anchor_px", 0.0) or 0.0)
+                _ref_crash_px = _anchor_px if _anchor_px > 0 else (_pre_tick_conf if _pre_tick_conf > 0 else prev_price)
+                if prev_ts > 0 and (time.time() - prev_ts) < 60 and _ref_crash_px > 0 \
+                        and current_price <= _ref_crash_px * 0.78 and max_pnl_pct >= 0.15 and pnl_pct > -0.20:
+                    if _anchor_px <= 0:
+                        position._crash_anchor_px = _ref_crash_px
                     _cg_n = int(getattr(position, "crash_confirm_n", 0) or 0) + 1
                     position.crash_confirm_n = _cg_n
                     if _cg_n < 3:
-                        print(f"⚠️ [SOL-TICK-VERIFY] {position.symbol} ({mint[:8]}): резкий 1-тик {pnl_pct*100:+.1f}% (-{(1 - current_price/prev_price)*100:.0f}%) — ждём 3-й тик подтверждения.")
+                        print(f"⚠️ [SOL-TICK-VERIFY] {position.symbol} ({mint[:8]}): резкий 1-тик {pnl_pct*100:+.1f}% (-{(1 - current_price/_ref_crash_px)*100:.0f}%) — ждём 3-й тик подтверждения.")
                         continue
                     # ПЕРЕД ЗАКРЫТИЕМ ПО CRASH GUARD — ДВОЙНАЯ ПРОВЕРКА ЧЕРЕЗ JUPITER / DIRECT DEX:
                     # Защита от кейса NMS (фантомный прокол / сбой котировок при реальном пампе):
                     try:
                         from jupiter import JupiterAPI
                         _live_px_check = await JupiterAPI.get_price(mint)
-                        if _live_px_check and _live_px_check > prev_price * 0.78:
-                            print(f"🛡️ [CRASH-GUARD-RESCUED] {position.symbol} ({mint[:8]}): ложный краш-тик! Live DEX price ${_live_px_check:.6f} > prev ({(1 - _live_px_check/prev_price)*100:+.1f}%). Позиция спасена.")
+                        if _live_px_check and _live_px_check > _ref_crash_px * 0.78:
+                            print(f"🛡️ [CRASH-GUARD-RESCUED] {position.symbol} ({mint[:8]}): ложный краш-тик! Live DEX price ${_live_px_check:.6f} > prev ({(1 - _live_px_check/_ref_crash_px)*100:+.1f}%). Позиция спасена.")
                             current_price = _live_px_check
                             position.current_price_usd = _live_px_check
+                            position._confirmed_px = _live_px_check
                             position.crash_confirm_n = 0
+                            position._crash_anchor_px = 0.0
                             position.price_checked_at = time.time()
                             continue
                     except Exception:
                         pass
+                    position._crash_anchor_px = 0.0
                     tracker.close_position(mint, current_price,
-                                           f"Crash Guard (-{(1 - current_price/prev_price)*100:.0f}% за {(time.time()-prev_ts):.0f} сек)")
+                                           f"Crash Guard (-{(1 - current_price/_ref_crash_px)*100:.0f}% за {(time.time()-prev_ts):.0f} сек)")
                     continue
                 else:
                     position.crash_confirm_n = 0
+                    position._crash_anchor_px = 0.0
+                    if not _suppress_eval_peak:
+                        position._confirmed_px = current_price
                 position.price_checked_at = time.time()
                 
                 # Обновляем текущие значения для отображения в интерфейсе
@@ -469,7 +514,10 @@ async def position_manager_loop(analyzer, tracker):
                     if (time.time() - float(getattr(position, "last_tp_ts", 0.0) or 0.0)) < 5.0 and pnl_pct >= 0.045:
                         continue
                 from exit_managers import MatureExitManager
+                _saved_max_px = position.max_price_usd if _suppress_eval_peak else None
                 mature_exit_reason = MatureExitManager.evaluate_exit(position, current_price)
+                if _saved_max_px is not None:
+                    position.max_price_usd = _saved_max_px
                 if mature_exit_reason == "PARTIAL_TP1_TRIGGER":
                     if _allow_partial_tp:
                         tracker.partial_close_position(mint, current_price, _tp1_sell, f"Take Profit Flush +{pnl_pct*100:.1f}% (after peak +{max_pnl_pct*100:.1f}%)")

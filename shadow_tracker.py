@@ -23,6 +23,7 @@ class ShadowTracker:
         self.db_path = db_path
         self._rate_limit_lock = asyncio.Lock()
         self._cooldown = {}  # {mint: timestamp} — дедупликация, чтобы не спамить Supabase
+        self._cooldown_reasons = {}  # {mint: reason} — позволяем апгрейдить софт-причину в hard антискам
         self._peak_memory = {}  # {mint: (max_price, max_liq, ts)} — память пиков для защиты от покупки слитых токенов
         
         self.use_supabase = bool(
@@ -42,6 +43,16 @@ class ShadowTracker:
                 self.use_supabase = False
         
         self.init_db()
+
+    @staticmethod
+    def _is_hard_scam_reason(reason: str) -> bool:
+        r = str(reason or "").lower()
+        return any(k in r for k in (
+            "unburned-lp", "unlocked-custom-lp", "pumpswap-scam-pool",
+            "pumpswap-liq-fdv-trap", "no-socials-amm-scam", "bad-word-scam",
+            "mimic-corp-scam", "mimic-scam", "honeypot", "freeze", "rug",
+            "wash-spike", "wash-bump",
+        ))
 
     def _sb_warn(self, msg: str) -> None:
         """Ошибку Supabase печатаем не чаще раза в минуту (раньше она молча глоталась и таблица оставалась пустой)."""
@@ -144,6 +155,27 @@ class ShadowTracker:
         # 10 минут достаточно, чтобы не спамить, но не упустить монету, если через 10-15м в ней начался памп.
         now_ts = time.time()
         if mint in self._cooldown and (now_ts - self._cooldown[mint]) < 600:
+            prev_r = self._cooldown_reasons.get(mint, "")
+            if self._is_hard_scam_reason(reason) and not self._is_hard_scam_reason(prev_r):
+                clean_upd = str(reason or "Filtered")
+                self._cooldown_reasons[mint] = clean_upd
+                try:
+                    with sqlite3.connect(self.db_path) as conn:
+                        conn.execute(
+                            "UPDATE rejected_tokens SET reason = ?, is_missed_rocket = 0 WHERE mint = ?",
+                            (clean_upd, mint),
+                        )
+                except Exception as sql_e:
+                    self._sb_warn(f"SQLite upgrade: {sql_e}")
+                if self.use_supabase and self.supabase:
+                    def _bg_upd_reason(sb_c, tbl, m_addr, r_txt):
+                        try:
+                            sb_c.table(tbl).update({"reason": r_txt, "is_missed_rocket": False}).eq("mint", m_addr).execute()
+                        except Exception:
+                            pass
+                    import threading as _th
+                    _th.Thread(target=_bg_upd_reason, args=(self.supabase, self._target_table, mint, clean_upd), daemon=True).start()
+                print(f"🛡️ [Shadow Logger] Антискам-причина обновлена: {str(symbol or mint[:6]).upper()} | {clean_upd}")
             return
             
         # Не логируем нулевые пустышки без ликвидности и токены до миграции с фейковыми ценами 5e-12
@@ -156,6 +188,7 @@ class ShadowTracker:
             return
             
         self._cooldown[mint] = now_ts
+        self._cooldown_reasons[mint] = str(reason or "Filtered")
 
         try:
             native_score = float(score or 0.0)
@@ -409,6 +442,7 @@ class ShadowTracker:
                                 "old_ath": _oa,
                                 "old_ath_pnl": _prev_ath_pnl,
                                 "old_outcome": str(row.get("outcome") or ""),
+                                "reason": str(row.get("reason") or ""),
                                 "old_time_to_ath": float(row.get("time_to_ath_min", 0.0) or 0.0),
                                 "check_5m": check_5m,
                                 "check_15m": check_15m,
@@ -462,7 +496,12 @@ class ShadowTracker:
                                 cur_pnl = ((old_ath - p_entry) / p_entry * 100.0)
                             else:
                                 cur_pnl = 0.0
-                            is_rocket = bool(ath_pnl >= 50.0 and not is_lp_rugged and cur_pnl > -85.0)
+                            is_rocket = bool(
+                                ath_pnl >= 50.0
+                                and not is_lp_rugged
+                                and cur_pnl > -85.0
+                                and not self._is_hard_scam_reason(upd.get("reason", ""))
+                            )
 
                             # Категоризация исхода монеты:
                             if is_lp_rugged:
