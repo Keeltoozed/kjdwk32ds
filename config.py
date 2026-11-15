@@ -185,34 +185,15 @@ def is_safe_unlocked_custom_runner(
     **kwargs,
 ) -> bool:
     """
-    Allow fresh Solana DEX runners (Raydium, Meteora, PumpSwap) to trade without
-    a 3rd-party locked LP certificate, matching the canonical Commit 0d2b1ae behavior.
-    
-    Rugs like WASTED ($109k fake liq) are blocked by is_trap (is_pumpswap_liq_fdv_trap).
-    Flash rugs like SURVIVE are blocked by the initial quarantine (age_min >= SOLANA_MIN_AGE_MIN).
-    Artificial dev bundles are blocked by requiring real organic sell transactions (sells5 >= 1).
+    Каноничный стандарт Commit 0d2b1ae:
+    Кастомные не-pump токены (Raydium CPMM, Meteora DYN2) ОБЯЗАНЫ иметь заблокированный/сожжённый LP
+    (lpLockedPct / lpBurnedPct >= 80%).
+    Покупка пулов без сжигания LP открывает дверь мгновенному сносу ликвидности девом (RemoveLiquidity),
+    что привело к рагам AXIOMCOIN (-99.9%), MULT (-98%), SURVIVE (-96%) и сливам BUTTHOLE/SI/MENTATS.
+    Только нативные токены Pump.fun (bonding curve, PumpSwap canonical, Raydium burned LP)
+    не требуют стороннего сертификата лока, так как их LP аппаратно заблокирован контрактом.
     """
-    if is_trap:
-        return False
-    # Fresh runners window: up to 60 minutes
-    if age_min > 60.0:
-        return False
-    # Must have minimum real liquidity ($5,000+)
-    if liq_usd < 5000.0:
-        return False
-    # Must have active trading volume
-    if vol5_usd < 800.0:
-        return False
-    # Must have active organic trading (buyers and sellers, not 0 sells honeypot)
-    if buys5 < 12 or (sells5 == 0 and buys5 >= 5):
-        return False
-    # Must not be dominated by heavy selling
-    if sells5 > 0 and buys5 < int(sells5 * 0.65):
-        return False
-    # Dev & top 10 concentration safety
-    if dev_pct > 10.0 or (top10_pct > 0.0 and top10_pct > 35.0):
-        return False
-    return True
+    return False
 
 
 def is_distributed_safe_runner(

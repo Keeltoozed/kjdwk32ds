@@ -592,8 +592,8 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
                 log_unlocked=True,
                 allow_pump_amm_lock=_allow_ps_lock_j,
             )
-            if mint.endswith("pump") and "meteora" in _dex_j_low and not _lp_ok:
-                print(f"🚫 [{source_tag}-FAKE-METEORA] {_sym_tmp} ({mint[:8]}): .pump токен на пуле Meteora без сожжённого LP — неофициальный скам-пул мимо PumpSwap (кейс SURVIVE -96%)!")
+            if mint.endswith("pump") and ("meteora" in _dex_j_low or _dex_j_low == "meteoradbc"):
+                print(f"🚫 [{source_tag}-FAKE-METEORA] {_sym_tmp} ({mint[:8]}): .pump токен на пуле Meteora — неофициальный скам-пул мимо PumpSwap (кейсы MULT/SURVIVE -98%)!")
                 return False
 
             if not _lp_ok:

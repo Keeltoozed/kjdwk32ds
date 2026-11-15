@@ -1281,7 +1281,7 @@ async def scanner_loop(analyzer, tracker):
                                     pass
                             actual_symbol = pair_data.get("baseToken", {}).get("symbol", "UNKNOWN") if pair_data else "UNKNOWN"
                             liq_usd = float(((pair_data or {}).get("liquidity", {}) or {}).get("usd", 0) or 0)
-                            if liq_usd == 0 and (mint.endswith("pump") or (pair_data or {}).get("dexId") in ("pump", "pumpfun")):
+                            if liq_usd == 0 and (pair_data or {}).get("dexId") in ("pump", "pumpfun"):
                                 _fdv = float(((pair_data or {}).get("fdv", 0) or (pair_data or {}).get("marketCap", 0) or 0))
                                 liq_usd = _fdv * 0.40
                             if entry_price > 0:
@@ -1290,6 +1290,12 @@ async def scanner_loop(analyzer, tracker):
                                     print(f"🚫 [SCANNER-PRICE-SPLIT] {actual_symbol} ({mint[:8]}): рассинхрон пулов {_div_r:.1f}x — блок.")
                                     continue
                                 _dex_id = str((pair_data.get("dexId") or "")).lower()
+                                if mint.endswith("pump") and ("meteora" in _dex_id or _dex_id == "meteoradbc"):
+                                    print(f"🚫 [SCANNER-FAKE-METEORA] {actual_symbol} ({mint[:8]}): .pump токен на пуле Meteora — неофициальный скам-пул, отмена!")
+                                    continue
+                                if config.is_permissionless_liq_fdv_trap(pair_data):
+                                    print(f"🚫 [SCANNER-LIQ-TRAP] {actual_symbol} ({mint[:8]}): seeded trap pool (liq/fdv drain risk) — отмена!")
+                                    continue
                                 if _dex_id in ("pump", "pumpfun", "moonshot", "meteoradbc") or mint.endswith("moon"):
                                     _fdv_m_sc = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
                                     _min_c_sc = float(getattr(config, "MIN_PUMP_CURVE_MCAP_USD", 7500.0))

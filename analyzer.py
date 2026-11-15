@@ -112,12 +112,13 @@ def score_token_with_rocket_xgb(mint: str, pair_data: dict, holders_info: dict =
             else:
                 _age_min = 0.2
         _dex_low = str(pair_data.get("dexId", "")).lower()
+        _is_curve = _dex_low in ("pump", "pumpfun")
         _is_pump = 1 if (str(mint).endswith("pump") or _dex_low in ("pump", "pumpfun", "pumpswap")) else 0
 
         raw_liq = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
         fdv_val = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
-        curve_liq = fdv_val * 0.35 if fdv_val > 0 else 0.0
-        liq_val = max(raw_liq, curve_liq) if _is_pump else raw_liq
+        curve_liq = fdv_val * 0.35 if (fdv_val > 0 and _is_curve) else 0.0
+        liq_val = max(raw_liq, curve_liq) if _is_curve else raw_liq
 
         _info = pair_data.get("info", {}) or {}
         _socs = _info.get("socials", []) or []
@@ -2237,13 +2238,13 @@ class Analyzer:
                     )
 
                     # Для токенов .pump на пулах Meteora: Pump.fun никогда не мигрирует на Meteora!
-                    # Любой пул Meteora для .pump токена — это кастомная неофициальная ловушка (кейс SURVIVE -96%),
-                    # если LP на Meteora не сожжён/не залочен на 100%.
-                    if mint.endswith("pump") and "meteora" in _dex_low_main and not has_verified_locked_lp:
+                    # Любой пул Meteora для .pump токена — это кастомная неофициальная ловушка (кейсы MULT/SURVIVE -98%),
+                    # блокируем 100% без исключений!
+                    if mint.endswith("pump") and ("meteora" in _dex_low_main or _dex_low_main == "meteoradbc"):
                         return self._deny(
                             mint,
                             "pump-token-unlocked-meteora",
-                            f"🚫 [FAKE-METEORA-POOL] {symbol} ({mint[:8]}): .pump токен на пуле Meteora без сожжённого LP — неофициальный скам-пул мимо PumpSwap (кейс SURVIVE -96%)!"
+                            f"🚫 [FAKE-METEORA-POOL] {symbol} ({mint[:8]}): .pump токен на пуле Meteora — неофициальный скам-пул мимо PumpSwap (кейсы MULT/SURVIVE -98%)!"
                         )
 
                     # Проверка блокировки LP:
@@ -4036,7 +4037,13 @@ class Analyzer:
             return False
 
         _dex_low = (pair_data.get("dexId") or "").lower()
-        _is_migrated_pump = mint.endswith("pump") and _dex_low in ("pumpswap", "raydium", "meteora", "orca")
+        if mint.endswith("pump") and ("meteora" in _dex_low or _dex_low == "meteoradbc"):
+            return self._deny(mint, "fake-meteora-pump-pool", f"🚫 [FAKE-METEORA] {mint[:8]}: .pump токен на пуле Meteora — неофициальный скам-пул мимо PumpSwap (кейсы MULT/SURVIVE -98%)!")
+
+        if config.is_permissionless_liq_fdv_trap(pair_data):
+            return self._deny(mint, "permissionless-liq-fdv-trap", f"🚫 [LIQ-FDV-TRAP] {mint[:8]}: пул с высокой посеянной ликвидностью и 0 соцсетей — риск сноса LP!")
+
+        _is_migrated_pump = mint.endswith("pump") and _dex_low in ("pumpswap", "raydium")
 
         _c_ms = pair_data.get("pairCreatedAt") or 0
         import time as _t
