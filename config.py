@@ -70,8 +70,8 @@ LIQ_LOCKED_BURNED_MIN_PCT = 0.50  # Минимум 50% ликвидности з
 # === ФИЛЬТРЫ ВХОДА (ОХОТА ЗА СВЕЖИМИ 2X-10X РАКЕТАМИ) ===
 MAX_ENTRY_H1_PCT = 1800.0      # Высокий потолок h1: мигрировавшие Pump.fun ракеты ($5k->$200k) всегда имеют +400%..+1500%
 MAX_ENTRY_H6_PCT = 2500.0      # Потолок 6h: не душим вторую волну 2x-10x ракет из-за роста от дна бондинга
-MAX_ENTRY_M5_PCT = 120.0       # Потолок m5: ловим волну разгона и ранние миграции (до +350% при сильном потоке покупателей)
-MAX_ENTRY_M1_PCT = 22.0        # Потолок m1 +22% (и до +30% при пробое с перевесом покупателей, чтобы не резать живой памп)
+MAX_ENTRY_M5_PCT = 75.0        # Потолок m5: ловим зажигание и ранний разгон (+1.5%..+60%), строго блокируя покупку на пике (+80%..+400%)
+MAX_ENTRY_M1_PCT = 18.0        # Потолок m1: не заходим на хае раздутой 1м свечи (> +18%)
 REQUIRE_SOCIALS_MIN_AGE_MIN = 25.0  # Требуем соцсети ТОЛЬКО после 25 минут (на старте DexScreener не успевает индексировать)
 
 
@@ -298,17 +298,17 @@ def evaluate_entry_momentum(
 
     # 1. HARD NO-FALLING-KNIFE GATE:
     # Никогда не покупаем красные падающие свечи!
-    # Падение за 5м (m5 < 2.0%) или дамп за 1м (m1 < -0.8%) — это не зажигание ракеты!
-    if m5 < 2.0:
-        return False, f"m5-falling-knife {m5:+.1f}% < +2.0% (red or flat 5m candle)"
-    if m1 < -0.8:
-        return False, f"m1-falling-knife {m1:+.1f}% < -0.8% (1m candle dumping)"
+    if m5 < 0.8:
+        return False, f"m5-falling-knife {m5:+.1f}% < +0.8% (red or flat 5m candle)"
+    if m1 < -2.2:
+        return False, f"m1-falling-knife {m1:+.1f}% < -2.2% (1m candle dumping)"
 
-    # 2. Покупатели обязаны доминировать над продавцами (минимум на 10% больше)
-    if sells5 > 0 and buys5 < int(sells5 * 1.10):
+    # 2. Покупатели обязаны доминировать над продавцами (не режем высокооборотные ракеты)
+    _is_hi_vol_rocket = (vol5_usd >= 8000.0 and buys5 >= int(sells5 * 0.95))
+    if sells5 > 5 and buys5 < sells5 and not _is_hi_vol_rocket:
         return False, f"sellers-dominating {buys5}b/{sells5}s (more sellers than buyers in 5m)"
 
-    _max_fdv_allowed = 1500000.0 if (vol5_usd >= 8000.0 and buys5 >= int(sells5 * 1.10) and m5 >= 2.0) else float(globals().get("JEV_MAX_MCAP_USD", 850000.0))
+    _max_fdv_allowed = 1500000.0 if (vol5_usd >= 8000.0 and buys5 >= int(sells5 * 1.02) and m5 >= 2.0) else float(globals().get("JEV_MAX_MCAP_USD", 850000.0))
     if fdv_usd > 0.0 and fdv_usd > _max_fdv_allowed:
         return False, f"mcap-too-large ${fdv_usd:,.0f} > ${_max_fdv_allowed:,.0f} (limited 2x+ upside)"
     if age_min > SOLANA_MAX_AGE_MIN:
@@ -320,36 +320,37 @@ def evaluate_entry_momentum(
     if h1 > _max_h1_allowed:
         return False, f"h1-exhausted {h1:+.0f}% > +{_max_h1_allowed:.0f}% (buying late parabolic top, dump risk)"
 
-    # Block vertical top-chasing (FOMO into huge 1m/5m green candles)
-    _max_m1_dyn = 30.0 if (buys5 >= max(10, int(sells5 * 1.15)) and vol5_usd >= 3000.0 and m5 >= 4.0) else float(globals().get("MAX_ENTRY_M1_PCT", 22.0))
-    _max_m5_dyn = 400.0 if (age_min <= 15.0 and buys5 >= max(12, int(sells5 * 1.12)) and vol5_usd >= 3500.0) else (
-        350.0 if (buys5 >= max(10, int(sells5 * 1.10)) and vol5_usd >= 3000.0) else max(float(globals().get("MAX_ENTRY_M5_PCT", 120.0)), 135.0)
+    # Block vertical top-chasing: никогда не заходим на вершине раздутой свечи (+75%..+400%)!
+    # Заходим ИСКЛЮЧИТЕЛЬНО в самом начале импульса (+1.0%..+60%)!
+    _max_m1_dyn = 18.0 if (buys5 >= max(10, int(sells5 * 1.15)) and vol5_usd >= 3000.0 and m5 >= 4.0) else float(globals().get("MAX_ENTRY_M1_PCT", 15.0))
+    _max_m5_dyn = 85.0 if (age_min <= 15.0 and buys5 >= max(12, int(sells5 * 1.12)) and vol5_usd >= 3500.0) else (
+        75.0 if (buys5 >= max(10, int(sells5 * 1.10)) and vol5_usd >= 2500.0) else max(float(globals().get("MAX_ENTRY_M5_PCT", 65.0)), 65.0)
     )
     if m1 > _max_m1_dyn:
-        return False, f"m1-vertical-top {m1:+.1f}% > +{_max_m1_dyn:.0f}%"
+        return False, f"m1-vertical-top {m1:+.1f}% > +{_max_m1_dyn:.0f}% (buying candle top, wait for reset)"
     if m5 > _max_m5_dyn:
-        return False, f"m5-parabolic-top {m5:+.1f}% > +{_max_m5_dyn:.0f}%"
+        return False, f"m5-parabolic-top {m5:+.1f}% > +{_max_m5_dyn:.0f}% (buying exhausted peak, enter at ignition only)"
 
-    # 1. Свежая миграция / накопление покупателей ($40k-$160k FDV):
-    _fma_vol_req = 1000.0 if age_min <= 2.5 else 1600.0
+    # 1. Свежая миграция / накопление покупателей ($40k-$180k FDV):
+    _fma_vol_req = 600.0 if age_min <= 2.0 else 1000.0
     is_fresh_migration_accumulation = (
         age_min <= 25.0
-        and (fdv_usd <= 0.0 or fdv_usd <= 160000.0)
+        and (fdv_usd <= 0.0 or fdv_usd <= 180000.0)
         and liq_usd >= 4500.0
-        and buys5 >= max(8, int(sells5 * 1.15))
+        and buys5 >= max(6, sells5)
         and vol5_usd >= _fma_vol_req
-        and m5 >= 2.0
-        and m1 >= 0.0
+        and m5 >= 1.0
+        and m1 >= -1.5
     )
 
     # 1.1 Свежий запуск / реактивный разгон молодых токенов (<10м):
-    _uf_vol_req = 1000.0 if age_min <= 2.5 else (1500.0 if age_min <= 5.0 else 2000.0)
-    _uf_min_tx = 8 if age_min <= 2.5 else 10
+    _uf_vol_req = 500.0 if age_min <= 1.5 else (800.0 if age_min <= 3.0 else (1200.0 if age_min <= 5.0 else 1800.0))
+    _uf_min_tx = 6 if age_min <= 1.5 else 8
     is_ultra_fresh_launch = (
         age_min <= 10.0
-        and m5 >= 2.5
-        and m1 >= 0.0
-        and buys5 >= max(8, int(sells5 * 1.15))
+        and m5 >= 1.0
+        and m1 >= -1.5
+        and buys5 >= max(6, sells5)
         and vol5_usd >= _uf_vol_req
         and tot_tx >= _uf_min_tx
     )
@@ -357,27 +358,27 @@ def evaluate_entry_momentum(
     # 1.2 Вход на откате молодой ракеты (1м микро-пуллбэк на разгоняющемся токене):
     is_fresh_pullback_entry = (
         age_min <= 35.0
-        and m5 >= 3.5
-        and -0.8 <= m1 <= -0.1
-        and buys5 >= max(8, int(sells5 * 1.15))
-        and vol5_usd >= 1400.0
+        and m5 >= 2.0
+        and -1.8 <= m1 <= -0.1
+        and buys5 >= max(6, sells5)
+        and vol5_usd >= 1000.0
     )
 
     # 1.3 Первичное зажигание ракеты (свежий импульс)
     is_fresh_ignition = (
         age_min <= 45.0
-        and m5 >= 2.5
-        and m1 >= 0.0
-        and buys5 >= max(8, int(sells5 * 1.15))
-        and vol5_usd >= 1200.0
-        and tot_tx >= 10
+        and m5 >= 1.5
+        and m1 >= -1.5
+        and buys5 >= max(8, sells5)
+        and vol5_usd >= 1000.0
+        and tot_tx >= 8
     )
 
     # 1.4 Гипер-зажигание (сильный пробой)
     is_hyper_ignition = (
         m5 >= 5.0
-        and m1 >= -0.5
-        and buys5 >= max(8, int(sells5 * 1.15))
+        and m1 >= -1.0
+        and buys5 >= max(6, sells5)
         and vol5_usd >= 1000.0
     )
 
@@ -407,12 +408,24 @@ def evaluate_entry_momentum(
     # 1.7 Зрелый пробой (зрелые капы с импульсом)
     is_mature_breakout = (
         age_min <= SOLANA_MAX_AGE_MIN
-        and m5 >= (2.5 if age_min > 45.0 else 1.5)
-        and h1 >= -10.0
+        and m5 >= (2.0 if age_min > 45.0 else 1.2)
+        and h1 >= -15.0
         and m1 >= -2.0
-        and buys5 >= (max(10, int(sells5 * 1.10)) if age_min > 45.0 else max(5, int(sells5 * 1.02)))
-        and vol5_usd >= (3000.0 if age_min > 45.0 else 1400.0)
-        and (vel_ratio >= 0.06 or vol5_usd >= 4000.0)
+        and buys5 >= (max(8, int(sells5 * 1.05)) if age_min > 45.0 else max(5, sells5))
+        and vol5_usd >= (1200.0 if age_min > 45.0 else 800.0)
+        and (vel_ratio >= 0.04 or vol5_usd >= 2000.0)
+    )
+
+    # 1.8 Импульсный прорыв консолидации / повторный разгон (раннеры любого возраста до 240м, кейс sOHM 2h)
+    # Позволяет ловить ракеты в САМОМ НАЧАЛЕ их импульса (свечи +1.2%..+60%), а не на вершине (+150%..+350%)!
+    _cb_max_mcap = float(globals().get("JEV_MAX_MCAP_USD", 850000.0))
+    is_consolidation_breakout = (
+        age_min <= SOLANA_MAX_AGE_MIN
+        and 1.2 <= m5 <= 65.0
+        and m1 >= -1.8
+        and buys5 >= max(6, sells5)
+        and vol5_usd >= 750.0
+        and (fdv_usd <= 0.0 or fdv_usd <= _cb_max_mcap)
     )
 
     if not (
@@ -424,6 +437,7 @@ def evaluate_entry_momentum(
         or is_turned_green_dip
         or is_fresh_v_reversal
         or is_mature_breakout
+        or is_consolidation_breakout
     ):
         return (
             False,
@@ -517,9 +531,10 @@ MOONBAG_MAX_HOLD_MIN = 55.0          # Мунбэг может ехать до 5
 PUMP_XGB_ENABLED = False
 RAY_XGB_ENABLED = False
 ROCKET_XGB_ENABLED = True
-ROCKET_XGB_STAGE1_THRESHOLD = 12.0   # Первичный отсев 12%: отсекает чистый скам и бот-ловушки (Tagoh 11%, VI 7%, SURVIVE 9%), пропуская ракеты
-ROCKET_XGB_FINAL_THRESHOLD = 16.0    # Финальный порог 16%: надёжный пропуск реальных ракет (TOYCOIN 28%, GO 40%, Fug 58%, STRIPCOIN 60%)
-ROCKET_XGB_THRESHOLD = 16.0
+ROCKET_XGB_STAGE1_THRESHOLD = 10.0   # Первичный отсев 10%: надёжно отсекает мертвяк и скам (Tagoh 11%, VI 7%, SURVIVE 9%), пропуская ракеты
+ROCKET_XGB_FINAL_THRESHOLD = 14.0    # Финальный порог 14%: свободный пропуск реальных ракет (investinu 19%, YIELD 24%, TOYCOIN 28%, GO 40%, STRIPCOIN 60%)
+ROCKET_XGB_THRESHOLD = 14.0
+JEV_MAX_AGE_MIN = 240.0              # Разрешаем тренд-раннеры до 4 часов (синхронизировано с SOLANA_MAX_AGE_MIN)
 
 STALL_TIMER_SEC = 420.0   # 7 минут на консолидацию до среза по стагнации
 STALL_MAX_LOSS_PCT = -0.055
@@ -543,10 +558,10 @@ UNLOCKED_FAST_STOP_PCT = -0.075          # Быстрый стоп-лосс -7.5
 
 PREFETCH_TTL_SEC = 12
 SOLANA_MIN_AGE_MIN = 0.40        # 24 секунды: пускает свежие импульсные ракеты (TAOTAO, HOGE, TOYCOIN) сразу со 2-й свечи!
-SOLANA_MAX_AGE_HOURS = 1.5        # До 1.5 часов (90м) — защита от захода в отработавшие и сливающиеся топы
+SOLANA_MAX_AGE_HOURS = 4.0         # До 4 часов (240м)
 SOLANA_MAX_AGE_MIN = 240.0        # Потолок 4 часа (240м) для сканера: позволяет ловить мощные многоволновые разгоны и пробои ATH!
-JEV_MAX_AGE_MIN = 60.0            # В GROK-JEV свежие монеты до 60м (защита от зомби-монет)
-JEV_MAX_M1_ENTRY_PCT = 25.0
+JEV_MAX_AGE_MIN = 240.0           # В GROK-JEV ловим монеты до 240м (допускаем разгоны и пробои до 4 часов, кейс sOHM 2h)
+JEV_MAX_M1_ENTRY_PCT = 18.0
 
 SCALP_TIMEOUT_MIN = 10.0
 STAGNANT_LOSS_MIN = 15.0
@@ -566,8 +581,8 @@ JEV_ENABLED = True
 JEV_WICK_STOP_ENABLED = False
 JEV_EARLY_MIN_AGE_MIN = 0.35   # Быстрый ранний вход от 21с для проверенных сильных миграций
 JEV_MIN_AGE_MIN = 0.50         # Базовый карантин 30 секунд для защиты от первого дампового тика
-JEV_MAX_AGE_MIN = 60.0         # В GROK-JEV ловим свежие монеты до 60м
-JEV_MIN_LIQUIDITY_USD = 6000.0   # Минимум $6k ликвидности — пускает ранние ракеты без мёртвых микро-пулов
+JEV_MAX_AGE_MIN = 240.0        # В GROK-JEV ловим монеты до 240м (до 4 часов, кейс sOHM 2h)
+JEV_MIN_LIQUIDITY_USD = 4000.0   # Минимум $4k ликвидности — пускает ранние ракеты и кёрвы Pump.fun без мёртвых микро-пулов
 JEV_MAX_LIQUIDITY_USD = 450000.0
 JEV_MIN_VOLUME_H1 = 8000.0
 JEV_MIN_MCAP_USD = 6000.0      # Минимум $6k MCap

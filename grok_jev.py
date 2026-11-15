@@ -457,11 +457,11 @@ class GrokJevEngine:
         _min_grad_liq = float(getattr(_c, "MIN_GRADUATED_LIQ_USD", 5000.0))
         if _c.is_pumpswap_liq_fdv_trap(pair_data):
             return False, "permissionless-liq-fdv-trap (seeded pool with >=70% liq/fdv and 0 socials, drain risk)"
-        if is_pump and ("meteora" in dex_id or dex_id == "meteoradbc"):
-            return False, "fake-meteora-pump-pool (pump tokens never migrate to Meteora, scam trap)"
-        if dex_id in ("pump", "pumpfun", "meteoradbc") and not getattr(_c, "ALLOW_UNGRADUATED_PUMPFUN", False):
+        if "meteora" in dex_id or dex_id == "meteoradbc":
+            return False, "meteora-unlocked-pool (Meteora pools allow dev LP withdrawal, scam-trap cases: AXIOMCOIN/MULT/PUNCHAO)"
+        if dex_id in ("pump", "pumpfun") and not getattr(_c, "ALLOW_UNGRADUATED_PUMPFUN", False):
             return False, "raw-pump-curve (wait for graduation to PumpSwap/Raydium with locked LP)"
-        min_liq = 1500.0 if (dex_id in ("pump", "pumpfun", "meteoradbc") and getattr(_c, "ALLOW_UNGRADUATED_PUMPFUN", False)) else _min_grad_liq
+        min_liq = 1500.0 if (dex_id in ("pump", "pumpfun") and getattr(_c, "ALLOW_UNGRADUATED_PUMPFUN", False)) else _min_grad_liq
         if eff_liq < min_liq:
             return False, f"liq-depth-low ${eff_liq:.0f} < ${min_liq:.0f} (micro-cap dump trap)"
             
@@ -515,21 +515,19 @@ class GrokJevEngine:
         # 2. Возраст токена, потолок FDV <= $320k и запрет старых отработанных монет (кейс BILL 202m $473k)
         _avg_tx_e = vol_m5 / max(1, b5 + s5)
         min_age = _sol_min_age_g
-        max_age = float(getattr(_c, "JEV_MAX_AGE_MIN", 60.0))
-        _max_scan_age_g = float(getattr(_c, "SOLANA_MAX_AGE_MIN", 90.0))
-        _max_mcap_g = float(getattr(_c, "JEV_MAX_MCAP_USD", 220000.0))
+        max_age = float(getattr(_c, "JEV_MAX_AGE_MIN", getattr(_c, "SOLANA_MAX_AGE_MIN", 240.0)))
+        _max_scan_age_g = float(getattr(_c, "SOLANA_MAX_AGE_MIN", 240.0))
+        _max_mcap_g = float(getattr(_c, "JEV_MAX_MCAP_USD", 850000.0))
         if fdv_mc > _max_mcap_g:
             return False, f"mcap-too-large ${fdv_mc:,.0f} > ${_max_mcap_g:,.0f}"
         _is_jev_breakout = (
             age_min <= _max_scan_age_g
             and fdv_mc <= _max_mcap_g
-            and eff_liq >= 15000.0
-            and vol_m5 >= 8000.0
-            and (vol_m5 / max(eff_liq, 1.0)) >= 0.25
-            and m5 >= 6.0
+            and eff_liq >= 3500.0
+            and vol_m5 >= 750.0
+            and 1.2 <= m5 <= 85.0
             and m1 >= float(getattr(_c, "JEV_MIN_M1_ENTRY_FLOOR_PCT", -3.5))
-            and _avg_tx_e >= 8.0
-            and b5 >= int(s5 * 1.15)
+            and b5 >= s5
         )
         if age_min < min_age:
             try:
@@ -618,11 +616,11 @@ class GrokJevEngine:
         ):
             return False, _mom_why_g
 
-        _max_m5_allowed = float(getattr(_c, "MAX_ENTRY_M5_PCT", 120.0))
+        _max_m5_allowed = float(getattr(_c, "MAX_ENTRY_M5_PCT", 75.0))
         if m5 > _max_m5_allowed:
-            _fresh_grad_m5_cap = 400.0 if (age_min <= 15.0 and fdv_mc <= 260000.0) else 350.0
-            _is_strong_buyer_breakout_g = (m5 <= _fresh_grad_m5_cap and b5 >= int(s5 * 1.12) and vol_m5 >= 3000.0 and (b5 + s5) >= 15)
-            _is_cooling_pullback = (-3.5 <= m1 <= -0.5 and m5 <= 350.0 and b5 >= s5 * 1.05)
+            _fresh_grad_m5_cap = 90.0 if (age_min <= 15.0 and fdv_mc <= 260000.0) else 80.0
+            _is_strong_buyer_breakout_g = (m5 <= _fresh_grad_m5_cap and b5 >= int(s5 * 1.12) and vol_m5 >= 2500.0 and (b5 + s5) >= 15)
+            _is_cooling_pullback = (-3.5 <= m1 <= -0.5 and m5 <= 85.0 and b5 >= s5 * 1.05)
             if not (_is_strong_buyer_breakout_g or _is_cooling_pullback):
                 return False, f"fomo-vertical-m5 m5 {m5:+.1f}% > +{_max_m5_allowed:.0f}% (buying top of vertical pump without cooling pullback, m1={m1:+.1f}%)"
         if s5 > 10 and b5 < (s5 * 0.80):
@@ -658,18 +656,22 @@ class GrokJevEngine:
 
         _base_vol_m5 = float(getattr(_c, "MIN_VOLUME_M5", 2000.0))
         # Масштабируем порог объёма под возраст: реальный поток SOL для настоящих ракет
-        if age_min <= 2.5 and b5 >= int(s5 * 1.15) and (b5 + s5) >= 8:
-            _min_vol_m5 = 1000.0
-        elif age_min <= 5.0 and b5 >= int(s5 * 1.10) and (b5 + s5) >= 10:
-            _min_vol_m5 = 1400.0
-        elif age_min <= 10.0 and b5 >= int(s5 * 1.05):
-            _min_vol_m5 = 1800.0
+        if age_min <= 1.5 and b5 >= s5 and (b5 + s5) >= 6:
+            _min_vol_m5 = 500.0
+        elif age_min <= 3.0 and b5 >= s5 and (b5 + s5) >= 8:
+            _min_vol_m5 = 800.0
+        elif age_min <= 5.0 and b5 >= s5:
+            _min_vol_m5 = 1200.0
+        elif age_min <= 10.0 and b5 >= s5:
+            _min_vol_m5 = 1500.0
         else:
             _min_vol_m5 = _base_vol_m5
         if vol_m5 < _min_vol_m5:
             return False, f"vol5-low ${vol_m5:.0f} < ${_min_vol_m5:.0f} (inactive dead pool — нет реального объема для ракеты)"
         _min_tx5 = int(getattr(_c, "MIN_TXNS_M5", 14))
-        if age_min <= 2.5:
+        if age_min <= 1.5:
+            _min_tx5 = 6
+        elif age_min <= 3.0:
             _min_tx5 = 8
         elif age_min <= 5.0:
             _min_tx5 = 10
@@ -687,10 +689,12 @@ class GrokJevEngine:
         if s5 > 0 and (b5 / s5) < _req_bs:
             return False, f"sellers-dominating {b5}b/{s5}s (ratio {b5/s5:.2f} < {_req_bs:.2f})"
 
-        # Проверка суточной активности h24 для токенов старше 1 часа
-        if age_min >= 60.0:
-            min_vol_h24 = float(getattr(_c, "JEV_MIN_VOLUME_H24", 15000.0))
-            min_trades_h24 = int(getattr(_c, "JEV_MIN_TRADES_H24", 50))
+        # Проверка суточной активности h24 для токенов старше 1 часа:
+        # Не блокируем живой пробой консолидации (кейс sOHM 2h, где m5 +12% и идёт активный приток покупателей)
+        _is_fresh_breakout_exempt = (vol_m5 >= 1000.0 and b5 >= s5 and m5 >= 1.5)
+        if age_min >= 60.0 and not _is_fresh_breakout_exempt:
+            min_vol_h24 = float(getattr(_c, "JEV_MIN_VOLUME_H24", 5000.0))
+            min_trades_h24 = int(getattr(_c, "JEV_MIN_TRADES_H24", 25))
             if vol_h24 < min_vol_h24:
                 return False, f"vol-h24-low ${vol_h24:,.0f} < ${min_vol_h24:,.0f}"
             if trades_h24 < min_trades_h24:
@@ -953,15 +957,15 @@ class GrokJevEngine:
         _m1_is_phantom = (_age_m < 3.0 and abs(m5) > 1.0 and abs(m1) > 0 and abs(m1 / max(abs(m5), 0.01) - 1.0) < 0.08)
         _fdv_flush = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
         _strong_breakout = (b5 >= 10 and b5 >= s5 * 1.05 and vol5 >= 2000.0)
-        _base_m1_g = float(getattr(_c, "JEV_MAX_M1_ENTRY_PCT", 25.0))
-        _max_m1 = max(_base_m1_g, 30.0) if (_strong_breakout and b5 >= int(s5 * 1.15) and vol5 >= 3000.0 and m5 >= 4.0) else _base_m1_g
-        _cfg_m5 = float(getattr(_c, "MAX_ENTRY_M5_PCT", 120.0))
+        _base_m1_g = float(getattr(_c, "JEV_MAX_M1_ENTRY_PCT", 18.0))
+        _max_m1 = max(_base_m1_g, 20.0) if (_strong_breakout and b5 >= int(s5 * 1.15) and vol5 >= 2500.0 and m5 >= 4.0) else _base_m1_g
+        _cfg_m5 = float(getattr(_c, "MAX_ENTRY_M5_PCT", 75.0))
         if _strong_breakout and _age_m <= 15.0 and (0 < _fdv_flush <= 260000.0):
-            _max_m5_cap = 400.0
+            _max_m5_cap = 90.0
         elif _strong_breakout:
-            _max_m5_cap = max(_cfg_m5, 350.0)
+            _max_m5_cap = max(_cfg_m5, 85.0)
         else:
-            _max_m5_cap = max(_cfg_m5, 135.0)
+            _max_m5_cap = max(_cfg_m5, 75.0)
         if m5 > _max_m5_cap:
             return False, -0.14, 0.0, f"fomo-spike (m5 {m5:+.1f}% > +{_max_m5_cap:.0f}%) — buying local top, wait for reset"
         if m1 > _max_m1 and not _m1_is_phantom:
@@ -973,17 +977,18 @@ class GrokJevEngine:
             return False, -0.14, 0.0, f"thin-liquidity (${_liq_usd:,.0f} < ${_min_liq:,.0f}) — slippage/dump risk"
 
         # 2. Защита от покупки падающего ножа:
-        _flush_floor = float(getattr(_c, "JEV_MIN_M1_ENTRY_FLOOR_PCT", -1.5))
-        _min_flush_m1 = max(_flush_floor, -1.2)
+        _flush_floor = float(getattr(_c, "JEV_MIN_M1_ENTRY_FLOOR_PCT", -3.5))
+        _min_flush_m1 = min(_flush_floor, -2.5) if (vol5 >= 5000.0 or m5 >= 5.0) else -2.0
         if _m1_known and m1 < _min_flush_m1:
             return False, -0.14, 0.0, f"flush-dump (m1 {m1:+.1f}% < {_min_flush_m1:+.1f}%) — falling knife / weak rollover"
 
-        # 3. Проверка давления продавцов: покупатели обязаны держать перевес
-        if s5 > 0 and b5 < int(s5 * 1.05):
+        # 3. Проверка давления продавцов: покупатели обязаны держать перевес (не режем ракеты с высоким оборотом)
+        _is_hi_vol_flow = (vol5 >= 8000.0 and b5 >= int(s5 * 0.95))
+        if s5 > 5 and b5 < s5 and not _is_hi_vol_flow:
             return False, -0.14, 0.0, f"sellers-dominating ({b5}b/{s5}s) — sellers active, wait for buyer absorption"
 
         # 4. Монета не должна стоять мёртвым флетом
-        if (_m1_known and m1 <= -0.8 and m5 < 2.0) or m5 < 1.8:
+        if (_m1_known and m1 <= -1.5 and m5 < 1.0) or m5 < 0.6:
             return False, -0.14, 0.0, f"flat-coin (m1 {m1:+.1f}%, m5 {m5:+.1f}%) — price standing still, waiting for live impulse"
 
         # 3.2. ПОДТВЕРЖДЕНИЕ ТРЕНДА ПО СОБСТВЕННОЙ ИСТОРИИ ЦЕН (DexScreener m1/m5 запаздывают на минуту и больше)

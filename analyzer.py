@@ -1710,6 +1710,12 @@ class Analyzer:
                 # Если метки времени нет у любого токена — это новорожденный токен (<30 сек), а НЕ 999 минут!
                 _age_min_pre = 0.2
         _dex_pre_early = str(pair_data.get("dexId", "")).lower()
+        if "meteora" in _dex_pre_early or _dex_pre_early == "meteoradbc":
+            return self._deny(
+                mint,
+                "meteora-unlocked-pool",
+                f"🚫 [METEORA-BLOCK] {symbol} ({mint[:8]}): пул Meteora {_dex_pre_early} — риск вывода LP девом (кейсы AXIOMCOIN/MULT/PUNCHAO), блок входа!"
+            )
         _is_known_grad = False
         try:
             from birth_tracker import birth_tracker as _bt_kg
@@ -1841,14 +1847,16 @@ class Analyzer:
         # 3. ФИЛЬТР ИМПУЛЬСА, СКОРОСТИ ОБОРОТА И ТРЕНДА ДО ROCKET-XGB:
         _base_v5_cfg = float(getattr(config, "MIN_VOLUME_M5", 2000.0))
         # Масштабируем порог объёма под возраст: реальный поток SOL для настоящих ракет
-        if _age_min_pre <= 2.0:
-            _min_v5_cfg = 1000.0 if (_b5_pre >= int(_s5_pre * 1.15) and _b5_pre >= 8) else 1500.0
+        if _age_min_pre <= 1.5:
+            _min_v5_cfg = 500.0 if (_b5_pre >= _s5_pre and _b5_pre >= 6) else 800.0
+        elif _age_min_pre <= 3.0:
+            _min_v5_cfg = 800.0 if _b5_pre >= _s5_pre else 1200.0
         elif _age_min_pre <= 5.0:
-            _min_v5_cfg = 1400.0 if _b5_pre >= int(_s5_pre * 1.10) else 1800.0
+            _min_v5_cfg = 1200.0
         elif _age_min_pre <= 15.0:
-            _min_v5_cfg = 1800.0
+            _min_v5_cfg = 1500.0
         elif _age_min_pre <= 30.0:
-            _min_v5_cfg = 2000.0
+            _min_v5_cfg = 1800.0
         else:
             _min_v5_cfg = _base_v5_cfg
         if _vm5_pre < _min_v5_cfg:
@@ -1935,18 +1943,18 @@ class Analyzer:
 
         # 4. Anti-FOMO: Защита от перегретых вершин
         _max_entry_h1 = config.get_max_entry_h1_pct(_age_min_pre, _vm5_pre, _b5_pre, _s5_pre, _raw_liq_chk, _m5)
-        _max_entry_m5 = float(getattr(config, "MAX_ENTRY_M5_PCT", 120.0))
+        _max_entry_m5 = float(getattr(config, "MAX_ENTRY_M5_PCT", 75.0))
         if _h1 > _max_entry_h1 and _age_min_pre > 4.0:
             return self._deny(
                 mint,
                 f"h1-exhausted {_h1:.0f}%>{_max_entry_h1:.0f}%",
                 f"🚫 [EXHAUSTED-TOP] {symbol} ({mint[:8]}): рост за час {_h1:+.1f}% > +{_max_entry_h1:.0f}% — вершина пампа.",
             )
-        # Разрешаем сильные ранние пробои/миграции (до +350%/+400%) и здоровый откат, режем пустые вертикальные свечи
+        # Блокируем покупку на вершине перегретой свечи: входим строго на раннем разгоне (+1.5%..+65%)
         if _m5 > _max_entry_m5:
-            _fresh_grad_m5_cap_a = 400.0 if (_age_min_pre <= 15.0 and _fdv_chk_pre <= 260000.0) else 350.0
-            _is_strong_buyer_breakout = (_m5 <= _fresh_grad_m5_cap_a and _b5_pre >= int(_s5_pre * 1.12) and _vm5_pre >= 3000.0 and (_b5_pre + _s5_pre) >= 15)
-            _is_cooling_pullback = (_m1 <= -0.5 and _m5 <= 350.0 and _b5_pre >= _s5_pre * 1.05)
+            _fresh_grad_m5_cap_a = 90.0 if (_age_min_pre <= 15.0 and _fdv_chk_pre <= 260000.0) else 80.0
+            _is_strong_buyer_breakout = (_m5 <= _fresh_grad_m5_cap_a and _b5_pre >= int(_s5_pre * 1.12) and _vm5_pre >= 2500.0 and (_b5_pre + _s5_pre) >= 15)
+            _is_cooling_pullback = (_m1 <= -0.5 and _m5 <= 85.0 and _b5_pre >= _s5_pre * 1.05)
             if not (_is_strong_buyer_breakout or _is_cooling_pullback):
                 return self._deny(
                     mint,
@@ -2049,16 +2057,16 @@ class Analyzer:
             liq_val = max(raw_liq, curve_liq) if is_pump_curve else raw_liq
 
             _is_momentum_rocket_a = (
-                (conf + 0.05) >= max(10.0, threshold - 2.0)
+                (conf + 0.05) >= max(8.0, threshold - 2.0)
                 and _age_min_pre <= _max_age_min
                 and _fdv_chk_pre <= _max_mcap_pre
                 and (_age_min_pre < 45.0 or _h6_pre_opt is None or _h6_pre_opt <= float(getattr(config, "MAX_ENTRY_H6_PCT", 2500.0)))
-                and _m1 >= 0.0
+                and _m1 >= -1.5
                 and (
-                    (_m5 >= 10.0 and _b5_pre >= _s5_pre * 1.20 and _vm5_pre >= 4000.0)
-                    or (_vm5_pre >= 10000.0 and _b5_pre >= _s5_pre * 1.15 and _m5 >= 4.0)
-                    or (_m5 >= 5.0 and _b5_pre >= int(_s5_pre * 1.20) and _vm5_pre >= 3000.0 and _b5_pre >= 15)
-                    or (_age_min_pre <= 5.0 and _m5 >= 2.5 and _b5_pre >= int(_s5_pre * 1.15) and _vm5_pre >= 1500.0 and _b5_pre >= 10)
+                    (_m5 >= 10.0 and _b5_pre >= int(_s5_pre * 1.05) and _vm5_pre >= 3500.0)
+                    or (_vm5_pre >= 8000.0 and _b5_pre >= _s5_pre and _m5 >= 3.0)
+                    or (_m5 >= 4.0 and _b5_pre >= _s5_pre and _vm5_pre >= 2000.0 and _b5_pre >= 10)
+                    or (_age_min_pre <= 5.0 and _m5 >= 1.5 and _b5_pre >= _s5_pre and _vm5_pre >= 800.0 and _b5_pre >= 6)
                 )
             )
             if (conf + 0.05) < threshold and not _is_momentum_rocket_a:
@@ -2432,8 +2440,8 @@ class Analyzer:
                     self._last_top10 = top_10_sum_pct
                     self._last_dev = dev_holding_pct
 
-                    # Лимиты холдеров (@savipww Auditor: Dev <= 6% sold 0, Whale <= 15%, Top10 <= 30% на DEX)
-                    max_dev_pct = 8.0 if _is_pump_flag else float(getattr(config, "AUDITOR_MAX_DEV_PCT", 6.0))
+                    # Лимиты холдеров (Dev <= 15% на Pump, Whale <= 20%, Top10 <= 35%): допускаем ракеты, где дев ещё держит часть эмиссии
+                    max_dev_pct = 15.0 if _is_pump_flag else float(getattr(config, "AUDITOR_MAX_DEV_PCT", 10.0))
                     if dev_holding_pct and dev_holding_pct > max_dev_pct:
                         return self._deny(mint, f"dev-hold {dev_holding_pct:.1f}%", f"🚫 [АНТИСКАМ] Дев держит {dev_holding_pct:.1f}% > {max_dev_pct:.0f}% у {mint[:8]} → Блок.")
                     try:
