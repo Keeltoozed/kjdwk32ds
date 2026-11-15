@@ -3039,13 +3039,14 @@ st.markdown("Панель управления алгоритмическим б
 tab1, tab2 = st.tabs(["📊 Портфель и История", "📡 Радар Рынка (Alpha Scanner)"])
 
 _frag_dec = getattr(st, "fragment", getattr(st, "experimental_fragment", None))
+st.session_state.setdefault("auto_refresh_enabled", False)
 
 def _render_tab1_content():
     # Кнопки управления портфелем
     _b_col1, _b_col2 = st.columns([1, 1])
     with _b_col1:
-        if st.button("🔄 Обновить портфель"):
-            pass
+        if st.button("🔄 Обновить портфель", key="btn_refresh_portfolio"):
+            st.rerun()
     with _b_col2:
         if st.button("🗑️ Очистить историю (С чистого листа)"):
             try:
@@ -3278,7 +3279,8 @@ def _render_tab1_content():
     except FileNotFoundError:
         st.info("Бот еще не совершил первую сделку.")
 
-if _frag_dec:
+_auto_refresh_on = bool(st.session_state.get("auto_refresh_enabled", False))
+if _frag_dec and _auto_refresh_on:
     _render_tab1_content = _frag_dec(run_every="2s")(_render_tab1_content)
 
 with tab1:
@@ -3372,11 +3374,23 @@ with tab2:
     except Exception as e:
         st.info("Ожидание данных от сканера...")
 
-# Автообновление интерфейса (каждые 2 сек): если активен @st.fragment, не делаем конфликтующий полный st.rerun()
-if not _frag_dec:
-    if st.checkbox("Включить автообновление (каждые 2 сек)", value=True):
-        time.sleep(2)
+# Ручное и опциональное автообновление интерфейса (по умолчанию автообновление ВЫКЛЮЧЕНО)
+_ref_col1, _ref_col2 = st.columns([1, 2])
+with _ref_col1:
+    if st.button("🔄 Обновить сайт", key="btn_manual_refresh_site"):
         st.rerun()
+with _ref_col2:
+    _auto_ref_toggle = st.checkbox(
+        "Включить автообновление (каждые 2 сек)",
+        value=_auto_refresh_on,
+        key="auto_refresh_checkbox",
+    )
+    if _auto_ref_toggle != _auto_refresh_on:
+        st.session_state["auto_refresh_enabled"] = bool(_auto_ref_toggle)
+        st.rerun()
+if _auto_refresh_on and not _frag_dec:
+    time.sleep(2)
+    st.rerun()
 
 if __name__ == "__main__":
     # Если запущен напрямую (python3 main.py), держим процесс активным для терминала/демона

@@ -100,7 +100,7 @@ def get_max_entry_h1_pct(
 
 LAUNCHPAD_MINT_SUFFIXES = ("pump", "moon", "bonk", "bags")
 UNLOCKED_CUSTOM_MIN_LIQ_USD = 2500.0
-UNLOCKED_CUSTOM_MIN_AGE_MIN = 0.0
+UNLOCKED_CUSTOM_MIN_AGE_MIN = 1.25        # 75с карантин для кастомных незалоченных пулов: отсекает 0m LP-pull раги уровня GTA6 ($25k -> $2)
 UNLOCKED_CUSTOM_MIN_VOL5_USD = 750.0
 UNLOCKED_CUSTOM_MIN_BUYS5 = 6
 
@@ -566,6 +566,7 @@ ROCKET_XGB_ENABLED = True
 ROCKET_XGB_STAGE1_THRESHOLD = 5.0    # Первичный отсев 5%: широкий пропуск импульсных пулов без потери скорости
 ROCKET_XGB_FINAL_THRESHOLD = 7.0     # Финальный порог 7%: свободный пропуск ранних и незалоченных раннеров
 ROCKET_XGB_THRESHOLD = 7.0
+ROCKET_XGB_UNLOCKED_CUSTOM_MIN = 18.0  # Для кастомных не-launchpad пулов без сожжённого LP требуется >= 18% XGB (FiveM=54% проходит, 7% GTA6-клоны отсекаются)
 JEV_MAX_AGE_MIN = 45.0               # Ультра-ранний фокус: свежие запуски и пробои до 45м (освобождаем слоты от старых 2ч+ топов)
 
 STALL_TIMER_SEC = 420.0   # 7 минут на консолидацию до среза по стагнации

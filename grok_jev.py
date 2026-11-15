@@ -479,6 +479,32 @@ class GrokJevEngine:
         vol_h24 = float((pair_data.get("volume") or {}).get("h24", 0) or 0)
         trades_h24 = int(txns_h24.get("buys", 0) or 0) + int(txns_h24.get("sells", 0) or 0)
 
+        # 2.5 ЗАЩИТА ОТ 0m МГНОВЕННОГО СЛИВА UNLOCKED-AMM (кейс GTA6: $25,117 -> $2 за 0м в GROK-JEV):
+        # Для кастомных не-launchpad пулов без сожжённого/канонического LP:
+        # 1) Выдерживаем карантин первой минуты в Waiting Room (отсевает мгновенные 0m LP-pull ловушки);
+        # 2) Отсекаем раздутую приманку seeded-LP ($18k+ LP без живого оборота >=20% и <20 покупателей).
+        _is_launchpad_pool = (
+            _c.is_launchpad_mint(mint)
+            or dex_id in ("pump", "pumpfun", "moonshot")
+            or bool(pair_data.get("_pumpswap_is_canonical"))
+        )
+        _lp_burned_flag = bool(pair_data.get("_pumpswap_lp_burned"))
+        if not _is_launchpad_pool and not _lp_burned_flag:
+            _u_min_age = max(float(getattr(_c, "UNLOCKED_CUSTOM_MIN_AGE_MIN", 1.25)), 1.25)
+            if age_min < _u_min_age:
+                try:
+                    from birth_tracker import birth_tracker as _bt_uc
+                    _bt_uc.add_to_waiting_room(mint, str(pair_data.get("pairAddress") or ""))
+                except Exception:
+                    pass
+                return False, f"unlocked-custom-0m-quarantine {age_min:.2f}m < {_u_min_age:.2f}m (wait for LP stability)"
+            if raw_liq >= 18000.0 and (vol_m5 < (raw_liq * 0.20) or b5 < 20 or (s5 > 0 and b5 < s5)):
+                return False, f"seeded-unlocked-lp-bait liq ${raw_liq:,.0f} vol5 ${vol_m5:,.0f} ({b5}b/{s5}s) — drain-trap risk"
+            _info_hg = pair_data.get("info") or {}
+            _has_soc_hg = bool((_info_hg.get("socials") or []) or (_info_hg.get("websites") or []))
+            if raw_liq >= 12000.0 and not _has_soc_hg and (fdv_mc <= 0.0 or raw_liq >= (fdv_mc * 0.65)) and (vol_m5 < (raw_liq * 0.45) or b5 < 25):
+                return False, f"permissionless-seeded-lp-fdv-trap liq ${raw_liq:,.0f} fdv ${fdv_mc:,.0f} vol5 ${vol_m5:,.0f} 0-socials"
+
         # 3. Живой импульс ракеты (LIVE ROCKET MOMENTUM)
         pc = pair_data.get("priceChange", {}) or {}
         m5 = float(pc.get("m5", 0) or 0)
@@ -1672,6 +1698,25 @@ class GrokJevEngine:
 
                     # Проверка держателей и дева (Holders & Sybil analysis)
                     holders = rc_data.get("topHolders", []) or []
+                    if not holders:
+                        _h_raw_rc = _gp.get_solana_holder_stats(address)
+                        if _h_raw_rc and _h_raw_rc.get("has_data"):
+                            _h_stats["top10_pct"] = float(_h_raw_rc.get("top_10_pct", 0.0) or 0.0)
+                            _h_stats["dev_pct"] = float(_h_raw_rc.get("dev_pct", 0.0) or 0.0)
+                            _h_stats["top1_pct"] = _h_stats["dev_pct"]
+                            _max_dev_rc0 = float(getattr(_c, "AUDITOR_MAX_DEV_PCT", 15.0))
+                            _max_top10_rc0 = float(getattr(_c, "AUDITOR_MAX_TOP10_PCT", 55.0))
+                            if _h_stats["dev_pct"] > _max_dev_rc0:
+                                return False, f"dev loaded (GoPlus) {_h_stats['dev_pct']:.1f}% > {_max_dev_rc0:.0f}% (dump risk)", _h_stats
+                            if _h_stats["top10_pct"] > _max_top10_rc0:
+                                return False, f"top10 concentration (GoPlus) {_h_stats['top10_pct']:.1f}% > {_max_top10_rc0:.0f}%", _h_stats
+                        elif getattr(_c, "JEV_REQUIRE_HOLDER_DATA", False) or (
+                            not is_canonical_pump
+                            and not _is_launchpad_aud
+                            and not has_verified_locked_lp
+                            and not bool(pair_data.get("_pumpswap_lp_burned"))
+                        ):
+                            return False, "auditor-pending: unverified custom AMM without holder index (RugCheck topHolders empty)", _h_stats
                     pool_accounts = set()
                     if pair_data.get("pairAddress"):
                         pool_accounts.add(pair_data["pairAddress"])
@@ -1809,9 +1854,10 @@ class GrokJevEngine:
                         if _mid_ratio <= 1.65:
                             return False, f"top20-sybil-swarm ({len(_mid_sybils)} wallets holding 1.5-4.5% = {sum(_mid_sybils):.1f}% supply)", _h_stats
 
-                    _h_stats["top10_pct"] = top_10_sum
-                    _h_stats["dev_pct"] = dev_pct
-                    _h_stats["top1_pct"] = largest_whale
+                    if holders:
+                        _h_stats["top10_pct"] = top_10_sum
+                        _h_stats["dev_pct"] = dev_pct
+                        _h_stats["top1_pct"] = largest_whale
 
                     max_dev_limit = float(getattr(_c, "AUDITOR_MAX_DEV_PCT", 15.0))
                     if dev_pct and dev_pct > max_dev_limit:
@@ -1874,8 +1920,8 @@ class GrokJevEngine:
                         max_top10_gp = float(getattr(_c, "AUDITOR_MAX_TOP10_PCT", 55.0))
                         if _h_stats["top10_pct"] > max_top10_gp:
                             return False, f"top10 concentration (GoPlus) {_h_stats['top10_pct']:.1f}% > {max_top10_gp:.0f}%", _h_stats
-                    elif getattr(_c, "JEV_REQUIRE_HOLDER_DATA", False) or (not is_canonical_pump and not _is_launchpad_aud and raw_liq < 12000.0):
-                        return False, "auditor-pending: unverified custom AMM < $12k without holder index (wait for RugCheck/GoPlus)", _h_stats
+                    elif getattr(_c, "JEV_REQUIRE_HOLDER_DATA", False) or (not is_canonical_pump and not _is_launchpad_aud and not bool(pair_data.get("_pumpswap_lp_burned"))):
+                        return False, "auditor-pending: unverified custom AMM without holder index (wait for RugCheck/GoPlus)", _h_stats
                     elif isinstance(pair_data, dict):
                         pair_data["_lp_verified"] = bool(is_canonical_pump or getattr(_c, "ALLOW_UNLOCKED_LP_POOLS", True))
 
@@ -1893,7 +1939,7 @@ class GrokJevEngine:
                         return False, f"dev loaded (GoPlus) {_h_stats['dev_pct']:.1f}% > {max_dev_gp_fb:.0f}% (dump risk)", _h_stats
                     if _h_stats["top10_pct"] > max_top10_gp_fb:
                         return False, f"top10 concentration (GoPlus) {_h_stats['top10_pct']:.1f}% > {max_top10_gp_fb:.0f}%", _h_stats
-                elif getattr(_c, "JEV_REQUIRE_HOLDER_DATA", False) or (not is_canonical_pump and not _is_launchpad_aud and raw_liq < 12000.0):
+                elif getattr(_c, "JEV_REQUIRE_HOLDER_DATA", False) or (not is_canonical_pump and not _is_launchpad_aud and not bool(pair_data.get("_pumpswap_lp_burned"))):
                     return False, f"auditor-pending: holder report not ready yet ({e}), wait for verification", _h_stats
                 elif isinstance(pair_data, dict):
                     pair_data["_lp_verified"] = bool(is_canonical_pump or getattr(_c, "ALLOW_UNLOCKED_LP_POOLS", True))
@@ -2255,6 +2301,17 @@ class GrokJevEngine:
         if getattr(_c, "ROCKET_XGB_ENABLED", True) and not _is_mom_rocket_fin and (rkt_final + 0.05) < final_thresh:
             print(f"🚫 [GROK-JEV-ML-VETO] {symbol} ({address[:8]}): Rocket XGB final score {rkt_final:.1f}% < {final_thresh:.0f}% — VETO! (Блокировка дампа)")
             return False, f"rocket-xgb-final-veto {rkt_final:.1f}% < {final_thresh:.0f}%"
+        _dex_fin_j = str(pair.get("dexId", "")).lower()
+        _is_unlocked_custom_fin = (
+            not _c.is_launchpad_mint(address)
+            and _dex_fin_j not in ("pump", "pumpfun", "moonshot")
+            and not bool(pair.get("_pumpswap_is_canonical"))
+            and not bool(pair.get("_pumpswap_lp_burned"))
+        )
+        _custom_xgb_min = float(getattr(_c, "ROCKET_XGB_UNLOCKED_CUSTOM_MIN", 18.0))
+        if getattr(_c, "ROCKET_XGB_ENABLED", True) and _is_unlocked_custom_fin and (rkt_final + 0.05) < _custom_xgb_min:
+            print(f"🚫 [GROK-JEV-ML-UNLOCKED] {symbol} ({address[:8]}): unlocked AMM Rocket XGB {rkt_final:.1f}% < {_custom_xgb_min:.0f}% — VETO! (отсев слабых/клонированных пулов уровня GTA6)")
+            return False, f"rocket-xgb-unlocked-veto {rkt_final:.1f}% < {_custom_xgb_min:.0f}%"
 
         print(f"🚀 [GROK-JEV-ML-PASS] {symbol} ({address[:8]}): Rocket XGB score {rkt_final:.1f}% (thresh {final_thresh:.0f}%) — ОДОБРЕНО!")
 

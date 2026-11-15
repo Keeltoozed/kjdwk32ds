@@ -3033,6 +3033,25 @@ class Analyzer:
                 elif top_10_sum_pct > max_allowed_pct:
                     print(f"🚫 [АНТИСКАМ] Топ-10 держат {top_10_sum_pct:.1f}% (Лимит {max_allowed_pct}%). Блокируем.")
                     return False
+                if not holders:
+                    import goplus as _gp_empty
+                    _h_empty = _gp_empty.get_solana_holder_stats(mint)
+                    if _h_empty.get("has_data"):
+                        self._last_top10 = float(_h_empty.get("top_10_pct", 0.0) or 0.0)
+                        self._last_dev = float(_h_empty.get("dev_pct", 0.0) or 0.0)
+                        if self._last_dev > max_dev_pct:
+                            print(f"🚫 [GOPLUS-DEV] {symbol} ({mint[:8]}): дев держит {self._last_dev:.1f}% > {max_dev_pct:.0f}% — блок.")
+                            return False
+                        if self._last_top10 > max_allowed_pct:
+                            print(f"🚫 [GOPLUS-CABAL] {symbol} ({mint[:8]}): топ-10 держат {self._last_top10:.1f}% > {max_allowed_pct:.0f}% — блок.")
+                            return False
+                    elif getattr(config, "JEV_REQUIRE_HOLDER_DATA", False) or (
+                        not _is_pump_mint
+                        and not is_pump_curve
+                        and not bool((pair_data or {}).get("_pumpswap_lp_burned"))
+                    ):
+                        print(f"🚫 [NO-AUDIT] {symbol} ({mint[:8]}): RugCheck topHolders пуст и GoPlus без холдеров (не-pump пул ${liquidity:,.0f}) — блок входа.")
+                        return False
             else:
                 # rc_data is None (RugCheck 400, 404, 429, timeout)
                 if not _is_pump_mint and not getattr(config, "ALLOW_UNLOCKED_LP_POOLS", True):
@@ -3069,8 +3088,8 @@ class Analyzer:
                             print(f"🚫 [GOPLUS-CABAL] {symbol} ({mint[:8]}): топ-10 держат {self._last_top10:.1f}% > {_max_top10:.0f}% — риск кабала.")
                             return False
                         print(f"🛡️ [GOPLUS] RugCheck недоступен, но GoPlus подтвердил безопасность {mint[:8]} (Топ-10: {self._last_top10:.1f}%, Дев: {self._last_dev:.1f}%).")
-                    elif getattr(config, "JEV_REQUIRE_HOLDER_DATA", False) or (not _is_pump_mint and not is_pump_curve and liquidity < 12000.0):
-                        print(f"🚫 [NO-AUDIT] {symbol} ({mint[:8]}): Ни RugCheck, ни GoPlus не имеют данных холдеров (не-pump пул ${liquidity:,.0f} < $12k) — блок входа.")
+                    elif getattr(config, "JEV_REQUIRE_HOLDER_DATA", False) or (not _is_pump_mint and not is_pump_curve and not bool(pair_data.get("_pumpswap_lp_burned"))):
+                        print(f"🚫 [NO-AUDIT] {symbol} ({mint[:8]}): Ни RugCheck, ни GoPlus не имеют данных холдеров (не-pump пул ${liquidity:,.0f}) — блок входа.")
                         return False
                 except Exception as _ge:
                     if not getattr(config, "ALLOW_UNLOCKED_LP_POOLS", True):
