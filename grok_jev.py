@@ -2146,11 +2146,26 @@ class GrokJevEngine:
             print(f"🚫 [GROK+JEV-SCAM] {symbol} ({chain}): {sec_why}")
             return False, f"anti-scam-reject {sec_why}"
 
-        # 4.5. Нет данных о холдерах (RugCheck/GoPlus молчат) -> не входим вслепую (для не-pump токенов):
-        _is_pump_token = _c.is_launchpad_mint(address) or str(pair.get("dexId", "")).lower() in ("pump", "pumpfun")
-        if getattr(_c, "JEV_REQUIRE_HOLDER_DATA", True) and not _is_pump_token:
-            if not (float((_h_stats or {}).get("top1_pct", 0) or 0) > 0 or float((_h_stats or {}).get("top10_pct", 0) or 0) > 0):
-                return False, "anti-scam-reject holders-no-data (нет данных о холдерах)"
+        # 4.5. Нет данных о холдерах (RugCheck/GoPlus молчат) -> не входим вслепую (включая pump токены):
+        # Защищает от кейса NIHAOMAS: пустой отчёт холдеров -> дев держал 90% и слил в 1-ю минуту!
+        if getattr(_c, "JEV_REQUIRE_HOLDER_DATA", True):
+            _has_h = bool(_h_stats and isinstance(_h_stats, dict) and (
+                float(_h_stats.get("top1_pct", 0) or 0) > 0 or float(_h_stats.get("top10_pct", 0) or 0) > 0
+            ))
+            if not _has_h:
+                try:
+                    import goplus as _gp_j
+                    _g_raw = _gp_j.get_solana_holder_stats(address)
+                    if _g_raw and _g_raw.get("has_data"):
+                        _h_stats = dict(_h_stats or {})
+                        _h_stats["top10_pct"] = float(_g_raw.get("top_10_pct", 0.0) or 0.0)
+                        _h_stats["dev_pct"] = float(_g_raw.get("dev_pct", 0.0) or 0.0)
+                        _h_stats["top1_pct"] = _h_stats["dev_pct"]
+                        _has_h = True
+                except Exception:
+                    pass
+            if not _has_h:
+                return False, "anti-scam-reject holders-no-data (нет данных о холдерах — ожидание индексации)"
 
         # 4.6. SMART HUNTER: торговали ли этим токеном кошельки из базы. Фильтры НЕ обходит (инсайдеры тоже сливают на копирующих),
         # результат идёт в data-line судьи и в запись входа, чтобы измерить, есть ли в этом сигнале польза.
@@ -2361,9 +2376,9 @@ async def grok_bot_jev_loop(tracker, analyzer=None):
         try:
             import config as _c
             if not getattr(_c, "JEV_ENABLED", True):
-                await asyncio.sleep(30.0)
+                await asyncio.sleep(10.0)
                 continue
-            await asyncio.sleep(15.0)
+            await asyncio.sleep(2.5)
             now = time.time()
 
             # Периодический отчет воронки THE FUNNEL (раз в 60 сек)

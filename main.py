@@ -438,7 +438,7 @@ async def position_manager_loop(analyzer, tracker):
                         if _is_unl_cg is None:
                             _is_unl_cg = not bool(getattr(position, "is_lp_locked_80", False))
                     position.is_unlocked_pool = _is_unl_cg
-                    _cg_req = 1 if _is_unl_cg else 3
+                    _cg_req = 1 if (_is_unl_cg or _is_pump_tok or minutes_held <= 15.0) else 2
                     if _cg_n < _cg_req:
                         print(f"⚠️ [SOL-TICK-VERIFY] {position.symbol} ({mint[:8]}): резкий 1-тик {pnl_pct*100:+.1f}% (-{(1 - current_price/_ref_crash_px)*100:.0f}%) — ждём {_cg_req}-й тик подтверждения.")
                         continue
@@ -489,7 +489,7 @@ async def position_manager_loop(analyzer, tracker):
                 _tp4_sell = float(getattr(config, "TP4_SELL_FRAC", 0.50))
                 _tp5 = float(getattr(config, "TP5_TRIGGER_PCT", 4.00))
                 _tp5_sell = float(getattr(config, "TP5_SELL_FRAC", 0.50))
-                _min_tp_ticket = float(getattr(config, "PARTIAL_TP_MIN_TICKET_USD", 20.0))
+                _min_tp_ticket = float(getattr(config, "PARTIAL_TP_MIN_TICKET_USD", 2.0))
                 _pos_val = float(getattr(position, "original_amount_usd", 0.0) or getattr(position, "amount_usd", 0.0) or 0.0)
                 _allow_partial_tp = getattr(config, "PARTIAL_TP_ENABLED", True) and (_pos_val >= _min_tp_ticket)
 
@@ -1076,8 +1076,8 @@ async def scanner_loop(analyzer, tracker):
                             processed_mints[mint] = _now_r - _cd_r + 20
                             continue
 
-                        # Слив/флет (m5 < 1.0%): не тратим слоты сканера на красные свечи
-                        if _c_m5 < 1.0 and _c_age_m > 1.5:
+                        # Слив/флет (m5 < 1.0%): не тратим слоты сканера на красные свечи (но пускаем свежие миграции до 2.5м)
+                        if _c_m5 < 1.0 and _c_age_m > 2.5 and not _is_fresh_grad:
                             processed_mints[mint] = _now_r - _cd_r + 15
                             continue
 
@@ -1330,10 +1330,10 @@ async def scanner_loop(analyzer, tracker):
                                     print(f"🚫 [SCANNER-FLOOR-TOKEN] {actual_symbol} ({mint[:8]}): h1 {_h1_live:.0f}% — токен уже на полу, входить нельзя!")
                                     continue
                                 # Блок: токен созревает со 2-й свечи (карантин блока 0)
-                                _min_sc_age = float(getattr(config, "SOLANA_MIN_AGE_MIN", 1.0))
+                                _min_sc_age = float(getattr(config, "SOLANA_MIN_AGE_MIN", 0.40))
                                 if _age_m < _min_sc_age:
                                     print(f"⏳ [SCANNER-WARMUP] {actual_symbol} ({mint[:8]}): пул {_age_m:.1f}м < {_min_sc_age:.1f}м — ждём созревания 1-й свечи.")
-                                    processed_mints[mint] = time.time() - _cd + 20
+                                    processed_mints[mint] = time.time() - _cd + 12
                                     continue
 
                                 # Повторная проверка живых метрик после сброса prefetch-кэша (единый классификатор пропускает откат покупателей и V-развороты)
@@ -1463,42 +1463,30 @@ async def scanner_loop(analyzer, tracker):
                                     print(f"🚫 [SCANNER-FAKE-PUMPSWAP] {actual_symbol} ({mint[:8]}): кастомный не-pump контракт на PumpSwap с микро-пулом (${liq_usd:,.0f} < $6k) — отмена!")
                                     continue
 
-                                # Защита от миграционного дампа Pump.fun (кейс SHANE FDV $35.8k -24.2%!)
+                                # Защита от миграционного дампа Pump.fun
                                 if mint.endswith("pump") and _dex_id in ("pumpswap", "raydium", "meteora", "orca"):
                                     _c_ms_sc = pair_data.get("pairCreatedAt") or 0
                                     _age_sc = ((time.time() * 1000 - _c_ms_sc) / 60000.0) if _c_ms_sc else 0.5
-                                    _has_launch_surge = (_vol5_live >= 2000.0 and _b5_bump >= _s5_bump and _b5_bump >= 6 and _m5_live >= -2.0)
-                                    # Сильный surge: мощный импульс чтобы войти раньше 1.5м (не душим кейсы b5=325, vol=$11k)
-                                    _strong_surge = (
-                                        (_vol5_live >= 5000.0 and _b5_bump >= 40 and _b5_bump >= _s5_bump * 1.12 and _m5_live >= 3.0)
-                                        or (_vol5_live >= 10000.0 and _b5_bump >= 80 and _b5_bump >= _s5_bump * 1.05 and _m5_live >= 2.0)
-                                    )
-                                    if _age_sc < 1.5 and not _has_launch_surge:
-                                        processed_mints[mint] = time.time() - _cd + 15
+                                    _has_launch_surge = (_vol5_live >= 300.0 and _b5_bump >= _s5_bump and _b5_bump >= 3 and _m5_live >= 0.5)
+                                    if _age_sc < 0.4 and not _has_launch_surge:
+                                        processed_mints[mint] = time.time() - _cd + 10
                                         try:
                                             from birth_tracker import birth_tracker as _bt_sc
                                             _bt_sc.add_to_waiting_room(mint)
                                         except Exception:
                                             pass
-                                        print(f"⏳ [SCANNER-MIGRATION] {actual_symbol} ({mint[:8]}): AMM-пул создан {_age_sc:.1f}м назад (< 1.5м) без импульса — повтор через 15с.")
+                                        print(f"⏳ [SCANNER-MIGRATION] {actual_symbol} ({mint[:8]}): пул {_age_sc:.1f}м < 0.4м без сделок — повтор через 10с.")
                                         continue
-                                    elif _age_sc < 1.5 and _has_launch_surge and not _strong_surge:
-                                        # Слабый surge (< 40 байев, < $5k vol) — ждём созревания до 1.5 мин
-                                        processed_mints[mint] = time.time() - _cd + 20
-                                        print(f"⏳ [SCANNER-MIGRATION-WAIT] {actual_symbol} ({mint[:8]}): surge слабый (b5={_b5_bump}, vol=${_vol5_live:,.0f}) — ждём 1.5м от создания пула.")
-                                        continue
-                                    elif _age_sc < 1.5 and _strong_surge:
-                                        print(f"🚀 [MIGRATION-SURGE] {actual_symbol} ({mint[:8]}): СИЛЬНЫЙ прорыв миграции (vol5 ${_vol5_live:,.0f}, {_b5_bump}b/{_s5_bump}s, m5 {_m5_live:+.1f}%) — ранний вход!")
                                     _fdv_sc = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
                                     from sol_price import get_sol_price_sync
                                     _sol_p_sc = float(get_sol_price_sync() or 150.0)
                                     if _sol_p_sc <= 0: _sol_p_sc = 150.0
-                                    _dump_floor_sc = float(getattr(config, "PUMP_DUMP_FLOOR_SOL", 160.0)) * _sol_p_sc
-                                    if 0 < _fdv_sc < _dump_floor_sc and not (_age_sc < 5.0 and _vol5_live >= 4000.0 and _m5_live >= 8.0 and _b5_bump >= _s5_bump * 1.10):
-                                        print(f"🚫 [SCANNER-MIGRATION] {actual_symbol} ({mint[:8]}): FDV ${_fdv_sc:,.0f} < ${_dump_floor_sc:,.0f} [~160 SOL] — слит ниже уровня миграции.")
+                                    _dump_floor_sc = float(getattr(config, "PUMP_DUMP_FLOOR_SOL", 140.0)) * _sol_p_sc
+                                    if 0 < _fdv_sc < _dump_floor_sc and not (_age_sc < 5.0 and _vol5_live >= 2000.0 and _m5_live >= 3.0 and _b5_bump >= _s5_bump):
+                                        print(f"🚫 [SCANNER-MIGRATION] {actual_symbol} ({mint[:8]}): FDV ${_fdv_sc:,.0f} < ${_dump_floor_sc:,.0f} [~140 SOL] — слит ниже уровня миграции.")
                                         continue
-                                    if liq_usd < 8000.0:
-                                        print(f"🚫 [SCANNER-MIGRATION] {actual_symbol} ({mint[:8]}): ликвидность ${liq_usd:,.0f} < $8,000 — микро-пул.")
+                                    if liq_usd < 5000.0:
+                                        print(f"🚫 [SCANNER-MIGRATION] {actual_symbol} ({mint[:8]}): ликвидность ${liq_usd:,.0f} < $5,000 — микро-пул.")
                                         continue
 
                                 # Живая проверка цены Jupiter для ЛЮБЫХ токенов на AMM (включая pump на Raydium/PumpSwap)

@@ -715,9 +715,9 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
     _b5_j = int((((td or {}).get("txns") or {}).get("m5") or {}).get("buys", 0) or 0)
     _s5_j = int((((td or {}).get("txns") or {}).get("m5") or {}).get("sells", 0) or 0)
 
-    # 0. КАРАНТИН БЛОКА 0 (минимум 1.0 минута / 60 секунд со 2-й свечи):
+    # 0. КАРАНТИН БЛОКА 0 (минимум 24 секунды со 2-й свечи):
     # Защищает от снайперских бандлов блока 0, но не задерживает вход со 2-й свечи ракеты.
-    _min_age_jup = float(getattr(config, "SOLANA_MIN_AGE_MIN", 1.0))
+    _min_age_jup = float(getattr(config, "SOLANA_MIN_AGE_MIN", 0.40))
     if _age_j < _min_age_jup:
         print(f"⏳ [{source_tag}-AGE-WARMUP] {_sym_tmp}: возраст {_age_j*60:.0f}с < {_min_age_jup*60:.0f}с — карантин 1-й свечи (защита от снайперов и бандл-рага дева)")
         return False
@@ -1025,7 +1025,7 @@ async def jup_loop(analyzer, tracker):
                     skipped_nodata = 0
                     immature_count = 0
                     _now_t = _t.time()
-                    _min_age = float(getattr(config, "SOLANA_MIN_AGE_MIN", 1.0))
+                    _min_age = float(getattr(config, "SOLANA_MIN_AGE_MIN", 0.40))
 
                     for m in mints:
                         if not m or m in open_jup or m.startswith("0x"):

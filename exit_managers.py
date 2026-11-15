@@ -90,71 +90,67 @@ class MatureExitManager:
                     return f"Early Seller Dump Cut ({pnl_pct*100:.1f}%, {b5_chk}b/{s5_chk}s)"
 
             # СБРОС МОМЕНТАЛЬНОГО РАГА НА ПЕРВОЙ СВЕЧЕ (First Candle Rug Exit)
-            # На ракетах (SWEATER, MUSTACHE) первая свеча зелёная, покупатели льют объём и pnl в плюсе.
-            # Если токен — раг: на первой свече (0.5..3м) дев сливает стек, m1 падает > 18% или продавцы давят в одну калитку.
-            # Сбрасываем ТОЛЬКО РАГ сразу на первой свече с минимальным убытком (-6%..-9%), не дожидаясь -25%..-35%!
-            if 0.4 <= minutes_held <= 3.0 and pnl_pct <= -0.100:
+            # На ракетах первая свеча зелёная, покупатели льют объём и pnl в плюсе.
+            # Если токен — раг: дев сливает стек, m1 падает > 12% или продавцы давят в одну калитку.
+            # Сбрасываем ТОЛЬКО РАГ сразу на первой свече с минимальным убытком (-6%..-7.5%), не дожидаясь -25%..-90%!
+            if 0.3 <= minutes_held <= 3.0 and pnl_pct <= -0.070:
                 _pc_chk = _pd_chk.get("priceChange") or {}
                 _m1_c = float(_pc_chk.get("m1", 0) or 0)
                 _txns = (_pd_chk.get("txns") or {}).get("m5") or {}
                 _b5 = int(_txns.get("buys", 0) or 0)
                 _s5 = int(_txns.get("sells", 0) or 0)
-                if _m1_c <= -18.0:
+                if _m1_c <= -12.0:
                     return f"🚨 First Candle Rug Dump: 1m crash ({_m1_c:.0f}%, PnL {pnl_pct*100:.1f}%)"
-                if _s5 >= 8 and (_b5 / max(1, _s5)) < 0.35:
+                if _s5 >= 6 and (_b5 / max(1, _s5)) < 0.40:
                     return f"🚨 First Candle Rug Cut: Sellers dominating ({_b5}b/{_s5}s, PnL {pnl_pct*100:.1f}%)"
 
         # =========================================================================
-        # 0.5. UNLOCKED POOL STALL GUARD (Защита от сноса ликвидности при остановке цены)
+        # 0.5. БЫСТРЫЙ СБОР ПРИБЫЛИ И ЗАЩИТА ОТ РАГА / ЗАТУХАНИЯ (FAST PROFIT HARVEST)
         # =========================================================================
-        # На незалоченных пулах (Meteora DYN2, Raydium CPMM, кастомный DEX) дев держит 100% LP
-        # в своём кошельке. Как только волна покупок останавливается и цена замирает на 20-30с,
-        # дев видит остановку стакана и нажимает "Remove Liquidity" (кейс PUNCHAO 220 SOL).
-        # Фиксируем прибыль НЕМЕДЛЕННО при первых признаках затухания импульса!
+        # На мемкоинах Solana окно максимальной прибыли длится 15-45 секунд.
+        # Если монета сделала скачок и замерла — фиксируем прибыль СРАЗУ,
+        # даже если монета потом рагнится! Быстро вытаскиваем профит до сброса стакана!
         _pd_pos = getattr(position, "pair_data", None) or getattr(position, "last_pair_data", None) or {}
         _mint_pos = str(getattr(position, "mint", "") or "")
         _base_a = str(((_pd_pos.get("baseToken") or {}).get("address")) or _mint_pos)
         _is_pump_token = _mint_pos.endswith("pump") or _base_a.endswith("pump")
         _dex_pos_low = str((_pd_pos.get("dexId", "") if isinstance(_pd_pos, dict) else "") or "").lower()
 
-        # Настоящий безопасный лок LP: только PumpSwap canonical или проверенный RugCheck lock/burn >= 80%
         _has_safe_lock = bool(getattr(position, "is_lp_locked_80", False)) or (
             _is_pump_token and _dex_pos_low in ("pumpswap", "pump-amm", "pump", "pumpfun")
         )
         _is_unlocked = not _has_safe_lock
         position.is_unlocked_pool = _is_unlocked
 
-        if _is_unlocked:
-            _u_prof_age = float(getattr(config, "UNLOCKED_STALL_PROFIT_AGE_SEC", 20.0)) / 60.0
-            _u_mid_age = float(getattr(config, "UNLOCKED_STALL_MID_AGE_SEC", 24.0)) / 60.0
-            _u_scratch_held = float(getattr(config, "UNLOCKED_ENTRY_SCRATCH_SEC", 35.0)) / 60.0
-            _u_fast_sl = -abs(float(getattr(config, "UNLOCKED_FAST_STOP_PCT", -0.075)))
-
-            # А. Фиксация пампа при затухании импульса (кейс PUNCHAO +40.3% -> застой 20с -> Remove 220 SOL)
-            if max_pnl_pct >= 0.18:
-                if _peak_age_min >= _u_prof_age and pnl_pct >= 0.10:
-                    return f"⚡ Unlocked Momentum Stall (+{pnl_pct*100:.1f}%, застой {_peak_age_min*60:.0f}с после пика +{max_pnl_pct*100:.1f}% — фиксация до Remove LP)"
-            elif max_pnl_pct >= 0.10:
-                if _peak_age_min >= _u_mid_age and pnl_pct >= 0.04:
-                    return f"⚡ Unlocked Stall Profit Lock (+{pnl_pct*100:.1f}%, застой {_peak_age_min*60:.0f}с после пика +{max_pnl_pct*100:.1f}%)"
-            elif max_pnl_pct >= 0.05:
-                if _peak_age_min >= (_u_mid_age * 1.25) and pnl_pct <= 0.02:
-                    return f"⚡ Unlocked Pop Fade (+{pnl_pct*100:.1f}%, застой {_peak_age_min*60:.0f}с)"
-
-            # Б. Срез зависшей позиции без импульса (Stall at Entry)
-            if minutes_held >= _u_scratch_held and max_pnl_pct < 0.04 and pnl_pct <= 0.005:
-                return f"⚡ Unlocked Zero-Momentum Scratch ({pnl_pct*100:+.1f}%, 0 импульса за {minutes_held*60:.0f}с на незалоченном пуле)"
-
-            # В. Быстрый стоп-лосс на незалоченном пуле (-7.5% вместо -11.5%)
-            if pnl_pct <= _u_fast_sl:
-                return f"⚡ Unlocked Fast Stop Loss ({pnl_pct*100:.1f}%)"
-
-        # Быстрая фиксация прибыли при затухании импульса для ЛЮБЫХ монет:
-        # Если монета сделала +22%..+50% и цена замерла на 35с без нового ATH — вытаскиваем профит!
+        # А. Фиксация прибыли при затухании импульса (для ЛЮБЫХ монет):
         if not _is_mb:
-            if max_pnl_pct >= 0.22 and _peak_age_min >= 0.58 and pnl_pct >= 0.12:
-                if pnl_pct <= max_pnl_pct * 0.88:
-                    return f"⚡ Momentum Stall Harvest (+{pnl_pct*100:.1f}%, застой {_peak_age_min*60:.0f}с после пика +{max_pnl_pct*100:.1f}% — фиксация прибыли)"
+            if max_pnl_pct >= 0.50:
+                # Памп +50%..+100%: если нет нового ATH 15 сек или откат >= 8% от пика — забираем прибыль!
+                if (_peak_age_min >= 0.25 and pnl_pct <= max_pnl_pct * 0.92) or pnl_pct <= max_pnl_pct * 0.85:
+                    return f"⚡ Runner Stall Harvest (+{pnl_pct*100:.1f}%, застой {_peak_age_min*60:.0f}с после пика +{max_pnl_pct*100:.1f}%)"
+            elif max_pnl_pct >= 0.25:
+                # Памп +25%..+50%: если нет нового ATH 14 сек или откат >= 7% от пика — забираем прибыль!
+                if (_peak_age_min >= 0.23 and pnl_pct <= max_pnl_pct * 0.90) or pnl_pct <= max_pnl_pct * 0.82:
+                    return f"⚡ Momentum Stall Harvest (+{pnl_pct*100:.1f}%, застой {_peak_age_min*60:.0f}с после пика +{max_pnl_pct*100:.1f}%)"
+            elif max_pnl_pct >= 0.15:
+                # Памп +15%..+25%: если нет нового ATH 16 сек или откат до +8% — забираем прибыль!
+                if (_peak_age_min >= 0.27 and pnl_pct >= 0.08) or pnl_pct <= 0.08:
+                    return f"⚡ Fast Profit Harvest (+{pnl_pct*100:.1f}%, застой {_peak_age_min*60:.0f}с после пика +{max_pnl_pct*100:.1f}%)"
+            elif max_pnl_pct >= 0.08:
+                # Малый отскок +8%..+15%: если застой 20 сек и цена сползает к +3% — фиксируем!
+                if _peak_age_min >= 0.33 and pnl_pct <= 0.035:
+                    return f"⚡ Quick Pop Lock (+{pnl_pct*100:.1f}%, откат после пика +{max_pnl_pct*100:.1f}%)"
+
+        # Б. УНИВЕРСАЛЬНЫЙ СРЕЗ ЗАВИСШИХ МОНЕТ БЕЗ ИМПУЛЬСА (Zero-Momentum Scratch):
+        # Если монета куплена, прошло 35 секунд, а импульса нет (пик < +4% и pnl <= 0.0%):
+        # ВЫХОДИМ НЕМЕДЛЕННО! Это освобождает слот для настоящих ракет и спасает от рагпула дева!
+        if minutes_held >= 0.58 and max_pnl_pct < 0.04 and pnl_pct <= 0.005:
+            return f"⚡ Zero-Momentum Scratch ({pnl_pct*100:+.1f}%, 0 импульса за {minutes_held*60:.0f}с — сброс до дампа дева)"
+
+        # В. БЫСТРЫЙ СТОП-ЛОСС (-7.5% на 1-м тике):
+        _fast_sl = -abs(float(getattr(config, "STOP_LOSS_PCT", -0.075)))
+        if pnl_pct <= _fast_sl:
+            return f"🚨 Fast Stop Loss ({pnl_pct*100:.1f}%)"
 
         # =========================================================================
         # 1. ЖЕСТКИЙ КОНТРОЛЬ УБЫТКА (EMERGENCY CAP & STOP LOSS) — ПО СТАНДАРТУ 0d2b1ae

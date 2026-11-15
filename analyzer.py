@@ -3000,11 +3000,8 @@ class Analyzer:
                 is_pump = pair_data and pair_data.get("dexId") in ("pump", "pumpfun")
                 max_allowed_pct = 40.0 if is_pump else 45.0
 
-                max_dev_pct = float(getattr(config, "ROBINHOOD_MAX_CREATOR_PCT", 0.20)) * 100.0
-                if is_pump:
-                    max_dev_pct = min(max_dev_pct, 15.0)
-                else:
-                    max_dev_pct = min(max_dev_pct, 10.0)
+                max_dev_pct = 6.0
+                max_allowed_pct = 35.0
                 
                 if top_10_sum_pct > 100:
                     print(f"⚠️ [HOLDERS] {mint[:8]}: топ-10 {top_10_sum_pct:.1f}% > 100% — битые данные сапплая.")
@@ -3012,9 +3009,9 @@ class Analyzer:
                     print(f"🚫 [АНТИСКАМ] Создатель (Dev) держит {dev_holding_pct:.1f}% (Лимит {max_dev_pct:.0f}%). Блокируем.")
                     return False
                 
-                # Защита от скрытого второго кошелька дева: ни один кит не должен держать > 25% (pump) / 20% (dex)
+                # Защита от скрытого второго кошелька дева: ни один кит не должен держать > 12%
                 largest_whale_pct = top_10[0][1] if top_10 else 0.0
-                max_single_whale = 25.0 if is_pump else 20.0
+                max_single_whale = 12.0
                 if largest_whale_pct > max_single_whale:
                     print(f"🚫 [АНТИСКАМ] Кит держит {largest_whale_pct:.1f}% > {max_single_whale:.0f}% (риск скрытого дева/дампа). Блокируем.")
                     return False
@@ -4195,8 +4192,8 @@ class Analyzer:
         # 4. Проверка безопасности холдеров и создателя
         _t10 = getattr(self, '_last_top10', 0.0)
         _dev = getattr(self, '_last_dev', 0.0)
-        if _dev > 10.0:
-            return self._deny(mint, "ray-dev-hold", f"🚫 [DEV-HOLD] {mint[:8]}: создатель держит {_dev:.1f}% > 10% — дамп-риск.")
+        if _dev > 6.0:
+            return self._deny(mint, "ray-dev-hold", f"🚫 [DEV-HOLD] {mint[:8]}: создатель держит {_dev:.1f}% > 6% — дамп-риск.")
         _max_t10 = 32.0 if (_dex_low == "pumpswap" or _is_migrated_pump) else 35.0
         if _t10 > _max_t10:
             return self._deny(mint, "ray-top10-cabal", f"🚫 [TOP10-CABAL] {mint[:8]}: топ-10 держат {_t10:.1f}% > {_max_t10:.0f}% — кабал/дамп-риск.")
