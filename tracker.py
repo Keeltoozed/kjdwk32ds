@@ -481,9 +481,35 @@ class PaperTracker:
             # ВСЕ прибыльные ракеты бота (WILL +62%, UP +23%, WISHMAS +86%, TEDDY, BUFFAPE, SYRUP)
             # заканчиваются строго на 'pump'!
             _pd_liq = float(((pair_data or {}).get("liquidity") or {}).get("usd", 0) or 0) if isinstance(pair_data, dict) else 0.0
+            _pd_dex = str((pair_data or {}).get("dexId", "") or "").lower() if isinstance(pair_data, dict) else ""
+            _lp_preverified = bool(isinstance(pair_data, dict) and pair_data.get("_lp_verified"))
             _eff_init_liq = max(float(initial_liquidity_usd or 0.0), _pd_liq)
             _is_vip_or_copy = ("VIP" in str(source or "")) or str(source or "").startswith("COPY")
-            if not config.is_launchpad_mint(mint_str) and not _is_vip_or_copy:
+            if isinstance(pair_data, dict):
+                if config.is_pumpswap_liq_fdv_trap(pair_data):
+                    print(f"🛑 [FIREWALL-RUG-BLOCK] {symbol} ({mint_str[:8]}): PumpSwap CreatePool liq/fdv 0-social trap!")
+                    return False
+                if pair_data.get("_pumpswap_checked") and not _lp_preverified:
+                    print(f"🛑 [FIREWALL-RUG-BLOCK] {symbol} ({mint_str[:8]}): PumpSwap pool failed on-chain CreatePool check!")
+                    return False
+                if _pd_dex == "pumpswap" and pair_data.get("_pumpswap_canonical") is False and not _lp_preverified:
+                    print(f"🛑 [FIREWALL-RUG-BLOCK] {symbol} ({mint_str[:8]}): custom non-canonical PumpSwap pool without verified burned LP!")
+                    return False
+            # Строгий LP-Firewall:
+            # 1) Нативный Pump.fun токен (оканчивается на 'pump') на pumpfun / каноническом pumpswap защищён протоколом.
+            # 2) Любой кастомный не-'pump' токен (.bonk, .bags, или кастомный DEX-пул) ИЛИ .pump на стороннем DEX / non-canonical CreatePool
+            #    ДОЛЖЕН иметь подтверждённый _lp_verified!
+            _ps_canon_flag = bool(isinstance(pair_data, dict) and pair_data.get("_pumpswap_canonical"))
+            _is_native_pump_dex = mint_str.lower().endswith("pump") and (
+                _pd_dex in ("", "pumpfun", "pump")
+                or (_pd_dex == "pumpswap" and (not isinstance(pair_data, dict) or not pair_data.get("_pumpswap_checked") or _ps_canon_flag))
+            )
+            if not _is_native_pump_dex and not _lp_preverified and not _is_vip_or_copy:
+                # Легаси-совместимость для unit-тестов/ручных вызовов без pair_data: если явно не передан сторонний DEX,
+                # проверяем хотя бы наличие ML-аудита и минимального пула; при наличии pair_data требуем _lp_verified.
+                if isinstance(pair_data, dict) and pair_data:
+                    print(f"🛑 [FIREWALL-RUG-BLOCK] {symbol} ({mint_str[:8]}): отказ входа — не подтверждён LP burn/lock для кастомного пула (dex={_pd_dex}, liq ${_eff_init_liq:,.0f})!")
+                    return False
                 if float(ml_confidence or 0.0) <= 0.0 and _eff_init_liq < 5000.0:
                     print(f"🛑 [FIREWALL-RUG-BLOCK] {symbol} ({mint_str[:8]}): отказ входа — неаудированный кастомный не-launchpad токен (liq ${_eff_init_liq:,.0f}, ML {float(ml_confidence or 0):.1f}%)!")
                     return False
@@ -511,8 +537,8 @@ class PaperTracker:
         # ИСКЛЮЧЕНИЕ: VIP KOL сделки (Ansem, Chairman и др.) идут с 100% обходом ML-фильтров по прямому требованию!
         _is_copy_src = str(source or "").startswith("COPY")
         _is_vip = "VIP" in str(source or "")
-        min_conf = float(getattr(config, "ROCKET_XGB_FINAL_THRESHOLD", 28.0))
-        _eff_min_conf = float(getattr(config, "ROCKET_XGB_STAGE1_THRESHOLD", 18.0)) if _is_copy_src else min_conf
+        min_conf = float(getattr(config, "ROCKET_XGB_FINAL_THRESHOLD", 15.0))
+        _eff_min_conf = float(getattr(config, "ROCKET_XGB_STAGE1_THRESHOLD", 10.0)) if _is_copy_src else min_conf
         if getattr(config, "ROCKET_XGB_ENABLED", True) and not _is_vip:
             if ml_confidence > 0 and (ml_confidence + 0.05) < _eff_min_conf:
                 print(f"🚫 [FIREWALL] Отказ входа {symbol} ({mint[:8]}): Rocket XGB скор {ml_confidence:.1f}% < {_eff_min_conf:.0f}% (блокировка убыточного дампа)")

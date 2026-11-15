@@ -1279,25 +1279,25 @@ async def scanner_loop(analyzer, tracker):
                                     min_h6=float(getattr(config, "JEV_MIN_H6_PCT", -20.0)),
                                     fdv_usd=_fdv_live_sc,
                                 )
-                                _min_sc_m1 = float(getattr(config, "JEV_MIN_M1_ENTRY_FLOOR_PCT", -2.5))
+                                _min_sc_m1 = float(getattr(config, "JEV_MIN_M1_ENTRY_FLOOR_PCT", -3.5))
                                 if not _mom_live_ok or _m1_live < _min_sc_m1:
                                     print(f"🚫 [SCANNER-LIVE-REVERSAL] {actual_symbol} ({mint[:8]}): на живом графике импульс сломан ({_mom_live_why}, m5 {_m5_live:+.1f}%, m1 {_m1_live:+.1f}% < {_min_sc_m1:+.1f}%) — отмена покупки!")
                                     continue
-                                _max_m1_cfg_live = float(getattr(config, "MAX_ENTRY_M1_PCT", 25.0))
-                                if _m1_live > _max_m1_cfg_live and _age_m >= 3.0:
+                                _max_m1_cfg_live = float(getattr(config, "MAX_ENTRY_M1_PCT", 15.0))
+                                if _m1_live > _max_m1_cfg_live:
                                     _b5_sc = int((pair_data.get("txns") or {}).get("m5", {}).get("buys", 0) or 0)
                                     _s5_sc = int((pair_data.get("txns") or {}).get("m5", {}).get("sells", 0) or 0)
-                                    if not (_b5_sc >= _s5_sc * 1.15 and _m1_live <= 45.0):
-                                        print(f"🚫 [SCANNER-M1-SPIKE] {actual_symbol} ({mint[:8]}): живой m1 +{_m1_live:.1f}% > +{_max_m1_cfg_live:.1f}% без перевеса покупателей — вершина свечи, отмена!")
+                                    if not (_b5_sc >= _s5_sc * 1.15 and _m1_live <= 18.0):
+                                        print(f"🚫 [SCANNER-M1-SPIKE] {actual_symbol} ({mint[:8]}): живой m1 +{_m1_live:.1f}% > +{_max_m1_cfg_live:.1f}% — вершина свечи, отмена!")
                                         continue
-                                _max_m5_cfg = float(getattr(config, "MAX_ENTRY_M5_PCT", 120.0))
+                                _max_m5_cfg = float(getattr(config, "MAX_ENTRY_M5_PCT", 85.0))
                                 if _m5_live > _max_m5_cfg:
                                     _b5_sc = int((pair_data.get("txns") or {}).get("m5", {}).get("buys", 0) or 0)
                                     _s5_sc = int((pair_data.get("txns") or {}).get("m5", {}).get("sells", 0) or 0)
-                                    _max_allowed_m5 = 450.0 if (_age_m <= 30.0 or mint in _graduated_set or mint.lower().endswith(("pump", "bonk", "bags")) or _dex_id == "pumpswap") else 165.0
-                                    _is_breakout = (_vol5_live >= 6000.0 and _b5_sc >= _s5_sc * 1.12 and _m5_live <= _max_allowed_m5)
+                                    _max_allowed_m5 = 130.0 if (_age_m <= 15.0 or mint in _graduated_set or _dex_id == "pumpswap") else 105.0
+                                    _is_breakout = (_vol5_live >= 4000.0 and _b5_sc >= _s5_sc * 1.12 and _m5_live <= _max_allowed_m5)
                                     if not _is_breakout:
-                                        print(f"🚫 [SCANNER-FOMO-M5] {actual_symbol} ({mint[:8]}): живой m5 +{_m5_live:.1f}% > +{_max_m5_cfg:.0f}% без прорывного объема — вершина свечи, отмена!")
+                                        print(f"🚫 [SCANNER-FOMO-M5] {actual_symbol} ({mint[:8]}): живой m5 +{_m5_live:.1f}% > +{_max_m5_cfg:.0f}% — вершина свечи, отмена!")
                                         continue
                                 _links_sc = len(pair_data.get("info", {}).get("socials", []) or []) + len(pair_data.get("info", {}).get("websites", []) or [])
                                 _soc_unk_sc = bool(pair_data.get("_socials_unknown", False))
@@ -1573,6 +1573,21 @@ async def scanner_loop(analyzer, tracker):
                                 except Exception:
                                     pass
 
+                                # PRE-FLIGHT PUMPSWAP ON-CHAIN GUARD: защита от permissionless CreatePool дрейнов (включая .pump/.bonk/.BAGS)
+                                if str(pair_data.get("dexId") or "").lower() == "pumpswap":
+                                    try:
+                                        import goplus as _gp_ps
+                                        _ps_m_ok, _ps_m_canon, _ps_m_why = await _gp_ps.verify_pumpswap_pool_onchain(
+                                            mint,
+                                            pair_address=str(pair_data.get("pairAddress") or ""),
+                                            pair_data=pair_data,
+                                        )
+                                        if not _ps_m_ok or config.is_pumpswap_liq_fdv_trap(pair_data):
+                                            print(f"🚫 [SCANNER PRE-FLIGHT PUMPSWAP] {actual_symbol} ({mint[:8]}): {_ps_m_why} — вход заблокирован!")
+                                            continue
+                                    except Exception:
+                                        pass
+
                                 # PRE-FLIGHT RUG WALLET AUDIT: анализ кошельков дева, autorités, холдеров, бандлов
                                 if getattr(config, "RUG_WALLET_AUDIT_ENABLED", True):
                                     try:
@@ -1609,7 +1624,7 @@ async def scanner_loop(analyzer, tracker):
                                         print(f"⚠️ [SCANNER PRE-FLIGHT FCR] {actual_symbol} ({mint[:8]}): error {type(_e).__name__} — вход разрешён (fail-open).")
                                         _fcr_feat = {}
 
-                                tracker.add_position(actual_symbol, mint, entry_price, position_size, is_mature=True,
+                                _bought = tracker.add_position(actual_symbol, mint, entry_price, position_size, is_mature=True,
                                                      ml_features={**analyzer.pack_features(pair_data), **_fcr_feat},
                                                      ml_confidence=_final_sc_conf,
                                                      source=f"SCANNER:{analyzer.get_signal(mint)}",
@@ -1618,6 +1633,10 @@ async def scanner_loop(analyzer, tracker):
                                                      wick_stop_loss_pct=_wick_pct,
                                                      initial_liquidity_usd=liq_usd,
                                                      pair_data=pair_data)
+                                if not _bought:
+                                    print(f"🚫 [SCANNER-FIREWALL] {actual_symbol} ({mint[:8]}): покупка отклонена финальным фильтром tracker.")
+                                    continue
+                                print(f"🚀 [BUY-EXECUTED] {actual_symbol} ({mint[:8]}) @ ${entry_price:.8f} [${position_size:.0f}] | ML {_final_sc_conf:.1f}%")
                                 # Инициализируем мониторинг кошельков для новой позиции
                                 try:
                                     init_position_wallet_state(mint, time.time())

@@ -488,11 +488,11 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
     _m1_j = float(_pc_j.get("m1", 0) or 0)
     if abs(_m1_j) > max(180.0, abs(_m5_j) * 3.0 + 40.0):
         _m1_j = _m5_j / 5.0
-    _max_m1_cfg_j = float(getattr(config, "MAX_ENTRY_M1_PCT", 28.0))
-    if _m1_j > _max_m1_cfg_j and _age_j >= 3.0:
-        if not (_b5_j >= int(_s5_j * 1.15) and _m1_j <= 45.0):
-            print(f"🚫 [{source_tag}-M1-SPIKE] {_sym_tmp} ({mint[:8]}): m1 +{_m1_j:.1f}% > +{_max_m1_cfg_j:.1f}% без перевеса покупателей — отмена входа.")
-            return False
+    _max_m1_cfg_j = float(getattr(config, "MAX_ENTRY_M1_PCT", 15.0))
+    _eff_max_m1_j = max(_max_m1_cfg_j, 18.0) if (_b5_j >= int(_s5_j * 1.15) and _vol5_j >= 3000.0) else _max_m1_cfg_j
+    if _m1_j > _eff_max_m1_j:
+        print(f"🚫 [{source_tag}-M1-SPIKE] {_sym_tmp} ({mint[:8]}): m1 +{_m1_j:.1f}% > +{_eff_max_m1_j:.1f}% — вершина свечи, отмена входа.")
+        return False
     _h1_j = float(_pc_j.get("h1", 0) or 0)
     _max_h1_j = config.get_max_entry_h1_pct(_age_j, _vol5_j, _b5_j, _s5_j, _liq_j, _m5_j)
     if _h1_j > _max_h1_j:
@@ -505,11 +505,11 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
         h6=(float(_h6_j_raw) if _h6_j_raw is not None else None),
         age_min=_age_j, vol5_usd=_vol5_j, liq_usd=_liq_j,
         buys5=_b5_j, sells5=_s5_j,
-        min_h1=float(getattr(config, "JEV_MIN_H1_PCT", -12.0)),
-        min_h6=float(getattr(config, "JEV_MIN_H6_PCT", -20.0)),
+        min_h1=float(getattr(config, "JEV_MIN_H1_PCT", -15.0)),
+        min_h6=float(getattr(config, "JEV_MIN_H6_PCT", -25.0)),
         fdv_usd=_fdv_j1,
     )
-    _min_m1_j = float(getattr(config, "JEV_MIN_M1_ENTRY_FLOOR_PCT", -2.5))
+    _min_m1_j = float(getattr(config, "JEV_MIN_M1_ENTRY_FLOOR_PCT", -3.5))
     if not _mom_j_ok or _m1_j < _min_m1_j:
         print(f"🚫 [{source_tag}-MOMENTUM-LOST] {_sym_tmp} ({mint[:8]}): импульс отклонён ({_mom_j_why}, m5 {_m5_j:+.1f}%, m1 {_m1_j:+.1f}%) — отмена входа.")
         return False
@@ -526,13 +526,32 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
         _is_grad_jup = _bt_j.is_graduated(mint)
     except Exception:
         pass
-    _is_launchpad_jup = config.is_launchpad_mint(mint)
-    if not _is_launchpad_jup and not _is_grad_jup:
+    _dex_j_low = str((td or {}).get("dexId", "")).lower()
+    if config.is_pumpswap_liq_fdv_trap(td):
+        print(f"🚫 [JUP-PUMPSWAP-TRAP] {mint[:8]}: custom CreatePool liq/fdv trap — отмена!")
+        return False
+    _ps_j_canon = False
+    if _dex_j_low == "pumpswap":
+        import goplus as _gp_j
+        _ps_j_ok, _ps_j_canon, _ps_j_why = await _gp_j.verify_pumpswap_pool_onchain(
+            mint,
+            pair_address=str((td or {}).get("pairAddress", "") or ""),
+            pair_data=td,
+        )
+        if not _ps_j_ok:
+            print(f"🚫 [JUP-PUMPSWAP] {mint[:8]}: {_ps_j_why} — отмена!")
+            return False
+    _is_native_pump_jup = (
+        (_ps_j_canon and _dex_j_low == "pumpswap")
+        or (mint.lower().endswith("pump") and _dex_j_low in ("pump", "pumpfun"))
+    )
+    _lp_verified_jup = _is_native_pump_jup
+    if not _is_native_pump_jup:
         try:
             import goplus as _gp_jup
             _rc_st, _rc_d = await _gp_jup.fetch_rugcheck_report_cached(mint, ttl=120.0, timeout=5)
             if _rc_st != 200 or not isinstance(_rc_d, dict):
-                print(f"⏳ [{source_tag}-RC-WAIT] {_sym_tmp} ({mint[:8]}): кастомный не-launchpad токен ожидает индексации RugCheck (HTTP {_rc_st}).")
+                print(f"⏳ [{source_tag}-RC-WAIT] {_sym_tmp} ({mint[:8]}): кастомный токен ожидает индексации RugCheck (HTTP {_rc_st}).")
                 return False
             _tok_rc = _rc_d.get("token") or {}
             _SAFE_AUTHS = {"6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P", "11111111111111111111111111111111", None, ""}
@@ -553,23 +572,26 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
                 print(f"🚫 [{source_tag}-HIGH-RISK] {_sym_tmp} ({mint[:8]}): RugCheck Score {(_raw_sc - _ign_sc):.0f} >= 1200 — блок скама!")
                 return False
 
-            _lp_ok = False
-            for _m in (_rc_d.get("markets") or []):
-                if isinstance(_m, dict):
-                    _m_type_j = str(_m.get("marketType") or "").lower()
-                    _lp_inf = _m.get("lp") or {}
-                    _lp_burn_j = float(_lp_inf.get("lpBurnedPct", 0) or 0)
-                    _lp_lock_j = float(_lp_inf.get("lpLockedPct", 0) or 0)
-                    if _lp_burn_j >= 80.0 or ("meteora" not in _m_type_j and _lp_lock_j >= 80.0):
-                        _lp_ok = True
+            _target_pair_j = str((td or {}).get("pairAddress", "") or "").strip()
+            _allow_ps_lock_j = bool((td or {}).get("_pumpswap_canonical")) or (_dex_j_low != "pumpswap")
+            _lp_ok = config.verify_rugcheck_lp_markets(
+                _rc_d.get("markets") or [],
+                target_pair=_target_pair_j,
+                raw_liq=_liq_j,
+                symbol=_sym_tmp,
+                mint=mint,
+                log_unlocked=True,
+                allow_pump_amm_lock=_allow_ps_lock_j,
+            )
             if not _lp_ok:
-                if not config.is_safe_unlocked_custom_runner(_liq_j, _age_j, _vol5_j, _b5_j, _s5_j):
-                    print(f"🚫 [{source_tag}-UNLOCKED-LP] {_sym_tmp} ({mint[:8]}): незалоченный LP на {_dex_j} (liq ${_liq_j:,.0f}, age {_age_j:.1f}m, vol ${_vol5_j:,.0f}) — риск Remove LP!")
-                    return False
-                print(f"💎 [{source_tag}-UNLOCKED-RUNNER] {_sym_tmp} ({mint[:8]}): зрелый ликвидный пул допущен (liq ${_liq_j:,.0f}, age {_age_j:.0f}м, vol ${_vol5_j:,.0f})!")
+                print(f"🚫 [{source_tag}-UNLOCKED-LP] {_sym_tmp} ({mint[:8]}): незалоченный/несожжённый LP на {_dex_j_low or 'DEX'} (liq ${_liq_j:,.0f}, age {_age_j:.1f}m) — риск Remove LP!")
+                return False
+            _lp_verified_jup = True
         except Exception as _lp_ex:
             print(f"⏳ [{source_tag}-RC-ERR] {_sym_tmp} ({mint[:8]}): ошибка проверки RugCheck ({_lp_ex}) — пропуск цикла.")
             return False
+    if isinstance(td, dict) and _lp_verified_jup:
+        td["_lp_verified"] = True
 
     # Защита от анонимных бандлер-пулов без соцсетей на DEX
     # Канонические launchpad-токены (pump, moon, bonk, BAGS) и ликвидные пулы >$25k допускаются
@@ -663,7 +685,7 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
     if not _mom_j2_ok:
         print(f"🚫 [{source_tag}-DOWNTREND] {_sym_tmp}: {_mom_j2_why} — отмена входа!")
         return False
-    _min_jup_m1 = float(getattr(config, "JEV_MIN_M1_ENTRY_FLOOR_PCT", -2.5))
+    _min_jup_m1 = float(getattr(config, "JEV_MIN_M1_ENTRY_FLOOR_PCT", -3.5))
     if _m1_j < _min_jup_m1:
         print(f"🚫 [{source_tag}-1M-DUMP] {_sym_tmp}: 1м свеча {_m1_j:+.1f}% < {_min_jup_m1:+.1f}% — отмена входа!")
         return False
@@ -752,8 +774,8 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
     else:
         print(f"🎯 [JEV-FILLS] {_sym_tmp} ({mint[:8]}): {_flush_msg}")
 
-    # Ончейн аудит бандлов/холдеров/дева (синхронизировано со scanner_loop, чтобы не покупать отклонённые BILLIE-раги)
-    if getattr(config, "RUG_WALLET_ANALYSIS_ENABLED", True):
+    # Ончейн аудит бандлов/холдеров/дева (синхронизировано со scanner_loop)
+    if getattr(config, "RUG_WALLET_AUDIT_ENABLED", getattr(config, "RUG_WALLET_ANALYSIS_ENABLED", True)):
         try:
             from rug_wallet_analysis import quick_rug_check
             _is_ok_rw, _rw_reason = await quick_rug_check(mint)
@@ -761,10 +783,10 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
                 _rw_l = str(_rw_reason).lower()
                 _rw_rpc_err = any(e in _rw_l for e in ("429", "403", "timeout", "error", "none", "rpc", "http", "retry"))
                 if not _rw_rpc_err:
-                    print(f"🚫 [{source_tag}-RUG-WALLET] {_sym_tmp} ({mint[:8]}): {_rw_reason} (Score: {_rw_score}/100) — вход заблокирован.")
+                    print(f"🚫 [{source_tag}-RUG-WALLET] {_sym_tmp} ({mint[:8]}): {_rw_reason} — вход заблокирован.")
                     return False
-        except Exception:
-            pass
+        except Exception as _rw_e:
+            print(f"⚠️ [{source_tag}-RUG-WALLET] {_sym_tmp} ({mint[:8]}): audit err {type(_rw_e).__name__}: {_rw_e}")
 
     # Предвходовой анализ на мгновенный раг первой свечи (FCR Guard)
     if getattr(config, "FCR_ENABLED", True):
@@ -833,7 +855,7 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
         except Exception:
             pass
 
-        tracker.add_position(
+        if not tracker.add_position(
             _sym_tmp, mint, price, min(size, 100.0),
             is_mature=True,
             ml_features=analyzer.pack_features(td or {}),
@@ -843,7 +865,8 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
             stop_under_wick=_wick_stop_price,
             wick_stop_loss_pct=_wick_pct,
             initial_liquidity_usd=_j_liq,
-            pair_data=td)
+            pair_data=td):
+            return False
         grok_jev.FUNNEL_STATS["filled"] += 1
         print(grok_jev.get_funnel_summary())
         print(f"🪐 {source_tag} BUY {_sym_tmp} ({mint[:8]}) @ ${price} [size: ${min(size, 100.0):.1f}] | Wick Stop: ${_wick_stop_price:.8f} ({_wick_pct*100:.1f}%)")

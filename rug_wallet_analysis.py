@@ -44,14 +44,18 @@ async def _rpc(client: AsyncClient, method: str, *args, **kwargs):
         print(f"⚠️ [RUG-AUDIT] Primary RPC {method} error: {type(e).__name__}: {e}")
 
     # Фоллбэк на публичный узел если основной RPC (Helius) вернул 429 или упал
+    fallback_client = AsyncClient("https://api.mainnet-beta.solana.com")
     try:
-        fallback_client = AsyncClient("https://api.mainnet-beta.solana.com")
         fn_fb = getattr(fallback_client, method)
         resp_fb = await asyncio.wait_for(fn_fb(*args, **kwargs), timeout=4.0)
-        await fallback_client.close()
         return resp_fb
-    except Exception as e_fb:
+    except Exception:
         return None
+    finally:
+        try:
+            await fallback_client.close()
+        except Exception:
+            pass
 
 
 # =============================================================================

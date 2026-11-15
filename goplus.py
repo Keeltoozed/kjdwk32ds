@@ -1597,3 +1597,212 @@ async def fetch_rugcheck_report_cached(mint: str, ttl: float = 120.0, timeout: i
         return 200, body
     _RC_REPORT_CACHE[mint] = (now, int(st or 0), None)
     return int(st or 0), None
+
+
+_PUMPSWAP_POOL_CACHE: dict = {}  # (mint, pair_address) -> (ts, (ok, is_canonical, reason))
+_PUMP_AMM_PROG = "pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA"
+_PUMP_FUN_PROG = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"
+_PUMP_MIG_AUTH = "39azUYFWPz3VHgKCf3VChUwbpURdCHRxjWVowf5jUJjg"
+
+
+def _set_pumpswap_flags(pair_data, ok: bool, is_canonical: bool) -> None:
+    if isinstance(pair_data, dict):
+        pair_data["_pumpswap_checked"] = True
+        pair_data["_pumpswap_canonical"] = bool(is_canonical)
+        if not ok:
+            pair_data["_lp_verified"] = False
+        elif is_canonical:
+            pair_data["_lp_verified"] = True
+
+
+async def _solana_rpc_call(method: str, params: list, timeout: int = 5):
+    """Failover Solana JSON-RPC call using _get_solana_rpcs() and http_client.fetch_json."""
+    try:
+        from http_client import fetch_json
+    except Exception:
+        return None
+    payload = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
+    for rpc_url in _get_solana_rpcs()[:3]:
+        st, data = await fetch_json(
+            rpc_url,
+            timeout=timeout,
+            retries=0,
+            method="POST",
+            json_payload=payload,
+        )
+        if st in (401, 403, 429):
+            _note_rpc_status(rpc_url, st)
+            continue
+        if st == 200 and isinstance(data, dict) and "result" in data and not data.get("error"):
+            return data.get("result")
+    return None
+
+
+def _parse_ui_token_supply(sup_res):
+    if not isinstance(sup_res, dict):
+        return None
+    val = sup_res.get("value")
+    if not isinstance(val, dict):
+        return None
+    ui = val.get("uiAmount")
+    if ui is not None:
+        try:
+            return float(ui)
+        except Exception:
+            pass
+    try:
+        raw_amt = float(val.get("amount") or 0.0)
+        dec = int(val.get("decimals") or 0)
+        return raw_amt / (10 ** dec)
+    except Exception:
+        return None
+
+
+def _pumpswap_rpc_fallback(mint: str, pair_data, reason_prefix: str) -> tuple:
+    """Fail-closed on suspicious PumpSwap CreatePool fingerprints when RPC is unreachable."""
+    if config.is_pumpswap_liq_fdv_trap(pair_data):
+        return False, False, "pumpswap-liq-fdv-trap"
+    if isinstance(pair_data, dict):
+        liq = float((pair_data.get("liquidity") or {}).get("usd") or 0.0)
+        fdv = float(pair_data.get("fdv") or pair_data.get("marketCap") or 0.0)
+        info = pair_data.get("info") or {}
+        has_socials = bool(
+            (isinstance(info.get("socials"), list) and len(info.get("socials")) > 0)
+            or (isinstance(info.get("websites"), list) and len(info.get("websites")) > 0)
+        )
+        if fdv > 0.0 and liq >= fdv * 0.75 and not has_socials:
+            return False, False, f"{reason_prefix}-suspicious-liq-fdv"
+    if not str(mint or "").lower().endswith("pump"):
+        return False, False, f"{reason_prefix}-custom-mint"
+    return True, False, f"{reason_prefix}-unverified"
+
+
+async def verify_pumpswap_pool_onchain(
+    mint: str,
+    pair_address: str = "",
+    pair_data: dict = None,
+    ttl: float = 180.0,
+) -> tuple:
+    """
+    On-chain PumpSwap AMM Pool verification against permissionless CreatePool rugs.
+    Returns (ok, is_canonical, reason):
+      - Canonical Pump.fun migration: owner == pAMMBay..., index == 0, base_mint == mint,
+        and creator == PDA(["pool-authority", mint], 6EF8...) or legacy 39azUY...
+      - Custom CreatePool (index != 0 or EOA creator): allowed ONLY if LP mint total
+        supply is actually burned on-chain (<= 0.5) and not a liq/fdv 0-social trap.
+    """
+    mint = str(mint or "").strip()
+    if isinstance(pair_data, dict):
+        dex = str(pair_data.get("dexId") or "").lower()
+        if dex and dex != "pumpswap":
+            return True, False, "not-pumpswap"
+        if not pair_address:
+            pair_address = str(pair_data.get("pairAddress") or "").strip()
+    pair_address = str(pair_address or "").strip()
+
+    cache_key = (mint, pair_address)
+    now = _t.time()
+    cached = _PUMPSWAP_POOL_CACHE.get(cache_key)
+    if cached and (now - cached[0]) < ttl:
+        res = cached[1]
+        _set_pumpswap_flags(pair_data, res[0], res[1])
+        return res
+
+    if not pair_address:
+        res = _pumpswap_rpc_fallback(mint, pair_data, "pumpswap-no-pair")
+        if res[0]:
+            res = (False, False, "pumpswap-no-pair-address")
+        _set_pumpswap_flags(pair_data, res[0], res[1])
+        _PUMPSWAP_POOL_CACHE[cache_key] = (now - ttl + 20.0, res)
+        return res
+
+    acc_res = await _solana_rpc_call("getAccountInfo", [pair_address, {"encoding": "base64"}])
+    if acc_res is None:
+        res = _pumpswap_rpc_fallback(mint, pair_data, "pumpswap-rpc-unavailable")
+        _set_pumpswap_flags(pair_data, res[0], res[1])
+        _PUMPSWAP_POOL_CACHE[cache_key] = (now - ttl + 20.0, res)
+        return res
+
+    acc = acc_res.get("value") if isinstance(acc_res, dict) else None
+    if not isinstance(acc, dict):
+        res = (False, False, "pumpswap-pool-missing")
+        _set_pumpswap_flags(pair_data, res[0], res[1])
+        _PUMPSWAP_POOL_CACHE[cache_key] = (now - ttl + 20.0, res)
+        return res
+
+    owner = str(acc.get("owner") or "")
+    if owner != _PUMP_AMM_PROG:
+        res = (False, False, f"pumpswap-bad-owner:{owner[:8]}")
+        _set_pumpswap_flags(pair_data, res[0], res[1])
+        _PUMPSWAP_POOL_CACHE[cache_key] = (now, res)
+        return res
+
+    try:
+        import base64 as _b64
+        import struct as _struct
+        from solders.pubkey import Pubkey as _Pubkey
+
+        raw_field = acc.get("data")
+        raw_b64 = raw_field[0] if isinstance(raw_field, list) else raw_field
+        raw = _b64.b64decode(raw_b64)
+        if len(raw) < 211:
+            res = (False, False, f"pumpswap-short-pool:{len(raw)}")
+            _set_pumpswap_flags(pair_data, res[0], res[1])
+            _PUMPSWAP_POOL_CACHE[cache_key] = (now, res)
+            return res
+
+        pool_idx = _struct.unpack_from("<H", raw, 9)[0]
+        pool_creator = str(_Pubkey.from_bytes(raw[11:43]))
+        base_mint = str(_Pubkey.from_bytes(raw[43:75]))
+        lp_mint = str(_Pubkey.from_bytes(raw[107:139]))
+        pool_auth = str(
+            _Pubkey.find_program_address(
+                [b"pool-authority", bytes(_Pubkey.from_string(mint))],
+                _Pubkey.from_string(_PUMP_FUN_PROG),
+            )[0]
+        )
+    except Exception as e:
+        res = (False, False, f"pumpswap-decode-err:{type(e).__name__}")
+        _set_pumpswap_flags(pair_data, res[0], res[1])
+        _PUMPSWAP_POOL_CACHE[cache_key] = (now - ttl + 20.0, res)
+        return res
+
+    is_canonical = (
+        pool_idx == 0
+        and base_mint == mint
+        and pool_creator in (pool_auth, _PUMP_MIG_AUTH)
+    )
+    if is_canonical:
+        res = (True, True, f"pumpswap-canonical-idx0:{pool_creator[:8]}")
+        _set_pumpswap_flags(pair_data, True, True)
+        _PUMPSWAP_POOL_CACHE[cache_key] = (now, res)
+        if len(_PUMPSWAP_POOL_CACHE) > 2000:
+            _PUMPSWAP_POOL_CACHE.clear()
+        return res
+
+    sup_res = await _solana_rpc_call("getTokenSupply", [lp_mint])
+    lp_sup = _parse_ui_token_supply(sup_res)
+    if lp_sup is None:
+        res = (False, False, f"pumpswap-custom-idx{pool_idx}-lp-unknown")
+        _set_pumpswap_flags(pair_data, False, False)
+        _PUMPSWAP_POOL_CACHE[cache_key] = (now - ttl + 20.0, res)
+        return res
+
+    if lp_sup > 0.5:
+        res = (False, False, f"pumpswap-createpool-unburned-lp:{lp_sup:.2f}-idx{pool_idx}")
+        _set_pumpswap_flags(pair_data, False, False)
+        _PUMPSWAP_POOL_CACHE[cache_key] = (now, res)
+        return res
+
+    if config.is_pumpswap_liq_fdv_trap(pair_data):
+        res = (False, False, f"pumpswap-liq-fdv-trap-idx{pool_idx}")
+        _set_pumpswap_flags(pair_data, False, False)
+        _PUMPSWAP_POOL_CACHE[cache_key] = (now, res)
+        return res
+
+    res = (True, False, f"pumpswap-custom-burned-lp:{lp_sup:.4f}-idx{pool_idx}")
+    _set_pumpswap_flags(pair_data, True, False)
+    _PUMPSWAP_POOL_CACHE[cache_key] = (now, res)
+    if len(_PUMPSWAP_POOL_CACHE) > 2000:
+        _PUMPSWAP_POOL_CACHE.clear()
+    return res

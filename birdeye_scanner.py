@@ -94,6 +94,53 @@ async def birdeye_loop(analyzer, tracker):
                             if _veto:
                                 print(f"🚫 [BIRDEYE-VETO] {sym} [{ch}]: {_veto}")
                                 continue
+                            if ch == "solana":
+                                if getattr(config, "RUG_WALLET_AUDIT_ENABLED", True):
+                                    try:
+                                        from rug_wallet_analysis import quick_rug_check
+                                        _rw_ok_b, _rw_why_b = await quick_rug_check(addr)
+                                        _why_b_l = str(_rw_why_b or "").lower()
+                                        if not _rw_ok_b and not any(k in _why_b_l for k in ("429", "403", "timeout", "rpc", "http")):
+                                            print(f"🚫 [BIRDEYE-RUG-WALLET] {sym} ({addr[:8]}): {_rw_why_b}")
+                                            continue
+                                    except Exception as _be_rw_e:
+                                        print(f"⚠️ [BIRDEYE-RUG-WALLET] {sym}: {type(_be_rw_e).__name__}")
+                                if getattr(config, "FCR_ENABLED", True):
+                                    try:
+                                        from first_candle_rug_guard import pre_entry_rug_check
+                                        _fcr_b = await pre_entry_rug_check(addr, pair_data=td or {}, symbol=sym)
+                                        if _fcr_b.get("verdict") == "BLOCK":
+                                            print(f"🚫 [BIRDEYE-FCR] {sym} ({addr[:8]}): {_fcr_b.get('report', '')}")
+                                            continue
+                                    except Exception:
+                                        pass
+                                try:
+                                    from jupiter import JupiterAPI
+                                    _sell_b_ok, _sell_b_why = await JupiterAPI.is_token_sellable(addr)
+                                    if not _sell_b_ok:
+                                        print(f"🚫 [BIRDEYE-JUP] {sym} ({addr[:8]}): непродаваем ({_sell_b_why})")
+                                        continue
+                                    _jup_px_b = await JupiterAPI.get_price(addr)
+                                    if _jup_px_b and _jup_px_b > 0 and price > 0:
+                                        if _jup_px_b < price * 0.925 or max(_jup_px_b, price) / min(_jup_px_b, price) > 1.15:
+                                            print(f"🚫 [BIRDEYE-PRICE] {sym} ({addr[:8]}): Jupiter ${_jup_px_b:.8f} vs DS ${price:.8f} — отмена!")
+                                            continue
+                                        price = _jup_px_b
+                                except Exception:
+                                    pass
+                            if str((td or {}).get("dexId", "")).lower() == "pumpswap":
+                                try:
+                                    import goplus as _gp_be
+                                    _ps_b_ok, _ps_b_canon, _ps_b_why = await _gp_be.verify_pumpswap_pool_onchain(
+                                        addr,
+                                        pair_address=str((td or {}).get("pairAddress", "") or ""),
+                                        pair_data=td or {},
+                                    )
+                                    if not _ps_b_ok or config.is_pumpswap_liq_fdv_trap(td):
+                                        print(f"🚫 [BIRDEYE-PUMPSWAP] {sym} ({addr[:8]}): {_ps_b_why}")
+                                        continue
+                                except Exception:
+                                    pass
                             if getattr(config, "DYNAMIC_REINVEST_ENABLED", True):
                                 size = tracker.calculate_dynamic_position_size(td or {}, chain=ch)
                                 if size <= 0:
@@ -105,14 +152,15 @@ async def birdeye_loop(analyzer, tracker):
                                 else:
                                     cap = tracker.get_total_capital()
                                     size = max(4.0, min(100.0, cap * (config.REINVEST_PERCENT / 100.0))) if cap > 0 else 4.0
-                            tracker.add_position(
+                            if tracker.add_position(
                                 sym, addr, price, min(size, 100.0), is_mature=True,
                                 ml_features=analyzer.pack_features(td or {}),
                                 ml_confidence=float(getattr(analyzer, "last_score", 0.0)),
                                 source=f"BIRDEYE:{_sig}",
                                 pair_address=((td or {}).get("pairAddress", "") or ""),
-                                **({"chain": ch} if ch != "solana" else {}))
-                            print(f"🦅 BIRDEYE BUY {sym} [{ch}] @ ${price}")
+                                pair_data=td,
+                                **({"chain": ch} if ch != "solana" else {})):
+                                print(f"🦅 BIRDEYE BUY {sym} [{ch}] @ ${price}")
                             break
                     await asyncio.sleep(0.3)
                 if len(processed) > 1000:

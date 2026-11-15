@@ -105,62 +105,77 @@ class MatureExitManager:
                     return f"🚨 First Candle Rug Cut: Sellers dominating ({_b5}b/{_s5}s, PnL {pnl_pct*100:.1f}%)"
 
         # =========================================================================
-        # 1. ЖЕСТКИЙ КОНТРОЛЬ УБЫТКА (EMERGENCY CAP & STOP LOSS) — БЕЗ РАСТЯГИВАНИЯ ДО -24%!
+        # 1. ЖЕСТКИЙ КОНТРОЛЬ УБЫТКА (EMERGENCY CAP & STOP LOSS) — ПО СТАНДАРТУ 0d2b1ae
         # =========================================================================
-        # СБРОС ДЕВ-ДАМПА НА ПЕРВОЙ СВЕЧЕ: режем резкий обвал <= -14.0% в первые 2.5 минуты
-        if minutes_held <= 2.5 and pnl_pct <= -0.140:
+        # СБРОС ДЕВ-ДАМПА НА ПЕРВОЙ СВЕЧЕ: режем резкий обвал <= -10.5% в первые 2.5 минуты
+        if minutes_held <= 2.5 and pnl_pct <= -0.105:
             return f"🚨 First Candle Rug Cut ({pnl_pct*100:.1f}% в первые {minutes_held*60:.0f}с)"
 
-        _emerg_cap = -abs(float(getattr(config, "EMERGENCY_CAP_PCT", -0.165)))
+        _emerg_cap = -abs(float(getattr(config, "EMERGENCY_CAP_PCT", -0.115)))
         if pnl_pct <= _emerg_cap:
             return f"Mature Emergency Cap ({pnl_pct*100:.1f}%)"
 
-        _sl = -abs(float(getattr(config, "STOP_LOSS_PCT", -0.125)))
+        _sl = -abs(float(getattr(config, "STOP_LOSS_PCT", -0.095)))
         if pnl_pct <= _sl:
             _sl_c = int(getattr(position, "sl_confirm_n", 0) or 0) + 1
             position.sl_confirm_n = _sl_c
-            # На глубоком проливе (<= -14.5%) выходим за 1 тик, на -12.5%..-14.4% ждём 2 тика
-            if _sl_c >= 2 or pnl_pct <= -0.145:
+            # На проливе <= -10.8% выходим за 1 тик, в зоне -9.5%..-10.7% ждём 2 тика (защита от 1-тикового сквиза)
+            if _sl_c >= 2 or pnl_pct <= (_sl * 1.13):
                 return f"Mature Stop Loss ({pnl_pct*100:.1f}%)"
         else:
             position.sl_confirm_n = 0
 
         # =========================================================================
-        # 2. РАКЕТНЫЙ ТРЕЙЛИНГ-СТОП ДЛЯ 2x-10x (СВОБОДНЫЙ ПОЛЁТ ДО +90%!)
+        # 2. BREAKEVEN SHIELD И ПРОГРЕССИВНЫЕ ЭТАЖИ ДЛЯ 2x-10x РАКЕТ (0d2b1ae + RUNNER CURVE)
         # =========================================================================
-        # ПРАВИЛО: ДО +90% ПИКА НЕ ДУШИМ РАКЕТЫ ТЕЙЛ-ПОЛАМИ (+18%/+32%), КАК ЭТО БЫЛО НА DOGCOIN!
-        # Позиция спокойно пересиживает 20-25% откаты и едет в 2x-10x; защита до 2x — стоп -12.5%
-        # и Anti-Roundtrip Shield (срабатывает ТОЛЬКО если +35%+ ракета вернулась обратно к +5%).
         _floor_pnl = None
         _trail_dist = None
 
         if _is_mb:
-            # === МУНБЭГ-ТРЕЙЛИНГ (ПОСЛЕ TP1 +55%, ТРЕЙЛИНГ ТОЛЬКО ОТ 2x +100%) ===
+            # === МУНБЭГ-ТРЕЙЛИНГ ===
             _mb_act = float(getattr(config, "MOONBAG_TRAIL_ACTIVATION_PCT", 1.00))
-            _mb_dist = float(getattr(config, "MOONBAG_TRAIL_DISTANCE_PCT", 0.25))
-            if max_pnl_pct >= 3.50:                      # +350%+ (4.5x+): защита 70% пика
-                _floor_pnl = round(max_pnl_pct * 0.70, 2)
+            _mb_dist = float(getattr(config, "MOONBAG_TRAIL_DISTANCE_PCT", 0.22))
+            if max_pnl_pct >= 5.00:
+                _floor_pnl = round(max_pnl_pct * 0.78, 2)
+                _trail_dist = min(_mb_dist, 0.22)
+            elif max_pnl_pct >= 2.50:
+                _floor_pnl = round(max(1.65, max_pnl_pct * 0.74), 2)
                 _trail_dist = min(_mb_dist, 0.20)
-            elif max_pnl_pct >= 1.50:                    # +150%..+350% (2.5x - 4.5x)
-                _floor_pnl = 0.95
-                _trail_dist = min(_mb_dist, 0.23)
-            elif max_pnl_pct >= _mb_act:                 # от 2x (+100%) до 2.5x: гарантируем +48%, трейл 25%
-                _floor_pnl = 0.48
+            elif max_pnl_pct >= _mb_act:
+                _floor_pnl = round(max(0.72, max_pnl_pct * 0.72), 2)
                 _trail_dist = _mb_dist
-            elif max_pnl_pct >= 0.55:                    # ПОСЛЕ TP1 (+55%): страховка +8% (не отдаём остаток в стоп, но свободно переживаем -30% откат!)
-                _floor_pnl = 0.08
-                _trail_dist = None
+            elif max_pnl_pct >= 0.55:
+                _floor_pnl = 0.24
+                _trail_dist = 0.22
         else:
-            # === ОСНОВНАЯ ПОЗИЦИЯ: ЖДЁМ НАСТОЯЩИЕ 2x-10x ПРОРЫВЫ ===
-            if max_pnl_pct >= 3.50:         # +350%+ (4.5x - 10x+ гипер-ракета)
-                _floor_pnl = round(max_pnl_pct * 0.70, 2)
+            # === ОСНОВНАЯ ПОЗИЦИЯ: ЖЁСТКИЙ Б/У ЩИТ + СТУПЕНЧАТЫЙ ТРЕЙЛИНГ ДО 10x+ ===
+            if max_pnl_pct >= 5.00:         # 6x+: фиксируем минимум 78% от ATH PnL
+                _floor_pnl = round(max_pnl_pct * 0.78, 2)
+                _trail_dist = 0.22
+            elif max_pnl_pct >= 2.50:       # 3.5x - 6x: фиксируем минимум 74% от ATH (от +165%)
+                _floor_pnl = round(max(1.65, max_pnl_pct * 0.74), 2)
                 _trail_dist = 0.20
-            elif max_pnl_pct >= 1.50:       # +150%..+350% (2.5x - 4.5x ракета)
-                _floor_pnl = 0.95
-                _trail_dist = 0.23
-            elif max_pnl_pct >= 0.90:       # от +90% пика (зона 2x): фиксируем минимум +48%, трейлинг 25%
-                _floor_pnl = 0.48
-                _trail_dist = 0.25
+            elif max_pnl_pct >= 1.10:       # 2.1x - 3.5x: фиксируем от +72%, даём 20% места для волны 3x-5x
+                _floor_pnl = round(max(0.72, max_pnl_pct * 0.72), 2)
+                _trail_dist = 0.20
+            elif max_pnl_pct >= 0.55:       # +55%..+110%: фиксируем минимум +34%, трейл 18% от цены ATH
+                _floor_pnl = 0.34
+                _trail_dist = 0.18
+            elif max_pnl_pct >= 0.28:       # +28%..+55%: Wave-1 Shield (+14% пол после 45с, трейл 16%)
+                if minutes_held >= 0.75:
+                    _floor_pnl = 0.14
+                    _trail_dist = 0.16
+                else:
+                    _floor_pnl = 0.06
+                    _trail_dist = None
+            elif max_pnl_pct >= float(getattr(config, "BREAKEVEN_PCT", 0.16) or 0.16):
+                # Breakeven Shield: позиция с пиком >= +16% НЕ МОЖЕТ закрыться в минус!
+                # Первые 45с / 18с после ATH держим пол +1.5% от шума сквиза (кейс 67GOOGLE), затем +4.5% (~+2.5..3% чистыми)
+                if minutes_held >= 0.75 and _peak_age_min >= 0.30:
+                    _floor_pnl = 0.045
+                else:
+                    _floor_pnl = 0.015
+                _trail_dist = None
 
         if _floor_pnl is not None and minutes_held >= 0.20:
             drop_from_max = (position.max_price_usd - current_price) / position.max_price_usd if position.max_price_usd > 0 else 0.0
@@ -171,27 +186,20 @@ class MatureExitManager:
                 return f"Mature {_tag} Floor (+{pnl_pct*100:.1f}% locked after peak +{max_pnl_pct*100:.1f}%)"
 
         # =========================================================================
-        # 3. PARABOLIC MOMENTUM HARVEST (ФИКСАЦИЯ 2x-3x ТОЛЬКО ПРИ ДОЛГОМ ЗАСТРЕВАНИИ)
+        # 3. PARABOLIC MOMENTUM HARVEST (ФИКСАЦИЯ ПРИ ДОЛГОМ ЗАТУХАНИИ НА ХАЯХ)
         # =========================================================================
         _mb_free_ride = _is_mb and max_pnl_pct < float(getattr(config, "MOONBAG_TRAIL_ACTIVATION_PCT", 1.00))
-        if max_pnl_pct >= 2.00 and _peak_age_min >= 10.0:
+        if max_pnl_pct >= 2.00 and _peak_age_min >= 8.0:
             return f"Parabolic 3x Harvest (+{pnl_pct*100:.0f}% locked after peak +{max_pnl_pct*100:.0f}%, {_peak_age_min:.0f}m no ATH)"
-        if not _mb_free_ride and max_pnl_pct >= 1.00 and _peak_age_min >= 12.0:
+        if not _mb_free_ride and max_pnl_pct >= 1.00 and _peak_age_min >= 10.0:
             return f"Parabolic 2x Harvest (+{pnl_pct*100:.0f}% locked after peak +{max_pnl_pct*100:.0f}%, {_peak_age_min:.0f}m no ATH)"
 
-        # === ЗАЩИТА ОТ ОТКАТА В МИНУС И СРЕЗ СТОЯЧЕГО МУСОРА (НЕ ТРОГАЕМ РАСТУЩИЕ +20..+85% ВОЛНЫ!) ===
+        # === ЗАЩИТА ОТ ОТКАТА НЕБОЛЬШИХ ПОПОВ (+10%..+15.9%) БЕЗ МИКРО-ПИЛА НА 2.5м ===
         if not _mb_free_ride:
-            # 1. Dead Churn Escape: ТОЛЬКО для плоских лузеров (пик < +6% и уже в минусе 5+ мин)
-            if minutes_held >= 5.0 and _peak_age_min >= 4.0 and max_pnl_pct < 0.06 and pnl_pct <= -0.02:
-                return f"Dead Churn Escape ({pnl_pct*100:+.1f}%, застрял без импульса {_peak_age_min:.1f}м — выход)"
-
-            # 2. Anti-Roundtrip Shield: если монета улетала на +35%+, но 2.5м+ без ATH и вернулась почти в 0 (<= +5%) — забираем +5%, не отдаём в минус!
-            if max_pnl_pct >= 0.35 and _peak_age_min >= 2.5 and pnl_pct <= 0.05:
+            if 0.10 <= max_pnl_pct < 0.16 and minutes_held >= 4.0 and _peak_age_min >= 2.0 and pnl_pct <= -0.030:
+                return f"🛡️ Small Pop Cut ({pnl_pct*100:+.1f}%, откат после поп-пика +{max_pnl_pct*100:.1f}%)"
+            if max_pnl_pct >= 0.35 and _peak_age_min >= 3.5 and pnl_pct <= 0.14:
                 return f"Mid-Peak Profit Shield ({pnl_pct*100:+.1f}% locked after peak +{max_pnl_pct*100:.0f}%, {_peak_age_min:.1f}m no ATH)"
-
-            # 2b. Faded Impulse Stop: импульс был (+15%+), но затух (4.5м без ATH) и ушёл в минус (-8%)
-            if max_pnl_pct >= 0.15 and _peak_age_min >= 4.5 and pnl_pct <= -0.08:
-                return f"Faded Impulse Stop ({pnl_pct*100:+.1f}%, затухание импульса после пика +{max_pnl_pct*100:.0f}%)"
 
 
         # =========================================================================
@@ -261,22 +269,20 @@ class MatureExitManager:
             return f"Max Hold Expiry ({pnl_pct*100:+.1f}% after {minutes_held:.0f}m)"
 
         # =========================================================================
-        # 6. СТАГНАЦИЯ И МЕРТВЫЙ ИМПУЛЬС (Срез стоячих монет до дев-дампа)
+        # 6. СТАГНАЦИЯ И МЕРТВЫЙ ИМПУЛЬС (Срез только реально мёртвых позиций без отрыва в рост)
         # =========================================================================
-        # Если монета в рынке 6+ минут, её пик был слабым (< +15%), и новых ATH нет 4+ минут:
-        # выходим! В мемкоинах полное затухание импульса означает скорый раг дева.
-        if not _is_mb and minutes_held >= 6.0 and max_pnl_pct < 0.15 and _peak_age_min >= 4.0:
+        if not _is_mb and minutes_held >= 8.0 and max_pnl_pct < 0.10 and _peak_age_min >= 5.0 and pnl_pct <= 0.02:
             _sign = "+" if pnl_pct >= 0 else ""
             return f"Stalled Momentum Escape ({_sign}{pnl_pct*100:.1f}%, no ATH {_peak_age_min:.1f}m at {minutes_held:.1f}m)"
 
-        _stall_sec = float(getattr(config, "STALL_TIMER_SEC", 240.0))
-        _stall_loss = float(getattr(config, "STALL_MAX_LOSS_PCT", -0.090))
-        if minutes_held >= (_stall_sec / 60.0) and max_pnl_pct < 0.04 and pnl_pct <= _stall_loss:
+        _stall_sec = float(getattr(config, "STALL_TIMER_SEC", 420.0))
+        _stall_loss = float(getattr(config, "STALL_MAX_LOSS_PCT", -0.055))
+        if minutes_held >= (_stall_sec / 60.0) and max_pnl_pct < 0.05 and pnl_pct <= _stall_loss:
             return f"Dead Momentum Stall ({minutes_held*60:.0f}s no breakout, pnl {pnl_pct*100:.1f}%)"
 
-        if minutes_held >= 20.0 and pnl_pct <= -0.06 and max_pnl_pct < 0.04:
+        if minutes_held >= 18.0 and pnl_pct <= -0.04 and max_pnl_pct < 0.06:
             return f"Stagnant Loss Cut ({minutes_held:.0f}m, {pnl_pct*100:.1f}%)"
-        if minutes_held >= 25.0 and pnl_pct < 0.015 and max_pnl_pct < 0.05:
+        if minutes_held >= 24.0 and pnl_pct < 0.02 and max_pnl_pct < 0.08:
             return f"Stagnant Cut ({minutes_held:.0f}m, {pnl_pct*100:.1f}%)"
 
         return None
