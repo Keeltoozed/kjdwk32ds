@@ -261,20 +261,20 @@ async def fetch_jup_tokens() -> list:
                     if age_p > _max_disc_age:
                         continue
                     vol5_p = float((p.get("volume") or {}).get("m5", 0) or 0)
-                    _min_v5_ds = 150.0 if age_p <= 2.5 else (300.0 if age_p <= 5.0 else (600.0 if age_p <= 15.0 else float(getattr(config, "MIN_VOLUME_M5", 250.0))))
+                    _min_v5_ds = 700.0 if age_p <= 2.5 else (850.0 if age_p <= 5.0 else float(getattr(config, "MIN_VOLUME_M5", 1000.0)))
                     if vol5_p < _min_v5_ds:
                         continue
                     tx5_p = (p.get("txns") or {}).get("m5") or {}
                     b5_p = int(tx5_p.get("buys", 0) or 0)
                     s5_p = int(tx5_p.get("sells", 0) or 0)
-                    _min_tx_ds = 2 if age_p <= 2.5 else (4 if age_p <= 5.0 else int(getattr(config, "MIN_TXNS_M5", 3)))
-                    _min_bs_ds = 0.90 if age_p <= 5.0 else 1.00
+                    _min_tx_ds = 7 if age_p <= 2.5 else (8 if age_p <= 5.0 else int(getattr(config, "MIN_TXNS_M5", 10)))
+                    _min_bs_ds = 1.05 if age_p <= 5.0 else 1.02
                     if (b5_p + s5_p) < _min_tx_ds or (s5_p > 0 and (b5_p / s5_p) < _min_bs_ds):
                         continue
                     pc_p = p.get("priceChange") or {}
                     m5_p = float(pc_p.get("m5", 0) or 0)
                     h1_p = float(pc_p.get("h1", 0) or 0)
-                    _min_m5_ds = 1.0 if age_p <= 5.0 else 2.0
+                    _min_m5_ds = 2.0 if age_p <= 5.0 else 2.5
                     if m5_p < _min_m5_ds:
                         continue
                     fdv_p = float(p.get("fdv") or p.get("marketCap") or 0)
@@ -310,7 +310,7 @@ async def fetch_jup_tokens() -> list:
                 _gt_m5 = float(((_gt_td.get("priceChange") or {}).get("m5", 0) or 0)) if _gt_td else 5.0
                 _gt_v5 = float(((_gt_td.get("volume") or {}).get("m5", 0) or 0)) if _gt_td else 5000.0
                 _gt_sym = str(((_gt_td.get("baseToken") or {}).get("symbol") or addr[:6])).upper() if _gt_td else addr[:6]
-                if _gt_td and (_gt_v5 < float(getattr(config, "MIN_VOLUME_M5", 250.0)) or _gt_m5 < -1.5):
+                if _gt_td and (_gt_v5 < float(getattr(config, "MIN_VOLUME_M5", 1000.0)) or _gt_m5 < 0.0):
                     continue
                 seen.add(addr)
                 _age_by_mint[addr] = _gt_age
@@ -376,7 +376,7 @@ async def fetch_jup_tokens() -> list:
                         continue
                     vol5_b = float((p.get("volume") or {}).get("m5", 0) or 0)
                     m5_b = float((p.get("priceChange") or {}).get("m5", 0) or 0)
-                    if vol5_b < float(getattr(config, "MIN_VOLUME_M5", 250.0)) or m5_b < 0.5:
+                    if vol5_b < float(getattr(config, "MIN_VOLUME_M5", 1000.0)) or m5_b < 2.0:
                         continue
                     sym_b = str(((p.get("baseToken") or {}).get("symbol")) or bm[:6]).upper().strip()
                     _age_by_mint[bm] = age_b
@@ -493,21 +493,19 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
         print(f"🚫 [{source_tag}-LOW-LIQ] {_sym_tmp} ({mint[:8]}): реальная ликвидность ${_liq_j:.0f} < ${_min_liq_req:.0f} — микро-пул/риск слива.")
         return False
     _tot_tx_j = _b5_j + _s5_j
-    _cfg_min_tx_j = int(getattr(config, "MIN_TXNS_M5", 3))
-    _min_tx_req_j = min(_cfg_min_tx_j, 2) if _age_j <= 2.5 else (min(_cfg_min_tx_j, 4) if _age_j <= 10.0 else _cfg_min_tx_j)
+    _cfg_min_tx_j = int(getattr(config, "MIN_TXNS_M5", 10))
+    _min_tx_req_j = min(_cfg_min_tx_j, 7) if (_age_j <= 2.5 and _b5_j >= max(6, int(_s5_j * 1.15))) else (min(_cfg_min_tx_j, 8) if _age_j <= 5.0 else _cfg_min_tx_j)
     if _tot_tx_j < _min_tx_req_j:
         print(f"🚫 [{source_tag}-LOW-TXNS] {_sym_tmp} ({mint[:8]}): всего {_tot_tx_j} сделок в m5 (<{_min_tx_req_j}) — вялый боковой стакан.")
         return False
     _vol5_j = float(((td or {}).get("volume") or {}).get("m5", 0) or 0)
-    _cfg_min_v5_j = float(getattr(config, "MIN_VOLUME_M5", 250.0))
-    if _age_j <= 2.5:
-        _min_vol_j = min(_cfg_min_v5_j, 150.0)
-    elif _age_j <= 5.0:
-        _min_vol_j = min(_cfg_min_v5_j, 250.0)
-    elif _age_j <= 15.0:
-        _min_vol_j = _cfg_min_v5_j
+    _cfg_min_v5_j = float(getattr(config, "MIN_VOLUME_M5", 1000.0))
+    if _age_j <= 2.5 and _b5_j >= max(6, int(_s5_j * 1.15)):
+        _min_vol_j = min(_cfg_min_v5_j, 700.0)
+    elif _age_j <= 5.0 and _b5_j >= max(7, _s5_j):
+        _min_vol_j = min(_cfg_min_v5_j, 850.0)
     else:
-        _min_vol_j = _cfg_min_v5_j if _b5_j >= int(_s5_j * 1.05) else max(_cfg_min_v5_j, 800.0)
+        _min_vol_j = _cfg_min_v5_j
     if _vol5_j < _min_vol_j:
         print(f"🚫 [{source_tag}-LOW-VOL] {_sym_tmp} ({mint[:8]}): 5м объем ${_vol5_j:,.0f} < ${_min_vol_j:,.0f} — слабый стоячий токен (кейс BRO).")
         return False

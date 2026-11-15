@@ -1838,12 +1838,12 @@ class Analyzer:
             )
 
         # 3. ФИЛЬТР ИМПУЛЬСА, СКОРОСТИ ОБОРОТА И ТРЕНДА ДО ROCKET-XGB:
-        _base_v5_cfg = float(getattr(config, "MIN_VOLUME_M5", 250.0))
-        # Масштабируем порог объёма под возраст (ультра-ранний старт с первых сделок)
-        if _age_min_pre <= 2.5:
-            _min_v5_cfg = min(_base_v5_cfg, 150.0 if (_b5_pre >= _s5_pre and _b5_pre >= 3) else 250.0)
-        elif _age_min_pre <= 5.0:
-            _min_v5_cfg = min(_base_v5_cfg, 350.0)
+        _base_v5_cfg = float(getattr(config, "MIN_VOLUME_M5", 1000.0))
+        # Масштабируем порог объёма под возраст (отсекаем мёртвые $250 / 3-tx пулы, оставляя ранний вход)
+        if _age_min_pre <= 2.5 and _b5_pre >= max(6, int(_s5_pre * 1.15)):
+            _min_v5_cfg = min(_base_v5_cfg, 700.0)
+        elif _age_min_pre <= 5.0 and _b5_pre >= max(7, _s5_pre):
+            _min_v5_cfg = min(_base_v5_cfg, 850.0)
         else:
             _min_v5_cfg = _base_v5_cfg
         if _vm5_pre < _min_v5_cfg:
@@ -1852,31 +1852,40 @@ class Analyzer:
                 f"low-vol5 ${_vm5_pre:.0f}<${_min_v5_cfg:.0f}",
                 f"🚫 [LOW-MOMENTUM] {symbol} ({mint[:8]}): 5м объем ${_vm5_pre:,.0f} < ${_min_v5_cfg:,.0f} — слабый стоячий токен (нет объема для ракеты).",
             )
+        _min_tx_pre_a = int(getattr(config, "MIN_TXNS_M5", 10))
+        if _age_min_pre <= 2.5 and _b5_pre >= max(6, int(_s5_pre * 1.15)):
+            _min_tx_pre_a = min(_min_tx_pre_a, 7)
+        elif _age_min_pre <= 5.0:
+            _min_tx_pre_a = min(_min_tx_pre_a, 8)
+        if _tot_tx5_pre < _min_tx_pre_a:
+            return self._deny(
+                mint,
+                f"low-tx5 {_tot_tx5_pre}<{_min_tx_pre_a}",
+                f"🚫 [LOW-TXNS] {symbol} ({mint[:8]}): 5м сделок {_tot_tx5_pre} < {_min_tx_pre_a} — нет спроса.",
+            )
         if _age_min_pre >= 20.0:
-            _is_massive_mature_flow = (_vm5_pre >= 5000.0 and _b5_pre >= int(_s5_pre * 0.90))
-            _is_strong_mature_breakout = (_m5 >= 0.8 and _vm5_pre >= 400.0 and _b5_pre >= int(_s5_pre * 0.90) and _tot_tx5_pre >= 4)
+            _is_massive_mature_flow = (_vm5_pre >= 5000.0 and _b5_pre >= int(_s5_pre * 0.95))
+            _is_strong_mature_breakout = (_m5 >= 2.0 and _vm5_pre >= 1200.0 and _b5_pre >= int(_s5_pre * 1.00) and _tot_tx5_pre >= 10)
             _is_mature_active_pullback = (
                 _h1 >= 5.0
-                and _m5 >= 1.0
+                and _m5 >= 2.0
                 and _m1 >= -3.0
-                and _b5_pre >= int(_s5_pre * 0.95)
+                and _b5_pre >= int(_s5_pre * 1.00)
                 and _vm5_pre >= 2000.0
                 and _raw_liq_chk >= 4000.0
             )
             _v2l_mat = (_vm5_pre / max(_raw_liq_chk, 1.0)) if _raw_liq_chk > 0 else 0.0
-            if not _is_massive_mature_flow and not _is_strong_mature_breakout and not _is_mature_active_pullback and (_vm5_pre < 1000.0 or _m5 < 0.0 or _tot_tx5_pre < 6):
+            if not _is_massive_mature_flow and not _is_strong_mature_breakout and not _is_mature_active_pullback and (_vm5_pre < 1500.0 or _m5 < 0.0 or _tot_tx5_pre < 10):
                 return self._deny(
                     mint,
                     f"slow-mature-pool v5=${_vm5_pre:.0f} v/l={_v2l_mat:.2f}x",
                     f"🚫 [MATURE-STALL-GUARD] {symbol} ({mint[:8]}): токену {_age_min_pre:.0f}м, но оборот вялый (vol5 ${_vm5_pre:,.0f}, v/l {_v2l_mat:.2f}x, m5 {_m5:+.1f}%) — кейс PROPFUN.",
                 )
 
-        # Запрет входа только при явном сливе продавцами
-        _base_bs_cfg = float(getattr(config, "MIN_BUY_SELL_RATIO", 0.90))
-        if _vm5_pre >= 20000.0 and _m5 >= 8.0 and _b5_pre >= 100 and _m1 >= -4.0:
-            _min_bs_cfg = min(_base_bs_cfg, 0.85)
-        elif _age_min_pre <= 15.0 and _m5 >= 1.0 and _b5_pre >= 4:
-            _min_bs_cfg = min(_base_bs_cfg, 0.85)
+        # Запрет входа при давлении продавцов
+        _base_bs_cfg = float(getattr(config, "MIN_BUY_SELL_RATIO", 1.05))
+        if _vm5_pre >= 8000.0 and _m5 >= 5.0 and _b5_pre >= 30 and _m1 >= -3.5:
+            _min_bs_cfg = min(_base_bs_cfg, 0.92)
         else:
             _min_bs_cfg = _base_bs_cfg
         if _s5_pre > 4 and (_b5_pre / _s5_pre) < _min_bs_cfg:
@@ -3901,7 +3910,7 @@ class Analyzer:
             return self._deny(mint, "pump-stale-curve", f"🚫 [CURVE-STALE-FAIL] {mint[:8]}: возраст {age_minutes:.1f}м > 15м при FDV ${_fdv_curve:,.0f} < $18k — токен не смог выйти из кривой, 100% слив.")
 
         _vm5 = float((pair_data.get("volume") or {}).get("m5", 0) or 0)
-        _min_vm5_xgb = min(float(getattr(config, "MIN_VOLUME_M5", 250.0)), 300.0)
+        _min_vm5_xgb = max(650.0, min(float(getattr(config, "MIN_VOLUME_M5", 1000.0)), 850.0))
         if _vm5 < _min_vm5_xgb:
             print(f"🚫 [PUMP-LOW-VOL] {mint[:8]}: объём 5m ${_vm5:,.0f} < ${_min_vm5_xgb:,.0f} — слабая активность.")
             return False

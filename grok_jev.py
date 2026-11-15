@@ -524,12 +524,13 @@ class GrokJevEngine:
             age_min <= min(max_age, _max_scan_age_g)
             and fdv_mc <= _max_mcap_g
             and eff_liq >= 2500.0
-            and vol_m5 >= 250.0
+            and vol_m5 >= 750.0
+            and (b5 + s5) >= 8
             and (
-                (0.8 <= m5 <= 120.0 and m1 >= float(getattr(_c, "JEV_MIN_M1_ENTRY_FLOOR_PCT", -5.0)))
-                or (m1 >= 0.8 and m5 >= 0.3 and vol_m5 >= 350.0)
+                (2.0 <= m5 <= 120.0 and m1 >= float(getattr(_c, "JEV_MIN_M1_ENTRY_FLOOR_PCT", -3.5)))
+                or (m1 >= 1.5 and m5 >= 0.5 and vol_m5 >= 900.0)
             )
-            and b5 >= s5
+            and b5 >= max(6, s5)
         )
         if age_min < min_age:
             try:
@@ -656,25 +657,25 @@ class GrokJevEngine:
         if eff_liq > 0 and (vol_m5 / eff_liq) > _max_vl_jev:
             return False, f"wash-trading-spike: vol5 ${vol_m5:,.0f} is {(vol_m5/eff_liq):.1f}x > {_max_vl_jev:.2f}x of pool liq ${eff_liq:,.0f} (bot pump trap)"
 
-        _base_vol_m5 = float(getattr(_c, "MIN_VOLUME_M5", 250.0))
-        if age_min <= 2.5 and b5 >= int(s5 * 0.85) and (b5 + s5) >= 3:
-            _min_vol_m5 = min(_base_vol_m5, 150.0)
-        elif age_min <= 5.0 and b5 >= int(s5 * 0.90):
-            _min_vol_m5 = min(_base_vol_m5, 250.0)
+        _base_vol_m5 = float(getattr(_c, "MIN_VOLUME_M5", 1000.0))
+        if age_min <= 2.5 and b5 >= max(6, int(s5 * 1.15)) and (b5 + s5) >= 7:
+            _min_vol_m5 = min(_base_vol_m5, 700.0)
+        elif age_min <= 5.0 and b5 >= max(7, s5):
+            _min_vol_m5 = min(_base_vol_m5, 850.0)
         else:
             _min_vol_m5 = _base_vol_m5
         if vol_m5 < _min_vol_m5:
             return False, f"vol5-low ${vol_m5:.0f} < ${_min_vol_m5:.0f} (inactive dead pool — нет реального объема для ракеты)"
-        _min_tx5 = int(getattr(_c, "MIN_TXNS_M5", 3))
-        if age_min <= 2.5:
-            _min_tx5 = min(_min_tx5, 3)
+        _min_tx5 = int(getattr(_c, "MIN_TXNS_M5", 10))
+        if age_min <= 2.5 and b5 >= max(6, int(s5 * 1.15)):
+            _min_tx5 = min(_min_tx5, 7)
+        elif age_min <= 5.0 and b5 >= s5:
+            _min_tx5 = min(_min_tx5, 8)
         if (b5 + s5) < _min_tx5:
             return False, f"tx5-low {b5+s5} < {_min_tx5} (too few transactions)"
-        _req_bs = float(getattr(_c, "MIN_BUY_SELL_RATIO", 0.90))
-        if vol_m5 >= 10000.0 and m5 >= 5.0 and b5 >= 50 and m1 >= -4.5:
-            _req_bs = min(_req_bs, 0.85)
-        elif age_min <= 15.0 and m5 >= 1.0 and b5 >= 4:
-            _req_bs = min(_req_bs, 0.85)
+        _req_bs = float(getattr(_c, "MIN_BUY_SELL_RATIO", 1.05))
+        if vol_m5 >= 8000.0 and m5 >= 5.0 and b5 >= 30 and m1 >= -3.5:
+            _req_bs = min(_req_bs, 0.92)
         if s5 > 4 and (b5 / s5) < _req_bs:
             return False, f"sellers-dominating {b5}b/{s5}s (ratio {b5/s5:.2f} < {_req_bs:.2f})"
 
@@ -973,8 +974,8 @@ class GrokJevEngine:
             return False, -0.14, 0.0, f"sellers-dominating ({b5}b/{s5}s) — sellers active, wait for buyer absorption"
 
         # 4. Монета не должна стоять мёртвым флетом
-        _is_live_blast = (m1 >= 0.5 and vol5 >= 200.0 and b5 >= int(s5 * 0.85))
-        if not _is_live_blast and (((_m1_known and m1 <= -3.5 and m5 < 0.5) or m5 < 0.0)):
+        _is_live_blast = (m1 >= 1.5 and m5 >= 0.5 and vol5 >= 750.0 and b5 >= max(6, int(s5 * 1.10)))
+        if not _is_live_blast and (((_m1_known and m1 <= -3.0 and m5 < 2.0) or m5 < 1.5)):
             return False, -0.14, 0.0, f"flat-coin (m1 {m1:+.1f}%, m5 {m5:+.1f}%) — price standing still, waiting for live impulse"
 
         # 3.2. ПОДТВЕРЖДЕНИЕ ТРЕНДА ПО СОБСТВЕННОЙ ИСТОРИИ ЦЕН (DexScreener m1/m5 запаздывают на минуту и больше)
@@ -2079,7 +2080,7 @@ class GrokJevEngine:
             or (_vm5_s1 >= 8000.0 and _b5_s1 >= int(_s5_s1 * 1.15) and _m5_s1 >= 4.0)
             or (_m5_s1 >= 6.0 and _vm5_s1 >= 4000.0 and _b5_s1 >= max(10, int(_s5_s1 * 1.15)))
             or (_m5_s1 >= 3.0 and _b5_s1 >= int(_s5_s1 * 1.15) and _vm5_s1 >= 1500.0 and _b5_s1 >= 8)
-            or (_age_s1 <= 5.0 and _m5_s1 >= 0.8 and _b5_s1 >= int(_s5_s1 * 1.05) and _vm5_s1 >= 250.0 and _b5_s1 >= 3)
+            or (_age_s1 <= 5.0 and _m5_s1 >= 2.5 and _b5_s1 >= max(6, int(_s5_s1 * 1.15)) and _vm5_s1 >= 750.0)
         )
 
         if getattr(_c, "ROCKET_XGB_ENABLED", True) and not _is_momentum_rocket and (rkt_s1 + 0.05) < s1_thresh:
@@ -2451,7 +2452,7 @@ async def grok_bot_jev_loop(tracker, analyzer=None):
                     if _liq_c > 0 and _liq_c < float(getattr(_c, "MIN_GRADUATED_LIQ_USD", 2500.0)) * 0.7:
                         evaluated_cooldown[(address, chain)] = now + 20.0
                         continue
-                    if _m5_c < 0.4 and _v5_c < float(getattr(_c, "MIN_VOLUME_M5", 250.0)):
+                    if _v5_c < 600.0 or (_m5_c < 1.5 and _v5_c < float(getattr(_c, "MIN_VOLUME_M5", 1000.0))):
                         evaluated_cooldown[(address, chain)] = now + 12.0
                         continue
                     import math

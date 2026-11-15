@@ -262,43 +262,54 @@ async def position_manager_loop(analyzer, tracker):
                         _last_known = float(getattr(position, "current_price_usd", 0.0) or getattr(position, "entry_price_usd", 0.0) or 0.0)
                         _last_live_ts = float(getattr(position, "last_live_price_ts", 0.0) or position.entry_time)
                         _stale_sec = time.time() - _last_live_ts
-                        if _stale_sec > 45.0:
-                            # Пробуем запросить ончейн через Jupiter
+                        _last_fb_try = float(getattr(position, "_last_jup_fb_ts", 0.0) or 0.0)
+                        if _stale_sec > 8.0 and (time.time() - _last_fb_try) >= 8.0:
+                            position._last_jup_fb_ts = time.time()
+                            # Пробуем запросить ончейн через Jupiter, затем свежий Pair Data без кэша
+                            _fb_px = 0.0
                             try:
                                 from jupiter import JupiterAPI
-                                _j_px = await JupiterAPI.get_price(mint)
-                                if _j_px > 0:
-                                    current_price = _j_px
-                                    position.current_price_usd = _j_px
-                                    position.last_live_price_ts = time.time()
-                                    position.price_updated_at = time.time()
-                                else:
-                                    current_price = _last_known
+                                _fb_px = float(await asyncio.wait_for(JupiterAPI.get_price(mint), timeout=1.5) or 0.0)
                             except Exception:
-                                current_price = _last_known
-                            
-                            # Если котировок нет больше 180 сек — проверяем продаваемость через Jupiter
-                            if _stale_sec > 180.0:
+                                _fb_px = 0.0
+                            if _fb_px <= 0.0:
                                 try:
-                                    from jupiter import JupiterAPI
-                                    _sell_ok, _sell_why = await JupiterAPI.is_token_sellable(mint)
-                                    if not _sell_ok:
-                                        tracker.close_position(mint, 0.0, f"Dead Stale Pool Cut ({_stale_sec:.0f}s no quotes / {_sell_why})")
-                                        continue
-                                    else:
-                                        _j_live = await JupiterAPI.get_price(mint)
-                                        if _j_live > 0:
-                                            current_price = _j_live
-                                            position.current_price_usd = _j_live
-                                            position.last_live_price_ts = time.time()
-                                            position.price_updated_at = time.time()
-                                            continue
+                                    import market_data as _md_fb
+                                    _td_fb = await asyncio.wait_for(_md_fb.get_token_data(mint, max_cache_age=0.0), timeout=1.5)
+                                    _fb_px = float((_td_fb.get("priceUsd", 0) or 0)) if _td_fb else 0.0
                                 except Exception:
-                                    pass
-                                tracker.close_position(mint, current_price if current_price > 0 else _last_known, f"Dead Stale Pool Cut ({_stale_sec:.0f}s no quotes)")
-                                continue
+                                    _fb_px = 0.0
+                            if _fb_px > 0:
+                                current_price = _fb_px
+                                api_price = _fb_px
+                                position.current_price_usd = _fb_px
+                                position.last_live_price_ts = time.time()
+                                position.price_updated_at = time.time()
+                            else:
+                                current_price = _last_known
                         else:
                             current_price = _last_known
+
+                        # Если котировок нет больше 180 сек — проверяем продаваемость через Jupiter
+                        if api_price <= 0.0 and _stale_sec > 180.0:
+                            try:
+                                from jupiter import JupiterAPI
+                                _sell_ok, _sell_why = await JupiterAPI.is_token_sellable(mint)
+                                if not _sell_ok:
+                                    tracker.close_position(mint, 0.0, f"Dead Stale Pool Cut ({_stale_sec:.0f}s no quotes / {_sell_why})")
+                                    continue
+                                else:
+                                    _j_live = await JupiterAPI.get_price(mint)
+                                    if _j_live > 0:
+                                        current_price = _j_live
+                                        position.current_price_usd = _j_live
+                                        position.last_live_price_ts = time.time()
+                                        position.price_updated_at = time.time()
+                                        continue
+                            except Exception:
+                                pass
+                            tracker.close_position(mint, current_price if current_price > 0 else _last_known, f"Dead Stale Pool Cut ({_stale_sec:.0f}s no quotes)")
+                            continue
                 
                 # Всегда фиксируем время активного мониторинга позиции менеджером
                 position.price_checked_at = time.time()
@@ -1067,8 +1078,8 @@ async def scanner_loop(analyzer, tracker):
                             processed_mints[mint] = _now_r - _cd_r + 90
                             continue
 
-                        # Отсекаем вялые стоячие токены с объёмом < $2,000: быстрый переопрос через 20с
-                        if _c_age_m >= 5.0 and _c_vol5 < max(500.0, float(getattr(config, "MIN_VOLUME_M5", 250.0)) * 2.0) and not _is_fresh_grad:
+                        # Отсекаем вялые стоячие токены старше 5м без живого объёма: быстрый переопрос через 20с
+                        if _c_age_m >= 5.0 and _c_vol5 < max(850.0, float(getattr(config, "MIN_VOLUME_M5", 1000.0))) and not _is_fresh_grad:
                             processed_mints[mint] = _now_r - _cd_r + 20
                             continue
 

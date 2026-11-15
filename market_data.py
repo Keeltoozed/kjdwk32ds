@@ -635,13 +635,16 @@ async def _ds_bulk_prices(mints: list, pair_hints: dict = None) -> dict:
                     continue
                 px = float(p.get("priceUsd", 0) or 0)
                 liq = float((p.get("liquidity") or {}).get("usd", 0) or 0)
-                if not px or liq < 50.0:
+                dex_low = str(p.get("dexId", "") or "").lower()
+                is_curve = dex_low in ("pump", "pumpfun", "moonshot", "meteoradbc")
+                if not px or (liq < 50.0 and not is_curve):
                     continue
+                eff_liq_rank = liq if liq > 0 else (float(p.get("fdv", 0) or p.get("marketCap", 0) or 0) * 0.40)
                 p_addr = str(p.get("pairAddress") or "").strip()
                 target_pair = str(_hints.get(addr) or "").strip()
                 if target_pair and p_addr == target_pair:
                     _locked_exact.add(addr)
-                    _liq[addr] = liq
+                    _liq[addr] = eff_liq_rank
                     out[addr] = px
                     try:
                         _TD_CACHE[addr] = (time.monotonic(), p)
@@ -650,8 +653,8 @@ async def _ds_bulk_prices(mints: list, pair_hints: dict = None) -> dict:
                     continue
                 if addr in _locked_exact:
                     continue
-                if liq > _liq.get(addr, -1):
-                    _liq[addr] = liq
+                if eff_liq_rank > _liq.get(addr, -1):
+                    _liq[addr] = eff_liq_rank
                     out[addr] = px
                     try:
                         _TD_CACHE[addr] = (time.monotonic(), p)
@@ -672,19 +675,22 @@ async def _ds_bulk_prices(mints: list, pair_hints: dict = None) -> dict:
                                 continue
                             px = float(p.get("priceUsd", 0) or 0)
                             liq = float((p.get("liquidity") or {}).get("usd", 0) or 0)
-                            if not px or liq < 50.0:
+                            dex_low = str(p.get("dexId", "") or "").lower()
+                            is_curve = dex_low in ("pump", "pumpfun", "moonshot", "meteoradbc")
+                            if not px or (liq < 50.0 and not is_curve):
                                 continue
+                            eff_liq_rank = liq if liq > 0 else (float(p.get("fdv", 0) or p.get("marketCap", 0) or 0) * 0.40)
                             p_addr = str(p.get("pairAddress") or "").strip()
                             target_pair = str(_hints.get(addr) or "").strip()
                             if target_pair and p_addr == target_pair:
                                 _locked_exact.add(addr)
-                                _liq[addr] = liq
+                                _liq[addr] = eff_liq_rank
                                 out[addr] = px
                                 continue
                             if addr in _locked_exact:
                                 continue
-                            if liq > _liq.get(addr, -1):
-                                _liq[addr] = liq
+                            if eff_liq_rank > _liq.get(addr, -1):
+                                _liq[addr] = eff_liq_rank
                                 out[addr] = px
                                 try:
                                     _TD_CACHE[addr] = (time.monotonic(), p)

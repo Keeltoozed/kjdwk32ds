@@ -120,11 +120,14 @@ class MatureExitManager:
             return f"Mature Emergency Cap ({pnl_pct*100:.1f}%)"
 
         # =========================================================================
-        # 0.6. БЫСТРЫЙ СБОР ПРИБЫЛИ ПРИ ЗАТУХАНИИ ИМПУЛЬСА (FAST PROFIT HARVEST)
+        # 0.6. КОНТРОЛЬ СТАТУСА ПУЛА И ЗАЩИТА ОТ ЗАВИСАНИЯ (БЕЗ РАННЕГО СРЕЗА РАКЕТ!)
         # =========================================================================
-        # На мемкоинах Solana окно максимальной прибыли длится 15-45 секунд.
-        # Если монета сделала скачок и замерла — фиксируем прибыль СРАЗУ,
-        # даже если монета потом рагнится! Быстро вытаскиваем профит до сброса стакана!
+        # Критично для 2x-10x: НЕ закрываем +15%..+50% волны через 12-18 секунд!
+        # От рагов и дампов на ранней фазе уже защищают:
+        # - Absolute Liquidity Loss / Early Liquidity Drop Escape (срез LP < 55%)
+        # - First Candle Rug Cut (-7.0% в первые 2.5м) / Fast Stop Loss (-7.5%)
+        # - Breakeven Shield (+16% пик -> стоп в безубыток/плюс, в минус уйти НЕЛЬЗЯ)
+        # - Crash Guard (-18%..-50% за 1м)
         _pd_pos = getattr(position, "pair_data", None) or getattr(position, "last_pair_data", None) or {}
         _mint_pos = str(getattr(position, "mint", "") or "")
         _base_a = str(((_pd_pos.get("baseToken") or {}).get("address")) or _mint_pos)
@@ -137,30 +140,21 @@ class MatureExitManager:
         _is_unlocked = not _has_safe_lock
         position.is_unlocked_pool = _is_unlocked
 
-        # А. Фиксация прибыли при затухании импульса (для ЛЮБЫХ монет):
-        if not _is_mb:
-            if max_pnl_pct >= 0.50:
-                # Памп +50%..+100%: если нет нового ATH 12 сек или откат >= 7% от пика — забираем прибыль!
-                if (_peak_age_min >= 0.20 and pnl_pct <= max_pnl_pct * 0.93) or pnl_pct <= max_pnl_pct * 0.86:
-                    return f"⚡ Runner Stall Harvest (+{pnl_pct*100:.1f}%, застой {_peak_age_min*60:.0f}с после пика +{max_pnl_pct*100:.1f}%)"
-            elif max_pnl_pct >= 0.25:
-                # Памп +25%..+50%: если нет нового ATH 12 сек или откат >= 6% от пика — забираем прибыль!
-                if (_peak_age_min >= 0.20 and pnl_pct <= max_pnl_pct * 0.92) or pnl_pct <= max_pnl_pct * 0.84:
-                    return f"⚡ Momentum Stall Harvest (+{pnl_pct*100:.1f}%, застой {_peak_age_min*60:.0f}с после пика +{max_pnl_pct*100:.1f}%)"
-            elif max_pnl_pct >= 0.15:
-                # Памп +15%..+25%: если нет нового ATH 14 сек или откат до +8% — забираем прибыль!
-                if (_peak_age_min >= 0.23 and pnl_pct >= 0.08) or pnl_pct <= 0.08:
-                    return f"⚡ Fast Profit Harvest (+{pnl_pct*100:.1f}%, застой {_peak_age_min*60:.0f}с после пика +{max_pnl_pct*100:.1f}%)"
-            elif max_pnl_pct >= 0.08:
-                # Малый отскок +8%..+15%: если застой 18 сек и цена сползает к +3.5% — фиксируем!
-                if _peak_age_min >= 0.30 and pnl_pct <= 0.035:
-                    return f"⚡ Quick Pop Lock (+{pnl_pct*100:.1f}%, откат после пика +{max_pnl_pct*100:.1f}%)"
+        # Для незалоченных кастомных пулов: фиксируем только при долгом застое (3+ мин после +45%) и глубоком откате,
+        # давая нормальным волнам вырасти до 2x-10x под защитой Breakeven Shield и Liquidity Guard.
+        _unl_stall_min = float(getattr(config, "UNLOCKED_STALL_PROFIT_AGE_SEC", 180.0)) / 60.0
+        if not _is_mb and _is_unlocked and minutes_held >= max(3.0, _unl_stall_min):
+            if max_pnl_pct >= 0.45 and _peak_age_min >= _unl_stall_min and pnl_pct <= max_pnl_pct * 0.72:
+                return f"⚡ Unlocked Stale Profit Lock (+{pnl_pct*100:.1f}%, застой {_peak_age_min*60:.0f}с после пика +{max_pnl_pct*100:.1f}%)"
 
-        # Б. УНИВЕРСАЛЬНЫЙ СРЕЗ ЗАВИСШИХ МОНЕТ БЕЗ ИМПУЛЬСА (Zero-Momentum Scratch):
-        # Строго в диапазоне около нуля: -4.5% <= pnl_pct <= +0.5%!
-        # ДАМПЫ (pnl < -4.5%) УЖЕ перехвачены Stop Loss / Rug Cut выше!
-        if minutes_held >= 0.58 and max_pnl_pct < 0.04 and -0.045 <= pnl_pct <= 0.005:
-            return f"⚡ Zero-Momentum Scratch ({pnl_pct*100:+.1f}%, 0 импульса за {minutes_held*60:.0f}с — сброс до дампа дева)"
+        # Б. СРЕЗ МЁРТВЫХ ФЛЕТОВ ПОСЛЕ КОНСОЛИДАЦИИ (НЕ рубим +0.0% на 35-й секунде!):
+        # Даём сделке минимум 3.0 минуты (180с) на раскачку и обновление живых котировок;
+        # от реальных дампов с 1-й секунды защищают Fast Stop Loss (-7.5%), Rug Cut (-7.0%) и LP Drop Escape.
+        _scratch_min = max(2.5, float(getattr(config, "UNLOCKED_ENTRY_SCRATCH_SEC", 180.0)) / 60.0)
+        if not _is_mb and minutes_held >= _scratch_min and max_pnl_pct < 0.04 and -0.055 <= pnl_pct <= -0.008:
+            return f"⚡ Zero-Momentum Scratch ({pnl_pct*100:+.1f}%, нет отрыва за {minutes_held*60:.0f}с)"
+        if not _is_mb and minutes_held >= max(4.5, _scratch_min + 1.5) and max_pnl_pct < 0.04 and -0.055 <= pnl_pct <= 0.005:
+            return f"⚡ Dead Flat Scratch ({pnl_pct*100:+.1f}%, полный флет {minutes_held*60:.0f}с)"
 
         _sl = -abs(float(getattr(config, "STOP_LOSS_PCT", -0.095)))
         if pnl_pct <= _sl:
@@ -183,43 +177,43 @@ class MatureExitManager:
             _mb_act = float(getattr(config, "MOONBAG_TRAIL_ACTIVATION_PCT", 1.00))
             _mb_dist = float(getattr(config, "MOONBAG_TRAIL_DISTANCE_PCT", 0.22))
             if max_pnl_pct >= 5.00:
-                _floor_pnl = round(max_pnl_pct * 0.78, 2)
+                _floor_pnl = round(max_pnl_pct * 0.72, 2)
                 _trail_dist = min(_mb_dist, 0.22)
             elif max_pnl_pct >= 2.50:
-                _floor_pnl = round(max(1.65, max_pnl_pct * 0.74), 2)
-                _trail_dist = min(_mb_dist, 0.20)
+                _floor_pnl = round(max(1.50, max_pnl_pct * 0.65), 2)
+                _trail_dist = min(_mb_dist, 0.22)
             elif max_pnl_pct >= _mb_act:
-                _floor_pnl = round(max(0.72, max_pnl_pct * 0.72), 2)
+                _floor_pnl = round(max(0.55, max_pnl_pct * 0.62), 2)
                 _trail_dist = _mb_dist
             elif max_pnl_pct >= 0.55:
-                _floor_pnl = 0.24
-                _trail_dist = 0.22
+                _floor_pnl = 0.26
+                _trail_dist = 0.20
         else:
-            # === ОСНОВНАЯ ПОЗИЦИЯ: ЖЁСТКИЙ Б/У ЩИТ + СТУПЕНЧАТЫЙ ТРЕЙЛИНГ ДО 10x+ ===
-            if max_pnl_pct >= 5.00:         # 6x+: фиксируем минимум 78% от ATH PnL
-                _floor_pnl = round(max_pnl_pct * 0.78, 2)
+            # === ОСНОВНАЯ ПОЗИЦИЯ: Б/У ЩИТ ОТ +16% + ПРОГРЕССИВНЫЙ ТРЕЙЛИНГ ДО 10x+ ===
+            if max_pnl_pct >= 5.00:         # 6x+: фиксируем минимум 72% от ATH PnL
+                _floor_pnl = round(max_pnl_pct * 0.72, 2)
                 _trail_dist = 0.22
-            elif max_pnl_pct >= 2.50:       # 3.5x - 6x: фиксируем минимум 74% от ATH (от +165%)
-                _floor_pnl = round(max(1.65, max_pnl_pct * 0.74), 2)
+            elif max_pnl_pct >= 2.50:       # 3.5x - 6x: фиксируем минимум 65% от ATH (от +150%)
+                _floor_pnl = round(max(1.50, max_pnl_pct * 0.65), 2)
+                _trail_dist = 0.22
+            elif max_pnl_pct >= 1.10:       # 2.1x - 3.5x: фиксируем от +58%, даём 22% места для волны 3.5x-6x
+                _floor_pnl = round(max(0.58, max_pnl_pct * 0.62), 2)
+                _trail_dist = 0.22
+            elif max_pnl_pct >= 0.55:       # +55%..+110%: фиксируем минимум +26%, трейл 20% от ATH
+                _floor_pnl = 0.26
                 _trail_dist = 0.20
-            elif max_pnl_pct >= 1.10:       # 2.1x - 3.5x: фиксируем от +72%, даём 20% места для волны 3x-5x
-                _floor_pnl = round(max(0.72, max_pnl_pct * 0.72), 2)
-                _trail_dist = 0.20
-            elif max_pnl_pct >= 0.55:       # +55%..+110%: фиксируем минимум +34%, трейл 18% от цены ATH
-                _floor_pnl = 0.34
-                _trail_dist = 0.18
-            elif max_pnl_pct >= 0.28:       # +28%..+55%: Wave-1 Shield (+14% пол после 45с, трейл 16%)
-                if minutes_held >= 0.75:
-                    _floor_pnl = 0.14
-                    _trail_dist = 0.16
+            elif max_pnl_pct >= 0.28:       # +28%..+55%: Wave-1 Shield (+12% пол после 75с, трейл 18%)
+                if minutes_held >= 1.25:
+                    _floor_pnl = 0.12
+                    _trail_dist = 0.18
                 else:
-                    _floor_pnl = 0.06
+                    _floor_pnl = 0.05
                     _trail_dist = None
             elif max_pnl_pct >= float(getattr(config, "BREAKEVEN_PCT", 0.16) or 0.16):
                 # Breakeven Shield: позиция с пиком >= +16% НЕ МОЖЕТ закрыться в минус!
-                # Первые 45с / 18с после ATH держим пол +1.5% от шума сквиза (кейс 67GOOGLE), затем +4.5% (~+2.5..3% чистыми)
-                if minutes_held >= 0.75 and _peak_age_min >= 0.30:
-                    _floor_pnl = 0.045
+                # Оставляем простор +1.5%..+3.5% для ретеста перед второй волной в 2x-5x
+                if minutes_held >= 1.50 and _peak_age_min >= 0.50:
+                    _floor_pnl = 0.035
                 else:
                     _floor_pnl = 0.015
                 _trail_dist = None
