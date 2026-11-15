@@ -130,21 +130,18 @@ class MatureExitManager:
         # - Crash Guard (-18%..-50% за 1м)
         _pd_pos = getattr(position, "pair_data", None) or getattr(position, "last_pair_data", None) or {}
         _mint_pos = str(getattr(position, "mint", "") or "")
-        _base_a = str(((_pd_pos.get("baseToken") or {}).get("address")) or _mint_pos)
-        _is_pump_token = _mint_pos.endswith("pump") or _base_a.endswith("pump")
-        _dex_pos_low = str((_pd_pos.get("dexId", "") if isinstance(_pd_pos, dict) else "") or "").lower()
-
-        _has_safe_lock = bool(getattr(position, "is_lp_locked_80", False)) or (
-            _is_pump_token and _dex_pos_low in ("pumpswap", "pump-amm", "pump", "pumpfun")
+        _is_unlocked = config.is_position_unlocked_lp(
+            _mint_pos,
+            _pd_pos,
+            bool(getattr(position, "is_lp_locked_80", False)),
         )
-        _is_unlocked = not _has_safe_lock
         position.is_unlocked_pool = _is_unlocked
 
-        # Для незалоченных кастомных пулов: фиксируем только при долгом застое (3+ мин после +45%) и глубоком откате,
-        # давая нормальным волнам вырасти до 2x-10x под защитой Breakeven Shield и Liquidity Guard.
-        _unl_stall_min = float(getattr(config, "UNLOCKED_STALL_PROFIT_AGE_SEC", 180.0)) / 60.0
-        if not _is_mb and _is_unlocked and minutes_held >= max(3.0, _unl_stall_min):
-            if max_pnl_pct >= 0.45 and _peak_age_min >= _unl_stall_min and pnl_pct <= max_pnl_pct * 0.72:
+        # Для незалоченных кастомных пулов: быстрее фиксируем профит при застое (2+ мин после +35% и откате 22%+),
+        # не дожидаясь пока дев выдернет LP; 100% тела уже выводится лесенкой на +16%/+30%!
+        _unl_stall_min = min(2.0, float(getattr(config, "UNLOCKED_STALL_PROFIT_AGE_SEC", 180.0)) / 60.0)
+        if not _is_mb and _is_unlocked and minutes_held >= _unl_stall_min:
+            if max_pnl_pct >= 0.35 and _peak_age_min >= _unl_stall_min and pnl_pct <= max_pnl_pct * 0.78:
                 return f"⚡ Unlocked Stale Profit Lock (+{pnl_pct*100:.1f}%, застой {_peak_age_min*60:.0f}с после пика +{max_pnl_pct*100:.1f}%)"
 
         # Б. СРЕЗ МЁРТВЫХ ФЛЕТОВ ПОСЛЕ КОНСОЛИДАЦИИ (НЕ рубим +0.0% на 35-й секунде!):
@@ -174,8 +171,19 @@ class MatureExitManager:
 
         if _is_mb:
             # === МУНБЭГ-ТРЕЙЛИНГ ===
-            _mb_act = float(getattr(config, "MOONBAG_TRAIL_ACTIVATION_PCT", 1.00))
-            _mb_dist = float(getattr(config, "MOONBAG_TRAIL_DISTANCE_PCT", 0.22))
+            if _is_unlocked and max_pnl_pct >= float(getattr(config, "UNLOCKED_MOONBAG_TRAIL_ACT_PCT", 0.65)):
+                if _peak_age_min >= 3.5 and pnl_pct <= max_pnl_pct * 0.80:
+                    return f"Unlocked Moonbag Stale Harvest (+{pnl_pct*100:.0f}% locked after peak +{max_pnl_pct*100:.0f}%, {_peak_age_min:.1f}m no ATH)"
+            _mb_act = float(
+                getattr(config, "UNLOCKED_MOONBAG_TRAIL_ACT_PCT", 0.65)
+                if _is_unlocked
+                else getattr(config, "MOONBAG_TRAIL_ACTIVATION_PCT", 1.00)
+            )
+            _mb_dist = float(
+                getattr(config, "UNLOCKED_MOONBAG_TRAIL_DIST_PCT", 0.18)
+                if _is_unlocked
+                else getattr(config, "MOONBAG_TRAIL_DISTANCE_PCT", 0.22)
+            )
             if max_pnl_pct >= 5.00:
                 _floor_pnl = round(max_pnl_pct * 0.72, 2)
                 _trail_dist = min(_mb_dist, 0.22)
@@ -183,7 +191,7 @@ class MatureExitManager:
                 _floor_pnl = round(max(1.50, max_pnl_pct * 0.65), 2)
                 _trail_dist = min(_mb_dist, 0.22)
             elif max_pnl_pct >= _mb_act:
-                _floor_pnl = round(max(0.55, max_pnl_pct * 0.62), 2)
+                _floor_pnl = round(max(0.32 if _is_unlocked else 0.55, max_pnl_pct * (0.65 if _is_unlocked else 0.62)), 2)
                 _trail_dist = _mb_dist
             elif max_pnl_pct >= 0.55:
                 _floor_pnl = 0.26

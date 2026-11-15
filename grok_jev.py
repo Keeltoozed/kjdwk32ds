@@ -479,18 +479,12 @@ class GrokJevEngine:
         vol_h24 = float((pair_data.get("volume") or {}).get("h24", 0) or 0)
         trades_h24 = int(txns_h24.get("buys", 0) or 0) + int(txns_h24.get("sells", 0) or 0)
 
-        # 2.5 ЗАЩИТА ОТ 0m МГНОВЕННОГО СЛИВА UNLOCKED-AMM (кейс GTA6: $25,117 -> $2 за 0м в GROK-JEV):
-        # Для кастомных не-launchpad пулов без сожжённого/канонического LP:
-        # 1) Выдерживаем карантин первой минуты в Waiting Room (отсевает мгновенные 0m LP-pull ловушки);
-        # 2) Отсекаем раздутую приманку seeded-LP ($18k+ LP без живого оборота >=20% и <20 покупателей).
-        _is_launchpad_pool = (
-            _c.is_launchpad_mint(mint)
-            or dex_id in ("pump", "pumpfun", "moonshot")
-            or bool(pair_data.get("_pumpswap_is_canonical"))
-        )
-        _lp_burned_flag = bool(pair_data.get("_pumpswap_lp_burned"))
-        if not _is_launchpad_pool and not _lp_burned_flag:
-            _u_min_age = max(float(getattr(_c, "UNLOCKED_CUSTOM_MIN_AGE_MIN", 1.25)), 1.25)
+        # 2.5 ЗАЩИТА ОТ 0m МГНОВЕННОГО СЛИВА И SEEDED-LP ЛОВУШЕК UNLOCKED-AMM (кейсы GTA6/TOWN/Starhug):
+        _m5_hg_raw = (pair_data.get("priceChange") or {}).get("m5")
+        _m5_hg_val = float(_m5_hg_raw or 0.0) if _m5_hg_raw is not None else 0.0
+        _is_unlocked_hg = _c.is_position_unlocked_lp(mint, pair_data, bool(pair_data.get("_lp_verified")))
+        if _is_unlocked_hg:
+            _u_min_age = max(float(getattr(_c, "UNLOCKED_CUSTOM_MIN_AGE_MIN", 1.5)), 1.25)
             if age_min < _u_min_age:
                 try:
                     from birth_tracker import birth_tracker as _bt_uc
@@ -498,8 +492,12 @@ class GrokJevEngine:
                 except Exception:
                     pass
                 return False, f"unlocked-custom-0m-quarantine {age_min:.2f}m < {_u_min_age:.2f}m (wait for LP stability)"
-            if raw_liq >= 18000.0 and (vol_m5 < (raw_liq * 0.20) or b5 < 20 or (s5 > 0 and b5 < s5)):
+            if raw_liq >= 18000.0 and (vol_m5 < (raw_liq * 0.35) or b5 < 20 or (s5 > 0 and b5 < s5)):
                 return False, f"seeded-unlocked-lp-bait liq ${raw_liq:,.0f} vol5 ${vol_m5:,.0f} ({b5}b/{s5}s) — drain-trap risk"
+            if fdv_mc > 0.0 and (raw_liq >= (fdv_mc * 1.15) or (raw_liq >= (fdv_mc * 0.85) and vol_m5 < (raw_liq * 1.50))):
+                return False, f"inverted-unlocked-lp-bait liq ${raw_liq:,.0f} vs fdv ${fdv_mc:,.0f} vol5 ${vol_m5:,.0f} — TOWN/Starhug trap"
+            if _m5_hg_val < 5.0 and vol_m5 < (raw_liq * 2.0):
+                return False, f"flat-unlocked-lp-trap m5 {_m5_hg_val:+.1f}% vol5 ${vol_m5:,.0f} — no real breakout"
             _info_hg = pair_data.get("info") or {}
             _has_soc_hg = bool((_info_hg.get("socials") or []) or (_info_hg.get("websites") or []))
             if raw_liq >= 12000.0 and not _has_soc_hg and (fdv_mc <= 0.0 or raw_liq >= (fdv_mc * 0.65)) and (vol_m5 < (raw_liq * 0.45) or b5 < 25):
@@ -1675,6 +1673,7 @@ class GrokJevEngine:
                         _s5_rc = int(_tx_rc.get("sells", 0) or 0)
                         _is_trap_rc = _c.is_pumpswap_liq_fdv_trap(pair_data)
                         
+                        _m5_rc = ((pair_data.get("priceChange") or {}).get("m5"))
                         _is_unlocked_safe = _c.is_safe_unlocked_custom_runner(
                             liq_usd=_eff_l_rc,
                             age_min=_age_rc,
@@ -1683,18 +1682,21 @@ class GrokJevEngine:
                             sells5=_s5_rc,
                             has_socials=has_socials,
                             is_trap=_is_trap_rc,
+                            fdv_usd=fdv,
+                            m5_pct=(float(_m5_rc) if _m5_rc is not None else None),
                         )
                         if _is_unlocked_safe:
-                            print(f"🔓 [GROK-JEV-UNLOCKED-LP] {symbol} ({address[:8]}): свежий DEX-раннер (age {_age_rc:.1f}м, liq ${_eff_l_rc:,.0f}, vol5 ${_vm5_rc:,.0f}) — лок LP не требуется (режим 0d2b1ae).")
+                            print(f"🔓 [GROK-JEV-UNLOCKED-LP] {symbol} ({address[:8]}): свежий DEX-раннер (age {_age_rc:.1f}м, liq ${_eff_l_rc:,.0f}, vol5 ${_vm5_rc:,.0f}) — лок LP не требуется (быстрый возврат тела +16%/+30%).")
                         elif not getattr(_c, "ALLOW_UNLOCKED_LP_POOLS", True):
                             _req_soc_min = float(getattr(_c, "REQUIRE_SOCIALS_MIN_AGE_MIN", 25.0))
                             if getattr(_c, "REQUIRE_SOCIALS_ENABLED", False) and not is_raw_pump_curve and not has_socials and not _is_launchpad_aud and not bool(pair_data.get("_socials_unknown", False)) and _smart_n_chk < 2 and _age_rc > _req_soc_min:
                                 return False, "no-socials-amm-scam (0 соцсетей на кастомном DEX-пуле без подтверждённого лока LP)", _h_stats
                             return False, f"unlocked-custom-lp (liq ${_eff_l_rc:.0f}, age {_age_rc:.1f}m, vol ${_vm5_rc:.0f}, soc={int(bool(has_socials))})", _h_stats
                         else:
-                            return False, f"liq-depth-low ${_eff_l_rc:.0f} (weak/empty pool)", _h_stats
+                            return False, f"liq/fdv-bait-or-weak-unlocked-pool (liq ${_eff_l_rc:.0f}, fdv ${fdv:.0f}, vol5 ${_vm5_rc:.0f})", _h_stats
                     if isinstance(pair_data, dict):
-                        pair_data["_lp_verified"] = bool(is_canonical_pump or has_verified_locked_lp or _is_unlocked_safe or getattr(_c, "ALLOW_UNLOCKED_LP_POOLS", True))
+                        pair_data["_unlocked_runner_ok"] = bool(_is_unlocked_safe)
+                        pair_data["_lp_verified"] = bool(is_canonical_pump or has_verified_locked_lp or pair_data.get("_pumpswap_lp_burned"))
 
                     # Проверка держателей и дева (Holders & Sybil analysis)
                     holders = rc_data.get("topHolders", []) or []
@@ -1923,7 +1925,8 @@ class GrokJevEngine:
                     elif getattr(_c, "JEV_REQUIRE_HOLDER_DATA", False) or (not is_canonical_pump and not _is_launchpad_aud and not bool(pair_data.get("_pumpswap_lp_burned"))):
                         return False, "auditor-pending: unverified custom AMM without holder index (wait for RugCheck/GoPlus)", _h_stats
                     elif isinstance(pair_data, dict):
-                        pair_data["_lp_verified"] = bool(is_canonical_pump or getattr(_c, "ALLOW_UNLOCKED_LP_POOLS", True))
+                        pair_data["_lp_verified"] = bool(is_canonical_pump or pair_data.get("_pumpswap_lp_burned"))
+                        pair_data["_unlocked_runner_ok"] = bool(getattr(_c, "ALLOW_UNLOCKED_LP_POOLS", True))
 
             except Exception as e:
                 # Фоллбэк при сетевой ошибке RugCheck: проверяем GoPlus holder stats
@@ -1942,7 +1945,8 @@ class GrokJevEngine:
                 elif getattr(_c, "JEV_REQUIRE_HOLDER_DATA", False) or (not is_canonical_pump and not _is_launchpad_aud and not bool(pair_data.get("_pumpswap_lp_burned"))):
                     return False, f"auditor-pending: holder report not ready yet ({e}), wait for verification", _h_stats
                 elif isinstance(pair_data, dict):
-                    pair_data["_lp_verified"] = bool(is_canonical_pump or getattr(_c, "ALLOW_UNLOCKED_LP_POOLS", True))
+                    pair_data["_lp_verified"] = bool(is_canonical_pump or pair_data.get("_pumpswap_lp_burned"))
+                    pair_data["_unlocked_runner_ok"] = bool(getattr(_c, "ALLOW_UNLOCKED_LP_POOLS", True))
 
             # Д) FIRST-CANDLE RUG GUARD: анализ когорты кошельков ДО входа.
             # Ищем кластеры «одного источника финансирования»: сколько кошельков
@@ -2301,14 +2305,8 @@ class GrokJevEngine:
         if getattr(_c, "ROCKET_XGB_ENABLED", True) and not _is_mom_rocket_fin and (rkt_final + 0.05) < final_thresh:
             print(f"🚫 [GROK-JEV-ML-VETO] {symbol} ({address[:8]}): Rocket XGB final score {rkt_final:.1f}% < {final_thresh:.0f}% — VETO! (Блокировка дампа)")
             return False, f"rocket-xgb-final-veto {rkt_final:.1f}% < {final_thresh:.0f}%"
-        _dex_fin_j = str(pair.get("dexId", "")).lower()
-        _is_unlocked_custom_fin = (
-            not _c.is_launchpad_mint(address)
-            and _dex_fin_j not in ("pump", "pumpfun", "moonshot")
-            and not bool(pair.get("_pumpswap_is_canonical"))
-            and not bool(pair.get("_pumpswap_lp_burned"))
-        )
-        _custom_xgb_min = float(getattr(_c, "ROCKET_XGB_UNLOCKED_CUSTOM_MIN", 18.0))
+        _is_unlocked_custom_fin = _c.is_position_unlocked_lp(address, pair, bool(pair.get("_lp_verified")))
+        _custom_xgb_min = float(getattr(_c, "ROCKET_XGB_UNLOCKED_CUSTOM_MIN", 35.0))
         if getattr(_c, "ROCKET_XGB_ENABLED", True) and _is_unlocked_custom_fin and (rkt_final + 0.05) < _custom_xgb_min:
             print(f"🚫 [GROK-JEV-ML-UNLOCKED] {symbol} ({address[:8]}): unlocked AMM Rocket XGB {rkt_final:.1f}% < {_custom_xgb_min:.0f}% — VETO! (отсев слабых/клонированных пулов уровня GTA6)")
             return False, f"rocket-xgb-unlocked-veto {rkt_final:.1f}% < {_custom_xgb_min:.0f}%"

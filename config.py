@@ -99,15 +99,38 @@ def get_max_entry_h1_pct(
 
 
 LAUNCHPAD_MINT_SUFFIXES = ("pump", "moon", "bonk", "bags")
-UNLOCKED_CUSTOM_MIN_LIQ_USD = 2500.0
-UNLOCKED_CUSTOM_MIN_AGE_MIN = 1.25        # 75с карантин для кастомных незалоченных пулов: отсекает 0m LP-pull раги уровня GTA6 ($25k -> $2)
-UNLOCKED_CUSTOM_MIN_VOL5_USD = 750.0
-UNLOCKED_CUSTOM_MIN_BUYS5 = 6
+UNLOCKED_CUSTOM_MIN_LIQ_USD = 4500.0
+UNLOCKED_CUSTOM_MIN_AGE_MIN = 1.5         # 90с карантин для кастомных незалоченных пулов: отсекает 0m-1m LP-pull раги (GTA6/TOWN)
+UNLOCKED_CUSTOM_MIN_VOL5_USD = 1800.0
+UNLOCKED_CUSTOM_MIN_BUYS5 = 12
 
 
 def is_launchpad_mint(mint: str) -> bool:
     """Return True if mint belongs to a canonical Solana launchpad (pump, moon, bonk, BAGS)."""
     return str(mint or "").strip().lower().endswith(LAUNCHPAD_MINT_SUFFIXES)
+
+
+def is_position_unlocked_lp(
+    mint: str,
+    pair_data: Optional[dict] = None,
+    is_lp_locked_80: bool = False,
+) -> bool:
+    """Return True if LP can be withdrawn by the pool creator/owner (unlocked risk)."""
+    if bool(is_lp_locked_80):
+        return False
+    pd = pair_data if isinstance(pair_data, dict) else {}
+    if bool(pd.get("_pumpswap_canonical")) or bool(pd.get("_pumpswap_lp_burned")):
+        return False
+    dex_low = str(pd.get("dexId") or "").strip().lower()
+    mint_low = str(mint or "").strip().lower()
+    if (
+        mint_low.endswith("pump")
+        and dex_low in ("", "pump", "pumpfun", "pump-amm", "pumpswap")
+        and pd.get("_pumpswap_canonical") is not False
+        and pd.get("_pumpswap_lp_burned") is not False
+    ):
+        return False
+    return True
 
 
 def verify_rugcheck_lp_markets(
@@ -184,30 +207,51 @@ def is_safe_unlocked_custom_runner(
     is_trap: bool = False,
     dev_pct: float = 0.0,
     top10_pct: float = 0.0,
+    fdv_usd: float = 0.0,
+    m5_pct: Optional[float] = None,
     **kwargs,
 ) -> bool:
     """
-    Восстановленный режим Commit 0d2b1ae (без ограничения на залоченный LP):
-    свежие DEX-раннеры (Raydium, Meteora, PumpSwap CreatePool, Moonit) допускаются
-    без стороннего сертификата лока/сжигания LP при наличии минимальной ликвидности и активности.
-    Защита от рага обеспечивается быстрым сбором профита и мониторингом слива LP.
+    Допуск свежих DEX-раннеров без сожжённого/залоченного LP (Meteora, PumpSwap CreatePool, Raydium):
+    отсекаем инвертированные seeded-LP ловушки (Liq > FDV без кратного оборота, плоские свечи TOWN,
+    раздутые малооборотные пулы Starhug $103k liq / $20k vol) при сохранении настоящих ракет (TikTok).
     """
     if not bool(globals().get("ALLOW_UNLOCKED_LP_POOLS", True)):
         return False
+    liq_val = float(liq_usd or 0.0)
+    fdv_val = float(fdv_usd or 0.0)
+    vol5_val = float(vol5_usd or 0.0)
+    age_val = float(age_min or 0.0)
+    b5 = int(buys5 or 0)
+    s5 = int(sells5 or 0)
+
     min_liq = float(globals().get("UNLOCKED_CUSTOM_MIN_LIQ_USD", 4500.0))
-    if float(liq_usd or 0.0) < min_liq:
+    if liq_val < min_liq:
         return False
-    min_age = float(globals().get("UNLOCKED_CUSTOM_MIN_AGE_MIN", 0.0))
-    if float(age_min or 0.0) < min_age:
+    min_age = float(globals().get("UNLOCKED_CUSTOM_MIN_AGE_MIN", 1.5))
+    if age_val < min_age:
         return False
-    min_vol5 = float(globals().get("UNLOCKED_CUSTOM_MIN_VOL5_USD", 1500.0))
-    min_buys5 = int(globals().get("UNLOCKED_CUSTOM_MIN_BUYS5", 10))
-    if int(buys5 or 0) < min_buys5 or float(vol5_usd or 0.0) < min_vol5:
+    min_vol5 = float(globals().get("UNLOCKED_CUSTOM_MIN_VOL5_USD", 1800.0))
+    min_buys5 = int(globals().get("UNLOCKED_CUSTOM_MIN_BUYS5", 12))
+    if b5 < min_buys5 or vol5_val < min_vol5:
         return False
-    if int(sells5 or 0) > 0 and int(buys5 or 0) < int(int(sells5) * 0.90):
+    if s5 > 0 and b5 < int(s5 * 1.05):
         return False
-    # Кастомный незалоченный пул без соцсетей с аномальным wash-оборотом (>7x ликвидности) — ловушка дева
-    if not has_socials and float(liq_usd or 0.0) > 0 and (float(vol5_usd or 0.0) / float(liq_usd)) > 7.5 and float(age_min or 0.0) < 20.0:
+    # Seeded-LP приманка (кейс Starhug $103.5k liq / $20k vol5 = 0.19x): на крупном незалоченном пуле нужен оборот >= 35%
+    if liq_val >= 18000.0 and vol5_val < (liq_val * 0.35):
+        return False
+    # Инвертированная ловушка Liq/FDV (кейсы TOWN liq $29.8k vs FDV $16.7k, Starhug $103.5k vs $61k):
+    # если ликвидность превышает FDV >= 1.15x или >= 85% FDV без кратного живого оборота (>= 1.5x LP) — дев держит пул как приманку
+    if fdv_val > 0.0:
+        if liq_val >= (fdv_val * 1.15):
+            return False
+        if liq_val >= (fdv_val * 0.85) and vol5_val < (liq_val * 1.50):
+            return False
+    # На незалоченном пуле должен быть реальный ценовой импульс, а не плоский флет перед дампом (кейс TOWN +0.7%)
+    if m5_pct is not None and float(m5_pct) < 5.0 and vol5_val < (liq_val * 2.0):
+        return False
+    # Кастомный незалоченный пул без соцсетей с аномальным wash-оборотом (>7.5x ликвидности) — ловушка дева
+    if not has_socials and liq_val > 0 and (vol5_val / liq_val) > 7.5 and age_val < 20.0:
         return False
     return True
 
@@ -561,6 +605,51 @@ MOONBAG_TRAIL_ACTIVATION_PCT = 1.00  # Трейлинг мунбэга вклю�
 MOONBAG_TRAIL_DISTANCE_PCT = 0.25    # Дистанция трейлинга 25% от пика (переживает здоровые откаты)
 MOONBAG_MAX_HOLD_MIN = 55.0          # Мунбэг может ехать до 55 минут
 
+# === БЫСТРЫЙ СБОР ТЕЛА И ПРОФИТА ДЛЯ НЕЗАЛОЧЕННЫХ ПУЛОВ (Meteora / PumpSwap CreatePool / Raydium) ===
+# На unlocked-LP дев может выдернуть 100% пула за 1 блок (кейсы Starhug/4CHAN/TikTok):
+# к +30% выводим 103.4% тела в кэш, к +65% фиксируем +21% чистыми и жестче тралим мунбэг.
+UNLOCKED_TP1_TRIGGER_PCT = 0.16
+UNLOCKED_TP1_SELL_FRAC = 0.60
+UNLOCKED_TP2_TRIGGER_PCT = 0.30
+UNLOCKED_TP2_SELL_FRAC = 0.65
+UNLOCKED_TP3_TRIGGER_PCT = 0.65
+UNLOCKED_TP3_SELL_FRAC = 0.50
+UNLOCKED_TP4_TRIGGER_PCT = 1.40
+UNLOCKED_TP4_SELL_FRAC = 0.50
+UNLOCKED_TP5_TRIGGER_PCT = 3.00
+UNLOCKED_TP5_SELL_FRAC = 0.50
+UNLOCKED_MOONBAG_TRAIL_ACT_PCT = 0.65
+UNLOCKED_MOONBAG_TRAIL_DIST_PCT = 0.18
+
+
+def get_sol_tp_ladder(is_unlocked: bool) -> tuple:
+    """Return (tp1_t, tp1_f, tp2_t, tp2_f, tp3_t, tp3_f, tp4_t, tp4_f, tp5_t, tp5_f)."""
+    if is_unlocked:
+        return (
+            float(globals().get("UNLOCKED_TP1_TRIGGER_PCT", 0.16)),
+            float(globals().get("UNLOCKED_TP1_SELL_FRAC", 0.60)),
+            float(globals().get("UNLOCKED_TP2_TRIGGER_PCT", 0.30)),
+            float(globals().get("UNLOCKED_TP2_SELL_FRAC", 0.65)),
+            float(globals().get("UNLOCKED_TP3_TRIGGER_PCT", 0.65)),
+            float(globals().get("UNLOCKED_TP3_SELL_FRAC", 0.50)),
+            float(globals().get("UNLOCKED_TP4_TRIGGER_PCT", 1.40)),
+            float(globals().get("UNLOCKED_TP4_SELL_FRAC", 0.50)),
+            float(globals().get("UNLOCKED_TP5_TRIGGER_PCT", 3.00)),
+            float(globals().get("UNLOCKED_TP5_SELL_FRAC", 0.50)),
+        )
+    return (
+        float(globals().get("TP1_TRIGGER_PCT", 0.25)),
+        float(globals().get("TP1_SELL_FRAC", 0.45)),
+        float(globals().get("TP2_TRIGGER_PCT", 0.60)),
+        float(globals().get("TP2_SELL_FRAC", 0.50)),
+        float(globals().get("TP3_TRIGGER_PCT", 1.50)),
+        float(globals().get("TP3_SELL_FRAC", 0.35)),
+        float(globals().get("TP4_TRIGGER_PCT", 3.50)),
+        float(globals().get("TP4_SELL_FRAC", 0.40)),
+        float(globals().get("TP5_TRIGGER_PCT", 8.00)),
+        float(globals().get("TP5_SELL_FRAC", 0.50)),
+    )
+
 PUMP_XGB_ENABLED = False
 RAY_XGB_ENABLED = False
 ROCKET_XGB_ENABLED = True
@@ -628,8 +717,8 @@ JEV_MIN_HOLDERS = 25             # Минимум 25 холдеров вмест
 JEV_MAX_TOP_WALLET = 0.14        # Макс 14% на один кошелёк (вместо 30%)
 JEV_MAX_TOP_10 = 0.42            # Макс 42% у топ-10 холдеров (вместо 65%)
 UNLOCKED_CUSTOM_MIN_LIQ_USD = 4500.0
-UNLOCKED_CUSTOM_MIN_VOL5_USD = 1500.0
-UNLOCKED_CUSTOM_MIN_BUYS5 = 10
+UNLOCKED_CUSTOM_MIN_VOL5_USD = 1800.0
+UNLOCKED_CUSTOM_MIN_BUYS5 = 12
 JEV_REQUIRE_HOLDER_DATA = False  # Не ждём индексации холдеров в RugCheck/GoPlus на свежих пулах
 MAX_POOL_LIQ_FRAC = 0.02
 AUDITOR_MAX_DELEGATED_ACCOUNTS = 3

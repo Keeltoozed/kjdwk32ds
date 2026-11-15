@@ -435,16 +435,13 @@ async def position_manager_loop(analyzer, tracker):
                     _cg_n = int(getattr(position, "crash_confirm_n", 0) or 0) + 1
                     position.crash_confirm_n = _cg_n
                     _pd_tmp = getattr(position, "pair_data", None) or getattr(position, "last_pair_data", None) or {}
-                    _base_tmp = str((((_pd_tmp or {}).get("baseToken") or {}).get("address")) or mint or "")
-                    _is_pump_tok = _base_tmp.endswith("pump") or str(mint).endswith("pump")
-                    if _is_pump_tok:
-                        _is_unl_cg = False
-                    else:
-                        _is_unl_cg = getattr(position, "is_unlocked_pool", None)
-                        if _is_unl_cg is None:
-                            _is_unl_cg = not bool(getattr(position, "is_lp_locked_80", False))
+                    _is_unl_cg = config.is_position_unlocked_lp(
+                        mint,
+                        _pd_tmp,
+                        bool(getattr(position, "is_lp_locked_80", False)),
+                    )
                     position.is_unlocked_pool = _is_unl_cg
-                    _cg_req = 1 if (_is_unl_cg or _is_pump_tok or minutes_held <= 15.0) else 2
+                    _cg_req = 1 if (_is_unl_cg or str(mint).endswith("pump") or minutes_held <= 15.0) else 2
                     if _cg_n < _cg_req:
                         print(f"⚠️ [SOL-TICK-VERIFY] {position.symbol} ({mint[:8]}): резкий 1-тик {pnl_pct*100:+.1f}% (-{(1 - current_price/_ref_crash_px)*100:.0f}%) — ждём {_cg_req}-й тик подтверждения.")
                         continue
@@ -485,16 +482,13 @@ async def position_manager_loop(analyzer, tracker):
                 # === ИНТЕГРАЦИЯ МАТЕМАТИКИ ДЛЯ ЗРЕЛЫХ МОНЕТ (SWING TRADING / RIDE RUNNERS) ===
                 # Исполняется ДО скальперских Early Fade / Stagnant срезов, чтобы ракеты ехали по MatureExitManager!
                 # === ИНТЕГРАЦИЯ МАТЕМАТИКИ ДЛЯ ВСЕХ ПОЗИЦИЙ SOLANA (main.py строки 240-280) ===
-                _tp1_sol_thr = float(getattr(config, "TP1_TRIGGER_PCT", 0.25))
-                _tp1_sell = float(getattr(config, "TP1_SELL_FRAC", 0.45))
-                _tp2 = float(getattr(config, "TP2_TRIGGER_PCT", 0.60))
-                _tp2_sell = float(getattr(config, "TP2_SELL_FRAC", 0.50))
-                _tp3 = float(getattr(config, "TP3_TRIGGER_PCT", 1.60))
-                _tp3_sell = float(getattr(config, "TP3_SELL_FRAC", 0.35))
-                _tp4 = float(getattr(config, "TP4_TRIGGER_PCT", 3.50))
-                _tp4_sell = float(getattr(config, "TP4_SELL_FRAC", 0.40))
-                _tp5 = float(getattr(config, "TP5_TRIGGER_PCT", 8.00))
-                _tp5_sell = float(getattr(config, "TP5_SELL_FRAC", 0.50))
+                _pos_unl_tp = config.is_position_unlocked_lp(
+                    mint,
+                    getattr(position, "pair_data", None) or getattr(position, "last_pair_data", None),
+                    bool(getattr(position, "is_lp_locked_80", False)),
+                )
+                position.is_unlocked_pool = _pos_unl_tp
+                _tp1_sol_thr, _tp1_sell, _tp2, _tp2_sell, _tp3, _tp3_sell, _tp4, _tp4_sell, _tp5, _tp5_sell = config.get_sol_tp_ladder(_pos_unl_tp)
                 _min_tp_ticket = float(getattr(config, "PARTIAL_TP_MIN_TICKET_USD", 3.0))
                 _pos_val = float(getattr(position, "original_amount_usd", 0.0) or getattr(position, "amount_usd", 0.0) or 0.0)
                 _allow_partial_tp = getattr(config, "PARTIAL_TP_ENABLED", True) and (_pos_val >= _min_tp_ticket)
@@ -1309,17 +1303,18 @@ async def scanner_loop(analyzer, tracker):
                                 if not _allow_unl_sc and ("meteora" in _dex_id or _dex_id == "meteoradbc") and not pair_data.get("_lp_verified", False):
                                     print(f"🚫 [SCANNER-METEORA-UNBURNED] {actual_symbol} ({mint[:8]}): пул Meteora без сожжённого/залоченного LP — риск Remove LP, отмена!")
                                     continue
-                                _is_canon_m_sc = (mint.endswith("pump") and _dex_id in ("pump", "pumpfun", "pumpswap")) or bool(pair_data.get("_pumpswap_canonical"))
-                                _is_lp_safe_sc = bool(pair_data.get("_lp_verified")) or bool(pair_data.get("_pumpswap_lp_burned")) or _is_canon_m_sc
-                                if not _is_lp_safe_sc:
+                                _is_unl_sc_pool = config.is_position_unlocked_lp(mint, pair_data, bool(pair_data.get("_lp_verified")))
+                                if _is_unl_sc_pool:
                                     _ca_sc = float(pair_data.get("pairCreatedAt") or 0)
                                     _age_sc_unl = ((time.time() * 1000.0 - _ca_sc) / 60000.0) if _ca_sc > 0 else 0.1
                                     _tx5_sc_u = (pair_data.get("txns") or {}).get("m5") or {}
                                     _b5_sc_u = int(_tx5_sc_u.get("buys", 0) or 0)
                                     _s5_sc_u = int(_tx5_sc_u.get("sells", 0) or 0)
                                     _vol5_sc_u = float(((pair_data.get("volume") or {}).get("m5", 0) or 0))
+                                    _fdv_sc_u = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
+                                    _m5_sc_u = ((pair_data.get("priceChange") or {}).get("m5"))
                                     _sc_xgb_sc = float(getattr(analyzer, "rocket_scores", {}).get(mint, getattr(analyzer, "last_score", 0.0)) or 0.0)
-                                    _min_unl_xgb = float(getattr(config, "ROCKET_XGB_UNLOCKED_CUSTOM_MIN", 18.0))
+                                    _min_unl_xgb = float(getattr(config, "ROCKET_XGB_UNLOCKED_CUSTOM_MIN", 35.0))
                                     if _sc_xgb_sc < _min_unl_xgb:
                                         print(f"🚫 [SCANNER-UNLOCKED-XGB] {actual_symbol} ({mint[:8]}): незалоченный кастомный пул XGB {_sc_xgb_sc:.1f}% < {_min_unl_xgb:.0f}% — отмена (риск мгновенного слива пула)!")
                                         continue
@@ -1329,8 +1324,10 @@ async def scanner_loop(analyzer, tracker):
                                         vol5_usd=_vol5_sc_u,
                                         buys5=_b5_sc_u,
                                         sells5=_s5_sc_u,
+                                        fdv_usd=_fdv_sc_u,
+                                        m5_pct=(float(_m5_sc_u) if _m5_sc_u is not None else None),
                                     ):
-                                        print(f"🚫 [SCANNER-UNLOCKED-GATE] {actual_symbol} ({mint[:8]}): незалоченный пул без достаточной активности/возраста (age {_age_sc_unl:.2f}м, vol5 ${_vol5_sc_u:,.0f}, {_b5_sc_u}b/{_s5_sc_u}s) — отмена!")
+                                        print(f"🚫 [SCANNER-UNLOCKED-GATE] {actual_symbol} ({mint[:8]}): незалоченный пул не прошёл проверку liq/fdv/оборота (age {_age_sc_unl:.2f}м, liq ${liq_usd:,.0f}, fdv ${_fdv_sc_u:,.0f}, vol5 ${_vol5_sc_u:,.0f}, {_b5_sc_u}b/{_s5_sc_u}s) — отмена!")
                                         continue
                                 if config.is_permissionless_liq_fdv_trap(pair_data):
                                     print(f"🚫 [SCANNER-LIQ-TRAP] {actual_symbol} ({mint[:8]}): seeded trap pool (liq/fdv drain risk) — отмена!")
@@ -1700,6 +1697,22 @@ async def scanner_loop(analyzer, tracker):
                                         if not _ps_m_ok or config.is_pumpswap_liq_fdv_trap(pair_data):
                                             print(f"🚫 [SCANNER PRE-FLIGHT PUMPSWAP] {actual_symbol} ({mint[:8]}): {_ps_m_why} — вход заблокирован!")
                                             continue
+                                        if not _ps_m_canon and not bool(pair_data.get("_pumpswap_lp_burned")):
+                                            _ca_ps = float(pair_data.get("pairCreatedAt") or 0)
+                                            _age_ps = ((time.time() * 1000.0 - _ca_ps) / 60000.0) if _ca_ps > 0 else 0.1
+                                            _fdv_ps = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
+                                            _m5_ps = _pc.get("m5")
+                                            if not config.is_safe_unlocked_custom_runner(
+                                                liq_usd=liq_usd,
+                                                age_min=_age_ps,
+                                                vol5_usd=float(((pair_data.get("volume") or {}).get("m5", 0) or 0)),
+                                                buys5=int(_tx5.get("buys", 0) or 0),
+                                                sells5=int(_tx5.get("sells", 0) or 0),
+                                                fdv_usd=_fdv_ps,
+                                                m5_pct=(float(_m5_ps) if _m5_ps is not None else None),
+                                            ):
+                                                print(f"🚫 [SCANNER PRE-FLIGHT PUMPSWAP-CREATEPOOL] {actual_symbol} ({mint[:8]}): кастомный незалоченный пул ({_ps_m_why}) не прошёл фильтр liq/fdv/оборота — блок!")
+                                                continue
                                     except Exception:
                                         pass
 

@@ -1616,10 +1616,13 @@ def _set_pumpswap_flags(
         pair_data["_pumpswap_checked"] = True
         pair_data["_pumpswap_canonical"] = bool(is_canonical)
         pair_data["_pumpswap_rpc_unverified"] = bool(rpc_unverified)
+        pair_data["_pumpswap_lp_burned"] = bool(lp_burned)
         if not ok:
             pair_data["_lp_verified"] = False
         elif is_canonical or lp_burned:
             pair_data["_lp_verified"] = True
+        else:
+            pair_data["_lp_verified"] = False
 
 
 async def _solana_rpc_call(method: str, params: list, timeout: int = 5):
@@ -1825,6 +1828,13 @@ async def verify_pumpswap_pool_onchain(
         res = (False, False, f"pumpswap-liq-fdv-trap-idx{pool_idx}")
         _set_pumpswap_flags(pair_data, False, False)
         _PUMPSWAP_POOL_CACHE[cache_key] = (now, res)
+        return res
+
+    _cur_ps_liq = float(((pair_data or {}).get("liquidity") or {}).get("usd") or 0.0) if isinstance(pair_data, dict) else 0.0
+    if isinstance(pair_data, dict) and pair_data.get("liquidity") is not None and _cur_ps_liq < 1000.0:
+        res = (False, False, f"pumpswap-custom-drained-lp:{lp_sup:.4f}-liq${_cur_ps_liq:.0f}")
+        _set_pumpswap_flags(pair_data, False, False, lp_burned=False)
+        _PUMPSWAP_POOL_CACHE[cache_key] = (now - ttl + 20.0, res)
         return res
 
     res = (True, False, f"pumpswap-custom-burned-lp:{lp_sup:.4f}-idx{pool_idx}")

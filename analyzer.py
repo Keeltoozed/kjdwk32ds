@@ -2244,11 +2244,15 @@ class Analyzer:
 
                     # Проверка блокировки LP (режим Commit 0d2b1ae: допускаем незалоченные DEX-раннеры)
                     _is_unlocked_runner_ok = False
-                    if not _is_canonical_pump and not has_verified_locked_lp:
+                    _is_lp_really_safe = bool(_is_canonical_pump or has_verified_locked_lp or (isinstance(pair_data, dict) and pair_data.get("_pumpswap_lp_burned")))
+                    if not _is_lp_really_safe:
                         _ca_main = float((pair_data or {}).get("pairCreatedAt") or 0)
                         _age_main = ((time.time() * 1000.0 - _ca_main) / 60000.0) if _ca_main > 0 else 0.2
                         _liq_main = float(((pair_data or {}).get("liquidity") or {}).get("usd", 0) or 0)
+                        _fdv_main = float((pair_data or {}).get("fdv", 0) or 0)
                         _v5_main = float(((pair_data or {}).get("volume") or {}).get("m5", 0) or 0)
+                        _m5_raw_main = ((pair_data or {}).get("priceChange") or {}).get("m5")
+                        _m5_main = float(_m5_raw_main) if _m5_raw_main is not None else None
                         _tx_main = ((pair_data or {}).get("txns") or {}).get("m5") or {}
                         _b5_main = int(_tx_main.get("buys", 0) or 0)
                         _s5_main = int(_tx_main.get("sells", 0) or 0)
@@ -2261,9 +2265,11 @@ class Analyzer:
                             buys5=_b5_main,
                             sells5=_s5_main,
                             is_trap=_is_trap_main,
+                            fdv_usd=_fdv_main,
+                            m5_pct=_m5_main,
                         ):
                             _is_unlocked_runner_ok = True
-                            print(f"🔓 [UNLOCKED-LP-ALLOWED] {symbol} ({mint[:8]}): свежий DEX-раннер (age {_age_main:.1f}м, liq ${_liq_main:,.0f}, vol5 ${_v5_main:,.0f}, {_b5_main}b/{_s5_main}s) — лок LP не требуется (режим 0d2b1ae).")
+                            print(f"🔓 [UNLOCKED-LP-ALLOWED] {symbol} ({mint[:8]}): свежий DEX-раннер (age {_age_main:.1f}м, liq ${_liq_main:,.0f}, fdv ${_fdv_main:,.0f}, vol5 ${_v5_main:,.0f}, {_b5_main}b/{_s5_main}s) — лок LP не требуется (режим 0d2b1ae).")
                         elif not getattr(config, "ALLOW_UNLOCKED_LP_POOLS", True):
                             return self._deny(
                                 mint,
@@ -2274,18 +2280,21 @@ class Analyzer:
                             return self._deny(
                                 mint,
                                 f"low-liq ${_liq_main:.0f}",
-                                f"🚫 [ANTI-RUG] {symbol} ({mint[:8]}): слабый пул (liq ${_liq_main:,.0f}, vol5 ${_v5_main:,.0f}, {_b5_main}b/{_s5_main}s)."
+                                f"🚫 [ANTI-RUG] {symbol} ({mint[:8]}): слабый/подозрительный пул (liq ${_liq_main:,.0f}, fdv ${_fdv_main:,.0f}, vol5 ${_v5_main:,.0f}, {_b5_main}b/{_s5_main}s)."
                             )
                     if isinstance(pair_data, dict):
-                        _lp_ok_m = bool(_is_canonical_pump or has_verified_locked_lp or _is_unlocked_runner_ok)
+                        _lp_ok_m = _is_lp_really_safe
                         pair_data["_lp_verified"] = _lp_ok_m
-                        if _lp_ok_m:
+                        pair_data["_unlocked_runner_ok"] = bool(_is_unlocked_runner_ok)
+                        if _lp_ok_m or _is_unlocked_runner_ok:
                             if not hasattr(self, "_verified_lp_meta"):
                                 self._verified_lp_meta = {}
                             _meta_entry = {
-                                "_lp_verified": True,
+                                "_lp_verified": _lp_ok_m,
+                                "_unlocked_runner_ok": bool(_is_unlocked_runner_ok),
                                 "_pumpswap_checked": bool(pair_data.get("_pumpswap_checked")),
                                 "_pumpswap_canonical": bool(pair_data.get("_pumpswap_canonical")),
+                                "_pumpswap_lp_burned": bool(pair_data.get("_pumpswap_lp_burned")),
                                 "_pumpswap_rpc_unverified": bool(pair_data.get("_pumpswap_rpc_unverified")),
                             }
                             self._verified_lp_meta[(mint, _target_pair_rc)] = _meta_entry
@@ -2379,7 +2388,7 @@ class Analyzer:
                     _dist_runner_a = config.is_distributed_safe_runner(
                         raw_liq, _age_min_pre, _vm5_pre, _b5_pre, _s5_pre,
                         top1_pct=largest_whale_pct_pre, top10_pct=top_10_sum_pct, dev_pct=dev_holding_pct,
-                        is_lp_safe=(_is_canonical_pump or has_verified_locked_lp or _is_unlocked_runner_ok),
+                        is_lp_safe=_is_lp_really_safe,
                     )
                     if _is_unlocked_runner_ok and not getattr(config, "ALLOW_UNLOCKED_LP_POOLS", True):
                         if dev_holding_pct > 10.0:
@@ -2481,17 +2490,48 @@ class Analyzer:
                         pass
                 else:
                     # В режиме 0d2b1ae / unlocked LP не блокируем свежие пулы, если RugCheck ещё не успел проиндексировать:
-                    # сразу ниже выполняется прямой ончейн-RPC аудит (Mint/Freeze Authority).
+                    # сразу ниже выполняется прямой ончейн-RPC аудит (Mint/Freeze Authority), а unlocked-раннеры обязаны пройти базовый anti-rug фильтр.
                     if getattr(config, "ALLOW_UNLOCKED_LP_POOLS", True):
                         if isinstance(pair_data, dict):
-                            pair_data["_lp_verified"] = True
+                            _is_safe_lp_rc_unidx = bool(pair_data.get("_pumpswap_canonical") or pair_data.get("_pumpswap_lp_burned"))
+                            if not _is_safe_lp_rc_unidx:
+                                _ca_rc_u = float(pair_data.get("pairCreatedAt") or 0)
+                                _age_rc_u = ((time.time() * 1000.0 - _ca_rc_u) / 60000.0) if _ca_rc_u > 0 else 0.2
+                                _liq_rc_u = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
+                                _fdv_rc_u = float(pair_data.get("fdv", 0) or 0)
+                                _v5_rc_u = float((pair_data.get("volume") or {}).get("m5", 0) or 0)
+                                _m5_raw_rc_u = (pair_data.get("priceChange") or {}).get("m5")
+                                _m5_rc_u = float(_m5_raw_rc_u) if _m5_raw_rc_u is not None else None
+                                _tx_rc_u = (pair_data.get("txns") or {}).get("m5") or {}
+                                _b5_rc_u = int(_tx_rc_u.get("buys", 0) or 0)
+                                _s5_rc_u = int(_tx_rc_u.get("sells", 0) or 0)
+                                _is_trap_rc_u = config.is_pumpswap_liq_fdv_trap(pair_data)
+                                if not config.is_safe_unlocked_custom_runner(
+                                    liq_usd=_liq_rc_u,
+                                    age_min=_age_rc_u,
+                                    vol5_usd=_v5_rc_u,
+                                    buys5=_b5_rc_u,
+                                    sells5=_s5_rc_u,
+                                    is_trap=_is_trap_rc_u,
+                                    fdv_usd=_fdv_rc_u,
+                                    m5_pct=_m5_rc_u,
+                                ):
+                                    return self._deny(
+                                        mint,
+                                        "unlocked-rc-unindexed-trap",
+                                        f"🚫 [ANTI-RUG] {symbol} ({mint[:8]}): RugCheck HTTP {_rc_st} + слабый/подозрительный незалоченный пул (liq ${_liq_rc_u:,.0f}, fdv ${_fdv_rc_u:,.0f}, vol5 ${_v5_rc_u:,.0f})."
+                                    )
+                            pair_data["_lp_verified"] = _is_safe_lp_rc_unidx
+                            pair_data["_unlocked_runner_ok"] = (not _is_safe_lp_rc_unidx)
                             _t_p_rc = str(pair_data.get("pairAddress") or "").strip()
                             if not hasattr(self, "_verified_lp_meta"):
                                 self._verified_lp_meta = {}
                             _meta_entry_open = {
-                                "_lp_verified": True,
+                                "_lp_verified": _is_safe_lp_rc_unidx,
+                                "_unlocked_runner_ok": (not _is_safe_lp_rc_unidx),
                                 "_pumpswap_checked": bool(pair_data.get("_pumpswap_checked")),
                                 "_pumpswap_canonical": bool(pair_data.get("_pumpswap_canonical")),
+                                "_pumpswap_lp_burned": bool(pair_data.get("_pumpswap_lp_burned")),
                                 "_pumpswap_rpc_unverified": bool(pair_data.get("_pumpswap_rpc_unverified")),
                             }
                             self._verified_lp_meta[(mint, _t_p_rc)] = _meta_entry_open
@@ -4217,6 +4257,17 @@ class Analyzer:
             return self._deny(mint, "fake-liq-trap", f"🚫 [FAKE-LIQ] {mint[:8]}: пул ${liquidity:,.0f}, но объем 5m всего ${_vm5:,.0f} (оборот {_vm5/liquidity:.2f} < 0.15) — ловушка снайперов / фейковый пул.")
         if not _is_migrated_pump and liquidity >= 20000.0 and (_vm5 / max(liquidity, 1.0)) < 0.10 and _b5 < 25:
             return self._deny(mint, "seeded-lp-bait", f"🚫 [SEEDED-LP-BAIT] {mint[:8]}: раздутый пул ${liquidity:,.0f} при обороте 5m ${_vm5:,.0f} (<10% LP) и {_b5} покупках — приманка под вывод LP.")
+        if config.is_position_unlocked_lp(mint, pair_data, bool(pair_data.get("_lp_verified"))):
+            if liquidity >= 18000.0 and (_vm5 / max(liquidity, 1.0)) < 0.35:
+                return self._deny(mint, "unlocked-seeded-lp", f"🚫 [UNLOCKED-SEEDED-LP] {mint[:8]}: раздутый незалоченный пул ${liquidity:,.0f} при обороте 5m ${_vm5:,.0f} ({_vm5/liquidity:.2f} < 0.35x) — приманка под Remove LP.")
+            if fdv > 0.0 and liquidity >= (fdv * 1.15):
+                return self._deny(mint, "unlocked-inverted-liq-fdv", f"🚫 [UNLOCKED-LIQ>FDV] {mint[:8]}: ликвидность ${liquidity:,.0f} >= 1.15x FDV ${fdv:,.0f} на незалоченном пуле — синтетический LP-пул.")
+            if fdv > 0.0 and liquidity >= (fdv * 0.85) and (_vm5 / max(liquidity, 1.0)) < 1.50:
+                return self._deny(mint, "unlocked-heavy-lp-low-vol", f"🚫 [UNLOCKED-HEAVY-LP] {mint[:8]}: тяжёлый LP ${liquidity:,.0f} ({liquidity/fdv:.2f}x FDV ${fdv:,.0f}) при обороте 5m ${_vm5:,.0f} < 1.5x LP.")
+            _m5_ray_raw = ((pair_data.get("priceChange") or {}).get("m5"))
+            _m5_ray = float(_m5_ray_raw) if _m5_ray_raw is not None else None
+            if _m5_ray is not None and _m5_ray < 5.0 and (_vm5 / max(liquidity, 1.0)) < 2.0:
+                return self._deny(mint, "unlocked-flat-candle", f"🚫 [UNLOCKED-FLAT] {mint[:8]}: плоская свеча m5={_m5_ray:+.1f}% (< +5%) при обороте {_vm5/max(liquidity,1):.2f}x — wash-бот перед Remove LP.")
 
         # 2. Защита от картонных пулов: для молодых ракет / pump.fun ($12k liq при росте до $600k+ FDV) лимит до 85x
         _max_hollow_ratio = 85.0 if (_is_fresh_ray and _b5 >= _s5 * 1.15) else 45.0
