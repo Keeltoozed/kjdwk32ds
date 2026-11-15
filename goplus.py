@@ -1666,7 +1666,9 @@ def _parse_ui_token_supply(sup_res):
 
 
 def _pumpswap_rpc_fallback(mint: str, pair_data, reason_prefix: str) -> tuple:
-    """Fail-closed on suspicious PumpSwap CreatePool fingerprints when RPC is unreachable."""
+    """Fallback when PumpSwap RPC pool lookup is unavailable."""
+    if bool(_cfg("ALLOW_UNLOCKED_LP_POOLS", True)):
+        return True, False, f"{reason_prefix}-unlocked-allowed"
     if config.is_pumpswap_liq_fdv_trap(pair_data):
         return False, False, "pumpswap-liq-fdv-trap"
     if isinstance(pair_data, dict):
@@ -1796,13 +1798,24 @@ async def verify_pumpswap_pool_onchain(
 
     sup_res = await _solana_rpc_call("getTokenSupply", [lp_mint])
     lp_sup = _parse_ui_token_supply(sup_res)
+    _allow_unlocked_ps = bool(_cfg("ALLOW_UNLOCKED_LP_POOLS", True))
     if lp_sup is None:
+        if _allow_unlocked_ps:
+            res = (True, False, f"pumpswap-custom-unlocked-idx{pool_idx}-lp-unknown")
+            _set_pumpswap_flags(pair_data, True, False, rpc_unverified=True, lp_burned=False)
+            _PUMPSWAP_POOL_CACHE[cache_key] = (now - ttl + 20.0, res)
+            return res
         res = (False, False, f"pumpswap-custom-idx{pool_idx}-lp-unknown")
         _set_pumpswap_flags(pair_data, False, False)
         _PUMPSWAP_POOL_CACHE[cache_key] = (now - ttl + 20.0, res)
         return res
 
     if lp_sup > 0.5:
+        if _allow_unlocked_ps:
+            res = (True, False, f"pumpswap-custom-unlocked-lp:{lp_sup:.2f}-idx{pool_idx}")
+            _set_pumpswap_flags(pair_data, True, False, lp_burned=False)
+            _PUMPSWAP_POOL_CACHE[cache_key] = (now, res)
+            return res
         res = (False, False, f"pumpswap-createpool-unburned-lp:{lp_sup:.2f}-idx{pool_idx}")
         _set_pumpswap_flags(pair_data, False, False)
         _PUMPSWAP_POOL_CACHE[cache_key] = (now, res)

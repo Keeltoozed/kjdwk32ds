@@ -1131,7 +1131,7 @@ async def scanner_loop(analyzer, tracker):
                 for mint in (_launch if _launch else mints_to_scan[:30]):
                     if not mint or mint in tracker.positions:
                         continue
-                    if hasattr(tracker, "is_loss_cooldown_active") and tracker.is_loss_cooldown_active(mint, 14400.0):
+                    if hasattr(tracker, "is_loss_cooldown_active") and tracker.is_loss_cooldown_active(mint, float(getattr(config, "MINT_LOSS_COOLDOWN_SEC", 1800.0))):
                         processed_mints[mint] = time.time()
                         continue
                     _pre_m = getattr(analyzer, "_prefetch_cache", {}).get(mint, (0, {}))[1]
@@ -1245,20 +1245,29 @@ async def scanner_loop(analyzer, tracker):
                                           is_good, _sc_score_m)
 
                         if is_good:
-                            _cached_hit = getattr(analyzer, "_prefetch_cache", {}).pop(mint, None)
+                            _cached_hit = getattr(analyzer, "_prefetch_cache", {}).get(mint, None)
                             if isinstance(_cached_hit, tuple) and len(_cached_hit) >= 2 and isinstance(_cached_hit[1], dict):
                                 _cached_pair = dict(_cached_hit[1])
                             elif isinstance(_cached_hit, dict):
                                 _cached_pair = dict(_cached_hit)
                             else:
                                 _cached_pair = None
+                            _last_an_p = getattr(analyzer, "_last_analyzed_pair", {}).get(mint)
                             pair_data = await analyzer.fetch_token_data(mint)
                             if not isinstance(pair_data, dict):
                                 pair_data = {}
                             entry_price = float(pair_data.get("priceUsd", 0) or 0) if pair_data else 0.0
+                            if (not pair_data or entry_price <= 0) and _last_an_p:
+                                pair_data = dict(_last_an_p)
+                                entry_price = float(pair_data.get("priceUsd", 0) or 0)
                             if (not pair_data or entry_price <= 0) and _cached_pair:
                                 pair_data = dict(_cached_pair)
                                 entry_price = float(pair_data.get("priceUsd", 0) or 0)
+                            if entry_price <= 0 and pair_data:
+                                _fdv_calc = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
+                                if _fdv_calc > 0:
+                                    entry_price = _fdv_calc / 1_000_000_000.0
+                                    pair_data["priceUsd"] = entry_price
                             if entry_price <= 0:
                                 try:
                                     from jupiter import JupiterAPI
@@ -1285,10 +1294,11 @@ async def scanner_loop(analyzer, tracker):
                                     print(f"🚫 [SCANNER-PRICE-SPLIT] {actual_symbol} ({mint[:8]}): рассинхрон пулов {_div_r:.1f}x — блок.")
                                     continue
                                 _dex_id = str((pair_data.get("dexId") or "")).lower()
-                                if mint.endswith("pump") and ("meteora" in _dex_id or _dex_id == "meteoradbc"):
+                                _allow_unl_sc = bool(getattr(config, "ALLOW_UNLOCKED_LP_POOLS", True))
+                                if not _allow_unl_sc and mint.endswith("pump") and ("meteora" in _dex_id or _dex_id == "meteoradbc"):
                                     print(f"🚫 [SCANNER-FAKE-METEORA] {actual_symbol} ({mint[:8]}): .pump токен на пуле Meteora — неофициальный скам-пул, отмена!")
                                     continue
-                                if ("meteora" in _dex_id or _dex_id == "meteoradbc") and not pair_data.get("_lp_verified", False):
+                                if not _allow_unl_sc and ("meteora" in _dex_id or _dex_id == "meteoradbc") and not pair_data.get("_lp_verified", False):
                                     print(f"🚫 [SCANNER-METEORA-UNBURNED] {actual_symbol} ({mint[:8]}): пул Meteora без сожжённого/залоченного LP — риск Remove LP, отмена!")
                                     continue
                                 if config.is_permissionless_liq_fdv_trap(pair_data):
@@ -1345,26 +1355,29 @@ async def scanner_loop(analyzer, tracker):
                                     min_h6=float(getattr(config, "JEV_MIN_H6_PCT", -20.0)),
                                     fdv_usd=_fdv_live_sc,
                                 )
-                                _min_sc_m1 = float(getattr(config, "JEV_MIN_M1_ENTRY_FLOOR_PCT", -2.2))
+                                _min_sc_m1 = float(getattr(config, "JEV_MIN_M1_ENTRY_FLOOR_PCT", -5.0))
                                 if _vol5_live >= 15000.0 and _b5_live >= int(_s5_live * 1.25) and _m5_live >= 6.0:
-                                    _min_sc_m1 = -2.5
+                                    _min_sc_m1 = min(_min_sc_m1, -5.0)
                                 if not _mom_live_ok or _m1_live < _min_sc_m1:
                                     print(f"🚫 [SCANNER-LIVE-REVERSAL] {actual_symbol} ({mint[:8]}): на живом графике импульс сломан ({_mom_live_why}, m5 {_m5_live:+.1f}%, m1 {_m1_live:+.1f}% < {_min_sc_m1:+.1f}%) — отмена покупки!")
                                     continue
-                                if _m5_live < 1.0:
-                                    print(f"🚫 [SCANNER-LIVE-FALLING] {actual_symbol} ({mint[:8]}): живой m5 {_m5_live:+.1f}% < +1.0% — падающий нож перед входом, отмена покупки!")
+                                _is_live_m1_blast = (_m1_live >= 1.5 and _b5_live >= max(8, _s5_live) and _vol5_live >= 1500.0)
+                                _m5_live_floor = 0.0 if _is_live_m1_blast else 0.8
+                                if _m5_live < _m5_live_floor:
+                                    print(f"🚫 [SCANNER-LIVE-FALLING] {actual_symbol} ({mint[:8]}): живой m5 {_m5_live:+.1f}% < +{_m5_live_floor:.1f}% — падающий нож перед входом, отмена покупки!")
                                     continue
-                                if _m1_live < -2.0:
-                                    print(f"🚫 [SCANNER-LIVE-M1-DUMP] {actual_symbol} ({mint[:8]}): живой m1 {_m1_live:+.1f}% < -2.0% — резкий сброс за 1м, отмена покупки!")
+                                _m1_dump_floor = min(-4.5, _min_sc_m1)
+                                if _m1_live < _m1_dump_floor:
+                                    print(f"🚫 [SCANNER-LIVE-M1-DUMP] {actual_symbol} ({mint[:8]}): живой m1 {_m1_live:+.1f}% < {_m1_dump_floor:+.1f}% — резкий сброс за 1м, отмена покупки!")
                                     continue
-                                _max_m1_cfg_live = float(getattr(config, "MAX_ENTRY_M1_PCT", 22.0))
+                                _max_m1_cfg_live = float(getattr(config, "MAX_ENTRY_M1_PCT", 35.0))
                                 if _m1_live > _max_m1_cfg_live:
                                     _b5_sc = int((pair_data.get("txns") or {}).get("m5", {}).get("buys", 0) or 0)
                                     _s5_sc = int((pair_data.get("txns") or {}).get("m5", {}).get("sells", 0) or 0)
-                                    if not (_b5_sc >= int(_s5_sc * 1.15) and _vol5_live >= 3000.0 and _m5_live >= 4.0 and _m1_live <= 30.0):
+                                    if not (_b5_sc >= int(_s5_sc * 1.15) and _vol5_live >= 3000.0 and _m5_live >= 4.0 and _m1_live <= 45.0):
                                         print(f"🚫 [SCANNER-M1-SPIKE] {actual_symbol} ({mint[:8]}): живой m1 +{_m1_live:.1f}% > +{_max_m1_cfg_live:.1f}% — вершина свечи, отмена!")
                                         continue
-                                _max_m5_cfg = float(getattr(config, "MAX_ENTRY_M5_PCT", 120.0))
+                                _max_m5_cfg = float(getattr(config, "MAX_ENTRY_M5_PCT", 180.0))
                                 if _m5_live > _max_m5_cfg:
                                     _b5_sc = int((pair_data.get("txns") or {}).get("m5", {}).get("buys", 0) or 0)
                                     _s5_sc = int((pair_data.get("txns") or {}).get("m5", {}).get("sells", 0) or 0)
@@ -1377,7 +1390,7 @@ async def scanner_loop(analyzer, tracker):
                                 _soc_unk_sc = bool(pair_data.get("_socials_unknown", False))
                                 _b5_sc = int((pair_data.get("txns") or {}).get("m5", {}).get("buys", 0) or 0)
                                 _s5_sc = int((pair_data.get("txns") or {}).get("m5", {}).get("sells", 0) or 0)
-                                if _links_sc == 0 and not _soc_unk_sc and _age_m < float(getattr(config, "REQUIRE_SOCIALS_MIN_AGE_MIN", 25.0)):
+                                if getattr(config, "REQUIRE_SOCIALS_ENABLED", False) and _links_sc == 0 and not _soc_unk_sc and _age_m < float(getattr(config, "REQUIRE_SOCIALS_MIN_AGE_MIN", 9999.0)):
                                     _dex_sc_low = str(pair_data.get("dexId", "")).lower()
                                     _is_lp_or_pump = mint.endswith("pump") or mint.endswith("moon") or _dex_sc_low in ("pump", "pumpfun", "pumpswap")
                                     _is_stealth_sc = (
@@ -1398,8 +1411,8 @@ async def scanner_loop(analyzer, tracker):
                                     print(f"🚫 [SCANNER-POST-PEAK] {actual_symbol} ({mint[:8]}): токен слился от пика (цена {_pk_drop_live:+.1f}%, ликва {_lq_drop_live:+.1f}%) — отмена!")
                                     continue
 
-                                _max_age_live = float(getattr(config, "SOLANA_MAX_AGE_MIN", 90.0))
-                                _max_fdv_live = float(getattr(config, "JEV_MAX_MCAP_USD", 220000.0))
+                                _max_age_live = float(getattr(config, "SOLANA_MAX_AGE_MIN", 240.0))
+                                _max_fdv_live = float(getattr(config, "JEV_MAX_MCAP_USD", 850000.0))
                                 _fdv_sc_live = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
                                 _vol5_live = float(((pair_data.get("volume") or {}).get("m5", 0) or 0))
                                 if _fdv_sc_live > _max_fdv_live:
@@ -1408,10 +1421,10 @@ async def scanner_loop(analyzer, tracker):
                                 _is_active_breakout_live = (
                                     _age_m <= _max_age_live
                                     and _fdv_sc_live <= _max_fdv_live
-                                    and liq_usd >= 15000.0
-                                    and _vol5_live >= 8000.0
-                                    and _m5_live >= 6.0
-                                    and _b5_sc >= _s5_sc * 1.20
+                                    and liq_usd >= 4000.0
+                                    and _vol5_live >= 750.0
+                                    and 1.2 <= _m5_live <= 85.0
+                                    and _b5_sc >= _s5_sc
                                 )
                                 if _age_m > _max_age_live and not _is_active_breakout_live:
                                     print(f"🚫 [SCANNER-OLD-ZOMBIE] {actual_symbol} ({mint[:8]}): возраст {_age_m:.0f}м > {_max_age_live:.0f}м — старый пул, отмена!")
@@ -1423,19 +1436,23 @@ async def scanner_loop(analyzer, tracker):
                                 _s5_bump = int(_tx5_sc.get("sells", 0) or 0)
                                 _tot_tx5_sc = _b5_bump + _s5_bump
                                 _avg_tx5_sc = (_vol5_live / _tot_tx5_sc) if _tot_tx5_sc > 0 else 0.0
-                                if _age_m >= _req_soc_age and _links_sc == 0 and not _soc_unk_sc:
+                                if getattr(config, "REQUIRE_SOCIALS_ENABLED", False) and _age_m >= _req_soc_age and _links_sc == 0 and not _soc_unk_sc:
                                     _vl_sc = _vol5_live / max(liq_usd, 1.0)
                                     _is_lp_mint_sc = config.is_launchpad_mint(mint) or _dex_id in ("pump", "pumpfun")
                                     _is_organic_stealth = (
-                                        _is_lp_mint_sc
-                                        and _vol5_live >= 3500.0 and _b5_bump >= 15 and _b5_bump >= _s5_bump * 1.02
-                                        and liq_usd >= 6000.0 and _vl_sc <= 8.0 and _avg_tx5_sc >= 8.0
+                                        (_is_lp_mint_sc or liq_usd >= 5000.0 or _b5_bump >= 20)
+                                        and _vol5_live >= 1200.0 and _b5_bump >= 12 and _b5_bump >= _s5_bump * 1.02
+                                        and (liq_usd >= 5000.0 or _is_lp_mint_sc) and _vl_sc <= 8.5
                                     )
-                                    if not _is_organic_stealth:
+                                    _is_viral_stealth = (
+                                        _vol5_live >= 12000.0 and _b5_bump >= 60 and _b5_bump >= int(_s5_bump * 1.05)
+                                    )
+                                    if not (_is_organic_stealth or _is_viral_stealth):
                                         print(f"🚫 [SCANNER-NO-SOCIALS] {actual_symbol} ({mint[:8]}): 0 соцсетей в зрелом возрасте {_age_m:.0f}м (>={_req_soc_age:.0f}м) — отмена!")
                                         continue
                                     else:
-                                        print(f"💎 [SCANNER-ORGANIC-STEALTH] {actual_symbol} ({mint[:8]}): 0 соцсетей, но подтвержден органический прорыв — пропуск в анализ.")
+                                        _st_tag = "SCANNER-VIRAL-STEALTH" if _is_viral_stealth else "SCANNER-ORGANIC-STEALTH"
+                                        print(f"💎 [{_st_tag}] {actual_symbol} ({mint[:8]}): 0 соцсетей, но подтвержден органический прорыв — пропуск в анализ.")
 
                                 # Защита от микро bump-ботов: не блокируем реальный розничный поток при покупках >= продаж
                                 _is_retail_flow_sc = (_b5_bump >= _s5_bump and _vol5_live >= 2000.0)
@@ -1453,9 +1470,9 @@ async def scanner_loop(analyzer, tracker):
                                     print(f"🚫 [SCANNER-WASH-TRAP] {actual_symbol} ({mint[:8]}): накрутка микро-ботом ({_tot_tx5_sc} txns, avg ${_avg_tx5_sc:.2f} < $4) — отмена!")
                                     continue
 
-                                # Блок кастомных не-launchpad контрактов на PumpSwap при пуле < $10k (выше $10k LP/безопасность проверяет RugCheck + Analyzer)
-                                if _dex_id == "pumpswap" and not config.is_launchpad_mint(mint) and liq_usd < 10000.0:
-                                    print(f"🚫 [SCANNER-FAKE-PUMPSWAP] {actual_symbol} ({mint[:8]}): кастомный не-pump контракт на PumpSwap с микро-пулом (${liq_usd:,.0f} < $6k) — отмена!")
+                                # Блок кастомных не-launchpad контрактов на PumpSwap при пуле < $10k (отключается при ALLOW_UNLOCKED_LP_POOLS=True)
+                                if not bool(getattr(config, "ALLOW_UNLOCKED_LP_POOLS", True)) and _dex_id == "pumpswap" and not config.is_launchpad_mint(mint) and liq_usd < 10000.0:
+                                    print(f"🚫 [SCANNER-FAKE-PUMPSWAP] {actual_symbol} ({mint[:8]}): кастомный не-pump контракт на PumpSwap с микро-пулом (${liq_usd:,.0f} < $10k) — отмена!")
                                     continue
 
                                 # Защита от миграционного дампа Pump.fun
@@ -1463,25 +1480,27 @@ async def scanner_loop(analyzer, tracker):
                                     _c_ms_sc = pair_data.get("pairCreatedAt") or 0
                                     _age_sc = ((time.time() * 1000 - _c_ms_sc) / 60000.0) if _c_ms_sc else 0.5
                                     _has_launch_surge = (_vol5_live >= 300.0 and _b5_bump >= _s5_bump and _b5_bump >= 3 and _m5_live >= 0.5)
-                                    if _age_sc < 0.4 and not _has_launch_surge:
+                                    _min_mig_age_sc = float(getattr(config, "SOLANA_MIN_AGE_MIN", 0.15))
+                                    if _age_sc < _min_mig_age_sc and not _has_launch_surge:
                                         processed_mints[mint] = time.time() - _cd + 10
                                         try:
                                             from birth_tracker import birth_tracker as _bt_sc
                                             _bt_sc.add_to_waiting_room(mint)
                                         except Exception:
                                             pass
-                                        print(f"⏳ [SCANNER-MIGRATION] {actual_symbol} ({mint[:8]}): пул {_age_sc:.1f}м < 0.4м без сделок — повтор через 10с.")
+                                        print(f"⏳ [SCANNER-MIGRATION] {actual_symbol} ({mint[:8]}): пул {_age_sc:.1f}м < {_min_mig_age_sc:.2f}м без сделок — повтор через 10с.")
                                         continue
                                     _fdv_sc = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
                                     from sol_price import get_sol_price_sync
                                     _sol_p_sc = float(get_sol_price_sync() or 150.0)
                                     if _sol_p_sc <= 0: _sol_p_sc = 150.0
-                                    _dump_floor_sc = float(getattr(config, "PUMP_DUMP_FLOOR_SOL", 140.0)) * _sol_p_sc
-                                    if 0 < _fdv_sc < _dump_floor_sc and not (_age_sc < 5.0 and _vol5_live >= 2000.0 and _m5_live >= 3.0 and _b5_bump >= _s5_bump):
-                                        print(f"🚫 [SCANNER-MIGRATION] {actual_symbol} ({mint[:8]}): FDV ${_fdv_sc:,.0f} < ${_dump_floor_sc:,.0f} [~140 SOL] — слит ниже уровня миграции.")
+                                    _dump_floor_sc = float(getattr(config, "PUMP_DUMP_FLOOR_SOL", 50.0)) * _sol_p_sc
+                                    if 0 < _fdv_sc < _dump_floor_sc and not (_age_sc < 5.0 and _vol5_live >= 1000.0 and _m5_live >= 1.5 and _b5_bump >= _s5_bump):
+                                        print(f"🚫 [SCANNER-MIGRATION] {actual_symbol} ({mint[:8]}): FDV ${_fdv_sc:,.0f} < ${_dump_floor_sc:,.0f} — слит ниже уровня миграции.")
                                         continue
-                                    if liq_usd < 5000.0:
-                                        print(f"🚫 [SCANNER-MIGRATION] {actual_symbol} ({mint[:8]}): ликвидность ${liq_usd:,.0f} < $5,000 — микро-пул.")
+                                    _min_mig_liq_sc = float(getattr(config, "MIN_GRADUATED_LIQ_USD", 3000.0))
+                                    if liq_usd < _min_mig_liq_sc:
+                                        print(f"🚫 [SCANNER-MIGRATION] {actual_symbol} ({mint[:8]}): ликвидность ${liq_usd:,.0f} < ${_min_mig_liq_sc:,.0f} — микро-пул.")
                                         continue
 
                                 # Живая проверка цены Jupiter для ЛЮБЫХ токенов на AMM (включая pump на Raydium/PumpSwap)

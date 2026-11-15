@@ -485,21 +485,22 @@ class PaperTracker:
             _lp_preverified = bool(isinstance(pair_data, dict) and pair_data.get("_lp_verified"))
             _eff_init_liq = max(float(initial_liquidity_usd or 0.0), _pd_liq)
             _is_vip_or_copy = ("VIP" in str(source or "")) or str(source or "").startswith("COPY")
+            _allow_unl_tr = bool(getattr(config, "ALLOW_UNLOCKED_LP_POOLS", True))
             if isinstance(pair_data, dict):
                 if config.is_pumpswap_liq_fdv_trap(pair_data):
                     print(f"🛑 [FIREWALL-RUG-BLOCK] {symbol} ({mint_str[:8]}): PumpSwap CreatePool liq/fdv 0-social trap!")
                     return False
                 _ps_rpc_unv = bool(pair_data.get("_pumpswap_rpc_unverified")) and config.is_launchpad_mint(mint_str)
-                if pair_data.get("_pumpswap_checked") and not _lp_preverified and not _ps_rpc_unv:
+                if not _allow_unl_tr and pair_data.get("_pumpswap_checked") and not _lp_preverified and not _ps_rpc_unv:
                     print(f"🛑 [FIREWALL-RUG-BLOCK] {symbol} ({mint_str[:8]}): PumpSwap pool failed on-chain CreatePool check!")
                     return False
-                if _pd_dex == "pumpswap" and pair_data.get("_pumpswap_canonical") is False and not _lp_preverified and not _ps_rpc_unv:
+                if not _allow_unl_tr and _pd_dex == "pumpswap" and pair_data.get("_pumpswap_canonical") is False and not _lp_preverified and not _ps_rpc_unv:
                     print(f"🛑 [FIREWALL-RUG-BLOCK] {symbol} ({mint_str[:8]}): custom non-canonical PumpSwap pool without verified burned LP!")
                     return False
             # Строгий LP-Firewall:
             # 1) Нативный Pump.fun токен (оканчивается на 'pump') на pumpfun / каноническом pumpswap защищён протоколом.
             # 2) Любой кастомный не-'pump' токен (.bonk, .bags, или кастомный DEX-пул) ИЛИ .pump на стороннем DEX / non-canonical CreatePool
-            #    ДОЛЖЕН иметь подтверждённый _lp_verified!
+            #    ДОЛЖЕН иметь подтверждённый _lp_verified (если не включен ALLOW_UNLOCKED_LP_POOLS).
             _ps_canon_flag = bool(isinstance(pair_data, dict) and pair_data.get("_pumpswap_canonical"))
             _ps_rpc_unv_flag = bool(isinstance(pair_data, dict) and pair_data.get("_pumpswap_rpc_unverified")) and config.is_launchpad_mint(mint_str) and not config.is_pumpswap_liq_fdv_trap(pair_data)
             _is_native_pump_dex = mint_str.lower().endswith("pump") and (
@@ -525,10 +526,12 @@ class PaperTracker:
                     _lp_preverified = True
                     if isinstance(pair_data, dict):
                         pair_data["_lp_verified"] = True
+                elif _allow_unl_tr and _eff_init_liq >= float(getattr(config, "UNLOCKED_CUSTOM_MIN_LIQ_USD", 3000.0)):
+                    print(f"🔓 [FIREWALL-0d2b1ae] {symbol} ({mint_str[:8]}): разрешён вход в кастомный/незалоченный пул (dex={_pd_dex}, liq ${_eff_init_liq:,.0f}).")
                 elif isinstance(pair_data, dict) and pair_data:
                     print(f"🛑 [FIREWALL-RUG-BLOCK] {symbol} ({mint_str[:8]}): отказ входа — не подтверждён LP burn/lock для кастомного пула (dex={_pd_dex}, liq ${_eff_init_liq:,.0f})!")
                     return False
-                if float(ml_confidence or 0.0) <= 0.0 and _eff_init_liq < 5000.0:
+                if not _allow_unl_tr and float(ml_confidence or 0.0) <= 0.0 and _eff_init_liq < 5000.0:
                     print(f"🛑 [FIREWALL-RUG-BLOCK] {symbol} ({mint_str[:8]}): отказ входа — неаудированный кастомный не-launchpad токен (liq ${_eff_init_liq:,.0f}, ML {float(ml_confidence or 0):.1f}%)!")
                     return False
 
@@ -634,12 +637,13 @@ class PaperTracker:
                 and not any(k in _er_m_up for k in ("CRASH", "RUG", "HONEYPOT", "EMERGENCY", "BREAKEVEN", "REVERSAL", "STALL", "STAGNANT", "STOP"))
             )
             
-            _req_cd = (45 * 60) if _was_profitable else (4 * 3600)
+            _loss_cd_cfg = float(getattr(config, "MINT_LOSS_COOLDOWN_SEC", 1800) or 1800)
+            _req_cd = (45 * 60) if _was_profitable else _loss_cd_cfg
             if not _is_vip and time_since_exit < _req_cd:
                 if _was_profitable:
                     print(f"⏳ Кулдаун профитной монеты: {symbol} закрыт в +${_pnl:.2f}. Ждем еще {int(_req_cd - time_since_exit)}с перед возможным перезаходом во 2-ю волну.")
                 else:
-                    print(f"⏳ Кулдаун: {symbol} закрыт с минусом. Ждем еще {(4*3600 - time_since_exit)/3600:.1f}ч перед входом.")
+                    print(f"⏳ Кулдаун: {symbol} закрыт с минусом. Ждем еще {int(_req_cd - time_since_exit)}с перед входом.")
                 return False
                 
             # Если кулдаун прошел, архивируем старую сделку, чтобы не потерять ее из истории PnL

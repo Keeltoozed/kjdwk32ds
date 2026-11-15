@@ -171,7 +171,8 @@ async def fetch_jup_tokens() -> list:
                 _max_pc1h = config.get_max_entry_h1_pct(age_m, vol5, b5, s5, liq, None)
                 if pc1h > _max_pc1h or (pc1h < -15.0 and pc5 < 15.0):
                     continue
-                _min_v5_req = 800.0 if age_m <= 15.0 else float(getattr(config, "MIN_VOLUME_M5", 2000.0))
+                _cfg_v5_req = float(getattr(config, "MIN_VOLUME_M5", 600.0))
+                _min_v5_req = min(_cfg_v5_req, 800.0) if age_m <= 15.0 else _cfg_v5_req
                 if vol5 < _min_v5_req:
                     continue
                 _is_turned_green_dip = (
@@ -492,19 +493,21 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
         print(f"🚫 [{source_tag}-LOW-LIQ] {_sym_tmp} ({mint[:8]}): реальная ликвидность ${_liq_j:.0f} < ${_min_liq_req:.0f} — микро-пул/риск слива.")
         return False
     _tot_tx_j = _b5_j + _s5_j
-    _min_tx_req_j = 3 if _age_j <= 2.5 else (6 if _age_j <= 10.0 else 10)
+    _cfg_min_tx_j = int(getattr(config, "MIN_TXNS_M5", 6))
+    _min_tx_req_j = min(_cfg_min_tx_j, 3) if _age_j <= 2.5 else (min(_cfg_min_tx_j, 6) if _age_j <= 10.0 else _cfg_min_tx_j)
     if _tot_tx_j < _min_tx_req_j:
         print(f"🚫 [{source_tag}-LOW-TXNS] {_sym_tmp} ({mint[:8]}): всего {_tot_tx_j} сделок в m5 (<{_min_tx_req_j}) — вялый боковой стакан.")
         return False
     _vol5_j = float(((td or {}).get("volume") or {}).get("m5", 0) or 0)
+    _cfg_min_v5_j = float(getattr(config, "MIN_VOLUME_M5", 600.0))
     if _age_j <= 2.5:
-        _min_vol_j = 250.0
+        _min_vol_j = min(_cfg_min_v5_j, 250.0)
     elif _age_j <= 5.0:
-        _min_vol_j = 500.0
+        _min_vol_j = min(_cfg_min_v5_j, 500.0)
     elif _age_j <= 15.0:
-        _min_vol_j = 800.0
+        _min_vol_j = _cfg_min_v5_j
     else:
-        _min_vol_j = 1500.0 if _b5_j >= int(_s5_j * 1.05) else 2500.0
+        _min_vol_j = _cfg_min_v5_j if _b5_j >= int(_s5_j * 1.05) else max(_cfg_min_v5_j, 1200.0)
     if _vol5_j < _min_vol_j:
         print(f"🚫 [{source_tag}-LOW-VOL] {_sym_tmp} ({mint[:8]}): 5м объем ${_vol5_j:,.0f} < ${_min_vol_j:,.0f} — слабый стоячий токен (кейс BRO).")
         return False
@@ -581,12 +584,17 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
         try:
             import goplus as _gp_jup
             _rc_st, _rc_d = await _gp_jup.fetch_rugcheck_report_cached(mint, ttl=120.0, timeout=5)
+            _allow_unl_lp_j = bool(getattr(config, "ALLOW_UNLOCKED_LP_POOLS", True))
             if _rc_st != 200 or not isinstance(_rc_d, dict):
-                print(f"⏳ [{source_tag}-RC-WAIT] {_sym_tmp} ({mint[:8]}): кастомный токен ожидает индексации RugCheck (HTTP {_rc_st}).")
-                return False
+                if _allow_unl_lp_j:
+                    print(f"🔓 [{source_tag}-RC-SKIP] {_sym_tmp} ({mint[:8]}): RugCheck HTTP {_rc_st} — разрешаем быстрый вход без задержки (режим 0d2b1ae).")
+                    _rc_d = {}
+                else:
+                    print(f"⏳ [{source_tag}-RC-WAIT] {_sym_tmp} ({mint[:8]}): кастомный токен ожидает индексации RugCheck (HTTP {_rc_st}).")
+                    return False
             _tok_rc = _rc_d.get("token") or {}
             _SAFE_AUTHS = {"6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P", "11111111111111111111111111111111", None, ""}
-            if _tok_rc.get("mintAuthority") not in _SAFE_AUTHS or _tok_rc.get("freezeAuthority") not in _SAFE_AUTHS:
+            if _tok_rc and (_tok_rc.get("mintAuthority") not in _SAFE_AUTHS or _tok_rc.get("freezeAuthority") not in _SAFE_AUTHS):
                 print(f"🚫 [{source_tag}-AUTH-SCAM] {_sym_tmp} ({mint[:8]}): активный mint/freeze authority — блок входа!")
                 return False
             # 1. Проверка критической концентрации монет у одного кошелька (кейсы CRO, NEX AI) и серийных рагеров
@@ -614,8 +622,9 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
                 mint=mint,
                 log_unlocked=True,
                 allow_pump_amm_lock=_allow_ps_lock_j,
-            )
-            if mint.endswith("pump") and ("meteora" in _dex_j_low or _dex_j_low == "meteoradbc"):
+            ) if _rc_d else False
+            _lp_verified_jup = bool(_lp_ok)
+            if not _allow_unl_lp_j and mint.endswith("pump") and ("meteora" in _dex_j_low or _dex_j_low == "meteoradbc"):
                 print(f"🚫 [{source_tag}-FAKE-METEORA] {_sym_tmp} ({mint[:8]}): .pump токен на пуле Meteora — неофициальный скам-пул мимо PumpSwap (кейсы MULT/SURVIVE -98%)!")
                 return False
 
@@ -634,13 +643,20 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
                 if _is_unl_safe_j:
                     print(f"🔓 [{source_tag}-UNLOCKED-LP-ALLOWED] {_sym_tmp} ({mint[:8]}): свежий DEX-раннер (age {_age_j:.1f}м, liq ${_liq_j:,.0f}, vol5 ${_vol5_j:,.0f}) — лок LP не требуется (режим 0d2b1ae).")
                     _lp_ok = True
+                    _lp_verified_jup = True
+                elif _allow_unl_lp_j and _liq_j >= float(getattr(config, "MIN_GRADUATED_LIQ_USD", 3000.0)):
+                    print(f"🔓 [{source_tag}-UNLOCKED-LP-OPEN] {_sym_tmp} ({mint[:8]}): {_dex_j_low or 'DEX'} с незалоченным LP (liq ${_liq_j:,.0f}) допущен в режиме 0d2b1ae.")
+                    _lp_ok = True
+                    _lp_verified_jup = True
                 else:
                     print(f"🚫 [{source_tag}-UNLOCKED-LP] {_sym_tmp} ({mint[:8]}): незалоченный/несожжённый LP на {_dex_j_low or 'DEX'} (liq ${_liq_j:,.0f}, age {_age_j:.1f}m) — риск Remove LP!")
                     return False
-            _lp_verified_jup = True
         except Exception as _lp_ex:
-            print(f"⏳ [{source_tag}-RC-ERR] {_sym_tmp} ({mint[:8]}): ошибка проверки RugCheck ({_lp_ex}) — пропуск цикла.")
-            return False
+            if getattr(config, "ALLOW_UNLOCKED_LP_POOLS", True) and _liq_j >= float(getattr(config, "MIN_GRADUATED_LIQ_USD", 3000.0)):
+                print(f"🔓 [{source_tag}-RC-ERR-SKIP] {_sym_tmp} ({mint[:8]}): ошибка RugCheck ({_lp_ex}) — разрешаем быстрый вход (режим 0d2b1ae).")
+            else:
+                print(f"⏳ [{source_tag}-RC-ERR] {_sym_tmp} ({mint[:8]}): ошибка проверки RugCheck ({_lp_ex}) — пропуск цикла.")
+                return False
     if isinstance(td, dict) and _lp_verified_jup:
         td["_lp_verified"] = True
 
@@ -649,23 +665,25 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
     _info_j = (td or {}).get("info") or {}
     _soc_j = _info_j.get("socials") or []
     _web_j = _info_j.get("websites") or []
-    _req_soc_min_j = float(getattr(config, "REQUIRE_SOCIALS_MIN_AGE_MIN", 25.0))
-    if not _is_launchpad_jup and not (td or {}).get("_socials_unknown", False) and len(_soc_j) == 0 and len(_web_j) == 0 and _liq_j < 25000 and _age_j > _req_soc_min_j:
+    _req_soc_min_j = float(getattr(config, "REQUIRE_SOCIALS_MIN_AGE_MIN", 9999.0))
+    if getattr(config, "REQUIRE_SOCIALS_ENABLED", False) and not _is_launchpad_jup and not (td or {}).get("_socials_unknown", False) and len(_soc_j) == 0 and len(_web_j) == 0 and _liq_j < 25000 and _age_j > _req_soc_min_j:
         print(f"🚫 [{source_tag}-NO-SOCIALS] {_sym_tmp} ({mint[:8]}): 0 соцсетей/сайтов при ликвидности ${_liq_j:,.0f} (<$25k) — анонимный бандлер-раг.")
         return False
 
-    # Защита от миграционного дампа Pump.fun: выдерживаем минимум SOLANA_MIN_AGE_MIN (30с), далее вход под полным ончейн-аудитом
+    # Защита от миграционного дампа Pump.fun: выдерживаем минимум SOLANA_MIN_AGE_MIN, далее вход под полным ончейн-аудитом
     if mint.endswith("pump") and _dex_j in ("pumpswap", "raydium", "meteora", "orca"):
-        _min_mig_age_j = float(getattr(config, "SOLANA_MIN_AGE_MIN", 0.5))
+        _min_mig_age_j = float(getattr(config, "SOLANA_MIN_AGE_MIN", 0.15))
         if _age_j < _min_mig_age_j:
             print(f"⏳ [{source_tag}-MIGRATION-DUMP] {_sym_tmp} ({mint[:8]}): AMM-пул создан {_age_j:.1f}м назад (< {_min_mig_age_j:.1f}м) — зона сброса снайперов pump.fun.")
             return False
         _fdv_j = float((td or {}).get("fdv", 0) or (td or {}).get("marketCap", 0) or 0)
-        if 0 < _fdv_j < 5000.0:
-            print(f"🚫 [{source_tag}-MIGRATION-LOW-FDV] {_sym_tmp} ({mint[:8]}): FDV ${_fdv_j:,.0f} < $5,000 — токен слит ниже уровня миграции pump.fun.")
+        _min_mig_fdv_j = float(getattr(config, "JEV_MIN_MCAP_USD", 4000.0))
+        if 0 < _fdv_j < _min_mig_fdv_j:
+            print(f"🚫 [{source_tag}-MIGRATION-LOW-FDV] {_sym_tmp} ({mint[:8]}): FDV ${_fdv_j:,.0f} < ${_min_mig_fdv_j:,.0f} — токен слит ниже уровня миграции pump.fun.")
             return False
-        if _liq_j < 3500.0:
-            print(f"🚫 [{source_tag}-MIGRATION-LOW-LIQ] {_sym_tmp} ({mint[:8]}): ликвидность ${_liq_j:,.0f} < $3,500 — дев/снайперы высосали SOL.")
+        _min_mig_liq_j = float(getattr(config, "MIN_GRADUATED_LIQ_USD", 3000.0))
+        if _liq_j < _min_mig_liq_j:
+            print(f"🚫 [{source_tag}-MIGRATION-LOW-LIQ] {_sym_tmp} ({mint[:8]}): ликвидность ${_liq_j:,.0f} < ${_min_mig_liq_j:,.0f} — дев/снайперы высосали SOL.")
             return False
         
     from jupiter import JupiterAPI
@@ -800,7 +818,7 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
         return False
     _links_j = len((td or {}).get("info", {}).get("socials", []) or []) + len((td or {}).get("info", {}).get("websites", []) or [])
     _soc_unk_j = bool((td or {}).get("_socials_unknown", False))
-    if _age_j >= _req_soc_age and _links_j == 0 and not _soc_unk_j:
+    if getattr(config, "REQUIRE_SOCIALS_ENABLED", False) and _age_j >= _req_soc_age and _links_j == 0 and not _soc_unk_j:
         _avg_j = _vm5_j / max(1, _b5_j + _s5_j)
         _vl_j = _vm5_j / max(_liq_j, 1.0)
         _is_organic_stealth = (_vm5_j >= 4000.0 and (_vl_j >= 0.50 or _vm5_j >= 20000.0) and _b5_j >= 20 and _b5_j >= _s5_j * 1.05 and _liq_j >= 8000.0 and _avg_j >= 8.0 and _vl_j <= 8.0)
