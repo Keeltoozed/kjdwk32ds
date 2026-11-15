@@ -110,7 +110,7 @@ def score_token_with_rocket_xgb(mint: str, pair_data: dict, holders_info: dict =
             elif str(mint).endswith("pump") or str(pair_data.get("dexId", "")).lower() in ("pump", "pumpfun", "pumpswap"):
                 _age_min = 0.1
             else:
-                _age_min = 999.0
+                _age_min = 0.2
         _dex_low = str(pair_data.get("dexId", "")).lower()
         _is_pump = 1 if (str(mint).endswith("pump") or _dex_low in ("pump", "pumpfun", "pumpswap")) else 0
 
@@ -3437,7 +3437,7 @@ class Analyzer:
             elif str(address).endswith("pump") or str(pair_data.get("dexId", "")).lower() in ("pump", "pumpfun", "pumpswap"):
                 _age_min = 0.1
             else:
-                _age_min = 999.0
+                _age_min = 0.2
         _px_now = float(pair_data.get("priceUsd", 0) or 0)
         if not hasattr(self, "_eval_ctx"):
             self._eval_ctx = {}

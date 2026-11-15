@@ -112,21 +112,23 @@ class MatureExitManager:
         # дев видит остановку стакана и нажимает "Remove Liquidity" (кейс PUNCHAO 220 SOL).
         # Фиксируем прибыль НЕМЕДЛЕННО при первых признаках затухания импульса!
         _pd_pos = getattr(position, "pair_data", None) or getattr(position, "last_pair_data", None) or {}
-        _is_unlocked = getattr(position, "is_unlocked_pool", None)
-        if _is_unlocked is None:
-            if isinstance(_pd_pos, dict) and _pd_pos:
-                _dex_p = str(_pd_pos.get("dexId", "") or "").lower()
-                _base_a = str(((_pd_pos.get("baseToken") or {}).get("address")) or getattr(position, "mint", "") or "")
-                _is_p_canon = bool(_pd_pos.get("_pumpswap_canonical"))
-                if _base_a.endswith("pump") and _dex_p in ("pump", "pumpfun"):
-                    _is_unlocked = False
-                elif _dex_p == "pumpswap" and _is_p_canon:
-                    _is_unlocked = False
-                else:
+        _mint_pos = str(getattr(position, "mint", "") or "")
+        _base_a = str(((_pd_pos.get("baseToken") or {}).get("address")) or _mint_pos)
+        _is_pump_token = _mint_pos.endswith("pump") or _base_a.endswith("pump")
+
+        if _is_pump_token:
+            # На Pump.fun смарт-контракт криптографически блокирует снятие ликвидности девом!
+            # Такие токены ОБЯЗАНЫ лететь на 2x-10x по полноценной кривой трейлинга (0d2b1ae)
+            # и НЕ должны срезаться 20-секундным стопором застоя (кейсы STRIPCOIN +577%, SINKCAT +285%)!
+            _is_unlocked = False
+        else:
+            _is_unlocked = getattr(position, "is_unlocked_pool", None)
+            if _is_unlocked is None:
+                if isinstance(_pd_pos, dict) and _pd_pos:
                     _is_unlocked = not bool(getattr(position, "is_lp_locked_80", False))
-            else:
-                _is_unlocked = True
-            position.is_unlocked_pool = _is_unlocked
+                else:
+                    _is_unlocked = False
+        position.is_unlocked_pool = _is_unlocked
 
         if _is_unlocked:
             _u_prof_age = float(getattr(config, "UNLOCKED_STALL_PROFIT_AGE_SEC", 20.0)) / 60.0

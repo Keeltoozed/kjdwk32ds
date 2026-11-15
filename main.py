@@ -428,13 +428,16 @@ async def position_manager_loop(analyzer, tracker):
                         position._crash_anchor_px = _ref_crash_px
                     _cg_n = int(getattr(position, "crash_confirm_n", 0) or 0) + 1
                     position.crash_confirm_n = _cg_n
-                    _is_unl_cg = getattr(position, "is_unlocked_pool", None)
-                    if _is_unl_cg is None:
-                        _pd_tmp = getattr(position, "pair_data", None) or getattr(position, "last_pair_data", None) or {}
-                        _dex_tmp = str((_pd_tmp or {}).get("dexId", "") or "").lower()
-                        _base_tmp = str((((_pd_tmp or {}).get("baseToken") or {}).get("address")) or mint or "")
-                        _is_unl_cg = not (_base_tmp.endswith("pump") and _dex_tmp in ("pump", "pumpfun"))
-                        position.is_unlocked_pool = _is_unl_cg
+                    _pd_tmp = getattr(position, "pair_data", None) or getattr(position, "last_pair_data", None) or {}
+                    _base_tmp = str((((_pd_tmp or {}).get("baseToken") or {}).get("address")) or mint or "")
+                    _is_pump_tok = _base_tmp.endswith("pump") or str(mint).endswith("pump")
+                    if _is_pump_tok:
+                        _is_unl_cg = False
+                    else:
+                        _is_unl_cg = getattr(position, "is_unlocked_pool", None)
+                        if _is_unl_cg is None:
+                            _is_unl_cg = not bool(getattr(position, "is_lp_locked_80", False))
+                    position.is_unlocked_pool = _is_unl_cg
                     _cg_req = 1 if _is_unl_cg else 3
                     if _cg_n < _cg_req:
                         print(f"⚠️ [SOL-TICK-VERIFY] {position.symbol} ({mint[:8]}): резкий 1-тик {pnl_pct*100:+.1f}% (-{(1 - current_price/_ref_crash_px)*100:.0f}%) — ждём {_cg_req}-й тик подтверждения.")

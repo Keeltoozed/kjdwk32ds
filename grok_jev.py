@@ -452,11 +452,11 @@ class GrokJevEngine:
             if _bt_age is not None:
                 age_min = float(_bt_age)
             else:
-                age_min = 0.0 if is_pump else 999.0
+                age_min = 0.1 if is_pump else 0.2
 
         _min_grad_liq = float(getattr(_c, "MIN_GRADUATED_LIQ_USD", 5000.0))
         if _c.is_pumpswap_liq_fdv_trap(pair_data):
-            return False, "pumpswap-liq-fdv-trap (custom CreatePool with >=85% liq/fdv and 0 socials)"
+            return False, "permissionless-liq-fdv-trap (seeded pool with >=70% liq/fdv and 0 socials, drain risk)"
         if dex_id in ("pump", "pumpfun", "meteoradbc") and not getattr(_c, "ALLOW_UNGRADUATED_PUMPFUN", False):
             return False, "raw-pump-curve (wait for graduation to PumpSwap/Raydium with locked LP)"
         min_liq = 1500.0 if (dex_id in ("pump", "pumpfun", "meteoradbc") and getattr(_c, "ALLOW_UNGRADUATED_PUMPFUN", False)) else _min_grad_liq
@@ -922,7 +922,7 @@ class GrokJevEngine:
                 _bt_age = _bt_check.get_age(_base_addr)
             except Exception:
                 pass
-            _age_m = float(_bt_age) if _bt_age is not None else (0.1 if _is_pump_pair else 999.0)
+            _age_m = float(_bt_age) if _bt_age is not None else (0.1 if _is_pump_pair else 0.2)
         _liq_usd = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
         _base_addr = str(((pair_data.get("baseToken") or {}).get("address")) or "")
         _dex_id = str(pair_data.get("dexId", "")).lower()

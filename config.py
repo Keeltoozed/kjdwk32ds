@@ -240,22 +240,26 @@ def is_distributed_safe_runner(
     return True
 
 
-def is_pumpswap_liq_fdv_trap(pair_data: Optional[dict]) -> bool:
+def is_permissionless_liq_fdv_trap(pair_data: Optional[dict]) -> bool:
     """
-    Detect permissionless PumpSwap CreatePool liquidity-drain rugs:
-    custom Token-2022 .pump/.bonk/.BAGS pools created directly on PumpSwap with
-    500-700 SOL (~$70k-$100k liq) matching or exceeding FDV (liq/fdv >= 0.85)
-    and 0 socials so deployers can Withdraw+Burn the LP minutes later.
+    Detect permissionless liquidity-drain rugs across Meteora, PumpSwap, Raydium:
+    custom pools created with high seeded liquidity matching or near FDV (liq/fdv >= 0.70 with liq >= $18k,
+    or liq/fdv >= 0.60 with liq >= $30k) and 0 socials/websites, so deployers can drain the LP minutes later
+    (cases: AXIOMCOIN, WASTED, SURVIVE).
     """
     if not isinstance(pair_data, dict):
         return False
     dex = str(pair_data.get("dexId") or "").lower()
-    if dex != "pumpswap":
+    # Pump.fun bonding curves cannot have LP drained by dev
+    if dex in ("pump", "pumpfun"):
         return False
+        
     liq_usd = float((pair_data.get("liquidity") or {}).get("usd") or 0.0)
     fdv_usd = float(pair_data.get("fdv") or pair_data.get("marketCap") or 0.0)
-    if liq_usd < 35000.0 or fdv_usd <= 0.0 or liq_usd < fdv_usd * 0.85:
+    if liq_usd < 18000.0:
         return False
+        
+    # Check socials
     info = pair_data.get("info") or {}
     socials = info.get("socials") or []
     websites = info.get("websites") or []
@@ -263,7 +267,22 @@ def is_pumpswap_liq_fdv_trap(pair_data: Optional[dict]) -> bool:
         (isinstance(socials, list) and len(socials) > 0)
         or (isinstance(websites, list) and len(websites) > 0)
     )
-    return not has_socials
+    if has_socials:
+        return False
+
+    # 1. Liq/FDV >= 70% with Liq >= $18k and 0 socials (AXIOMCOIN: $43.5k liq / $53.9k fdv = 80.6%)
+    if fdv_usd <= 0.0 or liq_usd >= (fdv_usd * 0.70):
+        return True
+        
+    # 2. Liq/FDV >= 60% with Liq >= $30k and 0 socials
+    if liq_usd >= 30000.0 and (liq_usd >= fdv_usd * 0.60):
+        return True
+
+    return False
+
+
+# Backward-compatible alias for all existing imports and call sites
+is_pumpswap_liq_fdv_trap = is_permissionless_liq_fdv_trap
 
 
 def evaluate_entry_momentum(
@@ -531,7 +550,7 @@ BREAKEVEN_PCT = 0.16       # Breakeven Shield ВКЛЮЧЕН как в 0d2b1ae: 
 # === ЗАЩИТА ОТ СНОСА ЛИКВИДНОСТИ НА НЕЗАЛОЧЕННЫХ ПУЛАХ (UNLOCKED POOL STALL GUARD) ===
 UNLOCKED_STALL_PROFIT_AGE_SEC = 20.0     # 20 секунд застоя цены после пика >= +18% -> мгновенный выход с прибылью (кейс PUNCHAO +40.3% до Remove LP)
 UNLOCKED_STALL_MID_AGE_SEC = 24.0        # 24 секунды застоя после пика +10%..+18% -> фиксация прибыли
-UNLOCKED_ENTRY_SCRATCH_SEC = 35.0        # 35 секунд без импульса (< +4%) на старте -> срез в безубыток
+UNLOCKED_ENTRY_SCRATCH_SEC = 55.0        # 55 секунд без импульса (< +4%) на старте -> срез в безубыток
 UNLOCKED_FAST_STOP_PCT = -0.075          # Быстрый стоп-лосс -7.5% на незалоченном пуле (1 тик)
 
 PREFETCH_TTL_SEC = 12
