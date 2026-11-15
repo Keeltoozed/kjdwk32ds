@@ -1283,19 +1283,19 @@ async def scanner_loop(analyzer, tracker):
                                 if not _mom_live_ok or _m1_live < _min_sc_m1:
                                     print(f"🚫 [SCANNER-LIVE-REVERSAL] {actual_symbol} ({mint[:8]}): на живом графике импульс сломан ({_mom_live_why}, m5 {_m5_live:+.1f}%, m1 {_m1_live:+.1f}% < {_min_sc_m1:+.1f}%) — отмена покупки!")
                                     continue
-                                _max_m1_cfg_live = float(getattr(config, "MAX_ENTRY_M1_PCT", 15.0))
+                                _max_m1_cfg_live = float(getattr(config, "MAX_ENTRY_M1_PCT", 22.0))
                                 if _m1_live > _max_m1_cfg_live:
                                     _b5_sc = int((pair_data.get("txns") or {}).get("m5", {}).get("buys", 0) or 0)
                                     _s5_sc = int((pair_data.get("txns") or {}).get("m5", {}).get("sells", 0) or 0)
-                                    if not (_b5_sc >= _s5_sc * 1.15 and _m1_live <= 18.0):
+                                    if not (_b5_sc >= int(_s5_sc * 1.15) and _vol5_live >= 3000.0 and _m5_live >= 4.0 and _m1_live <= 30.0):
                                         print(f"🚫 [SCANNER-M1-SPIKE] {actual_symbol} ({mint[:8]}): живой m1 +{_m1_live:.1f}% > +{_max_m1_cfg_live:.1f}% — вершина свечи, отмена!")
                                         continue
-                                _max_m5_cfg = float(getattr(config, "MAX_ENTRY_M5_PCT", 85.0))
+                                _max_m5_cfg = float(getattr(config, "MAX_ENTRY_M5_PCT", 120.0))
                                 if _m5_live > _max_m5_cfg:
                                     _b5_sc = int((pair_data.get("txns") or {}).get("m5", {}).get("buys", 0) or 0)
                                     _s5_sc = int((pair_data.get("txns") or {}).get("m5", {}).get("sells", 0) or 0)
-                                    _max_allowed_m5 = 130.0 if (_age_m <= 15.0 or mint in _graduated_set or _dex_id == "pumpswap") else 105.0
-                                    _is_breakout = (_vol5_live >= 4000.0 and _b5_sc >= _s5_sc * 1.12 and _m5_live <= _max_allowed_m5)
+                                    _max_allowed_m5 = 400.0 if (_age_m <= 15.0 or mint in _graduated_set or _dex_id == "pumpswap") else 350.0
+                                    _is_breakout = (_vol5_live >= 3500.0 and _b5_sc >= int(_s5_sc * 1.12) and _m5_live <= _max_allowed_m5)
                                     if not _is_breakout:
                                         print(f"🚫 [SCANNER-FOMO-M5] {actual_symbol} ({mint[:8]}): живой m5 +{_m5_live:.1f}% > +{_max_m5_cfg:.0f}% — вершина свечи, отмена!")
                                         continue
@@ -1389,8 +1389,11 @@ async def scanner_loop(analyzer, tracker):
                                     _c_ms_sc = pair_data.get("pairCreatedAt") or 0
                                     _age_sc = ((time.time() * 1000 - _c_ms_sc) / 60000.0) if _c_ms_sc else 0.5
                                     _has_launch_surge = (_vol5_live >= 2000.0 and _b5_bump >= _s5_bump and _b5_bump >= 6 and _m5_live >= -2.0)
-                                    # Сильный surge: нужен РЕАЛЬНО мощный импульс чтобы войти раньше 1.5м
-                                    _strong_surge = (_vol5_live >= 5000.0 and _b5_bump >= 40 and _b5_bump >= _s5_bump * 1.30 and _m5_live >= 5.0)
+                                    # Сильный surge: мощный импульс чтобы войти раньше 1.5м (не душим кейсы b5=325, vol=$11k)
+                                    _strong_surge = (
+                                        (_vol5_live >= 5000.0 and _b5_bump >= 40 and _b5_bump >= _s5_bump * 1.12 and _m5_live >= 3.0)
+                                        or (_vol5_live >= 10000.0 and _b5_bump >= 80 and _b5_bump >= _s5_bump * 1.05 and _m5_live >= 2.0)
+                                    )
                                     if _age_sc < 1.5 and not _has_launch_surge:
                                         processed_mints[mint] = time.time() - _cd + 15
                                         try:
@@ -1427,9 +1430,9 @@ async def scanner_loop(analyzer, tracker):
                                         if _jup_chk < entry_price * 0.93:
                                             analyzer._deny(mint, "scanner-live-dump >7%", f"🚫 [LIVE-DUMP] {actual_symbol} ({mint[:8]}): живая цена Jupiter (${_jup_chk:.8f}) уже на {(1.0 - _jup_chk / entry_price) * 100:.1f}% ниже DexScreener (${entry_price:.8f}) [>7%] — токен обваливается прямо сейчас, блок входа!")
                                             continue
-                                        _chk_r = max(_jup_chk, entry_price) / min(_jup_chk, entry_price)
-                                        if _chk_r > 1.15:
-                                            print(f"🚫 [SCANNER-PRICE-MISMATCH] {actual_symbol} ({mint[:8]}): Jupiter (${_jup_chk:.8f}) vs DS (${entry_price:.8f}) расхождение {_chk_r:.2f}x (>1.15x) — блок от ложного стопа.")
+                                        _chk_up_r = _jup_chk / entry_price
+                                        if _chk_up_r > 1.30:
+                                            print(f"🚫 [SCANNER-PRICE-MISMATCH] {actual_symbol} ({mint[:8]}): Jupiter (${_jup_chk:.8f}) vs DS (${entry_price:.8f}) опережение {_chk_up_r:.2f}x (>1.30x) — блок от вертикального входа.")
                                             continue
                                         entry_price = _jup_chk
                                 # RKT-вето дженерик-входов Solana (лотереи/VIP-билеты exempt).

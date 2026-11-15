@@ -489,10 +489,11 @@ class PaperTracker:
                 if config.is_pumpswap_liq_fdv_trap(pair_data):
                     print(f"🛑 [FIREWALL-RUG-BLOCK] {symbol} ({mint_str[:8]}): PumpSwap CreatePool liq/fdv 0-social trap!")
                     return False
-                if pair_data.get("_pumpswap_checked") and not _lp_preverified:
+                _ps_rpc_unv = bool(pair_data.get("_pumpswap_rpc_unverified")) and config.is_launchpad_mint(mint_str)
+                if pair_data.get("_pumpswap_checked") and not _lp_preverified and not _ps_rpc_unv:
                     print(f"🛑 [FIREWALL-RUG-BLOCK] {symbol} ({mint_str[:8]}): PumpSwap pool failed on-chain CreatePool check!")
                     return False
-                if _pd_dex == "pumpswap" and pair_data.get("_pumpswap_canonical") is False and not _lp_preverified:
+                if _pd_dex == "pumpswap" and pair_data.get("_pumpswap_canonical") is False and not _lp_preverified and not _ps_rpc_unv:
                     print(f"🛑 [FIREWALL-RUG-BLOCK] {symbol} ({mint_str[:8]}): custom non-canonical PumpSwap pool without verified burned LP!")
                     return False
             # Строгий LP-Firewall:
@@ -500,9 +501,10 @@ class PaperTracker:
             # 2) Любой кастомный не-'pump' токен (.bonk, .bags, или кастомный DEX-пул) ИЛИ .pump на стороннем DEX / non-canonical CreatePool
             #    ДОЛЖЕН иметь подтверждённый _lp_verified!
             _ps_canon_flag = bool(isinstance(pair_data, dict) and pair_data.get("_pumpswap_canonical"))
+            _ps_rpc_unv_flag = bool(isinstance(pair_data, dict) and pair_data.get("_pumpswap_rpc_unverified")) and config.is_launchpad_mint(mint_str) and not config.is_pumpswap_liq_fdv_trap(pair_data)
             _is_native_pump_dex = mint_str.lower().endswith("pump") and (
                 _pd_dex in ("", "pumpfun", "pump")
-                or (_pd_dex == "pumpswap" and (not isinstance(pair_data, dict) or not pair_data.get("_pumpswap_checked") or _ps_canon_flag))
+                or (_pd_dex == "pumpswap" and (not isinstance(pair_data, dict) or not pair_data.get("_pumpswap_checked") or _ps_canon_flag or _ps_rpc_unv_flag))
             )
             if not _is_native_pump_dex and not _lp_preverified and not _is_vip_or_copy:
                 # Легаси-совместимость для unit-тестов/ручных вызовов без pair_data: если явно не передан сторонний DEX,
@@ -537,8 +539,17 @@ class PaperTracker:
         # ИСКЛЮЧЕНИЕ: VIP KOL сделки (Ansem, Chairman и др.) идут с 100% обходом ML-фильтров по прямому требованию!
         _is_copy_src = str(source or "").startswith("COPY")
         _is_vip = "VIP" in str(source or "")
-        min_conf = float(getattr(config, "ROCKET_XGB_FINAL_THRESHOLD", 15.0))
-        _eff_min_conf = float(getattr(config, "ROCKET_XGB_STAGE1_THRESHOLD", 10.0)) if _is_copy_src else min_conf
+        min_conf = float(getattr(config, "ROCKET_XGB_FINAL_THRESHOLD", 8.0))
+        _stage1_conf = float(getattr(config, "ROCKET_XGB_STAGE1_THRESHOLD", 5.0))
+        _mom_rocket_ok = False
+        if isinstance(pair_data, dict):
+            _tx_t = (pair_data.get("txns") or {}).get("m5") or {}
+            _b5_t = int(_tx_t.get("buys", 0) or 0)
+            _s5_t = int(_tx_t.get("sells", 0) or 0)
+            _v5_t = float((pair_data.get("volume") or {}).get("m5", 0) or 0)
+            _m5_t = float((pair_data.get("priceChange") or {}).get("m5", 0) or 0)
+            _mom_rocket_ok = (_m5_t >= 5.0 and _v5_t >= 4000.0 and _b5_t >= int(_s5_t * 1.15))
+        _eff_min_conf = _stage1_conf if (_is_copy_src or _mom_rocket_ok) else min_conf
         if getattr(config, "ROCKET_XGB_ENABLED", True) and not _is_vip:
             if ml_confidence > 0 and (ml_confidence + 0.05) < _eff_min_conf:
                 print(f"🚫 [FIREWALL] Отказ входа {symbol} ({mint[:8]}): Rocket XGB скор {ml_confidence:.1f}% < {_eff_min_conf:.0f}% (блокировка убыточного дампа)")

@@ -1605,13 +1605,20 @@ _PUMP_FUN_PROG = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"
 _PUMP_MIG_AUTH = "39azUYFWPz3VHgKCf3VChUwbpURdCHRxjWVowf5jUJjg"
 
 
-def _set_pumpswap_flags(pair_data, ok: bool, is_canonical: bool) -> None:
+def _set_pumpswap_flags(
+    pair_data,
+    ok: bool,
+    is_canonical: bool,
+    rpc_unverified: bool = False,
+    lp_burned: bool = False,
+) -> None:
     if isinstance(pair_data, dict):
         pair_data["_pumpswap_checked"] = True
         pair_data["_pumpswap_canonical"] = bool(is_canonical)
+        pair_data["_pumpswap_rpc_unverified"] = bool(rpc_unverified)
         if not ok:
             pair_data["_lp_verified"] = False
-        elif is_canonical:
+        elif is_canonical or lp_burned:
             pair_data["_lp_verified"] = True
 
 
@@ -1705,7 +1712,14 @@ async def verify_pumpswap_pool_onchain(
     cached = _PUMPSWAP_POOL_CACHE.get(cache_key)
     if cached and (now - cached[0]) < ttl:
         res = cached[1]
-        _set_pumpswap_flags(pair_data, res[0], res[1])
+        _rs = str(res[2] if len(res) > 2 else "")
+        _set_pumpswap_flags(
+            pair_data,
+            res[0],
+            res[1],
+            rpc_unverified=("unverified" in _rs),
+            lp_burned=("burned-lp" in _rs),
+        )
         return res
 
     if not pair_address:
@@ -1719,7 +1733,7 @@ async def verify_pumpswap_pool_onchain(
     acc_res = await _solana_rpc_call("getAccountInfo", [pair_address, {"encoding": "base64"}])
     if acc_res is None:
         res = _pumpswap_rpc_fallback(mint, pair_data, "pumpswap-rpc-unavailable")
-        _set_pumpswap_flags(pair_data, res[0], res[1])
+        _set_pumpswap_flags(pair_data, res[0], res[1], rpc_unverified=("unverified" in str(res[2])))
         _PUMPSWAP_POOL_CACHE[cache_key] = (now - ttl + 20.0, res)
         return res
 
@@ -1801,7 +1815,7 @@ async def verify_pumpswap_pool_onchain(
         return res
 
     res = (True, False, f"pumpswap-custom-burned-lp:{lp_sup:.4f}-idx{pool_idx}")
-    _set_pumpswap_flags(pair_data, True, False)
+    _set_pumpswap_flags(pair_data, True, False, lp_burned=True)
     _PUMPSWAP_POOL_CACHE[cache_key] = (now, res)
     if len(_PUMPSWAP_POOL_CACHE) > 2000:
         _PUMPSWAP_POOL_CACHE.clear()

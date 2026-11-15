@@ -257,10 +257,10 @@ class GrokJevEngine:
         _prev_r = self._runner_registry.get(_norm_sym)
         if _prev_r and _prev_r[0] != mint:
             _orig_mint, _orig_liq, _orig_ca, _orig_ts = _prev_r
-            if (time.time() - _orig_ts) < 86400.0 and _orig_liq >= 25000.0 and _raw_liq_cc < (_orig_liq * 0.25):
-                if _orig_ca == 0 or _ca_cc == 0 or _ca_cc > _orig_ca:
+            if (time.time() - _orig_ts) < 86400.0 and _orig_liq >= 60000.0 and _raw_liq_cc < (_orig_liq * 0.25):
+                if _orig_ca > 0 and _ca_cc > _orig_ca:
                     return False, f"copycat-of-runner {symbol} (clone of {_orig_mint[:6]} liq ${_orig_liq:,.0f})"
-        if _raw_liq_cc >= 25000.0 and (_h24_cc >= 200.0 or _fdv_cc >= 180000.0):
+        if _raw_liq_cc >= 60000.0 and (_h24_cc >= 200.0 or _fdv_cc >= 250000.0):
             if (not _prev_r) or _raw_liq_cc > _prev_r[1]:
                 if len(self._runner_registry) > 1500:
                     self._runner_registry.clear()
@@ -614,11 +614,11 @@ class GrokJevEngine:
         ):
             return False, _mom_why_g
 
-        _max_m5_allowed = float(getattr(_c, "MAX_ENTRY_M5_PCT", 85.0))
+        _max_m5_allowed = float(getattr(_c, "MAX_ENTRY_M5_PCT", 120.0))
         if m5 > _max_m5_allowed:
-            _fresh_grad_m5_cap = 130.0 if (age_min <= 15.0 and fdv_mc <= 220000.0) else 105.0
+            _fresh_grad_m5_cap = 400.0 if (age_min <= 15.0 and fdv_mc <= 260000.0) else 350.0
             _is_strong_buyer_breakout_g = (m5 <= _fresh_grad_m5_cap and b5 >= int(s5 * 1.12) and vol_m5 >= 3000.0 and (b5 + s5) >= 15)
-            _is_cooling_pullback = (-3.0 <= m1 <= -0.5 and m5 <= 125.0 and b5 >= s5 * 1.08)
+            _is_cooling_pullback = (-3.5 <= m1 <= -0.5 and m5 <= 350.0 and b5 >= s5 * 1.05)
             if not (_is_strong_buyer_breakout_g or _is_cooling_pullback):
                 return False, f"fomo-vertical-m5 m5 {m5:+.1f}% > +{_max_m5_allowed:.0f}% (buying top of vertical pump without cooling pullback, m1={m1:+.1f}%)"
         if s5 > 10 and b5 < (s5 * 0.80):
@@ -934,15 +934,15 @@ class GrokJevEngine:
         _m1_is_phantom = (_age_m < 3.0 and abs(m5) > 1.0 and abs(m1) > 0 and abs(m1 / max(abs(m5), 0.01) - 1.0) < 0.08)
         _fdv_flush = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
         _strong_breakout = (b5 >= 10 and b5 >= s5 * 1.05 and vol5 >= 2000.0)
-        _base_m1_g = float(getattr(_c, "JEV_MAX_M1_ENTRY_PCT", 15.0))
-        _max_m1 = max(_base_m1_g, 18.0) if _strong_breakout else _base_m1_g
-        _cfg_m5 = float(getattr(_c, "MAX_ENTRY_M5_PCT", 85.0))
-        if _strong_breakout and _age_m <= 15.0 and (0 < _fdv_flush <= 220000.0):
-            _max_m5_cap = 130.0
+        _base_m1_g = float(getattr(_c, "JEV_MAX_M1_ENTRY_PCT", 25.0))
+        _max_m1 = max(_base_m1_g, 30.0) if (_strong_breakout and b5 >= int(s5 * 1.15) and vol5 >= 3000.0 and m5 >= 4.0) else _base_m1_g
+        _cfg_m5 = float(getattr(_c, "MAX_ENTRY_M5_PCT", 120.0))
+        if _strong_breakout and _age_m <= 15.0 and (0 < _fdv_flush <= 260000.0):
+            _max_m5_cap = 400.0
         elif _strong_breakout:
-            _max_m5_cap = max(_cfg_m5, 105.0)
+            _max_m5_cap = max(_cfg_m5, 350.0)
         else:
-            _max_m5_cap = _cfg_m5
+            _max_m5_cap = max(_cfg_m5, 135.0)
         if m5 > _max_m5_cap:
             return False, -0.14, 0.0, f"fomo-spike (m5 {m5:+.1f}% > +{_max_m5_cap:.0f}%) — buying local top, wait for reset"
         if m1 > _max_m1 and not _m1_is_phantom:
@@ -953,9 +953,11 @@ class GrokJevEngine:
         if _liq_usd > 0 and _liq_usd < _min_liq:
             return False, -0.14, 0.0, f"thin-liquidity (${_liq_usd:,.0f} < ${_min_liq:,.0f}) — slippage/dump risk"
 
-        # 2. Защита от покупки падающего ножа: максимум -2.5% на 1м свече (никаких -12% дампов!)
-        _flush_floor = float(getattr(_c, "JEV_MIN_M1_ENTRY_FLOOR_PCT", -2.5))
-        _min_flush_m1 = _flush_floor if (m5 >= 8.0 and b5 >= s5) else max(_flush_floor, -2.0)
+        # 2. Защита от покупки падающего ножа: максимум -2.5%..-3.5% (или -4.5% при мощном выкупе просадки)
+        _flush_floor = float(getattr(_c, "JEV_MIN_M1_ENTRY_FLOOR_PCT", -3.5))
+        if (vol5 >= 10000.0 and b5 >= int(s5 * 1.15)) or (_h1 >= 25.0 and b5 >= int(s5 * 1.25) and vol5 >= 4500.0):
+            _flush_floor = min(_flush_floor, -4.5)
+        _min_flush_m1 = _flush_floor if ((m5 >= 8.0 and b5 >= s5) or (b5 >= int(s5 * 1.10) and vol5 >= 4000.0)) else max(_flush_floor, -2.5)
         if _m1_known and m1 < _min_flush_m1:
             return False, -0.14, 0.0, f"flush-dump (m1 {m1:+.1f}% < {_min_flush_m1:+.1f}%) — falling knife / weak rollover"
 
@@ -1219,7 +1221,7 @@ class GrokJevEngine:
                 liq_g = float(g.get("liquidity", 0) or 0)
                 age_g = float(g.get("age_m", 999) or 999)
                 fdv_g = float(g.get("fdv", 0) or g.get("market_cap", 0) or 0)
-                if m and 32 <= len(m) <= 44 and not m.startswith("0x") and liq_g >= 4500.0 and age_g <= float(getattr(_c, "SOLANA_MAX_AGE_MIN", 90.0)) and fdv_g <= 350000.0 and m not in seen:
+                if m and 32 <= len(m) <= 44 and not m.startswith("0x") and liq_g >= 4500.0 and age_g <= float(getattr(_c, "SOLANA_MAX_AGE_MIN", 90.0)) and fdv_g <= float(getattr(_c, "JEV_MAX_MCAP_USD", 1200000.0)) and m not in seen:
                     seen.add(m)
                     candidates.append((m, "solana"))
         except Exception:
@@ -1592,11 +1594,12 @@ class GrokJevEngine:
                         if rk_lvl == "danger":
                             return False, f"rugcheck: critical danger risk '{rk.get('name')}'", _h_stats
 
-                    # Проверка пулов (логируем статус LP, но не блокируем монеты с незалоченным LP по стратегии ракет)
+                    # Проверка пулов: кастомные незалоченные DEX-пулы (Meteora/CreatePool) блокируются всегда;
+                    # при временной недоступности RPC для .pump-минта (без traps) разрешаем проверку lock=100 по RugCheck
                     target_pair = str(pair_data.get("pairAddress") or "").strip()
                     _dex_rc_low = str(pair_data.get("dexId") or "").lower()
-                    _allow_ps_lock_jev = bool(pair_data.get("_pumpswap_canonical")) or (_dex_rc_low != "pumpswap")
-                    has_verified_locked_lp = False
+                    _ps_rpc_unv_j = bool(pair_data.get("_pumpswap_rpc_unverified")) and _c.is_launchpad_mint(address) and not _c.is_pumpswap_liq_fdv_trap(pair_data)
+                    _allow_ps_lock_jev = bool(pair_data.get("_pumpswap_canonical")) or _ps_rpc_unv_j or (_dex_rc_low != "pumpswap")
                     has_verified_locked_lp = _c.verify_rugcheck_lp_markets(
                         rc_data.get("markets") or [],
                         target_pair=target_pair,
@@ -2014,7 +2017,7 @@ class GrokJevEngine:
             and _m1_s1 >= float(getattr(_c, "JEV_MIN_M1_ENTRY_FLOOR_PCT", -3.5))
             and _h1_s1 >= float(getattr(_c, "JEV_MIN_H1_PCT", -15.0))
         )
-        _is_momentum_rocket = _s1_fresh_ok and (rkt_s1 + 0.05) >= max(8.0, s1_thresh - 2.0) and (
+        _is_momentum_rocket = _s1_fresh_ok and (rkt_s1 + 0.05) >= max(3.5, s1_thresh - 2.0) and (
             (_m5_s1 >= 12.0 and _b5_s1 >= int(_s5_s1 * 1.25) and _vm5_s1 >= 8000.0)
             or (_vm5_s1 >= 15000.0 and _b5_s1 >= int(_s5_s1 * 1.15) and _m5_s1 >= 6.0)
             or (_m5_s1 >= 8.0 and _vm5_s1 >= 10000.0 and _b5_s1 >= max(12, int(_s5_s1 * 1.15)))
@@ -2041,12 +2044,25 @@ class GrokJevEngine:
             return False, f"fills-flush-wait {flush_msg}"
 
         # 3.5. ПЕРЕПРОВЕРКА НА СВЕЖИХ ДАННЫХ: цена из кэша могла устареть на минуту, пока монета уже падает
+        # Важно: не перезаписываем богатый снимок pair пустым/переключившимся окном m5 (кейс PENNY: 77b/$4.5k -> 6b/$219)!
         if getattr(_c, "JEV_FRESH_RECHECK_ENABLED", False):
             _fresh = await self.fetch_pair_fresh(address, chain)
             if _fresh:
                 _fp = float(_fresh.get("priceUsd", 0) or 0)
                 if _fp > 0:
-                    pair, price = _fresh, _fp
+                    _prev_v5 = float((pair.get("volume") or {}).get("m5", 0) or 0)
+                    _prev_tx5 = int((pair.get("txns") or {}).get("m5", {}).get("buys", 0) or 0) + int((pair.get("txns") or {}).get("m5", {}).get("sells", 0) or 0)
+                    _fresh_v5 = float((_fresh.get("volume") or {}).get("m5", 0) or 0)
+                    _fresh_tx5 = int((_fresh.get("txns") or {}).get("m5", {}).get("buys", 0) or 0) + int((_fresh.get("txns") or {}).get("m5", {}).get("sells", 0) or 0)
+                    _fresh_bucket_rolled = (_prev_v5 >= 1500.0 and _prev_tx5 >= 15 and (_fresh_v5 < max(500.0, _prev_v5 * 0.25) or _fresh_tx5 < max(4, int(_prev_tx5 * 0.20))))
+                    if _fresh_bucket_rolled and _fp >= price * 0.90:
+                        pair = dict(pair)
+                        pair["priceUsd"] = _fresh.get("priceUsd")
+                        if (_fresh.get("liquidity") or {}).get("usd"):
+                            pair["liquidity"] = _fresh.get("liquidity")
+                        price = _fp
+                    else:
+                        pair, price = _fresh, _fp
                     _hard2_ok, _hard2_why = self.hard_gate(address, pair, chain, None)
                     if not _hard2_ok:
                         return False, f"fills-flush-wait fresh-recheck {_hard2_why}"
@@ -2115,20 +2131,45 @@ class GrokJevEngine:
         if _fm1 < -5.5:
             print(f"🚫 [FINAL-RECHECK] {symbol} ({address[:8]}): резкий слив 1м свечи ({_fm1:+.1f}%) — отмена входа!")
             return False, f"fills-flush-wait final-recheck m1 {_fm1:+.1f}% falling"
-        pair, price = _fin, _fpx
+        _prev_fv5 = float((pair.get("volume") or {}).get("m5", 0) or 0)
+        _prev_ftx5 = int((pair.get("txns") or {}).get("m5", {}).get("buys", 0) or 0) + int((pair.get("txns") or {}).get("m5", {}).get("sells", 0) or 0)
+        _fin_v5_chk = float((_fin.get("volume") or {}).get("m5", 0) or 0)
+        _fin_tx5_chk = int((_fin.get("txns") or {}).get("m5", {}).get("buys", 0) or 0) + int((_fin.get("txns") or {}).get("m5", {}).get("sells", 0) or 0)
+        if _prev_fv5 >= 1500.0 and _prev_ftx5 >= 15 and (_fin_v5_chk < max(500.0, _prev_fv5 * 0.25) or _fin_tx5_chk < max(4, int(_prev_ftx5 * 0.20))):
+            pair = dict(pair)
+            pair["priceUsd"] = _fpx
+            if (_fin.get("liquidity") or {}).get("usd"):
+                pair["liquidity"] = _fin.get("liquidity")
+            price = _fpx
+        else:
+            pair, price = _fin, _fpx
         wick_price = price * (1.0 + wick_pct)
 
         # 5.6. 🚀 STAGE 2: ROCKET XGBOOST FINAL ML FIREWALL (единый порог с tracker.py)
         rkt_final = self.score_rocket_xgb(address, pair, _h_stats)
-        final_thresh = float(getattr(_c, "ROCKET_XGB_FINAL_THRESHOLD", 15.0))
+        final_thresh = float(getattr(_c, "ROCKET_XGB_FINAL_THRESHOLD", 8.0))
         _fin_links = len((pair.get("info") or {}).get("socials", []) or []) + len((pair.get("info") or {}).get("websites", []) or [])
-        if _fin_links == 0 and not bool(pair.get("_socials_unknown", False)):
-            final_thresh = max(final_thresh, 16.0)
-        if getattr(_c, "ROCKET_XGB_ENABLED", True) and (rkt_final + 0.05) < final_thresh:
+        _fin_ca_ms = float(pair.get("pairCreatedAt") or 0)
+        _fin_age_m = ((time.time() * 1000.0 - _fin_ca_ms) / 60000.0) if _fin_ca_ms > 0 else 0.0
+        _req_soc_age_j = float(getattr(_c, "REQUIRE_SOCIALS_MIN_AGE_MIN", 25.0))
+        if _fin_links == 0 and not bool(pair.get("_socials_unknown", False)) and _fin_age_m >= _req_soc_age_j:
+            final_thresh = max(final_thresh, final_thresh + 1.0)
+        _s1_thr_j = float(getattr(_c, "ROCKET_XGB_STAGE1_THRESHOLD", 5.0))
+        _fin_v5 = float((pair.get("volume") or {}).get("m5", 0) or 0)
+        _fin_m5 = float(((pair.get("priceChange") or {}).get("m5", 0)) or 0)
+        _fin_b5 = int(((pair.get("txns") or {}).get("m5") or {}).get("buys", 0) or 0)
+        _fin_s5 = int(((pair.get("txns") or {}).get("m5") or {}).get("sells", 0) or 0)
+        _is_mom_rocket_fin = (
+            _fin_m5 >= 5.0
+            and _fin_v5 >= 4000.0
+            and _fin_b5 >= max(15, int(_fin_s5 * 1.15))
+            and (rkt_final + 0.05) >= _s1_thr_j
+        )
+        if getattr(_c, "ROCKET_XGB_ENABLED", True) and not _is_mom_rocket_fin and (rkt_final + 0.05) < final_thresh:
             print(f"🚫 [GROK-JEV-ML-VETO] {symbol} ({address[:8]}): Rocket XGB final score {rkt_final:.1f}% < {final_thresh:.0f}% — VETO! (Блокировка дампа)")
             return False, f"rocket-xgb-final-veto {rkt_final:.1f}% < {final_thresh:.0f}%"
 
-        print(f"🚀 [GROK-JEV-ML-PASS] {symbol} ({address[:8]}): Rocket XGB score {rkt_final:.1f}% >= {final_thresh:.0f}% — ОДОБРЕНО!")
+        print(f"🚀 [GROK-JEV-ML-PASS] {symbol} ({address[:8]}): Rocket XGB score {rkt_final:.1f}% (thresh {final_thresh:.0f}%) — ОДОБРЕНО!")
 
         # 6. CHIEF / GROK TRADES: Исполнение ордера
         if len(tracker.get_open_positions()) >= getattr(_c, "MAX_CONCURRENT_POSITIONS", 10):
@@ -2169,10 +2210,10 @@ class GrokJevEngine:
                         if _jup_live_px < price * 0.925:
                             print(f"🚫 [JEV-LIVE-DUMP] {symbol} ({address[:8]}): живая цена Jupiter (${_jup_live_px:.8f}) уже на {(1.0 - _jup_live_px / price) * 100:.1f}% ниже DexScreener (${price:.8f}) — обвал в моменте, блок входа!")
                             return False, "fills-flush-wait live-jup-dump"
-                        _jup_ratio = max(_jup_live_px, price) / min(_jup_live_px, price)
-                        if _jup_ratio > 1.16:
-                            print(f"🚫 [JEV-PRICE-MISMATCH] {symbol} ({address[:8]}): Jupiter (${_jup_live_px:.8f}) vs DS (${price:.8f}) расхождение {_jup_ratio:.2f}x (>1.16x) — защита от ложного стопа!")
-                            return False, f"fills-flush-wait jup-ds-mismatch ({_jup_ratio:.2f}x)"
+                        _jup_up_ratio = _jup_live_px / price
+                        if _jup_up_ratio > 1.30:
+                            print(f"🚫 [JEV-PRICE-MISMATCH] {symbol} ({address[:8]}): Jupiter (${_jup_live_px:.8f}) vs DS (${price:.8f}) опережение {_jup_up_ratio:.2f}x (>1.30x) — защита от вертикального входа!")
+                            return False, f"fills-flush-wait jup-ds-mismatch ({_jup_up_ratio:.2f}x)"
                         price = _jup_live_px
                         wick_price = price * (1.0 + wick_pct)
             except Exception:

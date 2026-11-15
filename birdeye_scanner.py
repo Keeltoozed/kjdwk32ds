@@ -122,7 +122,7 @@ async def birdeye_loop(analyzer, tracker):
                                         continue
                                     _jup_px_b = await JupiterAPI.get_price(addr)
                                     if _jup_px_b and _jup_px_b > 0 and price > 0:
-                                        if _jup_px_b < price * 0.925 or max(_jup_px_b, price) / min(_jup_px_b, price) > 1.15:
+                                        if _jup_px_b < price * 0.925 or (_jup_px_b / price) > 1.30:
                                             print(f"🚫 [BIRDEYE-PRICE] {sym} ({addr[:8]}): Jupiter ${_jup_px_b:.8f} vs DS ${price:.8f} — отмена!")
                                             continue
                                         price = _jup_px_b

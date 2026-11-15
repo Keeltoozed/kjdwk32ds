@@ -633,7 +633,7 @@ class Analyzer:
                         _age_lt = ((time.time() * 1000.0 - _ca_lt) / 60000.0) if _ca_lt > 0 else 999.0
                         if _liq_lt < 6000.0 or _vol5_lt < 1200.0 or _m5_lt < 2.0:
                             continue
-                        if _age_lt > float(getattr(config, "SOLANA_MAX_AGE_MIN", 90.0)) or _fdv_lt > 350000.0:
+                        if _age_lt > float(getattr(config, "SOLANA_MAX_AGE_MIN", 90.0)) or _fdv_lt > float(getattr(config, "JEV_MAX_MCAP_USD", 1200000.0)):
                             continue
                         _addr_lt = str((_p_lt.get("baseToken") or {}).get("address") or "").strip()
                         if _addr_lt and not _addr_lt.startswith("0x") and 32 <= len(_addr_lt) <= 44:
@@ -924,6 +924,18 @@ class Analyzer:
             self._prefetch_cache = {k: v for k, v in self._prefetch_cache.items() if v[0] >= cutoff}
         return got
 
+    def _apply_verified_lp_meta(self, mint: str, pair_dict: dict) -> dict:
+        if isinstance(pair_dict, dict):
+            _meta_map = getattr(self, "_verified_lp_meta", None)
+            if isinstance(_meta_map, dict):
+                _pa = str(pair_dict.get("pairAddress") or "").strip()
+                _meta = _meta_map.get((mint, _pa)) or _meta_map.get((mint, ""))
+                if isinstance(_meta, dict):
+                    for _mk, _mv in _meta.items():
+                        if _mk not in pair_dict:
+                            pair_dict[_mk] = _mv
+        return pair_dict
+
     async def fetch_token_data(self, mint: str) -> dict:
         _is_grad = False
         try:
@@ -941,7 +953,7 @@ class Analyzer:
             else:
                 _hit_dex = str(_hit[1].get("dexId") or "").lower()
                 if not (_is_grad and _hit_dex in ("pump", "pumpfun", "meteoradbc")):
-                    return dict(_hit[1])
+                    return self._apply_verified_lp_meta(mint, dict(_hit[1]))
 
         url = f"https://api.dexscreener.com/latest/dex/tokens/{mint}"
         from http_client import fetch_json
@@ -953,12 +965,12 @@ class Analyzer:
                 if best_pair:
                     _bp_dex = str(best_pair.get("dexId") or "").lower()
                     if not (_is_grad and _bp_dex in ("pump", "pumpfun", "meteoradbc")):
-                        return best_pair
+                        return self._apply_verified_lp_meta(mint, best_pair)
             # Если торговля сырыми кривыми Pump.fun выключена и минт ещё НЕ мигрировал,
             # НЕ сжигаем лимит GeckoTerminal (24 RPM) на неиндексированные кёрвы (иначе падает check_1m_candles с 429)!
             if mint.endswith("pump") and not getattr(config, "ALLOW_UNGRADUATED_PUMPFUN", False):
                 if not _is_grad:
-                    return best_pair or {}
+                    return self._apply_verified_lp_meta(mint, best_pair) if best_pair else {}
             # Для свежих миграций (subscribeMigration), где DS ещё запаздывает, сначала берём быстрый Jupiter v2 (0 лимитов GT)!
             try:
                 import market_data as _md_fb
@@ -966,14 +978,16 @@ class Analyzer:
                 if _jup_pair and float(_jup_pair.get("priceUsd", 0) or 0) > 0:
                     _jp_dex = str(_jup_pair.get("dexId") or "").lower()
                     if _jp_dex not in ("pump", "pumpfun", "meteoradbc") or getattr(config, "ALLOW_UNGRADUATED_PUMPFUN", False):
-                        return _jup_pair
+                        return self._apply_verified_lp_meta(mint, _jup_pair)
             except Exception:
                 pass
             gt_pair = await self.fetch_token_data_gecko(mint)
-            return gt_pair or best_pair or {}
+            _res_fb = gt_pair or best_pair
+            return self._apply_verified_lp_meta(mint, _res_fb) if _res_fb else {}
         except Exception:
             gt_pair = await self.fetch_token_data_gecko(mint)
-            return gt_pair or best_pair or {}
+            _res_ex = gt_pair or best_pair
+            return self._apply_verified_lp_meta(mint, _res_ex) if _res_ex else {}
 
     async def fetch_token_data_gecko(self, mint: str) -> dict:
         import market_data
@@ -1838,9 +1852,17 @@ class Analyzer:
             )
         if _age_min_pre >= 20.0:
             _is_massive_mature_flow = (_vm5_pre >= 10000.0 and _b5_pre >= _s5_pre)
-            _is_strong_mature_breakout = (_m5 >= 2.0 and _vm5_pre >= 2500.0 and _b5_pre >= _s5_pre * 1.02 and _tot_tx5_pre >= 12)
+            _is_strong_mature_breakout = (_m5 >= 1.5 and _vm5_pre >= 2500.0 and _b5_pre >= _s5_pre * 1.02 and _tot_tx5_pre >= 12)
+            _is_mature_active_pullback = (
+                _h1 >= 15.0
+                and _m5 >= -15.0
+                and _m1 >= -4.5
+                and _b5_pre >= int(_s5_pre * 1.08)
+                and _vm5_pre >= 4000.0
+                and _raw_liq_chk >= 9000.0
+            )
             _v2l_mat = (_vm5_pre / max(_raw_liq_chk, 1.0)) if _raw_liq_chk > 0 else 0.0
-            if not _is_massive_mature_flow and not _is_strong_mature_breakout and (_vm5_pre < 2500.0 or _m5 < 0.5 or _tot_tx5_pre < 12):
+            if not _is_massive_mature_flow and not _is_strong_mature_breakout and not _is_mature_active_pullback and (_vm5_pre < 2500.0 or _m5 < 0.5 or _tot_tx5_pre < 12):
                 return self._deny(
                     mint,
                     f"slow-mature-pool v5=${_vm5_pre:.0f} v/l={_v2l_mat:.2f}x",
@@ -1885,14 +1907,19 @@ class Analyzer:
                 _mom_why_a.split("(")[0].strip()[:48],
                 f"🚫 [MOMENTUM-GATE] {symbol} ({mint[:8]}): {_mom_why_a}",
             )
-        _base_max_m1 = float(getattr(config, "MAX_ENTRY_M1_PCT", 15.0))
-        # Строгий потолок 1м свечи: до +15% базово и не выше +18% даже при сильном пробое (никаких +25%..+45% вершин!)
+        _base_max_m1 = float(getattr(config, "MAX_ENTRY_M1_PCT", 22.0))
+        # Гибкий потолок 1м свечи: +22% базово и до +30% при сильном пробое с перевесом покупателей
         if _b5_pre >= int(_s5_pre * 1.15) and _vm5_pre >= 3000.0 and _m5 >= 4.0:
-            _max_m1_cfg = max(_base_max_m1, 18.0)
+            _max_m1_cfg = max(_base_max_m1, 30.0)
         else:
             _max_m1_cfg = _base_max_m1
         _min_m1_floor = float(getattr(config, "JEV_MIN_M1_ENTRY_FLOOR_PCT", -3.5))
-        if _m1 > _max_m1_cfg or _m1 < _min_m1_floor:
+        if _vm5_pre >= 10000.0 and _b5_pre >= int(_s5_pre * 1.15):
+            _min_m1_floor = min(_min_m1_floor, -4.5)
+        elif _h1 >= 25.0 and _b5_pre >= int(_s5_pre * 1.25) and _vm5_pre >= 4500.0:
+            _min_m1_floor = min(_min_m1_floor, -4.5)
+        _m1_is_phantom_a = (_age_min_pre < 3.0 and abs(_m5) > 1.0 and abs(_m1) > 0 and abs(_m1 / max(abs(_m5), 0.01) - 1.0) < 0.08)
+        if (_m1 > _max_m1_cfg and not _m1_is_phantom_a) or _m1 < _min_m1_floor:
             return self._deny(
                 mint,
                 f"m1-bad {_m1:+.1f}%",
@@ -1901,18 +1928,18 @@ class Analyzer:
 
         # 4. Anti-FOMO: Защита от перегретых вершин
         _max_entry_h1 = config.get_max_entry_h1_pct(_age_min_pre, _vm5_pre, _b5_pre, _s5_pre, _raw_liq_chk, _m5)
-        _max_entry_m5 = float(getattr(config, "MAX_ENTRY_M5_PCT", 85.0))
+        _max_entry_m5 = float(getattr(config, "MAX_ENTRY_M5_PCT", 120.0))
         if _h1 > _max_entry_h1 and _age_min_pre > 4.0:
             return self._deny(
                 mint,
                 f"h1-exhausted {_h1:.0f}%>{_max_entry_h1:.0f}%",
                 f"🚫 [EXHAUSTED-TOP] {symbol} ({mint[:8]}): рост за час {_h1:+.1f}% > +{_max_entry_h1:.0f}% — вершина пампа.",
             )
-        # Не гонимся за вертикальными +150%..+500% свечами без отката: макс +130% для свежей миграции <=15м
+        # Разрешаем сильные ранние пробои/миграции (до +350%/+400%) и здоровый откат, режем пустые вертикальные свечи
         if _m5 > _max_entry_m5:
-            _fresh_grad_m5_cap_a = 130.0 if (_age_min_pre <= 15.0 and _fdv_chk_pre <= 220000.0) else 100.0
+            _fresh_grad_m5_cap_a = 400.0 if (_age_min_pre <= 15.0 and _fdv_chk_pre <= 260000.0) else 350.0
             _is_strong_buyer_breakout = (_m5 <= _fresh_grad_m5_cap_a and _b5_pre >= int(_s5_pre * 1.12) and _vm5_pre >= 3000.0 and (_b5_pre + _s5_pre) >= 15)
-            _is_cooling_pullback = (_m1 <= -0.5 and _m5 <= 125.0 and _b5_pre >= _s5_pre * 1.08)
+            _is_cooling_pullback = (_m1 <= -0.5 and _m5 <= 350.0 and _b5_pre >= _s5_pre * 1.05)
             if not (_is_strong_buyer_breakout or _is_cooling_pullback):
                 return self._deny(
                     mint,
@@ -2015,13 +2042,14 @@ class Analyzer:
             liq_val = max(raw_liq, curve_liq) if is_pump_curve else raw_liq
 
             _is_momentum_rocket_a = (
-                (conf + 0.05) >= max(8.0, threshold - 2.0)
+                (conf + 0.05) >= max(3.5, threshold - 2.0)
                 and _age_min_pre <= _max_age_min
                 and _fdv_chk_pre <= _max_mcap_pre
                 and (_age_min_pre < 45.0 or _h6_pre_opt is None or _h6_pre_opt <= float(getattr(config, "MAX_ENTRY_H6_PCT", 2500.0)))
                 and (
-                    (_m5 >= 12.0 and _m1 >= -3.5 and _b5_pre >= _s5_pre * 1.20 and _vm5_pre >= 8000.0)
-                    or (_vm5_pre >= 15000.0 and _b5_pre >= _s5_pre * 1.15 and _m5 >= 6.0 and _m1 >= -3.5)
+                    (_m5 >= 12.0 and _m1 >= -4.0 and _b5_pre >= _s5_pre * 1.15 and _vm5_pre >= 6000.0)
+                    or (_vm5_pre >= 15000.0 and _b5_pre >= _s5_pre * 1.15 and _m5 >= 5.0 and _m1 >= -4.0)
+                    or (_m5 >= 5.0 and _b5_pre >= int(_s5_pre * 1.20) and _vm5_pre >= 4000.0 and _b5_pre >= 20 and _m1 >= -3.5)
                 )
             )
             if (conf + 0.05) < threshold and not _is_momentum_rocket_a:
@@ -2189,7 +2217,8 @@ class Analyzer:
 
                     # Проверка пулов и блокировки LP
                     _target_pair_rc = str((pair_data or {}).get("pairAddress") or "").strip()
-                    _allow_ps_lock_main = bool((pair_data or {}).get("_pumpswap_canonical")) or (_dex_low_main != "pumpswap")
+                    _ps_rpc_unv_main = bool((pair_data or {}).get("_pumpswap_rpc_unverified")) and config.is_launchpad_mint(mint) and not config.is_pumpswap_liq_fdv_trap(pair_data or {})
+                    _allow_ps_lock_main = bool((pair_data or {}).get("_pumpswap_canonical")) or _ps_rpc_unv_main or (_dex_low_main != "pumpswap")
                     has_verified_locked_lp = config.verify_rugcheck_lp_markets(
                         rc_data.get("markets") or [],
                         target_pair=_target_pair_rc,
@@ -2208,7 +2237,19 @@ class Analyzer:
                             f"🚫 [АНТИСКАМ-LP] {symbol} ({mint[:8]}): LP на {_dex_low_main or 'DEX'} не сожжён/не залочен (риск Remove LP)."
                         )
                     if isinstance(pair_data, dict):
-                        pair_data["_lp_verified"] = bool(_is_canonical_pump or has_verified_locked_lp)
+                        _lp_ok_m = bool(_is_canonical_pump or has_verified_locked_lp)
+                        pair_data["_lp_verified"] = _lp_ok_m
+                        if _lp_ok_m:
+                            if not hasattr(self, "_verified_lp_meta"):
+                                self._verified_lp_meta = {}
+                            _meta_entry = {
+                                "_lp_verified": True,
+                                "_pumpswap_checked": bool(pair_data.get("_pumpswap_checked")),
+                                "_pumpswap_canonical": bool(pair_data.get("_pumpswap_canonical")),
+                                "_pumpswap_rpc_unverified": bool(pair_data.get("_pumpswap_rpc_unverified")),
+                            }
+                            self._verified_lp_meta[(mint, _target_pair_rc)] = _meta_entry
+                            self._verified_lp_meta[(mint, "")] = _meta_entry
 
                     # Проверка холдеров RugCheck
                     top_holders = rc_data.get("topHolders") or []
@@ -2434,10 +2475,12 @@ class Analyzer:
                 conf = self.score_rocket_xgb(mint, pair_data, holders_info=_real_holders)
                 self.last_score = conf
                 self.rocket_scores[mint] = conf
-            _final_thr = float(getattr(config, "ROCKET_XGB_FINAL_THRESHOLD", 14.0))
-            if _links_cnt == 0 and not _soc_unknown:
-                _final_thr = max(_final_thr, 16.0)
-            if (conf + 0.05) < _final_thr:
+            _final_thr = float(getattr(config, "ROCKET_XGB_FINAL_THRESHOLD", 8.0))
+            _req_soc_age_a = float(getattr(config, "REQUIRE_SOCIALS_MIN_AGE_MIN", 25.0))
+            if _links_cnt == 0 and not _soc_unknown and _age_min_pre >= _req_soc_age_a:
+                _final_thr = max(_final_thr, _final_thr + 1.0)
+            _s1_thr_a = float(getattr(config, "ROCKET_XGB_STAGE1_THRESHOLD", 5.0))
+            if (conf + 0.05) < _final_thr and not (_is_momentum_rocket_a and (conf + 0.05) >= _s1_thr_a):
                 return self._deny(mint, f"rocket-xgb-s2 {conf:.0f}%", f"🚫 [ROCKET-XGB-S2] {symbol} ({mint[:8]}): скор с учётом холдеров {conf:.1f}% < {_final_thr:.0f}% — отсев.")
 
             self._set_sig(mint, f"ROCKET-XGB {conf:.0f}%")

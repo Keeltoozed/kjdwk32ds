@@ -70,8 +70,8 @@ LIQ_LOCKED_BURNED_MIN_PCT = 0.50  # Минимум 50% ликвидности з
 # === ФИЛЬТРЫ ВХОДА (ОХОТА ЗА СВЕЖИМИ 2X-10X РАКЕТАМИ) ===
 MAX_ENTRY_H1_PCT = 1800.0      # Высокий потолок h1: мигрировавшие Pump.fun ракеты ($5k->$200k) всегда имеют +400%..+1500%
 MAX_ENTRY_H6_PCT = 2500.0      # Потолок 6h: не душим вторую волну 2x-10x ракет из-за роста от дна бондинга
-MAX_ENTRY_M5_PCT = 85.0        # Потолок m5: ловим волну разгона до +85% (без покупки вертикального хая +150%..+500%)
-MAX_ENTRY_M1_PCT = 15.0        # Строгий потолок m1 +15%: не входим в свечи +25%..+45%, которые сразу откатывают на -10%
+MAX_ENTRY_M5_PCT = 120.0       # Потолок m5: ловим волну разгона и ранние миграции (до +350% при сильном потоке покупателей)
+MAX_ENTRY_M1_PCT = 22.0        # Потолок m1 +22% (и до +30% при пробое с перевесом покупателей, чтобы не резать живой памп)
 REQUIRE_SOCIALS_MIN_AGE_MIN = 25.0  # Требуем соцсети ТОЛЬКО после 25 минут (на старте DexScreener не успевает индексировать)
 
 
@@ -259,21 +259,36 @@ def evaluate_entry_momentum(
     if age_min >= 45.0 and h6 is not None and float(h6 or 0.0) > MAX_ENTRY_H6_PCT:
         return False, f"h6-exhausted {float(h6 or 0.0):+.1f}% > +{MAX_ENTRY_H6_PCT:.0f}% at {age_min:.0f}m (spent top)"
 
-    # Block vertical top-chasing (+18%+ in 1m) and active falling knives (< -3.5% in 1m)
-    if m1 > 18.0:
-        return False, f"m1-vertical-top {m1:+.1f}% > +18.0%"
-    if m1 < -3.5:
-        return False, f"m1-falling-knife {m1:+.1f}% < -3.5%"
-    if m5 > 130.0:
-        return False, f"m5-parabolic-top {m5:+.1f}% > +130.0%"
+    # Block vertical top-chasing and active falling knives
+    _max_m1_dyn = 30.0 if (buys5 >= max(10, int(sells5 * 1.15)) and vol5_usd >= 3000.0 and m5 >= 4.0) else float(globals().get("MAX_ENTRY_M1_PCT", 22.0))
+    _min_m1_dyn = -4.5 if ((vol5_usd >= 10000.0 and buys5 >= int(sells5 * 1.15)) or (h1 >= 25.0 and buys5 >= int(sells5 * 1.25) and vol5_usd >= 4500.0)) else -3.5
+    _max_m5_dyn = 400.0 if (age_min <= 15.0 and buys5 >= max(12, int(sells5 * 1.12)) and vol5_usd >= 3500.0) else (
+        350.0 if (buys5 >= max(10, int(sells5 * 1.10)) and vol5_usd >= 3000.0) else max(float(globals().get("MAX_ENTRY_M5_PCT", 120.0)), 135.0)
+    )
+    if m1 > _max_m1_dyn:
+        return False, f"m1-vertical-top {m1:+.1f}% > +{_max_m1_dyn:.0f}%"
+    if m1 < _min_m1_dyn:
+        return False, f"m1-falling-knife {m1:+.1f}% < {_min_m1_dyn:+.1f}%"
+    if m5 > _max_m5_dyn:
+        return False, f"m5-parabolic-top {m5:+.1f}% > +{_max_m5_dyn:.0f}%"
 
     is_fresh_ignition = (
-        age_min <= 45.0
-        and m5 >= 2.0
-        and m1 >= -2.5
-        and buys5 >= max(5, int(sells5 * 1.05))
-        and vol5_usd >= 2000.0
-        and tot_tx >= 10
+        (
+            age_min <= 45.0
+            and m5 >= 2.0
+            and m1 >= -2.5
+            and buys5 >= max(5, int(sells5 * 1.05))
+            and vol5_usd >= 2000.0
+            and tot_tx >= 10
+        )
+        or (
+            age_min <= 45.0
+            and m5 >= -1.5
+            and m1 >= 1.5
+            and buys5 >= max(10, int(sells5 * 1.12))
+            and vol5_usd >= 1400.0
+            and tot_tx >= 12
+        )
     )
     is_hyper_ignition = (
         m5 >= 10.0
@@ -289,15 +304,17 @@ def evaluate_entry_momentum(
         and vol5_usd >= 1800.0
         and tot_tx >= 8
     )
-    # Healthy dip / post-migration reclaim (catches winners like MAIN, SEXYANSEM without chasing tops)
+    # Healthy dip / post-migration reclaim & active second-wave consolidation (catches Socks, HOGE, DOJE without dead bleeders)
     is_turned_green_dip = (
-        age_min <= 120.0
-        and m5 >= -2.5
-        and m1 >= -1.0
+        age_min <= 180.0
         and buys5 >= max(10, int(sells5 * 1.10))
         and vol5_usd >= 4000.0
         and liq_usd >= 9000.0
-        and h1 >= 8.0
+        and (
+            (m5 >= -2.5 and m1 >= -1.0 and h1 >= 8.0)
+            or (h1 >= 15.0 and m5 >= -15.0 and m1 >= -4.5)
+            or (m5 >= -4.5 and m1 >= -3.5 and vol5_usd >= 10000.0 and buys5 >= max(30, int(sells5 * 1.15)))
+        )
     )
     is_fresh_v_reversal = (
         age_min <= 45.0
@@ -310,12 +327,12 @@ def evaluate_entry_momentum(
     )
     is_mature_breakout = (
         age_min <= SOLANA_MAX_AGE_MIN
-        and m5 >= 2.0
-        and h1 >= -5.0
+        and m5 >= 1.5
+        and h1 >= -10.0
         and m1 >= -2.5
         and buys5 >= max(8, int(sells5 * 1.02))
         and vol5_usd >= 2500.0
-        and (vel_ratio >= 0.12 or vol5_usd >= 10000.0)
+        and (vel_ratio >= 0.09 or vol5_usd >= 8000.0)
     )
 
     if not (
@@ -418,9 +435,9 @@ MOONBAG_MAX_HOLD_MIN = 55.0          # Мунбэг может ехать до 5
 PUMP_XGB_ENABLED = False
 RAY_XGB_ENABLED = False
 ROCKET_XGB_ENABLED = True
-ROCKET_XGB_STAGE1_THRESHOLD = 10.0   # Первичный отсев 10%: отсекает мёртвый мусор, пропуская живые ракеты на аудит
-ROCKET_XGB_FINAL_THRESHOLD = 15.0    # Финальный порог 15%: баланс потока 0d2b1ae и качества (единый с tracker.py)
-ROCKET_XGB_THRESHOLD = 15.0
+ROCKET_XGB_STAGE1_THRESHOLD = 5.0    # Первичный отсев 5%: возвращает поток 0d2b1ae/d57dc079, отсекая лишь полный мертвяк
+ROCKET_XGB_FINAL_THRESHOLD = 8.0     # Финальный порог 8%: не режет ранние 2x+ ракеты (UPCAT 12%, CHICK 13.6% и т.д.)
+ROCKET_XGB_THRESHOLD = 8.0
 
 STALL_TIMER_SEC = 420.0   # 7 минут на консолидацию до среза по стагнации
 STALL_MAX_LOSS_PCT = -0.055
@@ -441,7 +458,7 @@ SOLANA_MIN_AGE_MIN = 0.50        # 30 секунд: отсекает мгнов�
 SOLANA_MAX_AGE_HOURS = 4.0       # До 4 часов (240м как в 0d2b1ae) для ловли 2-й волны 2x-10x ракет
 SOLANA_MAX_AGE_MIN = 240.0       # Потолок 240 минут для сканера
 JEV_MAX_AGE_MIN = 180.0          # В GROK-JEV ракеты до 180 минут (2-я волна 0d2b1ae)
-JEV_MAX_M1_ENTRY_PCT = 15.0
+JEV_MAX_M1_ENTRY_PCT = 25.0
 
 SCALP_TIMEOUT_MIN = 10.0
 STAGNANT_LOSS_MIN = 15.0

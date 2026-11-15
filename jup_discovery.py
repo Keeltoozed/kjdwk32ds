@@ -488,8 +488,8 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
     _m1_j = float(_pc_j.get("m1", 0) or 0)
     if abs(_m1_j) > max(180.0, abs(_m5_j) * 3.0 + 40.0):
         _m1_j = _m5_j / 5.0
-    _max_m1_cfg_j = float(getattr(config, "MAX_ENTRY_M1_PCT", 15.0))
-    _eff_max_m1_j = max(_max_m1_cfg_j, 18.0) if (_b5_j >= int(_s5_j * 1.15) and _vol5_j >= 3000.0) else _max_m1_cfg_j
+    _max_m1_cfg_j = float(getattr(config, "MAX_ENTRY_M1_PCT", 22.0))
+    _eff_max_m1_j = max(_max_m1_cfg_j, 30.0) if (_b5_j >= int(_s5_j * 1.15) and _vol5_j >= 3000.0 and _m5_j >= 4.0) else _max_m1_cfg_j
     if _m1_j > _eff_max_m1_j:
         print(f"🚫 [{source_tag}-M1-SPIKE] {_sym_tmp} ({mint[:8]}): m1 +{_m1_j:.1f}% > +{_eff_max_m1_j:.1f}% — вершина свечи, отмена входа.")
         return False
@@ -510,6 +510,8 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
         fdv_usd=_fdv_j1,
     )
     _min_m1_j = float(getattr(config, "JEV_MIN_M1_ENTRY_FLOOR_PCT", -3.5))
+    if (_vol5_j >= 10000.0 and _b5_j >= int(_s5_j * 1.15)) or (_h1_j >= 25.0 and _b5_j >= int(_s5_j * 1.25) and _vol5_j >= 4500.0):
+        _min_m1_j = min(_min_m1_j, -4.5)
     if not _mom_j_ok or _m1_j < _min_m1_j:
         print(f"🚫 [{source_tag}-MOMENTUM-LOST] {_sym_tmp} ({mint[:8]}): импульс отклонён ({_mom_j_why}, m5 {_m5_j:+.1f}%, m1 {_m1_j:+.1f}%) — отмена входа.")
         return False
@@ -573,7 +575,8 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
                 return False
 
             _target_pair_j = str((td or {}).get("pairAddress", "") or "").strip()
-            _allow_ps_lock_j = bool((td or {}).get("_pumpswap_canonical")) or (_dex_j_low != "pumpswap")
+            _ps_rpc_unv_jup = bool((td or {}).get("_pumpswap_rpc_unverified")) and config.is_launchpad_mint(mint) and not config.is_pumpswap_liq_fdv_trap(td or {})
+            _allow_ps_lock_j = bool((td or {}).get("_pumpswap_canonical")) or _ps_rpc_unv_jup or (_dex_j_low != "pumpswap")
             _lp_ok = config.verify_rugcheck_lp_markets(
                 _rc_d.get("markets") or [],
                 target_pair=_target_pair_j,
@@ -620,12 +623,12 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
     ds_price = float((td or {}).get("priceUsd", 0) or 0.0)
     jup_price = await JupiterAPI.get_price(mint)
     if ds_price > 0 and jup_price and jup_price > 0:
-        ratio = max(ds_price, jup_price) / min(ds_price, jup_price)
-        if ratio > 1.16:
-            print(f"🚫 [{source_tag}-PRICE-MISMATCH] {_sym_tmp} ({mint[:8]}): Jupiter (${jup_price:.8f}) vs Dex (${ds_price:.8f}) расхождение {ratio:.2f}x (>1.16x) — блок от ложного стопа.")
-            return False
         if jup_price < ds_price * 0.925:
             analyzer._deny(mint, "jup-live-dump >7.5%", f"🚫 [{source_tag}-LIVE-DUMP] {_sym_tmp} ({mint[:8]}): живая котировка Jupiter (${jup_price:.8f}) уже ниже DexScreener (${ds_price:.8f}) на {(1.0 - jup_price/ds_price)*100:.1f}% [>7.5%] — слив в процессе!")
+            return False
+        _up_ratio = jup_price / ds_price
+        if _up_ratio > 1.30:
+            print(f"🚫 [{source_tag}-PRICE-MISMATCH] {_sym_tmp} ({mint[:8]}): Jupiter (${jup_price:.8f}) vs Dex (${ds_price:.8f}) опережение {_up_ratio:.2f}x (>1.30x) — блок от вертикального входа.")
             return False
         price = jup_price
     elif ds_price > 0:
@@ -845,9 +848,9 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
                 if _jup_live_px < _ref_dump_px * 0.925:
                     print(f"🚫 [{source_tag}-LIVE-DUMP] {_sym_tmp} ({mint[:8]}): живая цена Jupiter (${_jup_live_px:.8f}) уже на {(1.0 - _jup_live_px / _ref_dump_px) * 100:.1f}% ниже ориентира (${_ref_dump_px:.8f}) — обвал в моменте, отмена!")
                     return False
-                _jup_ratio = max(_jup_live_px, price) / min(_jup_live_px, price)
-                if _jup_ratio > 1.15:
-                    print(f"🚫 [{source_tag}-PRICE-MISMATCH] {_sym_tmp} ({mint[:8]}): Jupiter vs сигнал расхождение {_jup_ratio:.2f}x (>1.15x) — отмена!")
+                _jup_up_ratio = _jup_live_px / price
+                if _jup_up_ratio > 1.30:
+                    print(f"🚫 [{source_tag}-PRICE-MISMATCH] {_sym_tmp} ({mint[:8]}): Jupiter vs сигнал опережение {_jup_up_ratio:.2f}x (>1.30x) — отмена!")
                     return False
                 price = _jup_live_px
                 if _wick_stop_price and _wick_pct:
