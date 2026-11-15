@@ -109,20 +109,20 @@ class PaperTracker:
                         v["max_price_usd"] = float(v.get("current_price_usd", 0) or _e)
                 except Exception:
                     pass
-                # Миграция старых сделок: восстанавливаем original_amount_usd.
-                # TP1 продаёт 20% (остаток 0.8), Moonbag 50% остатка (0.4 при обоих).
+                # Миграция старых сделок: восстанавливаем original_amount_usd с учётом актуальных долей TP1/TP2.
                 if not v.get("original_amount_usd"):
                     _rem = float(v.get("amount_usd", 0) or 0)
                     _tp1 = bool(v.get("tp1_done", False))
+                    _tp2 = bool(v.get("tp2_done", False))
                     _moon = bool(v.get("is_moonbag", False))
-                    if _tp1 and _moon:
-                        v["original_amount_usd"] = _rem / 0.4 if _rem else _rem
-                    elif _moon:
-                        v["original_amount_usd"] = _rem / 0.5 if _rem else _rem
-                    elif _tp1:
-                        v["original_amount_usd"] = _rem / 0.8 if _rem else _rem
-                    else:
-                        v["original_amount_usd"] = _rem
+                    _f1 = 1.0 - float(getattr(config, "TP1_SELL_FRAC", 0.42))
+                    _f2 = 1.0 - float(getattr(config, "TP2_SELL_FRAC", 0.52))
+                    _frac = 1.0
+                    if _tp1:
+                        _frac *= _f1
+                    if _tp2 or (_moon and not _tp1):
+                        _frac *= _f2
+                    v["original_amount_usd"] = (_rem / _frac) if (_rem and _frac > 0) else _rem
                 try:
                     self.positions[k] = VirtualPosition(**v)
                 except Exception as e:

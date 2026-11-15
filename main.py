@@ -485,47 +485,43 @@ async def position_manager_loop(analyzer, tracker):
                 # === ИНТЕГРАЦИЯ МАТЕМАТИКИ ДЛЯ ЗРЕЛЫХ МОНЕТ (SWING TRADING / RIDE RUNNERS) ===
                 # Исполняется ДО скальперских Early Fade / Stagnant срезов, чтобы ракеты ехали по MatureExitManager!
                 # === ИНТЕГРАЦИЯ МАТЕМАТИКИ ДЛЯ ВСЕХ ПОЗИЦИЙ SOLANA (main.py строки 240-280) ===
-                _tp1_sol_thr = float(getattr(config, "TP1_TRIGGER_PCT", 0.085))
-                _tp1_sell = float(getattr(config, "TP1_SELL_FRAC", 0.45))
-                _tp2 = float(getattr(config, "TP2_TRIGGER_PCT", 0.28))
-                _tp2_sell = float(getattr(config, "TP2_SELL_FRAC", 0.35))
-                _tp3 = float(getattr(config, "TP3_TRIGGER_PCT", 0.65))
-                _tp3_sell = float(getattr(config, "TP3_SELL_FRAC", 0.40))
-                _tp4 = float(getattr(config, "TP4_TRIGGER_PCT", 1.50))
-                _tp4_sell = float(getattr(config, "TP4_SELL_FRAC", 0.50))
-                _tp5 = float(getattr(config, "TP5_TRIGGER_PCT", 4.00))
+                _tp1_sol_thr = float(getattr(config, "TP1_TRIGGER_PCT", 0.35))
+                _tp1_sell = float(getattr(config, "TP1_SELL_FRAC", 0.42))
+                _tp2 = float(getattr(config, "TP2_TRIGGER_PCT", 0.65))
+                _tp2_sell = float(getattr(config, "TP2_SELL_FRAC", 0.52))
+                _tp3 = float(getattr(config, "TP3_TRIGGER_PCT", 1.60))
+                _tp3_sell = float(getattr(config, "TP3_SELL_FRAC", 0.35))
+                _tp4 = float(getattr(config, "TP4_TRIGGER_PCT", 3.50))
+                _tp4_sell = float(getattr(config, "TP4_SELL_FRAC", 0.40))
+                _tp5 = float(getattr(config, "TP5_TRIGGER_PCT", 8.00))
                 _tp5_sell = float(getattr(config, "TP5_SELL_FRAC", 0.50))
-                _min_tp_ticket = float(getattr(config, "PARTIAL_TP_MIN_TICKET_USD", 2.0))
+                _min_tp_ticket = float(getattr(config, "PARTIAL_TP_MIN_TICKET_USD", 3.0))
                 _pos_val = float(getattr(position, "original_amount_usd", 0.0) or getattr(position, "amount_usd", 0.0) or 0.0)
                 _allow_partial_tp = getattr(config, "PARTIAL_TP_ENABLED", True) and (_pos_val >= _min_tp_ticket)
 
                 if _allow_partial_tp:
-                    if pnl_pct >= _tp1_sol_thr and not getattr(position, "tp1_done", False):
-                        tracker.partial_close_position(mint, current_price, _tp1_sell, f"Take Profit +{_tp1_sol_thr*100:.0f}% (Tier-1 {int(_tp1_sell*100)}%)")
+                    if pnl_pct >= _tp1_sol_thr and not getattr(position, "tp1_done", False) and float(getattr(position, "amount_usd", 0.0) or 0.0) > 0.05:
+                        tracker.partial_close_position(mint, current_price, _tp1_sell, f"Take Profit +{_tp1_sol_thr*100:.0f}% (Tier-1 {int(_tp1_sell*100)}%, Principal Shield)")
                         position.tp1_done = True
+                        position.last_tp_ts = time.time()
+                    if pnl_pct >= _tp2 and not getattr(position, "tp2_done", False) and float(getattr(position, "amount_usd", 0.0) or 0.0) > 0.05:
+                        tracker.partial_close_position(mint, current_price, _tp2_sell, f"Take Profit +{_tp2*100:.0f}% (Tier-2 {int(_tp2_sell*100)}%, Risk-Free Moonbag)")
+                        position.tp2_done = True
                         position.is_moonbag = True
                         position.last_tp_ts = time.time()
-                        continue
-                    if pnl_pct >= _tp2 and not getattr(position, "tp2_done", False):
-                        tracker.partial_close_position(mint, current_price, _tp2_sell, f"Take Profit +{_tp2*100:.0f}% (Tier-2 {int(_tp2_sell*100)}%)")
-                        position.tp2_done = True
-                        position.last_tp_ts = time.time()
-                        continue
-                    if pnl_pct >= _tp3 and not getattr(position, "tp3_done", False):
+                    if pnl_pct >= _tp3 and not getattr(position, "tp3_done", False) and float(getattr(position, "amount_usd", 0.0) or 0.0) > 0.05:
                         tracker.partial_close_position(mint, current_price, _tp3_sell, f"Take Profit +{_tp3*100:.0f}% (Tier-3 {int(_tp3_sell*100)}%)")
                         position.tp3_done = True
+                        position.is_moonbag = True
                         position.last_tp_ts = time.time()
-                        continue
-                    if pnl_pct >= _tp4 and not getattr(position, "tp4_done", False):
+                    if pnl_pct >= _tp4 and not getattr(position, "tp4_done", False) and float(getattr(position, "amount_usd", 0.0) or 0.0) > 0.05:
                         tracker.partial_close_position(mint, current_price, _tp4_sell, f"Take Profit +{_tp4*100:.0f}% (Tier-4 {int(_tp4_sell*100)}%)")
                         position.tp4_done = True
                         position.last_tp_ts = time.time()
-                        continue
-                    if pnl_pct >= _tp5 and not getattr(position, "tp5_done", False):
+                    if pnl_pct >= _tp5 and not getattr(position, "tp5_done", False) and float(getattr(position, "amount_usd", 0.0) or 0.0) > 0.05:
                         tracker.partial_close_position(mint, current_price, _tp5_sell, f"Take Profit +{_tp5*100:.0f}% (Tier-5 {int(_tp5_sell*100)}%)")
                         position.tp5_done = True
                         position.last_tp_ts = time.time()
-                        continue
                     # Даем 5 секунд передышки после взятия частичного тейка ТОЛЬКО пока позиция уверенно в плюсе (>= +4.5%),
                     # чтобы никогда не блокировать Mature Breakeven при резком откате к цене входа!
                     if (time.time() - float(getattr(position, "last_tp_ts", 0.0) or 0.0)) < 5.0 and pnl_pct >= 0.045:
@@ -3376,10 +3372,11 @@ with tab2:
     except Exception as e:
         st.info("Ожидание данных от сканера...")
 
-# Автообновление интерфейса (каждые 2 сек)
-if st.checkbox("Включить автообновление (каждые 2 сек)", value=True):
-    time.sleep(2)
-    st.rerun()
+# Автообновление интерфейса (каждые 2 сек): если активен @st.fragment, не делаем конфликтующий полный st.rerun()
+if not _frag_dec:
+    if st.checkbox("Включить автообновление (каждые 2 сек)", value=True):
+        time.sleep(2)
+        st.rerun()
 
 if __name__ == "__main__":
     # Если запущен напрямую (python3 main.py), держим процесс активным для терминала/демона

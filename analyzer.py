@@ -3069,8 +3069,8 @@ class Analyzer:
                             print(f"🚫 [GOPLUS-CABAL] {symbol} ({mint[:8]}): топ-10 держат {self._last_top10:.1f}% > {_max_top10:.0f}% — риск кабала.")
                             return False
                         print(f"🛡️ [GOPLUS] RugCheck недоступен, но GoPlus подтвердил безопасность {mint[:8]} (Топ-10: {self._last_top10:.1f}%, Дев: {self._last_dev:.1f}%).")
-                    elif getattr(config, "JEV_REQUIRE_HOLDER_DATA", False):
-                        print(f"🚫 [NO-AUDIT] {symbol} ({mint[:8]}): Ни RugCheck, ни GoPlus не имеют данных холдеров — блок входа (ожидание индексации).")
+                    elif getattr(config, "JEV_REQUIRE_HOLDER_DATA", False) or (not _is_pump_mint and not is_pump_curve and liquidity < 12000.0):
+                        print(f"🚫 [NO-AUDIT] {symbol} ({mint[:8]}): Ни RugCheck, ни GoPlus не имеют данных холдеров (не-pump пул ${liquidity:,.0f} < $12k) — блок входа.")
                         return False
                 except Exception as _ge:
                     if not getattr(config, "ALLOW_UNLOCKED_LP_POOLS", True):
@@ -4192,10 +4192,12 @@ class Analyzer:
         if liquidity < _min_ray_liq:
             return self._deny(mint, "ray-micro-liq", f"📉 [RAYDIUM] {mint[:8]}: реальная ликвидность пула ${liquidity:,.0f} < ${_min_ray_liq:,.0f} — микро-пул с риском мгновенного слива.")
 
-        # Защита от фейковых раздутых пулов с мертвым оборотом (кейсы Pinksph $111k liq / $8k vol, EPYCDRG $104k liq / $8k vol):
-        # На глубоком пуле ($50k+) оборот за 5 минут должен быть минимум 15% (vol5 / liq >= 0.15)
+        # Защита от фейковых раздутых пулов с мертвым оборотом (кейсы Pinksph $111k liq / $8k vol, seeded-LP раг-пулы):
+        # На глубоком пуле ($50k+) оборот за 5м >= 15%; на $20k+ не-pump пуле при слабых покупках >= 10%
         if liquidity >= 50000.0 and (_vm5 / max(liquidity, 1.0)) < 0.15:
             return self._deny(mint, "fake-liq-trap", f"🚫 [FAKE-LIQ] {mint[:8]}: пул ${liquidity:,.0f}, но объем 5m всего ${_vm5:,.0f} (оборот {_vm5/liquidity:.2f} < 0.15) — ловушка снайперов / фейковый пул.")
+        if not _is_migrated_pump and liquidity >= 20000.0 and (_vm5 / max(liquidity, 1.0)) < 0.10 and _b5 < 25:
+            return self._deny(mint, "seeded-lp-bait", f"🚫 [SEEDED-LP-BAIT] {mint[:8]}: раздутый пул ${liquidity:,.0f} при обороте 5m ${_vm5:,.0f} (<10% LP) и {_b5} покупках — приманка под вывод LP.")
 
         # 2. Защита от картонных пулов: для молодых ракет / pump.fun ($12k liq при росте до $600k+ FDV) лимит до 85x
         _max_hollow_ratio = 85.0 if (_is_fresh_ray and _b5 >= _s5 * 1.15) else 45.0

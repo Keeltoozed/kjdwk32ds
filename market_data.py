@@ -522,20 +522,21 @@ async def _jup_v3_bulk_prices(mints: list) -> dict:
     out = {}
     if not mints:
         return out
-    key = getattr(config, "JUP_API_KEY", "") or ""
+    key = (getattr(config, "JUP_API_KEY", "") or "").strip()
     headers = {"Accept": "application/json"}
     if key:
         headers["x-api-key"] = key
+    _jup_hosts = (("https://api.jup.ag", True), ("https://lite-api.jup.ag", False)) if key else (("https://lite-api.jup.ag", False),)
     for i in range(0, len(mints), 50):
         chunk = [m for m in mints[i:i + 50] if m and not m.startswith("0x")]
         if not chunk:
             continue
         ids_q = ",".join(chunk)
-        for j_host, use_key in (("https://api.jup.ag", True), ("https://lite-api.jup.ag", False)):
+        for j_host, use_key in _jup_hosts:
             url = f"{j_host}/price/v3?ids={ids_q}"
             req_hdrs = headers if use_key else {"Accept": "application/json"}
             try:
-                status, data = await fetch_json(url, headers=req_hdrs, timeout=2.5, retries=0)
+                status, data = await fetch_json(url, headers=req_hdrs, timeout=1.1, retries=0)
                 if status == 200 and isinstance(data, dict):
                     for m in chunk:
                         entry = data.get(m)
@@ -570,9 +571,9 @@ async def get_bulk_prices(mints: list, pair_hints: dict = None) -> dict:
 
     missing = [m for m in ms if m not in out or out[m] <= 0]
     if missing:
-        # 2. Фоллбэк на DexScreener bulk tokens/v1/solana
+        # 2. Фоллбэк на DexScreener bulk tokens/v1/solana (с жестким таймаутом, чтобы не терять уже полученные jup_prices!)
         try:
-            ds_out = await _ds_bulk_prices(missing, pair_hints=pair_hints)
+            ds_out = await asyncio.wait_for(_ds_bulk_prices(missing, pair_hints=pair_hints), timeout=1.2)
             if isinstance(ds_out, dict):
                 out.update({k: v for k, v in ds_out.items() if v and v > 0})
         except Exception:
@@ -584,7 +585,7 @@ async def get_bulk_prices(mints: list, pair_hints: dict = None) -> dict:
         try:
             from http_client import fetch_json
             url = f"https://api.geckoterminal.com/api/v2/simple/networks/solana/token_price/{','.join(missing[:30])}"
-            status, data = await fetch_json(url, timeout=1.2, retries=0)
+            status, data = await fetch_json(url, timeout=0.9, retries=0)
             if status == 200 and isinstance(data, dict):
                 prices = data.get("data", {}).get("attributes", {}).get("token_prices", {})
                 out.update({k: float(v) for k, v in prices.items() if float(v or 0) > 0})
@@ -617,13 +618,13 @@ async def _ds_bulk_prices(mints: list, pair_hints: dict = None) -> dict:
         # Сначала пробуем сверхбыстрый прямой endpoint tokens/v1/solana
         pairs = []
         try:
-            status, data = await fetch_json(f"https://api.dexscreener.com/tokens/v1/solana/{','.join(chunk)}", timeout=4)
+            status, data = await fetch_json(f"https://api.dexscreener.com/tokens/v1/solana/{','.join(chunk)}", timeout=1.2, retries=0)
             if status == 200 and isinstance(data, list):
                 pairs = data
         except Exception:
             pairs = []
         if not pairs:
-            status, data = await fetch_json(f"https://api.dexscreener.com/latest/dex/tokens/{','.join(chunk)}", timeout=6)
+            status, data = await fetch_json(f"https://api.dexscreener.com/latest/dex/tokens/{','.join(chunk)}", timeout=1.3, retries=0)
             if status == 200 and isinstance(data, dict):
                 pairs = data.get("pairs") or []
         for p in (pairs or []):

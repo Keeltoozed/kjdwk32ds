@@ -188,6 +188,9 @@ class MatureExitManager:
             elif max_pnl_pct >= 0.55:
                 _floor_pnl = 0.26
                 _trail_dist = 0.20
+            elif max_pnl_pct >= 0.35:
+                _floor_pnl = 0.14
+                _trail_dist = None
         else:
             # === ОСНОВНАЯ ПОЗИЦИЯ: Б/У ЩИТ ОТ +16% + ПРОГРЕССИВНЫЙ ТРЕЙЛИНГ ДО 10x+ ===
             if max_pnl_pct >= 5.00:         # 6x+: фиксируем минимум 72% от ATH PnL
@@ -202,6 +205,10 @@ class MatureExitManager:
             elif max_pnl_pct >= 0.55:       # +55%..+110%: фиксируем минимум +26%, трейл 20% от ATH
                 _floor_pnl = 0.26
                 _trail_dist = 0.20
+            elif max_pnl_pct >= 0.35 and getattr(position, "tp1_done", False):
+                # После частичной фиксации TP1 (+35%) защищаем прибыль отката: минимум +14% (или +6% первые 45с)
+                _floor_pnl = 0.14 if minutes_held >= 0.75 else 0.06
+                _trail_dist = 0.18 if minutes_held >= 1.0 else None
             elif max_pnl_pct >= 0.28:       # +28%..+55%: Wave-1 Shield (+12% пол после 75с, трейл 18%)
                 if minutes_held >= 1.25:
                     _floor_pnl = 0.12

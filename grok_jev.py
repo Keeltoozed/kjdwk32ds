@@ -523,14 +523,16 @@ class GrokJevEngine:
         _is_jev_breakout = (
             age_min <= min(max_age, _max_scan_age_g)
             and fdv_mc <= _max_mcap_g
-            and eff_liq >= 2500.0
-            and vol_m5 >= 750.0
-            and (b5 + s5) >= 8
+            and eff_liq >= 3800.0
+            and vol_m5 >= 1100.0
+            and (b5 + s5) >= 12
             and (
-                (2.0 <= m5 <= 120.0 and m1 >= float(getattr(_c, "JEV_MIN_M1_ENTRY_FLOOR_PCT", -3.5)))
-                or (m1 >= 1.5 and m5 >= 0.5 and vol_m5 >= 900.0)
+                (2.0 <= m5 <= 120.0 and (
+                    m1 >= -2.0 or (m1 >= float(getattr(_c, "JEV_MIN_M1_ENTRY_FLOOR_PCT", -3.5)) and m5 >= 10.0 and vol_m5 >= 2500.0 and b5 >= int(s5 * 1.15))
+                ))
+                or (m1 >= 1.5 and m5 >= 0.8 and vol_m5 >= 1200.0)
             )
-            and b5 >= max(6, s5)
+            and b5 >= max(8, int(s5 * 1.05))
         )
         if age_min < min_age:
             try:
@@ -1119,11 +1121,11 @@ class GrokJevEngine:
         sym_lower = symbol.lower()
         soc_matched = any(sym_lower in str(s.get("url", "")).lower() for s in socials)
         if not has_soc:
-            # Для pump.fun токенов и монет с подтвержденной органикой аккаунт валиден (pump.fun native launch)
-            if is_pump or (liq >= 35000.0 and vol5 >= 12000.0) or (vol5 >= 3000.0):
+            # Для pump.fun токенов и глубоких DEX-пулов с живым оборотом аккаунт валиден
+            if is_pump or (liq >= 8000.0 and vol5 >= 4000.0):
                 account_score = 0.80
             else:
-                account_score = 0.35  # Отказ JEV: анонимный контракт без соцсетей и органики
+                account_score = 0.45  # Анонимный кастомный пул без соцсетей и глубины
         elif soc_matched:
             account_score = 0.90
         else:
@@ -1133,21 +1135,20 @@ class GrokJevEngine:
         recycled_score = 0.15
 
         # 3. concentration_is_exit_risk
-        # Если топ1 < 4% и топ10 < 22% — риск низкий (0.15..0.25)
-        conc_score = min(1.0, max(0.1, (top1_pct / 8.0) * 0.25 + (top10_pct / 30.0) * 0.25))
+        # Если топ1 <= 6% и топ10 <= 25% — риск низкий (0.15..0.30)
+        conc_score = min(1.0, max(0.1, (top1_pct / 6.5) * 0.25 + (top10_pct / 26.0) * 0.25))
 
         # 4. momentum_already_spent
-        # СТАЛО (замени строки 643-654 в grok_jev.py):
-        if m5 < 1.2 or h1 < -15.0:
+        if m5 < 2.0 or h1 < -15.0 or (m1 < -2.5 and m5 < 12.0):
             mom_score = 0.95
         elif m1 > 28.0:
             mom_score = 0.85
-        elif m5 >= 1.5 and m1 <= 15.0:
+        elif m5 >= 2.0 and m1 >= -2.0 and m1 <= 15.0:
             mom_score = 0.25
         elif m5 > 400.0 and m1 > 18.0:
             mom_score = 0.75
         else:
-            mom_score = 0.40
+            mom_score = 0.45
 
         # 5. liquidity_fits_ticket
         # Для ордера $15-$25 в мемкоины глубина пула от $2,500+ достаточна (проскальзывание < 0.5%)
@@ -1873,8 +1874,8 @@ class GrokJevEngine:
                         max_top10_gp = float(getattr(_c, "AUDITOR_MAX_TOP10_PCT", 55.0))
                         if _h_stats["top10_pct"] > max_top10_gp:
                             return False, f"top10 concentration (GoPlus) {_h_stats['top10_pct']:.1f}% > {max_top10_gp:.0f}%", _h_stats
-                    elif getattr(_c, "JEV_REQUIRE_HOLDER_DATA", False):
-                        return False, "auditor-pending: holder report not indexed yet by RugCheck/GoPlus (wait 25s for verification)", _h_stats
+                    elif getattr(_c, "JEV_REQUIRE_HOLDER_DATA", False) or (not is_canonical_pump and not _is_launchpad_aud and raw_liq < 12000.0):
+                        return False, "auditor-pending: unverified custom AMM < $12k without holder index (wait for RugCheck/GoPlus)", _h_stats
                     elif isinstance(pair_data, dict):
                         pair_data["_lp_verified"] = bool(is_canonical_pump or getattr(_c, "ALLOW_UNLOCKED_LP_POOLS", True))
 
@@ -1892,7 +1893,7 @@ class GrokJevEngine:
                         return False, f"dev loaded (GoPlus) {_h_stats['dev_pct']:.1f}% > {max_dev_gp_fb:.0f}% (dump risk)", _h_stats
                     if _h_stats["top10_pct"] > max_top10_gp_fb:
                         return False, f"top10 concentration (GoPlus) {_h_stats['top10_pct']:.1f}% > {max_top10_gp_fb:.0f}%", _h_stats
-                elif getattr(_c, "JEV_REQUIRE_HOLDER_DATA", False):
+                elif getattr(_c, "JEV_REQUIRE_HOLDER_DATA", False) or (not is_canonical_pump and not _is_launchpad_aud and raw_liq < 12000.0):
                     return False, f"auditor-pending: holder report not ready yet ({e}), wait for verification", _h_stats
                 elif isinstance(pair_data, dict):
                     pair_data["_lp_verified"] = bool(is_canonical_pump or getattr(_c, "ALLOW_UNLOCKED_LP_POOLS", True))
@@ -2035,6 +2036,18 @@ class GrokJevEngine:
 
         base_info = pair.get("baseToken", {}) or {}
         symbol = str(base_info.get("symbol", address[:6])).upper().strip()
+        if symbol and hasattr(tracker, "positions"):
+            _sym_cd_s = float(getattr(_c, "SYMBOL_REBUY_COOLDOWN_SEC", 1800.0) or 0.0)
+            _now_s = time.time()
+            for _pk, _pv in list(tracker.positions.items()):
+                if str(getattr(_pv, "symbol", "") or "").upper().strip() != symbol:
+                    continue
+                if getattr(_pv, "status", "") == "open":
+                    return False, "already-held-symbol"
+                if _sym_cd_s > 0:
+                    _xt_s = float(getattr(_pv, "exit_time", 0.0) or 0.0)
+                    if _xt_s > 0 and (_now_s - _xt_s) < _sym_cd_s:
+                        return False, "already-traded-symbol-cooldown"
         price = float(pair.get("priceUsd", 0) or 0.0)
         if not hasattr(self, "_pair_seen"):
             self._pair_seen = {}

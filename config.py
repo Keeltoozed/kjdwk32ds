@@ -194,15 +194,20 @@ def is_safe_unlocked_custom_runner(
     """
     if not bool(globals().get("ALLOW_UNLOCKED_LP_POOLS", True)):
         return False
-    min_liq = float(globals().get("UNLOCKED_CUSTOM_MIN_LIQ_USD", 3000.0))
+    min_liq = float(globals().get("UNLOCKED_CUSTOM_MIN_LIQ_USD", 4500.0))
     if float(liq_usd or 0.0) < min_liq:
         return False
     min_age = float(globals().get("UNLOCKED_CUSTOM_MIN_AGE_MIN", 0.0))
     if float(age_min or 0.0) < min_age:
         return False
-    min_vol5 = float(globals().get("UNLOCKED_CUSTOM_MIN_VOL5_USD", 300.0))
-    min_buys5 = int(globals().get("UNLOCKED_CUSTOM_MIN_BUYS5", 3))
-    if int(buys5 or 0) < min_buys5 and float(vol5_usd or 0.0) < min_vol5:
+    min_vol5 = float(globals().get("UNLOCKED_CUSTOM_MIN_VOL5_USD", 1500.0))
+    min_buys5 = int(globals().get("UNLOCKED_CUSTOM_MIN_BUYS5", 10))
+    if int(buys5 or 0) < min_buys5 or float(vol5_usd or 0.0) < min_vol5:
+        return False
+    if int(sells5 or 0) > 0 and int(buys5 or 0) < int(int(sells5) * 0.90):
+        return False
+    # Кастомный незалоченный пул без соцсетей с аномальным wash-оборотом (>7x ликвидности) — ловушка дева
+    if not has_socials and float(liq_usd or 0.0) > 0 and (float(vol5_usd or 0.0) / float(liq_usd)) > 7.5 and float(age_min or 0.0) < 20.0:
         return False
     return True
 
@@ -500,11 +505,11 @@ MAX_PUMP_CURVE_MCAP_SOL = 480.0           # Верх кривой перед м�
 PUMP_MIGRATION_MCAP_SOL = 410.0           # FDV миграции pump.fun
 PUMP_DUMP_FLOOR_SOL = 50.0                # Порог post-mig-dumped (~50 SOL, разрешает быстрые реклеймы)
 JEV_MAX_TICKET_USD = 0.0
-MIN_GRADUATED_LIQ_USD = 2500.0            # Минимум $2.5k ликвидности на DEX (ультра-ранние Raydium/Meteora/PumpSwap пулы)
+MIN_GRADUATED_LIQ_USD = 4000.0            # Минимум $4k ликвидности на DEX (отсекаем сверхтонкие пулы с проскальзыванием -25%)
 AUDITOR_STAIRCASE_ENABLED = False
-AUDITOR_MAX_DEV_PCT = 15.0
-AUDITOR_MAX_WHALE_PCT = 25.0
-AUDITOR_MAX_TOP10_PCT = 55.0
+AUDITOR_MAX_DEV_PCT = 8.0                 # Макс 8% у дева (защита от моментальных дампов разработчика в GROK-JEV)
+AUDITOR_MAX_WHALE_PCT = 14.0              # Макс 14% в одном кошельке (защита от 1-клик слива кита как FOMOCOIN/$CHOPS)
+AUDITOR_MAX_TOP10_PCT = 40.0              # Макс 40% у топ-10 холдеров (анти-кабал)
 STREAM_WINDOW_SEC = 60
 STREAM_MIN_UNIQUE_BUYERS = 3
 STREAM_MIN_BUY_SOL = 0.6
@@ -535,23 +540,23 @@ VIP_KOL_WALLETS = {
 TIME_EXIT_MINUTES = 40
 TIME_EXIT_PROFIT_REQ = 0.015
 
-# === ЛЕСТНИЦА ТЕЙК-ПРОФИТОВ (ОХОТА ЗА 2x-10x РАКЕТАМИ: НЕ РЕЖЕМ РОСТ НА +25%) ===
+# === ЛЕСТНИЦА ТЕЙК-ПРОФИТОВ (ВОЗВРАТ ВЛОЖЕННОГО ТЕЛА ДО РАГА + FREE-RIDE MOONBAG 2x-10x) ===
 PARTIAL_TP_ENABLED = True
-PARTIAL_TP_MIN_TICKET_USD = 20.0     # Не дробим $5 билеты: $5 позиции едут целиком за 2x-10x ракетами!
-TP1_TRIGGER_PCT = 0.85               # Тейк-профит на +85% только для крупных билетов >= $20
-TP1_SELL_FRAC = 0.25
-TP2_TRIGGER_PCT = 1.10               # На +110% (2.1x) фиксируем 40% от остатка
-TP2_SELL_FRAC = 0.40
-TP3_TRIGGER_PCT = 2.50               # На +250% (3.5x) фиксируем 45% от остатка
-TP3_SELL_FRAC = 0.45
-TP4_TRIGGER_PCT = 5.00               # На +500% (6x) фиксируем 50% от остатка
-TP4_SELL_FRAC = 0.50
-TP5_TRIGGER_PCT = 9.00               # На +900% (10x) закрываем остаток
-TP5_SELL_FRAC = 1.00
-MOONBAG_TRIGGER_PCT = 0.55           # Статус Moonbag начинается от TP1 (+55%)
+PARTIAL_TP_MIN_TICKET_USD = 3.0      # Включено для $5 ордеров: забираем вложенный депозит до рага, остаток летит бесплатно!
+TP1_TRIGGER_PCT = 0.35               # На +35% забираем 42% позиции (~$2.70 кэша из $5 — половина тела уже в безопасности)
+TP1_SELL_FRAC = 0.42
+TP2_TRIGGER_PCT = 0.65               # На +65% забираем 52% от остатка (~$2.50 -> суммарно 104%+ депозита вернули, остаток 28% = FREE MOONBAG!)
+TP2_SELL_FRAC = 0.52
+TP3_TRIGGER_PCT = 1.60               # На +160% (2.6x) фиксируем 35% от бесплатного остатка
+TP3_SELL_FRAC = 0.35
+TP4_TRIGGER_PCT = 3.50               # На +350% (4.5x) фиксируем 40% от остатка
+TP4_SELL_FRAC = 0.40
+TP5_TRIGGER_PCT = 8.00               # На +800% (9x) фиксируем 50% от остатка, остальное едет до предела трейлинга
+TP5_SELL_FRAC = 0.50
+MOONBAG_TRIGGER_PCT = 0.65           # Статус Moonbag включается после TP2 (+65%), когда 100% тела уже выведено в кэш!
 MOONBAG_SELL_FRAC = 0.0
-# === МУНБЭГ-ТРЕЙЛИНГ (даём ракете пробить 2x и везти до 3.5x-10x без раннего срыва) ===
-MOONBAG_TRAIL_ACTIVATION_PCT = 1.00  # Трейлинг мунбэга включается только выше 2x (+100%)
+# === МУНБЭГ-ТРЕЙЛИНГ (даём бесплатному остатку пробить 2x и везти до 3.5x-10x без риска потери депозита) ===
+MOONBAG_TRAIL_ACTIVATION_PCT = 1.00  # Трейлинг мунбэга включается выше 2x (+100%)
 MOONBAG_TRAIL_DISTANCE_PCT = 0.25    # Дистанция трейлинга 25% от пика (переживает здоровые откаты)
 MOONBAG_MAX_HOLD_MIN = 55.0          # Мунбэг может ехать до 55 минут
 
@@ -596,7 +601,7 @@ STAGNANT_LOSS_MIN_FAST = 12.0
 STAGNANT_HOLD_MIN = 20.0
 
 AI_MODE = "degen"
-MIN_LIQUIDITY = 2500.0          # Минимум $2,500 ликвидности — пускает самые свежие и незалоченные пулы на старте
+MIN_LIQUIDITY = 4000.0          # Минимум $4,000 реальной ликвидности AMM (кривые pump.fun имеют свой порог)
 MAX_LIQUIDITY = 50000000
 
 GROQ_API_KEY = (os.getenv("GROQ_API_KEY") or os.getenv("GROK_API_KEY") or os.getenv("XAI_API_KEY") or "").strip().strip('"').strip("'")
@@ -609,17 +614,20 @@ JEV_WICK_STOP_ENABLED = False
 JEV_EARLY_MIN_AGE_MIN = 0.05   # Ультра-ранний вход от 3с
 JEV_MIN_AGE_MIN = 0.08         # Мгновенный вход от 5 секунд (до разгона ракеты)
 JEV_MAX_AGE_MIN = 45.0         # В GROK-JEV фокус на свежих запусках <= 45м
-JEV_MIN_LIQUIDITY_USD = 2500.0   # Минимум $2.5k ликвидности — пускает ультра-ранние/незалоченные пулы
+JEV_MIN_LIQUIDITY_USD = 4000.0   # Минимум $4.0k ликвидности AMM — отсекаем тонкие -35% ловушки вроде FOMOCOIN/$CHOPS
 JEV_MAX_LIQUIDITY_USD = 180000.0
-JEV_MIN_VOLUME_H1 = 350.0
-JEV_MIN_MCAP_USD = 3500.0      # Минимум $3.5k MCap для самых ранних ракет
+JEV_MIN_VOLUME_H1 = 1500.0       # Минимум $1.5k реального оборота вместо $350 шума
+JEV_MIN_MCAP_USD = 4500.0      # Минимум $4.5k MCap для ранних ракет
 JEV_MAX_MCAP_USD = 220000.0    # Верхняя граница $220k FDV: не покупаем отработанные $600k+ хаи
-JEV_MIN_VOLUME_H24 = 350.0
-JEV_MIN_TRADES_H24 = 4
-JEV_MIN_TRADES_H1 = 3
-JEV_MIN_HOLDERS = 8
-JEV_MAX_TOP_WALLET = 0.30
-JEV_MAX_TOP_10 = 0.65
+JEV_MIN_VOLUME_H24 = 1500.0
+JEV_MIN_TRADES_H24 = 12
+JEV_MIN_TRADES_H1 = 10
+JEV_MIN_HOLDERS = 25             # Минимум 25 холдеров вместо 8 (защита от кастомных бандл-ферм дева)
+JEV_MAX_TOP_WALLET = 0.14        # Макс 14% на один кошелёк (вместо 30%)
+JEV_MAX_TOP_10 = 0.42            # Макс 42% у топ-10 холдеров (вместо 65%)
+UNLOCKED_CUSTOM_MIN_LIQ_USD = 4500.0
+UNLOCKED_CUSTOM_MIN_VOL5_USD = 1500.0
+UNLOCKED_CUSTOM_MIN_BUYS5 = 10
 JEV_REQUIRE_HOLDER_DATA = False  # Не ждём индексации холдеров в RugCheck/GoPlus на свежих пулах
 MAX_POOL_LIQ_FRAC = 0.02
 AUDITOR_MAX_DELEGATED_ACCOUNTS = 3

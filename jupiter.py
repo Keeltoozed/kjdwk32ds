@@ -5,6 +5,7 @@ import config
 
 # Кэш успешных двухсторонних симуляций (mint -> (ts, res_dict)) для защиты от 429
 _SIM_CACHE: dict = {}
+_SELLABLE_CACHE: dict = {}
 _SIM_LOCKS: dict = {}
 _LAST_SIM_TS: float = 0.0
 
@@ -176,31 +177,40 @@ class JupiterAPI:
         """
         Оперативная проверка для открытой позиции: можно ли прямо сейчас продать токен в SOL (Mint -> SOL).
         Возвращает (is_sellable: bool, reason: str).
-        Никогда не списывает в 0.0$ при 429 rate limit или сетевых таймаутах.
+        Никогда не списывает в 0.0$ при 429 rate limit или сетевых таймаутах, использует короткий кэш чтобы не тормозить трекер.
         """
+        now_s = time.time()
+        _s_hit = _SELLABLE_CACHE.get(mint)
+        if _s_hit and now_s < _s_hit[0]:
+            return _s_hit[1]
         sol_mint = "So11111111111111111111111111111111111111112"
-        hosts = ["https://api.jup.ag", "https://lite-api.jup.ag"]
-        
+        key_set = bool((getattr(config, "JUP_API_KEY", "") or "").strip())
+        hosts = ["https://api.jup.ag", "https://lite-api.jup.ag"] if key_set else ["https://lite-api.jup.ag"]
+
         from http_client import get_session
         session = await get_session()
-        test_amounts = [1000000, 100000000]  # Пробуем микро-лот (1M) и стандартный (100M), а не 1 миллиард
-        for attempt in range(3):
+        test_amounts = [1000000, 100000000]  # Пробуем микро-лот (1M) и стандартный (100M)
+        for attempt in range(2):
             host = hosts[attempt % len(hosts)]
             amt = test_amounts[attempt % len(test_amounts)]
             sell_url = f"{host}/swap/v1/quote?inputMint={mint}&outputMint={sol_mint}&amount={amt}&slippageBps=2500"
             try:
-                async with session.get(sell_url, headers=_jup_headers(host), timeout=5) as resp:
+                async with session.get(sell_url, headers=_jup_headers(host), timeout=1.8) as resp:
                     if resp.status in (429, 401, 403):
-                        await asyncio.sleep(0.4 * (attempt + 1))
+                        await asyncio.sleep(0.15)
                         continue
                     if resp.status == 200:
                         data = await resp.json()
                         out_lamports = int(data.get("outAmount", 0) or 0)
                         impact = float(data.get("priceImpactPct", 100) or 100)
                         if out_lamports > 0 and impact < 50.0:
-                            return True, "OK"
+                            res = (True, "OK")
+                            _SELLABLE_CACHE[mint] = (time.time() + 8.0, res)
+                            return res
                         elif impact >= 50.0:
-                            return False, f"Extreme sell price impact: {impact:.1f}% (liquidity drained)"
+                            res = (False, f"Extreme sell price impact: {impact:.1f}% (liquidity drained)")
+                            _SELLABLE_CACHE[mint] = (time.time() + 2.0, res)
+                            return res
                         else:
                             return False, "Zero SOL out on sell quote"
                     elif resp.status == 400:
@@ -209,16 +219,22 @@ class JupiterAPI:
                             err_code = err_data.get("errorCode", err_data.get("error", "NO_ROUTE"))
                         except Exception:
                             err_code = "NO_ROUTE"
-                        # Если на первой попытке NO_ROUTE, пробуем второй хост/размер перед вынесением вердикта
-                        if attempt < 2:
+                        if attempt == 0:
                             continue
-                        return False, f"HONEYPOT: cannot sell token back to SOL ({err_code})"
+                        res = (False, f"HONEYPOT: cannot sell token back to SOL ({err_code})")
+                        _SELLABLE_CACHE[mint] = (time.time() + 3.0, res)
+                        return res
                     else:
-                        # 5xx или временный сбой API — НЕ считаем продаваемым, требуем повторную проверку
                         return False, f"Jupiter API temporary status {resp.status} (not assumed sellable)"
             except Exception as e:
-                return False, f"Network error during check ({e}) (not assumed sellable)"
-        return False, "Jupiter rate limit 429 (not assumed sellable)"
+                if attempt == 0:
+                    continue
+                res = (False, f"Network error during check ({e}) (not assumed sellable)")
+                _SELLABLE_CACHE[mint] = (time.time() + 2.5, res)
+                return res
+        res = (False, "Jupiter rate limit 429 (not assumed sellable)")
+        _SELLABLE_CACHE[mint] = (time.time() + 2.5, res)
+        return res
 
     @staticmethod
     async def get_swap_transaction(mint: str, is_sell: bool = False, amount_lamports: int = 0, is_emergency: bool = False) -> dict:
