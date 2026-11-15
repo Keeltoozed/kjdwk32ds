@@ -632,7 +632,9 @@ class Analyzer:
                         _fdv_lt = float(_p_lt.get("fdv", 0) or _p_lt.get("marketCap", 0) or 0)
                         _ca_lt = float(_p_lt.get("pairCreatedAt") or 0)
                         _age_lt = ((time.time() * 1000.0 - _ca_lt) / 60000.0) if _ca_lt > 0 else 1.5
-                        if _liq_lt < 4000.0 or _vol5_lt < 500.0 or _m5_lt < 1.0:
+                        _min_liq_lt = 1500.0 if (_allow_raw_lt and _dex_lt in ("pump", "pumpfun")) else 3500.0
+                        _min_vol_lt = 250.0 if (_age_lt <= 3.0 or (_allow_raw_lt and _dex_lt in ("pump", "pumpfun"))) else 450.0
+                        if _liq_lt < _min_liq_lt or _vol5_lt < _min_vol_lt or _m5_lt < 1.0:
                             continue
                         if _age_lt > float(getattr(config, "SOLANA_MAX_AGE_MIN", 240.0)) or _fdv_lt > float(getattr(config, "JEV_MAX_MCAP_USD", 850000.0)):
                             continue
@@ -1839,12 +1841,14 @@ class Analyzer:
         # 3. ФИЛЬТР ИМПУЛЬСА, СКОРОСТИ ОБОРОТА И ТРЕНДА ДО ROCKET-XGB:
         _base_v5_cfg = float(getattr(config, "MIN_VOLUME_M5", 2000.0))
         # Масштабируем порог объёма под возраст: 1-минутный токен физически не может иметь $2,000 в 5м окне
-        if _age_min_pre <= 2.5 and _b5_pre >= int(_s5_pre * 0.95) and _tot_tx5_pre >= 5:
-            _min_v5_cfg = 600.0
-        elif _age_min_pre <= 5.0 and _b5_pre >= int(_s5_pre * 0.95) and _tot_tx5_pre >= 8:
-            _min_v5_cfg = 1000.0
-        elif _age_min_pre <= 10.0 and _b5_pre >= int(_s5_pre * 0.95):
-            _min_v5_cfg = 1400.0
+        if _age_min_pre <= 2.0:
+            _min_v5_cfg = 200.0 if (_b5_pre >= int(_s5_pre * 0.95) and _tot_tx5_pre >= 2) else 350.0
+        elif _age_min_pre <= 5.0:
+            _min_v5_cfg = 450.0 if _b5_pre >= int(_s5_pre * 0.95) else 700.0
+        elif _age_min_pre <= 15.0:
+            _min_v5_cfg = 800.0
+        elif _age_min_pre <= 30.0:
+            _min_v5_cfg = 1200.0
         else:
             _min_v5_cfg = _base_v5_cfg
         if _vm5_pre < _min_v5_cfg:
@@ -2045,15 +2049,15 @@ class Analyzer:
             liq_val = max(raw_liq, curve_liq) if is_pump_curve else raw_liq
 
             _is_momentum_rocket_a = (
-                (conf + 0.05) >= max(3.5, threshold - 2.0)
+                (conf + 0.05) >= max(2.5, threshold - 2.0)
                 and _age_min_pre <= _max_age_min
                 and _fdv_chk_pre <= _max_mcap_pre
                 and (_age_min_pre < 45.0 or _h6_pre_opt is None or _h6_pre_opt <= float(getattr(config, "MAX_ENTRY_H6_PCT", 2500.0)))
                 and (
-                    (_m5 >= 12.0 and _m1 >= -4.0 and _b5_pre >= _s5_pre * 1.15 and _vm5_pre >= 6000.0)
-                    or (_vm5_pre >= 15000.0 and _b5_pre >= _s5_pre * 1.15 and _m5 >= 5.0 and _m1 >= -4.0)
-                    or (_m5 >= 5.0 and _b5_pre >= int(_s5_pre * 1.20) and _vm5_pre >= 4000.0 and _b5_pre >= 20 and _m1 >= -3.5)
-                    or (_age_min_pre <= 10.0 and _m5 >= 3.0 and _b5_pre >= int(_s5_pre * 1.05) and _vm5_pre >= 1000.0 and _b5_pre >= 5)
+                    (_m5 >= 10.0 and _m1 >= -4.0 and _b5_pre >= _s5_pre * 1.10 and _vm5_pre >= 4000.0)
+                    or (_vm5_pre >= 10000.0 and _b5_pre >= _s5_pre * 1.10 and _m5 >= 4.0 and _m1 >= -4.0)
+                    or (_m5 >= 4.0 and _b5_pre >= int(_s5_pre * 1.15) and _vm5_pre >= 2500.0 and _b5_pre >= 15 and _m1 >= -3.5)
+                    or (_age_min_pre <= 10.0 and _m5 >= 2.0 and _b5_pre >= int(_s5_pre * 1.02) and _vm5_pre >= 600.0 and _b5_pre >= 3)
                 )
             )
             if (conf + 0.05) < threshold and not _is_momentum_rocket_a:

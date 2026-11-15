@@ -83,16 +83,18 @@ def get_max_entry_h1_pct(
     liq_usd: float = 0.0,
     m5_pct: float = 1.5,
 ) -> float:
-    """Return dynamic max h1% entry cap: permit curve runup only for fresh migrations (<=15m)."""
+    """Return dynamic max h1% entry cap: allow strong explosive rockets while avoiding dead tops."""
     _m5_ok = True if m5_pct is None else (float(m5_pct) >= 1.0)
-    _flow_ok = vol_m5 >= 3000.0 and buys_m5 >= int(sells_m5 * 1.10) and _m5_ok
+    _flow_ok = vol_m5 >= 2500.0 and buys_m5 >= int(sells_m5 * 1.05) and _m5_ok
     if age_min <= 15.0:
-        return 2500.0 if _flow_ok else 1500.0
+        return 3000.0 if _flow_ok else 2000.0
     if age_min <= 35.0:
-        return 450.0 if (liq_usd >= 15000.0 and vol_m5 >= 8000.0 and _flow_ok) else 300.0
+        return 850.0 if _flow_ok else 500.0
     if age_min <= 60.0:
-        return 220.0
-    return 150.0
+        return 750.0 if _flow_ok else 350.0
+    if age_min <= 120.0:
+        return 550.0 if _flow_ok else 250.0
+    return 300.0 if _flow_ok else 180.0
 
 
 # `.moon` excluded: live Moonit/custom pools frequently report unlocked LP (e.g. EDIDRG..moon 0% lock).
@@ -223,16 +225,21 @@ def is_distributed_safe_runner(
 
 def is_permissionless_liq_fdv_trap(pair_data: Optional[dict]) -> bool:
     """
-    Detect permissionless liquidity-drain rugs across Meteora, PumpSwap, Raydium:
+    Detect permissionless liquidity-drain rugs across Meteora, Raydium:
     custom pools created with high seeded liquidity matching or near FDV (liq/fdv >= 0.70 with liq >= $18k,
     or liq/fdv >= 0.60 with liq >= $30k) and 0 socials/websites, so deployers can drain the LP minutes later
-    (cases: AXIOMCOIN, WASTED, SURVIVE).
+    (cases: AXIOMCOIN, WASTED).
+    PumpSwap AMM, Pump.fun curves, and canonical .pump tokens are cryptographic contracts where
+    deployers CANNOT drain liquidity, so they are exempted.
     """
     if not isinstance(pair_data, dict):
         return False
     dex = str(pair_data.get("dexId") or "").lower()
-    # Pump.fun bonding curves cannot have LP drained by dev
-    if dex in ("pump", "pumpfun"):
+    base_token = pair_data.get("baseToken") or {}
+    mint = str(base_token.get("address") or "").lower()
+
+    # Pump.fun bonding curves, PumpSwap AMM, and canonical .pump tokens cannot have LP drained by dev
+    if dex in ("pump", "pumpfun", "pumpswap", "pump-amm") or mint.endswith("pump"):
         return False
         
     liq_usd = float((pair_data.get("liquidity") or {}).get("usd") or 0.0)
@@ -251,7 +258,7 @@ def is_permissionless_liq_fdv_trap(pair_data: Optional[dict]) -> bool:
     if has_socials:
         return False
 
-    # 1. Liq/FDV >= 70% with Liq >= $18k and 0 socials (AXIOMCOIN: $43.5k liq / $53.9k fdv = 80.6%)
+    # 1. Liq/FDV >= 70% with Liq >= $18k and 0 socials on custom pools (AXIOMCOIN: $43.5k liq / $53.9k fdv = 80.6%)
     if fdv_usd <= 0.0 or liq_usd >= (fdv_usd * 0.70):
         return True
         
@@ -319,25 +326,25 @@ def evaluate_entry_momentum(
         return False, f"m5-parabolic-top {m5:+.1f}% > +{_max_m5_dyn:.0f}%"
 
     # 1. Свежая миграция / накопление покупателей ($40k-$160k FDV):
-    _fma_vol_req = 800.0 if age_min <= 2.5 else 1200.0
+    _fma_vol_req = 400.0 if age_min <= 2.5 else 800.0
     is_fresh_migration_accumulation = (
         age_min <= 25.0
         and (fdv_usd <= 0.0 or fdv_usd <= 160000.0)
-        and liq_usd >= 5000.0
-        and buys5 >= max(4, int(sells5 * 1.05))
+        and liq_usd >= 4500.0
+        and buys5 >= max(3, int(sells5 * 1.02))
         and vol5_usd >= _fma_vol_req
         and m5 >= 1.0
         and m1 >= -2.0
     )
 
     # 1.1 Свежий запуск / реактивный разгон молодых токенов (<10м):
-    _uf_vol_req = 600.0 if age_min <= 2.0 else (900.0 if age_min <= 4.0 else 1200.0)
-    _uf_min_tx = 5 if age_min <= 2.0 else 7
+    _uf_vol_req = 250.0 if age_min <= 2.0 else (450.0 if age_min <= 4.0 else 750.0)
+    _uf_min_tx = 3 if age_min <= 2.0 else 5
     is_ultra_fresh_launch = (
         age_min <= 10.0
         and m5 >= 1.0
         and m1 >= -2.0
-        and buys5 >= max(4, int(sells5 * 1.02))
+        and buys5 >= max(3, int(sells5 * 1.02))
         and vol5_usd >= _uf_vol_req
         and tot_tx >= _uf_min_tx
     )
@@ -345,10 +352,10 @@ def evaluate_entry_momentum(
     # 1.2 Вход на откате молодой ракеты (1м микро-пуллбэк на разгоняющемся токене):
     is_fresh_pullback_entry = (
         age_min <= 35.0
-        and m5 >= 2.5
-        and -2.0 <= m1 <= -0.2
-        and buys5 >= max(6, int(sells5 * 1.05))
-        and vol5_usd >= 1200.0
+        and m5 >= 2.0
+        and -2.2 <= m1 <= -0.2
+        and buys5 >= max(4, int(sells5 * 1.02))
+        and vol5_usd >= 800.0
     )
 
     # 1.3 Первичное зажигание ракеты (свежий импульс)
@@ -356,51 +363,51 @@ def evaluate_entry_momentum(
         age_min <= 45.0
         and m5 >= 1.5
         and m1 >= -2.0
-        and buys5 >= max(5, int(sells5 * 1.05))
-        and vol5_usd >= 1200.0
-        and tot_tx >= 7
+        and buys5 >= max(4, int(sells5 * 1.02))
+        and vol5_usd >= 800.0
+        and tot_tx >= 5
     )
 
     # 1.4 Гипер-зажигание (сильный пробой)
     is_hyper_ignition = (
-        m5 >= 7.0
+        m5 >= 5.0
         and m1 >= -2.2
-        and buys5 >= max(6, int(sells5 * 1.05))
-        and vol5_usd >= 2000.0
+        and buys5 >= max(4, int(sells5 * 1.02))
+        and vol5_usd >= 1000.0
     )
 
     # 1.5 Здоровый второй импульс / реклейм уровня
     is_turned_green_dip = (
         age_min <= 90.0
         and (fdv_usd <= 0.0 or fdv_usd <= 350000.0)
-        and buys5 >= max(8, int(sells5 * 1.10))
-        and vol5_usd >= 3000.0
-        and liq_usd >= 7500.0
+        and buys5 >= max(6, int(sells5 * 1.05))
+        and vol5_usd >= 2000.0
+        and liq_usd >= 6000.0
         and m5 >= 1.5
-        and m1 >= -1.8
-        and (h1 >= 5.0 or vol5_usd >= 8000.0)
+        and m1 >= -2.0
+        and (h1 >= 5.0 or vol5_usd >= 6000.0)
     )
 
     # 1.6 V-образный разворот покупателями
     is_fresh_v_reversal = (
         age_min <= 45.0
-        and m5 >= 5.0
-        and m1 >= -1.5
-        and buys5 >= int(sells5 * 1.15)
-        and vol5_usd >= 3500.0
-        and liq_usd >= 7500.0
+        and m5 >= 4.0
+        and m1 >= -1.8
+        and buys5 >= int(sells5 * 1.10)
+        and vol5_usd >= 2500.0
+        and liq_usd >= 6000.0
         and h1 >= -20.0
     )
 
     # 1.7 Зрелый пробой (зрелые капы с импульсом)
     is_mature_breakout = (
         age_min <= SOLANA_MAX_AGE_MIN
-        and m5 >= 2.0
+        and m5 >= (2.5 if age_min > 45.0 else 1.5)
         and h1 >= -10.0
         and m1 >= -2.0
-        and buys5 >= max(8, int(sells5 * 1.05))
-        and vol5_usd >= 2200.0
-        and (vel_ratio >= 0.08 or vol5_usd >= 6000.0)
+        and buys5 >= (max(10, int(sells5 * 1.10)) if age_min > 45.0 else max(5, int(sells5 * 1.02)))
+        and vol5_usd >= (3000.0 if age_min > 45.0 else 1400.0)
+        and (vel_ratio >= 0.06 or vol5_usd >= 4000.0)
     )
 
     if not (
@@ -440,15 +447,15 @@ DD_THROTTLE_START_USD = 15.0
 
 # === ВХОД В ЗРЕЛЫЕ КРИВЫЕ PUMP.FUN ДО МИГРАЦИИ + ЗАЩИТА DEX ===
 SNIPER_ENTRIES_ENABLED = False            # ВЫКЛЮЧЕНО: защита от мгновенных дев-дампов на пустых кривых
-ALLOW_UNGRADUATED_PUMPFUN = False         # ВЫКЛЮЧЕНО: запрет сырых bonding curves (блокировка рагов Bagpad -99.9%, Percolator $0 liq). Торгуем ТОЛЬКО проверенные миграции Raydium/PumpSwap с сожжённым LP!
-MIN_PUMP_CURVE_MCAP_USD = 18000.0         # Fallback в USD (если sol_price недоступен)
-MAX_PUMP_CURVE_MCAP_USD = 44000.0         # Fallback в USD
-MIN_PUMP_CURVE_MCAP_SOL = 80.0            # Порог кривой pump.fun в SOL
-MAX_PUMP_CURVE_MCAP_SOL = 350.0           # Верх кривой перед миграцией
+ALLOW_UNGRADUATED_PUMPFUN = True          # ВКЛЮЧЕНО: ловим живые разгоны Pump.fun кривых ($10k-$58k) до миграции с быстрым сбором иксов
+MIN_PUMP_CURVE_MCAP_USD = 10000.0         # Fallback в USD (если sol_price недоступен)
+MAX_PUMP_CURVE_MCAP_USD = 58000.0         # Fallback в USD (до миграционного обрыва $69k)
+MIN_PUMP_CURVE_MCAP_SOL = 60.0            # Порог кривой pump.fun в SOL
+MAX_PUMP_CURVE_MCAP_SOL = 450.0           # Верх кривой перед миграцией
 PUMP_MIGRATION_MCAP_SOL = 410.0           # FDV миграции pump.fun (~410 SOL = ~$35k при SOL $85)
 PUMP_DUMP_FLOOR_SOL = 100.0               # Порог post-mig-dumped (~100 SOL = ~$7.5k, разрешает Dip Reclaim ракеты вроде SCRAP/FOMO/ICC)
 JEV_MAX_TICKET_USD = 0.0
-MIN_GRADUATED_LIQ_USD = 5000.0           # На DEX минимум $5k реальной ликвидности — пускает свежие миграции PumpSwap/Raydium ($5k-$12k при SOL $75-$150) и отсекает пустые микро-пулы
+MIN_GRADUATED_LIQ_USD = 4500.0           # На DEX минимум $4.5k реальной ликвидности — пускает свежие миграции PumpSwap/Raydium ($5k-$12k при SOL $75-$150) и отсекает пустые микро-пулы
 AUDITOR_STAIRCASE_ENABLED = True
 AUDITOR_MAX_DEV_PCT = 6.0
 AUDITOR_MAX_TOP10_PCT = 32.0
@@ -505,9 +512,9 @@ MOONBAG_MAX_HOLD_MIN = 55.0          # Мунбэг может ехать до 5
 PUMP_XGB_ENABLED = False
 RAY_XGB_ENABLED = False
 ROCKET_XGB_ENABLED = True
-ROCKET_XGB_STAGE1_THRESHOLD = 10.0   # Первичный отсев 10%: отсекает мертвяк и скам (скор < 10%)
-ROCKET_XGB_FINAL_THRESHOLD = 15.0    # Финальный порог 15%: чистый отсев 1-7% мусора, свободный проход для 20-60% ракет
-ROCKET_XGB_THRESHOLD = 15.0
+ROCKET_XGB_STAGE1_THRESHOLD = 5.0    # Первичный отсев 5%: отсекает чистый мертвяк (<5%), даёт шанс ранним ракетам
+ROCKET_XGB_FINAL_THRESHOLD = 10.0    # Финальный порог 10%: чистый отсев 1-4% мусора, свободный проход для ракет
+ROCKET_XGB_THRESHOLD = 10.0
 
 STALL_TIMER_SEC = 420.0   # 7 минут на консолидацию до среза по стагнации
 STALL_MAX_LOSS_PCT = -0.055

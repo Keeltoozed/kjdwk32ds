@@ -115,19 +115,13 @@ class MatureExitManager:
         _mint_pos = str(getattr(position, "mint", "") or "")
         _base_a = str(((_pd_pos.get("baseToken") or {}).get("address")) or _mint_pos)
         _is_pump_token = _mint_pos.endswith("pump") or _base_a.endswith("pump")
+        _dex_pos_low = str((_pd_pos.get("dexId", "") if isinstance(_pd_pos, dict) else "") or "").lower()
 
-        if _is_pump_token:
-            # На Pump.fun смарт-контракт криптографически блокирует снятие ликвидности девом!
-            # Такие токены ОБЯЗАНЫ лететь на 2x-10x по полноценной кривой трейлинга (0d2b1ae)
-            # и НЕ должны срезаться 20-секундным стопором застоя (кейсы STRIPCOIN +577%, SINKCAT +285%)!
-            _is_unlocked = False
-        else:
-            _is_unlocked = getattr(position, "is_unlocked_pool", None)
-            if _is_unlocked is None:
-                if isinstance(_pd_pos, dict) and _pd_pos:
-                    _is_unlocked = not bool(getattr(position, "is_lp_locked_80", False))
-                else:
-                    _is_unlocked = False
+        # Настоящий безопасный лок LP: только PumpSwap canonical или проверенный RugCheck lock/burn >= 80%
+        _has_safe_lock = bool(getattr(position, "is_lp_locked_80", False)) or (
+            _is_pump_token and _dex_pos_low in ("pumpswap", "pump-amm", "pump", "pumpfun")
+        )
+        _is_unlocked = not _has_safe_lock
         position.is_unlocked_pool = _is_unlocked
 
         if _is_unlocked:
@@ -154,6 +148,13 @@ class MatureExitManager:
             # В. Быстрый стоп-лосс на незалоченном пуле (-7.5% вместо -11.5%)
             if pnl_pct <= _u_fast_sl:
                 return f"⚡ Unlocked Fast Stop Loss ({pnl_pct*100:.1f}%)"
+
+        # Быстрая фиксация прибыли при затухании импульса для ЛЮБЫХ монет:
+        # Если монета сделала +22%..+50% и цена замерла на 35с без нового ATH — вытаскиваем профит!
+        if not _is_mb:
+            if max_pnl_pct >= 0.22 and _peak_age_min >= 0.58 and pnl_pct >= 0.12:
+                if pnl_pct <= max_pnl_pct * 0.88:
+                    return f"⚡ Momentum Stall Harvest (+{pnl_pct*100:.1f}%, застой {_peak_age_min*60:.0f}с после пика +{max_pnl_pct*100:.1f}% — фиксация прибыли)"
 
         # =========================================================================
         # 1. ЖЕСТКИЙ КОНТРОЛЬ УБЫТКА (EMERGENCY CAP & STOP LOSS) — ПО СТАНДАРТУ 0d2b1ae

@@ -2071,18 +2071,18 @@ class GrokJevEngine:
         _ca_s1 = float(pair.get("pairCreatedAt") or 0)
         _age_s1 = ((time.time() * 1000.0 - _ca_s1) / 60000.0) if _ca_s1 > 0 else 0.2
         _s1_fresh_ok = (
-            _age_s1 <= float(getattr(_c, "SOLANA_MAX_AGE_MIN", 90.0))
-            and _fdv_s1 <= float(getattr(_c, "JEV_MAX_MCAP_USD", 320000.0))
+            _age_s1 <= float(getattr(_c, "SOLANA_MAX_AGE_MIN", 240.0))
+            and _fdv_s1 <= float(getattr(_c, "JEV_MAX_MCAP_USD", 850000.0))
             and (_age_s1 < 45.0 or _h6_s1 is None or float(_h6_s1 or 0) <= float(getattr(_c, "MAX_ENTRY_H6_PCT", 2500.0)))
             and _m1_s1 >= float(getattr(_c, "JEV_MIN_M1_ENTRY_FLOOR_PCT", -2.2))
             and _h1_s1 >= float(getattr(_c, "JEV_MIN_H1_PCT", -15.0))
         )
-        _is_momentum_rocket = _s1_fresh_ok and (rkt_s1 + 0.05) >= max(3.5, s1_thresh - 2.0) and (
-            (_m5_s1 >= 12.0 and _b5_s1 >= int(_s5_s1 * 1.25) and _vm5_s1 >= 8000.0)
-            or (_vm5_s1 >= 15000.0 and _b5_s1 >= int(_s5_s1 * 1.15) and _m5_s1 >= 6.0)
-            or (_m5_s1 >= 8.0 and _vm5_s1 >= 10000.0 and _b5_s1 >= max(12, int(_s5_s1 * 1.15)))
-            or (_m5_s1 >= 5.0 and _b5_s1 >= int(_s5_s1 * 1.20) and _vm5_s1 >= 4000.0 and _b5_s1 >= 20)
-            or (_age_s1 <= 10.0 and _m5_s1 >= 2.5 and _b5_s1 >= int(_s5_s1 * 1.05) and _vm5_s1 >= 1000.0 and _b5_s1 >= 5)
+        _is_momentum_rocket = _s1_fresh_ok and (rkt_s1 + 0.05) >= max(2.5, s1_thresh - 2.0) and (
+            (_m5_s1 >= 10.0 and _b5_s1 >= int(_s5_s1 * 1.15) and _vm5_s1 >= 4000.0)
+            or (_vm5_s1 >= 8000.0 and _b5_s1 >= int(_s5_s1 * 1.10) and _m5_s1 >= 4.0)
+            or (_m5_s1 >= 6.0 and _vm5_s1 >= 4000.0 and _b5_s1 >= max(10, int(_s5_s1 * 1.10)))
+            or (_m5_s1 >= 3.0 and _b5_s1 >= int(_s5_s1 * 1.10) and _vm5_s1 >= 2000.0 and _b5_s1 >= 10)
+            or (_age_s1 <= 10.0 and _m5_s1 >= 1.5 and _b5_s1 >= int(_s5_s1 * 1.02) and _vm5_s1 >= 500.0 and _b5_s1 >= 3)
         )
 
         if getattr(_c, "ROCKET_XGB_ENABLED", True) and not _is_momentum_rocket and (rkt_s1 + 0.05) < s1_thresh:

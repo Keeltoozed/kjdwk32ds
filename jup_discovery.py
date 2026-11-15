@@ -492,11 +492,19 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
         print(f"🚫 [{source_tag}-LOW-LIQ] {_sym_tmp} ({mint[:8]}): реальная ликвидность ${_liq_j:.0f} < ${_min_liq_req:.0f} — микро-пул/риск слива.")
         return False
     _tot_tx_j = _b5_j + _s5_j
-    if _tot_tx_j < 16:
-        print(f"🚫 [{source_tag}-LOW-TXNS] {_sym_tmp} ({mint[:8]}): всего {_tot_tx_j} сделок в m5 (<16) — вялый боковой стакан.")
+    _min_tx_req_j = 3 if _age_j <= 2.5 else (6 if _age_j <= 10.0 else 10)
+    if _tot_tx_j < _min_tx_req_j:
+        print(f"🚫 [{source_tag}-LOW-TXNS] {_sym_tmp} ({mint[:8]}): всего {_tot_tx_j} сделок в m5 (<{_min_tx_req_j}) — вялый боковой стакан.")
         return False
     _vol5_j = float(((td or {}).get("volume") or {}).get("m5", 0) or 0)
-    _min_vol_j = 2000.0 if (_b5_j >= int(_s5_j * 1.05) or _age_j <= 15.0) else 4000.0
+    if _age_j <= 2.5:
+        _min_vol_j = 250.0
+    elif _age_j <= 5.0:
+        _min_vol_j = 500.0
+    elif _age_j <= 15.0:
+        _min_vol_j = 800.0
+    else:
+        _min_vol_j = 1500.0 if _b5_j >= int(_s5_j * 1.05) else 2500.0
     if _vol5_j < _min_vol_j:
         print(f"🚫 [{source_tag}-LOW-VOL] {_sym_tmp} ({mint[:8]}): 5м объем ${_vol5_j:,.0f} < ${_min_vol_j:,.0f} — слабый стоячий токен (кейс BRO).")
         return False
