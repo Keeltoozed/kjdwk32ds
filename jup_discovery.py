@@ -132,7 +132,7 @@ async def fetch_jup_tokens() -> list:
         seen = set()
         _age_by_mint = {}
         _max_disc_age = float(getattr(config, "SOLANA_MAX_AGE_MIN", 90.0))
-        _max_disc_fdv = float(getattr(config, "JEV_MAX_MCAP_USD", 320000.0)) + 30000.0
+        _max_disc_fdv = float(getattr(config, "JEV_MAX_MCAP_USD", 220000.0)) + 30000.0
 
         def _add_jup_list(items, tag: str, min_pc5: float = 1.8):
             if not isinstance(items, list):
@@ -1029,7 +1029,7 @@ async def jup_loop(analyzer, tracker):
                         _m1_cand = float((td.get("priceChange") or {}).get("m1", 0) or 0)
 
                         # Отсекаем тяжёлые (> $320k FDV) и отработанные 6h (+450%+) топы вроде BILL до оценки ML:
-                        if _fdv_dex > float(getattr(config, "JEV_MAX_MCAP_USD", 320000.0)):
+                        if _fdv_dex > float(getattr(config, "JEV_MAX_MCAP_USD", 220000.0)):
                             skipped_ancient += 1
                             processed[m] = _now_t + 180
                             continue

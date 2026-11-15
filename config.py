@@ -84,14 +84,15 @@ def get_max_entry_h1_pct(
     m5_pct: float = 1.5,
 ) -> float:
     """Return dynamic max h1% entry cap: permit curve runup only for fresh migrations (<=15m)."""
-    base = float(MAX_ENTRY_H1_PCT)
-    _m5_ok = True if m5_pct is None else (float(m5_pct) >= 2.0)
-    _flow_ok = vol_m5 >= 3000.0 and buys_m5 >= int(sells_m5 * 1.15) and _m5_ok
-    if age_min <= 15.0 and _flow_ok:
-        return max(base, 2500.0)
-    if age_min <= 45.0 and liq_usd >= 20000.0 and vol_m5 >= 10000.0 and buys_m5 >= int(sells_m5 * 1.20) and _m5_ok:
-        return max(base, 450.0)
-    return base
+    _m5_ok = True if m5_pct is None else (float(m5_pct) >= 1.0)
+    _flow_ok = vol_m5 >= 3000.0 and buys_m5 >= int(sells_m5 * 1.10) and _m5_ok
+    if age_min <= 15.0:
+        return 2500.0 if _flow_ok else 1500.0
+    if age_min <= 35.0:
+        return 450.0 if (liq_usd >= 15000.0 and vol_m5 >= 8000.0 and _flow_ok) else 300.0
+    if age_min <= 60.0:
+        return 220.0
+    return 150.0
 
 
 # `.moon` excluded: live Moonit/custom pools frequently report unlocked LP (e.g. EDIDRG..moon 0% lock).
@@ -259,6 +260,10 @@ def evaluate_entry_momentum(
     if age_min >= 45.0 and h6 is not None and float(h6 or 0.0) > MAX_ENTRY_H6_PCT:
         return False, f"h6-exhausted {float(h6 or 0.0):+.1f}% > +{MAX_ENTRY_H6_PCT:.0f}% at {age_min:.0f}m (spent top)"
 
+    _max_h1_allowed = get_max_entry_h1_pct(age_min, vol5_usd, buys5, sells5, liq_usd, m5)
+    if h1 > _max_h1_allowed:
+        return False, f"h1-exhausted {h1:+.0f}% > +{_max_h1_allowed:.0f}% (buying late parabolic top, dump risk)"
+
     # Block vertical top-chasing and active falling knives
     _max_m1_dyn = 30.0 if (buys5 >= max(10, int(sells5 * 1.15)) and vol5_usd >= 3000.0 and m5 >= 4.0) else float(globals().get("MAX_ENTRY_M1_PCT", 22.0))
     _min_m1_dyn = -4.5 if ((vol5_usd >= 10000.0 and buys5 >= int(sells5 * 1.15)) or (h1 >= 25.0 and buys5 >= int(sells5 * 1.25) and vol5_usd >= 4500.0)) else -3.5
@@ -272,22 +277,34 @@ def evaluate_entry_momentum(
     if m5 > _max_m5_dyn:
         return False, f"m5-parabolic-top {m5:+.1f}% > +{_max_m5_dyn:.0f}%"
 
+    # 1. Раннее накопление / ретест свежей миграции (золотая зона входа $40k-$135k FDV):
+    # Токен только вышел на DEX (<=25м), ликвидность на месте (>= $7.5k), объём идёт (>= $2k),
+    # покупатели активны (buys >= sells * 0.95), цена не падает лавиной (m5 >= -6.5%, m1 >= -2.0%):
+    is_fresh_migration_accumulation = (
+        age_min <= 25.0
+        and (fdv_usd <= 0.0 or fdv_usd <= 135000.0)
+        and liq_usd >= 7500.0
+        and buys5 >= max(4, int(sells5 * 0.95))
+        and vol5_usd >= 2000.0
+        and m5 >= -6.5
+        and m1 >= -2.0
+    )
     is_fresh_ignition = (
         (
             age_min <= 45.0
-            and m5 >= 2.0
+            and m5 >= 0.8
             and m1 >= -2.5
-            and buys5 >= max(5, int(sells5 * 1.05))
-            and vol5_usd >= 2000.0
-            and tot_tx >= 10
+            and buys5 >= max(5, int(sells5 * 1.02))
+            and vol5_usd >= 1800.0
+            and tot_tx >= 8
         )
         or (
             age_min <= 45.0
-            and m5 >= -1.5
-            and m1 >= 1.5
-            and buys5 >= max(10, int(sells5 * 1.12))
+            and m5 >= -2.5
+            and m1 >= 0.5
+            and buys5 >= max(8, int(sells5 * 1.05))
             and vol5_usd >= 1400.0
-            and tot_tx >= 12
+            and tot_tx >= 10
         )
     )
     is_hyper_ignition = (
@@ -306,7 +323,8 @@ def evaluate_entry_momentum(
     )
     # Healthy dip / post-migration reclaim & active second-wave consolidation (catches Socks, HOGE, DOJE without dead bleeders)
     is_turned_green_dip = (
-        age_min <= 180.0
+        age_min <= 90.0
+        and (fdv_usd <= 0.0 or fdv_usd <= 220000.0)
         and buys5 >= max(10, int(sells5 * 1.10))
         and vol5_usd >= 4000.0
         and liq_usd >= 9000.0
@@ -337,6 +355,7 @@ def evaluate_entry_momentum(
 
     if not (
         is_ultra_fresh_launch
+        or is_fresh_migration_accumulation
         or is_fresh_ignition
         or is_hyper_ignition
         or is_turned_green_dip
@@ -455,9 +474,9 @@ BREAKEVEN_PCT = 0.16       # Breakeven Shield ВКЛЮЧЕН как в 0d2b1ae: 
 
 PREFETCH_TTL_SEC = 12
 SOLANA_MIN_AGE_MIN = 0.50        # 30 секунд: отсекает мгновенные снайпер-раги первых секунд (HOPE/GTACOIN), ловя ранние ракеты
-SOLANA_MAX_AGE_HOURS = 4.0       # До 4 часов (240м как в 0d2b1ae) для ловли 2-й волны 2x-10x ракет
-SOLANA_MAX_AGE_MIN = 240.0       # Потолок 240 минут для сканера
-JEV_MAX_AGE_MIN = 180.0          # В GROK-JEV ракеты до 180 минут (2-я волна 0d2b1ae)
+SOLANA_MAX_AGE_HOURS = 1.5        # До 1.5 часов (90м) — защита от захода в отработавшие и сливающиеся топы
+SOLANA_MAX_AGE_MIN = 90.0         # Потолок 90 минут для сканера (не покупаем старые измученные монеты)
+JEV_MAX_AGE_MIN = 60.0            # В GROK-JEV свежие монеты до 60м (защита от зомби-монет)
 JEV_MAX_M1_ENTRY_PCT = 25.0
 
 SCALP_TIMEOUT_MIN = 10.0
@@ -478,12 +497,12 @@ JEV_ENABLED = True
 JEV_WICK_STOP_ENABLED = False
 JEV_EARLY_MIN_AGE_MIN = 0.35   # Быстрый ранний вход от 21с для проверенных сильных миграций
 JEV_MIN_AGE_MIN = 0.50         # Базовый карантин 30 секунд для защиты от первого дампового тика
-JEV_MAX_AGE_MIN = 180.0        # В GROK-JEV ловим как свежие, так и 2-ю волну ракет до 180 минут
+JEV_MAX_AGE_MIN = 60.0         # В GROK-JEV ловим свежие монеты до 60м
 JEV_MIN_LIQUIDITY_USD = 6000.0   # Минимум $6k ликвидности — пускает ранние ракеты без мёртвых микро-пулов
 JEV_MAX_LIQUIDITY_USD = 450000.0
 JEV_MIN_VOLUME_H1 = 8000.0
 JEV_MIN_MCAP_USD = 6000.0      # Минимум $6k MCap
-JEV_MAX_MCAP_USD = 1200000.0   # Верхняя граница $1.2M FDV как в 0d2b1ae: позволяет ловить мощные 2x-10x волны!
+JEV_MAX_MCAP_USD = 220000.0    # Верхняя граница $220k FDV: покупаем на старте/разгоне ($40k-$140k), строго блокируем покупку на вершине ($450k+)!
 JEV_MIN_VOLUME_H24 = 15000.0
 JEV_MIN_TRADES_H24 = 60
 JEV_MIN_TRADES_H1 = 20

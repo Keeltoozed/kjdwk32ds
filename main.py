@@ -1037,33 +1037,36 @@ async def scanner_loop(analyzer, tracker):
                         _c_liq = float((_c_pre.get("liquidity") or {}).get("usd", 0) or 0)
                         _c_fdv = float(_c_pre.get("fdv", 0) or _c_pre.get("marketCap", 0) or 0)
                         _max_sc_age = float(getattr(config, "SOLANA_MAX_AGE_MIN", 90.0))
-                        _max_sc_fdv = float(getattr(config, "JEV_MAX_MCAP_USD", 320000.0)) + 30000.0
+                        _max_sc_fdv = float(getattr(config, "JEV_MAX_MCAP_USD", 220000.0)) + 30000.0
 
-                        # Отсекаем тяжёлые (>$350k FDV) и старые (>90м) токены до входа в окно ТОП-60 (никаких BILL!):
-                        if _c_fdv > _max_sc_fdv and mint not in _graduated_set:
+                        # Свежая миграция (только что вышедшая на DEX в пределах раннего окна):
+                        _is_fresh_grad = (mint in _graduated_set) and (_c_age_m <= 25.0) and (_c_fdv <= _max_sc_fdv)
+
+                        # Отсекаем перегретые топы (>$250k FDV) — блокируем покупку на вершине (в т.ч. старых миграций вроде Socks на $450k!):
+                        if _c_fdv > _max_sc_fdv:
                             processed_mints[mint] = _now_r + 300
                             continue
-                        if _c_age_m > _max_sc_age and mint not in _graduated_set:
+                        if _c_age_m > _max_sc_age and not _is_fresh_grad:
                             processed_mints[mint] = _now_r + 600
                             continue
 
                         # Токен старше 45м без свежего импульса (<4%): скип на 90с
-                        if _c_age_m > 45.0 and _c_m5 < 4.0 and mint not in _graduated_set:
+                        if _c_age_m > 45.0 and _c_m5 < 4.0 and not _is_fresh_grad:
                             processed_mints[mint] = _now_r - _cd_r + 90
                             continue
 
                         # Мертвый токен старше 3 минут с 0 сделок в m5: скип на 90с
-                        if _c_age_m >= 3.0 and _c_trades == 0 and _c_vol5 == 0 and mint not in _graduated_set:
+                        if _c_age_m >= 3.0 and _c_trades == 0 and _c_vol5 == 0 and not _is_fresh_grad:
                             processed_mints[mint] = _now_r - _cd_r + 90
                             continue
 
                         # Отсекаем вялые стоячие токены с объёмом < $2,000: быстрый переопрос через 20с
-                        if _c_age_m >= 5.0 and _c_vol5 < 2000.0 and mint not in _graduated_set:
+                        if _c_age_m >= 5.0 and _c_vol5 < 2000.0 and not _is_fresh_grad:
                             processed_mints[mint] = _now_r - _cd_r + 20
                             continue
 
                         # Слив/флет (m5 < 2.0%) не из миграций: кулдаун 18с
-                        if _c_m5 < 2.0 and mint not in _graduated_set and _c_age_m > 3.0:
+                        if _c_m5 < 2.0 and not _is_fresh_grad and _c_age_m > 3.0:
                             processed_mints[mint] = _now_r - _cd_r + 18
                             continue
 
@@ -1077,7 +1080,7 @@ async def scanner_loop(analyzer, tracker):
                         _fresh_sc_mult = 2.5 if _c_age_m <= 15.0 else (1.8 if _c_age_m <= 45.0 else 1.0)
                         _rkt_vel = _c_m5 * _vol_log * _bs_ratio * _fresh_sc_mult
 
-                        _score_rank = (1000.0 if mint in _graduated_set else 0.0) + _rkt_vel
+                        _score_rank = (1000.0 if _is_fresh_grad else 0.0) + _rkt_vel
                         _ranked_mints.append((_score_rank, mint))
                     else:
                         # Если данных в префетче нет: пускаем только свежие миграции, ручной вотчлист или молодой токен из роддома
@@ -1373,11 +1376,11 @@ async def scanner_loop(analyzer, tracker):
                                     continue
 
                                 _max_age_live = float(getattr(config, "SOLANA_MAX_AGE_MIN", 90.0))
-                                _max_fdv_live = float(getattr(config, "JEV_MAX_MCAP_USD", 320000.0))
+                                _max_fdv_live = float(getattr(config, "JEV_MAX_MCAP_USD", 220000.0))
                                 _fdv_sc_live = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
                                 _vol5_live = float(((pair_data.get("volume") or {}).get("m5", 0) or 0))
                                 if _fdv_sc_live > _max_fdv_live:
-                                    print(f"🚫 [SCANNER-LARGE-CAP] {actual_symbol} ({mint[:8]}): FDV ${_fdv_sc_live:,.0f} > ${_max_fdv_live:,.0f} — нет запаса хода 2x+.")
+                                    print(f"🚫 [SCANNER-LARGE-CAP] {actual_symbol} ({mint[:8]}): FDV ${_fdv_sc_live:,.0f} > ${_max_fdv_live:,.0f} — нет запаса хода 2x+ (покупка вершины исключена).")
                                     continue
                                 _is_active_breakout_live = (
                                     _age_m <= _max_age_live

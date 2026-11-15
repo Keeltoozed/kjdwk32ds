@@ -515,7 +515,7 @@ class GrokJevEngine:
         min_age = _sol_min_age_g
         max_age = float(getattr(_c, "JEV_MAX_AGE_MIN", 60.0))
         _max_scan_age_g = float(getattr(_c, "SOLANA_MAX_AGE_MIN", 90.0))
-        _max_mcap_g = float(getattr(_c, "JEV_MAX_MCAP_USD", 320000.0))
+        _max_mcap_g = float(getattr(_c, "JEV_MAX_MCAP_USD", 220000.0))
         if fdv_mc > _max_mcap_g:
             return False, f"mcap-too-large ${fdv_mc:,.0f} > ${_max_mcap_g:,.0f}"
         _is_jev_breakout = (
@@ -698,7 +698,7 @@ class GrokJevEngine:
         if is_pump and mcap > 0 and mcap < 5000.0:
             return False, f"pump-curve-too-early mcap ${mcap:,.0f} < $5k (high dev dump trap risk)"
         min_mcap = 5000.0 if (dex_id in ("pump", "pumpfun")) else float(getattr(_c, "JEV_MIN_MCAP_USD", 5000.0))
-        max_mcap = float(getattr(_c, "JEV_MAX_MCAP_USD", 320000.0))
+        max_mcap = float(getattr(_c, "JEV_MAX_MCAP_USD", 220000.0))
         if mcap > 0 and not (min_mcap <= mcap <= max_mcap):
             return False, f"mcap-out-of-bounds ${mcap:,.0f} not in [${min_mcap:,.0f}, ${max_mcap:,.0f}]"
 
@@ -1221,7 +1221,7 @@ class GrokJevEngine:
                 liq_g = float(g.get("liquidity", 0) or 0)
                 age_g = float(g.get("age_m", 999) or 999)
                 fdv_g = float(g.get("fdv", 0) or g.get("market_cap", 0) or 0)
-                if m and 32 <= len(m) <= 44 and not m.startswith("0x") and liq_g >= 4500.0 and age_g <= float(getattr(_c, "SOLANA_MAX_AGE_MIN", 90.0)) and fdv_g <= float(getattr(_c, "JEV_MAX_MCAP_USD", 1200000.0)) and m not in seen:
+                if m and 32 <= len(m) <= 44 and not m.startswith("0x") and liq_g >= 4500.0 and age_g <= float(getattr(_c, "SOLANA_MAX_AGE_MIN", 90.0)) and fdv_g <= float(getattr(_c, "JEV_MAX_MCAP_USD", 220000.0)) and m not in seen:
                     seen.add(m)
                     candidates.append((m, "solana"))
         except Exception:
@@ -2011,8 +2011,8 @@ class GrokJevEngine:
         _ca_s1 = float(pair.get("pairCreatedAt") or 0)
         _age_s1 = ((time.time() * 1000.0 - _ca_s1) / 60000.0) if _ca_s1 > 0 else 999.0
         _s1_fresh_ok = (
-            _age_s1 <= float(getattr(_c, "SOLANA_MAX_AGE_MIN", 240.0))
-            and _fdv_s1 <= float(getattr(_c, "JEV_MAX_MCAP_USD", 1200000.0))
+            _age_s1 <= float(getattr(_c, "SOLANA_MAX_AGE_MIN", 90.0))
+            and _fdv_s1 <= float(getattr(_c, "JEV_MAX_MCAP_USD", 220000.0))
             and (_age_s1 < 45.0 or _h6_s1 is None or float(_h6_s1 or 0) <= float(getattr(_c, "MAX_ENTRY_H6_PCT", 2500.0)))
             and _m1_s1 >= float(getattr(_c, "JEV_MIN_M1_ENTRY_FLOOR_PCT", -3.5))
             and _h1_s1 >= float(getattr(_c, "JEV_MIN_H1_PCT", -15.0))

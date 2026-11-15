@@ -633,7 +633,7 @@ class Analyzer:
                         _age_lt = ((time.time() * 1000.0 - _ca_lt) / 60000.0) if _ca_lt > 0 else 999.0
                         if _liq_lt < 6000.0 or _vol5_lt < 1200.0 or _m5_lt < 2.0:
                             continue
-                        if _age_lt > float(getattr(config, "SOLANA_MAX_AGE_MIN", 90.0)) or _fdv_lt > float(getattr(config, "JEV_MAX_MCAP_USD", 1200000.0)):
+                        if _age_lt > float(getattr(config, "SOLANA_MAX_AGE_MIN", 90.0)) or _fdv_lt > float(getattr(config, "JEV_MAX_MCAP_USD", 220000.0)):
                             continue
                         _addr_lt = str((_p_lt.get("baseToken") or {}).get("address") or "").strip()
                         if _addr_lt and not _addr_lt.startswith("0x") and 32 <= len(_addr_lt) <= 44:
@@ -1758,9 +1758,9 @@ class Analyzer:
             print(f"⏳ [ENTRY] {mint[:8]}: возраст {_age_min_pre:.1f}м < {_sol_min_age}м — выдерживаем карантин первой свечи.")
             return None
 
-        # 1. Защита от старых отработанных пулов (> 90м) и переросших mid-caps (> JEV_MAX_MCAP_USD = $320k)
+        # 1. Защита от старых отработанных пулов (> 90м) и переросших mid-caps (> JEV_MAX_MCAP_USD = $220k)
         _fdv_chk_pre = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
-        _max_mcap_pre = float(getattr(config, "JEV_MAX_MCAP_USD", 320000.0))
+        _max_mcap_pre = float(getattr(config, "JEV_MAX_MCAP_USD", 220000.0))
         if _fdv_chk_pre > _max_mcap_pre:
             return self._deny(
                 mint,
