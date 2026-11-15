@@ -306,11 +306,12 @@ def evaluate_entry_momentum(
     if tot_tx >= 10 and (vol5_usd / max(1, tot_tx)) < 4.0:
         return False, f"fake-bump-wash-bot avg ${vol5_usd/max(1, tot_tx):.2f} < $4.00 across {tot_tx} txns"
 
-    # 0.5 ЖЁСТКИЙ ОТСЕВ МЁРТВЫХ ПУСТЫШЕК БЕЗ ОБЪЁМА И СПРОСА (кейс Lily / VICE / GTA / CLOWN):
-    _min_tx_gate = 7 if age_min <= 3.0 else 10
-    _min_vol_gate = 650.0 if (age_min <= 3.0 and buys5 >= 5) else 1000.0
-    if tot_tx < _min_tx_gate or buys5 < 5:
-        return False, f"no-demand-txns {buys5}b/{sells5}s (tot {tot_tx} < {_min_tx_gate})"
+    # 0.5 ЖЁСТКИЙ ОТСЕВ МЁРТВЫХ ПУСТЫШЕК БЕЗ ОБЪЁМА И СПРОСА (кейс Lily / VICE / GTA / CLOWN / DMIND):
+    _min_tx_gate = 14 if age_min <= 3.0 else 20
+    _min_vol_gate = 1800.0 if (age_min <= 3.0 and buys5 >= 10) else 3500.0
+    _min_buys_req = 8 if age_min <= 3.0 else 12
+    if tot_tx < _min_tx_gate or buys5 < _min_buys_req:
+        return False, f"no-demand-txns {buys5}b/{sells5}s (buys < {_min_buys_req} or tot {tot_tx} < {_min_tx_gate})"
     if vol5_usd < _min_vol_gate:
         return False, f"no-demand-vol5 ${vol5_usd:,.0f} < ${_min_vol_gate:,.0f} (dead micro-pool)"
     if liq_usd >= 1500.0 and vel_ratio < 0.08 and vol5_usd < 2000.0:
@@ -318,18 +319,18 @@ def evaluate_entry_momentum(
 
     # 1. HARD NO-FALLING-KNIFE GATE:
     # Не покупаем глубокий обвал или стоячий флет; пускаем живой рост и быстрый взрыв 1м.
-    _is_m1_surge = (m1 >= 1.5 and buys5 >= max(7, int(sells5 * 1.15)) and vol5_usd >= 900.0)
+    _is_m1_surge = (m1 >= 1.5 and buys5 >= max(10, int(sells5 * 1.15)) and vol5_usd >= 1500.0)
     _m5_min_req = -0.5 if _is_m1_surge else 2.0
     if m5 < _m5_min_req:
         return False, f"m5-falling-knife {m5:+.1f}% < +{_m5_min_req:.1f}% (red or flat 5m candle)"
-    _is_strong_pullback = (vol5_usd >= 4000.0 and buys5 >= max(15, int(sells5 * 1.10)) and m5 >= 4.0)
+    _is_strong_pullback = (vol5_usd >= 4500.0 and buys5 >= max(18, int(sells5 * 1.10)) and m5 >= 4.0)
     if m1 < (-4.5 if _is_strong_pullback else -3.0):
         return False, f"m1-falling-knife {m1:+.1f}% (1m candle dumping)"
 
     # 2. Активный перевес покупателей (не берём пулы, где продавцы уже пересиливают)
-    _is_hi_vol_rocket = (vol5_usd >= 5000.0 and buys5 >= max(20, int(sells5 * 0.90)) and m5 >= 3.0)
-    if sells5 > 4 and buys5 < int(sells5 * 1.00) and not _is_hi_vol_rocket:
-        return False, f"sellers-dominating {buys5}b/{sells5}s (more sellers than buyers in 5m)"
+    _is_hi_vol_rocket = (vol5_usd >= 6000.0 and buys5 >= max(25, int(sells5 * 1.05)) and m5 >= 3.0)
+    if sells5 > 4 and buys5 < int(sells5 * 1.10) and not _is_hi_vol_rocket:
+        return False, f"sellers-dominating {buys5}b/{sells5}s (need buyers > sellers * 1.10 in 5m)"
 
     _max_fdv_allowed = (float(globals().get("JEV_MAX_MCAP_USD", 220000.0)) * 1.25) if (vol5_usd >= 5000.0 and buys5 >= int(sells5 * 1.00) and age_min <= 20.0) else float(globals().get("JEV_MAX_MCAP_USD", 220000.0))
     if fdv_usd > 0.0 and fdv_usd > _max_fdv_allowed:
@@ -497,10 +498,10 @@ DD_THROTTLE_START_USD = 15.0
 
 # === ВХОД В ЗРЕЛЫЕ КРИВЫЕ PUMP.FUN ДО МИГРАЦИИ + ЗАЩИТА DEX ===
 SNIPER_ENTRIES_ENABLED = True             # ВКЛЮЧЕНО: мгновенный вход в свежие кривые/миграции со стрима
-ALLOW_UNGRADUATED_PUMPFUN = True          # ВКЛЮЧЕНО: ловим живые разгоны Pump.fun кривых до миграции с быстрым сбором иксов
-MIN_PUMP_CURVE_MCAP_USD = 3500.0          # Ранний порог кривой в USD (от ~$3.5k)
+ALLOW_UNGRADUATED_PUMPFUN = True          # ВКЛЮЧЕНО: ловим реальные разгоны кривых к миграции (от $22k капы, отсекая $3.5k мертвецов)
+MIN_PUMP_CURVE_MCAP_USD = 22000.0         # Порог реального разгона кривой (от $22k, где уже есть толпа и объём, исключая $3.5k dev-дамп ловушки)
 MAX_PUMP_CURVE_MCAP_USD = 65000.0         # Fallback в USD (до миграционного обрыва $69k)
-MIN_PUMP_CURVE_MCAP_SOL = 22.0            # Ранний порог кривой pump.fun в SOL (~22 SOL)
+MIN_PUMP_CURVE_MCAP_SOL = 140.0           # Порог кривой pump.fun в SOL (~140 SOL, стадия активного пробоя)
 MAX_PUMP_CURVE_MCAP_SOL = 480.0           # Верх кривой перед миграцией
 PUMP_MIGRATION_MCAP_SOL = 410.0           # FDV миграции pump.fun
 PUMP_DUMP_FLOOR_SOL = 50.0                # Порог post-mig-dumped (~50 SOL, разрешает быстрые реклеймы)
@@ -563,10 +564,10 @@ MOONBAG_MAX_HOLD_MIN = 55.0          # Мунбэг может ехать до 5
 PUMP_XGB_ENABLED = False
 RAY_XGB_ENABLED = False
 ROCKET_XGB_ENABLED = True
-ROCKET_XGB_STAGE1_THRESHOLD = 5.0    # Первичный отсев 5%: широкий пропуск импульсных пулов без потери скорости
-ROCKET_XGB_FINAL_THRESHOLD = 7.0     # Финальный порог 7%: свободный пропуск ранних и незалоченных раннеров
-ROCKET_XGB_THRESHOLD = 7.0
-ROCKET_XGB_UNLOCKED_CUSTOM_MIN = 18.0  # Для кастомных не-launchpad пулов без сожжённого LP требуется >= 18% XGB (FiveM=54% проходит, 7% GTA6-клоны отсекаются)
+ROCKET_XGB_STAGE1_THRESHOLD = 18.0    # Первичный отсев 18%: отсекает сонный шум, пропуская только активные импульсы
+ROCKET_XGB_FINAL_THRESHOLD = 30.0     # Финальный порог 30%: фильтрует слабые токены (TRELLISUP 12%, GTI 8%), пропуская ракеты уровня FiveM (54%) и Retire (50%)
+ROCKET_XGB_THRESHOLD = 30.0
+ROCKET_XGB_UNLOCKED_CUSTOM_MIN = 35.0  # Для кастомных пулов без сожжённого LP требуется >= 35% XGB (FiveM=54% проходит, слабые пулы отсекаются)
 JEV_MAX_AGE_MIN = 45.0               # Ультра-ранний фокус: свежие запуски и пробои до 45м (освобождаем слоты от старых 2ч+ топов)
 
 STALL_TIMER_SEC = 420.0   # 7 минут на консолидацию до среза по стагнации
@@ -739,9 +740,9 @@ PULLBACK_M1_MIN_PCT = -0.08
 PULLBACK_M1_MAX_PCT = 0.20
 PULLBACK_MAX_H1_PCT = 320.0
 PULLBACK_MAX_M5_PCT = 0.95
-MIN_VOLUME_M5 = 1000            # Минимум $1,000 за 5м — отсекает мёртвый 3-tx шум без потери раннего захвата
-MIN_TXNS_M5 = 10                # Минимум 10 сделок за 5м — подтверждённый спрос толпы
-MIN_BUY_SELL_RATIO = 1.05       # Покупатели должны превышать продавцов (чистый приток спроса)
+MIN_VOLUME_M5 = 4500            # Минимум $4,500 за 5м — реальный торговый поток толпы (как у FiveM и Retire)
+MIN_TXNS_M5 = 20                # Минимум 20 сделок за 5м — подтверждённый активный спрос
+MIN_BUY_SELL_RATIO = 1.15       # Покупатели преобладают над продавцами на 15%+ (чистый приток спроса)
 LOTTERY_ENABLED = False
 LOTTERY_MIN_M5_PCT = 0.60
 LOTTERY_SIZE_MULT = 0.30
