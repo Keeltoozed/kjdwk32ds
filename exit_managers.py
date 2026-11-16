@@ -205,18 +205,18 @@ class MatureExitManager:
                 _trail_dist = _mb_dist
             elif max_pnl_pct >= 0.55:
                 _floor_pnl = 0.28
-                _trail_dist = 0.18
+                _trail_dist = 0.20
             elif max_pnl_pct >= 0.28:
                 _floor_pnl = 0.14
-                _trail_dist = 0.14
+                _trail_dist = 0.18
             elif max_pnl_pct >= 0.15:
                 _floor_pnl = 0.05
-                _trail_dist = 0.12
+                _trail_dist = 0.15
             else:
                 # НЕСГОРАЕМЫЙ БЕЗУБЫТОК МУНБЭГА:
                 # Прибыль по первой части уже зафиксирована на TP1. Оставшийся мунбэг
                 # гарантированно защищен от убытка: при откате к уровню безубытка (+0.5%)
-                # позиция полностью закрывается, сохраняя 100% зафиксированного профита!
+                # позиция закрывается с подтверждением, сохраняя 100% зафиксированного профита!
                 _floor_pnl = 0.005
                 _trail_dist = None
         else:
@@ -259,7 +259,7 @@ class MatureExitManager:
                 _fl_c = int(getattr(position, "floor_confirm_n", 0) or 0) + 1
                 position.floor_confirm_n = _fl_c
                 # Подтверждаем 2 тика (защита от 1-секундного спреда/сквиза на ретесте):
-                if _fl_c >= 2 or pnl_pct <= (_floor_pnl - 0.04) or _is_mb:
+                if _fl_c >= 2 or pnl_pct <= (_floor_pnl - 0.05):
                     _pnl_str = f"+{pnl_pct*100:.1f}%" if pnl_pct >= 0 else f"{pnl_pct*100:.1f}%"
                     return f"Mature {_tag} Floor ({_pnl_str} after peak +{max_pnl_pct*100:.1f}%)"
             else:

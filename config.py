@@ -636,17 +636,17 @@ TIME_EXIT_PROFIT_REQ = 0.015
 # === ЛЕСТНИЦА ТЕЙК-ПРОФИТОВ (ВОЗВРАТ ВЛОЖЕННОГО ТЕЛА ДО РАГА + FREE-RIDE MOONBAG 2x-10x) ===
 PARTIAL_TP_ENABLED = True
 PARTIAL_TP_MIN_TICKET_USD = 3.0      # Включено для $5 ордеров: забираем вложенный депозит до рага, остаток летит бесплатно!
-TP1_TRIGGER_PCT = 0.10               # На первом импульсе +10% забираем 50% позиции (~$2.75 кэша из $5 — половина тела уже в безопасности!)
-TP1_SELL_FRAC = 0.50
-TP2_TRIGGER_PCT = 0.28               # На +28% забираем еще 50% от остатка (~$1.60 -> суммарно 87% тела вернули в кэш!)
-TP2_SELL_FRAC = 0.50
-TP3_TRIGGER_PCT = 0.70               # На +70% (1.7x) фиксируем 35% от бесплатного остатка
+TP1_TRIGGER_PCT = 0.15               # На первом импульсе +15% фиксируем 40% (фиксируем прибыль, оставляя 60% тела для полёта в ракету)
+TP1_SELL_FRAC = 0.40
+TP2_TRIGGER_PCT = 0.35               # На +35% фиксируем еще 40% от остатка (тело полностью в плюсе, остаток едет в 2x-10x)
+TP2_SELL_FRAC = 0.40
+TP3_TRIGGER_PCT = 0.80               # На +80% (1.8x) фиксируем 35% от бесплатного остатка
 TP3_SELL_FRAC = 0.35
-TP4_TRIGGER_PCT = 1.80               # На +180% (2.8x) фиксируем 40% от остатка
+TP4_TRIGGER_PCT = 2.00               # На +200% (3.0x) фиксируем 40% от остатка
 TP4_SELL_FRAC = 0.40
 TP5_TRIGGER_PCT = 5.00               # На +500% (6x) фиксируем 50% от остатка, остальное едет до предела трейлинга
 TP5_SELL_FRAC = 0.50
-MOONBAG_TRIGGER_PCT = 0.28           # Статус Moonbag включается после TP2 (+28%), когда 87%+ тела уже в кэше!
+MOONBAG_TRIGGER_PCT = 0.35           # Статус Moonbag включается после TP2 (+35%), когда тело полностью защищено!
 MOONBAG_SELL_FRAC = 0.0
 # === МУНБЭГ-ТРЕЙЛИНГ (даём бесплатному остатку пробить 2x и везти до 3.5x-10x без риска потери депозита) ===
 MOONBAG_TRAIL_ACTIVATION_PCT = 1.00  # Трейлинг мунбэга включается выше 2x (+100%)
@@ -686,13 +686,13 @@ def get_sol_tp_ladder(is_unlocked: bool) -> tuple:
             float(globals().get("UNLOCKED_TP5_SELL_FRAC", 0.50)),
         )
     return (
-        float(globals().get("TP1_TRIGGER_PCT", 0.10)),
-        float(globals().get("TP1_SELL_FRAC", 0.50)),
-        float(globals().get("TP2_TRIGGER_PCT", 0.28)),
-        float(globals().get("TP2_SELL_FRAC", 0.50)),
-        float(globals().get("TP3_TRIGGER_PCT", 0.70)),
+        float(globals().get("TP1_TRIGGER_PCT", 0.15)),
+        float(globals().get("TP1_SELL_FRAC", 0.40)),
+        float(globals().get("TP2_TRIGGER_PCT", 0.35)),
+        float(globals().get("TP2_SELL_FRAC", 0.40)),
+        float(globals().get("TP3_TRIGGER_PCT", 0.80)),
         float(globals().get("TP3_SELL_FRAC", 0.35)),
-        float(globals().get("TP4_TRIGGER_PCT", 1.80)),
+        float(globals().get("TP4_TRIGGER_PCT", 2.00)),
         float(globals().get("TP4_SELL_FRAC", 0.40)),
         float(globals().get("TP5_TRIGGER_PCT", 5.00)),
         float(globals().get("TP5_SELL_FRAC", 0.50)),

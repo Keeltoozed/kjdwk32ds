@@ -1459,7 +1459,12 @@ class Analyzer:
 
         # 1. Защита от краха, стоячих majors и неликвидных/старых пулов (только для обычных китов; VIP обходит!)
         dex_id_low = str((pair_data or {}).get("dexId") or "").lower()
-        is_pump_curve = dex_id_low in ("pump", "pumpfun")
+        _fdv_tmp = float((pair_data or {}).get("fdv", 0) or (pair_data or {}).get("marketCap", 0) or 0)
+        _liq_tmp = float(((pair_data or {}).get("liquidity") or {}).get("usd", 0) or 0)
+        is_pump_curve = (
+            dex_id_low in ("pump", "pumpfun")
+            or (str(mint).endswith("pump") and (_fdv_tmp < 35000.0 or _liq_tmp < 6000.0 or dex_id_low in ("pump", "pumpfun")))
+        )
         if is_vip:
             print(f"👑 [VIP-DIRECT-BYPASS] {clean_symbol} ({mint[:8]}): Сигнал VIP-трейдера {trader_name} — полный обход фильтров объёма, возраста, соцсетей и свечей!")
         else:
@@ -1764,12 +1769,29 @@ class Analyzer:
             _is_known_grad = _bt_kg.is_graduated(mint)
         except Exception:
             pass
-        if (_dex_pre_early in ("pump", "pumpfun", "moonshot", "meteoradbc") or mint.endswith("moon")) and not _is_known_grad:
+        _fdv_curve_pre = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
+        if _fdv_curve_pre <= 0:
+            _px_calc = float(pair_data.get("priceUsd", 0) or 0)
+            if _px_calc > 0:
+                _fdv_curve_pre = _px_calc * 1_000_000_000.0
+        _liq_curve_pre = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
+
+        _is_unmigrated_curve = (
+            _dex_pre_early in ("pump", "pumpfun", "moonshot", "meteoradbc")
+            or mint.endswith("moon")
+            or (mint.endswith("pump") and (
+                not _is_known_grad
+                or _dex_pre_early in ("pump", "pumpfun")
+                or _fdv_curve_pre < 35000.0
+                or _liq_curve_pre < 6000.0
+            ))
+        )
+        if _is_unmigrated_curve and not _is_known_grad:
             if not getattr(config, "ALLOW_UNGRADUATED_PUMPFUN", False):
                 return self._deny(
                     mint,
                     "ungraduated-pump-curve",
-                    f"⏳ [CURVE-SKIP] {symbol} ({mint[:8]}): сырая кривая bonding curve без миграции на DEX — ждём выхода на PumpSwap/Raydium с сожжённым LP.",
+                    f"⏳ [CURVE-SKIP] {symbol} ({mint[:8]}): сырая кривая bonding curve без миграции на DEX (FDV ${_fdv_curve_pre:,.0f}, Liq ${_liq_curve_pre:,.0f}) — ждём выхода на PumpSwap/Raydium с сожжённым LP.",
                 )
             _fdv_curve_pre = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
             if _fdv_curve_pre <= 0:
