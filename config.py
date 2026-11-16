@@ -451,6 +451,15 @@ def evaluate_entry_momentum(
     if liq_usd >= 1500.0 and vel_ratio < 0.10 and vol5_usd < 3500.0:
         return False, f"dead-turnover v/l {vel_ratio:.2f}x < 0.10x (vol5 ${vol5_usd:,.0f} on liq ${liq_usd:,.0f})"
 
+    # 0.6 ДИНАМИЧЕСКИЙ ПОРОГ ОБОРОТА (ликвидирует стоячие монеты без импульса вроде CHOP):
+    # Если монета дорогая (FDV > $70k) или зрелая (age > 10m), объём обязан соответствовать размеру капитализации!
+    if fdv_usd >= 70000.0:
+        _req_fdv_vol = max(10000.0, fdv_usd * 0.05)
+        if vol5_usd < _req_fdv_vol:
+            return False, f"low-fdv-turnover ${vol5_usd:,.0f} < ${_req_fdv_vol:,.0f} on FDV ${fdv_usd:,.0f} (sluggish chop, no rocket momentum)"
+    if liq_usd >= 8000.0 and age_min >= 10.0 and vel_ratio < 0.25:
+        return False, f"low-liq-turnover v/l {vel_ratio:.2f}x < 0.25x on liq ${liq_usd:,.0f} (stagnant flow)"
+
     # 1. HARD NO-FALLING-KNIFE GATE:
     # Вход РАЗРЕШЁН ТОЛЬКО на растущей 1м свече (m1 >= 0.0%). Покупка на красной 1м свече строго запрещена!
     _is_m1_surge = (m1 >= 1.5 and buys5 >= max(10, int(sells5 * 1.15)) and vol5_usd >= 1500.0)
@@ -462,8 +471,7 @@ def evaluate_entry_momentum(
 
     # 2. Активный перевес покупателей (покупатели обязаны опережать продавцов минимум на 30%+):
     _req_bs_ratio = 1.30
-    _is_hi_vol_rocket = (vol5_usd >= 6000.0 and buys5 >= max(25, int(sells5 * 1.15)) and m5 >= 3.0)
-    if sells5 > 4 and buys5 < int(sells5 * _req_bs_ratio) and not _is_hi_vol_rocket:
+    if sells5 > 4 and buys5 < int(sells5 * _req_bs_ratio):
         return False, f"sellers-dominating {buys5}b/{sells5}s (need buyers > sellers * {_req_bs_ratio:.2f} in 5m)"
 
     # 2.5. Жесткий барьер против микро-пулов и ловушек снайп-дампов (кейсы Smoke / COGE):

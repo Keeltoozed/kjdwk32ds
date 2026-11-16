@@ -1916,22 +1916,13 @@ class Analyzer:
                 f"🚫 [LOW-TXNS] {symbol} ({mint[:8]}): 5м сделок {_tot_tx5_pre} < {_min_tx_pre_a} — нет спроса.",
             )
         if _age_min_pre >= 20.0:
-            _is_massive_mature_flow = (_vm5_pre >= 5000.0 and _b5_pre >= int(_s5_pre * 0.95))
-            _is_strong_mature_breakout = (_m5 >= 2.0 and _vm5_pre >= 1200.0 and _b5_pre >= int(_s5_pre * 1.00) and _tot_tx5_pre >= 10)
-            _is_mature_active_pullback = (
-                _h1 >= 5.0
-                and _m5 >= 2.0
-                and _m1 >= -3.0
-                and _b5_pre >= int(_s5_pre * 1.00)
-                and _vm5_pre >= 2000.0
-                and _raw_liq_chk >= 4000.0
-            )
+            _is_mature_breakout = (_m5 >= 2.0 and _vm5_pre >= 10000.0 and _b5_pre >= int(_s5_pre * 1.30) and _tot_tx5_pre >= 25)
             _v2l_mat = (_vm5_pre / max(_raw_liq_chk, 1.0)) if _raw_liq_chk > 0 else 0.0
-            if not _is_massive_mature_flow and not _is_strong_mature_breakout and not _is_mature_active_pullback and (_vm5_pre < 1500.0 or _m5 < 0.0 or _tot_tx5_pre < 10):
+            if not _is_mature_breakout and (_vm5_pre < 8000.0 or _v2l_mat < 0.25 or _m5 < 1.0):
                 return self._deny(
                     mint,
                     f"slow-mature-pool v5=${_vm5_pre:.0f} v/l={_v2l_mat:.2f}x",
-                    f"🚫 [MATURE-STALL-GUARD] {symbol} ({mint[:8]}): токену {_age_min_pre:.0f}м, но оборот вялый (vol5 ${_vm5_pre:,.0f}, v/l {_v2l_mat:.2f}x, m5 {_m5:+.1f}%) — кейс PROPFUN.",
+                    f"🚫 [MATURE-STALL-GUARD] {symbol} ({mint[:8]}): токену {_age_min_pre:.0f}м, но оборот вялый (vol5 ${_vm5_pre:,.0f}, v/l {_v2l_mat:.2f}x, m5 {_m5:+.1f}%) — стоячий флет.",
                 )
 
         # Запрет входа при давлении продавцов (строгое соотношение покупателей, без послаблений на высоком объёме)
