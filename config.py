@@ -74,8 +74,8 @@ BLOCK_PERMISSIONLESS_LIQ_FDV_TRAP = True   # Блокировать кастом
 REQUIRE_SOCIALS_ENABLED = False            # Не требовать соцсети на старте/зрелости (важна только живая ликвидность и импульс)
 MAX_ENTRY_H1_PCT = 1500.0      # Высокий потолок h1 для свежих миграций (<15м); старые (>30м) режутся в get_max_entry_h1_pct
 MAX_ENTRY_H6_PCT = 500.0       # Потолок 6h: не входим в уже отработавшие 6x-20x памп-топы
-MAX_ENTRY_M5_PCT = 180.0       # Потолок m5: ловим взрывной старт ракет (+20%..+180%), отсекаем только гипер-свечи вроде GOSSIP (+1330%)
-MAX_ENTRY_M1_PCT = 35.0        # Потолок m1: допускаем быстрые 1м пробои до +35%
+MAX_ENTRY_M5_PCT = 450.0       # Потолок m5: допускает взлёт миграций (+200%..+450% baseline от pump.fun), отсекает только гипер-свечи (+650%+)
+MAX_ENTRY_M1_PCT = 45.0        # Потолок m1: допускаем быстрые 1м пробои до +45%
 REQUIRE_SOCIALS_MIN_AGE_MIN = 9999.0  # Соцсети не обязательны (отключено)
 
 
@@ -494,9 +494,18 @@ def evaluate_entry_momentum(
     if h1 > _max_h1_allowed:
         return False, f"h1-exhausted {h1:+.0f}% > +{_max_h1_allowed:.0f}% (buying late parabolic top, dump risk)"
 
-    # Потолки m1/m5 масштабируются от конфига (не режем ранние быстрые пробои):
-    _max_m1_dyn = max(float(globals().get("MAX_ENTRY_M1_PCT", 35.0)), 35.0 if (buys5 >= max(8, sels_min := int(sells5 * 1.05)) and vol5_usd >= 1200.0) else 25.0)
-    _max_m5_dyn = max(float(globals().get("MAX_ENTRY_M5_PCT", 180.0)), 180.0)
+    # Потолки m1/m5 масштабируются от конфига (не режем свежие миграции и реактивные ракеты вроде MIMIC +391%):
+    # При миграции pump.fun -> DEX AMM цена открывается на +200%..+450% выше кривой,
+    # поэтому для токенов возрастом <= 25м или с мощным объёмом потолок m5 должен быть 650%, а не 180%!
+    _is_fresh_grad_or_surge = (
+        (age_min <= 25.0 or vol5_usd >= 3500.0)
+        and buys5 >= max(8, int(sells5 * 1.15))
+    )
+    _max_m5_dyn = 650.0 if _is_fresh_grad_or_surge else max(float(globals().get("MAX_ENTRY_M5_PCT", 350.0)), 350.0)
+    _max_m1_dyn = max(
+        float(globals().get("MAX_ENTRY_M1_PCT", 35.0)),
+        60.0 if (buys5 >= max(10, int(sells5 * 1.20)) and vol5_usd >= 2500.0) else (35.0 if buys5 >= max(8, int(sells5 * 1.05)) and vol5_usd >= 1200.0 else 25.0)
+    )
     if m1 > _max_m1_dyn:
         return False, f"m1-vertical-top {m1:+.1f}% > +{_max_m1_dyn:.0f}% (buying candle top, wait for reset)"
     if m5 > _max_m5_dyn:

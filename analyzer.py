@@ -2197,6 +2197,7 @@ class Analyzer:
             _is_canonical_pump = _is_native_pump_dex
             _is_pump_flag = 1 if config.is_launchpad_mint(mint) or _is_canonical_pump else 0
             _cur_tok_top10 = 0.0
+            _cur_tok_top1 = 0.0
             _cur_tok_dev = 0.0
             try:
                 import goplus as _gp_rc
@@ -2481,6 +2482,7 @@ class Analyzer:
                                 f"🚫 [TOP20-SYBIL-SWARM] {symbol} ({mint[:8]}): {len(_mid_syb_a)} суб-кошельков держат по 1.5-4.5% ({sum(_mid_syb_a):.1f}% эмиссии) — сибил-рои дева!",
                             )
                     _cur_tok_top10 = top_10_sum_pct
+                    _cur_tok_top1 = largest_whale_pct_pre
                     _cur_tok_dev = dev_holding_pct
                     self._last_top10 = top_10_sum_pct
                     self._last_dev = dev_holding_pct
@@ -2608,9 +2610,11 @@ class Analyzer:
                 return False
 
             # 5. Stage-2 ML пересчёт с реальными ончейн-данными холдеров этого конкретного токена (локальные переменные защищают от гонок ScanWindow!)
-            if _cur_tok_top10 > 0 or _cur_tok_dev > 0:
+            _s1_score = conf
+            if _cur_tok_top10 > 0 or _cur_tok_dev > 0 or _cur_tok_top1 > 0:
+                _top1_val = _cur_tok_top1 if _cur_tok_top1 > 0 else max(float(_cur_tok_dev or 0.0), min(4.5, float(_cur_tok_top10 or 20.0) / 6.0))
                 _real_holders = {
-                    "top1_pct": max(float(_cur_tok_dev or 0.0), float(_cur_tok_top10 or 20.0) / 5.0),
+                    "top1_pct": _top1_val,
                     "top10_pct": float(_cur_tok_top10 or 20.0),
                     "dev_pct": float(_cur_tok_dev or 0.0),
                 }
@@ -2621,6 +2625,23 @@ class Analyzer:
             _req_soc_age_a = float(getattr(config, "REQUIRE_SOCIALS_MIN_AGE_MIN", 25.0))
             if _links_cnt == 0 and not _soc_unknown and _age_min_pre >= _req_soc_age_a:
                 _final_thr = max(_final_thr, _final_thr + 1.0)
+
+            # ЗАЩИТА РАКЕТ: Если токен прошёл Stage-1 (>= 18%) и является подтвержденным лидером волны
+            # (NARRATIVE-KING или vol5 >= $8,000 + buys >= sells * 1.25) с чистым девом (dev <= 15%),
+            # срез холдеров не должен блочить ракету (кейс JENSENATOR $35k vol5)!
+            _is_king = bool(getattr(self, "_is_narrative_king", False)) or bool(pair_data.get("_is_narrative_king"))
+            _tx_s2 = (pair_data.get("txns") or {}).get("m5") or {}
+            _b5_s2 = int(_tx_s2.get("buys", 0) or 0)
+            _s5_s2 = int(_tx_s2.get("sells", 0) or 0)
+            _v5_s2 = float((pair_data.get("volume") or {}).get("m5", 0) or 0)
+            _m5_s2 = float(((pair_data.get("priceChange") or {}).get("m5", 0)) or 0)
+            _is_confirmed_runner = (
+                _is_king
+                or (_v5_s2 >= 8000.0 and _b5_s2 >= max(12, int(_s5_s2 * 1.25)) and _m5_s2 >= 2.0)
+            )
+            if _is_confirmed_runner and _s1_score >= float(getattr(config, "ROCKET_XGB_STAGE1_THRESHOLD", 18.0)) and _cur_tok_dev <= 15.0:
+                _final_thr = min(_final_thr, 2.5)
+
             if (conf + 0.05) < _final_thr:
                 return self._deny(mint, f"rocket-xgb-s2 {conf:.0f}%", f"🚫 [ROCKET-XGB-S2] {symbol} ({mint[:8]}): скор с учётом холдеров {conf:.1f}% < {_final_thr:.0f}% — отсев.")
 

@@ -2306,10 +2306,10 @@ class GrokJevEngine:
         _is_unlocked_custom_fin = _c.is_position_unlocked_lp(address, pair, bool(pair.get("_lp_verified")))
         _is_mom_rocket_fin = (
             not _is_unlocked_custom_fin
-            and _fin_m5 >= 5.0
-            and _fin_v5 >= 4000.0
-            and _fin_b5 >= max(15, int(_fin_s5 * float(getattr(_c, "MIN_BUY_SELL_RATIO", 1.30))))
-            and (rkt_final + 0.05) >= _s1_thr_j
+            and _fin_m5 >= 2.0
+            and _fin_v5 >= 3500.0
+            and _fin_b5 >= max(10, int(_fin_s5 * float(getattr(_c, "MIN_BUY_SELL_RATIO", 1.25))))
+            and (rkt_final + 0.05) >= 2.5
         )
         if getattr(_c, "ROCKET_XGB_ENABLED", True) and not _is_mom_rocket_fin and (rkt_final + 0.05) < final_thresh:
             print(f"🚫 [GROK-JEV-ML-VETO] {symbol} ({address[:8]}): Rocket XGB final score {rkt_final:.1f}% < {final_thresh:.0f}% — VETO! (Блокировка дампа)")

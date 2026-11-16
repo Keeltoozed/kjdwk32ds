@@ -148,7 +148,13 @@ class MatureExitManager:
             _emerg_cap = -abs(float(getattr(config, "EMERGENCY_CAP_PCT", -0.40)))
 
         if pnl_pct <= _emerg_cap:
-            return f"🚨 Emergency Cap Dump ({pnl_pct*100:.1f}%)"
+            _em_c = int(getattr(position, "emerg_confirm_n", 0) or 0) + 1
+            position.emerg_confirm_n = _em_c
+            # На первых 60с требуем 2 тика подтверждения (защита от разового битого тика DexScreener/спреда):
+            if minutes_held >= 1.0 or _em_c >= 2 or pnl_pct <= -0.75:
+                return f"🚨 Emergency Cap Dump ({pnl_pct*100:.1f}%)"
+        else:
+            position.emerg_confirm_n = 0
         if pnl_pct <= _sl:
             _sl_c = int(getattr(position, "sl_confirm_n", 0) or 0) + 1
             position.sl_confirm_n = _sl_c
