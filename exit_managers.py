@@ -96,6 +96,20 @@ class MatureExitManager:
                 if s5_chk >= 12 and (b5_chk / max(1, s5_chk)) < 0.35:
                     return f"Early Seller Dump Cut ({pnl_pct*100:.1f}%, {b5_chk}b/{s5_chk}s)"
 
+            # ⚡ РАННИЙ СРЕЗ ЗАТУХАЮЩЕГО ИМПУЛЬСА (Early Momentum Failure Cut):
+            # Если токен за 45-150 секунд так и не пошёл в рост (max_pnl_pct < +3.5%) и уходит в минус (<= -9.0%),
+            # при этом 1м свеча красная или продавцы душат спрос:
+            # Сбрасываем немедленно, не пересиживая до полного стоп-лосса!
+            # Убыток со сделки составит всего ~$0.45..$0.55 вместо -$1.70..-$2.05!
+            if 0.75 <= minutes_held <= 2.5 and pnl_pct <= -0.09 and max_pnl_pct < 0.035:
+                _pc_f = _pd_chk.get("priceChange") or {}
+                _m1_f = float(_pc_f.get("m1", 0) or 0)
+                _tx_f = (_pd_chk.get("txns") or {}).get("m5") or {}
+                _b_f = int(_tx_f.get("buys", 0) or 0)
+                _s_f = int(_tx_f.get("sells", 0) or 0)
+                if _m1_f <= -0.2 or _s_f > _b_f or (_s_f >= 4 and (_b_f / max(1, _s_f)) < 1.15):
+                    return f"⚡ Early Momentum Failure Cut ({pnl_pct*100:.1f}%, 90с без импульса — срез убытка)"
+
             # СБРОС МОМЕНТАЛЬНОГО РАГА НА ПЕРВОЙ СВЕЧЕ (First Candle Rug Exit)
             # На ракетах первая свеча зелёная, покупатели льют объём и pnl в плюсе.
             # Если токен — раг: дев сливает стек, m1 падает > 12% или продавцы давят в одну калитку.

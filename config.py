@@ -55,9 +55,9 @@ MAX_CONCURRENT_POSITIONS = 8
 # === ЖЕСТКОЕ ОГРАНИЧЕНИЕ УБЫТКА (РИСК-МЕНЕДЖМЕНТ) ===
 MAX_DAILY_LOSS_USD = 1000.0
 KILL_SWITCH_ENABLED = False
-STOP_LOSS_PCT = -0.32         # Стоп -32% для Pump.fun: даёт ракетам пережить стартовый фитиль отката (wuf -23.8% -> +788%, LETTER -16.2% -> +284%)
-STOP_LOSS_UNLOCKED_PCT = -0.18 # Стоп -18% для незалоченных пулов Meteora/Raydium
-EMERGENCY_CAP_PCT = -0.40     # Аварийный потолок -40%: мгновенный срез катастрофического обвала
+STOP_LOSS_PCT = -0.18         # Стоп -18%: режет неудачные сделки на корню (убыток ~$0.90 вместо $2.05)
+STOP_LOSS_UNLOCKED_PCT = -0.16 # Стоп -16% для незалоченных пулов Meteora/Raydium
+EMERGENCY_CAP_PCT = -0.26     # Аварийный потолок -26%: мгновенный срез любого резкого обвала
 INFANT_WINDOW_MIN = 0.5
 INFANT_DUMP_PCT = -0.350       # Срез мгновенного рага дева в первые секунды (<= -35.0%)
 
@@ -113,7 +113,7 @@ def is_launchpad_mint(mint: str) -> bool:
 
 
 def is_unmigrated_curve_token(mint: str, pair_data: Optional[dict] = None) -> bool:
-    """Return True if token is on an ungraduated bonding curve or micro-pool (<$35k FDV / <$6k Liq)."""
+    """Return True if token is on an ungraduated bonding curve, dumped post-migration, or micro-pool (<$30k FDV / <$4.5k Liq)."""
     if not mint:
         return False
     mint_str = str(mint).strip().lower()
@@ -124,25 +124,36 @@ def is_unmigrated_curve_token(mint: str, pair_data: Optional[dict] = None) -> bo
     if dex_id in ("pump", "pumpfun", "moonshot", "meteoradbc") or mint_str.endswith("moon"):
         return True
 
-    # 2. Токены Pump.fun: выпускник ОБЯЗАН иметь FDV >= $35,000 и ликвидность >= $6,000.
-    # Если токен ends with 'pump', а FDV $3k..$15k или ликвидность < $6k — это 100% сырая бондинг-кривая!
-    if mint_str.endswith("pump"):
+    # 2. Вычисляем FDV и ликвидность с защитой от пустых/нулевых значений
+    fdv = float(pd.get("fdv", 0) or pd.get("marketCap", 0) or 0)
+    if fdv <= 0:
+        px = float(pd.get("priceUsd", 0) or 0)
+        if px > 0:
+            fdv = px * 1_000_000_000.0
+    liq = float((pd.get("liquidity") or {}).get("usd", 0) or 0)
+
+    # 3. Токены Pump.fun / PumpSwap:
+    # Настоящий выпускник Pump.fun ОБЯЗАН иметь FDV >= $30,000 и ликвидность >= $4,500.
+    # Если токен ends with 'pump' или dexId 'pumpswap', но FDV < $30k или Liq < $4.5k — это сырой кёрв или снайп-дамп (как Smoke)!
+    if mint_str.endswith("pump") or dex_id in ("pumpswap", "pump", "pumpfun"):
         is_known_grad = False
         try:
             from birth_tracker import birth_tracker as _bt_chk
             is_known_grad = _bt_chk.is_graduated(mint)
         except Exception:
             pass
-        if not is_known_grad:
+        if not is_known_grad and dex_id in ("pump", "pumpfun"):
             return True
-        fdv = float(pd.get("fdv", 0) or pd.get("marketCap", 0) or 0)
-        liq = float((pd.get("liquidity") or {}).get("usd", 0) or 0)
-        if fdv > 0 and fdv < 35000.0:
+        if fdv > 0 and fdv < 30000.0:
             return True
-        if liq > 0 and liq < 6000.0:
+        if liq > 0 and liq < 4500.0:
             return True
-        if dex_id in ("pump", "pumpfun"):
+        if fdv <= 0 and liq <= 0:
             return True
+
+    # 4. Общее правило для ЛЮБЫХ токенов на Solana: микро-пулы с FDV < $25,000 или liq < $3,500 — это 99% раг
+    if 0 < fdv < 25000.0 or 0 < liq < 3500.0:
+        return True
 
     return False
 
@@ -441,19 +452,23 @@ def evaluate_entry_momentum(
         return False, f"dead-turnover v/l {vel_ratio:.2f}x < 0.10x (vol5 ${vol5_usd:,.0f} on liq ${liq_usd:,.0f})"
 
     # 1. HARD NO-FALLING-KNIFE GATE:
-    # Не покупаем глубокий обвал или стоячий флет; пускаем живой рост и быстрый взрыв 1м.
+    # Вход РАЗРЕШЁН ТОЛЬКО на растущей 1м свече (m1 >= 0.0%). Покупка на красной 1м свече строго запрещена!
     _is_m1_surge = (m1 >= 1.5 and buys5 >= max(10, int(sells5 * 1.15)) and vol5_usd >= 1500.0)
-    _m5_min_req = -0.5 if _is_m1_surge else 2.0
+    _m5_min_req = -0.5 if _is_m1_surge else 1.5
     if m5 < _m5_min_req:
         return False, f"m5-falling-knife {m5:+.1f}% < +{_m5_min_req:.1f}% (red or flat 5m candle)"
-    _is_strong_pullback = (vol5_usd >= 4500.0 and buys5 >= max(18, int(sells5 * 1.10)) and m5 >= 4.0)
-    if m1 < (-4.5 if _is_strong_pullback else -3.0):
-        return False, f"m1-falling-knife {m1:+.1f}% (1m candle dumping)"
+    if m1 < 0.0:
+        return False, f"m1-falling-knife {m1:+.1f}% (1m candle is red, sellers active)"
 
-    # 2. Активный перевес покупателей (не берём пулы, где продавцы уже пересиливают)
-    _is_hi_vol_rocket = (vol5_usd >= 6000.0 and buys5 >= max(25, int(sells5 * 1.05)) and m5 >= 3.0)
-    if sells5 > 4 and buys5 < int(sells5 * 1.10) and not _is_hi_vol_rocket:
-        return False, f"sellers-dominating {buys5}b/{sells5}s (need buyers > sellers * 1.10 in 5m)"
+    # 2. Активный перевес покупателей (покупатели обязаны опережать продавцов минимум на 30%+):
+    _req_bs_ratio = 1.30
+    _is_hi_vol_rocket = (vol5_usd >= 6000.0 and buys5 >= max(25, int(sells5 * 1.15)) and m5 >= 3.0)
+    if sells5 > 4 and buys5 < int(sells5 * _req_bs_ratio) and not _is_hi_vol_rocket:
+        return False, f"sellers-dominating {buys5}b/{sells5}s (need buyers > sellers * {_req_bs_ratio:.2f} in 5m)"
+
+    # 2.5. Жесткий барьер против микро-пулов и ловушек снайп-дампов (кейсы Smoke / COGE):
+    if 0 < fdv_usd < 30000.0:
+        return False, f"fdv-too-low ${fdv_usd:,.0f} < $30,000 (dumped micro-pool, high rug risk)"
 
     _base_max_fdv = float(globals().get("JEV_MAX_MCAP_USD", 1500000.0))
     _max_fdv_allowed = (_base_max_fdv * 1.65) if (vol5_usd >= 15000.0 and buys5 >= int(sells5 * 1.05)) else _base_max_fdv
@@ -914,7 +929,7 @@ PULLBACK_MAX_H1_PCT = 320.0
 PULLBACK_MAX_M5_PCT = 0.95
 MIN_VOLUME_M5 = 4500            # Минимум $4,500 за 5м — реальный торговый поток толпы (как у FiveM и Retire)
 MIN_TXNS_M5 = 20                # Минимум 20 сделок за 5м — подтверждённый активный спрос
-MIN_BUY_SELL_RATIO = 1.15       # Покупатели преобладают над продавцами на 15%+ (чистый приток спроса)
+MIN_BUY_SELL_RATIO = 1.30       # Покупатели обязаны преобладать над продавцами минимум на 30%+ (чистый приток спроса)
 LOTTERY_ENABLED = False
 LOTTERY_MIN_M5_PCT = 0.60
 LOTTERY_SIZE_MULT = 0.30
@@ -976,7 +991,7 @@ SOLANA_FRESH_RESCAN_COOLDOWN = 4
 
 JEV_TREND_CONFIRM_ENABLED = True
 JEV_FRESH_RECHECK_ENABLED = True   # Включена финальная проверка цены перед покупкой (защищает от покупки на падающей свече!)
-JEV_MIN_M1_ENTRY_FLOOR_PCT = -3.5
+JEV_MIN_M1_ENTRY_FLOOR_PCT = 0.0    # Вход только на растущей 1м свече (m1 >= 0.0%), покупка красного ножа запрещена
 JEV_MIN_H1_PCT = -25.0
 JEV_MIN_H6_PCT = -35.0
 SYMBOL_REBUY_COOLDOWN_SEC = 1800

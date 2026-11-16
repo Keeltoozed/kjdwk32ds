@@ -549,11 +549,11 @@ class GrokJevEngine:
             and (b5 + s5) >= 12
             and (
                 (2.0 <= m5 <= 120.0 and (
-                    m1 >= -2.0 or (m1 >= float(getattr(_c, "JEV_MIN_M1_ENTRY_FLOOR_PCT", -3.5)) and m5 >= 10.0 and vol_m5 >= 2500.0 and b5 >= int(s5 * 1.15))
+                    m1 >= 0.0 or (m1 >= float(getattr(_c, "JEV_MIN_M1_ENTRY_FLOOR_PCT", 0.0)) and m5 >= 10.0 and vol_m5 >= 2500.0 and b5 >= int(s5 * 1.30))
                 ))
-                or (m1 >= 1.5 and m5 >= 0.8 and vol_m5 >= 1200.0)
+                or (m1 >= 1.2 and m5 >= 0.8 and vol_m5 >= 1200.0)
             )
-            and b5 >= max(8, int(s5 * 1.05))
+            and b5 >= max(8, int(s5 * 1.30))
         )
         if age_min < min_age:
             try:
@@ -2143,7 +2143,7 @@ class GrokJevEngine:
             _age_s1 <= _age_cap_s1
             and _fdv_s1 <= _mcap_cap_s1
             and (_age_s1 < 20.0 or _h6_s1 is None or float(_h6_s1 or 0) <= float(getattr(_c, "MAX_ENTRY_H6_PCT", 500.0)))
-            and _m1_s1 >= float(getattr(_c, "JEV_MIN_M1_ENTRY_FLOOR_PCT", -5.0))
+            and _m1_s1 >= float(getattr(_c, "JEV_MIN_M1_ENTRY_FLOOR_PCT", 0.0))
             and _h1_s1 >= float(getattr(_c, "JEV_MIN_H1_PCT", -25.0))
         )
         _is_unlocked_s1 = _c.is_position_unlocked_lp(address, pair, bool(pair.get("_lp_verified")))
@@ -2274,8 +2274,8 @@ class GrokJevEngine:
         if _scan_liq > 0 and _fliq > 0 and _fliq < _scan_liq * 0.75:
             print(f"🚫 [FINAL-RECHECK] {symbol} ({address[:8]}): отток ликвидности (${_scan_liq:,.0f} -> ${_fliq:,.0f}) — отмена входа!")
             return False, f"fills-flush-wait final-recheck liquidity draining ({_scan_liq:,.0f}->{_fliq:,.0f})"
-        if _fm1 < -5.5:
-            print(f"🚫 [FINAL-RECHECK] {symbol} ({address[:8]}): резкий слив 1м свечи ({_fm1:+.1f}%) — отмена входа!")
+        if _fm1 < 0.0:
+            print(f"🚫 [FINAL-RECHECK] {symbol} ({address[:8]}): красная 1м свеча ({_fm1:+.1f}%) — отмена покупки на падающем графике!")
             return False, f"fills-flush-wait final-recheck m1 {_fm1:+.1f}% falling"
         _prev_fv5 = float((pair.get("volume") or {}).get("m5", 0) or 0)
         _prev_ftx5 = int((pair.get("txns") or {}).get("m5", {}).get("buys", 0) or 0) + int((pair.get("txns") or {}).get("m5", {}).get("sells", 0) or 0)

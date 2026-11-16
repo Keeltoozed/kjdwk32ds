@@ -1064,7 +1064,7 @@ async def scanner_loop(analyzer, tracker):
                             continue
 
                         _c_dex = str(_c_pre.get("dexId", "")).lower()
-                        if not getattr(config, "ALLOW_UNGRADUATED_PUMPFUN", False) and config.is_unmigrated_curve_token(mint, _c_pre) and mint not in _graduated_set:
+                        if not getattr(config, "ALLOW_UNGRADUATED_PUMPFUN", False) and config.is_unmigrated_curve_token(mint, _c_pre):
                             processed_mints[mint] = _now_r - _cd_r + 30
                             continue
 
@@ -1419,9 +1419,7 @@ async def scanner_loop(analyzer, tracker):
                                     min_h6=float(getattr(config, "JEV_MIN_H6_PCT", -20.0)),
                                     fdv_usd=_fdv_live_sc,
                                 )
-                                _min_sc_m1 = float(getattr(config, "JEV_MIN_M1_ENTRY_FLOOR_PCT", -5.0))
-                                if _vol5_live >= 15000.0 and _b5_live >= int(_s5_live * 1.25) and _m5_live >= 6.0:
-                                    _min_sc_m1 = min(_min_sc_m1, -5.0)
+                                _min_sc_m1 = float(getattr(config, "JEV_MIN_M1_ENTRY_FLOOR_PCT", 0.0))
                                 if not _mom_live_ok or _m1_live < _min_sc_m1:
                                     print(f"🚫 [SCANNER-LIVE-REVERSAL] {actual_symbol} ({mint[:8]}): на живом графике импульс сломан ({_mom_live_why}, m5 {_m5_live:+.1f}%, m1 {_m1_live:+.1f}% < {_min_sc_m1:+.1f}%) — отмена покупки!")
                                     continue
