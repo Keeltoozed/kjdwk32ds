@@ -582,6 +582,28 @@ class Analyzer:
                 "signal": sig,
                 "time": time.time(),
             })
+            # Автоматическая запись каждого скана в таблицу all_scanned_tokens в Supabase и SQLite
+            try:
+                from shadow_tracker import shadow_tracker
+                _dec_str = "BUY" if decision is True else ("SKIP" if decision is False else "SEEN")
+                _px_obs = float((pd or {}).get("priceUsd", 0) or 0.0)
+                _fdv_obs = float((pd or {}).get("fdv", 0) or (pd or {}).get("marketCap", 0) or 0.0)
+                shadow_tracker.log_scanned_token(
+                    mint=mint,
+                    symbol=symbol or (mint[:6] + "..."),
+                    chain="solana" if not str(mint).startswith("0x") else "evm",
+                    decision=_dec_str,
+                    reason=sig or ("APPROVED" if decision is True else "SCANNER_OBSERVATION"),
+                    score=float(score or 0.0),
+                    price=_px_obs,
+                    liquidity=float(liquidity or 0.0),
+                    fdv=_fdv_obs,
+                    m5_pct=float(m5_change or 0.0),
+                    source=source or "SCANNER",
+                    features={"buys_m5": buys, "sells_m5": sells, "vol_24h": vol_24h}
+                )
+            except Exception:
+                pass
         except Exception:
             pass
 

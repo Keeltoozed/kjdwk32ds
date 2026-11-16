@@ -33,11 +33,13 @@ class ShadowTracker:
         )
         self.supabase = None
         self._target_table = "rejected_tokens"
+        self._all_scanned_table = "all_scanned_tokens"
+        self._all_scanned_cooldown = {}  # {mint: (ts, decision, price)} — защита от спама в Supabase
         
         if self.use_supabase:
             try:
                 self.supabase: Client = create_client(config.SUPABASE_URL, config.SUPABASE_KEY)
-                print("☁️ [ShadowTracker] Подключен к Supabase PostgreSQL (таблица rejected_tokens)")
+                print("☁️ [ShadowTracker] Подключен к Supabase PostgreSQL (таблицы all_scanned_tokens и rejected_tokens)")
             except Exception as e:
                 print(f"⚠️ [ShadowTracker] Ошибка подключения к Supabase: {e}")
                 self.use_supabase = False
@@ -91,7 +93,7 @@ class ShadowTracker:
         return old[0], old[1]
 
     def init_db(self):
-        """Создает локальную SQLite таблицу как гарантированный fallback и применяет миграции колонок."""
+        """Создает локальные SQLite таблицы как гарантированный fallback и применяет миграции колонок."""
         try:
             with sqlite3.connect(self.db_path) as conn:
                 conn.execute('''
@@ -122,22 +124,196 @@ class ShadowTracker:
                         last_checked_at TIMESTAMP
                     )
                 ''')
-                # Безопасная миграция колонок для существующей таблицы
-                existing_cols = {col[1] for col in conn.execute("PRAGMA table_info(rejected_tokens)").fetchall()}
-                for col_name, col_type in [
-                    ("check_5m_done", "INTEGER DEFAULT 0"),
-                    ("check_15m_done", "INTEGER DEFAULT 0"),
-                    ("time_to_ath_min", "REAL DEFAULT 0.0"),
-                    ("current_pnl", "REAL DEFAULT 0.0"),
-                    ("outcome", "TEXT DEFAULT 'PENDING'")
-                ]:
-                    if col_name not in existing_cols:
-                        try:
-                            conn.execute(f"ALTER TABLE rejected_tokens ADD COLUMN {col_name} {col_type}")
-                        except Exception:
-                            pass
+                # Таблица ВСЕХ виденных ботом токенов (радар, сканер, JUP, покупки, памп-кривые)
+                conn.execute('''
+                    CREATE TABLE IF NOT EXISTS all_scanned_tokens (
+                        mint TEXT PRIMARY KEY,
+                        symbol TEXT,
+                        chain TEXT DEFAULT 'solana',
+                        scanned_at TIMESTAMP,
+                        rejected_at TIMESTAMP,
+                        decision TEXT DEFAULT 'SKIP',
+                        reason TEXT,
+                        score REAL DEFAULT 0.0,
+                        rkt_score REAL DEFAULT NULL,
+                        m5_pct REAL DEFAULT 0.0,
+                        price_at_scan REAL DEFAULT 0.0,
+                        price_at_rejection REAL DEFAULT 0.0,
+                        liquidity REAL DEFAULT 0.0,
+                        fdv REAL DEFAULT 0.0,
+                        source TEXT,
+                        ath_price REAL DEFAULT 0.0,
+                        hypothetical_pnl REAL DEFAULT 0.0,
+                        is_missed_rocket INTEGER DEFAULT 0,
+                        check_5m_done INTEGER DEFAULT 0,
+                        check_15m_done INTEGER DEFAULT 0,
+                        check_1h_done INTEGER DEFAULT 0,
+                        check_4h_done INTEGER DEFAULT 0,
+                        check_24h_done INTEGER DEFAULT 0,
+                        time_to_ath_min REAL DEFAULT 0.0,
+                        current_pnl REAL DEFAULT 0.0,
+                        outcome TEXT DEFAULT 'PENDING',
+                        features TEXT DEFAULT '{}',
+                        last_checked_at TIMESTAMP
+                    )
+                ''')
+                # Безопасная миграция колонок для обеих таблиц
+                for tbl in ("rejected_tokens", "all_scanned_tokens"):
+                    existing_cols = {col[1] for col in conn.execute(f"PRAGMA table_info({tbl})").fetchall()}
+                    for col_name, col_type in [
+                        ("check_5m_done", "INTEGER DEFAULT 0"),
+                        ("check_15m_done", "INTEGER DEFAULT 0"),
+                        ("time_to_ath_min", "REAL DEFAULT 0.0"),
+                        ("current_pnl", "REAL DEFAULT 0.0"),
+                        ("outcome", "TEXT DEFAULT 'PENDING'"),
+                        ("decision", "TEXT DEFAULT 'SKIP'"),
+                        ("price_at_scan", "REAL DEFAULT 0.0"),
+                        ("price_at_rejection", "REAL DEFAULT 0.0"),
+                        ("fdv", "REAL DEFAULT 0.0"),
+                        ("scanned_at", "TIMESTAMP"),
+                        ("rejected_at", "TIMESTAMP")
+                    ]:
+                        if col_name not in existing_cols:
+                            try:
+                                conn.execute(f"ALTER TABLE {tbl} ADD COLUMN {col_name} {col_type}")
+                            except Exception:
+                                pass
+
+                # Авто-бэкфилл существующих записей из rejected_tokens в all_scanned_tokens
+                try:
+                    conn.execute('''
+                        INSERT OR IGNORE INTO all_scanned_tokens (
+                            mint, symbol, chain, scanned_at, rejected_at, decision, reason, score, rkt_score,
+                            m5_pct, price_at_scan, price_at_rejection, liquidity, fdv, source,
+                            ath_price, hypothetical_pnl, is_missed_rocket, check_5m_done, check_15m_done,
+                            check_1h_done, check_4h_done, check_24h_done, time_to_ath_min, current_pnl,
+                            outcome, features, last_checked_at
+                        )
+                        SELECT 
+                            mint, symbol, chain, rejected_at, rejected_at, 'SKIP', reason, score, rkt_score,
+                            m5_pct, price_at_rejection, price_at_rejection, liquidity, 0.0, source,
+                            ath_price, hypothetical_pnl, is_missed_rocket, check_5m_done, check_15m_done,
+                            check_1h_done, check_4h_done, check_24h_done, time_to_ath_min, current_pnl,
+                            outcome, features, last_checked_at
+                        FROM rejected_tokens
+                    ''')
+                except Exception:
+                    pass
         except Exception as e:
             print(f"⚠️ [ShadowTracker] SQLite init err: {e}")
+
+    def log_scanned_token(
+        self, mint: str, symbol: str = "", chain: str = "solana",
+        decision: str = "SKIP", reason: str = "", score: float = 0.0,
+        rkt_score: float = None, price: float = 0.0, liquidity: float = 0.0,
+        fdv: float = 0.0, m5_pct: float = 0.0, source: str = "SCANNER",
+        features: dict = None
+    ):
+        """
+        Логирует АБСОЛЮТНО ВСЕ токены, которые видел бот (радар, сканер, JUP, pump, покупки).
+        Сохраняет в Supabase (таблица all_scanned_tokens) и в локальный SQLite (shadow_trades.db).
+        """
+        if not mint:
+            return
+        
+        now_ts = time.time()
+        self.record_observation(mint, price, liquidity)
+        
+        # Дедупликация: не спамим Supabase частыми запросами на одну монету.
+        # Если монета уже записана <90с назад и решение/цена не изменились — скип.
+        prev = self._all_scanned_cooldown.get(mint)
+        if prev:
+            prev_ts, prev_dec, prev_px = prev
+            px_val = float(price or 0.0)
+            if (now_ts - prev_ts) < 90 and prev_dec == decision:
+                if prev_px > 0 and abs(px_val - prev_px) / prev_px < 0.06:
+                    return
+        
+        self._all_scanned_cooldown[mint] = (now_ts, decision, float(price or 0.0))
+        
+        try:
+            native_score = float(score or 0.0)
+            native_price = float(price or 0.0)
+            native_m5 = float(m5_pct or 0.0)
+            native_liq = float(liquidity or 0.0)
+            native_fdv = float(fdv or 0.0)
+            native_rkt = float(rkt_score) if rkt_score is not None else None
+            clean_sym = str(symbol or mint[:6]).upper()
+            clean_chain = str(chain or "solana").lower()
+            clean_reason = str(reason or ("BOUGHT" if decision == "BUY" else "Scanned"))
+            clean_source = str(source or "SCANNER")
+            clean_decision = str(decision or "SKIP").upper()
+            features_dict = features or {}
+            now_iso = datetime.utcnow().isoformat()
+
+            data = {
+                "mint": mint,
+                "symbol": clean_sym,
+                "chain": clean_chain,
+                "scanned_at": now_iso,
+                "rejected_at": now_iso,
+                "decision": clean_decision,
+                "reason": clean_reason,
+                "score": native_score,
+                "rkt_score": native_rkt,
+                "m5_pct": native_m5,
+                "price_at_scan": native_price,
+                "price_at_rejection": native_price,
+                "liquidity": native_liq,
+                "fdv": native_fdv,
+                "source": clean_source,
+                "ath_price": native_price,
+                "hypothetical_pnl": 0.0,
+                "is_missed_rocket": False,
+                "check_5m_done": 0,
+                "check_15m_done": 0,
+                "check_1h_done": 0,
+                "check_4h_done": 0,
+                "check_24h_done": 0,
+                "time_to_ath_min": 0.0,
+                "current_pnl": 0.0,
+                "outcome": "PENDING",
+                "features": json.dumps(features_dict) if isinstance(features_dict, dict) else str(features_dict)
+            }
+
+            # 1. Supabase background upsert
+            if self.use_supabase and self.supabase:
+                def _bg_sb_upsert_all(sb_client, tbl, d_dict):
+                    try:
+                        sb_client.table(tbl).upsert(d_dict).execute()
+                    except Exception as err:
+                        try:
+                            compat = dict(d_dict)
+                            for k in ["check_5m_done", "check_15m_done", "time_to_ath_min", "current_pnl", "outcome", "fdv", "price_at_scan"]:
+                                compat.pop(k, None)
+                            sb_client.table(tbl).upsert(compat).execute()
+                        except Exception as err2:
+                            self._sb_warn(f"all_scanned_tokens upsert: {err2}")
+
+                import threading as _th
+                _th.Thread(target=_bg_sb_upsert_all, args=(self.supabase, self._all_scanned_table, dict(data)), daemon=True).start()
+
+            # 2. SQLite local fallback
+            try:
+                with sqlite3.connect(self.db_path) as conn:
+                    conn.execute('''
+                        INSERT OR REPLACE INTO all_scanned_tokens (
+                            mint, symbol, chain, scanned_at, rejected_at, decision, reason, score, rkt_score,
+                            m5_pct, price_at_scan, price_at_rejection, liquidity, fdv, source,
+                            ath_price, hypothetical_pnl, is_missed_rocket, check_5m_done,
+                            check_15m_done, check_1h_done, check_4h_done, check_24h_done,
+                            time_to_ath_min, current_pnl, outcome, features
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ''', (
+                        mint, clean_sym, clean_chain, now_iso, now_iso, clean_decision, clean_reason,
+                        native_score, native_rkt, native_m5, native_price, native_price, native_liq, native_fdv,
+                        clean_source, native_price, 0.0, 0, 0, 0, 0, 0, 0, 0.0, 0.0, "PENDING", data["features"]
+                    ))
+            except Exception as sql_e:
+                self._sb_warn(f"SQLite all_scanned: {sql_e}")
+
+        except Exception as e:
+            print(f"⚠️ Ошибка Shadow Tracker log_scanned_token: {e}")
 
     def log_rejection(self, mint: str, reason: str, score: float = 0.0, price: float = 0.0,
                       features: dict = None, symbol: str = "", chain: str = "solana",
@@ -150,6 +326,25 @@ class ShadowTracker:
         if not mint:
             return
         self.record_observation(mint, price, liquidity)
+
+        # Сохраняем в таблицу ВСЕХ отсканированных токенов (без лимитов ликвидности)
+        try:
+            self.log_scanned_token(
+                mint=mint,
+                symbol=symbol,
+                chain=chain,
+                decision="SKIP",
+                reason=reason,
+                score=score,
+                rkt_score=rkt_score,
+                price=price,
+                liquidity=liquidity,
+                m5_pct=m5_pct,
+                source=source,
+                features=features
+            )
+        except Exception:
+            pass
             
         # Защита от спама: если этот токен уже логировали за последние 10 минут (было 30м) — скип.
         # 10 минут достаточно, чтобы не спамить, но не упустить монету, если через 10-15м в ней начался памп.
@@ -362,15 +557,20 @@ class ShadowTracker:
                 rows = []
                 if self.use_supabase and self.supabase:
                     def _fetch_sb():
+                        res = []
                         try:
-                            return self.supabase.table(table_to_use).select("*").eq("check_24h_done", 0).order("rejected_at", desc=True).limit(50).execute().data or []
+                            res += (self.supabase.table(self._all_scanned_table).select("*").eq("check_24h_done", 0).order("scanned_at", desc=True).limit(60).execute().data or [])
+                        except Exception:
+                            pass
+                        try:
+                            res += (self.supabase.table(table_to_use).select("*").eq("check_24h_done", 0).order("rejected_at", desc=True).limit(40).execute().data or [])
                         except Exception:
                             if table_to_use != "shadow_log":
                                 try:
-                                    return self.supabase.table("shadow_log").select("*").eq("check_24h_done", 0).order("rejected_at", desc=True).limit(50).execute().data or []
+                                    res += (self.supabase.table("shadow_log").select("*").eq("check_24h_done", 0).order("rejected_at", desc=True).limit(40).execute().data or [])
                                 except Exception:
-                                    return []
-                            return []
+                                    pass
+                        return res
                     try:
                         rows = await asyncio.wait_for(asyncio.to_thread(_fetch_sb), timeout=5.0)
                     except Exception:
@@ -381,14 +581,27 @@ class ShadowTracker:
                         with sqlite3.connect(self.db_path) as conn:
                             conn.row_factory = sqlite3.Row
                             c = conn.cursor()
-                            c.execute("SELECT * FROM rejected_tokens WHERE check_24h_done = 0 ORDER BY rejected_at DESC LIMIT 200")
-                            rows = [dict(r) for r in c.fetchall()]
+                            c.execute("SELECT * FROM all_scanned_tokens WHERE check_24h_done = 0 ORDER BY scanned_at DESC LIMIT 150")
+                            r1 = [dict(r) for r in c.fetchall()]
+                            c.execute("SELECT * FROM rejected_tokens WHERE check_24h_done = 0 ORDER BY rejected_at DESC LIMIT 100")
+                            r2 = [dict(r) for r in c.fetchall()]
+                            rows = r1 + r2
                     except Exception:
                         rows = []
 
+                # Дедупликация списка по mint
+                seen_m = set()
+                uniq_rows = []
+                for r in rows:
+                    m_val = r.get("mint")
+                    if m_val and m_val not in seen_m:
+                        seen_m.add(m_val)
+                        uniq_rows.append(r)
+                rows = uniq_rows
+
                 for row in rows:
                     try:
-                        rej_str = row.get("rejected_at") or ""
+                        rej_str = row.get("scanned_at") or row.get("rejected_at") or ""
                         if not rej_str:
                             continue
                         rej_clean = rej_str.split(".")[0].replace("Z", "")
@@ -429,7 +642,7 @@ class ShadowTracker:
 
                         if needs_check:
                             m = row.get("mint")
-                            _pe = float(row.get("price_at_rejection", 0) or row.get("initial_price", 0) or 0)
+                            _pe = float(row.get("price_at_scan", 0) or row.get("price_at_rejection", 0) or row.get("initial_price", 0) or 0)
                             _oa = float(row.get("ath_price", 0) or 0)
                             _prev_ath_pnl = max(
                                 float(row.get("hypothetical_pnl", 0) or 0),
@@ -528,18 +741,21 @@ class ShadowTracker:
 
                             # Обновляем в Supabase
                             if self.use_supabase and self.supabase:
-                                def _bg_update_sb(tbl, m_addr, u_load, b_load, is_rkt):
-                                    try:
-                                        if tbl == "rejected_tokens":
-                                            u_load["is_missed_rocket"] = is_rkt
+                                def _bg_update_sb_both(m_addr, u_load, b_load, is_rkt):
+                                    for tbl in (self._all_scanned_table, table_to_use):
                                         try:
-                                            self.supabase.table(tbl).update(u_load).eq("mint", m_addr).execute()
-                                        except Exception:
+                                            cp = dict(u_load)
                                             if tbl == "rejected_tokens":
-                                                b_load["is_missed_rocket"] = is_rkt
-                                            self.supabase.table(tbl).update(b_load).eq("mint", m_addr).execute()
-                                    except Exception:
-                                        pass
+                                                cp["is_missed_rocket"] = is_rkt
+                                            self.supabase.table(tbl).update(cp).eq("mint", m_addr).execute()
+                                        except Exception:
+                                            try:
+                                                cp_b = dict(b_load)
+                                                if tbl == "rejected_tokens":
+                                                    cp_b["is_missed_rocket"] = is_rkt
+                                                self.supabase.table(tbl).update(cp_b).eq("mint", m_addr).execute()
+                                            except Exception:
+                                                pass
 
                                 update_payload = {
                                     "ath_price": new_ath,
@@ -563,26 +779,32 @@ class ShadowTracker:
                                     "last_checked_at": datetime.utcnow().isoformat()
                                 }
                                 import threading as _th
-                                _th.Thread(target=_bg_update_sb, args=(table_to_use, m, update_payload, base_payload, is_rocket), daemon=True).start()
+                                _th.Thread(target=_bg_update_sb_both, args=(m, update_payload, base_payload, is_rocket), daemon=True).start()
                                     
-                            # Обновляем в SQLite
+                            # Обновляем в локальном SQLite (обе таблицы)
                             try:
                                 with sqlite3.connect(self.db_path) as conn:
-                                    conn.execute('''
-                                        UPDATE rejected_tokens 
-                                        SET ath_price = ?, hypothetical_pnl = ?, is_missed_rocket = ?,
-                                            check_5m_done = ?, check_15m_done = ?,
-                                            check_1h_done = ?, check_4h_done = ?, check_24h_done = ?,
-                                            time_to_ath_min = ?, current_pnl = ?, outcome = ?,
-                                            last_checked_at = ?
-                                        WHERE mint = ?
-                                    ''', (
-                                        new_ath, round(ath_pnl, 1), 1 if is_rocket else 0,
-                                        upd["check_5m"], upd["check_15m"],
-                                        upd["check_1h"], upd["check_4h"], upd["check_24h"],
-                                        time_to_ath, round(cur_pnl, 1), outcome,
-                                        datetime.utcnow().isoformat(), m
-                                    ))
+                                    for tbl in ("all_scanned_tokens", "rejected_tokens"):
+                                        try:
+                                            conn.execute(f'''
+                                                UPDATE {tbl} 
+                                                SET ath_price = ?, hypothetical_pnl = ?, is_missed_rocket = ?,
+                                                    check_5m_done = ?, check_15m_done = ?,
+                                                    check_1h_done = ?, check_4h_done = ?, check_24h_done = ?,
+                                                    time_to_ath_min = ?, current_pnl = ?, outcome = ?,
+                                                    last_checked_at = ?
+                                                WHERE mint = ?
+                                            ''', (
+                                                new_ath, round(ath_pnl, 1), 1 if is_rocket else 0,
+                                                upd["check_5m"], upd["check_15m"],
+                                                upd["check_1h"], upd["check_4h"], upd["check_24h"],
+                                                time_to_ath, round(cur_pnl, 1), outcome,
+                                                datetime.utcnow().isoformat(), m
+                                            ))
+                                        except Exception:
+                                            pass
+                            except Exception:
+                                pass
                             except Exception:
                                 pass
 

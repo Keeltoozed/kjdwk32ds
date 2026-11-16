@@ -730,6 +730,24 @@ class PaperTracker:
             except RuntimeError:
                 import threading
                 threading.Thread(target=lambda: asyncio.run(logger.log_entry(mint, entry_features, ml_confidence, is_mature)), daemon=True).start()
+
+            # Также регистрируем покупку в единой таблице all_scanned_tokens
+            try:
+                from shadow_tracker import shadow_tracker
+                shadow_tracker.log_scanned_token(
+                    mint=mint,
+                    symbol=symbol,
+                    chain=chain,
+                    decision="BUY",
+                    reason=f"BUY_ORDER (conf={ml_confidence:.1f}%)",
+                    score=float(ml_confidence or 0.0),
+                    price=float(entry_price or 0.0),
+                    liquidity=float(pool_liq or 0.0),
+                    source=source or "BUY",
+                    features=entry_features
+                )
+            except Exception:
+                pass
         except Exception as e:
             print(f"⚠️ Ошибка логирования входа: {e}")
         return True

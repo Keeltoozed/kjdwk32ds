@@ -804,10 +804,14 @@ async def birth_wss_loop(analyzer, tracker):
     print("👶 Запуск Роддома: сбор базы данных новых токенов для сканера (без авто-покупки на 0-секунде)...")
 
     async def _fallback_poll_births():
-        """Фоновый сбор свежих токенов (страхует при сбоях PumpPortal WSS 502)."""
+        """Фоновый сбор свежих токенов (страхует при сбоях PumpPortal WSS 502 / тайм-аутах).
+        Собирает профили/бусты DexScreener + свежие пулы и миграции GeckoTerminal (0-5 мин)
+        с авто-детектом выпускников PumpSwap и Raydium."""
         from http_client import fetch_json
+        _last_gt_poll = 0.0
         while True:
             try:
+                # 1. DexScreener профили и бусты
                 st, d = await fetch_json("https://api.dexscreener.com/token-profiles/latest/v1", timeout=6, retries=1)
                 if st == 200 and isinstance(d, list):
                     for item in d:
@@ -822,6 +826,25 @@ async def birth_wss_loop(analyzer, tracker):
                             m = item.get("tokenAddress")
                             if m and (m.endswith("pump") or len(m) > 32):
                                 birth_tracker.add_token(m)
+
+                # 2. GeckoTerminal New Pools (каждые 10с): мгновенный захват свежих миграций Raydium/PumpSwap
+                _now_f = time.time()
+                if _now_f - _last_gt_poll >= 10.0:
+                    _last_gt_poll = _now_f
+                    st_gt, d_gt = await fetch_json("https://api.geckoterminal.com/api/v2/networks/solana/new_pools?page=1", timeout=6, retries=0)
+                    if st_gt == 200 and isinstance(d_gt, dict):
+                        for p in (d_gt.get("data") or []):
+                            attrs = p.get("attributes") or {}
+                            rel = p.get("relationships") or {}
+                            base_id = (rel.get("base_token", {}).get("data") or {}).get("id", "")
+                            dex_id = str((rel.get("dex", {}).get("data") or {}).get("id", "")).lower()
+                            mint = base_id.replace("solana_", "").strip()
+                            pool_addr = attrs.get("address", "")
+                            if mint and 32 <= len(mint) <= 44 and not mint.startswith("0x"):
+                                birth_tracker.add_token(mint)
+                                # Если это миграция на PumpSwap / Raydium — немедленно в приоритетную очередь graduated!
+                                if "pumpswap" in dex_id or "raydium" in dex_id:
+                                    birth_tracker.add_graduated(mint, pool_addr)
             except Exception:
                 pass
             await asyncio.sleep(6)

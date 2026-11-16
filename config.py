@@ -17,7 +17,7 @@ RUGCHECK_API = "https://api.rugcheck.xyz/v1/tokens/{mint}/report/summary"
 
 def _clean_supabase_url(raw: str) -> str:
     u = (raw or "").strip().strip('"').strip("'").rstrip("/")
-    if not u or "kpyiiwouhsuaohqtcrfy" in u:
+    if not u:
         return "https://kfyrvmupvwnvuqkeuxun.supabase.co"
     for suffix in ("/rest/v1", "/auth/v1", "/realtime/v1", "/storage/v1"):
         if u.endswith(suffix):

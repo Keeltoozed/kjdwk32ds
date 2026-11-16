@@ -132,7 +132,7 @@ async def fetch_jup_tokens() -> list:
         seen = set()
         _age_by_mint = {}
         _max_disc_age = float(getattr(config, "SOLANA_MAX_AGE_MIN", 90.0))
-        _max_disc_fdv = float(getattr(config, "JEV_MAX_MCAP_USD", 220000.0))
+        _max_disc_fdv = float(getattr(config, "JEV_MAX_MCAP_USD", 450000.0))
 
         def _add_jup_list(items, tag: str, min_pc5: float = 1.8):
             if not isinstance(items, list):
@@ -269,7 +269,8 @@ async def fetch_jup_tokens() -> list:
                     s5_p = int(tx5_p.get("sells", 0) or 0)
                     _min_tx_ds = 7 if age_p <= 2.5 else (8 if age_p <= 5.0 else int(getattr(config, "MIN_TXNS_M5", 10)))
                     _min_bs_ds = 1.05 if age_p <= 5.0 else 1.02
-                    if (b5_p + s5_p) < _min_tx_ds or (s5_p > 0 and (b5_p / s5_p) < _min_bs_ds):
+                    _is_clean_fresh_buyer = (age_p <= 3.0 and b5_p >= 4 and s5_p <= 1)
+                    if not _is_clean_fresh_buyer and ((b5_p + s5_p) < _min_tx_ds or (s5_p > 0 and (b5_p / s5_p) < _min_bs_ds)):
                         continue
                     pc_p = p.get("priceChange") or {}
                     m5_p = float(pc_p.get("m5", 0) or 0)
