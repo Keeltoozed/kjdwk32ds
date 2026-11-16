@@ -647,11 +647,11 @@ class GrokJevEngine:
         ):
             return False, _mom_why_g
 
-        _max_m5_allowed = float(getattr(_c, "MAX_ENTRY_M5_PCT", 180.0))
+        _max_m5_allowed = float(getattr(_c, "MAX_ENTRY_M5_PCT", 55.0))
         if m5 > _max_m5_allowed:
-            _fresh_grad_m5_cap = max(_max_m5_allowed, 180.0)
-            _is_strong_buyer_breakout_g = (m5 <= _fresh_grad_m5_cap and b5 >= int(s5 * 0.95) and vol_m5 >= 1500.0 and (b5 + s5) >= 8)
-            _is_cooling_pullback = (-4.5 <= m1 <= -0.5 and m5 <= _fresh_grad_m5_cap and b5 >= s5 * 0.90)
+            _fresh_grad_m5_cap = max(_max_m5_allowed * 1.35, 75.0)
+            _is_strong_buyer_breakout_g = (m5 <= _fresh_grad_m5_cap and b5 >= int(s5 * 1.5) and vol_m5 >= 15000.0 and (b5 + s5) >= 30)
+            _is_cooling_pullback = (-4.5 <= m1 <= -0.5 and m5 <= _fresh_grad_m5_cap and b5 >= s5 * 1.1)
             if not (_is_strong_buyer_breakout_g or _is_cooling_pullback):
                 return False, f"fomo-vertical-m5 m5 {m5:+.1f}% > +{_max_m5_allowed:.0f}% (buying top of vertical pump without cooling pullback, m1={m1:+.1f}%)"
         if s5 > 8 and b5 < (s5 * 0.80):
@@ -978,10 +978,11 @@ class GrokJevEngine:
         _strong_breakout = (b5 >= 6 and b5 >= int(s5 * 0.90) and vol5 >= 500.0)
         _base_m1_g = float(getattr(_c, "JEV_MAX_M1_ENTRY_PCT", 35.0))
         _max_m1 = max(_base_m1_g, 35.0)
-        _cfg_m5 = float(getattr(_c, "MAX_ENTRY_M5_PCT", 180.0))
-        _max_m5_cap = max(_cfg_m5, 180.0)
-        if m5 > _max_m5_cap:
-            return False, -0.14, 0.0, f"fomo-spike (m5 {m5:+.1f}% > +{_max_m5_cap:.0f}%) — buying local top, wait for reset"
+        _cfg_m5 = float(getattr(_c, "MAX_ENTRY_M5_PCT", 55.0))
+        _max_m5_cap = max(_cfg_m5 * 1.35, 75.0)
+        _is_fomo_bypass = (b5 >= int(s5 * 1.5) and vol5 >= 15000.0 and m5 <= _max_m5_cap)
+        if m5 > _cfg_m5 and not _is_fomo_bypass:
+            return False, -0.14, 0.0, f"fomo-spike (m5 {m5:+.1f}% > +{_cfg_m5:.0f}%) — buying local top, wait for reset"
         if m1 > _max_m1 and not _m1_is_phantom:
             return False, -0.14, 0.0, f"m1-spike (m1 {m1:+.1f}% > +{_max_m1:.1f}%) — vertical push, wait for consolidation"
         _max_h1_flush = _c.get_max_entry_h1_pct(_age_m, vol5, b5, s5, _liq_usd, m5)
@@ -1585,7 +1586,7 @@ class GrokJevEngine:
                     return False, f"pumpswap-scam-pool ({_ps_jev_why})", _h_stats
             is_canonical_pump = (
                 (_ps_jev_canon and _dex_low_jev == "pumpswap")
-                or (address.lower().endswith("pump") and _dex_low_jev in ("pump", "pumpfun"))
+                or (address.lower().endswith("pump") and _dex_low_jev in ("pump", "pumpfun", "pumpswap", "raydium"))
                 or (is_raw_pump_curve and _dex_low_jev in ("pump", "pumpfun"))
             )
             if not is_canonical_pump and not getattr(_c, "ALLOW_UNLOCKED_LP_POOLS", True) and (rc_status_pre != 200 or not isinstance(rc_data_pre, dict)):

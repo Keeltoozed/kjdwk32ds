@@ -74,7 +74,7 @@ BLOCK_PERMISSIONLESS_LIQ_FDV_TRAP = True   # Блокировать кастом
 REQUIRE_SOCIALS_ENABLED = False            # Не требовать соцсети на старте/зрелости (важна только живая ликвидность и импульс)
 MAX_ENTRY_H1_PCT = 1500.0      # Высокий потолок h1 для свежих миграций (<15м); старые (>30м) режутся в get_max_entry_h1_pct
 MAX_ENTRY_H6_PCT = 500.0       # Потолок 6h: не входим в уже отработавшие 6x-20x памп-топы
-MAX_ENTRY_M5_PCT = 180.0       # Потолок m5: ловим зажигание и быстрый разгон без раннего отсева
+MAX_ENTRY_M5_PCT = 55.0        # Потолок m5: ловим старт ракет (+5%..+45%), отсекаем покупку вершины свечи после пампа +80%..+145%
 MAX_ENTRY_M1_PCT = 35.0        # Потолок m1: допускаем быстрые 1м пробои до +35%
 REQUIRE_SOCIALS_MIN_AGE_MIN = 9999.0  # Соцсети не обязательны (отключено)
 
@@ -574,8 +574,8 @@ DD_THROTTLE_START_USD = 15.0
 
 # === ВХОД В ЗРЕЛЫЕ КРИВЫЕ PUMP.FUN ДО МИГРАЦИИ + ЗАЩИТА DEX ===
 SNIPER_ENTRIES_ENABLED = True             # ВКЛЮЧЕНО: мгновенный вход в свежие кривые/миграции со стрима
-ALLOW_UNGRADUATED_PUMPFUN = True          # ВКЛЮЧЕНО: ловим реальные разгоны кривых к миграции (от $22k капы, отсекая $3.5k мертвецов)
-MIN_PUMP_CURVE_MCAP_USD = 7500.0          # Порог ранней кривой от $7.5k: ловим мощные пампы на ранней стадии (NOODLE $12.4k, CI $7.5k)
+ALLOW_UNGRADUATED_PUMPFUN = True          # ВКЛЮЧЕНО: ловим реальные разгоны кривых к миграции (от $12k капы, отсекая $3.5k-$9k пустых мертвецов)
+MIN_PUMP_CURVE_MCAP_USD = 12000.0         # Порог кривой от $12k: отсекаем детские пулы с ликвидностью < $5k (кейсы RP/once)
 MAX_PUMP_CURVE_MCAP_USD = 65000.0         # Fallback в USD (до миграционного обрыва $69k)
 MIN_PUMP_CURVE_MCAP_SOL = 45.0            # Порог кривой pump.fun в SOL (~45 SOL, ранний набор высоты)
 MAX_PUMP_CURVE_MCAP_SOL = 480.0           # Верх кривой перед миграцией
@@ -620,17 +620,17 @@ TIME_EXIT_PROFIT_REQ = 0.015
 # === ЛЕСТНИЦА ТЕЙК-ПРОФИТОВ (ВОЗВРАТ ВЛОЖЕННОГО ТЕЛА ДО РАГА + FREE-RIDE MOONBAG 2x-10x) ===
 PARTIAL_TP_ENABLED = True
 PARTIAL_TP_MIN_TICKET_USD = 3.0      # Включено для $5 ордеров: забираем вложенный депозит до рага, остаток летит бесплатно!
-TP1_TRIGGER_PCT = 0.25               # На первом импульсе +25% забираем 45% позиции (~$2.80 кэша из $5 — половина тела уже в безопасности!)
-TP1_SELL_FRAC = 0.45
-TP2_TRIGGER_PCT = 0.60               # На +60% забираем 50% от остатка (~$2.40 -> суммарно 104%+ депозита вернули, остаток = FREE MOONBAG!)
+TP1_TRIGGER_PCT = 0.15               # На первом импульсе +15% забираем 50% позиции (~$2.88 кэша из $5 — половина тела уже в безопасности!)
+TP1_SELL_FRAC = 0.50
+TP2_TRIGGER_PCT = 0.45               # На +45% забираем еще 50% от остатка (~$1.80 -> суммарно 110%+ депозита вернули, остаток = FREE MOONBAG!)
 TP2_SELL_FRAC = 0.50
-TP3_TRIGGER_PCT = 1.50               # На +150% (2.5x) фиксируем 35% от бесплатного остатка
+TP3_TRIGGER_PCT = 1.20               # На +120% (2.2x) фиксируем 35% от бесплатного остатка
 TP3_SELL_FRAC = 0.35
-TP4_TRIGGER_PCT = 3.50               # На +350% (4.5x) фиксируем 40% от остатка
+TP4_TRIGGER_PCT = 3.00               # На +300% (4x) фиксируем 40% от остатка
 TP4_SELL_FRAC = 0.40
-TP5_TRIGGER_PCT = 8.00               # На +800% (9x) фиксируем 50% от остатка, остальное едет до предела трейлинга
+TP5_TRIGGER_PCT = 7.00               # На +700% (8x) фиксируем 50% от остатка, остальное едет до предела трейлинга
 TP5_SELL_FRAC = 0.50
-MOONBAG_TRIGGER_PCT = 0.60           # Статус Moonbag включается после TP2 (+60%), когда 100% тела уже выведено в кэш!
+MOONBAG_TRIGGER_PCT = 0.45           # Статус Moonbag включается после TP2 (+45%), когда 100% тела уже выведено в кэш!
 MOONBAG_SELL_FRAC = 0.0
 # === МУНБЭГ-ТРЕЙЛИНГ (даём бесплатному остатку пробить 2x и везти до 3.5x-10x без риска потери депозита) ===
 MOONBAG_TRAIL_ACTIVATION_PCT = 1.00  # Трейлинг мунбэга включается выше 2x (+100%)
@@ -670,15 +670,15 @@ def get_sol_tp_ladder(is_unlocked: bool) -> tuple:
             float(globals().get("UNLOCKED_TP5_SELL_FRAC", 0.50)),
         )
     return (
-        float(globals().get("TP1_TRIGGER_PCT", 0.25)),
-        float(globals().get("TP1_SELL_FRAC", 0.45)),
-        float(globals().get("TP2_TRIGGER_PCT", 0.60)),
+        float(globals().get("TP1_TRIGGER_PCT", 0.15)),
+        float(globals().get("TP1_SELL_FRAC", 0.50)),
+        float(globals().get("TP2_TRIGGER_PCT", 0.45)),
         float(globals().get("TP2_SELL_FRAC", 0.50)),
-        float(globals().get("TP3_TRIGGER_PCT", 1.50)),
+        float(globals().get("TP3_TRIGGER_PCT", 1.20)),
         float(globals().get("TP3_SELL_FRAC", 0.35)),
-        float(globals().get("TP4_TRIGGER_PCT", 3.50)),
+        float(globals().get("TP4_TRIGGER_PCT", 3.00)),
         float(globals().get("TP4_SELL_FRAC", 0.40)),
-        float(globals().get("TP5_TRIGGER_PCT", 8.00)),
+        float(globals().get("TP5_TRIGGER_PCT", 7.00)),
         float(globals().get("TP5_SELL_FRAC", 0.50)),
     )
 
@@ -741,7 +741,7 @@ JEV_MIN_LIQUIDITY_USD = 4000.0   # Минимум $4.0k ликвидности A
 JEV_MAX_LIQUIDITY_USD = 180000.0
 JEV_MIN_VOLUME_H1 = 1500.0       # Минимум $1.5k реального оборота вместо $350 шума
 JEV_MIN_MCAP_USD = 4500.0      # Минимум $4.5k MCap для ранних ракет
-JEV_MAX_MCAP_USD = 220000.0    # Верхняя граница $220k FDV: не покупаем отработанные $600k+ хаи
+JEV_MAX_MCAP_USD = 450000.0    # Верхняя граница $450k FDV: пропускает мощные раннеры уровня UHI (+792%) и BJB (+308%)
 JEV_MIN_VOLUME_H24 = 1500.0
 JEV_MIN_TRADES_H24 = 12
 JEV_MIN_TRADES_H1 = 10

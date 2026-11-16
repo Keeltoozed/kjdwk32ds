@@ -246,7 +246,14 @@ class MatureExitManager:
             if _trail_dist is not None and drop_from_max >= _trail_dist and pnl_pct >= _floor_pnl:
                 return f"Mature {_tag} Trailing ({pnl_pct*100:+.1f}% locked after peak +{max_pnl_pct*100:.1f}%)"
             elif pnl_pct <= _floor_pnl:
-                return f"Mature {_tag} Floor (+{pnl_pct*100:.1f}% locked after peak +{max_pnl_pct*100:.1f}%)"
+                _fl_c = int(getattr(position, "floor_confirm_n", 0) or 0) + 1
+                position.floor_confirm_n = _fl_c
+                # Подтверждаем 2 тика (защита от 1-секундного спреда/сквиза на ретесте):
+                if _fl_c >= 2 or pnl_pct <= (_floor_pnl - 0.06):
+                    _pnl_str = f"+{pnl_pct*100:.1f}%" if pnl_pct >= 0 else f"{pnl_pct*100:.1f}%"
+                    return f"Mature {_tag} Floor ({_pnl_str} after peak +{max_pnl_pct*100:.1f}%)"
+            else:
+                position.floor_confirm_n = 0
 
         # =========================================================================
         # 3. PARABOLIC MOMENTUM HARVEST (ФИКСАЦИЯ ПРИ ДОЛГОМ ЗАТУХАНИИ НА ХАЯХ)

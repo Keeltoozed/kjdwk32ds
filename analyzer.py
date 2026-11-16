@@ -1932,7 +1932,7 @@ class Analyzer:
 
         # 4. Anti-FOMO: Защита от перегретых вершин
         _max_entry_h1 = config.get_max_entry_h1_pct(_age_min_pre, _vm5_pre, _b5_pre, _s5_pre, _raw_liq_chk, _m5)
-        _max_entry_m5 = float(getattr(config, "MAX_ENTRY_M5_PCT", 180.0))
+        _max_entry_m5 = float(getattr(config, "MAX_ENTRY_M5_PCT", 55.0))
         if _h1 > _max_entry_h1 and _age_min_pre > 4.0:
             return self._deny(
                 mint,
@@ -1941,9 +1941,9 @@ class Analyzer:
             )
         # Потолок перегретой свечи синхронизирован с MAX_ENTRY_M5_PCT
         if _m5 > _max_entry_m5:
-            _fresh_grad_m5_cap_a = max(_max_entry_m5, 180.0)
-            _is_strong_buyer_breakout = (_m5 <= _fresh_grad_m5_cap_a and _b5_pre >= int(_s5_pre * 1.05) and _vm5_pre >= 1500.0 and (_b5_pre + _s5_pre) >= 8)
-            _is_cooling_pullback = (_m1 <= -0.5 and _m5 <= _fresh_grad_m5_cap_a and _b5_pre >= _s5_pre * 0.95)
+            _fresh_grad_m5_cap_a = max(_max_entry_m5 * 1.35, 75.0)
+            _is_strong_buyer_breakout = (_m5 <= _fresh_grad_m5_cap_a and _b5_pre >= int(_s5_pre * 1.5) and _vm5_pre >= 15000.0 and (_b5_pre + _s5_pre) >= 30)
+            _is_cooling_pullback = (_m1 <= -0.5 and _m5 <= _fresh_grad_m5_cap_a and _b5_pre >= _s5_pre * 1.1)
             if not (_is_strong_buyer_breakout or _is_cooling_pullback):
                 return self._deny(
                     mint,
@@ -2036,7 +2036,7 @@ class Analyzer:
             dex_id_low = str(pair_data.get("dexId", "")).lower()
             is_pump_curve = dex_id_low in ("pump", "pumpfun")
             _is_canonical_pump = (
-                (mint.lower().endswith("pump") and dex_id_low in ("pump", "pumpfun", "pumpswap"))
+                (mint.lower().endswith("pump") and dex_id_low in ("pump", "pumpfun", "pumpswap", "raydium"))
                 or (is_pump_curve and dex_id_low in ("pump", "pumpfun"))
             )
             raw_liq = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
@@ -2134,7 +2134,7 @@ class Analyzer:
                     return self._deny(mint, f"pumpswap-scam-pool ({_ps_a_why})", f"🚫 [PUMPSWAP-ONCHAIN] {symbol} ({mint[:8]}): {_ps_a_why}")
             _is_canonical_pump = (
                 (_ps_a_canon and dex_id_low == "pumpswap")
-                or (mint.lower().endswith("pump") and dex_id_low in ("pump", "pumpfun"))
+                or (mint.lower().endswith("pump") and dex_id_low in ("pump", "pumpfun", "pumpswap", "raydium"))
                 or (is_pump_curve and dex_id_low in ("pump", "pumpfun"))
             )
             if not _is_canonical_pump and _s5_pre == 0 and _b5_pre >= 8:
@@ -2152,7 +2152,7 @@ class Analyzer:
             _ps_main_canon = bool((pair_data or {}).get("_pumpswap_canonical"))
             _is_native_pump_dex = (
                 (_ps_main_canon and _dex_low_main == "pumpswap")
-                or (mint.lower().endswith("pump") and _dex_low_main in ("pump", "pumpfun"))
+                or (mint.lower().endswith("pump") and _dex_low_main in ("pump", "pumpfun", "pumpswap", "raydium"))
                 or (is_pump_curve and _dex_low_main in ("pump", "pumpfun"))
             )
             _is_canonical_pump = _is_native_pump_dex
