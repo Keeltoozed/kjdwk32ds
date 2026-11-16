@@ -1438,12 +1438,12 @@ async def scanner_loop(analyzer, tracker):
                                     if not (_b5_sc >= int(_s5_sc * 1.15) and _vol5_live >= 3000.0 and _m5_live >= 4.0 and _m1_live <= 45.0):
                                         print(f"🚫 [SCANNER-M1-SPIKE] {actual_symbol} ({mint[:8]}): живой m1 +{_m1_live:.1f}% > +{_max_m1_cfg_live:.1f}% — вершина свечи, отмена!")
                                         continue
-                                _max_m5_cfg = float(getattr(config, "MAX_ENTRY_M5_PCT", 55.0))
+                                _max_m5_cfg = float(getattr(config, "MAX_ENTRY_M5_PCT", 180.0))
                                 if _m5_live > _max_m5_cfg:
                                     _b5_sc = int((pair_data.get("txns") or {}).get("m5", {}).get("buys", 0) or 0)
                                     _s5_sc = int((pair_data.get("txns") or {}).get("m5", {}).get("sells", 0) or 0)
-                                    _max_allowed_m5 = max(_max_m5_cfg * 1.35, 75.0)
-                                    _is_breakout = (_vol5_live >= 15000.0 and _b5_sc >= int(_s5_sc * 1.5) and _m5_live <= _max_allowed_m5)
+                                    _max_allowed_m5 = max(_max_m5_cfg * 1.35, 250.0)
+                                    _is_breakout = (_vol5_live >= 8000.0 and _b5_sc >= int(_s5_sc * 1.2) and _m5_live <= _max_allowed_m5)
                                     if not _is_breakout:
                                         print(f"🚫 [SCANNER-FOMO-M5] {actual_symbol} ({mint[:8]}): живой m5 +{_m5_live:.1f}% > +{_max_m5_cfg:.0f}% — вершина свечи, отмена!")
                                         continue

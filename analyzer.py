@@ -1963,7 +1963,7 @@ class Analyzer:
 
         # 4. Anti-FOMO: Защита от перегретых вершин
         _max_entry_h1 = config.get_max_entry_h1_pct(_age_min_pre, _vm5_pre, _b5_pre, _s5_pre, _raw_liq_chk, _m5)
-        _max_entry_m5 = float(getattr(config, "MAX_ENTRY_M5_PCT", 55.0))
+        _max_entry_m5 = float(getattr(config, "MAX_ENTRY_M5_PCT", 180.0))
         if _h1 > _max_entry_h1 and _age_min_pre > 4.0:
             return self._deny(
                 mint,
@@ -1972,8 +1972,8 @@ class Analyzer:
             )
         # Потолок перегретой свечи синхронизирован с MAX_ENTRY_M5_PCT
         if _m5 > _max_entry_m5:
-            _fresh_grad_m5_cap_a = max(_max_entry_m5 * 1.35, 75.0)
-            _is_strong_buyer_breakout = (_m5 <= _fresh_grad_m5_cap_a and _b5_pre >= int(_s5_pre * 1.5) and _vm5_pre >= 15000.0 and (_b5_pre + _s5_pre) >= 30)
+            _fresh_grad_m5_cap_a = max(_max_entry_m5 * 1.35, 250.0)
+            _is_strong_buyer_breakout = (_m5 <= _fresh_grad_m5_cap_a and _b5_pre >= int(_s5_pre * 1.3) and _vm5_pre >= 8000.0)
             _is_cooling_pullback = (_m1 <= -0.5 and _m5 <= _fresh_grad_m5_cap_a and _b5_pre >= _s5_pre * 1.1)
             if not (_is_strong_buyer_breakout or _is_cooling_pullback):
                 return self._deny(
@@ -2883,7 +2883,7 @@ class Analyzer:
             _min_liq = 2000  # Для закрытого Pump.fun кёрва $2k ликвы достаточно для ордера $15
         else:
             liquidity = raw_liq
-            _min_liq = 8000 if (_age_min_pre < 30 or _m5 >= 15.0 or _lottery or is_vip) else getattr(config, "MIN_LIQUIDITY", 15000)
+            _min_liq = float(getattr(config, "MIN_GRADUATED_LIQ_USD", 4000.0)) if (_age_min_pre < 30 or _m5 >= 15.0 or _lottery or is_vip) else 8000.0
 
         # БЛОК КАСТОМНЫХ ФЕЙК-ПУЛОВ НА PUMPSWAP:
         # Блокируем только микро-пулы скамеров (< $6,000 ликвидности),

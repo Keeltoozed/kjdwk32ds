@@ -1108,15 +1108,15 @@ async def jup_loop(analyzer, tracker):
                             continue
 
                         # Anti-FOMO: блокируем покупку вертикального пампа на вершине свечи (кейсы GOSSIP +1330%)
-                        _max_entry_m5 = float(getattr(config, "MAX_ENTRY_M5_PCT", 55.0))
-                        _is_strong_breakout = (_m5 <= max(_max_entry_m5 * 1.35, 75.0) and _b5_cand >= int(_s5_cand * 1.4) and _v5_cand >= 10000.0)
+                        _max_entry_m5 = float(getattr(config, "MAX_ENTRY_M5_PCT", 180.0))
+                        _is_strong_breakout = (_m5 <= max(_max_entry_m5 * 1.35, 250.0) and _b5_cand >= int(_s5_cand * 1.2) and _v5_cand >= 8000.0)
                         if _m5 > _max_entry_m5 and not _is_strong_breakout:
                             skipped_ancient += 1
                             processed[m] = _now_t + 120
                             continue
 
                         # Режем старые токены > SOLANA_MAX_AGE_MIN:
-                        _max_age_cand = float(getattr(config, "SOLANA_MAX_AGE_MIN", 45.0))
+                        _max_age_cand = float(getattr(config, "SOLANA_MAX_AGE_MIN", 75.0))
                         if _ag > _max_age_cand:
                             skipped_ancient += 1
                             processed[m] = _now_t + 600
@@ -1126,8 +1126,8 @@ async def jup_loop(analyzer, tracker):
                         _tx_cand = (td.get("txns") or {}).get("m5") or {}
                         _b5_cand = int(_tx_cand.get("buys", 0) or 0)
                         _s5_cand = int(_tx_cand.get("sells", 0) or 0)
-                        # Защита от преобладания продавцов (не покупаем когда сливают больше чем берут):
-                        if _s5_cand > 0 and (_b5_cand / _s5_cand) < 0.95 and _v5_cand < 25000.0:
+                        # Защита от явного преобладания продавцов (сброс когда продавцы давят сильнее покупок на 35%+):
+                        if _s5_cand >= 8 and (_b5_cand / _s5_cand) < 0.65 and _v5_cand < 25000.0:
                             skipped_flat += 1
                             processed[m] = _now_t + 30
                             continue

@@ -647,10 +647,10 @@ class GrokJevEngine:
         ):
             return False, _mom_why_g
 
-        _max_m5_allowed = float(getattr(_c, "MAX_ENTRY_M5_PCT", 55.0))
+        _max_m5_allowed = float(getattr(_c, "MAX_ENTRY_M5_PCT", 180.0))
         if m5 > _max_m5_allowed:
-            _fresh_grad_m5_cap = max(_max_m5_allowed * 1.35, 75.0)
-            _is_strong_buyer_breakout_g = (m5 <= _fresh_grad_m5_cap and b5 >= int(s5 * 1.5) and vol_m5 >= 15000.0 and (b5 + s5) >= 30)
+            _fresh_grad_m5_cap = max(_max_m5_allowed * 1.35, 250.0)
+            _is_strong_buyer_breakout_g = (m5 <= _fresh_grad_m5_cap and b5 >= int(s5 * 1.2) and vol_m5 >= 8000.0)
             _is_cooling_pullback = (-4.5 <= m1 <= -0.5 and m5 <= _fresh_grad_m5_cap and b5 >= s5 * 1.1)
             if not (_is_strong_buyer_breakout_g or _is_cooling_pullback):
                 return False, f"fomo-vertical-m5 m5 {m5:+.1f}% > +{_max_m5_allowed:.0f}% (buying top of vertical pump without cooling pullback, m1={m1:+.1f}%)"
@@ -978,9 +978,9 @@ class GrokJevEngine:
         _strong_breakout = (b5 >= 6 and b5 >= int(s5 * 0.90) and vol5 >= 500.0)
         _base_m1_g = float(getattr(_c, "JEV_MAX_M1_ENTRY_PCT", 35.0))
         _max_m1 = max(_base_m1_g, 35.0)
-        _cfg_m5 = float(getattr(_c, "MAX_ENTRY_M5_PCT", 55.0))
-        _max_m5_cap = max(_cfg_m5 * 1.35, 75.0)
-        _is_fomo_bypass = (b5 >= int(s5 * 1.5) and vol5 >= 15000.0 and m5 <= _max_m5_cap)
+        _cfg_m5 = float(getattr(_c, "MAX_ENTRY_M5_PCT", 180.0))
+        _max_m5_cap = max(_cfg_m5 * 1.35, 250.0)
+        _is_fomo_bypass = (b5 >= int(s5 * 1.2) and vol5 >= 8000.0 and m5 <= _max_m5_cap)
         if m5 > _cfg_m5 and not _is_fomo_bypass:
             return False, -0.14, 0.0, f"fomo-spike (m5 {m5:+.1f}% > +{_cfg_m5:.0f}%) — buying local top, wait for reset"
         if m1 > _max_m1 and not _m1_is_phantom:
