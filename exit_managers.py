@@ -112,16 +112,21 @@ class MatureExitManager:
                     return f"🚨 First Candle Rug Cut: Sellers dominating ({_b5}b/{_s5}s, PnL {pnl_pct*100:.1f}%)"
 
         # =========================================================================
-        # 0.5. ЖЕСТКИЙ СТОП-ЛОСС И ЗАЩИТА ОТ ОБВАЛА НА 1-М ТИКЕ (LOSS CONTROL FIRST)
+        # 0.5. ЖЕСТКИЙ СТОП-ЛОСС И ЗАЩИТА ОТ ОБВАЛА (LOSS CONTROL WITH SPREAD IMMUNITY)
         # =========================================================================
-        # Любой резкий дамп режется В ПЕРВУЮ ОЧЕРЕДЬ, до логики фиксаций и скретчей!
-        _fast_sl = -abs(float(getattr(config, "STOP_LOSS_PCT", -0.14)))
-        if pnl_pct <= _fast_sl:
-            return f"🚨 Fast Stop Loss ({pnl_pct*100:.1f}%)"
-
-        _emerg_cap = -abs(float(getattr(config, "EMERGENCY_CAP_PCT", -0.16)))
+        # Любой резкий дамп режется В ПЕРВУЮ ОЧЕРЕДЬ, но с защитой от 1-секундного спреда/сквиза!
+        _sl = -abs(float(getattr(config, "STOP_LOSS_PCT", -0.22)))
+        _emerg_cap = -abs(float(getattr(config, "EMERGENCY_CAP_PCT", -0.28)))
         if pnl_pct <= _emerg_cap:
-            return f"Mature Emergency Cap ({pnl_pct*100:.1f}%)"
+            return f"🚨 Emergency Cap Dump ({pnl_pct*100:.1f}%)"
+        if pnl_pct <= _sl:
+            _sl_c = int(getattr(position, "sl_confirm_n", 0) or 0) + 1
+            position.sl_confirm_n = _sl_c
+            # На глубоком обвале <= -25% выходим за 1 тик; в зоне -22%..-25% подтверждаем 2 тика (защита от сквиза на 1-й минуте)
+            if _sl_c >= 2 or pnl_pct <= (_sl * 1.15):
+                return f"🚨 Fast Stop Loss ({pnl_pct*100:.1f}%)"
+        else:
+            position.sl_confirm_n = 0
 
         # =========================================================================
         # 0.6. КОНТРОЛЬ СТАТУСА ПУЛА И ЗАЩИТА ОТ ЗАВИСАНИЯ (БЕЗ РАННЕГО СРЕЗА РАКЕТ!)
@@ -159,16 +164,6 @@ class MatureExitManager:
             return f"⚡ Zero-Momentum Scratch ({pnl_pct*100:+.1f}%, нет отрыва за {minutes_held*60:.0f}с)"
         if not _is_mb and minutes_held >= max(4.5, _scratch_min + 1.5) and max_pnl_pct < 0.04 and -0.055 <= pnl_pct <= 0.005:
             return f"⚡ Dead Flat Scratch ({pnl_pct*100:+.1f}%, полный флет {minutes_held*60:.0f}с)"
-
-        _sl = -abs(float(getattr(config, "STOP_LOSS_PCT", -0.14)))
-        if pnl_pct <= _sl:
-            _sl_c = int(getattr(position, "sl_confirm_n", 0) or 0) + 1
-            position.sl_confirm_n = _sl_c
-            # На проливе <= -10.8% выходим за 1 тик, в зоне -9.5%..-10.7% ждём 2 тика (защита от 1-тикового сквиза)
-            if _sl_c >= 2 or pnl_pct <= (_sl * 1.13):
-                return f"Mature Stop Loss ({pnl_pct*100:.1f}%)"
-        else:
-            position.sl_confirm_n = 0
 
         # =========================================================================
         # 2. BREAKEVEN SHIELD И ПРОГРЕССИВНЫЕ ЭТАЖИ ДЛЯ 2x-10x РАКЕТ (0d2b1ae + RUNNER CURVE)
