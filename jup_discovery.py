@@ -117,22 +117,22 @@ async def fetch_jup_tokens() -> list:
                 await asyncio.sleep(0.22)
                 return st, data
 
-        (s1, d1), (s_org, d_org), (s3, d3), (s2, d2) = await asyncio.gather(
+        (s1, d1), (s_org, d_org), (s3, d3), (s2, d2), (s1h, d1h), (s_tr1h, d_tr1h), (s_org1h, d_org1h) = await asyncio.gather(
             _jup_get("toptrending/5m?limit=100", prefer_lite=False),
             _jup_get("toporganicscore/5m?limit=100", prefer_lite=True),
             _jup_get("toptraded/5m?limit=100", prefer_lite=False),
             _jup_get("recent", prefer_lite=False),
+            _jup_get("toptrending/1h?limit=100", prefer_lite=False),
+            _jup_get("toptraded/1h?limit=100", prefer_lite=False),
+            _jup_get("toporganicscore/1h?limit=100", prefer_lite=True),
         )
-        s1h, d1h = 0, []
-        s_tr1h, d_tr1h = 0, []
-        s_org1h, d_org1h = 0, []
         s6h, d6h = 0, []
 
         ranked = []
         seen = set()
         _age_by_mint = {}
-        _max_disc_age = float(getattr(config, "SOLANA_MAX_AGE_MIN", 90.0))
-        _max_disc_fdv = float(getattr(config, "JEV_MAX_MCAP_USD", 450000.0))
+        _max_disc_age = float(getattr(config, "SOLANA_MAX_AGE_MIN", 240.0))
+        _max_disc_fdv = float(getattr(config, "JEV_MAX_MCAP_USD", 1500000.0))
 
         def _add_jup_list(items, tag: str, min_pc5: float = 1.8):
             if not isinstance(items, list):

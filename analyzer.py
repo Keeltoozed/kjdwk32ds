@@ -661,7 +661,12 @@ class Analyzer:
                         _min_vol_lt = 150.0 if (_age_lt <= 3.0 or (_allow_raw_lt and _dex_lt in ("pump", "pumpfun"))) else 300.0
                         if _liq_lt < _min_liq_lt or _vol5_lt < _min_vol_lt or _m5_lt < 0.3:
                             continue
-                        if _age_lt > float(getattr(config, "SOLANA_MAX_AGE_MIN", 45.0)) or _fdv_lt > float(getattr(config, "JEV_MAX_MCAP_USD", 450000.0)):
+                        _max_age_lt = float(getattr(config, "SOLANA_MAX_AGE_MIN", 240.0))
+                        _max_fdv_lt = float(getattr(config, "JEV_MAX_MCAP_USD", 1500000.0))
+                        if _vol5_lt >= 15000.0:
+                            _max_fdv_lt = max(_max_fdv_lt, 2500000.0)
+                            _max_age_lt = max(_max_age_lt, 360.0)
+                        if _age_lt > _max_age_lt or _fdv_lt > _max_fdv_lt:
                             continue
                         _addr_lt = str((_p_lt.get("baseToken") or {}).get("address") or "").strip()
                         if _addr_lt and not _addr_lt.startswith("0x") and 32 <= len(_addr_lt) <= 44:
@@ -1802,7 +1807,9 @@ class Analyzer:
 
         # 1. Защита от старых отработанных пулов и переросших mid-caps
         _fdv_chk_pre = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
-        _max_mcap_pre = float(getattr(config, "JEV_MAX_MCAP_USD", 220000.0))
+        _max_mcap_pre = float(getattr(config, "JEV_MAX_MCAP_USD", 1500000.0))
+        if _vm5_pre >= 15000.0 and _b5_pre >= int(_s5_pre * 1.05):
+            _max_mcap_pre = max(_max_mcap_pre, 2500000.0)
         if _fdv_chk_pre > _max_mcap_pre:
             return self._deny(
                 mint,
@@ -1826,8 +1833,9 @@ class Analyzer:
                     f"🚫 [POST-MIGRATION-DUMP] {symbol} ({mint[:8]}): выпускник Pump.fun слит ниже миграции (FDV ${_fdv_chk_pre:,.0f} < ${_dump_floor_sol:,.0f} [~100 SOL]) — кейс SHANE.",
                 )
 
-        _max_age_min = float(getattr(config, "SOLANA_MAX_AGE_MIN", 45.0))
-        if _age_min_pre > _max_age_min:
+        _max_age_min = float(getattr(config, "SOLANA_MAX_AGE_MIN", 240.0))
+        _is_breakout_age = (_age_min_pre <= 360.0 and _vm5_pre >= 15000.0 and _b5_pre >= int(_s5_pre * 1.20) and _m5 >= 4.0)
+        if _age_min_pre > _max_age_min and not _is_breakout_age:
             return self._deny(
                 mint,
                 f"zombie-old-token {_age_min_pre:.0f}m",

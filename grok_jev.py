@@ -541,9 +541,13 @@ class GrokJevEngine:
         # 2. Возраст токена, потолок FDV <= $320k и запрет старых отработанных монет (кейс BILL 202m $473k)
         _avg_tx_e = vol_m5 / max(1, b5 + s5)
         min_age = _sol_min_age_g
-        max_age = float(getattr(_c, "JEV_MAX_AGE_MIN", getattr(_c, "SOLANA_MAX_AGE_MIN", 45.0)))
-        _max_scan_age_g = float(getattr(_c, "SOLANA_MAX_AGE_MIN", 45.0))
-        _max_mcap_g = float(getattr(_c, "JEV_MAX_MCAP_USD", 220000.0))
+        max_age = float(getattr(_c, "JEV_MAX_AGE_MIN", getattr(_c, "SOLANA_MAX_AGE_MIN", 240.0)))
+        _max_scan_age_g = float(getattr(_c, "SOLANA_MAX_AGE_MIN", 240.0))
+        _max_mcap_g = float(getattr(_c, "JEV_MAX_MCAP_USD", 1500000.0))
+        if vol_m5 >= 15000.0 and b5 >= int(s5 * 1.05):
+            _max_mcap_g = max(_max_mcap_g, 2500000.0)
+            max_age = max(max_age, 360.0)
+            _max_scan_age_g = max(_max_scan_age_g, 360.0)
         if fdv_mc > _max_mcap_g:
             return False, f"mcap-too-large ${fdv_mc:,.0f} > ${_max_mcap_g:,.0f}"
         _is_jev_breakout = (
@@ -740,7 +744,9 @@ class GrokJevEngine:
         if is_pump and mcap > 0 and mcap < _min_curve_mc_hg:
             return False, f"pump-curve-too-early mcap ${mcap:,.0f} < ${_min_curve_mc_hg:,.0f} (high dev dump trap risk)"
         min_mcap = _min_curve_mc_hg if (dex_id in ("pump", "pumpfun")) else float(getattr(_c, "JEV_MIN_MCAP_USD", 3500.0))
-        max_mcap = float(getattr(_c, "JEV_MAX_MCAP_USD", 220000.0))
+        max_mcap = float(getattr(_c, "JEV_MAX_MCAP_USD", 1500000.0))
+        if vol_m5 >= 15000.0 and b5 >= int(s5 * 1.05):
+            max_mcap = max(max_mcap, 2500000.0)
         if mcap > 0 and not (min_mcap <= mcap <= max_mcap):
             return False, f"mcap-out-of-bounds ${mcap:,.0f} not in [${min_mcap:,.0f}, ${max_mcap:,.0f}]"
 
@@ -1263,8 +1269,8 @@ class GrokJevEngine:
                     liq_g = float(g.get("liquidity", 0) or 0)
                     age_g = float(g.get("age_m", 999) or 999)
                     fdv_g = float(g.get("fdv", 0) or g.get("market_cap", 0) or 0)
-                    _max_a_g = float(getattr(_c, "SOLANA_MAX_AGE_MIN", 45.0))
-                    _max_f_g = float(getattr(_c, "JEV_MAX_MCAP_USD", 220000.0))
+                    _max_a_g = float(getattr(_c, "SOLANA_MAX_AGE_MIN", 240.0))
+                    _max_f_g = float(getattr(_c, "JEV_MAX_MCAP_USD", 1500000.0))
                     _min_l_g = float(getattr(_c, "MIN_GRADUATED_LIQ_USD", 2500.0))
                     if m and 32 <= len(m) <= 44 and not m.startswith("0x") and liq_g >= _min_l_g and age_g <= _max_a_g and fdv_g <= _max_f_g and m not in seen:
                         seen.add(m)
@@ -2135,9 +2141,14 @@ class GrokJevEngine:
         _fdv_s1 = float(pair.get("fdv", 0) or pair.get("marketCap", 0) or 0)
         _ca_s1 = float(pair.get("pairCreatedAt") or 0)
         _age_s1 = ((time.time() * 1000.0 - _ca_s1) / 60000.0) if _ca_s1 > 0 else 0.2
+        _age_cap_s1 = float(getattr(_c, "SOLANA_MAX_AGE_MIN", 240.0))
+        _mcap_cap_s1 = float(getattr(_c, "JEV_MAX_MCAP_USD", 1500000.0))
+        if _vm5_s1 >= 15000.0 and _b5_s1 >= int(_s5_s1 * 1.05):
+            _mcap_cap_s1 = max(_mcap_cap_s1, 2500000.0)
+            _age_cap_s1 = max(_age_cap_s1, 360.0)
         _s1_fresh_ok = (
-            _age_s1 <= float(getattr(_c, "SOLANA_MAX_AGE_MIN", 45.0))
-            and _fdv_s1 <= float(getattr(_c, "JEV_MAX_MCAP_USD", 220000.0))
+            _age_s1 <= _age_cap_s1
+            and _fdv_s1 <= _mcap_cap_s1
             and (_age_s1 < 20.0 or _h6_s1 is None or float(_h6_s1 or 0) <= float(getattr(_c, "MAX_ENTRY_H6_PCT", 500.0)))
             and _m1_s1 >= float(getattr(_c, "JEV_MIN_M1_ENTRY_FLOOR_PCT", -5.0))
             and _h1_s1 >= float(getattr(_c, "JEV_MIN_H1_PCT", -25.0))
@@ -2508,12 +2519,18 @@ async def grok_bot_jev_loop(tracker, analyzer=None):
                     _ca_c = _td_c.get("pairCreatedAt") or 0
                     _age_val_c = ((now * 1000 - _ca_c) / 60000.0) if _ca_c else 5.0
                     if _ca_c:
-                        _max_loop_age = float(getattr(_c, "SOLANA_MAX_AGE_MIN", 45.0))
+                        _max_loop_age = float(getattr(_c, "SOLANA_MAX_AGE_MIN", 240.0))
+                        _v5_c = float((_td_c.get("volume") or {}).get("m5", 0) or 0)
+                        if _v5_c >= 15000.0:
+                            _max_loop_age = max(_max_loop_age, 360.0)
                         if _age_val_c > _max_loop_age:
                             evaluated_cooldown[(address, chain)] = now + 86400.0
                             continue
                     _fdv_c = float(_td_c.get("fdv", 0) or _td_c.get("marketCap", 0) or 0)
-                    if _fdv_c > float(getattr(_c, "JEV_MAX_MCAP_USD", 220000.0)):
+                    _max_loop_mcap = float(getattr(_c, "JEV_MAX_MCAP_USD", 1500000.0))
+                    if float((_td_c.get("volume") or {}).get("m5", 0) or 0) >= 15000.0:
+                        _max_loop_mcap = max(_max_loop_mcap, 2500000.0)
+                    if _fdv_c > _max_loop_mcap:
                         evaluated_cooldown[(address, chain)] = now + 300.0
                         continue
                     _m5_c = float((_td_c.get("priceChange") or {}).get("m5", 0) or 0)

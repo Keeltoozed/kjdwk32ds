@@ -1077,8 +1077,11 @@ async def scanner_loop(analyzer, tracker):
                         _c_vol5 = float((_c_pre.get("volume") or {}).get("m5", 0) or 0)
                         _c_liq = float((_c_pre.get("liquidity") or {}).get("usd", 0) or 0)
                         _c_fdv = float(_c_pre.get("fdv", 0) or _c_pre.get("marketCap", 0) or 0)
-                        _max_sc_age = float(getattr(config, "SOLANA_MAX_AGE_MIN", 90.0))
-                        _max_sc_fdv = float(getattr(config, "JEV_MAX_MCAP_USD", 450000.0))
+                        _max_sc_age = float(getattr(config, "SOLANA_MAX_AGE_MIN", 240.0))
+                        _max_sc_fdv = float(getattr(config, "JEV_MAX_MCAP_USD", 1500000.0))
+                        if _c_vol5 >= 15000.0:
+                            _max_sc_fdv = max(_max_sc_fdv, 2500000.0)
+                            _max_sc_age = max(_max_sc_age, 360.0)
 
                         # Свежая миграция (только что вышедшая на DEX в пределах раннего окна):
                         _is_fresh_grad = ((mint in _graduated_set) or (_c_age_m <= 20.0 and (config.is_launchpad_mint(mint) or _c_dex == "pumpswap"))) and (_c_age_m <= 25.0) and (_c_fdv <= _max_sc_fdv)

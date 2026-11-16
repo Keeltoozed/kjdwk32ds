@@ -208,7 +208,10 @@ class MatureExitManager:
                 _trail_dist = 0.20
             elif max_pnl_pct >= 0.35:
                 _floor_pnl = 0.14
-                _trail_dist = None
+                _trail_dist = 0.18
+            elif max_pnl_pct >= 0.22:
+                _floor_pnl = 0.05
+                _trail_dist = 0.16
         else:
             # === ОСНОВНАЯ ПОЗИЦИЯ: Б/У ЩИТ ОТ +16% + ПРОГРЕССИВНЫЙ ТРЕЙЛИНГ ДО 10x+ ===
             if max_pnl_pct >= 5.00:         # 6x+: фиксируем минимум 72% от ATH PnL

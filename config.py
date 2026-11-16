@@ -365,6 +365,11 @@ def is_permissionless_liq_fdv_trap(pair_data: Optional[dict]) -> bool:
 # Backward-compatible alias for all existing imports and call sites
 is_pumpswap_liq_fdv_trap = is_permissionless_liq_fdv_trap
 
+# Глобальные лимиты раннеров (доступны всем функциям выше по файлу)
+JEV_MAX_MCAP_USD = 1500000.0       # Верхняя граница $1.5M FDV: открывает доступ к мощным раннерам, которые выходят в $5M-$20M
+SOLANA_MAX_AGE_MIN = 240.0         # До 240 минут (4 часа): захватывает консолидации и мощные вторые волны
+JEV_MAX_AGE_MIN = 240.0            # До 240 минут
+
 
 def evaluate_entry_momentum(
     m5: float,
@@ -415,11 +420,15 @@ def evaluate_entry_momentum(
     if sells5 > 4 and buys5 < int(sells5 * 1.10) and not _is_hi_vol_rocket:
         return False, f"sellers-dominating {buys5}b/{sells5}s (need buyers > sellers * 1.10 in 5m)"
 
-    _max_fdv_allowed = (float(globals().get("JEV_MAX_MCAP_USD", 220000.0)) * 1.25) if (vol5_usd >= 5000.0 and buys5 >= int(sells5 * 1.00) and age_min <= 20.0) else float(globals().get("JEV_MAX_MCAP_USD", 220000.0))
+    _base_max_fdv = float(globals().get("JEV_MAX_MCAP_USD", 1500000.0))
+    _max_fdv_allowed = (_base_max_fdv * 1.65) if (vol5_usd >= 15000.0 and buys5 >= int(sells5 * 1.05)) else _base_max_fdv
     if fdv_usd > 0.0 and fdv_usd > _max_fdv_allowed:
         return False, f"mcap-too-large ${fdv_usd:,.0f} > ${_max_fdv_allowed:,.0f} (limited 2x+ upside)"
-    if age_min > SOLANA_MAX_AGE_MIN:
-        return False, f"too-old age {age_min:.0f}m > {SOLANA_MAX_AGE_MIN:.0f}m (stale runner)"
+    _sol_max_age = float(globals().get("SOLANA_MAX_AGE_MIN", 240.0))
+    if age_min > _sol_max_age:
+        _is_super_breakout = (vol5_usd >= 15000.0 and buys5 >= int(sells5 * 1.20) and m5 >= 4.0 and age_min <= 360.0)
+        if not _is_super_breakout:
+            return False, f"too-old age {age_min:.0f}m > {_sol_max_age:.0f}m (stale runner)"
     if age_min >= 45.0 and h6 is not None and float(h6 or 0.0) > MAX_ENTRY_H6_PCT:
         return False, f"h6-exhausted {float(h6 or 0.0):+.1f}% > +{MAX_ENTRY_H6_PCT:.0f}% at {age_min:.0f}m (spent top)"
 
@@ -490,7 +499,7 @@ def evaluate_entry_momentum(
     # 1.5 Здоровый второй импульс / реклейм уровня
     is_turned_green_dip = (
         age_min <= SOLANA_MAX_AGE_MIN
-        and (fdv_usd <= 0.0 or fdv_usd <= float(globals().get("JEV_MAX_MCAP_USD", 220000.0)))
+        and (fdv_usd <= 0.0 or fdv_usd <= float(globals().get("JEV_MAX_MCAP_USD", 1500000.0)))
         and buys5 >= max(8, int(sells5 * 1.00))
         and vol5_usd >= 1200.0
         and liq_usd >= 2500.0
@@ -522,7 +531,7 @@ def evaluate_entry_momentum(
     )
 
     # 1.8 Импульсный прорыв консолидации / повторный разгон
-    _cb_max_mcap = float(globals().get("JEV_MAX_MCAP_USD", 220000.0))
+    _cb_max_mcap = float(globals().get("JEV_MAX_MCAP_USD", 1500000.0))
     is_consolidation_breakout = (
         age_min <= SOLANA_MAX_AGE_MIN
         and 2.5 <= m5 <= _max_m5_dyn
@@ -579,9 +588,9 @@ ROLLING_BREAKER_PAUSE_MIN = 5.0
 DD_THROTTLE_ENABLED = False
 DD_THROTTLE_START_USD = 15.0
 
-# === ВХОД В ЗРЕЛЫЕ КРИВЫЕ PUMP.FUN ДО МИГРАЦИИ + ЗАЩИТА DEX ===
+# === ВХОД В ЗРЕЛЫЕ ВЫПУСКНИКИ RAYDIUM / PUMPSWAP С СОЖЖЁННЫМ LP ===
 SNIPER_ENTRIES_ENABLED = True             # ВКЛЮЧЕНО: мгновенный вход в свежие кривые/миграции со стрима
-ALLOW_UNGRADUATED_PUMPFUN = True          # ВКЛЮЧЕНО: ловим реальные разгоны кривых к миграции от $18k FDV (отсекая $3.5k-$12k пустых мертвецов)
+ALLOW_UNGRADUATED_PUMPFUN = False         # ОТКЛЮЧЕНО: блокируем сырые кёрвы без DEX-миграции (защита от -99% дев-дампов вроде Monty)
 MIN_PUMP_CURVE_MCAP_USD = 18000.0         # Порог кривой от $18k: надежная зона набора высоты к $65k миграции (отсекает ранний сброс)
 MAX_PUMP_CURVE_MCAP_USD = 65000.0         # Fallback в USD (до миграционного обрыва $69k)
 MIN_PUMP_CURVE_MCAP_SOL = 45.0            # Порог кривой pump.fun в SOL (~45 SOL, ранний набор высоты)
@@ -629,15 +638,15 @@ PARTIAL_TP_ENABLED = True
 PARTIAL_TP_MIN_TICKET_USD = 3.0      # Включено для $5 ордеров: забираем вложенный депозит до рага, остаток летит бесплатно!
 TP1_TRIGGER_PCT = 0.10               # На первом импульсе +10% забираем 50% позиции (~$2.75 кэша из $5 — половина тела уже в безопасности!)
 TP1_SELL_FRAC = 0.50
-TP2_TRIGGER_PCT = 0.45               # На +45% забираем еще 50% от остатка (~$1.80 -> суммарно 110%+ депозита вернули, остаток = FREE MOONBAG!)
+TP2_TRIGGER_PCT = 0.28               # На +28% забираем еще 50% от остатка (~$1.60 -> суммарно 87% тела вернули в кэш!)
 TP2_SELL_FRAC = 0.50
-TP3_TRIGGER_PCT = 1.20               # На +120% (2.2x) фиксируем 35% от бесплатного остатка
+TP3_TRIGGER_PCT = 0.70               # На +70% (1.7x) фиксируем 35% от бесплатного остатка
 TP3_SELL_FRAC = 0.35
-TP4_TRIGGER_PCT = 3.00               # На +300% (4x) фиксируем 40% от остатка
+TP4_TRIGGER_PCT = 1.80               # На +180% (2.8x) фиксируем 40% от остатка
 TP4_SELL_FRAC = 0.40
-TP5_TRIGGER_PCT = 7.00               # На +700% (8x) фиксируем 50% от остатка, остальное едет до предела трейлинга
+TP5_TRIGGER_PCT = 5.00               # На +500% (6x) фиксируем 50% от остатка, остальное едет до предела трейлинга
 TP5_SELL_FRAC = 0.50
-MOONBAG_TRIGGER_PCT = 0.45           # Статус Moonbag включается после TP2 (+45%), когда 100% тела уже выведено в кэш!
+MOONBAG_TRIGGER_PCT = 0.28           # Статус Moonbag включается после TP2 (+28%), когда 87%+ тела уже в кэше!
 MOONBAG_SELL_FRAC = 0.0
 # === МУНБЭГ-ТРЕЙЛИНГ (даём бесплатному остатку пробить 2x и везти до 3.5x-10x без риска потери депозита) ===
 MOONBAG_TRAIL_ACTIVATION_PCT = 1.00  # Трейлинг мунбэга включается выше 2x (+100%)
@@ -679,13 +688,13 @@ def get_sol_tp_ladder(is_unlocked: bool) -> tuple:
     return (
         float(globals().get("TP1_TRIGGER_PCT", 0.10)),
         float(globals().get("TP1_SELL_FRAC", 0.50)),
-        float(globals().get("TP2_TRIGGER_PCT", 0.35)),
+        float(globals().get("TP2_TRIGGER_PCT", 0.28)),
         float(globals().get("TP2_SELL_FRAC", 0.50)),
-        float(globals().get("TP3_TRIGGER_PCT", 1.20)),
+        float(globals().get("TP3_TRIGGER_PCT", 0.70)),
         float(globals().get("TP3_SELL_FRAC", 0.35)),
-        float(globals().get("TP4_TRIGGER_PCT", 3.00)),
+        float(globals().get("TP4_TRIGGER_PCT", 1.80)),
         float(globals().get("TP4_SELL_FRAC", 0.40)),
-        float(globals().get("TP5_TRIGGER_PCT", 7.00)),
+        float(globals().get("TP5_TRIGGER_PCT", 5.00)),
         float(globals().get("TP5_SELL_FRAC", 0.50)),
     )
 
@@ -720,9 +729,9 @@ UNLOCKED_FAST_STOP_PCT = -0.075          # Быстрый стоп-лосс -7.5
 
 PREFETCH_TTL_SEC = 12
 SOLANA_MIN_AGE_MIN = 0.05        # 3 секунды: мгновенный старт на самой ранней волне
-SOLANA_MAX_AGE_HOURS = 1.25        # До 75 минут
-SOLANA_MAX_AGE_MIN = 75.0         # Потолок 75м: позволяет ловить консолидации и мощные выходы в раннеры
-JEV_MAX_AGE_MIN = 75.0            # В GROK-JEV фокус на свежих запусках и первых пробоях <= 75м
+SOLANA_MAX_AGE_HOURS = 4.0         # До 4 часов
+SOLANA_MAX_AGE_MIN = 240.0         # Потолок 240м: позволяет ловить консолидации и мощные выходы в раннеры
+JEV_MAX_AGE_MIN = 240.0            # В GROK-JEV фокус на пробоях до 240м (4ч)
 JEV_MAX_M1_ENTRY_PCT = 35.0
 
 SCALP_TIMEOUT_MIN = 10.0
@@ -743,12 +752,12 @@ JEV_ENABLED = True
 JEV_WICK_STOP_ENABLED = False
 JEV_EARLY_MIN_AGE_MIN = 0.05   # Ультра-ранний вход от 3с
 JEV_MIN_AGE_MIN = 0.08         # Мгновенный вход от 5 секунд (до разгона ракеты)
-JEV_MAX_AGE_MIN = 45.0         # В GROK-JEV фокус на свежих запусках <= 45м
+JEV_MAX_AGE_MIN = 240.0        # В GROK-JEV фокус на пробоях до 240м (4ч)
 JEV_MIN_LIQUIDITY_USD = 4000.0   # Минимум $4.0k ликвидности AMM — отсекаем тонкие -35% ловушки вроде FOMOCOIN/$CHOPS
 JEV_MAX_LIQUIDITY_USD = 180000.0
 JEV_MIN_VOLUME_H1 = 1500.0       # Минимум $1.5k реального оборота вместо $350 шума
 JEV_MIN_MCAP_USD = 4500.0      # Минимум $4.5k MCap для ранних ракет
-JEV_MAX_MCAP_USD = 450000.0    # Верхняя граница $450k FDV: пропускает мощные раннеры уровня UHI (+792%) и BJB (+308%)
+JEV_MAX_MCAP_USD = 1500000.0   # Верхняя граница $1.5M FDV: пропускает мощные раннеры уровня UHI (+792%) и BJB (+308%)
 JEV_MIN_VOLUME_H24 = 1500.0
 JEV_MIN_TRADES_H24 = 12
 JEV_MIN_TRADES_H1 = 10
