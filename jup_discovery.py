@@ -1099,6 +1099,9 @@ async def jup_loop(analyzer, tracker):
                         _fdv_dex = float(td.get("fdv", 0) or td.get("marketCap", 0) or 0)
                         _h6_cand = (td.get("priceChange") or {}).get("h6")
                         _m1_cand = float((td.get("priceChange") or {}).get("m1", 0) or 0)
+                        _tx_cand = (td.get("txns") or {}).get("m5") or {}
+                        _b5_cand = int(_tx_cand.get("buys", 0) or 0)
+                        _s5_cand = int(_tx_cand.get("sells", 0) or 0)
 
                         # Отсекаем тяжёлые (> $450k FDV) и отработанные 6h (+500%+) топы до оценки ML:
                         if _fdv_dex > float(getattr(config, "JEV_MAX_MCAP_USD", 450000.0)):
@@ -1126,9 +1129,6 @@ async def jup_loop(analyzer, tracker):
                             continue
 
                         # Ультра-ранний захват старта + живой восходящий импульс:
-                        _tx_cand = (td.get("txns") or {}).get("m5") or {}
-                        _b5_cand = int(_tx_cand.get("buys", 0) or 0)
-                        _s5_cand = int(_tx_cand.get("sells", 0) or 0)
                         # Защита от явного преобладания продавцов (сброс когда продавцы давят сильнее покупок на 35%+):
                         if _s5_cand >= 8 and (_b5_cand / _s5_cand) < 0.65 and _v5_cand < 25000.0:
                             skipped_flat += 1

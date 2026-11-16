@@ -1539,9 +1539,9 @@ async def scanner_loop(analyzer, tracker):
                                     continue
 
                                 # Защита от миграционного дампа Pump.fun
+                                _c_ms_sc = pair_data.get("pairCreatedAt") or 0
+                                _age_sc = ((time.time() * 1000 - _c_ms_sc) / 60000.0) if _c_ms_sc else _age_m
                                 if mint.endswith("pump") and _dex_id in ("pumpswap", "raydium", "meteora", "orca"):
-                                    _c_ms_sc = pair_data.get("pairCreatedAt") or 0
-                                    _age_sc = ((time.time() * 1000 - _c_ms_sc) / 60000.0) if _c_ms_sc else 0.5
                                     _has_launch_surge = (_vol5_live >= 300.0 and _b5_bump >= _s5_bump and _b5_bump >= 3 and _m5_live >= 0.5)
                                     _min_mig_age_sc = float(getattr(config, "SOLANA_MIN_AGE_MIN", 0.15))
                                     if _age_sc < _min_mig_age_sc and not _has_launch_surge:
