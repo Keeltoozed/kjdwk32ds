@@ -264,10 +264,8 @@ class MatureExitManager:
         if not _mb_free_ride and max_pnl_pct >= 1.00 and _peak_age_min >= 10.0:
             return f"Parabolic 2x Harvest (+{pnl_pct*100:.0f}% locked after peak +{max_pnl_pct*100:.0f}%, {_peak_age_min:.0f}m no ATH)"
 
-        # === ЗАЩИТА ОТ ОТКАТА НЕБОЛЬШИХ ПОПОВ (+10%..+15.9%) БЕЗ МИКРО-ПИЛА НА 2.5м ===
+        # === ЗАЩИТА ПРИБЫЛИ ОТ ВЫСОКИХ ПИКОВ (ОТКАТ ПОСЛЕ +35%) ===
         if not _mb_free_ride:
-            if 0.10 <= max_pnl_pct < 0.16 and minutes_held >= 4.0 and _peak_age_min >= 2.0 and pnl_pct <= -0.030:
-                return f"🛡️ Small Pop Cut ({pnl_pct*100:+.1f}%, откат после поп-пика +{max_pnl_pct*100:.1f}%)"
             if max_pnl_pct >= 0.35 and _peak_age_min >= 3.5 and pnl_pct <= 0.14:
                 return f"Mid-Peak Profit Shield ({pnl_pct*100:+.1f}% locked after peak +{max_pnl_pct*100:.0f}%, {_peak_age_min:.1f}m no ATH)"
 

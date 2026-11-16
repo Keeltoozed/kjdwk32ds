@@ -1102,12 +1102,12 @@ async def scanner_loop(analyzer, tracker):
                             continue
 
                         # Отсекаем вялые стоячие токены старше 5м без живого объёма: быстрый переопрос через 20с
-                        if _c_age_m >= 5.0 and _c_vol5 < max(850.0, float(getattr(config, "MIN_VOLUME_M5", 1000.0))) and not _is_fresh_grad:
+                        if _c_age_m >= 5.0 and _c_vol5 < max(2500.0, float(getattr(config, "MIN_VOLUME_M5", 4500.0))) and not _is_fresh_grad:
                             processed_mints[mint] = _now_r - _cd_r + 20
                             continue
 
-                        # Слив/флет (m5 < 1.0%): не тратим слоты сканера на красные свечи (но пускаем свежие миграции до 2.5м)
-                        if _c_m5 < 1.0 and _c_age_m > 2.5 and not _is_fresh_grad:
+                        # Слив/флет (m5 < 1.5%): не тратим слоты сканера на красные свечи (но пускаем свежие миграции до 2.5м)
+                        if _c_m5 < 1.5 and _c_age_m > 2.5 and not _is_fresh_grad:
                             processed_mints[mint] = _now_r - _cd_r + 15
                             continue
 

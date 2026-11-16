@@ -389,16 +389,16 @@ def evaluate_entry_momentum(
     if tot_tx >= 10 and (vol5_usd / max(1, tot_tx)) < 4.0:
         return False, f"fake-bump-wash-bot avg ${vol5_usd/max(1, tot_tx):.2f} < $4.00 across {tot_tx} txns"
 
-    # 0.5 ЖЁСТКИЙ ОТСЕВ МЁРТВЫХ ПУСТЫШЕК БЕЗ ОБЪЁМА И СПРОСА (кейс Lily / VICE / GTA / CLOWN / DMIND):
-    _min_tx_gate = 14 if age_min <= 3.0 else 20
-    _min_vol_gate = 1800.0 if (age_min <= 3.0 and buys5 >= 10) else 3500.0
-    _min_buys_req = 8 if age_min <= 3.0 else 12
+    # 0.5 ЖЁСТКИЙ ОТСЕВ МЁРТВЫХ ПУСТЫШЕК БЕЗ ОБЪЁМА И СПРОСА (кейс Lily / VICE / GTA / CLOWN / DMIND / CLAUDEMOM):
+    _min_tx_gate = 16 if age_min <= 3.0 else 22
+    _min_vol_gate = 2500.0 if (age_min <= 3.0 and buys5 >= 10) else 4500.0
+    _min_buys_req = 10 if age_min <= 3.0 else 14
     if tot_tx < _min_tx_gate or buys5 < _min_buys_req:
         return False, f"no-demand-txns {buys5}b/{sells5}s (buys < {_min_buys_req} or tot {tot_tx} < {_min_tx_gate})"
     if vol5_usd < _min_vol_gate:
         return False, f"no-demand-vol5 ${vol5_usd:,.0f} < ${_min_vol_gate:,.0f} (dead micro-pool)"
-    if liq_usd >= 1500.0 and vel_ratio < 0.08 and vol5_usd < 2000.0:
-        return False, f"dead-turnover v/l {vel_ratio:.2f}x < 0.08x (vol5 ${vol5_usd:,.0f} on liq ${liq_usd:,.0f})"
+    if liq_usd >= 1500.0 and vel_ratio < 0.10 and vol5_usd < 3500.0:
+        return False, f"dead-turnover v/l {vel_ratio:.2f}x < 0.10x (vol5 ${vol5_usd:,.0f} on liq ${liq_usd:,.0f})"
 
     # 1. HARD NO-FALLING-KNIFE GATE:
     # Не покупаем глубокий обвал или стоячий флет; пускаем живой рост и быстрый взрыв 1м.
@@ -627,7 +627,7 @@ TIME_EXIT_PROFIT_REQ = 0.015
 # === ЛЕСТНИЦА ТЕЙК-ПРОФИТОВ (ВОЗВРАТ ВЛОЖЕННОГО ТЕЛА ДО РАГА + FREE-RIDE MOONBAG 2x-10x) ===
 PARTIAL_TP_ENABLED = True
 PARTIAL_TP_MIN_TICKET_USD = 3.0      # Включено для $5 ордеров: забираем вложенный депозит до рага, остаток летит бесплатно!
-TP1_TRIGGER_PCT = 0.15               # На первом импульсе +15% забираем 50% позиции (~$2.88 кэша из $5 — половина тела уже в безопасности!)
+TP1_TRIGGER_PCT = 0.10               # На первом импульсе +10% забираем 50% позиции (~$2.75 кэша из $5 — половина тела уже в безопасности!)
 TP1_SELL_FRAC = 0.50
 TP2_TRIGGER_PCT = 0.45               # На +45% забираем еще 50% от остатка (~$1.80 -> суммарно 110%+ депозита вернули, остаток = FREE MOONBAG!)
 TP2_SELL_FRAC = 0.50
@@ -665,10 +665,10 @@ def get_sol_tp_ladder(is_unlocked: bool) -> tuple:
     """Return (tp1_t, tp1_f, tp2_t, tp2_f, tp3_t, tp3_f, tp4_t, tp4_f, tp5_t, tp5_f)."""
     if is_unlocked:
         return (
-            float(globals().get("UNLOCKED_TP1_TRIGGER_PCT", 0.16)),
-            float(globals().get("UNLOCKED_TP1_SELL_FRAC", 0.60)),
-            float(globals().get("UNLOCKED_TP2_TRIGGER_PCT", 0.30)),
-            float(globals().get("UNLOCKED_TP2_SELL_FRAC", 0.65)),
+            float(globals().get("UNLOCKED_TP1_TRIGGER_PCT", 0.10)),
+            float(globals().get("UNLOCKED_TP1_SELL_FRAC", 0.50)),
+            float(globals().get("UNLOCKED_TP2_TRIGGER_PCT", 0.25)),
+            float(globals().get("UNLOCKED_TP2_SELL_FRAC", 0.60)),
             float(globals().get("UNLOCKED_TP3_TRIGGER_PCT", 0.65)),
             float(globals().get("UNLOCKED_TP3_SELL_FRAC", 0.50)),
             float(globals().get("UNLOCKED_TP4_TRIGGER_PCT", 1.40)),
@@ -677,9 +677,9 @@ def get_sol_tp_ladder(is_unlocked: bool) -> tuple:
             float(globals().get("UNLOCKED_TP5_SELL_FRAC", 0.50)),
         )
     return (
-        float(globals().get("TP1_TRIGGER_PCT", 0.15)),
+        float(globals().get("TP1_TRIGGER_PCT", 0.10)),
         float(globals().get("TP1_SELL_FRAC", 0.50)),
-        float(globals().get("TP2_TRIGGER_PCT", 0.45)),
+        float(globals().get("TP2_TRIGGER_PCT", 0.35)),
         float(globals().get("TP2_SELL_FRAC", 0.50)),
         float(globals().get("TP3_TRIGGER_PCT", 1.20)),
         float(globals().get("TP3_SELL_FRAC", 0.35)),
@@ -710,7 +710,7 @@ WHALE_DUMP_GUARD_PCT = 0.22
 EVM_RUNNER_CRASH = 0.25
 EVM_NORMAL_CRASH = 0.22
 
-BREAKEVEN_PCT = 0.16       # Breakeven Shield ВКЛЮЧЕН как в 0d2b1ae: пик >= +16% -> сделка не может закрыться в минус!
+BREAKEVEN_PCT = 0.12       # Breakeven Shield: пик >= +12% -> сделка не может закрыться в минус (безубыток +0.5%)!
 
 # === ЗАЩИТА ОТ СНОСА ЛИКВИДНОСТИ И СТАГНАЦИИ ПОСЛЕ ЗАПУСКА ===
 UNLOCKED_STALL_PROFIT_AGE_SEC = 180.0    # 3 минуты без нового пика на +45%+ незалоченном пуле -> плановая фиксация

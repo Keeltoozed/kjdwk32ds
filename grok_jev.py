@@ -685,20 +685,20 @@ class GrokJevEngine:
         if eff_liq > 0 and (vol_m5 / eff_liq) > _max_vl_jev:
             return False, f"wash-trading-spike: vol5 ${vol_m5:,.0f} is {(vol_m5/eff_liq):.1f}x > {_max_vl_jev:.2f}x of pool liq ${eff_liq:,.0f} (bot pump trap)"
 
-        _base_vol_m5 = float(getattr(_c, "MIN_VOLUME_M5", 1000.0))
-        if age_min <= 2.5 and b5 >= max(6, int(s5 * 1.15)) and (b5 + s5) >= 7:
-            _min_vol_m5 = min(_base_vol_m5, 700.0)
-        elif age_min <= 5.0 and b5 >= max(7, s5):
-            _min_vol_m5 = min(_base_vol_m5, 850.0)
+        _base_vol_m5 = float(getattr(_c, "MIN_VOLUME_M5", 4500.0))
+        if age_min <= 2.5 and b5 >= max(8, int(s5 * 1.15)) and (b5 + s5) >= 10:
+            _min_vol_m5 = min(_base_vol_m5, 2000.0)
+        elif age_min <= 5.0 and b5 >= max(10, s5):
+            _min_vol_m5 = min(_base_vol_m5, 3000.0)
         else:
             _min_vol_m5 = _base_vol_m5
         if vol_m5 < _min_vol_m5:
             return False, f"vol5-low ${vol_m5:.0f} < ${_min_vol_m5:.0f} (inactive dead pool — нет реального объема для ракеты)"
-        _min_tx5 = int(getattr(_c, "MIN_TXNS_M5", 10))
-        if age_min <= 2.5 and b5 >= max(6, int(s5 * 1.15)):
-            _min_tx5 = min(_min_tx5, 7)
+        _min_tx5 = int(getattr(_c, "MIN_TXNS_M5", 16))
+        if age_min <= 2.5 and b5 >= max(7, int(s5 * 1.15)):
+            _min_tx5 = min(_min_tx5, 10)
         elif age_min <= 5.0 and b5 >= s5:
-            _min_tx5 = min(_min_tx5, 8)
+            _min_tx5 = min(_min_tx5, 12)
         if (b5 + s5) < _min_tx5:
             return False, f"tx5-low {b5+s5} < {_min_tx5} (too few transactions)"
         _req_bs = float(getattr(_c, "MIN_BUY_SELL_RATIO", 1.05))
@@ -2146,9 +2146,9 @@ class GrokJevEngine:
         _is_momentum_rocket = not _is_unlocked_s1 and _s1_fresh_ok and (rkt_s1 + 0.05) >= max(8.0, s1_thresh - 2.0) and _m1_s1 >= 0.0 and (
             (_m5_s1 >= 10.0 and _b5_s1 >= int(_s5_s1 * 1.20) and _vm5_s1 >= 4000.0)
             or (_vm5_s1 >= 8000.0 and _b5_s1 >= int(_s5_s1 * 1.15) and _m5_s1 >= 4.0)
-            or (_m5_s1 >= 6.0 and _vm5_s1 >= 4000.0 and _b5_s1 >= max(10, int(_s5_s1 * 1.15)))
-            or (_m5_s1 >= 3.0 and _b5_s1 >= int(_s5_s1 * 1.15) and _vm5_s1 >= 1500.0 and _b5_s1 >= 8)
-            or (_age_s1 <= 5.0 and _m5_s1 >= 2.5 and _b5_s1 >= max(6, int(_s5_s1 * 1.15)) and _vm5_s1 >= 750.0)
+            or (_m5_s1 >= 6.0 and _vm5_s1 >= 4000.0 and _b5_s1 >= max(12, int(_s5_s1 * 1.15)))
+            or (_m5_s1 >= 3.0 and _b5_s1 >= int(_s5_s1 * 1.15) and _vm5_s1 >= 2500.0 and _b5_s1 >= 10)
+            or (_age_s1 <= 5.0 and _m5_s1 >= 2.5 and _b5_s1 >= max(8, int(_s5_s1 * 1.15)) and _vm5_s1 >= 1500.0)
         )
 
         if getattr(_c, "ROCKET_XGB_ENABLED", True) and not _is_momentum_rocket and (rkt_s1 + 0.05) < s1_thresh:

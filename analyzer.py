@@ -2082,10 +2082,10 @@ class Analyzer:
                 and (_age_min_pre < 20.0 or _h6_pre_opt is None or _h6_pre_opt <= float(getattr(config, "MAX_ENTRY_H6_PCT", 500.0)))
                 and _m1 >= -2.5
                 and (
-                    (_m5 >= 10.0 and _b5_pre >= int(_s5_pre * 1.05) and _vm5_pre >= 3500.0)
-                    or (_vm5_pre >= 8000.0 and _b5_pre >= _s5_pre and _m5 >= 3.0)
-                    or (_m5 >= 4.0 and _b5_pre >= _s5_pre and _vm5_pre >= 1500.0 and _b5_pre >= 8)
-                    or (_age_min_pre <= 5.0 and _m5 >= 0.8 and _b5_pre >= _s5_pre and _vm5_pre >= 250.0 and _b5_pre >= 3)
+                    (_m5 >= 10.0 and _b5_pre >= int(_s5_pre * 1.15) and _vm5_pre >= 3500.0)
+                    or (_vm5_pre >= 8000.0 and _b5_pre >= int(_s5_pre * 1.05) and _m5 >= 3.0)
+                    or (_m5 >= 4.0 and _b5_pre >= int(_s5_pre * 1.10) and _vm5_pre >= 2500.0 and _b5_pre >= 10)
+                    or (_age_min_pre <= 5.0 and _m5 >= 1.5 and _b5_pre >= int(_s5_pre * 1.15) and _vm5_pre >= 1500.0 and _b5_pre >= 8)
                 )
             )
             if (conf + 0.05) < threshold and not _is_momentum_rocket_a:
