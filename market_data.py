@@ -571,9 +571,9 @@ async def get_bulk_prices(mints: list, pair_hints: dict = None) -> dict:
 
     missing = [m for m in ms if m not in out or out[m] <= 0]
     if missing:
-        # 2. Фоллбэк на DexScreener bulk tokens/v1/solana (с жестким таймаутом, чтобы не терять уже полученные jup_prices!)
+        # 2. Фоллбэк на DexScreener bulk latest/dex/tokens (с таймаутом 2.5с)
         try:
-            ds_out = await asyncio.wait_for(_ds_bulk_prices(missing, pair_hints=pair_hints), timeout=1.2)
+            ds_out = await asyncio.wait_for(_ds_bulk_prices(missing, pair_hints=pair_hints), timeout=2.5)
             if isinstance(ds_out, dict):
                 out.update({k: v for k, v in ds_out.items() if v and v > 0})
         except Exception:
@@ -606,7 +606,8 @@ async def get_bulk_prices(mints: list, pair_hints: dict = None) -> dict:
 async def _ds_bulk_prices(mints: list, pair_hints: dict = None) -> dict:
     """Балк-цены через DexScreener (работает и для Solana).
     Если передан pair_hints (mint -> pair_address), приоритет отдаётся ТОЧНОМУ пулу входа,
-    чтобы переключение между побочными пулами не давало ложных -20% стопов."""
+    чтобы переключение между побочными пулами не давало ложных -20% стопов.
+    Исключает мертвые bonding curve пулы (pumpfun с liq < 500), предотвращая фантомные дампы."""
     from http_client import fetch_json
     out = {}
     _liq = {}
@@ -614,91 +615,60 @@ async def _ds_bulk_prices(mints: list, pair_hints: dict = None) -> dict:
     _hints = pair_hints or {}
     _mset = set(mints)
     for i in range(0, len(mints), 30):
-        chunk = mints[i:i + 30]
-        # Сначала пробуем сверхбыстрый прямой endpoint tokens/v1/solana
+        chunk = [m for m in mints[i:i + 30] if m]
+        if not chunk:
+            continue
         pairs = []
         try:
-            status, data = await fetch_json(f"https://api.dexscreener.com/tokens/v1/solana/{','.join(chunk)}", timeout=1.2, retries=0)
-            if status == 200 and isinstance(data, list):
-                pairs = data
-        except Exception:
-            pairs = []
-        if not pairs:
-            status, data = await fetch_json(f"https://api.dexscreener.com/latest/dex/tokens/{','.join(chunk)}", timeout=1.3, retries=0)
+            status, data = await fetch_json(f"https://api.dexscreener.com/latest/dex/tokens/{','.join(chunk)}", timeout=2.0, retries=0)
             if status == 200 and isinstance(data, dict):
                 pairs = data.get("pairs") or []
+        except Exception:
+            pairs = []
         for p in (pairs or []):
-            if p.get("chainId") == "solana":
-                addr = (p.get("baseToken") or {}).get("address", "")
-                if not addr or addr not in _mset:
-                    continue
-                if not _is_allowed_sol_quote(p, addr):
-                    continue
-                px = float(p.get("priceUsd", 0) or 0)
-                liq = float((p.get("liquidity") or {}).get("usd", 0) or 0)
-                dex_low = str(p.get("dexId", "") or "").lower()
-                is_curve = dex_low in ("pump", "pumpfun", "moonshot", "meteoradbc")
-                if not px or (liq < 50.0 and not is_curve):
-                    continue
-                eff_liq_rank = liq if liq > 0 else (float(p.get("fdv", 0) or p.get("marketCap", 0) or 0) * 0.40)
-                p_addr = str(p.get("pairAddress") or "").strip()
-                target_pair = str(_hints.get(addr) or "").strip()
-                if target_pair and p_addr == target_pair:
-                    _locked_exact.add(addr)
-                    _liq[addr] = eff_liq_rank
-                    out[addr] = px
-                    try:
-                        _TD_CACHE[addr] = (time.monotonic(), p)
-                    except Exception:
-                        pass
-                    continue
-                if addr in _locked_exact:
-                    continue
-                if eff_liq_rank > _liq.get(addr, -1):
-                    _liq[addr] = eff_liq_rank
-                    out[addr] = px
-                    try:
-                        _TD_CACHE[addr] = (time.monotonic(), p)
-                    except Exception:
-                        pass
-        # Если часть токенов из чанка не получила цену (напр. редкий quoteToken или мультипул) — добираем через latest/dex/tokens
-        missing_chunk = [m for m in chunk if m not in out]
-        if missing_chunk:
-            try:
-                status, data = await fetch_json(f"https://api.dexscreener.com/latest/dex/tokens/{','.join(missing_chunk)}", timeout=6)
-                if status == 200 and isinstance(data, dict):
-                    for p in (data.get("pairs") or []):
-                        if p.get("chainId") == "solana":
-                            addr = (p.get("baseToken") or {}).get("address", "")
-                            if not addr or addr not in _mset:
-                                continue
-                            if not _is_allowed_sol_quote(p, addr):
-                                continue
-                            px = float(p.get("priceUsd", 0) or 0)
-                            liq = float((p.get("liquidity") or {}).get("usd", 0) or 0)
-                            dex_low = str(p.get("dexId", "") or "").lower()
-                            is_curve = dex_low in ("pump", "pumpfun", "moonshot", "meteoradbc")
-                            if not px or (liq < 50.0 and not is_curve):
-                                continue
-                            eff_liq_rank = liq if liq > 0 else (float(p.get("fdv", 0) or p.get("marketCap", 0) or 0) * 0.40)
-                            p_addr = str(p.get("pairAddress") or "").strip()
-                            target_pair = str(_hints.get(addr) or "").strip()
-                            if target_pair and p_addr == target_pair:
-                                _locked_exact.add(addr)
-                                _liq[addr] = eff_liq_rank
-                                out[addr] = px
-                                continue
-                            if addr in _locked_exact:
-                                continue
-                            if eff_liq_rank > _liq.get(addr, -1):
-                                _liq[addr] = eff_liq_rank
-                                out[addr] = px
-                                try:
-                                    _TD_CACHE[addr] = (time.monotonic(), p)
-                                except Exception:
-                                    pass
-            except Exception:
-                pass
+            if p.get("chainId") != "solana":
+                continue
+            addr = (p.get("baseToken") or {}).get("address", "")
+            if not addr or addr not in _mset:
+                continue
+            if not _is_allowed_sol_quote(p, addr):
+                continue
+            px = float(p.get("priceUsd", 0) or 0)
+            if px <= 0:
+                continue
+            liq = float((p.get("liquidity") or {}).get("usd", 0) or 0)
+            dex_low = str(p.get("dexId", "") or "").lower()
+            p_addr = str(p.get("pairAddress") or "").strip()
+            target_pair = str(_hints.get(addr) or "").strip()
+
+            # Игнорируем мертвые bonding curves (pumpfun с нулевой/отсутствующей ликвидностью),
+            # из-за которых происходили фантомные дампы в -63% на токенах в профите!
+            if dex_low in ("pump", "pumpfun") and liq < 500.0:
+                continue
+
+            # Приоритет №1: Точный пул входа позиции
+            if target_pair and p_addr == target_pair:
+                _locked_exact.add(addr)
+                _liq[addr] = 1e12
+                out[addr] = px
+                try:
+                    _TD_CACHE[addr] = (time.monotonic(), p)
+                except Exception:
+                    pass
+                continue
+
+            if addr in _locked_exact:
+                continue
+
+            # Приоритет №2: Пул с наибольшей реальной ликвидностью
+            eff_liq = liq if liq > 0 else (float(p.get("fdv", 0) or p.get("marketCap", 0) or 0) * 0.40 if dex_low not in ("pump", "pumpfun") else 0.0)
+            if eff_liq > _liq.get(addr, -1):
+                _liq[addr] = eff_liq
+                out[addr] = px
+                try:
+                    _TD_CACHE[addr] = (time.monotonic(), p)
+                except Exception:
+                    pass
     return out
 
 

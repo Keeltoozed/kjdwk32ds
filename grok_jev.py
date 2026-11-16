@@ -696,9 +696,7 @@ class GrokJevEngine:
             _min_tx5 = min(_min_tx5, 12)
         if (b5 + s5) < _min_tx5:
             return False, f"tx5-low {b5+s5} < {_min_tx5} (too few transactions)"
-        _req_bs = float(getattr(_c, "MIN_BUY_SELL_RATIO", 1.05))
-        if vol_m5 >= 8000.0 and m5 >= 5.0 and b5 >= 30 and m1 >= -3.5:
-            _req_bs = min(_req_bs, 0.92)
+        _req_bs = float(getattr(_c, "MIN_BUY_SELL_RATIO", 1.30))
         if s5 > 4 and (b5 / s5) < _req_bs:
             return False, f"sellers-dominating {b5}b/{s5}s (ratio {b5/s5:.2f} < {_req_bs:.2f})"
 
@@ -2310,7 +2308,7 @@ class GrokJevEngine:
             not _is_unlocked_custom_fin
             and _fin_m5 >= 5.0
             and _fin_v5 >= 4000.0
-            and _fin_b5 >= max(15, int(_fin_s5 * 1.15))
+            and _fin_b5 >= max(15, int(_fin_s5 * float(getattr(_c, "MIN_BUY_SELL_RATIO", 1.30))))
             and (rkt_final + 0.05) >= _s1_thr_j
         )
         if getattr(_c, "ROCKET_XGB_ENABLED", True) and not _is_mom_rocket_fin and (rkt_final + 0.05) < final_thresh:

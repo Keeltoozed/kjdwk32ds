@@ -345,8 +345,13 @@ async def fetch_jup_tokens() -> list:
             now_ms_b = time.time() * 1000
             for i_b in range(0, min(len(boost_mints), 90), 30):
                 chunk_b = boost_mints[i_b:i_b + 30]
-                st_b, pairs_b = await fetch_json(f"https://api.dexscreener.com/tokens/v1/solana/{','.join(chunk_b)}", timeout=6, retries=0)
-                if st_b != 200 or not isinstance(pairs_b, list):
+                st_b, data_b = await fetch_json(f"https://api.dexscreener.com/latest/dex/tokens/{','.join(chunk_b)}", timeout=6, retries=0)
+                pairs_b = []
+                if st_b == 200 and isinstance(data_b, dict):
+                    pairs_b = data_b.get("pairs") or []
+                elif st_b == 200 and isinstance(data_b, list):
+                    pairs_b = data_b
+                else:
                     continue
                 best_b = {}
                 for p in pairs_b:

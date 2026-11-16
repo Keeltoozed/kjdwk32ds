@@ -797,11 +797,15 @@ class Analyzer:
             best_pair = sorted(amm_pairs, key=lambda p: float(((p.get("liquidity") or {}).get("usd", 0) or 0)), reverse=True)[0]
         else:
             # 2. Если AMM-пулов вообще нет — токен ещё на bonding curve pump.fun
+            has_real_amm = any(float(((x.get("liquidity") or {}).get("usd", 0) or 0)) >= 500.0 for x in sol_pairs)
+            if has_real_amm:
+                sol_pairs = [p for p in sol_pairs if not (str(p.get("dexId") or "").lower() in ("pump", "pumpfun") and float(((p.get("liquidity") or {}).get("usd", 0) or 0)) < 500.0)]
+
             def _get_eff_liq(p):
                 raw_l = float(((p.get("liquidity") or {}).get("usd", 0) or 0))
                 if raw_l > 0:
                     return raw_l
-                if p.get("dexId") in ("pump", "pumpfun"):
+                if p.get("dexId") in ("pump", "pumpfun") and not has_real_amm:
                     return float(p.get("fdv", 0) or p.get("marketCap", 0) or 0) * 0.40
                 return 0.0
 
@@ -919,16 +923,12 @@ class Analyzer:
             pairs_list = []
             try:
                 status, data = await fetch_json(
-                    "https://api.dexscreener.com/tokens/v1/solana/" + ",".join(chunk),
+                    "https://api.dexscreener.com/latest/dex/tokens/" + ",".join(chunk),
                     timeout=8, retries=1)
-                if status == 200 and isinstance(data, list):
+                if status == 200 and isinstance(data, dict):
+                    pairs_list = data.get("pairs") or []
+                elif status == 200 and isinstance(data, list):
                     pairs_list = data
-                else:
-                    status2, data2 = await fetch_json(
-                        "https://api.dexscreener.com/latest/dex/tokens/" + ",".join(chunk),
-                        timeout=8, retries=1)
-                    if status2 == 200 and isinstance(data2, dict):
-                        pairs_list = data2.get("pairs") or []
             except Exception:
                 return chunk, []
             return chunk, pairs_list
@@ -1934,12 +1934,9 @@ class Analyzer:
                     f"🚫 [MATURE-STALL-GUARD] {symbol} ({mint[:8]}): токену {_age_min_pre:.0f}м, но оборот вялый (vol5 ${_vm5_pre:,.0f}, v/l {_v2l_mat:.2f}x, m5 {_m5:+.1f}%) — кейс PROPFUN.",
                 )
 
-        # Запрет входа при давлении продавцов
-        _base_bs_cfg = float(getattr(config, "MIN_BUY_SELL_RATIO", 1.05))
-        if _vm5_pre >= 8000.0 and _m5 >= 5.0 and _b5_pre >= 30 and _m1 >= -3.5:
-            _min_bs_cfg = min(_base_bs_cfg, 0.92)
-        else:
-            _min_bs_cfg = _base_bs_cfg
+        # Запрет входа при давлении продавцов (строгое соотношение покупателей, без послаблений на высоком объёме)
+        _base_bs_cfg = float(getattr(config, "MIN_BUY_SELL_RATIO", 1.30))
+        _min_bs_cfg = _base_bs_cfg
         if _s5_pre > 4 and (_b5_pre / _s5_pre) < _min_bs_cfg:
             return self._deny(
                 mint,
@@ -2840,7 +2837,7 @@ class Analyzer:
                     return self._deny(mint, f"vol5-low ${_vol5_p:.0f}", f"🚫 [ENTRY] {mint}: объем m5 ${_vol5_p:.0f} < ${_min_vol} — интерес угас.")
                 if (_b5_p + _s5_p) < _min_tx:
                     return self._deny(mint, f"tx5-low {_b5_p+_s5_p}<{_min_tx}", f"🚫 [ENTRY] {mint}: сделок m5 {_b5_p+_s5_p} < {_min_tx} — слишком тихо.")
-                _eff_min_ratio = 1.02 if (_vol5_p >= 15000.0 or _cur_liq_pre >= 30000.0) else _min_ratio
+                _eff_min_ratio = _min_ratio
                 if _s5_p > 0 and (_b5_p / _s5_p) < _eff_min_ratio:
                     return self._deny(mint, f"bs-low {_b5_p}/{_s5_p}", f"🚫 [ENTRY] {mint}: покупки/продажи m5 {_b5_p}/{_s5_p} < {_eff_min_ratio:.2f}x — продавцы давят.")
                 # 6. Защита от накрутки (средний чек < $4 — боты, либо аномальный wash-churn)
