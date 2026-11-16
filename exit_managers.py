@@ -111,18 +111,34 @@ class MatureExitManager:
                 if _s5 >= 6 and (_b5 / max(1, _s5)) < 0.40:
                     return f"🚨 First Candle Rug Cut: Sellers dominating ({_b5}b/{_s5}s, PnL {pnl_pct*100:.1f}%)"
 
+        _pd_pos = getattr(position, "pair_data", None) or getattr(position, "last_pair_data", None) or {}
+        _mint_pos = str(getattr(position, "mint", "") or "")
+        _is_unlocked = config.is_position_unlocked_lp(
+            _mint_pos,
+            _pd_pos,
+            bool(getattr(position, "is_lp_locked_80", False)),
+        )
+        position.is_unlocked_pool = _is_unlocked
+
         # =========================================================================
         # 0.5. ЖЕСТКИЙ СТОП-ЛОСС И ЗАЩИТА ОТ ОБВАЛА (LOSS CONTROL WITH SPREAD IMMUNITY)
         # =========================================================================
-        # Любой резкий дамп режется В ПЕРВУЮ ОЧЕРЕДЬ, но с защитой от 1-секундного спреда/сквиза!
-        _sl = -abs(float(getattr(config, "STOP_LOSS_PCT", -0.22)))
-        _emerg_cap = -abs(float(getattr(config, "EMERGENCY_CAP_PCT", -0.28)))
+        # На кривых Pump.fun LP не может быть выдернут девом. Стартовые фитили -15%..-28% — норма волатильности
+        # перед пампами +500%..+800% (кейсы wuf -23.8% -> +788%, LETTER -16.2% -> +284%, FiveM -21% -> +124%).
+        # Для незалоченных пулов Meteora держим стоп строже (-18%), так как там дев может снять LP.
+        if _is_unlocked:
+            _sl = -abs(float(getattr(config, "STOP_LOSS_UNLOCKED_PCT", -0.18)))
+            _emerg_cap = -abs(float(getattr(config, "EMERGENCY_CAP_UNLOCKED_PCT", -0.25)))
+        else:
+            _sl = -abs(float(getattr(config, "STOP_LOSS_PCT", -0.32)))
+            _emerg_cap = -abs(float(getattr(config, "EMERGENCY_CAP_PCT", -0.40)))
+
         if pnl_pct <= _emerg_cap:
             return f"🚨 Emergency Cap Dump ({pnl_pct*100:.1f}%)"
         if pnl_pct <= _sl:
             _sl_c = int(getattr(position, "sl_confirm_n", 0) or 0) + 1
             position.sl_confirm_n = _sl_c
-            # На глубоком обвале <= -25% выходим за 1 тик; в зоне -22%..-25% подтверждаем 2 тика (защита от сквиза на 1-й минуте)
+            # Подтверждаем 2 тика (защита от сквиза/спреда на 1-й секунде):
             if _sl_c >= 2 or pnl_pct <= (_sl * 1.15):
                 return f"🚨 Fast Stop Loss ({pnl_pct*100:.1f}%)"
         else:
@@ -137,14 +153,6 @@ class MatureExitManager:
         # - First Candle Rug Cut (-7.0% в первые 2.5м) / Fast Stop Loss (-7.5%)
         # - Breakeven Shield (+16% пик -> стоп в безубыток/плюс, в минус уйти НЕЛЬЗЯ)
         # - Crash Guard (-18%..-50% за 1м)
-        _pd_pos = getattr(position, "pair_data", None) or getattr(position, "last_pair_data", None) or {}
-        _mint_pos = str(getattr(position, "mint", "") or "")
-        _is_unlocked = config.is_position_unlocked_lp(
-            _mint_pos,
-            _pd_pos,
-            bool(getattr(position, "is_lp_locked_80", False)),
-        )
-        position.is_unlocked_pool = _is_unlocked
 
         # Для незалоченных кастомных пулов: мгновенно забираем прибыль при застое (от 1 мин после пика +8% и отката 18%+),
         # не дожидаясь пока дев выдернет LP (кейс SCHRODING, где бот сидел 4 минуты до вывода пула в $0)!

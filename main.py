@@ -91,52 +91,61 @@ async def position_security_auditor_loop(analyzer, tracker):
                         import market_data as _md
                         _td_sol = await asyncio.wait_for(_md.get_token_data(mint, max_cache_age=2.5), timeout=1.5)
                         if _td_sol:
-                            _liq_obj = _td_sol.get("liquidity") or {}
-                            _has_liq_data = bool(_liq_obj and ("usd" in _liq_obj or "quote" in _liq_obj))
-                            _sol_liq = float((_liq_obj.get("usd", 0) or 0))
-                            _quote_liq = float((_liq_obj.get("quote", 0) or 0))
-                            _q_sym = str(((_td_sol.get("quoteToken") or {}).get("symbol") or "")).upper()
+                            _dex_sol = str(_td_sol.get("dexId") or "").lower()
+                            _mint_sol = str(mint or "").lower()
+                            _is_curve_sol = _mint_sol.endswith("pump") and _dex_sol in ("", "pump", "pumpfun", "pump-amm")
 
-                            _init_liq = float(getattr(position, "initial_liquidity_usd", 0.0) or 0.0)
-                            if _init_liq <= 0 and _sol_liq > 0:
-                                position.initial_liquidity_usd = _sol_liq
-                                _init_liq = _sol_liq
-                            _peak_liq = float(getattr(position, "peak_liquidity_usd", 0.0) or _init_liq or 0.0)
-                            if _sol_liq > _peak_liq:
-                                position.peak_liquidity_usd = _sol_liq
-                                _peak_liq = _sol_liq
-
-                            # Проверка потери ликвидности (0 ликвидности, слив девом или падение пула):
-                            _is_zero_liq = (_sol_liq <= 0.0)
-                            _crit_drained = (_sol_liq <= 200.0) or (_q_sym in ("SOL", "WSOL") and _quote_liq < 1.0)
-                            _liq_crash_pct = ((_peak_liq - _sol_liq) / _peak_liq) if _peak_liq > 0 else 0.0
-                            _cfg_drain_exit = float(getattr(config, "LIQ_DRAIN_EXIT_PCT", 0.40))
-                            _cfg_drain_fast = float(getattr(config, "LIQ_DRAIN_FAST_PCT", 0.30))
-
-                            # МГНОВЕННЫЙ выход: ликва просела больше чем на LIQ_DRAIN_EXIT_PCT от пика — не ждём обнуления!
-                            _emergency_exit = _is_zero_liq or _crit_drained or (_liq_crash_pct >= _cfg_drain_exit and _peak_liq >= 3000.0)
-                            # Экстренный случай: за один тик ликва обвалилась на 30%+ — паник-сейл сразу
-                            _fast_drain = _liq_crash_pct >= _cfg_drain_fast and _peak_liq >= 3000.0
-
-                            if _has_liq_data and (_emergency_exit or _fast_drain):
-                                # Выходим НЕМЕДЛЕННО пока цена ещё есть, не ждём 2 тика подтверждения
-                                _px_now = 0.0 if (_is_zero_liq or _crit_drained or _sol_liq <= 250.0) else float(getattr(position, "current_price_usd", 0.0) or 0.0)
-                                _msg = f"Zero/Drained Liq ${_sol_liq:.0f}" if (_is_zero_liq or _crit_drained) else f"Liq Crash ${_sol_liq:.0f} from ${_peak_liq:.0f} (-{_liq_crash_pct*100:.0f}%)"
-                                _tag = "Liquidity Drain Escape" if _emergency_exit else "Fast Liquidity Drain Panic"
-                                print(f"🚨 [LIQ-LOSS] {position.symbol} ({mint[:8]}): {_msg} — выход МГНОВЕННО!")
-                                tracker.close_position(mint, _px_now, f"{_tag} (Liq dropped to ${_sol_liq:.0f} from ${_peak_liq:.0f})")
-                                continue
-                            elif _has_liq_data and _liq_crash_pct >= 0.25 and _peak_liq >= 3000.0:
-                                # Умеренный дроп 25%+: требуем 3 тика устойчивого подтверждения (не режем на рыночных шумах и кэше DexScreener)
-                                _drop_cnt = getattr(position, "_liq_drop_streak", 0) + 1
-                                position._liq_drop_streak = _drop_cnt
-                                if _drop_cnt >= 3:
-                                    _px_now = float(getattr(position, "current_price_usd", 0.0) or 0.0)
-                                    print(f"🚨 [LIQ-LOSS] {position.symbol} ({mint[:8]}): Liq Drop ${_sol_liq:.0f} from ${_peak_liq:.0f} (-{_liq_crash_pct*100:.0f}%) — подтверждённый выход (3 тика)!")
-                                    tracker.close_position(mint, _px_now, f"Confirmed Liquidity Drop (Liq ${_sol_liq:.0f} from ${_peak_liq:.0f})")
-                                    continue
+                            if _is_curve_sol:
+                                # На нативной pump.fun кривой ликвидность залочена в смарт-контракте — дев физически не может снять пул!
+                                # DexScreener часто отдаёт liq=None или liq=0 для pump.fun (это ложно выбивало ракету 莽小六 +518% в -99.99%).
+                                pass
                             else:
-                                position._liq_drop_streak = 0
+                                _liq_obj = _td_sol.get("liquidity") or {}
+                                _has_liq_data = bool(_liq_obj and ("usd" in _liq_obj or "quote" in _liq_obj))
+                                _sol_liq = float((_liq_obj.get("usd", 0) or 0))
+                                _quote_liq = float((_liq_obj.get("quote", 0) or 0))
+                                _q_sym = str(((_td_sol.get("quoteToken") or {}).get("symbol") or "")).upper()
+
+                                _init_liq = float(getattr(position, "initial_liquidity_usd", 0.0) or 0.0)
+                                if _init_liq <= 0 and _sol_liq > 0:
+                                    position.initial_liquidity_usd = _sol_liq
+                                    _init_liq = _sol_liq
+                                _peak_liq = float(getattr(position, "peak_liquidity_usd", 0.0) or _init_liq or 0.0)
+                                if _sol_liq > _peak_liq:
+                                    position.peak_liquidity_usd = _sol_liq
+                                    _peak_liq = _sol_liq
+
+                                # Проверка потери ликвидности (0 ликвидности, слив девом или падение пула):
+                                _is_zero_liq = (_sol_liq <= 0.0)
+                                _crit_drained = (_sol_liq <= 200.0) or (_q_sym in ("SOL", "WSOL") and _quote_liq < 1.0)
+                                _liq_crash_pct = ((_peak_liq - _sol_liq) / _peak_liq) if _peak_liq > 0 else 0.0
+                                _cfg_drain_exit = float(getattr(config, "LIQ_DRAIN_EXIT_PCT", 0.40))
+                                _cfg_drain_fast = float(getattr(config, "LIQ_DRAIN_FAST_PCT", 0.30))
+
+                                # МГНОВЕННЫЙ выход: ликва просела больше чем на LIQ_DRAIN_EXIT_PCT от пика — не ждём обнуления!
+                                _emergency_exit = _is_zero_liq or _crit_drained or (_liq_crash_pct >= _cfg_drain_exit and _peak_liq >= 3000.0)
+                                # Экстренный случай: за один тик ликва обвалилась на 30%+ — паник-сейл сразу
+                                _fast_drain = _liq_crash_pct >= _cfg_drain_fast and _peak_liq >= 3000.0
+
+                                if _has_liq_data and (_emergency_exit or _fast_drain):
+                                    # Выходим НЕМЕДЛЕННО пока цена ещё есть, не ждём 2 тика подтверждения
+                                    _px_now = 0.0 if (_is_zero_liq or _crit_drained or _sol_liq <= 250.0) else float(getattr(position, "current_price_usd", 0.0) or 0.0)
+                                    _msg = f"Zero/Drained Liq ${_sol_liq:.0f}" if (_is_zero_liq or _crit_drained) else f"Liq Crash ${_sol_liq:.0f} from ${_peak_liq:.0f} (-{_liq_crash_pct*100:.0f}%)"
+                                    _tag = "Liquidity Drain Escape" if _emergency_exit else "Fast Liquidity Drain Panic"
+                                    print(f"🚨 [LIQ-LOSS] {position.symbol} ({mint[:8]}): {_msg} — выход МГНОВЕННО!")
+                                    tracker.close_position(mint, _px_now, f"{_tag} (Liq dropped to ${_sol_liq:.0f} from ${_peak_liq:.0f})")
+                                    continue
+                                elif _has_liq_data and _liq_crash_pct >= 0.25 and _peak_liq >= 3000.0:
+                                    # Умеренный дроп 25%+: требуем 3 тика устойчивого подтверждения (не режем на рыночных шумах и кэше DexScreener)
+                                    _drop_cnt = getattr(position, "_liq_drop_streak", 0) + 1
+                                    position._liq_drop_streak = _drop_cnt
+                                    if _drop_cnt >= 3:
+                                        _px_now = float(getattr(position, "current_price_usd", 0.0) or 0.0)
+                                        print(f"🚨 [LIQ-LOSS] {position.symbol} ({mint[:8]}): Liq Drop ${_sol_liq:.0f} from ${_peak_liq:.0f} (-{_liq_crash_pct*100:.0f}%) — подтверждённый выход (3 тика)!")
+                                        tracker.close_position(mint, _px_now, f"Confirmed Liquidity Drop (Liq ${_sol_liq:.0f} from ${_peak_liq:.0f})")
+                                        continue
+                                else:
+                                    position._liq_drop_streak = 0
 
                             # 3. Мониторинг кошельков (сиビル, флипперы, аномальная активность после входа)
                             _wm_chk = getattr(position, "last_wallet_mon_chk", 0.0)
@@ -1415,7 +1424,8 @@ async def scanner_loop(analyzer, tracker):
                                     if not _is_breakout:
                                         print(f"🚫 [SCANNER-FOMO-M5] {actual_symbol} ({mint[:8]}): живой m5 +{_m5_live:.1f}% > +{_max_m5_cfg:.0f}% — вершина свечи, отмена!")
                                         continue
-                                _links_sc = len(pair_data.get("info", {}).get("socials", []) or []) + len(pair_data.get("info", {}).get("websites", []) or [])
+                                _info_sc_d = pair_data.get("info") or {}
+                                _links_sc = len(_info_sc_d.get("socials") or []) + len(_info_sc_d.get("websites") or [])
                                 _soc_unk_sc = bool(pair_data.get("_socials_unknown", False))
                                 _b5_sc = int((pair_data.get("txns") or {}).get("m5", {}).get("buys", 0) or 0)
                                 _s5_sc = int((pair_data.get("txns") or {}).get("m5", {}).get("sells", 0) or 0)

@@ -635,7 +635,7 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
                     vol5_usd=_vol5_j,
                     buys5=_b5_j,
                     sells5=_s5_j,
-                    has_socials=bool(len((td or {}).get("info", {}).get("socials", []) or [])),
+                    has_socials=bool(len(((td or {}).get("info") or {}).get("socials", []) or [])),
                     is_trap=config.is_pumpswap_liq_fdv_trap(td or {}),
                 )
                 if _is_unl_safe_j:
@@ -814,7 +814,8 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
     if _h1_j > _eff_max_h1_j:
         print(f"🚫 [{source_tag}-FOMO-H1] {_sym_tmp}: h1 +{_h1_j:.0f}% > +{_eff_max_h1_j:.0f}% — перегретый часовой памп, отмена!")
         return False
-    _links_j = len((td or {}).get("info", {}).get("socials", []) or []) + len((td or {}).get("info", {}).get("websites", []) or [])
+    _info_j = (td or {}).get("info") or {}
+    _links_j = len(_info_j.get("socials", []) or []) + len(_info_j.get("websites", []) or [])
     _soc_unk_j = bool((td or {}).get("_socials_unknown", False))
     if getattr(config, "REQUIRE_SOCIALS_ENABLED", False) and _age_j >= _req_soc_age and _links_j == 0 and not _soc_unk_j:
         _avg_j = _vm5_j / max(1, _b5_j + _s5_j)

@@ -1677,7 +1677,8 @@ class Analyzer:
                 _s5_mc = int(_tx5_mc.get("sells", 0) or 0)
                 _v5_mc = float((pair_data.get("volume") or {}).get("m5", 0) or 0)
                 _lq_mc = float((pair_data.get("liquidity", {}) or {}).get("usd", 0) or 0)
-                _links_m = len((pair_data or {}).get("info", {}).get("socials", []) or []) + len((pair_data or {}).get("info", {}).get("websites", []) or [])
+                _info_m = (pair_data or {}).get("info") or {}
+                _links_m = len(_info_m.get("socials") or []) + len(_info_m.get("websites") or [])
                 _v_to_l_m = (_v5_mc / max(_lq_mc, 1.0)) if _lq_mc > 0 else 0.0
                 _avg_tx_m = (_v5_mc / max(1, _b5_mc + _s5_mc)) if (_b5_mc + _s5_mc) > 0 else 0.0
                 # Живые вирусные мемы (PEPE69 $172k vol, DUGE, TRUMP, PNUT): пускаем при подтверждённом торговом потоке
@@ -1985,7 +1986,8 @@ class Analyzer:
 
         # 5. Соцсети: требуем ТОЛЬКО для зрелых токенов (>= 25 мин)!
         # Молодые токены (< 25 мин) часто не имеют соцсетей в индексе DexScreener, но являются взлетающими ракетами
-        _links_cnt = len((pair_data or {}).get("info", {}).get("socials", []) or []) + len((pair_data or {}).get("info", {}).get("websites", []) or [])
+        _info_cnt = (pair_data or {}).get("info") or {}
+        _links_cnt = len(_info_cnt.get("socials") or []) + len(_info_cnt.get("websites") or [])
         _soc_unknown = bool((pair_data or {}).get("_socials_unknown", False))
         _req_soc_age = float(getattr(config, "REQUIRE_SOCIALS_MIN_AGE_MIN", 25.0))
         if getattr(config, "REQUIRE_SOCIALS_ENABLED", False) and _age_min_pre >= _req_soc_age and _links_cnt == 0 and not _soc_unknown:
