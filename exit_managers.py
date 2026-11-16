@@ -195,23 +195,30 @@ class MatureExitManager:
                 else getattr(config, "MOONBAG_TRAIL_DISTANCE_PCT", 0.22)
             )
             if max_pnl_pct >= 5.00:
-                _floor_pnl = round(max_pnl_pct * 0.72, 2)
-                _trail_dist = min(_mb_dist, 0.22)
+                _floor_pnl = round(max_pnl_pct * 0.75, 2)
+                _trail_dist = min(_mb_dist, 0.20)
             elif max_pnl_pct >= 2.50:
-                _floor_pnl = round(max(1.50, max_pnl_pct * 0.65), 2)
-                _trail_dist = min(_mb_dist, 0.22)
+                _floor_pnl = round(max(1.60, max_pnl_pct * 0.68), 2)
+                _trail_dist = min(_mb_dist, 0.20)
             elif max_pnl_pct >= _mb_act:
-                _floor_pnl = round(max(0.32 if _is_unlocked else 0.55, max_pnl_pct * (0.65 if _is_unlocked else 0.62)), 2)
+                _floor_pnl = round(max(0.35 if _is_unlocked else 0.60, max_pnl_pct * (0.65 if _is_unlocked else 0.62)), 2)
                 _trail_dist = _mb_dist
             elif max_pnl_pct >= 0.55:
-                _floor_pnl = 0.26
-                _trail_dist = 0.20
-            elif max_pnl_pct >= 0.35:
-                _floor_pnl = 0.14
+                _floor_pnl = 0.28
                 _trail_dist = 0.18
-            elif max_pnl_pct >= 0.22:
+            elif max_pnl_pct >= 0.28:
+                _floor_pnl = 0.14
+                _trail_dist = 0.14
+            elif max_pnl_pct >= 0.15:
                 _floor_pnl = 0.05
-                _trail_dist = 0.16
+                _trail_dist = 0.12
+            else:
+                # НЕСГОРАЕМЫЙ БЕЗУБЫТОК МУНБЭГА:
+                # Прибыль по первой части уже зафиксирована на TP1. Оставшийся мунбэг
+                # гарантированно защищен от убытка: при откате к уровню безубытка (+0.5%)
+                # позиция полностью закрывается, сохраняя 100% зафиксированного профита!
+                _floor_pnl = 0.005
+                _trail_dist = None
         else:
             # === ОСНОВНАЯ ПОЗИЦИЯ: Б/У ЩИТ ОТ +16% + ПРОГРЕССИВНЫЙ ТРЕЙЛИНГ ДО 10x+ ===
             if max_pnl_pct >= 5.00:         # 6x+: фиксируем минимум 72% от ATH PnL
@@ -252,7 +259,7 @@ class MatureExitManager:
                 _fl_c = int(getattr(position, "floor_confirm_n", 0) or 0) + 1
                 position.floor_confirm_n = _fl_c
                 # Подтверждаем 2 тика (защита от 1-секундного спреда/сквиза на ретесте):
-                if _fl_c >= 2 or pnl_pct <= (_floor_pnl - 0.06):
+                if _fl_c >= 2 or pnl_pct <= (_floor_pnl - 0.04) or _is_mb:
                     _pnl_str = f"+{pnl_pct*100:.1f}%" if pnl_pct >= 0 else f"{pnl_pct*100:.1f}%"
                     return f"Mature {_tag} Floor ({_pnl_str} after peak +{max_pnl_pct*100:.1f}%)"
             else:

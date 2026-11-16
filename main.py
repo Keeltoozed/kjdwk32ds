@@ -3199,8 +3199,20 @@ def _render_tab1_content():
                         return 0.0
                     open_df['pnl_%'] = open_df.apply(_pct, axis=1)
                     for index, row in open_df.iterrows():
-                        pnl_usd = row['current_pnl_usd']
-                        pnl_pct = row['pnl_%']
+                        _floating_pnl = float(row.get('current_pnl_usd') or 0.0)
+                        _realized_pnl = float(row.get('pnl_usd') or 0.0)
+                        _orig_amt = float(row.get('original_amount_usd') or row.get('amount_usd') or 0.0)
+                        _cur_amt = float(row.get('amount_usd') or 0.0)
+                        _max_pnl_val = float(row.get('max_pnl_pct') or 0.0)
+
+                        # Совокупный PnL (зафиксированный профит от TP1/TP2 + плавающий остаток в рынке)
+                        if _realized_pnl != 0.0:
+                            pnl_usd = _realized_pnl + _floating_pnl
+                            pnl_pct = (pnl_usd / _orig_amt * 100) if _orig_amt > 0 else row['pnl_%']
+                        else:
+                            pnl_usd = _floating_pnl
+                            pnl_pct = row['pnl_%']
+
                         # Слепая позиция (sBTC-кейс): ни один источник цены минт
                         # не проиндексировал — вместо лживых $0.00 показываем факт.
                         try:
@@ -3215,14 +3227,23 @@ def _render_tab1_content():
                             _blind = False
                         color = "#00C851" if pnl_usd >= 0 else "#FF4444"
                         sign = "+" if pnl_usd > 0 else ""
+
+                        _tp_detail_html = ""
+                        if _realized_pnl > 0.005:
+                            _fl_color = "#00C851" if _floating_pnl >= 0 else "#FF4444"
+                            _fl_sign = "+" if _floating_pnl > 0 else ""
+                            _tp_detail_html = (
+                                f"<div style='font-size:0.75em; color:#aaa; margin-top:2px;'>"
+                                f"Зафиксировано TP: <b style='color:#00C851;'>+${_realized_pnl:.2f}</b> | "
+                                f"В рынке: <b style='color:{_fl_color};'>{_fl_sign}${_floating_pnl:.2f}</b>"
+                                f"</div>"
+                            )
+
                         _right = (f"<h3 style='margin:0; color: #888;'>⏳ нет цены</h3>"
                                   if _blind else
-                                  f"<h3 style='margin:0; color: {color};'>{sign}${pnl_usd:.2f} ({sign}{pnl_pct:.2f}%)</h3>")
+                                  f"<h3 style='margin:0; color: {color};'>{sign}${pnl_usd:.2f} ({sign}{pnl_pct:.2f}%)</h3>{_tp_detail_html}")
 
-                        _orig_amt = float(row.get('original_amount_usd') or row.get('amount_usd') or 0.0)
-                        _cur_amt = float(row.get('amount_usd') or 0.0)
-                        _max_pnl_val = float(row.get('max_pnl_pct') or 0.0)
-                        _is_mb = bool(row.get('is_moonbag', False) and (_max_pnl_val >= 1.00 or pnl_pct >= 1.00 or _cur_amt < _orig_amt * 0.75))
+                        _is_mb = bool(row.get('is_moonbag', False) or _cur_amt < (_orig_amt * 0.75) or _realized_pnl > 0.005)
                         _mb_html = " <span style='background:#6f42c1; color:white; padding:2px 7px; border-radius:4px; font-size:0.75em; font-weight:bold;'>🚀 Moonbag (Фиксация TP)</span>" if _is_mb else ""
                         _size_html = f"<div><span style='color:#888;'>Ордер:</span> <b>${_orig_amt:.1f}</b>" + (f" (В рынке: <b>${_cur_amt:.1f}</b>)" if _is_mb else "") + f"{_mb_html}</div>"
 
