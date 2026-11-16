@@ -141,12 +141,13 @@ class MatureExitManager:
         )
         position.is_unlocked_pool = _is_unlocked
 
-        # Для незалоченных кастомных пулов: быстрее фиксируем профит при застое (2+ мин после +35% и откате 22%+),
-        # не дожидаясь пока дев выдернет LP; 100% тела уже выводится лесенкой на +16%/+30%!
-        _unl_stall_min = min(2.0, float(getattr(config, "UNLOCKED_STALL_PROFIT_AGE_SEC", 180.0)) / 60.0)
-        if not _is_mb and _is_unlocked and minutes_held >= _unl_stall_min:
-            if max_pnl_pct >= 0.35 and _peak_age_min >= _unl_stall_min and pnl_pct <= max_pnl_pct * 0.78:
-                return f"⚡ Unlocked Stale Profit Lock (+{pnl_pct*100:.1f}%, застой {_peak_age_min*60:.0f}с после пика +{max_pnl_pct*100:.1f}%)"
+        # Для незалоченных кастомных пулов: мгновенно забираем прибыль при застое (от 1 мин после пика +8% и отката 18%+),
+        # не дожидаясь пока дев выдернет LP (кейс SCHRODING, где бот сидел 4 минуты до вывода пула в $0)!
+        if not _is_mb and _is_unlocked and minutes_held >= 1.0 and _peak_age_min >= 0.75:
+            if max_pnl_pct >= 0.08 and pnl_pct <= max_pnl_pct * 0.82:
+                return f"⚡ Unlocked Fast Profit Exit ({pnl_pct*100:+.1f}%, застой {_peak_age_min*60:.0f}с после пика +{max_pnl_pct*100:.1f}%)"
+            elif minutes_held >= 2.0 and pnl_pct < 0.02:
+                return f"⚡ Unlocked Stale Exit ({pnl_pct*100:+.1f}%, 2м без импульса на незалоченном пуле — защита от LP rug)"
 
         # Б. СРЕЗ МЁРТВЫХ ФЛЕТОВ ПОСЛЕ КОНСОЛИДАЦИИ (НЕ рубим +0.0% на 35-й секунде!):
         # Даём сделке минимум 3.0 минуты (180с) на раскачку и обновление живых котировок;

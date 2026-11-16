@@ -568,10 +568,11 @@ class PaperTracker:
         # ИСКЛЮЧЕНИЕ: VIP KOL сделки (Ansem, Chairman и др.) идут с 100% обходом ML-фильтров по прямому требованию!
         _is_copy_src = str(source or "").startswith("COPY")
         _is_vip = "VIP" in str(source or "")
-        min_conf = float(getattr(config, "ROCKET_XGB_FINAL_THRESHOLD", 8.0))
-        _stage1_conf = float(getattr(config, "ROCKET_XGB_STAGE1_THRESHOLD", 5.0))
+        _is_unlocked_tr = config.is_position_unlocked_lp(mint, pair_data, bool((pair_data or {}).get("_lp_verified")))
+        min_conf = float(getattr(config, "ROCKET_XGB_FINAL_THRESHOLD", 30.0))
+        _stage1_conf = float(getattr(config, "ROCKET_XGB_STAGE1_THRESHOLD", 18.0))
         _mom_rocket_ok = False
-        if isinstance(pair_data, dict):
+        if not _is_unlocked_tr and isinstance(pair_data, dict):
             _tx_t = (pair_data.get("txns") or {}).get("m5") or {}
             _b5_t = int(_tx_t.get("buys", 0) or 0)
             _s5_t = int(_tx_t.get("sells", 0) or 0)
@@ -580,7 +581,12 @@ class PaperTracker:
             _mom_rocket_ok = (_m5_t >= 5.0 and _v5_t >= 4000.0 and _b5_t >= int(_s5_t * 1.15))
         _eff_min_conf = _stage1_conf if (_is_copy_src or _mom_rocket_ok) else min_conf
         if getattr(config, "ROCKET_XGB_ENABLED", True) and not _is_vip:
-            if ml_confidence > 0 and (ml_confidence + 0.05) < _eff_min_conf:
+            if _is_unlocked_tr:
+                _unl_min = float(getattr(config, "ROCKET_XGB_UNLOCKED_CUSTOM_MIN", 35.0))
+                if (ml_confidence + 0.05) < _unl_min:
+                    print(f"🚫 [FIREWALL] Отказ входа {symbol} ({mint[:8]}): незалоченный пул Rocket XGB скор {ml_confidence:.1f}% < {_unl_min:.0f}% (блокировка LP-rug)")
+                    return False
+            elif ml_confidence > 0 and (ml_confidence + 0.05) < _eff_min_conf:
                 print(f"🚫 [FIREWALL] Отказ входа {symbol} ({mint[:8]}): Rocket XGB скор {ml_confidence:.1f}% < {_eff_min_conf:.0f}% (блокировка убыточного дампа)")
                 return False
             if (source == "GROK-JEV" or _is_copy_src) and ml_confidence <= 0.0:

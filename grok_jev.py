@@ -1252,8 +1252,8 @@ class GrokJevEngine:
                 if m and 32 <= len(m) <= 44 and not m.startswith("0x") and m not in seen:
                     seen.add(m)
                     candidates.append((m, "solana"))
-            # Топ-гейнеры 5m и 1h (живые ракеты с импульсом):
-            for _tf_g in ("5m", "1h"):
+            # Топ-гейнеры 1h (живые ракеты с подтверждённым часовым импульсом, исключая 30-секундные wash-ловушки 5m):
+            for _tf_g in ("1h",):
                 ds_g = await market_data.fetch_dexscreener_gainers(timeframe=_tf_g, network="solana")
                 for g in (ds_g or []):
                     m = str(g.get("mint") or "").strip()
@@ -2138,7 +2138,8 @@ class GrokJevEngine:
             and _m1_s1 >= float(getattr(_c, "JEV_MIN_M1_ENTRY_FLOOR_PCT", -5.0))
             and _h1_s1 >= float(getattr(_c, "JEV_MIN_H1_PCT", -25.0))
         )
-        _is_momentum_rocket = _s1_fresh_ok and (rkt_s1 + 0.05) >= max(8.0, s1_thresh - 2.0) and _m1_s1 >= 0.0 and (
+        _is_unlocked_s1 = _c.is_position_unlocked_lp(address, pair, bool(pair.get("_lp_verified")))
+        _is_momentum_rocket = not _is_unlocked_s1 and _s1_fresh_ok and (rkt_s1 + 0.05) >= max(8.0, s1_thresh - 2.0) and _m1_s1 >= 0.0 and (
             (_m5_s1 >= 10.0 and _b5_s1 >= int(_s5_s1 * 1.20) and _vm5_s1 >= 4000.0)
             or (_vm5_s1 >= 8000.0 and _b5_s1 >= int(_s5_s1 * 1.15) and _m5_s1 >= 4.0)
             or (_m5_s1 >= 6.0 and _vm5_s1 >= 4000.0 and _b5_s1 >= max(10, int(_s5_s1 * 1.15)))
@@ -2296,8 +2297,10 @@ class GrokJevEngine:
         _fin_m5 = float(((pair.get("priceChange") or {}).get("m5", 0)) or 0)
         _fin_b5 = int(((pair.get("txns") or {}).get("m5") or {}).get("buys", 0) or 0)
         _fin_s5 = int(((pair.get("txns") or {}).get("m5") or {}).get("sells", 0) or 0)
+        _is_unlocked_custom_fin = _c.is_position_unlocked_lp(address, pair, bool(pair.get("_lp_verified")))
         _is_mom_rocket_fin = (
-            _fin_m5 >= 5.0
+            not _is_unlocked_custom_fin
+            and _fin_m5 >= 5.0
             and _fin_v5 >= 4000.0
             and _fin_b5 >= max(15, int(_fin_s5 * 1.15))
             and (rkt_final + 0.05) >= _s1_thr_j
@@ -2305,10 +2308,9 @@ class GrokJevEngine:
         if getattr(_c, "ROCKET_XGB_ENABLED", True) and not _is_mom_rocket_fin and (rkt_final + 0.05) < final_thresh:
             print(f"🚫 [GROK-JEV-ML-VETO] {symbol} ({address[:8]}): Rocket XGB final score {rkt_final:.1f}% < {final_thresh:.0f}% — VETO! (Блокировка дампа)")
             return False, f"rocket-xgb-final-veto {rkt_final:.1f}% < {final_thresh:.0f}%"
-        _is_unlocked_custom_fin = _c.is_position_unlocked_lp(address, pair, bool(pair.get("_lp_verified")))
         _custom_xgb_min = float(getattr(_c, "ROCKET_XGB_UNLOCKED_CUSTOM_MIN", 35.0))
         if getattr(_c, "ROCKET_XGB_ENABLED", True) and _is_unlocked_custom_fin and (rkt_final + 0.05) < _custom_xgb_min:
-            print(f"🚫 [GROK-JEV-ML-UNLOCKED] {symbol} ({address[:8]}): unlocked AMM Rocket XGB {rkt_final:.1f}% < {_custom_xgb_min:.0f}% — VETO! (отсев слабых/клонированных пулов уровня GTA6)")
+            print(f"🚫 [GROK-JEV-ML-UNLOCKED] {symbol} ({address[:8]}): unlocked AMM Rocket XGB {rkt_final:.1f}% < {_custom_xgb_min:.0f}% — VETO! (отсев слабых/клонированных пулов уровня GTA6/SCHRODING)")
             return False, f"rocket-xgb-unlocked-veto {rkt_final:.1f}% < {_custom_xgb_min:.0f}%"
 
         print(f"🚀 [GROK-JEV-ML-PASS] {symbol} ({address[:8]}): Rocket XGB score {rkt_final:.1f}% (thresh {final_thresh:.0f}%) — ОДОБРЕНО!")

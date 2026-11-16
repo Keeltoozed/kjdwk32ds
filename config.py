@@ -232,11 +232,16 @@ def is_safe_unlocked_custom_runner(
     if age_val < min_age:
         return False
     min_vol5 = float(globals().get("UNLOCKED_CUSTOM_MIN_VOL5_USD", 1800.0))
-    min_buys5 = int(globals().get("UNLOCKED_CUSTOM_MIN_BUYS5", 12))
+    min_buys5 = int(globals().get("UNLOCKED_CUSTOM_MIN_BUYS5", 15))
     if b5 < min_buys5 or vol5_val < min_vol5:
         return False
-    if s5 > 0 and b5 < int(s5 * 1.05):
+    if s5 > 0 and b5 < int(s5 * 1.10):
         return False
+    # На незалоченном пуле без соцсетей риск моментального вывода LP девом составляет 99%:
+    # Если у пула нет подтвержденных соцсетей/сайта, требуем мощный органический интерес (>= 30 покупок и $6,000 объема 5m)
+    if not has_socials:
+        if b5 < 30 or vol5_val < 6000.0:
+            return False
     # Seeded-LP приманка (кейс Starhug $103.5k liq / $20k vol5 = 0.19x): на крупном незалоченном пуле нужен оборот >= 35%
     if liq_val >= 18000.0 and vol5_val < (liq_val * 0.35):
         return False
@@ -607,11 +612,11 @@ MOONBAG_MAX_HOLD_MIN = 55.0          # Мунбэг может ехать до 5
 
 # === БЫСТРЫЙ СБОР ТЕЛА И ПРОФИТА ДЛЯ НЕЗАЛОЧЕННЫХ ПУЛОВ (Meteora / PumpSwap CreatePool / Raydium) ===
 # На unlocked-LP дев может выдернуть 100% пула за 1 блок (кейсы Starhug/4CHAN/TikTok):
-# к +30% выводим 103.4% тела в кэш, к +65% фиксируем +21% чистыми и жестче тралим мунбэг.
-UNLOCKED_TP1_TRIGGER_PCT = 0.16
-UNLOCKED_TP1_SELL_FRAC = 0.60
-UNLOCKED_TP2_TRIGGER_PCT = 0.30
-UNLOCKED_TP2_SELL_FRAC = 0.65
+# к +22% выводим практически всё тело в кэш, остаток летит бесплатным мунбэгом.
+UNLOCKED_TP1_TRIGGER_PCT = 0.10      # Сверхбыстрый первый тейк: забираем 50% на +10%, спасая депозит до возможного дампа дева
+UNLOCKED_TP1_SELL_FRAC = 0.50
+UNLOCKED_TP2_TRIGGER_PCT = 0.22      # На +22% выводим еще 60% остатка (полный возврат депозита с прибылью в кэш!)
+UNLOCKED_TP2_SELL_FRAC = 0.60
 UNLOCKED_TP3_TRIGGER_PCT = 0.65
 UNLOCKED_TP3_SELL_FRAC = 0.50
 UNLOCKED_TP4_TRIGGER_PCT = 1.40
