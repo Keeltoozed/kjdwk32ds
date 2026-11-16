@@ -4260,14 +4260,12 @@ class Analyzer:
         if config.is_position_unlocked_lp(mint, pair_data, bool(pair_data.get("_lp_verified"))):
             if liquidity >= 18000.0 and (_vm5 / max(liquidity, 1.0)) < 0.35:
                 return self._deny(mint, "unlocked-seeded-lp", f"🚫 [UNLOCKED-SEEDED-LP] {mint[:8]}: раздутый незалоченный пул ${liquidity:,.0f} при обороте 5m ${_vm5:,.0f} ({_vm5/liquidity:.2f} < 0.35x) — приманка под Remove LP.")
-            if fdv > 0.0 and liquidity >= (fdv * 1.15):
-                return self._deny(mint, "unlocked-inverted-liq-fdv", f"🚫 [UNLOCKED-LIQ>FDV] {mint[:8]}: ликвидность ${liquidity:,.0f} >= 1.15x FDV ${fdv:,.0f} на незалоченном пуле — синтетический LP-пул.")
-            if fdv > 0.0 and liquidity >= (fdv * 0.85) and (_vm5 / max(liquidity, 1.0)) < 1.50:
-                return self._deny(mint, "unlocked-heavy-lp-low-vol", f"🚫 [UNLOCKED-HEAVY-LP] {mint[:8]}: тяжёлый LP ${liquidity:,.0f} ({liquidity/fdv:.2f}x FDV ${fdv:,.0f}) при обороте 5m ${_vm5:,.0f} < 1.5x LP.")
+            if fdv > 0.0 and liquidity > (fdv * 2.25):
+                return self._deny(mint, "unlocked-synthetic-liq-fdv", f"🚫 [UNLOCKED-SYNTHETIC-LIQ] {mint[:8]}: ликвидность ${liquidity:,.0f} > 2.25x FDV ${fdv:,.0f} — аномальный синтетический пул.")
             _m5_ray_raw = ((pair_data.get("priceChange") or {}).get("m5"))
             _m5_ray = float(_m5_ray_raw) if _m5_ray_raw is not None else None
-            if _m5_ray is not None and _m5_ray < 5.0 and (_vm5 / max(liquidity, 1.0)) < 2.0:
-                return self._deny(mint, "unlocked-flat-candle", f"🚫 [UNLOCKED-FLAT] {mint[:8]}: плоская свеча m5={_m5_ray:+.1f}% (< +5%) при обороте {_vm5/max(liquidity,1):.2f}x — wash-бот перед Remove LP.")
+            if _m5_ray is not None and _m5_ray < 4.0 and (_vm5 / max(liquidity, 1.0)) < 2.0:
+                return self._deny(mint, "unlocked-flat-candle", f"🚫 [UNLOCKED-FLAT] {mint[:8]}: плоская свеча m5={_m5_ray:+.1f}% (< +4%) при обороте {_vm5/max(liquidity,1):.2f}x — wash-бот перед Remove LP.")
 
         # 2. Защита от картонных пулов: для молодых ракет / pump.fun ($12k liq при росте до $600k+ FDV) лимит до 85x
         _max_hollow_ratio = 85.0 if (_is_fresh_ray and _b5 >= _s5 * 1.15) else 45.0

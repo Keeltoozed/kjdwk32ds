@@ -55,7 +55,7 @@ class MatureExitManager:
             _peak_age_min = 0.0
 
         _is_mb = getattr(position, "is_moonbag", False)
-        _min_tp_ticket = float(getattr(config, "PARTIAL_TP_MIN_TICKET_USD", 20.0))
+        _min_tp_ticket = float(getattr(config, "PARTIAL_TP_MIN_TICKET_USD", 3.0))
         _pos_val = float(getattr(position, "original_amount_usd", 0.0) or getattr(position, "amount_usd", 0.0) or 0.0)
         _allow_partial_tp = getattr(config, "PARTIAL_TP_ENABLED", True) and (_pos_val >= _min_tp_ticket)
 
@@ -64,25 +64,32 @@ class MatureExitManager:
         # =========================================================================
         _pd_chk = getattr(position, "pair_data", None) or getattr(position, "last_pair_data", None) or {}
         if isinstance(_pd_chk, dict) and _pd_chk:
-            _cur_l = float(((_pd_chk.get("liquidity") or {}).get("usd", 0) or 0))
-            _peak_l = float(getattr(position, "peak_liquidity_usd", 0.0) or getattr(position, "initial_liquidity_usd", 0.0) or 0.0)
-            if _cur_l > _peak_l:
-                position.peak_liquidity_usd = _cur_l
-                _peak_l = _cur_l
-            # Абсолютная потеря ликвидности (вывод пула девом в 0):
-            if (_peak_l >= 1000.0 and _cur_l <= 200.0) or (_peak_l >= 3000.0 and _cur_l < (_peak_l * 0.20)):
-                return f"Absolute Liquidity Loss (Liq dropped to ${_cur_l:.0f} from ${_peak_l:.0f})"
-            # Ранний срез вывода ликвидности девом (>45% просадки пула 2 тика подряд) — не режем от единичного спайка DS:
-            elif _peak_l >= 3000.0 and _cur_l < (_peak_l * 0.55):
-                _drop_s = int(getattr(position, "_liq_drop_streak_em", 0) or 0) + 1
-                position._liq_drop_streak_em = _drop_s
-                if _drop_s >= 2:
-                    return f"Early Liquidity Drop Escape (Liq dropped to ${_cur_l:.0f} from ${_peak_l:.0f})"
-            else:
-                position._liq_drop_streak_em = 0
+            _liq_obj = _pd_chk.get("liquidity")
+            if isinstance(_liq_obj, dict) and ("usd" in _liq_obj or "quote" in _liq_obj):
+                _cur_l = float((_liq_obj.get("usd", 0) or 0))
+                _peak_l = float(getattr(position, "peak_liquidity_usd", 0.0) or getattr(position, "initial_liquidity_usd", 0.0) or 0.0)
+                if _cur_l > _peak_l:
+                    position.peak_liquidity_usd = _cur_l
+                    _peak_l = _cur_l
+                _dex_chk = str(_pd_chk.get("dexId") or "").lower()
+                _mint_str = str(getattr(position, "mint", "") or "").lower()
+                _is_curve = _mint_str.endswith("pump") and _dex_chk in ("", "pump", "pumpfun", "pump-amm")
+                # На pump.fun кривой ликвидность в пуле контролируется контрактом, дев не может её снять
+                if not _is_curve:
+                    # Абсолютная потеря ликвидности (вывод пула девом в 0):
+                    if (_peak_l >= 1000.0 and _cur_l <= 200.0) or (_peak_l >= 3000.0 and _cur_l < (_peak_l * 0.20)):
+                        return f"Absolute Liquidity Loss (Liq dropped to ${_cur_l:.0f} from ${_peak_l:.0f})"
+                    # Ранний срез вывода ликвидности девом (>45% просадки пула 2 тика подряд):
+                    elif _peak_l >= 3000.0 and _cur_l < (_peak_l * 0.55):
+                        _drop_s = int(getattr(position, "_liq_drop_streak_em", 0) or 0) + 1
+                        position._liq_drop_streak_em = _drop_s
+                        if _drop_s >= 2:
+                            return f"Early Liquidity Drop Escape (Liq dropped to ${_cur_l:.0f} from ${_peak_l:.0f})"
+                    else:
+                        position._liq_drop_streak_em = 0
 
             # Ранний сброс при агрессивном даме продавцов на первых минутах (<2м):
-            if pnl_pct <= -0.095 and minutes_held < 2.0:
+            if pnl_pct <= -0.12 and minutes_held < 2.0:
                 txns_m5 = (_pd_chk.get("txns") or {}).get("m5") or {}
                 b5_chk = int(txns_m5.get("buys", 0) or 0)
                 s5_chk = int(txns_m5.get("sells", 0) or 0)
@@ -92,8 +99,8 @@ class MatureExitManager:
             # СБРОС МОМЕНТАЛЬНОГО РАГА НА ПЕРВОЙ СВЕЧЕ (First Candle Rug Exit)
             # На ракетах первая свеча зелёная, покупатели льют объём и pnl в плюсе.
             # Если токен — раг: дев сливает стек, m1 падает > 12% или продавцы давят в одну калитку.
-            # Сбрасываем ТОЛЬКО РАГ сразу на первой свече с минимальным убытком (-6%..-7.5%), не дожидаясь -25%..-90%!
-            if 0.3 <= minutes_held <= 3.0 and pnl_pct <= -0.070:
+            # Сбрасываем ТОЛЬКО РАГ сразу на первой свече при подтверждении, не дожидаясь -50%..-90%!
+            if 0.3 <= minutes_held <= 3.0 and pnl_pct <= -0.10:
                 _pc_chk = _pd_chk.get("priceChange") or {}
                 _m1_c = float(_pc_chk.get("m1", 0) or 0)
                 _txns = (_pd_chk.get("txns") or {}).get("m5") or {}
@@ -108,14 +115,11 @@ class MatureExitManager:
         # 0.5. ЖЕСТКИЙ СТОП-ЛОСС И ЗАЩИТА ОТ ОБВАЛА НА 1-М ТИКЕ (LOSS CONTROL FIRST)
         # =========================================================================
         # Любой резкий дамп режется В ПЕРВУЮ ОЧЕРЕДЬ, до логики фиксаций и скретчей!
-        _fast_sl = -abs(float(getattr(config, "STOP_LOSS_PCT", -0.075)))
+        _fast_sl = -abs(float(getattr(config, "STOP_LOSS_PCT", -0.14)))
         if pnl_pct <= _fast_sl:
             return f"🚨 Fast Stop Loss ({pnl_pct*100:.1f}%)"
 
-        if minutes_held <= 2.5 and pnl_pct <= -0.070:
-            return f"🚨 First Candle Rug Cut ({pnl_pct*100:.1f}% в первые {minutes_held*60:.0f}с)"
-
-        _emerg_cap = -abs(float(getattr(config, "EMERGENCY_CAP_PCT", -0.090)))
+        _emerg_cap = -abs(float(getattr(config, "EMERGENCY_CAP_PCT", -0.16)))
         if pnl_pct <= _emerg_cap:
             return f"Mature Emergency Cap ({pnl_pct*100:.1f}%)"
 
@@ -153,7 +157,7 @@ class MatureExitManager:
         if not _is_mb and minutes_held >= max(4.5, _scratch_min + 1.5) and max_pnl_pct < 0.04 and -0.055 <= pnl_pct <= 0.005:
             return f"⚡ Dead Flat Scratch ({pnl_pct*100:+.1f}%, полный флет {minutes_held*60:.0f}с)"
 
-        _sl = -abs(float(getattr(config, "STOP_LOSS_PCT", -0.095)))
+        _sl = -abs(float(getattr(config, "STOP_LOSS_PCT", -0.14)))
         if pnl_pct <= _sl:
             _sl_c = int(getattr(position, "sl_confirm_n", 0) or 0) + 1
             position.sl_confirm_n = _sl_c
@@ -213,8 +217,8 @@ class MatureExitManager:
             elif max_pnl_pct >= 0.55:       # +55%..+110%: фиксируем минимум +26%, трейл 20% от ATH
                 _floor_pnl = 0.26
                 _trail_dist = 0.20
-            elif max_pnl_pct >= float(getattr(config, "TP1_TRIGGER_PCT", 0.25)) and getattr(position, "tp1_done", False):
-                # После частичной фиксации TP1 (+25%) защищаем прибыль отката: пол +5% (или +2% первые 45с)
+            elif getattr(position, "tp1_done", False):
+                # После частичной фиксации TP1 защищаем оставшееся тело: пол +5% (или +2% первые 45с)
                 _floor_pnl = 0.05 if minutes_held >= 0.75 else 0.02
                 _trail_dist = 0.20 if minutes_held >= 1.0 else None
             elif max_pnl_pct >= 0.28:       # +28%..+55%: Wave-1 Shield (+6% пол после 90с, трейл 22%)

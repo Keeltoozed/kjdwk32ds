@@ -484,7 +484,7 @@ class GrokJevEngine:
         _m5_hg_val = float(_m5_hg_raw or 0.0) if _m5_hg_raw is not None else 0.0
         _is_unlocked_hg = _c.is_position_unlocked_lp(mint, pair_data, bool(pair_data.get("_lp_verified")))
         if _is_unlocked_hg:
-            _u_min_age = max(float(getattr(_c, "UNLOCKED_CUSTOM_MIN_AGE_MIN", 1.5)), 1.25)
+            _u_min_age = float(getattr(_c, "UNLOCKED_CUSTOM_MIN_AGE_MIN", 0.35))
             if age_min < _u_min_age:
                 try:
                     from birth_tracker import birth_tracker as _bt_uc
@@ -494,9 +494,9 @@ class GrokJevEngine:
                 return False, f"unlocked-custom-0m-quarantine {age_min:.2f}m < {_u_min_age:.2f}m (wait for LP stability)"
             if raw_liq >= 18000.0 and (vol_m5 < (raw_liq * 0.35) or b5 < 20 or (s5 > 0 and b5 < s5)):
                 return False, f"seeded-unlocked-lp-bait liq ${raw_liq:,.0f} vol5 ${vol_m5:,.0f} ({b5}b/{s5}s) — drain-trap risk"
-            if fdv_mc > 0.0 and (raw_liq >= (fdv_mc * 1.15) or (raw_liq >= (fdv_mc * 0.85) and vol_m5 < (raw_liq * 1.50))):
-                return False, f"inverted-unlocked-lp-bait liq ${raw_liq:,.0f} vs fdv ${fdv_mc:,.0f} vol5 ${vol_m5:,.0f} — TOWN/Starhug trap"
-            if _m5_hg_val < 5.0 and vol_m5 < (raw_liq * 2.0):
+            if fdv_mc > 0.0 and raw_liq > (fdv_mc * 2.25):
+                return False, f"synthetic-unlocked-lp-bait liq ${raw_liq:,.0f} vs fdv ${fdv_mc:,.0f} > 2.25x — impossible AMM ratio"
+            if _m5_hg_val < 4.0 and vol_m5 < (raw_liq * 2.0):
                 return False, f"flat-unlocked-lp-trap m5 {_m5_hg_val:+.1f}% vol5 ${vol_m5:,.0f} — no real breakout"
             _info_hg = pair_data.get("info") or {}
             _has_soc_hg = bool((_info_hg.get("socials") or []) or (_info_hg.get("websites") or []))

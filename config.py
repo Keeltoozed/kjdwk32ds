@@ -55,8 +55,8 @@ MAX_CONCURRENT_POSITIONS = 8
 # === ЖЕСТКОЕ ОГРАНИЧЕНИЕ УБЫТКА (РИСК-МЕНЕДЖМЕНТ) ===
 MAX_DAILY_LOSS_USD = 1000.0
 KILL_SWITCH_ENABLED = False
-STOP_LOSS_PCT = -0.075        # Быстрый стоп -7.5%: мгновенно режем слабые входы (cap loss ~$0.35 на $5)
-EMERGENCY_CAP_PCT = -0.090     # Аварийный потолок -9.0%: жесткий барьер от сквизов
+STOP_LOSS_PCT = -0.14         # Разумный стоп -14%: выдерживает спред и проскальзывание DEX (3-5%), спасая ракеты уровня Neil (+290%), XRL (+205%) и MARVIN (+115%)
+EMERGENCY_CAP_PCT = -0.16     # Аварийный потолок -16%: барьер от моментальных сквизов
 INFANT_WINDOW_MIN = 0.5
 INFANT_DUMP_PCT = -0.100       # Срез мгновенного рага в первые секунды при обвале <= -10.0%
 
@@ -100,7 +100,7 @@ def get_max_entry_h1_pct(
 
 LAUNCHPAD_MINT_SUFFIXES = ("pump", "moon", "bonk", "bags")
 UNLOCKED_CUSTOM_MIN_LIQ_USD = 4500.0
-UNLOCKED_CUSTOM_MIN_AGE_MIN = 1.5         # 90с карантин для кастомных незалоченных пулов: отсекает 0m-1m LP-pull раги (GTA6/TOWN)
+UNLOCKED_CUSTOM_MIN_AGE_MIN = 0.35         # 21с минимальный возраст: пропускает свежие ракеты сразу при появлении реального потока покупок
 UNLOCKED_CUSTOM_MIN_VOL5_USD = 1800.0
 UNLOCKED_CUSTOM_MIN_BUYS5 = 12
 
@@ -228,7 +228,7 @@ def is_safe_unlocked_custom_runner(
     min_liq = float(globals().get("UNLOCKED_CUSTOM_MIN_LIQ_USD", 4500.0))
     if liq_val < min_liq:
         return False
-    min_age = float(globals().get("UNLOCKED_CUSTOM_MIN_AGE_MIN", 1.5))
+    min_age = float(globals().get("UNLOCKED_CUSTOM_MIN_AGE_MIN", 0.35))
     if age_val < min_age:
         return False
     min_vol5 = float(globals().get("UNLOCKED_CUSTOM_MIN_VOL5_USD", 1800.0))
@@ -240,15 +240,15 @@ def is_safe_unlocked_custom_runner(
     # Seeded-LP приманка (кейс Starhug $103.5k liq / $20k vol5 = 0.19x): на крупном незалоченном пуле нужен оборот >= 35%
     if liq_val >= 18000.0 and vol5_val < (liq_val * 0.35):
         return False
-    # Инвертированная ловушка Liq/FDV (кейсы TOWN liq $29.8k vs FDV $16.7k, Starhug $103.5k vs $61k):
-    # если ликвидность превышает FDV >= 1.15x или >= 85% FDV без кратного живого оборота (>= 1.5x LP) — дев держит пул как приманку
+    # Синтетическая ловушка Liq/FDV:
+    # В AMM пулах (Meteora DYN2) Total Liq = 2 * Quote. При пуле 70%-95% саплая отношение Liq/FDV
+    # математически составляет 1.40x - 1.95x. Порог > 2.25x режет только фейковые пулы,
+    # не блокируя настоящие Meteora-ракеты (PERCPOOLS +648%, EQUITY +467%, RETAIL +423%, SOGE +258%).
     if fdv_val > 0.0:
-        if liq_val >= (fdv_val * 1.15):
-            return False
-        if liq_val >= (fdv_val * 0.85) and vol5_val < (liq_val * 1.50):
+        if liq_val > (fdv_val * 2.25):
             return False
     # На незалоченном пуле должен быть реальный ценовой импульс, а не плоский флет перед дампом (кейс TOWN +0.7%)
-    if m5_pct is not None and float(m5_pct) < 5.0 and vol5_val < (liq_val * 2.0):
+    if m5_pct is not None and float(m5_pct) < 4.0 and vol5_val < (liq_val * 2.0):
         return False
     # Кастомный незалоченный пул без соцсетей с аномальным wash-оборотом (>7.5x ликвидности) — ловушка дева
     if not has_socials and liq_val > 0 and (vol5_val / liq_val) > 7.5 and age_val < 20.0:
@@ -543,9 +543,9 @@ DD_THROTTLE_START_USD = 15.0
 # === ВХОД В ЗРЕЛЫЕ КРИВЫЕ PUMP.FUN ДО МИГРАЦИИ + ЗАЩИТА DEX ===
 SNIPER_ENTRIES_ENABLED = True             # ВКЛЮЧЕНО: мгновенный вход в свежие кривые/миграции со стрима
 ALLOW_UNGRADUATED_PUMPFUN = True          # ВКЛЮЧЕНО: ловим реальные разгоны кривых к миграции (от $22k капы, отсекая $3.5k мертвецов)
-MIN_PUMP_CURVE_MCAP_USD = 22000.0         # Порог реального разгона кривой (от $22k, где уже есть толпа и объём, исключая $3.5k dev-дамп ловушки)
+MIN_PUMP_CURVE_MCAP_USD = 7500.0          # Порог ранней кривой от $7.5k: ловим мощные пампы на ранней стадии (NOODLE $12.4k, CI $7.5k)
 MAX_PUMP_CURVE_MCAP_USD = 65000.0         # Fallback в USD (до миграционного обрыва $69k)
-MIN_PUMP_CURVE_MCAP_SOL = 140.0           # Порог кривой pump.fun в SOL (~140 SOL, стадия активного пробоя)
+MIN_PUMP_CURVE_MCAP_SOL = 45.0            # Порог кривой pump.fun в SOL (~45 SOL, ранний набор высоты)
 MAX_PUMP_CURVE_MCAP_SOL = 480.0           # Верх кривой перед миграцией
 PUMP_MIGRATION_MCAP_SOL = 410.0           # FDV миграции pump.fun
 PUMP_DUMP_FLOOR_SOL = 50.0                # Порог post-mig-dumped (~50 SOL, разрешает быстрые реклеймы)
@@ -554,7 +554,7 @@ MIN_GRADUATED_LIQ_USD = 4000.0            # Минимум $4k ликвидно�
 AUDITOR_STAIRCASE_ENABLED = False
 AUDITOR_MAX_DEV_PCT = 8.0                 # Макс 8% у дева (защита от моментальных дампов разработчика в GROK-JEV)
 AUDITOR_MAX_WHALE_PCT = 14.0              # Макс 14% в одном кошельке (защита от 1-клик слива кита как FOMOCOIN/$CHOPS)
-AUDITOR_MAX_TOP10_PCT = 40.0              # Макс 40% у топ-10 холдеров (анти-кабал)
+AUDITOR_MAX_TOP10_PCT = 48.0              # Макс 48% у топ-10 холдеров (пропускает ракеты уровня FiveM с 40.9%)
 STREAM_WINDOW_SEC = 60
 STREAM_MIN_UNIQUE_BUYERS = 3
 STREAM_MIN_BUY_SOL = 0.6
@@ -715,7 +715,7 @@ JEV_MIN_TRADES_H24 = 12
 JEV_MIN_TRADES_H1 = 10
 JEV_MIN_HOLDERS = 25             # Минимум 25 холдеров вместо 8 (защита от кастомных бандл-ферм дева)
 JEV_MAX_TOP_WALLET = 0.14        # Макс 14% на один кошелёк (вместо 30%)
-JEV_MAX_TOP_10 = 0.42            # Макс 42% у топ-10 холдеров (вместо 65%)
+JEV_MAX_TOP_10 = 0.48            # Макс 48% у топ-10 холдеров (пропускает ракеты уровня FiveM)
 UNLOCKED_CUSTOM_MIN_LIQ_USD = 4500.0
 UNLOCKED_CUSTOM_MIN_VOL5_USD = 1800.0
 UNLOCKED_CUSTOM_MIN_BUYS5 = 12

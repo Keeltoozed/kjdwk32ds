@@ -495,8 +495,9 @@ async def position_manager_loop(analyzer, tracker):
 
                 if _allow_partial_tp:
                     if pnl_pct >= _tp1_sol_thr and not getattr(position, "tp1_done", False) and float(getattr(position, "amount_usd", 0.0) or 0.0) > 0.05:
-                        tracker.partial_close_position(mint, current_price, _tp1_sell, f"Take Profit +{_tp1_sol_thr*100:.0f}% (Tier-1 {int(_tp1_sell*100)}%, Principal Shield)")
+                        tracker.partial_close_position(mint, current_price, _tp1_sell, f"Take Profit +{_tp1_sol_thr*100:.0f}% (Tier-1 {int(_tp1_sell*100)}%, Principal Shield / Moonbag)")
                         position.tp1_done = True
+                        position.is_moonbag = True
                         position.last_tp_ts = time.time()
                     if pnl_pct >= _tp2 and not getattr(position, "tp2_done", False) and float(getattr(position, "amount_usd", 0.0) or 0.0) > 0.05:
                         tracker.partial_close_position(mint, current_price, _tp2_sell, f"Take Profit +{_tp2*100:.0f}% (Tier-2 {int(_tp2_sell*100)}%, Risk-Free Moonbag)")
