@@ -100,9 +100,10 @@ def get_max_entry_h1_pct(
 
 LAUNCHPAD_MINT_SUFFIXES = ("pump", "moon", "bonk", "bags")
 UNLOCKED_CUSTOM_MIN_LIQ_USD = 4500.0
-UNLOCKED_CUSTOM_MIN_AGE_MIN = 0.35         # 21с минимальный возраст: пропускает свежие ракеты сразу при появлении реального потока покупок
-UNLOCKED_CUSTOM_MIN_VOL5_USD = 1800.0
-UNLOCKED_CUSTOM_MIN_BUYS5 = 12
+UNLOCKED_CUSTOM_MIN_AGE_MIN = 2.0              # 2.0 мин мин. возраст для незалоченных пулов С подтверждёнными соцсетями
+UNLOCKED_CUSTOM_NO_SOC_MIN_AGE_MIN = 3.0       # 3.0 мин мин. возраст для незалоченных пулов БЕЗ соцсетей (защита от мгновенного вывода LP девом)
+UNLOCKED_CUSTOM_MIN_VOL5_USD = 2500.0
+UNLOCKED_CUSTOM_MIN_BUYS5 = 15
 
 
 def is_launchpad_mint(mint: str) -> bool:
@@ -209,15 +210,19 @@ def is_safe_unlocked_custom_runner(
     top10_pct: float = 0.0,
     fdv_usd: float = 0.0,
     m5_pct: Optional[float] = None,
+    pair_data: Optional[dict] = None,
     **kwargs,
 ) -> bool:
     """
     Допуск свежих DEX-раннеров без сожжённого/залоченного LP (Meteora, PumpSwap CreatePool, Raydium):
-    отсекаем инвертированные seeded-LP ловушки (Liq > FDV без кратного оборота, плоские свечи TOWN,
-    раздутые малооборотные пулы Starhug $103k liq / $20k vol) при сохранении настоящих ракет (TikTok).
+    отсекаем мгновенные ловушки дева с выводом LP через 1 минуту (WCOIN, TOWN, VINE, SCHRODING, GTA6),
+    инвертированные seeded-LP ловушки (Starhug $103k liq / $20k vol) при сохранении настоящих ракет (TikTok).
     """
     if not bool(globals().get("ALLOW_UNLOCKED_LP_POOLS", True)):
         return False
+    if is_trap:
+        return False
+
     liq_val = float(liq_usd or 0.0)
     fdv_val = float(fdv_usd or 0.0)
     vol5_val = float(vol5_usd or 0.0)
@@ -228,23 +233,41 @@ def is_safe_unlocked_custom_runner(
     min_liq = float(globals().get("UNLOCKED_CUSTOM_MIN_LIQ_USD", 4500.0))
     if liq_val < min_liq:
         return False
-    min_age = float(globals().get("UNLOCKED_CUSTOM_MIN_AGE_MIN", 0.35))
+
+    # Извлечение подтверждённых соцсетей из pair_data
+    if isinstance(pair_data, dict):
+        _info = pair_data.get("info") or {}
+        _socs = _info.get("socials") or []
+        _webs = _info.get("websites") or []
+        if len(_socs) > 0 or len(_webs) > 0:
+            has_socials = True
+
+    # На незалоченном пуле создатель держит 100% LP и может нажать RemoveLiquidity в любую секунду.
+    # В 100% случаев дев-слива пул выдергивается в первые 45-120 секунд (кейсы WCOIN 1м, TOWN 1м, VINE 0м, GTA6 0м).
+    # Карантин по возрасту:
+    # - Без соцсетей (фантомные пулы): минимум 3.0 минуты устойчивой торговли
+    # - С подтверждёнными соцсетями/сайтом: минимум 2.0 минуты
+    min_age = float(globals().get("UNLOCKED_CUSTOM_NO_SOC_MIN_AGE_MIN", 3.0)) if not has_socials else float(globals().get("UNLOCKED_CUSTOM_MIN_AGE_MIN", 2.0))
     if age_val < min_age:
         return False
-    min_vol5 = float(globals().get("UNLOCKED_CUSTOM_MIN_VOL5_USD", 1800.0))
-    min_buys5 = int(globals().get("UNLOCKED_CUSTOM_MIN_BUYS5", 15))
-    if b5 < min_buys5 or vol5_val < min_vol5:
-        return False
+
+    if not has_socials:
+        # Без соцсетей требуем мощную реальную двустороннюю активность (не 1 бот накрутчик)
+        if b5 < 35 or vol5_val < 8000.0 or s5 < 8:
+            return False
+    else:
+        min_vol5 = float(globals().get("UNLOCKED_CUSTOM_MIN_VOL5_USD", 2500.0))
+        min_buys5 = int(globals().get("UNLOCKED_CUSTOM_MIN_BUYS5", 15))
+        if b5 < min_buys5 or vol5_val < min_vol5:
+            return False
+
     if s5 > 0 and b5 < int(s5 * 1.10):
         return False
-    # На незалоченном пуле без соцсетей риск моментального вывода LP девом составляет 99%:
-    # Если у пула нет подтвержденных соцсетей/сайта, требуем мощный органический интерес (>= 30 покупок и $6,000 объема 5m)
-    if not has_socials:
-        if b5 < 30 or vol5_val < 6000.0:
-            return False
+
     # Seeded-LP приманка (кейс Starhug $103.5k liq / $20k vol5 = 0.19x): на крупном незалоченном пуле нужен оборот >= 35%
     if liq_val >= 18000.0 and vol5_val < (liq_val * 0.35):
         return False
+
     # Синтетическая ловушка Liq/FDV:
     # В AMM пулах (Meteora DYN2) Total Liq = 2 * Quote. При пуле 70%-95% саплая отношение Liq/FDV
     # математически составляет 1.40x - 1.95x. Порог > 2.25x режет только фейковые пулы,
@@ -252,12 +275,15 @@ def is_safe_unlocked_custom_runner(
     if fdv_val > 0.0:
         if liq_val > (fdv_val * 2.25):
             return False
+
     # На незалоченном пуле должен быть реальный ценовой импульс, а не плоский флет перед дампом (кейс TOWN +0.7%)
     if m5_pct is not None and float(m5_pct) < 4.0 and vol5_val < (liq_val * 2.0):
         return False
+
     # Кастомный незалоченный пул без соцсетей с аномальным wash-оборотом (>7.5x ликвидности) — ловушка дева
     if not has_socials and liq_val > 0 and (vol5_val / liq_val) > 7.5 and age_val < 20.0:
         return False
+
     return True
 
 

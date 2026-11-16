@@ -484,22 +484,24 @@ class GrokJevEngine:
         _m5_hg_val = float(_m5_hg_raw or 0.0) if _m5_hg_raw is not None else 0.0
         _is_unlocked_hg = _c.is_position_unlocked_lp(mint, pair_data, bool(pair_data.get("_lp_verified")))
         if _is_unlocked_hg:
-            _u_min_age = float(getattr(_c, "UNLOCKED_CUSTOM_MIN_AGE_MIN", 0.35))
+            _info_hg = pair_data.get("info") or {}
+            _has_soc_hg = bool((_info_hg.get("socials") or []) or (_info_hg.get("websites") or []))
+            _u_min_age = float(getattr(_c, "UNLOCKED_CUSTOM_NO_SOC_MIN_AGE_MIN", 3.0)) if not _has_soc_hg else float(getattr(_c, "UNLOCKED_CUSTOM_MIN_AGE_MIN", 2.0))
             if age_min < _u_min_age:
                 try:
                     from birth_tracker import birth_tracker as _bt_uc
                     _bt_uc.add_to_waiting_room(mint, str(pair_data.get("pairAddress") or ""))
                 except Exception:
                     pass
-                return False, f"unlocked-custom-0m-quarantine {age_min:.2f}m < {_u_min_age:.2f}m (wait for LP stability)"
+                return False, f"unlocked-custom-quarantine {age_min:.2f}m < {_u_min_age:.2f}m (wait for LP stability, soc={int(_has_soc_hg)})"
             if raw_liq >= 18000.0 and (vol_m5 < (raw_liq * 0.35) or b5 < 20 or (s5 > 0 and b5 < s5)):
                 return False, f"seeded-unlocked-lp-bait liq ${raw_liq:,.0f} vol5 ${vol_m5:,.0f} ({b5}b/{s5}s) — drain-trap risk"
             if fdv_mc > 0.0 and raw_liq > (fdv_mc * 2.25):
                 return False, f"synthetic-unlocked-lp-bait liq ${raw_liq:,.0f} vs fdv ${fdv_mc:,.0f} > 2.25x — impossible AMM ratio"
             if _m5_hg_val < 4.0 and vol_m5 < (raw_liq * 2.0):
                 return False, f"flat-unlocked-lp-trap m5 {_m5_hg_val:+.1f}% vol5 ${vol_m5:,.0f} — no real breakout"
-            _info_hg = pair_data.get("info") or {}
-            _has_soc_hg = bool((_info_hg.get("socials") or []) or (_info_hg.get("websites") or []))
+            if not _has_soc_hg and (b5 < 35 or vol_m5 < 8000.0 or s5 < 8):
+                return False, f"unlocked-0-socials-weak-activity ({b5}b/{s5}s vol5 ${vol_m5:,.0f} < $8000) — drain-trap risk"
             if raw_liq >= 12000.0 and not _has_soc_hg and (fdv_mc <= 0.0 or raw_liq >= (fdv_mc * 0.65)) and (vol_m5 < (raw_liq * 0.45) or b5 < 25):
                 return False, f"permissionless-seeded-lp-fdv-trap liq ${raw_liq:,.0f} fdv ${fdv_mc:,.0f} vol5 ${vol_m5:,.0f} 0-socials"
 
@@ -1684,6 +1686,7 @@ class GrokJevEngine:
                             is_trap=_is_trap_rc,
                             fdv_usd=fdv,
                             m5_pct=(float(_m5_rc) if _m5_rc is not None else None),
+                            pair_data=pair_data,
                         )
                         if _is_unlocked_safe:
                             print(f"🔓 [GROK-JEV-UNLOCKED-LP] {symbol} ({address[:8]}): свежий DEX-раннер (age {_age_rc:.1f}м, liq ${_eff_l_rc:,.0f}, vol5 ${_vm5_rc:,.0f}) — лок LP не требуется (быстрый возврат тела +16%/+30%).")

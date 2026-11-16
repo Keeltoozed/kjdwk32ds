@@ -143,9 +143,11 @@ class MatureExitManager:
 
         # Для незалоченных кастомных пулов: мгновенно забираем прибыль при застое (от 1 мин после пика +8% и отката 18%+),
         # не дожидаясь пока дев выдернет LP (кейс SCHRODING, где бот сидел 4 минуты до вывода пула в $0)!
-        if not _is_mb and _is_unlocked and minutes_held >= 1.0 and _peak_age_min >= 0.75:
-            if max_pnl_pct >= 0.08 and pnl_pct <= max_pnl_pct * 0.82:
+        if not _is_mb and _is_unlocked:
+            if minutes_held >= 1.0 and _peak_age_min >= 0.75 and max_pnl_pct >= 0.08 and pnl_pct <= max_pnl_pct * 0.82:
                 return f"⚡ Unlocked Fast Profit Exit ({pnl_pct*100:+.1f}%, застой {_peak_age_min*60:.0f}с после пика +{max_pnl_pct*100:.1f}%)"
+            elif minutes_held >= 1.5 and max_pnl_pct < 0.03 and pnl_pct < 0.01:
+                return f"⚡ Unlocked Fast Stale Scratch ({pnl_pct*100:+.1f}%, 90с без взлёта на незалоченном пуле — сброс перед риском LP rug)"
             elif minutes_held >= 2.0 and pnl_pct < 0.02:
                 return f"⚡ Unlocked Stale Exit ({pnl_pct*100:+.1f}%, 2м без импульса на незалоченном пуле — защита от LP rug)"
 

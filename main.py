@@ -1717,6 +1717,32 @@ async def scanner_loop(analyzer, tracker):
                                     except Exception:
                                         pass
 
+                                # PRE-FLIGHT GUARD ДЛЯ ВСЕХ НЕЗАЛОЧЕННЫХ ПУЛОВ (Meteora DYN2, PumpSwap CreatePool, кастомный Raydium без сожжённого LP)
+                                _dex_lower_sc = str(pair_data.get("dexId") or "").lower()
+                                _is_native_pump_sc = mint.lower().endswith("pump") and _dex_lower_sc in ("", "pumpfun", "pump", "pumpswap")
+                                _is_lp_safe_sc = bool(pair_data.get("_lp_verified")) or bool(pair_data.get("_pumpswap_canonical"))
+                                if not _is_native_pump_sc and not _is_lp_safe_sc:
+                                    _ca_sc = float(pair_data.get("pairCreatedAt") or 0)
+                                    _age_sc = ((time.time() * 1000.0 - _ca_sc) / 60000.0) if _ca_sc > 0 else 0.1
+                                    _fdv_sc = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
+                                    _m5_sc = _pc.get("m5")
+                                    _info_sc = pair_data.get("info") or {}
+                                    _has_soc_sc = bool((_info_sc.get("socials") or []) or (_info_sc.get("websites") or []))
+                                    if not config.is_safe_unlocked_custom_runner(
+                                        liq_usd=liq_usd,
+                                        age_min=_age_sc,
+                                        vol5_usd=float(((pair_data.get("volume") or {}).get("m5", 0) or 0)),
+                                        buys5=int(_tx5.get("buys", 0) or 0),
+                                        sells5=int(_tx5.get("sells", 0) or 0),
+                                        has_socials=_has_soc_sc,
+                                        is_trap=config.is_pumpswap_liq_fdv_trap(pair_data),
+                                        fdv_usd=_fdv_sc,
+                                        m5_pct=(float(_m5_sc) if _m5_sc is not None else None),
+                                        pair_data=pair_data,
+                                    ):
+                                        print(f"🚫 [SCANNER PRE-FLIGHT UNLOCKED-POOL] {actual_symbol} ({mint[:8]}): незалоченный пул {_dex_lower_sc} (age {_age_sc:.1f}м, liq ${liq_usd:,.0f}, soc={_has_soc_sc}) не прошёл аудит анти-рага — блок!")
+                                        continue
+
                                 # PRE-FLIGHT RUG WALLET AUDIT: анализ кошельков дева, autorités, холдеров, бандлов
                                 if getattr(config, "RUG_WALLET_AUDIT_ENABLED", True):
                                     try:

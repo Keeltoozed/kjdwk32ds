@@ -525,21 +525,25 @@ class PaperTracker:
                 _s5_tr = int(_tx_tr.get("sells", 0) or 0)
                 _fdv_tr = float((pair_data or {}).get("fdv", 0) or (pair_data or {}).get("marketCap", 0) or 0)
                 _m5_tr = ((pair_data or {}).get("priceChange") or {}).get("m5")
+                _info_tr = (pair_data or {}).get("info") or {}
+                _has_soc_tr = bool((_info_tr.get("socials") or []) or (_info_tr.get("websites") or []))
                 _unl_tr_ok = config.is_safe_unlocked_custom_runner(
                     liq_usd=_eff_init_liq,
                     age_min=_age_tr,
                     vol5_usd=_v5_tr,
                     buys5=_b5_tr,
                     sells5=_s5_tr,
+                    has_socials=_has_soc_tr,
                     is_trap=config.is_pumpswap_liq_fdv_trap(pair_data or {}),
                     fdv_usd=_fdv_tr,
                     m5_pct=(float(_m5_tr) if _m5_tr is not None else None),
+                    pair_data=pair_data,
                 )
                 if _unl_tr_ok:
                     if isinstance(pair_data, dict):
                         pair_data["_unlocked_runner_ok"] = True
-                elif isinstance(pair_data, dict) and pair_data:
-                    print(f"🛑 [FIREWALL-RUG-BLOCK] {symbol} ({mint_str[:8]}): отказ входа — незалоченный пул не прошёл проверку безопасности/оборота (dex={_pd_dex}, liq ${_eff_init_liq:,.0f}, fdv ${_fdv_tr:,.0f}, vol5 ${_v5_tr:,.0f})!")
+                else:
+                    print(f"🛑 [FIREWALL-RUG-BLOCK] {symbol} ({mint_str[:8]}): отказ входа — незалоченный пул не прошёл аудит безопасности (dex={_pd_dex}, age {_age_tr:.1f}м, liq ${_eff_init_liq:,.0f}, fdv ${_fdv_tr:,.0f}, vol5 ${_v5_tr:,.0f}, soc={_has_soc_tr})!")
                     return False
                 if not _allow_unl_tr and float(ml_confidence or 0.0) <= 0.0 and _eff_init_liq < 5000.0:
                     print(f"🛑 [FIREWALL-RUG-BLOCK] {symbol} ({mint_str[:8]}): отказ входа — неаудированный кастомный не-launchpad токен (liq ${_eff_init_liq:,.0f}, ML {float(ml_confidence or 0):.1f}%)!")

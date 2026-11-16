@@ -2258,15 +2258,20 @@ class Analyzer:
                         _s5_main = int(_tx_main.get("sells", 0) or 0)
                         _is_trap_main = config.is_pumpswap_liq_fdv_trap(pair_data or {})
                         
+                        _info_main = (pair_data or {}).get("info") or {}
+                        _has_soc_main = bool((_info_main.get("socials") or []) or (_info_main.get("websites") or []))
+                        
                         if config.is_safe_unlocked_custom_runner(
                             liq_usd=_liq_main,
                             age_min=_age_main,
                             vol5_usd=_v5_main,
                             buys5=_b5_main,
                             sells5=_s5_main,
+                            has_socials=_has_soc_main,
                             is_trap=_is_trap_main,
                             fdv_usd=_fdv_main,
                             m5_pct=_m5_main,
+                            pair_data=pair_data,
                         ):
                             _is_unlocked_runner_ok = True
                             print(f"🔓 [UNLOCKED-LP-ALLOWED] {symbol} ({mint[:8]}): свежий DEX-раннер (age {_age_main:.1f}м, liq ${_liq_main:,.0f}, fdv ${_fdv_main:,.0f}, vol5 ${_v5_main:,.0f}, {_b5_main}b/{_s5_main}s) — лок LP не требуется (режим 0d2b1ae).")
@@ -2506,15 +2511,19 @@ class Analyzer:
                                 _b5_rc_u = int(_tx_rc_u.get("buys", 0) or 0)
                                 _s5_rc_u = int(_tx_rc_u.get("sells", 0) or 0)
                                 _is_trap_rc_u = config.is_pumpswap_liq_fdv_trap(pair_data)
+                                _info_rc_u = (pair_data or {}).get("info") or {}
+                                _has_soc_rc_u = bool((_info_rc_u.get("socials") or []) or (_info_rc_u.get("websites") or []))
                                 if not config.is_safe_unlocked_custom_runner(
                                     liq_usd=_liq_rc_u,
                                     age_min=_age_rc_u,
                                     vol5_usd=_v5_rc_u,
                                     buys5=_b5_rc_u,
                                     sells5=_s5_rc_u,
+                                    has_socials=_has_soc_rc_u,
                                     is_trap=_is_trap_rc_u,
                                     fdv_usd=_fdv_rc_u,
                                     m5_pct=_m5_rc_u,
+                                    pair_data=pair_data,
                                 ):
                                     return self._deny(
                                         mint,
