@@ -90,6 +90,9 @@ def score_token_with_rocket_xgb(mint: str, pair_data: dict, holders_info: dict =
         if abs(_m1) > max(180.0, abs(_m5) * 3.0 + 40.0):
             _m1 = max(-40.0, min(40.0, _m5 * 0.20))
         _m1 = max(-95.0, min(200.0, _m1))
+        # Защита от экстремальных выбросов m5/h1 (кейс PAD +213,768% ронял скор в 8.9% из-за выхода за пределы дерева):
+        _m5_xgb = max(-95.0, min(350.0, _m5))
+        _h1_xgb = max(-95.0, min(350.0, _h1))
         _vm5 = float((pair_data.get("volume") or {}).get("m5", 0) or 0)
         _txm5 = (pair_data.get("txns") or {}).get("m5", {}) or {}
         _b5 = int(_txm5.get("buys", 0) or 0)
@@ -150,9 +153,9 @@ def score_token_with_rocket_xgb(mint: str, pair_data: dict, holders_info: dict =
         ]
 
         rkt_features = {
-            "m5_pct": float(_m5),
+            "m5_pct": float(_m5_xgb),
             "m1_pct": float(_m1),
-            "h1_pct": float(_h1),
+            "h1_pct": float(_h1_xgb),
             "m1_to_m5": float(_m1_exh),
             "buys_m5": float(_b5),
             "sells_m5": float(_s5),
@@ -658,7 +661,7 @@ class Analyzer:
                         _min_vol_lt = 150.0 if (_age_lt <= 3.0 or (_allow_raw_lt and _dex_lt in ("pump", "pumpfun"))) else 300.0
                         if _liq_lt < _min_liq_lt or _vol5_lt < _min_vol_lt or _m5_lt < 0.3:
                             continue
-                        if _age_lt > float(getattr(config, "SOLANA_MAX_AGE_MIN", 45.0)) or _fdv_lt > float(getattr(config, "JEV_MAX_MCAP_USD", 220000.0)):
+                        if _age_lt > float(getattr(config, "SOLANA_MAX_AGE_MIN", 45.0)) or _fdv_lt > float(getattr(config, "JEV_MAX_MCAP_USD", 450000.0)):
                             continue
                         _addr_lt = str((_p_lt.get("baseToken") or {}).get("address") or "").strip()
                         if _addr_lt and not _addr_lt.startswith("0x") and 32 <= len(_addr_lt) <= 44:
@@ -1400,6 +1403,9 @@ class Analyzer:
         if abs(_m1) > max(180.0, abs(_m5) * 3.0 + 40.0):
             _m1 = max(-40.0, min(40.0, _m5 * 0.20))
         _m1 = max(-95.0, min(200.0, _m1))
+        # Защита от экстремальных выбросов m5/h1 (кейс PAD +213,768% ронял скор в 8.9% из-за выхода за пределы дерева):
+        _m5_xgb = max(-95.0, min(350.0, _m5))
+        _h1_xgb = max(-95.0, min(350.0, _h1))
         _h6 = float(_pc.get("h6", 0) or 0)
         if _h1 < -8.0 or _h6 < -15.0:
             return False
@@ -1646,6 +1652,9 @@ class Analyzer:
         if abs(_m1) > max(180.0, abs(_m5) * 3.0 + 40.0):
             _m1 = max(-40.0, min(40.0, _m5 * 0.20))
         _m1 = max(-95.0, min(200.0, _m1))
+        # Защита от экстремальных выбросов m5/h1 (кейс PAD +213,768% ронял скор в 8.9% из-за выхода за пределы дерева):
+        _m5_xgb = max(-95.0, min(350.0, _m5))
+        _h1_xgb = max(-95.0, min(350.0, _h1))
         _vm5_pre = float((pair_data.get("volume") or {}).get("m5", 0) or 0)
         _v24 = float((pair_data.get("volume") or {}).get("h24", 0) or 0)
         _txm5_pre = (pair_data.get("txns") or {}).get("m5", {}) or {}
@@ -4191,6 +4200,9 @@ class Analyzer:
         if abs(_m1) > max(180.0, abs(_m5) * 3.0 + 40.0):
             _m1 = max(-40.0, min(40.0, _m5 * 0.20))
         _m1 = max(-95.0, min(200.0, _m1))
+        # Защита от экстремальных выбросов m5/h1 (кейс PAD +213,768% ронял скор в 8.9% из-за выхода за пределы дерева):
+        _m5_xgb = max(-95.0, min(350.0, _m5))
+        _h1_xgb = max(-95.0, min(350.0, _h1))
         _h6 = float(_pc.get("h6", 0) or 0)
         _fdv_check = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
 
@@ -4356,9 +4368,9 @@ class Analyzer:
         ]
 
         rkt_features = {
-            "m5_pct": float(_m5),
+            "m5_pct": float(_m5_xgb),
             "m1_pct": float(_m1),
-            "h1_pct": float(_h1),
+            "h1_pct": float(_h1_xgb),
             "m1_to_m5": float(_m1_exhaustion),
             "buys_m5": float(_b5),
             "sells_m5": float(_s5),

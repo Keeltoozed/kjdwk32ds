@@ -1097,14 +1097,22 @@ async def jup_loop(analyzer, tracker):
                         _h6_cand = (td.get("priceChange") or {}).get("h6")
                         _m1_cand = float((td.get("priceChange") or {}).get("m1", 0) or 0)
 
-                        # Отсекаем тяжёлые (> $220k FDV) и отработанные 6h (+500%+) топы до оценки ML:
-                        if _fdv_dex > float(getattr(config, "JEV_MAX_MCAP_USD", 220000.0)):
+                        # Отсекаем тяжёлые (> $450k FDV) и отработанные 6h (+500%+) топы до оценки ML:
+                        if _fdv_dex > float(getattr(config, "JEV_MAX_MCAP_USD", 450000.0)):
                             skipped_ancient += 1
                             processed[m] = _now_t + 180
                             continue
                         if _ag >= 20.0 and _h6_cand is not None and float(_h6_cand or 0) > float(getattr(config, "MAX_ENTRY_H6_PCT", 500.0)):
                             skipped_ancient += 1
                             processed[m] = _now_t + 180
+                            continue
+
+                        # Anti-FOMO: блокируем покупку вертикального пампа на вершине свечи (кейсы GOSSIP +1330%)
+                        _max_entry_m5 = float(getattr(config, "MAX_ENTRY_M5_PCT", 55.0))
+                        _is_strong_breakout = (_m5 <= max(_max_entry_m5 * 1.35, 75.0) and _b5_cand >= int(_s5_cand * 1.4) and _v5_cand >= 10000.0)
+                        if _m5 > _max_entry_m5 and not _is_strong_breakout:
+                            skipped_ancient += 1
+                            processed[m] = _now_t + 120
                             continue
 
                         # Режем старые токены > SOLANA_MAX_AGE_MIN:
@@ -1118,6 +1126,11 @@ async def jup_loop(analyzer, tracker):
                         _tx_cand = (td.get("txns") or {}).get("m5") or {}
                         _b5_cand = int(_tx_cand.get("buys", 0) or 0)
                         _s5_cand = int(_tx_cand.get("sells", 0) or 0)
+                        # Защита от преобладания продавцов (не покупаем когда сливают больше чем берут):
+                        if _s5_cand > 0 and (_b5_cand / _s5_cand) < 0.95 and _v5_cand < 25000.0:
+                            skipped_flat += 1
+                            processed[m] = _now_t + 30
+                            continue
                         _is_turned_green_cand = (
                             -1.5 <= _m5 < 2.0
                             and _ag <= 30.0

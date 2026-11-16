@@ -121,13 +121,13 @@ def is_position_unlocked_lp(
     if bool(is_lp_locked_80):
         return False
     pd = pair_data if isinstance(pair_data, dict) else {}
-    if bool(pd.get("_pumpswap_canonical")) or bool(pd.get("_pumpswap_lp_burned")):
+    if bool(pd.get("_pumpswap_canonical")) or bool(pd.get("_pumpswap_lp_burned")) or bool(pd.get("_lp_verified")):
         return False
     dex_low = str(pd.get("dexId") or "").strip().lower()
     mint_low = str(mint or "").strip().lower()
     if (
         mint_low.endswith("pump")
-        and dex_low in ("", "pump", "pumpfun", "pump-amm", "pumpswap")
+        and dex_low in ("", "pump", "pumpfun", "pump-amm", "pumpswap", "raydium")
         and pd.get("_pumpswap_canonical") is not False
         and pd.get("_pumpswap_lp_burned") is not False
     ):
@@ -342,6 +342,13 @@ def is_permissionless_liq_fdv_trap(pair_data: Optional[dict]) -> bool:
         or (isinstance(websites, list) and len(websites) > 0)
     )
     if has_socials:
+        return False
+
+    # Органический старт с живыми покупателями (кейс $FWOG: 37b/0s -> ракета +184%):
+    _txns = pair_data.get("txns", {}).get("m5", {}) if isinstance(pair_data.get("txns"), dict) else {}
+    _b5 = int(_txns.get("buys", 0) or 0)
+    _s5 = int(_txns.get("sells", 0) or 0)
+    if _b5 >= 25 and _b5 >= _s5 * 1.5:
         return False
 
     # 1. Liq/FDV >= 70% with Liq >= $18k and 0 socials on custom pools (AXIOMCOIN: $43.5k liq / $53.9k fdv = 80.6%)
@@ -574,7 +581,7 @@ DD_THROTTLE_START_USD = 15.0
 
 # === ВХОД В ЗРЕЛЫЕ КРИВЫЕ PUMP.FUN ДО МИГРАЦИИ + ЗАЩИТА DEX ===
 SNIPER_ENTRIES_ENABLED = True             # ВКЛЮЧЕНО: мгновенный вход в свежие кривые/миграции со стрима
-ALLOW_UNGRADUATED_PUMPFUN = True          # ВКЛЮЧЕНО: ловим реальные разгоны кривых к миграции (от $12k капы, отсекая $3.5k-$9k пустых мертвецов)
+ALLOW_UNGRADUATED_PUMPFUN = False         # БЛОКИРОВКА СЫРЫХ КЁРВОВ: 100% защита от мгновенных дампов девов на bonding curve (кейсы GOSSIP -68%). Торгуем ТОЛЬКО миграции на DEX (PumpSwap/Raydium) с сожжённым LP!
 MIN_PUMP_CURVE_MCAP_USD = 12000.0         # Порог кривой от $12k: отсекаем детские пулы с ликвидностью < $5k (кейсы RP/once)
 MAX_PUMP_CURVE_MCAP_USD = 65000.0         # Fallback в USD (до миграционного обрыва $69k)
 MIN_PUMP_CURVE_MCAP_SOL = 45.0            # Порог кривой pump.fun в SOL (~45 SOL, ранний набор высоты)

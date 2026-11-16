@@ -1078,7 +1078,7 @@ async def scanner_loop(analyzer, tracker):
                         _c_liq = float((_c_pre.get("liquidity") or {}).get("usd", 0) or 0)
                         _c_fdv = float(_c_pre.get("fdv", 0) or _c_pre.get("marketCap", 0) or 0)
                         _max_sc_age = float(getattr(config, "SOLANA_MAX_AGE_MIN", 90.0))
-                        _max_sc_fdv = float(getattr(config, "JEV_MAX_MCAP_USD", 220000.0))
+                        _max_sc_fdv = float(getattr(config, "JEV_MAX_MCAP_USD", 450000.0))
 
                         # Свежая миграция (только что вышедшая на DEX в пределах раннего окна):
                         _is_fresh_grad = ((mint in _graduated_set) or (_c_age_m <= 20.0 and (config.is_launchpad_mint(mint) or _c_dex == "pumpswap"))) and (_c_age_m <= 25.0) and (_c_fdv <= _max_sc_fdv)
@@ -1570,8 +1570,10 @@ async def scanner_loop(analyzer, tracker):
                                     from jupiter import JupiterAPI
                                     _jup_chk = await JupiterAPI.get_price(mint)
                                     if _jup_chk and _jup_chk > 0 and entry_price > 0:
-                                        if _jup_chk < entry_price * 0.93:
-                                            analyzer._deny(mint, "scanner-live-dump >7%", f"🚫 [LIVE-DUMP] {actual_symbol} ({mint[:8]}): живая цена Jupiter (${_jup_chk:.8f}) уже на {(1.0 - _jup_chk / entry_price) * 100:.1f}% ниже DexScreener (${entry_price:.8f}) [>7%] — токен обваливается прямо сейчас, блок входа!")
+                                        _live_dump_thr = 0.88 if (_age_sc and _age_sc < 3.0) else 0.93
+                                        if _jup_chk < entry_price * _live_dump_thr:
+                                            _pct_down = (1.0 - _jup_chk / entry_price) * 100
+                                            analyzer._deny(mint, f"scanner-live-dump >{100-_live_dump_thr*100:.0f}%", f"🚫 [LIVE-DUMP] {actual_symbol} ({mint[:8]}): живая цена Jupiter (${_jup_chk:.8f}) уже на {_pct_down:.1f}% ниже DexScreener (${entry_price:.8f}) [>{100-_live_dump_thr*100:.0f}%] — токен обваливается прямо сейчас, блок входа!")
                                             continue
                                         _chk_up_r = _jup_chk / entry_price
                                         if _chk_up_r > 1.30:

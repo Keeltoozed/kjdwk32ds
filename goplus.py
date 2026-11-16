@@ -1772,7 +1772,8 @@ async def verify_pumpswap_pool_onchain(
 
         pool_idx = _struct.unpack_from("<H", raw, 9)[0]
         pool_creator = str(_Pubkey.from_bytes(raw[11:43]))
-        base_mint = str(_Pubkey.from_bytes(raw[43:75]))
+        token_0 = str(_Pubkey.from_bytes(raw[43:75]))
+        token_1 = str(_Pubkey.from_bytes(raw[75:107]))
         lp_mint = str(_Pubkey.from_bytes(raw[107:139]))
         pool_auth = str(
             _Pubkey.find_program_address(
@@ -1786,10 +1787,16 @@ async def verify_pumpswap_pool_onchain(
         _PUMPSWAP_POOL_CACHE[cache_key] = (now - ttl + 20.0, res)
         return res
 
+    _wsol = "So11111111111111111111111111111111111111112"
+    has_mint = (token_0 == mint or token_1 == mint)
+    has_wsol = (token_0 == _wsol or token_1 == _wsol)
+    is_pump_mint = str(mint or "").strip().lower().endswith("pump")
+
     is_canonical = (
         pool_idx == 0
-        and base_mint == mint
-        and pool_creator in (pool_auth, _PUMP_MIG_AUTH)
+        and has_mint
+        and has_wsol
+        and (is_pump_mint or pool_creator in (pool_auth, _PUMP_MIG_AUTH))
     )
     if is_canonical:
         res = (True, True, f"pumpswap-canonical-idx0:{pool_creator[:8]}")
