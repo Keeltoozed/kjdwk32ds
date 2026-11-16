@@ -403,19 +403,10 @@ class GrokJevEngine:
         raw_liq = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
         fdv_mc = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
 
-        # ЗАЩИТА ОТ ПУСТЫХ 0.2% FLASH-RUG КЁРВОВ PUMP.FUN (кейсы NOTHING $2.6k, CAMPUS $2.6k):
-        # На пустой кривой с 2 SOL резерва любой дамп дева пробивает стоп сразу в -75%!
-        # Пускаем Pump.fun кёрвы ТОЛЬКО если они уже набрали базу (прогресс >=15% / FDV >=$9k, кейсы MOBROS $12.5k, OREX $13k)!
-        is_pump = dex_id in ("pump", "pumpfun", "moonshot", "meteoradbc") or mint.endswith("moon")
-        _is_grad_ev = False
-        try:
-            from birth_tracker import birth_tracker as _bt_ge
-            _is_grad_ev = _bt_ge.is_graduated(mint)
-        except Exception:
-            pass
-        if is_pump and not _is_grad_ev:
+        # ЗАЩИТА ОТ ПУСТЫХ 0.2% FLASH-RUG КЁРВОВ PUMP.FUN И МИКРО-ПУЛОВ:
+        if _c.is_unmigrated_curve_token(mint, pair_data):
             if not getattr(_c, "ALLOW_UNGRADUATED_PUMPFUN", False):
-                return False, "ungraduated-pump-curve (ждём миграции на DEX с сожжённым LP)"
+                return False, "ungraduated-pump-curve (сырая бондинг-кривая до миграции с сожжённым LP)"
             if fdv_mc <= 0:
                 _cur_p = float(pair_data.get("priceUsd", 0) or 0)
                 if _cur_p > 0:
@@ -1232,8 +1223,10 @@ class GrokJevEngine:
             import config as _c_bt
             from birth_tracker import birth_tracker
             grad_ready = birth_tracker.get_waiting_room_graduates(min_age_sec=3.0, max_age_sec=1800.0)
-            fresh_births = birth_tracker.get_mature_tokens(float(getattr(_c_bt, "SOLANA_MIN_AGE_MIN", 0.05)), 20)
-            fresh_births.sort(key=lambda _bm: float(birth_tracker.get_age(_bm) or 999.0))
+            fresh_births = []
+            if getattr(_c_bt, "ALLOW_UNGRADUATED_PUMPFUN", False):
+                fresh_births = birth_tracker.get_mature_tokens(float(getattr(_c_bt, "SOLANA_MIN_AGE_MIN", 0.05)), 20)
+                fresh_births.sort(key=lambda _bm: float(birth_tracker.get_age(_bm) or 999.0))
             for gm in list(grad_ready or []) + fresh_births:
                 if gm and gm not in seen:
                     seen.add(gm)
@@ -2537,7 +2530,7 @@ async def grok_bot_jev_loop(tracker, analyzer=None):
                     _v5_c = float((_td_c.get("volume") or {}).get("m5", 0) or 0)
                     _liq_c = float((_td_c.get("liquidity") or {}).get("usd", 0) or 0)
                     _dex_c = str(_td_c.get("dexId", "")).lower()
-                    if _dex_c in ("pump", "pumpfun") and not getattr(_c, "ALLOW_UNGRADUATED_PUMPFUN", False):
+                    if _c.is_unmigrated_curve_token(address, _td_c) and not getattr(_c, "ALLOW_UNGRADUATED_PUMPFUN", False):
                         evaluated_cooldown[(address, chain)] = now + 45.0
                         continue
                     if _liq_c > 0 and _liq_c < float(getattr(_c, "MIN_GRADUATED_LIQ_USD", 2500.0)) * 0.7:

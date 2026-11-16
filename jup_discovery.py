@@ -245,13 +245,12 @@ async def fetch_jup_tokens() -> list:
                 for p in (d_q.get("pairs") or []):
                     if not isinstance(p, dict) or str(p.get("chainId") or "").lower() != "solana":
                         continue
-                    dex_p = str(p.get("dexId") or "").lower()
-                    if not allow_raw_curve and dex_p in ("pump", "pumpfun", "moonshot", "meteoradbc"):
-                        continue
                     bt = p.get("baseToken") or {}
                     addr = str(bt.get("address") or "").strip()
                     sym_p = str(bt.get("symbol") or "").upper().strip()
                     if not addr or addr.startswith("0x") or len(addr) < 32 or len(addr) > 44 or addr in seen or sym_p in SKIP_SYMBOLS:
+                        continue
+                    if not allow_raw_curve and config.is_unmigrated_curve_token(addr, p):
                         continue
                     liq_p = float((p.get("liquidity") or {}).get("usd", 0) or 0)
                     if liq_p < float(getattr(config, "MIN_GRADUATED_LIQ_USD", 2500.0)):
@@ -362,8 +361,7 @@ async def fetch_jup_tokens() -> list:
                     if not prev_b or (liq_b, vol_b) > (float((prev_b.get("liquidity") or {}).get("usd", 0) or 0), float((prev_b.get("volume") or {}).get("m5", 0) or 0)):
                         best_b[bm] = p
                 for bm, p in best_b.items():
-                    dex_b = str(p.get("dexId", "")).lower()
-                    if not allow_raw_curve and dex_b in ("pump", "pumpfun", "moonshot", "meteoradbc"):
+                    if not allow_raw_curve and config.is_unmigrated_curve_token(bm, p):
                         continue
                     liq_b = float((p.get("liquidity") or {}).get("usd", 0) or 0)
                     if liq_b < min_boost_liq:

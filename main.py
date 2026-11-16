@@ -1064,7 +1064,7 @@ async def scanner_loop(analyzer, tracker):
                             continue
 
                         _c_dex = str(_c_pre.get("dexId", "")).lower()
-                        if not getattr(config, "ALLOW_UNGRADUATED_PUMPFUN", False) and _c_dex in ("pump", "pumpfun", "moonshot", "meteoradbc") and mint not in _graduated_set:
+                        if not getattr(config, "ALLOW_UNGRADUATED_PUMPFUN", False) and config.is_unmigrated_curve_token(mint, _c_pre) and mint not in _graduated_set:
                             processed_mints[mint] = _now_r - _cd_r + 30
                             continue
 
@@ -1368,7 +1368,7 @@ async def scanner_loop(analyzer, tracker):
                                 if config.is_permissionless_liq_fdv_trap(pair_data):
                                     print(f"🚫 [SCANNER-LIQ-TRAP] {actual_symbol} ({mint[:8]}): seeded trap pool (liq/fdv drain risk) — отмена!")
                                     continue
-                                if _dex_id in ("pump", "pumpfun", "moonshot", "meteoradbc") or mint.endswith("moon"):
+                                if config.is_unmigrated_curve_token(mint, pair_data):
                                     _fdv_m_sc = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
                                     _min_c_sc = float(getattr(config, "MIN_PUMP_CURVE_MCAP_USD", 7500.0))
                                     _max_c_sc = float(getattr(config, "MAX_PUMP_CURVE_MCAP_USD", 42000.0))

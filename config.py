@@ -112,6 +112,41 @@ def is_launchpad_mint(mint: str) -> bool:
     return str(mint or "").strip().lower().endswith(LAUNCHPAD_MINT_SUFFIXES)
 
 
+def is_unmigrated_curve_token(mint: str, pair_data: Optional[dict] = None) -> bool:
+    """Return True if token is on an ungraduated bonding curve or micro-pool (<$35k FDV / <$6k Liq)."""
+    if not mint:
+        return False
+    mint_str = str(mint).strip().lower()
+    pd = pair_data if isinstance(pair_data, dict) else {}
+    dex_id = str(pd.get("dexId") or "").strip().lower()
+
+    # 1. Токены на сырых кривых moonshot, meteoradbc
+    if dex_id in ("pump", "pumpfun", "moonshot", "meteoradbc") or mint_str.endswith("moon"):
+        return True
+
+    # 2. Токены Pump.fun: выпускник ОБЯЗАН иметь FDV >= $35,000 и ликвидность >= $6,000.
+    # Если токен ends with 'pump', а FDV $3k..$15k или ликвидность < $6k — это 100% сырая бондинг-кривая!
+    if mint_str.endswith("pump"):
+        is_known_grad = False
+        try:
+            from birth_tracker import birth_tracker as _bt_chk
+            is_known_grad = _bt_chk.is_graduated(mint)
+        except Exception:
+            pass
+        if not is_known_grad:
+            return True
+        fdv = float(pd.get("fdv", 0) or pd.get("marketCap", 0) or 0)
+        liq = float((pd.get("liquidity") or {}).get("usd", 0) or 0)
+        if fdv > 0 and fdv < 35000.0:
+            return True
+        if liq > 0 and liq < 6000.0:
+            return True
+        if dex_id in ("pump", "pumpfun"):
+            return True
+
+    return False
+
+
 def is_position_unlocked_lp(
     mint: str,
     pair_data: Optional[dict] = None,

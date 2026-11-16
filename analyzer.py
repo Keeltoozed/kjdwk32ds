@@ -1776,17 +1776,7 @@ class Analyzer:
                 _fdv_curve_pre = _px_calc * 1_000_000_000.0
         _liq_curve_pre = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
 
-        _is_unmigrated_curve = (
-            _dex_pre_early in ("pump", "pumpfun", "moonshot", "meteoradbc")
-            or mint.endswith("moon")
-            or (mint.endswith("pump") and (
-                not _is_known_grad
-                or _dex_pre_early in ("pump", "pumpfun")
-                or _fdv_curve_pre < 35000.0
-                or _liq_curve_pre < 6000.0
-            ))
-        )
-        if _is_unmigrated_curve and not _is_known_grad:
+        if config.is_unmigrated_curve_token(mint, pair_data):
             if not getattr(config, "ALLOW_UNGRADUATED_PUMPFUN", False):
                 return self._deny(
                     mint,
