@@ -54,7 +54,7 @@ MAX_M1_VERTICAL_TOP_PCT = 60.0
 JEV_MIN_M1_ENTRY_FLOOR_PCT = -5.0
 JEV_TREND_CONFIRM_ENABLED = False
 
-# 4. Стоп-лосс и тейки (сохраняем защиту, но не душим вход):
+# 4. Стоп-лосс и тейки (для $2 позиции — полный выход на +25%, без мунбега):
 STOP_LOSS_PCT = -0.12
 STOP_LOSS_UNLOCKED_PCT = -0.11
 EMERGENCY_CAP_PCT = -0.15
@@ -67,7 +67,7 @@ TP2_TRIGGER_PCT = 1.00
 TP2_SELL_FRAC = 0.00
 TP3_TRIGGER_PCT = 2.50
 TP3_SELL_FRAC = 0.00
-BREAKEVEN_PCT = 0.11
+BREAKEVEN_PCT = 0.10
 
 MIN_LIQUIDITY_USD = 2500.0
 MIN_GRADUATED_LIQ_USD = 2500.0
@@ -77,8 +77,8 @@ MIN_FDV_TO_LIQ_RATIO = 1.40
 MIN_VOLUME_M5_USD = 700.0
 MIN_VOL_TO_LIQ_M5 = 0.10
 MAX_H1_PUMP_PCT = 600.0
-MIN_M5_PRICE_CHANGE_PCT = 1.5
-MIN_M1_PRICE_CHANGE_PCT = -5.0
+MIN_M5_PRICE_CHANGE_PCT = 2.0
+MIN_M1_PRICE_CHANGE_PCT = 0.0
 
 # Продажа на флете в плюсе:
 FLAT_PROFIT_ENABLED = True
@@ -175,18 +175,22 @@ def patch_config(path: str = "config.py") -> None:
     content = re.sub(r"^TP1_SELL_FRAC\s*=\s*0\.\d+", "TP1_SELL_FRAC = 1.00", content, flags=re.M)
     content = re.sub(r"^TP2_TRIGGER_PCT\s*=\s*0\.\d+", "TP2_TRIGGER_PCT = 1.00", content, flags=re.M)
     content = re.sub(r"^TP2_SELL_FRAC\s*=\s*0\.\d+", "TP2_SELL_FRAC = 0.00", content, flags=re.M)
+    content = re.sub(r"^TP3_TRIGGER_PCT\s*=\s*0\.\d+", "TP3_TRIGGER_PCT = 2.50", content, flags=re.M)
+    content = re.sub(r"^TP3_SELL_FRAC\s*=\s*0\.\d+", "TP3_SELL_FRAC = 0.00", content, flags=re.M)
     content = re.sub(r"^MAX_ENTRY_M5_PCT\s*=\s*\d+(\.\d+)?", "MAX_ENTRY_M5_PCT = 350.0", content, flags=re.M)
     content = re.sub(r"^MAX_ENTRY_M1_PCT\s*=\s*\d+(\.\d+)?", "MAX_ENTRY_M1_PCT = 60.0", content, flags=re.M)
     content = re.sub(r"^JEV_MAX_M1_ENTRY_PCT\s*=\s*\d+(\.\d+)?", "JEV_MAX_M1_ENTRY_PCT = 60.0", content, flags=re.M)
     content = re.sub(r"^SOLANA_MIN_AGE_MIN\s*=\s*\d+(\.\d+)?", "SOLANA_MIN_AGE_MIN = 0.05", content, flags=re.M)
     content = re.sub(r"^SOLANA_MAX_AGE_MIN\s*=\s*\d+(\.\d+)?", "SOLANA_MAX_AGE_MIN = 240.0", content, flags=re.M)
     content = re.sub(r"^JEV_MAX_AGE_MIN\s*=\s*\d+(\.\d+)?", "JEV_MAX_AGE_MIN = 240.0", content, flags=re.M)
-    content = re.sub(r"^ROCKET_XGB_STAGE1_THRESHOLD\s*=\s*\d+(\.\d+)?", "ROCKET_XGB_STAGE1_THRESHOLD = 4.0", content, flags=re.M)
+    content = re.sub(r"^ROCKET_XGB_STAGE1_THRESHOLD\s*=\s*\d+(\.\d+)?", "ROCKET_XGB_STAGE1_THRESHOLD = 8.0", content, flags=re.M)
     content = re.sub(r"^ROCKET_XGB_FINAL_THRESHOLD\s*=\s*\d+(\.\d+)?", "ROCKET_XGB_FINAL_THRESHOLD = 24.0", content, flags=re.M)
     content = re.sub(r"^ROCKET_XGB_THRESHOLD\s*=\s*\d+(\.\d+)?", "ROCKET_XGB_THRESHOLD = 24.0", content, flags=re.M)
     content = re.sub(r"^MIN_VOLUME_M5\s*=\s*\d+(\.\d+)?", "MIN_VOLUME_M5 = 700.0", content, flags=re.M)
     content = re.sub(r"^MIN_TXNS_M5\s*=\s*\d+\b", "MIN_TXNS_M5 = 10", content, flags=re.M)
     content = re.sub(r"^MIN_BUY_SELL_RATIO\s*=\s*1\.\d+", "MIN_BUY_SELL_RATIO = 1.05", content, flags=re.M)
+    content = re.sub(r"^MIN_M5_PRICE_CHANGE_PCT\s*=\s*\d+(\.\d+)?", "MIN_M5_PRICE_CHANGE_PCT = 2.0", content, flags=re.M)
+    content = re.sub(r"^MIN_M1_PRICE_CHANGE_PCT\s*=\s*[-0-9.]+", "MIN_M1_PRICE_CHANGE_PCT = 0.0", content, flags=re.M)
     content = re.sub(r"^JEV_MIN_M1_ENTRY_FLOOR_PCT\s*=\s*[-0-9.]+", "JEV_MIN_M1_ENTRY_FLOOR_PCT = -5.0", content, flags=re.M)
 
     if "# ==================== [AUTO-PATCH]" in content:
@@ -201,7 +205,7 @@ def patch_config(path: str = "config.py") -> None:
 
     with open(path, "w", encoding="utf-8") as f:
         f.write(content)
-    print(f"[OK] {path}: STOP_LOSS=-12%, TP1=+12%(50%), TP2=+24%(50%), XGB_FINAL=24%.")
+    print(f"[OK] {path}: STOP_LOSS=-12%, TP1=+25%(100%), TP2=+100%(0%), XGB_FINAL=24%.")
 
 
 def patch_analyzer(path: str = "analyzer.py") -> None:
@@ -333,7 +337,7 @@ def verify_on_render() -> None:
     print("\n" + "=" * 68, flush=True)
     print("✅ [RENDER PATCH v3 VERIFICATION] ПРОВЕРКА ПРИМЕНЕННЫХ ФИКСОВ:", flush=True)
     print(f"   • STOP_LOSS_PCT (1-tick)      = {getattr(config, 'STOP_LOSS_PCT', 0)*100:.0f}% / Emergency {getattr(config, 'EMERGENCY_CAP_PCT', 0)*100:.0f}%", flush=True)
-    print(f"   • TP1 / TP2                   = +{getattr(config, 'TP1_TRIGGER_PCT', 0)*100:.0f}% (50%) / +{getattr(config, 'TP2_TRIGGER_PCT', 0)*100:.0f}% (50%)", flush=True)
+    print(f"   • TP1 / TP2                   = +{getattr(config, 'TP1_TRIGGER_PCT', 0)*100:.0f}% (100%) / +{getattr(config, 'TP2_TRIGGER_PCT', 0)*100:.0f}% (0%)", flush=True)
     print(f"   • ROCKET_XGB_FINAL_THRESHOLD  = {getattr(config, 'ROCKET_XGB_FINAL_THRESHOLD', '?')}% (+ Rocket Flow Bypass >= $20k vol5)", flush=True)
     print(f"   • MAX_ENTRY_M1 / M5           = +{getattr(config, 'MAX_ENTRY_M1_PCT', '?')}% / +{getattr(config, 'MAX_ENTRY_M5_PCT', '?')}% (до +95% при vol5>=$20k)", flush=True)
     print("=" * 68 + "\n", flush=True)

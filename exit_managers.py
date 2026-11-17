@@ -208,50 +208,29 @@ class MatureExitManager:
             return f"⚡ Dead Flat Scratch ({pnl_pct*100:+.1f}%, полный флет {minutes_held*60:.0f}с)"
 
         # =========================================================================
-        # 2. BREAKEVEN SHIELD И ПРОГРЕССИВНЫЕ ЭТАЖИ ДЛЯ 2x-10x РАКЕТ (0d2b1ae + RUNNER CURVE)
+        # 2. ПРОСТАЯ СИСТЕМА ВЫХОДА (TP лесенка без сломанного мунбэга)
         # =========================================================================
-        _floor_pnl = None
-        _trail_dist = None
+        _tp1_t, _tp1_f, _tp2_t, _tp2_f, _tp3_t, _tp3_f, _tp4_t, _tp4_f, _tp5_t, _tp5_f = config.get_sol_tp_ladder(_is_unlocked)
 
-        if _is_mb:
-            # === МУНБЭГ-ТРЕЙЛИНГ ===
-            if _is_unlocked and max_pnl_pct >= float(getattr(config, "UNLOCKED_MOONBAG_TRAIL_ACT_PCT", 0.65)):
-                if _peak_age_min >= 3.5 and pnl_pct <= max_pnl_pct * 0.80:
-                    return f"Unlocked Moonbag Stale Harvest (+{pnl_pct*100:.0f}% locked after peak +{max_pnl_pct*100:.0f}%, {_peak_age_min:.1f}m no ATH)"
-            _mb_act = float(
-                getattr(config, "UNLOCKED_MOONBAG_TRAIL_ACT_PCT", 0.65)
-                if _is_unlocked
-                else getattr(config, "MOONBAG_TRAIL_ACTIVATION_PCT", 1.00)
-            )
-            _mb_dist = float(
-                getattr(config, "UNLOCKED_MOONBAG_TRAIL_DIST_PCT", 0.18)
-                if _is_unlocked
-                else getattr(config, "MOONBAG_TRAIL_DISTANCE_PCT", 0.22)
-            )
-            if max_pnl_pct >= 5.00:
-                _floor_pnl = round(max_pnl_pct * 0.75, 2)
-                _trail_dist = min(_mb_dist, 0.25)
-            elif max_pnl_pct >= 2.50:
-                _floor_pnl = round(max(1.60, max_pnl_pct * 0.68), 2)
-                _trail_dist = min(_mb_dist, 0.30)
-            elif max_pnl_pct >= _mb_act:
-                _floor_pnl = round(max(0.35 if _is_unlocked else 0.50, max_pnl_pct * (0.60 if _is_unlocked else 0.58)), 2)
-                _trail_dist = _mb_dist
-            else:
-                # До достижения +80% (2x) трейлинг НЕ включается!
-                # Даём ракете свободно дышать через естественные откаты 20-30%,
-                # защищая только уровень безубытка (+0.5%):
-                _floor_pnl = 0.005
-                _trail_dist = None
-        else:
-            # === ОСНОВНАЯ ПОЗИЦИЯ: Б/У ЩИТ ОТ +16% + ПРОГРЕССИВНЫЙ ТРЕЙЛИНГ ДО 10x+ ===
-            if max_pnl_pct >= 5.00:         # 6x+: фиксируем минимум 72% от ATH PnL
-                _floor_pnl = round(max_pnl_pct * 0.72, 2)
-                _trail_dist = 0.25
-            elif max_pnl_pct >= 2.50:       # 3.5x - 6x: фиксируем минимум 65% от ATH (от +150%)
-                _floor_pnl = round(max(1.50, max_pnl_pct * 0.65), 2)
-                _trail_dist = 0.28
-            elif max_pnl_pct >= 1.10:       # 2.1x - 3.5x: фиксируем от +58%, даём 28% места для волны 3.5x-6x
+        # TP1: фиксируем часть позиции на первом тейке
+        if not getattr(position, "tp1_done", False) and pnl_pct >= _tp1_t and minutes_held >= 0.20:
+            position.tp1_done = True
+            return f"TP1 (+{pnl_pct*100:.1f}%, продано {_tp1_f*100:.0f}%)"
+
+        # После TP1 оставшаяся часть держится на втором тейке или стопе
+        if getattr(position, "tp1_done", False) and not getattr(position, "tp2_done", False) and pnl_pct >= _tp2_t:
+            position.tp2_done = True
+            return f"TP2 (+{pnl_pct*100:.1f}%, продано {_tp2_f*100:.0f}%)"
+
+        # Безубыток: если пик достиг BREAKEVEN_PCT, не даём уйти в минус
+        if max_pnl_pct >= float(getattr(config, "BREAKEVEN_PCT", 0.08)) and pnl_pct <= 0.005:
+            return f"BREAKEVEN ({pnl_pct*100:+.1f}%, пик был +{max_pnl_pct*100:.1f}%)"
+
+        # =========================================================================
+        # 3. ПАРАБОЛИЧЕСКИЙ СБОР (фиксация при длительном затухании на хаях)
+        # =========================================================================
+        if max_pnl_pct >= 2.00 and _peak_age_min >= 8.0:
+            return f"Parabolic Harvest (+{pnl_pct*100:.0f}% locked, пик был +{max_pnl_pct*100:.0f}%, {_peak_age_min:.0f}m без нового максимума)"
                 _floor_pnl = round(max(0.58, max_pnl_pct * 0.62), 2)
                 _trail_dist = 0.30
             elif max_pnl_pct >= 0.55:       # +55%..+110%: фиксируем минимум +20%, трейл 30% от ATH
@@ -273,36 +252,6 @@ class MatureExitManager:
                 # Чистый безубыток +0.5% (покрытие комиссий) — даём монете пережить нормальный ретест в 2x-5x, не убивая ракеты на +2.9%!
                 _floor_pnl = 0.005
                 _trail_dist = None
-
-        if _floor_pnl is not None and minutes_held >= 0.20:
-            drop_from_max = (position.max_price_usd - current_price) / position.max_price_usd if position.max_price_usd > 0 else 0.0
-            _tag = "Moonbag" if _is_mb else "Full Runner"
-            if _trail_dist is not None and drop_from_max >= _trail_dist and pnl_pct >= _floor_pnl:
-                return f"Mature {_tag} Trailing ({pnl_pct*100:+.1f}% locked after peak +{max_pnl_pct*100:.1f}%)"
-            elif pnl_pct <= _floor_pnl:
-                _fl_c = int(getattr(position, "floor_confirm_n", 0) or 0) + 1
-                position.floor_confirm_n = _fl_c
-                # Подтверждаем 2 тика (защита от 1-секундного спреда/сквиза на ретесте):
-                if _fl_c >= 2 or pnl_pct <= (_floor_pnl - 0.05):
-                    _pnl_str = f"+{pnl_pct*100:.1f}%" if pnl_pct >= 0 else f"{pnl_pct*100:.1f}%"
-                    return f"Mature {_tag} Floor ({_pnl_str} after peak +{max_pnl_pct*100:.1f}%)"
-            else:
-                position.floor_confirm_n = 0
-
-        # =========================================================================
-        # 3. PARABOLIC MOMENTUM HARVEST (ФИКСАЦИЯ ПРИ ДОЛГОМ ЗАТУХАНИИ НА ХАЯХ)
-        # =========================================================================
-        _mb_free_ride = _is_mb and max_pnl_pct < float(getattr(config, "MOONBAG_TRAIL_ACTIVATION_PCT", 1.00))
-        if max_pnl_pct >= 2.00 and _peak_age_min >= 8.0:
-            return f"Parabolic 3x Harvest (+{pnl_pct*100:.0f}% locked after peak +{max_pnl_pct*100:.0f}%, {_peak_age_min:.0f}m no ATH)"
-        if not _mb_free_ride and max_pnl_pct >= 1.00 and _peak_age_min >= 10.0:
-            return f"Parabolic 2x Harvest (+{pnl_pct*100:.0f}% locked after peak +{max_pnl_pct*100:.0f}%, {_peak_age_min:.0f}m no ATH)"
-
-        # === ЗАЩИТА ПРИБЫЛИ ОТ ВЫСОКИХ ПИКОВ (ОТКАТ ПОСЛЕ +35%) ===
-        if not _mb_free_ride:
-            if max_pnl_pct >= 0.35 and _peak_age_min >= 3.5 and pnl_pct <= 0.14:
-                return f"Mid-Peak Profit Shield ({pnl_pct*100:+.1f}% locked after peak +{max_pnl_pct*100:.0f}%, {_peak_age_min:.1f}m no ATH)"
-
 
         # =========================================================================
         # 4. CRASH VELOCITY GUARD (Дев-дамп / аномальное обрушение за 1 минуту)

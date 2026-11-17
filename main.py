@@ -504,7 +504,9 @@ async def position_manager_loop(analyzer, tracker):
                 _pos_val = float(getattr(position, "original_amount_usd", 0.0) or getattr(position, "amount_usd", 0.0) or 0.0)
                 _allow_partial_tp = getattr(config, "PARTIAL_TP_ENABLED", True) and (_pos_val >= _min_tp_ticket)
 
-                if _allow_partial_tp:
+                # === ПРОСТЫЙ ВЫХОД ДЛЯ МАЛЕНЬКИХ ПОЗИЦИЙ (≤ $20): полный выход на TP1, без мунбега ===
+                _is_small_pos = _pos_val <= 20.0
+                if _allow_partial_tp and not _is_small_pos:
                     if pnl_pct >= _tp1_sol_thr and not getattr(position, "tp1_done", False) and float(getattr(position, "amount_usd", 0.0) or 0.0) > 0.05:
                         tracker.partial_close_position(mint, current_price, _tp1_sell, f"Take Profit +{_tp1_sol_thr*100:.0f}% (Tier-1 {int(_tp1_sell*100)}%, Principal Shield / Moonbag)")
                         position.tp1_done = True
@@ -655,8 +657,8 @@ async def position_manager_loop(analyzer, tracker):
                         tracker.close_position(mint, current_price, f"Scalp Profit (peak +{max_pnl_pct*100:.0f}%)")
                         continue
                         
-                # === TAKE-PROFIT LADDER (Лестница фиксации прибыли — только если билет >= $20) ===
-                if _allow_partial_tp:
+                # === TAKE-PROFIT LADDER (только для позиций > $20) ===
+                if _allow_partial_tp and not _is_small_pos:
                     if getattr(config, "PARTIAL_TP_ENABLED", False) and pnl_pct >= _tp1_sol_thr and not getattr(position, "tp1_done", False):
                         tracker.partial_close_position(mint, current_price, _tp1_sell, f"Take Profit +{_tp1_sol_thr*100:.0f}% (Tier-1 {int(_tp1_sell*100)}%)")
                         position.tp1_done = True
@@ -678,6 +680,12 @@ async def position_manager_loop(analyzer, tracker):
                         tracker.partial_close_position(mint, current_price, _tp5_sell, f"Take Profit +{_tp5*100:.0f}% (Tier-5 {int(_tp5_sell*100)}%)")
                         position.tp5_done = True
                         continue
+
+                # === ПРОСТЫЙ ВЫХОД ДЛЯ МАЛЕНЬКИХ ПОЗИЦИЙ (≤ $20): полный выход на +25% ===
+                if _is_small_pos and pnl_pct >= _tp1_sol_thr and not getattr(position, "tp1_done", False):
+                    tracker.close_position(mint, current_price, f"Small Pos Full Exit +{pnl_pct*100:.1f}% (TP1 {_tp1_sol_thr*100:.0f}%)")
+                    position.tp1_done = True
+                    continue
 
                 # 1.5 ГАРАНТИРОВАННЫЙ НЕСНИЖАЕМЫЙ ПОРОГ ПРИБЫЛИ (PROFIT FLOOR LOCK)
                 # До +50% монета свободно дышит, никаких микро-полов по 5%!

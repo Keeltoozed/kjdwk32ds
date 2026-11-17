@@ -699,74 +699,43 @@ VIP_KOL_WALLETS = {
 TIME_EXIT_MINUTES = 40
 TIME_EXIT_PROFIT_REQ = 0.015
 
-# === ЛЕСТНИЦА ТЕЙК-ПРОФИТОВ (для маленьких депозитов $2 — быстрый полный выход, без мунбэга) ===
+# === ПРОСТАЯ СИСТЕМА ВЫХОДА (без сломанного мунбэга) ===
 PARTIAL_TP_ENABLED = True
-PARTIAL_TP_MIN_TICKET_USD = 2.0      # Для $2 ордеров — сразу полный выход на первом тейке
-TP1_TRIGGER_PCT = 0.25               # На +25% закрываем ВСЮ позицию (не оставляем мунбэг на $2)
-TP1_SELL_FRAC = 1.00                 # 100% позиции на TP1 — забираем профит и выходим
-TP2_TRIGGER_PCT = 1.00               # Не используется для маленьких позиций (всё уже закрыто на TP1)
-TP2_SELL_FRAC = 0.00
-TP3_TRIGGER_PCT = 2.50
+PARTIAL_TP_MIN_TICKET_USD = 2.0
+TP1_TRIGGER_PCT = 0.25               # На +25% продаём 100% позиции (полный выход для $2 позиции)
+TP1_SELL_FRAC = 1.00                 # 100% позиции на TP1 — забираем всё, без мунбега
+TP2_TRIGGER_PCT = 1.00      # На +100% продаём остаток
+TP2_SELL_FRAC = 0.50
+TP3_TRIGGER_PCT = 2.00
 TP3_SELL_FRAC = 0.00
 TP4_TRIGGER_PCT = 5.00
 TP4_SELL_FRAC = 0.00
 TP5_TRIGGER_PCT = 10.00
 TP5_SELL_FRAC = 0.00
-MOONBAG_TRIGGER_PCT = 0.25           # Статус Moonbag после TP1, но для $2 позиции уже закрыта
+MOONBAG_TRIGGER_PCT = 999.0  # Мунбэг отключён
 MOONBAG_SELL_FRAC = 0.0
-# === МУНБЭГ-ТРЕЙЛИНГ (сократили удержание — не держим $2 позиции 90 минут) ===
-MOONBAG_TRAIL_ACTIVATION_PCT = 1.00  # Включаем трейлинг только выше +100% (для крупных позиций)
-MOONBAG_TRAIL_DISTANCE_PCT = 0.25    # Трейл 25% от пика
-MOONBAG_MAX_HOLD_MIN = 15.0          # Мунбég не более 15 минут (не 90)
 
-# === БЫСТРЫЙ СБОР ТЕЛА И ПРОФИТА ДЛЯ НЕЗАЛОЧЕННЫХ ПУЛОВ (Meteora / PumpSwap CreatePool / Raydium) ===
-UNLOCKED_TP1_TRIGGER_PCT = 0.15      # Сверхбыстрый первый тейк: забираем 100% на +15%, спасая депозит
-UNLOCKED_TP1_SELL_FRAC = 1.00        # Полный выход на +15% для маленьких позиций
-UNLOCKED_TP2_TRIGGER_PCT = 0.40
-UNLOCKED_TP2_SELL_FRAC = 0.00
-UNLOCKED_TP3_TRIGGER_PCT = 0.85
-UNLOCKED_TP3_SELL_FRAC = 0.00
-UNLOCKED_TP4_TRIGGER_PCT = 1.80
-UNLOCKED_TP4_SELL_FRAC = 0.00
-UNLOCKED_TP5_TRIGGER_PCT = 4.00
-UNLOCKED_TP5_SELL_FRAC = 0.00
-UNLOCKED_MOONBAG_TRAIL_ACT_PCT = 1.00
-UNLOCKED_MOONBAG_TRAIL_DIST_PCT = 0.25
+# Трейлинг только для мунбэга (отключён)
+MOONBAG_TRAIL_ACTIVATION_PCT = 999.0
+MOONBAG_TRAIL_DISTANCE_PCT = 0.0
+MOONBAG_MAX_HOLD_MIN = 0.0
 
+# Безопасность: стоп-лосс и экстренный выход
+STOP_LOSS_PCT = -0.10          # Стоп -10%
+STOP_LOSS_UNLOCKED_PCT = -0.10 # Стоп -10% для незалоченных пулов
+EMERGENCY_CAP_PCT = -0.20      # Аварийный выход -20%
 
-def get_sol_tp_ladder(is_unlocked: bool) -> tuple:
-    """Return (tp1_t, tp1_f, tp2_t, tp2_f, tp3_t, tp3_f, tp4_t, tp4_f, tp5_t, tp5_f).
-    Для маленьких позиций ($2): полный выход на TP1, остальные тейки = 0."""
-    if is_unlocked:
-        return (
-            float(globals().get("UNLOCKED_TP1_TRIGGER_PCT", 0.15)),
-            float(globals().get("UNLOCKED_TP1_SELL_FRAC", 1.00)),
-            float(globals().get("UNLOCKED_TP2_TRIGGER_PCT", 0.40)),
-            float(globals().get("UNLOCKED_TP2_SELL_FRAC", 0.00)),
-            float(globals().get("UNLOCKED_TP3_TRIGGER_PCT", 0.85)),
-            float(globals().get("UNLOCKED_TP3_SELL_FRAC", 0.00)),
-            float(globals().get("UNLOCKED_TP4_TRIGGER_PCT", 1.80)),
-            float(globals().get("UNLOCKED_TP4_SELL_FRAC", 0.00)),
-            float(globals().get("UNLOCKED_TP5_TRIGGER_PCT", 4.00)),
-            float(globals().get("UNLOCKED_TP5_SELL_FRAC", 0.00)),
-        )
-    return (
-        float(globals().get("TP1_TRIGGER_PCT", 0.25)),
-        float(globals().get("TP1_SELL_FRAC", 1.00)),
-        float(globals().get("TP2_TRIGGER_PCT", 1.00)),
-        float(globals().get("TP2_SELL_FRAC", 0.00)),
-        float(globals().get("TP3_TRIGGER_PCT", 2.50)),
-        float(globals().get("TP3_SELL_FRAC", 0.00)),
-        float(globals().get("TP4_TRIGGER_PCT", 5.00)),
-        float(globals().get("TP4_SELL_FRAC", 0.00)),
-        float(globals().get("TP5_TRIGGER_PCT", 10.00)),
-        float(globals().get("TP5_SELL_FRAC", 0.00)),
-    )
+# Быстрый выход при мгновенном дампе на входе (первые 60с, падение >15%)
+FLAT_PROFIT_ENABLED = True
+FLAT_PROFIT_MIN_PNL_PCT = 0.08
+FLAT_PROFIT_MIN_HOLD_MIN = 5.0
+FLAT_PROFIT_PEAK_AGE_MIN = 8.0
+FLAT_PROFIT_PRICE_DRIFT_PCT = 0.03
 
 PUMP_XGB_ENABLED = False
 RAY_XGB_ENABLED = False
 ROCKET_XGB_ENABLED = True
-ROCKET_XGB_STAGE1_THRESHOLD = 4.0    # Низкий первичный отсев 4% — пропускаем живые запуски (GTAVI 12.7% -> +248%)
+ROCKET_XGB_STAGE1_THRESHOLD = 8.0    # Порог 8% — пропускаем только уверенные запуски
 ROCKET_XGB_FINAL_THRESHOLD = 24.0     # Финальный порог 24%
 ROCKET_XGB_THRESHOLD = 24.0
 ROCKET_XGB_UNLOCKED_CUSTOM_MIN = 30.0  # Для кастомных пулов без сожжённого LP
@@ -791,7 +760,24 @@ WHALE_DUMP_GUARD_PCT = 0.22
 EVM_RUNNER_CRASH = 0.25
 EVM_NORMAL_CRASH = 0.22
 
-BREAKEVEN_PCT = 0.08       # Breakeven Shield: пик >= +8% -> сделка не может закрыться в минус (безубыток +0.5%)!
+BREAKEVEN_PCT = 0.10       # Breakeven Shield: пик >= +8% -> сделка не может закрыться в минус (безубыток +0.5%)
+
+
+def get_sol_tp_ladder(is_unlocked: bool) -> tuple:
+    """Return (tp1_t, tp1_f, tp2_t, tp2_f, tp3_t, tp3_f, tp4_t, tp4_f, tp5_t, tp5_f).
+    Простая система: TP1 +30% (50%), TP2 +100% (50% остатка), без мунбэга."""
+    return (
+        float(globals().get("TP1_TRIGGER_PCT", 0.30)),
+        float(globals().get("TP1_SELL_FRAC", 0.50)),
+        float(globals().get("TP2_TRIGGER_PCT", 1.00)),
+        float(globals().get("TP2_SELL_FRAC", 0.50)),
+        float(globals().get("TP3_TRIGGER_PCT", 2.00)),
+        float(globals().get("TP3_SELL_FRAC", 0.00)),
+        float(globals().get("TP4_TRIGGER_PCT", 5.00)),
+        float(globals().get("TP4_SELL_FRAC", 0.00)),
+        float(globals().get("TP5_TRIGGER_PCT", 10.00)),
+        float(globals().get("TP5_SELL_FRAC", 0.00)),
+    )!
 
 # === ЗАЩИТА ОТ СНОСА ЛИКВИДНОСТИ И СТАГНАЦИИ ПОСЛЕ ЗАПУСКА ===
 UNLOCKED_STALL_PROFIT_AGE_SEC = 180.0    # 3 минуты без нового пика на +45%+ незалоченном пуле -> плановая фиксация
@@ -1106,8 +1092,8 @@ MAX_AGE_MINUTES_FOR_ENTRY = 240.0        # Покупаем токены до 4 
 MIN_VOLUME_M5_USD = 700.0                # Минимальный 5м объем (мягкий порог для ранних запусков)
 MIN_VOL_TO_LIQ_M5 = 0.10                 # Минимальная оборачиваемость ликвидности за 5м
 MAX_H1_PUMP_PCT = 600.0                  # Не блокируем токены после роста за 1ч
-MIN_M5_PRICE_CHANGE_PCT = 1.5            # Разрешаем вход даже в слабые 5м свечи
-MIN_M1_PRICE_CHANGE_PCT = -5.0           # Запрет входа только при сильном сливе m1
+MIN_M5_PRICE_CHANGE_PCT = 2.0            # Не входим в слабые/паузу 5м свечи (минимум +2%)
+MIN_M1_PRICE_CHANGE_PCT = 0.0            # Запрет входа на красной 1м свече (m1 < 0 = блок)
 
 # 3. Адаптивный фильтр покупателей/продавцов (мягкий для свежих запусков)
 DEFAULT_MIN_BUY_SELL_RATIO = 1.05        # Для обычных пулов
@@ -1122,10 +1108,9 @@ CRASH_GUARD_MIN_HOLD_SEC = 20.0          # Не триггерить в перв
 CRASH_GUARD_CONFIRM_TICKS = 2            # Требовать 2 подряд тика падения с интервалом >= 1.5 сек (убирает "за 0 сек")
 CRASH_GUARD_IGNORE_IF_PNL_ABOVE = 15.0   # Если мы в плюсе > +15%, работает ступенчатый Trailing Stop, а не паник-селл 100%!
 
-# 2. Исправление Mature Moonbag Floor и Trailing Stop
-MOONBAG_ACTIVATION_PEAK_PCT = 80.0       # Активировать трейлинг мунбэга только после пика +80% (не душить монету на откатах)
-MOONBAG_FLOOR_PCT = 2.0                  # Уровень пола безубытка -> +2% (гарантия прибыли, не режет нормальные колебания)
-PARTIAL_TP1_PCT = 25.0                   # На +25% продавать 100% позиции (для $2 депозита — полный выход, без мунбэга)
+# 2. Исправление Mature Moonbag Floor и Trailing Stop (мунбэг отключён, оставлены только безубыток и стопы)
+MOONBAG_FLOOR_PCT = 2.0                  # Уровень пола безубытка -> +2%
+PARTIAL_TP1_PCT = 25.0                   # На +25% продавать 100% позиции (без мунбега)
 PARTIAL_TP1_SELL_FRACTION = 1.00
 
 # 3. Исправление жесткого Stop Loss и Early Momentum Cut
