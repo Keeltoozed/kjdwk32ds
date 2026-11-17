@@ -777,7 +777,7 @@ def get_sol_tp_ladder(is_unlocked: bool) -> tuple:
         float(globals().get("TP4_SELL_FRAC", 0.00)),
         float(globals().get("TP5_TRIGGER_PCT", 10.00)),
         float(globals().get("TP5_SELL_FRAC", 0.00)),
-    )!
+    )
 
 # === ЗАЩИТА ОТ СНОСА ЛИКВИДНОСТИ И СТАГНАЦИИ ПОСЛЕ ЗАПУСКА ===
 UNLOCKED_STALL_PROFIT_AGE_SEC = 180.0    # 3 минуты без нового пика на +45%+ незалоченном пуле -> плановая фиксация
