@@ -20,41 +20,41 @@ GROK_JEV_MIN_XGB_SCORE = 24.0
 GROK_JEV_MAX_AGE_MIN = 45.0
 GROK_JEV_MIN_VOL_M5 = 8000.0
 
-# 1. Объём и баланс покупателей:
-MIN_VOLUME_M5 = 4000.0
-MIN_TXNS_M5 = 18
-MIN_BUY_SELL_RATIO = 1.22
-DEFAULT_MIN_BUY_SELL_RATIO = 1.22
+# 1. Объём и баланс покупателей (мягкие пороги — не отсекаем свежие ракеты):
+MIN_VOLUME_M5 = 700.0
+MIN_TXNS_M5 = 10
+MIN_BUY_SELL_RATIO = 1.05
+DEFAULT_MIN_BUY_SELL_RATIO = 1.05
 HIGH_VOL_M5_THRESHOLD = 20000.0
-HIGH_VOL_MIN_BUY_SELL_RATIO = 1.14
+HIGH_VOL_MIN_BUY_SELL_RATIO = 1.05
 
-# 2. Пороги ML модели (базовый 24%, а для высокообъёмных ракет работает Rocket Flow Bypass от 7.5%):
-ROCKET_XGB_STAGE1_THRESHOLD = 14.0
-ROCKET_XGB_STAGE1_MIN_SCORE = 14.0
+# 2. Пороги ML модели (низкий stage-1 — пропускаем живые запуски):
+ROCKET_XGB_STAGE1_THRESHOLD = 4.0
+ROCKET_XGB_STAGE1_MIN_SCORE = 4.0
 ROCKET_XGB_FINAL_THRESHOLD = 24.0
 ROCKET_XGB_THRESHOLD = 24.0
 
-# 3. Тайминг и защита от покупки макушек:
-SOLANA_MIN_AGE_MIN = 1.5
-JEV_EARLY_MIN_AGE_MIN = 1.5
-JEV_MIN_AGE_MIN = 1.5
-SOLANA_MAX_AGE_MIN = 45.0
-JEV_MAX_AGE_MIN = 45.0
-MAX_AGE_MINUTES_FOR_ENTRY = 45.0
+# 3. Тайминг — разрешаем вход с 3с и до 4 часов:
+SOLANA_MIN_AGE_MIN = 0.05
+JEV_EARLY_MIN_AGE_MIN = 0.05
+JEV_MIN_AGE_MIN = 0.05
+SOLANA_MAX_AGE_MIN = 240.0
+JEV_MAX_AGE_MIN = 240.0
+MAX_AGE_MINUTES_FOR_ENTRY = 240.0
 
-MAX_ENTRY_M5_PCT = 40.0
-PULLBACK_MAX_M5_PCT = 0.40
-MAX_M5_PRICE_CHANGE_PCT = 40.0
+MAX_ENTRY_M5_PCT = 350.0
+PULLBACK_MAX_M5_PCT = 0.95
+MAX_M5_PRICE_CHANGE_PCT = 350.0
 
-MAX_ENTRY_M1_PCT = 14.0
-JEV_MAX_M1_ENTRY_PCT = 14.0
-PULLBACK_M1_MAX_PCT = 0.14
-MAX_M1_VERTICAL_TOP_PCT = 14.0
+MAX_ENTRY_M1_PCT = 60.0
+JEV_MAX_M1_ENTRY_PCT = 60.0
+PULLBACK_M1_MAX_PCT = 0.20
+MAX_M1_VERTICAL_TOP_PCT = 60.0
 
-JEV_MIN_M1_ENTRY_FLOOR_PCT = -3.0
+JEV_MIN_M1_ENTRY_FLOOR_PCT = -5.0
 JEV_TREND_CONFIRM_ENABLED = False
 
-# 4. Мгновенный короткий Stop-Loss -12% и плотная лесенка тейков (фикс MINNIE и MAYA):
+# 4. Стоп-лосс и тейки (сохраняем защиту, но не душим вход):
 STOP_LOSS_PCT = -0.12
 STOP_LOSS_UNLOCKED_PCT = -0.11
 EMERGENCY_CAP_PCT = -0.15
@@ -69,70 +69,69 @@ TP3_TRIGGER_PCT = 0.55
 TP3_SELL_FRAC = 0.50
 BREAKEVEN_PCT = 0.11
 
-MIN_LIQUIDITY_USD = 8000.0
-MIN_GRADUATED_LIQ_USD = 8000.0
-JEV_MIN_LIQUIDITY_USD = 8000.0
+MIN_LIQUIDITY_USD = 2500.0
+MIN_GRADUATED_LIQ_USD = 2500.0
+JEV_MIN_LIQUIDITY_USD = 2500.0
 MAX_LIQUIDITY_USD = 180000.0
 MIN_FDV_TO_LIQ_RATIO = 1.40
-MIN_VOLUME_M5_USD = 4000.0
-MIN_VOL_TO_LIQ_M5 = 0.20
-MAX_H1_PUMP_PCT = 220.0
-MIN_M5_PRICE_CHANGE_PCT = 3.0
-MIN_M1_PRICE_CHANGE_PCT = -3.0
+MIN_VOLUME_M5_USD = 700.0
+MIN_VOL_TO_LIQ_M5 = 0.10
+MAX_H1_PUMP_PCT = 600.0
+MIN_M5_PRICE_CHANGE_PCT = 1.5
+MIN_M1_PRICE_CHANGE_PCT = -5.0
 # ==============================================================================
 """
 
-NEW_EVALUATE_MOMENTUM_BLOCK = """    # 0.5 Отсев пустышек и фейковых пулов (где FDV < 1.35x Liquidity, как у скамов GEKKO/AURAW/PMA):
+NEW_EVALUATE_MOMENTUM_BLOCK = """    # 0.5 Отсев пустышек и фейковых пупов (где FDV < 1.35x Liquidity, как у скамов GEKKO/AURAW/PMA):
     if fdv_usd > 0 and liq_usd > 0 and (fdv_usd / liq_usd) < 1.35:
         return False, f"fake-lp-ratio fdv ${fdv_usd:,.0f} < 1.35x liq ${liq_usd:,.0f} (custom scam pool)"
-    _min_tx_gate = 14 if age_min <= 5.0 else int(globals().get("MIN_TXNS_M5", 18))
-    _min_vol_gate = 3000.0 if (age_min <= 5.0 and buys5 >= 12) else float(globals().get("MIN_VOLUME_M5", 4000.0))
-    _min_buys_req = 10 if age_min <= 5.0 else 12
+    _min_tx_gate = 8 if age_min <= 5.0 else int(globals().get("MIN_TXNS_M5", 10))
+    _min_vol_gate = 600.0 if (age_min <= 5.0 and buys5 >= 6) else float(globals().get("MIN_VOLUME_M5", 700.0))
+    _min_buys_req = 6 if age_min <= 5.0 else 10
     if tot_tx < _min_tx_gate or buys5 < _min_buys_req:
         return False, f"no-demand-txns {buys5}b/{sells5}s (buys < {_min_buys_req} or tot {tot_tx} < {_min_tx_gate})"
     if vol5_usd < _min_vol_gate:
         return False, f"no-demand-vol5 ${vol5_usd:,.0f} < ${_min_vol_gate:,.0f} (dead micro-pool)"
-    if liq_usd >= 1500.0 and vel_ratio < 0.12 and vol5_usd < 4000.0:
-        return False, f"dead-turnover v/l {vel_ratio:.2f}x < 0.12x (vol5 ${vol5_usd:,.0f} on liq ${liq_usd:,.0f})"
+    if liq_usd >= 1500.0 and vel_ratio < 0.08 and vol5_usd < 2000.0:
+        return False, f"dead-turnover v/l {vel_ratio:.2f}x < 0.08x (vol5 ${vol5_usd:,.0f} on liq ${liq_usd:,.0f})"
 
     # 0.6 Динамический порог оборота для крупных кап (FDV >= $250k):
     if fdv_usd >= 250000.0:
-        _req_fdv_vol = min(15000.0, max(5000.0, fdv_usd * 0.02))
+        _req_fdv_vol = min(15000.0, max(3000.0, fdv_usd * 0.015))
         if vol5_usd < _req_fdv_vol:
             return False, f"low-fdv-turnover ${vol5_usd:,.0f} < ${_req_fdv_vol:,.0f} on FDV ${fdv_usd:,.0f}"
-    if liq_usd >= 15000.0 and age_min >= 20.0 and vel_ratio < 0.15 and vol5_usd < 6000.0:
-        return False, f"low-liq-turnover v/l {vel_ratio:.2f}x < 0.15x on liq ${liq_usd:,.0f}"
+    if liq_usd >= 15000.0 and age_min >= 20.0 and vel_ratio < 0.10 and vol5_usd < 4000.0:
+        return False, f"low-liq-turnover v/l {vel_ratio:.2f}x < 0.10x on liq ${liq_usd:,.0f}"
 
-    # 1. Различаем плавный мега-разгон ракеты (PROPTRENCH vol5=$121k, JVOLT 1390b/212s) и свечку-палку (Shrek m1=+30%):
-    if age_min < float(globals().get("SOLANA_MIN_AGE_MIN", 1.5)):
-        return False, f"too-young {age_min:.2f}m < 1.5m (skip 1st minute sniper chop)"
+    # 1. Разрешаем вход для свежих и живых ракет, не режем макушки слишком жёстко:
+    if age_min < float(globals().get("SOLANA_MIN_AGE_MIN", 0.05)):
+        return False, f"too-young {age_min:.2f}m < 0.05m (skip 1st minute sniper chop)"
     _is_high_vol_flow = (
-        vol5_usd >= 20000.0
-        and (buys5 - sells5) >= 75
-        and buys5 >= int(sells5 * 1.14)
-        and 0.0 <= m1 <= 14.0
-        and (m5 <= 0 or (m1 / max(m5, 1.0)) <= 0.45)
+        vol5_usd >= 15000.0
+        and (buys5 - sells5) >= 50
+        and buys5 >= int(sells5 * 1.05)
+        and 0.0 <= m1 <= 60.0
     )
-    _m5_cap = 95.0 if _is_high_vol_flow else float(globals().get("MAX_ENTRY_M5_PCT", 40.0))
+    _m5_cap = 650.0 if _is_high_vol_flow else float(globals().get("MAX_ENTRY_M5_PCT", 350.0))
     if m5 > _m5_cap:
         return False, f"m5-overheated {m5:+.1f}% > +{_m5_cap:.0f}% (do not buy candle top)"
-    if m1 > float(globals().get("MAX_ENTRY_M1_PCT", 14.0)):
-        return False, f"m1-overheated {m1:+.1f}% > +14.0% (do not buy 1m spike top)"
+    if m1 > float(globals().get("MAX_ENTRY_M1_PCT", 60.0)):
+        return False, f"m1-overheated {m1:+.1f}% > +60.0% (do not buy 1m spike top)"
     if m5 >= 15.0 and m1 > (m5 * 0.60):
         return False, f"m1-pump-spike m1 {m1:+.1f}% is >60% of m5 {m5:+.1f}% (single-minute vertical spike)"
-    if h1 > float(globals().get("MAX_H1_PUMP_PCT", 220.0)) and not _is_high_vol_flow:
-        return False, f"h1-overheated {h1:+.0f}% > +220% (spent pump)"
+    if h1 > float(globals().get("MAX_H1_PUMP_PCT", 600.0)) and not _is_high_vol_flow:
+        return False, f"h1-overheated {h1:+.0f}% > +600% (spent pump)"
 
-    _is_m1_surge = (m1 >= 1.5 and buys5 >= max(10, int(sells5 * 1.20)) and vol5_usd >= 3000.0)
-    _m5_min_req = 1.0 if _is_m1_surge else 3.0
+    _is_m1_surge = (m1 >= 1.5 and buys5 >= max(8, int(sells5 * 1.10)) and vol5_usd >= 1500.0)
+    _m5_min_req = 1.0 if _is_m1_surge else 1.5
     if m5 < _m5_min_req:
         return False, f"m5-falling-knife {m5:+.1f}% < +{_m5_min_req:.1f}% (red or flat 5m candle)"
-    _m1_floor = float(globals().get("JEV_MIN_M1_ENTRY_FLOOR_PCT", -3.0)) if (m5 >= 5.0 and buys5 >= int(sells5 * 1.25)) else 0.0
+    _m1_floor = float(globals().get("JEV_MIN_M1_ENTRY_FLOOR_PCT", -5.0)) if (m5 >= 3.0 and buys5 >= int(sells5 * 1.10)) else -5.0
     if m1 < _m1_floor:
         return False, f"m1-falling-knife {m1:+.1f}% < {_m1_floor:+.1f}% (1m candle is dumping)"
 
-    # 2. Адаптивный перевес покупателей:
-    _req_bs_ratio = 1.14 if _is_high_vol_flow else float(globals().get("MIN_BUY_SELL_RATIO", 1.22))
+    # 2. Адаптивный перевес покупателей (мягкий для свежих токенов):
+    _req_bs_ratio = 1.05 if _is_high_vol_flow else float(globals().get("MIN_BUY_SELL_RATIO", 1.05))
     if sells5 > 4 and buys5 < int(sells5 * _req_bs_ratio):
         return False, f"sellers-dominating {buys5}b/{sells5}s (need buyers > sellers * {_req_bs_ratio:.2f} in 5m)"
 """
@@ -169,19 +168,19 @@ def patch_config(path: str = "config.py") -> None:
     content = re.sub(r"^TP1_SELL_FRAC\s*=\s*0\.\d+", "TP1_SELL_FRAC = 0.50", content, flags=re.M)
     content = re.sub(r"^TP2_TRIGGER_PCT\s*=\s*0\.\d+", "TP2_TRIGGER_PCT = 0.24", content, flags=re.M)
     content = re.sub(r"^TP2_SELL_FRAC\s*=\s*0\.\d+", "TP2_SELL_FRAC = 0.50", content, flags=re.M)
-    content = re.sub(r"^MAX_ENTRY_M5_PCT\s*=\s*\d+(\.\d+)?", "MAX_ENTRY_M5_PCT = 40.0", content, flags=re.M)
-    content = re.sub(r"^MAX_ENTRY_M1_PCT\s*=\s*\d+(\.\d+)?", "MAX_ENTRY_M1_PCT = 14.0", content, flags=re.M)
-    content = re.sub(r"^JEV_MAX_M1_ENTRY_PCT\s*=\s*\d+(\.\d+)?", "JEV_MAX_M1_ENTRY_PCT = 14.0", content, flags=re.M)
-    content = re.sub(r"^SOLANA_MIN_AGE_MIN\s*=\s*\d+(\.\d+)?", "SOLANA_MIN_AGE_MIN = 1.5", content, flags=re.M)
-    content = re.sub(r"^SOLANA_MAX_AGE_MIN\s*=\s*\d+(\.\d+)?", "SOLANA_MAX_AGE_MIN = 45.0", content, flags=re.M)
-    content = re.sub(r"^JEV_MAX_AGE_MIN\s*=\s*\d+(\.\d+)?", "JEV_MAX_AGE_MIN = 45.0", content, flags=re.M)
-    content = re.sub(r"^ROCKET_XGB_STAGE1_THRESHOLD\s*=\s*\d+(\.\d+)?", "ROCKET_XGB_STAGE1_THRESHOLD = 14.0", content, flags=re.M)
+    content = re.sub(r"^MAX_ENTRY_M5_PCT\s*=\s*\d+(\.\d+)?", "MAX_ENTRY_M5_PCT = 350.0", content, flags=re.M)
+    content = re.sub(r"^MAX_ENTRY_M1_PCT\s*=\s*\d+(\.\d+)?", "MAX_ENTRY_M1_PCT = 60.0", content, flags=re.M)
+    content = re.sub(r"^JEV_MAX_M1_ENTRY_PCT\s*=\s*\d+(\.\d+)?", "JEV_MAX_M1_ENTRY_PCT = 60.0", content, flags=re.M)
+    content = re.sub(r"^SOLANA_MIN_AGE_MIN\s*=\s*\d+(\.\d+)?", "SOLANA_MIN_AGE_MIN = 0.05", content, flags=re.M)
+    content = re.sub(r"^SOLANA_MAX_AGE_MIN\s*=\s*\d+(\.\d+)?", "SOLANA_MAX_AGE_MIN = 240.0", content, flags=re.M)
+    content = re.sub(r"^JEV_MAX_AGE_MIN\s*=\s*\d+(\.\d+)?", "JEV_MAX_AGE_MIN = 240.0", content, flags=re.M)
+    content = re.sub(r"^ROCKET_XGB_STAGE1_THRESHOLD\s*=\s*\d+(\.\d+)?", "ROCKET_XGB_STAGE1_THRESHOLD = 4.0", content, flags=re.M)
     content = re.sub(r"^ROCKET_XGB_FINAL_THRESHOLD\s*=\s*\d+(\.\d+)?", "ROCKET_XGB_FINAL_THRESHOLD = 24.0", content, flags=re.M)
     content = re.sub(r"^ROCKET_XGB_THRESHOLD\s*=\s*\d+(\.\d+)?", "ROCKET_XGB_THRESHOLD = 24.0", content, flags=re.M)
-    content = re.sub(r"^MIN_VOLUME_M5\s*=\s*\d+(\.\d+)?", "MIN_VOLUME_M5 = 4000.0", content, flags=re.M)
-    content = re.sub(r"^MIN_TXNS_M5\s*=\s*\d+\b", "MIN_TXNS_M5 = 18", content, flags=re.M)
-    content = re.sub(r"^MIN_BUY_SELL_RATIO\s*=\s*1\.\d+", "MIN_BUY_SELL_RATIO = 1.22", content, flags=re.M)
-    content = re.sub(r"^JEV_MIN_M1_ENTRY_FLOOR_PCT\s*=\s*[-0-9.]+", "JEV_MIN_M1_ENTRY_FLOOR_PCT = -3.0", content, flags=re.M)
+    content = re.sub(r"^MIN_VOLUME_M5\s*=\s*\d+(\.\d+)?", "MIN_VOLUME_M5 = 700.0", content, flags=re.M)
+    content = re.sub(r"^MIN_TXNS_M5\s*=\s*\d+\b", "MIN_TXNS_M5 = 10", content, flags=re.M)
+    content = re.sub(r"^MIN_BUY_SELL_RATIO\s*=\s*1\.\d+", "MIN_BUY_SELL_RATIO = 1.05", content, flags=re.M)
+    content = re.sub(r"^JEV_MIN_M1_ENTRY_FLOOR_PCT\s*=\s*[-0-9.]+", "JEV_MIN_M1_ENTRY_FLOOR_PCT = -5.0", content, flags=re.M)
 
     if "# ==================== [AUTO-PATCH]" in content:
         content = re.sub(

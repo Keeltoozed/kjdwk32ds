@@ -69,13 +69,13 @@ DEV_MAX_TOKEN_PCT = 0.15       # Дев не должен держать бол�
 LIQ_LOCKED_BURNED_MIN_PCT = 0.0   # Режим 0d2b1ae: блокировка/сжигание LP не требуется (быстрый сбор профита до рага)
 
 # === ФИЛЬТРЫ ВХОДА (ОХОТА ЗА НАСТОЯЩИМИ РАКЕТАМИ ТИПА FIVEM / WUF) ===
-ALLOW_UNLOCKED_LP_POOLS = False            # БЛОКИРОВКА НЕЗАЛОЧЕННЫХ ПУЛОВ METEORA DYN2: 100% защита от вывода LP девом (Remove 155 SOL). Торгуем ТОЛЬКО защищёнными Pump.fun и пулами со сожжённым LP!
+ALLOW_UNLOCKED_LP_POOLS = True            # РАЗРЕШАЕМ незалоченные пулы Meteora/PumpSwap — не блокируем свежие ракеты
 BLOCK_PERMISSIONLESS_LIQ_FDV_TRAP = True   # Блокировать кастомные ловушки дева
 REQUIRE_SOCIALS_ENABLED = False            # Не требовать соцсети на старте/зрелости (важна только живая ликвидность и импульс)
 MAX_ENTRY_H1_PCT = 180.0       # Было 1500.0: отсекает вертикальный вынос и хаи (фикс Y +944%)
 MAX_ENTRY_H6_PCT = 350.0       # Было 500.0: не входим в отработавшие топы
-MAX_ENTRY_M5_PCT = 35.0        # Было 450.0: отсекает покупку перегретых свечей (фикс GTA +87%, 👀 +52%, FOMOFUND +39%)
-MAX_ENTRY_M1_PCT = 25.0        # Было 45.0: допускаем 1м пробои до +25%
+MAX_ENTRY_M5_PCT = 350.0        # Не режем свежие ракеты — высокий потолок m5
+MAX_ENTRY_M1_PCT = 60.0         # Потолок 1м свечи +60% для свежих запусков
 REQUIRE_SOCIALS_MIN_AGE_MIN = 9999.0  # Соцсети не обязательны (отключено)
 
 
@@ -412,7 +412,7 @@ def is_permissionless_liq_fdv_trap(pair_data: Optional[dict]) -> bool:
 is_pumpswap_liq_fdv_trap = is_permissionless_liq_fdv_trap
 
 # Глобальные лимиты раннеров (доступны всем функциям выше по файлу)
-JEV_MAX_MCAP_USD = 1500000.0       # Верхняя граница $1.5M FDV: открывает доступ к мощным раннерам, которые выходят в $5M-$20M
+JEV_MAX_MCAP_USD = 5000000.0       # Верхняя граница $5M FDV: открывает доступ к мощным раннерам
 SOLANA_MAX_AGE_MIN = 240.0         # До 240 минут (4 часа): захватывает консолидации и мощные вторые волны
 JEV_MAX_AGE_MIN = 240.0            # До 240 минут
 
@@ -659,9 +659,9 @@ DD_THROTTLE_START_USD = 15.0
 SNIPER_ENTRIES_ENABLED = True             # ВКЛЮЧЕНО: мгновенный вход в свежие кривые/миграции со стрима
 ALLOW_UNGRADUATED_PUMPFUN = True          # ВКЛЮЧЕНО: ловим ракеты на кривой Pump.fun до миграции (открывает 大A +1559%, ROCKSTAR +163%)
 MIN_PUMP_CURVE_MCAP_USD = 3500.0          # Порог кривой от $3.5k: надежная зона набора высоты (отсекает 0% пустой мусор)
-MAX_PUMP_CURVE_MCAP_USD = 15000.0         # Верх кривой до миграционного обрыва ($65k)
+MAX_PUMP_CURVE_MCAP_USD = 100000.0         # Верх кривой до миграционного обрыва ($65k)
 MIN_PUMP_CURVE_MCAP_SOL = 25.0            # Порог кривой pump.fun в SOL (~25 SOL, ранний набор высоты)
-MAX_PUMP_CURVE_MCAP_SOL = 80.0            # Верх входа на кривой перед миграцией
+MAX_PUMP_CURVE_MCAP_SOL = 300.0            # Верх входа на кривой перед миграцией
 PUMP_MIGRATION_MCAP_SOL = 410.0           # FDV миграции pump.fun
 PUMP_DUMP_FLOOR_SOL = 50.0                # Порог post-mig-dumped (~50 SOL, разрешает быстрые реклеймы)
 JEV_MAX_TICKET_USD = 0.0
@@ -766,7 +766,7 @@ def get_sol_tp_ladder(is_unlocked: bool) -> tuple:
 PUMP_XGB_ENABLED = False
 RAY_XGB_ENABLED = False
 ROCKET_XGB_ENABLED = True
-ROCKET_XGB_STAGE1_THRESHOLD = 10.0    # Первичный отсев 10% (было 12-14%): пропускает ракеты (GTAVI 12.7% -> +248%)
+ROCKET_XGB_STAGE1_THRESHOLD = 4.0    # Низкий первичный отсев 4% — пропускаем живые запуски (GTAVI 12.7% -> +248%)
 ROCKET_XGB_FINAL_THRESHOLD = 24.0     # Финальный порог 24%
 ROCKET_XGB_THRESHOLD = 24.0
 ROCKET_XGB_UNLOCKED_CUSTOM_MIN = 30.0  # Для кастомных пулов без сожжённого LP
@@ -822,7 +822,7 @@ JEV_MIN_LIQUIDITY_USD = 4000.0   # Минимум $4.0k ликвидности A
 JEV_MAX_LIQUIDITY_USD = 500000.0   # Расширено до $500k: не блокирует ракеты с высокой ликвидностью (фикс GRAM +391%)
 JEV_MIN_VOLUME_H1 = 1500.0       # Минимум $1.5k реального оборота вместо $350 шума
 JEV_MIN_MCAP_USD = 4500.0      # Минимум $4.5k MCap для ранних ракет
-JEV_MAX_MCAP_USD = 1500000.0   # Верхняя граница $1.5M FDV: пропускает мощные раннеры уровня UHI (+792%) и BJB (+308%)
+JEV_MAX_MCAP_USD = 5000000.0   # Верхняя граница $5M FDV: пропускает мощные раннеры уровня UHI (+792%) и BJB (+308%)
 JEV_MIN_VOLUME_H24 = 1500.0
 JEV_MIN_TRADES_H24 = 12
 JEV_MIN_TRADES_H1 = 10
@@ -942,9 +942,9 @@ PULLBACK_M1_MIN_PCT = -0.08
 PULLBACK_M1_MAX_PCT = 0.20
 PULLBACK_MAX_H1_PCT = 320.0
 PULLBACK_MAX_M5_PCT = 0.95
-MIN_VOLUME_M5 = 4500            # Минимум $4,500 за 5м — реальный торговый поток толпы (как у FiveM и Retire)
-MIN_TXNS_M5 = 20                # Минимум 20 сделок за 5м — подтверждённый активный спрос
-MIN_BUY_SELL_RATIO = 1.30       # Покупатели обязаны преобладать над продавцами минимум на 30%+ (чистый приток спроса)
+MIN_VOLUME_M5 = 700            # Минимум $700 за 5м — мягкий порог для ранних токенов
+MIN_TXNS_M5 = 10                # Минимум 10 сделок за 5м — подтверждённый активный спрос
+MIN_BUY_SELL_RATIO = 1.05       # Покупатели обязаны преобладать над продавцами (мягкий порог для свежих запусков)
 LOTTERY_ENABLED = False
 LOTTERY_MIN_M5_PCT = 0.60
 LOTTERY_SIZE_MULT = 0.30
@@ -1090,7 +1090,7 @@ WALLET_DEV_WALLET_ADDR = ""               # Кошелек дева (запол�
 # 1. Отключаем самостоятельные покупки GROK-JEV в обход пайплайна ROCKET-XGB
 GROK_JEV_STANDALONE_BUY = False          # GROK-JEV работает только как фильтр/бустер поверх ROCKET-XGB
 GROK_JEV_MIN_XGB_SCORE = 24.0            # Минимальный скор ROCKET-XGB для входа по сигналу GROK-JEV
-ROCKET_XGB_STAGE1_MIN_SCORE = 10.0       # Снижено до 10.0% (пропускает ракеты вроде GTAVI 12.7% -> +248%)
+ROCKET_XGB_STAGE1_MIN_SCORE = 4.0       # Снижено до 4.0% (пропускает ракеты вроде GTAVI 12.7% -> +248%)
 
 # 2. Жесткие гейты на вход (единые для SCANNER, JUP и GROK-JEV)
 MIN_LIQUIDITY_USD = 4000.0               # Допускает кривые pump.fun от $4k
