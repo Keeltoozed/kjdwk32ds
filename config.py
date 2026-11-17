@@ -440,43 +440,41 @@ def evaluate_entry_momentum(
     if tot_tx >= 10 and (vol5_usd / max(1, tot_tx)) < 4.0:
         return False, f"fake-bump-wash-bot avg ${vol5_usd/max(1, tot_tx):.2f} < $4.00 across {tot_tx} txns"
 
-    # 0.5 ЖЁСТКИЙ ОТСЕВ МЁРТВЫХ ПУСТЫШЕК БЕЗ ОБЪЁМА И СПРОСА (кейс Lily / VICE / GTA / CLOWN / DMIND / CLAUDEMOM):
-    _min_tx_gate = 16 if age_min <= 3.0 else 22
-    _min_vol_gate = 2500.0 if (age_min <= 3.0 and buys5 >= 10) else 4500.0
-    _min_buys_req = 10 if age_min <= 3.0 else 14
+    # 0.5 МЯГКИЙ ОТСЕВ МЁРТВЫХ ПУСТЫШЕК (не блокируем свежие ракеты с маленьким объёмом):
+    _min_tx_gate = 8 if age_min <= 5.0 else int(globals().get("MIN_TXNS_M5", 10))
+    _min_vol_gate = 600.0 if (age_min <= 5.0 and buys5 >= 6) else float(globals().get("MIN_VOLUME_M5_USD", 700.0))
+    _min_buys_req = 6 if age_min <= 5.0 else 10
     if tot_tx < _min_tx_gate or buys5 < _min_buys_req:
         return False, f"no-demand-txns {buys5}b/{sells5}s (buys < {_min_buys_req} or tot {tot_tx} < {_min_tx_gate})"
     if vol5_usd < _min_vol_gate:
         return False, f"no-demand-vol5 ${vol5_usd:,.0f} < ${_min_vol_gate:,.0f} (dead micro-pool)"
-    if liq_usd >= 1500.0 and vel_ratio < 0.10 and vol5_usd < 3500.0:
-        return False, f"dead-turnover v/l {vel_ratio:.2f}x < 0.10x (vol5 ${vol5_usd:,.0f} on liq ${liq_usd:,.0f})"
+    if liq_usd >= 1500.0 and vel_ratio < 0.08 and vol5_usd < 2000.0:
+        return False, f"dead-turnover v/l {vel_ratio:.2f}x < 0.08x (vol5 ${vol5_usd:,.0f} on liq ${liq_usd:,.0f})"
 
-    # 0.6 ДИНАМИЧЕСКИЙ ПОРОГ ОБОРОТА (ликвидирует стоячие монеты без импульса вроде CHOP):
-    # Если монета дорогая (FDV > $70k) или зрелая (age > 10m), объём обязан соответствовать размеру капитализации!
-    if fdv_usd >= 70000.0:
-        _req_fdv_vol = max(10000.0, fdv_usd * 0.05)
+    # 0.6 ДИНАМИЧЕСКИЙ ПОРОГ ОБОРОТА (мягкий для крупных кап):
+    if fdv_usd >= 250000.0:
+        _req_fdv_vol = min(15000.0, max(3000.0, fdv_usd * 0.015))
         if vol5_usd < _req_fdv_vol:
-            return False, f"low-fdv-turnover ${vol5_usd:,.0f} < ${_req_fdv_vol:,.0f} on FDV ${fdv_usd:,.0f} (sluggish chop, no rocket momentum)"
-    if liq_usd >= 8000.0 and age_min >= 10.0 and vel_ratio < 0.25:
-        return False, f"low-liq-turnover v/l {vel_ratio:.2f}x < 0.25x on liq ${liq_usd:,.0f} (stagnant flow)"
+            return False, f"low-fdv-turnover ${vol5_usd:,.0f} < ${_req_fdv_vol:,.0f} on FDV ${fdv_usd:,.0f}"
+    if liq_usd >= 15000.0 and age_min >= 20.0 and vel_ratio < 0.10 and vol5_usd < 4000.0:
+        return False, f"low-liq-turnover v/l {vel_ratio:.2f}x < 0.10x on liq ${liq_usd:,.0f}"
 
-    # 1. HARD NO-FALLING-KNIFE GATE:
-    # Вход РАЗРЕШЁН ТОЛЬКО на растущей 1м свече (m1 >= 0.0%). Покупка на красной 1м свече строго запрещена!
-    _is_m1_surge = (m1 >= 1.5 and buys5 >= max(10, int(sells5 * 1.15)) and vol5_usd >= 1500.0)
-    _m5_min_req = -0.5 if _is_m1_surge else 1.5
+    # 1. МЯГКИЙ ГЕЙТ ПАДАЮЩИХ СВЕЧЕЙ (разрешаем вход даже на красной 1м — отскоки часто зажигают ракету):
+    _is_m1_surge = (m1 >= 1.5 and buys5 >= max(8, int(sells5 * 1.10)) and vol5_usd >= 1500.0)
+    _m5_min_req = 1.0 if _is_m1_surge else 1.5
     if m5 < _m5_min_req:
         return False, f"m5-falling-knife {m5:+.1f}% < +{_m5_min_req:.1f}% (red or flat 5m candle)"
-    if m1 < 0.0:
-        return False, f"m1-falling-knife {m1:+.1f}% (1m candle is red, sellers active)"
+    if m1 < float(globals().get("MIN_M1_PRICE_CHANGE_PCT", -5.0)):
+        return False, f"m1-falling-knife {m1:+.1f}% < {float(globals().get('MIN_M1_PRICE_CHANGE_PCT', -5.0)):+.1f}% (1m candle is dumping)"
 
-    # 2. Активный перевес покупателей (покупатели обязаны опережать продавцов минимум на 30%+):
-    _req_bs_ratio = 1.30
+    # 2. МЯГКИЙ ПЕРЕВЕС ПОКУПАТЕЛЕЙ (не требуем 30% dominance на старте):
+    _req_bs_ratio = float(globals().get("DEFAULT_MIN_BUY_SELL_RATIO", 1.05))
     if sells5 > 4 and buys5 < int(sells5 * _req_bs_ratio):
         return False, f"sellers-dominating {buys5}b/{sells5}s (need buyers > sellers * {_req_bs_ratio:.2f} in 5m)"
 
-    # 2.5. Жесткий барьер против микро-пулов и ловушек снайп-дампов (кейсы Smoke / COGE):
-    if 0 < fdv_usd < 30000.0:
-        return False, f"fdv-too-low ${fdv_usd:,.0f} < $30,000 (dumped micro-pool, high rug risk)"
+    # 2.5. УБИРАЕМ ЖЁСТКИЙ БАРЬЕР FDV < $30,000 — молодые ракеты часто стартуют с FDV $5k-$25k:
+    # (защиту от микро-пулов даёт MIN_LIQUIDITY_USD и MIN_VOLUME_M5_USD, а не жёсткий FDV cutoff)
+    # if 0 < fdv_usd < 30000.0:  # УБРАНО — блокировал NEIGHBORS $8,844 (+90%), GTAVI $13,722 (+81%), NEGRO $11,575 (+174%)
 
     _base_max_fdv = float(globals().get("JEV_MAX_MCAP_USD", 1500000.0))
     _max_fdv_allowed = (_base_max_fdv * 1.65) if (vol5_usd >= 15000.0 and buys5 >= int(sells5 * 1.05)) else _base_max_fdv
@@ -775,6 +773,13 @@ JEV_MAX_AGE_MIN = 240.0              # Пробои и консолидации 
 STALL_TIMER_SEC = 420.0   # 7 минут на консолидацию до среза по стагнации
 STALL_MAX_LOSS_PCT = -0.055
 
+# === ПРОДАЖА НА ФЛЕТЕ В ПЛЮС (фиксируем профит даже если монета стоит на месте) ===
+FLAT_PROFIT_ENABLED = True
+FLAT_PROFIT_MIN_PNL_PCT = 0.08       # Минимум +8% профита чтобы продать на флете
+FLAT_PROFIT_MIN_HOLD_MIN = 5.0       # Держать минимум 5 минут перед продажей на флете
+FLAT_PROFIT_PEAK_AGE_MIN = 8.0       # Пик был не менее 8 минут назад (нет новых максимумов)
+FLAT_PROFIT_PRICE_DRIFT_PCT = 0.03   # Цена не должна отклоняться от пика более чем на 3% (флет)
+
 TRAILING_ACTIVATION_PCT = 0.400   # Прогрессивный трейлинг включается с +40%
 TRAILING_DISTANCE_PCT = 0.300     # Дистанция от пика 30% (не душить нормальные откаты)
 TRAILING_RUNNER_DISTANCE_PCT = 0.35
@@ -805,7 +810,7 @@ STAGNANT_LOSS_MIN_FAST = 12.0
 STAGNANT_HOLD_MIN = 20.0
 
 AI_MODE = "degen"
-MIN_LIQUIDITY = 4000.0          # Минимум $4,000 реальной ликвидности AMM (кривые pump.fun имеют свой порог)
+MIN_LIQUIDITY = 2500.0          # Минимум $2,500 реальной ликвидности AMM — не отсекаем молодые ракеты
 MAX_LIQUIDITY = 50000000
 
 GROQ_API_KEY = (os.getenv("GROQ_API_KEY") or os.getenv("GROK_API_KEY") or os.getenv("XAI_API_KEY") or "").strip().strip('"').strip("'")
@@ -818,15 +823,15 @@ JEV_WICK_STOP_ENABLED = False
 JEV_EARLY_MIN_AGE_MIN = 0.05   # Ультра-ранний вход от 3с
 JEV_MIN_AGE_MIN = 0.08         # Мгновенный вход от 5 секунд (до разгона ракеты)
 JEV_MAX_AGE_MIN = 240.0        # В GROK-JEV фокус на пробоях до 240м (4ч)
-JEV_MIN_LIQUIDITY_USD = 4000.0   # Минимум $4.0k ликвидности AMM — отсекаем тонкие -35% ловушки вроде FOMOCOIN/$CHOPS
+JEV_MIN_LIQUIDITY_USD = 2500.0   # Минимум $2.5k ликвидности AMM — не отсекаем молодые ракеты с petites пулами
 JEV_MAX_LIQUIDITY_USD = 500000.0   # Расширено до $500k: не блокирует ракеты с высокой ликвидностью (фикс GRAM +391%)
 JEV_MIN_VOLUME_H1 = 1500.0       # Минимум $1.5k реального оборота вместо $350 шума
 JEV_MIN_MCAP_USD = 4500.0      # Минимум $4.5k MCap для ранних ракет
 JEV_MAX_MCAP_USD = 5000000.0   # Верхняя граница $5M FDV: пропускает мощные раннеры уровня UHI (+792%) и BJB (+308%)
 JEV_MIN_VOLUME_H24 = 1500.0
-JEV_MIN_TRADES_H24 = 12
-JEV_MIN_TRADES_H1 = 10
-JEV_MIN_HOLDERS = 25             # Минимум 25 холдеров вместо 8 (защита от кастомных бандл-ферм дева)
+JEV_MIN_TRADES_H24 = 6
+JEV_MIN_TRADES_H1 = 5
+JEV_MIN_HOLDERS = 8             # Минимум 8 холдеров — не блокируем только что запущенные токены
 JEV_MAX_TOP_WALLET = 0.14        # Макс 14% на один кошелёк (вместо 30%)
 JEV_MAX_TOP_10 = 0.48            # Макс 48% у топ-10 холдеров (пропускает ракеты уровня FiveM)
 UNLOCKED_CUSTOM_MIN_LIQ_USD = 4500.0
@@ -1089,23 +1094,23 @@ WALLET_DEV_WALLET_ADDR = ""               # Кошелек дева (запол�
 
 # 1. Отключаем самостоятельные покупки GROK-JEV в обход пайплайна ROCKET-XGB
 GROK_JEV_STANDALONE_BUY = False          # GROK-JEV работает только как фильтр/бустер поверх ROCKET-XGB
-GROK_JEV_MIN_XGB_SCORE = 24.0            # Минимальный скор ROCKET-XGB для входа по сигналу GROK-JEV
+GROK_JEV_MIN_XGB_SCORE = 4.0             # Минимальный скор ROCKET-XGB для входа по сигналу GROK-JEV (мягкий порог)
 ROCKET_XGB_STAGE1_MIN_SCORE = 4.0       # Снижено до 4.0% (пропускает ракеты вроде GTAVI 12.7% -> +248%)
 
-# 2. Жесткие гейты на вход (единые для SCANNER, JUP и GROK-JEV)
-MIN_LIQUIDITY_USD = 4000.0               # Допускает кривые pump.fun от $4k
-MIN_FDV_TO_LIQ_RATIO = 1.15              # Защита от кастомных scam-пулов со 100% сапплая (где FDV < Liq)
-MAX_AGE_MINUTES_FOR_ENTRY = 45.0         # Не покупать старые "зомби" пулы старше 45 минут
-MIN_VOLUME_M5_USD = 3000.0               # Минимальный 5м объем
-MIN_VOL_TO_LIQ_M5 = 0.50                 # Минимальная оборачиваемость ликвидности за 5м
-MAX_H1_PUMP_PCT = 180.0                  # Не покупать хаи после +180% за 1ч
-MIN_M5_PRICE_CHANGE_PCT = 3.0            # Не входить в плоские/падающие 5м свечи
-MIN_M1_PRICE_CHANGE_PCT = -5.0           # Запрет входа, если m1 == None или свеча сливается
+# 2. Мягкие гейты на вход — не отсекаем свежие ракеты (единые для SCANNER, JUP и GROK-JEV)
+MIN_LIQUIDITY_USD = 2500.0               # Допускает кривые pump.fun от $2.5k
+MIN_FDV_TO_LIQ_RATIO = 1.15              # Защита от кастомных scam-пулов со 100% сапплая
+MAX_AGE_MINUTES_FOR_ENTRY = 240.0        # Покупаем токены до 4 часов (не только 45 мин)
+MIN_VOLUME_M5_USD = 700.0                # Минимальный 5м объем (мягкий порог для ранних запусков)
+MIN_VOL_TO_LIQ_M5 = 0.10                 # Минимальная оборачиваемость ликвидности за 5м
+MAX_H1_PUMP_PCT = 600.0                  # Не блокируем токены после роста за 1ч
+MIN_M5_PRICE_CHANGE_PCT = 1.5            # Разрешаем вход даже в слабые 5м свечи
+MIN_M1_PRICE_CHANGE_PCT = -5.0           # Запрет входа только при сильном сливе m1
 
-# 3. Адаптивный фильтр покупателей/продавцов
-DEFAULT_MIN_BUY_SELL_RATIO = 1.20        # Для обычных пулов
+# 3. Адаптивный фильтр покупателей/продавцов (мягкий для свежих запусков)
+DEFAULT_MIN_BUY_SELL_RATIO = 1.05        # Для обычных пулов
 HIGH_VOL_M5_THRESHOLD = 30000.0          # Если объем за 5м > $30k...
-HIGH_VOL_MIN_BUY_SELL_RATIO = 1.10       # ...достаточно перевеса 1.10x
+HIGH_VOL_MIN_BUY_SELL_RATIO = 1.05       # ...достаточно перевеса 1.05x
 
 # ==================== ОБНОВЛЕННЫЕ НАСТРОЙКИ ВЫХОДОВ (exit_manager.py) ====================
 

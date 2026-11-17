@@ -1438,7 +1438,7 @@ async def scanner_loop(analyzer, tracker):
                                 if _m1_live > _max_m1_cfg_live:
                                     _b5_sc = int((pair_data.get("txns") or {}).get("m5", {}).get("buys", 0) or 0)
                                     _s5_sc = int((pair_data.get("txns") or {}).get("m5", {}).get("sells", 0) or 0)
-                                    if not (_b5_sc >= int(_s5_sc * 1.15) and _vol5_live >= 3000.0 and _m5_live >= 4.0 and _m1_live <= 45.0):
+                                    if not (_b5_sc >= int(_s5_sc * 1.05) and _vol5_live >= 700.0 and _m5_live >= 1.5 and _m1_live <= 60.0):
                                         print(f"🚫 [SCANNER-M1-SPIKE] {actual_symbol} ({mint[:8]}): живой m1 +{_m1_live:.1f}% > +{_max_m1_cfg_live:.1f}% — вершина свечи, отмена!")
                                         continue
                                 _max_m5_cfg = float(getattr(config, "MAX_ENTRY_M5_PCT", 180.0))

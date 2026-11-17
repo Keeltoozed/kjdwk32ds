@@ -3603,7 +3603,7 @@ class Analyzer:
             if m1 > 65.0:
                 return self._deny(address, f"scout-m1-spike {m1:+.1f}%",
                                   f"🚫 [{tag}-SCOUT] {symbol}: m1 {m1:+.1f}% — верхушка 1м импульса, вход = вершина.")
-            if m1 < -7.0:
+            if m1 < -10.0:
                 return self._deny(address, f"scout-m1-drop {m1:+.1f}%",
                                   f"🚫 [{tag}-SCOUT] {symbol}: m1 {m1:+.1f}% — падающий нож.")
             # Защита от покупки вершины уже выдохшегося пампа (кейс DATAEXPORT +474%)
@@ -3816,7 +3816,7 @@ class Analyzer:
         _max_m1 = 60.0 if (s5 > 0 and b5 >= 2.0 * s5 and (b5 + s5) >= 12) else (45.0 if (s5 > 0 and b5 >= 1.5 * s5 and (b5 + s5) >= 8) else (25.0 if (s5 > 0 and b5 >= 1.2 * s5) else 15.0))
         if m1 > _max_m1:
             return self._deny(address, f"m1-green {m1:+.1f}%", f"🚫 [{tag}] {symbol}: m1 {m1:+.1f}% > +{_max_m1:.0f}% — вершина в моменте, ждём.")
-        if m1 < -5.0:
+        if m1 < -8.0:
             return self._deny(address, f"m1-drop {m1:+.1f}%", f"🚫 [{tag}] {symbol}: m1 {m1:+.1f}% — резкое падение за 1м, падающий нож.")
         # Часовой тренд: глубокий дамп режем, но здоровый откат с разворотом на m5 пропускаем (кейсы IRL +775%, FTR +123%)
         if h1 < -25.0:

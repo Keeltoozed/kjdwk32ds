@@ -79,6 +79,13 @@ MIN_VOL_TO_LIQ_M5 = 0.10
 MAX_H1_PUMP_PCT = 600.0
 MIN_M5_PRICE_CHANGE_PCT = 1.5
 MIN_M1_PRICE_CHANGE_PCT = -5.0
+
+# Продажа на флете в плюсе:
+FLAT_PROFIT_ENABLED = True
+FLAT_PROFIT_MIN_PNL_PCT = 0.08
+FLAT_PROFIT_MIN_HOLD_MIN = 5.0
+FLAT_PROFIT_PEAK_AGE_MIN = 8.0
+FLAT_PROFIT_PRICE_DRIFT_PCT = 0.03
 # ==============================================================================
 """
 

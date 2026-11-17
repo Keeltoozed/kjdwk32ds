@@ -1001,7 +1001,7 @@ class GrokJevEngine:
 
         # 4. Монета не должна стоять мёртвым флетом
         _is_live_blast = (m1 >= 1.5 and m5 >= 0.5 and vol5 >= 750.0 and b5 >= max(6, int(s5 * 1.10)))
-        if not _is_live_blast and (((_m1_known and m1 <= -3.0 and m5 < 2.0) or m5 < 1.5)):
+        if not _is_live_blast and (((_m1_known and m1 <= -5.0 and m5 < 1.0) or m5 < 0.5)):
             return False, -0.14, 0.0, f"flat-coin (m1 {m1:+.1f}%, m5 {m5:+.1f}%) — price standing still, waiting for live impulse"
 
         # 3.2. ПОДТВЕРЖДЕНИЕ ТРЕНДА ПО СОБСТВЕННОЙ ИСТОРИИ ЦЕН (DexScreener m1/m5 запаздывают на минуту и больше)
@@ -1163,7 +1163,7 @@ class GrokJevEngine:
         conc_score = min(1.0, max(0.1, (top1_pct / 6.5) * 0.25 + (top10_pct / 26.0) * 0.25))
 
         # 4. momentum_already_spent
-        if m5 < 2.0 or h1 < -15.0 or (m1 < -2.5 and m5 < 12.0):
+        if m5 < 0.5 or h1 < -15.0 or (m1 < -2.5 and m5 < 5.0):
             mom_score = 0.95
         elif m1 > 28.0:
             mom_score = 0.85

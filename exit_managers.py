@@ -373,6 +373,20 @@ class MatureExitManager:
         if minutes_held >= 24.0 and pnl_pct < 0.02 and max_pnl_pct < 0.08:
             return f"Stagnant Cut ({minutes_held:.0f}m, {pnl_pct*100:.1f}%)"
 
+        # === ФЛЕТ В ПЛЮС: фиксируем профит даже если монета стоит на месте ===
+        _fp_enabled = bool(getattr(config, "FLAT_PROFIT_ENABLED", True))
+        if _fp_enabled and not _is_mb:
+            _fp_min_pnl = float(getattr(config, "FLAT_PROFIT_MIN_PNL_PCT", 0.08))
+            _fp_min_hold = float(getattr(config, "FLAT_PROFIT_MIN_HOLD_MIN", 5.0))
+            _fp_peak_age = float(getattr(config, "FLAT_PROFIT_PEAK_AGE_MIN", 8.0))
+            _fp_drift = float(getattr(config, "FLAT_PROFIT_PRICE_DRIFT_PCT", 0.03))
+            _fp_drop = (position.max_price_usd - current_price) / position.max_price_usd if position.max_price_usd > 0 else 0.0
+            if (minutes_held >= _fp_min_hold
+                    and pnl_pct >= _fp_min_pnl
+                    and _peak_age_min >= _fp_peak_age
+                    and _fp_drop <= _fp_drift):
+                return f"Flat Profit Harvest (+{pnl_pct*100:.1f}% locked, {minutes_held:.0f}m hold, {_peak_age_min:.0f}m no ATH)"
+
         return None
 
 
