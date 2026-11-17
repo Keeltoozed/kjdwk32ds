@@ -1621,6 +1621,7 @@ async def scanner_loop(analyzer, tracker):
                                         continue
                                     _is_lot = False
                                     _is_vipsig = False
+                                    fixed = 0.0
                                 else:
                                     fixed = float(getattr(config, "TRADE_AMOUNT_USD", 0.0) or 0.0)
                                     if fixed > 0:

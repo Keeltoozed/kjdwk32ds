@@ -76,7 +76,7 @@ MAX_ENTRY_H1_PCT = 180.0       # Было 1500.0: отсекает вертик�
 MAX_ENTRY_H6_PCT = 350.0       # Было 500.0: не входим в отработавшие топы
 MAX_ENTRY_M5_PCT = 350.0        # Не режем свежие ракеты — высокий потолок m5
 MAX_ENTRY_M1_PCT = 60.0         # Потолок 1м свечи +60% для свежих запусков
-MAX_ENTRY_M5_SPIKE_PCT = 60.0   # Не входить если m5 уже > +60% (защита от перегретых пампа типа RIPFOMO)
+# MAX_ENTRY_M5_SPIKE_PCT убран — не блокируем вход по m5, пусть ракеты летят
 REQUIRE_SOCIALS_MIN_AGE_MIN = 9999.0  # Соцсети не обязательны (отключено)
 
 
@@ -467,11 +467,6 @@ def evaluate_entry_momentum(
         return False, f"m5-falling-knife {m5:+.1f}% < +{_m5_min_req:.1f}% (red or flat 5m candle)"
     if m1 < float(globals().get("MIN_M1_PRICE_CHANGE_PCT", -5.0)):
         return False, f"m1-falling-knife {m1:+.1f}% < {float(globals().get('MIN_M1_PRICE_CHANGE_PCT', -5.0)):+.1f}% (1m candle is dumping)"
-
-    # 🚫 ЗАПРЕТ ВХОДА В ПЕРЕГРЕТЫЙ ПАМП: если m5 уже > +60% — это вершина, а не ракета (RIPFOMO сценарий)
-    _m5_spike_cap = float(globals().get("MAX_ENTRY_M5_SPIKE_PCT", 60.0))
-    if m5 > _m5_spike_cap:
-        return False, f"m5-spike-top {m5:+.0f}% > +{_m5_spike_cap:.0f}% (entry at pump top)"
 
     # 2. МЯГКИЙ ПЕРЕВЕС ПОКУПАТЕЛЕЙ (не требуем 30% dominance на старте):
     _req_bs_ratio = float(globals().get("DEFAULT_MIN_BUY_SELL_RATIO", 1.05))
