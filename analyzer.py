@@ -2096,7 +2096,14 @@ class Analyzer:
                     or (_age_min_pre <= 5.0 and _m5 >= 1.5 and _b5_pre >= int(_s5_pre * 1.15) and _vm5_pre >= 1500.0 and _b5_pre >= 8)
                 )
             )
-            if (conf + 0.05) < threshold and not _is_momentum_rocket_a:
+            # Hiper-моментум байпас: очень сильный m5 с объёмом обходит низкий XGB скор (MAXI m5 +279%, но XGB 5.2%)
+            _is_hyper_momentum = (
+                _m5 >= 40.0
+                and _vm5_pre >= 3000.0
+                and _b5_pre >= int(_s5_pre * 1.05)
+                and _age_min_pre <= 30.0
+            )
+            if (conf + 0.05) < threshold and not _is_momentum_rocket_a and not _is_hyper_momentum:
                 self._deny(mint, f"rocket-xgb {conf:.0f}%", f"· [ROCKET-XGB] {symbol} ({mint[:8]}): уверенность модели {conf:.1f}% < {threshold:.0f}% — отсеян до тяжелых проверок (0ms).")
                 try:
                     from shadow_tracker import shadow_tracker

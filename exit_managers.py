@@ -231,27 +231,25 @@ class MatureExitManager:
         # =========================================================================
         if max_pnl_pct >= 2.00 and _peak_age_min >= 8.0:
             return f"Parabolic Harvest (+{pnl_pct*100:.0f}% locked, пик был +{max_pnl_pct*100:.0f}%, {_peak_age_min:.0f}m без нового максимума)"
-                _floor_pnl = round(max(0.58, max_pnl_pct * 0.62), 2)
+        elif max_pnl_pct >= 0.55:       # +55%..+110%: фиксируем минимум +20%, трейл 30% от ATH
+            _floor_pnl = 0.20
+            _trail_dist = 0.30
+        elif getattr(position, "tp1_done", False):
+            # После частичной фиксации TP1 защищаем оставшееся тело: пол +5% (или +2% первые 45с)
+            _floor_pnl = 0.05 if minutes_held >= 0.75 else 0.02
+            _trail_dist = 0.28 if minutes_held >= 1.0 else None
+        elif max_pnl_pct >= 0.28:       # +28%..+55%: даем монете дышать, трейл 30%
+            if minutes_held >= 1.50:
+                _floor_pnl = 0.04
                 _trail_dist = 0.30
-            elif max_pnl_pct >= 0.55:       # +55%..+110%: фиксируем минимум +20%, трейл 30% от ATH
-                _floor_pnl = 0.20
-                _trail_dist = 0.30
-            elif getattr(position, "tp1_done", False):
-                # После частичной фиксации TP1 защищаем оставшееся тело: пол +5% (или +2% первые 45с)
-                _floor_pnl = 0.05 if minutes_held >= 0.75 else 0.02
-                _trail_dist = 0.28 if minutes_held >= 1.0 else None
-            elif max_pnl_pct >= 0.28:       # +28%..+55%: даем монете дышать, трейл 30%
-                if minutes_held >= 1.50:
-                    _floor_pnl = 0.04
-                    _trail_dist = 0.30
-                else:
-                    _floor_pnl = 0.01
-                    _trail_dist = None
-            elif max_pnl_pct >= float(getattr(config, "BREAKEVEN_PCT", 0.08) or 0.08):
-                # Breakeven Shield: позиция с пиком >= +16% НЕ МОЖЕТ закрыться в минус!
-                # Чистый безубыток +0.5% (покрытие комиссий) — даём монете пережить нормальный ретест в 2x-5x, не убивая ракеты на +2.9%!
-                _floor_pnl = 0.005
+            else:
+                _floor_pnl = 0.01
                 _trail_dist = None
+        elif max_pnl_pct >= float(getattr(config, "BREAKEVEN_PCT", 0.08) or 0.08):
+            # Breakeven Shield: позиция с пиком >= +16% НЕ МОЖЕТ закрыться в минус!
+            # Чистый безубыток +0.5% (покрытие комиссий) — даём монете пережить нормальный ретест в 2x-5x, не убивая ракеты на +2.9%!
+            _floor_pnl = 0.005
+            _trail_dist = None
 
         # =========================================================================
         # 4. CRASH VELOCITY GUARD (Дев-дамп / аномальное обрушение за 1 минуту)
