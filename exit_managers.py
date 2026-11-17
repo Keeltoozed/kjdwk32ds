@@ -29,6 +29,20 @@ class MatureExitManager:
 
         max_pnl_pct = (position.max_price_usd - position.entry_price_usd) / position.entry_price_usd if position.entry_price_usd else 0.0
 
+        # 🛡️ ЗАЩИТА ОТ СЛИВА ЛИКВИДНОСТИ (спасает от VCASH-типа: пул сдулся, цена пробила стоп в щелёк)
+        _pd_liq = getattr(position, "pair_data", None) or getattr(position, "last_pair_data", None) or {}
+        if isinstance(_pd_liq, dict) and _pd_liq:
+            _liq_obj = _pd_liq.get("liquidity")
+            if isinstance(_liq_obj, dict) and ("usd" in _liq_obj or "quote" in _liq_obj):
+                _cur_l = float((_liq_obj.get("usd", 0) or 0))
+                _peak_l = float(getattr(position, "peak_liquidity_usd", 0.0) or getattr(position, "initial_liquidity_usd", 0.0) or 0.0)
+                if _cur_l > _peak_l:
+                    position.peak_liquidity_usd = _cur_l
+                    _peak_l = _cur_l
+                # Если ликвидность просела более чем на 45% от пика — мгновенный выход, не ждём стоп-лосс
+                if _peak_l >= 2000.0 and _cur_l <= (_peak_l * 0.55):
+                    return f"🚨 Liq Drain Emergency ({_cur_l:.0f} USD left from ${_peak_l:.0f}, PnL {pnl_pct*100:+.1f}%)"
+
         now_ts = time.time()
         et = getattr(position, 'entry_time', now_ts)
         if hasattr(et, 'timestamp'):
@@ -254,7 +268,7 @@ class MatureExitManager:
                 else:
                     _floor_pnl = 0.01
                     _trail_dist = None
-            elif max_pnl_pct >= float(getattr(config, "BREAKEVEN_PCT", 0.16) or 0.16):
+            elif max_pnl_pct >= float(getattr(config, "BREAKEVEN_PCT", 0.08) or 0.08):
                 # Breakeven Shield: позиция с пиком >= +16% НЕ МОЖЕТ закрыться в минус!
                 # Чистый безубыток +0.5% (покрытие комиссий) — даём монете пережить нормальный ретест в 2x-5x, не убивая ракеты на +2.9%!
                 _floor_pnl = 0.005

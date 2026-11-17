@@ -76,6 +76,7 @@ MAX_ENTRY_H1_PCT = 180.0       # Было 1500.0: отсекает вертик�
 MAX_ENTRY_H6_PCT = 350.0       # Было 500.0: не входим в отработавшие топы
 MAX_ENTRY_M5_PCT = 350.0        # Не режем свежие ракеты — высокий потолок m5
 MAX_ENTRY_M1_PCT = 60.0         # Потолок 1м свечи +60% для свежих запусков
+MAX_ENTRY_M5_SPIKE_PCT = 60.0   # Не входить если m5 уже > +60% (защита от перегретых пампа типа RIPFOMO)
 REQUIRE_SOCIALS_MIN_AGE_MIN = 9999.0  # Соцсети не обязательны (отключено)
 
 
@@ -467,6 +468,11 @@ def evaluate_entry_momentum(
     if m1 < float(globals().get("MIN_M1_PRICE_CHANGE_PCT", -5.0)):
         return False, f"m1-falling-knife {m1:+.1f}% < {float(globals().get('MIN_M1_PRICE_CHANGE_PCT', -5.0)):+.1f}% (1m candle is dumping)"
 
+    # 🚫 ЗАПРЕТ ВХОДА В ПЕРЕГРЕТЫЙ ПАМП: если m5 уже > +60% — это вершина, а не ракета (RIPFOMO сценарий)
+    _m5_spike_cap = float(globals().get("MAX_ENTRY_M5_SPIKE_PCT", 60.0))
+    if m5 > _m5_spike_cap:
+        return False, f"m5-spike-top {m5:+.0f}% > +{_m5_spike_cap:.0f}% (entry at pump top)"
+
     # 2. МЯГКИЙ ПЕРЕВЕС ПОКУПАТЕЛЕЙ (не требуем 30% dominance на старте):
     _req_bs_ratio = float(globals().get("DEFAULT_MIN_BUY_SELL_RATIO", 1.05))
     if sells5 > 4 and buys5 < int(sells5 * _req_bs_ratio):
@@ -698,67 +704,68 @@ VIP_KOL_WALLETS = {
 TIME_EXIT_MINUTES = 40
 TIME_EXIT_PROFIT_REQ = 0.015
 
-# === ЛЕСТНИЦА ТЕЙК-ПРОФИТОВ (ВОЗВРАТ ВЛОЖЕННОГО ТЕЛА ДО РАГА + FREE-RIDE MOONBAG 2x-10x) ===
+# === ЛЕСТНИЦА ТЕЙК-ПРОФИТОВ (для маленьких депозитов $2 — быстрый полный выход, без мунбэга) ===
 PARTIAL_TP_ENABLED = True
-PARTIAL_TP_MIN_TICKET_USD = 1.0      # Включено для $2 ордеров: забираем вложенный депозит до рага, остаток летит бесплатно!
-TP1_TRIGGER_PCT = 0.40               # На первом импульсе +40% фиксируем 50% (забираем вложенный депозит до рага, остаток — free ride!)
-TP1_SELL_FRAC = 0.50
-TP2_TRIGGER_PCT = 1.00               # На +100% (2x) фиксируем 30% от остатка
-TP2_SELL_FRAC = 0.30
-TP3_TRIGGER_PCT = 2.50               # На +250% (3.5x) фиксируем 30% от бесплатного остатка
-TP3_SELL_FRAC = 0.30
-TP4_TRIGGER_PCT = 5.00               # На +500% (6x) фиксируем 40% от остатка
-TP4_SELL_FRAC = 0.40
-TP5_TRIGGER_PCT = 10.00              # На +1000% (11x) фиксируем 50% от остатка
-TP5_SELL_FRAC = 0.50
-MOONBAG_TRIGGER_PCT = 0.40           # Статус Moonbag включается после TP1 (+40%), когда тело полностью защищено!
+PARTIAL_TP_MIN_TICKET_USD = 2.0      # Для $2 ордеров — сразу полный выход на первом тейке
+TP1_TRIGGER_PCT = 0.25               # На +25% закрываем ВСЮ позицию (не оставляем мунбэг на $2)
+TP1_SELL_FRAC = 1.00                 # 100% позиции на TP1 — забираем профит и выходим
+TP2_TRIGGER_PCT = 1.00               # Не используется для маленьких позиций (всё уже закрыто на TP1)
+TP2_SELL_FRAC = 0.00
+TP3_TRIGGER_PCT = 2.50
+TP3_SELL_FRAC = 0.00
+TP4_TRIGGER_PCT = 5.00
+TP4_SELL_FRAC = 0.00
+TP5_TRIGGER_PCT = 10.00
+TP5_SELL_FRAC = 0.00
+MOONBAG_TRIGGER_PCT = 0.25           # Статус Moonbag после TP1, но для $2 позиции уже закрыта
 MOONBAG_SELL_FRAC = 0.0
-# === МУНБЭГ-ТРЕЙЛИНГ (даём бесплатному остатку пробить 2x и везти до 3.5x-10x без риска потери депозита) ===
-MOONBAG_TRAIL_ACTIVATION_PCT = 0.80  # Трейлинг мунбэга включается только выше +80% (не душить монету на старте)
-MOONBAG_TRAIL_DISTANCE_PCT = 0.35    # Дистанция трейлинга 35% от пика (переживает естественные откаты мемкоинов 25-30%)
-MOONBAG_MAX_HOLD_MIN = 90.0          # Мунбэг может ехать до 90 минут
+# === МУНБЭГ-ТРЕЙЛИНГ (сократили удержание — не держим $2 позиции 90 минут) ===
+MOONBAG_TRAIL_ACTIVATION_PCT = 1.00  # Включаем трейлинг только выше +100% (для крупных позиций)
+MOONBAG_TRAIL_DISTANCE_PCT = 0.25    # Трейл 25% от пика
+MOONBAG_MAX_HOLD_MIN = 15.0          # Мунбég не более 15 минут (не 90)
 
 # === БЫСТРЫЙ СБОР ТЕЛА И ПРОФИТА ДЛЯ НЕЗАЛОЧЕННЫХ ПУЛОВ (Meteora / PumpSwap CreatePool / Raydium) ===
-UNLOCKED_TP1_TRIGGER_PCT = 0.15      # Сверхбыстрый первый тейк: забираем 50% на +15%, спасая депозит до возможного дампа дева
-UNLOCKED_TP1_SELL_FRAC = 0.50
-UNLOCKED_TP2_TRIGGER_PCT = 0.40      # На +40% выводим еще 40% остатка
-UNLOCKED_TP2_SELL_FRAC = 0.40
+UNLOCKED_TP1_TRIGGER_PCT = 0.15      # Сверхбыстрый первый тейк: забираем 100% на +15%, спасая депозит
+UNLOCKED_TP1_SELL_FRAC = 1.00        # Полный выход на +15% для маленьких позиций
+UNLOCKED_TP2_TRIGGER_PCT = 0.40
+UNLOCKED_TP2_SELL_FRAC = 0.00
 UNLOCKED_TP3_TRIGGER_PCT = 0.85
-UNLOCKED_TP3_SELL_FRAC = 0.40
+UNLOCKED_TP3_SELL_FRAC = 0.00
 UNLOCKED_TP4_TRIGGER_PCT = 1.80
-UNLOCKED_TP4_SELL_FRAC = 0.40
+UNLOCKED_TP4_SELL_FRAC = 0.00
 UNLOCKED_TP5_TRIGGER_PCT = 4.00
-UNLOCKED_TP5_SELL_FRAC = 0.50
-UNLOCKED_MOONBAG_TRAIL_ACT_PCT = 0.70
-UNLOCKED_MOONBAG_TRAIL_DIST_PCT = 0.28
+UNLOCKED_TP5_SELL_FRAC = 0.00
+UNLOCKED_MOONBAG_TRAIL_ACT_PCT = 1.00
+UNLOCKED_MOONBAG_TRAIL_DIST_PCT = 0.25
 
 
 def get_sol_tp_ladder(is_unlocked: bool) -> tuple:
-    """Return (tp1_t, tp1_f, tp2_t, tp2_f, tp3_t, tp3_f, tp4_t, tp4_f, tp5_t, tp5_f)."""
+    """Return (tp1_t, tp1_f, tp2_t, tp2_f, tp3_t, tp3_f, tp4_t, tp4_f, tp5_t, tp5_f).
+    Для маленьких позиций ($2): полный выход на TP1, остальные тейки = 0."""
     if is_unlocked:
         return (
             float(globals().get("UNLOCKED_TP1_TRIGGER_PCT", 0.15)),
-            float(globals().get("UNLOCKED_TP1_SELL_FRAC", 0.50)),
+            float(globals().get("UNLOCKED_TP1_SELL_FRAC", 1.00)),
             float(globals().get("UNLOCKED_TP2_TRIGGER_PCT", 0.40)),
-            float(globals().get("UNLOCKED_TP2_SELL_FRAC", 0.40)),
+            float(globals().get("UNLOCKED_TP2_SELL_FRAC", 0.00)),
             float(globals().get("UNLOCKED_TP3_TRIGGER_PCT", 0.85)),
-            float(globals().get("UNLOCKED_TP3_SELL_FRAC", 0.40)),
+            float(globals().get("UNLOCKED_TP3_SELL_FRAC", 0.00)),
             float(globals().get("UNLOCKED_TP4_TRIGGER_PCT", 1.80)),
-            float(globals().get("UNLOCKED_TP4_SELL_FRAC", 0.40)),
+            float(globals().get("UNLOCKED_TP4_SELL_FRAC", 0.00)),
             float(globals().get("UNLOCKED_TP5_TRIGGER_PCT", 4.00)),
-            float(globals().get("UNLOCKED_TP5_SELL_FRAC", 0.50)),
+            float(globals().get("UNLOCKED_TP5_SELL_FRAC", 0.00)),
         )
     return (
-        float(globals().get("TP1_TRIGGER_PCT", 0.40)),
-        float(globals().get("TP1_SELL_FRAC", 0.50)),
+        float(globals().get("TP1_TRIGGER_PCT", 0.25)),
+        float(globals().get("TP1_SELL_FRAC", 1.00)),
         float(globals().get("TP2_TRIGGER_PCT", 1.00)),
-        float(globals().get("TP2_SELL_FRAC", 0.30)),
+        float(globals().get("TP2_SELL_FRAC", 0.00)),
         float(globals().get("TP3_TRIGGER_PCT", 2.50)),
-        float(globals().get("TP3_SELL_FRAC", 0.30)),
+        float(globals().get("TP3_SELL_FRAC", 0.00)),
         float(globals().get("TP4_TRIGGER_PCT", 5.00)),
-        float(globals().get("TP4_SELL_FRAC", 0.40)),
+        float(globals().get("TP4_SELL_FRAC", 0.00)),
         float(globals().get("TP5_TRIGGER_PCT", 10.00)),
-        float(globals().get("TP5_SELL_FRAC", 0.50)),
+        float(globals().get("TP5_SELL_FRAC", 0.00)),
     )
 
 PUMP_XGB_ENABLED = False
@@ -789,7 +796,7 @@ WHALE_DUMP_GUARD_PCT = 0.22
 EVM_RUNNER_CRASH = 0.25
 EVM_NORMAL_CRASH = 0.22
 
-BREAKEVEN_PCT = 0.12       # Breakeven Shield: пик >= +12% -> сделка не может закрыться в минус (безубыток +0.5%)!
+BREAKEVEN_PCT = 0.08       # Breakeven Shield: пик >= +8% -> сделка не может закрыться в минус (безубыток +0.5%)!
 
 # === ЗАЩИТА ОТ СНОСА ЛИКВИДНОСТИ И СТАГНАЦИИ ПОСЛЕ ЗАПУСКА ===
 UNLOCKED_STALL_PROFIT_AGE_SEC = 180.0    # 3 минуты без нового пика на +45%+ незалоченном пуле -> плановая фиксация
@@ -1123,8 +1130,8 @@ CRASH_GUARD_IGNORE_IF_PNL_ABOVE = 15.0   # Если мы в плюсе > +15%, �
 # 2. Исправление Mature Moonbag Floor и Trailing Stop
 MOONBAG_ACTIVATION_PEAK_PCT = 80.0       # Активировать трейлинг мунбэга только после пика +80% (не душить монету на откатах)
 MOONBAG_FLOOR_PCT = 2.0                  # Уровень пола безубытка -> +2% (гарантия прибыли, не режет нормальные колебания)
-PARTIAL_TP1_PCT = 40.0                   # На +40% продавать 50% позиции (забираем тело + профит, остальное — бесплатный мунбэг)
-PARTIAL_TP1_SELL_FRACTION = 0.50
+PARTIAL_TP1_PCT = 25.0                   # На +25% продавать 100% позиции (для $2 депозита — полный выход, без мунбэга)
+PARTIAL_TP1_SELL_FRACTION = 1.00
 
 # 3. Исправление жесткого Stop Loss и Early Momentum Cut
 FAST_STOP_LOSS_PCT = -18.0               # Жесткий стоп -18% (не ждать -31%..-33% как на KLAUDIA и BIGP)
