@@ -724,8 +724,10 @@ class GrokJevEngine:
             if avg_trade < 12.0 and not _is_strong_volume_pump:
                 return False, f"wash-trading-trap (avg trade ${avg_trade:.1f} < $12 across {trades_h24} txns, weak pool)"
 
-        # 5. Рыночная капитализация и верхний потолок ликвидности (отсекает $320k+ топы без запаса 2x)
-        max_liq = float(getattr(_c, "JEV_MAX_LIQUIDITY_USD", 180000.0))
+        # 5. Рыночная капитализация и верхний потолок ликвидности (отсекает $500k+ топы без запаса 2x)
+        max_liq = float(getattr(_c, "JEV_MAX_LIQUIDITY_USD", 500000.0))
+        if vol_m5 >= 15000.0:
+            max_liq = max(max_liq, 1000000.0)
         if eff_liq > max_liq:
             return False, f"liq-too-heavy ${eff_liq:,.0f} > ${max_liq:,.0f} (mid-cap pool, slow moves)"
         mcap = fdv_mc
@@ -2326,11 +2328,14 @@ class GrokJevEngine:
             return False, "max-positions-reached"
 
         # Расчет размера билета (Dynamic Sizing / Compounding)
-        _base_t = float(getattr(_c, "TRADE_AMOUNT_USD", getattr(_c, "BASE_TRADE_AMOUNT_USD", 5.0)) or 5.0)
+        _base_t = float(getattr(_c, "TRADE_AMOUNT_USD", getattr(_c, "BASE_TRADE_AMOUNT_USD", 2.0)) or 2.0)
         ticket_size = _base_t
         if getattr(_c, "DYNAMIC_REINVEST_ENABLED", True) or getattr(_c, "COMPOUNDING_ENABLED", True):
             try:
-                ticket_size = tracker.calculate_dynamic_position_size(pair, chain=chain)
+                dyn_sz = tracker.calculate_dynamic_position_size(pair, chain=chain)
+                if dyn_sz <= 0:
+                    return False, "insufficient-capital-or-cooldown"
+                ticket_size = dyn_sz
             except Exception:
                 pass
         ticket_size = max(_base_t, ticket_size)

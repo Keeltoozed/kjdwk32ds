@@ -349,7 +349,7 @@ class PaperTracker:
             total_pnl += pos.pnl_usd
         real_capital = config.INITIAL_BALANCE_USD + total_pnl
         
-        if real_capital < 5.0:
+        if real_capital < 2.0:
             print(f"🛑 [KILL SWITCH] Капитал критически низкий: ${real_capital:.2f}. Торговля невозможна!")
             return 0.0  # Вернуть 0 → position_size будет 0 → сделка не откроется
         
@@ -358,26 +358,12 @@ class PaperTracker:
     def calculate_dynamic_position_size(self, pair_data: dict = None, chain: str = "base") -> float:
         """
         Умный ступенчатый реинвест прибыли с защитой от сдвига цены (Price Impact Guard):
-        1. Проверка свободного кэша:
-           Свободный кэш = Общий капитал - Стоимость открытых позиций.
-           Если свободного кэша меньше базового входа ($15) -> 0.0 (не открываем).
-        2. Базовый пол: $15.0.
-        3. Жесткий потолок: $25.0 (не более $25 в один мемкоин).
-        4. Ступени от чистой прибыли (не рискуем всей прибылью!):
-           - Прибыль < $20: $15
-           - Прибыль $20..$39: $17 (риск из прибыли всего +$2)
-           - Прибыль $40..$69: $19 (риск из прибыли всего +$4)
-           - Прибыль $70..$99: $22 (риск из прибыли всего +$7)
-           - Прибыль >= $100: $25 (риск из прибыли всего +$10)
-        5. Защита ликвидности пула:
-           - Если пул < $15,000 USD -> сайз строго залочен на базовые $15.0 (защита от сдвига цены).
-           - Если пул >= $15,000 USD -> разрешен увеличенный сайз ($17-$25).
-           - В любом случае сайз не может превышать 0.5% ликвидности пула (liq * 0.0025).
-        6. Округление: строго целое число долларов (int(round(...))). Никаких бесконечных копеек!
+        Для депозита $20 базовый вход $2.0 (10% от депо).
+        По мере роста капитала сайз плавно растёт через компаундинг до $5-$25.
         """
-        base_size = float(getattr(config, "BASE_TRADE_AMOUNT_USD", 15.0) or 15.0)
-        hard_cap = float(getattr(config, "MAX_POSITION_SIZE_USD", 25.0) or 25.0)
-        min_liq = float(getattr(config, "REINVEST_MIN_POOL_LIQ_USD", 15000.0) or 15000.0)
+        base_size = float(getattr(config, "BASE_TRADE_AMOUNT_USD", 2.0) or 2.0)
+        hard_cap = float(getattr(config, "MAX_COMPOUNDING_SIZE_USD", getattr(config, "MAX_POSITION_SIZE_USD", 25.0)) or 25.0)
+        min_liq = float(getattr(config, "REINVEST_MIN_POOL_LIQ_USD", 5000.0) or 5000.0)
 
         # 0. Проверка защиты от серии минусов
         is_cooling, reason = self.is_streak_cooldown_active()
@@ -386,7 +372,7 @@ class PaperTracker:
             return 0.0
 
         capital = self.get_total_capital()
-        if capital < 5.0:
+        if capital < 2.0:
             return 0.0
 
         open_positions = self.get_open_positions()
@@ -397,25 +383,23 @@ class PaperTracker:
             print(f"⚠️ [REINVEST] Недостаточно свободного кэша: ${free_cash:.1f} < базового входа ${base_size:.1f}")
             return 0.0
 
-        initial_balance = float(getattr(config, "INITIAL_BALANCE_USD", 100.0) or 100.0)
+        initial_balance = float(getattr(config, "INITIAL_BALANCE_USD", 20.0) or 20.0)
         net_profit = capital - initial_balance
 
-        # Стратегия экспоненциального разгона (@savipww):
-        # 20-25% от текущего капитала в одну сделку (фиксированная доля капитала).
+        # Стратегия экспоненциального разгона:
+        # 10% от текущего капитала в одну сделку (фиксированная доля капитала).
         if getattr(config, "COMPOUNDING_ENABLED", True):
-            comp_pct = float(getattr(config, "COMPOUNDING_PCT", 0.22) or 0.22)
+            comp_pct = float(getattr(config, "COMPOUNDING_PCT", 0.10) or 0.10)
             target = max(base_size, capital * comp_pct)
         else:
-            if net_profit < 20.0:
-                target = 15.0
-            elif net_profit < 40.0:
-                target = 17.0
-            elif net_profit < 70.0:
-                target = 19.0
-            elif net_profit < 100.0:
-                target = 22.0
+            if net_profit < 10.0:
+                target = base_size
+            elif net_profit < 25.0:
+                target = base_size * 1.5
+            elif net_profit < 50.0:
+                target = base_size * 2.0
             else:
-                target = 25.0
+                target = min(hard_cap, base_size * 2.5)
 
         liq_usd = 0.0
         if isinstance(pair_data, dict):

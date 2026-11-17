@@ -216,53 +216,43 @@ class MatureExitManager:
             )
             if max_pnl_pct >= 5.00:
                 _floor_pnl = round(max_pnl_pct * 0.75, 2)
-                _trail_dist = min(_mb_dist, 0.20)
+                _trail_dist = min(_mb_dist, 0.25)
             elif max_pnl_pct >= 2.50:
                 _floor_pnl = round(max(1.60, max_pnl_pct * 0.68), 2)
-                _trail_dist = min(_mb_dist, 0.20)
+                _trail_dist = min(_mb_dist, 0.30)
             elif max_pnl_pct >= _mb_act:
-                _floor_pnl = round(max(0.35 if _is_unlocked else 0.60, max_pnl_pct * (0.65 if _is_unlocked else 0.62)), 2)
+                _floor_pnl = round(max(0.35 if _is_unlocked else 0.50, max_pnl_pct * (0.60 if _is_unlocked else 0.58)), 2)
                 _trail_dist = _mb_dist
-            elif max_pnl_pct >= 0.55:
-                _floor_pnl = 0.28
-                _trail_dist = 0.20
-            elif max_pnl_pct >= 0.28:
-                _floor_pnl = 0.14
-                _trail_dist = 0.18
-            elif max_pnl_pct >= 0.15:
-                _floor_pnl = 0.05
-                _trail_dist = 0.15
             else:
-                # НЕСГОРАЕМЫЙ БЕЗУБЫТОК МУНБЭГА:
-                # Прибыль по первой части уже зафиксирована на TP1. Оставшийся мунбэг
-                # гарантированно защищен от убытка: при откате к уровню безубытка (+0.5%)
-                # позиция закрывается с подтверждением, сохраняя 100% зафиксированного профита!
+                # До достижения +80% (2x) трейлинг НЕ включается!
+                # Даём ракете свободно дышать через естественные откаты 20-30%,
+                # защищая только уровень безубытка (+0.5%):
                 _floor_pnl = 0.005
                 _trail_dist = None
         else:
             # === ОСНОВНАЯ ПОЗИЦИЯ: Б/У ЩИТ ОТ +16% + ПРОГРЕССИВНЫЙ ТРЕЙЛИНГ ДО 10x+ ===
             if max_pnl_pct >= 5.00:         # 6x+: фиксируем минимум 72% от ATH PnL
                 _floor_pnl = round(max_pnl_pct * 0.72, 2)
-                _trail_dist = 0.22
+                _trail_dist = 0.25
             elif max_pnl_pct >= 2.50:       # 3.5x - 6x: фиксируем минимум 65% от ATH (от +150%)
                 _floor_pnl = round(max(1.50, max_pnl_pct * 0.65), 2)
-                _trail_dist = 0.22
-            elif max_pnl_pct >= 1.10:       # 2.1x - 3.5x: фиксируем от +58%, даём 22% места для волны 3.5x-6x
+                _trail_dist = 0.28
+            elif max_pnl_pct >= 1.10:       # 2.1x - 3.5x: фиксируем от +58%, даём 28% места для волны 3.5x-6x
                 _floor_pnl = round(max(0.58, max_pnl_pct * 0.62), 2)
-                _trail_dist = 0.22
-            elif max_pnl_pct >= 0.55:       # +55%..+110%: фиксируем минимум +26%, трейл 20% от ATH
-                _floor_pnl = 0.26
-                _trail_dist = 0.20
+                _trail_dist = 0.30
+            elif max_pnl_pct >= 0.55:       # +55%..+110%: фиксируем минимум +20%, трейл 30% от ATH
+                _floor_pnl = 0.20
+                _trail_dist = 0.30
             elif getattr(position, "tp1_done", False):
                 # После частичной фиксации TP1 защищаем оставшееся тело: пол +5% (или +2% первые 45с)
                 _floor_pnl = 0.05 if minutes_held >= 0.75 else 0.02
-                _trail_dist = 0.20 if minutes_held >= 1.0 else None
-            elif max_pnl_pct >= 0.28:       # +28%..+55%: Wave-1 Shield (+6% пол после 90с, трейл 22%)
+                _trail_dist = 0.28 if minutes_held >= 1.0 else None
+            elif max_pnl_pct >= 0.28:       # +28%..+55%: даем монете дышать, трейл 30%
                 if minutes_held >= 1.50:
-                    _floor_pnl = 0.06
-                    _trail_dist = 0.22
+                    _floor_pnl = 0.04
+                    _trail_dist = 0.30
                 else:
-                    _floor_pnl = 0.02
+                    _floor_pnl = 0.01
                     _trail_dist = None
             elif max_pnl_pct >= float(getattr(config, "BREAKEVEN_PCT", 0.16) or 0.16):
                 # Breakeven Shield: позиция с пиком >= +16% НЕ МОЖЕТ закрыться в минус!

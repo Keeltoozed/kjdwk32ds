@@ -35,26 +35,26 @@ SUPABASE_URL = _clean_supabase_url(os.getenv("SUPABASE_URL"))
 SUPABASE_KEY = (os.getenv("SUPABASE_KEY") or "").strip().strip('"').strip("'")
 
 PAPER_PORTFOLIO_FILE = "portfolio.json"
-PORTFOLIO_SNAPSHOT_MINT = (os.getenv("PORTFOLIO_SNAPSHOT_MINT", "") or "").strip().strip('"').strip("'") or "PORTFOLIO_SOLANA_V2"
+PORTFOLIO_SNAPSHOT_MINT = (os.getenv("PORTFOLIO_SNAPSHOT_MINT", "") or "").strip().strip('"').strip("'") or "PORTFOLIO_ROCKET_V4_20USD"
 INITIAL_BALANCE_USD = 20.0
-REINVEST_PERCENT = 22.0
-VIRTUAL_POSITION_SIZE_USD = 5.0
-TRADE_AMOUNT_USD = 5.0
+REINVEST_PERCENT = 20.0
+VIRTUAL_POSITION_SIZE_USD = 2.0
+TRADE_AMOUNT_USD = 2.0
 
-COMPOUNDING_ENABLED = False
-COMPOUNDING_PCT = 0.20
-MAX_COMPOUNDING_SIZE_USD = 5.0
-DYNAMIC_REINVEST_ENABLED = False
-BASE_TRADE_AMOUNT_USD = 5.0
+COMPOUNDING_ENABLED = True
+COMPOUNDING_PCT = 0.10
+MAX_COMPOUNDING_SIZE_USD = 25.0
+DYNAMIC_REINVEST_ENABLED = True
+BASE_TRADE_AMOUNT_USD = 2.0
 MAX_POSITION_SIZE_USD = 5.0
-REINVEST_MIN_POOL_LIQ_USD = 7500.0
-SCOUT_SIZE_USD = 5.0
-LOTTERY_SIZE_USD = 5.0
-MAX_CONCURRENT_POSITIONS = 8
+REINVEST_MIN_POOL_LIQ_USD = 5000.0
+SCOUT_SIZE_USD = 2.0
+LOTTERY_SIZE_USD = 2.0
+MAX_CONCURRENT_POSITIONS = 3
 
 # === ЖЕСТКОЕ ОГРАНИЧЕНИЕ УБЫТКА (РИСК-МЕНЕДЖМЕНТ) ===
-MAX_DAILY_LOSS_USD = 1000.0
-KILL_SWITCH_ENABLED = False
+MAX_DAILY_LOSS_USD = 15.0
+KILL_SWITCH_ENABLED = True
 STOP_LOSS_PCT = -0.28         # Стоп -28%: даёт дыхание нормальным встряскам перед 2x-10x пампами (не режет MELNOK +70%, CHOP +28%, BIGP +30%)
 STOP_LOSS_UNLOCKED_PCT = -0.16 # Стоп -16% для незалоченных пулов Meteora/Raydium
 EMERGENCY_CAP_PCT = -0.38     # Аварийный потолок -38%: срез глубокого слива с подтверждением 2 тика
@@ -72,10 +72,10 @@ LIQ_LOCKED_BURNED_MIN_PCT = 0.0   # Режим 0d2b1ae: блокировка/с�
 ALLOW_UNLOCKED_LP_POOLS = False            # БЛОКИРОВКА НЕЗАЛОЧЕННЫХ ПУЛОВ METEORA DYN2: 100% защита от вывода LP девом (Remove 155 SOL). Торгуем ТОЛЬКО защищёнными Pump.fun и пулами со сожжённым LP!
 BLOCK_PERMISSIONLESS_LIQ_FDV_TRAP = True   # Блокировать кастомные ловушки дева
 REQUIRE_SOCIALS_ENABLED = False            # Не требовать соцсети на старте/зрелости (важна только живая ликвидность и импульс)
-MAX_ENTRY_H1_PCT = 1500.0      # Высокий потолок h1 для свежих миграций (<15м); старые (>30м) режутся в get_max_entry_h1_pct
-MAX_ENTRY_H6_PCT = 500.0       # Потолок 6h: не входим в уже отработавшие 6x-20x памп-топы
-MAX_ENTRY_M5_PCT = 450.0       # Потолок m5: допускает взлёт миграций (+200%..+450% baseline от pump.fun), отсекает только гипер-свечи (+650%+)
-MAX_ENTRY_M1_PCT = 45.0        # Потолок m1: допускаем быстрые 1м пробои до +45%
+MAX_ENTRY_H1_PCT = 180.0       # Было 1500.0: отсекает вертикальный вынос и хаи (фикс Y +944%)
+MAX_ENTRY_H6_PCT = 350.0       # Было 500.0: не входим в отработавшие топы
+MAX_ENTRY_M5_PCT = 35.0        # Было 450.0: отсекает покупку перегретых свечей (фикс GTA +87%, 👀 +52%, FOMOFUND +39%)
+MAX_ENTRY_M1_PCT = 25.0        # Было 45.0: допускаем 1м пробои до +25%
 REQUIRE_SOCIALS_MIN_AGE_MIN = 9999.0  # Соцсети не обязательны (отключено)
 
 
@@ -655,17 +655,17 @@ ROLLING_BREAKER_PAUSE_MIN = 5.0
 DD_THROTTLE_ENABLED = False
 DD_THROTTLE_START_USD = 15.0
 
-# === ВХОД В ЗРЕЛЫЕ ВЫПУСКНИКИ RAYDIUM / PUMPSWAP С СОЖЖЁННЫМ LP ===
+# === ВХОД В ЗРЕЛЫЕ ВЫПУСКНИКИ RAYDIUM / PUMPSWAP И РАННИЕ КРИВЫЕ PUMP.FUN ===
 SNIPER_ENTRIES_ENABLED = True             # ВКЛЮЧЕНО: мгновенный вход в свежие кривые/миграции со стрима
-ALLOW_UNGRADUATED_PUMPFUN = False         # ОТКЛЮЧЕНО: блокируем сырые кёрвы без DEX-миграции (защита от -99% дев-дампов вроде Monty)
-MIN_PUMP_CURVE_MCAP_USD = 18000.0         # Порог кривой от $18k: надежная зона набора высоты к $65k миграции (отсекает ранний сброс)
-MAX_PUMP_CURVE_MCAP_USD = 65000.0         # Fallback в USD (до миграционного обрыва $69k)
-MIN_PUMP_CURVE_MCAP_SOL = 45.0            # Порог кривой pump.fun в SOL (~45 SOL, ранний набор высоты)
-MAX_PUMP_CURVE_MCAP_SOL = 480.0           # Верх кривой перед миграцией
+ALLOW_UNGRADUATED_PUMPFUN = True          # ВКЛЮЧЕНО: ловим ракеты на кривой Pump.fun до миграции (открывает 大A +1559%, ROCKSTAR +163%)
+MIN_PUMP_CURVE_MCAP_USD = 3500.0          # Порог кривой от $3.5k: надежная зона набора высоты (отсекает 0% пустой мусор)
+MAX_PUMP_CURVE_MCAP_USD = 15000.0         # Верх кривой до миграционного обрыва ($65k)
+MIN_PUMP_CURVE_MCAP_SOL = 25.0            # Порог кривой pump.fun в SOL (~25 SOL, ранний набор высоты)
+MAX_PUMP_CURVE_MCAP_SOL = 80.0            # Верх входа на кривой перед миграцией
 PUMP_MIGRATION_MCAP_SOL = 410.0           # FDV миграции pump.fun
 PUMP_DUMP_FLOOR_SOL = 50.0                # Порог post-mig-dumped (~50 SOL, разрешает быстрые реклеймы)
 JEV_MAX_TICKET_USD = 0.0
-MIN_GRADUATED_LIQ_USD = 4000.0            # Минимум $4k ликвидности на DEX (отсекаем сверхтонкие пулы с проскальзыванием -25%)
+MIN_GRADUATED_LIQ_USD = 3000.0            # Минимум $3k ликвидности на DEX
 AUDITOR_STAIRCASE_ENABLED = False
 AUDITOR_MAX_DEV_PCT = 8.0                 # Макс 8% у дева (защита от моментальных дампов разработчика в GROK-JEV)
 AUDITOR_MAX_WHALE_PCT = 14.0              # Макс 14% в одном кошельке (защита от 1-клик слива кита как FOMOCOIN/$CHOPS)
@@ -702,84 +702,82 @@ TIME_EXIT_PROFIT_REQ = 0.015
 
 # === ЛЕСТНИЦА ТЕЙК-ПРОФИТОВ (ВОЗВРАТ ВЛОЖЕННОГО ТЕЛА ДО РАГА + FREE-RIDE MOONBAG 2x-10x) ===
 PARTIAL_TP_ENABLED = True
-PARTIAL_TP_MIN_TICKET_USD = 3.0      # Включено для $5 ордеров: забираем вложенный депозит до рага, остаток летит бесплатно!
-TP1_TRIGGER_PCT = 0.15               # На первом импульсе +15% фиксируем 40% (фиксируем прибыль, оставляя 60% тела для полёта в ракету)
-TP1_SELL_FRAC = 0.40
-TP2_TRIGGER_PCT = 0.35               # На +35% фиксируем еще 40% от остатка (тело полностью в плюсе, остаток едет в 2x-10x)
-TP2_SELL_FRAC = 0.40
-TP3_TRIGGER_PCT = 0.80               # На +80% (1.8x) фиксируем 35% от бесплатного остатка
-TP3_SELL_FRAC = 0.35
-TP4_TRIGGER_PCT = 2.00               # На +200% (3.0x) фиксируем 40% от остатка
+PARTIAL_TP_MIN_TICKET_USD = 1.0      # Включено для $2 ордеров: забираем вложенный депозит до рага, остаток летит бесплатно!
+TP1_TRIGGER_PCT = 0.40               # На первом импульсе +40% фиксируем 50% (забираем вложенный депозит до рага, остаток — free ride!)
+TP1_SELL_FRAC = 0.50
+TP2_TRIGGER_PCT = 1.00               # На +100% (2x) фиксируем 30% от остатка
+TP2_SELL_FRAC = 0.30
+TP3_TRIGGER_PCT = 2.50               # На +250% (3.5x) фиксируем 30% от бесплатного остатка
+TP3_SELL_FRAC = 0.30
+TP4_TRIGGER_PCT = 5.00               # На +500% (6x) фиксируем 40% от остатка
 TP4_SELL_FRAC = 0.40
-TP5_TRIGGER_PCT = 5.00               # На +500% (6x) фиксируем 50% от остатка, остальное едет до предела трейлинга
+TP5_TRIGGER_PCT = 10.00              # На +1000% (11x) фиксируем 50% от остатка
 TP5_SELL_FRAC = 0.50
-MOONBAG_TRIGGER_PCT = 0.35           # Статус Moonbag включается после TP2 (+35%), когда тело полностью защищено!
+MOONBAG_TRIGGER_PCT = 0.40           # Статус Moonbag включается после TP1 (+40%), когда тело полностью защищено!
 MOONBAG_SELL_FRAC = 0.0
 # === МУНБЭГ-ТРЕЙЛИНГ (даём бесплатному остатку пробить 2x и везти до 3.5x-10x без риска потери депозита) ===
-MOONBAG_TRAIL_ACTIVATION_PCT = 1.00  # Трейлинг мунбэга включается выше 2x (+100%)
-MOONBAG_TRAIL_DISTANCE_PCT = 0.25    # Дистанция трейлинга 25% от пика (переживает здоровые откаты)
-MOONBAG_MAX_HOLD_MIN = 55.0          # Мунбэг может ехать до 55 минут
+MOONBAG_TRAIL_ACTIVATION_PCT = 0.80  # Трейлинг мунбэга включается только выше +80% (не душить монету на старте)
+MOONBAG_TRAIL_DISTANCE_PCT = 0.35    # Дистанция трейлинга 35% от пика (переживает естественные откаты мемкоинов 25-30%)
+MOONBAG_MAX_HOLD_MIN = 90.0          # Мунбэг может ехать до 90 минут
 
 # === БЫСТРЫЙ СБОР ТЕЛА И ПРОФИТА ДЛЯ НЕЗАЛОЧЕННЫХ ПУЛОВ (Meteora / PumpSwap CreatePool / Raydium) ===
-# На unlocked-LP дев может выдернуть 100% пула за 1 блок (кейсы Starhug/4CHAN/TikTok):
-# к +22% выводим практически всё тело в кэш, остаток летит бесплатным мунбэгом.
-UNLOCKED_TP1_TRIGGER_PCT = 0.10      # Сверхбыстрый первый тейк: забираем 50% на +10%, спасая депозит до возможного дампа дева
+UNLOCKED_TP1_TRIGGER_PCT = 0.15      # Сверхбыстрый первый тейк: забираем 50% на +15%, спасая депозит до возможного дампа дева
 UNLOCKED_TP1_SELL_FRAC = 0.50
-UNLOCKED_TP2_TRIGGER_PCT = 0.22      # На +22% выводим еще 60% остатка (полный возврат депозита с прибылью в кэш!)
-UNLOCKED_TP2_SELL_FRAC = 0.60
-UNLOCKED_TP3_TRIGGER_PCT = 0.65
-UNLOCKED_TP3_SELL_FRAC = 0.50
-UNLOCKED_TP4_TRIGGER_PCT = 1.40
-UNLOCKED_TP4_SELL_FRAC = 0.50
-UNLOCKED_TP5_TRIGGER_PCT = 3.00
+UNLOCKED_TP2_TRIGGER_PCT = 0.40      # На +40% выводим еще 40% остатка
+UNLOCKED_TP2_SELL_FRAC = 0.40
+UNLOCKED_TP3_TRIGGER_PCT = 0.85
+UNLOCKED_TP3_SELL_FRAC = 0.40
+UNLOCKED_TP4_TRIGGER_PCT = 1.80
+UNLOCKED_TP4_SELL_FRAC = 0.40
+UNLOCKED_TP5_TRIGGER_PCT = 4.00
 UNLOCKED_TP5_SELL_FRAC = 0.50
-UNLOCKED_MOONBAG_TRAIL_ACT_PCT = 0.65
-UNLOCKED_MOONBAG_TRAIL_DIST_PCT = 0.18
+UNLOCKED_MOONBAG_TRAIL_ACT_PCT = 0.70
+UNLOCKED_MOONBAG_TRAIL_DIST_PCT = 0.28
 
 
 def get_sol_tp_ladder(is_unlocked: bool) -> tuple:
     """Return (tp1_t, tp1_f, tp2_t, tp2_f, tp3_t, tp3_f, tp4_t, tp4_f, tp5_t, tp5_f)."""
     if is_unlocked:
         return (
-            float(globals().get("UNLOCKED_TP1_TRIGGER_PCT", 0.10)),
+            float(globals().get("UNLOCKED_TP1_TRIGGER_PCT", 0.15)),
             float(globals().get("UNLOCKED_TP1_SELL_FRAC", 0.50)),
-            float(globals().get("UNLOCKED_TP2_TRIGGER_PCT", 0.25)),
-            float(globals().get("UNLOCKED_TP2_SELL_FRAC", 0.60)),
-            float(globals().get("UNLOCKED_TP3_TRIGGER_PCT", 0.65)),
-            float(globals().get("UNLOCKED_TP3_SELL_FRAC", 0.50)),
-            float(globals().get("UNLOCKED_TP4_TRIGGER_PCT", 1.40)),
-            float(globals().get("UNLOCKED_TP4_SELL_FRAC", 0.50)),
-            float(globals().get("UNLOCKED_TP5_TRIGGER_PCT", 3.00)),
+            float(globals().get("UNLOCKED_TP2_TRIGGER_PCT", 0.40)),
+            float(globals().get("UNLOCKED_TP2_SELL_FRAC", 0.40)),
+            float(globals().get("UNLOCKED_TP3_TRIGGER_PCT", 0.85)),
+            float(globals().get("UNLOCKED_TP3_SELL_FRAC", 0.40)),
+            float(globals().get("UNLOCKED_TP4_TRIGGER_PCT", 1.80)),
+            float(globals().get("UNLOCKED_TP4_SELL_FRAC", 0.40)),
+            float(globals().get("UNLOCKED_TP5_TRIGGER_PCT", 4.00)),
             float(globals().get("UNLOCKED_TP5_SELL_FRAC", 0.50)),
         )
     return (
-        float(globals().get("TP1_TRIGGER_PCT", 0.15)),
-        float(globals().get("TP1_SELL_FRAC", 0.40)),
-        float(globals().get("TP2_TRIGGER_PCT", 0.35)),
-        float(globals().get("TP2_SELL_FRAC", 0.40)),
-        float(globals().get("TP3_TRIGGER_PCT", 0.80)),
-        float(globals().get("TP3_SELL_FRAC", 0.35)),
-        float(globals().get("TP4_TRIGGER_PCT", 2.00)),
+        float(globals().get("TP1_TRIGGER_PCT", 0.40)),
+        float(globals().get("TP1_SELL_FRAC", 0.50)),
+        float(globals().get("TP2_TRIGGER_PCT", 1.00)),
+        float(globals().get("TP2_SELL_FRAC", 0.30)),
+        float(globals().get("TP3_TRIGGER_PCT", 2.50)),
+        float(globals().get("TP3_SELL_FRAC", 0.30)),
+        float(globals().get("TP4_TRIGGER_PCT", 5.00)),
         float(globals().get("TP4_SELL_FRAC", 0.40)),
-        float(globals().get("TP5_TRIGGER_PCT", 5.00)),
+        float(globals().get("TP5_TRIGGER_PCT", 10.00)),
         float(globals().get("TP5_SELL_FRAC", 0.50)),
     )
 
 PUMP_XGB_ENABLED = False
 RAY_XGB_ENABLED = False
 ROCKET_XGB_ENABLED = True
-ROCKET_XGB_STAGE1_THRESHOLD = 12.0    # Первичный отсев 12%: отсекает сонный шум, пропуская ракеты (GOYMAS 12.7% -> +123%, JOJO 15.0% -> +108%) на ончейн-аудит Stage 2
-ROCKET_XGB_FINAL_THRESHOLD = 30.0     # Финальный порог 30%: фильтрует слабые токены (TRELLISUP 12%, GTI 8%), пропуская ракеты уровня FiveM (54%) и Retire (50%)
-ROCKET_XGB_THRESHOLD = 30.0
-ROCKET_XGB_UNLOCKED_CUSTOM_MIN = 35.0  # Для кастомных пулов без сожжённого LP требуется >= 35% XGB (FiveM=54% проходит, слабые пулы отсекаются)
+ROCKET_XGB_STAGE1_THRESHOLD = 10.0    # Первичный отсев 10% (было 12-14%): пропускает ракеты (GTAVI 12.7% -> +248%)
+ROCKET_XGB_FINAL_THRESHOLD = 24.0     # Финальный порог 24%
+ROCKET_XGB_THRESHOLD = 24.0
+ROCKET_XGB_UNLOCKED_CUSTOM_MIN = 30.0  # Для кастомных пулов без сожжённого LP
 JEV_MAX_AGE_MIN = 240.0              # Пробои и консолидации до 240м (4ч): позволяет ловить мощные вторые волны и раннеры
 
 STALL_TIMER_SEC = 420.0   # 7 минут на консолидацию до среза по стагнации
 STALL_MAX_LOSS_PCT = -0.055
 
-TRAILING_ACTIVATION_PCT = 0.280   # Прогрессивный трейлинг включается с +28% (после Breakeven Shield +16%)
-TRAILING_DISTANCE_PCT = 0.180     # Дистанция от пика 18% (не отдаём +88% прибыль обратно в +12%!)
-TRAILING_RUNNER_DISTANCE_PCT = 0.22
+TRAILING_ACTIVATION_PCT = 0.400   # Прогрессивный трейлинг включается с +40%
+TRAILING_DISTANCE_PCT = 0.300     # Дистанция от пика 30% (не душить нормальные откаты)
+TRAILING_RUNNER_DISTANCE_PCT = 0.35
 SCALP_PROFIT_ENABLED = False
 
 WHALE_DUMP_GUARD_PCT = 0.22
@@ -821,7 +819,7 @@ JEV_EARLY_MIN_AGE_MIN = 0.05   # Ультра-ранний вход от 3с
 JEV_MIN_AGE_MIN = 0.08         # Мгновенный вход от 5 секунд (до разгона ракеты)
 JEV_MAX_AGE_MIN = 240.0        # В GROK-JEV фокус на пробоях до 240м (4ч)
 JEV_MIN_LIQUIDITY_USD = 4000.0   # Минимум $4.0k ликвидности AMM — отсекаем тонкие -35% ловушки вроде FOMOCOIN/$CHOPS
-JEV_MAX_LIQUIDITY_USD = 180000.0
+JEV_MAX_LIQUIDITY_USD = 500000.0   # Расширено до $500k: не блокирует ракеты с высокой ликвидностью (фикс GRAM +391%)
 JEV_MIN_VOLUME_H1 = 1500.0       # Минимум $1.5k реального оборота вместо $350 шума
 JEV_MIN_MCAP_USD = 4500.0      # Минимум $4.5k MCap для ранних ракет
 JEV_MAX_MCAP_USD = 1500000.0   # Верхняя граница $1.5M FDV: пропускает мощные раннеры уровня UHI (+792%) и BJB (+308%)
@@ -1043,7 +1041,7 @@ RUG_WALLET_RPC_TIMEOUT = 5.0              # Таймаут RPC-запросов 
 # === ДЕТЕКТОР МГНОВЕННОГО РАГА ПЕРВОЙ СВЕЧОЙ (First Candle Rug Guard) ===
 # Анализ ДО входа: когорта кошельков -> источник финансирования -> кластеры «одного
 # источника» (сколько кошельков, сколько % эмиссии держат) + микроструктура рынка.
-FCR_ENABLED = False                     # Отключено по режиму быстрого входа 0d2b1ae (убираем задержку до 14с перед входом)
+FCR_ENABLED = True                      # ВКЛЮЧЕНО: защита от мгновенного рага первой свечой и кластеров дева
 FCR_BLOCK_SCORE = 0.58                 # score >= этого значения -> вход блокируется (сохраняем блок при 30% дев-холде hard=0.60, убираем ложные срабатывания)
 FCR_WARN_SCORE = 0.32                  # score >= этого значения -> предупреждение (лог, не блок)
 FCR_COHORT_SIZE = 8                    # Сколько кошельков когорты анализировать максимум
@@ -1068,7 +1066,7 @@ FCR_STALL_M1 = 3.0                     # ...при мёртвом m1 = дев р
 FCR_SELL_DOMINANCE = 0.85              # sells/buys за 5м для сигнала "продавцы давят"
 FCR_MIN_SELL_COUNT = 120               # Абсолютный минимум продаж, чтобы сигнал был значимым
 FCR_TRUSTED_FUNDERS = []              # Адреса-источники, которым доверяем (свои кошельки, биржи) — их кластеры игнорируются
-FCR_MAX_DURATION_SEC = 14.0           # Жёсткий дедлайн анализа: не успел -> fail-open (вход разрешён)
+FCR_MAX_DURATION_SEC = 3.0            # Быстрый дедлайн анализа 3с: не успел -> fail-open (не тормозит снайпинг)
 FCR_GRAPH_MIN_PCT = 0.05              # Узел сети RugCheck с долей < 0.05% — пыль, не участник фермы
 FCR_GRAPH_MAX_WALLETS = 15           # Сеть крупнее — это граф переводов толпы, а не ферма (вес режется)
 FCR_SIG_PAGE_LIMIT = 200              # Сколько подписей тянуть за раз (лёгкий payload для публичного RPC)
@@ -1091,23 +1089,23 @@ WALLET_DEV_WALLET_ADDR = ""               # Кошелек дева (запол�
 
 # 1. Отключаем самостоятельные покупки GROK-JEV в обход пайплайна ROCKET-XGB
 GROK_JEV_STANDALONE_BUY = False          # GROK-JEV работает только как фильтр/бустер поверх ROCKET-XGB
-GROK_JEV_MIN_XGB_SCORE = 28.0            # Минимальный скор ROCKET-XGB для входа по сигналу GROK-JEV
-ROCKET_XGB_STAGE1_MIN_SCORE = 14.5       # Снижено с 18.0% до 14.5% (чтобы не пропускать JOJO +71% и GOYMAS +123%)
+GROK_JEV_MIN_XGB_SCORE = 24.0            # Минимальный скор ROCKET-XGB для входа по сигналу GROK-JEV
+ROCKET_XGB_STAGE1_MIN_SCORE = 10.0       # Снижено до 10.0% (пропускает ракеты вроде GTAVI 12.7% -> +248%)
 
 # 2. Жесткие гейты на вход (единые для SCANNER, JUP и GROK-JEV)
-MIN_LIQUIDITY_USD = 11500.0              # Отсекает фантомные пулы ($0.01 - $5000)
+MIN_LIQUIDITY_USD = 4000.0               # Допускает кривые pump.fun от $4k
 MIN_FDV_TO_LIQ_RATIO = 1.15              # Защита от кастомных scam-пулов со 100% сапплая (где FDV < Liq)
-MAX_AGE_MINUTES_FOR_ENTRY = 45.0         # Не покупать старые "зомби" пулы старше 45 минут (MISCHIO 58m, GOLDIE 146m)
-MIN_VOLUME_M5_USD = 12000.0              # Минимальный 5м объем (отсекает MELNOK $4.5k и GOLDIE $7.8k)
-MIN_VOL_TO_LIQ_M5 = 0.65                 # Минимальная оборачиваемость ликвидности за 5м
-MAX_H1_PUMP_PCT = 300.0                  # Не покупать хаи после +300% за 1ч (отсекает CHOP +445% и LEOSTAR top)
-MIN_M5_PRICE_CHANGE_PCT = 4.0            # Не входить в плоские/падающие 5м свечи (отсекает KLAUDIA +1.7% и CHOP +3.1%)
+MAX_AGE_MINUTES_FOR_ENTRY = 45.0         # Не покупать старые "зомби" пулы старше 45 минут
+MIN_VOLUME_M5_USD = 3000.0               # Минимальный 5м объем
+MIN_VOL_TO_LIQ_M5 = 0.50                 # Минимальная оборачиваемость ликвидности за 5м
+MAX_H1_PUMP_PCT = 180.0                  # Не покупать хаи после +180% за 1ч
+MIN_M5_PRICE_CHANGE_PCT = 3.0            # Не входить в плоские/падающие 5м свечи
 MIN_M1_PRICE_CHANGE_PCT = -5.0           # Запрет входа, если m1 == None или свеча сливается
 
 # 3. Адаптивный фильтр покупателей/продавцов
-DEFAULT_MIN_BUY_SELL_RATIO = 1.30        # Для обычных пулов
-HIGH_VOL_M5_THRESHOLD = 50000.0          # Если объем за 5м > $50k...
-HIGH_VOL_MIN_BUY_SELL_RATIO = 1.15       # ...достаточно перевеса 1.15x при net_buyers >= 80 (спасет ракеты типа JOJO +85%)
+DEFAULT_MIN_BUY_SELL_RATIO = 1.20        # Для обычных пулов
+HIGH_VOL_M5_THRESHOLD = 30000.0          # Если объем за 5м > $30k...
+HIGH_VOL_MIN_BUY_SELL_RATIO = 1.10       # ...достаточно перевеса 1.10x
 
 # ==================== ОБНОВЛЕННЫЕ НАСТРОЙКИ ВЫХОДОВ (exit_manager.py) ====================
 
@@ -1118,9 +1116,9 @@ CRASH_GUARD_CONFIRM_TICKS = 2            # Требовать 2 подряд т�
 CRASH_GUARD_IGNORE_IF_PNL_ABOVE = 15.0   # Если мы в плюсе > +15%, работает ступенчатый Trailing Stop, а не паник-селл 100%!
 
 # 2. Исправление Mature Moonbag Floor и Trailing Stop
-MOONBAG_ACTIVATION_PEAK_PCT = 40.0       # Активировать безубыток только после пика +40% (вместо +17.7%)
-MOONBAG_FLOOR_PCT = 12.0                 # Уровень пола после +40% пика -> +12%
-PARTIAL_TP1_PCT = 45.0                   # На +45% продавать 50% позиции (забираем тело + профит, остальное — бесплатный мунбэг)
+MOONBAG_ACTIVATION_PEAK_PCT = 80.0       # Активировать трейлинг мунбэга только после пика +80% (не душить монету на откатах)
+MOONBAG_FLOOR_PCT = 2.0                  # Уровень пола безубытка -> +2% (гарантия прибыли, не режет нормальные колебания)
+PARTIAL_TP1_PCT = 40.0                   # На +40% продавать 50% позиции (забираем тело + профит, остальное — бесплатный мунбэг)
 PARTIAL_TP1_SELL_FRACTION = 0.50
 
 # 3. Исправление жесткого Stop Loss и Early Momentum Cut
