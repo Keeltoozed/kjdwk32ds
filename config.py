@@ -55,9 +55,9 @@ MAX_CONCURRENT_POSITIONS = 8
 # === ЖЕСТКОЕ ОГРАНИЧЕНИЕ УБЫТКА (РИСК-МЕНЕДЖМЕНТ) ===
 MAX_DAILY_LOSS_USD = 1000.0
 KILL_SWITCH_ENABLED = False
-STOP_LOSS_PCT = -0.18         # Стоп -18%: режет неудачные сделки на корню (убыток ~$0.90 вместо $2.05)
+STOP_LOSS_PCT = -0.28         # Стоп -28%: даёт дыхание нормальным встряскам перед 2x-10x пампами (не режет MELNOK +70%, CHOP +28%, BIGP +30%)
 STOP_LOSS_UNLOCKED_PCT = -0.16 # Стоп -16% для незалоченных пулов Meteora/Raydium
-EMERGENCY_CAP_PCT = -0.26     # Аварийный потолок -26%: мгновенный срез любого резкого обвала
+EMERGENCY_CAP_PCT = -0.38     # Аварийный потолок -38%: срез глубокого слива с подтверждением 2 тика
 INFANT_WINDOW_MIN = 0.5
 INFANT_DUMP_PCT = -0.350       # Срез мгновенного рага дева в первые секунды (<= -35.0%)
 
@@ -768,7 +768,7 @@ def get_sol_tp_ladder(is_unlocked: bool) -> tuple:
 PUMP_XGB_ENABLED = False
 RAY_XGB_ENABLED = False
 ROCKET_XGB_ENABLED = True
-ROCKET_XGB_STAGE1_THRESHOLD = 18.0    # Первичный отсев 18%: отсекает сонный шум, пропуская только активные импульсы
+ROCKET_XGB_STAGE1_THRESHOLD = 12.0    # Первичный отсев 12%: отсекает сонный шум, пропуская ракеты (GOYMAS 12.7% -> +123%, JOJO 15.0% -> +108%) на ончейн-аудит Stage 2
 ROCKET_XGB_FINAL_THRESHOLD = 30.0     # Финальный порог 30%: фильтрует слабые токены (TRELLISUP 12%, GTI 8%), пропуская ракеты уровня FiveM (54%) и Retire (50%)
 ROCKET_XGB_THRESHOLD = 30.0
 ROCKET_XGB_UNLOCKED_CUSTOM_MIN = 35.0  # Для кастомных пулов без сожжённого LP требуется >= 35% XGB (FiveM=54% проходит, слабые пулы отсекаются)

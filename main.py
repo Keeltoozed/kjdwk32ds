@@ -432,25 +432,27 @@ async def position_manager_loop(analyzer, tracker):
                 minutes_since_peak = (time.time() - peak_ts) / 60 if peak_ts else 0
 
                 prev_ts = getattr(position, "price_checked_at", 0.0)
-                # 1-тиковый фильтр аномального провала котировки (>45% за 1 тик ТОЛЬКО при наличии прибыли >=15%):
+                # 1-тиковый фильтр аномального провала котировки (>38% за 1 тик ТОЛЬКО при наличии прибыли >=15%):
                 # защищает от ложного тика побочного пула (кейс MAKERS +213% -> -100.0% на 1 тик),
                 # НЕ задерживает стопы/дампы при реальном минусе!
                 _anchor_px = float(getattr(position, "_crash_anchor_px", 0.0) or 0.0)
                 _ref_crash_px = _anchor_px if _anchor_px > 0 else (_pre_tick_conf if _pre_tick_conf > 0 else prev_price)
+                _pd_tmp = getattr(position, "pair_data", None) or getattr(position, "last_pair_data", None) or {}
+                _is_unl_cg = config.is_position_unlocked_lp(
+                    mint,
+                    _pd_tmp,
+                    bool(getattr(position, "is_lp_locked_80", False)),
+                )
+                position.is_unlocked_pool = _is_unl_cg
+                _crash_mult = 0.70 if _is_unl_cg else 0.62  # -30% для незалоченных, -38% для защищённых Pump/Raydium (не режем обычные откаты -22% как в кейсе LEOSTAR +689%)
                 if prev_ts > 0 and (time.time() - prev_ts) < 60 and _ref_crash_px > 0 \
-                        and current_price <= _ref_crash_px * 0.78 and max_pnl_pct >= 0.15 and pnl_pct > -0.20:
+                        and current_price <= _ref_crash_px * _crash_mult and max_pnl_pct >= 0.15 and pnl_pct > -0.20:
                     if _anchor_px <= 0:
                         position._crash_anchor_px = _ref_crash_px
                     _cg_n = int(getattr(position, "crash_confirm_n", 0) or 0) + 1
                     position.crash_confirm_n = _cg_n
-                    _pd_tmp = getattr(position, "pair_data", None) or getattr(position, "last_pair_data", None) or {}
-                    _is_unl_cg = config.is_position_unlocked_lp(
-                        mint,
-                        _pd_tmp,
-                        bool(getattr(position, "is_lp_locked_80", False)),
-                    )
-                    position.is_unlocked_pool = _is_unl_cg
-                    _cg_req = 1 if (_is_unl_cg or str(mint).endswith("pump") or minutes_held <= 15.0) else 2
+                    # Для защищённых Pump/Raydium пулов строго требуем 2 тика подтверждения (защита от разового сбоя котировки):
+                    _cg_req = 1 if _is_unl_cg else 2
                     if _cg_n < _cg_req:
                         print(f"⚠️ [SOL-TICK-VERIFY] {position.symbol} ({mint[:8]}): резкий 1-тик {pnl_pct*100:+.1f}% (-{(1 - current_price/_ref_crash_px)*100:.0f}%) — ждём {_cg_req}-й тик подтверждения.")
                         continue
@@ -459,7 +461,7 @@ async def position_manager_loop(analyzer, tracker):
                     try:
                         from jupiter import JupiterAPI
                         _live_px_check = await JupiterAPI.get_price(mint)
-                        if _live_px_check and _live_px_check > _ref_crash_px * 0.78:
+                        if _live_px_check and _live_px_check > _ref_crash_px * _crash_mult:
                             print(f"🛡️ [CRASH-GUARD-RESCUED] {position.symbol} ({mint[:8]}): ложный краш-тик! Live DEX price ${_live_px_check:.6f} > prev ({(1 - _live_px_check/_ref_crash_px)*100:+.1f}%). Позиция спасена.")
                             current_price = _live_px_check
                             position.current_price_usd = _live_px_check

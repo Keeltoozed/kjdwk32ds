@@ -678,14 +678,19 @@ class ShadowTracker:
                     for upd in updates:
                         m = upd["mint"]
                         if m in batch_mints:
-                            p_now = cur_prices.get(m, 0) or cur_prices.get(m.lower(), 0)
-                            p_entry = upd["price_at_rejection"]
+                            p_now = float(cur_prices.get(m, 0) or cur_prices.get(m.lower(), 0) or 0.0)
+                            p_entry = float(upd.get("price_at_rejection", 0) or 0.0)
+                            # Если монета была залогирована без цены (на пре-скрининге), но сейчас цена появилась — фиксируем точку отсчета
+                            if p_entry < 1e-7 and p_now >= 1e-7:
+                                p_entry = p_now
+                                upd["price_at_rejection"] = p_now
+
                             # Защита от бага котировок DexScreener (когда возвращается цена SOL/BNB $200-$400 или фантомный x500)
-                            if (p_now > 10.0 and p_entry > 0 and p_entry < 0.1) or (p_entry > 0 and p_now / p_entry > 500.0):
+                            if (p_now > 10.0 and 0 < p_entry < 0.1) or (p_entry >= 1e-7 and p_now / p_entry > 500.0):
                                 p_now = 0.0
-                            old_ath = upd["old_ath"]
-                            old_time = upd["old_time_to_ath"]
-                            elapsed_m = upd["elapsed_min"]
+                            old_ath = float(upd.get("old_ath", 0) or 0.0)
+                            old_time = float(upd.get("old_time_to_ath", 0.0) or 0.0)
+                            elapsed_m = float(upd.get("elapsed_min", 0.0) or 0.0)
                             is_lp_rugged = (m.lower() in rugged_set) or (batch_ok and p_now <= 0 and elapsed_m >= 5.0)
 
                             # Если токен дал новый пик цены — фиксируем новый ATH и точную минуту
@@ -698,13 +703,13 @@ class ShadowTracker:
                             if new_ath > 0 and not is_lp_rugged:
                                 self.record_observation(m, new_ath, 0.0)
 
-                            ath_pnl = ((new_ath - p_entry) / p_entry * 100.0) if p_entry >= 1e-7 and new_ath > 0 else 0.0
+                            ath_pnl = ((new_ath - p_entry) / p_entry * 100.0) if (p_entry >= 1e-7 and new_ath > 0) else 0.0
                             if p_now > 0 and p_entry >= 1e-7:
                                 cur_pnl = ((p_now - p_entry) / p_entry * 100.0)
                             elif is_lp_rugged:
                                 # Пул ликвидности опустошён (< $1,000) или полностью удалён после 5+ минут -> реальный LP Rug (-100%), а не упущенная ракета!
                                 cur_pnl = -100.0
-                            elif old_ath > 0:
+                            elif old_ath > 0 and p_entry >= 1e-7:
                                 # Первые минуты (0-5м): монета может быть в процессе 30-секундной миграции на AMM
                                 cur_pnl = ((old_ath - p_entry) / p_entry * 100.0)
                             else:
