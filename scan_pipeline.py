@@ -27,7 +27,7 @@ MISSING = object()  # токен не был поставлен в окно -> �
 async def _analyze_one(analyzer, mint, sem):
     try:
         async with sem:
-            ok = await asyncio.wait_for(analyzer.analyze_token(mint), timeout=22.0)
+            ok = await asyncio.wait_for(analyzer.analyze_token(mint), timeout=14.0)
             # Снимок состояния ВНУТРИ задачи (её контекст) — в родителе оно не видно.
             return (
                 ok,
@@ -44,7 +44,7 @@ async def _analyze_one(analyzer, mint, sem):
 
 
 class ScanWindow:
-    def __init__(self, analyzer, mints, concurrency=4):
+    def __init__(self, analyzer, mints, concurrency=8):
         self.analyzer = analyzer
         self.mints = list(dict.fromkeys(m for m in mints if m))
         self.index = {m: i for i, m in enumerate(self.mints)}
@@ -75,9 +75,9 @@ class ScanWindow:
         if task is None:
             return MISSING
         try:
-            return await asyncio.wait_for(asyncio.shield(task), timeout=25.0)
+            return await asyncio.wait_for(asyncio.shield(task), timeout=16.0)
         except asyncio.TimeoutError:
-            print(f"⏱️ [SCAN-WIN-TIMEOUT] {mint[:8]}: ожидание задачи превысило 25с — пропуск.")
+            print(f"⏱️ [SCAN-WIN-TIMEOUT] {mint[:8]}: ожидание задачи превысило 16с — пропуск.")
             return (False, 0.0, 0.0, 0.0)
 
     async def close(self):

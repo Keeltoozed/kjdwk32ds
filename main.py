@@ -1198,14 +1198,14 @@ async def scanner_loop(analyzer, tracker):
                     try:
                         # Используем умный маршрутизатор (сам выберет XGBoost или Raydium модель)
                         try:
-                            _res = await asyncio.wait_for(_scan_win.get(mint), timeout=25.0) if _scan_win is not None else _SCAN_MISSING
+                            _res = await asyncio.wait_for(_scan_win.get(mint), timeout=16.0) if _scan_win is not None else _SCAN_MISSING
                         except asyncio.TimeoutError:
                             _res = _SCAN_MISSING
                         if _res is _SCAN_MISSING:
                             try:
-                                is_good = await asyncio.wait_for(analyzer.analyze_token(mint), timeout=22.0)
+                                is_good = await asyncio.wait_for(analyzer.analyze_token(mint), timeout=14.0)
                             except asyncio.TimeoutError:
-                                print(f"⏱️ [SCAN-TIMEOUT] {mint[:8]}: анализ превысил 22с, пропуск")
+                                print(f"⏱️ [SCAN-TIMEOUT] {mint[:8]}: анализ превысил 14с, пропуск")
                                 is_good = None
                         else:
                             is_good = _scan_apply(analyzer, _res)

@@ -1030,7 +1030,7 @@ class Analyzer:
         if len(self._gt_token_cache) > 1500:
             self._gt_token_cache = {k: v for k, v in self._gt_token_cache.items() if (now_gt - v[0]) < 60.0}
         cached_gt = self._gt_token_cache.get(mint)
-        if cached_gt and (now_gt - cached_gt[0]) < 45.0:
+        if cached_gt and (now_gt - cached_gt[0]) < 120.0:
             return dict(cached_gt[1]) if cached_gt[1] else {}
         try:
             data = await market_data._gt_get(f"/networks/solana/tokens/{mint}/pools?page=1", retries=0, timeout=8)
@@ -2201,7 +2201,7 @@ class Analyzer:
             _cur_tok_dev = 0.0
             try:
                 import goplus as _gp_rc
-                _rc_st, rc_data = await _gp_rc.fetch_rugcheck_report_cached(mint, ttl=120.0, timeout=7)
+                _rc_st, rc_data = await _gp_rc.fetch_rugcheck_report_cached(mint, ttl=120.0, timeout=5)
                 if _rc_st == 400:
                     print(f"ℹ️ [RUGCHECK] {mint[:8]}: монета ещё индексируется RugCheck (код 400) -> ожидаем отчёта...")
                 elif _rc_st not in (200, 0, 429):

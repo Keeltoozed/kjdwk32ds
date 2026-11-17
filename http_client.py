@@ -41,7 +41,7 @@ HOST_LIMITS = {
 
 # Шаг 1: конкурентность по хостам. DS=3, GT=1 — требование задачи.
 HOST_SEMAPHORES = {
-    "api.dexscreener.com": 3,
+    "api.dexscreener.com": 4,
     "api.geckoterminal.com": 1,
     "coins.llama.fi": 2,
     "api.llama.fi": 2,
@@ -64,7 +64,7 @@ DEFAULT_SEM = 5
 # Стаггер между стартами запросов на один хост (анти-пачка).
 # DS: 0.2с по задаче (при 3 слотах = до ~15 RPS пиком, средний держит лимит 240/мин).
 HOST_STAGGER = {
-    "api.dexscreener.com": 0.2,
+    "api.dexscreener.com": 0.1,
     "api.geckoterminal.com": 0.0,  # у GT интервал 2.4с уже покрывает
 }
 DEFAULT_STAGGER = 0.0
@@ -246,7 +246,7 @@ _OPTIONAL_PROXY = os.getenv("PROXY_URL") or os.getenv("HTTPS_PROXY") or os.geten
 
 
 async def fetch_json(url: str, params=None, headers=None, timeout: int = 12,
-                     retries: int = 3, method: str = "GET", json_payload=None, json_data=None):
+                     retries: int = 1, method: str = "GET", json_payload=None, json_data=None):
     """GET/POST JSON через ГЛОБАЛЬНЫЙ семафор + троттлинг + backoff на 429/5xx.
 
     Возвращает (status, data). data={} при неудаче. Никогда не кидает исключение.
@@ -297,9 +297,9 @@ async def fetch_json(url: str, params=None, headers=None, timeout: int = 12,
                 last_err = f"{type(e).__name__}"
         if attempt < retries:
             if "429" in str(last_err):
-                await asyncio.sleep(2.0 + 1.0 * attempt)
+                await asyncio.sleep(0.5 + 0.5 * attempt)
             else:
-                await asyncio.sleep(1.0 + 1.0 * attempt)
+                await asyncio.sleep(0.5 + 0.5 * attempt)
     if last_status != 429:
         if last_status != 429:
             print(f"🔌 API fail {host}{urlparse(url).path[:50]}: {last_err} (status {last_status})")

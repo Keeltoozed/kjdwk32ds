@@ -792,7 +792,7 @@ UNLOCKED_STALL_MID_AGE_SEC = 180.0       # Синхронизированный 
 UNLOCKED_ENTRY_SCRATCH_SEC = 180.0       # Не режем +0.0% на 35с: даём 3 минуты на отрыв импульса (раги уже режет SL -7.5%)
 UNLOCKED_FAST_STOP_PCT = -0.075          # Быстрый стоп-лосс -7.5% (1 тик)
 
-PREFETCH_TTL_SEC = 12
+PREFETCH_TTL_SEC = 45
 SOLANA_MIN_AGE_MIN = 0.05        # 3 секунды: мгновенный старт на самой ранней волне
 SOLANA_MAX_AGE_HOURS = 4.0         # До 4 часов
 SOLANA_MAX_AGE_MIN = 240.0         # Потолок 240м: позволяет ловить консолидации и мощные выходы в раннеры
@@ -997,12 +997,12 @@ GOPLUS_ENABLED = True
 GOPLUS_MAX_SELL_TAX = 0.10
 GOPLUS_CACHE_SEC = 3600
 
-SCAN_CONCURRENCY = 12
-SCAN_LOOP_SLEEP_SEC = 2
+SCAN_CONCURRENCY = 24
+SCAN_LOOP_SLEEP_SEC = 1
 SCAN_AFTER_ENTRY_SLEEP_SEC = 1
 SCAN_LATEST_TTL_SEC = 5
-SOLANA_RESCAN_COOLDOWN = 15
-SOLANA_FRESH_RESCAN_COOLDOWN = 4
+SOLANA_RESCAN_COOLDOWN = 8
+SOLANA_FRESH_RESCAN_COOLDOWN = 2
 
 JEV_TREND_CONFIRM_ENABLED = True
 JEV_FRESH_RECHECK_ENABLED = True   # Включена финальная проверка цены перед покупкой (защищает от покупки на падающей свече!)
