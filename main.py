@@ -1822,6 +1822,9 @@ async def scanner_loop(analyzer, tracker):
                                         if _fcr.get("verdict") == "WARN":
                                             _fcr_w_n = int((_fcr_compact or {}).get("fcr_cluster_wallets", 0) or 0)
                                             _fcr_m5 = float((pair_data.get("priceChange") or {}).get("m5", 0) or 0)
+                                            if _fcr_w_n >= 5:
+                                                print(f"🚫 [SCANNER FCR-FARM-BLOCK] {actual_symbol} ({mint[:8]}): ферма из {_fcr_w_n} кошельков одного источника (кейсы GTA6 -14%, DACT) — отмена входа!")
+                                                continue
                                             if _fcr_w_n >= 3 and _fcr_m5 > 120.0:
                                                 print(f"🚫 [SCANNER FCR-INSIDER-BLOCK] {actual_symbol} ({mint[:8]}): инсайдерская сеть {_fcr_w_n} кошельков на свече m5 {_fcr_m5:+.1f}% — отмена входа (кейс CHUD -50%)!")
                                                 continue

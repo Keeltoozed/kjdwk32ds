@@ -247,6 +247,9 @@ class MatureExitManager:
         elif max_pnl_pct >= 0.28:       # +28%..+50%: трейл 22%
             _floor_pnl = 0.08 if minutes_held >= 1.0 else 0.02
             _trail_dist = 0.22 if minutes_held >= 1.5 else None
+        elif max_pnl_pct >= 0.20:       # +20%..+28% (кейс clipping пик +26% -> закрыт в -0.4%): фиксируем минимум +7%
+            _floor_pnl = 0.07 if minutes_held >= 0.5 else 0.03
+            _trail_dist = None
         elif max_pnl_pct >= float(getattr(config, "BREAKEVEN_PCT", 0.08) or 0.08):
             _floor_pnl = 0.005
             _trail_dist = None
@@ -258,7 +261,7 @@ class MatureExitManager:
                 return f"Trailing Stop (+{pnl_pct*100:.1f}%, откат {_trail_dist*100:.0f}% от пика +{max_pnl_pct*100:.0f}%)"
 
         # 2. Срабатывание Неснижаемого пола прибыли (Floor Lock):
-        if _floor_pnl is not None and max_pnl_pct >= 0.28 and pnl_pct <= _floor_pnl:
+        if _floor_pnl is not None and max_pnl_pct >= 0.20 and pnl_pct <= _floor_pnl:
             return f"Profit Floor (+{_floor_pnl*100:.0f}% locked after peak +{max_pnl_pct*100:.0f}%)"
 
         # 3. Безубыток: если пик достиг BREAKEVEN_PCT, не даём уйти в минус

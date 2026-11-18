@@ -1969,6 +1969,9 @@ class GrokJevEngine:
                     elif _fcr.get("verdict") == "WARN":
                         _fcr_w_n_g = int((_fcr_compact or {}).get("fcr_cluster_wallets", 0) or 0)
                         _fcr_m5_g = float((pair_data.get("priceChange") or {}).get("m5", 0) or 0)
+                        if _fcr_w_n_g >= 5:
+                            print(f"🚫 [FCR-FARM-BLOCK] {symbol} ({address[:8]}): ферма из {_fcr_w_n_g} кошельков одного источника — отмена входа!")
+                            return False, f"fcr-wallet-farm ({_fcr_w_n_g} wallets)", _h_stats
                         if _fcr_w_n_g >= 3 and _fcr_m5_g > 120.0:
                             print(f"🚫 [FCR-INSIDER-BLOCK] {symbol} ({address[:8]}): инсайдерская сеть {_fcr_w_n_g} кошельков на свече m5 {_fcr_m5_g:+.1f}% — отмена входа (кейс CHUD -50%)!")
                             return False, f"fcr-insider-cluster ({_fcr_w_n_g} wallets, m5 {_fcr_m5_g:+.0f}%)", _h_stats

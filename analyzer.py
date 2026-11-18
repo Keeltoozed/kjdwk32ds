@@ -1887,6 +1887,15 @@ class Analyzer:
                 f"🚫 [WASH-BUMP-TRAP] {symbol} ({mint[:8]}): накрутка микро-ботом ({_tot_tx5_pre} txns, avg ${_avg_tx_pre:.2f} < $4.50).",
             )
 
+        # BUNDLE-PUMP на кривой: сотни мелких покупок одним ботом при b/s >= 3x и среднем чеке < $15 на вертикали m5 > +80%
+        # (кейс DCC: 209b/54s, avg $9, m5 +139% -> -67.5% за 50 секунд). Органика Rockstar: 194b/157s (1.2x), avg $14.
+        if _dex_pre_early in ("pump", "pumpfun") and _b5_pre >= 60 and _b5_pre >= _s5_pre * 3.0 and _avg_tx_pre < 15.0 and _m5 > 80.0:
+            return self._deny(
+                mint,
+                f"bundle-pump b/s {_b5_pre}/{_s5_pre} avg ${_avg_tx_pre:.1f}",
+                f"🚫 [BUNDLE-PUMP] {symbol} ({mint[:8]}): {_b5_pre}b/{_s5_pre}s при среднем чеке ${_avg_tx_pre:.2f} на m5 {_m5:+.0f}% — бот-накачка кривой перед сливом!",
+            )
+
         # 3. ФИЛЬТР ИМПУЛЬСА, СКОРОСТИ ОБОРОТА И ТРЕНДА ДО ROCKET-XGB:
         _base_v5_cfg = float(getattr(config, "MIN_VOLUME_M5", 1000.0))
         # Масштабируем порог объёма под возраст (отсекаем мёртвые $150 / 3-tx пулы, пропуская ранние ракеты вроде NADJA/CSI/GTAVI)

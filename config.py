@@ -379,6 +379,12 @@ def is_permissionless_liq_fdv_trap(pair_data: Optional[dict]) -> bool:
     fdv_usd = float(pair_data.get("fdv") or pair_data.get("marketCap") or 0.0)
     if liq_usd < 18000.0:
         return False
+
+    # ЖЁСТКИЙ ТРАП: pump-минт на AMM с ликвой >= 75% FDV — это НЕ каноничная миграция (там liq/fdv ~0.3-0.5),
+    # а посеянный девом CreatePool. Никакие покупатели/соцсети не спасают (кейс BALVOTE: $103k liq / $117k fdv,
+    # 186b/46s -> пул выведен в $0 за 3 минуты, -101%).
+    if mint.endswith("pump") and fdv_usd > 0 and liq_usd >= fdv_usd * 0.75:
+        return True
         
     # Check socials
     info = pair_data.get("info") or {}
@@ -661,9 +667,9 @@ DD_THROTTLE_START_USD = 15.0
 # === ВХОД В ЗРЕЛЫЕ ВЫПУСКНИКИ RAYDIUM / PUMPSWAP И РАННИЕ КРИВЫЕ PUMP.FUN ===
 SNIPER_ENTRIES_ENABLED = True             # ВКЛЮЧЕНО: мгновенный вход в свежие кривые/миграции со стрима
 ALLOW_UNGRADUATED_PUMPFUN = True          # ВКЛЮЧЕНО: ловим ракеты на кривой Pump.fun до миграции (открывает 大A +1559%, ROCKSTAR +163%)
-MIN_PUMP_CURVE_MCAP_USD = 2000.0          # Порог кривой от $2.0k (ловит ранние ракеты вроде Могура с 0% набора)
+MIN_PUMP_CURVE_MCAP_USD = 4000.0          # Порог кривой от $4.0k: кривые $2.9-3.1k (Puchin/patula) = мгновенный слив, ракеты (Rockstar $6.5k, SPCB $5k, MIA $12k) выше
 MAX_PUMP_CURVE_MCAP_USD = 100000.0         # Верх кривой до миграционного обрыва ($65k)
-MIN_PUMP_CURVE_MCAP_SOL = 25.0            # Порог кривой pump.fun в SOL (~25 SOL, ранний набор высоты)
+MIN_PUMP_CURVE_MCAP_SOL = 55.0            # Порог кривой pump.fun в SOL (~55 SOL ≈ $4k): ниже — пустой кёрв, дев/снайперы сливают за 1 минуту
 MAX_PUMP_CURVE_MCAP_SOL = 300.0            # Верх входа на кривой перед миграцией
 PUMP_MIGRATION_MCAP_SOL = 410.0           # FDV миграции pump.fun
 PUMP_DUMP_FLOOR_SOL = 50.0                # Порог post-mig-dumped (~50 SOL, разрешает быстрые реклеймы)
@@ -706,7 +712,7 @@ TIME_EXIT_PROFIT_REQ = 0.015
 # === ПРОСТАЯ СИСТЕМА ВЫХОДА (С АКТИВНЫМ МУНБЭГОМ) ===
 PARTIAL_TP_ENABLED = True
 PARTIAL_TP_MIN_TICKET_USD = 0.50
-TP1_TRIGGER_PCT = 0.30               # На +30% забираем тело (50% позиции)
+TP1_TRIGGER_PCT = 0.25               # На +25% забираем тело (50% позиции) — clipping +26% не должен возвращаться в 0
 TP1_SELL_FRAC = 0.50                 # 50% позиции на TP1, оставшиеся 50% — Risk-Free Moonbag!
 TP2_TRIGGER_PCT = 1.10               # Мунбэг цель +110% (забираем всё!)
 TP2_SELL_FRAC = 1.00                 # 100% остатка продаём на +110% (крупный тейк перекрывает стопы)
