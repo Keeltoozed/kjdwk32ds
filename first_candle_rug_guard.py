@@ -272,7 +272,7 @@ async def _rpc_batch(calls: List[Tuple[str, list]], timeout: float = 9.0) -> Lis
                     await asyncio.sleep(gap)
                 _RPC_LAST_CALL[url] = time.monotonic()
                 async with session.post(
-                    url, json=payload, timeout=aiohttp.ClientTimeout(total=timeout)
+                    url, json=payload, timeout=aiohttp.ClientTimeout(total=min(timeout, 3.5))
                 ) as resp:
                     if resp.status != 200:
                         last_err = f"HTTP {resp.status}"
@@ -1585,20 +1585,22 @@ async def pre_entry_rug_check(
         verdict = await asyncio.wait_for(_analyze(mint, pair_data, verdict), timeout=budget)
     except asyncio.TimeoutError:
         _pd_liq = float(((pair_data or {}).get("liquidity") or {}).get("usd", 0) or 0)
-        _is_micro = _pd_liq > 0 and _pd_liq < 4500.0
-        if _is_micro:
+        _dex_fcr = str((pair_data or {}).get("dexId") or "").lower()
+        _is_pump_curve = mint.lower().endswith("pump") or _dex_fcr in ("pump", "pumpfun")
+        _is_unl_custom = not _is_pump_curve and not bool((pair_data or {}).get("_lp_verified"))
+        if _is_unl_custom and _pd_liq > 0 and _pd_liq < 4500.0:
             verdict["degraded"] = True
             verdict["safe"] = False
             verdict["verdict"] = "BLOCK"
             verdict["score"] = 99.0
-            verdict["reasons"] = [f"таймаут FCR ({budget:.0f}с) на микро-пуле (liq ${_pd_liq:,.0f} < $4.5k) — fail-closed защита от рага"]
+            verdict["reasons"] = [f"таймаут FCR ({budget:.0f}с) на незалоченном пуле (liq ${_pd_liq:,.0f} < $4.5k) — fail-closed защита от рага"]
             verdict["report"] = format_report(verdict)
         else:
             verdict["degraded"] = True
             verdict["safe"] = True
             verdict["verdict"] = "OK"
             verdict["score"] = 0.0
-            verdict["reasons"] = [f"анализ не уложился в {budget:.0f}с — вход разрешён (fail-open)"]
+            verdict["reasons"] = [f"таймаут FCR ({budget:.0f}с) — LP защищён/норма (fail-open)"]
             verdict["report"] = format_report(verdict)
     except Exception as e:  # fail-open: сеть/баг не должны блокировать вход
         verdict["degraded"] = True
