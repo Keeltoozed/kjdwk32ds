@@ -1298,8 +1298,9 @@ async def scanner_loop(analyzer, tracker):
                         else:
                             processed_mints[mint] = time.time()
                         _sc_score_m = float(getattr(analyzer, "rocket_scores", {}).get(mint, getattr(analyzer, "last_score", 0.0)) or 0.0)
-                        analyzer.log_scan(mint[:8], mint, "SCANNER",
-                                          is_good, _sc_score_m)
+                        if not is_good:
+                            analyzer.log_scan(mint[:8], mint, "SCANNER",
+                                              False, _sc_score_m)
 
                         if is_good:
                             _cached_hit = getattr(analyzer, "_prefetch_cache", {}).get(mint, None)
@@ -1318,6 +1319,10 @@ async def scanner_loop(analyzer, tracker):
                             pair_data = await analyzer.fetch_token_data(mint)
                             if not isinstance(pair_data, dict):
                                 pair_data = {}
+                            if isinstance(_last_an_p, dict):
+                                for _fk in ("_lp_verified", "_unlocked_runner_ok", "_pumpswap_checked", "_pumpswap_canonical", "_pumpswap_lp_burned", "_pumpswap_rpc_unverified"):
+                                    if _fk in _last_an_p and _fk not in pair_data:
+                                        pair_data[_fk] = _last_an_p[_fk]
                             entry_price = float(pair_data.get("priceUsd", 0) or 0) if pair_data else 0.0
                             if _scan_px_sc > 0 and entry_price > 0:
                                 if entry_price < _scan_px_sc * 0.92:
@@ -1718,10 +1723,6 @@ async def scanner_loop(analyzer, tracker):
                                 _pc = pair_data.get("priceChange") or {}
                                 _tx5 = (pair_data.get("txns") or {}).get("m5", {}) or {}
                                 _final_sc_conf = float(getattr(analyzer, "rocket_scores", {}).get(mint, getattr(analyzer, "last_score", 0.0)) or 0.0)
-                                analyzer.log_scan(actual_symbol, mint, "SCANNER", True,
-                                                  _final_sc_conf,
-                                                  liq_usd, _pc.get("m5", 0) or 0,
-                                                  _tx5.get("buys", 0) or 0, _tx5.get("sells", 0) or 0)
 
                                 # PRE-FLIGHT GUARD: симулируем продажу на Jupiter ДО открытия позиции!
                                 try:
@@ -1731,16 +1732,16 @@ async def scanner_loop(analyzer, tracker):
                                     if not _j_ok and any(k in _w_low for k in ("no routes", "cannot sell", "honeypot", "freeze", "0 sol returned")):
                                         print(f"🚫 [SCANNER PRE-FLIGHT BLOCKED] {actual_symbol} ({mint[:8]}): токен непродаваем на DEX ({_j_why}) — предотвращен вход!")
                                         continue
-                                    _live_jup_px = await JupiterAPI.get_price(mint)
-                                    if _live_jup_px and _live_jup_px > 0 and entry_price > 0:
-                                        if _live_jup_px < entry_price * 0.925:
-                                            print(f"🚫 [SCANNER LIVE-DUMP BLOCKED] {actual_symbol} ({mint[:8]}): живая цена Jupiter (${_live_jup_px:.8f}) уже на {(1.0 - _live_jup_px / entry_price) * 100:.1f}% ниже цены сигнала (${entry_price:.8f}) — обвал в моменте, отмена входа!")
-                                            continue
-                                        if _live_jup_px > entry_price * 1.25:
-                                            print(f"🚫 [SCANNER JUP-SPIKE BLOCKED] {actual_symbol} ({mint[:8]}): Jupiter (${_live_jup_px:.8f}) выше DS (${entry_price:.8f}) на {(_live_jup_px/entry_price - 1)*100:+.1f}% — защита от покупки спайка (кейс DCC)!")
-                                            continue
-                                        # На сырых кривых pump/pumpfun НЕ перезаписываем entry_price завышенной котировкой роутера Jupiter (как в GROK-JEV строка 2370):
-                                        if _dex_id not in ("pump", "pumpfun"):
+                                    # На сырых кривых pump/pumpfun НЕ сверяем с котировкой роутера Jupiter (искажает цену виртуального кёрва):
+                                    if _dex_id not in ("pump", "pumpfun"):
+                                        _live_jup_px = await JupiterAPI.get_price(mint)
+                                        if _live_jup_px and _live_jup_px > 0 and entry_price > 0:
+                                            if _live_jup_px < entry_price * 0.925:
+                                                print(f"🚫 [SCANNER LIVE-DUMP BLOCKED] {actual_symbol} ({mint[:8]}): живая цена Jupiter (${_live_jup_px:.8f}) уже на {(1.0 - _live_jup_px / entry_price) * 100:.1f}% ниже цены сигнала (${entry_price:.8f}) — обвал в моменте, отмена входа!")
+                                                continue
+                                            if _live_jup_px > entry_price * 1.25:
+                                                print(f"🚫 [SCANNER JUP-SPIKE BLOCKED] {actual_symbol} ({mint[:8]}): Jupiter (${_live_jup_px:.8f}) выше DS (${entry_price:.8f}) на {(_live_jup_px/entry_price - 1)*100:+.1f}% — защита от покупки спайка (кейс DCC)!")
+                                                continue
                                             entry_price = _live_jup_px
                                 except Exception:
                                     pass
@@ -1768,7 +1769,8 @@ async def scanner_loop(analyzer, tracker):
                                         if not _ps_m_ok or config.is_pumpswap_liq_fdv_trap(pair_data):
                                             print(f"🚫 [SCANNER PRE-FLIGHT PUMPSWAP] {actual_symbol} ({mint[:8]}): {_ps_m_why} — вход заблокирован!")
                                             continue
-                                        if not _ps_m_canon and not bool(pair_data.get("_pumpswap_lp_burned")):
+                                        _ps_rpc_safe_m = bool(pair_data.get("_pumpswap_rpc_unverified")) and mint.lower().endswith("pump")
+                                        if not _ps_m_canon and not bool(pair_data.get("_pumpswap_lp_burned")) and not _ps_rpc_safe_m:
                                             _ca_ps = float(pair_data.get("pairCreatedAt") or 0)
                                             _age_ps = ((time.time() * 1000.0 - _ca_ps) / 60000.0) if _ca_ps > 0 else 0.1
                                             _fdv_ps = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
@@ -1781,6 +1783,7 @@ async def scanner_loop(analyzer, tracker):
                                                 sells5=int(_tx5.get("sells", 0) or 0),
                                                 fdv_usd=_fdv_ps,
                                                 m5_pct=(float(_m5_ps) if _m5_ps is not None else None),
+                                                pair_data=pair_data,
                                             ):
                                                 print(f"🚫 [SCANNER PRE-FLIGHT PUMPSWAP-CREATEPOOL] {actual_symbol} ({mint[:8]}): кастомный незалоченный пул ({_ps_m_why}) не прошёл фильтр liq/fdv/оборота — блок!")
                                                 continue
@@ -1790,7 +1793,7 @@ async def scanner_loop(analyzer, tracker):
                                 # PRE-FLIGHT GUARD ДЛЯ ВСЕХ НЕЗАЛОЧЕННЫХ ПУЛОВ (Meteora DYN2, PumpSwap CreatePool, кастомный Raydium без сожжённого LP)
                                 _dex_lower_sc = str(pair_data.get("dexId") or "").lower()
                                 _is_native_pump_sc = mint.lower().endswith("pump") and _dex_lower_sc in ("", "pumpfun", "pump", "pumpswap")
-                                _is_lp_safe_sc = bool(pair_data.get("_lp_verified")) or bool(pair_data.get("_pumpswap_canonical"))
+                                _is_lp_safe_sc = bool(pair_data.get("_lp_verified")) or bool(pair_data.get("_pumpswap_canonical")) or bool(pair_data.get("_pumpswap_lp_burned"))
                                 if not _is_native_pump_sc and not _is_lp_safe_sc:
                                     _ca_sc = float(pair_data.get("pairCreatedAt") or 0)
                                     _age_sc = ((time.time() * 1000.0 - _ca_sc) / 60000.0) if _ca_sc > 0 else 0.1
@@ -1844,11 +1847,13 @@ async def scanner_loop(analyzer, tracker):
                                         if _fcr.get("verdict") == "WARN":
                                             _fcr_w_n = int((_fcr_compact or {}).get("fcr_cluster_wallets", 0) or 0)
                                             _fcr_m5 = float((pair_data.get("priceChange") or {}).get("m5", 0) or 0)
-                                            _is_dist_fcr_sc = (_vol5_live >= 25000.0 and _b5_live >= int(_s5_live * 1.20) and liq_usd >= 15000.0 and _age_m < 45.0)
+                                            _is_dist_fcr_sc = config.is_distributed_safe_runner(
+                                                liq_usd, _age_m, _vol5_live, _b5_live, _s5_live, is_lp_safe=True
+                                            )
                                             if _fcr_w_n >= 5 and not _is_dist_fcr_sc:
                                                 print(f"🚫 [SCANNER FCR-FARM-BLOCK] {actual_symbol} ({mint[:8]}): ферма из {_fcr_w_n} кошельков одного источника (кейс GTA6 -14%) — отмена входа!")
                                                 continue
-                                            if _fcr_w_n >= 3 and _fcr_m5 > 120.0:
+                                            if _fcr_w_n >= 3 and _fcr_m5 > 120.0 and not _is_dist_fcr_sc:
                                                 print(f"🚫 [SCANNER FCR-INSIDER-BLOCK] {actual_symbol} ({mint[:8]}): инсайдерская сеть {_fcr_w_n} кошельков на свече m5 {_fcr_m5:+.1f}% — отмена входа (кейс CHUD -50%)!")
                                                 continue
                                             print(f"⚠️ [SCANNER PRE-FLIGHT FCR] {actual_symbol} ({mint[:8]}): {_fcr.get('report', '')}")
@@ -1870,6 +1875,10 @@ async def scanner_loop(analyzer, tracker):
                                 if not _bought:
                                     print(f"🚫 [SCANNER-FIREWALL] {actual_symbol} ({mint[:8]}): покупка отклонена финальным фильтром tracker.")
                                     continue
+                                analyzer.log_scan(actual_symbol, mint, "SCANNER", True,
+                                                  _final_sc_conf,
+                                                  liq_usd, _pc.get("m5", 0) or 0,
+                                                  _tx5.get("buys", 0) or 0, _tx5.get("sells", 0) or 0)
                                 print(f"🚀 [BUY-EXECUTED] {actual_symbol} ({mint[:8]}) @ ${entry_price:.8f} [${position_size:.0f}] | ML {_final_sc_conf:.1f}%")
                                 # Инициализируем мониторинг кошельков для новой позиции
                                 try:

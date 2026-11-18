@@ -484,11 +484,12 @@ class PaperTracker:
                     print(f"🛑 [FIREWALL-RUG-BLOCK] {symbol} ({mint_str[:8]}): PumpSwap CreatePool liq/fdv 0-social trap!")
                     return False
                 _ps_rpc_unv = bool(pair_data.get("_pumpswap_rpc_unverified")) and config.is_launchpad_mint(mint_str)
-                if not _allow_unl_tr and pair_data.get("_pumpswap_checked") and not _lp_preverified and not _ps_rpc_unv:
+                _unl_runner_pre = bool(pair_data.get("_unlocked_runner_ok"))
+                if not _allow_unl_tr and pair_data.get("_pumpswap_checked") and not _lp_preverified and not _ps_rpc_unv and not _unl_runner_pre:
                     print(f"🛑 [FIREWALL-RUG-BLOCK] {symbol} ({mint_str[:8]}): PumpSwap pool failed on-chain CreatePool check!")
                     return False
-                if not _allow_unl_tr and _pd_dex == "pumpswap" and pair_data.get("_pumpswap_canonical") is False and not _lp_preverified and not _ps_rpc_unv:
-                    print(f"🛑 [FIREWALL-RUG-BLOCK] {symbol} ({mint_str[:8]}): custom non-canonical PumpSwap pool without verified burned LP!")
+                if not _allow_unl_tr and _pd_dex == "pumpswap" and mint_str.lower().endswith("pump") and pair_data.get("_pumpswap_canonical") is False and not _lp_preverified and not _ps_rpc_unv:
+                    print(f"🛑 [FIREWALL-RUG-BLOCK] {symbol} ({mint_str[:8]}): custom non-canonical .pump PumpSwap pool without verified burned LP!")
                     return False
             # Строгий LP-Firewall:
             # 1) Нативный Pump.fun токен (оканчивается на 'pump') на pumpfun / каноническом pumpswap защищён протоколом.
@@ -557,8 +558,10 @@ class PaperTracker:
         _is_copy_src = str(source or "").startswith("COPY")
         _is_vip = "VIP" in str(source or "")
         _is_unlocked_tr = config.is_position_unlocked_lp(mint, pair_data, bool((pair_data or {}).get("_lp_verified")))
-        min_conf = float(getattr(config, "ROCKET_XGB_FINAL_THRESHOLD", 30.0))
-        _stage1_conf = float(getattr(config, "ROCKET_XGB_STAGE1_THRESHOLD", 18.0))
+        _pd_dex_tr = str((pair_data or {}).get("dexId", "") or "").lower() if isinstance(pair_data, dict) else ""
+        _is_raw_curve_tr = _pd_dex_tr in ("pump", "pumpfun")
+        min_conf = 20.0 if _is_raw_curve_tr else float(getattr(config, "ROCKET_XGB_FINAL_THRESHOLD", 14.0))
+        _stage1_conf = 20.0 if _is_raw_curve_tr else float(getattr(config, "ROCKET_XGB_STAGE1_THRESHOLD", 14.0))
         _mom_rocket_ok = False
         if not _is_unlocked_tr and isinstance(pair_data, dict):
             _tx_t = (pair_data.get("txns") or {}).get("m5") or {}
@@ -726,7 +729,7 @@ class PaperTracker:
                     reason=f"BUY_ORDER (conf={ml_confidence:.1f}%)",
                     score=float(ml_confidence or 0.0),
                     price=float(entry_price or 0.0),
-                    liquidity=float(pool_liq or 0.0),
+                    liquidity=float(_eff_init_liq or 0.0),
                     source=source or "BUY",
                     features=entry_features
                 )

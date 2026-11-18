@@ -473,6 +473,9 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
             if _fresh_px_j > _scan_px_j * 1.30:
                 print(f"🚫 [{source_tag}-FINAL-RECHECK] {mint[:8]}: цена улетела на {(_fresh_px_j/_scan_px_j - 1)*100:+.1f}% за время аудита — не догоняем хай!")
                 return False
+        for _fk in ("_lp_verified", "_unlocked_runner_ok", "_pumpswap_checked", "_pumpswap_canonical", "_pumpswap_lp_burned", "_pumpswap_rpc_unverified"):
+            if _fk in td and _fk not in _fresh_td:
+                _fresh_td[_fk] = td[_fk]
         td = _fresh_td
     _base_tok = (td.get("baseToken") or {})
     _sym_tmp = str(_base_tok.get("symbol") or mint[:6]).strip().upper()

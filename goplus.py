@@ -1613,13 +1613,15 @@ def _set_pumpswap_flags(
     lp_burned: bool = False,
 ) -> None:
     if isinstance(pair_data, dict):
+        _bt_addr = str(((pair_data.get("baseToken") or {}).get("address") or "")).strip().lower()
+        _rpc_pump_safe = bool(ok and rpc_unverified and _bt_addr.endswith("pump") and not config.is_pumpswap_liq_fdv_trap(pair_data))
         pair_data["_pumpswap_checked"] = True
-        pair_data["_pumpswap_canonical"] = bool(is_canonical)
+        pair_data["_pumpswap_canonical"] = bool(is_canonical or _rpc_pump_safe)
         pair_data["_pumpswap_rpc_unverified"] = bool(rpc_unverified)
         pair_data["_pumpswap_lp_burned"] = bool(lp_burned)
         if not ok:
             pair_data["_lp_verified"] = False
-        elif is_canonical or lp_burned:
+        elif is_canonical or lp_burned or _rpc_pump_safe:
             pair_data["_lp_verified"] = True
         else:
             pair_data["_lp_verified"] = False
@@ -1826,6 +1828,34 @@ async def verify_pumpswap_pool_onchain(
             _set_pumpswap_flags(pair_data, True, False, lp_burned=False)
             _PUMPSWAP_POOL_CACHE[cache_key] = (now, res)
             return res
+        # Для .pump токенов неканонический CreatePool с несожжённым LP — 100% скам-приманка (JENSEN, DACITYCOIN, BALVOTE).
+        # Для не-.pump токенов (HOGE +158%, ANT +53%) допускаем ТОЛЬКО если пул проходит жёсткий фильтр органического раннера.
+        if not is_pump_mint and isinstance(pair_data, dict) and not config.is_pumpswap_liq_fdv_trap(pair_data):
+            import time as _t_ps
+            _ca_ps = float(pair_data.get("pairCreatedAt") or 0.0)
+            _age_ps = ((_t_ps.time() * 1000.0 - _ca_ps) / 60000.0) if _ca_ps > 0 else 0.2
+            _liq_ps = float((pair_data.get("liquidity") or {}).get("usd") or 0.0)
+            _fdv_ps = float(pair_data.get("fdv") or pair_data.get("marketCap") or 0.0)
+            _vol5_ps = float((pair_data.get("volume") or {}).get("m5") or 0.0)
+            _tx5_ps = (pair_data.get("txns") or {}).get("m5") or {}
+            _b5_ps = int(_tx5_ps.get("buys") or 0)
+            _s5_ps = int(_tx5_ps.get("sells") or 0)
+            _m5_ps = (pair_data.get("priceChange") or {}).get("m5")
+            if config.is_safe_unlocked_custom_runner(
+                liq_usd=_liq_ps,
+                age_min=_age_ps,
+                vol5_usd=_vol5_ps,
+                buys5=_b5_ps,
+                sells5=_s5_ps,
+                fdv_usd=_fdv_ps,
+                m5_pct=(float(_m5_ps) if _m5_ps is not None else None),
+                pair_data=pair_data,
+            ):
+                res = (True, False, f"pumpswap-custom-organic-runner:{lp_sup:.2f}-idx{pool_idx}")
+                _set_pumpswap_flags(pair_data, True, False, lp_burned=False)
+                pair_data["_unlocked_runner_ok"] = True
+                _PUMPSWAP_POOL_CACHE[cache_key] = (now, res)
+                return res
         res = (False, False, f"pumpswap-createpool-unburned-lp:{lp_sup:.2f}-idx{pool_idx}")
         _set_pumpswap_flags(pair_data, False, False)
         _PUMPSWAP_POOL_CACHE[cache_key] = (now, res)

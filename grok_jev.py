@@ -477,7 +477,7 @@ class GrokJevEngine:
         if _is_unlocked_hg:
             _info_hg = pair_data.get("info") or {}
             _has_soc_hg = bool((_info_hg.get("socials") or []) or (_info_hg.get("websites") or []))
-            _u_min_age = float(getattr(_c, "UNLOCKED_CUSTOM_NO_SOC_MIN_AGE_MIN", 3.0)) if not _has_soc_hg else float(getattr(_c, "UNLOCKED_CUSTOM_MIN_AGE_MIN", 2.0))
+            _u_min_age = float(getattr(_c, "UNLOCKED_CUSTOM_NO_SOC_MIN_AGE_MIN", 1.9)) if not _has_soc_hg else float(getattr(_c, "UNLOCKED_CUSTOM_MIN_AGE_MIN", 1.9))
             if age_min < _u_min_age:
                 try:
                     from birth_tracker import birth_tracker as _bt_uc
@@ -485,14 +485,14 @@ class GrokJevEngine:
                 except Exception:
                     pass
                 return False, f"unlocked-custom-quarantine {age_min:.2f}m < {_u_min_age:.2f}m (wait for LP stability, soc={int(_has_soc_hg)})"
-            if raw_liq >= 18000.0 and (vol_m5 < (raw_liq * 0.35) or b5 < 20 or (s5 > 0 and b5 < s5)):
+            if raw_liq >= 18000.0 and (vol_m5 < (raw_liq * 0.50) or b5 < 20 or (s5 > 0 and b5 < s5)):
                 return False, f"seeded-unlocked-lp-bait liq ${raw_liq:,.0f} vol5 ${vol_m5:,.0f} ({b5}b/{s5}s) — drain-trap risk"
             if fdv_mc > 0.0 and raw_liq > (fdv_mc * 2.25):
                 return False, f"synthetic-unlocked-lp-bait liq ${raw_liq:,.0f} vs fdv ${fdv_mc:,.0f} > 2.25x — impossible AMM ratio"
             if _m5_hg_val < 4.0 and vol_m5 < (raw_liq * 2.0):
                 return False, f"flat-unlocked-lp-trap m5 {_m5_hg_val:+.1f}% vol5 ${vol_m5:,.0f} — no real breakout"
-            if not _has_soc_hg and (b5 < 35 or vol_m5 < 8000.0 or s5 < 8):
-                return False, f"unlocked-0-socials-weak-activity ({b5}b/{s5}s vol5 ${vol_m5:,.0f} < $8000) — drain-trap risk"
+            if not _has_soc_hg and (b5 < 35 or vol_m5 < 6500.0 or s5 < 8):
+                return False, f"unlocked-0-socials-weak-activity ({b5}b/{s5}s vol5 ${vol_m5:,.0f} < $6500) — drain-trap risk"
             if raw_liq >= 12000.0 and not _has_soc_hg and (fdv_mc <= 0.0 or raw_liq >= (fdv_mc * 0.65)) and (vol_m5 < (raw_liq * 0.45) or b5 < 25):
                 return False, f"permissionless-seeded-lp-fdv-trap liq ${raw_liq:,.0f} fdv ${fdv_mc:,.0f} vol5 ${vol_m5:,.0f} 0-socials"
 
@@ -517,16 +517,20 @@ class GrokJevEngine:
                 m1 = max(-25.0, min(25.0, m5 * 0.15))
         h1 = float(pc.get("h1", 0) or 0)
 
-        # КАТЕГОРИЧЕСКИЙ БЛОК: СМЕРТЕЛЬНАЯ ЗОНА 0-1.9 МИНУТ (КРИВЫЕ И МИГРАЦИИ)
-        # На кривых <1.9м и в первые 90с миграции снайперы сливают начальные бандлы (кейсы HUGH -68%, EDDIE -17%, PUSSY -17%, AUDACITY -54%).
-        # Настоящие ракеты (Rockstar 2.5m +401%, OFFLINE 2.1m +300%, SI 2.6m +83%, DACT 3.1m +103%) входят после 1.9м!
+        # КАТЕГОРИЧЕСКИЙ БЛОК: СМЕРТЕЛЬНАЯ ЗОНА 0-1.8 МИНУТ (КРИВЫЕ И МИГРАЦИИ)
         _avg_tx_e = vol_m5 / max(1, b5 + s5)
         if dex_id in ("pump", "pumpfun"):
-            if fdv_mc > 0 and (fdv_mc < 3800.0 or fdv_mc > 11000.0):
-                return False, f"pump-curve-fdv-out-of-sweet-spot ${fdv_mc:,.0f} not in [$3.8k, $11k]"
-            if vol_m5 < 2500.0 or vol_m5 > 11500.0:
-                return False, f"pump-curve-vol5-out-of-sweet-spot ${vol_m5:,.0f} not in [$2.5k, $11.5k]"
-            _sol_min_age_g = 1.0 if (_avg_tx_e >= 45.0 and b5 >= int(s5 * 1.80)) else 1.9
+            if fdv_mc > 0 and (fdv_mc < 3200.0 or fdv_mc > 11500.0):
+                return False, f"pump-curve-fdv-out-of-sweet-spot ${fdv_mc:,.0f} not in [$3.2k, $11.5k]"
+            if s5 > 0 and b5 < int(s5 * 1.35):
+                return False, f"early-curve-weak-buyers fdv=${fdv_mc:.0f} {b5}b/{s5}s"
+            if (b5 - s5) < 15:
+                return False, f"early-curve-low-net-buyers {b5}b/{s5}s"
+            _min_c_v5 = 1800.0 if (b5 >= int(s5 * 2.0) and (b5 - s5) >= 15) else 2500.0
+            _max_c_v5 = 24000.0 if (m5 <= 135.0 and b5 >= int(s5 * 1.35) and _avg_tx_e >= 18.0) else 11500.0
+            if vol_m5 < _min_c_v5 or vol_m5 > _max_c_v5:
+                return False, f"pump-curve-vol5-out-of-sweet-spot ${vol_m5:,.0f} not in [${_min_c_v5:,.0f}, ${_max_c_v5:,.0f}]"
+            _sol_min_age_g = 1.0 if (_avg_tx_e >= 40.0 and b5 >= int(s5 * 1.80)) else 1.8
         else:
             _sol_min_age_g = 0.8 if (vol_m5 >= 20000.0 and b5 >= int(s5 * 1.30) and m5 >= 10.0) else 1.5
         if age_min < _sol_min_age_g:
@@ -2136,7 +2140,9 @@ class GrokJevEngine:
         # Отсекает 90% мусора и заведомых дампов в 0мс (DARTHLON 6%, BALLS 4%, DAISUKE 2%)
         # без лишних сетевых вызовов Jupiter, RugCheck и LLM.
         rkt_s1 = self.score_rocket_xgb(address, pair)
-        s1_thresh = float(getattr(_c, "ROCKET_XGB_STAGE1_THRESHOLD", 8.0))
+        s1_thresh = float(getattr(_c, "ROCKET_XGB_STAGE1_THRESHOLD", 14.0))
+        if str(pair.get("dexId") or "").lower() in ("pump", "pumpfun"):
+            s1_thresh = max(s1_thresh, 20.0)
         _txs_s1 = (pair.get("txns") or {}).get("m5") or {}
         _b5_s1 = int(_txs_s1.get("buys", 0) or 0)
         _s5_s1 = int(_txs_s1.get("sells", 0) or 0)
@@ -2303,12 +2309,17 @@ class GrokJevEngine:
                 pair["liquidity"] = _fin.get("liquidity")
             price = _fpx
         else:
+            for _fk in ("_lp_verified", "_unlocked_runner_ok", "_pumpswap_checked", "_pumpswap_canonical", "_pumpswap_lp_burned", "_pumpswap_rpc_unverified"):
+                if _fk in pair and _fk not in _fin:
+                    _fin[_fk] = pair[_fk]
             pair, price = _fin, _fpx
         wick_price = price * (1.0 + wick_pct)
 
         # 5.6. 🚀 STAGE 2: ROCKET XGBOOST FINAL ML FIREWALL (единый порог с tracker.py)
         rkt_final = self.score_rocket_xgb(address, pair, _h_stats)
-        final_thresh = float(getattr(_c, "ROCKET_XGB_FINAL_THRESHOLD", 8.0))
+        final_thresh = float(getattr(_c, "ROCKET_XGB_FINAL_THRESHOLD", 14.0))
+        if str(pair.get("dexId") or "").lower() in ("pump", "pumpfun"):
+            final_thresh = max(final_thresh, 20.0)
         _fin_links = len((pair.get("info") or {}).get("socials", []) or []) + len((pair.get("info") or {}).get("websites", []) or [])
         _fin_ca_ms = float(pair.get("pairCreatedAt") or 0)
         _fin_age_m = ((time.time() * 1000.0 - _fin_ca_ms) / 60000.0) if _fin_ca_ms > 0 else 0.0

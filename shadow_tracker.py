@@ -222,7 +222,7 @@ class ShadowTracker:
         # Дедупликация: не спамим Supabase частыми запросами на одну монету.
         # Если монета уже записана <90с назад и решение/цена не изменились — скип.
         prev = self._all_scanned_cooldown.get(mint)
-        if prev:
+        if prev and not str(reason or "").startswith("BUY_ORDER"):
             prev_ts, prev_dec, prev_px = prev
             px_val = float(price or 0.0)
             if (now_ts - prev_ts) < 90 and prev_dec == decision:

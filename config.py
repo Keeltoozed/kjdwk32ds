@@ -101,11 +101,11 @@ def get_max_entry_h1_pct(
 
 
 LAUNCHPAD_MINT_SUFFIXES = ("pump", "moon", "bonk", "bags")
-UNLOCKED_CUSTOM_MIN_LIQ_USD = 4500.0
-UNLOCKED_CUSTOM_MIN_AGE_MIN = 2.0              # 2.0 мин мин. возраст для незалоченных пулов С подтверждёнными соцсетями
-UNLOCKED_CUSTOM_NO_SOC_MIN_AGE_MIN = 3.0       # 3.0 мин мин. возраст для незалоченных пулов БЕЗ соцсетей (защита от мгновенного вывода LP девом)
-UNLOCKED_CUSTOM_MIN_VOL5_USD = 2500.0
-UNLOCKED_CUSTOM_MIN_BUYS5 = 15
+UNLOCKED_CUSTOM_MIN_LIQ_USD = 5000.0
+UNLOCKED_CUSTOM_MIN_AGE_MIN = 1.9              # 1.9 мин мин. возраст для незалоченных пулов С подтверждёнными соцсетями
+UNLOCKED_CUSTOM_NO_SOC_MIN_AGE_MIN = 1.9       # 1.9 мин мин. возраст для незалоченных пулов (отсекает 0-1.5м раги USPR/WCOIN/TOWN, пропускает ANT 2.38м +53% и HOGE +158%)
+UNLOCKED_CUSTOM_MIN_VOL5_USD = 6500.0
+UNLOCKED_CUSTOM_MIN_BUYS5 = 40
 
 
 def is_launchpad_mint(mint: str) -> bool:
@@ -114,46 +114,33 @@ def is_launchpad_mint(mint: str) -> bool:
 
 
 def is_unmigrated_curve_token(mint: str, pair_data: Optional[dict] = None) -> bool:
-    """Return True if token is on an ungraduated bonding curve, dumped post-migration, or micro-pool (<$30k FDV / <$4.5k Liq)."""
+    """Return True ONLY if token is on an actual ungraduated bonding curve (pump/pumpfun/moonshot/meteoradbc)."""
     if not mint:
         return False
     mint_str = str(mint).strip().lower()
     pd = pair_data if isinstance(pair_data, dict) else {}
     dex_id = str(pd.get("dexId") or "").strip().lower()
 
-    # 1. Токены на сырых кривых moonshot, meteoradbc
+    # 1. Явные пулы AMM DEX (pumpswap, raydium, orca, meteora) — уже мигрировали, это НЕ сырая кривая!
+    if dex_id in ("pumpswap", "raydium", "orca", "meteora"):
+        return False
+
+    # 2. Токены на сырых кривых pump, pumpfun, moonshot, meteoradbc
     if dex_id in ("pump", "pumpfun", "moonshot", "meteoradbc") or mint_str.endswith("moon"):
-        return True
-
-    # 2. Вычисляем FDV и ликвидность с защитой от пустых/нулевых значений
-    fdv = float(pd.get("fdv", 0) or pd.get("marketCap", 0) or 0)
-    if fdv <= 0:
-        px = float(pd.get("priceUsd", 0) or 0)
-        if px > 0:
-            fdv = px * 1_000_000_000.0
-    liq = float((pd.get("liquidity") or {}).get("usd", 0) or 0)
-
-    # 3. Токены Pump.fun / PumpSwap:
-    # Настоящий выпускник Pump.fun ОБЯЗАН иметь FDV >= $30,000 и ликвидность >= $4,500.
-    # Если токен ends with 'pump' или dexId 'pumpswap', но FDV < $30k или Liq < $4.5k — это сырой кёрв или снайп-дамп (как Smoke)!
-    if mint_str.endswith("pump") or dex_id in ("pumpswap", "pump", "pumpfun"):
         is_known_grad = False
         try:
             from birth_tracker import birth_tracker as _bt_chk
             is_known_grad = _bt_chk.is_graduated(mint)
         except Exception:
             pass
-        if not is_known_grad and dex_id in ("pump", "pumpfun"):
-            return True
-        if fdv > 0 and fdv < 30000.0:
-            return True
-        if liq > 0 and liq < 4500.0:
-            return True
-        if fdv <= 0 and liq <= 0:
-            return True
+        liq = float((pd.get("liquidity") or {}).get("usd", 0) or 0)
+        if is_known_grad and liq >= 6000.0 and dex_id not in ("pump", "pumpfun"):
+            return False
+        return True
 
-    # 4. Общее правило для ЛЮБЫХ токенов на Solana: микро-пулы с FDV < $25,000 или liq < $3,500 — это 99% раг
-    if 0 < fdv < 25000.0 or 0 < liq < 3500.0:
+    # 3. Если dexId пустой у .pump токена и ликвидность < $4,500 — это ещё сырой кёрв
+    liq = float((pd.get("liquidity") or {}).get("usd", 0) or 0)
+    if dex_id == "" and mint_str.endswith("pump") and liq < 4500.0:
         return True
 
     return False
@@ -262,14 +249,20 @@ def is_safe_unlocked_custom_runner(
     **kwargs,
 ) -> bool:
     """
-    Допуск свежих DEX-раннеров без сожжённого/залоченного LP (Meteora, PumpSwap CreatePool, Raydium):
-    отсекаем мгновенные ловушки дева с выводом LP через 1 минуту (WCOIN, TOWN, VINE, SCHRODING, GTA6),
-    инвертированные seeded-LP ловушки (Starhug $103k liq / $20k vol) при сохранении настоящих ракет (TikTok).
+    Допуск высокооборотных DEX-раннеров (PumpSwap, Raydium):
+    отсекаем мгновенные ловушки дева с выводом LP через 1 минуту (USPR, WCOIN, TOWN, VINE, GTA6),
+    искусственные seeded-LP ловушки (JENSEN, DACITYCOIN, BALVOTE, Starhug) и wash-накрутки (LSC 10.6x),
+    но пропускаем настоящие органические DEX-ракеты (HOGE +158%, ANT +53%, RATFACE +29%, GRANDPUMP +214%).
     """
-    if not bool(globals().get("ALLOW_UNLOCKED_LP_POOLS", True)):
-        return False
     if is_trap:
         return False
+
+    if isinstance(pair_data, dict):
+        _dex_u = str(pair_data.get("dexId") or "").lower()
+        if ("meteora" in _dex_u or _dex_u == "meteoradbc") and not bool(pair_data.get("_lp_verified")):
+            return False
+        if is_pumpswap_liq_fdv_trap(pair_data):
+            return False
 
     liq_val = float(liq_usd or 0.0)
     fdv_val = float(fdv_usd or 0.0)
@@ -278,7 +271,7 @@ def is_safe_unlocked_custom_runner(
     b5 = int(buys5 or 0)
     s5 = int(sells5 or 0)
 
-    min_liq = float(globals().get("UNLOCKED_CUSTOM_MIN_LIQ_USD", 4500.0))
+    min_liq = float(globals().get("UNLOCKED_CUSTOM_MIN_LIQ_USD", 5000.0))
     if liq_val < min_liq:
         return False
 
@@ -290,46 +283,45 @@ def is_safe_unlocked_custom_runner(
         if len(_socs) > 0 or len(_webs) > 0:
             has_socials = True
 
-    # На незалоченном пуле создатель держит 100% LP и может нажать RemoveLiquidity в любую секунду.
-    # В 100% случаев дев-слива пул выдергивается в первые 45-120 секунд (кейсы WCOIN 1м, TOWN 1м, VINE 0м, GTA6 0м).
-    # Карантин по возрасту:
-    # - Без соцсетей (фантомные пулы): минимум 3.0 минуты устойчивой торговли
-    # - С подтверждёнными соцсетями/сайтом: минимум 2.0 минуты
-    min_age = float(globals().get("UNLOCKED_CUSTOM_NO_SOC_MIN_AGE_MIN", 3.0)) if not has_socials else float(globals().get("UNLOCKED_CUSTOM_MIN_AGE_MIN", 2.0))
+    # Карантин по возрасту >= 1.9 минуты (отсекает 0-1.5м раги WCOIN, TOWN, VINE, GTA6, USPR)
+    min_age = float(globals().get("UNLOCKED_CUSTOM_NO_SOC_MIN_AGE_MIN", 1.9)) if not has_socials else float(globals().get("UNLOCKED_CUSTOM_MIN_AGE_MIN", 1.9))
     if age_val < min_age:
         return False
 
-    if not has_socials:
-        # Без соцсетей требуем мощную реальную двустороннюю активность (не 1 бот накрутчик)
-        if b5 < 35 or vol5_val < 8000.0 or s5 < 8:
+    # Требуем реальную двухстороннюю торговлю с нормальным средним чеком (HOGE avg $103, ANT avg $47, RATFACE avg $52)
+    avg_tx = vol5_val / max(1, b5 + s5)
+    if not bool(globals().get("ALLOW_UNLOCKED_LP_POOLS", True)):
+        if b5 < 40 or s5 < 10 or vol5_val < max(6500.0, liq_val * 0.80) or avg_tx < 22.0:
+            return False
+        if fdv_val > 0.0 and liq_val >= (fdv_val * 0.72):
             return False
     else:
-        min_vol5 = float(globals().get("UNLOCKED_CUSTOM_MIN_VOL5_USD", 2500.0))
-        min_buys5 = int(globals().get("UNLOCKED_CUSTOM_MIN_BUYS5", 15))
-        if b5 < min_buys5 or vol5_val < min_vol5:
-            return False
+        if not has_socials:
+            if b5 < 35 or vol5_val < 6500.0 or s5 < 8:
+                return False
+        else:
+            min_vol5 = float(globals().get("UNLOCKED_CUSTOM_MIN_VOL5_USD", 2500.0))
+            min_buys5 = int(globals().get("UNLOCKED_CUSTOM_MIN_BUYS5", 15))
+            if b5 < min_buys5 or vol5_val < min_vol5:
+                return False
 
     if s5 > 0 and b5 < int(s5 * 1.10):
         return False
 
-    # Seeded-LP приманка (кейс Starhug $103.5k liq / $20k vol5 = 0.19x): на крупном незалоченном пуле нужен оборот >= 35%
-    if liq_val >= 18000.0 and vol5_val < (liq_val * 0.35):
+    # Seeded-LP приманка (кейсы JENSEN 0.23x, DACITYCOIN 0.06x, Starhug 0.19x): на крупном пуле нужен живой оборот
+    if liq_val >= 18000.0 and vol5_val < (liq_val * 0.50):
         return False
 
-    # Синтетическая ловушка Liq/FDV:
-    # В AMM пулах (Meteora DYN2) Total Liq = 2 * Quote. При пуле 70%-95% саплая отношение Liq/FDV
-    # математически составляет 1.40x - 1.95x. Порог > 2.25x режет только фейковые пулы,
-    # не блокируя настоящие Meteora-ракеты (PERCPOOLS +648%, EQUITY +467%, RETAIL +423%, SOGE +258%).
-    if fdv_val > 0.0:
-        if liq_val > (fdv_val * 2.25):
-            return False
+    # Синтетическая ловушка Liq/FDV
+    if fdv_val > 0.0 and liq_val > (fdv_val * 2.25):
+        return False
 
     # На незалоченном пуле должен быть реальный ценовой импульс, а не плоский флет перед дампом (кейс TOWN +0.7%)
     if m5_pct is not None and float(m5_pct) < 4.0 and vol5_val < (liq_val * 2.0):
         return False
 
-    # Кастомный незалоченный пул без соцсетей с аномальным wash-оборотом (>7.5x ликвидности) — ловушка дева
-    if not has_socials and liq_val > 0 and (vol5_val / liq_val) > 7.5 and age_val < 20.0:
+    # Аномальный wash-оборот (>7.0x ликвидности без соцсетей — кейс LSC 10.6x -100%)
+    if not has_socials and liq_val > 0 and (vol5_val / liq_val) > 7.0 and age_val < 20.0:
         return False
 
     return True
@@ -347,8 +339,6 @@ def is_distributed_safe_runner(
     is_lp_safe: bool = False,
 ) -> bool:
     """Exempt liquid, active runners from soft sybil/graph false positives."""
-    if not is_lp_safe and not bool(globals().get("ALLOW_UNLOCKED_LP_POOLS", True)):
-        return False
     if liq_usd < 8000.0 or vol5_usd < 5000.0:
         return False
     if buys5 < 25 or (sells5 > 0 and buys5 < int(sells5 * 0.85)):
@@ -666,11 +656,11 @@ DD_THROTTLE_START_USD = 15.0
 
 # === ВХОД В ЗРЕЛЫЕ ВЫПУСКНИКИ RAYDIUM / PUMPSWAP И РАННИЕ КРИВЫЕ PUMP.FUN ===
 SNIPER_ENTRIES_ENABLED = True             # ВКЛЮЧЕНО: мгновенный вход в свежие кривые/миграции со стрима
-ALLOW_UNGRADUATED_PUMPFUN = True          # ВКЛЮЧЕНО: ловим ракеты на кривой Pump.fun до миграции (открывает 大A +1559%, ROCKSTAR +163%)
-MIN_PUMP_CURVE_MCAP_USD = 3800.0          # Порог кривой $3.8k (по 116 сделкам: <$3.8k = 6.2% WR, 0 ракет, -322% PnL; все 13 ракет >=$3.8k!)
-MAX_PUMP_CURVE_MCAP_USD = 11000.0         # Потолок сырой кривой $11.0k (выше $11k до миграции снайперы разгружаются = -510% PnL; дальше ждём миграцию на PumpSwap)
-MIN_PUMP_CURVE_MCAP_SOL = 50.0            # Нижняя граница золотой зоны кривой (~50 SOL ≈ $3.8k)
-MAX_PUMP_CURVE_MCAP_SOL = 148.0           # Верхняя граница золотой зоны сырой кривой (~148 SOL ≈ $11k)
+ALLOW_UNGRADUATED_PUMPFUN = True          # ВКЛЮЧЕНО: ловим ракеты на кривой Pump.fun до миграции (открывает 大A +1559%, ROCKSTAR +163%, NEIL +52%, BLUE +36%)
+MIN_PUMP_CURVE_MCAP_USD = 3200.0          # Порог кривой $3.2k (отсекает пустые $2k кёрвы, пропускает NEIL $3.3k->$5k +52% и BLUE $6.5k +36%)
+MAX_PUMP_CURVE_MCAP_USD = 11500.0         # Потолок сырой кривой $11.5k (выше $11.5k до миграции снайперы разгружаются; дальше ждём миграцию на PumpSwap)
+MIN_PUMP_CURVE_MCAP_SOL = 42.0            # Нижняя граница золотой зоны кривой (~42 SOL ≈ $3.2k)
+MAX_PUMP_CURVE_MCAP_SOL = 152.0           # Верхняя граница золотой зоны сырой кривой (~152 SOL ≈ $11.5k)
 PUMP_MIGRATION_MCAP_SOL = 410.0           # FDV миграции pump.fun
 PUMP_DUMP_FLOOR_SOL = 50.0                # Порог post-mig-dumped (~50 SOL, разрешает быстрые реклеймы)
 JEV_MAX_TICKET_USD = 0.0
@@ -745,10 +735,10 @@ FLAT_PROFIT_PRICE_DRIFT_PCT = 0.03
 PUMP_XGB_ENABLED = False
 RAY_XGB_ENABLED = False
 ROCKET_XGB_ENABLED = True
-ROCKET_XGB_STAGE1_THRESHOLD = 20.0   # Единый порог 20%: все 13 ракет на кривой и раннеры на DEX имели conf >= 20% (Rockstar 24%, OFFLINE 39%, DACT 47%)
-ROCKET_XGB_FINAL_THRESHOLD = 20.0     # Финальный порог 20%
-ROCKET_XGB_THRESHOLD = 20.0
-ROCKET_XGB_UNLOCKED_CUSTOM_MIN = 30.0  # Для кастомных пулов без сожжённого LP
+ROCKET_XGB_STAGE1_THRESHOLD = 14.0   # Порог 14% для DEX-раннеров (пропускает HOGE 15% +158%, GRANDPUMP 25% +214%, DACT 47% +103%; для сырых кривых применяется 20%)
+ROCKET_XGB_FINAL_THRESHOLD = 14.0     # Финальный порог 14%
+ROCKET_XGB_THRESHOLD = 14.0
+ROCKET_XGB_UNLOCKED_CUSTOM_MIN = 14.0  # Для проверенных высокооборотных DEX-раннеров
 JEV_MAX_AGE_MIN = 240.0              # Пробои и консолидации до 240м (4ч): позволяет ловить мощные вторые волны и раннеры
 
 STALL_TIMER_SEC = 420.0   # 7 минут на консолидацию до среза по стагнации

@@ -655,9 +655,12 @@ def _find_funder(tx: dict, wallet: str, mint: str) -> Tuple[Optional[str], float
     if not debtors:
         return None, received
 
-    # 1) дебет среди подписантов
+    # 1) дебет среди подписантов (реальный перевод SOL с кошелька-спонсора ОБЯЗАН быть подписан отправителем;
+    #    если среди debtors нет подписантов — значит транзакцию подписал сам wallet, а SOL выплатил PDA пула при свапе!)
     signers = [(i, d) for (i, d) in debtors if _is_signer(i)]
-    pool = signers or debtors
+    if not signers:
+        return None, received
+    pool = signers
     pool.sort(key=lambda x: x[1], reverse=True)
     funder = _pk(pool[0][0])
     amount = pool[0][1]

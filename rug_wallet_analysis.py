@@ -175,6 +175,14 @@ async def check_dev_and_holders(client: AsyncClient, mint: str) -> dict:
             "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P",   # Pump.fun
         }
         pool_accounts = set(DEX_POOL_AUTHORITIES)
+        try:
+            _pump_prog_pk = Pubkey.from_string("6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P")
+            _bc_pda = str(Pubkey.find_program_address([b"bonding-curve", bytes(mint_pubkey)], _pump_prog_pk)[0])
+            _pa_pda = str(Pubkey.find_program_address([b"pool-authority", bytes(mint_pubkey)], _pump_prog_pk)[0])
+            pool_accounts.add(_bc_pda)
+            pool_accounts.add(_pa_pda)
+        except Exception:
+            pass
         rc_owner_by_ata = {}
         try:
             import goplus as _gp_rw
@@ -208,12 +216,11 @@ async def check_dev_and_holders(client: AsyncClient, mint: str) -> dict:
             try:
                 from http_client import fetch_json
                 rpc_urls = [
-                    getattr(config, "QUICKNODE_RPC", ""),
                     getattr(config, "HELIUS_RPC_URL", ""),
+                    getattr(config, "QUICKNODE_RPC", ""),
                     getattr(client, "_provider", None) and getattr(client._provider, "endpoint_uri", ""),
                     "https://api.mainnet-beta.solana.com",
                 ]
-                endpoint = next((str(u) for u in rpc_urls if u and str(u).startswith("http")), "https://api.mainnet-beta.solana.com")
                 payload = {
                     "jsonrpc": "2.0",
                     "id": 1,
@@ -223,16 +230,19 @@ async def check_dev_and_holders(client: AsyncClient, mint: str) -> dict:
                         {"encoding": "jsonParsed"}
                     ]
                 }
-                _st, _resp_data = await fetch_json(endpoint, method="POST", json_payload=payload, timeout=6, retries=1)
-                if _st == 200 and isinstance(_resp_data, dict):
-                    _raw_values = (_resp_data.get("result") or {}).get("value", []) or []
-                    for _ata_addr, _acct_item in zip(need_ata_resolve, _raw_values):
-                        if isinstance(_acct_item, dict):
-                            _p_data = (_acct_item.get("data") or {}).get("parsed") if isinstance(_acct_item.get("data"), dict) else None
-                            if isinstance(_p_data, dict):
-                                _own = ((_p_data.get("info") or {}).get("owner")) or ""
-                                if _own:
-                                    rc_owner_by_ata[_ata_addr] = str(_own)
+                for _ep in [str(u) for u in rpc_urls if u and str(u).startswith("http")]:
+                    _st, _resp_data = await fetch_json(_ep, method="POST", json_payload=payload, timeout=5, retries=0)
+                    if _st == 200 and isinstance(_resp_data, dict) and not _resp_data.get("error"):
+                        _raw_values = (_resp_data.get("result") or {}).get("value", []) or []
+                        for _ata_addr, _acct_item in zip(need_ata_resolve, _raw_values):
+                            if isinstance(_acct_item, dict):
+                                _p_data = (_acct_item.get("data") or {}).get("parsed") if isinstance(_acct_item.get("data"), dict) else None
+                                if isinstance(_p_data, dict):
+                                    _own = ((_p_data.get("info") or {}).get("owner")) or ""
+                                    if _own:
+                                        rc_owner_by_ata[_ata_addr] = str(_own)
+                        if rc_owner_by_ata:
+                            break
             except Exception:
                 pass
 
@@ -244,22 +254,19 @@ async def check_dev_and_holders(client: AsyncClient, mint: str) -> dict:
         ))
         if _unique_owners:
             try:
-                _own_pks = [Pubkey.from_string(x) for x in _unique_owners]
-                _own_resp = await _rpc(client, "get_multiple_accounts", _own_pks)
-                if _own_resp and getattr(_own_resp, "value", None):
-                    for _o_addr, _o_info in zip(_unique_owners, _own_resp.value):
-                        if _o_info is not None:
-                            _prog_owner = str(getattr(_o_info, "owner", "") or "")
-                            if _prog_owner in DEX_PROGRAM_OWNERS:
-                                pool_accounts.add(_o_addr)
+                _prog_owned = await verify_program_owned_accounts(_unique_owners)
+                pool_accounts.update(_prog_owned)
             except Exception:
                 pass
 
         filtered_accounts = []
-        for a in top_accounts:
+        for idx_a, a in enumerate(top_accounts):
             _ata = a.get("address", "")
             _own = rc_owner_by_ata.get(_ata, "")
             if _ata in pool_accounts or (_own and _own in pool_accounts):
+                continue
+            # Крупнейший токен-аккаунт с долей >= 35% эмиссии — это всегда LP-пул / bonding curve (защита при RPC 429)
+            if idx_a == 0 and float(a.get("pct", 0) or 0) >= 0.35:
                 continue
             _acc_copy = dict(a)
             if _own:
@@ -477,8 +484,9 @@ async def check_rugcheck_api(mint: str) -> dict:
         _allowed_rc_noise = (
             "low liquidity", "copycat", "symbol mimic",
             "large amount of lp unlocked", "lp provider", "single lp provider",
-            "lp not locked", "unlocked lp",
+            "lp not locked", "unlocked lp", "low amount of lp",
             "single holder", "high holder concentration", "top 10 holders", "high ownership",
+            "bonding curve", "mutable", "metadata",
         )
         noise_penalty = sum(
             float(rk.get("score", 0) or 0)
