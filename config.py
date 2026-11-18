@@ -66,15 +66,15 @@ LIQ_DRAIN_EXIT_PCT = 0.40      # Выход если ликвидность уп
 LIQ_DRAIN_FAST_PCT = 0.30      # Если за один тик (<2с) ликва просела на 30% — мгновенный паник-сейл
 LIQ_MIN_STABLE_PCT = 0.80      # Перед входом: ликва не должна просесть более чем на 20% за последние 10 мин
 DEV_MAX_TOKEN_PCT = 0.15       # Дев не должен держать более 15% от эмиссии
-LIQ_LOCKED_BURNED_MIN_PCT = 80.0   # Требуем минимум 80% залоченного или сожжённого LP (защита от скам-выводов ликвидности)
+LIQ_LOCKED_BURNED_MIN_PCT = 0.0   # Разрешаем быстрый вход без задержки на аудит LP (охота за ракетами)
 
 # === ФИЛЬТРЫ ВХОДА (ОХОТА ЗА НАСТОЯЩИМИ РАКЕТАМИ ТИПА FIVEM / WUF) ===
-ALLOW_UNLOCKED_LP_POOLS = False           # БЛОКИРУЕМ незалоченные пулы девов — защита от мгновенного вывода LP (USPR/BUFO/SPACE)
+ALLOW_UNLOCKED_LP_POOLS = True            # ВХОД БЕЗ ОЖИДАНИЯ RUGCHECK: высокая частота сделок (защита от рагов точечными 0ms фильтрами)
 BLOCK_PERMISSIONLESS_LIQ_FDV_TRAP = True   # Блокировать кастомные ловушки дева
 REQUIRE_SOCIALS_ENABLED = False            # Не требовать соцсети на старте/зрелости (важна только живая ликвидность и импульс)
 MAX_ENTRY_H1_PCT = 180.0       # Было 1500.0: отсекает вертикальный вынос и хаи (фикс Y +944%)
 MAX_ENTRY_H6_PCT = 350.0       # Было 500.0: не входим в отработавшие топы
-MAX_ENTRY_M5_PCT = 350.0        # Не режем свежие ракеты — высокий потолок m5
+MAX_ENTRY_M5_PCT = 220.0        # Не входим в перегретые свечи >+220% — защита от сливов на хаях (CLAUDHAO/PEPEVRAX -80%)
 MAX_ENTRY_M1_PCT = 60.0         # Потолок 1м свечи +60% для свежих запусков
 # MAX_ENTRY_M5_SPIKE_PCT убран — не блокируем вход по m5, пусть ракеты летят
 REQUIRE_SOCIALS_MIN_AGE_MIN = 9999.0  # Соцсети не обязательны (отключено)
@@ -266,7 +266,7 @@ def is_safe_unlocked_custom_runner(
     отсекаем мгновенные ловушки дева с выводом LP через 1 минуту (WCOIN, TOWN, VINE, SCHRODING, GTA6),
     инвертированные seeded-LP ловушки (Starhug $103k liq / $20k vol) при сохранении настоящих ракет (TikTok).
     """
-    if not bool(globals().get("ALLOW_UNLOCKED_LP_POOLS", False)):
+    if not bool(globals().get("ALLOW_UNLOCKED_LP_POOLS", True)):
         return False
     if is_trap:
         return False
@@ -347,7 +347,7 @@ def is_distributed_safe_runner(
     is_lp_safe: bool = False,
 ) -> bool:
     """Exempt liquid, active runners from soft sybil/graph false positives."""
-    if not is_lp_safe and not bool(globals().get("ALLOW_UNLOCKED_LP_POOLS", False)):
+    if not is_lp_safe and not bool(globals().get("ALLOW_UNLOCKED_LP_POOLS", True)):
         return False
     if liq_usd < 8000.0 or vol5_usd < 5000.0:
         return False
@@ -371,8 +371,8 @@ def is_permissionless_liq_fdv_trap(pair_data: Optional[dict]) -> bool:
     base_token = pair_data.get("baseToken") or {}
     mint = str(base_token.get("address") or "").lower()
 
-    # Pump.fun bonding curves, PumpSwap AMM, and canonical .pump tokens cannot have LP drained by dev
-    if dex in ("pump", "pumpfun", "pumpswap", "pump-amm") or mint.endswith("pump"):
+    # Нативные pump.fun bonding curves безопасны (ликва в контракте), но пулы с гигантской посеянной ликвой (>= $25k) без соцсетей — скам (кейс MORAPL $93k liq / 0 soc)
+    if dex in ("pump", "pumpfun"):
         return False
         
     liq_usd = float((pair_data.get("liquidity") or {}).get("usd") or 0.0)
@@ -498,14 +498,13 @@ def evaluate_entry_momentum(
     if h1 > _max_h1_allowed:
         return False, f"h1-exhausted {h1:+.0f}% > +{_max_h1_allowed:.0f}% (buying late parabolic top, dump risk)"
 
-    # Потолки m1/m5 масштабируются от конфига (не режем свежие миграции и реактивные ракеты вроде MIMIC +391%):
-    # При миграции pump.fun -> DEX AMM цена открывается на +200%..+450% выше кривой,
-    # поэтому для токенов возрастом <= 25м или с мощным объёмом потолок m5 должен быть 650%, а не 180%!
-    _is_fresh_grad_or_surge = (
-        (age_min <= 25.0 or vol5_usd >= 3500.0)
-        and buys5 >= max(8, int(sells5 * 1.15))
+    # Потолок m5 для свежих запусков и кривых: не входим в уже отработавший вертикальный пик (+300%..+425%),
+    # где девы и первые снайперы фиксируют прибыль в наш вход (кейсы CLAUDHAO +425% -> -82%, CATEPEPE +410% -> -81%, PEPEVRAX +369% -> -79%).
+    # Ракеты вроде Rockstar (+154%), LIFTD (+154%), GTA6 (+35%) стартуют до +200% и дают огромный запас хода!
+    _is_dex_migration_surge = bool(
+        is_migrated_pump and vol5_usd >= 15000.0 and buys5 >= max(15, int(sells5 * 1.30))
     )
-    _max_m5_dyn = 650.0 if _is_fresh_grad_or_surge else max(float(globals().get("MAX_ENTRY_M5_PCT", 350.0)), 350.0)
+    _max_m5_dyn = 400.0 if _is_dex_migration_surge else float(globals().get("MAX_ENTRY_M5_PCT", 220.0))
     _max_m1_dyn = max(
         float(globals().get("MAX_ENTRY_M1_PCT", 35.0)),
         60.0 if (buys5 >= max(10, int(sells5 * 1.20)) and vol5_usd >= 2500.0) else (35.0 if buys5 >= max(8, int(sells5 * 1.05)) and vol5_usd >= 1200.0 else 25.0)
@@ -741,8 +740,8 @@ PUMP_XGB_ENABLED = False
 RAY_XGB_ENABLED = False
 ROCKET_XGB_ENABLED = True
 ROCKET_XGB_STAGE1_THRESHOLD = 8.0    # Порог 8% — пропускаем только уверенные запуски
-ROCKET_XGB_FINAL_THRESHOLD = 24.0     # Финальный порог 24%
-ROCKET_XGB_THRESHOLD = 24.0
+ROCKET_XGB_FINAL_THRESHOLD = 18.0     # Финальный порог 18% — гарантированно пропускает ракеты вроде Rockstar (23.97%)
+ROCKET_XGB_THRESHOLD = 18.0
 ROCKET_XGB_UNLOCKED_CUSTOM_MIN = 30.0  # Для кастомных пулов без сожжённого LP
 JEV_MAX_AGE_MIN = 240.0              # Пробои и консолидации до 240м (4ч): позволяет ловить мощные вторые волны и раннеры
 

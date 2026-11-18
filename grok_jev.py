@@ -448,8 +448,8 @@ class GrokJevEngine:
         _min_grad_liq = float(getattr(_c, "MIN_GRADUATED_LIQ_USD", 2500.0))
         if _c.is_pumpswap_liq_fdv_trap(pair_data):
             return False, "permissionless-liq-fdv-trap (seeded pool with >=70% liq/fdv and 0 socials, drain risk)"
-        if not getattr(_c, "ALLOW_UNLOCKED_LP_POOLS", True) and ("meteora" in dex_id or dex_id == "meteoradbc"):
-            return False, "meteora-unlocked-pool (Meteora pools allow dev LP withdrawal, scam-trap cases: AXIOMCOIN/MULT/PUNCHAO)"
+        if ("meteora" in dex_id or dex_id == "meteoradbc") and not bool(pair_data.get("_lp_verified")):
+            return False, "meteora-unlocked-pool (Meteora pools allow dev LP withdrawal, scam-trap cases: USPR/BUFO/SPACE/AXIOMCOIN)"
         if dex_id in ("pump", "pumpfun") and not getattr(_c, "ALLOW_UNGRADUATED_PUMPFUN", False):
             return False, "raw-pump-curve (wait for graduation to PumpSwap/Raydium with locked LP)"
         min_liq = 1000.0 if (dex_id in ("pump", "pumpfun") and getattr(_c, "ALLOW_UNGRADUATED_PUMPFUN", False)) else _min_grad_liq
@@ -1967,6 +1967,11 @@ class GrokJevEngine:
                             print(f"🚫 [FCR-BLOCK] {symbol} ({address[:8]}): {_fcr.get('report', '')}")
                             return False, "fcr-first-candle-rug: " + "; ".join(_fcr.get("reasons", [])[:3]), _h_stats
                     elif _fcr.get("verdict") == "WARN":
+                        _fcr_w_n_g = int((_fcr_compact or {}).get("fcr_cluster_wallets", 0) or 0)
+                        _fcr_m5_g = float((pair_data.get("priceChange") or {}).get("m5", 0) or 0)
+                        if _fcr_w_n_g >= 3 and _fcr_m5_g > 120.0:
+                            print(f"🚫 [FCR-INSIDER-BLOCK] {symbol} ({address[:8]}): инсайдерская сеть {_fcr_w_n_g} кошельков на свече m5 {_fcr_m5_g:+.1f}% — отмена входа (кейс CHUD -50%)!")
+                            return False, f"fcr-insider-cluster ({_fcr_w_n_g} wallets, m5 {_fcr_m5_g:+.0f}%)", _h_stats
                         print(f"⚠️ [FCR-WARN] {symbol} ({address[:8]}): {_fcr.get('report', '')}")
                     _fcr_feat = dict(_fcr_compact or {})
                 except Exception as _fcr_e:

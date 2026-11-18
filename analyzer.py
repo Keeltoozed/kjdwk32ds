@@ -2279,14 +2279,14 @@ class Analyzer:
                         allow_pump_amm_lock=_allow_ps_lock_main,
                     )
 
-                    # Для токенов .pump на пулах Meteora: Pump.fun никогда не мигрирует на Meteora!
-                    # Любой пул Meteora для .pump токена — это кастомная неофициальная ловушка (кейсы MULT/SURVIVE -98%),
-                    # блокируем 100% без исключений!
-                    if not getattr(config, "ALLOW_UNLOCKED_LP_POOLS", True) and mint.endswith("pump") and ("meteora" in _dex_low_main or _dex_low_main == "meteoradbc"):
+                    # Токены на пулах Meteora: Pump.fun никогда не мигрирует на Meteora,
+                    # а пулы Meteora без подтверждённого сожжённого LP — это 100% скам с выводом SOL девом (кейсы USPR/BUFO/SPACE/MULT/SURVIVE -98%).
+                    # Блокируем их ВСЕГДА и мгновенно (0ms), не зависимо от флагов:
+                    if ("meteora" in _dex_low_main or _dex_low_main == "meteoradbc") and not has_verified_locked_lp:
                         return self._deny(
                             mint,
-                            "pump-token-unlocked-meteora",
-                            f"🚫 [FAKE-METEORA-POOL] {symbol} ({mint[:8]}): .pump токен на пуле Meteora — неофициальный скам-пул мимо PumpSwap (кейсы MULT/SURVIVE -98%)!"
+                            "meteora-unlocked-pool",
+                            f"🚫 [METEORA-RUG-BLOCK] {symbol} ({mint[:8]}): незалоченный пул Meteora — риск вывода SOL девом (кейсы USPR/BUFO/SPACE)!"
                         )
 
                     # Проверка блокировки LP (режим Commit 0d2b1ae: допускаем незалоченные DEX-раннеры)
@@ -3023,7 +3023,7 @@ class Analyzer:
                         return False
 
                 _target_pair = str(pair_data.get("pairAddress") or "").strip()
-                _has_verified_locked_lp = bool(getattr(config, "ALLOW_UNLOCKED_LP_POOLS", False))
+                _has_verified_locked_lp = bool(getattr(config, "ALLOW_UNLOCKED_LP_POOLS", True))
                 for _mkt in (rc_data.get("markets") or []):
                     if isinstance(_mkt, dict):
                         _mkt_pubkey = str(_mkt.get("pubkey") or "").strip()
@@ -4180,8 +4180,8 @@ class Analyzer:
             return False
 
         _dex_low = (pair_data.get("dexId") or "").lower()
-        if not getattr(config, "ALLOW_UNLOCKED_LP_POOLS", True) and mint.endswith("pump") and ("meteora" in _dex_low or _dex_low == "meteoradbc"):
-            return self._deny(mint, "fake-meteora-pump-pool", f"🚫 [FAKE-METEORA] {mint[:8]}: .pump токен на пуле Meteora — неофициальный скам-пул мимо PumpSwap (кейсы MULT/SURVIVE -98%)!")
+        if ("meteora" in _dex_low or _dex_low == "meteoradbc") and not pair_data.get("_lp_verified", False):
+            return self._deny(mint, "fake-meteora-pool", f"🚫 [FAKE-METEORA] {mint[:8]}: пул Meteora без сожжённого LP — риск Remove LP (кейсы USPR/BUFO/SPACE)!")
 
         if config.is_permissionless_liq_fdv_trap(pair_data):
             return self._deny(mint, "permissionless-liq-fdv-trap", f"🚫 [LIQ-FDV-TRAP] {mint[:8]}: пул с высокой посеянной ликвидностью и 0 соцсетей — риск сноса LP!")

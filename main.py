@@ -1346,12 +1346,9 @@ async def scanner_loop(analyzer, tracker):
                                     print(f"🚫 [SCANNER-PRICE-SPLIT] {actual_symbol} ({mint[:8]}): рассинхрон пулов {_div_r:.1f}x — блок.")
                                     continue
                                 _dex_id = str((pair_data.get("dexId") or "")).lower()
-                                _allow_unl_sc = bool(getattr(config, "ALLOW_UNLOCKED_LP_POOLS", False))
-                                if not _allow_unl_sc and mint.endswith("pump") and ("meteora" in _dex_id or _dex_id == "meteoradbc"):
-                                    print(f"🚫 [SCANNER-FAKE-METEORA] {actual_symbol} ({mint[:8]}): .pump токен на пуле Meteora — неофициальный скам-пул, отмена!")
-                                    continue
-                                if not _allow_unl_sc and ("meteora" in _dex_id or _dex_id == "meteoradbc") and not pair_data.get("_lp_verified", False):
-                                    print(f"🚫 [SCANNER-METEORA-UNBURNED] {actual_symbol} ({mint[:8]}): пул Meteora без сожжённого/залоченного LP — риск Remove LP, отмена!")
+                                _allow_unl_sc = bool(getattr(config, "ALLOW_UNLOCKED_LP_POOLS", True))
+                                if ("meteora" in _dex_id or _dex_id == "meteoradbc") and not pair_data.get("_lp_verified", False):
+                                    print(f"🚫 [SCANNER-METEORA-UNBURNED] {actual_symbol} ({mint[:8]}): пул Meteora без сожжённого/залоченного LP — риск Remove LP (кейсы USPR/BUFO/SPACE), отмена!")
                                     continue
                                 _is_unl_sc_pool = config.is_position_unlocked_lp(mint, pair_data, bool(pair_data.get("_lp_verified")))
                                 if _is_unl_sc_pool:
@@ -1823,6 +1820,11 @@ async def scanner_loop(analyzer, tracker):
                                             print(f"🚫 [SCANNER PRE-FLIGHT FCR] {actual_symbol} ({mint[:8]}): {_fcr.get('report', '')} — вход заблокирован первоочередно по мгновенному рагу!")
                                             continue
                                         if _fcr.get("verdict") == "WARN":
+                                            _fcr_w_n = int((_fcr_compact or {}).get("fcr_cluster_wallets", 0) or 0)
+                                            _fcr_m5 = float((pair_data.get("priceChange") or {}).get("m5", 0) or 0)
+                                            if _fcr_w_n >= 3 and _fcr_m5 > 120.0:
+                                                print(f"🚫 [SCANNER FCR-INSIDER-BLOCK] {actual_symbol} ({mint[:8]}): инсайдерская сеть {_fcr_w_n} кошельков на свече m5 {_fcr_m5:+.1f}% — отмена входа (кейс CHUD -50%)!")
+                                                continue
                                             print(f"⚠️ [SCANNER PRE-FLIGHT FCR] {actual_symbol} ({mint[:8]}): {_fcr.get('report', '')}")
                                         # Сохраняем сводку в фичи позиции: дашборд / лог сделок.
                                         _fcr_feat = dict(_fcr_compact or {})
