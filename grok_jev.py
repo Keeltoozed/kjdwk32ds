@@ -1818,7 +1818,7 @@ class GrokJevEngine:
                     _dist_runner_g = _c.is_distributed_safe_runner(
                         _liq_aud, _age_aud, vol_m5, _b5_syb, _s5_syb,
                         top1_pct=largest_whale, top10_pct=top_10_sum, dev_pct=dev_pct,
-                        is_lp_safe=(is_canonical_pump or has_verified_locked_lp or _is_unlocked_safe or getattr(_c, "ALLOW_UNLOCKED_LP_POOLS", True)),
+                        is_lp_safe=(is_canonical_pump or has_verified_locked_lp or _is_unlocked_safe or getattr(_c, "ALLOW_UNLOCKED_LP_POOLS", False)),
                     )
                     if _is_unlocked_safe and not getattr(_c, "ALLOW_UNLOCKED_LP_POOLS", True):
                         if dev_pct > 10.0:
@@ -1929,7 +1929,7 @@ class GrokJevEngine:
                         return False, "auditor-pending: unverified custom AMM without holder index (wait for RugCheck/GoPlus)", _h_stats
                     elif isinstance(pair_data, dict):
                         pair_data["_lp_verified"] = bool(is_canonical_pump or pair_data.get("_pumpswap_lp_burned"))
-                        pair_data["_unlocked_runner_ok"] = bool(getattr(_c, "ALLOW_UNLOCKED_LP_POOLS", True))
+                        pair_data["_unlocked_runner_ok"] = bool(getattr(_c, "ALLOW_UNLOCKED_LP_POOLS", False))
 
             except Exception as e:
                 # Фоллбэк при сетевой ошибке RugCheck: проверяем GoPlus holder stats
@@ -1949,7 +1949,7 @@ class GrokJevEngine:
                     return False, f"auditor-pending: holder report not ready yet ({e}), wait for verification", _h_stats
                 elif isinstance(pair_data, dict):
                     pair_data["_lp_verified"] = bool(is_canonical_pump or pair_data.get("_pumpswap_lp_burned"))
-                    pair_data["_unlocked_runner_ok"] = bool(getattr(_c, "ALLOW_UNLOCKED_LP_POOLS", True))
+                    pair_data["_unlocked_runner_ok"] = bool(getattr(_c, "ALLOW_UNLOCKED_LP_POOLS", False))
 
             # Д) FIRST-CANDLE RUG GUARD: анализ когорты кошельков ДО входа.
             # Ищем кластеры «одного источника финансирования»: сколько кошельков

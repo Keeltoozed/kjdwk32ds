@@ -66,10 +66,10 @@ LIQ_DRAIN_EXIT_PCT = 0.40      # Выход если ликвидность уп
 LIQ_DRAIN_FAST_PCT = 0.30      # Если за один тик (<2с) ликва просела на 30% — мгновенный паник-сейл
 LIQ_MIN_STABLE_PCT = 0.80      # Перед входом: ликва не должна просесть более чем на 20% за последние 10 мин
 DEV_MAX_TOKEN_PCT = 0.15       # Дев не должен держать более 15% от эмиссии
-LIQ_LOCKED_BURNED_MIN_PCT = 0.0   # Режим 0d2b1ae: блокировка/сжигание LP не требуется (быстрый сбор профита до рага)
+LIQ_LOCKED_BURNED_MIN_PCT = 80.0   # Требуем минимум 80% залоченного или сожжённого LP (защита от скам-выводов ликвидности)
 
 # === ФИЛЬТРЫ ВХОДА (ОХОТА ЗА НАСТОЯЩИМИ РАКЕТАМИ ТИПА FIVEM / WUF) ===
-ALLOW_UNLOCKED_LP_POOLS = True            # РАЗРЕШАЕМ незалоченные пулы Meteora/PumpSwap — не блокируем свежие ракеты
+ALLOW_UNLOCKED_LP_POOLS = False           # БЛОКИРУЕМ незалоченные пулы девов — защита от мгновенного вывода LP (USPR/BUFO/SPACE)
 BLOCK_PERMISSIONLESS_LIQ_FDV_TRAP = True   # Блокировать кастомные ловушки дева
 REQUIRE_SOCIALS_ENABLED = False            # Не требовать соцсети на старте/зрелости (важна только живая ликвидность и импульс)
 MAX_ENTRY_H1_PCT = 180.0       # Было 1500.0: отсекает вертикальный вынос и хаи (фикс Y +944%)
@@ -266,7 +266,7 @@ def is_safe_unlocked_custom_runner(
     отсекаем мгновенные ловушки дева с выводом LP через 1 минуту (WCOIN, TOWN, VINE, SCHRODING, GTA6),
     инвертированные seeded-LP ловушки (Starhug $103k liq / $20k vol) при сохранении настоящих ракет (TikTok).
     """
-    if not bool(globals().get("ALLOW_UNLOCKED_LP_POOLS", True)):
+    if not bool(globals().get("ALLOW_UNLOCKED_LP_POOLS", False)):
         return False
     if is_trap:
         return False
@@ -347,7 +347,7 @@ def is_distributed_safe_runner(
     is_lp_safe: bool = False,
 ) -> bool:
     """Exempt liquid, active runners from soft sybil/graph false positives."""
-    if not is_lp_safe and not bool(globals().get("ALLOW_UNLOCKED_LP_POOLS", True)):
+    if not is_lp_safe and not bool(globals().get("ALLOW_UNLOCKED_LP_POOLS", False)):
         return False
     if liq_usd < 8000.0 or vol5_usd < 5000.0:
         return False
@@ -709,20 +709,20 @@ PARTIAL_TP_ENABLED = True
 PARTIAL_TP_MIN_TICKET_USD = 0.50
 TP1_TRIGGER_PCT = 0.30               # На +30% забираем тело (50% позиции)
 TP1_SELL_FRAC = 0.50                 # 50% позиции на TP1, оставшиеся 50% — Risk-Free Moonbag!
-TP2_TRIGGER_PCT = 1.00               # На +100% фиксируем ещё 25%
-TP2_SELL_FRAC = 0.25
-TP3_TRIGGER_PCT = 2.50               # На +250% фиксация
-TP3_SELL_FRAC = 0.25
+TP2_TRIGGER_PCT = 1.10               # Мунбэг цель +110% (забираем всё!)
+TP2_SELL_FRAC = 1.00                 # 100% остатка продаём на +110% (крупный тейк перекрывает стопы)
+TP3_TRIGGER_PCT = 2.50
+TP3_SELL_FRAC = 0.00
 TP4_TRIGGER_PCT = 5.00
 TP4_SELL_FRAC = 0.00
 TP5_TRIGGER_PCT = 10.00
 TP5_SELL_FRAC = 0.00
-MOONBAG_TRIGGER_PCT = 0.30           # Мунбэг активен после TP1
-MOONBAG_SELL_FRAC = 0.50
+MOONBAG_TRIGGER_PCT = 1.10           # Мунбэг на +110%
+MOONBAG_SELL_FRAC = 1.00
 
-# Трейлинг для мунбэга
-MOONBAG_TRAIL_ACTIVATION_PCT = 0.45  # Трейлинг включается при пике от +45%
-MOONBAG_TRAIL_DISTANCE_PCT = 0.25    # Дистанция 25% от ATH
+# Трейлинг для мунбэга (защищает отката: если дошло до +75%, не даёт слить в 0)
+MOONBAG_TRAIL_ACTIVATION_PCT = 0.40  # Трейлинг включается при пике от +40%
+MOONBAG_TRAIL_DISTANCE_PCT = 0.20    # Плотный трейл 20% от ATH (держит прибыль)
 MOONBAG_MAX_HOLD_MIN = 55.0          # Даём ракетам до 55 минут на 5x-20x памп
 
 # Безопасность: стоп-лосс и экстренный выход
@@ -770,13 +770,13 @@ BREAKEVEN_PCT = 0.10       # Breakeven Shield: пик >= +8% -> сделка н�
 
 def get_sol_tp_ladder(is_unlocked: bool) -> tuple:
     """Return (tp1_t, tp1_f, tp2_t, tp2_f, tp3_t, tp3_f, tp4_t, tp4_f, tp5_t, tp5_f).
-    Простая система: TP1 +30% (50%), TP2 +100% (50% остатка), без мунбэга."""
+    TP1 +30% (50% тело), TP2 Мунбэг +110% (100% остатка)."""
     return (
         float(globals().get("TP1_TRIGGER_PCT", 0.30)),
         float(globals().get("TP1_SELL_FRAC", 0.50)),
-        float(globals().get("TP2_TRIGGER_PCT", 1.00)),
-        float(globals().get("TP2_SELL_FRAC", 0.50)),
-        float(globals().get("TP3_TRIGGER_PCT", 2.00)),
+        float(globals().get("TP2_TRIGGER_PCT", 1.10)),
+        float(globals().get("TP2_SELL_FRAC", 1.00)),
+        float(globals().get("TP3_TRIGGER_PCT", 2.50)),
         float(globals().get("TP3_SELL_FRAC", 0.00)),
         float(globals().get("TP4_TRIGGER_PCT", 5.00)),
         float(globals().get("TP4_SELL_FRAC", 0.00)),

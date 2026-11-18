@@ -586,7 +586,7 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
         try:
             import goplus as _gp_jup
             _rc_st, _rc_d = await _gp_jup.fetch_rugcheck_report_cached(mint, ttl=120.0, timeout=5)
-            _allow_unl_lp_j = bool(getattr(config, "ALLOW_UNLOCKED_LP_POOLS", True))
+            _allow_unl_lp_j = bool(getattr(config, "ALLOW_UNLOCKED_LP_POOLS", False))
             if _rc_st != 200 or not isinstance(_rc_d, dict):
                 if _allow_unl_lp_j:
                     print(f"🔓 [{source_tag}-RC-SKIP] {_sym_tmp} ({mint[:8]}): RugCheck HTTP {_rc_st} — разрешаем быстрый вход без задержки (режим 0d2b1ae).")
@@ -654,7 +654,7 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
                     print(f"🚫 [{source_tag}-UNLOCKED-LP] {_sym_tmp} ({mint[:8]}): незалоченный/несожжённый LP на {_dex_j_low or 'DEX'} (liq ${_liq_j:,.0f}, age {_age_j:.1f}m) — риск Remove LP!")
                     return False
         except Exception as _lp_ex:
-            if getattr(config, "ALLOW_UNLOCKED_LP_POOLS", True) and _liq_j >= float(getattr(config, "MIN_GRADUATED_LIQ_USD", 3000.0)):
+            if getattr(config, "ALLOW_UNLOCKED_LP_POOLS", False) and _liq_j >= float(getattr(config, "MIN_GRADUATED_LIQ_USD", 3000.0)):
                 print(f"🔓 [{source_tag}-RC-ERR-SKIP] {_sym_tmp} ({mint[:8]}): ошибка RugCheck ({_lp_ex}) — разрешаем быстрый вход (режим 0d2b1ae).")
             else:
                 print(f"⏳ [{source_tag}-RC-ERR] {_sym_tmp} ({mint[:8]}): ошибка проверки RugCheck ({_lp_ex}) — пропуск цикла.")

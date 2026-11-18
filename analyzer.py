@@ -3023,7 +3023,7 @@ class Analyzer:
                         return False
 
                 _target_pair = str(pair_data.get("pairAddress") or "").strip()
-                _has_verified_locked_lp = bool(getattr(config, "ALLOW_UNLOCKED_LP_POOLS", True))
+                _has_verified_locked_lp = bool(getattr(config, "ALLOW_UNLOCKED_LP_POOLS", False))
                 for _mkt in (rc_data.get("markets") or []):
                     if isinstance(_mkt, dict):
                         _mkt_pubkey = str(_mkt.get("pubkey") or "").strip()

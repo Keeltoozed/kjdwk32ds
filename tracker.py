@@ -478,7 +478,7 @@ class PaperTracker:
             _lp_preverified = bool(isinstance(pair_data, dict) and pair_data.get("_lp_verified"))
             _eff_init_liq = max(float(initial_liquidity_usd or 0.0), _pd_liq)
             _is_vip_or_copy = ("VIP" in str(source or "")) or str(source or "").startswith("COPY")
-            _allow_unl_tr = bool(getattr(config, "ALLOW_UNLOCKED_LP_POOLS", True))
+            _allow_unl_tr = bool(getattr(config, "ALLOW_UNLOCKED_LP_POOLS", False))
             if isinstance(pair_data, dict):
                 if config.is_pumpswap_liq_fdv_trap(pair_data):
                     print(f"🛑 [FIREWALL-RUG-BLOCK] {symbol} ({mint_str[:8]}): PumpSwap CreatePool liq/fdv 0-social trap!")
@@ -773,6 +773,9 @@ class PaperTracker:
 
             # Уменьшаем позицию на проданный процент
             pos.amount_usd = max(0.0, pos.amount_usd - amount_sold_usd)
+            if pos.amount_usd <= 0.05 or sell_pct >= 0.99:
+                self.close_position(mint, exit_price, reason)
+                return
             if "MOONBAG" in reason.upper() or "RISK FREE" in reason.upper() or "200%" in reason:
                 pos.is_moonbag = True
             self.save_portfolio(force_cloud=True)

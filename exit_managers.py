@@ -218,38 +218,52 @@ class MatureExitManager:
             position.tp1_done = True
             return f"TP1 (+{pnl_pct*100:.1f}%, продано 100%)"
 
-        if _tp2_f >= 1.0 and getattr(position, "tp1_done", False) and not getattr(position, "tp2_done", False) and pnl_pct >= _tp2_t:
+        if _tp2_f >= 1.0 and getattr(position, "tp1_done", False) and not getattr(position, "tp2_done", False) and (pnl_pct + 0.005) >= _tp2_t:
             position.tp2_done = True
             return f"TP2 (+{pnl_pct*100:.1f}%, продано 100%)"
 
-        # Безубыток: если пик достиг BREAKEVEN_PCT, не даём уйти в минус
-        if max_pnl_pct >= float(getattr(config, "BREAKEVEN_PCT", 0.08)) and pnl_pct <= 0.005:
-            return f"BREAKEVEN ({pnl_pct*100:+.1f}%, пик был +{max_pnl_pct*100:.1f}%)"
-
         # =========================================================================
-        # 3. ПАРАБОЛИЧЕСКИЙ СБОР (фиксация при длительном затухании на хаях)
+        # 3. ДИНАМИЧЕСКИЙ ТРЕЙЛИНГ И ПОЛ ПРИБЫЛИ (Защита ракет от возврата в 0)
         # =========================================================================
         if max_pnl_pct >= 2.00 and _peak_age_min >= 8.0:
             return f"Parabolic Harvest (+{pnl_pct*100:.0f}% locked, пик был +{max_pnl_pct*100:.0f}%, {_peak_age_min:.0f}m без нового максимума)"
-        elif max_pnl_pct >= 0.55:       # +55%..+110%: фиксируем минимум +20%, трейл 30% от ATH
-            _floor_pnl = 0.20
-            _trail_dist = 0.30
+
+        _floor_pnl = None
+        _trail_dist = None
+
+        if max_pnl_pct >= 2.00:         # Мега-ракета (+200%+): держим минимум +100% и трейлим 20% от хая!
+            _floor_pnl = max(1.00, round(max_pnl_pct * 0.65, 2))
+            _trail_dist = 0.20
+        elif max_pnl_pct >= 1.00:       # 2x ракета (+100%..+200%): держим минимум +60%, трейл 20%
+            _floor_pnl = 0.60
+            _trail_dist = 0.20
+        elif max_pnl_pct >= 0.50:       # +50%..+100% (кейс EEPY +75%): фиксируем минимум +30%, трейл 20% от ATH
+            _floor_pnl = 0.30
+            _trail_dist = 0.20
         elif getattr(position, "tp1_done", False):
-            # После частичной фиксации TP1 защищаем оставшееся тело: пол +5% (или +2% первые 45с)
-            _floor_pnl = 0.05 if minutes_held >= 0.75 else 0.02
-            _trail_dist = 0.28 if minutes_held >= 1.0 else None
-        elif max_pnl_pct >= 0.28:       # +28%..+55%: даем монете дышать, трейл 30%
-            if minutes_held >= 1.50:
-                _floor_pnl = 0.04
-                _trail_dist = 0.30
-            else:
-                _floor_pnl = 0.01
-                _trail_dist = None
+            # После частичной фиксации TP1 защищаем тело мунбэга: пол +10%
+            _floor_pnl = 0.10 if minutes_held >= 0.50 else 0.03
+            _trail_dist = 0.22 if minutes_held >= 1.0 else None
+        elif max_pnl_pct >= 0.28:       # +28%..+50%: трейл 22%
+            _floor_pnl = 0.08 if minutes_held >= 1.0 else 0.02
+            _trail_dist = 0.22 if minutes_held >= 1.5 else None
         elif max_pnl_pct >= float(getattr(config, "BREAKEVEN_PCT", 0.08) or 0.08):
-            # Breakeven Shield: позиция с пиком >= +16% НЕ МОЖЕТ закрыться в минус!
-            # Чистый безубыток +0.5% (покрытие комиссий) — даём монете пережить нормальный ретест в 2x-5x, не убивая ракеты на +2.9%!
             _floor_pnl = 0.005
             _trail_dist = None
+
+        # 1. Срабатывание Трейлинг-стопа от хая (спасет PUTON на +150% вместо сброса в 0%):
+        if _trail_dist is not None and max_pnl_pct >= 0.35:
+            _trail_level = max_pnl_pct * (1.0 - _trail_dist)
+            if pnl_pct <= _trail_level:
+                return f"Trailing Stop (+{pnl_pct*100:.1f}%, откат {_trail_dist*100:.0f}% от пика +{max_pnl_pct*100:.0f}%)"
+
+        # 2. Срабатывание Неснижаемого пола прибыли (Floor Lock):
+        if _floor_pnl is not None and max_pnl_pct >= 0.28 and pnl_pct <= _floor_pnl:
+            return f"Profit Floor (+{_floor_pnl*100:.0f}% locked after peak +{max_pnl_pct*100:.0f}%)"
+
+        # 3. Безубыток: если пик достиг BREAKEVEN_PCT, не даём уйти в минус
+        if max_pnl_pct >= float(getattr(config, "BREAKEVEN_PCT", 0.08)) and pnl_pct <= 0.005:
+            return f"BREAKEVEN ({pnl_pct*100:+.1f}%, пик был +{max_pnl_pct*100:.1f}%)"
 
         # =========================================================================
         # 4. CRASH VELOCITY GUARD (Дев-дамп / аномальное обрушение за 1 минуту)

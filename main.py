@@ -513,10 +513,14 @@ async def position_manager_loop(analyzer, tracker):
                         position.is_moonbag = True
                         position.last_tp_ts = time.time()
                     if pnl_pct >= _tp2 and not getattr(position, "tp2_done", False) and float(getattr(position, "amount_usd", 0.0) or 0.0) > 0.05:
-                        tracker.partial_close_position(mint, current_price, _tp2_sell, f"Take Profit +{_tp2*100:.0f}% (Tier-2 {int(_tp2_sell*100)}%, Risk-Free Moonbag)")
-                        position.tp2_done = True
-                        position.is_moonbag = True
-                        position.last_tp_ts = time.time()
+                        if _tp2_sell >= 0.99:
+                            tracker.close_position(mint, current_price, f"Moonbag TP2 +{_tp2*100:.0f}% (Target +{pnl_pct*100:.1f}%)")
+                            continue
+                        else:
+                            tracker.partial_close_position(mint, current_price, _tp2_sell, f"Take Profit +{_tp2*100:.0f}% (Tier-2 {int(_tp2_sell*100)}%, Risk-Free Moonbag)")
+                            position.tp2_done = True
+                            position.is_moonbag = True
+                            position.last_tp_ts = time.time()
                     if pnl_pct >= _tp3 and not getattr(position, "tp3_done", False) and float(getattr(position, "amount_usd", 0.0) or 0.0) > 0.05:
                         tracker.partial_close_position(mint, current_price, _tp3_sell, f"Take Profit +{_tp3*100:.0f}% (Tier-3 {int(_tp3_sell*100)}%)")
                         position.tp3_done = True
@@ -1342,7 +1346,7 @@ async def scanner_loop(analyzer, tracker):
                                     print(f"🚫 [SCANNER-PRICE-SPLIT] {actual_symbol} ({mint[:8]}): рассинхрон пулов {_div_r:.1f}x — блок.")
                                     continue
                                 _dex_id = str((pair_data.get("dexId") or "")).lower()
-                                _allow_unl_sc = bool(getattr(config, "ALLOW_UNLOCKED_LP_POOLS", True))
+                                _allow_unl_sc = bool(getattr(config, "ALLOW_UNLOCKED_LP_POOLS", False))
                                 if not _allow_unl_sc and mint.endswith("pump") and ("meteora" in _dex_id or _dex_id == "meteoradbc"):
                                     print(f"🚫 [SCANNER-FAKE-METEORA] {actual_symbol} ({mint[:8]}): .pump токен на пуле Meteora — неофициальный скам-пул, отмена!")
                                     continue
@@ -1544,7 +1548,7 @@ async def scanner_loop(analyzer, tracker):
                                     continue
 
                                 # Блок кастомных не-launchpad контрактов на PumpSwap при пуле < $10k (отключается при ALLOW_UNLOCKED_LP_POOLS=True)
-                                if not bool(getattr(config, "ALLOW_UNLOCKED_LP_POOLS", True)) and _dex_id == "pumpswap" and not config.is_launchpad_mint(mint) and liq_usd < 10000.0:
+                                if not bool(getattr(config, "ALLOW_UNLOCKED_LP_POOLS", False)) and _dex_id == "pumpswap" and not config.is_launchpad_mint(mint) and liq_usd < 10000.0:
                                     print(f"🚫 [SCANNER-FAKE-PUMPSWAP] {actual_symbol} ({mint[:8]}): кастомный не-pump контракт на PumpSwap с микро-пулом (${liq_usd:,.0f} < $10k) — отмена!")
                                     continue
 

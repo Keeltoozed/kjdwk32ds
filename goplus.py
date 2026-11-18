@@ -1670,7 +1670,7 @@ def _parse_ui_token_supply(sup_res):
 
 def _pumpswap_rpc_fallback(mint: str, pair_data, reason_prefix: str) -> tuple:
     """Fallback when PumpSwap RPC pool lookup is unavailable."""
-    if bool(_cfg("ALLOW_UNLOCKED_LP_POOLS", True)):
+    if bool(_cfg("ALLOW_UNLOCKED_LP_POOLS", False)):
         return True, False, f"{reason_prefix}-unlocked-allowed"
     if config.is_pumpswap_liq_fdv_trap(pair_data):
         return False, False, "pumpswap-liq-fdv-trap"
@@ -1808,7 +1808,7 @@ async def verify_pumpswap_pool_onchain(
 
     sup_res = await _solana_rpc_call("getTokenSupply", [lp_mint])
     lp_sup = _parse_ui_token_supply(sup_res)
-    _allow_unlocked_ps = bool(_cfg("ALLOW_UNLOCKED_LP_POOLS", True))
+    _allow_unlocked_ps = bool(_cfg("ALLOW_UNLOCKED_LP_POOLS", False))
     if lp_sup is None:
         if _allow_unlocked_ps:
             res = (True, False, f"pumpswap-custom-unlocked-idx{pool_idx}-lp-unknown")
