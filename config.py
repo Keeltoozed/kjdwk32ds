@@ -502,7 +502,7 @@ def evaluate_entry_momentum(
     # где девы и первые снайперы фиксируют прибыль в наш вход (кейсы CLAUDHAO +425% -> -82%, CATEPEPE +410% -> -81%, PEPEVRAX +369% -> -79%).
     # Ракеты вроде Rockstar (+154%), LIFTD (+154%), GTA6 (+35%) стартуют до +200% и дают огромный запас хода!
     _is_dex_migration_surge = bool(
-        is_migrated_pump and vol5_usd >= 15000.0 and buys5 >= max(15, int(sells5 * 1.30))
+        vol5_usd >= 15000.0 and buys5 >= max(15, int(sells5 * 1.30)) and liq_usd >= 15000.0
     )
     _max_m5_dyn = 400.0 if _is_dex_migration_surge else float(globals().get("MAX_ENTRY_M5_PCT", 220.0))
     _max_m1_dyn = max(
