@@ -1815,7 +1815,7 @@ class Analyzer:
             _sol_p = float(get_sol_price_sync() or 75.0)
             if _sol_p <= 0:
                 _sol_p = 75.0
-            _min_curve_mcap = max(float(getattr(config, "MIN_PUMP_CURVE_MCAP_USD", 3200.0)), float(getattr(config, "MIN_PUMP_CURVE_MCAP_SOL", 44.0)) * _sol_p)
+            _min_curve_mcap = max(float(getattr(config, "MIN_PUMP_CURVE_MCAP_USD", 2750.0)), float(getattr(config, "MIN_PUMP_CURVE_MCAP_SOL", 38.0)) * _sol_p)
             _max_curve_mcap = min(float(getattr(config, "MAX_PUMP_CURVE_MCAP_USD", 25000.0)), float(getattr(config, "MAX_PUMP_CURVE_MCAP_SOL", 340.0)) * _sol_p)
             if _fdv_curve_pre > 0 and _fdv_curve_pre < _min_curve_mcap:
                 return self._deny(
@@ -1829,33 +1829,37 @@ class Analyzer:
                     f"pump-curve-top {_fdv_curve_pre:.0f}>{_max_curve_mcap:.0f}",
                     f"🚫 [CURVE-CLIFF] {symbol} ({mint[:8]}): FDV ${_fdv_curve_pre:,.0f} > ${_max_curve_mcap:,.0f} (зона разгрузки снайперов на кривой — ждём миграцию на PumpSwap).",
                 )
-            # Бокс живой кривой Pump.fun (пропускает GTA6 +115%, RAUL +38.5%, ROCKSTAR +401%, DACT +76%):
-            # От пустых/слитых кёрвов ($PICKLES, GTAMICHI, AabL4) защищает ончейн-аудит резервов (real_sol >= 2.2 SOL).
-            if _b5_pre < 15 or (_s5_pre > 0 and _b5_pre < int(_s5_pre * 1.15)) or (_b5_pre - _s5_pre) < 4:
+            # Бокс взрывной кривой Pump.fun (пропускает ADPAID +105%, WANTED +55%, GTA6 +115%, RAUL +38%, SHERRICK +42.7%, но режет еле ползущие кривые вроде amogus +18.6% -> -65.6%):
+            # От пустых/слитых кёрвов ($PICKLES, GTAMICHI, bob) защищает ончейн-аудит резервов (real_sol >= 2.2 SOL) и fail-closed FCR на тонких кривых.
+            if _b5_pre < 15 or (_s5_pre > 0 and _b5_pre < int(_s5_pre * 1.30)) or (_b5_pre - _s5_pre) < 5:
                 return self._deny(
                     mint,
                     f"early-curve-weak-buyers fdv=${_fdv_curve_pre:.0f} {_b5_pre}b/{_s5_pre}s",
-                    f"🚫 [CURVE-WEAK-BUYERS] {symbol} ({mint[:8]}): на кривой слабый приток покупателей {_b5_pre}b/{_s5_pre}s (нужно >=15b, net >=+4, b/s >=1.15x).",
+                    f"🚫 [CURVE-WEAK-BUYERS] {symbol} ({mint[:8]}): на кривой слабый приток покупателей {_b5_pre}b/{_s5_pre}s (нужно >=15b, net >=+5, b/s >=1.30x).",
                 )
-            if _vm5_pre < 1000.0:
+            _min_c_vol_a = 800.0 if (_age_min_pre <= 2.5 and _b5_pre >= max(15, int(_s5_pre * 2.20))) else 2000.0
+            if _vm5_pre < _min_c_vol_a:
                 return self._deny(
                     mint,
-                    f"curve-low-vol5 ${_vm5_pre:.0f}<$1000",
-                    f"🚫 [CURVE-LOW-VOL] {symbol} ({mint[:8]}): объём кривой ${_vm5_pre:,.0f} < $1,000 — вялая кривая.",
+                    f"curve-low-vol5 ${_vm5_pre:.0f}<${_min_c_vol_a:.0f}",
+                    f"🚫 [CURVE-LOW-VOL] {symbol} ({mint[:8]}): объём кривой ${_vm5_pre:,.0f} < ${_min_c_vol_a:,.0f} — вялая кривая.",
                 )
-            if _vm5_pre > 65000.0:
+            if _vm5_pre > 80000.0:
                 return self._deny(
                     mint,
-                    f"curve-wash-overchurn ${_vm5_pre:.0f}>$65k",
-                    f"🚫 [CURVE-OVERCHURN] {symbol} ({mint[:8]}): объём на сырой кривой ${_vm5_pre:,.0f} > $65,000 — перегретый wash-флип снайперов!",
+                    f"curve-wash-overchurn ${_vm5_pre:.0f}>$80k",
+                    f"🚫 [CURVE-OVERCHURN] {symbol} ({mint[:8]}): объём на сырой кривой ${_vm5_pre:,.0f} > $80,000 — перегретый wash-флип снайперов!",
                 )
-            if _m5 < 10.0 or _m5 > 220.0 or _m1 > 45.0:
+            if _m5 < 20.0 or _m5 > 320.0 or _m1 > 50.0:
                 return self._deny(
                     mint,
                     f"curve-m5-out-of-box m5={_m5:+.0f}% m1={_m1:+.0f}%",
-                    f"🚫 [CURVE-MOMENTUM-BOX] {symbol} ({mint[:8]}): импульс кривой m5 {_m5:+.1f}% (нужно +10%..+220%), m1 {_m1:+.1f}% (<=+45%) — вне диапазона старта ракеты.",
+                    f"🚫 [CURVE-MOMENTUM-BOX] {symbol} ({mint[:8]}): импульс кривой m5 {_m5:+.1f}% (нужно +20%..+320%), m1 {_m1:+.1f}% (<=+50%) — вне диапазона старта ракеты.",
                 )
-            if _age_min_pre > 6.0:
+            _is_curve_wakeup = (
+                _age_min_pre <= 45.0 and _m5 >= 20.0 and _vm5_pre >= 2000.0 and _b5_pre >= 15 and _b5_pre >= int(_s5_pre * 1.20)
+            )
+            if _age_min_pre > 6.0 and not _is_curve_wakeup:
                 return self._deny(
                     mint,
                     f"curve-stalled-age {_age_min_pre:.1f}m>6.0m",
@@ -2004,7 +2008,10 @@ class Analyzer:
         if _s5_pre > 4 and (_b5_pre / _s5_pre) < _min_bs_cfg:
             _bs_ratio_pre = _b5_pre / _s5_pre
             _pair_addr_wb = str(pair_data.get("pairAddress") or "").strip()
-            if _bs_ratio_pre >= 0.85 and _m5 >= 12.0 and _vm5_pre >= 6000.0 and _raw_liq_chk >= 7000.0 and _pair_addr_wb:
+            # Свежая миграция/разгон с перевесом покупателей (_b5 > _s5) и сильным импульсом (кейс TDC 199b/190s m5 +211%): не режем из-за 0.003 недобора до 1.05x
+            if _bs_ratio_pre >= 1.00 and _m5 >= 15.0 and _vm5_pre >= 8000.0 and _age_min_pre <= 8.0:
+                _absorbed_by_flow = True
+            elif _bs_ratio_pre >= 0.85 and _m5 >= 12.0 and _vm5_pre >= 6000.0 and _raw_liq_chk >= 7000.0 and _pair_addr_wb:
                 try:
                     import market_data as _md_wb
                     _flow_wb = await _md_wb.check_live_order_flow(
@@ -2070,13 +2077,17 @@ class Analyzer:
         # 4. Anti-FOMO: Защита от перегретых вершин
         _max_entry_h1 = config.get_max_entry_h1_pct(_age_min_pre, _vm5_pre, _b5_pre, _s5_pre, _raw_liq_chk, _m5)
         _max_entry_m5 = float(getattr(config, "MAX_ENTRY_M5_PCT", 180.0))
+        if _dex_pre_early in ("pump", "pumpfun", "meteoradbc"):
+            _max_entry_m5 = max(_max_entry_m5, 320.0)
+        elif _age_min_pre <= 5.0 and _vm5_pre >= 10000.0 and _b5_pre >= max(15, int(_s5_pre * 1.05)):
+            _max_entry_m5 = max(_max_entry_m5, 550.0)
         if _h1 > _max_entry_h1 and _age_min_pre > 4.0:
             return self._deny(
                 mint,
                 f"h1-exhausted {_h1:.0f}%>{_max_entry_h1:.0f}%",
                 f"🚫 [EXHAUSTED-TOP] {symbol} ({mint[:8]}): рост за час {_h1:+.1f}% > +{_max_entry_h1:.0f}% — вершина пампа.",
             )
-        # Потолок перегретой свечи синхронизирован с MAX_ENTRY_M5_PCT
+        # Потолок перегретой свечи синхронизирован с evaluate_entry_momentum
         if _m5 > _max_entry_m5:
             _fresh_grad_m5_cap_a = max(_max_entry_m5 * 1.35, 250.0)
             _is_strong_buyer_breakout = (_m5 <= _fresh_grad_m5_cap_a and _b5_pre >= int(_s5_pre * 1.3) and _vm5_pre >= 8000.0)
@@ -2171,9 +2182,10 @@ class Analyzer:
             self.rocket_scores[mint] = conf
 
             dex_id_low = str(pair_data.get("dexId", "")).lower()
-            is_pump_curve = dex_id_low in ("pump", "pumpfun")
+            is_pump_curve = dex_id_low in ("pump", "pumpfun", "meteoradbc")
             if is_pump_curve:
-                threshold = max(threshold, 20.0)
+                # rocket_xgb_v3 обучена на зрелых DEX-пулах и даёт 9-19% свежим 1-5м кривым (ADPAID 10.4% -> +105%)
+                threshold = min(threshold, 10.0)
             _is_canonical_pump = (
                 (mint.lower().endswith("pump") and dex_id_low in ("pump", "pumpfun", "pumpswap", "raydium"))
                 or (is_pump_curve and dex_id_low in ("pump", "pumpfun"))
@@ -2253,11 +2265,11 @@ class Analyzer:
                 _tot_tx5_a = _b5_pre + _s5_pre
                 _avg_tx5_a = _vm5_pre / max(_tot_tx5_a, 1)
                 _is_organic_trades = (
-                    (_avg_tx5_a >= 28.0 and _b5_pre >= 35 and _bs_a >= 1.08)
-                    or (raw_liq >= 12000.0 and _vm5_pre >= 15000.0 and _avg_tx5_a >= 25.0 and _bs_a >= 1.08)
-                    or (mint.endswith(("pump", "bonk", "BAGS")) and raw_liq >= 12000.0 and _bs_a >= 1.10)
+                    (_avg_tx5_a >= 25.0 and _b5_pre >= 30 and _bs_a >= 1.04)
+                    or (raw_liq >= 10000.0 and _vm5_pre >= 15000.0 and _avg_tx5_a >= 22.0 and _bs_a >= 1.02)
+                    or (mint.endswith(("pump", "bonk", "BAGS")) and raw_liq >= 8000.0 and _avg_tx5_a >= 20.0 and _bs_a >= 1.00)
                 )
-                if _v2l_a > 2.6 and _bs_a < 1.5 and not _is_organic_trades:
+                if _v2l_a > 4.5 and _bs_a < 1.45 and not _is_organic_trades:
                     return self._deny(mint, f"anon-wash-churn {_v2l_a:.1f}x", f"🚫 [WASH-TRAP] {symbol} ({mint[:8]}): 0 соцсетей, liq ${raw_liq:,.0f}, оборот 5м {_v2l_a:.1f}x пула (b/s {_bs_a:.2f}, avg ${_avg_tx5_a:.0f}) — анонимный wash-дамп!")
 
             # Кастомные не-launchpad токены на PumpSwap / Meteora проверяются ниже через RugCheck LP burn/lock и is_safe_unlocked_custom_runner.
@@ -2760,9 +2772,9 @@ class Analyzer:
                 conf = self.score_rocket_xgb(mint, pair_data, holders_info=_real_holders)
                 self.last_score = conf
                 self.rocket_scores[mint] = conf
-            _final_thr = float(getattr(config, "ROCKET_XGB_FINAL_THRESHOLD", 14.0))
+            _final_thr = float(getattr(config, "ROCKET_XGB_FINAL_THRESHOLD", 12.0))
             if is_pump_curve:
-                _final_thr = max(_final_thr, 20.0)
+                _final_thr = min(_final_thr, 10.0)
             _req_soc_age_a = float(getattr(config, "REQUIRE_SOCIALS_MIN_AGE_MIN", 25.0))
             if _links_cnt == 0 and not _soc_unknown and _age_min_pre >= _req_soc_age_a:
                 _final_thr = max(_final_thr, _final_thr + 1.0)

@@ -259,6 +259,12 @@ def is_safe_unlocked_custom_runner(
     if is_trap:
         return False
 
+    # ЖЁСТКИЙ ЗАПРЕТ незалоченных пулов при ALLOW_UNLOCKED_LP_POOLS = False:
+    # Не позволяем кастомным незалоченным пулам (Meteora DYN2, PumpSwap CreatePool без burn,
+    # кастомный Raydium с LP lock 0%) обходить запрет и выносить ликвидность в $0 (AudaCity, MUFFINS, CLIVE, VICECITY).
+    if not bool(globals().get("ALLOW_UNLOCKED_LP_POOLS", False)):
+        return False
+
     if isinstance(pair_data, dict):
         _dex_u = str(pair_data.get("dexId") or "").lower()
         if "meteora" in _dex_u and _dex_u != "meteoradbc" and not bool(pair_data.get("_lp_verified")):
@@ -469,13 +475,22 @@ def evaluate_entry_momentum(
     if liq_usd >= 15000.0 and age_min >= 20.0 and vel_ratio < 0.10 and vol5_usd < 4000.0:
         return False, f"low-liq-turnover v/l {vel_ratio:.2f}x < 0.10x on liq ${liq_usd:,.0f}"
 
-    # 1. МЯГКИЙ ГЕЙТ ПАДАЮЩИХ СВЕЧЕЙ (разрешаем вход даже на красной 1м — отскоки часто зажигают ракету):
-    _is_m1_surge = (m1 >= 1.5 and buys5 >= max(8, int(sells5 * 1.10)) and vol5_usd >= 1500.0)
-    _m5_min_req = 1.0 if _is_m1_surge else 1.5
-    if m5 < _m5_min_req:
-        return False, f"m5-falling-knife {m5:+.1f}% < +{_m5_min_req:.1f}% (red or flat 5m candle)"
-    if m1 < float(globals().get("MIN_M1_PRICE_CHANGE_PCT", -5.0)):
-        return False, f"m1-falling-knife {m1:+.1f}% < {float(globals().get('MIN_M1_PRICE_CHANGE_PCT', -5.0)):+.1f}% (1m candle is dumping)"
+    # 1. ЖЁСТКИЙ ОТСЕВ ЕЛЕ ПОЛЗУЩИХ ТОКЕНОВ (убираем +2%..+5% флет, который скатывается в 0 — кейсы Makenzi +4.98%, CC +2.85%, EDDIE, PUSSY):
+    # Исключения: бычий откат на огромном спросе (GTE7 +496%: m5 -14%, vol5 $118k, 1147b/899s) или мега-объём >= $18k с 100+ покупками (FREEDOM +8.1%, GENTLEMEN +7.3%).
+    _is_heavy_vol_launch = (vol5_usd >= 18000.0 and buys5 >= max(100, int(sells5 * 1.15)) and vel_ratio >= 1.20)
+    _m5_min_req = 6.0 if _is_heavy_vol_launch else 8.0
+    _is_bullish_pullback_dip = (
+        -18.0 <= m5 < _m5_min_req
+        and h1 >= 15.0
+        and m1 >= -1.0
+        and vol5_usd >= 20000.0
+        and buys5 >= max(50, int(sells5 * 1.15))
+        and liq_usd >= 10000.0
+    )
+    if m5 < _m5_min_req and not _is_bullish_pullback_dip:
+        return False, f"m5-too-slow {m5:+.1f}% < +{_m5_min_req:.1f}% (slow crawling token, not a rocket)"
+    if m1 < float(globals().get("MIN_M1_PRICE_CHANGE_PCT", -2.5)):
+        return False, f"m1-falling-knife {m1:+.1f}% < {float(globals().get('MIN_M1_PRICE_CHANGE_PCT', -2.5)):+.1f}% (1m candle is dumping)"
 
     # 2. МЯГКИЙ ПЕРЕВЕС ПОКУПАТЕЛЕЙ (не требуем 30% dominance на старте):
     _req_bs_ratio = float(globals().get("DEFAULT_MIN_BUY_SELL_RATIO", 1.05))
@@ -505,10 +520,16 @@ def evaluate_entry_momentum(
     # Потолок m5 для свежих запусков и кривых: не входим в уже отработавший вертикальный пик (+300%..+425%),
     # где девы и первые снайперы фиксируют прибыль в наш вход (кейсы CLAUDHAO +425% -> -82%, CATEPEPE +410% -> -81%, PEPEVRAX +369% -> -79%).
     # Ракеты вроде Rockstar (+154%), LIFTD (+154%), GTA6 (+35%) стартуют до +200% и дают огромный запас хода!
-    _is_dex_migration_surge = bool(
-        vol5_usd >= 15000.0 and buys5 >= max(15, int(sells5 * 1.30)) and liq_usd >= 15000.0
+    _is_fresh_grad_blast = bool(
+        age_min <= 5.0 and vol5_usd >= 10000.0 and buys5 >= max(15, int(sells5 * 1.05))
     )
-    _max_m5_dyn = 400.0 if _is_dex_migration_surge else float(globals().get("MAX_ENTRY_M5_PCT", 220.0))
+    _is_dex_migration_surge = bool(
+        vol5_usd >= 15000.0 and buys5 >= max(15, int(sells5 * 1.10)) and liq_usd >= 12000.0
+    )
+    _is_fresh_curve_surge = bool(
+        age_min <= 6.0 and vol5_usd >= 1500.0 and buys5 >= max(12, int(sells5 * 1.15))
+    )
+    _max_m5_dyn = 550.0 if _is_fresh_grad_blast else (420.0 if _is_dex_migration_surge else (320.0 if _is_fresh_curve_surge else float(globals().get("MAX_ENTRY_M5_PCT", 220.0))))
     _max_m1_dyn = max(
         float(globals().get("MAX_ENTRY_M1_PCT", 35.0)),
         60.0 if (buys5 >= max(10, int(sells5 * 1.20)) and vol5_usd >= 2500.0) else (35.0 if buys5 >= max(8, int(sells5 * 1.05)) and vol5_usd >= 1200.0 else 25.0)
@@ -523,131 +544,80 @@ def evaluate_entry_momentum(
     if m1 > 4.0 and m5 < 15.0 and m1 > (m5 + 3.0):
         return False, f"dead-cat-1m-spike m1 {m1:+.1f}% >> m5 {m5:+.1f}% (4m dump before 1m bounce)"
 
-    # Защита от кровоточащего часового тренда без мощного объёма (кейс LASTBOOK age 11.8m, h1 -10.0%, vol5 $7,087 -> -16.4%; GENTLEMEN vol5 $34.3k проходит):
-    if h1 < -3.0 and (age_min >= 8.0 or vol5_usd < 20000.0):
+    # Защита от кровоточащего часового тренда без мощного объёма — но пропускаем сильный V-разворот покупателями (кейс DCTYCAT +97%: m5 +64%, 360b/56s, h1 -32.6%):
+    _is_strong_v_reversal = (
+        m5 >= 15.0
+        and m1 >= 0.0
+        and buys5 >= max(30, int(sells5 * 1.40))
+        and vol5_usd >= 4000.0
+        and h1 >= -55.0
+    )
+    if h1 < -3.0 and not _is_strong_v_reversal and (age_min >= 8.0 or vol5_usd < 20000.0):
         return False, f"bleeding-h1-downtrend h1 {h1:+.1f}% at age {age_min:.1f}m vol5 ${vol5_usd:,.0f}"
 
-    # 1. Свежая миграция / накопление покупателей:
-    _fma_vol_req = 700.0 if age_min <= 3.0 else 1000.0
-    is_fresh_migration_accumulation = (
-        age_min <= 30.0
-        and (fdv_usd <= 0.0 or fdv_usd <= 250000.0)
-        and liq_usd >= 2500.0
-        and buys5 >= max(6, int(sells5 * 1.05))
-        and vol5_usd >= _fma_vol_req
-        and m5 >= 2.0
-        and m1 >= -2.5
+    # 1. Реальный взрывной старт ультра-свежего токена (<=3м): ADPAID (+105%: 16b/4s, m5 +29.8%), WANTED (+55%: 37b/13s, m5 +26%), TDC (+399%)
+    _is_explosive_micro_start = (
+        age_min <= 2.5
+        and m5 >= 20.0
+        and m1 >= -1.5
+        and buys5 >= max(15, int(sells5 * 2.20))
+        and vol5_usd >= 800.0
     )
-
-    # 1.1 Свежий запуск / реактивный разгон молодых токенов (<15м):
-    _uf_vol_req = 650.0 if age_min <= 3.0 else 1000.0
-    _uf_min_tx = 7 if age_min <= 3.0 else 10
     is_ultra_fresh_launch = (
-        age_min <= 15.0
-        and m5 >= 2.0
-        and m1 >= -2.5
-        and buys5 >= max(5, int(sells5 * 1.10))
-        and vol5_usd >= _uf_vol_req
-        and tot_tx >= _uf_min_tx
+        _is_explosive_micro_start
+        or (
+            age_min <= 5.0
+            and m5 >= 12.0
+            and m1 >= -2.5
+            and buys5 >= max(20, int(sells5 * 1.20))
+            and vol5_usd >= 2500.0
+            and (vel_ratio >= 0.40 or vol5_usd >= 5000.0)
+        )
     )
 
-    # 1.2 Вход на откате молодой ракеты (1м микро-пуллбэк на разгоняющемся токене):
-    is_fresh_pullback_entry = (
-        age_min <= 35.0
-        and m5 >= 4.0
-        and -3.5 <= m1 <= 2.5
-        and buys5 >= max(10, int(sells5 * 1.10))
-        and vol5_usd >= 1800.0
-    )
-
-    # 1.3 Первичное зажигание ракеты (свежий импульс или подтверждённый живым $ потоком выкуп мелких продаж)
+    # 1.1 Высокооборотный пробой свежей миграции / раннего раннера (<=25м): GTA6, LGTA6, Billy, RAUL, FREEDOM, GENTLEMEN
     is_fresh_ignition = (
-        age_min <= 35.0
-        and m5 >= 2.5
+        age_min <= 25.0
         and m1 >= -2.5
         and (
-            buys5 >= max(6, int(sells5 * 1.05))
-            or (allow_absorbed_buyers and buys5 >= int(sells5 * 0.85) and m5 >= 8.0 and vol5_usd >= 6000.0)
+            (
+                m5 >= 10.0
+                and vol5_usd >= 5000.0
+                and (vel_ratio >= 0.35 or vol5_usd >= 10000.0)
+                and (
+                    buys5 >= max(30, int(sells5 * 1.15))
+                    or (allow_absorbed_buyers and buys5 >= max(30, int(sells5 * 0.90)) and m5 >= 15.0 and vol5_usd >= 8000.0)
+                )
+            )
+            or (
+                m5 >= 6.0
+                and vol5_usd >= 18000.0
+                and vel_ratio >= 1.20
+                and buys5 >= max(100, int(sells5 * 1.15))
+            )
         )
-        and vol5_usd >= (700.0 if age_min <= 3.0 else 1000.0)
-        and tot_tx >= (7 if age_min <= 3.0 else 10)
     )
 
-    # 1.4 Гипер-зажигание (сильный пробой)
-    is_hyper_ignition = (
-        age_min <= SOLANA_MAX_AGE_MIN
-        and m5 >= 5.0
-        and m1 >= -3.0
-        and buys5 >= max(7, int(sells5 * 1.05))
-        and vol5_usd >= 1000.0
-    )
-
-    # 1.5 Здоровый второй импульс / реклейм уровня
-    is_turned_green_dip = (
-        age_min <= SOLANA_MAX_AGE_MIN
-        and (fdv_usd <= 0.0 or fdv_usd <= float(globals().get("JEV_MAX_MCAP_USD", 1500000.0)))
-        and buys5 >= max(8, int(sells5 * 1.00))
-        and vol5_usd >= 1200.0
-        and liq_usd >= 2500.0
-        and m5 >= 2.5
-        and m1 >= -3.0
-        and (h1 >= -5.0 or vol5_usd >= 3000.0)
-    )
-
-    # 1.6 V-образный разворот покупателями
-    is_fresh_v_reversal = (
-        age_min <= SOLANA_MAX_AGE_MIN
-        and m5 >= 3.5
-        and m1 >= -2.5
-        and buys5 >= max(8, int(sells5 * 1.05))
-        and vol5_usd >= 1200.0
-        and liq_usd >= 2500.0
-        and h1 >= -25.0
-    )
-
-    # 1.7 Зрелый пробой (свежие капы с импульсом)
+    # 1.2 Сильная вторая волна зрелого раннера (25м..240м): CDOG (+95%), AudaCity ERD (+53%), DCTYCAT (+97%)
+    # Полностью закрываем дыру для еле ползущих 1-4ч токенов с vol5 $1k-$4k и m5 +2%..+10%!
     is_mature_breakout = (
         age_min <= SOLANA_MAX_AGE_MIN
-        and m5 >= 2.5
-        and h1 >= -20.0
-        and m1 >= -2.5
-        and buys5 >= max(8, int(sells5 * 1.05))
-        and vol5_usd >= 1200.0
-        and (vel_ratio >= 0.08 or vol5_usd >= 2000.0)
-    )
-
-    # 1.8 Импульсный прорыв консолидации / повторный разгон
-    _cb_max_mcap = float(globals().get("JEV_MAX_MCAP_USD", 1500000.0))
-    is_consolidation_breakout = (
-        age_min <= SOLANA_MAX_AGE_MIN
-        and 2.5 <= m5 <= _max_m5_dyn
+        and (fdv_usd <= 0.0 or fdv_usd <= float(globals().get("JEV_MAX_MCAP_USD", 1500000.0)))
+        and m5 >= 15.0
         and m1 >= -2.0
-        and buys5 >= max(7, int(sells5 * 1.05))
-        and vol5_usd >= 1000.0
-        and (fdv_usd <= 0.0 or fdv_usd <= _cb_max_mcap)
-    )
-
-    # 1.9 Взрывной старт 1-минутной свечи (момент зажигания до того, как m5 успела раздуться):
-    is_m1_rocket_blast = (
-        age_min <= SOLANA_MAX_AGE_MIN
-        and m1 >= 1.5
-        and m5 >= 0.5
-        and buys5 >= max(7, int(sells5 * 1.15))
-        and vol5_usd >= 900.0
-        and (fdv_usd <= 0.0 or fdv_usd <= _cb_max_mcap)
+        and h1 >= -15.0
+        and buys5 >= max(40, int(sells5 * 1.20))
+        and vol5_usd >= 8000.0
+        and (vel_ratio >= 0.25 or vol5_usd >= 12000.0)
+        and liq_usd >= 6000.0
     )
 
     if not (
         is_ultra_fresh_launch
-        or is_fresh_migration_accumulation
-        or is_fresh_pullback_entry
         or is_fresh_ignition
-        or is_hyper_ignition
-        or is_turned_green_dip
-        or is_fresh_v_reversal
         or is_mature_breakout
-        or is_consolidation_breakout
-        or is_m1_rocket_blast
+        or _is_bullish_pullback_dip
+        or _is_strong_v_reversal
     ):
         return (
             False,
@@ -655,7 +625,7 @@ def evaluate_entry_momentum(
             f"b/s {buys5}/{sells5} vol5 ${vol5_usd:,.0f} v/l {vel_ratio:.2f}x",
         )
 
-    if h1 < min_h1 and not is_fresh_v_reversal:
+    if h1 < min_h1 and not _is_strong_v_reversal:
         return False, f"hourly-downtrend h1 {h1:+.1f}% < {min_h1:+.1f}% (choppy downtrend)"
 
     if age_min >= 45.0 and h6 is not None and float(h6 or 0.0) < min_h6:
@@ -677,9 +647,9 @@ DD_THROTTLE_START_USD = 15.0
 # === ВХОД В ЗРЕЛЫЕ ВЫПУСКНИКИ RAYDIUM / PUMPSWAP И РАННИЕ КРИВЫЕ PUMP.FUN ===
 SNIPER_ENTRIES_ENABLED = True             # ВКЛЮЧЕНО: мгновенный вход в свежие кривые/миграции со стрима
 ALLOW_UNGRADUATED_PUMPFUN = True          # ВКЛЮЧЕНО: ловим ракеты на кривой Pump.fun до миграции (открывает 大A +1559%, ROCKSTAR +163%, NEIL +52%, BLUE +36%)
-MIN_PUMP_CURVE_MCAP_USD = 3200.0          # Порог кривой $3.2k (пропускает ранних лидеров NEIL $3.3k +52%, RAUL $4.1k +38%, но отсекает 0-1 SOL мусор; реальный резерв >=2.2 SOL проверяется ончейн!)
+MIN_PUMP_CURVE_MCAP_USD = 2750.0          # Порог кривой $2.75k (отсекает пустые $2,037 запуски 0-1 SOL, но ловит живые старты WANTED $3,085 +55%)
 MAX_PUMP_CURVE_MCAP_USD = 25000.0         # Потолок сырой кривой $25k (захватывает растущие кривые $12k-$25k на пути к миграции ~$29k-$30k)
-MIN_PUMP_CURVE_MCAP_SOL = 44.0            # Нижняя граница золотой зоны кривой (~44 SOL ≈ $3.2k, ~14 real SOL внутри кривой)
+MIN_PUMP_CURVE_MCAP_SOL = 38.0            # Нижняя граница золотой зоны кривой (~38 SOL ≈ $2.75k при SOL $73, ~10 real SOL внутри кривой)
 MAX_PUMP_CURVE_MCAP_SOL = 340.0           # Верхняя граница золотой зоны сырой кривой (~340 SOL ≈ $25k при миграции 410 SOL)
 PUMP_MIGRATION_MCAP_SOL = 410.0           # FDV миграции pump.fun
 PUMP_DUMP_FLOOR_SOL = 50.0                # Порог post-mig-dumped (~50 SOL, разрешает быстрые реклеймы)
@@ -745,9 +715,9 @@ MOONBAG_MAX_HOLD_MIN = 55.0          # Даём ракетам до 55 мину�
 PUMP_XGB_ENABLED = False
 RAY_XGB_ENABLED = False
 ROCKET_XGB_ENABLED = True
-ROCKET_XGB_STAGE1_THRESHOLD = 14.0   # Порог 14% для DEX-раннеров (пропускает HOGE 15% +158%, GRANDPUMP 25% +214%, DACT 47% +103%; для сырых кривых применяется 20%)
-ROCKET_XGB_FINAL_THRESHOLD = 14.0     # Финальный порог 14%
-ROCKET_XGB_THRESHOLD = 14.0
+ROCKET_XGB_STAGE1_THRESHOLD = 10.0   # Порог 10% (пропускает ранние кривые ADPAID 10.4% +105%, HOGE 15% +158%, GRANDPUMP 25% +214%)
+ROCKET_XGB_FINAL_THRESHOLD = 12.0     # Финальный порог 12%
+ROCKET_XGB_THRESHOLD = 10.0
 ROCKET_XGB_UNLOCKED_CUSTOM_MIN = 14.0  # Для проверенных высокооборотных DEX-раннеров
 JEV_MAX_AGE_MIN = 240.0              # Пробои и консолидации до 240м (4ч): позволяет ловить мощные вторые волны и раннеры
 
@@ -1007,7 +977,7 @@ SOLANA_FRESH_RESCAN_COOLDOWN = 2
 
 JEV_TREND_CONFIRM_ENABLED = True
 JEV_FRESH_RECHECK_ENABLED = True   # Включена финальная проверка цены перед покупкой (защищает от покупки на падающей свече!)
-JEV_MIN_M1_ENTRY_FLOOR_PCT = 0.0    # Вход только на растущей 1м свече (m1 >= 0.0%), покупка красного ножа запрещена
+JEV_MIN_M1_ENTRY_FLOOR_PCT = -2.5   # Разрешаем микро-шум 1м свечи до -2.5% (не режем -0.4% тики), но блокируем 1м слив < -2.5%
 JEV_MIN_H1_PCT = -25.0
 JEV_MIN_H6_PCT = -35.0
 SYMBOL_REBUY_COOLDOWN_SEC = 1800
@@ -1101,7 +1071,7 @@ MIN_VOLUME_M5_USD = 450.0                # Минимальный 5м объем
 MIN_VOL_TO_LIQ_M5 = 0.10                 # Минимальная оборачиваемость ликвидности за 5м
 MAX_H1_PUMP_PCT = 600.0                  # Не блокируем токены после роста за 1ч
 MIN_M5_PRICE_CHANGE_PCT = 2.0            # Не входим в слабые/паузу 5м свечи (минимум +2%)
-MIN_M1_PRICE_CHANGE_PCT = 0.0            # Запрет входа на красной 1м свече (m1 < 0 = блок)
+MIN_M1_PRICE_CHANGE_PCT = -2.5           # Разрешаем микро-откат 1м до -2.5%, но режем падающие ножи (< -2.5%)
 
 # 3. Адаптивный фильтр покупателей/продавцов (мягкий для свежих запусков)
 DEFAULT_MIN_BUY_SELL_RATIO = 1.05        # Для обычных пулов

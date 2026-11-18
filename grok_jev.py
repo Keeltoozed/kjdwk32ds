@@ -522,19 +522,29 @@ class GrokJevEngine:
                 m1 = max(-25.0, min(25.0, m5 * 0.15))
         h1 = float(pc.get("h1", 0) or 0)
 
-        # 1.1. Живой бокс сырой кривой Pump.fun (пропускает GTA6 +115%, RAUL +38%, ROCKSTAR +401%, DACT +76%):
-        # От пустых/слитых кёрвов ($PICKLES, GTAMICHI, AabL4) защищает ончейн-аудит резервов (real_sol >= 1.8 SOL).
+        # 1.1. Живой бокс сырой кривой Pump.fun (единый с analyzer.py: пропускает ADPAID +105%, WANTED +55%, SHERRICK +42.7%):
+        # От пустых/слитых кёрвов ($PICKLES, GTAMICHI, AabL4) защищает ончейн-аудит резервов (real_sol >= 2.2 SOL).
         _avg_tx_e = vol_m5 / max(1, b5 + s5)
-        if dex_id in ("pump", "pumpfun"):
-            if fdv_mc > 0 and (fdv_mc < 2800.0 or fdv_mc > 13500.0):
-                return False, f"pump-curve-fdv-out-of-sweet-spot ${fdv_mc:,.0f} not in [$2.8k, $13.5k]"
-            if b5 < 25 or (s5 > 0 and b5 < int(s5 * 1.15)) or (b5 - s5) < 5:
-                return False, f"early-curve-weak-buyers fdv=${fdv_mc:.0f} {b5}b/{s5}s (need >=25b, net >=+5)"
-            if vol_m5 < 1800.0 or vol_m5 > 35000.0:
-                return False, f"pump-curve-vol5-out-of-sweet-spot ${vol_m5:,.0f} not in [$1.8k, $35.0k]"
-            if m5 < 15.0 or m5 > 185.0 or m1 > 40.0:
-                return False, f"pump-curve-momentum-out-of-box m5={m5:+.1f}% m1={m1:+.1f}%"
-            if age_min > 6.0:
+        if dex_id in ("pump", "pumpfun", "meteoradbc"):
+            from sol_price import get_sol_price_sync as _get_sol_c_g
+            _sol_cg = float(_get_sol_c_g() or 75.0)
+            if _sol_cg <= 0:
+                _sol_cg = 75.0
+            _min_c_g = max(float(getattr(_c, "MIN_PUMP_CURVE_MCAP_USD", 2750.0)), float(getattr(_c, "MIN_PUMP_CURVE_MCAP_SOL", 38.0)) * _sol_cg)
+            _max_c_g = min(float(getattr(_c, "MAX_PUMP_CURVE_MCAP_USD", 25000.0)), float(getattr(_c, "MAX_PUMP_CURVE_MCAP_SOL", 340.0)) * _sol_cg)
+            if fdv_mc > 0 and (fdv_mc < _min_c_g or fdv_mc > _max_c_g):
+                return False, f"pump-curve-fdv-out-of-sweet-spot ${fdv_mc:,.0f} not in [${_min_c_g/1000:.1f}k, ${_max_c_g/1000:.1f}k]"
+            if b5 < 15 or (s5 > 0 and b5 < int(s5 * 1.30)) or (b5 - s5) < 5:
+                return False, f"early-curve-weak-buyers fdv=${fdv_mc:.0f} {b5}b/{s5}s (need >=15b, net >=+5, b/s >=1.30x)"
+            _min_c_vol_g = 800.0 if (age_min <= 2.5 and b5 >= max(15, int(s5 * 2.20))) else 2000.0
+            if vol_m5 < _min_c_vol_g or vol_m5 > 80000.0:
+                return False, f"pump-curve-vol5-out-of-sweet-spot ${vol_m5:,.0f} not in [${_min_c_vol_g/1000:.2f}k, $80.0k]"
+            if m5 < 20.0 or m5 > 320.0 or m1 > 50.0:
+                return False, f"pump-curve-momentum-out-of-box m5={m5:+.1f}% m1={m1:+.1f}% (need +20%..+320%)"
+            _is_curve_wakeup_g = (
+                age_min <= 45.0 and m5 >= 20.0 and vol_m5 >= 2000.0 and b5 >= 15 and b5 >= int(s5 * 1.20)
+            )
+            if age_min > 6.0 and not _is_curve_wakeup_g:
                 return False, f"pump-curve-stalled-age {age_min:.1f}m > 6.0m"
             _sol_min_age_g = 0.8
         else:
@@ -660,6 +670,10 @@ class GrokJevEngine:
             return False, _mom_why_g
 
         _max_m5_allowed = float(getattr(_c, "MAX_ENTRY_M5_PCT", 180.0))
+        if dex_id in ("pump", "pumpfun", "meteoradbc"):
+            _max_m5_allowed = max(_max_m5_allowed, 320.0)
+        elif age_min <= 5.0 and vol_m5 >= 10000.0 and b5 >= max(15, int(s5 * 1.05)):
+            _max_m5_allowed = max(_max_m5_allowed, 550.0)
         if m5 > _max_m5_allowed:
             _fresh_grad_m5_cap = max(_max_m5_allowed * 1.35, 250.0)
             _is_strong_buyer_breakout_g = (m5 <= _fresh_grad_m5_cap and b5 >= int(s5 * 1.2) and vol_m5 >= 8000.0)
@@ -1986,11 +2000,8 @@ class GrokJevEngine:
                     _fcr = await pre_entry_rug_check(address, pair_data=pair_data, symbol=symbol)
                     _fcr_compact = compact_summary(_fcr)
                     if _fcr.get("verdict") == "BLOCK":
-                        if locals().get("_dist_runner_g", False):
-                            print(f"⚠️ [FCR-WARN-RUNNER] {symbol} ({address[:8]}): {_fcr.get('report', '')} — пропуск ликвидного распределённого раннера.")
-                        else:
-                            print(f"🚫 [FCR-BLOCK] {symbol} ({address[:8]}): {_fcr.get('report', '')}")
-                            return False, "fcr-first-candle-rug: " + "; ".join(_fcr.get("reasons", [])[:3]), _h_stats
+                        print(f"🚫 [FCR-BLOCK] {symbol} ({address[:8]}): {_fcr.get('report', '')}")
+                        return False, "fcr-first-candle-rug: " + "; ".join(_fcr.get("reasons", [])[:3]), _h_stats
                     elif _fcr.get("verdict") == "WARN":
                         _fcr_w_n_g = int((_fcr_compact or {}).get("fcr_cluster_wallets", 0) or 0)
                         _fcr_m5_g = float((pair_data.get("priceChange") or {}).get("m5", 0) or 0)
@@ -2154,9 +2165,9 @@ class GrokJevEngine:
         # Отсекает 90% мусора и заведомых дампов в 0мс (DARTHLON 6%, BALLS 4%, DAISUKE 2%)
         # без лишних сетевых вызовов Jupiter, RugCheck и LLM.
         rkt_s1 = self.score_rocket_xgb(address, pair)
-        s1_thresh = float(getattr(_c, "ROCKET_XGB_STAGE1_THRESHOLD", 14.0))
-        if str(pair.get("dexId") or "").lower() in ("pump", "pumpfun"):
-            s1_thresh = max(s1_thresh, 20.0)
+        s1_thresh = float(getattr(_c, "ROCKET_XGB_STAGE1_THRESHOLD", 10.0))
+        if str(pair.get("dexId") or "").lower() in ("pump", "pumpfun", "meteoradbc"):
+            s1_thresh = min(s1_thresh, 10.0)
         _txs_s1 = (pair.get("txns") or {}).get("m5") or {}
         _b5_s1 = int(_txs_s1.get("buys", 0) or 0)
         _s5_s1 = int(_txs_s1.get("sells", 0) or 0)
@@ -2344,9 +2355,9 @@ class GrokJevEngine:
 
         # 5.6. 🚀 STAGE 2: ROCKET XGBOOST FINAL ML FIREWALL (единый порог с tracker.py)
         rkt_final = self.score_rocket_xgb(address, pair, _h_stats)
-        final_thresh = float(getattr(_c, "ROCKET_XGB_FINAL_THRESHOLD", 14.0))
-        if str(pair.get("dexId") or "").lower() in ("pump", "pumpfun"):
-            final_thresh = max(final_thresh, 20.0)
+        final_thresh = float(getattr(_c, "ROCKET_XGB_FINAL_THRESHOLD", 12.0))
+        if str(pair.get("dexId") or "").lower() in ("pump", "pumpfun", "meteoradbc"):
+            final_thresh = min(final_thresh, 10.0)
         _fin_links = len((pair.get("info") or {}).get("socials", []) or []) + len((pair.get("info") or {}).get("websites", []) or [])
         _fin_ca_ms = float(pair.get("pairCreatedAt") or 0)
         _fin_age_m = ((time.time() * 1000.0 - _fin_ca_ms) / 60000.0) if _fin_ca_ms > 0 else 0.0

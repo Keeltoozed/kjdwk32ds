@@ -1202,8 +1202,19 @@ async def jup_loop(analyzer, tracker):
                             and _v5_cand >= 1500.0
                             and _b5_cand >= max(3, _s5_cand)
                         )
-                        _min_m5_cand = 0.4 if _ag <= 3.0 else 1.2
-                        if (_m5 < _min_m5_cand and not _is_turned_green_cand) or _m1_cand < -3.0:
+                        _dex_cand = str(td.get("dexId") or "").lower()
+                        if "meteora" in _dex_cand and _dex_cand != "meteoradbc" and not td.get("_lp_verified", False):
+                            skipped_flat += 1
+                            processed[m] = _now_t + 3600
+                            continue
+                        _is_bull_dip_cand = (
+                            _m5 >= -18.0
+                            and _v5_cand >= 20000.0
+                            and _b5_cand >= max(50, int(_s5_cand * 1.15))
+                            and _lq_cand >= 10000.0
+                        )
+                        _min_m5_cand = 2.0 if _ag <= 3.0 else 6.0
+                        if (_m5 < _min_m5_cand and not _is_bull_dip_cand) or _m1_cand < -3.0:
                             skipped_flat += 1
                             processed[m] = _now_t
                             continue
@@ -1251,11 +1262,11 @@ async def jup_loop(analyzer, tracker):
 
                             _sig_j = str(analyzer.get_signal(mint) or "").lower()
                             _is_term_j = any(k in _sig_j for k in (
-                                "rugcheck", "scam", "unlocked-lp", "bundle", "honeypot", 
+                                "rugcheck", "scam", "unlocked-lp", "meteora-unlocked-pool", "bundle", "honeypot", 
                                 "freeze", "mimic", "dead-token", "мёртвый токен", "sybil", 
-                                "delegation", "zombie", 
+                                "delegation", "zombie", "bad-creator", "post-mig-dumped", "liq-fdv-trap",
                                 "deadcat", "dead-cat", "ghost-pool", "wash-spike", 
-                                "wash-trap", "mcap-too-large", "price-split"
+                                "wash-trap", "anon-wash-churn", "mcap-too-large", "price-split"
                             ))
                             if ok is False:
                                 processed[mint] = _t.time() + (3600 if _is_term_j else 0)

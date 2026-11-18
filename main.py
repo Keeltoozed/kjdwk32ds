@@ -1113,6 +1113,9 @@ async def scanner_loop(analyzer, tracker):
                             continue
 
                         _c_dex = str(_c_pre.get("dexId", "")).lower()
+                        if "meteora" in _c_dex and _c_dex != "meteoradbc" and not _c_pre.get("_lp_verified", False):
+                            processed_mints[mint] = _now_r + 3600
+                            continue
                         if not getattr(config, "ALLOW_UNGRADUATED_PUMPFUN", False) and config.is_unmigrated_curve_token(mint, _c_pre):
                             processed_mints[mint] = _now_r - _cd_r + 30
                             continue
@@ -1122,10 +1125,33 @@ async def scanner_loop(analyzer, tracker):
                         _c_pc = _c_pre.get("priceChange") or {}
                         _c_m5 = float(_c_pc.get("m5", 0) or 0)
                         _c_tx = (_c_pre.get("txns") or {}).get("m5", {}) or {}
-                        _c_trades = int(_c_tx.get("buys", 0) or 0) + int(_c_tx.get("sells", 0) or 0)
+                        _c_b5 = int(_c_tx.get("buys", 0) or 0)
+                        _c_s5 = int(_c_tx.get("sells", 0) or 0)
+                        _c_trades = _c_b5 + _c_s5
                         _c_vol5 = float((_c_pre.get("volume") or {}).get("m5", 0) or 0)
                         _c_liq = float((_c_pre.get("liquidity") or {}).get("usd", 0) or 0)
                         _c_fdv = float(_c_pre.get("fdv", 0) or _c_pre.get("marketCap", 0) or 0)
+
+                        # 0мс отсев мёртвых трупов:
+                        # 1) Слитые в $2-$21 выпускники Pump.fun (MGOAT $12, AMAT $3) — бан на 1ч + выкидываем из очереди миграций
+                        if mint.endswith("pump") and _c_dex not in ("pump", "pumpfun") and 0 < _c_fdv < 1000.0:
+                            processed_mints[mint] = _now_r + 3600
+                            try:
+                                birth_tracker.remove_graduated(mint)
+                            except Exception:
+                                pass
+                            continue
+                        # 2) Пустые $2,037 старты сырой кривой без покупателей — не забиваем ими 60 слотов сканера каждые 8с!
+                        if config.is_unmigrated_curve_token(mint, _c_pre):
+                            from sol_price import get_sol_price_sync as _get_sol_sc
+                            _sol_sc = float(_get_sol_sc() or 75.0)
+                            if _sol_sc <= 0:
+                                _sol_sc = 75.0
+                            _min_c_sc = max(float(getattr(config, "MIN_PUMP_CURVE_MCAP_USD", 2750.0)), float(getattr(config, "MIN_PUMP_CURVE_MCAP_SOL", 38.0)) * _sol_sc)
+                            if (0 < _c_fdv < _min_c_sc) or (_c_trades == 0 and _c_vol5 == 0):
+                                processed_mints[mint] = _now_r - _cd_r + (90 if _c_trades == 0 else 45)
+                                continue
+
                         _max_sc_age = float(getattr(config, "SOLANA_MAX_AGE_MIN", 240.0))
                         _max_sc_fdv = float(getattr(config, "JEV_MAX_MCAP_USD", 1500000.0))
                         if _c_vol5 >= 15000.0:
@@ -1153,25 +1179,25 @@ async def scanner_loop(analyzer, tracker):
                             processed_mints[mint] = _now_r - _cd_r + 90
                             continue
 
-                        # Отсекаем вялые стоячие токены старше 5м без живого объёма: быстрый переопрос через 20с
-                        if _c_age_m >= 5.0 and _c_vol5 < max(2500.0, float(getattr(config, "MIN_VOLUME_M5", 4500.0))) and not _is_fresh_grad:
+                        # Отсекаем вялые стоячие/еле ползущие токены старше 5м без живого объёма: быстрый переопрос через 20с
+                        if _c_age_m >= 5.0 and _c_vol5 < max(4500.0, float(getattr(config, "MIN_VOLUME_M5", 4500.0))) and not _is_fresh_grad:
                             processed_mints[mint] = _now_r - _cd_r + 20
                             continue
 
-                        # Слив/флет (m5 < 1.5%): не тратим слоты сканера на красные свечи (но пускаем свежие миграции до 2.5м)
-                        if _c_m5 < 1.5 and _c_age_m > 2.5 and not _is_fresh_grad:
-                            processed_mints[mint] = _now_r - _cd_r + 15
+                        # Отсекаем флет и еле ползущие токены (m5 < 6%): пропускаем свежие миграции до 2.5м и бычьи откаты с мощным спросом (GTE7 +496%)
+                        _is_bull_dip_sc = (_c_m5 >= -18.0 and _c_vol5 >= 20000.0 and _c_b5 >= max(50, int(_c_s5 * 1.15)) and _c_liq >= 10000.0)
+                        if _c_m5 < 6.0 and _c_age_m > 2.5 and not _is_fresh_grad and not _is_bull_dip_sc:
+                            processed_mints[mint] = _now_r - _cd_r + 20
                             continue
 
                         # РОКЕТ-ВЕЛОСИТИ РАНЖИРОВАНИЕ С ПРИОРИТЕТОМ СВЕЖЕСТИ (<=15м x2.5, <=45м x1.8):
                         import math
-                        _c_b5 = int(_c_tx.get("buys", 0) or 0)
-                        _c_s5 = int(_c_tx.get("sells", 0) or 0)
                         _vol_log = math.log10(max(_c_vol5, 100.0))
                         _bs_ratio = (_c_b5 / max(_c_s5, 1)) if _c_s5 > 0 else 1.5
                         _bs_ratio = min(max(_bs_ratio, 0.5), 3.0)
                         _fresh_sc_mult = 6.0 if _c_age_m <= 2.0 else (4.0 if _c_age_m <= 5.0 else (2.2 if _c_age_m <= 15.0 else (0.4 if _c_age_m > 30.0 else 1.0)))
-                        _rkt_vel = _c_m5 * _vol_log * _bs_ratio * _fresh_sc_mult
+                        _eff_m5_vel = max(_c_m5, 8.0) if _is_bull_dip_sc else _c_m5
+                        _rkt_vel = _eff_m5_vel * _vol_log * _bs_ratio * _fresh_sc_mult
 
                         _score_rank = (1000.0 if _is_fresh_grad else 0.0) + _rkt_vel
                         _ranked_mints.append((_score_rank, mint))
@@ -1285,11 +1311,11 @@ async def scanner_loop(analyzer, tracker):
                             _sig = str(analyzer.get_signal(mint) or "")
                             _sig_l = _sig.lower()
                             _is_terminal = any(k in _sig_l for k in (
-                                "rugcheck", "scam", "unlocked-lp", "bundle", "honeypot", 
+                                "rugcheck", "scam", "unlocked-lp", "meteora-unlocked-pool", "bundle", "honeypot", 
                                 "freeze", "mimic", "dead-token", "мёртвый токен", "sybil", 
-                                "delegation", "zombie", 
+                                "delegation", "zombie", "bad-creator", "post-mig-dumped", "liq-fdv-trap",
                                 "deadcat", "dead-cat", "ghost-pool", "wash-spike", 
-                                "wash-trap", "mcap-too-large", "price-split"
+                                "wash-trap", "anon-wash-churn", "mcap-too-large", "price-split"
                             ))
                             if _is_terminal:
                                 processed_mints[mint] = time.time() + 3600      # Подтверждённый скам/мертвец: бан на 1 час и навсегда убираем из очереди миграций
@@ -1297,8 +1323,10 @@ async def scanner_loop(analyzer, tracker):
                                     birth_tracker.remove_graduated(mint)
                                 except Exception:
                                     pass
+                            elif "pump-curve-too-early" in _sig_l:
+                                processed_mints[mint] = time.time() + 45        # Пустой ранний кёрв ($2,037): не долбим каждые 10с
                             elif "ungraduated" in _sig_l or "bonding curve" in _sig_l or "curve" in _sig_l:
-                                processed_mints[mint] = time.time() + 10        # Сырая кривая: перепроверка через 10с
+                                processed_mints[mint] = time.time() + 15        # Живая кривая: перепроверка через 15с
                             elif "откат" in _sig_l or "вертикаль" in _sig_l or "pullback" in _sig_l:
                                 _pullbacks = getattr(analyzer, "_pullback_retries", {})
                                 _p_cnt = _pullbacks.get(mint, 0) + 1

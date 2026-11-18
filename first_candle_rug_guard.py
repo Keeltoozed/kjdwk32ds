@@ -1005,7 +1005,7 @@ async def _deep_first_action_batch(members: List[dict], mint: str) -> None:
             m["deep"]["first_action_mint"] = True
 
 
-async def analyze_funding_clusters(mint: str, cohort: List[dict]) -> dict:
+async def analyze_funding_clusters(mint: str, cohort: List[dict], deadline: Optional[float] = None) -> dict:
     """
     Главный блок: трассирует финансирование когорты и строит кластеры «одного источника».
 
@@ -1027,18 +1027,23 @@ async def analyze_funding_clusters(mint: str, cohort: List[dict]) -> dict:
 
     wallets = list(cohort)[:int(_cfg("FCR_COHORT_SIZE", 8))]
 
-    # 0) Кластеры по графу инсайдеров RugCheck (дёшево, точная доля эмиссии)
-    graph_clusters: List[dict] = []
-    try:
-        graph_clusters = await _insider_graph_clusters(mint)
-    except Exception:
+    # 0+1) Параллельно: граф инсайдеров RugCheck + трейс финансирования когорты в пределах остатка бюджета
+    priority = {w["wallet"]: float(w.get("pct", 0.0) or 0.0) for w in wallets}
+    _rem0 = (deadline - time.monotonic()) if deadline is not None else 5.0
+    _g_to = max(0.4, min(1.5, _rem0 - 1.5))
+    async def _safe_graph():
+        try:
+            return await asyncio.wait_for(_insider_graph_clusters(mint), timeout=_g_to)
+        except Exception:
+            return []
+
+    graph_clusters, funding_map = await asyncio.gather(
+        _safe_graph(),
+        _trace_all_funders([w["wallet"] for w in wallets], mint, priority=priority),
+    )
+    if not isinstance(graph_clusters, list):
         graph_clusters = []
     result["graph_clusters"] = graph_clusters
-
-    # 1) Трассируем финансирование ВСЕХ кошельков когорты одним батчем.
-    #    Приоритет пагинации genesis получают холдеры с заметной долей.
-    priority = {w["wallet"]: float(w.get("pct", 0.0) or 0.0) for w in wallets}
-    funding_map = await _trace_all_funders([w["wallet"] for w in wallets], mint, priority=priority)
     for w in wallets:
         info = funding_map.get(w["wallet"]) or {}
         if info.get("error"):
@@ -1070,13 +1075,18 @@ async def analyze_funding_clusters(mint: str, cohort: List[dict]) -> dict:
     for f in groups.keys():
         if f and f not in _KNOWN_LIQUIDITY_SOURCES and _known_source_label(f) == "unknown":
             candidate_funders.append(f)
-    if len(candidate_funders) >= 1:
+    _rem_br = (deadline - time.monotonic()) if deadline is not None else 4.0
+    if len(candidate_funders) >= 1 and _rem_br > 1.1:
         try:
             _check_funders = candidate_funders[:12]
-            f_sigs_res = await _rpc_batch([
-                ("getSignaturesForAddress", [f_addr, {"limit": 30}])
-                for f_addr in _check_funders
-            ], timeout=4.0)
+            _br_to = max(0.5, min(1.2, _rem_br - 0.7))
+            f_sigs_res = await asyncio.wait_for(
+                _rpc_batch([
+                    ("getSignaturesForAddress", [f_addr, {"limit": 30}])
+                    for f_addr in _check_funders
+                ], timeout=max(0.4, _br_to - 0.1)),
+                timeout=_br_to,
+            )
             burner_funders = set()
             _now_ts_br = time.time()
             for f_addr, sigs in zip(_check_funders, f_sigs_res or []):
@@ -1110,8 +1120,12 @@ async def analyze_funding_clusters(mint: str, cohort: List[dict]) -> dict:
                 if bm["wallet"] not in seen_dm:
                     deep_members.append(bm)
                     seen_dm.add(bm["wallet"])
-        if deep_members:
-            await _deep_first_action_batch(deep_members, mint)
+        _rem_dp = (deadline - time.monotonic()) if deadline is not None else 2.0
+        if deep_members and _rem_dp > 0.7:
+            try:
+                await asyncio.wait_for(_deep_first_action_batch(deep_members, mint), timeout=min(0.9, _rem_dp - 0.35))
+            except Exception:
+                pass
 
     # 4) Считаем метрики кластеров
     burst_window = float(_cfg("FCR_CLUSTER_BURST_SEC", 3600))
@@ -1673,18 +1687,26 @@ async def pre_entry_rug_check(
         verdict = await asyncio.wait_for(_analyze(mint, pair_data, verdict, budget=budget), timeout=budget)
     except asyncio.TimeoutError:
         _pd_liq = float(((pair_data or {}).get("liquidity") or {}).get("usd", 0) or 0)
+        _pd_fdv = float((pair_data or {}).get("fdv") or (pair_data or {}).get("marketCap") or 0)
         _dex_fcr = str((pair_data or {}).get("dexId") or "").lower()
-        _is_pump_curve = mint.lower().endswith("pump") or _dex_fcr in ("pump", "pumpfun", "meteoradbc", "moonshot")
+        _is_raw_curve_fcr = _dex_fcr in ("pump", "pumpfun", "meteoradbc", "moonshot")
+        _is_pump_curve = mint.lower().endswith("pump") or _is_raw_curve_fcr
         _is_unl_custom = not _is_pump_curve and not bool((pair_data or {}).get("_lp_verified"))
+        _cohort_sz = int((verdict.get("wallet_analysis") or {}).get("cohort_size", 0) or 0)
         verdict["degraded"] = True
         if verdict.get("score", 0.0) >= float(_cfg("FCR_BLOCK_SCORE", 0.58)):
             verdict["safe"] = False
             verdict["verdict"] = "BLOCK"
-        elif _is_unl_custom and _pd_liq > 0 and _pd_liq < 4500.0:
+        elif _is_unl_custom and (not bool(_cfg("ALLOW_UNLOCKED_LP_POOLS", False)) or (_pd_liq > 0 and _pd_liq < 4500.0)):
             verdict["safe"] = False
             verdict["verdict"] = "BLOCK"
             verdict["score"] = 99.0
-            verdict["reasons"] = [f"таймаут FCR ({budget:.0f}с) на незалоченном пуле (liq ${_pd_liq:,.0f} < $4.5k) — fail-closed защита от рага"]
+            verdict["reasons"] = [f"таймаут FCR ({budget:.0f}с) на незалоченном пуле (liq ${_pd_liq:,.0f}) — fail-closed защита от LP-рага"]
+        elif _is_raw_curve_fcr and _cohort_sz == 0 and (_pd_fdv < 8000.0 or _pd_liq < 4000.0):
+            verdict["safe"] = False
+            verdict["verdict"] = "BLOCK"
+            verdict["score"] = 0.70
+            verdict["reasons"] = [f"таймаут FCR ({budget:.0f}с, 0 холдеров) на тонкой кривой (FDV ${_pd_fdv:,.0f}) — fail-closed защита от слепого рага ($PICKLES/GTAMICHI/bob)"]
         elif verdict.get("score", 0.0) >= float(_cfg("FCR_WARN_SCORE", 0.32)):
             verdict["safe"] = True
             verdict["verdict"] = "WARN"
@@ -1710,11 +1732,13 @@ async def _analyze(mint: str, pair_data: Optional[dict], verdict: dict, budget: 
     """Основная часть анализа (обёрнута в дедлайн в pre_entry_rug_check)."""
     pair_data = pair_data or {}
     _pair_addr = str(pair_data.get("pairAddress") or "")
+    _deadline = time.monotonic() + float(budget)
 
-    # 1. Когорта + Slot-0 Jito бандл-чек ПАРАЛЛЕЛЬНО (0.3-1.0с)
+    # 1. Когорта + Slot-0 Jito бандл-чек ПАРАЛЛЕЛЬНО (жёсткий кап 1.2с для slot0, чтобы всегда оставался бюджет на кластеры)
+    _s0_to = max(0.5, min(1.2, float(budget) * 0.25))
     cohort, slot0_info = await asyncio.gather(
         build_cohort(mint, pair_data),
-        _detect_slot0_bundle(mint, _pair_addr),
+        asyncio.wait_for(_detect_slot0_bundle(mint, _pair_addr), timeout=_s0_to),
         return_exceptions=True,
     )
     if isinstance(cohort, Exception) or not isinstance(cohort, list):
@@ -1761,9 +1785,9 @@ async def _analyze(mint: str, pair_data: Optional[dict], verdict: dict, budget: 
         "clusters": [], "traced": 0, "errors": 0, "graph_clusters": [],
         "largest_cluster": None, "funder_map": {},
     }
-    _cl_timeout = max(1.2, float(budget) - 1.5)
+    _cl_timeout = max(1.0, (_deadline - time.monotonic()) - 0.25)
     try:
-        cluster_info = await asyncio.wait_for(analyze_funding_clusters(mint, cohort), timeout=_cl_timeout)
+        cluster_info = await asyncio.wait_for(analyze_funding_clusters(mint, cohort, deadline=_deadline - 0.25), timeout=_cl_timeout)
     except asyncio.TimeoutError:
         verdict["degraded"] = True
     except Exception:
@@ -1818,10 +1842,10 @@ async def _analyze(mint: str, pair_data: Optional[dict], verdict: dict, budget: 
     except Exception:
         _fcr_is_dist_runner = False
     _has_heavy_2hop_burner = any(
-        str(c.get("source") or "") == "burner_relay" and float(c.get("total_pct", 0.0) or 0.0) >= 10.0
+        str(c.get("source") or "") == "burner_relay" and float(c.get("total_pct", 0.0) or 0.0) >= 8.0
         for c in (verdict.get("clusters") or [])
     )
-    if _has_heavy_2hop_burner or slot0_info.get("severe_bundle") or float(_m_fcr.get("sell_impact_top3", 0.0) or 0.0) >= 0.88:
+    if _has_heavy_2hop_burner or slot0_info.get("severe_bundle") or float(_m_fcr.get("sell_impact_top3", 0.0) or 0.0) >= 0.88 or total >= 0.85:
         _fcr_is_dist_runner = False
     if total >= block_at:
         if _fcr_is_dist_runner:
