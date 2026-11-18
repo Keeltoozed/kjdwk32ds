@@ -1225,24 +1225,48 @@ async def check_live_order_flow(
         if pxs_3m:
             hi_3m = max(pxs_3m)
 
-        # Детект сэндвич / wash-ботов (кошельки, купившие и продавшие в окне <=30с)
+        # Детект сэндвич / wash-ботов и метрики MELT (уникальность покупателей + доля перевёртышей)
         by_wallet = {}
+        buy_wallets = set()
+        sell_wallets = set()
+        total_buys_n = 0
+        buy_usd_total = 0.0
+        sell_usd_total = 0.0
         total_usd_sample = sum(t["usd"] for t in parsed)
         for t in parsed:
             w = t["wallet"]
+            if t["kind"] == "buy":
+                total_buys_n += 1
+                buy_usd_total += t["usd"]
+                if w:
+                    buy_wallets.add(w)
+            elif t["kind"] == "sell":
+                sell_usd_total += t["usd"]
+                if w:
+                    sell_wallets.add(w)
             if not w:
                 continue
             by_wallet.setdefault(w, []).append(t)
+
         wash_usd = 0.0
+        max_single_buyer_usd = 0.0
         for w, txs in by_wallet.items():
             buys_w = [x for x in txs if x["kind"] == "buy"]
             sells_w = [x for x in txs if x["kind"] == "sell"]
+            b_w_usd = sum(x["usd"] for x in buys_w)
+            if b_w_usd > max_single_buyer_usd:
+                max_single_buyer_usd = b_w_usd
             if buys_w and sells_w:
                 # Проверяем парный разворот <= 30с
                 has_fast_flip = any(abs(b["ts"] - s["ts"]) <= 30.0 for b in buys_w for s in sells_w)
                 if has_fast_flip:
                     wash_usd += sum(x["usd"] for x in txs)
         wash_ratio = (wash_usd / total_usd_sample) if total_usd_sample > 0 else 0.0
+        unique_buyers_n = len(buy_wallets)
+        unique_buyers_ratio = (unique_buyers_n / total_buys_n) if total_buys_n > 0 else 1.0
+        active_traders = buy_wallets | sell_wallets
+        both_sides_overlap = (len(buy_wallets & sell_wallets) / len(active_traders)) if active_traders else 0.0
+        top_buyer_usd_share = (max_single_buyer_usd / buy_usd_total) if buy_usd_total > 0 else 0.0
 
         # Смарт-мани в последних сделках (нетто-покупатели из smart_wallets)
         smart_buyers = []
@@ -1274,6 +1298,15 @@ async def check_live_order_flow(
         elif len(parsed) >= 12 and wash_ratio >= 0.50 and buy_60 <= sell_60 * 1.05:
             block = True
             reason = f"tape-wash-mev ({wash_ratio*100:.0f}% same-block roundtrip MEV/wash volume)"
+        elif len(parsed) >= 16 and total_buys_n >= 8 and unique_buyers_n <= 4 and unique_buyers_ratio < 0.35:
+            block = True
+            reason = f"tape-fake-buyers-wash ({unique_buyers_n} уникальных покупателей на {total_buys_n} покупок)"
+        elif len(active_traders) >= 8 and both_sides_overlap >= 0.52 and wash_ratio >= 0.32 and buy_60 <= sell_60 * 1.15:
+            block = True
+            reason = f"tape-overlap-wash-bots ({both_sides_overlap*100:.0f}% трейдеров в обе стороны, wash {wash_ratio*100:.0f}%)"
+        elif buy_usd_total >= 400.0 and total_buys_n >= 8 and top_buyer_usd_share >= 0.65 and not smart_buyers:
+            block = True
+            reason = f"tape-single-buyer-spoof ({top_buyer_usd_share*100:.0f}% спроса от 1 кошелька)"
 
         res.update({
             "available": True,
@@ -1284,6 +1317,12 @@ async def check_live_order_flow(
             "recent_high_3m": hi_3m,
             "buy_usd_60s": buy_60,
             "sell_usd_60s": sell_60,
+            "buy_usd_total": round(buy_usd_total, 2),
+            "sell_usd_total": round(sell_usd_total, 2),
+            "unique_buyers_n": unique_buyers_n,
+            "unique_buyers_ratio": round(unique_buyers_ratio, 3),
+            "both_sides_overlap": round(both_sides_overlap, 3),
+            "top_buyer_usd_share": round(top_buyer_usd_share, 3),
             "wash_ratio": round(wash_ratio, 3),
             "last_trade_age_s": round(last_trade_age_s, 1),
         })
@@ -1357,8 +1396,8 @@ async def verify_entry_onchain_and_orderflow(
         else:
             r_sol = float(c_st.get("real_sol", 0.0) or 0.0)
             c_px = float(c_st.get("price_usd", 0.0) or 0.0)
-            if r_sol < 1.8:
-                return False, live_price, f"curve-empty-rug (real_sol={r_sol:.3f} < 1.8)", meta
+            if r_sol < 2.2:
+                return False, live_price, f"curve-empty-rug (real_sol={r_sol:.3f} < 2.2)", meta
             if live_price > 0 and c_px > 0:
                 if c_px < live_price * 0.90:
                     return False, c_px, f"curve-live-dump (-{(1.0 - c_px/live_price)*100:.1f}%)", meta
@@ -1396,11 +1435,13 @@ async def verify_entry_onchain_and_orderflow(
             live_price = jup_px
             meta["onchain_source"] = "jupiter_v3"
 
-    # 4. Живая лента сделок (Order Flow / Sandwich-Wash / Dump)
+    # 4. Живая лента сделок (Order Flow / Sandwich-Wash / Dump / MELT Metrics)
     flow = results.get("flow")
     if isinstance(flow, dict) and flow.get("available"):
         meta["smart_buyers"] = list(flow.get("smart_buyers") or [])
         meta["wash_ratio"] = float(flow.get("wash_ratio", 0.0) or 0.0)
+        meta["unique_buyers_ratio"] = float(flow.get("unique_buyers_ratio", 0.0) or 0.0)
+        meta["both_sides_overlap"] = float(flow.get("both_sides_overlap", 0.0) or 0.0)
         if flow.get("block"):
             return False, live_price, str(flow.get("reason") or "order-flow-block"), meta
         if meta["smart_buyers"]:

@@ -1798,7 +1798,7 @@ class Analyzer:
                 # Если метки времени нет у любого токена — это новорожденный токен (<30 сек), а НЕ 999 минут!
                 _age_min_pre = 0.2
         _dex_pre_early = str(pair_data.get("dexId", "")).lower()
-        if ("meteora" in _dex_pre_early or _dex_pre_early == "meteoradbc") and not pair_data.get("_lp_verified"):
+        if "meteora" in _dex_pre_early and _dex_pre_early != "meteoradbc" and not pair_data.get("_lp_verified"):
             return self._deny(
                 mint,
                 "meteora-unlocked-pool",
@@ -2015,15 +2015,40 @@ class Analyzer:
                     f"🚫 [MATURE-STALL-GUARD] {symbol} ({mint[:8]}): токену {_age_min_pre:.0f}м, но оборот вялый (vol5 ${_vm5_pre:,.0f}, v/l {_v2l_mat:.2f}x, m5 {_m5:+.1f}%) — стоячий флет.",
                 )
 
-        # Запрет входа при давлении продавцов (строгое соотношение покупателей, без послаблений на высоком объёме)
+        # Запрет входа при давлении продавцов (используем живой долларовый Order Flow как арбитр, чтобы не пропускать дампы, но ловить ракеты вроде ANT/EDDIE при мелкой фиксации толпы)
         _base_bs_cfg = float(getattr(config, "MIN_BUY_SELL_RATIO", 1.30))
         _min_bs_cfg = _base_bs_cfg
+        _absorbed_by_flow = False
         if _s5_pre > 4 and (_b5_pre / _s5_pre) < _min_bs_cfg:
-            return self._deny(
-                mint,
-                f"weak-buyers {_b5_pre}b/{_s5_pre}s",
-                f"🚫 [WEAK-BUYERS] {symbol} ({mint[:8]}): покупки/продажи 5м {_b5_pre}/{_s5_pre} ({_b5_pre/_s5_pre:.2f}x < {_min_bs_cfg:.2f}x) — продавцы давят!",
-            )
+            _bs_ratio_pre = _b5_pre / _s5_pre
+            _pair_addr_wb = str(pair_data.get("pairAddress") or "").strip()
+            if _bs_ratio_pre >= 0.85 and _m5 >= 12.0 and _vm5_pre >= 6000.0 and _raw_liq_chk >= 7000.0 and _pair_addr_wb:
+                try:
+                    import market_data as _md_wb
+                    _flow_wb = await _md_wb.check_live_order_flow(
+                        mint, _pair_addr_wb, ref_price_usd=float(pair_data.get("priceUsd", 0) or 0)
+                    )
+                    if (
+                        isinstance(_flow_wb, dict)
+                        and _flow_wb.get("available")
+                        and not _flow_wb.get("block")
+                        and float(_flow_wb.get("wash_ratio", 0.0) or 0.0) < 0.35
+                        and float(_flow_wb.get("unique_buyers_ratio", 0.0) or 0.0) >= 0.45
+                        and (
+                            float(_flow_wb.get("buy_usd_60s", 0.0) or 0.0) > float(_flow_wb.get("sell_usd_60s", 0.0) or 0.0) * 1.05
+                            or float(_flow_wb.get("buy_usd_total", 0.0) or 0.0) > float(_flow_wb.get("sell_usd_total", 0.0) or 0.0) * 1.08
+                        )
+                    ):
+                        _absorbed_by_flow = True
+                        print(f"💎 [ORDERFLOW-BUY-ABSORPTION] {symbol} ({mint[:8]}): {_b5_pre}b/{_s5_pre}s ({_bs_ratio_pre:.2f}x), но живой $ поток в пользу покупателей (uniq {_flow_wb.get('unique_buyers_ratio',0)*100:.0f}%, wash {_flow_wb.get('wash_ratio',0)*100:.0f}%) — пропуск!")
+                except Exception:
+                    pass
+            if not _absorbed_by_flow:
+                return self._deny(
+                    mint,
+                    f"weak-buyers {_b5_pre}b/{_s5_pre}s",
+                    f"🚫 [WEAK-BUYERS] {symbol} ({mint[:8]}): покупки/продажи 5м {_b5_pre}/{_s5_pre} ({_bs_ratio_pre:.2f}x < {_min_bs_cfg:.2f}x) — продавцы давят!",
+                )
 
         # Единый классификатор 2x+ ракетного разгона (блокирует отработанные вершины и падающие ножи)
         _h6_pre_raw = _pc.get("h6")
@@ -2035,6 +2060,7 @@ class Analyzer:
             age_min=_age_min_pre, vol5_usd=_vm5_pre, liq_usd=_raw_liq_chk,
             buys5=_b5_pre, sells5=_s5_pre, min_h1=_min_h1_cfg, min_h6=_min_h6_cfg,
             fdv_usd=_fdv_chk_pre,
+            allow_absorbed_buyers=_absorbed_by_flow,
         )
         if not _mom_ok_a:
             return self._deny(
@@ -2084,7 +2110,7 @@ class Analyzer:
         # Блокируем ТОЛЬКО если продавцы реально давят (не режем скоростные ракеты при фиксации профита: b/s >= 0.90, vol5 >= $20k, m5 >= 8%)
         _txns_tot_pre = _b5_pre + _s5_pre
         _is_hi_vel_rocket_a = (_vm5_pre >= 20000.0 and _m5 >= 8.0 and _b5_pre >= 100 and _m1 >= -4.0 and (_s5_pre == 0 or _b5_pre >= _s5_pre * 0.90))
-        if _txns_tot_pre >= 30 and _s5_pre > 0 and not _is_hi_vel_rocket_a:
+        if _txns_tot_pre >= 30 and _s5_pre > 0 and not _is_hi_vel_rocket_a and not _absorbed_by_flow:
             _sell_ratio = _s5_pre / _txns_tot_pre
             _v2l_pre = (_vm5_pre / max(_raw_liq_chk, 1.0)) if _raw_liq_chk > 0 else 0.0
             if _b5_pre < _s5_pre and (_sell_ratio >= 0.52 or (_sell_ratio >= 0.48 and _v2l_pre >= 3.5)):
@@ -2295,6 +2321,7 @@ class Analyzer:
                 (_ps_main_canon and _dex_low_main == "pumpswap")
                 or (mint.lower().endswith("pump") and _dex_low_main in ("pump", "pumpfun"))
                 or (is_pump_curve and _dex_low_main in ("pump", "pumpfun"))
+                or config.is_unmigrated_curve_token(mint, pair_data)
             )
             _is_canonical_pump = _is_native_pump_dex
             _is_pump_flag = 1 if config.is_launchpad_mint(mint) or _is_canonical_pump else 0
@@ -2407,7 +2434,7 @@ class Analyzer:
                     # Токены на пулах Meteora: Pump.fun никогда не мигрирует на Meteora,
                     # а пулы Meteora без подтверждённого сожжённого LP — это 100% скам с выводом SOL девом (кейсы USPR/BUFO/SPACE/MULT/SURVIVE -98%).
                     # Блокируем их ВСЕГДА и мгновенно (0ms), не зависимо от флагов:
-                    if ("meteora" in _dex_low_main or _dex_low_main == "meteoradbc") and not has_verified_locked_lp:
+                    if "meteora" in _dex_low_main and _dex_low_main != "meteoradbc" and not has_verified_locked_lp:
                         return self._deny(
                             mint,
                             "meteora-unlocked-pool",
@@ -2509,7 +2536,7 @@ class Analyzer:
                             _m_lp_safe = max(_m_lp_locked, _m_lp_burned)
                             _m_quote_usd = float(_m_lp.get("quoteUSD", 0) or 0)
                             _is_target_mkt = bool(_target_pair_rc and _m_pub == _target_pair_rc)
-                            _is_meteora_pool = ("meteora" in _m_type and (_is_target_mkt or "meteora" in dex_id_low or (not _is_canonical_pump and _m_quote_usd >= 2000.0)))
+                            _is_meteora_pool = ("meteora" in _m_type and _m_type != "meteoradbc" and (_is_target_mkt or dex_id_low == "meteora" or (not _is_canonical_pump and _m_quote_usd >= 2000.0)))
                             if not getattr(config, "ALLOW_UNLOCKED_LP_POOLS", True):
                                 if _is_meteora_pool and _m_lp_safe < 80.0:
                                     return self._deny(mint, "meteora-unlocked-lp", f"🚫 [METEORA-RUG] {symbol} ({mint[:8]}): незаблокированный пул Meteora {_m_type} (lock/burn {_m_lp_safe:.0f}% < 80%) — риск вывода SOL девом (кейсы AXIOMCOIN/MULT/PUNCHAO)!")
@@ -2522,7 +2549,7 @@ class Analyzer:
                                 if _mkt.get(_m_field):
                                     pool_accounts.add(_mkt[_m_field])
 
-                    if not getattr(config, "ALLOW_UNLOCKED_LP_POOLS", True) and dex_id_low in ("meteora", "meteoradbc"):
+                    if not getattr(config, "ALLOW_UNLOCKED_LP_POOLS", True) and dex_id_low == "meteora":
                         _met_locked = any("meteora" in str(m.get("marketType", "")).lower() and (float((m.get("lp") or {}).get("lpLockedPct", 0) or 0) >= 80.0 or float((m.get("lp") or {}).get("lpBurnedPct", 0) or 0) >= 80.0) for m in (rc_data.get("markets") or []))
                         if not _met_locked:
                             return self._deny(mint, "meteora-unlocked-lp", f"🚫 [METEORA-RUG] {symbol} ({mint[:8]}): токен на Meteora без заблокированного/сожжённого LP — риск Remove LP девом (кейсы AXIOMCOIN/MULT/PUNCHAO)!")
@@ -4323,7 +4350,7 @@ class Analyzer:
             return False
 
         _dex_low = (pair_data.get("dexId") or "").lower()
-        if ("meteora" in _dex_low or _dex_low == "meteoradbc") and not pair_data.get("_lp_verified", False):
+        if "meteora" in _dex_low and _dex_low != "meteoradbc" and not pair_data.get("_lp_verified", False):
             return self._deny(mint, "fake-meteora-pool", f"🚫 [FAKE-METEORA] {mint[:8]}: пул Meteora без сожжённого LP — риск Remove LP (кейсы USPR/BUFO/SPACE)!")
 
         if config.is_permissionless_liq_fdv_trap(pair_data):

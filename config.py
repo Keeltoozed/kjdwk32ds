@@ -157,6 +157,8 @@ def is_position_unlocked_lp(
     pd = pair_data if isinstance(pair_data, dict) else {}
     if bool(pd.get("_pumpswap_canonical")) or bool(pd.get("_pumpswap_lp_burned")) or bool(pd.get("_lp_verified")):
         return False
+    if is_unmigrated_curve_token(mint, pd):
+        return False
     dex_low = str(pd.get("dexId") or "").strip().lower()
     mint_low = str(mint or "").strip().lower()
     if (
@@ -259,7 +261,7 @@ def is_safe_unlocked_custom_runner(
 
     if isinstance(pair_data, dict):
         _dex_u = str(pair_data.get("dexId") or "").lower()
-        if ("meteora" in _dex_u or _dex_u == "meteoradbc") and not bool(pair_data.get("_lp_verified")):
+        if "meteora" in _dex_u and _dex_u != "meteoradbc" and not bool(pair_data.get("_lp_verified")):
             return False
         if is_pumpswap_liq_fdv_trap(pair_data):
             return False
@@ -427,6 +429,7 @@ def evaluate_entry_momentum(
     min_h1: float = -15.0,
     min_h6: float = -25.0,
     fdv_usd: float = 0.0,
+    allow_absorbed_buyers: bool = False,
 ) -> Tuple[bool, str]:
     """Strict green-momentum rocket classifier: captures explosive runs & healthy reclaims, strictly eliminates dead flat noise and dumping coins."""
     tot_tx = buys5 + sells5
@@ -471,7 +474,7 @@ def evaluate_entry_momentum(
 
     # 2. МЯГКИЙ ПЕРЕВЕС ПОКУПАТЕЛЕЙ (не требуем 30% dominance на старте):
     _req_bs_ratio = float(globals().get("DEFAULT_MIN_BUY_SELL_RATIO", 1.05))
-    if sells5 > 4 and buys5 < int(sells5 * _req_bs_ratio):
+    if not allow_absorbed_buyers and sells5 > 4 and buys5 < int(sells5 * _req_bs_ratio):
         return False, f"sellers-dominating {buys5}b/{sells5}s (need buyers > sellers * {_req_bs_ratio:.2f} in 5m)"
 
     # 2.5. УБИРАЕМ ЖЁСТКИЙ БАРЬЕР FDV < $30,000 — молодые ракеты часто стартуют с FDV $5k-$25k:
@@ -552,12 +555,15 @@ def evaluate_entry_momentum(
         and vol5_usd >= 1800.0
     )
 
-    # 1.3 Первичное зажигание ракеты (свежий импульс)
+    # 1.3 Первичное зажигание ракеты (свежий импульс или подтверждённый живым $ потоком выкуп мелких продаж)
     is_fresh_ignition = (
         age_min <= 35.0
         and m5 >= 2.5
         and m1 >= -2.5
-        and buys5 >= max(6, int(sells5 * 1.05))
+        and (
+            buys5 >= max(6, int(sells5 * 1.05))
+            or (allow_absorbed_buyers and buys5 >= int(sells5 * 0.85) and m5 >= 8.0 and vol5_usd >= 6000.0)
+        )
         and vol5_usd >= (700.0 if age_min <= 3.0 else 1000.0)
         and tot_tx >= (7 if age_min <= 3.0 else 10)
     )
@@ -666,9 +672,9 @@ DD_THROTTLE_START_USD = 15.0
 # === ВХОД В ЗРЕЛЫЕ ВЫПУСКНИКИ RAYDIUM / PUMPSWAP И РАННИЕ КРИВЫЕ PUMP.FUN ===
 SNIPER_ENTRIES_ENABLED = True             # ВКЛЮЧЕНО: мгновенный вход в свежие кривые/миграции со стрима
 ALLOW_UNGRADUATED_PUMPFUN = True          # ВКЛЮЧЕНО: ловим ракеты на кривой Pump.fun до миграции (открывает 大A +1559%, ROCKSTAR +163%, NEIL +52%, BLUE +36%)
-MIN_PUMP_CURVE_MCAP_USD = 4000.0          # Порог кривой $4.0k (отсекает bob $3.5k -34%, пропускает RAUL $4.1k +38%, GTA6 $8.1k +115%, ROCKSTAR $8.1k +401%)
+MIN_PUMP_CURVE_MCAP_USD = 3200.0          # Порог кривой $3.2k (пропускает ранних лидеров NEIL $3.3k +52%, RAUL $4.1k +38%, но отсекает 0-1 SOL мусор; реальный резерв >=2.2 SOL проверяется ончейн!)
 MAX_PUMP_CURVE_MCAP_USD = 11500.0         # Потолок сырой кривой $11.5k (выше $11.5k до миграции снайперы разгружаются; дальше ждём миграцию на PumpSwap)
-MIN_PUMP_CURVE_MCAP_SOL = 52.0            # Нижняя граница золотой зоны кривой (~52 SOL ≈ $4.0k)
+MIN_PUMP_CURVE_MCAP_SOL = 44.0            # Нижняя граница золотой зоны кривой (~44 SOL ≈ $3.2k, ~14 real SOL внутри кривой)
 MAX_PUMP_CURVE_MCAP_SOL = 152.0           # Верхняя граница золотой зоны сырой кривой (~152 SOL ≈ $11.5k)
 PUMP_MIGRATION_MCAP_SOL = 410.0           # FDV миграции pump.fun
 PUMP_DUMP_FLOOR_SOL = 50.0                # Порог post-mig-dumped (~50 SOL, разрешает быстрые реклеймы)
@@ -708,21 +714,21 @@ VIP_KOL_WALLETS = {
 TIME_EXIT_MINUTES = 40
 TIME_EXIT_PROFIT_REQ = 0.015
 
-# === ПРОСТАЯ СИСТЕМА ВЫХОДА (С АКТИВНЫМ МУНБЭГОМ) ===
+# === ПРОСТАЯ СИСТЕМА ВЫХОДА (МУНБЭГ ОТ +110%) ===
 PARTIAL_TP_ENABLED = True
 PARTIAL_TP_MIN_TICKET_USD = 0.50
-TP1_TRIGGER_PCT = 0.25               # На +25% забираем тело (50% позиции) — clipping +26% не должен возвращаться в 0
-TP1_SELL_FRAC = 0.50                 # 50% позиции на TP1, оставшиеся 50% — Risk-Free Moonbag!
-TP2_TRIGGER_PCT = 1.10               # Мунбэг цель +110% (забираем всё!)
-TP2_SELL_FRAC = 1.00                 # 100% остатка продаём на +110% (крупный тейк перекрывает стопы)
-TP3_TRIGGER_PCT = 2.50
+TP1_TRIGGER_PCT = 1.10               # До +110% держим все 100% позиции! На +110% продаём 50% (окупает ставку и оставляет чистый Moonbag)
+TP1_SELL_FRAC = 0.50                 # 50% позиции фиксируем на +110%, оставшиеся 50% — Risk-Free Moonbag!
+TP2_TRIGGER_PCT = 2.50               # Следующий тейк на +250% (фиксируем половину мунбэга)
+TP2_SELL_FRAC = 0.50                 # 50% остатка продаём на +250%, остальное тащим по Trailing Stop 20%
+TP3_TRIGGER_PCT = 5.00
 TP3_SELL_FRAC = 0.00
 TP4_TRIGGER_PCT = 5.00
 TP4_SELL_FRAC = 0.00
 TP5_TRIGGER_PCT = 10.00
 TP5_SELL_FRAC = 0.00
-MOONBAG_TRIGGER_PCT = 1.10           # Мунбэг на +110%
-MOONBAG_SELL_FRAC = 1.00
+MOONBAG_TRIGGER_PCT = 1.10           # Мунбэг активируется строго на +110%
+MOONBAG_SELL_FRAC = 0.50
 
 # Трейлинг для мунбэга (защищает отката: если дошло до +75%, не даёт слить в 0)
 MOONBAG_TRAIL_ACTIVATION_PCT = 0.40  # Трейлинг включается при пике от +40%
@@ -764,13 +770,13 @@ BREAKEVEN_PCT = 0.15       # Breakeven Shield: пик >= +15% -> перенос 
 
 def get_sol_tp_ladder(is_unlocked: bool) -> tuple:
     """Return (tp1_t, tp1_f, tp2_t, tp2_f, tp3_t, tp3_f, tp4_t, tp4_f, tp5_t, tp5_f).
-    TP1 +30% (50% тело), TP2 Мунбэг +110% (100% остатка)."""
+    TP1 +110% (50% позиции -> Risk-Free Moonbag), TP2 +250% (50% остатка)."""
     return (
-        float(globals().get("TP1_TRIGGER_PCT", 0.30)),
+        float(globals().get("TP1_TRIGGER_PCT", 1.10)),
         float(globals().get("TP1_SELL_FRAC", 0.50)),
-        float(globals().get("TP2_TRIGGER_PCT", 1.10)),
-        float(globals().get("TP2_SELL_FRAC", 1.00)),
-        float(globals().get("TP3_TRIGGER_PCT", 2.50)),
+        float(globals().get("TP2_TRIGGER_PCT", 2.50)),
+        float(globals().get("TP2_SELL_FRAC", 0.50)),
+        float(globals().get("TP3_TRIGGER_PCT", 5.00)),
         float(globals().get("TP3_SELL_FRAC", 0.00)),
         float(globals().get("TP4_TRIGGER_PCT", 5.00)),
         float(globals().get("TP4_SELL_FRAC", 0.00)),
@@ -1105,9 +1111,9 @@ CRASH_GUARD_MIN_HOLD_SEC = 20.0          # Не триггерить в перв
 CRASH_GUARD_CONFIRM_TICKS = 2            # Требовать 2 подряд тика падения с интервалом >= 1.5 сек (убирает "за 0 сек")
 CRASH_GUARD_IGNORE_IF_PNL_ABOVE = 15.0   # Если мы в плюсе > +15%, работает ступенчатый Trailing Stop, а не паник-селл 100%!
 
-# 2. Исправление Mature Moonbag Floor и Trailing Stop (активный мунбэг)
+# 2. Исправление Mature Moonbag Floor и Trailing Stop (активный мунбэг с +110%)
 MOONBAG_FLOOR_PCT = 5.0                  # Уровень пола безубытка для мунбэга -> +5%
-PARTIAL_TP1_PCT = 30.0                   # На +30% забираем 50% позиции (тело + профит)
+PARTIAL_TP1_PCT = 110.0                  # На +110% забираем 50% позиции (окупаем тело + профит)
 PARTIAL_TP1_SELL_FRACTION = 0.50         # 50% оставляем в Moonbag!
 
 # 3. Исправление жесткого Stop Loss и Early Momentum Cut

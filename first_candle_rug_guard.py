@@ -1226,6 +1226,32 @@ def _pair_age_min(pair_data: dict) -> float:
     return max(0.0, age)
 
 
+def _calc_sell_impact_and_hhi(cohort: List[dict], liq_usd: float, fdv_usd: float) -> dict:
+    """QuantOrb Sell Scenario + HHI индекс концентрации холдеров (0 доп. RPC-запросов).
+    Считает по формуле x*y=k теоретическое падение цены пула, если топ-3 не-пул холдера сольют стек одновременно."""
+    pcts = sorted(
+        [float(c.get("pct", 0.0) or 0.0) for c in (cohort or []) if 0.0 < float(c.get("pct", 0.0) or 0.0) <= 70.0],
+        reverse=True,
+    )
+    top3_pct = sum(pcts[:3])
+    top10_pcts = pcts[:10]
+    hhi = sum(((p / 100.0) ** 2) for p in top10_pcts) * 10000.0 if top10_pcts else 0.0
+
+    sell_impact = 0.0
+    if liq_usd > 0 and top3_pct > 0:
+        pool_q = liq_usd * 0.5
+        eff_fdv = fdv_usd if fdv_usd > 0 else (liq_usd * 2.5)
+        sell_usd_spot = (top3_pct / 100.0) * eff_fdv
+        r = sell_usd_spot / max(pool_q, 1.0)
+        sell_impact = max(0.0, min(0.999, 1.0 - (1.0 / ((1.0 + r) ** 2))))
+
+    return {
+        "top3_pct": round(top3_pct, 2),
+        "sell_impact_top3": round(sell_impact, 3),
+        "hhi": round(hhi, 1),
+    }
+
+
 def analyze_microstructure(mint: str, pair_data: dict, cohort: List[dict]) -> dict:
     """Сигналы, что дев уже начал разгружать стек / пул тонкий / монета только что запущена."""
     pair_data = pair_data or {}
@@ -1242,10 +1268,34 @@ def analyze_microstructure(mint: str, pair_data: dict, cohort: List[dict]) -> di
 
     top1 = max([float(c.get("pct", 0) or 0) for c in cohort] or [0.0])
     top10 = sum([float(c.get("pct", 0) or 0) for c in cohort[:10]])
+    q_stats = _calc_sell_impact_and_hhi(cohort, liq, fdv)
+    top3_pct = float(q_stats["top3_pct"])
+    sell_impact = float(q_stats["sell_impact_top3"])
+    hhi = float(q_stats["hhi"])
 
     sigs: List[dict] = []
     score = 0.0        # «мягкие» сигналы (рынок) — разбавляются при суммировании
     hard_score = 0.0   # «жёсткие» (концентрация) — идут в total напрямую
+
+    # QuantOrb Sell Scenario: одновременный слив топ-3 не-пул холдеров обвалит пул >= 78%
+    if top3_pct >= 18.0 and sell_impact >= 0.78:
+        w_si = 0.60 if (sell_impact >= 0.86 or top3_pct >= 26.0) else 0.45
+        hard_score = max(hard_score, w_si)
+        sigs.append({
+            "key": "sell_scenario_top3",
+            "weight": w_si,
+            "text": f"QuantOrb Sell Scenario: слив топ-3 ({top3_pct:.1f}%) уронит пул на -{sell_impact*100:.0f}%",
+        })
+
+    # Индекс концентрации HHI (различает равномерную толпу от 1-3 китов с огромным стеком)
+    if hhi >= 950.0 and len(cohort) >= 4:
+        w_hhi = 0.58 if hhi >= 1500.0 else 0.40
+        hard_score = max(hard_score, w_hhi)
+        sigs.append({
+            "key": "hhi_concentration",
+            "weight": w_hhi,
+            "text": f"высокий HHI концентрации {hhi:.0f} (топ-холдеры доминируют в стакане)",
+        })
 
     # a) Памп за 5м + мёртвый m1 = дев разгружает стек в толпу
     if (m5 >= float(_cfg("FCR_SPIKE_M5", 90.0)) and m1 <= float(_cfg("FCR_STALL_M1", 3.0))
@@ -1348,7 +1398,10 @@ def analyze_microstructure(mint: str, pair_data: dict, cohort: List[dict]) -> di
             "m1": m1, "m5": m5, "buys_m5": buys, "sells_m5": sells,
             "volume_m5": vol5, "liquidity": liq, "fdv": fdv,
             "age_min": round(age_min, 2), "top1_pct": round(top1, 2),
+            "top3_pct": round(top3_pct, 2),
             "top10_pct": round(top10, 2),
+            "sell_impact_top3": round(sell_impact, 3),
+            "hhi": round(hhi, 1),
         },
     }
 
@@ -1534,6 +1587,33 @@ def _format_cluster_line(c: dict) -> str:
             f"{c['total_amount_sol']:.2f} SOL · источник {c['funder'][:8]}… ({c['funder_label']})")
 
 
+async def _detect_slot0_bundle(mint: str, pair_address: str = "") -> dict:
+    """HoldTech/MELT быстрый (1 RPC-запрос <250мс) детектор Slot-0 Jito-бандла по подписям создания минта/пула."""
+    out = {"slot0_txs": 0, "slot01_txs": 0, "is_genesis_window": False, "bundle_detected": False}
+    target = str(mint or "").strip() or str(pair_address or "").strip()
+    if not target:
+        return out
+    try:
+        res = await _rpc_batch([("getSignaturesForAddress", [target, {"limit": 50}])], timeout=3.5)
+        sigs = res[0] if res else None
+        if not isinstance(sigs, list) or len(sigs) < 6 or len(sigs) >= 50:
+            return out
+        # Если получили < 50 подписей, последняя запись отражает слот создания токена
+        slots = [int(s.get("slot", 0) or 0) for s in sigs if isinstance(s, dict) and s.get("err") is None and s.get("slot")]
+        if not slots:
+            return out
+        min_slot = min(slots)
+        s0 = sum(1 for sl in slots if sl == min_slot)
+        s01 = sum(1 for sl in slots if sl <= min_slot + 1)
+        out["slot0_txs"] = s0
+        out["slot01_txs"] = s01
+        out["is_genesis_window"] = True
+        out["bundle_detected"] = (s0 >= 6 or s01 >= 10)
+    except Exception:
+        pass
+    return out
+
+
 async def pre_entry_rug_check(
     mint: str,
     pair_data: Optional[dict] = None,
@@ -1583,28 +1663,32 @@ async def pre_entry_rug_check(
 
     try:
         # Жёсткий дедлайн: анализ не имеет права задерживать вход в позицию.
-        # Не успели — fail-open (вход разрешён, degraded=True).
+        # Микроструктура + QuantOrb Sell Scenario + HHI + Slot-0 всегда успевают первыми!
         budget = float(_cfg("FCR_MAX_DURATION_SEC", 14.0))
-        verdict = await asyncio.wait_for(_analyze(mint, pair_data, verdict), timeout=budget)
+        verdict = await asyncio.wait_for(_analyze(mint, pair_data, verdict, budget=budget), timeout=budget)
     except asyncio.TimeoutError:
         _pd_liq = float(((pair_data or {}).get("liquidity") or {}).get("usd", 0) or 0)
         _dex_fcr = str((pair_data or {}).get("dexId") or "").lower()
-        _is_pump_curve = mint.lower().endswith("pump") or _dex_fcr in ("pump", "pumpfun")
+        _is_pump_curve = mint.lower().endswith("pump") or _dex_fcr in ("pump", "pumpfun", "meteoradbc", "moonshot")
         _is_unl_custom = not _is_pump_curve and not bool((pair_data or {}).get("_lp_verified"))
-        if _is_unl_custom and _pd_liq > 0 and _pd_liq < 4500.0:
-            verdict["degraded"] = True
+        verdict["degraded"] = True
+        if verdict.get("score", 0.0) >= float(_cfg("FCR_BLOCK_SCORE", 0.58)):
+            verdict["safe"] = False
+            verdict["verdict"] = "BLOCK"
+        elif _is_unl_custom and _pd_liq > 0 and _pd_liq < 4500.0:
             verdict["safe"] = False
             verdict["verdict"] = "BLOCK"
             verdict["score"] = 99.0
             verdict["reasons"] = [f"таймаут FCR ({budget:.0f}с) на незалоченном пуле (liq ${_pd_liq:,.0f} < $4.5k) — fail-closed защита от рага"]
-            verdict["report"] = format_report(verdict)
+        elif verdict.get("score", 0.0) >= float(_cfg("FCR_WARN_SCORE", 0.32)):
+            verdict["safe"] = True
+            verdict["verdict"] = "WARN"
         else:
-            verdict["degraded"] = True
             verdict["safe"] = True
             verdict["verdict"] = "OK"
-            verdict["score"] = 0.0
-            verdict["reasons"] = [f"таймаут FCR ({budget:.0f}с) — LP защищён/норма (fail-open)"]
-            verdict["report"] = format_report(verdict)
+            if not verdict.get("reasons"):
+                verdict["reasons"] = [f"таймаут FCR ({budget:.0f}с) — LP/микроструктура в норме (fail-open)"]
+        verdict["report"] = format_report(verdict)
     except Exception as e:  # fail-open: сеть/баг не должны блокировать вход
         verdict["degraded"] = True
         verdict["safe"] = True
@@ -1617,15 +1701,60 @@ async def pre_entry_rug_check(
     return verdict
 
 
-async def _analyze(mint: str, pair_data: Optional[dict], verdict: dict) -> dict:
+async def _analyze(mint: str, pair_data: Optional[dict], verdict: dict, budget: float = 14.0) -> dict:
     """Основная часть анализа (обёрнута в дедлайн в pre_entry_rug_check)."""
     pair_data = pair_data or {}
-    # 1. Когорта
-    cohort = await build_cohort(mint, pair_data)
+    _pair_addr = str(pair_data.get("pairAddress") or "")
+
+    # 1. Когорта + Slot-0 Jito бандл-чек ПАРАЛЛЕЛЬНО (0.3-1.0с)
+    cohort, slot0_info = await asyncio.gather(
+        build_cohort(mint, pair_data),
+        _detect_slot0_bundle(mint, _pair_addr),
+        return_exceptions=True,
+    )
+    if isinstance(cohort, Exception) or not isinstance(cohort, list):
+        cohort = []
+    if isinstance(slot0_info, Exception) or not isinstance(slot0_info, dict):
+        slot0_info = {"slot0_txs": 0, "slot01_txs": 0, "is_genesis_window": False, "bundle_detected": False}
     verdict["wallet_analysis"]["cohort_size"] = len(cohort)
 
-    # 2. Финансирование + кластеры
-    cluster_info = await analyze_funding_clusters(mint, cohort)
+    # 2. МГНОВЕННАЯ микроструктура + QuantOrb Sell Scenario + HHI (0 RPC, не зависит от таймаутов кластера!)
+    micro = analyze_microstructure(mint, pair_data, cohort)
+    micro_metrics = dict(micro.get("metrics") or {})
+    micro_metrics["slot0_txs"] = int(slot0_info.get("slot0_txs", 0) or 0)
+    micro_metrics["slot01_txs"] = int(slot0_info.get("slot01_txs", 0) or 0)
+    verdict["metrics"] = micro_metrics
+    verdict["signals"] = list(micro.get("signals") or [])
+    micro_score = float(micro.get("score", 0.0))
+    hard_score = float(micro.get("hard_score", 0.0))
+
+    if slot0_info.get("bundle_detected"):
+        _s0 = int(slot0_info.get("slot0_txs", 0) or 0)
+        _s01 = int(slot0_info.get("slot01_txs", 0) or 0)
+        hard_score = max(hard_score, 0.62)
+        verdict["signals"].append({
+            "key": "slot0_jito_bundle",
+            "weight": 0.62,
+            "text": f"Slot-0 Jito бандл при создании ({_s0} tx в слоте 0, {_s01} tx за 2 блока)",
+        })
+
+    # Сохраняем промежуточный скор на случай таймаута медленной RPC-трассировки кластеров
+    verdict["score"] = round(min(1.0, micro_score * 0.55 + hard_score), 3)
+    verdict["reasons"] = [s["text"] for s in verdict["signals"]]
+
+    # 3. Трассировка финансирования + кластеры в пределах остатка бюджета
+    cluster_info = {
+        "clusters": [], "traced": 0, "errors": 0, "graph_clusters": [],
+        "largest_cluster": None, "funder_map": {},
+    }
+    _cl_timeout = max(1.2, float(budget) - 1.5)
+    try:
+        cluster_info = await asyncio.wait_for(analyze_funding_clusters(mint, cohort), timeout=_cl_timeout)
+    except asyncio.TimeoutError:
+        verdict["degraded"] = True
+    except Exception:
+        verdict["degraded"] = True
+
     verdict["clusters"] = cluster_info.get("clusters", [])
     verdict["wallet_analysis"].update({
         "traced": cluster_info.get("traced", 0),
@@ -1636,16 +1765,8 @@ async def _analyze(mint: str, pair_data: Optional[dict], verdict: dict) -> dict:
         "funder_map": cluster_info.get("funder_map", {}),
     })
 
-    # 3. Микроструктура
-    micro = analyze_microstructure(mint, pair_data, cohort)
-    verdict["metrics"] = micro.get("metrics", {})
-    verdict["signals"] = micro.get("signals", [])
-
-    # 4. Скоринг: кластеры кошельков — главный сигнал, микроструктура — усилитель,
-    #    концентрация (дев/кит) — жёсткий сигнал, идёт напрямую.
+    # 4. Итоговый скоринг: кластеры + микроструктура + QuantOrb/Slot-0 жёсткие сигналы
     cluster_score, cluster_reasons = _score_clusters(verdict["clusters"])
-    micro_score = float(micro.get("score", 0.0))
-    hard_score = float(micro.get("hard_score", 0.0))
     total = min(1.0, cluster_score + micro_score * 0.55 + hard_score)
 
     reasons = [r["text"] for r in cluster_reasons]
@@ -1686,7 +1807,7 @@ async def _analyze(mint: str, pair_data: Optional[dict], verdict: dict) -> dict:
         str(c.get("source") or "") == "burner_relay" and float(c.get("total_pct", 0.0) or 0.0) >= 10.0
         for c in (verdict.get("clusters") or [])
     )
-    if _has_heavy_2hop_burner:
+    if _has_heavy_2hop_burner or slot0_info.get("bundle_detected") or float(_m_fcr.get("sell_impact_top3", 0.0) or 0.0) >= 0.86:
         _fcr_is_dist_runner = False
     if total >= block_at:
         if _fcr_is_dist_runner:
@@ -1703,7 +1824,7 @@ async def _analyze(mint: str, pair_data: Optional[dict], verdict: dict) -> dict:
         verdict["verdict"] = "OK"
         verdict["safe"] = True
 
-    # Данных не хватило? Помечаем degraded, но НЕ блокируем.
+    # Данных не хватило? Помечаем degraded, но НЕ затираем реальный скор.
     if not cohort or (cluster_info.get("traced", 0) == 0 and not verdict["clusters"]):
         verdict["degraded"] = True
 
@@ -1751,6 +1872,7 @@ def compact_summary(verdict: dict) -> dict:
         return {}
     clusters = verdict.get("clusters") or []
     top = clusters[0] if clusters else {}
+    m = verdict.get("metrics") or {}
     return {
         "fcr_verdict": str(verdict.get("verdict") or "OK"),
         "fcr_score": round(float(verdict.get("score", 0.0) or 0.0), 3),
@@ -1758,6 +1880,9 @@ def compact_summary(verdict: dict) -> dict:
         "fcr_cluster_pct": round(float(top.get("total_pct", 0.0) or 0.0), 2),
         "fcr_cluster_source": str(top.get("funder_label") or "")[:40],
         "fcr_cohort": int((verdict.get("wallet_analysis") or {}).get("cohort_size", 0) or 0),
+        "fcr_sell_impact": round(float(m.get("sell_impact_top3", 0.0) or 0.0), 3),
+        "fcr_hhi": round(float(m.get("hhi", 0.0) or 0.0), 1),
+        "fcr_slot0_txs": int(m.get("slot0_txs", 0) or 0),
         "fcr_reasons": "; ".join((verdict.get("reasons") or [])[:3])[:300],
     }
 

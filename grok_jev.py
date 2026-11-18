@@ -453,11 +453,11 @@ class GrokJevEngine:
         _min_grad_liq = float(getattr(_c, "MIN_GRADUATED_LIQ_USD", 2500.0))
         if _c.is_pumpswap_liq_fdv_trap(pair_data):
             return False, "permissionless-liq-fdv-trap (seeded pool with >=70% liq/fdv and 0 socials, drain risk)"
-        if ("meteora" in dex_id or dex_id == "meteoradbc") and not bool(pair_data.get("_lp_verified")):
+        if "meteora" in dex_id and dex_id != "meteoradbc" and not bool(pair_data.get("_lp_verified")):
             return False, "meteora-unlocked-pool (Meteora pools allow dev LP withdrawal, scam-trap cases: USPR/BUFO/SPACE/AXIOMCOIN)"
         if dex_id in ("pump", "pumpfun") and not getattr(_c, "ALLOW_UNGRADUATED_PUMPFUN", False):
             return False, "raw-pump-curve (wait for graduation to PumpSwap/Raydium with locked LP)"
-        min_liq = 1000.0 if (dex_id in ("pump", "pumpfun") and getattr(_c, "ALLOW_UNGRADUATED_PUMPFUN", False)) else _min_grad_liq
+        min_liq = 1000.0 if (dex_id in ("pump", "pumpfun", "meteoradbc") and getattr(_c, "ALLOW_UNGRADUATED_PUMPFUN", False)) else _min_grad_liq
         if eff_liq < min_liq:
             return False, f"liq-depth-low ${eff_liq:.0f} < ${min_liq:.0f} (micro-cap dump trap)"
             
@@ -1611,6 +1611,7 @@ class GrokJevEngine:
                 (_ps_jev_canon and _dex_low_jev == "pumpswap")
                 or (address.lower().endswith("pump") and _dex_low_jev in ("pump", "pumpfun"))
                 or (is_raw_pump_curve and _dex_low_jev in ("pump", "pumpfun"))
+                or _c.is_unmigrated_curve_token(address, pair_data)
             )
             if not is_canonical_pump and not getattr(_c, "ALLOW_UNLOCKED_LP_POOLS", True) and (rc_status_pre != 200 or not isinstance(rc_data_pre, dict)):
                 return False, "unverified-custom-token (waiting for rugcheck index)", _h_stats
@@ -1683,8 +1684,8 @@ class GrokJevEngine:
                         if address.endswith("pump") and "meteora" in _dex_rc_low and not has_verified_locked_lp:
                             return False, "pump-token-unlocked-meteora (.pump токен на пуле Meteora без сожжённого LP — кейс SURVIVE)", _h_stats
 
-                        # Любой токен на Meteora без подтверждённого сожжённого/залоченного LP блокируется на 100% (кейсы AXIOMCOIN/MULT/PUNCHAO/BUTTHOLE)
-                        if ("meteora" in _dex_rc_low or _dex_rc_low == "meteoradbc") and not has_verified_locked_lp:
+                        # Любой токен на AMM Meteora без подтверждённого сожжённого/залоченного LP блокируется (но не сырая кривая meteoradbc BAGS)
+                        if "meteora" in _dex_rc_low and _dex_rc_low != "meteoradbc" and not has_verified_locked_lp:
                             return False, "meteora-unlocked-lp (токен на пуле Meteora без подтверждённого сожжённого LP — риск Remove LP девом)", _h_stats
 
                     # По режиму Commit 0d2b1ae: свежие DEX-раннеры (Raydium, Meteora, PumpSwap) допускаются без лока LP

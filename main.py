@@ -2470,8 +2470,8 @@ async def _evm_track_once(tracker, chain: str, tag: str, emoji: str):
                 # токен физически непродаваем на блокчейне! Списываем как честный Honeypot (-100% / $0.0).
                 _last_sec_chk = getattr(pos, "last_security_check_ts", 0.0)
                 _need_tp_audit = (
-                    (maxp >= 0.25 and not getattr(pos, "tp1_done", False))
-                    or (maxp >= float(getattr(config, "TP2_TRIGGER_PCT", 1.00)) and not getattr(pos, "tp2_done", False))
+                    (maxp >= float(getattr(config, "TP1_TRIGGER_PCT", 1.10)) and not getattr(pos, "tp1_done", False))
+                    or (maxp >= float(getattr(config, "TP2_TRIGGER_PCT", 2.50)) and not getattr(pos, "tp2_done", False))
                     or (maxp >= getattr(config, "MOONBAG_TRIGGER_PCT", 2.00) and not getattr(pos, "is_moonbag", False))
                     or (held >= 30 and (_t.time() - (getattr(pos, "peak_time", 0.0) or pos.entry_time)) >= 1500 and pnl > 0.10)
                 )
