@@ -795,6 +795,9 @@ async def get_trending() -> list:
         mint = _base_mint(item)
         if not mint or mint in seen or mint.startswith("0x") or len(mint) < 32 or len(mint) > 44:
             return
+        _qt_id = str((((item.get("relationships") or {}).get("quote_token") or {}).get("data") or {}).get("id") or "").replace("solana_", "").lower()
+        if _qt_id and _qt_id not in _ALLOWED_SOL_QUOTES and _qt_id != "usd1ttgy1n17szxhfd31eyqso32682556356108733":
+            return
         dex_id = _dex_id_from_pool(item)
         if not _allow_raw_curve and dex_id in ("pump", "pumpfun", "meteoradbc"):
             return
@@ -823,7 +826,7 @@ async def get_trending() -> list:
             _max_age_gt_h = float(getattr(_tr_cfg, "SOLANA_MAX_AGE_MIN", 240.0)) / 60.0
             if age_h > _max_age_gt_h:
                 return
-            if age_h > 0.75:
+            if age_h > 0.75 and vol5_usd < 2000.0:
                 return
         seen.add(mint)
         out.append({"tokenAddress": mint, "chainId": "solana"})
@@ -1031,9 +1034,9 @@ async def get_live_pump_curve_state(mint: str) -> dict:
         if len(raw) < 49:
             return None
         v_token, v_sol, r_token, r_sol, supply, complete = struct.unpack('<QQQQQ?', raw[8:49])
-        sol_p = float(get_sol_price_sync() or 150.0)
+        sol_p = float(get_sol_price_sync() or 75.0)
         if sol_p <= 0:
-            sol_p = 150.0
+            sol_p = 75.0
 
         real_sol = r_sol / 1e9
         v_sol_flt = v_sol / 1e9
@@ -1111,9 +1114,9 @@ async def get_live_pumpswap_pool_state(mint: str, pair_address: str = "") -> dic
         if base_ui <= 0 or quote_ui <= 0:
             return {"pair_address": pair_address, "liq_usd": 0.0, "quote_amount": quote_ui, "price_usd": 0.0}
 
-        sol_p = float(get_sol_price_sync() or 150.0)
+        sol_p = float(get_sol_price_sync() or 75.0)
         if sol_p <= 0:
-            sol_p = 150.0
+            sol_p = 75.0
         is_wsol = (quote_mint == _WSOL_MINT)
         quote_usd = (quote_ui * sol_p) if is_wsol else quote_ui
         price_usd = quote_usd / base_ui
@@ -1193,7 +1196,7 @@ async def check_live_order_flow(
         if len(parsed) < 4:
             return res
 
-        latest_ts = max(t["ts"] for t in parsed if t["ts"] > 0) or time.time()
+        latest_ts = max((t["ts"] for t in parsed if t["ts"] > 0), default=0.0) or time.time()
         last_trade_age_s = max(0.0, time.time() - latest_ts)
 
         # Свежие окна 30с и 60с от последнего трейда в ленте
@@ -1295,16 +1298,16 @@ async def check_live_order_flow(
             drop_p = (1.0 - live_px / hi_3m) * 100.0
             block = True
             reason = f"tape-waterfall-drop (-{drop_p:.1f}% from 3m tape high, sell ${sell_60:.0f}/buy ${buy_60:.0f})"
-        elif len(parsed) >= 12 and wash_ratio >= 0.50 and buy_60 <= sell_60 * 1.05:
+        elif len(parsed) >= 12 and (wash_ratio >= 0.60 or (wash_ratio >= 0.50 and buy_60 <= sell_60 * 1.15)):
             block = True
             reason = f"tape-wash-mev ({wash_ratio*100:.0f}% same-block roundtrip MEV/wash volume)"
         elif len(parsed) >= 16 and total_buys_n >= 8 and unique_buyers_n <= 4 and unique_buyers_ratio < 0.35:
             block = True
             reason = f"tape-fake-buyers-wash ({unique_buyers_n} уникальных покупателей на {total_buys_n} покупок)"
-        elif len(active_traders) >= 8 and both_sides_overlap >= 0.52 and wash_ratio >= 0.32 and buy_60 <= sell_60 * 1.15:
+        elif len(active_traders) >= 8 and both_sides_overlap >= 0.55 and wash_ratio >= 0.35 and buy_60 <= sell_60 * 1.15:
             block = True
             reason = f"tape-overlap-wash-bots ({both_sides_overlap*100:.0f}% трейдеров в обе стороны, wash {wash_ratio*100:.0f}%)"
-        elif buy_usd_total >= 400.0 and total_buys_n >= 8 and top_buyer_usd_share >= 0.65 and not smart_buyers:
+        elif buy_usd_total >= 400.0 and total_buys_n >= 8 and top_buyer_usd_share >= 0.65 and not smart_buyers and (wash_ratio >= 0.30 or both_sides_overlap >= 0.35 or top_buyer_usd_share >= 0.88):
             block = True
             reason = f"tape-single-buyer-spoof ({top_buyer_usd_share*100:.0f}% спроса от 1 кошелька)"
 
@@ -1425,18 +1428,25 @@ async def verify_entry_onchain_and_orderflow(
             meta["onchain_source"] = "pumpswap_vault"
 
     # 3. Jupiter fallback (для Raydium/Orca/Meteora или если PumpSwap RPC не ответил)
+    flow = results.get("flow")
+    _flow_clean_buy = bool(
+        isinstance(flow, dict)
+        and flow.get("available")
+        and not flow.get("block")
+        and float(flow.get("buy_usd_60s", 0.0) or 0.0) > float(flow.get("sell_usd_60s", 0.0) or 0.0)
+    )
     if meta["onchain_source"] == "":
         jup_px = float(results.get("jup_px") or 0.0)
         if jup_px > 0 and live_price > 0:
             if jup_px < live_price * 0.925:
                 return False, jup_px, f"jup-live-dump (-{(1.0 - jup_px/live_price)*100:.1f}%)", meta
-            if jup_px > live_price * 1.25:
+            if jup_px > live_price * 1.45 and not _flow_clean_buy:
                 return False, jup_px, f"jup-spike (+{(jup_px/live_price - 1.0)*100:.1f}%)", meta
-            live_price = jup_px
-            meta["onchain_source"] = "jupiter_v3"
+            if jup_px <= live_price * 1.45:
+                live_price = jup_px
+                meta["onchain_source"] = "jupiter_v3"
 
     # 4. Живая лента сделок (Order Flow / Sandwich-Wash / Dump / MELT Metrics)
-    flow = results.get("flow")
     if isinstance(flow, dict) and flow.get("available"):
         meta["smart_buyers"] = list(flow.get("smart_buyers") or [])
         meta["wash_ratio"] = float(flow.get("wash_ratio", 0.0) or 0.0)

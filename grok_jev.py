@@ -595,9 +595,9 @@ class GrokJevEngine:
 
         # Защита от слитых ниже миграции выпускников Pump.fun (порог привязан к SOL, ~285 SOL)
         from sol_price import get_sol_price_sync
-        _sol_p_g = float(get_sol_price_sync() or 150.0)
+        _sol_p_g = float(get_sol_price_sync() or 75.0)
         if _sol_p_g <= 0:
-            _sol_p_g = 150.0
+            _sol_p_g = 75.0
         _dump_floor_g = float(getattr(_c, "PUMP_DUMP_FLOOR_SOL", 100.0)) * _sol_p_g
         _hard_dump_g = 65.0 * _sol_p_g
         if mint.endswith("pump") and dex_id not in ("pump", "pumpfun") and 0 < fdv_mc < _dump_floor_g:

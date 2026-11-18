@@ -369,14 +369,19 @@ def is_permissionless_liq_fdv_trap(pair_data: Optional[dict]) -> bool:
         
     liq_usd = float((pair_data.get("liquidity") or {}).get("usd") or 0.0)
     fdv_usd = float(pair_data.get("fdv") or pair_data.get("marketCap") or 0.0)
+
+    # ЖЁСТКИЙ ТРАП (проверяется ДО порога $18k, т.к. посеянный CreatePool часто на $5k-$18k, как AudaCity $15.7k liq / $10.4k FDV):
+    # 1) pump-минт на AMM с ликвой >= 75% FDV — посеянный CreatePool (BALVOTE).
+    # 2) Любой AMM пул с ликвой >= 110% FDV — физически невозможно без искусственного залива LP (AudaCity $18.5k->$15.7k liq / $14.5k->$10.4k FDV).
+    # Соцсети или боты-покупатели НЕ оправдывают такую аномалию!
+    if liq_usd >= 3000.0 and fdv_usd > 0:
+        if mint.endswith("pump") and liq_usd >= fdv_usd * 0.75:
+            return True
+        if liq_usd >= fdv_usd * 1.10:
+            return True
+
     if liq_usd < 18000.0:
         return False
-
-    # ЖЁСТКИЙ ТРАП: pump-минт на AMM с ликвой >= 75% FDV — это НЕ каноничная миграция (там liq/fdv ~0.3-0.5),
-    # а посеянный девом CreatePool. Никакие покупатели/соцсети не спасают (кейс BALVOTE: $103k liq / $117k fdv,
-    # 186b/46s -> пул выведен в $0 за 3 минуты, -101%).
-    if mint.endswith("pump") and fdv_usd > 0 and liq_usd >= fdv_usd * 0.75:
-        return True
         
     # Check socials
     info = pair_data.get("info") or {}
@@ -673,9 +678,9 @@ DD_THROTTLE_START_USD = 15.0
 SNIPER_ENTRIES_ENABLED = True             # ВКЛЮЧЕНО: мгновенный вход в свежие кривые/миграции со стрима
 ALLOW_UNGRADUATED_PUMPFUN = True          # ВКЛЮЧЕНО: ловим ракеты на кривой Pump.fun до миграции (открывает 大A +1559%, ROCKSTAR +163%, NEIL +52%, BLUE +36%)
 MIN_PUMP_CURVE_MCAP_USD = 3200.0          # Порог кривой $3.2k (пропускает ранних лидеров NEIL $3.3k +52%, RAUL $4.1k +38%, но отсекает 0-1 SOL мусор; реальный резерв >=2.2 SOL проверяется ончейн!)
-MAX_PUMP_CURVE_MCAP_USD = 11500.0         # Потолок сырой кривой $11.5k (выше $11.5k до миграции снайперы разгружаются; дальше ждём миграцию на PumpSwap)
+MAX_PUMP_CURVE_MCAP_USD = 25000.0         # Потолок сырой кривой $25k (захватывает растущие кривые $12k-$25k на пути к миграции ~$29k-$30k)
 MIN_PUMP_CURVE_MCAP_SOL = 44.0            # Нижняя граница золотой зоны кривой (~44 SOL ≈ $3.2k, ~14 real SOL внутри кривой)
-MAX_PUMP_CURVE_MCAP_SOL = 152.0           # Верхняя граница золотой зоны сырой кривой (~152 SOL ≈ $11.5k)
+MAX_PUMP_CURVE_MCAP_SOL = 340.0           # Верхняя граница золотой зоны сырой кривой (~340 SOL ≈ $25k при миграции 410 SOL)
 PUMP_MIGRATION_MCAP_SOL = 410.0           # FDV миграции pump.fun
 PUMP_DUMP_FLOOR_SOL = 50.0                # Порог post-mig-dumped (~50 SOL, разрешает быстрые реклеймы)
 JEV_MAX_TICKET_USD = 0.0

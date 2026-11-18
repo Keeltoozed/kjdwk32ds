@@ -1277,10 +1277,14 @@ def analyze_microstructure(mint: str, pair_data: dict, cohort: List[dict]) -> di
     score = 0.0        # «мягкие» сигналы (рынок) — разбавляются при суммировании
     hard_score = 0.0   # «жёсткие» (концентрация) — идут в total напрямую
 
-    # QuantOrb Sell Scenario: одновременный слив топ-3 не-пул холдеров обвалит пул >= 78%
-    if top3_pct >= 18.0 and sell_impact >= 0.78:
-        w_si = 0.60 if (sell_impact >= 0.86 or top3_pct >= 26.0) else 0.45
-        hard_score = max(hard_score, w_si)
+    # QuantOrb Sell Scenario: одновременный слив топ-3 не-пул холдеров (только для реальных кабалов >=25% и >=84% просадки)
+    if top3_pct >= 25.0 and sell_impact >= 0.84:
+        if top3_pct >= 32.0 or sell_impact >= 0.90:
+            w_si = 0.60
+            hard_score = max(hard_score, w_si)
+        else:
+            w_si = 0.36
+            score += w_si
         sigs.append({
             "key": "sell_scenario_top3",
             "weight": w_si,
@@ -1589,7 +1593,7 @@ def _format_cluster_line(c: dict) -> str:
 
 async def _detect_slot0_bundle(mint: str, pair_address: str = "") -> dict:
     """HoldTech/MELT быстрый (1 RPC-запрос <250мс) детектор Slot-0 Jito-бандла по подписям создания минта/пула."""
-    out = {"slot0_txs": 0, "slot01_txs": 0, "is_genesis_window": False, "bundle_detected": False}
+    out = {"slot0_txs": 0, "slot01_txs": 0, "is_genesis_window": False, "bundle_detected": False, "severe_bundle": False}
     target = str(mint or "").strip() or str(pair_address or "").strip()
     if not target:
         return out
@@ -1609,6 +1613,7 @@ async def _detect_slot0_bundle(mint: str, pair_address: str = "") -> dict:
         out["slot01_txs"] = s01
         out["is_genesis_window"] = True
         out["bundle_detected"] = (s0 >= 6 or s01 >= 10)
+        out["severe_bundle"] = (s0 >= 10 or s01 >= 16)
     except Exception:
         pass
     return out
@@ -1715,7 +1720,7 @@ async def _analyze(mint: str, pair_data: Optional[dict], verdict: dict, budget: 
     if isinstance(cohort, Exception) or not isinstance(cohort, list):
         cohort = []
     if isinstance(slot0_info, Exception) or not isinstance(slot0_info, dict):
-        slot0_info = {"slot0_txs": 0, "slot01_txs": 0, "is_genesis_window": False, "bundle_detected": False}
+        slot0_info = {"slot0_txs": 0, "slot01_txs": 0, "is_genesis_window": False, "bundle_detected": False, "severe_bundle": False}
     verdict["wallet_analysis"]["cohort_size"] = len(cohort)
 
     # 2. МГНОВЕННАЯ микроструктура + QuantOrb Sell Scenario + HHI (0 RPC, не зависит от таймаутов кластера!)
@@ -1728,14 +1733,23 @@ async def _analyze(mint: str, pair_data: Optional[dict], verdict: dict, budget: 
     micro_score = float(micro.get("score", 0.0))
     hard_score = float(micro.get("hard_score", 0.0))
 
-    if slot0_info.get("bundle_detected"):
+    if slot0_info.get("severe_bundle"):
         _s0 = int(slot0_info.get("slot0_txs", 0) or 0)
         _s01 = int(slot0_info.get("slot01_txs", 0) or 0)
         hard_score = max(hard_score, 0.62)
         verdict["signals"].append({
             "key": "slot0_jito_bundle",
             "weight": 0.62,
-            "text": f"Slot-0 Jito бандл при создании ({_s0} tx в слоте 0, {_s01} tx за 2 блока)",
+            "text": f"Тяжёлый Slot-0 Jito бандл при создании ({_s0} tx в слоте 0, {_s01} tx за 2 блока)",
+        })
+    elif slot0_info.get("bundle_detected"):
+        _s0 = int(slot0_info.get("slot0_txs", 0) or 0)
+        _s01 = int(slot0_info.get("slot01_txs", 0) or 0)
+        micro_score = min(1.0, micro_score + 0.48)
+        verdict["signals"].append({
+            "key": "slot0_jito_bundle",
+            "weight": 0.26,
+            "text": f"Умеренный Slot-0 старт ({_s0} tx в слоте 0, {_s01} tx за 2 блока)",
         })
 
     # Сохраняем промежуточный скор на случай таймаута медленной RPC-трассировки кластеров
@@ -1807,7 +1821,7 @@ async def _analyze(mint: str, pair_data: Optional[dict], verdict: dict, budget: 
         str(c.get("source") or "") == "burner_relay" and float(c.get("total_pct", 0.0) or 0.0) >= 10.0
         for c in (verdict.get("clusters") or [])
     )
-    if _has_heavy_2hop_burner or slot0_info.get("bundle_detected") or float(_m_fcr.get("sell_impact_top3", 0.0) or 0.0) >= 0.86:
+    if _has_heavy_2hop_burner or slot0_info.get("severe_bundle") or float(_m_fcr.get("sell_impact_top3", 0.0) or 0.0) >= 0.88:
         _fcr_is_dist_runner = False
     if total >= block_at:
         if _fcr_is_dist_runner:

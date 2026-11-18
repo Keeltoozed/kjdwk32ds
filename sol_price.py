@@ -3,7 +3,7 @@ import asyncio
 import time
 
 # Глобальный кеш цены SOL
-_sol_price = 150.0
+_sol_price = 75.0
 _last_update = 0.0
 _UPDATE_INTERVAL = 300  # Обновляем каждые 5 минут
 

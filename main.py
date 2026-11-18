@@ -1399,7 +1399,7 @@ async def scanner_loop(analyzer, tracker):
                                     continue
                                 _dex_id = str((pair_data.get("dexId") or "")).lower()
                                 _allow_unl_sc = bool(getattr(config, "ALLOW_UNLOCKED_LP_POOLS", True))
-                                if ("meteora" in _dex_id or _dex_id == "meteoradbc") and not pair_data.get("_lp_verified", False):
+                                if "meteora" in _dex_id and _dex_id != "meteoradbc" and not pair_data.get("_lp_verified", False):
                                     print(f"🚫 [SCANNER-METEORA-UNBURNED] {actual_symbol} ({mint[:8]}): пул Meteora без сожжённого/залоченного LP — риск Remove LP (кейсы USPR/BUFO/SPACE), отмена!")
                                     continue
                                 _is_unl_sc_pool = config.is_position_unlocked_lp(mint, pair_data, bool(pair_data.get("_lp_verified")))
@@ -1596,9 +1596,9 @@ async def scanner_loop(analyzer, tracker):
                                     print(f"🚫 [SCANNER-WASH-TRAP] {actual_symbol} ({mint[:8]}): накрутка микро-ботом ({_tot_tx5_sc} txns, avg ${_avg_tx5_sc:.2f} < $4) — отмена!")
                                     continue
 
-                                # Блок кастомных не-launchpad контрактов на PumpSwap при пуле < $10k (отключается при ALLOW_UNLOCKED_LP_POOLS=True)
-                                if not bool(getattr(config, "ALLOW_UNLOCKED_LP_POOLS", False)) and _dex_id == "pumpswap" and not config.is_launchpad_mint(mint) and liq_usd < 10000.0:
-                                    print(f"🚫 [SCANNER-FAKE-PUMPSWAP] {actual_symbol} ({mint[:8]}): кастомный не-pump контракт на PumpSwap с микро-пулом (${liq_usd:,.0f} < $10k) — отмена!")
+                                # Блок кастомных не-launchpad незалоченных контрактов на PumpSwap при пуле < $10k (отключается при ALLOW_UNLOCKED_LP_POOLS=True)
+                                if not bool(getattr(config, "ALLOW_UNLOCKED_LP_POOLS", False)) and _dex_id == "pumpswap" and not config.is_launchpad_mint(mint) and not pair_data.get("_lp_verified", False) and not pair_data.get("_pumpswap_lp_burned", False) and liq_usd < 10000.0:
+                                    print(f"🚫 [SCANNER-FAKE-PUMPSWAP] {actual_symbol} ({mint[:8]}): кастомный незалоченный контракт на PumpSwap с микро-пулом (${liq_usd:,.0f} < $10k) — отмена!")
                                     continue
 
                                 # Защита от миграционного дампа Pump.fun
@@ -1618,8 +1618,8 @@ async def scanner_loop(analyzer, tracker):
                                         continue
                                     _fdv_sc = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
                                     from sol_price import get_sol_price_sync
-                                    _sol_p_sc = float(get_sol_price_sync() or 150.0)
-                                    if _sol_p_sc <= 0: _sol_p_sc = 150.0
+                                    _sol_p_sc = float(get_sol_price_sync() or 75.0)
+                                    if _sol_p_sc <= 0: _sol_p_sc = 75.0
                                     _dump_floor_sc = float(getattr(config, "PUMP_DUMP_FLOOR_SOL", 50.0)) * _sol_p_sc
                                     if 0 < _fdv_sc < _dump_floor_sc and not (_age_sc < 5.0 and _vol5_live >= 1000.0 and _m5_live >= 1.5 and _b5_bump >= _s5_bump):
                                         print(f"🚫 [SCANNER-MIGRATION] {actual_symbol} ({mint[:8]}): FDV ${_fdv_sc:,.0f} < ${_dump_floor_sc:,.0f} — слит ниже уровня миграции.")

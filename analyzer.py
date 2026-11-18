@@ -621,8 +621,14 @@ class Analyzer:
     async def fetch_latest_tokens(self) -> list:
         tokens = []
         from http_client import fetch_json
+        try:
+            from sol_price import get_sol_price
+            await get_sol_price()
+        except Exception:
+            pass
         if True:
-            # 0. Прямой радар активных DEX-пулов Solana (PumpSwap / Meteora / Bonk выпускники, без ожидания платных бустов!)
+            # 0. Прямой радар активных DEX-пулов Solana (DexScreener search: pumpswap, pump, meteora, bonk, raydium, orca;
+            #    GeckoTerminal /new_pools + /trending_pools?duration=5m уже собирается в market_data.get_trending() без дублирования квоты GT)
             try:
                 import asyncio as _aio_lt
                 _ds_search_urls = (
@@ -633,12 +639,11 @@ class Analyzer:
                     "https://api.dexscreener.com/latest/dex/search?q=raydium%20SOL",
                     "https://api.dexscreener.com/latest/dex/search?q=orca%20SOL",
                 )
-                _ds_sr = await _aio_lt.gather(
-                    *[fetch_json(u, timeout=6, retries=0) for u in _ds_search_urls],
-                    return_exceptions=True,
-                )
+                _ds_sr = await _aio_lt.gather(*[fetch_json(u, timeout=6, retries=0) for u in _ds_search_urls], return_exceptions=True)
+
                 _allow_raw_lt = bool(getattr(config, "ALLOW_UNGRADUATED_PUMPFUN", False))
                 _by_mint_lt = {}
+
                 for _res_lt in _ds_sr:
                     if not isinstance(_res_lt, tuple) or len(_res_lt) != 2:
                         continue
@@ -657,8 +662,8 @@ class Analyzer:
                         _fdv_lt = float(_p_lt.get("fdv", 0) or _p_lt.get("marketCap", 0) or 0)
                         _ca_lt = float(_p_lt.get("pairCreatedAt") or 0)
                         _age_lt = ((time.time() * 1000.0 - _ca_lt) / 60000.0) if _ca_lt > 0 else 1.5
-                        _min_liq_lt = 1500.0 if (_allow_raw_lt and _dex_lt in ("pump", "pumpfun")) else 2500.0
-                        _min_vol_lt = 150.0 if (_age_lt <= 3.0 or (_allow_raw_lt and _dex_lt in ("pump", "pumpfun"))) else 300.0
+                        _min_liq_lt = 1500.0 if (_allow_raw_lt and _dex_lt in ("pump", "pumpfun", "meteoradbc")) else 2500.0
+                        _min_vol_lt = 150.0 if (_age_lt <= 3.0 or (_allow_raw_lt and _dex_lt in ("pump", "pumpfun", "meteoradbc"))) else 300.0
                         if _liq_lt < _min_liq_lt or _vol5_lt < _min_vol_lt or _m5_lt < 0.3:
                             continue
                         _max_age_lt = float(getattr(config, "SOLANA_MAX_AGE_MIN", 240.0))
@@ -683,53 +688,23 @@ class Analyzer:
             except Exception as e:
                 print(f"Dexscreener active search radar error: {e}")
 
-            # 1. Сканируем САМЫЕ СВЕЖИЕ бусты (token-boosts/latest/v1) — ловит новые ⚡-бусты сразу
+            # 1-4. Свежие бусты/профили/CTO добираем параллельно (после активных пулов, с ограничением чтобы старые бусты не забивали очередь)
             try:
-                status, data = await fetch_json("https://api.dexscreener.com/token-boosts/latest/v1", timeout=8, retries=1)
-                if status == 200 and isinstance(data, list):
-                    tokens.extend(data)
+                import asyncio as _aio_b
+                _boost_urls = (
+                    "https://api.dexscreener.com/token-boosts/latest/v1",
+                    config.DEXSCREENER_PROFILES,
+                    "https://api.dexscreener.com/token-profiles/recent-updates/v1",
+                    "https://api.dexscreener.com/community-takeovers/latest/v1",
+                    "https://api.dexscreener.com/token-boosts/top/v1",
+                )
+                _b_res = await _aio_b.gather(*[fetch_json(u, timeout=7, retries=0) for u in _boost_urls], return_exceptions=True)
+                for _br in _b_res:
+                    if isinstance(_br, tuple) and _br[0] == 200 and isinstance(_br[1], list):
+                        _sol_b = [x for x in _br[1] if isinstance(x, dict) and x.get("chainId") == "solana"]
+                        tokens.extend(_sol_b[:10])
             except Exception as e:
-                print(f"Dexscreener latest boosts fetch error: {e}")
-
-            # 1.1. Сканируем ТОПОВЫЕ бусты (token-boosts/top/v1) — топ-продвигаемые монеты
-            try:
-                status, data = await fetch_json("https://api.dexscreener.com/token-boosts/top/v1", timeout=8, retries=1)
-                if status == 200 and isinstance(data, list):
-                    tokens.extend(data)
-            except Exception as e:
-                print(f"Dexscreener top boosts fetch error: {e}")
-
-            # 2. Сканируем новые профили, чтобы не пропускать свежие ракеты
-            try:
-                status, data = await fetch_json(config.DEXSCREENER_PROFILES, timeout=8, retries=1)
-                if status == 200 and isinstance(data, list):
-                    tokens.extend(data)
-            except Exception as e:
-                print(f"Dexscreener profiles fetch error: {e}")
-
-            # 3. Сканируем недавно обновлённые профили (recent-updates)
-            try:
-                status, data = await fetch_json("https://api.dexscreener.com/token-profiles/recent-updates/v1", timeout=8, retries=1)
-                if status == 200 and isinstance(data, list):
-                    tokens.extend(data)
-            except Exception as e:
-                print(f"Dexscreener recent updates fetch error: {e}")
-
-            # 4. Топовые (Boosted) монеты — в самый конец, чтобы не забивать очередь старыми мамонтами
-            try:
-                status, data = await fetch_json(config.DEXSCREENER_LATEST, timeout=8, retries=1)
-                if status == 200 and isinstance(data, list):
-                    tokens.extend(data)
-            except Exception as e:
-                print(f"Dexscreener boosts fetch error: {e}")
-
-            # 4. Сканируем свежие Community Takeovers (CTO)
-            try:
-                status, data = await fetch_json("https://api.dexscreener.com/community-takeovers/latest/v1", timeout=8, retries=1)
-                if status == 200 and isinstance(data, list):
-                    tokens.extend(data)
-            except Exception as e:
-                print(f"Dexscreener CTO fetch error: {e}")
+                print(f"Dexscreener boosts/profiles fetch error: {e}")
                 
         # Возвращаем уникальные токены Solana (pump, moon, bonk, BAGS и токены DEX — безопасность/LP проверяется далее)
         seen = set()
@@ -942,8 +917,11 @@ class Analyzer:
         try:
             import market_data as _md_pf
             _jup_cache_pf = getattr(_md_pf, "_JUP_TD_CACHE", {})
+            _gt_cache_pf = getattr(_md_pf, "_TD_CACHE", {})
         except Exception:
             _jup_cache_pf = {}
+            _gt_cache_pf = {}
+        _mono_pf = time.monotonic()
         for res in results:
             if not isinstance(res, tuple) or len(res) != 3:
                 continue
@@ -960,8 +938,12 @@ class Analyzer:
                     got += 1
                 else:
                     _jh = _jup_cache_pf.get(m)
+                    _gh = _gt_cache_pf.get(m)
                     if _jh and (ts - _jh[0]) < 90.0 and isinstance(_jh[1], dict):
                         self._prefetch_cache[m] = (_jh[0], dict(_jh[1]))
+                        got += 1
+                    elif _gh and (_mono_pf - _gh[0]) < 90.0 and isinstance(_gh[1], dict):
+                        self._prefetch_cache[m] = (ts, dict(_gh[1]))
                         got += 1
                     elif ok_st:
                         # Короткий TTL (5с) для пустых ответов, чтобы свежие миграции быстро перепроверялись
@@ -1830,11 +1812,11 @@ class Analyzer:
                 if _px_calc > 0:
                     _fdv_curve_pre = _px_calc * 1_000_000_000.0
             from sol_price import get_sol_price_sync
-            _sol_p = float(get_sol_price_sync() or 150.0)
+            _sol_p = float(get_sol_price_sync() or 75.0)
             if _sol_p <= 0:
-                _sol_p = 150.0
-            _min_curve_mcap = max(float(getattr(config, "MIN_PUMP_CURVE_MCAP_USD", 2800.0)), float(getattr(config, "MIN_PUMP_CURVE_MCAP_SOL", 35.0)) * _sol_p)
-            _max_curve_mcap = min(float(getattr(config, "MAX_PUMP_CURVE_MCAP_USD", 13500.0)), float(getattr(config, "MAX_PUMP_CURVE_MCAP_SOL", 175.0)) * _sol_p)
+                _sol_p = 75.0
+            _min_curve_mcap = max(float(getattr(config, "MIN_PUMP_CURVE_MCAP_USD", 3200.0)), float(getattr(config, "MIN_PUMP_CURVE_MCAP_SOL", 44.0)) * _sol_p)
+            _max_curve_mcap = min(float(getattr(config, "MAX_PUMP_CURVE_MCAP_USD", 25000.0)), float(getattr(config, "MAX_PUMP_CURVE_MCAP_SOL", 340.0)) * _sol_p)
             if _fdv_curve_pre > 0 and _fdv_curve_pre < _min_curve_mcap:
                 return self._deny(
                     mint,
@@ -1848,30 +1830,30 @@ class Analyzer:
                     f"🚫 [CURVE-CLIFF] {symbol} ({mint[:8]}): FDV ${_fdv_curve_pre:,.0f} > ${_max_curve_mcap:,.0f} (зона разгрузки снайперов на кривой — ждём миграцию на PumpSwap).",
                 )
             # Бокс живой кривой Pump.fun (пропускает GTA6 +115%, RAUL +38.5%, ROCKSTAR +401%, DACT +76%):
-            # От пустых/слитых кёрвов ($PICKLES, GTAMICHI, AabL4) защищает ончейн-аудит резервов (real_sol >= 1.8 SOL).
-            if _b5_pre < 25 or (_s5_pre > 0 and _b5_pre < int(_s5_pre * 1.15)) or (_b5_pre - _s5_pre) < 5:
+            # От пустых/слитых кёрвов ($PICKLES, GTAMICHI, AabL4) защищает ончейн-аудит резервов (real_sol >= 2.2 SOL).
+            if _b5_pre < 15 or (_s5_pre > 0 and _b5_pre < int(_s5_pre * 1.15)) or (_b5_pre - _s5_pre) < 4:
                 return self._deny(
                     mint,
                     f"early-curve-weak-buyers fdv=${_fdv_curve_pre:.0f} {_b5_pre}b/{_s5_pre}s",
-                    f"🚫 [CURVE-WEAK-BUYERS] {symbol} ({mint[:8]}): на кривой слабый приток покупателей {_b5_pre}b/{_s5_pre}s (нужно >=25b, net >=+5, b/s >=1.15x).",
+                    f"🚫 [CURVE-WEAK-BUYERS] {symbol} ({mint[:8]}): на кривой слабый приток покупателей {_b5_pre}b/{_s5_pre}s (нужно >=15b, net >=+4, b/s >=1.15x).",
                 )
-            if _vm5_pre < 1800.0:
+            if _vm5_pre < 1000.0:
                 return self._deny(
                     mint,
-                    f"curve-low-vol5 ${_vm5_pre:.0f}<$1800",
-                    f"🚫 [CURVE-LOW-VOL] {symbol} ({mint[:8]}): объём кривой ${_vm5_pre:,.0f} < $1,800 — вялая кривая.",
+                    f"curve-low-vol5 ${_vm5_pre:.0f}<$1000",
+                    f"🚫 [CURVE-LOW-VOL] {symbol} ({mint[:8]}): объём кривой ${_vm5_pre:,.0f} < $1,000 — вялая кривая.",
                 )
-            if _vm5_pre > 35000.0:
+            if _vm5_pre > 65000.0:
                 return self._deny(
                     mint,
-                    f"curve-wash-overchurn ${_vm5_pre:.0f}>$35k",
-                    f"🚫 [CURVE-OVERCHURN] {symbol} ({mint[:8]}): объём на сырой кривой ${_vm5_pre:,.0f} > $35,000 — перегретый wash-флип снайперов!",
+                    f"curve-wash-overchurn ${_vm5_pre:.0f}>$65k",
+                    f"🚫 [CURVE-OVERCHURN] {symbol} ({mint[:8]}): объём на сырой кривой ${_vm5_pre:,.0f} > $65,000 — перегретый wash-флип снайперов!",
                 )
-            if _m5 < 15.0 or _m5 > 185.0 or _m1 > 40.0:
+            if _m5 < 10.0 or _m5 > 220.0 or _m1 > 45.0:
                 return self._deny(
                     mint,
                     f"curve-m5-out-of-box m5={_m5:+.0f}% m1={_m1:+.0f}%",
-                    f"🚫 [CURVE-MOMENTUM-BOX] {symbol} ({mint[:8]}): импульс кривой m5 {_m5:+.1f}% (нужно +15%..+185%), m1 {_m1:+.1f}% (<=+40%) — вне диапазона старта ракеты.",
+                    f"🚫 [CURVE-MOMENTUM-BOX] {symbol} ({mint[:8]}): импульс кривой m5 {_m5:+.1f}% (нужно +10%..+220%), m1 {_m1:+.1f}% (<=+45%) — вне диапазона старта ракеты.",
                 )
             if _age_min_pre > 6.0:
                 return self._deny(
@@ -1910,9 +1892,9 @@ class Analyzer:
                 f"🚫 [LARGE-CAP-SKIP] {symbol} ({mint[:8]}): FDV ${_fdv_chk_pre:,.0f} > ${_max_mcap_pre:,.0f} — нет запаса хода 2x+.",
             )
         from sol_price import get_sol_price_sync
-        _sol_p = float(get_sol_price_sync() or 150.0)
+        _sol_p = float(get_sol_price_sync() or 75.0)
         if _sol_p <= 0:
-            _sol_p = 150.0
+            _sol_p = 75.0
         _dump_floor_sol = float(getattr(config, "PUMP_DUMP_FLOOR_SOL", 100.0)) * _sol_p
         _hard_dump_sol = 65.0 * _sol_p
 
