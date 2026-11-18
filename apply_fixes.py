@@ -54,19 +54,19 @@ MAX_M1_VERTICAL_TOP_PCT = 60.0
 JEV_MIN_M1_ENTRY_FLOOR_PCT = -5.0
 JEV_TREND_CONFIRM_ENABLED = False
 
-# 4. Стоп-лосс и тейки (для $2 позиции — полный выход на +25%, без мунбега):
+# 4. Стоп-лосс и тейки (TP1 50% тело + профит, оставшиеся 50% — Moonbag):
 STOP_LOSS_PCT = -0.12
 STOP_LOSS_UNLOCKED_PCT = -0.11
 EMERGENCY_CAP_PCT = -0.15
 FAST_STOP_LOSS_PCT = -12.0
 EMERGENCY_STOP_LOSS_PCT = -15.0
 
-TP1_TRIGGER_PCT = 0.25
-TP1_SELL_FRAC = 1.00
+TP1_TRIGGER_PCT = 0.30
+TP1_SELL_FRAC = 0.50
 TP2_TRIGGER_PCT = 1.00
-TP2_SELL_FRAC = 0.00
+TP2_SELL_FRAC = 0.25
 TP3_TRIGGER_PCT = 2.50
-TP3_SELL_FRAC = 0.00
+TP3_SELL_FRAC = 0.25
 BREAKEVEN_PCT = 0.10
 
 MIN_LIQUIDITY_USD = 2500.0
@@ -171,8 +171,8 @@ def patch_config(path: str = "config.py") -> None:
     content = re.sub(r"^STOP_LOSS_PCT\s*=\s*-0\.\d+", "STOP_LOSS_PCT = -0.12", content, flags=re.M)
     content = re.sub(r"^STOP_LOSS_UNLOCKED_PCT\s*=\s*-0\.\d+", "STOP_LOSS_UNLOCKED_PCT = -0.11", content, flags=re.M)
     content = re.sub(r"^EMERGENCY_CAP_PCT\s*=\s*-0\.\d+", "EMERGENCY_CAP_PCT = -0.15", content, flags=re.M)
-    content = re.sub(r"^TP1_TRIGGER_PCT\s*=\s*0\.\d+", "TP1_TRIGGER_PCT = 0.25", content, flags=re.M)
-    content = re.sub(r"^TP1_SELL_FRAC\s*=\s*0\.\d+", "TP1_SELL_FRAC = 1.00", content, flags=re.M)
+    content = re.sub(r"^TP1_TRIGGER_PCT\s*=\s*0\.\d+", "TP1_TRIGGER_PCT = 0.30", content, flags=re.M)
+    content = re.sub(r"^TP1_SELL_FRAC\s*=\s*0\.\d+", "TP1_SELL_FRAC = 0.50", content, flags=re.M)
     content = re.sub(r"^TP2_TRIGGER_PCT\s*=\s*0\.\d+", "TP2_TRIGGER_PCT = 1.00", content, flags=re.M)
     content = re.sub(r"^TP2_SELL_FRAC\s*=\s*0\.\d+", "TP2_SELL_FRAC = 0.00", content, flags=re.M)
     content = re.sub(r"^TP3_TRIGGER_PCT\s*=\s*0\.\d+", "TP3_TRIGGER_PCT = 2.50", content, flags=re.M)

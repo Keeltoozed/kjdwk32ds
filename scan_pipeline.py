@@ -36,7 +36,7 @@ async def _analyze_one(analyzer, mint, sem):
                 float(getattr(analyzer, "_last_dev", 0.0) or 0.0),
             )
     except asyncio.TimeoutError:
-        print(f"⏱️ [SCAN-TIMEOUT] {mint[:8]}: анализ превысил 22с — пропуск.")
+        print(f"⏱️ [SCAN-TIMEOUT] {mint[:8]}: анализ превысил 14с — пропуск.")
         return (False, 0.0, 0.0, 0.0)
     except Exception as e:
         print(f"⚠️ [SCAN-ERR] {mint[:8]}: {e}")

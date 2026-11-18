@@ -411,7 +411,7 @@ class GrokJevEngine:
                 _cur_p = float(pair_data.get("priceUsd", 0) or 0)
                 if _cur_p > 0:
                     fdv_mc = _cur_p * 1_000_000_000.0
-            _min_curve_mc = float(getattr(_c, "MIN_PUMP_CURVE_MCAP_USD", 3500.0))
+            _min_curve_mc = float(getattr(_c, "MIN_PUMP_CURVE_MCAP_USD", 2000.0))
             _max_curve_mc = float(getattr(_c, "MAX_PUMP_CURVE_MCAP_USD", 65000.0))
             if fdv_mc > 0 and fdv_mc < _min_curve_mc:
                 return False, f"pump-curve-flash-rug: FDV ${fdv_mc:,.0f} < ${_min_curve_mc:,.0f} (пустой кёрв <12%, риск мгновенного сноса в -75%)"
@@ -2147,7 +2147,7 @@ class GrokJevEngine:
             and _h1_s1 >= float(getattr(_c, "JEV_MIN_H1_PCT", -25.0))
         )
         _is_unlocked_s1 = _c.is_position_unlocked_lp(address, pair, bool(pair.get("_lp_verified")))
-        _is_momentum_rocket = not _is_unlocked_s1 and _s1_fresh_ok and (rkt_s1 + 0.05) >= max(8.0, s1_thresh - 2.0) and _m1_s1 >= 0.0 and (
+        _is_momentum_rocket = not _is_unlocked_s1 and _s1_fresh_ok and (rkt_s1 + 0.05) >= max(1.5, s1_thresh - 6.0) and _m1_s1 >= 0.0 and (
             (_m5_s1 >= 10.0 and _b5_s1 >= int(_s5_s1 * 1.20) and _vm5_s1 >= 4000.0)
             or (_vm5_s1 >= 8000.0 and _b5_s1 >= int(_s5_s1 * 1.15) and _m5_s1 >= 4.0)
             or (_m5_s1 >= 6.0 and _vm5_s1 >= 4000.0 and _b5_s1 >= max(12, int(_s5_s1 * 1.15)))

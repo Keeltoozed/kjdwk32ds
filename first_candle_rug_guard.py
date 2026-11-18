@@ -1584,12 +1584,22 @@ async def pre_entry_rug_check(
         budget = float(_cfg("FCR_MAX_DURATION_SEC", 14.0))
         verdict = await asyncio.wait_for(_analyze(mint, pair_data, verdict), timeout=budget)
     except asyncio.TimeoutError:
-        verdict["degraded"] = True
-        verdict["safe"] = True
-        verdict["verdict"] = "OK"
-        verdict["score"] = 0.0
-        verdict["reasons"] = [f"анализ не уложился в {float(_cfg('FCR_MAX_DURATION_SEC', 14.0)):.0f}с — вход разрешён (fail-open)"]
-        verdict["report"] = format_report(verdict)
+        _pd_liq = float(((pair_data or {}).get("liquidity") or {}).get("usd", 0) or 0)
+        _is_micro = _pd_liq > 0 and _pd_liq < 4500.0
+        if _is_micro:
+            verdict["degraded"] = True
+            verdict["safe"] = False
+            verdict["verdict"] = "BLOCK"
+            verdict["score"] = 99.0
+            verdict["reasons"] = [f"таймаут FCR ({budget:.0f}с) на микро-пуле (liq ${_pd_liq:,.0f} < $4.5k) — fail-closed защита от рага"]
+            verdict["report"] = format_report(verdict)
+        else:
+            verdict["degraded"] = True
+            verdict["safe"] = True
+            verdict["verdict"] = "OK"
+            verdict["score"] = 0.0
+            verdict["reasons"] = [f"анализ не уложился в {budget:.0f}с — вход разрешён (fail-open)"]
+            verdict["report"] = format_report(verdict)
     except Exception as e:  # fail-open: сеть/баг не должны блокировать вход
         verdict["degraded"] = True
         verdict["safe"] = True

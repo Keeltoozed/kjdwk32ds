@@ -500,12 +500,12 @@ async def position_manager_loop(analyzer, tracker):
                 )
                 position.is_unlocked_pool = _pos_unl_tp
                 _tp1_sol_thr, _tp1_sell, _tp2, _tp2_sell, _tp3, _tp3_sell, _tp4, _tp4_sell, _tp5, _tp5_sell = config.get_sol_tp_ladder(_pos_unl_tp)
-                _min_tp_ticket = float(getattr(config, "PARTIAL_TP_MIN_TICKET_USD", 3.0))
+                _min_tp_ticket = float(getattr(config, "PARTIAL_TP_MIN_TICKET_USD", 0.50))
                 _pos_val = float(getattr(position, "original_amount_usd", 0.0) or getattr(position, "amount_usd", 0.0) or 0.0)
                 _allow_partial_tp = getattr(config, "PARTIAL_TP_ENABLED", True) and (_pos_val >= _min_tp_ticket)
 
-                # === ПРОСТЫЙ ВЫХОД ДЛЯ МАЛЕНЬКИХ ПОЗИЦИЙ (≤ $20): полный выход на TP1, без мунбега ===
-                _is_small_pos = _pos_val <= 20.0
+                # Для микро-пыли (< $0.50) частичный тейк не делим, но для нормальных позиций ($1-$5) обязательно даём мунбэгу лететь!
+                _is_small_pos = _pos_val < _min_tp_ticket
                 if _allow_partial_tp and not _is_small_pos:
                     if pnl_pct >= _tp1_sol_thr and not getattr(position, "tp1_done", False) and float(getattr(position, "amount_usd", 0.0) or 0.0) > 0.05:
                         tracker.partial_close_position(mint, current_price, _tp1_sell, f"Take Profit +{_tp1_sol_thr*100:.0f}% (Tier-1 {int(_tp1_sell*100)}%, Principal Shield / Moonbag)")
@@ -681,9 +681,9 @@ async def position_manager_loop(analyzer, tracker):
                         position.tp5_done = True
                         continue
 
-                # === ПРОСТЫЙ ВЫХОД ДЛЯ МАЛЕНЬКИХ ПОЗИЦИЙ (≤ $20): полный выход на +25% ===
+                # === ВЫХОД ДЛЯ МИКРО-ПЫЛИ (< $0.50) ===
                 if _is_small_pos and pnl_pct >= _tp1_sol_thr and not getattr(position, "tp1_done", False):
-                    tracker.close_position(mint, current_price, f"Small Pos Full Exit +{pnl_pct*100:.1f}% (TP1 {_tp1_sol_thr*100:.0f}%)")
+                    tracker.close_position(mint, current_price, f"Dust Pos Exit +{pnl_pct*100:.1f}% (TP1 {_tp1_sol_thr*100:.0f}%)")
                     position.tp1_done = True
                     continue
 

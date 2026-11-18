@@ -441,10 +441,15 @@ def evaluate_entry_momentum(
     if tot_tx >= 10 and (vol5_usd / max(1, tot_tx)) < 4.0:
         return False, f"fake-bump-wash-bot avg ${vol5_usd/max(1, tot_tx):.2f} < $4.00 across {tot_tx} txns"
 
-    # 0.5 МЯГКИЙ ОТСЕВ МЁРТВЫХ ПУСТЫШЕК (не блокируем свежие ракеты с маленьким объёмом):
-    _min_tx_gate = 8 if age_min <= 5.0 else int(globals().get("MIN_TXNS_M5", 10))
-    _min_vol_gate = 600.0 if (age_min <= 5.0 and buys5 >= 6) else float(globals().get("MIN_VOLUME_M5_USD", 700.0))
-    _min_buys_req = 6 if age_min <= 5.0 else 10
+    # 0.5 МЯГКИЙ ОТСЕВ МЁРТВЫХ ПУСТЫШЕК (не блокируем свежие ракеты вроде NADJA/CSI с объёмом $350-$650):
+    _min_tx_gate = 6 if age_min <= 2.5 else (8 if age_min <= 5.0 else int(globals().get("MIN_TXNS_M5", 10)))
+    if age_min <= 2.5 and buys5 >= 5:
+        _min_vol_gate = 300.0
+    elif age_min <= 5.0 and buys5 >= 6:
+        _min_vol_gate = 450.0
+    else:
+        _min_vol_gate = float(globals().get("MIN_VOLUME_M5_USD", 500.0))
+    _min_buys_req = 5 if age_min <= 2.5 else (6 if age_min <= 5.0 else 10)
     if tot_tx < _min_tx_gate or buys5 < _min_buys_req:
         return False, f"no-demand-txns {buys5}b/{sells5}s (buys < {_min_buys_req} or tot {tot_tx} < {_min_tx_gate})"
     if vol5_usd < _min_vol_gate:
@@ -657,7 +662,7 @@ DD_THROTTLE_START_USD = 15.0
 # === ВХОД В ЗРЕЛЫЕ ВЫПУСКНИКИ RAYDIUM / PUMPSWAP И РАННИЕ КРИВЫЕ PUMP.FUN ===
 SNIPER_ENTRIES_ENABLED = True             # ВКЛЮЧЕНО: мгновенный вход в свежие кривые/миграции со стрима
 ALLOW_UNGRADUATED_PUMPFUN = True          # ВКЛЮЧЕНО: ловим ракеты на кривой Pump.fun до миграции (открывает 大A +1559%, ROCKSTAR +163%)
-MIN_PUMP_CURVE_MCAP_USD = 3500.0          # Порог кривой от $3.5k: надежная зона набора высоты (отсекает 0% пустой мусор)
+MIN_PUMP_CURVE_MCAP_USD = 2000.0          # Порог кривой от $2.0k (ловит ранние ракеты вроде Могура с 0% набора)
 MAX_PUMP_CURVE_MCAP_USD = 100000.0         # Верх кривой до миграционного обрыва ($65k)
 MIN_PUMP_CURVE_MCAP_SOL = 25.0            # Порог кривой pump.fun в SOL (~25 SOL, ранний набор высоты)
 MAX_PUMP_CURVE_MCAP_SOL = 300.0            # Верх входа на кривой перед миграцией
@@ -699,26 +704,26 @@ VIP_KOL_WALLETS = {
 TIME_EXIT_MINUTES = 40
 TIME_EXIT_PROFIT_REQ = 0.015
 
-# === ПРОСТАЯ СИСТЕМА ВЫХОДА (без сломанного мунбэга) ===
+# === ПРОСТАЯ СИСТЕМА ВЫХОДА (С АКТИВНЫМ МУНБЭГОМ) ===
 PARTIAL_TP_ENABLED = True
-PARTIAL_TP_MIN_TICKET_USD = 2.0
-TP1_TRIGGER_PCT = 0.25               # На +25% продаём 100% позиции (полный выход для $2 позиции)
-TP1_SELL_FRAC = 1.00                 # 100% позиции на TP1 — забираем всё, без мунбега
-TP2_TRIGGER_PCT = 1.00      # На +100% продаём остаток
-TP2_SELL_FRAC = 0.50
-TP3_TRIGGER_PCT = 2.00
-TP3_SELL_FRAC = 0.00
+PARTIAL_TP_MIN_TICKET_USD = 0.50
+TP1_TRIGGER_PCT = 0.30               # На +30% забираем тело (50% позиции)
+TP1_SELL_FRAC = 0.50                 # 50% позиции на TP1, оставшиеся 50% — Risk-Free Moonbag!
+TP2_TRIGGER_PCT = 1.00               # На +100% фиксируем ещё 25%
+TP2_SELL_FRAC = 0.25
+TP3_TRIGGER_PCT = 2.50               # На +250% фиксация
+TP3_SELL_FRAC = 0.25
 TP4_TRIGGER_PCT = 5.00
 TP4_SELL_FRAC = 0.00
 TP5_TRIGGER_PCT = 10.00
 TP5_SELL_FRAC = 0.00
-MOONBAG_TRIGGER_PCT = 999.0  # Мунбэг отключён
-MOONBAG_SELL_FRAC = 0.0
+MOONBAG_TRIGGER_PCT = 0.30           # Мунбэг активен после TP1
+MOONBAG_SELL_FRAC = 0.50
 
-# Трейлинг только для мунбэга (отключён)
-MOONBAG_TRAIL_ACTIVATION_PCT = 999.0
-MOONBAG_TRAIL_DISTANCE_PCT = 0.0
-MOONBAG_MAX_HOLD_MIN = 0.0
+# Трейлинг для мунбэга
+MOONBAG_TRAIL_ACTIVATION_PCT = 0.45  # Трейлинг включается при пике от +45%
+MOONBAG_TRAIL_DISTANCE_PCT = 0.25    # Дистанция 25% от ATH
+MOONBAG_MAX_HOLD_MIN = 55.0          # Даём ракетам до 55 минут на 5x-20x памп
 
 # Безопасность: стоп-лосс и экстренный выход
 STOP_LOSS_PCT = -0.10          # Стоп -10%
@@ -935,7 +940,7 @@ PULLBACK_M1_MIN_PCT = -0.08
 PULLBACK_M1_MAX_PCT = 0.20
 PULLBACK_MAX_H1_PCT = 320.0
 PULLBACK_MAX_M5_PCT = 0.95
-MIN_VOLUME_M5 = 700            # Минимум $700 за 5м — мягкий порог для ранних токенов
+MIN_VOLUME_M5 = 450            # Минимум $450 за 5м — мягкий порог для ранних ракет
 MIN_TXNS_M5 = 10                # Минимум 10 сделок за 5м — подтверждённый активный спрос
 MIN_BUY_SELL_RATIO = 1.05       # Покупатели обязаны преобладать над продавцами (мягкий порог для свежих запусков)
 LOTTERY_ENABLED = False
@@ -1059,7 +1064,7 @@ FCR_STALL_M1 = 3.0                     # ...при мёртвом m1 = дев р
 FCR_SELL_DOMINANCE = 0.85              # sells/buys за 5м для сигнала "продавцы давят"
 FCR_MIN_SELL_COUNT = 120               # Абсолютный минимум продаж, чтобы сигнал был значимым
 FCR_TRUSTED_FUNDERS = []              # Адреса-источники, которым доверяем (свои кошельки, биржи) — их кластеры игнорируются
-FCR_MAX_DURATION_SEC = 3.0            # Быстрый дедлайн анализа 3с: не успел -> fail-open (не тормозит снайпинг)
+FCR_MAX_DURATION_SEC = 6.0            # Дедлайн анализа FCR 6с (на Render RPC успевает собрать кластеры)
 FCR_GRAPH_MIN_PCT = 0.05              # Узел сети RugCheck с долей < 0.05% — пыль, не участник фермы
 FCR_GRAPH_MAX_WALLETS = 15           # Сеть крупнее — это граф переводов толпы, а не ферма (вес режется)
 FCR_SIG_PAGE_LIMIT = 200              # Сколько подписей тянуть за раз (лёгкий payload для публичного RPC)
@@ -1089,7 +1094,7 @@ ROCKET_XGB_STAGE1_MIN_SCORE = 4.0       # Снижено до 4.0% (пропус
 MIN_LIQUIDITY_USD = 2500.0               # Допускает кривые pump.fun от $2.5k
 MIN_FDV_TO_LIQ_RATIO = 1.15              # Защита от кастомных scam-пулов со 100% сапплая
 MAX_AGE_MINUTES_FOR_ENTRY = 240.0        # Покупаем токены до 4 часов (не только 45 мин)
-MIN_VOLUME_M5_USD = 700.0                # Минимальный 5м объем (мягкий порог для ранних запусков)
+MIN_VOLUME_M5_USD = 450.0                # Минимальный 5м объем (мягкий порог для ранних ракет)
 MIN_VOL_TO_LIQ_M5 = 0.10                 # Минимальная оборачиваемость ликвидности за 5м
 MAX_H1_PUMP_PCT = 600.0                  # Не блокируем токены после роста за 1ч
 MIN_M5_PRICE_CHANGE_PCT = 2.0            # Не входим в слабые/паузу 5м свечи (минимум +2%)
@@ -1108,10 +1113,10 @@ CRASH_GUARD_MIN_HOLD_SEC = 20.0          # Не триггерить в перв
 CRASH_GUARD_CONFIRM_TICKS = 2            # Требовать 2 подряд тика падения с интервалом >= 1.5 сек (убирает "за 0 сек")
 CRASH_GUARD_IGNORE_IF_PNL_ABOVE = 15.0   # Если мы в плюсе > +15%, работает ступенчатый Trailing Stop, а не паник-селл 100%!
 
-# 2. Исправление Mature Moonbag Floor и Trailing Stop (мунбэг отключён, оставлены только безубыток и стопы)
-MOONBAG_FLOOR_PCT = 2.0                  # Уровень пола безубытка -> +2%
-PARTIAL_TP1_PCT = 25.0                   # На +25% продавать 100% позиции (без мунбега)
-PARTIAL_TP1_SELL_FRACTION = 1.00
+# 2. Исправление Mature Moonbag Floor и Trailing Stop (активный мунбэг)
+MOONBAG_FLOOR_PCT = 5.0                  # Уровень пола безубытка для мунбэга -> +5%
+PARTIAL_TP1_PCT = 30.0                   # На +30% забираем 50% позиции (тело + профит)
+PARTIAL_TP1_SELL_FRACTION = 0.50         # 50% оставляем в Moonbag!
 
 # 3. Исправление жесткого Stop Loss и Early Momentum Cut
 FAST_STOP_LOSS_PCT = -18.0               # Жесткий стоп -18% (не ждать -31%..-33% как на KLAUDIA и BIGP)

@@ -212,15 +212,15 @@ class MatureExitManager:
         # =========================================================================
         _tp1_t, _tp1_f, _tp2_t, _tp2_f, _tp3_t, _tp3_f, _tp4_t, _tp4_f, _tp5_t, _tp5_f = config.get_sol_tp_ladder(_is_unlocked)
 
-        # TP1: фиксируем часть позиции на первом тейке
-        if not getattr(position, "tp1_done", False) and pnl_pct >= _tp1_t and minutes_held >= 0.20:
+        # TP1: частичные фиксации (TP1/TP2) выполняются в main.py через tracker.partial_close_position.
+        # Если TP1_SELL_FRAC >= 1.0 (задана полная ликвидация без мунбэга), только тогда закрываем всю позицию:
+        if _tp1_f >= 1.0 and not getattr(position, "tp1_done", False) and pnl_pct >= _tp1_t and minutes_held >= 0.20:
             position.tp1_done = True
-            return f"TP1 (+{pnl_pct*100:.1f}%, продано {_tp1_f*100:.0f}%)"
+            return f"TP1 (+{pnl_pct*100:.1f}%, продано 100%)"
 
-        # После TP1 оставшаяся часть держится на втором тейке или стопе
-        if getattr(position, "tp1_done", False) and not getattr(position, "tp2_done", False) and pnl_pct >= _tp2_t:
+        if _tp2_f >= 1.0 and getattr(position, "tp1_done", False) and not getattr(position, "tp2_done", False) and pnl_pct >= _tp2_t:
             position.tp2_done = True
-            return f"TP2 (+{pnl_pct*100:.1f}%, продано {_tp2_f*100:.0f}%)"
+            return f"TP2 (+{pnl_pct*100:.1f}%, продано 100%)"
 
         # Безубыток: если пик достиг BREAKEVEN_PCT, не даём уйти в минус
         if max_pnl_pct >= float(getattr(config, "BREAKEVEN_PCT", 0.08)) and pnl_pct <= 0.005:

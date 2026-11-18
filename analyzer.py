@@ -999,28 +999,26 @@ class Analyzer:
                     _bp_dex = str(best_pair.get("dexId") or "").lower()
                     if not (_is_grad and _bp_dex in ("pump", "pumpfun", "meteoradbc")):
                         return self._apply_verified_lp_meta(mint, best_pair)
-            # Если торговля сырыми кривыми Pump.fun выключена и минт ещё НЕ мигрировал,
-            # НЕ сжигаем лимит GeckoTerminal (24 RPM) на неиндексированные кёрвы (иначе падает check_1m_candles с 429)!
-            if mint.endswith("pump") and not getattr(config, "ALLOW_UNGRADUATED_PUMPFUN", False):
-                if not _is_grad:
-                    return self._apply_verified_lp_meta(mint, best_pair) if best_pair else {}
-            # Для свежих миграций (subscribeMigration), где DS ещё запаздывает, сначала берём быстрый Jupiter v2 (0 лимитов GT)!
+            # ВАЖНО: GeckoTerminal НЕ индексирует сырые токены/кёрвы Pump.fun!
+            # Никогда не тратим семафор GT (25 RPM) на .pump токены — это исключает 22с таймауты и 429 блокировки!
+            if mint.endswith("pump"):
+                return self._apply_verified_lp_meta(mint, best_pair) if best_pair else {}
+
+            # Для DEX-токенов сначала пробуем быстрый Jupiter v2:
             try:
                 import market_data as _md_fb
                 _jup_pair = await _md_fb._jup_token_data(mint)
                 if _jup_pair and float(_jup_pair.get("priceUsd", 0) or 0) > 0:
-                    _jp_dex = str(_jup_pair.get("dexId") or "").lower()
-                    if _jp_dex not in ("pump", "pumpfun", "meteoradbc") or getattr(config, "ALLOW_UNGRADUATED_PUMPFUN", False):
-                        return self._apply_verified_lp_meta(mint, _jup_pair)
+                    return self._apply_verified_lp_meta(mint, _jup_pair)
             except Exception:
                 pass
+
+            # GeckoTerminal опрашиваем ТОЛЬКО для не-pump токенов как крайний fallback:
             gt_pair = await self.fetch_token_data_gecko(mint)
             _res_fb = gt_pair or best_pair
             return self._apply_verified_lp_meta(mint, _res_fb) if _res_fb else {}
         except Exception:
-            gt_pair = await self.fetch_token_data_gecko(mint)
-            _res_ex = gt_pair or best_pair
-            return self._apply_verified_lp_meta(mint, _res_ex) if _res_ex else {}
+            return self._apply_verified_lp_meta(mint, best_pair) if best_pair else {}
 
     async def fetch_token_data_gecko(self, mint: str) -> dict:
         import market_data
@@ -1030,10 +1028,10 @@ class Analyzer:
         if len(self._gt_token_cache) > 1500:
             self._gt_token_cache = {k: v for k, v in self._gt_token_cache.items() if (now_gt - v[0]) < 60.0}
         cached_gt = self._gt_token_cache.get(mint)
-        if cached_gt and (now_gt - cached_gt[0]) < 120.0:
+        if cached_gt and (now_gt - cached_gt[0]) < 300.0:
             return dict(cached_gt[1]) if cached_gt[1] else {}
         try:
-            data = await market_data._gt_get(f"/networks/solana/tokens/{mint}/pools?page=1", retries=0, timeout=8)
+            data = await market_data._gt_get(f"/networks/solana/tokens/{mint}/pools?page=1", retries=0, timeout=3)
             if not data:
                 self._gt_token_cache[mint] = (now_gt, {})
                 return {}
@@ -1757,11 +1755,11 @@ class Analyzer:
                 # Если метки времени нет у любого токена — это новорожденный токен (<30 сек), а НЕ 999 минут!
                 _age_min_pre = 0.2
         _dex_pre_early = str(pair_data.get("dexId", "")).lower()
-        if not getattr(config, "ALLOW_UNLOCKED_LP_POOLS", True) and ("meteora" in _dex_pre_early or _dex_pre_early == "meteoradbc"):
+        if ("meteora" in _dex_pre_early or _dex_pre_early == "meteoradbc") and not pair_data.get("_lp_verified"):
             return self._deny(
                 mint,
                 "meteora-unlocked-pool",
-                f"🚫 [METEORA-BLOCK] {symbol} ({mint[:8]}): пул Meteora {_dex_pre_early} — риск вывода LP девом (кейсы AXIOMCOIN/MULT/PUNCHAO), блок входа!"
+                f"🚫 [METEORA-BLOCK] {symbol} ({mint[:8]}): пул Meteora {_dex_pre_early} без сожжённого/залоченного LP — риск мгновенного вывода SOL девом (кейсы BUFO/SPACE/PUNCHAO), блок входа!"
             )
         _is_known_grad = False
         try:
@@ -1891,11 +1889,11 @@ class Analyzer:
 
         # 3. ФИЛЬТР ИМПУЛЬСА, СКОРОСТИ ОБОРОТА И ТРЕНДА ДО ROCKET-XGB:
         _base_v5_cfg = float(getattr(config, "MIN_VOLUME_M5", 1000.0))
-        # Масштабируем порог объёма под возраст (отсекаем мёртвые $250 / 3-tx пулы, оставляя ранний вход)
-        if _age_min_pre <= 2.5 and _b5_pre >= max(6, int(_s5_pre * 1.15)):
-            _min_v5_cfg = min(_base_v5_cfg, 700.0)
-        elif _age_min_pre <= 5.0 and _b5_pre >= max(7, _s5_pre):
-            _min_v5_cfg = min(_base_v5_cfg, 850.0)
+        # Масштабируем порог объёма под возраст (отсекаем мёртвые $150 / 3-tx пулы, пропуская ранние ракеты вроде NADJA/CSI/GTAVI)
+        if _age_min_pre <= 2.5 and _b5_pre >= max(5, int(_s5_pre * 1.05)):
+            _min_v5_cfg = min(_base_v5_cfg, 300.0)
+        elif _age_min_pre <= 5.0 and _b5_pre >= max(6, _s5_pre):
+            _min_v5_cfg = min(_base_v5_cfg, 450.0)
         else:
             _min_v5_cfg = _base_v5_cfg
         if _vm5_pre < _min_v5_cfg:
