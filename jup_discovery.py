@@ -931,62 +931,61 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
             size = min(size, float(getattr(config, "TG_VIP_SIZE_USD", 15.0) or 15.0))
         _mint_ml_conf = float(getattr(analyzer, "rocket_scores", {}).get(mint, getattr(analyzer, "last_score", 0.0)) or 0.0)
 
-        # Pre-flight live Jupiter price check (защита от покупки падающей свечи)
+        # Pre-flight: параллельно продаваемость Jupiter + ончейн резервы (Pump/PumpSwap) + живой Order-Flow/MEV Wash/Smart-Money аудит
+        _of_meta_j = {}
         try:
             from jupiter import JupiterAPI
-            _j_ok, _j_why = await JupiterAPI.is_token_sellable(mint)
-            if not _j_ok and any(k in str(_j_why or "").lower() for k in ("no routes", "cannot sell", "honeypot", "freeze", "0 sol returned")):
-                print(f"🚫 [{source_tag}-UNSELLABLE] {_sym_tmp} ({mint[:8]}): токен непродаваем на DEX ({_j_why}) — отмена входа!")
-                return False
+            import market_data as _md_jup
 
-            if mint.lower().endswith("pump"):
-                try:
-                    import market_data as _md_jup
-                    _c_j = await _md_jup.get_live_pump_curve_state(mint)
-                    if _c_j:
-                        if _c_j.get("complete"):
-                            pass  # уже мигрировал на DEX
-                        else:
-                            _r_sol_j = float(_c_j.get("real_sol", 0.0) or 0.0)
-                            _c_px_j = float(_c_j.get("price_usd", 0.0) or 0.0)
-                            if _r_sol_j < 1.8:
-                                print(f"🚫 [{source_tag}-CURVE-EMPTY-RUG] {_sym_tmp} ({mint[:8]}): реальный SOL на кривой {_r_sol_j:.3f} < 1.8 SOL — кёрв слит в 0, блок!")
-                                return False
-                            if price > 0 and _c_px_j > 0:
-                                if _c_px_j < price * 0.90:
-                                    print(f"🚫 [{source_tag}-CURVE-LIVE-DUMP] {_sym_tmp} ({mint[:8]}): ончейн цена (${_c_px_j:.8f}) на {(1.0 - _c_px_j / price) * 100:.1f}% ниже скана (${price:.8f}) — обвал в моменте, отмена!")
-                                    return False
-                                if _c_px_j > price * 1.35:
-                                    print(f"🚫 [{source_tag}-CURVE-SPIKE] {_sym_tmp} ({mint[:8]}): ончейн цена выше скана на {(_c_px_j/price - 1)*100:+.1f}% — пропуск спайка!")
-                                    return False
-                                price = _c_px_j
-                                if _wick_stop_price and _wick_pct:
-                                    _wick_stop_price = price * (1.0 + _wick_pct)
-                except Exception:
-                    pass
+            async def _chk_sell_j():
+                return await JupiterAPI.is_token_sellable(mint)
 
-            _jup_live_px = await JupiterAPI.get_price(mint)
-            if _jup_live_px and _jup_live_px > 0 and price > 0:
-                _ref_dump_px = min(price, ds_price) if ds_price > 0 else price
-                if _jup_live_px < _ref_dump_px * 0.925:
-                    print(f"🚫 [{source_tag}-LIVE-DUMP] {_sym_tmp} ({mint[:8]}): живая цена Jupiter (${_jup_live_px:.8f}) уже на {(1.0 - _jup_live_px / _ref_dump_px) * 100:.1f}% ниже ориентира (${_ref_dump_px:.8f}) — обвал в моменте, отмена!")
+            async def _chk_of_j():
+                return await _md_jup.verify_entry_onchain_and_orderflow(
+                    mint, _sym_tmp, td or {"priceUsd": price}, price
+                )
+
+            _sell_res_j, _of_res_j = await asyncio.gather(
+                _chk_sell_j(), _chk_of_j(), return_exceptions=True
+            )
+            if isinstance(_sell_res_j, tuple):
+                _j_ok, _j_why = _sell_res_j
+                if not _j_ok and any(k in str(_j_why or "").lower() for k in ("no routes", "cannot sell", "honeypot", "freeze", "0 sol returned")):
+                    print(f"🚫 [{source_tag}-UNSELLABLE] {_sym_tmp} ({mint[:8]}): токен непродаваем на DEX ({_j_why}) — отмена входа!")
                     return False
-                _jup_up_ratio = _jup_live_px / price
-                if _jup_up_ratio > 1.30:
-                    print(f"🚫 [{source_tag}-PRICE-MISMATCH] {_sym_tmp} ({mint[:8]}): Jupiter vs сигнал опережение {_jup_up_ratio:.2f}x (>1.30x) — отмена!")
+
+            if isinstance(_of_res_j, tuple) and len(_of_res_j) == 4:
+                _of_ok_j, _of_px_j, _of_why_j, _of_meta_j = _of_res_j
+                if not _of_ok_j:
+                    print(f"🚫 [{source_tag}-PREFLIGHT-BLOCKED] {_sym_tmp} ({mint[:8]}): {_of_why_j} — отмена входа!")
                     return False
-                price = _jup_live_px
-                if _wick_stop_price and _wick_pct:
-                    _wick_stop_price = price * (1.0 + _wick_pct)
+                if ds_price > 0 and _of_px_j > 0 and _of_px_j < ds_price * 0.925:
+                    print(f"🚫 [{source_tag}-LIVE-DUMP] {_sym_tmp} ({mint[:8]}): живая цена (${_of_px_j:.8f}) уже на {(1.0 - _of_px_j / ds_price) * 100:.1f}% ниже ориентира (${ds_price:.8f}) — обвал в моменте, отмена!")
+                    return False
+                if _of_px_j and _of_px_j > 0:
+                    price = _of_px_j
+                    if _wick_stop_price and _wick_pct:
+                        _wick_stop_price = price * (1.0 + _wick_pct)
         except Exception:
             pass
+
+        _of_feat_j = {}
+        if isinstance(_of_meta_j, dict):
+            if _of_meta_j.get("wash_ratio"):
+                _of_feat_j["wash_ratio"] = _of_meta_j["wash_ratio"]
+            if _of_meta_j.get("smart_buyers"):
+                _of_feat_j["smart_tape_n"] = len(_of_meta_j["smart_buyers"])
+            if _of_meta_j.get("onchain_source"):
+                _of_feat_j["onchain_source"] = _of_meta_j["onchain_source"]
+        if (td or {}).get("dexId"):
+            _of_feat_j.setdefault("dex", str((td or {}).get("dexId") or "").lower())
 
         if not tracker.add_position(
             _sym_tmp, mint, price, min(size, 100.0),
             is_mature=True,
-            ml_features=analyzer.pack_features(td or {}),
+            ml_features={**analyzer.pack_features(td or {}), **_of_feat_j},
             ml_confidence=_mint_ml_conf,
-            source=f"{source_tag}:{analyzer.get_signal(mint)}",
+            source=f"{source_tag}:{analyzer.get_signal(mint)}" + ("+SMART" if _of_feat_j.get("smart_tape_n") else ""),
             pair_address=((td or {}).get("pairAddress", "") or ""),
             stop_under_wick=_wick_stop_price,
             wick_stop_loss_pct=_wick_pct,

@@ -407,9 +407,9 @@ class Analyzer:
         """Метка решения для монеты. Per-mint словарь вместо общего поля:
         scanner/fomo/robinhood гоняют analyze параллельно на одном Analyzer."""
         self.signals[key] = text
-        if len(self.signals) > 2000:
-            self.signals.clear()
-            self.signals[key] = text
+        if len(self.signals) > 2500:
+            for _old_k in list(self.signals.keys())[:500]:
+                self.signals.pop(_old_k, None)
         self.last_signal = text
 
     def _deny(self, key: str, short: str, msg: str) -> bool:
@@ -1627,40 +1627,64 @@ class Analyzer:
             return True, f"👑 VIP Direct Execution for {trader_name} (ML: {ml_score:.1f}%)"
         return True, f"Passed Whale Contract & Momentum Audit (ML: {ml_score:.1f}%)"
 
+    def _get_mint_lock(self, mint: str) -> asyncio.Lock:
+        if not hasattr(self, "_mint_locks"):
+            self._mint_locks = {}
+        if len(self._mint_locks) > 2000:
+            self._mint_locks = {k: v for k, v in self._mint_locks.items() if v.locked()}
+        lk = self._mint_locks.get(mint)
+        if lk is None:
+            lk = asyncio.Lock()
+            self._mint_locks[mint] = lk
+        return lk
+
     async def analyze_token(self, mint: str) -> bool:
-        self.last_signal = ""
-        self.last_score = 0.0
-        self.signals.pop(mint, None)
-        self._last_top10 = 0.0
-        self._last_dev = 0.0
-        
         if mint in ["So11111111111111111111111111111111111111112", 
                     "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", 
                     "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB"]:
             return False
 
-        # Глобальный дедупликационный кэш: защищает от дублирующих сканов между scanner_loop и jup_loop
-        now = time.time()
-        if not hasattr(self, "_global_scan_cache"):
-            self._global_scan_cache = {}
-        if mint in self._global_scan_cache:
-            _c_ts, _c_res, _c_sig, _c_score, _c_top10, _c_dev = self._global_scan_cache[mint]
-            _sig_l = str(_c_sig or "").lower()
-            _is_term = any(k in _sig_l for k in (
-                "rugcheck", "scam", "unlocked-lp", "bundle", "honeypot", 
-                "freeze", "mimic", "dead-token", "мёртвый токен", "sybil", 
-                "delegation", "zombie", 
-                "deadcat", "dead-cat", "ghost-pool", "wash-spike", 
-                "wash-trap", "mcap-too-large", "price-split"
-            ))
-            _ttl = 1800.0 if _is_term else 12.0
-            if (now - _c_ts) < _ttl:
-                self.last_signal = _c_sig
-                self.last_score = _c_score
-                self.signals[mint] = _c_sig
-                self._last_top10 = _c_top10
-                self._last_dev = _c_dev
-                return _c_res
+        async with self._get_mint_lock(mint):
+            # Глобальный дедупликационный кэш ПЕРЕД сбросом signals[mint]: исключает гонку "SCANNER:?"
+            now = time.time()
+            if not hasattr(self, "_global_scan_cache"):
+                self._global_scan_cache = {}
+            if mint in self._global_scan_cache:
+                _c_ts, _c_res, _c_sig, _c_score, _c_top10, _c_dev = self._global_scan_cache[mint]
+                _sig_l = str(_c_sig or "").lower()
+                _is_term = any(k in _sig_l for k in (
+                    "rugcheck", "scam", "unlocked-lp", "bundle", "honeypot", 
+                    "freeze", "mimic", "dead-token", "мёртвый токен", "sybil", 
+                    "delegation", "zombie", "creator",
+                    "deadcat", "dead-cat", "ghost-pool", "wash-spike", 
+                    "wash-trap", "mcap-too-large", "price-split"
+                ))
+                _ttl = 1800.0 if _is_term else 12.0
+                if (now - _c_ts) < _ttl:
+                    self.last_signal = _c_sig
+                    self.last_score = _c_score
+                    self.signals[mint] = _c_sig
+                    self._last_top10 = _c_top10
+                    self._last_dev = _c_dev
+                    return _c_res
+
+            # Проверка 0ms репутации создателя (bad_creators.json + серийный завод рагов VICECITY)
+            try:
+                from birth_tracker import birth_tracker as _bt_cr
+                _cr_ok, _cr_why = _bt_cr.check_creator_risk(mint)
+                if not _cr_ok:
+                    return self._deny(mint, f"bad-creator ({_cr_why})", f"🚫 [CREATOR-BLACKLIST] {mint[:8]}: {_cr_why} — блок в 0мс!")
+            except Exception:
+                pass
+
+            self.last_signal = ""
+            self.last_score = 0.0
+            self.signals.pop(mint, None)
+            self._last_top10 = 0.0
+            self._last_dev = 0.0
+            return await self._analyze_token_inner(mint)
+
+    async def _analyze_token_inner(self, mint: str) -> bool:
 
         pair_data = await self.fetch_token_data(mint)
         if not pair_data:
@@ -2298,6 +2322,16 @@ class Analyzer:
                     token_info = rc_data.get("token", {})
                     mint_authority = token_info.get("mintAuthority")
                     freeze_authority = token_info.get("freezeAuthority")
+                    _rc_creator = str(rc_data.get("creator") or "").strip()
+                    if _rc_creator:
+                        try:
+                            from birth_tracker import birth_tracker as _bt_rc_c
+                            _bt_rc_c.record_creator(mint, _rc_creator)
+                            _cr_ok_rc, _cr_why_rc = _bt_rc_c.check_creator_risk(mint, creator=_rc_creator)
+                            if not _cr_ok_rc:
+                                return self._deny(mint, f"bad-creator ({_cr_why_rc})", f"🚫 [CREATOR-BLACKLIST] {symbol} ({mint[:8]}): {_cr_why_rc} — серийный рагер!")
+                        except Exception:
+                            pass
                     PUMPFUN_PROGRAM = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"
                     SYSTEM_PROGRAM = "11111111111111111111111111111111"
                     SAFE_AUTHORITIES = {PUMPFUN_PROGRAM, SYSTEM_PROGRAM, None, ""}
@@ -2306,18 +2340,35 @@ class Analyzer:
                     if freeze_authority and freeze_authority not in SAFE_AUTHORITIES:
                         return self._deny(mint, "freeze-authority-scam", f"🚫 [АНТИСКАМ] Freeze Authority у ДЕВ-кошелька {freeze_authority[:8]} у {mint[:8]} → СКАМ")
 
+                    # Жёсткий 0-терпимый блок серийных рагеров RugCheck ("Creator history of rugged tokens") + запись в bad_creators.json
+                    for rk in (rc_data.get("risks") or []):
+                        _rk_n0 = str(rk.get("name", "")).lower()
+                        if "creator history" in _rk_n0:
+                            try:
+                                from birth_tracker import birth_tracker as _bt_rc_b
+                                _bt_rc_b.record_bad_creator(_rc_creator or mint, "rc_creator_history")
+                            except Exception:
+                                pass
+                            return self._deny(mint, "creator-rug-history", f"🚫 [CREATOR-RUG-HISTORY] {symbol} ({mint[:8]}): '{rk.get('name')}' — создатель уже рагал токены (VICECITY)!")
+
                     _rc_raw_score = float(rc_data.get("score") or 0.0)
 
-                    # Для launchpad bonding curve и свежих PumpSwap AMM пулов RugCheck часто считает сам AMM-пул
-                    # как "Single holder ownership" / "Top 10 holders high ownership", начисляя ложные +2500..+3500 баллов.
-                    # Реальную концентрацию дева и китов мы проверяем отдельно ниже по массиву topHolders с точным исключением pairAddress и DEX_POOL_AUTHORITIES!
+                    # Для launchpad bonding curve и подтверждённых сожжённых PumpSwap AMM пулов RugCheck часто начисляет ложные баллы на пул/концентрацию.
+                    # НО для кастомных не-pump токенов с незалоченным LP (кейс FISH: 99.99% LP Unlocked, score 11399) НЕ списываем штраф LP Unlocked!
+                    _is_lp_burned_ps = bool((pair_data or {}).get("_pumpswap_lp_burned"))
+                    _holder_terms_main = (
+                        "low liquidity", "single holder", "high holder concentration", "top 10 holders", "high ownership"
+                    )
+                    _lp_unlock_terms_main = (
+                        "large amount of lp unlocked", "lp provider", "single lp provider", "lp not locked", "unlocked lp"
+                    )
                     _allowed_lp_terms_main = (
-                        "large amount of lp unlocked", "lp provider", "single lp provider",
-                        "lp not locked", "unlocked lp", "low liquidity",
-                        "single holder", "high holder concentration", "top 10 holders", "high ownership"
+                        (*_holder_terms_main, *_lp_unlock_terms_main)
+                        if (_is_canonical_pump or _is_lp_burned_ps)
+                        else _holder_terms_main
                     )
 
-                    # Исключаем безвредный шум: низкая ликвидность для молодых пулов, copycat для мемов, и LP контракт пула.
+                    # Исключаем только релевантный шум (не сбрасываем LP Unlocked 99.9% на кастомных токенах)
                     _rc_penalty_to_ignore = sum(
                         float(rk.get("score", 0) or 0)
                         for rk in (rc_data.get("risks") or [])
@@ -2330,13 +2381,13 @@ class Analyzer:
                     if _rc_score >= 2000:
                         return self._deny(mint, f"rugcheck-score {_rc_score:.0f}", f"🚫 [АНТИСКАМ] RugCheck Score {_rc_score:.0f} >= 2000 у {mint[:8]} → СКАМ")
 
-                    # Жёсткий фильтр критических опасностей смарт-контракта и серийных рагеров RugCheck
+                    # Жёсткий фильтр критических опасностей смарт-контракта RugCheck
                     for rk in (rc_data.get("risks") or []):
                         _rk_name = str(rk.get("name", "")).lower()
                         _rk_lvl = str(rk.get("level", "")).lower()
                         if any(k in _rk_name for k in ("copycat", "symbol mimic", *_allowed_lp_terms_main)):
                             continue
-                        if _rk_lvl == "danger" and any(k in _rk_name for k in ("freeze authority", "mint authority", "mutable", "honeypot", "transfer fee", "permanent delegate", "creator history")):
+                        if _rk_lvl == "danger" and any(k in _rk_name for k in ("freeze authority", "mint authority", "mutable", "honeypot", "transfer fee", "permanent delegate", "large amount of lp unlocked")):
                             return self._deny(mint, f"rc-danger {_rk_name[:15]}", f"🚫 [АНТИСКАМ-RC] {symbol} ({mint[:8]}): критический риск RugCheck '{rk.get('name')}' — блок скама!")
 
                     # Проверка пулов и блокировки LP
@@ -2726,7 +2777,18 @@ class Analyzer:
             if (conf + 0.05) < _final_thr:
                 return self._deny(mint, f"rocket-xgb-s2 {conf:.0f}%", f"🚫 [ROCKET-XGB-S2] {symbol} ({mint[:8]}): скор с учётом холдеров {conf:.1f}% < {_final_thr:.0f}% — отсев.")
 
-            self._set_sig(mint, f"ROCKET-XGB {conf:.0f}%")
+            _pass_sig = f"ROCKET-XGB {conf:.0f}%"
+            self._set_sig(mint, _pass_sig)
+            if not hasattr(self, "_global_scan_cache"):
+                self._global_scan_cache = {}
+            self._global_scan_cache[mint] = (
+                time.time(),
+                True,
+                _pass_sig,
+                float(conf),
+                float(self._last_top10 or 0.0),
+                float(self._last_dev or 0.0),
+            )
             print(f"🔎 [ANALYZER-PASS] {symbol} ({mint[:8]}): ML Score {conf:.1f}%, первичный аудит пройден ➔ финальные гейты (FCR/Jupiter/Rug).")
             return True
 

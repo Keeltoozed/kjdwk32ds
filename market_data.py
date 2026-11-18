@@ -482,8 +482,14 @@ async def _ds_token_data(mint: str) -> dict:
                     continue
                 sol.append(p)
             if sol:
-                best = sorted(sol, key=lambda x: float(((x.get("liquidity") or {}).get("usd", 0) or 0)),
-                              reverse=True)[0]
+                amm_sol = [p for p in sol if str(p.get("dexId") or "").lower() not in ("pump", "pumpfun", "meteoradbc")]
+                real_amm = [p for p in amm_sol if float(((p.get("liquidity") or {}).get("usd", 0) or 0)) >= 500.0]
+                if real_amm:
+                    best = sorted(real_amm, key=lambda x: float(((x.get("liquidity") or {}).get("usd", 0) or 0)), reverse=True)[0]
+                elif amm_sol:
+                    best = sorted(amm_sol, key=lambda x: float(((x.get("liquidity") or {}).get("usd", 0) or 0)), reverse=True)[0]
+                else:
+                    best = sorted(sol, key=lambda x: float(((x.get("liquidity") or {}).get("usd", 0) or 0)) or (float(x.get("fdv", 0) or x.get("marketCap", 0) or 0) * 0.40), reverse=True)[0]
                 best["_source"] = "dexscreener"
                 best["_socials_unknown"] = False
                 return best
@@ -958,6 +964,45 @@ async def fetch_dexscreener_gainers(timeframe: str = "5m", network: str = "all")
 
 
 PUMP_PROGRAM_PUBKEY_STR = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"
+PUMPSWAP_PROGRAM_STR = "pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA"
+_WSOL_MINT = "So11111111111111111111111111111111111111112"
+_STABLE_QUOTES = {
+    "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",  # USDC
+    "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB",  # USDT
+    "USD1ttGY1N17NEEHLmELoaybftRBUSErhqYiQzvEmuB",   # USD1
+    "USDSwr9ApdHk5bvJKMjzff41FfuX8bSxdKcR81vTwcA",   # USDS
+    "2b1kV6DkPAnxd5ixfnxCpjxmKwqjjaYmCZfHsFu24GXo", # PYUSD
+}
+
+_PUMPSWAP_LAYOUT_CACHE = {}   # pair_address -> (base_side_idx, base_vault, quote_vault, quote_mint)
+_ORDER_FLOW_CACHE = {}        # pair_address -> (monotonic_ts, result_dict)
+
+
+def _solana_rpc_endpoints() -> list:
+    import config
+    raw = []
+    helius = (getattr(config, "HELIUS_RPC_URL", "") or "").strip()
+    if helius and ("api-key" not in helius or getattr(config, "HELIUS_API_KEY", "")):
+        raw.append(helius)
+    raw.extend([
+        "https://api.mainnet-beta.solana.com",
+        "https://solana-rpc.publicnode.com",
+    ])
+    return list(dict.fromkeys(u for u in raw if u))
+
+
+async def _solana_rpc_json(method: str, params: list, timeout: float = 2.0):
+    from http_client import fetch_json
+    payload = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
+    for rpc in _solana_rpc_endpoints():
+        try:
+            status, resp = await fetch_json(rpc, method="POST", json_data=payload, timeout=timeout, retries=0)
+            if status == 200 and isinstance(resp, dict) and "result" in resp and not resp.get("error"):
+                return resp.get("result")
+        except Exception:
+            continue
+    return None
+
 
 async def get_live_pump_curve_state(mint: str) -> dict:
     """Ончейн проверка резервов bonding curve Pump.fun с задержкой < 250мс.
@@ -967,8 +1012,7 @@ async def get_live_pump_curve_state(mint: str) -> dict:
         return None
     try:
         from solders.pubkey import Pubkey
-        import struct, base64, config
-        from http_client import fetch_json
+        import struct, base64
         from sol_price import get_sol_price_sync
 
         pump_prog = Pubkey.from_string(PUMP_PROGRAM_PUBKEY_STR)
@@ -976,60 +1020,393 @@ async def get_live_pump_curve_state(mint: str) -> dict:
         bonding_curve_pk, _ = Pubkey.find_program_address([b"bonding-curve", bytes(mint_pk)], pump_prog)
         curve_addr = str(bonding_curve_pk)
 
-        rpc_endpoints = [
-            getattr(config, "HELIUS_RPC_URL", ""),
-            "https://api.mainnet-beta.solana.com",
-            "https://solana-rpc.publicnode.com"
-        ]
-        rpc_endpoints = [u for u in rpc_endpoints if u and ("api-key" not in u or getattr(config, "HELIUS_API_KEY", ""))]
+        res = await _solana_rpc_json("getAccountInfo", [curve_addr, {"encoding": "base64"}], timeout=2.0)
+        val = res.get("value") if isinstance(res, dict) else None
+        if val is None:
+            return None
+        data_list = val.get("data", [])
+        if not data_list:
+            return None
+        raw = base64.b64decode(data_list[0])
+        if len(raw) < 49:
+            return None
+        v_token, v_sol, r_token, r_sol, supply, complete = struct.unpack('<QQQQQ?', raw[8:49])
+        sol_p = float(get_sol_price_sync() or 150.0)
+        if sol_p <= 0:
+            sol_p = 150.0
 
-        payload = {
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "getAccountInfo",
-            "params": [curve_addr, {"encoding": "base64"}]
+        real_sol = r_sol / 1e9
+        v_sol_flt = v_sol / 1e9
+        v_tok_flt = v_token / 1e6
+        price_sol = (v_sol_flt / v_tok_flt) if v_tok_flt > 0 else 0.0
+        price_usd = price_sol * sol_p
+        fdv_usd = price_usd * 1_000_000_000.0
+        prog_pct = min(100.0, (real_sol / 85.0) * 100.0)
+
+        return {
+            "mint": mint,
+            "curve_address": curve_addr,
+            "complete": bool(complete),
+            "real_sol": real_sol,
+            "v_sol": v_sol_flt,
+            "v_token": v_tok_flt,
+            "price_sol": price_sol,
+            "price_usd": price_usd,
+            "fdv_usd": fdv_usd,
+            "progress_pct": prog_pct,
         }
-
-        for rpc in rpc_endpoints:
-            try:
-                status, resp = await fetch_json(rpc, method="POST", json_data=payload, timeout=2.0, retries=0)
-                if status == 200 and isinstance(resp, dict):
-                    val = resp.get("result", {}).get("value")
-                    if val is None:
-                        return None
-                    data_list = val.get("data", [])
-                    if not data_list:
-                        return None
-                    raw = base64.b64decode(data_list[0])
-                    if len(raw) < 49:
-                        return None
-                    v_token, v_sol, r_token, r_sol, supply, complete = struct.unpack('<QQQQQ?', raw[8:49])
-                    sol_p = float(get_sol_price_sync() or 150.0)
-                    if sol_p <= 0: sol_p = 150.0
-
-                    real_sol = r_sol / 1e9
-                    v_sol_flt = v_sol / 1e9
-                    v_tok_flt = v_token / 1e6
-                    price_sol = (v_sol_flt / v_tok_flt) if v_tok_flt > 0 else 0.0
-                    price_usd = price_sol * sol_p
-                    fdv_usd = price_usd * 1_000_000_000.0
-                    prog_pct = min(100.0, (real_sol / 85.0) * 100.0)
-
-                    return {
-                        "mint": mint,
-                        "curve_address": curve_addr,
-                        "complete": bool(complete),
-                        "real_sol": real_sol,
-                        "v_sol": v_sol_flt,
-                        "v_token": v_tok_flt,
-                        "price_sol": price_sol,
-                        "price_usd": price_usd,
-                        "fdv_usd": fdv_usd,
-                        "progress_pct": prog_pct,
-                    }
-            except Exception:
-                continue
     except Exception:
         pass
     return None
+
+
+async def get_live_pumpswap_pool_state(mint: str, pair_address: str = "") -> dict:
+    """Читает реальные ончейн-резервы AMM-пула PumpSwap (baseVault / quoteVault) за 1-2 RPC (~150мс).
+    Возвращает живую цену уровня блока Solana и реальный остаток SOL/USD в пуле (защита от 0-ликвы и VICECITY -95%)."""
+    pair_address = str(pair_address or "").strip()
+    if not mint or not pair_address or len(pair_address) < 32:
+        return None
+    try:
+        from solders.pubkey import Pubkey
+        import base64
+        from sol_price import get_sol_price_sync
+
+        layout = _PUMPSWAP_LAYOUT_CACHE.get(pair_address)
+        if layout is None:
+            res = await _solana_rpc_json("getAccountInfo", [pair_address, {"encoding": "base64"}], timeout=2.0)
+            val = res.get("value") if isinstance(res, dict) else None
+            if not isinstance(val, dict) or str(val.get("owner") or "") != PUMPSWAP_PROGRAM_STR:
+                return None
+            raw_field = val.get("data")
+            raw_b64 = raw_field[0] if isinstance(raw_field, list) else raw_field
+            raw = base64.b64decode(raw_b64)
+            if len(raw) < 203:
+                return None
+            t0 = str(Pubkey.from_bytes(raw[43:75]))
+            t1 = str(Pubkey.from_bytes(raw[75:107]))
+            v0 = str(Pubkey.from_bytes(raw[139:171]))
+            v1 = str(Pubkey.from_bytes(raw[171:203]))
+            if t0 == mint and (t1 == _WSOL_MINT or t1 in _STABLE_QUOTES):
+                layout = (v0, v1, t1)
+            elif t1 == mint and (t0 == _WSOL_MINT or t0 in _STABLE_QUOTES):
+                layout = (v1, v0, t0)
+            else:
+                return None
+            _PUMPSWAP_LAYOUT_CACHE[pair_address] = layout
+            if len(_PUMPSWAP_LAYOUT_CACHE) > 1000:
+                _PUMPSWAP_LAYOUT_CACHE.clear()
+
+        base_vault, quote_vault, quote_mint = layout
+        mres = await _solana_rpc_json(
+            "getMultipleAccounts",
+            [[base_vault, quote_vault], {"encoding": "jsonParsed"}],
+            timeout=2.0,
+        )
+        vals = (mres or {}).get("value") if isinstance(mres, dict) else None
+        if not isinstance(vals, list) or len(vals) < 2 or not vals[0] or not vals[1]:
+            return None
+
+        base_ui = float((((vals[0].get("data") or {}).get("parsed") or {}).get("info") or {}).get("tokenAmount", {}).get("uiAmount") or 0.0)
+        quote_ui = float((((vals[1].get("data") or {}).get("parsed") or {}).get("info") or {}).get("tokenAmount", {}).get("uiAmount") or 0.0)
+        if base_ui <= 0 or quote_ui <= 0:
+            return {"pair_address": pair_address, "liq_usd": 0.0, "quote_amount": quote_ui, "price_usd": 0.0}
+
+        sol_p = float(get_sol_price_sync() or 150.0)
+        if sol_p <= 0:
+            sol_p = 150.0
+        is_wsol = (quote_mint == _WSOL_MINT)
+        quote_usd = (quote_ui * sol_p) if is_wsol else quote_ui
+        price_usd = quote_usd / base_ui
+        price_sol = (quote_ui / base_ui) if is_wsol else (price_usd / sol_p)
+        return {
+            "mint": mint,
+            "pair_address": pair_address,
+            "quote_mint": quote_mint,
+            "is_wsol": is_wsol,
+            "quote_amount": quote_ui,
+            "base_amount": base_ui,
+            "quote_usd": quote_usd,
+            "liq_usd": quote_usd * 2.0,
+            "price_sol": price_sol,
+            "price_usd": price_usd,
+        }
+    except Exception:
+        return None
+
+
+async def check_live_order_flow(
+    mint: str,
+    pair_address: str = "",
+    smart_wallets: set = None,
+    ref_price_usd: float = 0.0,
+) -> dict:
+    """Анализ реальной ленты последних сделок пула (Order Flow, GeckoTerminal /trades, задержка <1с).
+    Выявляет:
+      1) Активный слив / дамп прямо в момент входа (красная лента, падение >=22% от 3м-пика)
+      2) MEV/sandwich и wash-ботов (один кошелёк покупает и тут же продаёт как FISH FDi3BzLs)
+      3) Участие проверенных Smart Money кошельков (smart_wallets_db)."""
+    res = {
+        "available": False,
+        "block": False,
+        "reason": "",
+        "smart_buyers": [],
+        "live_tape_px": 0.0,
+        "wash_ratio": 0.0,
+    }
+    clean_pair = str(pair_address or "").replace("solana_", "").strip()
+    if not clean_pair or len(clean_pair) < 32 or clean_pair.startswith("0x"):
+        return res
+
+    now_m = time.monotonic()
+    hit = _ORDER_FLOW_CACHE.get(clean_pair)
+    trades = None
+    if hit and (now_m - hit[0]) < 4.0:
+        trades = hit[1]
+    else:
+        try:
+            gt_resp = await _gt_get(f"/networks/solana/pools/{clean_pair}/trades", retries=0, timeout=4)
+            trades = (gt_resp or {}).get("data") if isinstance(gt_resp, dict) else None
+            if isinstance(trades, list):
+                _ORDER_FLOW_CACHE[clean_pair] = (now_m, trades)
+                if len(_ORDER_FLOW_CACHE) > 500:
+                    _ORDER_FLOW_CACHE.clear()
+        except Exception:
+            trades = None
+
+    if not isinstance(trades, list) or len(trades) < 4:
+        return res
+
+    try:
+        parsed = []
+        for tr in trades[:120]:
+            a = tr.get("attributes") or {}
+            kind = str(a.get("kind") or "").lower()
+            if kind not in ("buy", "sell"):
+                continue
+            ts_ms = _parse_ms(a.get("block_timestamp"))
+            ts = ts_ms / 1000.0 if ts_ms > 0 else 0.0
+            vol_usd = float(a.get("volume_in_usd") or 0.0)
+            px = float(a.get("price_to_in_usd") or 0.0) if kind == "buy" else float(a.get("price_from_in_usd") or 0.0)
+            wallet = str(a.get("tx_from_address") or "").strip()
+            parsed.append({"ts": ts, "kind": kind, "usd": vol_usd, "px": px, "wallet": wallet})
+
+        if len(parsed) < 4:
+            return res
+
+        latest_ts = max(t["ts"] for t in parsed if t["ts"] > 0) or time.time()
+        last_trade_age_s = max(0.0, time.time() - latest_ts)
+
+        # Свежие окна 30с и 60с от последнего трейда в ленте
+        w60 = [t for t in parsed if t["ts"] <= 0 or (latest_ts - t["ts"]) <= 60.0]
+        w30 = [t for t in parsed if t["ts"] <= 0 or (latest_ts - t["ts"]) <= 30.0]
+        w180 = [t for t in parsed if t["ts"] <= 0 or (latest_ts - t["ts"]) <= 180.0]
+
+        buy_60 = sum(t["usd"] for t in w60 if t["kind"] == "buy")
+        sell_60 = sum(t["usd"] for t in w60 if t["kind"] == "sell")
+        sells_60_n = sum(1 for t in w60 if t["kind"] == "sell")
+        buy_30 = sum(t["usd"] for t in w30 if t["kind"] == "buy")
+        sell_30 = sum(t["usd"] for t in w30 if t["kind"] == "sell")
+
+        last5 = parsed[:5]
+        last5_sells = sum(1 for t in last5 if t["kind"] == "sell")
+        last3_all_sell_usd = sum(t["usd"] for t in parsed[:3]) if all(t["kind"] == "sell" for t in parsed[:3]) else 0.0
+
+        # Живая цена по медиане последних 3 валидных сделок
+        recent_pxs = [t["px"] for t in parsed[:5] if t["px"] > 0]
+        live_px = 0.0
+        if recent_pxs:
+            s_pxs = sorted(recent_pxs[:3])
+            live_px = s_pxs[len(s_pxs) // 2]
+            if ref_price_usd > 0 and (live_px > ref_price_usd * 50.0 or live_px < ref_price_usd / 50.0):
+                live_px = 0.0  # несовпадающая сторона пары на GT -> не подменяем цену
+
+        hi_3m = 0.0
+        pxs_3m = [t["px"] for t in w180 if t["px"] > 0 and (live_px <= 0 or live_px / 8.0 <= t["px"] <= live_px * 8.0)]
+        if pxs_3m:
+            hi_3m = max(pxs_3m)
+
+        # Детект сэндвич / wash-ботов (кошельки, купившие и продавшие в окне <=30с)
+        by_wallet = {}
+        total_usd_sample = sum(t["usd"] for t in parsed)
+        for t in parsed:
+            w = t["wallet"]
+            if not w:
+                continue
+            by_wallet.setdefault(w, []).append(t)
+        wash_usd = 0.0
+        for w, txs in by_wallet.items():
+            buys_w = [x for x in txs if x["kind"] == "buy"]
+            sells_w = [x for x in txs if x["kind"] == "sell"]
+            if buys_w and sells_w:
+                # Проверяем парный разворот <= 30с
+                has_fast_flip = any(abs(b["ts"] - s["ts"]) <= 30.0 for b in buys_w for s in sells_w)
+                if has_fast_flip:
+                    wash_usd += sum(x["usd"] for x in txs)
+        wash_ratio = (wash_usd / total_usd_sample) if total_usd_sample > 0 else 0.0
+
+        # Смарт-мани в последних сделках (нетто-покупатели из smart_wallets)
+        smart_buyers = []
+        if smart_wallets:
+            for w in smart_wallets:
+                txs = by_wallet.get(w)
+                if not txs:
+                    continue
+                b_sum = sum(x["usd"] for x in txs if x["kind"] == "buy")
+                s_sum = sum(x["usd"] for x in txs if x["kind"] == "sell")
+                if b_sum >= 40.0 and b_sum > s_sum * 1.1:
+                    smart_buyers.append(w)
+
+        block = False
+        reason = ""
+        if last_trade_age_s > 240.0 and len(w60) == 0:
+            block = True
+            reason = f"tape-dead-pool (last trade {last_trade_age_s:.0f}s ago)"
+        elif last3_all_sell_usd >= 180.0 and sell_30 > buy_30 * 1.35 and last5_sells >= 4:
+            block = True
+            reason = f"tape-active-dump (4+/5 sells, 30s sell ${sell_30:.0f} > buy ${buy_30:.0f})"
+        elif sells_60_n >= 4 and sell_60 >= 300.0 and sell_60 > buy_60 * 1.65:
+            block = True
+            reason = f"tape-sell-pressure (60s sell ${sell_60:.0f} vs buy ${buy_60:.0f})"
+        elif live_px > 0 and hi_3m > 0 and live_px < hi_3m * 0.78 and sell_60 >= buy_60 * 0.90:
+            drop_p = (1.0 - live_px / hi_3m) * 100.0
+            block = True
+            reason = f"tape-waterfall-drop (-{drop_p:.1f}% from 3m tape high, sell ${sell_60:.0f}/buy ${buy_60:.0f})"
+        elif len(parsed) >= 12 and wash_ratio >= 0.50 and buy_60 <= sell_60 * 1.05:
+            block = True
+            reason = f"tape-wash-mev ({wash_ratio*100:.0f}% same-block roundtrip MEV/wash volume)"
+
+        res.update({
+            "available": True,
+            "block": block,
+            "reason": reason,
+            "smart_buyers": smart_buyers,
+            "live_tape_px": live_px,
+            "recent_high_3m": hi_3m,
+            "buy_usd_60s": buy_60,
+            "sell_usd_60s": sell_60,
+            "wash_ratio": round(wash_ratio, 3),
+            "last_trade_age_s": round(last_trade_age_s, 1),
+        })
+        return res
+    except Exception:
+        return res
+
+
+async def verify_entry_onchain_and_orderflow(
+    mint: str,
+    symbol: str,
+    pair_data: dict,
+    scan_price: float,
+) -> tuple:
+    """Единый про-бот Pre-Flight (уровень блока Solana + живая лента сделок):
+      1. Репутация создателя (bad_creators / серийный запуск)
+      2. Резервы bonding curve Pump.fun (real_sol >= 1.8 SOL) или ончейн-резервы PumpSwap (quote >= 5 SOL)
+      3. Живой Order Flow по последним трейдам пула (<1с задержка): отсев активного слива и MEV/wash-ботов
+      4. Детект Smart Money покупок (Tier-1/2/VIP)
+    Возвращает (ok: bool, live_price: float, reason: str, meta: dict)."""
+    meta = {"smart_buyers": [], "wash_ratio": 0.0, "onchain_source": ""}
+    live_price = float(scan_price or 0.0)
+    pair_data = pair_data if isinstance(pair_data, dict) else {}
+    dex_id = str(pair_data.get("dexId") or "").lower()
+    pair_addr = str(pair_data.get("pairAddress") or "").strip()
+
+    try:
+        from birth_tracker import birth_tracker as _bt_pf
+        _cr_ok, _cr_why = _bt_pf.check_creator_risk(mint)
+        if not _cr_ok:
+            return False, live_price, f"creator-blacklist ({_cr_why})", meta
+    except Exception:
+        pass
+
+    smart_set = set()
+    try:
+        from smart_money_hunter import smart_money_hunter as _smh_pf
+        smart_set = _smh_pf.get_trusted_wallets(chain="solana", max_tier=2)
+    except Exception:
+        pass
+
+    is_raw_curve = dex_id in ("pump", "pumpfun") or (
+        mint.lower().endswith("pump") and dex_id not in ("pumpswap", "raydium", "meteora", "orca")
+    )
+
+    tasks = {}
+    if is_raw_curve or mint.lower().endswith("pump"):
+        tasks["curve"] = asyncio.create_task(get_live_pump_curve_state(mint))
+    if dex_id == "pumpswap" and pair_addr:
+        tasks["pumpswap"] = asyncio.create_task(get_live_pumpswap_pool_state(mint, pair_addr))
+    if dex_id not in ("pump", "pumpfun"):
+        from jupiter import JupiterAPI
+        tasks["jup_px"] = asyncio.create_task(JupiterAPI.get_price(mint))
+        if pair_addr:
+            tasks["flow"] = asyncio.create_task(
+                check_live_order_flow(mint, pair_addr, smart_wallets=smart_set, ref_price_usd=live_price)
+            )
+
+    results = {}
+    if tasks:
+        vals = await asyncio.gather(*tasks.values(), return_exceptions=True)
+        for k, v in zip(tasks.keys(), vals):
+            results[k] = None if isinstance(v, Exception) else v
+
+    # 1. Ончейн проверка сырой кривой Pump.fun
+    c_st = results.get("curve")
+    if isinstance(c_st, dict):
+        if c_st.get("complete"):
+            if dex_id in ("pump", "pumpfun"):
+                return False, live_price, "curve-migrated-stale-pair (complete=True)", meta
+        else:
+            r_sol = float(c_st.get("real_sol", 0.0) or 0.0)
+            c_px = float(c_st.get("price_usd", 0.0) or 0.0)
+            if r_sol < 1.8:
+                return False, live_price, f"curve-empty-rug (real_sol={r_sol:.3f} < 1.8)", meta
+            if live_price > 0 and c_px > 0:
+                if c_px < live_price * 0.90:
+                    return False, c_px, f"curve-live-dump (-{(1.0 - c_px/live_price)*100:.1f}%)", meta
+                if c_px > live_price * 1.35:
+                    return False, c_px, f"curve-spike (+{(c_px/live_price - 1.0)*100:.1f}%)", meta
+                live_price = c_px
+                meta["onchain_source"] = "pump_curve"
+
+    # 2. Ончейн проверка резервов PumpSwap AMM
+    ps_st = results.get("pumpswap")
+    if isinstance(ps_st, dict):
+        ps_liq = float(ps_st.get("liq_usd", 0.0) or 0.0)
+        ps_q = float(ps_st.get("quote_amount", 0.0) or 0.0)
+        ps_px = float(ps_st.get("price_usd", 0.0) or 0.0)
+        if ps_st.get("is_wsol") and ps_q < 5.0:
+            return False, live_price, f"pumpswap-drained-onchain ({ps_q:.2f} SOL < 5 SOL)", meta
+        if ps_liq < 1200.0:
+            return False, live_price, f"pumpswap-low-liq-onchain (${ps_liq:.0f} < $1200)", meta
+        if live_price > 0 and ps_px > 0:
+            if ps_px < live_price * 0.91:
+                return False, ps_px, f"pumpswap-live-dump (-{(1.0 - ps_px/live_price)*100:.1f}%)", meta
+            if ps_px > live_price * 1.30:
+                return False, ps_px, f"pumpswap-spike (+{(ps_px/live_price - 1.0)*100:.1f}%)", meta
+            live_price = ps_px
+            meta["onchain_source"] = "pumpswap_vault"
+
+    # 3. Jupiter fallback (для Raydium/Orca/Meteora или если PumpSwap RPC не ответил)
+    if meta["onchain_source"] == "":
+        jup_px = float(results.get("jup_px") or 0.0)
+        if jup_px > 0 and live_price > 0:
+            if jup_px < live_price * 0.925:
+                return False, jup_px, f"jup-live-dump (-{(1.0 - jup_px/live_price)*100:.1f}%)", meta
+            if jup_px > live_price * 1.25:
+                return False, jup_px, f"jup-spike (+{(jup_px/live_price - 1.0)*100:.1f}%)", meta
+            live_price = jup_px
+            meta["onchain_source"] = "jupiter_v3"
+
+    # 4. Живая лента сделок (Order Flow / Sandwich-Wash / Dump)
+    flow = results.get("flow")
+    if isinstance(flow, dict) and flow.get("available"):
+        meta["smart_buyers"] = list(flow.get("smart_buyers") or [])
+        meta["wash_ratio"] = float(flow.get("wash_ratio", 0.0) or 0.0)
+        if flow.get("block"):
+            return False, live_price, str(flow.get("reason") or "order-flow-block"), meta
+        if meta["smart_buyers"]:
+            print(f"🐋 [SMART-MONEY INFLOW] {symbol} ({mint[:8]}): {len(meta['smart_buyers'])} активных топ-трейдеров в ленте!")
+
+    return True, live_price, "OK", meta
+
+
 

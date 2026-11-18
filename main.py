@@ -574,12 +574,30 @@ async def position_manager_loop(analyzer, tracker):
                         _px_to_close = 0.0
                     elif minutes_held < 2.0 and pnl_pct <= -0.10 and ("Emergency Cap" in mature_exit_reason or "Stop Loss" in mature_exit_reason):
                         try:
-                            from jupiter import JupiterAPI
-                            _live_em_px = await JupiterAPI.get_price(mint)
+                            _live_em_px = None
+                            _pos_mf = getattr(position, "ml_features", None) or {}
+                            _pos_dex = str(_pos_mf.get("dex") or getattr(position, "dex_id", "") or "").lower()
+                            _pos_pair = str(getattr(position, "pair_address", "") or "")
+                            import market_data as _md_em
+                            if _pos_dex in ("pump", "pumpfun") or (mint.lower().endswith("pump") and not _pos_pair):
+                                _st_em = await _md_em.get_live_pump_curve_state(mint)
+                                if _st_em and not _st_em.get("complete") and float(_st_em.get("price_usd", 0) or 0) > 0:
+                                    _live_em_px = float(_st_em["price_usd"])
+                            elif _pos_dex == "pumpswap":
+                                _ps_em = await _md_em.get_live_pumpswap_pool_state(mint, _pos_pair)
+                                if _ps_em:
+                                    if float(_ps_em.get("liq_usd", 0) or 0) < 800.0:
+                                        _px_to_close = float(_ps_em.get("price_usd", 0) or 0.0)
+                                        _live_em_px = _px_to_close
+                                    elif float(_ps_em.get("price_usd", 0) or 0) > 0:
+                                        _live_em_px = float(_ps_em["price_usd"])
+                            if not _live_em_px and not (_px_to_close == 0.0):
+                                from jupiter import JupiterAPI
+                                _live_em_px = await JupiterAPI.get_price(mint)
                             if _live_em_px and _live_em_px > 0 and position.entry_price_usd > 0:
                                 _live_em_pnl = (_live_em_px - position.entry_price_usd) / position.entry_price_usd
                                 if _live_em_pnl > -0.080:
-                                    print(f"🛡️ [EARLY-EXIT-RESCUED] {position.symbol} ({mint[:8]}): ложный тик {pnl_pct*100:+.1f}%, живой Jupiter ${_live_em_px:.8f} ({_live_em_pnl*100:+.1f}%) — позиция спасена!")
+                                    print(f"🛡️ [EARLY-EXIT-RESCUED] {position.symbol} ({mint[:8]}): ложный тик {pnl_pct*100:+.1f}%, живой ончейн/Jupiter ${_live_em_px:.8f} ({_live_em_pnl*100:+.1f}%) — позиция спасена!")
                                     position.current_price_usd = _live_em_px
                                     position.emerg_confirm_n = 0
                                     position.sl_confirm_n = 0
@@ -1736,75 +1754,102 @@ async def scanner_loop(analyzer, tracker):
                                 _tx5 = (pair_data.get("txns") or {}).get("m5", {}) or {}
                                 _final_sc_conf = float(getattr(analyzer, "rocket_scores", {}).get(mint, getattr(analyzer, "last_score", 0.0)) or 0.0)
 
-                                # PRE-FLIGHT GUARD: симулируем продажу на Jupiter ДО открытия позиции!
+                                # PRE-FLIGHT PARALLEL PIPELINE: sellability + ончейн/Order-Flow + GoPlus + PumpSwap + RugWallet + FCR выполняются ОДНОВРЕМЕННО (~3-5с вместо ~14с)
+                                _t_pf0 = time.time()
+                                _dex_lower_sc = str(pair_data.get("dexId") or "").lower()
+                                _fcr_feat = {}
+                                _of_meta = {}
+
                                 try:
                                     from jupiter import JupiterAPI
-                                    _j_ok, _j_why = await JupiterAPI.is_token_sellable(mint)
-                                    _w_low = str(_j_why or "").lower()
-                                    if not _j_ok and any(k in _w_low for k in ("no routes", "cannot sell", "honeypot", "freeze", "0 sol returned")):
-                                        print(f"🚫 [SCANNER PRE-FLIGHT BLOCKED] {actual_symbol} ({mint[:8]}): токен непродаваем на DEX ({_j_why}) — предотвращен вход!")
-                                        continue
-                                    # Ончейн проверка bonding curve Pump.fun (задержка < 250мс):
-                                    if _dex_id in ("pump", "pumpfun") or mint.lower().endswith("pump"):
+                                    import market_data as _md_pf
+                                    import goplus as _gp_pf
+
+                                    async def _pf_sellable():
                                         try:
-                                            import market_data as _md_c
-                                            _c_state = await _md_c.get_live_pump_curve_state(mint)
-                                            if _c_state:
-                                                if _c_state.get("complete"):
-                                                    if _dex_id in ("pump", "pumpfun"):
-                                                        print(f"🚫 [SCANNER CURVE-MIGRATED] {actual_symbol} ({mint[:8]}): bonding curve уже завершена (complete=True) — ждём AMM, блок старого кёрва!")
-                                                        continue
-                                                else:
-                                                    _r_sol = float(_c_state.get("real_sol", 0.0) or 0.0)
-                                                    _c_px = float(_c_state.get("price_usd", 0.0) or 0.0)
-                                                    if _r_sol < 1.8:
-                                                        print(f"🚫 [SCANNER CURVE-EMPTY-RUG] {actual_symbol} ({mint[:8]}): реальный SOL на кривой {_r_sol:.3f} < 1.8 SOL — кёрв слит в 0 ($PICKLES/GTAMICHI), блок!")
-                                                        continue
-                                                    if entry_price > 0 and _c_px > 0:
-                                                        if _c_px < entry_price * 0.90:
-                                                            print(f"🚫 [SCANNER CURVE-LIVE-DUMP] {actual_symbol} ({mint[:8]}): ончейн цена (${_c_px:.8f}) на {(1.0 - _c_px / entry_price) * 100:.1f}% ниже скана (${entry_price:.8f}) — обвал в реальном времени, блок!")
-                                                            continue
-                                                        if _c_px > entry_price * 1.35:
-                                                            print(f"🚫 [SCANNER CURVE-SPIKE] {actual_symbol} ({mint[:8]}): ончейн цена выше скана на {(_c_px/entry_price - 1)*100:+.1f}% — пропуск спайка!")
-                                                            continue
-                                                        entry_price = _c_px
+                                            return await JupiterAPI.is_token_sellable(mint)
                                         except Exception:
-                                            pass
+                                            return True, "sell-check-err"
 
-                                    # На сырых кривых pump/pumpfun НЕ сверяем с котировкой роутера Jupiter (искажает цену виртуального кёрва):
-                                    if _dex_id not in ("pump", "pumpfun"):
-                                        _live_jup_px = await JupiterAPI.get_price(mint)
-                                        if _live_jup_px and _live_jup_px > 0 and entry_price > 0:
-                                            if _live_jup_px < entry_price * 0.925:
-                                                print(f"🚫 [SCANNER LIVE-DUMP BLOCKED] {actual_symbol} ({mint[:8]}): живая цена Jupiter (${_live_jup_px:.8f}) уже на {(1.0 - _live_jup_px / entry_price) * 100:.1f}% ниже цены сигнала (${entry_price:.8f}) — обвал в моменте, отмена входа!")
-                                                continue
-                                            if _live_jup_px > entry_price * 1.25:
-                                                print(f"🚫 [SCANNER JUP-SPIKE BLOCKED] {actual_symbol} ({mint[:8]}): Jupiter (${_live_jup_px:.8f}) выше DS (${entry_price:.8f}) на {(_live_jup_px/entry_price - 1)*100:+.1f}% — защита от покупки спайка (кейс DCC)!")
-                                                continue
-                                            entry_price = _live_jup_px
-                                except Exception:
-                                    pass
+                                    async def _pf_orderflow():
+                                        try:
+                                            return await _md_pf.verify_entry_onchain_and_orderflow(
+                                                mint, actual_symbol, pair_data, entry_price
+                                            )
+                                        except Exception:
+                                            return True, entry_price, "", {}
 
-                                # PRE-FLIGHT GOPLUS: ещё раз сверяем токен на ханипот/фриз/непродаваемость прямо перед входом
-                                try:
-                                    import goplus as _gp
-                                    _g_ok, _g_why = await _gp.check_solana(mint)
-                                    _w_low = str(_g_why or "").lower()
-                                    if not _g_ok and any(k in _w_low for k in ("honeypot", "cannot_sell", "freeze", "freezable", "closable", "balance_mutable", "frozen", "non_transferable", "transfer_hook", "default_account")):
-                                        print(f"🚫 [SCANNER PRE-FLIGHT GOPLUS] {actual_symbol} ({mint[:8]}): {_g_why} — вход заблокирован!")
-                                        continue
-                                except Exception:
-                                    pass
+                                    async def _pf_goplus():
+                                        try:
+                                            return await _gp_pf.check_solana(mint)
+                                        except Exception:
+                                            return True, ""
 
-                                # PRE-FLIGHT PUMPSWAP ON-CHAIN GUARD: защита от permissionless CreatePool дрейнов (включая .pump/.bonk/.BAGS)
-                                if str(pair_data.get("dexId") or "").lower() == "pumpswap":
-                                    try:
-                                        import goplus as _gp_ps
-                                        _ps_m_ok, _ps_m_canon, _ps_m_why = await _gp_ps.verify_pumpswap_pool_onchain(
-                                            mint,
-                                            pair_address=str(pair_data.get("pairAddress") or ""),
-                                            pair_data=pair_data,
-                                        )
+                                    async def _pf_pumpswap():
+                                        if _dex_lower_sc != "pumpswap":
+                                            return None
+                                        try:
+                                            return await _gp_pf.verify_pumpswap_pool_onchain(
+                                                mint,
+                                                pair_address=str(pair_data.get("pairAddress") or ""),
+                                                pair_data=pair_data,
+                                            )
+                                        except Exception:
+                                            return None
+
+                                    async def _pf_rugwallet():
+                                        if not getattr(config, "RUG_WALLET_AUDIT_ENABLED", True):
+                                            return None
+                                        try:
+                                            return await quick_rug_check(mint)
+                                        except Exception as _e:
+                                            return _e
+
+                                    async def _pf_fcr():
+                                        if not getattr(config, "FCR_ENABLED", True):
+                                            return None
+                                        try:
+                                            from first_candle_rug_guard import pre_entry_rug_check
+                                            return await pre_entry_rug_check(mint, pair_data=pair_data, symbol=actual_symbol)
+                                        except Exception as _e:
+                                            return _e
+
+                                    _r_sell, _r_of, _r_gp, _r_ps, _r_rw, _r_fcr = await asyncio.gather(
+                                        _pf_sellable(),
+                                        _pf_orderflow(),
+                                        _pf_goplus(),
+                                        _pf_pumpswap(),
+                                        _pf_rugwallet(),
+                                        _pf_fcr(),
+                                    )
+
+                                    if isinstance(_r_sell, tuple):
+                                        _j_ok, _j_why = _r_sell
+                                        _w_low = str(_j_why or "").lower()
+                                        if not _j_ok and any(k in _w_low for k in ("no routes", "cannot sell", "honeypot", "freeze", "0 sol returned")):
+                                            print(f"🚫 [SCANNER PRE-FLIGHT BLOCKED] {actual_symbol} ({mint[:8]}): токен непродаваем на DEX ({_j_why}) — предотвращен вход!")
+                                            continue
+
+                                    if isinstance(_r_of, tuple) and len(_r_of) == 4:
+                                        _of_ok, _of_px, _of_why, _of_meta = _r_of
+                                        if not _of_ok:
+                                            print(f"🚫 [SCANNER ONCHAIN/FLOW] {actual_symbol} ({mint[:8]}): {_of_why} — вход заблокирован!")
+                                            continue
+                                        if _of_px and _of_px > 0:
+                                            entry_price = _of_px
+                                            if _wick_stop_price and _wick_pct:
+                                                _wick_stop_price = entry_price * (1.0 + _wick_pct)
+
+                                    if isinstance(_r_gp, tuple):
+                                        _g_ok, _g_why = _r_gp
+                                        _gw_low = str(_g_why or "").lower()
+                                        if not _g_ok and any(k in _gw_low for k in ("honeypot", "cannot_sell", "freeze", "freezable", "closable", "balance_mutable", "frozen", "non_transferable", "transfer_hook", "default_account")):
+                                            print(f"🚫 [SCANNER PRE-FLIGHT GOPLUS] {actual_symbol} ({mint[:8]}): {_g_why} — вход заблокирован!")
+                                            continue
+
+                                    # PRE-FLIGHT PUMPSWAP ON-CHAIN GUARD: защита от permissionless CreatePool дрейнов (включая .pump/.bonk/.BAGS)
+                                    if _dex_lower_sc == "pumpswap" and isinstance(_r_ps, tuple):
+                                        _ps_m_ok, _ps_m_canon, _ps_m_why = _r_ps
                                         if not _ps_m_ok or config.is_pumpswap_liq_fdv_trap(pair_data):
                                             print(f"🚫 [SCANNER PRE-FLIGHT PUMPSWAP] {actual_symbol} ({mint[:8]}): {_ps_m_why} — вход заблокирован!")
                                             continue
@@ -1826,41 +1871,38 @@ async def scanner_loop(analyzer, tracker):
                                             ):
                                                 print(f"🚫 [SCANNER PRE-FLIGHT PUMPSWAP-CREATEPOOL] {actual_symbol} ({mint[:8]}): кастомный незалоченный пул ({_ps_m_why}) не прошёл фильтр liq/fdv/оборота — блок!")
                                                 continue
-                                    except Exception:
-                                        pass
 
-                                # PRE-FLIGHT GUARD ДЛЯ ВСЕХ НЕЗАЛОЧЕННЫХ ПУЛОВ (Meteora DYN2, PumpSwap CreatePool, кастомный Raydium без сожжённого LP)
-                                _dex_lower_sc = str(pair_data.get("dexId") or "").lower()
-                                _is_native_pump_sc = mint.lower().endswith("pump") and _dex_lower_sc in ("", "pumpfun", "pump", "pumpswap")
-                                _is_lp_safe_sc = bool(pair_data.get("_lp_verified")) or bool(pair_data.get("_pumpswap_canonical")) or bool(pair_data.get("_pumpswap_lp_burned"))
-                                if not _is_native_pump_sc and not _is_lp_safe_sc:
-                                    _ca_sc = float(pair_data.get("pairCreatedAt") or 0)
-                                    _age_sc = ((time.time() * 1000.0 - _ca_sc) / 60000.0) if _ca_sc > 0 else 0.1
-                                    _fdv_sc = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
-                                    _m5_sc = _pc.get("m5")
-                                    _info_sc = pair_data.get("info") or {}
-                                    _has_soc_sc = bool((_info_sc.get("socials") or []) or (_info_sc.get("websites") or []))
-                                    if not config.is_safe_unlocked_custom_runner(
-                                        liq_usd=liq_usd,
-                                        age_min=_age_sc,
-                                        vol5_usd=float(((pair_data.get("volume") or {}).get("m5", 0) or 0)),
-                                        buys5=int(_tx5.get("buys", 0) or 0),
-                                        sells5=int(_tx5.get("sells", 0) or 0),
-                                        has_socials=_has_soc_sc,
-                                        is_trap=config.is_pumpswap_liq_fdv_trap(pair_data),
-                                        fdv_usd=_fdv_sc,
-                                        m5_pct=(float(_m5_sc) if _m5_sc is not None else None),
-                                        pair_data=pair_data,
-                                    ):
-                                        print(f"🚫 [SCANNER PRE-FLIGHT UNLOCKED-POOL] {actual_symbol} ({mint[:8]}): незалоченный пул {_dex_lower_sc} (age {_age_sc:.1f}м, liq ${liq_usd:,.0f}, soc={_has_soc_sc}) не прошёл аудит анти-рага — блок!")
-                                        continue
+                                    # PRE-FLIGHT GUARD ДЛЯ ВСЕХ НЕЗАЛОЧЕННЫХ ПУЛОВ (Meteora DYN2, PumpSwap CreatePool, кастомный Raydium без сожжённого LP)
+                                    _is_native_pump_sc = mint.lower().endswith("pump") and _dex_lower_sc in ("", "pumpfun", "pump", "pumpswap")
+                                    _is_lp_safe_sc = bool(pair_data.get("_lp_verified")) or bool(pair_data.get("_pumpswap_canonical")) or bool(pair_data.get("_pumpswap_lp_burned"))
+                                    if not _is_native_pump_sc and not _is_lp_safe_sc:
+                                        _ca_sc = float(pair_data.get("pairCreatedAt") or 0)
+                                        _age_sc = ((time.time() * 1000.0 - _ca_sc) / 60000.0) if _ca_sc > 0 else 0.1
+                                        _fdv_sc = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
+                                        _m5_sc = _pc.get("m5")
+                                        _info_sc = pair_data.get("info") or {}
+                                        _has_soc_sc = bool((_info_sc.get("socials") or []) or (_info_sc.get("websites") or []))
+                                        if not config.is_safe_unlocked_custom_runner(
+                                            liq_usd=liq_usd,
+                                            age_min=_age_sc,
+                                            vol5_usd=float(((pair_data.get("volume") or {}).get("m5", 0) or 0)),
+                                            buys5=int(_tx5.get("buys", 0) or 0),
+                                            sells5=int(_tx5.get("sells", 0) or 0),
+                                            has_socials=_has_soc_sc,
+                                            is_trap=config.is_pumpswap_liq_fdv_trap(pair_data),
+                                            fdv_usd=_fdv_sc,
+                                            m5_pct=(float(_m5_sc) if _m5_sc is not None else None),
+                                            pair_data=pair_data,
+                                        ):
+                                            print(f"🚫 [SCANNER PRE-FLIGHT UNLOCKED-POOL] {actual_symbol} ({mint[:8]}): незалоченный пул {_dex_lower_sc} (age {_age_sc:.1f}м, liq ${liq_usd:,.0f}, soc={_has_soc_sc}) не прошёл аудит анти-рага — блок!")
+                                            continue
 
-                                # PRE-FLIGHT RUG WALLET AUDIT: анализ кошельков дева, autorités, холдеров, бандлов
-                                if getattr(config, "RUG_WALLET_AUDIT_ENABLED", True):
-                                    try:
-                                        _rw_safe, _rw_why = await quick_rug_check(mint)
+                                    # PRE-FLIGHT RUG WALLET AUDIT: анализ кошельков дева, authorities, холдеров, бандлов
+                                    if isinstance(_r_rw, Exception):
+                                        print(f"⚠️ [SCANNER PRE-FLIGHT RUG-WALLET] {actual_symbol} ({mint[:8]}): audit error {type(_r_rw).__name__} — вход разрешён (fail-open).")
+                                    elif isinstance(_r_rw, tuple):
+                                        _rw_safe, _rw_why = _r_rw
                                         if not _rw_safe:
-                                            # Защита от блокировки из-за RPC 429: если данные просто не получены по сети, не блочим проверенную ракету
                                             _why_low = str(_rw_why or "").lower()
                                             _only_rpc_errors = all(k in _why_low for k in ("no-mint-account", "no-holder-data")) or "rpc" in _why_low or "timeout" in _why_low
                                             if _only_rpc_errors and not any(k in _why_low for k in ("mint_authority_enabled", "freeze_authority_enabled", "top1_pct_high", "sybil", "fresh bot")):
@@ -1868,22 +1910,17 @@ async def scanner_loop(analyzer, tracker):
                                             else:
                                                 print(f"🚫 [SCANNER PRE-FLIGHT RUG-WALLET] {actual_symbol} ({mint[:8]}): {_rw_why} — вход заблокирован аудитом кошельков!")
                                                 continue
-                                    except Exception as _e:
-                                        print(f"⚠️ [SCANNER PRE-FLIGHT RUG-WALLET] {actual_symbol} ({mint[:8]}): audit error {type(_e).__name__} — вход разрешён (fail-open).")
 
-                                # PRE-FLIGHT FIRST-CANDLE RUG GUARD: ловит мгновенный раг первой свечи.
-                                # Анализирует когорту кошельков, ищет кластеры «одного источника
-                                # финансирования» (сколько кошельков, сколько % эмиссии они держат).
-                                _fcr_feat = {}  # дефолт до включения FCR (fail-open / флаг выкл)
-                                if getattr(config, "FCR_ENABLED", True):
-                                    try:
-                                        from first_candle_rug_guard import pre_entry_rug_check, compact_summary
-                                        _fcr = await pre_entry_rug_check(mint, pair_data=pair_data, symbol=actual_symbol)
-                                        _fcr_compact = compact_summary(_fcr)
-                                        if _fcr.get("verdict") == "BLOCK":
-                                            print(f"🚫 [SCANNER PRE-FLIGHT FCR] {actual_symbol} ({mint[:8]}): {_fcr.get('report', '')} — вход заблокирован первоочередно по мгновенному рагу!")
+                                    # PRE-FLIGHT FIRST-CANDLE RUG GUARD
+                                    if isinstance(_r_fcr, Exception):
+                                        print(f"⚠️ [SCANNER PRE-FLIGHT FCR] {actual_symbol} ({mint[:8]}): error {type(_r_fcr).__name__} — вход разрешён (fail-open).")
+                                    elif isinstance(_r_fcr, dict):
+                                        from first_candle_rug_guard import compact_summary
+                                        _fcr_compact = compact_summary(_r_fcr)
+                                        if _r_fcr.get("verdict") == "BLOCK":
+                                            print(f"🚫 [SCANNER PRE-FLIGHT FCR] {actual_symbol} ({mint[:8]}): {_r_fcr.get('report', '')} — вход заблокирован первоочередно по мгновенному рагу!")
                                             continue
-                                        if _fcr.get("verdict") == "WARN":
+                                        if _r_fcr.get("verdict") == "WARN":
                                             _fcr_w_n = int((_fcr_compact or {}).get("fcr_cluster_wallets", 0) or 0)
                                             _fcr_m5 = float((pair_data.get("priceChange") or {}).get("m5", 0) or 0)
                                             _is_dist_fcr_sc = config.is_distributed_safe_runner(
@@ -1895,15 +1932,50 @@ async def scanner_loop(analyzer, tracker):
                                             if _fcr_w_n >= 3 and _fcr_m5 > 120.0 and not _is_dist_fcr_sc:
                                                 print(f"🚫 [SCANNER FCR-INSIDER-BLOCK] {actual_symbol} ({mint[:8]}): инсайдерская сеть {_fcr_w_n} кошельков на свече m5 {_fcr_m5:+.1f}% — отмена входа (кейс CHUD -50%)!")
                                                 continue
-                                            print(f"⚠️ [SCANNER PRE-FLIGHT FCR] {actual_symbol} ({mint[:8]}): {_fcr.get('report', '')}")
-                                        # Сохраняем сводку в фичи позиции: дашборд / лог сделок.
+                                            print(f"⚠️ [SCANNER PRE-FLIGHT FCR] {actual_symbol} ({mint[:8]}): {_r_fcr.get('report', '')}")
                                         _fcr_feat = dict(_fcr_compact or {})
-                                    except Exception as _e:
-                                        print(f"⚠️ [SCANNER PRE-FLIGHT FCR] {actual_symbol} ({mint[:8]}): error {type(_e).__name__} — вход разрешён (fail-open).")
-                                        _fcr_feat = {}
+
+                                    # POST-FCR LIVE SANITY CHECK: если аудит занял > 1с, перепроверяем актуальную цену/резерв перед открытием сделки
+                                    if (time.time() - _t_pf0) > 1.0 and entry_price > 0:
+                                        _re_px = 0.0
+                                        if _dex_lower_sc in ("pump", "pumpfun"):
+                                            _cs2 = await _md_pf.get_live_pump_curve_state(mint)
+                                            if _cs2 and not _cs2.get("complete"):
+                                                if float(_cs2.get("real_sol", 0) or 0) < 1.8:
+                                                    print(f"🚫 [POST-FCR CURVE-EMPTY] {actual_symbol} ({mint[:8]}): за время аудита кёрв слился ниже 1.8 SOL — отмена!")
+                                                    continue
+                                                _re_px = float(_cs2.get("price_usd", 0) or 0)
+                                        elif _dex_lower_sc == "pumpswap":
+                                            _ps2 = await _md_pf.get_live_pumpswap_pool_state(mint, str(pair_data.get("pairAddress") or ""))
+                                            if _ps2:
+                                                if float(_ps2.get("liq_usd", 0) or 0) < float(getattr(config, "MIN_GRADUATED_LIQ_USD", 3000.0)) * 0.5:
+                                                    print(f"🚫 [POST-FCR PUMPSWAP-DRAIN] {actual_symbol} ({mint[:8]}): за время аудита пул обсох (${float(_ps2.get('liq_usd', 0) or 0):,.0f}) — отмена!")
+                                                    continue
+                                                _re_px = float(_ps2.get("price_usd", 0) or 0)
+                                        else:
+                                            _re_px = float(await JupiterAPI.get_price(mint) or 0.0)
+                                        if _re_px > 0 and _re_px < entry_price * 0.92:
+                                            print(f"🚫 [POST-FCR DUMP] {actual_symbol} ({mint[:8]}): за время аудита цена упала на {(1.0 - _re_px / entry_price) * 100:.1f}% — отмена!")
+                                            continue
+                                        if _re_px > 0 and _re_px <= entry_price * 1.30:
+                                            entry_price = _re_px
+                                            if _wick_stop_price and _wick_pct:
+                                                _wick_stop_price = entry_price * (1.0 + _wick_pct)
+                                except Exception as _pf_err:
+                                    print(f"⚠️ [SCANNER PRE-FLIGHT] {actual_symbol} ({mint[:8]}): {type(_pf_err).__name__}")
+
+                                _of_feat = {"dex": _dex_lower_sc}
+                                if isinstance(_of_meta, dict):
+                                    if _of_meta.get("wash_ratio"):
+                                        _of_feat["wash_ratio"] = _of_meta["wash_ratio"]
+                                    if _of_meta.get("smart_buyers"):
+                                        _of_feat["smart_tape_n"] = len(_of_meta["smart_buyers"])
+                                        print(f"🧠 [SMART-MONEY-TAPE] {actual_symbol} ({mint[:8]}): зафиксирован вход {len(_of_meta['smart_buyers'])} топ-кошельков в живой ленте!")
+                                    if _of_meta.get("onchain_source"):
+                                        _of_feat["onchain_source"] = _of_meta["onchain_source"]
 
                                 _bought = tracker.add_position(actual_symbol, mint, entry_price, position_size, is_mature=True,
-                                                     ml_features={**analyzer.pack_features(pair_data), **_fcr_feat},
+                                                     ml_features={**analyzer.pack_features(pair_data), **_fcr_feat, **_of_feat},
                                                      ml_confidence=_final_sc_conf,
                                                      source=f"SCANNER:{analyzer.get_signal(mint)}",
                                                      pair_address=pair_data.get("pairAddress", ""),

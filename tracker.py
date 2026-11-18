@@ -828,6 +828,13 @@ class PaperTracker:
 
             # Считаем изменение цены актива (процент)
             price_diff_pct = (real_exit_price - real_entry_price) / real_entry_price if real_entry_price > 0 else 0
+            try:
+                _held_s = max(0.0, float(pos.exit_time or time.time()) - float(pos.entry_time or time.time()))
+                if _is_liq_loss_or_scam or (price_diff_pct <= -0.35 and _held_s <= 180.0):
+                    from birth_tracker import birth_tracker as _bt_bc
+                    _bt_bc.record_bad_creator(mint, reason[:60])
+            except Exception:
+                pass
             
             # 2. ДИНАМИЧЕСКИЕ МИКРО-КОМИССИИ JITO (Micro-Tips)
             # Аварийные выходы дороже: широкая проверка по смыслу, а не двум строкам

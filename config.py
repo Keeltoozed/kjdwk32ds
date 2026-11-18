@@ -55,11 +55,11 @@ MAX_CONCURRENT_POSITIONS = 3
 # === ЖЕСТКОЕ ОГРАНИЧЕНИЕ УБЫТКА (РИСК-МЕНЕДЖМЕНТ) ===
 MAX_DAILY_LOSS_USD = 15.0
 KILL_SWITCH_ENABLED = True
-STOP_LOSS_PCT = -0.28         # Стоп -28%: даёт дыхание нормальным встряскам перед 2x-10x пампами (не режет MELNOK +70%, CHOP +28%, BIGP +30%)
-STOP_LOSS_UNLOCKED_PCT = -0.16 # Стоп -16% для незалоченных пулов Meteora/Raydium
-EMERGENCY_CAP_PCT = -0.38     # Аварийный потолок -38%: срез глубокого слива с подтверждением 2 тика
+STOP_LOSS_PCT = -0.15          # Единый стоп -15%: не выбивает на -11%..-13% откатах ракет, но быстро режет лузеров (в паре с Quick Scratch -8.5%)
+STOP_LOSS_UNLOCKED_PCT = -0.12 # Единый стоп -12% для незалоченных пулов Meteora/Raydium/Custom PumpSwap
+EMERGENCY_CAP_PCT = -0.22      # Аварийный потолок -22%: срез мгновенного краша
 INFANT_WINDOW_MIN = 0.5
-INFANT_DUMP_PCT = -0.350       # Срез мгновенного рага дева в первые секунды (<= -35.0%)
+INFANT_DUMP_PCT = -0.200       # Срез мгновенного рага в первые 30с (<= -20.0%)
 
 # === ЗАЩИТА ОТ МГНОВЕННОГО ВЫВОДА ЛИКВИДНОСТИ (девы выдергивают пул в 0) ===
 LIQ_DRAIN_EXIT_PCT = 0.40      # Выход если ликвидность упала на 40% от пика (режем до полного обнуления)
@@ -729,17 +729,7 @@ MOONBAG_TRAIL_ACTIVATION_PCT = 0.40  # Трейлинг включается п�
 MOONBAG_TRAIL_DISTANCE_PCT = 0.20    # Плотный трейл 20% от ATH (держит прибыль)
 MOONBAG_MAX_HOLD_MIN = 55.0          # Даём ракетам до 55 минут на 5x-20x памп
 
-# Безопасность: стоп-лосс и экстренный выход
-STOP_LOSS_PCT = -0.10          # Стоп -10%
-STOP_LOSS_UNLOCKED_PCT = -0.10 # Стоп -10% для незалоченных пулов
-EMERGENCY_CAP_PCT = -0.20      # Аварийный выход -20%
-
-# Быстрый выход при мгновенном дампе на входе (первые 60с, падение >15%)
-FLAT_PROFIT_ENABLED = True
-FLAT_PROFIT_MIN_PNL_PCT = 0.08
-FLAT_PROFIT_MIN_HOLD_MIN = 5.0
-FLAT_PROFIT_PEAK_AGE_MIN = 8.0
-FLAT_PROFIT_PRICE_DRIFT_PCT = 0.03
+# (STOP_LOSS_PCT, STOP_LOSS_UNLOCKED_PCT, EMERGENCY_CAP_PCT заданы единым блоком в начале файла)
 
 PUMP_XGB_ENABLED = False
 RAY_XGB_ENABLED = False
@@ -831,9 +821,7 @@ JEV_MIN_TRADES_H1 = 5
 JEV_MIN_HOLDERS = 8             # Минимум 8 холдеров — не блокируем только что запущенные токены
 JEV_MAX_TOP_WALLET = 0.14        # Макс 14% на один кошелёк (вместо 30%)
 JEV_MAX_TOP_10 = 0.48            # Макс 48% у топ-10 холдеров (пропускает ракеты уровня FiveM)
-UNLOCKED_CUSTOM_MIN_LIQ_USD = 4500.0
-UNLOCKED_CUSTOM_MIN_VOL5_USD = 1800.0
-UNLOCKED_CUSTOM_MIN_BUYS5 = 12
+# UNLOCKED_CUSTOM_MIN_* заданы единым блоком вверху (lines 104-108)
 JEV_REQUIRE_HOLDER_DATA = False  # Не ждём индексации холдеров в RugCheck/GoPlus на свежих пулах
 MAX_POOL_LIQ_FRAC = 0.02
 AUDITOR_MAX_DELEGATED_ACCOUNTS = 3
@@ -1068,7 +1056,7 @@ FCR_STALL_M1 = 3.0                     # ...при мёртвом m1 = дев р
 FCR_SELL_DOMINANCE = 0.85              # sells/buys за 5м для сигнала "продавцы давят"
 FCR_MIN_SELL_COUNT = 120               # Абсолютный минимум продаж, чтобы сигнал был значимым
 FCR_TRUSTED_FUNDERS = []              # Адреса-источники, которым доверяем (свои кошельки, биржи) — их кластеры игнорируются
-FCR_MAX_DURATION_SEC = 13.0           # Дедлайн анализа FCR 13с (исключает 7с таймауты на кривых)
+FCR_MAX_DURATION_SEC = 10.0 if HELIUS_API_KEY else 5.0  # Без приватного Helius не держим вход 13с на публичных RPC (иначе покупаем опоздавший дамп)
 FCR_GRAPH_MIN_PCT = 0.05              # Узел сети RugCheck с долей < 0.05% — пыль, не участник фермы
 FCR_GRAPH_MAX_WALLETS = 15           # Сеть крупнее — это граф переводов толпы, а не ферма (вес режется)
 FCR_SIG_PAGE_LIMIT = 200              # Сколько подписей тянуть за раз (лёгкий payload для публичного RPC)

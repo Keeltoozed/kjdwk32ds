@@ -444,6 +444,14 @@ class PumpFunSniper:
                             initial_buy = float(data.get("initialBuy") or 0)
                             max_dev_tokens = float(getattr(config, "STREAM_MAX_DEV_BUY_TOKENS", 180_000_000))
 
+                            try:
+                                from birth_tracker import birth_tracker
+                                birth_tracker.record_creator(mint, trader_pubkey)
+                                if initial_buy > max_dev_tokens:
+                                    birth_tracker.record_bad_creator(trader_pubkey, f"dev_init_buy>{max_dev_tokens/1e7:.0f}%")
+                            except Exception:
+                                pass
+
                             if initial_buy > max_dev_tokens:
                                 continue  # Пропускаем явные мега-дампы (> 18% эмиссии у дева)
 
@@ -452,7 +460,7 @@ class PumpFunSniper:
                             # Передаем в birth_tracker для созревания (5-20 мин -> DEX анализ)
                             try:
                                 from birth_tracker import birth_tracker
-                                birth_tracker.add_token(mint)
+                                birth_tracker.add_token(mint, creator=trader_pubkey)
                             except Exception:
                                 pass
 

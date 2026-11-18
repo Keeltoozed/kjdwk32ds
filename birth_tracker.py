@@ -1,5 +1,10 @@
+import json
+import os
 import time
 import threading
+
+
+BAD_CREATORS_FILE = "bad_creators.json"
 
 
 class BirthTracker:
@@ -7,11 +12,84 @@ class BirthTracker:
         self.tokens = {}      # mint -> timestamp
         self.graduated = {}   # mint -> timestamp миграции (приоритет сканера!)
         self.waiting_room = {}  # mint -> {"ts": float, "pool": str, "creator": str, "init_dev_pct": float|None}
+        self.mint_creators = {}       # mint -> creator_wallet
+        self.creator_launches = {}    # creator_wallet -> [ts, ...] (последний час)
+        self.bad_creators = self._load_bad_creators()
         self.lock = threading.Lock()
 
-    def add_token(self, mint: str):
+    def _load_bad_creators(self) -> set:
+        try:
+            if os.path.exists(BAD_CREATORS_FILE):
+                with open(BAD_CREATORS_FILE, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if isinstance(data, list):
+                    return {str(x).strip() for x in data if str(x).strip()}
+        except Exception:
+            pass
+        return set()
+
+    def _save_bad_creators_unlocked(self):
+        try:
+            with open(BAD_CREATORS_FILE, "w", encoding="utf-8") as f:
+                json.dump(sorted(self.bad_creators), f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+
+    def record_creator(self, mint: str, creator: str = ""):
+        c = str(creator or "").strip()
+        m = str(mint or "").strip()
+        if not c:
+            return
+        now = time.time()
+        with self.lock:
+            is_new_mint = bool(m and m not in self.mint_creators)
+            if is_new_mint:
+                self.mint_creators[m] = c
+                if len(self.mint_creators) > 5000:
+                    self.mint_creators.clear()
+            hist = self.creator_launches.setdefault(c, [])
+            if is_new_mint or not hist or (now - hist[-1]) >= 2.0:
+                hist.append(now)
+            # Храним запуски только за последний час
+            hist[:] = [t for t in hist if (now - t) <= 3600.0]
+            if len(self.creator_launches) > 3000:
+                self.creator_launches = {
+                    k: [t for t in v if (now - t) <= 3600.0]
+                    for k, v in self.creator_launches.items()
+                    if v and (now - max(v)) <= 3600.0
+                }
+
+    def record_bad_creator(self, creator_or_mint: str, reason: str = ""):
+        key = str(creator_or_mint or "").strip()
+        if not key:
+            return
+        with self.lock:
+            creator = self.mint_creators.get(key) or ("" if key.endswith("pump") else key)
+            if not creator or creator in self.bad_creators:
+                return
+            self.bad_creators.add(creator)
+            self._save_bad_creators_unlocked()
+            print(f"☠️ [BAD-CREATOR] Занесён в чёрный список дев {creator[:8]}... ({reason or 'rug'})")
+
+    def check_creator_risk(self, mint: str, creator: str = "") -> tuple:
+        """0ms проверка репутации создателя токена (bad_creators.json + серийный спам-завод)."""
+        now = time.time()
+        with self.lock:
+            c = str(creator or "").strip() or self.mint_creators.get(str(mint or "").strip(), "")
+            if not c:
+                return True, ""
+            if c in self.bad_creators:
+                return False, f"blacklisted-rugger-creator {c[:8]}"
+            launches = [t for t in (self.creator_launches.get(c) or []) if (now - t) <= 3600.0]
+            if len(launches) >= 3:
+                return False, f"serial-rugger-factory ({len(launches)} launches in 1h by {c[:8]})"
+        return True, ""
+
+    def add_token(self, mint: str, creator: str = ""):
         with self.lock:
             self.tokens[mint] = time.time()
+        if creator:
+            self.record_creator(mint, creator)
 
     def remove_token(self, mint: str):
         """Удалить мертвый или отсканированный токен из трекера, чтобы не опрашивать повторно."""
@@ -55,6 +133,8 @@ class BirthTracker:
     def add_graduated(self, mint: str, pool: str = "", creator: str = ""):
         """Миграция завершена (кёрв 100% / subscribeMigration): токен — первый в очереди сканера + Waiting Room."""
         now = time.time()
+        if creator:
+            self.record_creator(mint, creator)
         with self.lock:
             self.graduated[mint] = now
             if len(self.graduated) > self.GRAD_MAX:

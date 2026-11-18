@@ -137,7 +137,7 @@ _SW = {"ts": 0.0, "set": set()}
 
 
 def _smart_wallets() -> set:
-    """Кошельки из smart_wallets.txt (их пишет smart_money_hunter), кэш 5 минут."""
+    """Кошельки из smart_wallets.txt + доверенные Tier-1/2 из smart_money_hunter, кэш 5 минут."""
     if time.time() - _SW["ts"] < 300:
         return _SW["set"]
     s = set()
@@ -147,6 +147,11 @@ def _smart_wallets() -> set:
                 line = line.strip()
                 if line and not line.startswith("#"):
                     s.add(line)
+    except Exception:
+        pass
+    try:
+        from smart_money_hunter import smart_money_hunter
+        s.update(smart_money_hunter.get_trusted_wallets(chain="solana", max_tier=2))
     except Exception:
         pass
     _SW["ts"], _SW["set"] = time.time(), s
@@ -2394,58 +2399,48 @@ class GrokJevEngine:
         if _fliq > 0:
             ticket_size = min(ticket_size, max(_base_t, round(_fliq * _pool_frac, 2)))
 
-        # PRE-FLIGHT SELL CHECK & LIVE JUPITER PRICE SYNC:
-        # 1) Проверяем продаваемость на Jupiter ПЕРЕД входом (спасает от ханипотов NO_ROUTES_FOUND).
-        # 2) Синхронизируем entry_price с живой котировкой Jupiter (защита от покупки с отстающей свечи DexScreener -> мгновенный стоп -14%).
+        # PRE-FLIGHT SELL CHECK & ON-CHAIN/ORDER-FLOW/JUPITER SYNC (параллельно):
+        _of_feat_j = {}
         if chain == "solana":
             try:
                 from jupiter import JupiterAPI
-                _j_ok, _j_why = await JupiterAPI.is_token_sellable(address)
-                _w_low = str(_j_why or "").lower()
-                if not _j_ok and any(k in _w_low for k in ("no routes", "cannot sell", "honeypot", "freeze", "0 sol returned")):
-                    print(f"🚫 [PRE-FLIGHT BLOCKED] Отказ входа {symbol} ({address[:8]}): токен непродаваем на DEX ({_j_why}) — предотвращен слив -100%!")
-                    return False, f"pre-flight-unsellable ({_j_why})"
-                _dex_fin = str(pair.get("dexId", "")).lower()
-                # Ончейн проверка bonding curve Pump.fun (задержка < 250мс):
-                if _dex_fin in ("pump", "pumpfun") or address.lower().endswith("pump"):
-                    try:
-                        import market_data as _md_cg
-                        _c_st = await _md_cg.get_live_pump_curve_state(address)
-                        if _c_st:
-                            if _c_st.get("complete"):
-                                if _dex_fin in ("pump", "pumpfun"):
-                                    print(f"🚫 [JEV CURVE-MIGRATED] {symbol} ({address[:8]}): bonding curve уже завершена — ждём AMM, блок старого кёрва!")
-                                    return False, "fills-flush-wait curve-graduated"
-                            else:
-                                _r_sol_g = float(_c_st.get("real_sol", 0.0) or 0.0)
-                                _c_px_g = float(_c_st.get("price_usd", 0.0) or 0.0)
-                                if _r_sol_g < 1.8:
-                                    print(f"🚫 [JEV CURVE-EMPTY-RUG] {symbol} ({address[:8]}): реальный SOL на кривой {_r_sol_g:.3f} < 1.8 SOL — кёрв слит в 0 ($PICKLES/GTAMICHI), блок!")
-                                    return False, "fills-flush-wait empty-curve-rug"
-                                if price > 0 and _c_px_g > 0:
-                                    if _c_px_g < price * 0.90:
-                                        print(f"🚫 [JEV CURVE-LIVE-DUMP] {symbol} ({address[:8]}): ончейн цена (${_c_px_g:.8f}) на {(1.0 - _c_px_g / price) * 100:.1f}% ниже скана (${price:.8f}) — обвал в моменте, блок!")
-                                        return False, "fills-flush-wait curve-live-dump"
-                                    if _c_px_g > price * 1.35:
-                                        print(f"🚫 [JEV CURVE-SPIKE] {symbol} ({address[:8]}): ончейн цена выше скана на {(_c_px_g/price - 1)*100:+.1f}% — пропуск спайка!")
-                                        return False, "fills-flush-wait curve-price-spike"
-                                    price = _c_px_g
-                                    wick_price = price * (1.0 + wick_pct)
-                    except Exception:
-                        pass
+                import market_data as _md_cg
 
-                if _dex_fin not in ("pump", "pumpfun"):
-                    _jup_live_px = await JupiterAPI.get_price(address)
-                    if _jup_live_px and _jup_live_px > 0 and price > 0:
-                        if _jup_live_px < price * 0.925:
-                            print(f"🚫 [JEV-LIVE-DUMP] {symbol} ({address[:8]}): живая цена Jupiter (${_jup_live_px:.8f}) уже на {(1.0 - _jup_live_px / price) * 100:.1f}% ниже DexScreener (${price:.8f}) — обвал в моменте, блок входа!")
-                            return False, "fills-flush-wait live-jup-dump"
-                        _jup_up_ratio = _jup_live_px / price
-                        if _jup_up_ratio > 1.30:
-                            print(f"🚫 [JEV-PRICE-MISMATCH] {symbol} ({address[:8]}): Jupiter (${_jup_live_px:.8f}) vs DS (${price:.8f}) опережение {_jup_up_ratio:.2f}x (>1.30x) — защита от вертикального входа!")
-                            return False, f"fills-flush-wait jup-ds-mismatch ({_jup_up_ratio:.2f}x)"
-                        price = _jup_live_px
+                async def _jev_sellable():
+                    return await JupiterAPI.is_token_sellable(address)
+
+                async def _jev_orderflow():
+                    return await _md_cg.verify_entry_onchain_and_orderflow(
+                        address, symbol, pair, price
+                    )
+
+                _sell_res_j, _of_res_j = await asyncio.gather(
+                    _jev_sellable(), _jev_orderflow(), return_exceptions=True
+                )
+
+                if isinstance(_sell_res_j, tuple):
+                    _j_ok, _j_why = _sell_res_j
+                    _w_low = str(_j_why or "").lower()
+                    if not _j_ok and any(k in _w_low for k in ("no routes", "cannot sell", "honeypot", "freeze", "0 sol returned")):
+                        print(f"🚫 [PRE-FLIGHT BLOCKED] Отказ входа {symbol} ({address[:8]}): токен непродаваем на DEX ({_j_why}) — предотвращен слив -100%!")
+                        return False, f"pre-flight-unsellable ({_j_why})"
+
+                if isinstance(_of_res_j, tuple) and len(_of_res_j) == 4:
+                    _of_ok, _of_px, _of_why, _of_meta = _of_res_j
+                    if not _of_ok:
+                        print(f"🚫 [JEV-PREFLIGHT-BLOCKED] {symbol} ({address[:8]}): {_of_why} — блок входа!")
+                        return False, f"fills-flush-wait {_of_why}"
+                    if _of_px and _of_px > 0:
+                        price = _of_px
                         wick_price = price * (1.0 + wick_pct)
+                    if isinstance(_of_meta, dict):
+                        if _of_meta.get("wash_ratio"):
+                            _of_feat_j["wash_ratio"] = _of_meta["wash_ratio"]
+                        if _of_meta.get("smart_buyers"):
+                            _of_feat_j["smart_tape_n"] = len(_of_meta["smart_buyers"])
+                            print(f"🧠 [JEV-SMART-TAPE] {symbol} ({address[:8]}): вход подтверждён {len(_of_meta['smart_buyers'])} топ-кошельками!")
+                        if _of_meta.get("onchain_source"):
+                            _of_feat_j["onchain_source"] = _of_meta["onchain_source"]
             except Exception:
                 pass
 
@@ -2464,7 +2459,7 @@ class GrokJevEngine:
             ml_confidence=rkt_final,
             initial_liquidity_usd=_fliq,
             pair_data=pair,
-            ml_features={**_entry_features(pair, _h_stats, jev_data), **_fcr_feat}
+            ml_features={**_entry_features(pair, _h_stats, jev_data), **_fcr_feat, **_of_feat_j}
         )
         if not _added_jev:
             return False, "tracker-rejected"

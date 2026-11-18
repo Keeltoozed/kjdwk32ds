@@ -192,6 +192,24 @@ class SmartMoneyHunter:
         except Exception as e:
             print(f"⚠️ Ошибка обновления {SOLANA_WALLETS_TXT}: {e}")
 
+    def get_trusted_wallets(self, chain: str = "solana", max_tier: int = 2) -> set:
+        """Возвращает проверенные Tier-1/Tier-2/VIP смарт-кошельки из базы."""
+        out = set()
+        try:
+            for w, data in (self.db or {}).items():
+                if not isinstance(data, dict):
+                    continue
+                if chain and data.get("chain", "solana") != chain:
+                    continue
+                if data.get("vip") or int(data.get("tier", 3) or 3) <= max_tier:
+                    out.add(w)
+            import config as _c
+            for vw in (getattr(_c, "VIP_KOL_WALLETS", {}) or {}).keys():
+                out.add(vw)
+        except Exception:
+            pass
+        return out
+
     def sync_to_config(self):
         """Синхронизирует топовые Base-кошельки в config.EVM_COPY_WALLETS."""
         try:

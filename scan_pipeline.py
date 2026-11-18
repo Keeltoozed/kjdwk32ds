@@ -29,18 +29,26 @@ async def _analyze_one(analyzer, mint, sem):
         async with sem:
             ok = await asyncio.wait_for(analyzer.analyze_token(mint), timeout=25.0)
             # Снимок состояния ВНУТРИ задачи (её контекст) — в родителе оно не видно.
+            sig = ""
+            try:
+                sig = (getattr(analyzer, "signals", {}) or {}).get(mint) or getattr(analyzer, "last_signal", "") or ""
+            except Exception:
+                sig = ""
+            score = float((getattr(analyzer, "rocket_scores", {}) or {}).get(mint) or getattr(analyzer, "last_score", 0.0) or 0.0)
             return (
                 ok,
-                float(getattr(analyzer, "last_score", 0.0) or 0.0),
+                score,
                 float(getattr(analyzer, "_last_top10", 0.0) or 0.0),
                 float(getattr(analyzer, "_last_dev", 0.0) or 0.0),
+                mint,
+                sig,
             )
     except asyncio.TimeoutError:
         print(f"⏱️ [SCAN-TIMEOUT] {mint[:8]}: анализ превысил 25с — пропуск.")
-        return (False, 0.0, 0.0, 0.0)
+        return (False, 0.0, 0.0, 0.0, mint, "")
     except Exception as e:
         print(f"⚠️ [SCAN-ERR] {mint[:8]}: {e}")
-        return (False, 0.0, 0.0, 0.0)
+        return (False, 0.0, 0.0, 0.0, mint, "")
 
 
 class ScanWindow:
@@ -78,7 +86,7 @@ class ScanWindow:
             return await asyncio.wait_for(asyncio.shield(task), timeout=28.0)
         except asyncio.TimeoutError:
             print(f"⏱️ [SCAN-WIN-TIMEOUT] {mint[:8]}: ожидание задачи превысило 28с — пропуск.")
-            return (False, 0.0, 0.0, 0.0)
+            return (False, 0.0, 0.0, 0.0, mint, "")
 
     async def close(self):
         """Отменяет недоработавшие задачи и забирает исключения (без 'never retrieved')."""
@@ -92,7 +100,18 @@ class ScanWindow:
 def apply_result(analyzer, result):
     """Восстанавливает в ТЕКУЩЕМ контексте состояние, снятое внутри задачи.
     Возвращает is_good (True/False/None)."""
-    ok, score, top10, dev = result
+    if len(result) >= 6:
+        ok, score, top10, dev, mint, sig = result[:6]
+        if mint:
+            if sig:
+                analyzer.signals[mint] = sig
+                analyzer.last_signal = sig
+            if score:
+                if not hasattr(analyzer, "rocket_scores"):
+                    analyzer.rocket_scores = {}
+                analyzer.rocket_scores[mint] = score
+    else:
+        ok, score, top10, dev = result[:4]
     analyzer.last_score = score
     analyzer._last_top10 = top10
     analyzer._last_dev = dev
