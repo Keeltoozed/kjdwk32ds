@@ -1809,13 +1809,13 @@ class Analyzer:
             _sol_p = float(get_sol_price_sync() or 150.0)
             if _sol_p <= 0:
                 _sol_p = 150.0
-            _min_curve_mcap = max(float(getattr(config, "MIN_PUMP_CURVE_MCAP_USD", 4000.0)), float(getattr(config, "MIN_PUMP_CURVE_MCAP_SOL", 52.0)) * _sol_p)
-            _max_curve_mcap = min(float(getattr(config, "MAX_PUMP_CURVE_MCAP_USD", 11500.0)), float(getattr(config, "MAX_PUMP_CURVE_MCAP_SOL", 152.0)) * _sol_p)
+            _min_curve_mcap = max(float(getattr(config, "MIN_PUMP_CURVE_MCAP_USD", 2800.0)), float(getattr(config, "MIN_PUMP_CURVE_MCAP_SOL", 35.0)) * _sol_p)
+            _max_curve_mcap = min(float(getattr(config, "MAX_PUMP_CURVE_MCAP_USD", 13500.0)), float(getattr(config, "MAX_PUMP_CURVE_MCAP_SOL", 175.0)) * _sol_p)
             if _fdv_curve_pre > 0 and _fdv_curve_pre < _min_curve_mcap:
                 return self._deny(
                     mint,
                     f"pump-curve-too-early {_fdv_curve_pre:.0f}<{_min_curve_mcap:.0f}",
-                    f"🚫 [CURVE-FLASH-RUG] {symbol} ({mint[:8]}): FDV ${_fdv_curve_pre:,.0f} < ${_min_curve_mcap:,.0f} — ранняя опасная зона кёрва (bob/EDDIE/Puchin).",
+                    f"🚫 [CURVE-FLASH-RUG] {symbol} ({mint[:8]}): FDV ${_fdv_curve_pre:,.0f} < ${_min_curve_mcap:,.0f} — ранняя опасная зона кёрва.",
                 )
             if _fdv_curve_pre > _max_curve_mcap:
                 return self._deny(
@@ -1823,48 +1823,45 @@ class Analyzer:
                     f"pump-curve-top {_fdv_curve_pre:.0f}>{_max_curve_mcap:.0f}",
                     f"🚫 [CURVE-CLIFF] {symbol} ({mint[:8]}): FDV ${_fdv_curve_pre:,.0f} > ${_max_curve_mcap:,.0f} (зона разгрузки снайперов на кривой — ждём миграцию на PumpSwap).",
                 )
-            # Строгий бокс сырой кривой Pump.fun (пропускает GTA6 +115%, RAUL +38.5%, ROCKSTAR +401%, отсекает $PICKLES -71%, amogus -66%, GTAMICHI -65%, bob -34%):
-            # 1) Покупок >= 120, чистый приток >= +35, соотношение b/s >= 1.22x
-            # 2) Объём 5м: от $8,000 до $25,000 (кёрвы <$8k объёма — тонкие бандл-ловушки $PICKLES/$4.8k, GTAMICHI/$4.9k, bob/$4.0k)
-            # 3) Импульс m5 в коридоре [+35%, +165%], m1 <= +30% (отсекает стоячий слив amogus +18.6% и перегретый хай $PICKLES +200%)
-            # 4) Возраст на кривой от 1.8м до 3.6м (старше 3.6м на кривой без миграции — раздача стека девом, кейс amogus 4.4м)
-            if _b5_pre < 120 or (_s5_pre > 0 and _b5_pre < int(_s5_pre * 1.22)) or (_b5_pre - _s5_pre) < 35:
+            # Бокс живой кривой Pump.fun (пропускает GTA6 +115%, RAUL +38.5%, ROCKSTAR +401%, DACT +76%):
+            # От пустых/слитых кёрвов ($PICKLES, GTAMICHI, AabL4) защищает ончейн-аудит резервов (real_sol >= 1.8 SOL).
+            if _b5_pre < 25 or (_s5_pre > 0 and _b5_pre < int(_s5_pre * 1.15)) or (_b5_pre - _s5_pre) < 5:
                 return self._deny(
                     mint,
                     f"early-curve-weak-buyers fdv=${_fdv_curve_pre:.0f} {_b5_pre}b/{_s5_pre}s",
-                    f"🚫 [CURVE-WEAK-BUYERS] {symbol} ({mint[:8]}): на кривой мало покупателей {_b5_pre}b/{_s5_pre}s (нужно >=120b, net >=+35, b/s >=1.22x) — риск слива (GTAMICHI/bob/amogus).",
+                    f"🚫 [CURVE-WEAK-BUYERS] {symbol} ({mint[:8]}): на кривой слабый приток покупателей {_b5_pre}b/{_s5_pre}s (нужно >=25b, net >=+5, b/s >=1.15x).",
                 )
-            if _vm5_pre < 8000.0:
+            if _vm5_pre < 1800.0:
                 return self._deny(
                     mint,
-                    f"curve-low-vol5 ${_vm5_pre:.0f}<$8000",
-                    f"🚫 [CURVE-LOW-VOL] {symbol} ({mint[:8]}): объём кривой ${_vm5_pre:,.0f} < $8,000 — тонкая кривая ($PICKLES/GTAMICHI/bob).",
+                    f"curve-low-vol5 ${_vm5_pre:.0f}<$1800",
+                    f"🚫 [CURVE-LOW-VOL] {symbol} ({mint[:8]}): объём кривой ${_vm5_pre:,.0f} < $1,800 — вялая кривая.",
                 )
-            if _vm5_pre > 25000.0:
+            if _vm5_pre > 35000.0:
                 return self._deny(
                     mint,
-                    f"curve-wash-overchurn ${_vm5_pre:.0f}>$25k",
-                    f"🚫 [CURVE-OVERCHURN] {symbol} ({mint[:8]}): объём на сырой кривой ${_vm5_pre:,.0f} > $25,000 — перегретый wash-флип снайперов!",
+                    f"curve-wash-overchurn ${_vm5_pre:.0f}>$35k",
+                    f"🚫 [CURVE-OVERCHURN] {symbol} ({mint[:8]}): объём на сырой кривой ${_vm5_pre:,.0f} > $35,000 — перегретый wash-флип снайперов!",
                 )
-            if _m5 < 35.0 or _m5 > 165.0 or _m1 > 30.0:
+            if _m5 < 15.0 or _m5 > 185.0 or _m1 > 40.0:
                 return self._deny(
                     mint,
                     f"curve-m5-out-of-box m5={_m5:+.0f}% m1={_m1:+.0f}%",
-                    f"🚫 [CURVE-MOMENTUM-BOX] {symbol} ({mint[:8]}): импульс кривой m5 {_m5:+.1f}% (нужно +35%..+165%), m1 {_m1:+.1f}% (<=+30%) — вне зоны ракеты ($PICKLES/amogus).",
+                    f"🚫 [CURVE-MOMENTUM-BOX] {symbol} ({mint[:8]}): импульс кривой m5 {_m5:+.1f}% (нужно +15%..+185%), m1 {_m1:+.1f}% (<=+40%) — вне диапазона старта ракеты.",
                 )
-            if _age_min_pre > 3.6:
+            if _age_min_pre > 6.0:
                 return self._deny(
                     mint,
-                    f"curve-stalled-age {_age_min_pre:.1f}m>3.6m",
-                    f"🚫 [CURVE-STALLED] {symbol} ({mint[:8]}): токен застрял на сырой кривой {_age_min_pre:.1f}м > 3.6м без миграции — дев разгружает в покупки (кейс amogus -65%)!",
+                    f"curve-stalled-age {_age_min_pre:.1f}m>6.0m",
+                    f"🚫 [CURVE-STALLED] {symbol} ({mint[:8]}): токен застрял на сырой кривой {_age_min_pre:.1f}м > 6.0м без миграции — стоячая монета.",
                 )
-            if _age_min_pre < 1.8:
+            if _age_min_pre < 0.8:
                 try:
                     from birth_tracker import birth_tracker as _bt_c_wait
                     _bt_c_wait.add_to_waiting_room(mint)
                 except Exception:
                     pass
-                print(f"⏳ [CURVE-MATURING] {symbol} ({mint[:8]}): кривой {_age_min_pre:.1f}м < 1.8м — ждём выживания после 1-й минуты (защита от 0-1м дампов HUGH/EDDIE/PUSSY).")
+                print(f"⏳ [CURVE-MATURING] {symbol} ({mint[:8]}): кривой {_age_min_pre:.1f}м < 0.8м — созревает до 45с в Waiting Room.")
                 return None
         # FAST-TRACK ДЛЯ МОЛОДЫХ РАКЕТ:
         _is_fast_rocket = (_age_min_pre >= 0.25 and _vm5_pre >= 1500.0 and _b5_pre >= 8 and _s5_pre >= 1 and _b5_pre >= _s5_pre and _m5 >= 2.0)

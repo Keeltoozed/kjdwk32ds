@@ -132,15 +132,27 @@ async def position_security_auditor_loop(analyzer, tracker):
                                 # Экстренный случай: за один тик ликва обвалилась — паник-сейл сразу
                                 _fast_drain = _liq_crash_pct >= _eff_drain_fast and _peak_liq >= 3000.0
 
-                                if _has_liq_data and (_emergency_exit or _fast_drain):
-                                    # Выходим НЕМЕДЛЕННО пока цена ещё есть, не ждём 2 тика подтверждения
+                                if _has_liq_data and (_is_zero_liq or _crit_drained):
+                                    # Физическое обнуление пула девом (LP <= $200 или 0) — выход МГНОВЕННО
                                     _px_now = 0.0 if (_is_zero_liq or _crit_drained or _sol_liq <= 250.0) else float(getattr(position, "current_price_usd", 0.0) or 0.0)
-                                    _msg = f"Zero/Drained Liq ${_sol_liq:.0f}" if (_is_zero_liq or _crit_drained) else f"Liq Crash ${_sol_liq:.0f} from ${_peak_liq:.0f} (-{_liq_crash_pct*100:.0f}%)"
-                                    _tag = "Liquidity Drain Escape" if _emergency_exit else "Fast Liquidity Drain Panic"
+                                    _msg = f"Zero/Drained Liq ${_sol_liq:.0f}"
                                     print(f"🚨 [LIQ-LOSS] {position.symbol} ({mint[:8]}): {_msg} — выход МГНОВЕННО!")
-                                    tracker.close_position(mint, _px_now, f"{_tag} (Liq dropped to ${_sol_liq:.0f} from ${_peak_liq:.0f})")
+                                    tracker.close_position(mint, _px_now, f"Liquidity Drain Rug (Liq ${_sol_liq:.0f} from ${_peak_liq:.0f})")
                                     continue
+                                elif _has_liq_data and (_emergency_exit or _fast_drain):
+                                    # Защита от разового тика/шума DexScreener (кейс AUDACITY: просадка 33% на 0м -> паник-сейл в -54%):
+                                    # требуем 2 тика подтверждения, если ликвидность всё ещё > $1,000
+                                    _drain_cnt = getattr(position, "_fast_drain_streak", 0) + 1
+                                    position._fast_drain_streak = _drain_cnt
+                                    if _drain_cnt >= 2 or _sol_liq <= 800.0 or _liq_crash_pct >= 0.70:
+                                        _px_now = float(getattr(position, "current_price_usd", 0.0) or 0.0)
+                                        _tag = "Liquidity Drain Escape" if _emergency_exit else "Fast Liquidity Drain Panic"
+                                        _msg = f"Liq Crash ${_sol_liq:.0f} from ${_peak_liq:.0f} (-{_liq_crash_pct*100:.0f}%)"
+                                        print(f"🚨 [LIQ-LOSS] {position.symbol} ({mint[:8]}): {_msg} (подтверждено 2 тика) — выход!")
+                                        tracker.close_position(mint, _px_now, f"{_tag} (Liq dropped to ${_sol_liq:.0f} from ${_peak_liq:.0f})")
+                                        continue
                                 elif _has_liq_data and _liq_crash_pct >= 0.25 and _peak_liq >= 3000.0:
+                                    position._fast_drain_streak = 0
                                     # Умеренный дроп 25%+: требуем 3 тика устойчивого подтверждения (не режем на рыночных шумах и кэше DexScreener)
                                     _drop_cnt = getattr(position, "_liq_drop_streak", 0) + 1
                                     position._liq_drop_streak = _drop_cnt
@@ -1732,6 +1744,33 @@ async def scanner_loop(analyzer, tracker):
                                     if not _j_ok and any(k in _w_low for k in ("no routes", "cannot sell", "honeypot", "freeze", "0 sol returned")):
                                         print(f"🚫 [SCANNER PRE-FLIGHT BLOCKED] {actual_symbol} ({mint[:8]}): токен непродаваем на DEX ({_j_why}) — предотвращен вход!")
                                         continue
+                                    # Ончейн проверка bonding curve Pump.fun (задержка < 250мс):
+                                    if _dex_id in ("pump", "pumpfun") or mint.lower().endswith("pump"):
+                                        try:
+                                            import market_data as _md_c
+                                            _c_state = await _md_c.get_live_pump_curve_state(mint)
+                                            if _c_state:
+                                                if _c_state.get("complete"):
+                                                    if _dex_id in ("pump", "pumpfun"):
+                                                        print(f"🚫 [SCANNER CURVE-MIGRATED] {actual_symbol} ({mint[:8]}): bonding curve уже завершена (complete=True) — ждём AMM, блок старого кёрва!")
+                                                        continue
+                                                else:
+                                                    _r_sol = float(_c_state.get("real_sol", 0.0) or 0.0)
+                                                    _c_px = float(_c_state.get("price_usd", 0.0) or 0.0)
+                                                    if _r_sol < 1.8:
+                                                        print(f"🚫 [SCANNER CURVE-EMPTY-RUG] {actual_symbol} ({mint[:8]}): реальный SOL на кривой {_r_sol:.3f} < 1.8 SOL — кёрв слит в 0 ($PICKLES/GTAMICHI), блок!")
+                                                        continue
+                                                    if entry_price > 0 and _c_px > 0:
+                                                        if _c_px < entry_price * 0.90:
+                                                            print(f"🚫 [SCANNER CURVE-LIVE-DUMP] {actual_symbol} ({mint[:8]}): ончейн цена (${_c_px:.8f}) на {(1.0 - _c_px / entry_price) * 100:.1f}% ниже скана (${entry_price:.8f}) — обвал в реальном времени, блок!")
+                                                            continue
+                                                        if _c_px > entry_price * 1.35:
+                                                            print(f"🚫 [SCANNER CURVE-SPIKE] {actual_symbol} ({mint[:8]}): ончейн цена выше скана на {(_c_px/entry_price - 1)*100:+.1f}% — пропуск спайка!")
+                                                            continue
+                                                        entry_price = _c_px
+                                        except Exception:
+                                            pass
+
                                     # На сырых кривых pump/pumpfun НЕ сверяем с котировкой роутера Jupiter (искажает цену виртуального кёрва):
                                     if _dex_id not in ("pump", "pumpfun"):
                                         _live_jup_px = await JupiterAPI.get_price(mint)

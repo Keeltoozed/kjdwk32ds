@@ -955,3 +955,81 @@ async def fetch_dexscreener_gainers(timeframe: str = "5m", network: str = "all")
 
     _gainers_cache[cache_key] = (now, out)
     return out
+
+
+PUMP_PROGRAM_PUBKEY_STR = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"
+
+async def get_live_pump_curve_state(mint: str) -> dict:
+    """Ончейн проверка резервов bonding curve Pump.fun с задержкой < 250мс.
+    Возвращает dict с live ценой, реальным SOL и статусом complete.
+    Спасает от покупки пустых/слитых в 0 кёрвов ($PICKLES, GTAMICHI, AabL4, bob)."""
+    if not mint or not str(mint).endswith("pump"):
+        return None
+    try:
+        from solders.pubkey import Pubkey
+        import struct, base64, config
+        from http_client import fetch_json
+        from sol_price import get_sol_price_sync
+
+        pump_prog = Pubkey.from_string(PUMP_PROGRAM_PUBKEY_STR)
+        mint_pk = Pubkey.from_string(str(mint).strip())
+        bonding_curve_pk, _ = Pubkey.find_program_address([b"bonding-curve", bytes(mint_pk)], pump_prog)
+        curve_addr = str(bonding_curve_pk)
+
+        rpc_endpoints = [
+            getattr(config, "HELIUS_RPC_URL", ""),
+            "https://api.mainnet-beta.solana.com",
+            "https://solana-rpc.publicnode.com"
+        ]
+        rpc_endpoints = [u for u in rpc_endpoints if u and ("api-key" not in u or getattr(config, "HELIUS_API_KEY", ""))]
+
+        payload = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "getAccountInfo",
+            "params": [curve_addr, {"encoding": "base64"}]
+        }
+
+        for rpc in rpc_endpoints:
+            try:
+                status, resp = await fetch_json(rpc, method="POST", json_data=payload, timeout=2.0, retries=0)
+                if status == 200 and isinstance(resp, dict):
+                    val = resp.get("result", {}).get("value")
+                    if val is None:
+                        return None
+                    data_list = val.get("data", [])
+                    if not data_list:
+                        return None
+                    raw = base64.b64decode(data_list[0])
+                    if len(raw) < 49:
+                        return None
+                    v_token, v_sol, r_token, r_sol, supply, complete = struct.unpack('<QQQQQ?', raw[8:49])
+                    sol_p = float(get_sol_price_sync() or 150.0)
+                    if sol_p <= 0: sol_p = 150.0
+
+                    real_sol = r_sol / 1e9
+                    v_sol_flt = v_sol / 1e9
+                    v_tok_flt = v_token / 1e6
+                    price_sol = (v_sol_flt / v_tok_flt) if v_tok_flt > 0 else 0.0
+                    price_usd = price_sol * sol_p
+                    fdv_usd = price_usd * 1_000_000_000.0
+                    prog_pct = min(100.0, (real_sol / 85.0) * 100.0)
+
+                    return {
+                        "mint": mint,
+                        "curve_address": curve_addr,
+                        "complete": bool(complete),
+                        "real_sol": real_sol,
+                        "v_sol": v_sol_flt,
+                        "v_token": v_tok_flt,
+                        "price_sol": price_sol,
+                        "price_usd": price_usd,
+                        "fdv_usd": fdv_usd,
+                        "progress_pct": prog_pct,
+                    }
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return None
+

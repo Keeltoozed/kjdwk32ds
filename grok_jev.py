@@ -517,20 +517,21 @@ class GrokJevEngine:
                 m1 = max(-25.0, min(25.0, m5 * 0.15))
         h1 = float(pc.get("h1", 0) or 0)
 
-        # КАТЕГОРИЧЕСКИЙ БЛОК: СМЕРТЕЛЬНАЯ ЗОНА 0-1.8 МИНУТ (КРИВЫЕ И МИГРАЦИИ)
+        # 1.1. Живой бокс сырой кривой Pump.fun (пропускает GTA6 +115%, RAUL +38%, ROCKSTAR +401%, DACT +76%):
+        # От пустых/слитых кёрвов ($PICKLES, GTAMICHI, AabL4) защищает ончейн-аудит резервов (real_sol >= 1.8 SOL).
         _avg_tx_e = vol_m5 / max(1, b5 + s5)
         if dex_id in ("pump", "pumpfun"):
-            if fdv_mc > 0 and (fdv_mc < 4000.0 or fdv_mc > 11500.0):
-                return False, f"pump-curve-fdv-out-of-sweet-spot ${fdv_mc:,.0f} not in [$4.0k, $11.5k]"
-            if b5 < 120 or (s5 > 0 and b5 < int(s5 * 1.22)) or (b5 - s5) < 35:
-                return False, f"early-curve-weak-buyers fdv=${fdv_mc:.0f} {b5}b/{s5}s (need >=120b, net >=+35)"
-            if vol_m5 < 8000.0 or vol_m5 > 25000.0:
-                return False, f"pump-curve-vol5-out-of-sweet-spot ${vol_m5:,.0f} not in [$8.0k, $25.0k]"
-            if m5 < 35.0 or m5 > 165.0 or m1 > 30.0:
+            if fdv_mc > 0 and (fdv_mc < 2800.0 or fdv_mc > 13500.0):
+                return False, f"pump-curve-fdv-out-of-sweet-spot ${fdv_mc:,.0f} not in [$2.8k, $13.5k]"
+            if b5 < 25 or (s5 > 0 and b5 < int(s5 * 1.15)) or (b5 - s5) < 5:
+                return False, f"early-curve-weak-buyers fdv=${fdv_mc:.0f} {b5}b/{s5}s (need >=25b, net >=+5)"
+            if vol_m5 < 1800.0 or vol_m5 > 35000.0:
+                return False, f"pump-curve-vol5-out-of-sweet-spot ${vol_m5:,.0f} not in [$1.8k, $35.0k]"
+            if m5 < 15.0 or m5 > 185.0 or m1 > 40.0:
                 return False, f"pump-curve-momentum-out-of-box m5={m5:+.1f}% m1={m1:+.1f}%"
-            if age_min > 3.6:
-                return False, f"pump-curve-stalled-age {age_min:.1f}m > 3.6m"
-            _sol_min_age_g = 1.8
+            if age_min > 6.0:
+                return False, f"pump-curve-stalled-age {age_min:.1f}m > 6.0m"
+            _sol_min_age_g = 0.8
         else:
             _sol_min_age_g = 0.8 if (vol_m5 >= 20000.0 and b5 >= int(s5 * 1.30) and m5 >= 10.0) else 1.5
         if age_min < _sol_min_age_g:
@@ -2405,6 +2406,34 @@ class GrokJevEngine:
                     print(f"🚫 [PRE-FLIGHT BLOCKED] Отказ входа {symbol} ({address[:8]}): токен непродаваем на DEX ({_j_why}) — предотвращен слив -100%!")
                     return False, f"pre-flight-unsellable ({_j_why})"
                 _dex_fin = str(pair.get("dexId", "")).lower()
+                # Ончейн проверка bonding curve Pump.fun (задержка < 250мс):
+                if _dex_fin in ("pump", "pumpfun") or address.lower().endswith("pump"):
+                    try:
+                        import market_data as _md_cg
+                        _c_st = await _md_cg.get_live_pump_curve_state(address)
+                        if _c_st:
+                            if _c_st.get("complete"):
+                                if _dex_fin in ("pump", "pumpfun"):
+                                    print(f"🚫 [JEV CURVE-MIGRATED] {symbol} ({address[:8]}): bonding curve уже завершена — ждём AMM, блок старого кёрва!")
+                                    return False, "fills-flush-wait curve-graduated"
+                            else:
+                                _r_sol_g = float(_c_st.get("real_sol", 0.0) or 0.0)
+                                _c_px_g = float(_c_st.get("price_usd", 0.0) or 0.0)
+                                if _r_sol_g < 1.8:
+                                    print(f"🚫 [JEV CURVE-EMPTY-RUG] {symbol} ({address[:8]}): реальный SOL на кривой {_r_sol_g:.3f} < 1.8 SOL — кёрв слит в 0 ($PICKLES/GTAMICHI), блок!")
+                                    return False, "fills-flush-wait empty-curve-rug"
+                                if price > 0 and _c_px_g > 0:
+                                    if _c_px_g < price * 0.90:
+                                        print(f"🚫 [JEV CURVE-LIVE-DUMP] {symbol} ({address[:8]}): ончейн цена (${_c_px_g:.8f}) на {(1.0 - _c_px_g / price) * 100:.1f}% ниже скана (${price:.8f}) — обвал в моменте, блок!")
+                                        return False, "fills-flush-wait curve-live-dump"
+                                    if _c_px_g > price * 1.35:
+                                        print(f"🚫 [JEV CURVE-SPIKE] {symbol} ({address[:8]}): ончейн цена выше скана на {(_c_px_g/price - 1)*100:+.1f}% — пропуск спайка!")
+                                        return False, "fills-flush-wait curve-price-spike"
+                                    price = _c_px_g
+                                    wick_price = price * (1.0 + wick_pct)
+                    except Exception:
+                        pass
+
                 if _dex_fin not in ("pump", "pumpfun"):
                     _jup_live_px = await JupiterAPI.get_price(address)
                     if _jup_live_px and _jup_live_px > 0 and price > 0:

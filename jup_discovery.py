@@ -938,6 +938,33 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
             if not _j_ok and any(k in str(_j_why or "").lower() for k in ("no routes", "cannot sell", "honeypot", "freeze", "0 sol returned")):
                 print(f"🚫 [{source_tag}-UNSELLABLE] {_sym_tmp} ({mint[:8]}): токен непродаваем на DEX ({_j_why}) — отмена входа!")
                 return False
+
+            if mint.lower().endswith("pump"):
+                try:
+                    import market_data as _md_jup
+                    _c_j = await _md_jup.get_live_pump_curve_state(mint)
+                    if _c_j:
+                        if _c_j.get("complete"):
+                            pass  # уже мигрировал на DEX
+                        else:
+                            _r_sol_j = float(_c_j.get("real_sol", 0.0) or 0.0)
+                            _c_px_j = float(_c_j.get("price_usd", 0.0) or 0.0)
+                            if _r_sol_j < 1.8:
+                                print(f"🚫 [{source_tag}-CURVE-EMPTY-RUG] {_sym_tmp} ({mint[:8]}): реальный SOL на кривой {_r_sol_j:.3f} < 1.8 SOL — кёрв слит в 0, блок!")
+                                return False
+                            if price > 0 and _c_px_j > 0:
+                                if _c_px_j < price * 0.90:
+                                    print(f"🚫 [{source_tag}-CURVE-LIVE-DUMP] {_sym_tmp} ({mint[:8]}): ончейн цена (${_c_px_j:.8f}) на {(1.0 - _c_px_j / price) * 100:.1f}% ниже скана (${price:.8f}) — обвал в моменте, отмена!")
+                                    return False
+                                if _c_px_j > price * 1.35:
+                                    print(f"🚫 [{source_tag}-CURVE-SPIKE] {_sym_tmp} ({mint[:8]}): ончейн цена выше скана на {(_c_px_j/price - 1)*100:+.1f}% — пропуск спайка!")
+                                    return False
+                                price = _c_px_j
+                                if _wick_stop_price and _wick_pct:
+                                    _wick_stop_price = price * (1.0 + _wick_pct)
+                except Exception:
+                    pass
+
             _jup_live_px = await JupiterAPI.get_price(mint)
             if _jup_live_px and _jup_live_px > 0 and price > 0:
                 _ref_dump_px = min(price, ds_price) if ds_price > 0 else price
