@@ -510,6 +510,15 @@ def evaluate_entry_momentum(
     if m5 > _max_m5_dyn:
         return False, f"m5-parabolic-top {m5:+.1f}% > +{_max_m5_dyn:.0f}% (buying exhausted peak, enter at ignition only)"
 
+    # Защита от 1м отскока дохлой кошки внутри 5м слива (кейсы Makenzi m5=+4.98%, m1=+13.74% -> -26.4%; CC m5=+2.85%, m1=+17.86% -> -26.1%):
+    # если 1м свеча значительно выше 5м изменения (значит предшествующие 4 минуты токен летел вниз), не покупаем вершину отскока!
+    if m1 > 4.0 and m5 < 15.0 and m1 > (m5 + 3.0):
+        return False, f"dead-cat-1m-spike m1 {m1:+.1f}% >> m5 {m5:+.1f}% (4m dump before 1m bounce)"
+
+    # Защита от кровоточащего часового тренда без мощного объёма (кейс LASTBOOK age 11.8m, h1 -10.0%, vol5 $7,087 -> -16.4%; GENTLEMEN vol5 $34.3k проходит):
+    if h1 < -3.0 and (age_min >= 8.0 or vol5_usd < 20000.0):
+        return False, f"bleeding-h1-downtrend h1 {h1:+.1f}% at age {age_min:.1f}m vol5 ${vol5_usd:,.0f}"
+
     # 1. Свежая миграция / накопление покупателей:
     _fma_vol_req = 700.0 if age_min <= 3.0 else 1000.0
     is_fresh_migration_accumulation = (
@@ -657,9 +666,9 @@ DD_THROTTLE_START_USD = 15.0
 # === ВХОД В ЗРЕЛЫЕ ВЫПУСКНИКИ RAYDIUM / PUMPSWAP И РАННИЕ КРИВЫЕ PUMP.FUN ===
 SNIPER_ENTRIES_ENABLED = True             # ВКЛЮЧЕНО: мгновенный вход в свежие кривые/миграции со стрима
 ALLOW_UNGRADUATED_PUMPFUN = True          # ВКЛЮЧЕНО: ловим ракеты на кривой Pump.fun до миграции (открывает 大A +1559%, ROCKSTAR +163%, NEIL +52%, BLUE +36%)
-MIN_PUMP_CURVE_MCAP_USD = 3200.0          # Порог кривой $3.2k (отсекает пустые $2k кёрвы, пропускает NEIL $3.3k->$5k +52% и BLUE $6.5k +36%)
+MIN_PUMP_CURVE_MCAP_USD = 4000.0          # Порог кривой $4.0k (отсекает bob $3.5k -34%, пропускает RAUL $4.1k +38%, GTA6 $8.1k +115%, ROCKSTAR $8.1k +401%)
 MAX_PUMP_CURVE_MCAP_USD = 11500.0         # Потолок сырой кривой $11.5k (выше $11.5k до миграции снайперы разгружаются; дальше ждём миграцию на PumpSwap)
-MIN_PUMP_CURVE_MCAP_SOL = 42.0            # Нижняя граница золотой зоны кривой (~42 SOL ≈ $3.2k)
+MIN_PUMP_CURVE_MCAP_SOL = 52.0            # Нижняя граница золотой зоны кривой (~52 SOL ≈ $4.0k)
 MAX_PUMP_CURVE_MCAP_SOL = 152.0           # Верхняя граница золотой зоны сырой кривой (~152 SOL ≈ $11.5k)
 PUMP_MIGRATION_MCAP_SOL = 410.0           # FDV миграции pump.fun
 PUMP_DUMP_FLOOR_SOL = 50.0                # Порог post-mig-dumped (~50 SOL, разрешает быстрые реклеймы)
@@ -760,7 +769,7 @@ WHALE_DUMP_GUARD_PCT = 0.22
 EVM_RUNNER_CRASH = 0.25
 EVM_NORMAL_CRASH = 0.22
 
-BREAKEVEN_PCT = 0.10       # Breakeven Shield: пик >= +8% -> сделка не может закрыться в минус (безубыток +0.5%)
+BREAKEVEN_PCT = 0.15       # Breakeven Shield: пик >= +15% -> перенос в безубыток (не выбивает YUKON на +10% шуме)
 
 
 def get_sol_tp_ladder(is_unlocked: bool) -> tuple:
@@ -1059,7 +1068,7 @@ FCR_STALL_M1 = 3.0                     # ...при мёртвом m1 = дев р
 FCR_SELL_DOMINANCE = 0.85              # sells/buys за 5м для сигнала "продавцы давят"
 FCR_MIN_SELL_COUNT = 120               # Абсолютный минимум продаж, чтобы сигнал был значимым
 FCR_TRUSTED_FUNDERS = []              # Адреса-источники, которым доверяем (свои кошельки, биржи) — их кластеры игнорируются
-FCR_MAX_DURATION_SEC = 7.0            # Дедлайн анализа FCR 7с (на Render RPC успевает собрать кластеры)
+FCR_MAX_DURATION_SEC = 13.0           # Дедлайн анализа FCR 13с (исключает 7с таймауты на кривых)
 FCR_GRAPH_MIN_PCT = 0.05              # Узел сети RugCheck с долей < 0.05% — пыль, не участник фермы
 FCR_GRAPH_MAX_WALLETS = 15           # Сеть крупнее — это граф переводов толпы, а не ферма (вес режется)
 FCR_SIG_PAGE_LIMIT = 200              # Сколько подписей тянуть за раз (лёгкий payload для публичного RPC)

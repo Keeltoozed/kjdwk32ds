@@ -520,17 +520,17 @@ class GrokJevEngine:
         # КАТЕГОРИЧЕСКИЙ БЛОК: СМЕРТЕЛЬНАЯ ЗОНА 0-1.8 МИНУТ (КРИВЫЕ И МИГРАЦИИ)
         _avg_tx_e = vol_m5 / max(1, b5 + s5)
         if dex_id in ("pump", "pumpfun"):
-            if fdv_mc > 0 and (fdv_mc < 3200.0 or fdv_mc > 11500.0):
-                return False, f"pump-curve-fdv-out-of-sweet-spot ${fdv_mc:,.0f} not in [$3.2k, $11.5k]"
-            if s5 > 0 and b5 < int(s5 * 1.35):
-                return False, f"early-curve-weak-buyers fdv=${fdv_mc:.0f} {b5}b/{s5}s"
-            if (b5 - s5) < 15:
-                return False, f"early-curve-low-net-buyers {b5}b/{s5}s"
-            _min_c_v5 = 1800.0 if (b5 >= int(s5 * 2.0) and (b5 - s5) >= 15) else 2500.0
-            _max_c_v5 = 24000.0 if (m5 <= 135.0 and b5 >= int(s5 * 1.35) and _avg_tx_e >= 18.0) else 11500.0
-            if vol_m5 < _min_c_v5 or vol_m5 > _max_c_v5:
-                return False, f"pump-curve-vol5-out-of-sweet-spot ${vol_m5:,.0f} not in [${_min_c_v5:,.0f}, ${_max_c_v5:,.0f}]"
-            _sol_min_age_g = 1.0 if (_avg_tx_e >= 40.0 and b5 >= int(s5 * 1.80)) else 1.8
+            if fdv_mc > 0 and (fdv_mc < 4000.0 or fdv_mc > 11500.0):
+                return False, f"pump-curve-fdv-out-of-sweet-spot ${fdv_mc:,.0f} not in [$4.0k, $11.5k]"
+            if b5 < 120 or (s5 > 0 and b5 < int(s5 * 1.22)) or (b5 - s5) < 35:
+                return False, f"early-curve-weak-buyers fdv=${fdv_mc:.0f} {b5}b/{s5}s (need >=120b, net >=+35)"
+            if vol_m5 < 8000.0 or vol_m5 > 25000.0:
+                return False, f"pump-curve-vol5-out-of-sweet-spot ${vol_m5:,.0f} not in [$8.0k, $25.0k]"
+            if m5 < 35.0 or m5 > 165.0 or m1 > 30.0:
+                return False, f"pump-curve-momentum-out-of-box m5={m5:+.1f}% m1={m1:+.1f}%"
+            if age_min > 3.6:
+                return False, f"pump-curve-stalled-age {age_min:.1f}m > 3.6m"
+            _sol_min_age_g = 1.8
         else:
             _sol_min_age_g = 0.8 if (vol_m5 >= 20000.0 and b5 >= int(s5 * 1.30) and m5 >= 10.0) else 1.5
         if age_min < _sol_min_age_g:
@@ -904,6 +904,13 @@ class GrokJevEngine:
                   f"conf={llm_res.get('confidence')} [{llm_res.get('source', 'llm')}]")
             return True, llm_res, "PASS"
         if not getattr(_c, "JEV_LLM_ENFORCE", True):
+            # Если и LLM, и детерминированный математический алгоритм (_deterministic_jev_eval) забраковали токен
+            # (напр. $PICKLES: momentum_already_spent=0.78 > 0.65, pick_worth_trading=0.35 < 0.60 -> -70.8%), блокируем вход!
+            _worth_v = float(llm_res.get("pick_worth_trading", 0.7) or 0.0)
+            _mom_sp_v = float(llm_res.get("momentum_already_spent", 0.3) or 0.0)
+            if _worth_v < 0.48 or _mom_sp_v > 0.72:
+                print(f"🚫 [JEV-ALGO-VETO] {symbol} ({mint[:8]}): математический вето (worth={_worth_v:.2f}, mom_spent={_mom_sp_v:.2f}, {', '.join(failed)}) — отмена входа!")
+                return False, llm_res, "JEV+Algo hard-reject: " + ", ".join(failed)
             print(f"👻 [JEV-SHADOW] {symbol}: судья отказал бы ({', '.join(failed)}) -> пропуск (shadow)")
             return True, llm_res, "shadow-pass"
         return False, llm_res, "JEV soft-reject: " + ", ".join(failed)
@@ -2298,6 +2305,19 @@ class GrokJevEngine:
         if _fm1 < 0.0:
             print(f"🚫 [FINAL-RECHECK] {symbol} ({address[:8]}): красная 1м свеча ({_fm1:+.1f}%) — отмена покупки на падающем графике!")
             return False, f"fills-flush-wait final-recheck m1 {_fm1:+.1f}% falling"
+        _fm5 = float(((_fin.get("priceChange") or {}).get("m5", 0)) or 0)
+        _f_dex = str(_fin.get("dexId") or "").lower()
+        _max_fm1 = 30.0 if _f_dex in ("pump", "pumpfun") else float(getattr(_c, "MAX_ENTRY_M1_PCT", 60.0))
+        _max_fm5 = 165.0 if _f_dex in ("pump", "pumpfun") else float(getattr(_c, "MAX_ENTRY_M5_PCT", 175.0))
+        if _fm1 > _max_fm1:
+            print(f"🚫 [FINAL-RECHECK] {symbol} ({address[:8]}): вертикальный спайк m1 {_fm1:+.1f}% > +{_max_fm1:.0f}% (кейс $PICKLES) — отмена покупки хая!")
+            return False, f"fills-flush-wait final-recheck m1 spike {_fm1:+.1f}%"
+        if _fm5 > _max_fm5:
+            print(f"🚫 [FINAL-RECHECK] {symbol} ({address[:8]}): перегретый m5 {_fm5:+.1f}% > +{_max_fm5:.0f}% (кейс $PICKLES) — отмена покупки хая!")
+            return False, f"fills-flush-wait final-recheck m5 spike {_fm5:+.1f}%"
+        if _fm1 > 4.0 and _fm5 < 15.0 and _fm1 > (_fm5 + 3.0):
+            print(f"🚫 [FINAL-RECHECK] {symbol} ({address[:8]}): 1м отскок дохлой кошки (m1 {_fm1:+.1f}% >> m5 {_fm5:+.1f}%, кейс CC/Makenzi) — отмена входа!")
+            return False, f"fills-flush-wait final-recheck dead-cat-1m-spike"
         _prev_fv5 = float((pair.get("volume") or {}).get("m5", 0) or 0)
         _prev_ftx5 = int((pair.get("txns") or {}).get("m5", {}).get("buys", 0) or 0) + int((pair.get("txns") or {}).get("m5", {}).get("sells", 0) or 0)
         _fin_v5_chk = float((_fin.get("volume") or {}).get("m5", 0) or 0)

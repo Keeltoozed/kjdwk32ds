@@ -1682,6 +1682,12 @@ async def _analyze(mint: str, pair_data: Optional[dict], verdict: dict) -> dict:
             )
     except Exception:
         _fcr_is_dist_runner = False
+    _has_heavy_2hop_burner = any(
+        str(c.get("source") or "") == "burner_relay" and float(c.get("total_pct", 0.0) or 0.0) >= 10.0
+        for c in (verdict.get("clusters") or [])
+    )
+    if _has_heavy_2hop_burner:
+        _fcr_is_dist_runner = False
     if total >= block_at:
         if _fcr_is_dist_runner:
             verdict["verdict"] = "WARN"
