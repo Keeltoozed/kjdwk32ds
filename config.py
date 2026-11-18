@@ -74,7 +74,7 @@ BLOCK_PERMISSIONLESS_LIQ_FDV_TRAP = True   # Блокировать кастом
 REQUIRE_SOCIALS_ENABLED = False            # Не требовать соцсети на старте/зрелости (важна только живая ликвидность и импульс)
 MAX_ENTRY_H1_PCT = 180.0       # Было 1500.0: отсекает вертикальный вынос и хаи (фикс Y +944%)
 MAX_ENTRY_H6_PCT = 350.0       # Было 500.0: не входим в отработавшие топы
-MAX_ENTRY_M5_PCT = 220.0        # Не входим в перегретые свечи >+220% — защита от сливов на хаях (CLAUDHAO/PEPEVRAX -80%)
+MAX_ENTRY_M5_PCT = 175.0        # Потолок m5 +175% (по 161 сделке: m5>180% = -648% PnL; ракеты Rockstar +154%, DOGPOOP +165%, LIFTD +154%, DACT +59% <= 175%)
 MAX_ENTRY_M1_PCT = 60.0         # Потолок 1м свечи +60% для свежих запусков
 # MAX_ENTRY_M5_SPIKE_PCT убран — не блокируем вход по m5, пусть ракеты летят
 REQUIRE_SOCIALS_MIN_AGE_MIN = 9999.0  # Соцсети не обязательны (отключено)
@@ -667,10 +667,10 @@ DD_THROTTLE_START_USD = 15.0
 # === ВХОД В ЗРЕЛЫЕ ВЫПУСКНИКИ RAYDIUM / PUMPSWAP И РАННИЕ КРИВЫЕ PUMP.FUN ===
 SNIPER_ENTRIES_ENABLED = True             # ВКЛЮЧЕНО: мгновенный вход в свежие кривые/миграции со стрима
 ALLOW_UNGRADUATED_PUMPFUN = True          # ВКЛЮЧЕНО: ловим ракеты на кривой Pump.fun до миграции (открывает 大A +1559%, ROCKSTAR +163%)
-MIN_PUMP_CURVE_MCAP_USD = 2600.0          # Порог кривой от $2.6k (отсекает пустой кёрв $2,080, но захватывает старт первой волны $2.6k-$4.0k)
-MAX_PUMP_CURVE_MCAP_USD = 100000.0         # Верх кривой до миграционного обрыва ($65k)
-MIN_PUMP_CURVE_MCAP_SOL = 35.0            # Порог кривой pump.fun в SOL (~35 SOL ≈ $2.6k: пустой кёрв = 28 SOL / $2,080)
-MAX_PUMP_CURVE_MCAP_SOL = 300.0            # Верх входа на кривой перед миграцией
+MIN_PUMP_CURVE_MCAP_USD = 3800.0          # Порог кривой $3.8k (по 116 сделкам: <$3.8k = 6.2% WR, 0 ракет, -322% PnL; все 13 ракет >=$3.8k!)
+MAX_PUMP_CURVE_MCAP_USD = 11000.0         # Потолок сырой кривой $11.0k (выше $11k до миграции снайперы разгружаются = -510% PnL; дальше ждём миграцию на PumpSwap)
+MIN_PUMP_CURVE_MCAP_SOL = 50.0            # Нижняя граница золотой зоны кривой (~50 SOL ≈ $3.8k)
+MAX_PUMP_CURVE_MCAP_SOL = 148.0           # Верхняя граница золотой зоны сырой кривой (~148 SOL ≈ $11k)
 PUMP_MIGRATION_MCAP_SOL = 410.0           # FDV миграции pump.fun
 PUMP_DUMP_FLOOR_SOL = 50.0                # Порог post-mig-dumped (~50 SOL, разрешает быстрые реклеймы)
 JEV_MAX_TICKET_USD = 0.0
@@ -745,9 +745,9 @@ FLAT_PROFIT_PRICE_DRIFT_PCT = 0.03
 PUMP_XGB_ENABLED = False
 RAY_XGB_ENABLED = False
 ROCKET_XGB_ENABLED = True
-ROCKET_XGB_STAGE1_THRESHOLD = 12.0   # Единый порог 12%: кандидаты Stage 1 (VICEVAULT 13.5%, BAWSAQ 13.4%) не режутся впустую на Stage 2
-ROCKET_XGB_FINAL_THRESHOLD = 12.0     # Финальный порог 12% — гарантированно пропускает ракеты (Rockstar 23.97%, SS 19.9%, VICEVAULT 13.5%)
-ROCKET_XGB_THRESHOLD = 12.0
+ROCKET_XGB_STAGE1_THRESHOLD = 20.0   # Единый порог 20%: все 13 ракет на кривой и раннеры на DEX имели conf >= 20% (Rockstar 24%, OFFLINE 39%, DACT 47%)
+ROCKET_XGB_FINAL_THRESHOLD = 20.0     # Финальный порог 20%
+ROCKET_XGB_THRESHOLD = 20.0
 ROCKET_XGB_UNLOCKED_CUSTOM_MIN = 30.0  # Для кастомных пулов без сожжённого LP
 JEV_MAX_AGE_MIN = 240.0              # Пробои и консолидации до 240м (4ч): позволяет ловить мощные вторые волны и раннеры
 

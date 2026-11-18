@@ -517,12 +517,18 @@ class GrokJevEngine:
                 m1 = max(-25.0, min(25.0, m5 * 0.15))
         h1 = float(pc.get("h1", 0) or 0)
 
-        # КАТЕГОРИЧЕСКИЙ БЛОК: СМЕРТЕЛЬНАЯ ЗОНА МИГРАЦИИ И СНАЙПЕРОВ (0 - 1.5 МИНУТ НА AMM)
-        # В первые 90с после миграции на PumpSwap/Raydium снайперы кривой сливают бандлы (кейсы AUDACITY -54%, BREASTCOIN, MAYA).
-        # Настоящие ракеты (DACT 3.1m +103%, clipping 3.6m, WILL, UP) проходят после стабилизации 1-й свечи!
-        _sol_min_age_g = float(getattr(_c, "SOLANA_MIN_AGE_MIN", 0.05))
-        if dex_id not in ("pump", "pumpfun") and not (vol_m5 >= 20000.0 and b5 >= int(s5 * 1.30) and m5 >= 10.0):
-            _sol_min_age_g = max(_sol_min_age_g, 1.5)
+        # КАТЕГОРИЧЕСКИЙ БЛОК: СМЕРТЕЛЬНАЯ ЗОНА 0-1.9 МИНУТ (КРИВЫЕ И МИГРАЦИИ)
+        # На кривых <1.9м и в первые 90с миграции снайперы сливают начальные бандлы (кейсы HUGH -68%, EDDIE -17%, PUSSY -17%, AUDACITY -54%).
+        # Настоящие ракеты (Rockstar 2.5m +401%, OFFLINE 2.1m +300%, SI 2.6m +83%, DACT 3.1m +103%) входят после 1.9м!
+        _avg_tx_e = vol_m5 / max(1, b5 + s5)
+        if dex_id in ("pump", "pumpfun"):
+            if fdv_mc > 0 and (fdv_mc < 3800.0 or fdv_mc > 11000.0):
+                return False, f"pump-curve-fdv-out-of-sweet-spot ${fdv_mc:,.0f} not in [$3.8k, $11k]"
+            if vol_m5 < 2500.0 or vol_m5 > 11500.0:
+                return False, f"pump-curve-vol5-out-of-sweet-spot ${vol_m5:,.0f} not in [$2.5k, $11.5k]"
+            _sol_min_age_g = 1.0 if (_avg_tx_e >= 45.0 and b5 >= int(s5 * 1.80)) else 1.9
+        else:
+            _sol_min_age_g = 0.8 if (vol_m5 >= 20000.0 and b5 >= int(s5 * 1.30) and m5 >= 10.0) else 1.5
         if age_min < _sol_min_age_g:
             try:
                 from birth_tracker import birth_tracker as _bt_mig
@@ -532,7 +538,6 @@ class GrokJevEngine:
             return False, f"post-migration-dump-zone {age_min:.1f}m < {_sol_min_age_g:.1f}m (wait for 1st candle close)"
 
         # 2. Возраст токена, потолок FDV <= $320k и запрет старых отработанных монет (кейс BILL 202m $473k)
-        _avg_tx_e = vol_m5 / max(1, b5 + s5)
         min_age = _sol_min_age_g
         max_age = float(getattr(_c, "JEV_MAX_AGE_MIN", getattr(_c, "SOLANA_MAX_AGE_MIN", 240.0)))
         _max_scan_age_g = float(getattr(_c, "SOLANA_MAX_AGE_MIN", 240.0))

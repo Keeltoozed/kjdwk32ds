@@ -1804,29 +1804,45 @@ class Analyzer:
             _sol_p = float(get_sol_price_sync() or 150.0)
             if _sol_p <= 0:
                 _sol_p = 150.0
-            _min_curve_mcap = float(getattr(config, "MIN_PUMP_CURVE_MCAP_SOL", 22.0)) * _sol_p
-            _max_curve_mcap = float(getattr(config, "MAX_PUMP_CURVE_MCAP_SOL", 480.0)) * _sol_p
+            _min_curve_mcap = max(float(getattr(config, "MIN_PUMP_CURVE_MCAP_USD", 3800.0)), float(getattr(config, "MIN_PUMP_CURVE_MCAP_SOL", 50.0)) * _sol_p)
+            _max_curve_mcap = min(float(getattr(config, "MAX_PUMP_CURVE_MCAP_USD", 11000.0)), float(getattr(config, "MAX_PUMP_CURVE_MCAP_SOL", 148.0)) * _sol_p)
             if _fdv_curve_pre > 0 and _fdv_curve_pre < _min_curve_mcap:
                 return self._deny(
                     mint,
                     f"pump-curve-too-early {_fdv_curve_pre:.0f}<{_min_curve_mcap:.0f}",
-                    f"🚫 [CURVE-FLASH-RUG] {symbol} ({mint[:8]}): FDV ${_fdv_curve_pre:,.0f} < ${_min_curve_mcap:,.0f} — пустой кёрв.",
-                )
-            # На ранней кривой ($2.6k - $3.8k) требуем явное доминирование покупателей и живой объём,
-            # чтобы отсекать сливаемые стартовые свечи (Puchin $2.9k 41b/31s, patula $3.1k vol $1.4k),
-            # но пускать настоящие ранние ракеты до 2x выноса!
-            if 0 < _fdv_curve_pre < 3800.0 and (_vm5_pre < 1800.0 or _b5_pre < max(15, int(_s5_pre * 1.45))):
-                return self._deny(
-                    mint,
-                    f"early-curve-weak-buyers fdv=${_fdv_curve_pre:.0f} {_b5_pre}b/{_s5_pre}s",
-                    f"🚫 [EARLY-CURVE-WEAK] {symbol} ({mint[:8]}): ранняя кривая ${_fdv_curve_pre:,.0f} со слабым напором ({_b5_pre}b/{_s5_pre}s, vol5 ${_vm5_pre:,.0f}) — отсев.",
+                    f"🚫 [CURVE-FLASH-RUG] {symbol} ({mint[:8]}): FDV ${_fdv_curve_pre:,.0f} < ${_min_curve_mcap:,.0f} — ранняя опасная зона кёрва (EDDIE/Puchin).",
                 )
             if _fdv_curve_pre > _max_curve_mcap:
                 return self._deny(
                     mint,
                     f"pump-curve-top {_fdv_curve_pre:.0f}>{_max_curve_mcap:.0f}",
-                    f"🚫 [CURVE-CLIFF] {symbol} ({mint[:8]}): FDV ${_fdv_curve_pre:,.0f} > ${_max_curve_mcap:,.0f} (обрыв перед миграцией).",
+                    f"🚫 [CURVE-CLIFF] {symbol} ({mint[:8]}): FDV ${_fdv_curve_pre:,.0f} > ${_max_curve_mcap:,.0f} (зона разгрузки снайперов на кривой — ждём миграцию на PumpSwap).",
                 )
+            # По 116 сделкам на кривой Pump.fun:
+            # 1) vol5 < $2,500 = 0 ракет, -183% PnL (DCC $2,369 -68%, patula $1,407, SEX $1,551)
+            # 2) vol5 > $11,500 на сырой кривой = wash-накрутка ботами перед сливом (-766% PnL: PENCIL, CYBER, CHUD, CLAUDHAO)
+            # 3) возраст < 1.9м (без крупного чека >=$45 и b/s>=1.8x) = 1-минутные бандл-дампы (HUGH 0м -68%, EDDIE 1м -17%, PUSSY 1м -17%, DOWN 1.2м -46%)
+            if _vm5_pre < 2500.0:
+                return self._deny(
+                    mint,
+                    f"curve-low-vol5 ${_vm5_pre:.0f}<$2500",
+                    f"🚫 [CURVE-LOW-VOL] {symbol} ({mint[:8]}): объём кривой ${_vm5_pre:,.0f} < $2,500 — слабый поток (кейс DCC).",
+                )
+            if _vm5_pre > 11500.0:
+                return self._deny(
+                    mint,
+                    f"curve-wash-overchurn ${_vm5_pre:.0f}>$11.5k",
+                    f"🚫 [CURVE-OVERCHURN] {symbol} ({mint[:8]}): объём на сырой кривой ${_vm5_pre:,.0f} > $11,500 — перегретый wash-флип снайперов перед сливом!",
+                )
+            _avg_c_tx = _vm5_pre / max(1, _b5_pre + _s5_pre)
+            if _age_min_pre < 1.9 and not (_age_min_pre >= 1.0 and _avg_c_tx >= 45.0 and _b5_pre >= int(_s5_pre * 1.80)):
+                try:
+                    from birth_tracker import birth_tracker as _bt_c_wait
+                    _bt_c_wait.add_to_waiting_room(mint)
+                except Exception:
+                    pass
+                print(f"⏳ [CURVE-MATURING] {symbol} ({mint[:8]}): кривой {_age_min_pre:.1f}м < 1.9м — ждём выживания после 1-й минуты (защита от 0-1м дампов HUGH/EDDIE/PUSSY).")
+                return None
         # FAST-TRACK ДЛЯ МОЛОДЫХ РАКЕТ:
         _is_fast_rocket = (_age_min_pre >= 0.25 and _vm5_pre >= 1500.0 and _b5_pre >= 8 and _s5_pre >= 1 and _b5_pre >= _s5_pre and _m5 >= 2.0)
         _raw_liq_age = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)

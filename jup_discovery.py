@@ -460,6 +460,20 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
     """Полная проверка безопасности, ликвидности и вход в сделку. Потокобезопасна."""
     if not td or len(tracker.get_open_positions()) >= config.MAX_CONCURRENT_POSITIONS:
         return False
+    _scan_px_j = float((td or {}).get("priceUsd", 0) or 0)
+    # Сброс prefetch-кэша перед входом, чтобы не покупать по старой котировке 15-30с давности после дампа во время аудита:
+    getattr(analyzer, "_prefetch_cache", {}).pop(mint, None)
+    _fresh_td = await analyzer.fetch_token_data(mint)
+    if isinstance(_fresh_td, dict) and float(_fresh_td.get("priceUsd", 0) or 0) > 0:
+        _fresh_px_j = float(_fresh_td.get("priceUsd", 0) or 0)
+        if _scan_px_j > 0:
+            if _fresh_px_j < _scan_px_j * 0.92:
+                print(f"🚫 [{source_tag}-FINAL-RECHECK] {mint[:8]}: обвал цены на {(_fresh_px_j/_scan_px_j - 1)*100:+.1f}% за время аудита — отмена входа!")
+                return False
+            if _fresh_px_j > _scan_px_j * 1.30:
+                print(f"🚫 [{source_tag}-FINAL-RECHECK] {mint[:8]}: цена улетела на {(_fresh_px_j/_scan_px_j - 1)*100:+.1f}% за время аудита — не догоняем хай!")
+                return False
+        td = _fresh_td
     _base_tok = (td.get("baseToken") or {})
     _sym_tmp = str(_base_tok.get("symbol") or mint[:6]).strip().upper()
     
@@ -702,10 +716,11 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
             analyzer._deny(mint, "jup-live-dump >7.5%", f"🚫 [{source_tag}-LIVE-DUMP] {_sym_tmp} ({mint[:8]}): живая котировка Jupiter (${jup_price:.8f}) уже ниже DexScreener (${ds_price:.8f}) на {(1.0 - jup_price/ds_price)*100:.1f}% [>7.5%] — слив в процессе!")
             return False
         _up_ratio = jup_price / ds_price
-        if _up_ratio > 1.30:
-            print(f"🚫 [{source_tag}-PRICE-MISMATCH] {_sym_tmp} ({mint[:8]}): Jupiter (${jup_price:.8f}) vs Dex (${ds_price:.8f}) опережение {_up_ratio:.2f}x (>1.30x) — блок от вертикального входа.")
+        if _up_ratio > 1.25:
+            print(f"🚫 [{source_tag}-PRICE-MISMATCH] {_sym_tmp} ({mint[:8]}): Jupiter (${jup_price:.8f}) vs Dex (${ds_price:.8f}) опережение {_up_ratio:.2f}x (>1.25x) — блок от вертикального входа.")
             return False
-        price = jup_price
+        # На сырых кривых pump/pumpfun НЕ перезаписываем ds_price завышенной котировкой роутера Jupiter (исключает искусственные стопы -25% на 1-м тике):
+        price = ds_price if _dex_j_low in ("pump", "pumpfun") else jup_price
     elif ds_price > 0:
         price = ds_price
     elif jup_price and jup_price > 0:

@@ -1310,10 +1310,22 @@ async def scanner_loop(analyzer, tracker):
                             else:
                                 _cached_pair = None
                             _last_an_p = getattr(analyzer, "_last_analyzed_pair", {}).get(mint)
+                            _scan_px_sc = float((_last_an_p or _cached_pair or {}).get("priceUsd", 0) or 0)
+                            # ОБЯЗАТЕЛЬНЫЙ сброс prefetch-кэша перед финальной проверкой и покупкой!
+                            # Без этого fetch_token_data возвращал старую цену 15-30с давности из начала батча,
+                            # и бот покупал уже слившиеся монеты (кейсы HUGH -68% в 0м, EDDIE -17%, PUSSY -17%)!
+                            getattr(analyzer, "_prefetch_cache", {}).pop(mint, None)
                             pair_data = await analyzer.fetch_token_data(mint)
                             if not isinstance(pair_data, dict):
                                 pair_data = {}
                             entry_price = float(pair_data.get("priceUsd", 0) or 0) if pair_data else 0.0
+                            if _scan_px_sc > 0 and entry_price > 0:
+                                if entry_price < _scan_px_sc * 0.92:
+                                    print(f"🚫 [SCANNER-FINAL-RECHECK] {mint[:8]}: обвал цены на {(entry_price/_scan_px_sc - 1)*100:+.1f}% за время аудита — отмена входа!")
+                                    continue
+                                if entry_price > _scan_px_sc * 1.30:
+                                    print(f"🚫 [SCANNER-FINAL-RECHECK] {mint[:8]}: цена улетела на {(entry_price/_scan_px_sc - 1)*100:+.1f}% за время аудита — не догоняем вертикальный хай!")
+                                    continue
                             if (not pair_data or entry_price <= 0) and _last_an_p:
                                 pair_data = dict(_last_an_p)
                                 entry_price = float(pair_data.get("priceUsd", 0) or 0)
@@ -1724,7 +1736,12 @@ async def scanner_loop(analyzer, tracker):
                                         if _live_jup_px < entry_price * 0.925:
                                             print(f"🚫 [SCANNER LIVE-DUMP BLOCKED] {actual_symbol} ({mint[:8]}): живая цена Jupiter (${_live_jup_px:.8f}) уже на {(1.0 - _live_jup_px / entry_price) * 100:.1f}% ниже цены сигнала (${entry_price:.8f}) — обвал в моменте, отмена входа!")
                                             continue
-                                        entry_price = _live_jup_px
+                                        if _live_jup_px > entry_price * 1.25:
+                                            print(f"🚫 [SCANNER JUP-SPIKE BLOCKED] {actual_symbol} ({mint[:8]}): Jupiter (${_live_jup_px:.8f}) выше DS (${entry_price:.8f}) на {(_live_jup_px/entry_price - 1)*100:+.1f}% — защита от покупки спайка (кейс DCC)!")
+                                            continue
+                                        # На сырых кривых pump/pumpfun НЕ перезаписываем entry_price завышенной котировкой роутера Jupiter (как в GROK-JEV строка 2370):
+                                        if _dex_id not in ("pump", "pumpfun"):
+                                            entry_price = _live_jup_px
                                 except Exception:
                                     pass
 
