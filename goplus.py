@@ -1796,7 +1796,7 @@ async def verify_pumpswap_pool_onchain(
         pool_idx == 0
         and has_mint
         and has_wsol
-        and (is_pump_mint or pool_creator in (pool_auth, _PUMP_MIG_AUTH))
+        and pool_creator in (pool_auth, _PUMP_MIG_AUTH)
     )
     if is_canonical:
         res = (True, True, f"pumpswap-canonical-idx0:{pool_creator[:8]}")

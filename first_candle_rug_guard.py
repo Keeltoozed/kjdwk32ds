@@ -1680,8 +1680,7 @@ async def _analyze(mint: str, pair_data: Optional[dict], verdict: dict) -> dict:
     except Exception:
         _fcr_is_dist_runner = False
     if total >= block_at:
-        # Исключение «распределённый раннер» не действует при экстремальном скоре (кейс DACT: score 1.00, 5 кошельков-ферма)
-        if _fcr_is_dist_runner and total < 0.85:
+        if _fcr_is_dist_runner:
             verdict["verdict"] = "WARN"
             verdict["safe"] = True
             reasons.append("допущен как распределённый ликвидный раннер")

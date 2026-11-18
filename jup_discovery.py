@@ -186,6 +186,11 @@ async def fetch_jup_tokens() -> list:
                     continue
                 seen.add(m)
                 _age_by_mint[m] = age_m
+                try:
+                    import market_data as _md_jcache
+                    _md_jcache.normalize_jup_token(t)
+                except Exception:
+                    pass
                 ranked.append((max(pc5, 3.0 if _is_turned_green_dip else pc5), vol5, sym, m, tag))
 
         if s_org == 200:
@@ -285,6 +290,11 @@ async def fetch_jup_tokens() -> list:
                         continue
                     seen.add(addr)
                     _age_by_mint[addr] = age_p
+                    try:
+                        import market_data as _md_dscache
+                        _md_dscache._JUP_TD_CACHE[addr] = (time.time(), p)
+                    except Exception:
+                        pass
                     ranked.append((m5_p, vol5_p, sym_p, addr, "ds_radar"))
         except Exception:
             pass
@@ -644,10 +654,6 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
                 )
                 if _is_unl_safe_j:
                     print(f"🔓 [{source_tag}-UNLOCKED-LP-ALLOWED] {_sym_tmp} ({mint[:8]}): свежий DEX-раннер (age {_age_j:.1f}м, liq ${_liq_j:,.0f}, vol5 ${_vol5_j:,.0f}) — лок LP не требуется (режим 0d2b1ae).")
-                    _lp_ok = True
-                    _lp_verified_jup = True
-                elif _allow_unl_lp_j and _liq_j >= float(getattr(config, "MIN_GRADUATED_LIQ_USD", 3000.0)):
-                    print(f"🔓 [{source_tag}-UNLOCKED-LP-OPEN] {_sym_tmp} ({mint[:8]}): {_dex_j_low or 'DEX'} с незалоченным LP (liq ${_liq_j:,.0f}) допущен в режиме 0d2b1ae.")
                     _lp_ok = True
                     _lp_verified_jup = True
                 else:
@@ -1062,6 +1068,16 @@ async def jup_loop(analyzer, tracker):
 
                         hit = getattr(analyzer, "_prefetch_cache", {}).get(m)
                         td = hit[1] if (hit and hit[1]) else None
+                        if not td:
+                            try:
+                                import market_data as _md_jfb
+                                _jhit = getattr(_md_jfb, "_JUP_TD_CACHE", {}).get(m)
+                                if _jhit and (_now_t - _jhit[0]) < 90.0 and isinstance(_jhit[1], dict):
+                                    td = dict(_jhit[1])
+                                    if hasattr(analyzer, "_prefetch_cache"):
+                                        analyzer._prefetch_cache[m] = (_jhit[0], td)
+                            except Exception:
+                                pass
                         if not td:
                             skipped_nodata += 1
                             continue

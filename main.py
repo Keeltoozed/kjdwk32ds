@@ -123,9 +123,14 @@ async def position_security_auditor_loop(analyzer, tracker):
                                 _cfg_drain_fast = float(getattr(config, "LIQ_DRAIN_FAST_PCT", 0.30))
 
                                 # МГНОВЕННЫЙ выход: ликва просела больше чем на LIQ_DRAIN_EXIT_PCT от пика — не ждём обнуления!
-                                _emergency_exit = _is_zero_liq or _crit_drained or (_liq_crash_pct >= _cfg_drain_exit and _peak_liq >= 3000.0)
-                                # Экстренный случай: за один тик ликва обвалилась на 30%+ — паник-сейл сразу
-                                _fast_drain = _liq_crash_pct >= _cfg_drain_fast and _peak_liq >= 3000.0
+                                # Для сожжённых/залоченных пулов (каноничный PumpSwap / Raydium LP lock>=80%) дев физически не может вывести LP,
+                                # а просадка USD-ликвидности на 30% в AMM (xy=k) — это обычное движение цены, которое режет штатный Stop-Loss (-10%), а не паник-сейл в -54%!
+                                _is_locked_amm = bool(getattr(position, "is_lp_locked_80", False)) or not bool(getattr(position, "is_unlocked_pool", False))
+                                _eff_drain_exit = 0.68 if _is_locked_amm else _cfg_drain_exit
+                                _eff_drain_fast = 0.60 if _is_locked_amm else _cfg_drain_fast
+                                _emergency_exit = _is_zero_liq or _crit_drained or (_liq_crash_pct >= _eff_drain_exit and _peak_liq >= 3000.0)
+                                # Экстренный случай: за один тик ликва обвалилась — паник-сейл сразу
+                                _fast_drain = _liq_crash_pct >= _eff_drain_fast and _peak_liq >= 3000.0
 
                                 if _has_liq_data and (_emergency_exit or _fast_drain):
                                     # Выходим НЕМЕДЛЕННО пока цена ещё есть, не ждём 2 тика подтверждения
@@ -1822,8 +1827,9 @@ async def scanner_loop(analyzer, tracker):
                                         if _fcr.get("verdict") == "WARN":
                                             _fcr_w_n = int((_fcr_compact or {}).get("fcr_cluster_wallets", 0) or 0)
                                             _fcr_m5 = float((pair_data.get("priceChange") or {}).get("m5", 0) or 0)
-                                            if _fcr_w_n >= 5:
-                                                print(f"🚫 [SCANNER FCR-FARM-BLOCK] {actual_symbol} ({mint[:8]}): ферма из {_fcr_w_n} кошельков одного источника (кейсы GTA6 -14%, DACT) — отмена входа!")
+                                            _is_dist_fcr_sc = (_vol5_live >= 25000.0 and _b5_live >= int(_s5_live * 1.20) and liq_usd >= 15000.0 and _age_m < 45.0)
+                                            if _fcr_w_n >= 5 and not _is_dist_fcr_sc:
+                                                print(f"🚫 [SCANNER FCR-FARM-BLOCK] {actual_symbol} ({mint[:8]}): ферма из {_fcr_w_n} кошельков одного источника (кейс GTA6 -14%) — отмена входа!")
                                                 continue
                                             if _fcr_w_n >= 3 and _fcr_m5 > 120.0:
                                                 print(f"🚫 [SCANNER FCR-INSIDER-BLOCK] {actual_symbol} ({mint[:8]}): инсайдерская сеть {_fcr_w_n} кошельков на свече m5 {_fcr_m5:+.1f}% — отмена входа (кейс CHUD -50%)!")

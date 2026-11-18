@@ -193,34 +193,17 @@ def _normalize_pool(mint: str, name: str, symbol: str, item: dict, token_attrs: 
     }
 
 
-async def _jup_token_data(mint: str) -> dict:
-    """Токен-профиль через Jupiter Tokens API v2 (/tokens/v2/search?query=mint).
-    Старый /tokens/v1/token/{mint} отключён (404) — используем v2 на
-    api.jup.ag (с x-api-key) -> lite-api.jup.ag. Даёт соцсети, холдеры, аудит, возраст миграции и m5/h1 статистику.
-    Нормализация — в форму DexScreener-пары. {} если токен не проиндексирован."""
-    from http_client import fetch_json
-    import config as _jc
-    jup_key = getattr(_jc, "JUP_API_KEY", "") or ""
-    jup_hdrs = {"x-api-key": jup_key} if jup_key else {}
-    data = None
-    for base, hdrs in (("https://api.jup.ag", jup_hdrs), ("https://lite-api.jup.ag", {})):
-        status, body = await fetch_json(
-            f"{base}/tokens/v2/search?query={mint}",
-            headers=hdrs,
-            timeout=8,
-            retries=0,
-        )
-        if status == 200 and body:
-            data = [body] if isinstance(body, dict) else body
-            break
-    if not data:
+_JUP_TD_CACHE: dict = {}
+
+
+def normalize_jup_token(t: dict) -> dict:
+    """Нормализует объект токена из Jupiter Tokens API v2 в формат DexScreener pair_data."""
+    if not isinstance(t, dict):
+        return {}
+    mint = str(t.get("id") or "").strip()
+    if not mint:
         return {}
     try:
-        items = data if isinstance(data, list) else []
-        exact = [x for x in items if isinstance(x, dict) and x.get("id") == mint]
-        if not exact:
-            return {}
-        t = exact[0]
         s5 = t.get("stats5m", {}) or {}
         s1 = t.get("stats1h", {}) or {}
         s6 = t.get("stats6h", {}) or {}
@@ -270,8 +253,16 @@ async def _jup_token_data(mint: str) -> dict:
             else (str(grad_pool_raw) if grad_pool_raw else str(first_pool_obj.get("id", "") or ""))
         )
         created_ts_raw = t.get("graduatedAt") or first_pool_obj.get("createdAt") or t.get("createdAt")
-        dex_out = ("pumpswap" if mint.endswith("pump") else "meteora") if graduated else "pump"
-        return {
+        _pool_dex_hint = str(first_pool_obj.get("dex") or t.get("launchpad") or "").lower()
+        if not graduated:
+            dex_out = "pump"
+        elif mint.endswith("pump") or "pump" in _pool_dex_hint:
+            dex_out = "pumpswap"
+        elif "meteora" in _pool_dex_hint:
+            dex_out = "meteora"
+        else:
+            dex_out = "raydium"
+        out = {
             "chainId": "solana",
             "dexId": dex_out,
             "pairAddress": pair_addr_jup,
@@ -299,6 +290,50 @@ async def _jup_token_data(mint: str) -> dict:
             "_socials_unknown": False,
             "_vol1h": bv1,
         }
+        import time as _t
+        _JUP_TD_CACHE[mint] = (_t.time(), out)
+        if len(_JUP_TD_CACHE) > 2500:
+            _cut = _t.time() - 180.0
+            for _k in list(_JUP_TD_CACHE.keys()):
+                if _JUP_TD_CACHE[_k][0] < _cut:
+                    _JUP_TD_CACHE.pop(_k, None)
+        return out
+    except Exception:
+        return {}
+
+
+async def _jup_token_data(mint: str) -> dict:
+    """Токен-профиль через Jupiter Tokens API v2 (/tokens/v2/search?query=mint).
+    Старый /tokens/v1/token/{mint} отключён (404) — используем v2 на
+    api.jup.ag (с x-api-key) -> lite-api.jup.ag. Даёт соцсети, холдеры, аудит, возраст миграции и m5/h1 статистику.
+    Нормализация — в форму DexScreener-пары. {} если токен не проиндексирован."""
+    import time as _t
+    _cached_j = _JUP_TD_CACHE.get(mint)
+    if _cached_j and (_t.time() - _cached_j[0]) < 15.0:
+        return dict(_cached_j[1])
+    from http_client import fetch_json
+    import config as _jc
+    jup_key = getattr(_jc, "JUP_API_KEY", "") or ""
+    jup_hdrs = {"x-api-key": jup_key} if jup_key else {}
+    data = None
+    for base, hdrs in (("https://api.jup.ag", jup_hdrs), ("https://lite-api.jup.ag", {})):
+        status, body = await fetch_json(
+            f"{base}/tokens/v2/search?query={mint}",
+            headers=hdrs,
+            timeout=8,
+            retries=0,
+        )
+        if status == 200 and body:
+            data = [body] if isinstance(body, dict) else body
+            break
+    if not data:
+        return {}
+    try:
+        items = data if isinstance(data, list) else []
+        exact = [x for x in items if isinstance(x, dict) and x.get("id") == mint]
+        if not exact:
+            return {}
+        return normalize_jup_token(exact[0])
     except Exception:
         return {}
 

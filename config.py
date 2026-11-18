@@ -69,7 +69,7 @@ DEV_MAX_TOKEN_PCT = 0.15       # Дев не должен держать бол�
 LIQ_LOCKED_BURNED_MIN_PCT = 0.0   # Разрешаем быстрый вход без задержки на аудит LP (охота за ракетами)
 
 # === ФИЛЬТРЫ ВХОДА (ОХОТА ЗА НАСТОЯЩИМИ РАКЕТАМИ ТИПА FIVEM / WUF) ===
-ALLOW_UNLOCKED_LP_POOLS = True            # ВХОД БЕЗ ОЖИДАНИЯ RUGCHECK: высокая частота сделок (защита от рагов точечными 0ms фильтрами)
+ALLOW_UNLOCKED_LP_POOLS = False           # СТРОГИЙ БЛОК LP lock 0% / burn 0% (защита от рагов TOMÁS, USPR, BALVOTE; Pump.fun и каноничные PumpSwap/Raydium проходят!)
 BLOCK_PERMISSIONLESS_LIQ_FDV_TRAP = True   # Блокировать кастомные ловушки дева
 REQUIRE_SOCIALS_ENABLED = False            # Не требовать соцсети на старте/зрелости (важна только живая ликвидность и импульс)
 MAX_ENTRY_H1_PCT = 180.0       # Было 1500.0: отсекает вертикальный вынос и хаи (фикс Y +944%)
@@ -667,9 +667,9 @@ DD_THROTTLE_START_USD = 15.0
 # === ВХОД В ЗРЕЛЫЕ ВЫПУСКНИКИ RAYDIUM / PUMPSWAP И РАННИЕ КРИВЫЕ PUMP.FUN ===
 SNIPER_ENTRIES_ENABLED = True             # ВКЛЮЧЕНО: мгновенный вход в свежие кривые/миграции со стрима
 ALLOW_UNGRADUATED_PUMPFUN = True          # ВКЛЮЧЕНО: ловим ракеты на кривой Pump.fun до миграции (открывает 大A +1559%, ROCKSTAR +163%)
-MIN_PUMP_CURVE_MCAP_USD = 4000.0          # Порог кривой от $4.0k: кривые $2.9-3.1k (Puchin/patula) = мгновенный слив, ракеты (Rockstar $6.5k, SPCB $5k, MIA $12k) выше
+MIN_PUMP_CURVE_MCAP_USD = 2600.0          # Порог кривой от $2.6k (отсекает пустой кёрв $2,080, но захватывает старт первой волны $2.6k-$4.0k)
 MAX_PUMP_CURVE_MCAP_USD = 100000.0         # Верх кривой до миграционного обрыва ($65k)
-MIN_PUMP_CURVE_MCAP_SOL = 55.0            # Порог кривой pump.fun в SOL (~55 SOL ≈ $4k): ниже — пустой кёрв, дев/снайперы сливают за 1 минуту
+MIN_PUMP_CURVE_MCAP_SOL = 35.0            # Порог кривой pump.fun в SOL (~35 SOL ≈ $2.6k: пустой кёрв = 28 SOL / $2,080)
 MAX_PUMP_CURVE_MCAP_SOL = 300.0            # Верх входа на кривой перед миграцией
 PUMP_MIGRATION_MCAP_SOL = 410.0           # FDV миграции pump.fun
 PUMP_DUMP_FLOOR_SOL = 50.0                # Порог post-mig-dumped (~50 SOL, разрешает быстрые реклеймы)
@@ -745,9 +745,9 @@ FLAT_PROFIT_PRICE_DRIFT_PCT = 0.03
 PUMP_XGB_ENABLED = False
 RAY_XGB_ENABLED = False
 ROCKET_XGB_ENABLED = True
-ROCKET_XGB_STAGE1_THRESHOLD = 8.0    # Порог 8% — пропускаем только уверенные запуски
-ROCKET_XGB_FINAL_THRESHOLD = 18.0     # Финальный порог 18% — гарантированно пропускает ракеты вроде Rockstar (23.97%)
-ROCKET_XGB_THRESHOLD = 18.0
+ROCKET_XGB_STAGE1_THRESHOLD = 12.0   # Единый порог 12%: кандидаты Stage 1 (VICEVAULT 13.5%, BAWSAQ 13.4%) не режутся впустую на Stage 2
+ROCKET_XGB_FINAL_THRESHOLD = 12.0     # Финальный порог 12% — гарантированно пропускает ракеты (Rockstar 23.97%, SS 19.9%, VICEVAULT 13.5%)
+ROCKET_XGB_THRESHOLD = 12.0
 ROCKET_XGB_UNLOCKED_CUSTOM_MIN = 30.0  # Для кастомных пулов без сожжённого LP
 JEV_MAX_AGE_MIN = 240.0              # Пробои и консолидации до 240м (4ч): позволяет ловить мощные вторые волны и раннеры
 
@@ -795,7 +795,7 @@ UNLOCKED_STALL_MID_AGE_SEC = 180.0       # Синхронизированный 
 UNLOCKED_ENTRY_SCRATCH_SEC = 180.0       # Не режем +0.0% на 35с: даём 3 минуты на отрыв импульса (раги уже режет SL -7.5%)
 UNLOCKED_FAST_STOP_PCT = -0.075          # Быстрый стоп-лосс -7.5% (1 тик)
 
-PREFETCH_TTL_SEC = 45
+PREFETCH_TTL_SEC = 12
 SOLANA_MIN_AGE_MIN = 0.05        # 3 секунды: мгновенный старт на самой ранней волне
 SOLANA_MAX_AGE_HOURS = 4.0         # До 4 часов
 SOLANA_MAX_AGE_MIN = 240.0         # Потолок 240м: позволяет ловить консолидации и мощные выходы в раннеры

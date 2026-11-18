@@ -921,25 +921,33 @@ class Analyzer:
         got = 0
         async def _fetch_chunk(chunk):
             pairs_list = []
+            ok_st = False
             try:
                 status, data = await fetch_json(
                     "https://api.dexscreener.com/latest/dex/tokens/" + ",".join(chunk),
                     timeout=8, retries=1)
                 if status == 200 and isinstance(data, dict):
                     pairs_list = data.get("pairs") or []
+                    ok_st = True
                 elif status == 200 and isinstance(data, list):
                     pairs_list = data
+                    ok_st = True
             except Exception:
-                return chunk, []
-            return chunk, pairs_list
+                return chunk, [], False
+            return chunk, pairs_list, ok_st
 
         chunks = [todo[i:i + 30] for i in range(0, len(todo), 30)]
         results = await asyncio.gather(*[_fetch_chunk(c) for c in chunks], return_exceptions=True)
         ts = time.time()
+        try:
+            import market_data as _md_pf
+            _jup_cache_pf = getattr(_md_pf, "_JUP_TD_CACHE", {})
+        except Exception:
+            _jup_cache_pf = {}
         for res in results:
-            if not isinstance(res, tuple) or len(res) != 2:
+            if not isinstance(res, tuple) or len(res) != 3:
                 continue
-            chunk, pairs_list = res
+            chunk, pairs_list, ok_st = res
             by_mint = {}
             for p in (pairs_list or []):
                 a = (p.get("baseToken") or {}).get("address")
@@ -951,7 +959,13 @@ class Analyzer:
                     self._prefetch_cache[m] = (ts, best)
                     got += 1
                 else:
-                    self._prefetch_cache[m] = (ts, None)
+                    _jh = _jup_cache_pf.get(m)
+                    if _jh and (ts - _jh[0]) < 90.0 and isinstance(_jh[1], dict):
+                        self._prefetch_cache[m] = (_jh[0], dict(_jh[1]))
+                        got += 1
+                    elif ok_st:
+                        # Короткий TTL (5с) для пустых ответов, чтобы свежие миграции быстро перепроверялись
+                        self._prefetch_cache[m] = (ts - ttl + 5.0, None)
         if len(self._prefetch_cache) > 3000:
             cutoff = time.time() - 120
             self._prefetch_cache = {k: v for k, v in self._prefetch_cache.items() if v[0] >= cutoff}
@@ -999,12 +1013,7 @@ class Analyzer:
                     _bp_dex = str(best_pair.get("dexId") or "").lower()
                     if not (_is_grad and _bp_dex in ("pump", "pumpfun", "meteoradbc")):
                         return self._apply_verified_lp_meta(mint, best_pair)
-            # ВАЖНО: GeckoTerminal НЕ индексирует сырые токены/кёрвы Pump.fun!
-            # Никогда не тратим семафор GT (25 RPM) на .pump токены — это исключает 22с таймауты и 429 блокировки!
-            if mint.endswith("pump"):
-                return self._apply_verified_lp_meta(mint, best_pair) if best_pair else {}
-
-            # Для DEX-токенов сначала пробуем быстрый Jupiter v2:
+            # Для DEX-токенов и свежих миграций .pump (которые DS ещё не проиндексировал) пробуем быстрый Jupiter v2:
             try:
                 import market_data as _md_fb
                 _jup_pair = await _md_fb._jup_token_data(mint)
@@ -1012,6 +1021,11 @@ class Analyzer:
                     return self._apply_verified_lp_meta(mint, _jup_pair)
             except Exception:
                 pass
+
+            # ВАЖНО: GeckoTerminal НЕ индексирует сырые токены/кёрвы Pump.fun!
+            # Никогда не тратим семафор GT (25 RPM) на .pump токены — это исключает 22с таймауты и 429 блокировки!
+            if mint.endswith("pump"):
+                return self._apply_verified_lp_meta(mint, best_pair) if best_pair else {}
 
             # GeckoTerminal опрашиваем ТОЛЬКО для не-pump токенов как крайний fallback:
             gt_pair = await self.fetch_token_data_gecko(mint)
@@ -1798,6 +1812,15 @@ class Analyzer:
                     f"pump-curve-too-early {_fdv_curve_pre:.0f}<{_min_curve_mcap:.0f}",
                     f"🚫 [CURVE-FLASH-RUG] {symbol} ({mint[:8]}): FDV ${_fdv_curve_pre:,.0f} < ${_min_curve_mcap:,.0f} — пустой кёрв.",
                 )
+            # На ранней кривой ($2.6k - $3.8k) требуем явное доминирование покупателей и живой объём,
+            # чтобы отсекать сливаемые стартовые свечи (Puchin $2.9k 41b/31s, patula $3.1k vol $1.4k),
+            # но пускать настоящие ранние ракеты до 2x выноса!
+            if 0 < _fdv_curve_pre < 3800.0 and (_vm5_pre < 1800.0 or _b5_pre < max(15, int(_s5_pre * 1.45))):
+                return self._deny(
+                    mint,
+                    f"early-curve-weak-buyers fdv=${_fdv_curve_pre:.0f} {_b5_pre}b/{_s5_pre}s",
+                    f"🚫 [EARLY-CURVE-WEAK] {symbol} ({mint[:8]}): ранняя кривая ${_fdv_curve_pre:,.0f} со слабым напором ({_b5_pre}b/{_s5_pre}s, vol5 ${_vm5_pre:,.0f}) — отсев.",
+                )
             if _fdv_curve_pre > _max_curve_mcap:
                 return self._deny(
                     mint,
@@ -2187,7 +2210,7 @@ class Analyzer:
                     return self._deny(mint, f"pumpswap-scam-pool ({_ps_a_why})", f"🚫 [PUMPSWAP-ONCHAIN] {symbol} ({mint[:8]}): {_ps_a_why}")
             _is_canonical_pump = (
                 (_ps_a_canon and dex_id_low == "pumpswap")
-                or (mint.lower().endswith("pump") and dex_id_low in ("pump", "pumpfun", "pumpswap", "raydium"))
+                or (mint.lower().endswith("pump") and dex_id_low in ("pump", "pumpfun"))
                 or (is_pump_curve and dex_id_low in ("pump", "pumpfun"))
             )
             if not _is_canonical_pump and _s5_pre == 0 and _b5_pre >= 8:
@@ -2205,7 +2228,7 @@ class Analyzer:
             _ps_main_canon = bool((pair_data or {}).get("_pumpswap_canonical"))
             _is_native_pump_dex = (
                 (_ps_main_canon and _dex_low_main == "pumpswap")
-                or (mint.lower().endswith("pump") and _dex_low_main in ("pump", "pumpfun", "pumpswap", "raydium"))
+                or (mint.lower().endswith("pump") and _dex_low_main in ("pump", "pumpfun"))
                 or (is_pump_curve and _dex_low_main in ("pump", "pumpfun"))
             )
             _is_canonical_pump = _is_native_pump_dex
@@ -2712,10 +2735,15 @@ class Analyzer:
                 _tx5_rc = (pair_data.get("txns") or {}).get("m5", {}) or {}
                 _b5_rc = int(_tx5_rc.get("buys", 0) or 0)
                 _s5_rc = int(_tx5_rc.get("sells", 0) or 0)
-                if mint.endswith("pump") and _age_min_pre < 2.0:
-                    _has_launch_mom = (_vm5_check >= 1500.0 and _m5_check >= -2.0 and _b5_rc >= 6 and _b5_rc >= _s5_rc)
+                if mint.endswith("pump") and _age_min_pre < 1.5:
+                    _has_launch_mom = (_vm5_check >= 20000.0 and _m5_check >= 10.0 and _b5_rc >= 40 and _b5_rc >= int(_s5_rc * 1.30))
                     if not _has_launch_mom:
-                        return self._deny(mint, "post-migration-dump-zone", f"🚫 [POST-MIGRATION-DUMP] {mint[:8]}: возраст {_age_min_pre:.1f}м < 2.0м — опасная зона сброса снайперов кривой.")
+                        try:
+                            from birth_tracker import birth_tracker as _bt_mig_a
+                            _bt_mig_a.add_to_waiting_room(mint)
+                        except Exception:
+                            pass
+                        return self._deny(mint, "post-migration-dump-zone", f"🚫 [POST-MIGRATION-DUMP] {mint[:8]}: возраст AMM-пула {_age_min_pre:.1f}м < 1.5м — ждём разгрузки снайперов кривой в Waiting Room (кейс AUDACITY -54%).")
                 if mint.endswith("pump") and 0 < _fdv_pre < 35000:
                     # DIP RECLAIM: Если токен после миграции просел, но активно выкупается (M5 > +2.5%, объем > $1k, покупателей >= продавцов) — это точка разворота ракеты (как 大A +1156%, OMNI +986%)!
                     _is_reclaim = (_fdv_pre >= 5000 and _m5_check >= 2.5 and _vm5_check >= 1000.0 and _b5_rc >= _s5_rc * 0.85)

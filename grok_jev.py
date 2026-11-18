@@ -517,10 +517,12 @@ class GrokJevEngine:
                 m1 = max(-25.0, min(25.0, m5 * 0.15))
         h1 = float(pc.get("h1", 0) or 0)
 
-        # КАТЕГОРИЧЕСКИЙ БЛОК: СМЕРТЕЛЬНАЯ ЗОНА МИГРАЦИИ И СНАЙПЕРОВ (0 - 2.0 МИНУТ)
-        # В первые 90-120с снайперы и дев сливают начальные бандлы (кейсы BREASTCOIN, MAYA, DACAT, HANK).
-        # Настоящие ракеты (WILL, UP, WISHMAS, BELIEVE, FLC) живут и летят 15-60+ минут!
-        _sol_min_age_g = float(getattr(_c, "SOLANA_MIN_AGE_MIN", 1.0))
+        # КАТЕГОРИЧЕСКИЙ БЛОК: СМЕРТЕЛЬНАЯ ЗОНА МИГРАЦИИ И СНАЙПЕРОВ (0 - 1.5 МИНУТ НА AMM)
+        # В первые 90с после миграции на PumpSwap/Raydium снайперы кривой сливают бандлы (кейсы AUDACITY -54%, BREASTCOIN, MAYA).
+        # Настоящие ракеты (DACT 3.1m +103%, clipping 3.6m, WILL, UP) проходят после стабилизации 1-й свечи!
+        _sol_min_age_g = float(getattr(_c, "SOLANA_MIN_AGE_MIN", 0.05))
+        if dex_id not in ("pump", "pumpfun") and not (vol_m5 >= 20000.0 and b5 >= int(s5 * 1.30) and m5 >= 10.0):
+            _sol_min_age_g = max(_sol_min_age_g, 1.5)
         if age_min < _sol_min_age_g:
             try:
                 from birth_tracker import birth_tracker as _bt_mig
@@ -1585,7 +1587,7 @@ class GrokJevEngine:
                     return False, f"pumpswap-scam-pool ({_ps_jev_why})", _h_stats
             is_canonical_pump = (
                 (_ps_jev_canon and _dex_low_jev == "pumpswap")
-                or (address.lower().endswith("pump") and _dex_low_jev in ("pump", "pumpfun", "pumpswap", "raydium"))
+                or (address.lower().endswith("pump") and _dex_low_jev in ("pump", "pumpfun"))
                 or (is_raw_pump_curve and _dex_low_jev in ("pump", "pumpfun"))
             )
             if not is_canonical_pump and not getattr(_c, "ALLOW_UNLOCKED_LP_POOLS", True) and (rc_status_pre != 200 or not isinstance(rc_data_pre, dict)):
@@ -1969,7 +1971,7 @@ class GrokJevEngine:
                     elif _fcr.get("verdict") == "WARN":
                         _fcr_w_n_g = int((_fcr_compact or {}).get("fcr_cluster_wallets", 0) or 0)
                         _fcr_m5_g = float((pair_data.get("priceChange") or {}).get("m5", 0) or 0)
-                        if _fcr_w_n_g >= 5:
+                        if _fcr_w_n_g >= 5 and not locals().get("_dist_runner_g", False):
                             print(f"🚫 [FCR-FARM-BLOCK] {symbol} ({address[:8]}): ферма из {_fcr_w_n_g} кошельков одного источника — отмена входа!")
                             return False, f"fcr-wallet-farm ({_fcr_w_n_g} wallets)", _h_stats
                         if _fcr_w_n_g >= 3 and _fcr_m5_g > 120.0:
