@@ -457,20 +457,71 @@ async def fetch_jup_tokens() -> list:
 
 
 async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: str = "JUP") -> bool:
-    """Полная проверка безопасности, ликвидности и вход в сделку. Потокобезопасна."""
+    """Полная проверка безопасности, ликвидности и вход в сделку с дедупликацией против scanner_loop."""
     if not td or len(tracker.get_open_positions()) >= config.MAX_CONCURRENT_POSITIONS:
         return False
+    if hasattr(analyzer, "try_claim_buy_flight") and not analyzer.try_claim_buy_flight(mint):
+        return False
+    try:
+        return await _evaluate_and_buy_inner(mint, td, analyzer, tracker, source_tag=source_tag)
+    finally:
+        if hasattr(analyzer, "release_buy_flight"):
+            analyzer.release_buy_flight(mint)
+
+
+async def _evaluate_and_buy_inner(mint: str, td: dict, analyzer, tracker, source_tag: str = "JUP") -> bool:
     _scan_px_j = float((td or {}).get("priceUsd", 0) or 0)
-    # Сброс prefetch-кэша перед входом, чтобы не покупать по старой котировке 15-30с давности после дампа во время аудита:
+    # Сброс prefetch-кэша перед входом + WAVE 1 (параллельно: свежий pair_data fast=True, живая цена Jupiter,
+    # ончейн mint/freeze RPC, GoPlus и анти-клон — ~0.8с вместо 10-14с последовательных вызовов!):
     getattr(analyzer, "_prefetch_cache", {}).pop(mint, None)
-    _fresh_td = await analyzer.fetch_token_data(mint)
+    _pre_sym_j = str(((td or {}).get("baseToken") or {}).get("symbol") or mint[:6]).strip().upper()
+    import goplus as _gp
+    from jupiter import JupiterAPI
+    from grok_jev import grok_jev
+
+    async def _w1_jup_px():
+        try:
+            return await JupiterAPI.get_price(mint)
+        except Exception:
+            return 0.0
+
+    async def _w1_onchain():
+        try:
+            return await _gp.check_onchain_solana_security(mint)
+        except Exception:
+            return (True, "")
+
+    async def _w1_goplus():
+        try:
+            return await _gp.check_solana(mint)
+        except Exception:
+            return (True, "")
+
+    async def _w1_clone():
+        try:
+            return await grok_jev.check_trending_clone(mint, _pre_sym_j, td or {})
+        except Exception:
+            return (True, "")
+
+    _fresh_td, _jup_price_pre, _onchain_res_pre, _gp_res_pre, _tc_res_pre = await asyncio.gather(
+        analyzer.fetch_token_data(mint, fast=True),
+        _w1_jup_px(),
+        _w1_onchain(),
+        _w1_goplus(),
+        _w1_clone(),
+        return_exceptions=True,
+    )
+    if isinstance(_fresh_td, Exception):
+        _fresh_td = None
+    if isinstance(_jup_price_pre, Exception):
+        _jup_price_pre = 0.0
     if isinstance(_fresh_td, dict) and float(_fresh_td.get("priceUsd", 0) or 0) > 0:
         _fresh_px_j = float(_fresh_td.get("priceUsd", 0) or 0)
         if _scan_px_j > 0:
             if _fresh_px_j < _scan_px_j * 0.92:
                 print(f"🚫 [{source_tag}-FINAL-RECHECK] {mint[:8]}: обвал цены на {(_fresh_px_j/_scan_px_j - 1)*100:+.1f}% за время аудита — отмена входа!")
                 return False
-            if _fresh_px_j > _scan_px_j * 1.30:
+            if _fresh_px_j > _scan_px_j * 1.45:
                 print(f"🚫 [{source_tag}-FINAL-RECHECK] {mint[:8]}: цена улетела на {(_fresh_px_j/_scan_px_j - 1)*100:+.1f}% за время аудита — не догоняем хай!")
                 return False
         for _fk in ("_lp_verified", "_unlocked_runner_ok", "_pumpswap_checked", "_pumpswap_canonical", "_pumpswap_lp_burned", "_pumpswap_rpc_unverified"):
@@ -485,12 +536,17 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
         print(f"🚫 [{source_tag}-PRICE-SPLIT] {_sym_tmp} ({mint[:8]}): рассинхрон пулов {_div_r:.1f}x — блок.")
         return False
         
-    import goplus as _gp
-    _sol_onchain_ok, _sol_onchain_why = await _gp.check_onchain_solana_security(mint)
+    if isinstance(_onchain_res_pre, tuple) and len(_onchain_res_pre) == 2:
+        _sol_onchain_ok, _sol_onchain_why = _onchain_res_pre
+    else:
+        _sol_onchain_ok, _sol_onchain_why = await _gp.check_onchain_solana_security(mint)
     if not _sol_onchain_ok:
         print(f"🚫 [{source_tag}-FREEZE] {_sym_tmp} ({mint[:8]}): {_sol_onchain_why} — блок входа.")
         return False
-    _g_ok, _g_why = await _gp.check_solana(mint)
+    if isinstance(_gp_res_pre, tuple) and len(_gp_res_pre) == 2:
+        _g_ok, _g_why = _gp_res_pre
+    else:
+        _g_ok, _g_why = await _gp.check_solana(mint)
     if not _g_ok:
         print(f"🚫 [{source_tag}-GOPLUS] {_sym_tmp} ({mint[:8]}): {_g_why} — блок входа.")
         return False
@@ -713,14 +769,14 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
         
     from jupiter import JupiterAPI
     ds_price = float((td or {}).get("priceUsd", 0) or 0.0)
-    jup_price = await JupiterAPI.get_price(mint)
+    jup_price = _jup_price_pre if (_jup_price_pre and _jup_price_pre > 0) else (await JupiterAPI.get_price(mint))
     if ds_price > 0 and jup_price and jup_price > 0:
         if jup_price < ds_price * 0.925:
             analyzer._deny(mint, "jup-live-dump >7.5%", f"🚫 [{source_tag}-LIVE-DUMP] {_sym_tmp} ({mint[:8]}): живая котировка Jupiter (${jup_price:.8f}) уже ниже DexScreener (${ds_price:.8f}) на {(1.0 - jup_price/ds_price)*100:.1f}% [>7.5%] — слив в процессе!")
             return False
         _up_ratio = jup_price / ds_price
-        if _up_ratio > 1.25:
-            print(f"🚫 [{source_tag}-PRICE-MISMATCH] {_sym_tmp} ({mint[:8]}): Jupiter (${jup_price:.8f}) vs Dex (${ds_price:.8f}) опережение {_up_ratio:.2f}x (>1.25x) — блок от вертикального входа.")
+        if _up_ratio > 1.45:
+            print(f"🚫 [{source_tag}-PRICE-MISMATCH] {_sym_tmp} ({mint[:8]}): Jupiter (${jup_price:.8f}) vs Dex (${ds_price:.8f}) опережение {_up_ratio:.2f}x (>1.45x) — блок от вертикального входа.")
             return False
         # На сырых кривых pump/pumpfun НЕ перезаписываем ds_price завышенной котировкой роутера Jupiter (исключает искусственные стопы -25% на 1-м тике):
         price = ds_price if _dex_j_low in ("pump", "pumpfun") else jup_price
@@ -855,13 +911,16 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
         else:
             print(f"💎 [{source_tag}-ORGANIC-STEALTH] {_sym_tmp}: 0 соцсетей, но подтвержден органический прорыв — пропуск.")
 
-    # === Analyzer уже провёл ROCKET-XGB S1+S2 и 8-слойный ончейн-аудит: проверяем только 0ms анти-клон и точку входа/стоп ===
+    # === Analyzer уже провёл ROCKET-XGB S1+S2 и 8-слойный ончейн-аудит: проверяем только 0ms анти-клон (или результат Wave 1) и точку входа/стоп ===
     from grok_jev import grok_jev
     _cc_ok, _cc_why = grok_jev.check_copycat_runner(mint, _sym_tmp, td or {})
     if not _cc_ok:
         print(f"🚫 [{source_tag}-COPYCAT] {_sym_tmp} ({mint[:8]}): {_cc_why} — отказ входа.")
         return False
-    _tc_ok, _tc_why = await grok_jev.check_trending_clone(mint, _sym_tmp, td or {})
+    if isinstance(_tc_res_pre, tuple) and len(_tc_res_pre) == 2 and _sym_tmp == _pre_sym_j:
+        _tc_ok, _tc_why = _tc_res_pre
+    else:
+        _tc_ok, _tc_why = await grok_jev.check_trending_clone(mint, _sym_tmp, td or {})
     if not _tc_ok:
         print(f"🚫 [{source_tag}-CLONE] {_sym_tmp} ({mint[:8]}): {_tc_why} — отказ входа.")
         return False
@@ -873,30 +932,80 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
     else:
         print(f"🎯 [JEV-FILLS] {_sym_tmp} ({mint[:8]}): {_flush_msg}")
 
-    # Ончейн аудит бандлов/холдеров/дева (синхронизировано со scanner_loop)
-    if getattr(config, "RUG_WALLET_AUDIT_ENABLED", getattr(config, "RUG_WALLET_ANALYSIS_ENABLED", True)):
+    # WAVE 2 (ПАРАЛЛЕЛЬНЫЙ PRE-FLIGHT, ~3-4.5с вместо 15-20с последовательных проверок!):
+    # RugWallet + FCR Guard + Jupiter Sellability + Ончейн-резервы/Order-Flow выполняются ОДНОВРЕМЕННО до взятия _get_buy_lock().
+    import market_data as _md_jup
+
+    async def _w2_rw():
+        if not getattr(config, "RUG_WALLET_AUDIT_ENABLED", getattr(config, "RUG_WALLET_ANALYSIS_ENABLED", True)):
+            return None
         try:
             from rug_wallet_analysis import quick_rug_check
-            _is_ok_rw, _rw_reason = await quick_rug_check(mint)
-            if not _is_ok_rw:
-                _rw_l = str(_rw_reason).lower()
-                _rw_rpc_err = any(e in _rw_l for e in ("429", "403", "timeout", "error", "none", "rpc", "http", "retry"))
-                if not _rw_rpc_err:
-                    print(f"🚫 [{source_tag}-RUG-WALLET] {_sym_tmp} ({mint[:8]}): {_rw_reason} — вход заблокирован.")
-                    return False
+            return await quick_rug_check(mint)
         except Exception as _rw_e:
-            print(f"⚠️ [{source_tag}-RUG-WALLET] {_sym_tmp} ({mint[:8]}): audit err {type(_rw_e).__name__}: {_rw_e}")
+            return _rw_e
 
-    # Предвходовой анализ на мгновенный раг первой свечи (FCR Guard)
-    if getattr(config, "FCR_ENABLED", True):
+    async def _w2_fcr():
+        if not getattr(config, "FCR_ENABLED", True):
+            return None
         try:
             from first_candle_rug_guard import pre_entry_rug_check
-            _fcr = await pre_entry_rug_check(mint, pair_data=td or {}, symbol=_sym_tmp)
-            if _fcr.get("verdict") == "BLOCK":
-                print(f"🚫 [{source_tag}-FCR] {_sym_tmp} ({mint[:8]}): {_fcr.get('report', '')} — вход заблокирован (мгновенный раг)!")
-                return False
+            return await pre_entry_rug_check(mint, pair_data=td or {}, symbol=_sym_tmp)
         except Exception:
-            pass
+            return None
+
+    async def _w2_sell():
+        try:
+            return await JupiterAPI.is_token_sellable(mint)
+        except Exception:
+            return (True, "sell-check-err")
+
+    async def _w2_of():
+        try:
+            return await _md_jup.verify_entry_onchain_and_orderflow(
+                mint, _sym_tmp, td or {"priceUsd": price}, price
+            )
+        except Exception:
+            return (True, price, "", {})
+
+    _rw_res_j, _fcr_res_j, _sell_res_j, _of_res_j = await asyncio.gather(
+        _w2_rw(), _w2_fcr(), _w2_sell(), _w2_of(), return_exceptions=True
+    )
+
+    if isinstance(_rw_res_j, tuple) and len(_rw_res_j) == 2:
+        _is_ok_rw, _rw_reason = _rw_res_j
+        if not _is_ok_rw:
+            _rw_l = str(_rw_reason).lower()
+            _rw_rpc_err = any(e in _rw_l for e in ("429", "403", "timeout", "error", "none", "rpc", "http", "retry"))
+            if not _rw_rpc_err:
+                print(f"🚫 [{source_tag}-RUG-WALLET] {_sym_tmp} ({mint[:8]}): {_rw_reason} — вход заблокирован.")
+                return False
+    elif isinstance(_rw_res_j, Exception):
+        print(f"⚠️ [{source_tag}-RUG-WALLET] {_sym_tmp} ({mint[:8]}): audit err {type(_rw_res_j).__name__}: {_rw_res_j}")
+
+    if isinstance(_fcr_res_j, dict) and _fcr_res_j.get("verdict") == "BLOCK":
+        print(f"🚫 [{source_tag}-FCR] {_sym_tmp} ({mint[:8]}): {_fcr_res_j.get('report', '')} — вход заблокирован (мгновенный раг)!")
+        return False
+
+    if isinstance(_sell_res_j, tuple):
+        _j_ok, _j_why = _sell_res_j
+        if not _j_ok and any(k in str(_j_why or "").lower() for k in ("no routes", "cannot sell", "honeypot", "freeze", "0 sol returned")):
+            print(f"🚫 [{source_tag}-UNSELLABLE] {_sym_tmp} ({mint[:8]}): токен непродаваем на DEX ({_j_why}) — отмена входа!")
+            return False
+
+    _of_meta_j = {}
+    if isinstance(_of_res_j, tuple) and len(_of_res_j) == 4:
+        _of_ok_j, _of_px_j, _of_why_j, _of_meta_j = _of_res_j
+        if not _of_ok_j:
+            print(f"🚫 [{source_tag}-PREFLIGHT-BLOCKED] {_sym_tmp} ({mint[:8]}): {_of_why_j} — отмена входа!")
+            return False
+        if ds_price > 0 and _of_px_j > 0 and _of_px_j < ds_price * 0.90:
+            print(f"🚫 [{source_tag}-LIVE-DUMP] {_sym_tmp} ({mint[:8]}): живая цена (${_of_px_j:.8f}) уже на {(1.0 - _of_px_j / ds_price) * 100:.1f}% ниже ориентира (${ds_price:.8f}) — обвал в моменте, отмена!")
+            return False
+        if _of_px_j and _of_px_j > 0:
+            price = _of_px_j
+            if _wick_stop_price and _wick_pct:
+                _wick_stop_price = price * (1.0 + _wick_pct)
 
     async with _get_buy_lock():
         if len(tracker.get_open_positions()) >= config.MAX_CONCURRENT_POSITIONS:
@@ -930,44 +1039,6 @@ async def _evaluate_and_buy(mint: str, td: dict, analyzer, tracker, source_tag: 
         if "VIP-" in _sig:
             size = min(size, float(getattr(config, "TG_VIP_SIZE_USD", 15.0) or 15.0))
         _mint_ml_conf = float(getattr(analyzer, "rocket_scores", {}).get(mint, getattr(analyzer, "last_score", 0.0)) or 0.0)
-
-        # Pre-flight: параллельно продаваемость Jupiter + ончейн резервы (Pump/PumpSwap) + живой Order-Flow/MEV Wash/Smart-Money аудит
-        _of_meta_j = {}
-        try:
-            from jupiter import JupiterAPI
-            import market_data as _md_jup
-
-            async def _chk_sell_j():
-                return await JupiterAPI.is_token_sellable(mint)
-
-            async def _chk_of_j():
-                return await _md_jup.verify_entry_onchain_and_orderflow(
-                    mint, _sym_tmp, td or {"priceUsd": price}, price
-                )
-
-            _sell_res_j, _of_res_j = await asyncio.gather(
-                _chk_sell_j(), _chk_of_j(), return_exceptions=True
-            )
-            if isinstance(_sell_res_j, tuple):
-                _j_ok, _j_why = _sell_res_j
-                if not _j_ok and any(k in str(_j_why or "").lower() for k in ("no routes", "cannot sell", "honeypot", "freeze", "0 sol returned")):
-                    print(f"🚫 [{source_tag}-UNSELLABLE] {_sym_tmp} ({mint[:8]}): токен непродаваем на DEX ({_j_why}) — отмена входа!")
-                    return False
-
-            if isinstance(_of_res_j, tuple) and len(_of_res_j) == 4:
-                _of_ok_j, _of_px_j, _of_why_j, _of_meta_j = _of_res_j
-                if not _of_ok_j:
-                    print(f"🚫 [{source_tag}-PREFLIGHT-BLOCKED] {_sym_tmp} ({mint[:8]}): {_of_why_j} — отмена входа!")
-                    return False
-                if ds_price > 0 and _of_px_j > 0 and _of_px_j < ds_price * 0.925:
-                    print(f"🚫 [{source_tag}-LIVE-DUMP] {_sym_tmp} ({mint[:8]}): живая цена (${_of_px_j:.8f}) уже на {(1.0 - _of_px_j / ds_price) * 100:.1f}% ниже ориентира (${ds_price:.8f}) — обвал в моменте, отмена!")
-                    return False
-                if _of_px_j and _of_px_j > 0:
-                    price = _of_px_j
-                    if _wick_stop_price and _wick_pct:
-                        _wick_stop_price = price * (1.0 + _wick_pct)
-        except Exception:
-            pass
 
         _of_feat_j = {}
         if isinstance(_of_meta_j, dict):
@@ -1287,9 +1358,9 @@ async def jup_loop(analyzer, tracker):
                     tasks = [_process_hot_candidate(c) for c in hot_candidates[:30]]
                     if tasks:
                         try:
-                            await asyncio.wait_for(asyncio.gather(*tasks, return_exceptions=True), timeout=35.0)
+                            await asyncio.wait_for(asyncio.gather(*tasks, return_exceptions=True), timeout=45.0)
                         except asyncio.TimeoutError:
-                            print("⏱️ [JUP-BATCH-TIMEOUT] Пакетный анализ кандидатов превысил 35с!")
+                            print("⏱️ [JUP-BATCH-TIMEOUT] Пакетный анализ кандидатов превысил 45с!")
 
                     if len(processed) > 1000:
                         processed.clear()

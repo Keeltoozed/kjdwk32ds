@@ -976,7 +976,28 @@ class Analyzer:
                         pair_dict[_fk] = _last_p[_fk]
         return pair_dict
 
-    async def fetch_token_data(self, mint: str) -> dict:
+    def try_claim_buy_flight(self, mint: str, ttl: float = 25.0) -> bool:
+        """Общий межпоточный/межзадачный lock-guard на вход по минту:
+        исключает одновременный дублирующий pre-flight от scanner_loop и jup_loop на одном токене (кейс VINTEL)."""
+        if not mint:
+            return False
+        now = time.time()
+        if not hasattr(self, "_buy_in_flight"):
+            self._buy_in_flight = {}
+        # Очистка протухших записей
+        for k in list(self._buy_in_flight.keys()):
+            if (now - self._buy_in_flight[k]) > ttl:
+                self._buy_in_flight.pop(k, None)
+        if mint in self._buy_in_flight:
+            return False
+        self._buy_in_flight[mint] = now
+        return True
+
+    def release_buy_flight(self, mint: str) -> None:
+        if hasattr(self, "_buy_in_flight"):
+            self._buy_in_flight.pop(mint, None)
+
+    async def fetch_token_data(self, mint: str, fast: bool = False) -> dict:
         _is_grad = False
         try:
             from birth_tracker import birth_tracker as _bt_g
@@ -999,7 +1020,7 @@ class Analyzer:
         from http_client import fetch_json
         best_pair = None
         try:
-            status, data = await fetch_json(url, timeout=8, retries=1)
+            status, data = await fetch_json(url, timeout=(3.5 if fast else 8), retries=(0 if fast else 1))
             if status == 200 and data:
                 best_pair = self._best_solana_pair(mint, data.get("pairs") or [])
                 if best_pair:
@@ -1017,7 +1038,7 @@ class Analyzer:
 
             # ВАЖНО: GeckoTerminal НЕ индексирует сырые токены/кёрвы Pump.fun!
             # Никогда не тратим семафор GT (25 RPM) на .pump токены — это исключает 22с таймауты и 429 блокировки!
-            if mint.endswith("pump"):
+            if fast or mint.endswith("pump"):
                 return self._apply_verified_lp_meta(mint, best_pair) if best_pair else {}
 
             # GeckoTerminal опрашиваем ТОЛЬКО для не-pump токенов как крайний fallback:
@@ -1038,7 +1059,7 @@ class Analyzer:
         if cached_gt and (now_gt - cached_gt[0]) < 300.0:
             return dict(cached_gt[1]) if cached_gt[1] else {}
         try:
-            data = await market_data._gt_get(f"/networks/solana/tokens/{mint}/pools?page=1", retries=0, timeout=3)
+            data = await market_data._gt_get(f"/networks/solana/tokens/{mint}/pools?page=1", retries=0, timeout=3, max_wait=2.5)
             if not data:
                 self._gt_token_cache[mint] = (now_gt, {})
                 return {}
@@ -1776,6 +1797,15 @@ class Analyzer:
                     print(f"🔥 [MIMIC-FOMO] {symbol} ({mint[:8]}): подтвержденный вирусный мем (b/s {_b5_mc}/{_s5_mc}, vol5 ${_v5_mc:,.0f}, links {_links_m}) — пропуск.")
                 else:
                     return self._deny(mint, "mimic-scam", f"🚫 Мусор: Токен {symbol} мимикрирует под известный мем без активности (links {_links_m}, v/l {_v_to_l_m:.1f}x, vol5 ${_v5_mc:,.0f}).")
+
+        # 0ms анти-копикэт до сетевых вызовов RugCheck/L7-L10 (не тратим 13с и квоту GT на клоны FIONA!)
+        try:
+            from grok_jev import grok_jev as _gj_cc_early
+            _cc_e_ok, _cc_e_why = _gj_cc_early.check_copycat_runner(mint, symbol, pair_data)
+            if not _cc_e_ok:
+                return self._deny(mint, f"copycat-runner ({_cc_e_why[:36]})", f"🚫 [COPYCAT-0MS] {symbol} ({mint[:8]}): {_cc_e_why} — отсев до аудита.")
+        except Exception:
+            pass
             
         _created_pre = pair_data.get("pairCreatedAt") or 0
         if _created_pre:
@@ -2054,7 +2084,7 @@ class Analyzer:
                 try:
                     import market_data as _md_wb
                     _flow_wb = await _md_wb.check_live_order_flow(
-                        mint, _pair_addr_wb, ref_price_usd=float(pair_data.get("priceUsd", 0) or 0)
+                        mint, _pair_addr_wb, ref_price_usd=float(pair_data.get("priceUsd", 0) or 0), max_wait=1.8
                     )
                     if (
                         isinstance(_flow_wb, dict)
@@ -2104,8 +2134,8 @@ class Analyzer:
                 f"🚫 [MOMENTUM-GATE] {symbol} ({mint[:8]}): {_mom_why_a}",
             )
         _base_max_m1 = float(getattr(config, "MAX_ENTRY_M1_PCT", 22.0))
-        if not _is_curve_pre_a and _b5_pre >= max(50, int(_s5_pre * 1.35)) and _vm5_pre >= 25000.0 and _m5 >= 25.0:
-            _max_m1_cfg = max(_base_max_m1, 25.0)
+        if not _is_curve_pre_a and _raw_liq_chk >= 10000.0 and _b5_pre >= max(40, int(_s5_pre * 1.20)) and _vm5_pre >= 12000.0 and _m5 >= 25.0:
+            _max_m1_cfg = max(_base_max_m1, 28.0)
         else:
             _max_m1_cfg = _base_max_m1
         _min_m1_floor = float(getattr(config, "JEV_MIN_M1_ENTRY_FLOOR_PCT", -5.0))
@@ -2716,10 +2746,16 @@ class Analyzer:
                         _ui_s = (_raw_s / (10 ** _dec_s)) if _raw_s > 0 else 1_000_000_000.0
                         _h_accs = [str(h.get("address") or "") for h in top_holders[:20] if h.get("address") and str(h.get("address")) not in pool_accounts]
                         _h_owners = [str(h.get("owner") or "") for h in top_holders[:20] if h.get("owner") and str(h.get("owner")) not in pool_accounts and float(h.get("pct") or 0) <= 50.0]
+                        async def _bounded_layer(coro, _t_lim: float = 3.5):
+                            try:
+                                return await _aio_aud.wait_for(coro, timeout=_t_lim)
+                            except Exception:
+                                return (True, "")
+
                         (_l7_ok, _l7_why), (_l8_ok, _l8_why), (_l9_ok, _l9_why) = await _aio_aud.gather(
-                            _gp_aud.check_rugcheck_insider_graph(mint, total_supply_raw=_raw_s, pool_accounts=pool_accounts),
-                            _gp_aud.check_spl_holder_delegations(mint, holder_token_accounts=_h_accs, total_supply_ui=_ui_s),
-                            _gp_aud.check_staircase_and_sybil_farm(mint, pair_address=str(pair_data.get("pairAddress") or ""), holder_owners=_h_owners),
+                            _bounded_layer(_gp_aud.check_rugcheck_insider_graph(mint, total_supply_raw=_raw_s, pool_accounts=pool_accounts), 3.5),
+                            _bounded_layer(_gp_aud.check_spl_holder_delegations(mint, holder_token_accounts=_h_accs, total_supply_ui=_ui_s), 3.5),
+                            _bounded_layer(_gp_aud.check_staircase_and_sybil_farm(mint, pair_address=str(pair_data.get("pairAddress") or ""), holder_owners=_h_owners), 3.8),
                         )
                         if not _l8_ok:
                             return self._deny(mint, "spl-delegation-drain", f"🚫 [АНТИСКАМ-L8] {symbol} ({mint[:8]}): {_l8_why} → Скрытый дрейнер!")
@@ -3531,7 +3567,7 @@ class Analyzer:
         else:
             try:
                 import market_data as _md
-                data = await _md._gt_get(f"/networks/{gt_net}/pools/{pair_addr}/ohlcv/minute?aggregate=1&limit=5", retries=1)
+                data = await _md._gt_get(f"/networks/{gt_net}/pools/{pair_addr}/ohlcv/minute?aggregate=1&limit=5", retries=0, timeout=3, max_wait=2.5)
                 if data:
                     ohlcv = ((data.get("data") or {}).get("attributes") or {}).get("ohlcv_list") or []
                     self._ohlcv_1m_cache[pair_addr] = (now, ohlcv)

@@ -598,8 +598,8 @@ def evaluate_entry_momentum(
     else:
         _max_m5_dyn = float(globals().get("MAX_ENTRY_M5_PCT", 175.0))
     _max_m1_dyn = float(globals().get("MAX_ENTRY_M1_PCT", 22.0))
-    if not is_curve and buys5 >= max(50, int(sells5 * 1.35)) and vol5_usd >= 25000.0 and m5 >= 25.0:
-        _max_m1_dyn = max(_max_m1_dyn, 25.0)
+    if not is_curve and liq_usd >= 10000.0 and buys5 >= max(40, int(sells5 * 1.20)) and vol5_usd >= 12000.0 and m5 >= 25.0:
+        _max_m1_dyn = max(_max_m1_dyn, 28.0)
     if m1 > _max_m1_dyn:
         return False, f"m1-vertical-top {m1:+.1f}% > +{_max_m1_dyn:.0f}% (buying candle top, wait for reset)"
     if m5 > _max_m5_dyn:
@@ -635,6 +635,7 @@ def evaluate_entry_momentum(
         return False, f"bleeding-h1-downtrend h1 {h1:+.1f}% at age {age_min:.1f}m vol5 ${vol5_usd:,.0f}"
 
     # 1. Реальный взрывной старт ультра-свежего токена (<=3м): ADPAID (+105%: 16b/4s, m5 +29.8%), WANTED (+55%: 37b/13s, m5 +26%), TDC (+399%)
+    # + Свежий выпускник PumpSwap/DEX (<=6м, liq >=$7.5k): в первые минуты на полном пуле $25-35k v/l равен 0.10-0.20x даже при 5x перевесе покупателей (кейс PIPI 119b/23s vol5 $4.1k)!
     _is_explosive_micro_start = (
         age_min <= 2.5
         and m5 >= 20.0
@@ -642,8 +643,19 @@ def evaluate_entry_momentum(
         and buys5 >= max(15, int(sells5 * 2.20))
         and vol5_usd >= 800.0
     )
+    _is_fresh_grad_ignition = (
+        not is_curve
+        and age_min <= 6.0
+        and liq_usd >= 7500.0
+        and m5 >= 8.0
+        and m1 >= -2.0
+        and vol5_usd >= 2500.0
+        and buys5 >= max(25, int(sells5 * 1.40))
+        and (vel_ratio >= 0.10 or vol5_usd >= 3500.0)
+    )
     is_ultra_fresh_launch = (
         _is_explosive_micro_start
+        or _is_fresh_grad_ignition
         or (
             age_min <= 5.0
             and m5 >= 12.0
@@ -1138,7 +1150,7 @@ FCR_SELL_DOMINANCE = 0.85              # sells/buys за 5м для сигнал
 FCR_MIN_SELL_COUNT = 120               # Абсолютный минимум продаж, чтобы сигнал был значимым
 FCR_TRUSTED_FUNDERS = []              # Адреса-источники, которым доверяем (свои кошельки, биржи) — их кластеры игнорируются
 FCR_MAX_DURATION_SEC = 10.0 if HELIUS_API_KEY else 5.0  # Без приватного Helius не держим вход 13с на публичных RPC (иначе покупаем опоздавший дамп)
-FCR_CANONICAL_PUMPSWAP_DURATION_SEC = 6.0  # Бюджет FCR (6с) для каноничного PumpSwap: успевает проверить funding-кластеры кабала (FIONA), но не висит 10-14с
+FCR_CANONICAL_PUMPSWAP_DURATION_SEC = 4.5  # Бюджет FCR (4.5с) для каноничного PumpSwap: успевает проверить funding-кластеры кабала (FIONA), но не задерживает вход на 10-14с
 FCR_GRAPH_MIN_PCT = 0.05              # Узел сети RugCheck с долей < 0.05% — пыль, не участник фермы
 FCR_GRAPH_MAX_WALLETS = 15           # Сеть крупнее — это граф переводов толпы, а не ферма (вес режется)
 FCR_SIG_PAGE_LIMIT = 200              # Сколько подписей тянуть за раз (лёгкий payload для публичного RPC)

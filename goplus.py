@@ -1491,13 +1491,12 @@ async def check_staircase_and_sybil_farm(mint: str, pair_address: str = "", hold
         _STAIRCASE_CACHE.clear()
 
     recent_buyers = []
-    # --- LAYER 9: Лента сделок пула (GeckoTerminal /trades через единый пейсер market_data) ---
+    # --- LAYER 9: Лента сделок пула (общий кэш /trades с Order-Flow и fail-fast max_wait=2.5с, без 20с зависаний при 429) ---
     clean_pair = str(pair_address or "").replace("solana_", "").strip()
     if clean_pair and len(clean_pair) >= 32 and not clean_pair.startswith("0x"):
         try:
             import market_data
-            gt_resp = await market_data._gt_get(f"/networks/solana/pools/{clean_pair}/trades", retries=0, timeout=5)
-            trades_list = (gt_resp or {}).get("data") if isinstance(gt_resp, dict) else None
+            trades_list = await market_data.get_pool_trades_cached(clean_pair, max_wait=2.5, ttl=10.0)
             if isinstance(trades_list, list) and trades_list:
                 t_ok, t_why, recent_buyers = analyze_trade_tape_staircase(trades_list)
                 if not t_ok:

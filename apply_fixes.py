@@ -55,13 +55,19 @@ def verify_on_render() -> None:
         flush=True,
     )
     try:
-        import inspect
-        import analyzer as _an_v
-        import tracker as _tr_v
-        _has_an_gate = "curve-thin-liq" in inspect.getsource(_an_v.Analyzer._analyze_token_inner)
-        _has_tr_fw = "FIREWALL-CURVE-THIN-LIQ" in inspect.getsource(_tr_v.PaperTracker.add_position)
+        import os
+        _base_dir = os.path.dirname(os.path.abspath(__file__))
+        with open(os.path.join(_base_dir, "analyzer.py"), encoding="utf-8") as _f:
+            _an_src = _f.read()
+        with open(os.path.join(_base_dir, "tracker.py"), encoding="utf-8") as _f:
+            _tr_src = _f.read()
+        with open(os.path.join(_base_dir, "market_data.py"), encoding="utf-8") as _f:
+            _md_src = _f.read()
+        _has_an_gate = "curve-thin-liq" in _an_src and "try_claim_buy_flight" in _an_src
+        _has_tr_fw = "FIREWALL-CURVE-THIN-LIQ" in _tr_src
+        _has_gt_fast = "get_pool_trades_cached" in _md_src and "max_wait" in _md_src
         print(
-            f"   • GATES ACTIVE                = analyzer.curve-thin-liq:{'OK' if _has_an_gate else 'MISSING'} | tracker.firewall:{'OK' if _has_tr_fw else 'MISSING'}",
+            f"   • GATES ACTIVE                = analyzer.fast-gates:{'OK' if _has_an_gate else 'MISSING'} | tracker.firewall:{'OK' if _has_tr_fw else 'MISSING'} | gt.fail-fast:{'OK' if _has_gt_fast else 'MISSING'}",
             flush=True,
         )
     except Exception as _ve:

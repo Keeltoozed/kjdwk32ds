@@ -46,11 +46,12 @@ _gt_consecutive_fails = 0
 _gt_breaker_until = 0.0
 
 
-async def _gt_get(path: str, retries: int = 0, timeout: int = 6):
+async def _gt_get(path: str, retries: int = 0, timeout: int = 6, max_wait: float = 0.0):
     """GET к GeckoTerminal через ГЛОБАЛЬНЫЙ семафор http_client (Sem=1) и локальный пейсер.
     ВАЖНО:
-    - Circuit Breaker: при 4 сбоях подряд (таймауты/5xx/429) пауза 25с (fail-fast, не забиваем очередь).
-    - default retries=0 и timeout=6 для быстрого дискавери.
+    - Circuit Breaker: при 2 подряд 429 (или 4 сбоях) пауза 15с (fail-fast, не забиваем очередь).
+    - max_wait > 0: жёсткий потолок ожидания (очередь лока + HTTP), чтобы критичный путь входа
+      (L9 staircase / 1m OHLCV / order-flow) НИКОГДА не висел 15-20с в очереди за дискавери.
     - 429 НЕ ретраится (повторный долбёж усугубляет бан). Возвращает dict или {}."""
     global _gt_consecutive_fails, _gt_breaker_until, _last_call
     from http_client import fetch_json
@@ -58,12 +59,41 @@ async def _gt_get(path: str, retries: int = 0, timeout: int = 6):
     if now_m < _gt_breaker_until:
         return {}  # Circuit breaker open: fail-fast
 
-    async with _get_lock():
-        wait_s = 3.0 - (time.monotonic() - _last_call)
+    t_start = now_m
+    lock = _get_lock()
+    acquired = False
+    try:
+        if max_wait and max_wait > 0.0:
+            try:
+                await asyncio.wait_for(lock.acquire(), timeout=max(0.15, max_wait * 0.55))
+                acquired = True
+            except asyncio.TimeoutError:
+                return {}
+        else:
+            await lock.acquire()
+            acquired = True
+
+        if time.monotonic() < _gt_breaker_until:
+            return {}
+
+        wait_s = MIN_INTERVAL - (time.monotonic() - _last_call)
         if wait_s > 0:
+            if max_wait and max_wait > 0.0:
+                rem_after_wait = max_wait - (time.monotonic() - t_start) - wait_s
+                if rem_after_wait < 0.6:
+                    return {}
             await asyncio.sleep(wait_s)
         _last_call = time.monotonic()
-        status, data = await fetch_json(BASE + path, headers=HEADERS, timeout=timeout, retries=0)
+        eff_timeout = timeout
+        if max_wait and max_wait > 0.0:
+            rem_http = max_wait - (time.monotonic() - t_start)
+            if rem_http < 0.4:
+                return {}
+            eff_timeout = min(float(timeout), max(0.8, rem_http))
+        status, data = await fetch_json(BASE + path, headers=HEADERS, timeout=eff_timeout, retries=0)
+    finally:
+        if acquired and lock.locked():
+            lock.release()
     if status == 200 and isinstance(data, dict):
         _gt_consecutive_fails = 0
         return data
@@ -71,7 +101,7 @@ async def _gt_get(path: str, retries: int = 0, timeout: int = 6):
         return {}  # токен/пул ещё не проиндексирован — ретраи бессмысленны
     if status == 429:
         _gt_consecutive_fails += 1
-        if _gt_consecutive_fails >= 4:
+        if _gt_consecutive_fails >= 2:
             _gt_consecutive_fails = 0
             _gt_breaker_until = time.monotonic() + 15.0
             print("⚡ [GT-BREAKER] GeckoTerminal 429 -> пауза GT на 15с (fail-fast, не блочим систему).")
@@ -374,7 +404,7 @@ async def get_token_data(mint: str, max_cache_age: float = TD_TTL) -> dict:
         # Добираем GT только если у Jupiter пустое окно m5
         if float((jup.get("volume") or {}).get("m5", 0) or 0) <= 0:
             try:
-                g = await _gt_get(f"/networks/solana/tokens/{mint}?include=top_pools")
+                g = await _gt_get(f"/networks/solana/tokens/{mint}?include=top_pools", timeout=3, max_wait=2.5)
                 pools = [x for x in g.get("included", []) if x.get("type") == "pool" and _base_mint(x) == mint]
                 if pools:
                     best = max(pools, key=lambda x: float(
@@ -402,7 +432,7 @@ async def get_token_data(mint: str, max_cache_age: float = TD_TTL) -> dict:
     if mint.endswith("pump") and not getattr(_md_cfg, "ALLOW_UNGRADUATED_PUMPFUN", False):
         if not _is_grad_md:
             return ds or {}
-    d = await _gt_get(f"/networks/solana/tokens/{mint}?include=top_pools")
+    d = await _gt_get(f"/networks/solana/tokens/{mint}?include=top_pools", timeout=3, max_wait=2.5)
     try:
         data = d.get("data", {})
         ta = data.get("attributes", {})
@@ -1141,11 +1171,41 @@ async def get_live_pumpswap_pool_state(mint: str, pair_address: str = "") -> dic
         return None
 
 
+async def get_pool_trades_cached(clean_pair: str, max_wait: float = 2.5, ttl: float = 10.0) -> list:
+    """Единый кэшированный запрос /pools/{pair}/trades с fail-fast таймаутом.
+    Общий кэш для Layer 9 (goplus.check_staircase_and_sybil_farm) и Pre-Flight Order-Flow:
+    устраняет двойные запросы на один и тот же пул и 15-20с зависания при 429."""
+    clean_pair = str(clean_pair or "").replace("solana_", "").strip()
+    if not clean_pair or len(clean_pair) < 32 or clean_pair.startswith("0x"):
+        return []
+    now_m = time.monotonic()
+    hit = _ORDER_FLOW_CACHE.get(clean_pair)
+    if hit and (now_m - hit[0]) < ttl:
+        return hit[1] if isinstance(hit[1], list) else []
+    try:
+        gt_resp = await _gt_get(
+            f"/networks/solana/pools/{clean_pair}/trades",
+            retries=0,
+            timeout=3,
+            max_wait=max_wait,
+        )
+        trades = (gt_resp or {}).get("data") if isinstance(gt_resp, dict) else None
+        if isinstance(trades, list):
+            _ORDER_FLOW_CACHE[clean_pair] = (now_m, trades)
+            if len(_ORDER_FLOW_CACHE) > 500:
+                _ORDER_FLOW_CACHE.clear()
+            return trades
+    except Exception:
+        pass
+    return []
+
+
 async def check_live_order_flow(
     mint: str,
     pair_address: str = "",
     smart_wallets: set = None,
     ref_price_usd: float = 0.0,
+    max_wait: float = 2.5,
 ) -> dict:
     """Анализ реальной ленты последних сделок пула (Order Flow, GeckoTerminal /trades, задержка <1с).
     Выявляет:
@@ -1164,21 +1224,7 @@ async def check_live_order_flow(
     if not clean_pair or len(clean_pair) < 32 or clean_pair.startswith("0x"):
         return res
 
-    now_m = time.monotonic()
-    hit = _ORDER_FLOW_CACHE.get(clean_pair)
-    trades = None
-    if hit and (now_m - hit[0]) < 4.0:
-        trades = hit[1]
-    else:
-        try:
-            gt_resp = await _gt_get(f"/networks/solana/pools/{clean_pair}/trades", retries=0, timeout=4)
-            trades = (gt_resp or {}).get("data") if isinstance(gt_resp, dict) else None
-            if isinstance(trades, list):
-                _ORDER_FLOW_CACHE[clean_pair] = (now_m, trades)
-                if len(_ORDER_FLOW_CACHE) > 500:
-                    _ORDER_FLOW_CACHE.clear()
-        except Exception:
-            trades = None
+    trades = await get_pool_trades_cached(clean_pair, max_wait=max_wait, ttl=10.0)
 
     if not isinstance(trades, list) or len(trades) < 4:
         return res

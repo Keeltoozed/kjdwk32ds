@@ -1318,6 +1318,7 @@ async def scanner_loop(analyzer, tracker):
                     if len(processed_mints) > 1000:
                         processed_mints.clear()
         
+                    _claimed_buy_flight = False
                     try:
                         # Используем умный маршрутизатор (сам выберет XGBoost или Raydium модель)
                         try:
@@ -1390,17 +1391,26 @@ async def scanner_loop(analyzer, tracker):
                                     except Exception:
                                         pass
                             elif mint in _graduated_set:
-                                _g_retries = getattr(analyzer, "_grad_retries", {})
-                                _g_cnt = _g_retries.get(mint, 0) + 1
-                                _g_retries[mint] = _g_cnt
-                                if _g_cnt <= 8:
-                                    processed_mints[mint] = time.time() - _cd + 20
-                                else:
-                                    processed_mints[mint] = time.time() + 120
+                                _last_p_g = getattr(analyzer, "_last_analyzed_pair", {}).get(mint) or {}
+                                _last_m5_g = float(((_last_p_g.get("priceChange") or {}).get("m5", 0) or 0))
+                                if _last_m5_g <= -70.0:
+                                    processed_mints[mint] = time.time() + 300
                                     try:
                                         birth_tracker.remove_graduated(mint)
                                     except Exception:
                                         pass
+                                else:
+                                    _g_retries = getattr(analyzer, "_grad_retries", {})
+                                    _g_cnt = _g_retries.get(mint, 0) + 1
+                                    _g_retries[mint] = _g_cnt
+                                    if _g_cnt <= 8:
+                                        processed_mints[mint] = time.time() - _cd + 20
+                                    else:
+                                        processed_mints[mint] = time.time() + 120
+                                        try:
+                                            birth_tracker.remove_graduated(mint)
+                                        except Exception:
+                                            pass
                             elif any(k in _sig_l for k in ("low-vol5", "m5-too-slow", "no-rocket-ignition")):
                                 processed_mints[mint] = time.time() - _cd + 25
                             else:
@@ -1413,6 +1423,9 @@ async def scanner_loop(analyzer, tracker):
                                               False, _sc_score_m)
 
                         if is_good:
+                            if not analyzer.try_claim_buy_flight(mint):
+                                continue
+                            _claimed_buy_flight = True
                             _cached_hit = getattr(analyzer, "_prefetch_cache", {}).get(mint, None)
                             if isinstance(_cached_hit, tuple) and len(_cached_hit) >= 2 and isinstance(_cached_hit[1], dict):
                                 _cached_pair = dict(_cached_hit[1])
@@ -1423,12 +1436,41 @@ async def scanner_loop(analyzer, tracker):
                             _last_an_p = getattr(analyzer, "_last_analyzed_pair", {}).get(mint)
                             _scan_px_sc = float((_last_an_p or _cached_pair or {}).get("priceUsd", 0) or 0)
                             # ОБЯЗАТЕЛЬНЫЙ сброс prefetch-кэша перед финальной проверкой и покупкой!
-                            # Без этого fetch_token_data возвращал старую цену 15-30с давности из начала батча,
-                            # и бот покупал уже слившиеся монеты (кейсы HUGH -68% в 0м, EDDIE -17%, PUSSY -17%)!
+                            # Параллельно забираем свежий pair_data (fast=True, <=3.5с) + живую цену Jupiter + анти-клон,
+                            # чтобы убрать 10-13с последовательных ожиданий после ANALYZER-PASS (кейс VINTEL)!
                             getattr(analyzer, "_prefetch_cache", {}).pop(mint, None)
-                            pair_data = await analyzer.fetch_token_data(mint)
-                            if not isinstance(pair_data, dict):
-                                pair_data = {}
+                            _pre_sym_sc = str(((_last_an_p or _cached_pair or {}).get("baseToken") or {}).get("symbol") or "").strip()
+                            _pre_dex_sc = str((_last_an_p or _cached_pair or {}).get("dexId") or "").lower()
+                            from jupiter import JupiterAPI as _JupPreSc
+                            from grok_jev import grok_jev as _gj_pre_sc
+
+                            async def _sc_jup_px_task():
+                                if _pre_dex_sc in ("pump", "pumpfun"):
+                                    return 0.0
+                                try:
+                                    return await _JupPreSc.get_price(mint)
+                                except Exception:
+                                    return 0.0
+
+                            async def _sc_clone_task():
+                                if not _pre_sym_sc or not isinstance(_last_an_p, dict):
+                                    return None
+                                try:
+                                    return await _gj_pre_sc.check_trending_clone(mint, _pre_sym_sc, _last_an_p)
+                                except Exception:
+                                    return (True, "")
+
+                            _sc_res_td, _jup_chk_pre, _tc_res_pre = await asyncio.gather(
+                                analyzer.fetch_token_data(mint, fast=True),
+                                _sc_jup_px_task(),
+                                _sc_clone_task(),
+                                return_exceptions=True,
+                            )
+                            pair_data = _sc_res_td if isinstance(_sc_res_td, dict) else {}
+                            if isinstance(_jup_chk_pre, Exception):
+                                _jup_chk_pre = 0.0
+                            if isinstance(_tc_res_pre, Exception):
+                                _tc_res_pre = None
                             if isinstance(_last_an_p, dict):
                                 for _fk in ("_lp_verified", "_unlocked_runner_ok", "_pumpswap_checked", "_pumpswap_canonical", "_pumpswap_lp_burned", "_pumpswap_rpc_unverified"):
                                     if _fk in _last_an_p and _fk not in pair_data:
@@ -1438,7 +1480,7 @@ async def scanner_loop(analyzer, tracker):
                                 if entry_price < _scan_px_sc * 0.92:
                                     print(f"🚫 [SCANNER-FINAL-RECHECK] {mint[:8]}: обвал цены на {(entry_price/_scan_px_sc - 1)*100:+.1f}% за время аудита — отмена входа!")
                                     continue
-                                if entry_price > _scan_px_sc * 1.30:
+                                if entry_price > _scan_px_sc * 1.45:
                                     print(f"🚫 [SCANNER-FINAL-RECHECK] {mint[:8]}: цена улетела на {(entry_price/_scan_px_sc - 1)*100:+.1f}% за время аудита — не догоняем вертикальный хай!")
                                     continue
                             if (not pair_data or entry_price <= 0) and _last_an_p:
@@ -1589,7 +1631,7 @@ async def scanner_loop(analyzer, tracker):
                                 if _m1_live > _max_m1_cfg_live:
                                     _b5_sc = int((pair_data.get("txns") or {}).get("m5", {}).get("buys", 0) or 0)
                                     _s5_sc = int((pair_data.get("txns") or {}).get("m5", {}).get("sells", 0) or 0)
-                                    if not (not _is_curve_live and _b5_sc >= max(50, int(_s5_sc * 1.35)) and _vol5_live >= 25000.0 and _m5_live >= 25.0 and _m1_live <= 25.0):
+                                    if not (not _is_curve_live and liq_usd >= 10000.0 and _b5_sc >= max(40, int(_s5_sc * 1.20)) and _vol5_live >= 12000.0 and _m5_live >= 25.0 and _m1_live <= 28.0):
                                         print(f"🚫 [SCANNER-M1-SPIKE] {actual_symbol} ({mint[:8]}): живой m1 +{_m1_live:.1f}% > +{_max_m1_cfg_live:.1f}% — вершина 1м свечи (кейс MAGA), отмена!")
                                         continue
                                 _max_m5_cfg = (300.0 if (_m1_live >= 2.0 and _s5_live < 80 and _b5_live >= max(30, int(_s5_live * 1.80))) else 165.0) if _is_curve_live else float(getattr(config, "MAX_ENTRY_M5_PCT", 175.0))
@@ -1720,10 +1762,10 @@ async def scanner_loop(analyzer, tracker):
                                         print(f"🚫 [SCANNER-MIGRATION] {actual_symbol} ({mint[:8]}): ликвидность ${liq_usd:,.0f} < ${_min_mig_liq_sc:,.0f} — микро-пул.")
                                         continue
 
-                                # Живая проверка цены Jupiter для ЛЮБЫХ токенов на AMM (включая pump на Raydium/PumpSwap)
+                                # Живая проверка цены Jupiter для ЛЮБЫХ токенов на AMM (переиспользуем параллельный запрос _jup_chk_pre — 0мс задержки!)
                                 if _dex_id not in ("pump", "pumpfun"):
                                     from jupiter import JupiterAPI
-                                    _jup_chk = await JupiterAPI.get_price(mint)
+                                    _jup_chk = _jup_chk_pre if (_jup_chk_pre and _jup_chk_pre > 0) else (await JupiterAPI.get_price(mint))
                                     if _jup_chk and _jup_chk > 0 and entry_price > 0:
                                         _live_dump_thr = 0.88 if (_age_sc and _age_sc < 3.0) else 0.93
                                         if _jup_chk < entry_price * _live_dump_thr:
@@ -1746,13 +1788,16 @@ async def scanner_loop(analyzer, tracker):
                                     continue
 
                                 # === Analyzer уже выполнил ROCKET-XGB S1+S2 и 8-слойный ончейн-аудит (RPC + RugCheck + L7 Insiders + L8 Delegations + GoPlus).
-                                # Здесь выполняем только 0ms анти-клон и расчёт точки входа / стопа под фитиль без дублирования HTTP/LLM! ===
+                                # Здесь выполняем только 0ms анти-клон (или переиспользуем _tc_res_pre) и расчёт точки входа / стопа под фитиль! ===
                                 from grok_jev import grok_jev
                                 _cc_ok, _cc_why = grok_jev.check_copycat_runner(mint, actual_symbol, pair_data)
                                 if not _cc_ok:
                                     print(f"🚫 [SCANNER-COPYCAT] {actual_symbol} ({mint[:8]}): {_cc_why} — отказ входа.")
                                     continue
-                                _tc_ok, _tc_why = await grok_jev.check_trending_clone(mint, actual_symbol, pair_data)
+                                if isinstance(_tc_res_pre, tuple) and len(_tc_res_pre) == 2 and actual_symbol == _pre_sym_sc:
+                                    _tc_ok, _tc_why = _tc_res_pre
+                                else:
+                                    _tc_ok, _tc_why = await grok_jev.check_trending_clone(mint, actual_symbol, pair_data)
                                 if not _tc_ok:
                                     print(f"🚫 [SCANNER-CLONE] {actual_symbol} ({mint[:8]}): {_tc_why} — отказ входа.")
                                     continue
@@ -2111,6 +2156,9 @@ async def scanner_loop(analyzer, tracker):
                         await asyncio.sleep(0.05)
                     except Exception as e:
                         print(f"⚠️ Ошибка анализа {mint[:8]}: {type(e).__name__}: {e}. Сканирую дальше.")
+                    finally:
+                        if _claimed_buy_flight:
+                            analyzer.release_buy_flight(mint)
             else:
                 # Диагностика "тишины": сканер вообще не работает, пока вход закрыт
                 _now_i = time.time()
