@@ -553,13 +553,14 @@ class ShadowTracker:
                 updates = []
                 mints_to_check = []
                 table_to_use = self._target_table
+                _wl = int(getattr(config, "SHADOW_WATCH_LIMIT", 400) or 400)
                 
                 rows = []
                 if self.use_supabase and self.supabase:
                     def _fetch_sb():
                         res = []
                         try:
-                            res += (self.supabase.table(self._all_scanned_table).select("*").eq("check_24h_done", 0).order("scanned_at", desc=True).limit(60).execute().data or [])
+                            res += (self.supabase.table(self._all_scanned_table).select("*").eq("check_24h_done", 0).order("scanned_at", desc=True).limit(_wl).execute().data or [])
                         except Exception:
                             pass
                         try:
@@ -581,7 +582,7 @@ class ShadowTracker:
                         with sqlite3.connect(self.db_path) as conn:
                             conn.row_factory = sqlite3.Row
                             c = conn.cursor()
-                            c.execute("SELECT * FROM all_scanned_tokens WHERE check_24h_done = 0 ORDER BY scanned_at DESC LIMIT 150")
+                            c.execute("SELECT * FROM all_scanned_tokens WHERE check_24h_done = 0 ORDER BY scanned_at DESC LIMIT ?", (_wl,))
                             r1 = [dict(r) for r in c.fetchall()]
                             c.execute("SELECT * FROM rejected_tokens WHERE check_24h_done = 0 ORDER BY rejected_at DESC LIMIT 100")
                             r2 = [dict(r) for r in c.fetchall()]
@@ -684,6 +685,8 @@ class ShadowTracker:
                             if p_entry < 1e-7 and p_now >= 1e-7:
                                 p_entry = p_now
                                 upd["price_at_rejection"] = p_now
+                                upd["_baseline_new"] = True   # сохраним в БД, иначе на след. цикле база снова 0 и PnL считается от «плавающей» цены
+                            no_baseline = p_entry < 1e-7
 
                             # Защита от бага котировок DexScreener (когда возвращается цена SOL/BNB $200-$400 или фантомный x500)
                             if (p_now > 10.0 and 0 < p_entry < 0.1) or (p_entry >= 1e-7 and p_now / p_entry > 500.0):
@@ -691,7 +694,7 @@ class ShadowTracker:
                             old_ath = float(upd.get("old_ath", 0) or 0.0)
                             old_time = float(upd.get("old_time_to_ath", 0.0) or 0.0)
                             elapsed_m = float(upd.get("elapsed_min", 0.0) or 0.0)
-                            is_lp_rugged = (m.lower() in rugged_set) or (batch_ok and p_now <= 0 and elapsed_m >= 5.0)
+                            is_lp_rugged = (m.lower() in rugged_set) or (batch_ok and p_now <= 0 and not no_baseline and elapsed_m >= 5.0)
 
                             # Если токен дал новый пик цены — фиксируем новый ATH и точную минуту
                             if p_now > old_ath:
@@ -722,7 +725,9 @@ class ShadowTracker:
                             )
 
                             # Категоризация исхода монеты:
-                            if is_lp_rugged:
+                            if no_baseline and not is_lp_rugged:
+                                outcome = "❓ Нет цены (DexScreener не отдаёт пул с liq >= $1.5k) — исход неизвестен"
+                            elif is_lp_rugged:
                                 outcome = f"☠️ LP Rug / Ликва вынута (пик +{ath_pnl:.0f}% -> $0, фильтр спас!)"
                             elif ath_pnl >= 50.0 and cur_pnl <= 0.0:
                                 outcome = f"🚀 Ракета +{ath_pnl:.0f}% на {time_to_ath:.0f}м -> Слив в 0 ({cur_pnl:.0f}%)"
@@ -750,8 +755,9 @@ class ShadowTracker:
                                     for tbl in (self._all_scanned_table, table_to_use):
                                         try:
                                             cp = dict(u_load)
-                                            if tbl == "rejected_tokens":
-                                                cp["is_missed_rocket"] = is_rkt
+                                            cp["is_missed_rocket"] = is_rkt
+                                            if tbl != self._all_scanned_table:
+                                                cp.pop("price_at_scan", None)
                                             self.supabase.table(tbl).update(cp).eq("mint", m_addr).execute()
                                         except Exception:
                                             try:
@@ -775,6 +781,9 @@ class ShadowTracker:
                                     "outcome": outcome,
                                     "last_checked_at": datetime.utcnow().isoformat()
                                 }
+                                if upd.get("_baseline_new") and p_entry >= 1e-7:
+                                    update_payload["price_at_scan"] = p_entry
+                                    update_payload["price_at_rejection"] = p_entry
                                 base_payload = {
                                     "ath_price": new_ath,
                                     "hypothetical_pnl": round(ath_pnl, 1),
@@ -797,14 +806,17 @@ class ShadowTracker:
                                                     check_5m_done = ?, check_15m_done = ?,
                                                     check_1h_done = ?, check_4h_done = ?, check_24h_done = ?,
                                                     time_to_ath_min = ?, current_pnl = ?, outcome = ?,
-                                                    last_checked_at = ?
+                                                    last_checked_at = ?,
+                                                    price_at_scan = CASE WHEN COALESCE(price_at_scan, 0) < 1e-7 THEN ? ELSE price_at_scan END,
+                                                    price_at_rejection = CASE WHEN COALESCE(price_at_rejection, 0) < 1e-7 THEN ? ELSE price_at_rejection END
                                                 WHERE mint = ?
                                             ''', (
                                                 new_ath, round(ath_pnl, 1), 1 if is_rocket else 0,
                                                 upd["check_5m"], upd["check_15m"],
                                                 upd["check_1h"], upd["check_4h"], upd["check_24h"],
                                                 time_to_ath, round(cur_pnl, 1), outcome,
-                                                datetime.utcnow().isoformat(), m
+                                                datetime.utcnow().isoformat(),
+                                                p_entry if p_entry >= 1e-7 else 0.0, p_entry if p_entry >= 1e-7 else 0.0, m
                                             ))
                                         except Exception:
                                             pass

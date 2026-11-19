@@ -1684,6 +1684,18 @@ async def pre_entry_rug_check(
         # Жёсткий дедлайн: анализ не имеет права задерживать вход в позицию.
         # Микроструктура + QuantOrb Sell Scenario + HHI + Slot-0 всегда успевают первыми!
         budget = float(_cfg("FCR_MAX_DURATION_SEC", 14.0))
+        _dex_b = str((pair_data or {}).get("dexId") or "").lower()
+        _is_canon_ps_b = (
+            mint.lower().endswith("pump")
+            and _dex_b == "pumpswap"
+            and (
+                bool((pair_data or {}).get("_pumpswap_canonical"))
+                or bool((pair_data or {}).get("_pumpswap_lp_burned"))
+                or bool((pair_data or {}).get("_lp_verified"))
+            )
+        )
+        if _is_canon_ps_b:
+            budget = min(budget, float(_cfg("FCR_CANONICAL_PUMPSWAP_DURATION_SEC", 4.0)))
         verdict = await asyncio.wait_for(_analyze(mint, pair_data, verdict, budget=budget), timeout=budget)
     except asyncio.TimeoutError:
         _pd_liq = float(((pair_data or {}).get("liquidity") or {}).get("usd", 0) or 0)

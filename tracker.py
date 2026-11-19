@@ -479,6 +479,48 @@ class PaperTracker:
             _eff_init_liq = max(float(initial_liquidity_usd or 0.0), _pd_liq)
             _is_vip_or_copy = ("VIP" in str(source or "")) or str(source or "").startswith("COPY")
             _allow_unl_tr = bool(getattr(config, "ALLOW_UNLOCKED_LP_POOLS", True))
+
+            # Master Curve & Liquidity Firewall: единый заслон для ВСЕХ модулей (SCANNER, GROK-JEV, JUP, SNIPER, TG).
+            # 1) Если ALLOW_UNGRADUATED_PUMPFUN=False — ни одна сырая кривая не откроется.
+            # 2) Если сырая кривая разрешена — не допускает вход с ликвидностью < CURVE_MIN_LIQ_USD.
+            # 3) Для мигрировавших DEX-пулов — не допускает микро-пулы с ликвидностью < MIN_GRADUATED_LIQ_USD.
+            _curve_min_liq_fw = float(getattr(config, "CURVE_MIN_LIQ_USD", 0.0) or 0.0)
+            _grad_min_liq_fw = float(getattr(config, "MIN_GRADUATED_LIQ_USD", 0.0) or 0.0)
+            _mf_dex_fw = str((ml_features or {}).get("dex") or "").lower() if isinstance(ml_features, dict) else ""
+            _is_curve_fw = (
+                config.is_unmigrated_curve_token(mint_str, pair_data)
+                or _pd_dex in ("pump", "pumpfun", "meteoradbc")
+                or _mf_dex_fw in ("pump", "pumpfun", "meteoradbc")
+            )
+            if _is_curve_fw and not _is_vip_or_copy:
+                if not getattr(config, "ALLOW_UNGRADUATED_PUMPFUN", False):
+                    print(
+                        f"🛑 [FIREWALL-UNGRADUATED-CURVE] {symbol} ({mint_str[:8]}): отказ входа ({source}) — "
+                        f"сырые кривые отключены (ALLOW_UNGRADUATED_PUMPFUN=False), торгуем только мигрировавшие DEX-пулы!"
+                    )
+                    return False
+                if _curve_min_liq_fw > 0.0:
+                    _fdv_fw = float(
+                        (pair_data or {}).get("fdv", 0)
+                        or (pair_data or {}).get("marketCap", 0)
+                        or ((ml_features or {}).get("fdv", 0) if isinstance(ml_features, dict) else 0)
+                        or 0.0
+                    )
+                    if _fdv_fw <= 0.0 and float(entry_price or 0) > 0 and mint_str.lower().endswith("pump"):
+                        _fdv_fw = float(entry_price) * 1_000_000_000.0
+                    _curve_liq_fw = _eff_init_liq if _eff_init_liq > 0.0 else (0.40 * _fdv_fw)
+                    if _curve_liq_fw < _curve_min_liq_fw:
+                        print(
+                            f"🛑 [FIREWALL-CURVE-THIN-LIQ] {symbol} ({mint_str[:8]}): отказ входа ({source}) — "
+                            f"сырая кривая с ликвидностью ${_curve_liq_fw:,.0f} < ${_curve_min_liq_fw:,.0f} (FDV ${_fdv_fw:,.0f})!"
+                        )
+                        return False
+            elif not _is_curve_fw and not _is_vip_or_copy and _grad_min_liq_fw > 0.0 and 0.0 < _eff_init_liq < _grad_min_liq_fw:
+                print(
+                    f"🛑 [FIREWALL-LOW-GRAD-LIQ] {symbol} ({mint_str[:8]}): отказ входа ({source}) — "
+                    f"ликвидность пула ${_eff_init_liq:,.0f} < ${_grad_min_liq_fw:,.0f}!"
+                )
+                return False
             if isinstance(pair_data, dict):
                 if config.is_pumpswap_liq_fdv_trap(pair_data):
                     print(f"🛑 [FIREWALL-RUG-BLOCK] {symbol} ({mint_str[:8]}): PumpSwap CreatePool liq/fdv 0-social trap!")
@@ -997,12 +1039,14 @@ class PaperTracker:
         loss_streak = 0
         last_loss_exit_time = 0.0
         for p in sorted_closed:
-            # Учитываем только реальные минусы (микро-скретчи вроде Starman -$0.32 не являются скам-волной)
-            if p.pnl_usd <= -1.50:
+            # Считаем по % от исходного размера позиции (на ставке $2 стоп -20% = -$0.40, старый порог -$1.50 никогда не срабатывал!)
+            _orig_p = float(getattr(p, "original_amount_usd", 0.0) or getattr(p, "amount_usd", 0.0) or 2.0)
+            _pnl_pct_p = (float(p.pnl_usd or 0.0) / _orig_p) if _orig_p > 0 else 0.0
+            if _pnl_pct_p <= -0.10 or p.pnl_usd <= -1.50:
                 loss_streak += 1
                 if last_loss_exit_time == 0.0:
                     last_loss_exit_time = getattr(p, "exit_time", 0.0) or getattr(p, "entry_time", 0.0) or time.time()
-            elif p.pnl_usd > 0.50:
+            elif _pnl_pct_p >= 0.10 or p.pnl_usd > 0.50:
                 break
 
         if loss_streak >= max_losses:

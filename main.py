@@ -133,13 +133,48 @@ async def position_security_auditor_loop(analyzer, tracker):
                                 _fast_drain = _liq_crash_pct >= _eff_drain_fast and _peak_liq >= 3000.0
 
                                 if _has_liq_data and (_is_zero_liq or _crit_drained):
-                                    # Физическое обнуление пула девом (LP <= $200 или 0) — выход МГНОВЕННО
+                                    # ЗАЩИТА ОТ ЛОЖНОГО СПИСАНИЯ В -101% (кейс HOLM: спам-пул $3 поверх живой кривой, после чего цена +77%):
+                                    # 1) Для .pump проверяем живое состояние бондинг-кривой ончейн: если кривая не закрыта и в ней >= 1 SOL — это не раг!
+                                    _rescued_live_curve = False
+                                    if _mint_sol.endswith("pump"):
+                                        try:
+                                            _st_dr = await asyncio.wait_for(_md.get_live_pump_curve_state(mint), timeout=1.5)
+                                            if _st_dr and not _st_dr.get("complete") and float(_st_dr.get("real_sol", 0) or 0) >= 1.0 and float(_st_dr.get("price_usd", 0) or 0) > 0:
+                                                position.current_price_usd = float(_st_dr["price_usd"])
+                                                position._zero_liq_streak = 0
+                                                _rescued_live_curve = True
+                                        except Exception:
+                                            pass
+                                    if _rescued_live_curve:
+                                        continue
+                                    # 2) Для AMM-пулов проверяем ончейн PumpSwap / требуем 2 тика подтверждения (0.5с) против разового глюка DexScreener:
+                                    _onchain_alive = False
+                                    if _dex_sol == "pumpswap":
+                                        try:
+                                            _ps_dr = await asyncio.wait_for(
+                                                _md.get_live_pumpswap_pool_state(mint, str(getattr(position, "pair_address", "") or _td_sol.get("pairAddress") or "")),
+                                                timeout=1.5,
+                                            )
+                                            if _ps_dr and float(_ps_dr.get("liq_usd", 0) or 0) >= 500.0 and float(_ps_dr.get("price_usd", 0) or 0) > 0:
+                                                position.current_price_usd = float(_ps_dr["price_usd"])
+                                                position._zero_liq_streak = 0
+                                                _onchain_alive = True
+                                        except Exception:
+                                            pass
+                                    if _onchain_alive:
+                                        continue
+                                    _zl_cnt = int(getattr(position, "_zero_liq_streak", 0) or 0) + 1
+                                    position._zero_liq_streak = _zl_cnt
+                                    if _zl_cnt < 2:
+                                        continue
+                                    # Физическое обнуление пула девом (LP <= $200 или 0, подтверждено 2 тика / ончейн) — выход МГНОВЕННО
                                     _px_now = 0.0 if (_is_zero_liq or _crit_drained or _sol_liq <= 250.0) else float(getattr(position, "current_price_usd", 0.0) or 0.0)
                                     _msg = f"Zero/Drained Liq ${_sol_liq:.0f}"
-                                    print(f"🚨 [LIQ-LOSS] {position.symbol} ({mint[:8]}): {_msg} — выход МГНОВЕННО!")
+                                    print(f"🚨 [LIQ-LOSS] {position.symbol} ({mint[:8]}): {_msg} (подтверждено {_zl_cnt} тика) — выход МГНОВЕННО!")
                                     tracker.close_position(mint, _px_now, f"Liquidity Drain Rug (Liq ${_sol_liq:.0f} from ${_peak_liq:.0f})")
                                     continue
                                 elif _has_liq_data and (_emergency_exit or _fast_drain):
+                                    position._zero_liq_streak = 0
                                     # Защита от разового тика/шума DexScreener (кейс AUDACITY: просадка 33% на 0м -> паник-сейл в -54%):
                                     # требуем 2 тика подтверждения, если ликвидность всё ещё > $1,000
                                     _drain_cnt = getattr(position, "_fast_drain_streak", 0) + 1
@@ -162,6 +197,8 @@ async def position_security_auditor_loop(analyzer, tracker):
                                         tracker.close_position(mint, _px_now, f"Confirmed Liquidity Drop (Liq ${_sol_liq:.0f} from ${_peak_liq:.0f})")
                                         continue
                                 else:
+                                    position._zero_liq_streak = 0
+                                    position._fast_drain_streak = 0
                                     position._liq_drop_streak = 0
 
                             # 3. Мониторинг кошельков (сиビル, флипперы, аномальная активность после входа)
@@ -601,8 +638,12 @@ async def position_manager_loop(analyzer, tracker):
                                 _live_em_px = await JupiterAPI.get_price(mint)
                             if _live_em_px and _live_em_px > 0 and position.entry_price_usd > 0:
                                 _live_em_pnl = (_live_em_px - position.entry_price_usd) / position.entry_price_usd
-                                if _live_em_pnl > -0.080:
-                                    print(f"🛡️ [EARLY-EXIT-RESCUED] {position.symbol} ({mint[:8]}): ложный тик {pnl_pct*100:+.1f}%, живой ончейн/Jupiter ${_live_em_px:.8f} ({_live_em_pnl*100:+.1f}%) — позиция спасена!")
+                                # Порог спасения от ложного тика DexScreener синхронизирован с реальным SL (фикс GME: тик -40.8%, живой ончейн -11.5% при SL -20%):
+                                _is_unl_em = bool(getattr(position, "is_unlocked_pool", False))
+                                _sl_em = -abs(float(getattr(config, "STOP_LOSS_UNLOCKED_PCT", -0.15))) if _is_unl_em else -abs(float(getattr(config, "STOP_LOSS_PCT", -0.20)))
+                                _rescue_thr = -0.10 if any(k in mature_exit_reason for k in ("Quick Scratch", "Early Momentum")) else (_sl_em * 0.85)
+                                if _live_em_pnl > _rescue_thr:
+                                    print(f"🛡️ [EARLY-EXIT-RESCUED] {position.symbol} ({mint[:8]}): ложный тик {pnl_pct*100:+.1f}%, живой ончейн/Jupiter ${_live_em_px:.8f} ({_live_em_pnl*100:+.1f}% > {_rescue_thr*100:+.1f}%) — позиция спасена!")
                                     position.current_price_usd = _live_em_px
                                     position.emerg_confirm_n = 0
                                     position.sl_confirm_n = 0
@@ -1185,7 +1226,7 @@ async def scanner_loop(analyzer, tracker):
                             continue
 
                         # Отсекаем вялые стоячие/еле ползущие токены старше 5м без живого объёма: быстрый переопрос через 20с
-                        if _c_age_m >= 5.0 and _c_vol5 < max(4500.0, float(getattr(config, "MIN_VOLUME_M5", 4500.0))) and not _is_fresh_grad:
+                        if _c_age_m >= 5.0 and _c_vol5 < max(1500.0, float(getattr(config, "MIN_VOLUME_M5", 1500.0))) and not _is_fresh_grad:
                             processed_mints[mint] = _now_r - _cd_r + 20
                             continue
 
@@ -1684,8 +1725,8 @@ async def scanner_loop(analyzer, tracker):
                                             analyzer._deny(mint, f"scanner-live-dump >{100-_live_dump_thr*100:.0f}%", f"🚫 [LIVE-DUMP] {actual_symbol} ({mint[:8]}): живая цена Jupiter (${_jup_chk:.8f}) уже на {_pct_down:.1f}% ниже DexScreener (${entry_price:.8f}) [>{100-_live_dump_thr*100:.0f}%] — токен обваливается прямо сейчас, блок входа!")
                                             continue
                                         _chk_up_r = _jup_chk / entry_price
-                                        if _chk_up_r > 1.30:
-                                            print(f"🚫 [SCANNER-PRICE-MISMATCH] {actual_symbol} ({mint[:8]}): Jupiter (${_jup_chk:.8f}) vs DS (${entry_price:.8f}) опережение {_chk_up_r:.2f}x (>1.30x) — блок от вертикального входа.")
+                                        if _chk_up_r > 1.45:
+                                            print(f"🚫 [SCANNER-PRICE-MISMATCH] {actual_symbol} ({mint[:8]}): Jupiter (${_jup_chk:.8f}) vs DS (${entry_price:.8f}) опережение {_chk_up_r:.2f}x (>1.45x) — блок от вертикального входа.")
                                             continue
                                         entry_price = _jup_chk
                                 # RKT-вето дженерик-входов Solana (лотереи/VIP-билеты exempt).
@@ -2010,10 +2051,11 @@ async def scanner_loop(analyzer, tracker):
                                                 _re_px = float(_ps2.get("price_usd", 0) or 0)
                                         else:
                                             _re_px = float(await JupiterAPI.get_price(mint) or 0.0)
-                                        if _re_px > 0 and _re_px < entry_price * 0.92:
+                                        _pf_dump_floor = 0.88 if (_dex_lower_sc == "pumpswap" and mint.lower().endswith("pump")) else 0.92
+                                        if _re_px > 0 and _re_px < entry_price * _pf_dump_floor:
                                             print(f"🚫 [POST-FCR DUMP] {actual_symbol} ({mint[:8]}): за время аудита цена упала на {(1.0 - _re_px / entry_price) * 100:.1f}% — отмена!")
                                             continue
-                                        if _re_px > 0 and _re_px <= entry_price * 1.30:
+                                        if _re_px > 0 and _re_px <= entry_price * 1.40:
                                             entry_price = _re_px
                                             if _wick_stop_price and _wick_pct:
                                                 _wick_stop_price = entry_price * (1.0 + _wick_pct)
@@ -3132,6 +3174,9 @@ async def async_main():
         print(f"🏷️ РЕЖИМ { _tt.strftime('%Y-%m-%d %H:%M UTC', _tt.gmtime())}: "
               f"STOP {config.STOP_LOSS_PCT} TRAIL {config.TRAILING_ACTIVATION_PCT}/{config.TRAILING_DISTANCE_PCT} "
               f"MOONBAG {config.MOONBAG_TRIGGER_PCT} LIQ {getattr(config, 'MIN_LIQUIDITY', '?')} "
+              f"CURVE_MIN_LIQ ${getattr(config, 'CURVE_MIN_LIQ_USD', 0):.0f} "
+              f"UNGRAD {getattr(config, 'ALLOW_UNGRADUATED_PUMPFUN', '?')} "
+              f"SHADOW_LIM {getattr(config, 'SHADOW_WATCH_LIMIT', '?')} "
               f"VETO {getattr(config, 'ROCKET_VETO_MIN', '?')}@{getattr(config, 'ROCKET_VETO_ENABLED', '?')} "
               f"TG_MAX {getattr(config, 'TG_MAX_SIZE_USD', '?')}/VIP {getattr(config, 'TG_VIP_SIZE_USD', '?')} "
               f"ROB_MAX {getattr(config, 'ROB_MAX_SIZE_USD', '?')} "

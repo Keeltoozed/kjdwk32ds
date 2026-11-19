@@ -50,7 +50,7 @@ MAX_POSITION_SIZE_USD = 5.0
 REINVEST_MIN_POOL_LIQ_USD = 5000.0
 SCOUT_SIZE_USD = 2.0
 LOTTERY_SIZE_USD = 2.0
-MAX_CONCURRENT_POSITIONS = 3
+MAX_CONCURRENT_POSITIONS = 4
 
 # === ЖЕСТКОЕ ОГРАНИЧЕНИЕ УБЫТКА (РИСК-МЕНЕДЖМЕНТ) ===
 MAX_DAILY_LOSS_USD = 15.0
@@ -603,7 +603,15 @@ def evaluate_entry_momentum(
 
     # Защита от 1м отскока дохлой кошки внутри 5м слива (кейсы Makenzi m5=+4.98%, m1=+13.74% -> -26.4%; CC m5=+2.85%, m1=+17.86% -> -26.1%):
     # если 1м свеча значительно выше 5м изменения (значит предшествующие 4 минуты токен летел вниз), не покупаем вершину отскока!
-    if m1 > 4.0 and m5 < 15.0 and m1 > (m5 + 3.0):
+    # Исключение (кейс CORNER +122%: 1162b/964s, m5=+7.6%, m1=+11.7%, liq=$13.5k): мощный органический пробой на высоком объёме.
+    _is_organic_v_breakout = (
+        not is_curve
+        and m5 >= 5.0
+        and buys5 >= max(80, int(sells5 * 1.10))
+        and vol5_usd >= 10000.0
+        and liq_usd >= 10000.0
+    )
+    if m1 > 4.0 and m5 < 15.0 and m1 > (m5 + 3.0) and not _is_organic_v_breakout:
         return False, f"dead-cat-1m-spike m1 {m1:+.1f}% >> m5 {m5:+.1f}% (4m dump before 1m bounce)"
 
     # Защита от кровоточащего часового тренда (отсекает дохлые отскоки DACI h1=-32% 206b/80s, CASHPARROT h1=-37% 163b/83s),
@@ -713,9 +721,9 @@ def evaluate_entry_momentum(
 
     return True, "ok"
 
-STREAK_COOLDOWN_ENABLED = False
-STREAK_MAX_CONSECUTIVE_LOSSES = 5
-STREAK_COOLDOWN_MINUTES = 5.0
+STREAK_COOLDOWN_ENABLED = True
+STREAK_MAX_CONSECUTIVE_LOSSES = 3
+STREAK_COOLDOWN_MINUTES = 15.0
 
 ROLLING_BREAKER_ENABLED = False
 ROLLING_BREAKER_WINDOW = 8
@@ -724,17 +732,22 @@ ROLLING_BREAKER_PAUSE_MIN = 5.0
 DD_THROTTLE_ENABLED = False
 DD_THROTTLE_START_USD = 15.0
 
-# === ВХОД В ЗРЕЛЫЕ ВЫПУСКНИКИ RAYDIUM / PUMPSWAP И РАННИЕ КРИВЫЕ PUMP.FUN ===
-SNIPER_ENTRIES_ENABLED = True             # ВКЛЮЧЕНО: мгновенный вход в свежие кривые/миграции со стрима
-ALLOW_UNGRADUATED_PUMPFUN = True          # ВКЛЮЧЕНО: ловим ракеты на кривой Pump.fun до миграции (открывает 大A +1559%, ROCKSTAR +163%, NEIL +52%, BLUE +36%)
-MIN_PUMP_CURVE_MCAP_USD = 2750.0          # Порог кривой $2.75k (отсекает пустые $2,037 запуски 0-1 SOL, но ловит живые старты WANTED $3,085 +55%)
-MAX_PUMP_CURVE_MCAP_USD = 25000.0         # Потолок сырой кривой $25k (захватывает растущие кривые $12k-$25k на пути к миграции ~$29k-$30k)
-MIN_PUMP_CURVE_MCAP_SOL = 38.0            # Нижняя граница золотой зоны кривой (~38 SOL ≈ $2.75k при SOL $73, ~10 real SOL внутри кривой)
-MAX_PUMP_CURVE_MCAP_SOL = 340.0           # Верхняя граница золотой зоны сырой кривой (~340 SOL ≈ $25k при миграции 410 SOL)
+# === ВХОД В ЗРЕЛЫЕ ВЫПУСКНИКИ RAYDIUM / PUMPSWAP (БЕЗ СЫРЫХ КРИВЫХ PUMP.FUN) ===
+# По статистике shadow_trades.db (1785 токенов) и живым сделкам 19.11.2026:
+# сырая кривая давала 0 побед / 7 убытков (-340%), раг-рейт 8-14% при 0.5-0.9% ракет;
+# мигрировавшие .pump на PumpSwap (liq >= $7.5k, LP сожжён протоколом) — раг-рейт 3.3% и все реальные ракеты (ANT +231%, CD, CORNER, TESLA).
+SNIPER_ENTRIES_ENABLED = False            # Выключен вход в сырую кривую (WSS subscribeMigration продолжает мгновенно подавать миграции в BirthTracker!)
+ALLOW_UNGRADUATED_PUMPFUN = False         # ТОЛЬКО мигрировавшие DEX-пулы (PumpSwap/Raydium с сожжённым LP) — убираем слив на кривой
+MIN_PUMP_CURVE_MCAP_USD = 2750.0          # Порог кривой $2.75k (используется только если ALLOW_UNGRADUATED_PUMPFUN=True)
+MAX_PUMP_CURVE_MCAP_USD = 25000.0         # Потолок сырой кривой $25k
+MIN_PUMP_CURVE_MCAP_SOL = 38.0            # Нижняя граница зоны кривой
+MAX_PUMP_CURVE_MCAP_SOL = 340.0           # Верхняя граница зоны кривой
+CURVE_MIN_LIQ_USD = 5000.0
+SHADOW_WATCH_LIMIT = 400                  # Сколько последних записей shadow_tracker перепроверяет за цикл (было 60/150 -> слежение обрывалось через ~6 мин)
 PUMP_MIGRATION_MCAP_SOL = 410.0           # FDV миграции pump.fun
 PUMP_DUMP_FLOOR_SOL = 50.0                # Порог post-mig-dumped (~50 SOL, разрешает быстрые реклеймы)
 JEV_MAX_TICKET_USD = 0.0
-MIN_GRADUATED_LIQ_USD = 3000.0            # Минимум $3k ликвидности на DEX
+MIN_GRADUATED_LIQ_USD = 7500.0            # Минимум $7.5k ликвидности на DEX (отсекает слитые микро-пулы и высокое проскальзывание на стопах)
 AUDITOR_STAIRCASE_ENABLED = False
 AUDITOR_MAX_DEV_PCT = 8.0                 # Макс 8% у дева (защита от моментальных дампов разработчика в GROK-JEV)
 AUDITOR_MAX_WHALE_PCT = 14.0              # Макс 14% в одном кошельке (защита от 1-клик слива кита как FOMOCOIN/$CHOPS)
@@ -1056,6 +1069,7 @@ SOLANA_RESCAN_COOLDOWN = 8
 SOLANA_FRESH_RESCAN_COOLDOWN = 2
 
 JEV_TREND_CONFIRM_ENABLED = True
+JEV_MAX_DD_FROM_HIGH = 0.22        # Разрешаем нормальный откат до -22% от локального пика (вместо 12%, который резал пробои PumpSwap)
 JEV_FRESH_RECHECK_ENABLED = True   # Включена финальная проверка цены перед покупкой (защищает от покупки на падающей свече!)
 JEV_MIN_M1_ENTRY_FLOOR_PCT = -2.5   # Разрешаем микро-шум 1м свечи до -2.5% (не режем -0.4% тики), но блокируем 1м слив < -2.5%
 JEV_MIN_H1_PCT = -25.0
@@ -1118,6 +1132,7 @@ FCR_SELL_DOMINANCE = 0.85              # sells/buys за 5м для сигнал
 FCR_MIN_SELL_COUNT = 120               # Абсолютный минимум продаж, чтобы сигнал был значимым
 FCR_TRUSTED_FUNDERS = []              # Адреса-источники, которым доверяем (свои кошельки, биржи) — их кластеры игнорируются
 FCR_MAX_DURATION_SEC = 10.0 if HELIUS_API_KEY else 5.0  # Без приватного Helius не держим вход 13с на публичных RPC (иначе покупаем опоздавший дамп)
+FCR_CANONICAL_PUMPSWAP_DURATION_SEC = 4.0  # Быстрый бюджет FCR (4с) для каноничного PumpSwap с сожжённым LP (убирает 10с задержку входа как на ANT/CD)
 FCR_GRAPH_MIN_PCT = 0.05              # Узел сети RugCheck с долей < 0.05% — пыль, не участник фермы
 FCR_GRAPH_MAX_WALLETS = 15           # Сеть крупнее — это граф переводов толпы, а не ферма (вес режется)
 FCR_SIG_PAGE_LIMIT = 200              # Сколько подписей тянуть за раз (лёгкий payload для публичного RPC)

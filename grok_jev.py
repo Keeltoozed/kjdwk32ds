@@ -459,7 +459,7 @@ class GrokJevEngine:
             return False, "meteora-unlocked-pool (Meteora pools allow dev LP withdrawal, scam-trap cases: USPR/BUFO/SPACE/AXIOMCOIN)"
         if dex_id in ("pump", "pumpfun") and not getattr(_c, "ALLOW_UNGRADUATED_PUMPFUN", False):
             return False, "raw-pump-curve (wait for graduation to PumpSwap/Raydium with locked LP)"
-        min_liq = 1000.0 if (dex_id in ("pump", "pumpfun", "meteoradbc") and getattr(_c, "ALLOW_UNGRADUATED_PUMPFUN", False)) else _min_grad_liq
+        min_liq = max(1000.0, float(getattr(_c, "CURVE_MIN_LIQ_USD", 0.0) or 0.0)) if (dex_id in ("pump", "pumpfun", "meteoradbc") and getattr(_c, "ALLOW_UNGRADUATED_PUMPFUN", False)) else _min_grad_liq
         if eff_liq < min_liq:
             return False, f"liq-depth-low ${eff_liq:.0f} < ${min_liq:.0f} (micro-cap dump trap)"
             
@@ -1002,7 +1002,7 @@ class GrokJevEngine:
         _base_addr = str(((pair_data.get("baseToken") or {}).get("address")) or "")
         _dex_id = str(pair_data.get("dexId", "")).lower()
         _is_raw_curve_only = (_dex_id in ("pump", "pumpfun") and getattr(_c, "ALLOW_UNGRADUATED_PUMPFUN", False))
-        _min_liq = 1000.0 if _is_raw_curve_only else float(getattr(_c, "MIN_GRADUATED_LIQ_USD", 2500.0))
+        _min_liq = max(1000.0, float(getattr(_c, "CURVE_MIN_LIQ_USD", 0.0) or 0.0)) if _is_raw_curve_only else float(getattr(_c, "MIN_GRADUATED_LIQ_USD", 2500.0))
         _base_max_m1 = float(getattr(_c, "JEV_MAX_M1_ENTRY_PCT", 28.0))
 
         # Если DexScreener не отдал m1 (0.0 / None) — берем реальный sub-minute m1 из нашей живой истории сканов
@@ -1065,10 +1065,19 @@ class GrokJevEngine:
                 # (а) уже слили с недавнего максимума — это откат после пика, а не вход в рост
                 _win = float(getattr(_c, "JEV_DD_WINDOW_MIN", 30.0)) * 60.0
                 _hi = max([p for t, p in _h if _now - t <= _win] or [0.0])
-                _max_dd = float(getattr(_c, "JEV_MAX_DD_FROM_HIGH", 0.12))
+                _max_dd = float(getattr(_c, "JEV_MAX_DD_FROM_HIGH", 0.22))
                 if _hi > 0 and entry_price < _hi * (1.0 - _max_dd):
                     return False, -0.14, 0.0, f"flush-wait post-peak-fade (price {(entry_price/_hi-1)*100:+.1f}% from {int(_win/60)}m high)"
                 # (б) цена должна быть ВЫШЕ, чем 20-300 секунд назад (растём, а не падаем / стоим)
+                # Исключение: на ликвидном пробое DEX с сильным потоком покупателей консолидация перед 2-й волной — нормальный вход!
+                _is_liq_dex_consolidation = (
+                    not _is_curve_fl
+                    and vol5 >= 10000.0
+                    and _liq_usd >= 10000.0
+                    and b5 >= max(40, int(s5 * 1.15))
+                    and m5 >= 8.0
+                    and m1 >= -2.5
+                )
                 _rmin = float(getattr(_c, "JEV_RISE_REF_MIN_SEC", 20.0))
                 _rmax = float(getattr(_c, "JEV_RISE_REF_MAX_SEC", 300.0))
                 _ref = [p for t, p in _h if _rmin <= _now - t <= _rmax]
@@ -1076,7 +1085,7 @@ class GrokJevEngine:
                     # На первом скане не блокируем, если DexScreener m5/m1 уже подтверждает активный импульс
                     if m5 < 2.5 or m1 < -2.5:
                         return False, -0.14, 0.0, "flush-wait no-trend-history (first sight, need a second price)"
-                elif entry_price < _ref[-1] * (1.0 + float(getattr(_c, "JEV_RISE_EPS", 0.002))):
+                elif not _is_liq_dex_consolidation and entry_price < _ref[-1] * (1.0 + float(getattr(_c, "JEV_RISE_EPS", 0.002))):
                     return False, -0.14, 0.0, f"flush-wait not-rising ({(entry_price/_ref[-1]-1)*100:+.2f}% vs earlier scan)"
 
         # 4. Расчет стопа под фитиль отката ("The stop lives under the wick"):

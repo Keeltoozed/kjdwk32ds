@@ -469,12 +469,31 @@ async def _ds_token_data(mint: str) -> dict:
             if sol:
                 amm_sol = [p for p in sol if str(p.get("dexId") or "").lower() not in ("pump", "pumpfun", "meteoradbc")]
                 real_amm = [p for p in amm_sol if float(((p.get("liquidity") or {}).get("usd", 0) or 0)) >= 500.0]
+                _ignore_dust_amm = False
+                if not real_amm and amm_sol:
+                    _top_dust = sorted(amm_sol, key=lambda x: float(((x.get("liquidity") or {}).get("usd", 0) or 0)), reverse=True)[0]
+                    _dust_l = float(((_top_dust.get("liquidity") or {}).get("usd", 0) or 0))
+                    _dust_v24 = float(((_top_dust.get("volume") or {}).get("h24", 0) or 0))
+                    _live_curves = [
+                        p for p in sol
+                        if str(p.get("dexId") or "").lower() in ("pump", "pumpfun")
+                        and 0 < float(p.get("fdv", 0) or p.get("marketCap", 0) or 0) < 28000.0
+                    ]
+                    _is_grad_ds = False
+                    try:
+                        from birth_tracker import birth_tracker as _bt_ds
+                        _is_grad_ds = _bt_ds.is_graduated(mint)
+                    except Exception:
+                        pass
+                    if _live_curves and not _is_grad_ds and _dust_l < 100.0 and _dust_v24 < 500.0:
+                        _ignore_dust_amm = True
                 if real_amm:
                     best = sorted(real_amm, key=lambda x: float(((x.get("liquidity") or {}).get("usd", 0) or 0)), reverse=True)[0]
-                elif amm_sol:
+                elif amm_sol and not _ignore_dust_amm:
                     best = sorted(amm_sol, key=lambda x: float(((x.get("liquidity") or {}).get("usd", 0) or 0)), reverse=True)[0]
                 else:
-                    best = sorted(sol, key=lambda x: float(((x.get("liquidity") or {}).get("usd", 0) or 0)) or (float(x.get("fdv", 0) or x.get("marketCap", 0) or 0) * 0.40), reverse=True)[0]
+                    _curve_pool = [p for p in sol if str(p.get("dexId") or "").lower() in ("pump", "pumpfun", "meteoradbc")] if _ignore_dust_amm else sol
+                    best = sorted(_curve_pool or sol, key=lambda x: float(((x.get("liquidity") or {}).get("usd", 0) or 0)) or (float(x.get("fdv", 0) or x.get("marketCap", 0) or 0) * 0.40), reverse=True)[0]
                 best["_source"] = "dexscreener"
                 best["_socials_unknown"] = False
                 return best
@@ -1405,9 +1424,9 @@ async def verify_entry_onchain_and_orderflow(
         if ps_liq < 1200.0:
             return False, live_price, f"pumpswap-low-liq-onchain (${ps_liq:.0f} < $1200)", meta
         if live_price > 0 and ps_px > 0:
-            if ps_px < live_price * 0.91:
+            if ps_px < live_price * 0.90:
                 return False, ps_px, f"pumpswap-live-dump (-{(1.0 - ps_px/live_price)*100:.1f}%)", meta
-            if ps_px > live_price * 1.30:
+            if ps_px > live_price * 1.45:
                 return False, ps_px, f"pumpswap-spike (+{(ps_px/live_price - 1.0)*100:.1f}%)", meta
             live_price = ps_px
             meta["onchain_source"] = "pumpswap_vault"

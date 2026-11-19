@@ -34,6 +34,34 @@ def verify_on_render() -> None:
         f"   • MAX_ENTRY_M1 / M5           = +{getattr(config, 'MAX_ENTRY_M1_PCT', '?')}% / +{getattr(config, 'MAX_ENTRY_M5_PCT', '?')}%",
         flush=True,
     )
+    print(
+        f"   • CURVE_MIN_LIQ_USD / UNGRAD  = ${getattr(config, 'CURVE_MIN_LIQ_USD', 0):,.0f} / {getattr(config, 'ALLOW_UNGRADUATED_PUMPFUN', '?')} (SNIPER={getattr(config, 'SNIPER_ENTRIES_ENABLED', '?')})",
+        flush=True,
+    )
+    print(
+        f"   • MIN_GRADUATED_LIQ / SLOTS   = ${getattr(config, 'MIN_GRADUATED_LIQ_USD', 0):,.0f} / {getattr(config, 'MAX_CONCURRENT_POSITIONS', '?')} slots",
+        flush=True,
+    )
+    print(
+        f"   • STREAK COOLDOWN / FCR PS    = {getattr(config, 'STREAK_COOLDOWN_ENABLED', '?')} ({getattr(config, 'STREAK_MAX_CONSECUTIVE_LOSSES', '?')}L/{getattr(config, 'STREAK_COOLDOWN_MINUTES', '?')}m) / {getattr(config, 'FCR_CANONICAL_PUMPSWAP_DURATION_SEC', '?')}s",
+        flush=True,
+    )
+    print(
+        f"   • SHADOW_WATCH_LIMIT          = {getattr(config, 'SHADOW_WATCH_LIMIT', '?')}",
+        flush=True,
+    )
+    try:
+        import inspect
+        import analyzer as _an_v
+        import tracker as _tr_v
+        _has_an_gate = "curve-thin-liq" in inspect.getsource(_an_v.Analyzer._analyze_token_inner)
+        _has_tr_fw = "FIREWALL-CURVE-THIN-LIQ" in inspect.getsource(_tr_v.PaperTracker.add_position)
+        print(
+            f"   • GATES ACTIVE                = analyzer.curve-thin-liq:{'OK' if _has_an_gate else 'MISSING'} | tracker.firewall:{'OK' if _has_tr_fw else 'MISSING'}",
+            flush=True,
+        )
+    except Exception as _ve:
+        print(f"   • GATES CHECK ERR             = {_ve}", flush=True)
     print("=" * 68 + "\n", flush=True)
 
 

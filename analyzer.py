@@ -176,6 +176,14 @@ def score_token_with_rocket_xgb(mint: str, pair_data: dict, holders_info: dict =
         }
         df = _pd.DataFrame([rkt_features])[FEATURE_COLS]
         prob = float(model.predict_proba(df)[0][1] * 100.0)
+        # Анти-утечка rocket_xgb_v3: модель переобучена на dev_pct ∈ (0.1..3.5%) и задирает мусорные
+        # кривые до 98-99% при любом dev_pct > 0. Гарантируем монотонность: dev_pct > 0 не может
+        # повышать скор выше оценки при dev_pct == 0 (штраф при высоком dev_pct >= 4% сохраняется).
+        if _dev > 0.0:
+            _rkt_zero_dev = dict(rkt_features, dev_pct=0.0)
+            _prob_zero_dev = float(model.predict_proba(_pd.DataFrame([_rkt_zero_dev])[FEATURE_COLS])[0][1] * 100.0)
+            if prob > _prob_zero_dev:
+                prob = _prob_zero_dev
         if return_features:
             return prob, rkt_features
         return prob
@@ -740,14 +748,36 @@ class Analyzer:
 
         # 1. Если у токена уже есть AMM-пулы (pumpswap/raydium/meteora/orca), он УЖЕ мигрировал с кривой pump.fun.
         # Ни при каких условиях не возвращаемся к замороженному мёртвому пулу pumpfun ($43k FDV, кейс DUMB -99%).
+        # Исключение (кейс HOLM -101% при живой кривой +77%): спам-пылевой AMM сайд-пул ($3 liq, vol24 < $500)
+        # при НЕмигрировавшей живой кривой pump.fun (fdv < $28k) не должен подменять активную кривую!
         amm_pairs = [p for p in sol_pairs if str(p.get("dexId") or "").lower() not in ("pump", "pumpfun", "meteoradbc")]
         real_pairs = [p for p in amm_pairs if float(((p.get("liquidity") or {}).get("usd", 0) or 0)) >= 500]
+        _ignore_dust_amm = False
+        if not real_pairs and amm_pairs:
+            _best_dust_amm = sorted(amm_pairs, key=lambda p: float(((p.get("liquidity") or {}).get("usd", 0) or 0)), reverse=True)[0]
+            _dust_liq = float(((_best_dust_amm.get("liquidity") or {}).get("usd", 0) or 0))
+            _dust_v24 = float(((_best_dust_amm.get("volume") or {}).get("h24", 0) or 0))
+            _curve_live_cands = [
+                p for p in sol_pairs
+                if str(p.get("dexId") or "").lower() in ("pump", "pumpfun")
+                and 0 < float(p.get("fdv", 0) or p.get("marketCap", 0) or 0) < 28000.0
+            ]
+            _is_grad_chk = False
+            try:
+                from birth_tracker import birth_tracker as _bt_du
+                _is_grad_chk = _bt_du.is_graduated(mint)
+            except Exception:
+                pass
+            if _curve_live_cands and not _is_grad_chk and _dust_liq < 100.0 and _dust_v24 < 500.0:
+                _ignore_dust_amm = True
         if real_pairs:
             best_pair = sorted(real_pairs, key=lambda p: float(((p.get("liquidity") or {}).get("usd", 0) or 0)), reverse=True)[0]
-        elif amm_pairs:
+        elif amm_pairs and not _ignore_dust_amm:
             best_pair = sorted(amm_pairs, key=lambda p: float(((p.get("liquidity") or {}).get("usd", 0) or 0)), reverse=True)[0]
         else:
-            # 2. Если AMM-пулов вообще нет — токен ещё на bonding curve pump.fun
+            # 2. Если AMM-пулов вообще нет (или есть только спам-пыль <$100) — токен ещё на bonding curve pump.fun
+            if _ignore_dust_amm:
+                sol_pairs = [p for p in sol_pairs if str(p.get("dexId") or "").lower() in ("pump", "pumpfun", "meteoradbc")] or sol_pairs
             has_real_amm = any(float(((x.get("liquidity") or {}).get("usd", 0) or 0)) >= 500.0 for x in sol_pairs)
             if has_real_amm:
                 sol_pairs = [p for p in sol_pairs if not (str(p.get("dexId") or "").lower() in ("pump", "pumpfun") and float(((p.get("liquidity") or {}).get("usd", 0) or 0)) < 500.0)]
@@ -1706,7 +1736,22 @@ class Analyzer:
                                   "NVDA", "NVIDIA", "GOOG", "AMZN", "META", "NFLX", "ANTHROPIC", "OPENAI", "PERPLEXITY"]
         if any(keyword in symbol for keyword in corporate_scam_keywords) or any(keyword in name for keyword in corporate_scam_keywords):
             if not self._brand_whitelisted(mint):
-                return self._deny(mint, "mimic-corp-scam", f"🚫 Мусор: Токен {symbol} мимикрирует под корпоративный бренд. Это 100% scam.")
+                _lq_cp = float((pair_data.get("liquidity", {}) or {}).get("usd", 0) or 0)
+                _dex_cp = str(pair_data.get("dexId", "") or "").lower()
+                # Пропускаем только вирусные мигрировавшие .pump раннеры с высокой ликвидностью и сильным спросом (кейс TESLA +307%, liq $15.7k, 404b/305s)
+                _is_viral_pump_corp = (
+                    mint.lower().endswith("pump")
+                    and _dex_cp not in ("", "pump", "pumpfun")
+                    and _lq_cp >= 12000.0
+                    and _vm5_pre >= 8000.0
+                    and _b5_pre >= 100
+                    and _b5_pre >= int(_s5_pre * 1.15)
+                    and _m5 >= 10.0
+                )
+                if _is_viral_pump_corp:
+                    print(f"🔥 [CORP-VIRAL-PUMP] {symbol} ({mint[:8]}): подтверждённый мигрировавший .pump раннер (liq ${_lq_cp:,.0f}, vol5 ${_vm5_pre:,.0f}, {_b5_pre}b/{_s5_pre}s) — пропуск.")
+                else:
+                    return self._deny(mint, "mimic-corp-scam", f"🚫 Мусор: Токен {symbol} мимикрирует под корпоративный бренд. Это 100% scam.")
 
         meme_keywords = ["PEPE", "SHIB", "DOGE", "FLOKI", "BONK", "WIF", "BOME", "POPCAT", "TRUMP", "BIDEN", "ELON", "ELUN", "ELOM", "MUSK",
                          "CLAUDE", "CHATGPT", "DEEPSEEK", "GROK", "GEMINI"]
@@ -1811,6 +1856,16 @@ class Analyzer:
                     mint,
                     f"pump-curve-top {_fdv_curve_pre:.0f}>{_max_curve_mcap:.0f}",
                     f"🚫 [CURVE-CLIFF] {symbol} ({mint[:8]}): FDV ${_fdv_curve_pre:,.0f} > ${_max_curve_mcap:,.0f} (зона разгрузки снайперов на кривой — ждём миграцию на PumpSwap).",
+                )
+            # Пол ликвидности сырой кривой: ROCKET-XGB/SCANNER не должен покупать кривые с liq < CURVE_MIN_LIQ_USD
+            # (FDV ~ $2.7k-$6.8k, liq $1-2.7k: в выгрузке 19.11.2026 там 0 ракет из 349 и ~27% рагов).
+            _curve_min_liq = float(getattr(config, "CURVE_MIN_LIQ_USD", 0.0))
+            _liq_curve_eff = _liq_curve_pre if _liq_curve_pre > 0 else 0.40 * _fdv_curve_pre
+            if _curve_min_liq > 0 and _liq_curve_eff < _curve_min_liq:
+                return self._deny(
+                    mint,
+                    f"curve-thin-liq ${_liq_curve_eff:.0f}<${_curve_min_liq:.0f}",
+                    f"🚫 [CURVE-THIN-LIQ] {symbol} ({mint[:8]}): ликвидность кривой ${_liq_curve_eff:,.0f} < ${_curve_min_liq:,.0f} — раг стоит дёшево, ракет в этой зоне нет.",
                 )
             # Бокс взрывной кривой Pump.fun (пропускает ADPAID +105%, WANTED +55%, GTA6 +115%, RAUL +38%, SHERRICK +42.7%, но режет еле ползущие кривые вроде amogus +18.6% -> -65.6%):
             # От пустых/слитых кёрвов ($PICKLES, GTAMICHI, bob) защищает ончейн-аудит резервов (real_sol >= 2.2 SOL) и fail-closed FCR на тонких кривых.
@@ -2240,7 +2295,7 @@ class Analyzer:
             # 1. Защита от микрованночек, сырых кёрвов и фейковых AMM-пулов
             _is_raw_curve = dex_id_low in ("pump", "pumpfun")
             _min_grad_liq = float(getattr(config, "MIN_GRADUATED_LIQ_USD", 2500.0))
-            _min_liq = 1000.0 if _is_raw_curve else _min_grad_liq
+            _min_liq = max(1000.0, float(getattr(config, "CURVE_MIN_LIQ_USD", 0.0) or 0.0)) if _is_raw_curve else _min_grad_liq
             _eff_pool_liq = liq_val if _is_raw_curve else raw_liq
             if _eff_pool_liq < _min_liq:
                 return self._deny(mint, f"low-liq ${_eff_pool_liq:.0f}<{_min_liq:.0f}", f"🚫 [ANTI-RUG] {symbol} ({mint[:8]}): Реальная ликвидность DEX ${_eff_pool_liq:,.0f} < ${_min_liq:,.0f} — риск дампа/проскальзывания.")
