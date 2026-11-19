@@ -47,6 +47,10 @@ def verify_on_render() -> None:
         flush=True,
     )
     print(
+        f"   • STAIRCASE / SLOW-COOK EXIT  = {getattr(config, 'AUDITOR_STAIRCASE_ENABLED', '?')} / {getattr(config, 'SLOW_COOK_PROFIT_EXIT_MIN', '?')}m-{getattr(config, 'SLOW_COOK_HARD_EXIT_MIN', '?')}m",
+        flush=True,
+    )
+    print(
         f"   • SHADOW_WATCH_LIMIT          = {getattr(config, 'SHADOW_WATCH_LIMIT', '?')}",
         flush=True,
     )

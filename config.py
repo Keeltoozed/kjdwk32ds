@@ -378,12 +378,16 @@ def is_distributed_safe_runner(
     dev_pct: float = 0.0,
     is_lp_safe: bool = False,
 ) -> bool:
-    """Exempt liquid, active runners from soft sybil/graph false positives."""
-    if liq_usd < 8000.0 or vol5_usd < 5000.0:
+    """Exempt ONLY genuinely mature, deep, established tokens from soft sybil/graph false positives.
+    NEVER exempt fresh PumpSwap launches (<45m or liq <$60k) — slow-cook cabal bundle rugs like FIONA (-96.3%)
+    deliberately keep top1/top10 low across 50 sub-wallets and fake $200k wash volume to bypass sybil/L7/L9/FCR!"""
+    if not is_lp_safe:
         return False
-    if buys5 < 25 or (sells5 > 0 and buys5 < int(sells5 * 0.85)):
+    if age_min < 45.0 or liq_usd < 60000.0 or vol5_usd < 25000.0:
         return False
-    if top1_pct > 18.0 or top10_pct > 45.0 or dev_pct >= 15.0:
+    if buys5 < 120 or (sells5 > 0 and buys5 < int(sells5 * 1.15)):
+        return False
+    if top1_pct > 8.0 or top10_pct > 28.0 or dev_pct > 3.0:
         return False
     return True
 
@@ -675,7 +679,7 @@ def evaluate_entry_momentum(
 
     # 1.2 Сильная вторая волна зрелого раннера (25м..240м): CDOG (+95%), AudaCity ERD (+53%), DCTYCAT (+97%), Buncoin (+310%)
     # Для старых токенов (> 120м) требуем взрывной пробой m5 >= 35% и vol5 >= $20k (отсекает вялый STM 230м -11.9%, пропускает Buncoin 234м +310%):
-    _mature_min_m5 = 35.0 if age_min > 120.0 else 15.0
+    _mature_min_m5 = 35.0 if age_min > 120.0 else (10.0 if (liq_usd >= 20000.0 and buys5 >= max(100, int(sells5 * 1.25)) and vol5_usd >= 10000.0) else 15.0)
     _mature_min_vol5 = 20000.0 if age_min > 120.0 else 8000.0
     is_mature_breakout = (
         age_min <= SOLANA_MAX_AGE_MIN
@@ -748,7 +752,7 @@ PUMP_MIGRATION_MCAP_SOL = 410.0           # FDV миграции pump.fun
 PUMP_DUMP_FLOOR_SOL = 50.0                # Порог post-mig-dumped (~50 SOL, разрешает быстрые реклеймы)
 JEV_MAX_TICKET_USD = 0.0
 MIN_GRADUATED_LIQ_USD = 7500.0            # Минимум $7.5k ликвидности на DEX (отсекает слитые микро-пулы и высокое проскальзывание на стопах)
-AUDITOR_STAIRCASE_ENABLED = False
+AUDITOR_STAIRCASE_ENABLED = True          # ВКЛЮЧЕНО: Layer 9/10 детектор лесенки-ботофермы и газовой пыли (защита от slow-cook cabal рагов типа FIONA -96.3%)
 AUDITOR_MAX_DEV_PCT = 8.0                 # Макс 8% у дева (защита от моментальных дампов разработчика в GROK-JEV)
 AUDITOR_MAX_WHALE_PCT = 14.0              # Макс 14% в одном кошельке (защита от 1-клик слива кита как FOMOCOIN/$CHOPS)
 AUDITOR_MAX_TOP10_PCT = 48.0              # Макс 48% у топ-10 холдеров (пропускает ракеты уровня FiveM с 40.9%)
@@ -782,21 +786,23 @@ VIP_KOL_WALLETS = {
 TIME_EXIT_MINUTES = 40
 TIME_EXIT_PROFIT_REQ = 0.015
 
-# === ПРОСТАЯ СИСТЕМА ВЫХОДА (МУНБЭГ ОТ +110%) ===
+# === СИСТЕМА ВЫХОДА (РАННИЙ TP1 +70% + SLOW-COOK ЗАЩИТА ОТ CABAL RUG) ===
 PARTIAL_TP_ENABLED = True
 PARTIAL_TP_MIN_TICKET_USD = 0.50
-TP1_TRIGGER_PCT = 1.10               # До +110% держим все 100% позиции! На +110% продаём 50% (окупает ставку и оставляет чистый Moonbag)
-TP1_SELL_FRAC = 0.50                 # 50% позиции фиксируем на +110%, оставшиеся 50% — Risk-Free Moonbag!
-TP2_TRIGGER_PCT = 2.50               # Следующий тейк на +250% (фиксируем половину мунбэга)
-TP2_SELL_FRAC = 0.50                 # 50% остатка продаём на +250%, остальное тащим по Trailing Stop 20%
+TP1_TRIGGER_PCT = 0.70               # На +70% фиксируем 50% позиции (резко снижаем риск при 1-блоковом дампе как FIONA +68% -> -96%)
+TP1_SELL_FRAC = 0.50                 # 50% позиции фиксируем на +70%, оставшиеся 50% — Moonbag на 3x-10x!
+TP2_TRIGGER_PCT = 1.80               # Следующий тейк на +180% (фиксируем половину мунбэга)
+TP2_SELL_FRAC = 0.50                 # 50% остатка продаём на +180%, остальное тащим по Trailing Stop
 TP3_TRIGGER_PCT = 5.00
 TP3_SELL_FRAC = 0.00
 TP4_TRIGGER_PCT = 5.00
 TP4_SELL_FRAC = 0.00
 TP5_TRIGGER_PCT = 10.00
 TP5_SELL_FRAC = 0.00
-MOONBAG_TRIGGER_PCT = 1.10           # Мунбэг активируется строго на +110%
+MOONBAG_TRIGGER_PCT = 0.70           # Мунбэг активируется на +70%
 MOONBAG_SELL_FRAC = 0.50
+SLOW_COOK_PROFIT_EXIT_MIN = 12.0     # Если за 12м монета не пробила TP1 (+70%) и в плюсе >= +5% — фиксируем профит (защита от slow-cook рага FIONA на 16-й мин!)
+SLOW_COOK_HARD_EXIT_MIN = 15.0       # Если за 15м монета так и не дошла до TP1 — выходим, не сидим в тикающей бомбе кабала
 
 # Трейлинг для мунбэга (защищает отката: если дошло до +75%, не даёт слить в 0)
 MOONBAG_TRAIL_ACTIVATION_PCT = 0.40  # Трейлинг включается при пике от +40%
@@ -833,7 +839,7 @@ WHALE_DUMP_GUARD_PCT = 0.22
 EVM_RUNNER_CRASH = 0.25
 EVM_NORMAL_CRASH = 0.22
 
-BREAKEVEN_PCT = 0.45       # Breakeven Shield: пик >= +45% -> пол +3% (не выбивает GTAgent +65%, GTASZN +635%, DCTC +763% на стартовом шуме!)
+BREAKEVEN_PCT = 0.35       # Breakeven Shield: пик >= +35% -> пол +3% (перекрывает комиссии и не даёт слить в минус)
 
 
 def get_sol_tp_ladder(is_unlocked: bool) -> tuple:
@@ -1132,7 +1138,7 @@ FCR_SELL_DOMINANCE = 0.85              # sells/buys за 5м для сигнал
 FCR_MIN_SELL_COUNT = 120               # Абсолютный минимум продаж, чтобы сигнал был значимым
 FCR_TRUSTED_FUNDERS = []              # Адреса-источники, которым доверяем (свои кошельки, биржи) — их кластеры игнорируются
 FCR_MAX_DURATION_SEC = 10.0 if HELIUS_API_KEY else 5.0  # Без приватного Helius не держим вход 13с на публичных RPC (иначе покупаем опоздавший дамп)
-FCR_CANONICAL_PUMPSWAP_DURATION_SEC = 4.0  # Быстрый бюджет FCR (4с) для каноничного PumpSwap с сожжённым LP (убирает 10с задержку входа как на ANT/CD)
+FCR_CANONICAL_PUMPSWAP_DURATION_SEC = 6.0  # Бюджет FCR (6с) для каноничного PumpSwap: успевает проверить funding-кластеры кабала (FIONA), но не висит 10-14с
 FCR_GRAPH_MIN_PCT = 0.05              # Узел сети RugCheck с долей < 0.05% — пыль, не участник фермы
 FCR_GRAPH_MAX_WALLETS = 15           # Сеть крупнее — это граф переводов толпы, а не ферма (вес режется)
 FCR_SIG_PAGE_LIMIT = 200              # Сколько подписей тянуть за раз (лёгкий payload для публичного RPC)

@@ -1163,8 +1163,12 @@ async def scanner_loop(analyzer, tracker):
                             processed_mints[mint] = _now_r + 3600
                             continue
                         if not getattr(config, "ALLOW_UNGRADUATED_PUMPFUN", False) and config.is_unmigrated_curve_token(mint, _c_pre):
-                            processed_mints[mint] = _now_r - _cd_r + 30
-                            continue
+                            # КРИТИЧНО: если токен уже в _graduated_set (пришёл из subscribeMigration), НЕ выкидываем его!
+                            # DexScreener часто отстаёт на 1-3 мин и показывает старый dexId='pumpfun', тогда как
+                            # analyzer.fetch_token_data() сразу проваливается в Jupiter v2 и видит свежий PumpSwap-пул за 2с!
+                            if mint not in _graduated_set:
+                                processed_mints[mint] = _now_r - _cd_r + 30
+                                continue
 
                         _c_at = _c_pre.get("pairCreatedAt") or 0
                         _c_age_m = (_now_r * 1000 - _c_at) / 60000.0 if _c_at else 0.2
@@ -1389,14 +1393,16 @@ async def scanner_loop(analyzer, tracker):
                                 _g_retries = getattr(analyzer, "_grad_retries", {})
                                 _g_cnt = _g_retries.get(mint, 0) + 1
                                 _g_retries[mint] = _g_cnt
-                                if _g_cnt <= 3:
-                                    processed_mints[mint] = time.time() - _cd + 35
+                                if _g_cnt <= 8:
+                                    processed_mints[mint] = time.time() - _cd + 20
                                 else:
-                                    processed_mints[mint] = time.time() + 600
+                                    processed_mints[mint] = time.time() + 120
                                     try:
                                         birth_tracker.remove_graduated(mint)
                                     except Exception:
                                         pass
+                            elif any(k in _sig_l for k in ("low-vol5", "m5-too-slow", "no-rocket-ignition")):
+                                processed_mints[mint] = time.time() - _cd + 25
                             else:
                                 processed_mints[mint] = time.time() + 90
                         else:
