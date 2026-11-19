@@ -1,0 +1,131 @@
+--- a/config.py	2026-11-19 07:55:52.901483980 +0000
++++ b/config.py	2026-11-19 07:55:52.902778868 +0000
+@@ -731,6 +731,11 @@
+ MAX_PUMP_CURVE_MCAP_USD = 25000.0         # Потолок сырой кривой $25k (захватывает растущие кривые $12k-$25k на пути к миграции ~$29k-$30k)
+ MIN_PUMP_CURVE_MCAP_SOL = 38.0            # Нижняя граница золотой зоны кривой (~38 SOL ≈ $2.75k при SOL $73, ~10 real SOL внутри кривой)
+ MAX_PUMP_CURVE_MCAP_SOL = 340.0           # Верхняя граница золотой зоны сырой кривой (~340 SOL ≈ $25k при миграции 410 SOL)
++# Пол ликвидности для входа на СЫРОЙ кривой (0 = выключено). По выгрузке all_scanned_tokens 19.11.2026:
++# на кривой при liq < $3k ракет 0 из 349, раги 27%; все 4 убыточные сделки ROCKET-XGB были с liq $1.9-2.7k.
++# Ликвидность кривой ≈ 0.40 * FDV, т.е. $5k ≈ FDV $12.5k.
++CURVE_MIN_LIQ_USD = 5000.0
++SHADOW_WATCH_LIMIT = 400                  # Сколько последних записей shadow_tracker перепроверяет за цикл (было 60/150 -> слежение обрывалось через ~6 мин)
+ PUMP_MIGRATION_MCAP_SOL = 410.0           # FDV миграции pump.fun
+ PUMP_DUMP_FLOOR_SOL = 50.0                # Порог post-mig-dumped (~50 SOL, разрешает быстрые реклеймы)
+ JEV_MAX_TICKET_USD = 0.0
+--- a/analyzer.py	2026-11-19 07:55:52.904072731 +0000
++++ b/analyzer.py	2026-11-19 07:55:52.905599443 +0000
+@@ -1812,6 +1812,16 @@
+                     f"pump-curve-top {_fdv_curve_pre:.0f}>{_max_curve_mcap:.0f}",
+                     f"🚫 [CURVE-CLIFF] {symbol} ({mint[:8]}): FDV ${_fdv_curve_pre:,.0f} > ${_max_curve_mcap:,.0f} (зона разгрузки снайперов на кривой — ждём миграцию на PumpSwap).",
+                 )
++            # Пол ликвидности сырой кривой: ROCKET-XGB/SCANNER не должен покупать кривые с liq < CURVE_MIN_LIQ_USD
++            # (FDV ~ $2.7k-$6.8k, liq $1-2.7k: в выгрузке 19.11.2026 там 0 ракет из 349 и ~27% рагов).
++            _curve_min_liq = float(getattr(config, "CURVE_MIN_LIQ_USD", 0.0))
++            _liq_curve_eff = _liq_curve_pre if _liq_curve_pre > 0 else 0.40 * _fdv_curve_pre
++            if _curve_min_liq > 0 and _liq_curve_eff < _curve_min_liq:
++                return self._deny(
++                    mint,
++                    f"curve-thin-liq ${_liq_curve_eff:.0f}<${_curve_min_liq:.0f}",
++                    f"🚫 [CURVE-THIN-LIQ] {symbol} ({mint[:8]}): ликвидность кривой ${_liq_curve_eff:,.0f} < ${_curve_min_liq:,.0f} — раг стоит дёшево, ракет в этой зоне нет.",
++                )
+             # Бокс взрывной кривой Pump.fun (пропускает ADPAID +105%, WANTED +55%, GTA6 +115%, RAUL +38%, SHERRICK +42.7%, но режет еле ползущие кривые вроде amogus +18.6% -> -65.6%):
+             # От пустых/слитых кёрвов ($PICKLES, GTAMICHI, bob) защищает ончейн-аудит резервов (real_sol >= 2.2 SOL) и fail-closed FCR на тонких кривых.
+             if _b5_pre < 15 or (_s5_pre > 0 and _b5_pre < int(_s5_pre * 1.30)) or (_b5_pre - _s5_pre) < 5:
+--- a/shadow_tracker.py	2026-11-19 07:55:52.907053459 +0000
++++ b/shadow_tracker.py	2026-11-19 07:55:52.908393187 +0000
+@@ -553,13 +553,14 @@
+                 updates = []
+                 mints_to_check = []
+                 table_to_use = self._target_table
++                _wl = int(getattr(config, "SHADOW_WATCH_LIMIT", 400) or 400)
+                 
+                 rows = []
+                 if self.use_supabase and self.supabase:
+                     def _fetch_sb():
+                         res = []
+                         try:
+-                            res += (self.supabase.table(self._all_scanned_table).select("*").eq("check_24h_done", 0).order("scanned_at", desc=True).limit(60).execute().data or [])
++                            res += (self.supabase.table(self._all_scanned_table).select("*").eq("check_24h_done", 0).order("scanned_at", desc=True).limit(_wl).execute().data or [])
+                         except Exception:
+                             pass
+                         try:
+@@ -581,7 +582,7 @@
+                         with sqlite3.connect(self.db_path) as conn:
+                             conn.row_factory = sqlite3.Row
+                             c = conn.cursor()
+-                            c.execute("SELECT * FROM all_scanned_tokens WHERE check_24h_done = 0 ORDER BY scanned_at DESC LIMIT 150")
++                            c.execute("SELECT * FROM all_scanned_tokens WHERE check_24h_done = 0 ORDER BY scanned_at DESC LIMIT ?", (_wl,))
+                             r1 = [dict(r) for r in c.fetchall()]
+                             c.execute("SELECT * FROM rejected_tokens WHERE check_24h_done = 0 ORDER BY rejected_at DESC LIMIT 100")
+                             r2 = [dict(r) for r in c.fetchall()]
+@@ -684,6 +685,8 @@
+                             if p_entry < 1e-7 and p_now >= 1e-7:
+                                 p_entry = p_now
+                                 upd["price_at_rejection"] = p_now
++                                upd["_baseline_new"] = True   # сохраним в БД, иначе на след. цикле база снова 0 и PnL считается от «плавающей» цены
++                            no_baseline = p_entry < 1e-7
+ 
+                             # Защита от бага котировок DexScreener (когда возвращается цена SOL/BNB $200-$400 или фантомный x500)
+                             if (p_now > 10.0 and 0 < p_entry < 0.1) or (p_entry >= 1e-7 and p_now / p_entry > 500.0):
+@@ -691,7 +694,7 @@
+                             old_ath = float(upd.get("old_ath", 0) or 0.0)
+                             old_time = float(upd.get("old_time_to_ath", 0.0) or 0.0)
+                             elapsed_m = float(upd.get("elapsed_min", 0.0) or 0.0)
+-                            is_lp_rugged = (m.lower() in rugged_set) or (batch_ok and p_now <= 0 and elapsed_m >= 5.0)
++                            is_lp_rugged = (m.lower() in rugged_set) or (batch_ok and p_now <= 0 and not no_baseline and elapsed_m >= 5.0)
+ 
+                             # Если токен дал новый пик цены — фиксируем новый ATH и точную минуту
+                             if p_now > old_ath:
+@@ -722,7 +725,9 @@
+                             )
+ 
+                             # Категоризация исхода монеты:
+-                            if is_lp_rugged:
++                            if no_baseline and not is_lp_rugged:
++                                outcome = "❓ Нет цены (DexScreener не отдаёт пул с liq >= $1.5k) — исход неизвестен"
++                            elif is_lp_rugged:
+                                 outcome = f"☠️ LP Rug / Ликва вынута (пик +{ath_pnl:.0f}% -> $0, фильтр спас!)"
+                             elif ath_pnl >= 50.0 and cur_pnl <= 0.0:
+                                 outcome = f"🚀 Ракета +{ath_pnl:.0f}% на {time_to_ath:.0f}м -> Слив в 0 ({cur_pnl:.0f}%)"
+@@ -750,8 +755,9 @@
+                                     for tbl in (self._all_scanned_table, table_to_use):
+                                         try:
+                                             cp = dict(u_load)
+-                                            if tbl == "rejected_tokens":
+-                                                cp["is_missed_rocket"] = is_rkt
++                                            cp["is_missed_rocket"] = is_rkt
++                                            if tbl != self._all_scanned_table:
++                                                cp.pop("price_at_scan", None)
+                                             self.supabase.table(tbl).update(cp).eq("mint", m_addr).execute()
+                                         except Exception:
+                                             try:
+@@ -775,6 +781,9 @@
+                                     "outcome": outcome,
+                                     "last_checked_at": datetime.utcnow().isoformat()
+                                 }
++                                if upd.get("_baseline_new") and p_entry >= 1e-7:
++                                    update_payload["price_at_scan"] = p_entry
++                                    update_payload["price_at_rejection"] = p_entry
+                                 base_payload = {
+                                     "ath_price": new_ath,
+                                     "hypothetical_pnl": round(ath_pnl, 1),
+@@ -797,14 +806,17 @@
+                                                     check_5m_done = ?, check_15m_done = ?,
+                                                     check_1h_done = ?, check_4h_done = ?, check_24h_done = ?,
+                                                     time_to_ath_min = ?, current_pnl = ?, outcome = ?,
+-                                                    last_checked_at = ?
++                                                    last_checked_at = ?,
++                                                    price_at_scan = CASE WHEN COALESCE(price_at_scan, 0) < 1e-7 THEN ? ELSE price_at_scan END,
++                                                    price_at_rejection = CASE WHEN COALESCE(price_at_rejection, 0) < 1e-7 THEN ? ELSE price_at_rejection END
+                                                 WHERE mint = ?
+                                             ''', (
+                                                 new_ath, round(ath_pnl, 1), 1 if is_rocket else 0,
+                                                 upd["check_5m"], upd["check_15m"],
+                                                 upd["check_1h"], upd["check_4h"], upd["check_24h"],
+                                                 time_to_ath, round(cur_pnl, 1), outcome,
+-                                                datetime.utcnow().isoformat(), m
++                                                datetime.utcnow().isoformat(),
++                                                p_entry if p_entry >= 1e-7 else 0.0, p_entry if p_entry >= 1e-7 else 0.0, m
+                                             ))
+                                         except Exception:
+                                             pass
