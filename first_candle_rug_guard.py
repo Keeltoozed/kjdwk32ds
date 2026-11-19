@@ -1320,7 +1320,7 @@ def analyze_microstructure(mint: str, pair_data: dict, cohort: List[dict]) -> di
             and sells >= int(_cfg("FCR_MIN_SELL_COUNT", 120))):
         score += 0.22
         sigs.append({"key": "distribution_stall", "weight": 0.22,
-                     "text": f"дистрибуция: m5 +{m1 and m5:.0f}% при мёртвом m1 ({m1:+.1f}%), {sells} продаж/5м"})
+                     "text": f"дистрибуция: m5 +{m5:.0f}% при мёртвом m1 ({m1:+.1f}%), {sells} продаж/5м"})
 
     # b) Продавцы давят
     if buys > 0 and sells >= int(_cfg("FCR_MIN_SELL_COUNT", 120)):
@@ -1845,7 +1845,7 @@ async def _analyze(mint: str, pair_data: Optional[dict], verdict: dict, budget: 
         str(c.get("source") or "") == "burner_relay" and float(c.get("total_pct", 0.0) or 0.0) >= 8.0
         for c in (verdict.get("clusters") or [])
     )
-    if _has_heavy_2hop_burner or slot0_info.get("severe_bundle") or float(_m_fcr.get("sell_impact_top3", 0.0) or 0.0) >= 0.88 or total >= 0.85:
+    if _has_heavy_2hop_burner or slot0_info.get("severe_bundle") or float(_m_fcr.get("sell_impact_top3", 0.0) or 0.0) >= 0.88 or total >= 0.65:
         _fcr_is_dist_runner = False
     if total >= block_at:
         if _fcr_is_dist_runner:

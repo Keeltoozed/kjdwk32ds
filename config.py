@@ -55,11 +55,11 @@ MAX_CONCURRENT_POSITIONS = 3
 # === ЖЕСТКОЕ ОГРАНИЧЕНИЕ УБЫТКА (РИСК-МЕНЕДЖМЕНТ) ===
 MAX_DAILY_LOSS_USD = 15.0
 KILL_SWITCH_ENABLED = True
-STOP_LOSS_PCT = -0.15          # Единый стоп -15%: не выбивает на -11%..-13% откатах ракет, но быстро режет лузеров (в паре с Quick Scratch -8.5%)
-STOP_LOSS_UNLOCKED_PCT = -0.12 # Единый стоп -12% для незалоченных пулов Meteora/Raydium/Custom PumpSwap
-EMERGENCY_CAP_PCT = -0.22      # Аварийный потолок -22%: срез мгновенного краша
+STOP_LOSS_PCT = -0.20          # Единый стоп -20%: переживает стартовые фитили ракет (VICE -16.2% -> +82.8%), но чётко режет дампы
+STOP_LOSS_UNLOCKED_PCT = -0.15 # Строгий стоп -15% для незалоченных пулов
+EMERGENCY_CAP_PCT = -0.28      # Аварийный потолок -28%: срез мгновенного краша
 INFANT_WINDOW_MIN = 0.5
-INFANT_DUMP_PCT = -0.200       # Срез мгновенного рага в первые 30с (<= -20.0%)
+INFANT_DUMP_PCT = -0.220       # Срез мгновенного рага в первые 30с (<= -22.0%)
 
 # === ЗАЩИТА ОТ МГНОВЕННОГО ВЫВОДА ЛИКВИДНОСТИ (девы выдергивают пул в 0) ===
 LIQ_DRAIN_EXIT_PCT = 0.40      # Выход если ликвидность упала на 40% от пика (режем до полного обнуления)
@@ -74,10 +74,42 @@ BLOCK_PERMISSIONLESS_LIQ_FDV_TRAP = True   # Блокировать кастом
 REQUIRE_SOCIALS_ENABLED = False            # Не требовать соцсети на старте/зрелости (важна только живая ликвидность и импульс)
 MAX_ENTRY_H1_PCT = 180.0       # Было 1500.0: отсекает вертикальный вынос и хаи (фикс Y +944%)
 MAX_ENTRY_H6_PCT = 350.0       # Было 500.0: не входим в отработавшие топы
-MAX_ENTRY_M5_PCT = 175.0        # Потолок m5 +175% (по 161 сделке: m5>180% = -648% PnL; ракеты Rockstar +154%, DOGPOOP +165%, LIFTD +154%, DACT +59% <= 175%)
-MAX_ENTRY_M1_PCT = 60.0         # Потолок 1м свечи +60% для свежих запусков
+MAX_ENTRY_M5_PCT = 175.0        # Потолок m5 +175% (для сырой кривой +165%: отсекает PPV +279% / AFTERGTA6 +205%, пропускает DCTC +132%)
+MAX_ENTRY_M1_PCT = 22.0         # Потолок 1м свечи +22% (отсекает покупку вертикального хая типа MAGA m1 +37.5%; все ракеты <= +9.4%)
 # MAX_ENTRY_M5_SPIKE_PCT убран — не блокируем вход по m5, пусть ракеты летят
 REQUIRE_SOCIALS_MIN_AGE_MIN = 9999.0  # Соцсети не обязательны (отключено)
+
+# Строгий белый список котируемых активов Solana (исключаем xStocks TTWO/QQQx/SPCX — кейсы JETSKI -42.7%, FOILED -34.0%):
+ALLOWED_SOL_QUOTE_ADDRS = frozenset({
+    "so11111111111111111111111111111111111111112",  # WSOL/SOL
+    "epjfwdd5aufqssqem2qn1xzybapc8g4weggkzwytdt1v",  # USDC
+    "es9vmfrzacermjfrf4h2fyd4kconky11mcce8benwnyb",  # USDT
+    "usd1ttgy1n17szxhfd31eyqso32682556356108733",   # USD1
+})
+ALLOWED_SOL_QUOTE_SYMBOLS = frozenset({
+    "SOL", "WSOL", "USDC", "USDT", "USD1", "USDS", "PYUSD",
+})
+
+
+def is_allowed_solana_quote(pair_data: Optional[dict]) -> bool:
+    """Return True ONLY for SOL / canonical stablecoin quote pools (rejects TTWO/xStocks/meme-quoted pairs)."""
+    if not isinstance(pair_data, dict):
+        return True
+    qt = pair_data.get("quoteToken")
+    if not isinstance(qt, dict) or not qt:
+        return True
+    q_addr = str(qt.get("address") or "").strip().lower()
+    q_sym = str(qt.get("symbol") or "").strip().upper()
+    if not q_addr and not q_sym:
+        return True
+    if q_addr and q_addr in ALLOWED_SOL_QUOTE_ADDRS:
+        return True
+    if q_sym and q_sym in ALLOWED_SOL_QUOTE_SYMBOLS and (not q_addr or q_addr in ALLOWED_SOL_QUOTE_ADDRS):
+        return True
+    # Если передан только символ без адреса (синтетика) — проверяем по белому списку символов
+    if not q_addr and q_sym in ALLOWED_SOL_QUOTE_SYMBOLS:
+        return True
+    return False
 
 
 def get_max_entry_h1_pct(
@@ -88,15 +120,15 @@ def get_max_entry_h1_pct(
     liq_usd: float = 0.0,
     m5_pct: float = 1.5,
 ) -> float:
-    """Return dynamic max h1% entry cap: allow ultra-fresh launches/migrations while rejecting spent tops."""
+    """Return dynamic max h1% entry cap: allow genuine fresh launches while rejecting +700%..+900% vertical tops (DATITTY/BNC/GMGM)."""
     _m5_ok = True if m5_pct is None else (float(m5_pct) >= 1.0)
     _flow_ok = vol_m5 >= 2500.0 and buys_m5 >= int(sells_m5 * 1.05) and _m5_ok
     if age_min <= 15.0:
-        return 2500.0 if _flow_ok else 1800.0
+        return 450.0 if _flow_ok else 300.0
     if age_min <= 30.0:
-        return 600.0 if _flow_ok else 350.0
+        return 350.0 if _flow_ok else 220.0
     if age_min <= 60.0:
-        return 400.0 if _flow_ok else 220.0
+        return 300.0 if _flow_ok else 180.0
     return 250.0 if _flow_ok else 150.0
 
 
@@ -441,6 +473,9 @@ def evaluate_entry_momentum(
     min_h6: float = -25.0,
     fdv_usd: float = 0.0,
     allow_absorbed_buyers: bool = False,
+    is_curve: bool = False,
+    buys_h1: Optional[int] = None,
+    sells_h1: Optional[int] = None,
 ) -> Tuple[bool, str]:
     """Strict green-momentum rocket classifier: captures explosive runs & healthy reclaims, strictly eliminates dead flat noise and dumping coins."""
     tot_tx = buys5 + sells5
@@ -517,23 +552,50 @@ def evaluate_entry_momentum(
     if h1 > _max_h1_allowed:
         return False, f"h1-exhausted {h1:+.0f}% > +{_max_h1_allowed:.0f}% (buying late parabolic top, dump risk)"
 
-    # Потолок m5 для свежих запусков и кривых: не входим в уже отработавший вертикальный пик (+300%..+425%),
-    # где девы и первые снайперы фиксируют прибыль в наш вход (кейсы CLAUDHAO +425% -> -82%, CATEPEPE +410% -> -81%, PEPEVRAX +369% -> -79%).
-    # Ракеты вроде Rockstar (+154%), LIFTD (+154%), GTA6 (+35%) стартуют до +200% и дают огромный запас хода!
+    # Потолок m5 для свежих запусков и кривых:
+    # На сырой кривой Pump.fun базовый потолок +165% (отсекает дистрибуционные хаи AFTERGTA6 +205% m1=0 140s, PPV +279% m1=0 186s).
+    # Если сырая кривая активно ускоряется (m1 >= 2%, sells < 80, b/s >= 1.8x — кейс VICESTREAM +280%) — допускаем до +300%.
+    # На свежей высокообъёмной миграции (GTASZN +216%, TDC +399% vol5 $80k) — до +450% (синхронно с h1 <= +450%).
+    _is_active_curve_blast = bool(
+        is_curve
+        and m1 >= 2.0
+        and sells5 < 80
+        and buys5 >= max(30, int(sells5 * 1.80))
+    )
+    _is_mega_mig_blast = bool(
+        not is_curve
+        and age_min <= 4.0
+        and vol5_usd >= 30000.0
+        and liq_usd >= 12000.0
+        and buys5 >= max(80, int(sells5 * 1.15))
+        and m1 >= 2.0
+    )
     _is_fresh_grad_blast = bool(
-        age_min <= 5.0 and vol5_usd >= 10000.0 and buys5 >= max(15, int(sells5 * 1.05))
+        not is_curve
+        and age_min <= 5.0
+        and vol5_usd >= 20000.0
+        and liq_usd >= 12000.0
+        and buys5 >= max(30, int(sells5 * 1.15))
     )
     _is_dex_migration_surge = bool(
-        vol5_usd >= 15000.0 and buys5 >= max(15, int(sells5 * 1.10)) and liq_usd >= 12000.0
+        not is_curve
+        and vol5_usd >= 15000.0
+        and buys5 >= max(15, int(sells5 * 1.10))
+        and liq_usd >= 12000.0
     )
-    _is_fresh_curve_surge = bool(
-        age_min <= 6.0 and vol5_usd >= 1500.0 and buys5 >= max(12, int(sells5 * 1.15))
-    )
-    _max_m5_dyn = 550.0 if _is_fresh_grad_blast else (420.0 if _is_dex_migration_surge else (320.0 if _is_fresh_curve_surge else float(globals().get("MAX_ENTRY_M5_PCT", 220.0))))
-    _max_m1_dyn = max(
-        float(globals().get("MAX_ENTRY_M1_PCT", 35.0)),
-        60.0 if (buys5 >= max(10, int(sells5 * 1.20)) and vol5_usd >= 2500.0) else (35.0 if buys5 >= max(8, int(sells5 * 1.05)) and vol5_usd >= 1200.0 else 25.0)
-    )
+    if is_curve:
+        _max_m5_dyn = 300.0 if _is_active_curve_blast else 165.0
+    elif _is_mega_mig_blast:
+        _max_m5_dyn = 450.0
+    elif _is_fresh_grad_blast:
+        _max_m5_dyn = 300.0
+    elif _is_dex_migration_surge:
+        _max_m5_dyn = 240.0
+    else:
+        _max_m5_dyn = float(globals().get("MAX_ENTRY_M5_PCT", 175.0))
+    _max_m1_dyn = float(globals().get("MAX_ENTRY_M1_PCT", 22.0))
+    if not is_curve and buys5 >= max(50, int(sells5 * 1.35)) and vol5_usd >= 25000.0 and m5 >= 25.0:
+        _max_m1_dyn = max(_max_m1_dyn, 25.0)
     if m1 > _max_m1_dyn:
         return False, f"m1-vertical-top {m1:+.1f}% > +{_max_m1_dyn:.0f}% (buying candle top, wait for reset)"
     if m5 > _max_m5_dyn:
@@ -544,13 +606,18 @@ def evaluate_entry_momentum(
     if m1 > 4.0 and m5 < 15.0 and m1 > (m5 + 3.0):
         return False, f"dead-cat-1m-spike m1 {m1:+.1f}% >> m5 {m5:+.1f}% (4m dump before 1m bounce)"
 
-    # Защита от кровоточащего часового тренда без мощного объёма — но пропускаем сильный V-разворот покупателями (кейс DCTYCAT +97%: m5 +64%, 360b/56s, h1 -32.6%):
+    # Защита от кровоточащего часового тренда (отсекает дохлые отскоки DACI h1=-32% 206b/80s, CASHPARROT h1=-37% 163b/83s),
+    # но пропускает экстремальный V-разворот покупателями (кейс DCTYCAT +97%: m5 +64%, 360b/56s = 6.4x, vol5 $5.2k!):
+    _h1_flow_not_bleeding = True
+    if buys_h1 is not None and sells_h1 is not None and int(sells_h1) > 20:
+        _h1_flow_not_bleeding = (int(buys_h1) >= int(int(sells_h1) * 0.98)) or (buys5 >= max(150, int(sells5 * 3.50)))
     _is_strong_v_reversal = (
-        m5 >= 15.0
+        m5 >= 20.0
         and m1 >= 0.0
-        and buys5 >= max(30, int(sells5 * 1.40))
+        and buys5 >= max(100, int(sells5 * 2.80))
         and vol5_usd >= 4000.0
-        and h1 >= -55.0
+        and h1 >= -50.0
+        and _h1_flow_not_bleeding
     )
     if h1 < -3.0 and not _is_strong_v_reversal and (age_min >= 8.0 or vol5_usd < 20000.0):
         return False, f"bleeding-h1-downtrend h1 {h1:+.1f}% at age {age_min:.1f}m vol5 ${vol5_usd:,.0f}"
@@ -598,24 +665,37 @@ def evaluate_entry_momentum(
         )
     )
 
-    # 1.2 Сильная вторая волна зрелого раннера (25м..240м): CDOG (+95%), AudaCity ERD (+53%), DCTYCAT (+97%)
-    # Полностью закрываем дыру для еле ползущих 1-4ч токенов с vol5 $1k-$4k и m5 +2%..+10%!
+    # 1.2 Сильная вторая волна зрелого раннера (25м..240м): CDOG (+95%), AudaCity ERD (+53%), DCTYCAT (+97%), Buncoin (+310%)
+    # Для старых токенов (> 120м) требуем взрывной пробой m5 >= 35% и vol5 >= $20k (отсекает вялый STM 230м -11.9%, пропускает Buncoin 234м +310%):
+    _mature_min_m5 = 35.0 if age_min > 120.0 else 15.0
+    _mature_min_vol5 = 20000.0 if age_min > 120.0 else 8000.0
     is_mature_breakout = (
         age_min <= SOLANA_MAX_AGE_MIN
         and (fdv_usd <= 0.0 or fdv_usd <= float(globals().get("JEV_MAX_MCAP_USD", 1500000.0)))
-        and m5 >= 15.0
+        and m5 >= _mature_min_m5
         and m1 >= -2.0
         and h1 >= -15.0
         and buys5 >= max(40, int(sells5 * 1.20))
-        and vol5_usd >= 8000.0
+        and vol5_usd >= _mature_min_vol5
         and (vel_ratio >= 0.25 or vol5_usd >= 12000.0)
         and liq_usd >= 6000.0
+    )
+
+    # 1.2b Пробуждение сырой кривой Pump.fun (25м..45м, кейс SHERRICK +42.7%: 40b/15s, vol5 $4.5k, m1 +5%):
+    is_curve_wakeup = (
+        is_curve
+        and age_min <= 45.0
+        and m5 >= 20.0
+        and m1 >= 0.0
+        and buys5 >= max(25, int(sells5 * 1.80))
+        and vol5_usd >= 3000.0
     )
 
     if not (
         is_ultra_fresh_launch
         or is_fresh_ignition
         or is_mature_breakout
+        or is_curve_wakeup
         or _is_bullish_pullback_dip
         or _is_strong_v_reversal
     ):
@@ -740,7 +820,7 @@ WHALE_DUMP_GUARD_PCT = 0.22
 EVM_RUNNER_CRASH = 0.25
 EVM_NORMAL_CRASH = 0.22
 
-BREAKEVEN_PCT = 0.15       # Breakeven Shield: пик >= +15% -> перенос в безубыток (не выбивает YUKON на +10% шуме)
+BREAKEVEN_PCT = 0.45       # Breakeven Shield: пик >= +45% -> пол +3% (не выбивает GTAgent +65%, GTASZN +635%, DCTC +763% на стартовом шуме!)
 
 
 def get_sol_tp_ladder(is_unlocked: bool) -> tuple:
@@ -770,7 +850,7 @@ SOLANA_MIN_AGE_MIN = 0.05        # 3 секунды: мгновенный ста
 SOLANA_MAX_AGE_HOURS = 4.0         # До 4 часов
 SOLANA_MAX_AGE_MIN = 240.0         # Потолок 240м: позволяет ловить консолидации и мощные выходы в раннеры
 JEV_MAX_AGE_MIN = 240.0            # В GROK-JEV фокус на пробоях до 240м (4ч)
-JEV_MAX_M1_ENTRY_PCT = 35.0
+JEV_MAX_M1_ENTRY_PCT = 22.0
 
 SCALP_TIMEOUT_MIN = 10.0
 STAGNANT_LOSS_MIN = 15.0
@@ -820,7 +900,7 @@ JEV_MAX_DEV_STILL_LOADED = 0.35
 
 JEV_BID_THE_FLUSH_ENABLED = True
 JEV_STOP_UNDER_WICK_ENABLED = True
-JEV_MAX_M1_ENTRY_PCT = 35.0       # Вход в импульс m1: разрешаем до +35% (не блокируем быстрые ракеты)
+JEV_MAX_M1_ENTRY_PCT = 22.0       # Вход в импульс m1: разрешаем до +35% (не блокируем быстрые ракеты)
 JEV_DEFAULT_WICK_STOP_PCT = -0.100
 
 BIRDEYE_API_KEY = os.getenv("BIRDEYE_API_KEY", "")
@@ -1092,7 +1172,7 @@ PARTIAL_TP1_PCT = 110.0                  # На +110% забираем 50% по�
 PARTIAL_TP1_SELL_FRACTION = 0.50         # 50% оставляем в Moonbag!
 
 # 3. Исправление жесткого Stop Loss и Early Momentum Cut
-FAST_STOP_LOSS_PCT = -18.0               # Жесткий стоп -18% (не ждать -31%..-33% как на KLAUDIA и BIGP)
-EARLY_MOMENTUM_CUT_SEC = 90.0            # Проверка импульса через 90 сек
-EARLY_MOMENTUM_MIN_PEAK_PCT = 3.0        # Если за 90 сек пик был меньше +3%
-EARLY_MOMENTUM_MAX_LOSS_PCT = -10.0      # Резать только в диапазоне от -3% до -10% (если ниже -18% — уже сработает обычный SL)
+FAST_STOP_LOSS_PCT = -20.0               # Жесткий стоп -20% (переживает стартовые фитили ракет, чётко режет дампы)
+EARLY_MOMENTUM_CUT_SEC = 60.0            # Проверка импульса через 60 сек (не выбивает VICE на 11-й секунде!)
+EARLY_MOMENTUM_MIN_PEAK_PCT = 3.0        # Если за 60-150 сек пик был меньше +3%
+EARLY_MOMENTUM_MAX_LOSS_PCT = -12.0      # Срез при подтверждённом уходе <= -12% без импульса

@@ -111,24 +111,27 @@ class MatureExitManager:
                     return f"Early Seller Dump Cut ({pnl_pct*100:.1f}%, {b5_chk}b/{s5_chk}s)"
 
             # ⚡ РАННИЙ СРЕЗ ЗАТУХАЮЩЕГО ИМПУЛЬСА (Early Momentum Failure Cut):
-            # Если токен за 45-150 секунд так и не пошёл в рост (max_pnl_pct < +3.5%) и уходит в минус (<= -9.0%),
-            # при этом 1м свеча красная или продавцы душат спрос:
-            # Сбрасываем немедленно, не пересиживая до полного стоп-лосса!
-            # Убыток со сделки составит всего ~$0.45..$0.55 вместо -$1.70..-$2.05!
-            if 0.75 <= minutes_held <= 2.5 and pnl_pct <= -0.09 and max_pnl_pct < 0.035:
+            # Если токен за 60-150 секунд так и не пошёл в рост (max_pnl_pct < +3.5%) и подтверждённо уходит в минус (<= -11.0%),
+            # при этом 1м свеча красная или продавцы душат спрос (2 тика подтверждения — защита от 1-тик фитиля):
+            if 1.0 <= minutes_held <= 2.5 and pnl_pct <= -0.11 and max_pnl_pct < 0.035:
                 _pc_f = _pd_chk.get("priceChange") or {}
                 _m1_f = float(_pc_f.get("m1", 0) or 0)
                 _tx_f = (_pd_chk.get("txns") or {}).get("m5") or {}
                 _b_f = int(_tx_f.get("buys", 0) or 0)
                 _s_f = int(_tx_f.get("sells", 0) or 0)
                 if _m1_f <= -0.2 or _s_f > _b_f or (_s_f >= 4 and (_b_f / max(1, _s_f)) < 1.15):
-                    return f"⚡ Early Momentum Failure Cut ({pnl_pct*100:.1f}%, 90с без импульса — срез убытка)"
+                    _emf_c = int(getattr(position, "_em_fail_n", 0) or 0) + 1
+                    position._em_fail_n = _emf_c
+                    if _emf_c >= 2 or pnl_pct <= -0.16:
+                        return f"⚡ Early Momentum Failure Cut ({pnl_pct*100:.1f}%, {minutes_held*60:.0f}с без импульса — срез убытка)"
+                else:
+                    position._em_fail_n = 0
+            else:
+                position._em_fail_n = 0
 
             # СБРОС МОМЕНТАЛЬНОГО РАГА НА ПЕРВОЙ СВЕЧЕ (First Candle Rug Exit)
-            # На ракетах первая свеча зелёная, покупатели льют объём и pnl в плюсе.
-            # Если токен — раг: дев сливает стек, m1 падает > 12% или продавцы давят в одну калитку.
-            # Сбрасываем ТОЛЬКО РАГ сразу на первой свече при подтверждении, не дожидаясь -50%..-90%!
-            if 0.3 <= minutes_held <= 3.0 and pnl_pct <= -0.10:
+            # Даём 30 секунд на проход стартового спреда; если после 30с дев сливает стек (m1 <= -12% или продавцы > 60%) — режем.
+            if 0.50 <= minutes_held <= 3.0 and pnl_pct <= -0.13:
                 _pc_chk = _pd_chk.get("priceChange") or {}
                 _m1_c = float(_pc_chk.get("m1", 0) or 0)
                 _txns = (_pd_chk.get("txns") or {}).get("m5") or {}
@@ -151,15 +154,14 @@ class MatureExitManager:
         # =========================================================================
         # 0.48. БЫСТРЫЙ СРЕЗ НЕУДАВШЕГОСЯ ПРОБОЯ (QUICK SCRATCH ON FAILED BREAKOUT)
         # =========================================================================
-        # В первые 90 секунд настоящая ракета (+40%..+200%) СРАЗУ даёт зелёный импульс.
-        # Если монета за первые 45-90с ни разу не показала даже +3.0% (max_pnl_pct < 0.030)
-        # и просела ниже -8.5% (pnl_pct <= -0.085), это ложный пробой или слив инсайдеров.
-        # Режем с микро-убытком (-8.5% = -$0.17), НЕ допуская сползания в -40%..-70% (-$1.40)!
-        if minutes_held <= 1.5 and max_pnl_pct < 0.030 and pnl_pct <= -0.085:
+        # Даём сделке минимум 45 секунд на проход стартового спреда и снайперского фитиля
+        # (фикс VICE: -16.2% на 11-й секунде -> затем ракета +82.8%!).
+        # Если на 45-120с монета ни разу не показала +3.0% и 2 тика подряд держится <= -12.0% — режем убыток.
+        if 0.75 <= minutes_held <= 2.0 and max_pnl_pct < 0.030 and pnl_pct <= -0.12:
             _early_c = int(getattr(position, "_early_scratch_n", 0) or 0) + 1
             position._early_scratch_n = _early_c
-            if _early_c >= 2 or pnl_pct <= -0.14:
-                return f"⚡ Quick Scratch Failed Breakout ({pnl_pct*100:.1f}%, 0м без импульса)"
+            if _early_c >= 2:
+                return f"⚡ Quick Scratch Failed Breakout ({pnl_pct*100:.1f}%, {minutes_held*60:.0f}с без импульса)"
         else:
             position._early_scratch_n = 0
 
@@ -238,50 +240,78 @@ class MatureExitManager:
             return f"TP2 (+{pnl_pct*100:.1f}%, продано 100%)"
 
         # =========================================================================
-        # 3. ДИНАМИЧЕСКИЙ ТРЕЙЛИНГ И ПОЛ ПРИБЫЛИ (Защита ракет от возврата в 0)
+        # 3. ДИНАМИЧЕСКИЙ ТРЕЙЛИНГ ПО ЦЕНЕ ОТ ATH И ПОЛ ПРИБЫЛИ (ДЛЯ РАКЕТ 2x-10x!)
         # =========================================================================
-        if max_pnl_pct >= 2.00 and _peak_age_min >= 8.0:
+        # ВАЖНО:
+        # - До пика +45% НЕ включаем Breakeven / Floor / Trailing — иначе 6x-8x ракеты вытряхивает
+        #   на первой коррекции (кейсы DCTC +763% вышел на +23%, GTASZN +635% вышел на +2%, GTAgent +65% вышел в -1.3%)!
+        # - Трейлинг измеряется СТРОГО как реальный откат ЦЕНЫ от пика ((max_price - price) / max_price),
+        #   а НЕ как доля от max_pnl_pct (при +35% старая формула давала срез на -5.7% цены!).
+        # - После TP1 (+110%, 50% продано -> Risk-Free Moonbag) даём мунбэгу широкий трейлинг 28-32% для полёта в 5x-10x!
+        _has_tp1 = bool(_is_mb or getattr(position, "tp1_done", False))
+        if max_pnl_pct >= 3.00 and _peak_age_min >= 12.0:
             return f"Parabolic Harvest (+{pnl_pct*100:.0f}% locked, пик был +{max_pnl_pct*100:.0f}%, {_peak_age_min:.0f}m без нового максимума)"
 
+        _be_thr = float(getattr(config, "BREAKEVEN_PCT", 0.45) or 0.45)
         _floor_pnl = None
-        _trail_dist = None
+        _trail_price_drop = None
+        _drop_from_peak = (
+            (position.max_price_usd - current_price) / position.max_price_usd
+            if position.max_price_usd > 0 else 0.0
+        )
 
-        if max_pnl_pct >= 2.00:         # Мега-ракета (+200%+): держим минимум +100% и трейлим 20% от хая!
-            _floor_pnl = max(1.00, round(max_pnl_pct * 0.65, 2))
-            _trail_dist = 0.20
-        elif max_pnl_pct >= 1.00:       # 2x ракета (+100%..+200%): держим минимум +60%, трейл 20%
-            _floor_pnl = 0.60
-            _trail_dist = 0.20
-        elif max_pnl_pct >= 0.50:       # +50%..+100% (кейс EEPY +75%): фиксируем минимум +30%, трейл 20% от ATH
-            _floor_pnl = 0.30
-            _trail_dist = 0.20
-        elif getattr(position, "tp1_done", False):
-            # После частичной фиксации TP1 защищаем тело мунбэга: пол +10%
-            _floor_pnl = 0.10 if minutes_held >= 0.50 else 0.03
-            _trail_dist = 0.22 if minutes_held >= 1.0 else None
-        elif max_pnl_pct >= 0.28:       # +28%..+50%: трейл 22%
-            _floor_pnl = 0.08 if minutes_held >= 1.0 else 0.02
-            _trail_dist = 0.22 if minutes_held >= 1.5 else None
-        elif max_pnl_pct >= 0.20:       # +20%..+28% (кейс clipping пик +26% -> закрыт в -0.4%): фиксируем минимум +7%
-            _floor_pnl = 0.07 if minutes_held >= 0.5 else 0.03
-            _trail_dist = None
-        elif max_pnl_pct >= float(getattr(config, "BREAKEVEN_PCT", 0.08) or 0.08):
-            _floor_pnl = 0.005
-            _trail_dist = None
+        if _has_tp1:
+            # Risk-Free Moonbag (50% уже окупили ставку на +110% TP1):
+            if max_pnl_pct >= 4.00:       # 5x+ мега-ракета: широкий трейл -28% от цены пика, пол +200%+
+                _floor_pnl = max(2.00, round(max_pnl_pct * 0.55, 2))
+                _trail_price_drop = 0.28
+            elif max_pnl_pct >= 2.00:     # 3x..5x ракета: трейл -30% от цены пика, пол +90%
+                _floor_pnl = 0.90
+                _trail_price_drop = 0.30
+            else:                         # 2.1x..3x (сразу после TP1): трейл -32% от пика, пол +15% (никогда в минус!)
+                _floor_pnl = 0.15
+                _trail_price_drop = 0.32
+        else:
+            # До TP1 (+110%): даём ракете дышать на откатах -25%, не вытряхивая на +15%..+35% шуме!
+            if max_pnl_pct >= 1.10:
+                _floor_pnl = 0.50
+                _trail_price_drop = 0.28
+            elif max_pnl_pct >= 0.80:     # +80%..+110%: фиксируем минимум +35%, трейл -26% от цены пика
+                _floor_pnl = 0.35
+                _trail_price_drop = 0.26
+            elif max_pnl_pct >= 0.55:     # +55%..+80% (GTAgent +65%, GTASANTA +76%): пол +15%, трейл -26% с +72%
+                _floor_pnl = 0.15
+                _trail_price_drop = 0.26 if max_pnl_pct >= 0.72 else None
+            elif max_pnl_pct >= _be_thr:  # +45%..+55%: Breakeven Shield (+3%, перекрывает комиссии)
+                _floor_pnl = 0.03
+                _trail_price_drop = None
 
-        # 1. Срабатывание Трейлинг-стопа от хая (спасет PUTON на +150% вместо сброса в 0%):
-        if _trail_dist is not None and max_pnl_pct >= 0.35:
-            _trail_level = max_pnl_pct * (1.0 - _trail_dist)
-            if pnl_pct <= _trail_level:
-                return f"Trailing Stop (+{pnl_pct*100:.1f}%, откат {_trail_dist*100:.0f}% от пика +{max_pnl_pct*100:.0f}%)"
+        # 1. Трейлинг-стоп по реальному откату цены от ATH (2 тика подтверждения против ложного прокола):
+        if _trail_price_drop is not None and _drop_from_peak >= _trail_price_drop:
+            _tr_c = int(getattr(position, "_trail_conf_n", 0) or 0) + 1
+            position._trail_conf_n = _tr_c
+            if _tr_c >= 2 or _drop_from_peak >= (_trail_price_drop + 0.08):
+                return f"Trailing Stop (+{pnl_pct*100:.1f}%, откат цены {_drop_from_peak*100:.0f}% от пика +{max_pnl_pct*100:.0f}%)"
+        else:
+            position._trail_conf_n = 0
 
-        # 2. Срабатывание Неснижаемого пола прибыли (Floor Lock):
-        if _floor_pnl is not None and max_pnl_pct >= 0.20 and pnl_pct <= _floor_pnl:
-            return f"Profit Floor (+{_floor_pnl*100:.0f}% locked after peak +{max_pnl_pct*100:.0f}%)"
+        # 2. Неснижаемый пол прибыли (Floor Lock, 2 тика подтверждения):
+        if _floor_pnl is not None and max_pnl_pct >= 0.55 and pnl_pct <= _floor_pnl:
+            _fl_c = int(getattr(position, "_floor_conf_n", 0) or 0) + 1
+            position._floor_conf_n = _fl_c
+            if _fl_c >= 2 or pnl_pct <= (_floor_pnl - 0.08):
+                return f"Profit Floor (+{_floor_pnl*100:.0f}% locked after peak +{max_pnl_pct*100:.0f}%)"
+        else:
+            position._floor_conf_n = 0
 
-        # 3. Безубыток: если пик достиг BREAKEVEN_PCT, не даём уйти в минус
-        if max_pnl_pct >= float(getattr(config, "BREAKEVEN_PCT", 0.08)) and pnl_pct <= 0.005:
-            return f"BREAKEVEN ({pnl_pct*100:+.1f}%, пик был +{max_pnl_pct*100:.1f}%)"
+        # 3. Breakeven Shield: включается только после уверенного отрыва (+45% пик), 2 тика подтверждения:
+        if max_pnl_pct >= _be_thr and pnl_pct <= 0.03:
+            _be_c = int(getattr(position, "_be_conf_n", 0) or 0) + 1
+            position._be_conf_n = _be_c
+            if _be_c >= 2 or pnl_pct <= -0.02:
+                return f"BREAKEVEN ({pnl_pct*100:+.1f}%, пик был +{max_pnl_pct*100:.1f}%)"
+        else:
+            position._be_conf_n = 0
 
         # =========================================================================
         # 4. CRASH VELOCITY GUARD (Дев-дамп / аномальное обрушение за 1 минуту)
@@ -310,9 +340,9 @@ class MatureExitManager:
             if _m1_crash <= -50.0 and minutes_held >= 0.5:
                 return f"🚨 Crash Guard: Dev Dump ({_m1_crash:.0f}% за 1m, PnL {pnl_pct*100:+.1f}%)"
 
-            # === СЛУЧАЙ 2: СИЛЬНЫЙ КРАШ (-25%..-50%) + МЫ В ПРОФИТЕ ===
-            # Мог быть кит, мог быть дев. Если мы в плюсе — выходим, не рискуем.
-            if _m1_crash <= -25.0 and pnl_pct >= 0.05 and minutes_held >= 0.5:
+            # === СЛУЧАЙ 2: СИЛЬНЫЙ КРАШ (-35% или -25% при давлении продавцов) + МЫ В ПРОФИТЕ ===
+            # На risk-free мунбэге не паникуем на -25% откате (только при настоящем обвале <= -42%):
+            if ((_m1_crash <= -35.0) or (_m1_crash <= -25.0 and bs_ratio < 0.55)) and pnl_pct >= 0.08 and minutes_held >= 0.5 and (not _has_tp1 or _m1_crash <= -42.0):
                 return f"🚨 Crash Guard: Price Crash ({_m1_crash:.0f}% за 1m, locked {pnl_pct*100:+.1f}%)"
 
             # === СЛУЧАЙ 3: УМЕРЕННЫЙ КРАШ (-18%) + ДОМИНИРОВАНИЕ ПРОДАВЦОВ + ВСПЛЕСК ===

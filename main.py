@@ -291,13 +291,24 @@ async def position_manager_loop(analyzer, tracker):
                         _last_fb_try = float(getattr(position, "_last_jup_fb_ts", 0.0) or 0.0)
                         if _stale_sec > 8.0 and (time.time() - _last_fb_try) >= 8.0:
                             position._last_jup_fb_ts = time.time()
-                            # Пробуем запросить ончейн через Jupiter, затем свежий Pair Data без кэша
+                            # Пробуем запросить ончейн: сначала Pump.fun bonding curve (фикс Dead Stale Pool Cut на Etch/藏狐), затем Jupiter и свежий Pair Data
                             _fb_px = 0.0
-                            try:
-                                from jupiter import JupiterAPI
-                                _fb_px = float(await asyncio.wait_for(JupiterAPI.get_price(mint), timeout=1.5) or 0.0)
-                            except Exception:
-                                _fb_px = 0.0
+                            _pos_mf_fb = getattr(position, "ml_features", None) or {}
+                            _pos_dex_fb = str(_pos_mf_fb.get("dex") or getattr(position, "dex_id", "") or "").lower()
+                            if _pos_dex_fb in ("pump", "pumpfun") or mint.lower().endswith("pump"):
+                                try:
+                                    import market_data as _md_fb
+                                    _st_fb = await asyncio.wait_for(_md_fb.get_live_pump_curve_state(mint), timeout=1.5)
+                                    if _st_fb and not _st_fb.get("complete") and float(_st_fb.get("price_usd", 0) or 0) > 0:
+                                        _fb_px = float(_st_fb["price_usd"])
+                                except Exception:
+                                    _fb_px = 0.0
+                            if _fb_px <= 0.0:
+                                try:
+                                    from jupiter import JupiterAPI
+                                    _fb_px = float(await asyncio.wait_for(JupiterAPI.get_price(mint), timeout=1.5) or 0.0)
+                                except Exception:
+                                    _fb_px = 0.0
                             if _fb_px <= 0.0:
                                 try:
                                     import market_data as _md_fb
@@ -448,21 +459,60 @@ async def position_manager_loop(analyzer, tracker):
                 peak_ts = getattr(position, "peak_time", 0.0) or position.entry_time
                 minutes_since_peak = (time.time() - peak_ts) / 60 if peak_ts else 0
 
-                prev_ts = getattr(position, "price_checked_at", 0.0)
-                # 1-тиковый фильтр аномального провала котировки (>38% за 1 тик ТОЛЬКО при наличии прибыли >=15%):
-                # защищает от ложного тика побочного пула (кейс MAKERS +213% -> -100.0% на 1 тик),
-                # НЕ задерживает стопы/дампы при реальном минусе!
-                _anchor_px = float(getattr(position, "_crash_anchor_px", 0.0) or 0.0)
-                _ref_crash_px = _anchor_px if _anchor_px > 0 else (_pre_tick_conf if _pre_tick_conf > 0 else prev_price)
+                # === ЧАСТИЧНАЯ ФИКСАЦИЯ TP1 (+110%, 50% -> MOONBAG) И TP2 (+250%) ИСПОЛНЯЕТСЯ ДО CRASH GUARD ===
+                # Гарантирует, что на взрывной ракете (Buncoin +310%, DCTC +763%, GTASZN +635%) мы ВСЕГДА
+                # сначала забираем 50% на +110% (окупаем ставку), а остаток ведём как Risk-Free Moonbag!
                 _pd_tmp = getattr(position, "pair_data", None) or getattr(position, "last_pair_data", None) or {}
-                _is_unl_cg = config.is_position_unlocked_lp(
+                _pos_unl_tp = config.is_position_unlocked_lp(
                     mint,
                     _pd_tmp,
                     bool(getattr(position, "is_lp_locked_80", False)),
                 )
-                position.is_unlocked_pool = _is_unl_cg
-                _crash_mult = 0.70 if _is_unl_cg else 0.62  # -30% для незалоченных, -38% для защищённых Pump/Raydium (не режем обычные откаты -22% как в кейсе LEOSTAR +689%)
-                if prev_ts > 0 and (time.time() - prev_ts) < 60 and _ref_crash_px > 0 \
+                position.is_unlocked_pool = _pos_unl_tp
+                _tp1_sol_thr, _tp1_sell, _tp2, _tp2_sell, _tp3, _tp3_sell, _tp4, _tp4_sell, _tp5, _tp5_sell = config.get_sol_tp_ladder(_pos_unl_tp)
+                _min_tp_ticket = float(getattr(config, "PARTIAL_TP_MIN_TICKET_USD", 0.50))
+                _pos_val = float(getattr(position, "original_amount_usd", 0.0) or getattr(position, "amount_usd", 0.0) or 0.0)
+                _allow_partial_tp = getattr(config, "PARTIAL_TP_ENABLED", True) and (_pos_val >= _min_tp_ticket)
+                _is_small_pos = _pos_val < _min_tp_ticket
+                if _allow_partial_tp and not _is_small_pos and not _suppress_eval_peak:
+                    if pnl_pct >= _tp1_sol_thr and not getattr(position, "tp1_done", False) and float(getattr(position, "amount_usd", 0.0) or 0.0) > 0.05:
+                        tracker.partial_close_position(mint, current_price, _tp1_sell, f"Take Profit +{_tp1_sol_thr*100:.0f}% (Tier-1 {int(_tp1_sell*100)}%, Principal Shield / Moonbag)")
+                        position.tp1_done = True
+                        position.is_moonbag = True
+                        position.last_tp_ts = time.time()
+                    if pnl_pct >= _tp2 and not getattr(position, "tp2_done", False) and float(getattr(position, "amount_usd", 0.0) or 0.0) > 0.05:
+                        if _tp2_sell >= 0.99:
+                            tracker.close_position(mint, current_price, f"Moonbag TP2 +{_tp2*100:.0f}% (Target +{pnl_pct*100:.1f}%)")
+                            continue
+                        else:
+                            tracker.partial_close_position(mint, current_price, _tp2_sell, f"Take Profit +{_tp2*100:.0f}% (Tier-2 {int(_tp2_sell*100)}%, Risk-Free Moonbag)")
+                            position.tp2_done = True
+                            position.is_moonbag = True
+                            position.last_tp_ts = time.time()
+                    if _tp3_sell > 0 and pnl_pct >= _tp3 and not getattr(position, "tp3_done", False) and float(getattr(position, "amount_usd", 0.0) or 0.0) > 0.05:
+                        tracker.partial_close_position(mint, current_price, _tp3_sell, f"Take Profit +{_tp3*100:.0f}% (Tier-3 {int(_tp3_sell*100)}%)")
+                        position.tp3_done = True
+                        position.is_moonbag = True
+                        position.last_tp_ts = time.time()
+                    if _tp4_sell > 0 and pnl_pct >= _tp4 and not getattr(position, "tp4_done", False) and float(getattr(position, "amount_usd", 0.0) or 0.0) > 0.05:
+                        tracker.partial_close_position(mint, current_price, _tp4_sell, f"Take Profit +{_tp4*100:.0f}% (Tier-4 {int(_tp4_sell*100)}%)")
+                        position.tp4_done = True
+                        position.last_tp_ts = time.time()
+                    if _tp5_sell > 0 and pnl_pct >= _tp5 and not getattr(position, "tp5_done", False) and float(getattr(position, "amount_usd", 0.0) or 0.0) > 0.05:
+                        tracker.partial_close_position(mint, current_price, _tp5_sell, f"Take Profit +{_tp5*100:.0f}% (Tier-5 {int(_tp5_sell*100)}%)")
+                        position.tp5_done = True
+                        position.last_tp_ts = time.time()
+
+                prev_ts = getattr(position, "price_checked_at", 0.0)
+                # 1-тиковый фильтр аномального провала котировки (>38% за 1 тик; для risk-free moonbag в плюсе >= +40% шире: >45%):
+                # Не триггерим в первые CRASH_GUARD_MIN_HOLD_SEC (20с) и требуем 2 тика подтверждения для защищённых пулов!
+                _anchor_px = float(getattr(position, "_crash_anchor_px", 0.0) or 0.0)
+                _ref_crash_px = _anchor_px if _anchor_px > 0 else (_pre_tick_conf if _pre_tick_conf > 0 else prev_price)
+                _is_unl_cg = _pos_unl_tp
+                _cg_min_hold_min = float(getattr(config, "CRASH_GUARD_MIN_HOLD_SEC", 20.0) or 20.0) / 60.0
+                _is_mb_cg = bool(getattr(position, "is_moonbag", False) or getattr(position, "tp1_done", False))
+                _crash_mult = 0.70 if _is_unl_cg else (0.55 if (_is_mb_cg and pnl_pct >= 0.40) else 0.62)
+                if minutes_held >= _cg_min_hold_min and prev_ts > 0 and (time.time() - prev_ts) < 60 and _ref_crash_px > 0 \
                         and current_price <= _ref_crash_px * _crash_mult and max_pnl_pct >= 0.15 and pnl_pct > -0.20:
                     if _anchor_px <= 0:
                         position._crash_anchor_px = _ref_crash_px
@@ -507,54 +557,9 @@ async def position_manager_loop(analyzer, tracker):
                 if current_price > 0 and (api_price > 0.0 or wss_fresh):
                     position.price_updated_at = time.time()
 
-                # === ИНТЕГРАЦИЯ МАТЕМАТИКИ ДЛЯ ЗРЕЛЫХ МОНЕТ (SWING TRADING / RIDE RUNNERS) ===
-                # Исполняется ДО скальперских Early Fade / Stagnant срезов, чтобы ракеты ехали по MatureExitManager!
-                # === ИНТЕГРАЦИЯ МАТЕМАТИКИ ДЛЯ ВСЕХ ПОЗИЦИЙ SOLANA (main.py строки 240-280) ===
-                _pos_unl_tp = config.is_position_unlocked_lp(
-                    mint,
-                    getattr(position, "pair_data", None) or getattr(position, "last_pair_data", None),
-                    bool(getattr(position, "is_lp_locked_80", False)),
-                )
-                position.is_unlocked_pool = _pos_unl_tp
-                _tp1_sol_thr, _tp1_sell, _tp2, _tp2_sell, _tp3, _tp3_sell, _tp4, _tp4_sell, _tp5, _tp5_sell = config.get_sol_tp_ladder(_pos_unl_tp)
-                _min_tp_ticket = float(getattr(config, "PARTIAL_TP_MIN_TICKET_USD", 0.50))
-                _pos_val = float(getattr(position, "original_amount_usd", 0.0) or getattr(position, "amount_usd", 0.0) or 0.0)
-                _allow_partial_tp = getattr(config, "PARTIAL_TP_ENABLED", True) and (_pos_val >= _min_tp_ticket)
-
-                # Для микро-пыли (< $0.50) частичный тейк не делим, но для нормальных позиций ($1-$5) обязательно даём мунбэгу лететь!
-                _is_small_pos = _pos_val < _min_tp_ticket
-                if _allow_partial_tp and not _is_small_pos:
-                    if pnl_pct >= _tp1_sol_thr and not getattr(position, "tp1_done", False) and float(getattr(position, "amount_usd", 0.0) or 0.0) > 0.05:
-                        tracker.partial_close_position(mint, current_price, _tp1_sell, f"Take Profit +{_tp1_sol_thr*100:.0f}% (Tier-1 {int(_tp1_sell*100)}%, Principal Shield / Moonbag)")
-                        position.tp1_done = True
-                        position.is_moonbag = True
-                        position.last_tp_ts = time.time()
-                    if pnl_pct >= _tp2 and not getattr(position, "tp2_done", False) and float(getattr(position, "amount_usd", 0.0) or 0.0) > 0.05:
-                        if _tp2_sell >= 0.99:
-                            tracker.close_position(mint, current_price, f"Moonbag TP2 +{_tp2*100:.0f}% (Target +{pnl_pct*100:.1f}%)")
-                            continue
-                        else:
-                            tracker.partial_close_position(mint, current_price, _tp2_sell, f"Take Profit +{_tp2*100:.0f}% (Tier-2 {int(_tp2_sell*100)}%, Risk-Free Moonbag)")
-                            position.tp2_done = True
-                            position.is_moonbag = True
-                            position.last_tp_ts = time.time()
-                    if pnl_pct >= _tp3 and not getattr(position, "tp3_done", False) and float(getattr(position, "amount_usd", 0.0) or 0.0) > 0.05:
-                        tracker.partial_close_position(mint, current_price, _tp3_sell, f"Take Profit +{_tp3*100:.0f}% (Tier-3 {int(_tp3_sell*100)}%)")
-                        position.tp3_done = True
-                        position.is_moonbag = True
-                        position.last_tp_ts = time.time()
-                    if pnl_pct >= _tp4 and not getattr(position, "tp4_done", False) and float(getattr(position, "amount_usd", 0.0) or 0.0) > 0.05:
-                        tracker.partial_close_position(mint, current_price, _tp4_sell, f"Take Profit +{_tp4*100:.0f}% (Tier-4 {int(_tp4_sell*100)}%)")
-                        position.tp4_done = True
-                        position.last_tp_ts = time.time()
-                    if pnl_pct >= _tp5 and not getattr(position, "tp5_done", False) and float(getattr(position, "amount_usd", 0.0) or 0.0) > 0.05:
-                        tracker.partial_close_position(mint, current_price, _tp5_sell, f"Take Profit +{_tp5*100:.0f}% (Tier-5 {int(_tp5_sell*100)}%)")
-                        position.tp5_done = True
-                        position.last_tp_ts = time.time()
-                    # Даем 5 секунд передышки после взятия частичного тейка ТОЛЬКО пока позиция уверенно в плюсе (>= +4.5%),
-                    # чтобы никогда не блокировать Mature Breakeven при резком откате к цене входа!
-                    if (time.time() - float(getattr(position, "last_tp_ts", 0.0) or 0.0)) < 5.0 and pnl_pct >= 0.045:
-                        continue
+                # Даем 5 секунд передышки после взятия частичного тейка ТОЛЬКО пока позиция уверенно в плюсе (>= +4.5%):
+                if _allow_partial_tp and not _is_small_pos and (time.time() - float(getattr(position, "last_tp_ts", 0.0) or 0.0)) < 5.0 and pnl_pct >= 0.045:
+                    continue
                 from exit_managers import MatureExitManager
                 _saved_max_px = position.max_price_usd if _suppress_eval_peak else None
                 mature_exit_reason = MatureExitManager.evaluate_exit(position, current_price)
@@ -572,7 +577,7 @@ async def position_manager_loop(analyzer, tracker):
                     if "Absolute Liquidity Loss" in mature_exit_reason:
                         # При абсолютной потере ликвидности (пул $0) — цена продажи 0.0 (списание):
                         _px_to_close = 0.0
-                    elif minutes_held < 2.0 and pnl_pct <= -0.10 and ("Emergency Cap" in mature_exit_reason or "Stop Loss" in mature_exit_reason):
+                    elif minutes_held < 2.5 and pnl_pct <= -0.10 and any(k in mature_exit_reason for k in ("Emergency Cap", "Stop Loss", "Quick Scratch", "Early Momentum")):
                         try:
                             _live_em_px = None
                             _pos_mf = getattr(position, "ml_features", None) or {}
@@ -1456,6 +1461,10 @@ async def scanner_loop(analyzer, tracker):
                                     ):
                                         print(f"🚫 [SCANNER-UNLOCKED-GATE] {actual_symbol} ({mint[:8]}): незалоченный пул не прошёл проверку liq/fdv/оборота (age {_age_sc_unl:.2f}м, liq ${liq_usd:,.0f}, fdv ${_fdv_sc_u:,.0f}, vol5 ${_vol5_sc_u:,.0f}, {_b5_sc_u}b/{_s5_sc_u}s) — отмена!")
                                         continue
+                                if not config.is_allowed_solana_quote(pair_data):
+                                    _bad_q_sc = str((pair_data.get("quoteToken") or {}).get("symbol") or "?")
+                                    print(f"🚫 [SCANNER-BAD-QUOTE] {actual_symbol} ({mint[:8]}): пара к {_bad_q_sc} (не SOL/стейблкоин, кейсы JETSKI/FOILED) — отмена!")
+                                    continue
                                 if config.is_permissionless_liq_fdv_trap(pair_data):
                                     print(f"🚫 [SCANNER-LIQ-TRAP] {actual_symbol} ({mint[:8]}): seeded trap pool (liq/fdv drain risk) — отмена!")
                                     continue
@@ -1499,8 +1508,11 @@ async def scanner_loop(analyzer, tracker):
                                 # Повторная проверка живых метрик после сброса prefetch-кэша (единый классификатор пропускает откат покупателей и V-развороты)
                                 _b5_live = int(((pair_data.get("txns") or {}).get("m5") or {}).get("buys", 0) or 0)
                                 _s5_live = int(((pair_data.get("txns") or {}).get("m5") or {}).get("sells", 0) or 0)
+                                _b_h1_live = int(((pair_data.get("txns") or {}).get("h1") or {}).get("buys", 0) or 0)
+                                _s_h1_live = int(((pair_data.get("txns") or {}).get("h1") or {}).get("sells", 0) or 0)
                                 _h6_live = _pc_live.get("h6")
                                 _fdv_live_sc = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
+                                _is_curve_live = config.is_unmigrated_curve_token(mint, pair_data)
                                 _mom_live_ok, _mom_live_why = config.evaluate_entry_momentum(
                                     m5=_m5_live, m1=_m1_live, h1=_h1_live,
                                     h6=(float(_h6_live) if _h6_live is not None else None),
@@ -1509,6 +1521,9 @@ async def scanner_loop(analyzer, tracker):
                                     min_h1=float(getattr(config, "JEV_MIN_H1_PCT", -12.0)),
                                     min_h6=float(getattr(config, "JEV_MIN_H6_PCT", -20.0)),
                                     fdv_usd=_fdv_live_sc,
+                                    is_curve=_is_curve_live,
+                                    buys_h1=_b_h1_live if (_b_h1_live or _s_h1_live) else None,
+                                    sells_h1=_s_h1_live if (_b_h1_live or _s_h1_live) else None,
                                 )
                                 _min_sc_m1 = float(getattr(config, "JEV_MIN_M1_ENTRY_FLOOR_PCT", 0.0))
                                 if not _mom_live_ok or _m1_live < _min_sc_m1:
@@ -1523,20 +1538,21 @@ async def scanner_loop(analyzer, tracker):
                                 if _m1_live < _m1_dump_floor:
                                     print(f"🚫 [SCANNER-LIVE-M1-DUMP] {actual_symbol} ({mint[:8]}): живой m1 {_m1_live:+.1f}% < {_m1_dump_floor:+.1f}% — резкий сброс за 1м, отмена покупки!")
                                     continue
-                                _max_m1_cfg_live = float(getattr(config, "MAX_ENTRY_M1_PCT", 35.0))
+                                _max_m1_cfg_live = float(getattr(config, "MAX_ENTRY_M1_PCT", 22.0))
                                 if _m1_live > _max_m1_cfg_live:
                                     _b5_sc = int((pair_data.get("txns") or {}).get("m5", {}).get("buys", 0) or 0)
                                     _s5_sc = int((pair_data.get("txns") or {}).get("m5", {}).get("sells", 0) or 0)
-                                    if not (_b5_sc >= int(_s5_sc * 1.05) and _vol5_live >= 700.0 and _m5_live >= 1.5 and _m1_live <= 60.0):
-                                        print(f"🚫 [SCANNER-M1-SPIKE] {actual_symbol} ({mint[:8]}): живой m1 +{_m1_live:.1f}% > +{_max_m1_cfg_live:.1f}% — вершина свечи, отмена!")
+                                    if not (not _is_curve_live and _b5_sc >= max(50, int(_s5_sc * 1.35)) and _vol5_live >= 25000.0 and _m5_live >= 25.0 and _m1_live <= 25.0):
+                                        print(f"🚫 [SCANNER-M1-SPIKE] {actual_symbol} ({mint[:8]}): живой m1 +{_m1_live:.1f}% > +{_max_m1_cfg_live:.1f}% — вершина 1м свечи (кейс MAGA), отмена!")
                                         continue
-                                _max_m5_cfg = float(getattr(config, "MAX_ENTRY_M5_PCT", 180.0))
+                                _max_m5_cfg = (300.0 if (_m1_live >= 2.0 and _s5_live < 80 and _b5_live >= max(30, int(_s5_live * 1.80))) else 165.0) if _is_curve_live else float(getattr(config, "MAX_ENTRY_M5_PCT", 175.0))
                                 if _m5_live > _max_m5_cfg:
                                     _b5_sc = int((pair_data.get("txns") or {}).get("m5", {}).get("buys", 0) or 0)
                                     _s5_sc = int((pair_data.get("txns") or {}).get("m5", {}).get("sells", 0) or 0)
-                                    _max_allowed_m5 = max(_max_m5_cfg * 1.35, 250.0)
-                                    _is_breakout = (_vol5_live >= 8000.0 and _b5_sc >= int(_s5_sc * 1.2) and _m5_live <= _max_allowed_m5)
-                                    if not _is_breakout:
+                                    _is_mega_mig_live = (not _is_curve_live and _age_m <= 4.0 and _vol5_live >= 30000.0 and liq_usd >= 12000.0 and _b5_sc >= max(80, int(_s5_sc * 1.15)) and _m1_live >= 2.0 and _m5_live <= 450.0)
+                                    _is_fresh_grad_live = (not _is_curve_live and _age_m <= 5.0 and _vol5_live >= 20000.0 and liq_usd >= 12000.0 and _b5_sc >= max(30, int(_s5_sc * 1.15)) and _m5_live <= 300.0)
+                                    _is_breakout = (not _is_curve_live and _vol5_live >= 15000.0 and liq_usd >= 12000.0 and _b5_sc >= int(_s5_sc * 1.2) and _m5_live <= 240.0)
+                                    if not (_is_mega_mig_live or _is_fresh_grad_live or _is_breakout):
                                         print(f"🚫 [SCANNER-FOMO-M5] {actual_symbol} ({mint[:8]}): живой m5 +{_m5_live:.1f}% > +{_max_m5_cfg:.0f}% — вершина свечи, отмена!")
                                         continue
                                 _info_sc_d = pair_data.get("info") or {}
@@ -1948,9 +1964,21 @@ async def scanner_loop(analyzer, tracker):
                                         if _r_fcr.get("verdict") == "BLOCK":
                                             print(f"🚫 [SCANNER PRE-FLIGHT FCR] {actual_symbol} ({mint[:8]}): {_r_fcr.get('report', '')} — вход заблокирован первоочередно по мгновенному рагу!")
                                             continue
+                                        _fcr_score_sc = float((_fcr_compact or {}).get("fcr_score", 0.0) or _r_fcr.get("score", 0.0) or 0.0)
+                                        _fcr_rsn_sc = str((_fcr_compact or {}).get("fcr_reasons", "") or "").lower()
+                                        if _is_curve_live and "дистрибуция" in _fcr_rsn_sc:
+                                            print(f"🚫 [SCANNER FCR-CURVE-DIST] {actual_symbol} ({mint[:8]}): дистрибуция на сырой кривой (кейсы AFTERGTA6/PPV) — отмена входа!")
+                                            continue
                                         if _r_fcr.get("verdict") == "WARN":
                                             _fcr_w_n = int((_fcr_compact or {}).get("fcr_cluster_wallets", 0) or 0)
                                             _fcr_m5 = float((pair_data.get("priceChange") or {}).get("m5", 0) or 0)
+                                            _fcr_h1 = float((pair_data.get("priceChange") or {}).get("h1", 0) or 0)
+                                            if _fcr_score_sc >= 0.55:
+                                                print(f"🚫 [SCANNER FCR-HIGH-SCORE] {actual_symbol} ({mint[:8]}): FCR score {_fcr_score_sc:.2f} >= 0.55 (кейс BNC 0.721) — отмена входа!")
+                                                continue
+                                            if _fcr_h1 < -15.0:
+                                                print(f"🚫 [SCANNER FCR-RED-H1] {actual_symbol} ({mint[:8]}): FCR WARN на падающем часовом тренде h1 {_fcr_h1:+.1f}% (кейсы DACI/CASHPARROT) — отмена входа!")
+                                                continue
                                             _is_dist_fcr_sc = config.is_distributed_safe_runner(
                                                 liq_usd, _age_m, _vol5_live, _b5_live, _s5_live, is_lp_safe=True
                                             )

@@ -726,37 +726,13 @@ class Analyzer:
         2. И только если токен всё ещё на bonding curve pump.fun (нет ни одного AMM-пула с liq >= 500),
            выбираем pump.fun пул с эффективной ликвидностью (fdv * 0.40).
         """
-        ALLOWED_SOL_QUOTES = {
-            "so11111111111111111111111111111111111111112",  # WSOL/SOL
-            "epjfwdd5aufqssqem2qn1xzybapc8g4weggkzwytdt1v",  # USDC
-            "es9vmfrzacermjfrf4h2fyd4kconky11mcce8benwnyb",  # USDT
-            "ttwofwage91ofhzs7kpqdyrvrkmevgm88xijgvqfbko",  # TTWO (xStock / PumpSwap quote)
-            "spcxxcqxj6e5djdvnovhn8744zkbhm2byudu45bimgb",  # SPCX (xStock / PumpSwap quote)
-            "3nz9jmvbmgaqocybic2c7lqcjscmgaz6vqqtdzcqmjh",  # WBTC
-            "xs8s1uus1zvs2p7iwtsg3b6fkhpvmwz4gyu3gwamwhz",  # QQQx
-        }
-        ALLOWED_SOL_SYMBOLS = {
-            "SOL", "WSOL", "USDC", "USDT", "USD1", "USDS", "PYUSD",
-            "WBTC", "WETH", "TTWO", "SPCX", "QQQX", "SPYX", "TSLAX", "NVDAX",
-        }
         sol_pairs = []
         for p in (pairs or []):
             if (p.get("chainId") or "").lower() != "solana":
                 continue
             if ((p.get("baseToken") or {}).get("address") or mint) != mint:
                 continue
-            q_addr = str((p.get("quoteToken") or {}).get("address") or "").lower()
-            q_sym = str((p.get("quoteToken") or {}).get("symbol") or "").upper()
-            _dex_low_q = str(p.get("dexId") or "").lower()
-            # На PumpSwap разрешаем официальные мультивалютные пулы выпускников (...pump), кроме пар с другими мем-токенами (...pump)
-            _is_official_pumpswap_quote = (
-                _dex_low_q == "pumpswap"
-                and mint.endswith("pump")
-                and q_addr
-                and not q_addr.endswith(("pump", "moon", "bonk", "bags"))
-                and float(((p.get("liquidity") or {}).get("usd", 0) or 0)) >= 4000.0
-            )
-            if q_addr and q_addr not in ALLOWED_SOL_QUOTES and q_sym not in ALLOWED_SOL_SYMBOLS and not _is_official_pumpswap_quote:
+            if not config.is_allowed_solana_quote(p):
                 continue
             sol_pairs.append(p)
         if not sol_pairs:
@@ -1780,6 +1756,13 @@ class Analyzer:
                 # Если метки времени нет у любого токена — это новорожденный токен (<30 сек), а НЕ 999 минут!
                 _age_min_pre = 0.2
         _dex_pre_early = str(pair_data.get("dexId", "")).lower()
+        if not config.is_allowed_solana_quote(pair_data):
+            _bad_q_a = str((pair_data.get("quoteToken") or {}).get("symbol") or "?")
+            return self._deny(
+                mint,
+                f"non-sol-quote {_bad_q_a}",
+                f"🚫 [BAD-QUOTE] {symbol} ({mint[:8]}): пара к {_bad_q_a} (разрешены только SOL/стейблкоины; блок xStock кейсов JETSKI/FOILED).",
+            )
         if "meteora" in _dex_pre_early and _dex_pre_early != "meteoradbc" and not pair_data.get("_lp_verified"):
             return self._deny(
                 mint,
@@ -1850,11 +1833,12 @@ class Analyzer:
                     f"curve-wash-overchurn ${_vm5_pre:.0f}>$80k",
                     f"🚫 [CURVE-OVERCHURN] {symbol} ({mint[:8]}): объём на сырой кривой ${_vm5_pre:,.0f} > $80,000 — перегретый wash-флип снайперов!",
                 )
-            if _m5 < 20.0 or _m5 > 320.0 or _m1 > 50.0:
+            _max_c_m5_a = 300.0 if (_m1 >= 2.0 and _s5_pre < 80 and _b5_pre >= max(30, int(_s5_pre * 1.80))) else 165.0
+            if _m5 < 20.0 or _m5 > _max_c_m5_a or _m1 > 22.0:
                 return self._deny(
                     mint,
                     f"curve-m5-out-of-box m5={_m5:+.0f}% m1={_m1:+.0f}%",
-                    f"🚫 [CURVE-MOMENTUM-BOX] {symbol} ({mint[:8]}): импульс кривой m5 {_m5:+.1f}% (нужно +20%..+320%), m1 {_m1:+.1f}% (<=+50%) — вне диапазона старта ракеты.",
+                    f"🚫 [CURVE-MOMENTUM-BOX] {symbol} ({mint[:8]}): импульс кривой m5 {_m5:+.1f}% (нужно +20%..+{_max_c_m5_a:.0f}%), m1 {_m1:+.1f}% (<=+22%) — вне диапазона старта ракеты.",
                 )
             _is_curve_wakeup = (
                 _age_min_pre <= 45.0 and _m5 >= 20.0 and _vm5_pre >= 2000.0 and _b5_pre >= 15 and _b5_pre >= int(_s5_pre * 1.20)
@@ -2044,12 +2028,19 @@ class Analyzer:
         _h6_pre_opt = float(_h6_pre_raw) if _h6_pre_raw is not None else None
         _min_h1_cfg = float(getattr(config, "JEV_MIN_H1_PCT", -12.0))
         _min_h6_cfg = float(getattr(config, "JEV_MIN_H6_PCT", -20.0))
+        _is_curve_pre_a = config.is_unmigrated_curve_token(mint, pair_data)
+        _tx_h1_pre_a = (pair_data.get("txns") or {}).get("h1") or {}
+        _bh1_pre_a = int(_tx_h1_pre_a.get("buys", 0) or 0)
+        _sh1_pre_a = int(_tx_h1_pre_a.get("sells", 0) or 0)
         _mom_ok_a, _mom_why_a = config.evaluate_entry_momentum(
             m5=_m5, m1=_m1, h1=_h1, h6=_h6_pre_opt,
             age_min=_age_min_pre, vol5_usd=_vm5_pre, liq_usd=_raw_liq_chk,
             buys5=_b5_pre, sells5=_s5_pre, min_h1=_min_h1_cfg, min_h6=_min_h6_cfg,
             fdv_usd=_fdv_chk_pre,
             allow_absorbed_buyers=_absorbed_by_flow,
+            is_curve=_is_curve_pre_a,
+            buys_h1=_bh1_pre_a if (_bh1_pre_a or _sh1_pre_a) else None,
+            sells_h1=_sh1_pre_a if (_bh1_pre_a or _sh1_pre_a) else None,
         )
         if not _mom_ok_a:
             return self._deny(
@@ -2057,10 +2048,9 @@ class Analyzer:
                 _mom_why_a.split("(")[0].strip()[:48],
                 f"🚫 [MOMENTUM-GATE] {symbol} ({mint[:8]}): {_mom_why_a}",
             )
-        _base_max_m1 = float(getattr(config, "MAX_ENTRY_M1_PCT", 35.0))
-        # Гибкий потолок 1м свечи: +35% базово
-        if _b5_pre >= int(_s5_pre * 1.15) and _vm5_pre >= 3000.0 and _m5 >= 4.0:
-            _max_m1_cfg = max(_base_max_m1, 35.0)
+        _base_max_m1 = float(getattr(config, "MAX_ENTRY_M1_PCT", 22.0))
+        if not _is_curve_pre_a and _b5_pre >= max(50, int(_s5_pre * 1.35)) and _vm5_pre >= 25000.0 and _m5 >= 25.0:
+            _max_m1_cfg = max(_base_max_m1, 25.0)
         else:
             _max_m1_cfg = _base_max_m1
         _min_m1_floor = float(getattr(config, "JEV_MIN_M1_ENTRY_FLOOR_PCT", -5.0))
@@ -2074,14 +2064,17 @@ class Analyzer:
                 f"🚫 [M1-FILTER] {symbol} ({mint[:8]}): 1м свеча {_m1:+.1f}% вне коридора [{_min_m1_floor:+.1f}%, +{_max_m1_cfg:.0f}%].",
             )
 
-        # 4. Anti-FOMO: Защита от перегретых вершин
+        # 4. Anti-FOMO: Защита от перегретых вершин (без байпаса age <= 4m — блокирует DATITTY +866%, BNC +771%, GMGM +755%)
         _max_entry_h1 = config.get_max_entry_h1_pct(_age_min_pre, _vm5_pre, _b5_pre, _s5_pre, _raw_liq_chk, _m5)
-        _max_entry_m5 = float(getattr(config, "MAX_ENTRY_M5_PCT", 180.0))
-        if _dex_pre_early in ("pump", "pumpfun", "meteoradbc"):
-            _max_entry_m5 = max(_max_entry_m5, 320.0)
-        elif _age_min_pre <= 5.0 and _vm5_pre >= 10000.0 and _b5_pre >= max(15, int(_s5_pre * 1.05)):
-            _max_entry_m5 = max(_max_entry_m5, 550.0)
-        if _h1 > _max_entry_h1 and _age_min_pre > 4.0:
+        if _is_curve_pre_a:
+            _max_entry_m5 = 300.0 if (_m1 >= 2.0 and _s5_pre < 80 and _b5_pre >= max(30, int(_s5_pre * 1.80))) else 165.0
+        elif _age_min_pre <= 4.0 and _vm5_pre >= 30000.0 and _raw_liq_chk >= 12000.0 and _b5_pre >= max(80, int(_s5_pre * 1.15)) and _m1 >= 2.0:
+            _max_entry_m5 = 450.0
+        elif _age_min_pre <= 5.0 and _vm5_pre >= 20000.0 and _raw_liq_chk >= 12000.0 and _b5_pre >= max(30, int(_s5_pre * 1.15)):
+            _max_entry_m5 = 300.0
+        else:
+            _max_entry_m5 = float(getattr(config, "MAX_ENTRY_M5_PCT", 175.0))
+        if _h1 > _max_entry_h1:
             return self._deny(
                 mint,
                 f"h1-exhausted {_h1:.0f}%>{_max_entry_h1:.0f}%",
@@ -2089,9 +2082,9 @@ class Analyzer:
             )
         # Потолок перегретой свечи синхронизирован с evaluate_entry_momentum
         if _m5 > _max_entry_m5:
-            _fresh_grad_m5_cap_a = max(_max_entry_m5 * 1.35, 250.0)
-            _is_strong_buyer_breakout = (_m5 <= _fresh_grad_m5_cap_a and _b5_pre >= int(_s5_pre * 1.3) and _vm5_pre >= 8000.0)
-            _is_cooling_pullback = (_m1 <= -0.5 and _m5 <= _fresh_grad_m5_cap_a and _b5_pre >= _s5_pre * 1.1)
+            _fresh_grad_m5_cap_a = 165.0 if _is_curve_pre_a else max(_max_entry_m5, 240.0)
+            _is_strong_buyer_breakout = (not _is_curve_pre_a and _m5 <= _fresh_grad_m5_cap_a and _b5_pre >= int(_s5_pre * 1.3) and _vm5_pre >= 15000.0 and _raw_liq_chk >= 12000.0)
+            _is_cooling_pullback = (not _is_curve_pre_a and _m1 <= -0.5 and _m5 <= _fresh_grad_m5_cap_a and _b5_pre >= _s5_pre * 1.1)
             if not (_is_strong_buyer_breakout or _is_cooling_pullback):
                 return self._deny(
                     mint,

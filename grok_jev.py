@@ -428,6 +428,8 @@ class GrokJevEngine:
         # В пуле ОБЯЗАН быть реальный резерв SOL (>= 10-12 SOL), чтобы не пускать пустышки по 1.3-2.9 SOL вроде ZECP/MIKE/SLEGO.
         liq_dict = pair_data.get("liquidity") or {}
         quote_token_symbol = str((pair_data.get("quoteToken") or {}).get("symbol", "")).upper()
+        if not _c.is_allowed_solana_quote(pair_data):
+            return False, f"non-sol-quote {quote_token_symbol or '?'} (только SOL/стейблкоины, блок TTWO/xStock кейсов JETSKI/FOILED)"
         quote_amount = float(liq_dict.get("quote", 0.0) or 0.0)
         if quote_token_symbol in ("SOL", "WSOL") and quote_amount > 0:
             _min_sol_req = 3.0 if dex_id == "pumpswap" else 2.0
@@ -539,8 +541,9 @@ class GrokJevEngine:
             _min_c_vol_g = 800.0 if (age_min <= 2.5 and b5 >= max(15, int(s5 * 2.20))) else 2000.0
             if vol_m5 < _min_c_vol_g or vol_m5 > 80000.0:
                 return False, f"pump-curve-vol5-out-of-sweet-spot ${vol_m5:,.0f} not in [${_min_c_vol_g/1000:.2f}k, $80.0k]"
-            if m5 < 20.0 or m5 > 320.0 or m1 > 50.0:
-                return False, f"pump-curve-momentum-out-of-box m5={m5:+.1f}% m1={m1:+.1f}% (need +20%..+320%)"
+            _max_c_m5_g = 300.0 if (m1 >= 2.0 and s5 < 80 and b5 >= max(30, int(s5 * 1.80))) else 165.0
+            if m5 < 20.0 or m5 > _max_c_m5_g or m1 > 22.0:
+                return False, f"pump-curve-momentum-out-of-box m5={m5:+.1f}% m1={m1:+.1f}% (need +20%..+{_max_c_m5_g:.0f}%)"
             _is_curve_wakeup_g = (
                 age_min <= 45.0 and m5 >= 20.0 and vol_m5 >= 2000.0 and b5 >= 15 and b5 >= int(s5 * 1.20)
             )
@@ -644,11 +647,11 @@ class GrokJevEngine:
             else:
                 print(f"💎 [JEV-ORGANIC-STEALTH] {symbol} ({mint[:8]}): 0 соцсетей, но доказан чистый органический поток (${vol_m5:,.0f}, {b5}b/{s5}s, v/l {_vol_liq_ratio_g:.2f}) — пропуск.")
 
-        # 2.5. Exhaustion Guard: блокируем перегретые поздние пампы, но пускаем свежие миграции <=15м (h1 включает рост на кёрве)
+        # 2.5. Exhaustion Guard: блокируем перегретые поздние пампы (без байпаса age <= 4m — кейсы DATITTY +866%, BNC +771%)
         _max_h1_allowed = _c.get_max_entry_h1_pct(age_min, vol_m5, b5, s5, eff_liq, m5)
         if _links_cnt_g == 0 and not _soc_unk_g and not _is_organic_stealth and not (is_pump or age_min <= 10.0) and (h1 > 160.0 or m5 > 110.0):
             return False, f"exhaustion-no-soc-top h1 {h1:+.0f}%, m5 {m5:+.0f}% (0 socials pump-and-dump top)"
-        if h1 > _max_h1_allowed and age_min > 4.0:
+        if h1 > _max_h1_allowed:
             return False, f"exhaustion-top-h1 h1 {h1:+.0f}% > +{_max_h1_allowed:.0f}% (late pump top, dump risk)"
         if fdv_mc > 100000.0 and eff_liq < 35000.0 and eff_liq < 0.02 * fdv_mc:
             return False, f"fdv-liquidity-trap liq ${eff_liq:,.0f} < 2% of FDV ${fdv_mc:,.0f} (phantom valuation)"
@@ -658,26 +661,36 @@ class GrokJevEngine:
         _h6_val_g = float(_h6_raw_g) if _h6_raw_g is not None else None
         _min_h1_g = float(getattr(_c, "JEV_MIN_H1_PCT", -12.0))
         _min_h6_g = float(getattr(_c, "JEV_MIN_H6_PCT", -20.0))
+        _is_curve_g = _c.is_unmigrated_curve_token(mint, pair_data)
+        _tx_h1_g = (pair_data.get("txns") or {}).get("h1") or {}
+        _bh1_g = int(_tx_h1_g.get("buys", 0) or 0)
+        _sh1_g = int(_tx_h1_g.get("sells", 0) or 0)
         _mom_ok_g, _mom_why_g = _c.evaluate_entry_momentum(
             m5=m5, m1=m1, h1=h1, h6=_h6_val_g,
             age_min=age_min, vol5_usd=vol_m5, liq_usd=eff_liq,
             buys5=b5, sells5=s5, min_h1=_min_h1_g, min_h6=_min_h6_g,
             fdv_usd=fdv_mc,
+            is_curve=_is_curve_g,
+            buys_h1=_bh1_g if (_bh1_g or _sh1_g) else None,
+            sells_h1=_sh1_g if (_bh1_g or _sh1_g) else None,
         )
         if not _mom_ok_g and (
             _mom_why_g.startswith(("mcap-too-large", "too-old", "h6-exhausted", "m1-falling-knife", "no-rocket-ignition", "no-momentum", "slow-mature-pool"))
         ):
             return False, _mom_why_g
 
-        _max_m5_allowed = float(getattr(_c, "MAX_ENTRY_M5_PCT", 180.0))
-        if dex_id in ("pump", "pumpfun", "meteoradbc"):
-            _max_m5_allowed = max(_max_m5_allowed, 320.0)
-        elif age_min <= 5.0 and vol_m5 >= 10000.0 and b5 >= max(15, int(s5 * 1.05)):
-            _max_m5_allowed = max(_max_m5_allowed, 550.0)
+        if _is_curve_g:
+            _max_m5_allowed = 300.0 if (m1 >= 2.0 and s5 < 80 and b5 >= max(30, int(s5 * 1.80))) else 165.0
+        elif age_min <= 4.0 and vol_m5 >= 30000.0 and eff_liq >= 12000.0 and b5 >= max(80, int(s5 * 1.15)) and m1 >= 2.0:
+            _max_m5_allowed = 450.0
+        elif age_min <= 5.0 and vol_m5 >= 20000.0 and eff_liq >= 12000.0 and b5 >= max(30, int(s5 * 1.15)):
+            _max_m5_allowed = 300.0
+        else:
+            _max_m5_allowed = float(getattr(_c, "MAX_ENTRY_M5_PCT", 175.0))
         if m5 > _max_m5_allowed:
-            _fresh_grad_m5_cap = max(_max_m5_allowed * 1.35, 250.0)
-            _is_strong_buyer_breakout_g = (m5 <= _fresh_grad_m5_cap and b5 >= int(s5 * 1.2) and vol_m5 >= 8000.0)
-            _is_cooling_pullback = (-4.5 <= m1 <= -0.5 and m5 <= _fresh_grad_m5_cap and b5 >= s5 * 1.1)
+            _fresh_grad_m5_cap = 165.0 if _is_curve_g else max(_max_m5_allowed, 240.0)
+            _is_strong_buyer_breakout_g = (not _is_curve_g and m5 <= _fresh_grad_m5_cap and b5 >= int(s5 * 1.2) and vol_m5 >= 15000.0 and eff_liq >= 12000.0)
+            _is_cooling_pullback = (not _is_curve_g and -4.5 <= m1 <= -0.5 and m5 <= _fresh_grad_m5_cap and b5 >= s5 * 1.1)
             if not (_is_strong_buyer_breakout_g or _is_cooling_pullback):
                 return False, f"fomo-vertical-m5 m5 {m5:+.1f}% > +{_max_m5_allowed:.0f}% (buying top of vertical pump without cooling pullback, m1={m1:+.1f}%)"
         if s5 > 8 and b5 < (s5 * 0.80):
@@ -1011,17 +1024,18 @@ class GrokJevEngine:
         _m1_is_phantom = (_age_m < 3.0 and abs(m5) > 1.0 and abs(m1) > 0 and abs(m1 / max(abs(m5), 0.01) - 1.0) < 0.08)
         _fdv_flush = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
         _strong_breakout = (b5 >= 6 and b5 >= int(s5 * 0.90) and vol5 >= 500.0)
-        _base_m1_g = float(getattr(_c, "JEV_MAX_M1_ENTRY_PCT", 35.0))
-        _max_m1 = max(_base_m1_g, 35.0)
-        _cfg_m5 = float(getattr(_c, "MAX_ENTRY_M5_PCT", 180.0))
-        _max_m5_cap = max(_cfg_m5 * 1.35, 250.0)
-        _is_fomo_bypass = (b5 >= int(s5 * 1.2) and vol5 >= 8000.0 and m5 <= _max_m5_cap)
-        if m5 > _cfg_m5 and not _is_fomo_bypass:
+        _is_curve_fl = _c.is_unmigrated_curve_token(_base_addr, pair_data)
+        _base_m1_g = float(getattr(_c, "JEV_MAX_M1_ENTRY_PCT", 22.0))
+        _max_m1 = max(_base_m1_g, 25.0) if (not _is_curve_fl and b5 >= max(50, int(s5 * 1.35)) and vol5 >= 25000.0 and m5 >= 25.0) else _base_m1_g
+        _cfg_m5 = 165.0 if _is_curve_fl else float(getattr(_c, "MAX_ENTRY_M5_PCT", 175.0))
+        _is_fresh_grad_fl = (not _is_curve_fl and _age_m <= 5.0 and vol5 >= 20000.0 and _liq_usd >= 12000.0 and b5 >= max(30, int(s5 * 1.15)) and m5 <= 300.0)
+        _is_fomo_bypass = (not _is_curve_fl and b5 >= int(s5 * 1.2) and vol5 >= 15000.0 and _liq_usd >= 12000.0 and m5 <= 240.0)
+        if m5 > _cfg_m5 and not (_is_fresh_grad_fl or _is_fomo_bypass):
             return False, -0.14, 0.0, f"fomo-spike (m5 {m5:+.1f}% > +{_cfg_m5:.0f}%) — buying local top, wait for reset"
         if m1 > _max_m1 and not _m1_is_phantom:
             return False, -0.14, 0.0, f"m1-spike (m1 {m1:+.1f}% > +{_max_m1:.1f}%) — vertical push, wait for consolidation"
         _max_h1_flush = _c.get_max_entry_h1_pct(_age_m, vol5, b5, s5, _liq_usd, m5)
-        if _h1 > _max_h1_flush and _age_m > 4.0:
+        if _h1 > _max_h1_flush:
             return False, -0.14, 0.0, f"h1-exhaustion (h1 {_h1:+.1f}% > +{_max_h1_flush:.0f}% at {_age_m:.0f}m) — pump already exhausted"
         if _liq_usd > 0 and _liq_usd < _min_liq:
             return False, -0.14, 0.0, f"thin-liquidity (${_liq_usd:,.0f} < ${_min_liq:,.0f}) — slippage/dump risk"
@@ -2002,9 +2016,21 @@ class GrokJevEngine:
                     if _fcr.get("verdict") == "BLOCK":
                         print(f"🚫 [FCR-BLOCK] {symbol} ({address[:8]}): {_fcr.get('report', '')}")
                         return False, "fcr-first-candle-rug: " + "; ".join(_fcr.get("reasons", [])[:3]), _h_stats
-                    elif _fcr.get("verdict") == "WARN":
+                    _fcr_score_g = float((_fcr_compact or {}).get("fcr_score", 0.0) or _fcr.get("score", 0.0) or 0.0)
+                    _fcr_rsn_g = str((_fcr_compact or {}).get("fcr_reasons", "") or "").lower()
+                    if _c.is_unmigrated_curve_token(address, pair_data) and "дистрибуция" in _fcr_rsn_g:
+                        print(f"🚫 [FCR-CURVE-DIST] {symbol} ({address[:8]}): дистрибуция на сырой кривой (кейсы AFTERGTA6/PPV) — отмена входа!")
+                        return False, "fcr-curve-distribution", _h_stats
+                    if _fcr.get("verdict") == "WARN":
                         _fcr_w_n_g = int((_fcr_compact or {}).get("fcr_cluster_wallets", 0) or 0)
                         _fcr_m5_g = float((pair_data.get("priceChange") or {}).get("m5", 0) or 0)
+                        _fcr_h1_g = float((pair_data.get("priceChange") or {}).get("h1", 0) or 0)
+                        if _fcr_score_g >= 0.55:
+                            print(f"🚫 [FCR-HIGH-SCORE] {symbol} ({address[:8]}): FCR score {_fcr_score_g:.2f} >= 0.55 (кейс BNC 0.721) — отмена входа!")
+                            return False, f"fcr-high-score ({_fcr_score_g:.2f})", _h_stats
+                        if _fcr_h1_g < -15.0:
+                            print(f"🚫 [FCR-RED-H1] {symbol} ({address[:8]}): FCR WARN на падающем h1 {_fcr_h1_g:+.1f}% (кейсы DACI/CASHPARROT) — отмена входа!")
+                            return False, f"fcr-warn-red-h1 ({_fcr_h1_g:+.1f}%)", _h_stats
                         if _fcr_w_n_g >= 5 and not locals().get("_dist_runner_g", False):
                             print(f"🚫 [FCR-FARM-BLOCK] {symbol} ({address[:8]}): ферма из {_fcr_w_n_g} кошельков одного источника — отмена входа!")
                             return False, f"fcr-wallet-farm ({_fcr_w_n_g} wallets)", _h_stats
@@ -2325,8 +2351,12 @@ class GrokJevEngine:
             return False, f"fills-flush-wait final-recheck m1 {_fm1:+.1f}% falling"
         _fm5 = float(((_fin.get("priceChange") or {}).get("m5", 0)) or 0)
         _f_dex = str(_fin.get("dexId") or "").lower()
-        _max_fm1 = 30.0 if _f_dex in ("pump", "pumpfun") else float(getattr(_c, "MAX_ENTRY_M1_PCT", 60.0))
-        _max_fm5 = 165.0 if _f_dex in ("pump", "pumpfun") else float(getattr(_c, "MAX_ENTRY_M5_PCT", 175.0))
+        _fv5_re = float(((_fin.get("volume") or {}).get("m5", 0)) or 0)
+        _is_f_curve = _f_dex in ("pump", "pumpfun", "meteoradbc")
+        _max_fm1 = float(getattr(_c, "MAX_ENTRY_M1_PCT", 22.0))
+        if not _is_f_curve and _fv5_re >= 25000.0 and _fm5 >= 25.0:
+            _max_fm1 = max(_max_fm1, 25.0)
+        _max_fm5 = 165.0 if _is_f_curve else (300.0 if (_fv5_re >= 20000.0 and _fliq >= 12000.0) else float(getattr(_c, "MAX_ENTRY_M5_PCT", 175.0)))
         if _fm1 > _max_fm1:
             print(f"🚫 [FINAL-RECHECK] {symbol} ({address[:8]}): вертикальный спайк m1 {_fm1:+.1f}% > +{_max_fm1:.0f}% (кейс $PICKLES) — отмена покупки хая!")
             return False, f"fills-flush-wait final-recheck m1 spike {_fm1:+.1f}%"
