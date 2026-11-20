@@ -574,21 +574,21 @@ def evaluate_entry_momentum(
     _is_heavy_vol_launch = (vol5_usd >= 18000.0 and buys5 >= max(100, int(sells5 * 1.15)) and vel_ratio >= 1.20)
     _is_fresh_mig_early_launch = (
         not is_curve
-        and age_min <= 8.0
-        and liq_usd >= 10000.0
-        and vol5_usd >= 8000.0
-        and buys5 >= max(45, int(sells5 * 1.25))
-        and m1 >= 0.5
-        and h1 >= 0.0
+        and age_min <= 10.0
+        and liq_usd >= 7500.0
+        and vol5_usd >= 3500.0
+        and buys5 >= max(25, int(sells5 * 1.20))
+        and m1 >= -1.0
+        and h1 >= -5.0
     )
     _is_high_conviction_accum = (
         not is_curve
         and liq_usd >= 7500.0
-        and vol5_usd >= 10000.0
-        and buys5 >= max(60, int(sells5 * 1.60))
-        and (vol5_usd / max(1, tot_tx)) >= 12.0
-        and h1 >= 15.0
-        and m1 >= 0.0
+        and vol5_usd >= 5000.0
+        and buys5 >= max(60, int(sells5 * 1.50))
+        and (vol5_usd / max(1, tot_tx)) >= 10.0
+        and h1 >= 10.0
+        and m1 >= -0.5
     )
     _is_clean_grad_flow = (
         not is_curve
@@ -597,7 +597,7 @@ def evaluate_entry_momentum(
         and buys5 >= max(30, int(sells5 * 1.15))
         and m1 >= -1.0
     )
-    _m5_min_req = 4.0 if _is_high_conviction_accum else (5.0 if (_is_fresh_mig_early_launch or _is_clean_grad_flow) else (6.0 if _is_heavy_vol_launch else 8.0))
+    _m5_min_req = 3.0 if _is_high_conviction_accum else (3.5 if _is_fresh_mig_early_launch else (5.0 if _is_clean_grad_flow else (6.0 if _is_heavy_vol_launch else 8.0)))
     _is_bullish_pullback_dip = (
         -18.0 <= m5 < _m5_min_req
         and h1 >= 15.0
@@ -732,12 +732,12 @@ def evaluate_entry_momentum(
     )
     _is_fresh_grad_ignition = (
         not is_curve
-        and age_min <= 8.0
+        and age_min <= 10.0
         and liq_usd >= 7500.0
-        and (m5 >= 8.0 or (_is_fresh_mig_early_launch and m5 >= 5.0))
+        and (m5 >= 8.0 or (_is_fresh_mig_early_launch and m5 >= 3.5))
         and m1 >= -2.0
         and vol5_usd >= 2500.0
-        and buys5 >= max(25, int(sells5 * 1.40))
+        and buys5 >= max(25, int(sells5 * 1.20))
         and (vel_ratio >= 0.10 or vol5_usd >= 3500.0)
     )
     is_ultra_fresh_launch = (
@@ -806,7 +806,7 @@ def evaluate_entry_momentum(
         _is_established_brk
         or _is_sharp_mid_breakout
         or _is_clean_grad_ignition
-        or (_is_high_conviction_accum and age_min <= SOLANA_MAX_AGE_MIN and m5 >= 4.0)
+        or (_is_high_conviction_accum and age_min <= SOLANA_MAX_AGE_MIN and m5 >= 3.0)
         or (
             age_min <= _mature_max_age
             and (fdv_usd <= 0.0 or fdv_usd <= float(globals().get("JEV_MAX_MCAP_USD", 1500000.0)))
@@ -916,9 +916,9 @@ TIME_EXIT_PROFIT_REQ = 0.015
 # === СИСТЕМА ВЫХОДА (РАННИЙ TP1 +70% + SLOW-COOK ЗАЩИТА ОТ CABAL RUG) ===
 PARTIAL_TP_ENABLED = True
 PARTIAL_TP_MIN_TICKET_USD = 0.50
-TP1_TRIGGER_PCT = 0.70               # На +70% фиксируем 50% позиции (резко снижаем риск при 1-блоковом дампе как FIONA +68% -> -96%)
-TP1_SELL_FRAC = 0.50                 # 50% позиции фиксируем на +70%, оставшиеся 50% — Moonbag на 3x-10x!
-TP2_TRIGGER_PCT = 1.80               # Следующий тейк на +180% (фиксируем половину мунбэга)
+TP1_TRIGGER_PCT = 0.55               # На +55% фиксируем 50% позиции (забираем профит ДО 1-блоковых дампов вроде FIONA +68% -> -96%)
+TP1_SELL_FRAC = 0.50                 # 50% позиции фиксируем на +55%, оставшиеся 50% — Moonbag на 3x-10x!
+TP2_TRIGGER_PCT = 1.60               # Следующий тейк на +160% (фиксируем половину мунбэга)
 TP2_SELL_FRAC = 0.50                 # 50% остатка продаём на +180%, остальное тащим по Trailing Stop
 TP3_TRIGGER_PCT = 5.00
 TP3_SELL_FRAC = 0.00
@@ -966,7 +966,7 @@ WHALE_DUMP_GUARD_PCT = 0.22
 EVM_RUNNER_CRASH = 0.25
 EVM_NORMAL_CRASH = 0.22
 
-BREAKEVEN_PCT = 0.35       # Breakeven Shield: пик >= +35% -> пол +3% (перекрывает комиссии и не даёт слить в минус)
+BREAKEVEN_PCT = 0.25       # Breakeven Shield: пик >= +25% -> пол +3% (перекрывает комиссии и гарантирует выход без минуса до рага)
 
 
 def get_sol_tp_ladder(is_unlocked: bool) -> tuple:

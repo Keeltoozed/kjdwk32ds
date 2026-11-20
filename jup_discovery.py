@@ -108,14 +108,11 @@ async def fetch_jup_tokens() -> list:
         async def _jup_get(subpath: str):
             async with _jup_sem:
                 st, data = await fetch_json(f"{BASE}/{subpath}", headers=headers, timeout=8, retries=0)
-                if st == 429:
-                    await asyncio.sleep(0.8)
-                    return st, []
                 if st != 200 or not isinstance(data, list):
-                    await asyncio.sleep(0.45)
+                    await asyncio.sleep(0.55 if st == 429 else 0.35)
                     st_l, data_l = await fetch_json(f"{LITE_BASE}/{subpath}", headers=None, timeout=8, retries=0)
                     if st_l == 200 and isinstance(data_l, list):
-                        await asyncio.sleep(0.40)
+                        await asyncio.sleep(0.45)
                         return st_l, data_l
                 await asyncio.sleep(0.40)
                 return st, data
@@ -236,6 +233,7 @@ async def fetch_jup_tokens() -> list:
                 "https://api.dexscreener.com/latest/dex/search?q=pumpswap%20SOL",
                 "https://api.dexscreener.com/latest/dex/search?q=pump%20USDC",
                 "https://api.dexscreener.com/latest/dex/search?q=bonk%20SOL",
+                "https://api.dexscreener.com/latest/dex/search?q=bags%20SOL",
                 "https://api.dexscreener.com/latest/dex/search?q=raydium%20SOL",
                 "https://api.dexscreener.com/latest/dex/search?q=orca%20SOL",
             )
@@ -284,7 +282,12 @@ async def fetch_jup_tokens() -> list:
                     pc_p = p.get("priceChange") or {}
                     m5_p = float(pc_p.get("m5", 0) or 0)
                     h1_p = float(pc_p.get("h1", 0) or 0)
-                    _is_ds_super_brk = (age_p <= 360.0 and vol5_p >= 15000.0 and b5_p >= int(s5_p * 1.20) and m5_p >= 4.0)
+                    fdv_p = float(p.get("fdv") or p.get("marketCap") or 0)
+                    _is_ds_super_brk = config.is_established_breakout_runner(
+                        age_min=age_p, liq_usd=liq_p, vol5_usd=vol5_p, m5_pct=m5_p,
+                        buys5=b5_p, sells5=s5_p, fdv_usd=fdv_p,
+                        is_curve=config.is_unmigrated_curve_token(addr, p),
+                    )
                     if age_p > _max_disc_age and not _is_ds_super_brk:
                         continue
                     _min_v5_ds = 700.0 if age_p <= 2.5 else (850.0 if age_p <= 5.0 else float(getattr(config, "MIN_VOLUME_M5", 1000.0)))

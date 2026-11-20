@@ -1212,6 +1212,16 @@ async def discovery_feeder_loop(analyzer):
             except Exception:
                 pass
 
+            # 0. Сохраняем свежие ончейн-миграции Pump.fun первыми (не перезатираем их при 429 от Jupiter/GT на Render!)
+            try:
+                _onchain_grads = list(getattr(birth_tracker, "graduated", {}).keys()) + list(
+                    birth_tracker.get_waiting_room_graduates(min_age_sec=0.0, max_age_sec=1800.0) or []
+                )
+                if _onchain_grads:
+                    mints = _onchain_grads + mints
+            except Exception:
+                pass
+
             if mints:
                 deduped = list(dict.fromkeys(
                     m.strip() for m in mints
@@ -1447,10 +1457,11 @@ async def scanner_loop(analyzer, tracker):
                             processed_mints[mint] = _now_r - _cd_r + 20
                             continue
 
-                        # Отсекаем флет и еле ползущие токены (m5 < 6%): пропускаем свежие миграции, бычьи откаты (GTE7) и сильную аккумуляцию (PASSTHEHAT 445b/100s)
+                        # Отсекаем флет и еле ползущие токены (m5 < 5%): пропускаем свежие миграции (<=10м), бычьи откаты (GTE7) и сильную аккумуляцию (PASSTHEHAT 402b/88s)
                         _is_bull_dip_sc = (_c_m5 >= -18.0 and _c_vol5 >= 20000.0 and _c_b5 >= max(50, int(_c_s5 * 1.15)) and _c_liq >= 10000.0)
-                        _is_accum_sc = (_c_m5 >= 4.0 and _c_vol5 >= 10000.0 and _c_b5 >= max(60, int(_c_s5 * 1.60)) and _c_liq >= 10000.0)
-                        if _c_m5 < 6.0 and _c_age_m > 2.5 and not _is_fresh_grad and not _is_bull_dip_sc and not _is_accum_sc:
+                        _is_accum_sc = (_c_m5 >= 3.0 and _c_vol5 >= 5000.0 and _c_b5 >= max(60, int(_c_s5 * 1.50)) and _c_liq >= 7500.0)
+                        _is_early_launch_sc = (_c_age_m <= 10.0 and _c_m5 >= 3.5 and _c_vol5 >= 3500.0 and _c_b5 >= max(25, int(_c_s5 * 1.20)) and _c_liq >= 7500.0)
+                        if _c_m5 < 5.0 and _c_age_m > 2.5 and not _is_fresh_grad and not _is_bull_dip_sc and not _is_accum_sc and not _is_early_launch_sc:
                             processed_mints[mint] = _now_r - _cd_r + 20
                             continue
 
