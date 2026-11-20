@@ -1013,7 +1013,11 @@ class Analyzer:
                             pair_dict[_mk] = _mv
             _last_p = getattr(self, "_last_analyzed_pair", {}).get(mint)
             if isinstance(_last_p, dict):
-                for _fk in ("_lp_verified", "_unlocked_runner_ok", "_pumpswap_checked", "_pumpswap_canonical", "_pumpswap_lp_burned", "_pumpswap_rpc_unverified"):
+                for _fk in (
+                    "_lp_verified", "_unlocked_runner_ok", "_pumpswap_checked",
+                    "_pumpswap_canonical", "_pumpswap_lp_burned", "_pumpswap_rpc_unverified",
+                    "_rug_hunter_mode", "_rug_hunter_creator_profile", "_rug_hunter_watch",
+                ):
                     if _fk in _last_p and _fk not in pair_dict:
                         pair_dict[_fk] = _last_p[_fk]
         return pair_dict
@@ -1891,11 +1895,33 @@ class Analyzer:
                 f"🚫 [BAD-QUOTE] {symbol} ({mint[:8]}): пара к {_bad_q_a} (разрешены только SOL/стейблкоины; блок xStock кейсов JETSKI/FOILED).",
             )
         if "meteora" in _dex_pre_early and _dex_pre_early != "meteoradbc" and not pair_data.get("_lp_verified"):
-            return self._deny(
-                mint,
-                "meteora-unlocked-pool",
-                f"🚫 [METEORA-BLOCK] {symbol} ({mint[:8]}): пул Meteora {_dex_pre_early} без сожжённого/залоченного LP — риск мгновенного вывода SOL девом (кейсы BUFO/SPACE/PUNCHAO), блок входа!"
-            )
+            _rh_met_early_ok = False
+            try:
+                import rug_hunter as _rh_e
+                _tx_me = (pair_data.get("txns") or {}).get("m5") or {}
+                _pc_me = pair_data.get("priceChange") or {}
+                _rh_met_early_ok, _ = _rh_e.qualify_unlocked_lp_hunter(
+                    mint=mint, pair_data=pair_data, age_min=_age_min_pre,
+                    liq_usd=float((pair_data.get("liquidity") or {}).get("usd", 0) or 0),
+                    fdv_usd=float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0),
+                    vol5_usd=float((pair_data.get("volume") or {}).get("m5", 0) or 0),
+                    buys5=int(_tx_me.get("buys", 0) or 0),
+                    sells5=int(_tx_me.get("sells", 0) or 0),
+                    m5=float(_pc_me.get("m5", 0) or 0),
+                    m1=float(_pc_me.get("m1", 0) or 0),
+                    h1=float(_pc_me.get("h1", 0) or 0),
+                )
+            except Exception:
+                _rh_met_early_ok = False
+            if _rh_met_early_ok:
+                pair_data["_rug_hunter_mode"] = "UNLOCKED-LP"
+                print(f"🎯 [RUG-HUNTER-CAND] {symbol} ({mint[:8]}): ранний незалоченный пул Meteora допущен в аудит RUG-HUNTER:UNLOCKED-LP.")
+            else:
+                return self._deny(
+                    mint,
+                    "meteora-unlocked-pool",
+                    f"🚫 [METEORA-BLOCK] {symbol} ({mint[:8]}): пул Meteora {_dex_pre_early} без сожжённого/залоченного LP — риск мгновенного вывода SOL девом (кейсы BUFO/SPACE/PUNCHAO), блок входа!"
+                )
         if config.is_pumpswap_liq_fdv_trap(pair_data):
             return self._deny(
                 mint,
@@ -2200,6 +2226,9 @@ class Analyzer:
                 _mom_why_a.split("(")[0].strip()[:48],
                 f"🚫 [MOMENTUM-GATE] {symbol} ({mint[:8]}): {_mom_why_a}",
             )
+        if _mom_why_a == "ok-rug-hunter-cabal" and not pair_data.get("_rug_hunter_mode"):
+            pair_data["_rug_hunter_mode"] = "CABAL-SURF"
+            print(f"🎯 [RUG-HUNTER-CABAL] {symbol} ({mint[:8]}): ранний кабал-разгон (age {_age_min_pre:.1f}м) переведён в стратегию RUG-HUNTER:CABAL-SURF.")
         _base_max_m1 = float(getattr(config, "MAX_ENTRY_M1_PCT", 22.0))
         if not _is_curve_pre_a and _raw_liq_chk >= 10000.0 and _b5_pre >= max(40, int(_s5_pre * 1.20)) and _vm5_pre >= 12000.0 and _m5 >= 25.0:
             _max_m1_cfg = max(_base_max_m1, 28.0)
@@ -2448,7 +2477,22 @@ class Analyzer:
                     pair_data=pair_data,
                 )
                 if not _ps_a_ok:
-                    return self._deny(mint, f"pumpswap-scam-pool ({_ps_a_why})", f"🚫 [PUMPSWAP-ONCHAIN] {symbol} ({mint[:8]}): {_ps_a_why}")
+                    _rh_ps_ok = False
+                    if "createpool-unburned-lp" in str(_ps_a_why or "").lower():
+                        try:
+                            import rug_hunter as _rh_ps
+                            _rh_ps_ok, _ = _rh_ps.qualify_unlocked_lp_hunter(
+                                mint=mint, pair_data=pair_data, age_min=_age_min_pre,
+                                liq_usd=raw_liq, fdv_usd=fdv_val, vol5_usd=_vm5_pre,
+                                buys5=_b5_pre, sells5=_s5_pre, m5=_m5, m1=_m1, h1=_h1,
+                            )
+                        except Exception:
+                            _rh_ps_ok = False
+                    if _rh_ps_ok:
+                        pair_data["_rug_hunter_mode"] = "UNLOCKED-LP"
+                        print(f"🎯 [RUG-HUNTER-PS] {symbol} ({mint[:8]}): незалоченный PumpSwap CreatePool ({_ps_a_why}) переведён в аудит RUG-HUNTER:UNLOCKED-LP.")
+                    else:
+                        return self._deny(mint, f"pumpswap-scam-pool ({_ps_a_why})", f"🚫 [PUMPSWAP-ONCHAIN] {symbol} ({mint[:8]}): {_ps_a_why}")
             _is_canonical_pump = (
                 (_ps_a_canon and dex_id_low == "pumpswap")
                 or (mint.lower().endswith("pump") and dex_id_low in ("pump", "pumpfun"))
@@ -2555,14 +2599,45 @@ class Analyzer:
                     )
 
                     _rc_score = max(0.0, _rc_raw_score - _rc_penalty_to_ignore)
+                    # 🎯 RUG-HUNTER:UNLOCKED-LP — если высокий RugCheck Score вызван ИСКЛЮЧИТЕЛЬНО штрафом
+                    # за незалоченный LP (а сам контракт без mint/freeze/honeypot/creator-rug-history < 1000),
+                    # проверяем историю времени жизни прошлых пулов дева и раннюю квалификацию!
+                    _rh_unlocked_rc_ok = False
+                    _rh_creator_prof_a = None
                     if _rc_score >= 2000:
-                        return self._deny(mint, f"rugcheck-score {_rc_score:.0f}", f"🚫 [АНТИСКАМ] RugCheck Score {_rc_score:.0f} >= 2000 у {mint[:8]} → СКАМ")
+                        _rc_lp_only_pen = sum(
+                            float(rk.get("score", 0) or 0)
+                            for rk in (rc_data.get("risks") or [])
+                            if any(k in str(rk.get("name", "")).lower() for k in _lp_unlock_terms_main)
+                        )
+                        _rc_no_lp_score = max(0.0, _rc_score - _rc_lp_only_pen)
+                        if _rc_lp_only_pen > 0 and _rc_no_lp_score < 1000.0 and getattr(config, "RUG_HUNTER_ENABLED", False) and getattr(config, "RUG_HUNTER_UNLOCKED_LP_ENABLED", False):
+                            try:
+                                import rug_hunter as _rh_rc
+                                _rh_creator_prof_a = await _rh_rc.profile_creator_rug_timing(_rc_creator, mint)
+                                _rh_unlocked_rc_ok, _rh_rc_why = _rh_rc.qualify_unlocked_lp_hunter(
+                                    mint=mint, pair_data=pair_data, age_min=_age_min_pre,
+                                    liq_usd=raw_liq, fdv_usd=fdv_val, vol5_usd=_vm5_pre,
+                                    buys5=_b5_pre, sells5=_s5_pre, m5=_m5, m1=_m1, h1=_h1,
+                                    creator_profile=_rh_creator_prof_a,
+                                )
+                                if _rh_unlocked_rc_ok:
+                                    pair_data["_rug_hunter_mode"] = "UNLOCKED-LP"
+                                    pair_data["_rug_hunter_creator_profile"] = _rh_creator_prof_a
+                                    print(f"🎯 [RUG-HUNTER-RC] {symbol} ({mint[:8]}): RugCheck={_rc_score:.0f} только из-за LP Unlocked (контракт {_rc_no_lp_score:.0f}, {_rh_creator_prof_a.get('reason')}) — допуск в RUG-HUNTER:UNLOCKED-LP!")
+                            except Exception:
+                                _rh_unlocked_rc_ok = False
+                        if not _rh_unlocked_rc_ok:
+                            return self._deny(mint, f"rugcheck-score {_rc_score:.0f}", f"🚫 [АНТИСКАМ] RugCheck Score {_rc_score:.0f} >= 2000 у {mint[:8]} → СКАМ")
 
                     # Жёсткий фильтр критических опасностей смарт-контракта RugCheck
+                    # (freeze/mint/mutable/honeypot/transfer fee/permanent delegate — ВСЕГДА БЛОК даже для Rug-Hunter!)
                     for rk in (rc_data.get("risks") or []):
                         _rk_name = str(rk.get("name", "")).lower()
                         _rk_lvl = str(rk.get("level", "")).lower()
                         if any(k in _rk_name for k in ("copycat", "symbol mimic", *_allowed_lp_terms_main)):
+                            continue
+                        if _rh_unlocked_rc_ok and any(k in _rk_name for k in _lp_unlock_terms_main):
                             continue
                         if _rk_lvl == "danger" and any(k in _rk_name for k in ("freeze authority", "mint authority", "mutable", "honeypot", "transfer fee", "permanent delegate", "large amount of lp unlocked")):
                             return self._deny(mint, f"rc-danger {_rk_name[:15]}", f"🚫 [АНТИСКАМ-RC] {symbol} ({mint[:8]}): критический риск RugCheck '{rk.get('name')}' — блок скама!")
@@ -2581,24 +2656,15 @@ class Analyzer:
                         allow_pump_amm_lock=_allow_ps_lock_main,
                     )
 
-                    # Токены на пулах Meteora: Pump.fun никогда не мигрирует на Meteora,
-                    # а пулы Meteora без подтверждённого сожжённого LP — это 100% скам с выводом SOL девом (кейсы USPR/BUFO/SPACE/MULT/SURVIVE -98%).
-                    # Блокируем их ВСЕГДА и мгновенно (0ms), не зависимо от флагов:
-                    if "meteora" in _dex_low_main and _dex_low_main != "meteoradbc" and not has_verified_locked_lp:
-                        return self._deny(
-                            mint,
-                            "meteora-unlocked-pool",
-                            f"🚫 [METEORA-RUG-BLOCK] {symbol} ({mint[:8]}): незалоченный пул Meteora — риск вывода SOL девом (кейсы USPR/BUFO/SPACE)!"
-                        )
-
-                    # Проверка блокировки LP (режим Commit 0d2b1ae: допускаем незалоченные DEX-раннеры)
+                    # Проверка блокировки LP (основная стратегия требует сожжённый/залоченный LP;
+                    # стратегия RUG-HUNTER:UNLOCKED-LP допускает квалифицированные ранние незалоченные пулы!)
                     _is_unlocked_runner_ok = False
                     _is_lp_really_safe = bool(_is_canonical_pump or has_verified_locked_lp or (isinstance(pair_data, dict) and pair_data.get("_pumpswap_lp_burned")))
                     if not _is_lp_really_safe:
                         _ca_main = float((pair_data or {}).get("pairCreatedAt") or 0)
                         _age_main = ((time.time() * 1000.0 - _ca_main) / 60000.0) if _ca_main > 0 else 0.2
                         _liq_main = float(((pair_data or {}).get("liquidity") or {}).get("usd", 0) or 0)
-                        _fdv_main = float((pair_data or {}).get("fdv", 0) or 0)
+                        _fdv_main = float((pair_data or {}).get("fdv", 0) or (pair_data or {}).get("marketCap", 0) or 0)
                         _v5_main = float(((pair_data or {}).get("volume") or {}).get("m5", 0) or 0)
                         _m5_raw_main = ((pair_data or {}).get("priceChange") or {}).get("m5")
                         _m5_main = float(_m5_raw_main) if _m5_raw_main is not None else None
@@ -2606,36 +2672,64 @@ class Analyzer:
                         _b5_main = int(_tx_main.get("buys", 0) or 0)
                         _s5_main = int(_tx_main.get("sells", 0) or 0)
                         _is_trap_main = config.is_pumpswap_liq_fdv_trap(pair_data or {})
-                        
                         _info_main = (pair_data or {}).get("info") or {}
                         _has_soc_main = bool((_info_main.get("socials") or []) or (_info_main.get("websites") or []))
-                        
-                        if config.is_safe_unlocked_custom_runner(
-                            liq_usd=_liq_main,
-                            age_min=_age_main,
-                            vol5_usd=_v5_main,
-                            buys5=_b5_main,
-                            sells5=_s5_main,
-                            has_socials=_has_soc_main,
-                            is_trap=_is_trap_main,
-                            fdv_usd=_fdv_main,
-                            m5_pct=_m5_main,
-                            pair_data=pair_data,
-                        ):
-                            _is_unlocked_runner_ok = True
-                            print(f"🔓 [UNLOCKED-LP-ALLOWED] {symbol} ({mint[:8]}): свежий DEX-раннер (age {_age_main:.1f}м, liq ${_liq_main:,.0f}, fdv ${_fdv_main:,.0f}, vol5 ${_v5_main:,.0f}, {_b5_main}b/{_s5_main}s) — лок LP не требуется (режим 0d2b1ae).")
-                        elif not getattr(config, "ALLOW_UNLOCKED_LP_POOLS", True):
-                            return self._deny(
-                                mint,
-                                "unlocked-custom-lp",
-                                f"🚫 [АНТИСКАМ-LP] {symbol} ({mint[:8]}): LP на {_dex_low_main or 'DEX'} не сожжён/не залочен (риск Remove LP)."
-                            )
-                        else:
-                            return self._deny(
-                                mint,
-                                f"low-liq ${_liq_main:.0f}",
-                                f"🚫 [ANTI-RUG] {symbol} ({mint[:8]}): слабый/подозрительный пул (liq ${_liq_main:,.0f}, fdv ${_fdv_main:,.0f}, vol5 ${_v5_main:,.0f}, {_b5_main}b/{_s5_main}s)."
-                            )
+
+                        # 1) Сначала проверяем RUG-HUNTER:UNLOCKED-LP (если включён):
+                        _rh_unl_pass = False
+                        if getattr(config, "RUG_HUNTER_ENABLED", False) and getattr(config, "RUG_HUNTER_UNLOCKED_LP_ENABLED", False):
+                            try:
+                                import rug_hunter as _rh_lp
+                                if _rh_creator_prof_a is None:
+                                    _rh_creator_prof_a = await _rh_lp.profile_creator_rug_timing(_rc_creator, mint)
+                                _rh_unl_pass, _rh_unl_why = _rh_lp.qualify_unlocked_lp_hunter(
+                                    mint=mint, pair_data=pair_data, age_min=_age_main,
+                                    liq_usd=_liq_main, fdv_usd=_fdv_main, vol5_usd=_v5_main,
+                                    buys5=_b5_main, sells5=_s5_main,
+                                    m5=float(_m5_main or 0.0), m1=_m1, h1=_h1,
+                                    creator_profile=_rh_creator_prof_a,
+                                )
+                                if _rh_unl_pass:
+                                    _is_unlocked_runner_ok = True
+                                    pair_data["_rug_hunter_mode"] = "UNLOCKED-LP"
+                                    pair_data["_rug_hunter_creator_profile"] = _rh_creator_prof_a
+                                    print(f"🎯 [RUG-HUNTER:UNLOCKED-LP] {symbol} ({mint[:8]}): {_dex_low_main} age {_age_main:.1f}м, liq ${_liq_main:,.0f}, vol5 ${_v5_main:,.0f}, {_b5_main}b/{_s5_main}s ({_rh_creator_prof_a.get('reason')}) — квалифицирован!")
+                            except Exception:
+                                _rh_unl_pass = False
+
+                        if not _rh_unl_pass:
+                            if "meteora" in _dex_low_main and _dex_low_main != "meteoradbc" and not has_verified_locked_lp:
+                                return self._deny(
+                                    mint,
+                                    "meteora-unlocked-pool",
+                                    f"🚫 [METEORA-RUG-BLOCK] {symbol} ({mint[:8]}): незалоченный пул Meteora — риск вывода SOL девом (кейсы USPR/BUFO/SPACE)!"
+                                )
+                            if config.is_safe_unlocked_custom_runner(
+                                liq_usd=_liq_main,
+                                age_min=_age_main,
+                                vol5_usd=_v5_main,
+                                buys5=_b5_main,
+                                sells5=_s5_main,
+                                has_socials=_has_soc_main,
+                                is_trap=_is_trap_main,
+                                fdv_usd=_fdv_main,
+                                m5_pct=_m5_main,
+                                pair_data=pair_data,
+                            ):
+                                _is_unlocked_runner_ok = True
+                                print(f"🔓 [UNLOCKED-LP-ALLOWED] {symbol} ({mint[:8]}): свежий DEX-раннер (age {_age_main:.1f}м, liq ${_liq_main:,.0f}, fdv ${_fdv_main:,.0f}, vol5 ${_v5_main:,.0f}, {_b5_main}b/{_s5_main}s) — лок LP не требуется (режим 0d2b1ae).")
+                            elif not getattr(config, "ALLOW_UNLOCKED_LP_POOLS", True):
+                                return self._deny(
+                                    mint,
+                                    "unlocked-custom-lp",
+                                    f"🚫 [АНТИСКАМ-LP] {symbol} ({mint[:8]}): LP на {_dex_low_main or 'DEX'} не сожжён/не залочен (риск Remove LP)."
+                                )
+                            else:
+                                return self._deny(
+                                    mint,
+                                    f"low-liq ${_liq_main:.0f}",
+                                    f"🚫 [ANTI-RUG] {symbol} ({mint[:8]}): слабый/подозрительный пул (liq ${_liq_main:,.0f}, fdv ${_fdv_main:,.0f}, vol5 ${_v5_main:,.0f}, {_b5_main}b/{_s5_main}s)."
+                                )
                     if isinstance(pair_data, dict):
                         _lp_ok_m = _is_lp_really_safe
                         pair_data["_lp_verified"] = _lp_ok_m
@@ -2651,6 +2745,10 @@ class Analyzer:
                                 "_pumpswap_lp_burned": bool(pair_data.get("_pumpswap_lp_burned")),
                                 "_pumpswap_rpc_unverified": bool(pair_data.get("_pumpswap_rpc_unverified")),
                             }
+                            if pair_data.get("_rug_hunter_mode"):
+                                _meta_entry["_rug_hunter_mode"] = pair_data["_rug_hunter_mode"]
+                            if pair_data.get("_rug_hunter_creator_profile"):
+                                _meta_entry["_rug_hunter_creator_profile"] = pair_data["_rug_hunter_creator_profile"]
                             self._verified_lp_meta[(mint, _target_pair_rc)] = _meta_entry
                             self._verified_lp_meta[(mint, "")] = _meta_entry
 
@@ -2689,7 +2787,8 @@ class Analyzer:
                             # Не блокируем подтверждённый безопасный PumpSwap/Raydium пул (_is_lp_really_safe=True)
                             # из-за стороннего Meteora DLMM арбитраж-пула (кейс RUDY $30k->$250k +730% с $2.8k DLMM сайд-пулом)!
                             _is_meteora_pool = ("meteora" in _m_type and _m_type != "meteoradbc" and (_is_target_mkt or dex_id_low == "meteora" or (not _is_lp_really_safe and _m_quote_usd >= 2000.0)))
-                            if not getattr(config, "ALLOW_UNLOCKED_LP_POOLS", True):
+                            _is_rh_unlocked_m = bool(isinstance(pair_data, dict) and pair_data.get("_rug_hunter_mode") == "UNLOCKED-LP")
+                            if not getattr(config, "ALLOW_UNLOCKED_LP_POOLS", True) and not _is_rh_unlocked_m:
                                 if _is_meteora_pool and _m_lp_safe < 80.0:
                                     return self._deny(mint, "meteora-unlocked-lp", f"🚫 [METEORA-RUG] {symbol} ({mint[:8]}): незаблокированный пул Meteora {_m_type} (lock/burn {_m_lp_safe:.0f}% < 80%) — риск вывода SOL девом (кейсы AXIOMCOIN/MULT/PUNCHAO)!")
                                 if not _is_pump_flag and "raydium" in _m_type and (_is_target_mkt or _m_quote_usd >= 2000.0) and _m_lp_safe < 80.0:
@@ -2701,7 +2800,8 @@ class Analyzer:
                                 if _mkt.get(_m_field):
                                     pool_accounts.add(_mkt[_m_field])
 
-                    if not getattr(config, "ALLOW_UNLOCKED_LP_POOLS", True) and dex_id_low == "meteora":
+                    _is_rh_unlocked_m2 = bool(isinstance(pair_data, dict) and pair_data.get("_rug_hunter_mode") == "UNLOCKED-LP")
+                    if not getattr(config, "ALLOW_UNLOCKED_LP_POOLS", True) and not _is_rh_unlocked_m2 and dex_id_low == "meteora":
                         _met_locked = any("meteora" in str(m.get("marketType", "")).lower() and (float((m.get("lp") or {}).get("lpLockedPct", 0) or 0) >= 80.0 or float((m.get("lp") or {}).get("lpBurnedPct", 0) or 0) >= 80.0) for m in (rc_data.get("markets") or []))
                         if not _met_locked:
                             return self._deny(mint, "meteora-unlocked-lp", f"🚫 [METEORA-RUG] {symbol} ({mint[:8]}): токен на Meteora без заблокированного/сожжённого LP — риск Remove LP девом (кейсы AXIOMCOIN/MULT/PUNCHAO)!")
@@ -2746,27 +2846,53 @@ class Analyzer:
                         top1_pct=largest_whale_pct_pre, top10_pct=top_10_sum_pct, dev_pct=dev_holding_pct,
                         is_lp_safe=_is_lp_really_safe,
                     )
+                    _is_rh_unlocked_h = bool(isinstance(pair_data, dict) and pair_data.get("_rug_hunter_mode") == "UNLOCKED-LP")
                     if _is_unlocked_runner_ok and not getattr(config, "ALLOW_UNLOCKED_LP_POOLS", True):
-                        if dev_holding_pct > 10.0:
-                            return self._deny(mint, f"unlocked-dev-too-high {dev_holding_pct:.1f}%", f"🚫 [DEV-CONCENTRATION] {symbol} ({mint[:8]}): дев держит {dev_holding_pct:.1f}% > 10% на незалоченном пуле!")
-                        if top_10_sum_pct > 35.0:
-                            return self._deny(mint, f"unlocked-top10-too-high {top_10_sum_pct:.1f}%", f"🚫 [TOP10-CONCENTRATION] {symbol} ({mint[:8]}): топ-10 держат {top_10_sum_pct:.1f}% > 35% на незалоченном пуле!")
+                        _rh_dev_lim = 25.0 if _is_rh_unlocked_h else 10.0
+                        _rh_t10_lim = 55.0 if _is_rh_unlocked_h else 35.0
+                        if dev_holding_pct > _rh_dev_lim:
+                            return self._deny(mint, f"unlocked-dev-too-high {dev_holding_pct:.1f}%", f"🚫 [DEV-CONCENTRATION] {symbol} ({mint[:8]}): дев держит {dev_holding_pct:.1f}% > {_rh_dev_lim:.0f}% на незалоченном пуле!")
+                        if top_10_sum_pct > _rh_t10_lim:
+                            return self._deny(mint, f"unlocked-top10-too-high {top_10_sum_pct:.1f}%", f"🚫 [TOP10-CONCENTRATION] {symbol} ({mint[:8]}): топ-10 держат {top_10_sum_pct:.1f}% > {_rh_t10_lim:.0f}% на незалоченном пуле!")
+
+                    # Helper для перевода ранних кабал/сибил-пулов (с залоченным LP) в ветку RUG-HUNTER:CABAL-SURF
+                    def _try_rh_cabal(tag_name: str) -> bool:
+                        if not _is_lp_really_safe or not isinstance(pair_data, dict):
+                            return False
+                        try:
+                            import rug_hunter as _rh_cb
+                            _cb_ok, _cb_why = _rh_cb.qualify_cabal_surf_hunter(
+                                mint=mint, pair_data=pair_data, age_min=_age_min_pre,
+                                liq_usd=raw_liq, fdv_usd=fdv_val, vol5_usd=_vm5_pre,
+                                buys5=_b5_pre, sells5=_s5_pre, m5=_m5, m1=_m1, h1=_h1,
+                                reason_tag=tag_name,
+                            )
+                            if _cb_ok:
+                                pair_data["_rug_hunter_mode"] = "CABAL-SURF"
+                                print(f"🎯 [RUG-HUNTER:CABAL-SURF] {symbol} ({mint[:8]}): пойман ранний кабал ({tag_name}, age {_age_min_pre:.1f}м) — вход с автовыходом до дампа!")
+                                return True
+                        except Exception:
+                            pass
+                        return False
+
                     if len(bundle_suspects) >= 4 and not (_dist_runner_a and _age_min_pre >= 3.0):
                         from collections import Counter
                         counts = Counter(bundle_suspects)
                         most_common_pct, count = counts.most_common(1)[0]
                         if count >= 4 and most_common_pct >= 2.5 and (most_common_pct * count) >= 12.0:
-                            return self._deny(mint, "jito-bundle-sybil", f"🚫 [АНТИСКАМ] Jito-бандл ({count} кошельков по ~{most_common_pct:.1f}%) у {mint[:8]} → Блок.")
+                            if not _try_rh_cabal("jito-bundle-sybil"):
+                                return self._deny(mint, "jito-bundle-sybil", f"🚫 [АНТИСКАМ] Jito-бандл ({count} кошельков по ~{most_common_pct:.1f}%) у {mint[:8]} → Блок.")
 
                     # Детектор ультра-атомизированной сибил-сетки дева: не блокируем здоровый высокооборотный ритейл (OTHERM $102k vol5, 543b/354s)
                     _is_viral_retail_a = (_vm5_pre >= 15000.0 and _b5_pre >= 80 and _b5_pre >= _s5_pre and raw_liq >= 15000.0)
                     if 0 < pool_pct_sum <= 38.0 and len(top_10) >= 8 and not (_is_viral_retail_a or _dist_runner_a):
                         if top_10_sum_pct < 6.0 and largest_whale_pct_pre < 0.70:
-                            return self._deny(
-                                mint,
-                                f"atomized-sybil-supply pool={pool_pct_sum:.0f}% top10={top_10_sum_pct:.1f}%",
-                                f"🚫 [ATOMIZED-SYBIL] {symbol} ({mint[:8]}): в пуле всего {pool_pct_sum:.1f}% эмиссии ({100.0 - pool_pct_sum:.1f}% снаружи), но топ-1={largest_whale_pct_pre:.2f}%, топ-10={top_10_sum_pct:.1f}% — эмиссия спрятана на 100+ микро-кошельках дева (кейс CARDANO)!",
-                            )
+                            if not _try_rh_cabal("atomized-sybil"):
+                                return self._deny(
+                                    mint,
+                                    f"atomized-sybil-supply pool={pool_pct_sum:.0f}% top10={top_10_sum_pct:.1f}%",
+                                    f"🚫 [ATOMIZED-SYBIL] {symbol} ({mint[:8]}): в пуле всего {pool_pct_sum:.1f}% эмиссии ({100.0 - pool_pct_sum:.1f}% снаружи), но топ-1={largest_whale_pct_pre:.2f}%, топ-10={top_10_sum_pct:.1f}% — эмиссия спрятана на 100+ микро-кошельках дева (кейс CARDANO)!",
+                                )
                     # Детектор анонимной кабал-фермы (кейсы BERNIE top1=1.36%/top10=10.24% -> -95%, WIFGTA6 top1=2.23%/top10=13.55% -> -75%):
                     # 0 соцсетей + свежий пул <=15м + дикий оборот 600+ сделок или $25k+ при искусственно раздробленных холдерах (top10 < 15%, top1 < 2.5%)
                     _info_atom_a = (pair_data or {}).get("info") or {}
@@ -2781,11 +2907,12 @@ class Analyzer:
                         and largest_whale_pct_pre < 2.5
                         and not _dist_runner_a
                     ):
-                        return self._deny(
-                            mint,
-                            f"atomized-cabal-farm top1={largest_whale_pct_pre:.1f}% top10={top_10_sum_pct:.1f}%",
-                            f"🚫 [ATOMIZED-CABAL-FARM] {symbol} ({mint[:8]}): 0 соцсетей, возраст {_age_min_pre:.1f}м, {_b5_pre+_s5_pre}tx/${_vm5_pre:,.0f}, но top1={largest_whale_pct_pre:.2f}%, top10={top_10_sum_pct:.1f}% — раздробленная кабал-ферма (кейсы BERNIE/WIFGTA6)!",
-                        )
+                        if not _try_rh_cabal("atomized-cabal-farm"):
+                            return self._deny(
+                                mint,
+                                f"atomized-cabal-farm top1={largest_whale_pct_pre:.1f}% top10={top_10_sum_pct:.1f}%",
+                                f"🚫 [ATOMIZED-CABAL-FARM] {symbol} ({mint[:8]}): 0 соцсетей, возраст {_age_min_pre:.1f}м, {_b5_pre+_s5_pre}tx/${_vm5_pre:,.0f}, но top1={largest_whale_pct_pre:.2f}%, top10={top_10_sum_pct:.1f}% — раздробленная кабал-ферма (кейсы BERNIE/WIFGTA6)!",
+                            )
 
                     # Детектор равномерной сибил-нарезки стека дева (кейс BALLFIN: top20=43%), пропускаем уже распределённые ликвидные ракеты
                     if len(top_10) >= 8 and top_10_sum_pct >= 18.0 and not _dist_runner_a:
@@ -2795,20 +2922,22 @@ class Analyzer:
                         _t10_cv = (_st_an.pstdev(_t10_p) / _t10_m) if _t10_m > 0 else 9.9
                         _h10_r = (_t10_p[-1] / _t10_p[0]) if _t10_p[0] > 0 else 0.0
                         if _t10_cv <= 0.14 or (_h10_r >= 0.68 and _t10_p[-1] >= 1.5):
-                            return self._deny(
-                                mint,
-                                f"flat-sybil-split CV={_t10_cv:.2f}",
-                                f"🚫 [FLAT-SYBIL-SPLIT] {symbol} ({mint[:8]}): топ-10 ({top_10_sum_pct:.1f}%) нарезаны равномерно (CV={_t10_cv:.2f}, h10/h1={_h10_r:.2f}) — сибил-сетка дева (кейс BALLFIN)!",
-                            )
+                            if not _try_rh_cabal("flat-sybil-split"):
+                                return self._deny(
+                                    mint,
+                                    f"flat-sybil-split CV={_t10_cv:.2f}",
+                                    f"🚫 [FLAT-SYBIL-SPLIT] {symbol} ({mint[:8]}): топ-10 ({top_10_sum_pct:.1f}%) нарезаны равномерно (CV={_t10_cv:.2f}, h10/h1={_h10_r:.2f}) — сибил-сетка дева (кейс BALLFIN)!",
+                                )
                     _mid_syb_a = [x[1] for x in non_curve_accounts[:20] if 1.5 <= x[1] <= 4.5]
                     if len(_mid_syb_a) >= 12 and sum(_mid_syb_a) >= 28.0 and not _dist_runner_a:
                         _mid_r_a = max(_mid_syb_a) / max(min(_mid_syb_a), 0.1)
                         if _mid_r_a <= 1.65:
-                            return self._deny(
-                                mint,
-                                f"top20-sybil-swarm {len(_mid_syb_a)}w",
-                                f"🚫 [TOP20-SYBIL-SWARM] {symbol} ({mint[:8]}): {len(_mid_syb_a)} суб-кошельков держат по 1.5-4.5% ({sum(_mid_syb_a):.1f}% эмиссии) — сибил-рои дева!",
-                            )
+                            if not _try_rh_cabal("top20-sybil-swarm"):
+                                return self._deny(
+                                    mint,
+                                    f"top20-sybil-swarm {len(_mid_syb_a)}w",
+                                    f"🚫 [TOP20-SYBIL-SWARM] {symbol} ({mint[:8]}): {len(_mid_syb_a)} суб-кошельков держат по 1.5-4.5% ({sum(_mid_syb_a):.1f}% эмиссии) — сибил-рои дева!",
+                                )
                     _cur_tok_top10 = top_10_sum_pct
                     _cur_tok_top1 = largest_whale_pct_pre
                     _cur_tok_dev = dev_holding_pct
@@ -2816,7 +2945,7 @@ class Analyzer:
                     self._last_dev = dev_holding_pct
 
                     # Лимиты холдеров (смягчены для режима быстрого входа 0d2b1ae):
-                    max_dev_pct = float(getattr(config, "AUDITOR_MAX_DEV_PCT", 15.0))
+                    max_dev_pct = 25.0 if _is_rh_unlocked_h else float(getattr(config, "AUDITOR_MAX_DEV_PCT", 15.0))
                     if dev_holding_pct and dev_holding_pct > max_dev_pct:
                         return self._deny(mint, f"dev-hold {dev_holding_pct:.1f}%", f"🚫 [АНТИСКАМ] Дев держит {dev_holding_pct:.1f}% > {max_dev_pct:.0f}% у {mint[:8]} → Блок.")
                     try:
@@ -2827,10 +2956,10 @@ class Analyzer:
                     except Exception:
                         pass
                     largest_whale_pct = top_10[0][1] if top_10 else 0.0
-                    max_whale_pct = float(getattr(config, "AUDITOR_MAX_WHALE_PCT", 25.0))
+                    max_whale_pct = 22.0 if _is_rh_unlocked_h else float(getattr(config, "AUDITOR_MAX_WHALE_PCT", 25.0))
                     if largest_whale_pct > max_whale_pct:
                         return self._deny(mint, f"whale-hold {largest_whale_pct:.1f}%", f"🚫 [АНТИСКАМ] Кит держит {largest_whale_pct:.1f}% > {max_whale_pct:.0f}% у {mint[:8]} → Блок.")
-                    _cfg_top10_cap = float(getattr(config, "AUDITOR_MAX_TOP10_PCT", 55.0))
+                    _cfg_top10_cap = 55.0 if _is_rh_unlocked_h else float(getattr(config, "AUDITOR_MAX_TOP10_PCT", 55.0))
                     max_allowed_top10 = max(_cfg_top10_cap, 38.0 if (_is_pump_flag and (_vm5_pre >= 10000.0 or _b5_pre >= 80)) else _cfg_top10_cap)
                     if top_10_sum_pct > max_allowed_top10:
                         return self._deny(mint, f"top10-hold {top_10_sum_pct:.1f}%", f"🚫 [АНТИСКАМ] Топ-10 держат {top_10_sum_pct:.1f}% > {max_allowed_top10:.0f}% у {mint[:8]} → Блок.")
@@ -2844,6 +2973,8 @@ class Analyzer:
                         if not _l7a_ok:
                             if _dist_runner_a:
                                 print(f"⚠️ [АНТИСКАМ-L7a-WARN] {symbol} ({mint[:8]}): {_l7a_why} — допущен как распределённый ликвидный раннер.")
+                            elif _try_rh_cabal("L7a-insiders"):
+                                pass
                             else:
                                 return self._deny(mint, "insider-report-swarm", f"🚫 [АНТИСКАМ-L7a] {symbol} ({mint[:8]}): {_l7a_why} → Кабал-рой инсайдеров!")
                         _tok_meta = rc_data.get("token") or {}
@@ -2868,15 +2999,26 @@ class Analyzer:
                         if not _l7_ok:
                             if _dist_runner_a:
                                 print(f"⚠️ [АНТИСКАМ-L7-WARN] {symbol} ({mint[:8]}): {_l7_why} — допущен как распределённый ликвидный раннер.")
+                            elif _try_rh_cabal("L7b-insider-graph"):
+                                pass
                             else:
                                 return self._deny(mint, "insider-graph-bundle", f"🚫 [АНТИСКАМ-L7] {symbol} ({mint[:8]}): {_l7_why} → Блок.")
                         if not _l9_ok:
                             if _dist_runner_a:
                                 print(f"⚠️ [АНТИСКАМ-L9-WARN] {symbol} ({mint[:8]}): {_l9_why} — допущен как распределённый ликвидный раннер.")
+                            elif _try_rh_cabal("L9-staircase-farm"):
+                                pass
                             else:
                                 return self._deny(mint, "staircase-sybil-farm", f"🚫 [АНТИСКАМ-L9/10] {symbol} ({mint[:8]}): {_l9_why} → Ботоферма дева!")
                     except Exception:
                         pass
+                    # Снимок кошельков дева + топ-3 холдеров для лайв-монитора Rug-Hunter
+                    if isinstance(pair_data, dict) and pair_data.get("_rug_hunter_mode"):
+                        try:
+                            import rug_hunter as _rh_snap
+                            pair_data["_rug_hunter_watch"] = _rh_snap.snapshot_rugger_wallets(rc_data, pool_accounts)
+                        except Exception:
+                            pass
                 else:
                     # Если токен — канонический Pump.fun / PumpSwap или прошёл фильтр органического раннера, не блокируем при RugCheck 400/429:
                     # сразу ниже выполняется прямой ончейн-RPC аудит (Mint/Freeze Authority).
@@ -2985,10 +3127,39 @@ class Analyzer:
             if _is_confirmed_runner and _s1_score >= float(getattr(config, "ROCKET_XGB_STAGE1_THRESHOLD", 18.0)) and _cur_tok_dev <= 15.0:
                 _final_thr = min(_final_thr, 2.5)
 
-            if (conf + 0.05) < _final_thr:
+            # Для квалифицированных сделок RUG-HUNTER (уже прошли Stage-1 ML и все гейты Rug-Hunter):
+            # rocket_xgb_v3 обучена на чистых dev=0% пулах и искусственно обнуляет Stage-2 скор при dev 5-20%.
+            # Сохраняем Stage-1 скор и не блокируем уже отобранного кандидата Rug-Hunter на Stage-2!
+            _rh_mode_s2 = str((pair_data or {}).get("_rug_hunter_mode") or "").strip()
+            if _rh_mode_s2 and _s1_score >= float(getattr(config, "ROCKET_XGB_STAGE1_THRESHOLD", 7.0)):
+                conf = max(conf, _s1_score)
+                self.last_score = conf
+                self.rocket_scores[mint] = conf
+            elif (conf + 0.05) < _final_thr:
                 return self._deny(mint, f"rocket-xgb-s2 {conf:.0f}%", f"🚫 [ROCKET-XGB-S2] {symbol} ({mint[:8]}): скор с учётом холдеров {conf:.1f}% < {_final_thr:.0f}% — отсев.")
 
-            _pass_sig = f"ROCKET-XGB {conf:.0f}%"
+            _rh_mode_fin = str((pair_data or {}).get("_rug_hunter_mode") or "").strip()
+            if _rh_mode_fin:
+                import rug_hunter as _rh_sig
+                _pass_sig = _rh_sig.format_rug_hunter_source(
+                    _rh_mode_fin,
+                    conf,
+                    (pair_data or {}).get("_rug_hunter_creator_profile"),
+                )
+                # Сохраняем метаданные Rug-Hunter в кэш, чтобы main.py / jup_discovery.py получили их при повторном fetch
+                if not hasattr(self, "_verified_lp_meta"):
+                    self._verified_lp_meta = {}
+                _pa_fin = str((pair_data or {}).get("pairAddress") or "").strip()
+                _rh_meta_fin = dict(self._verified_lp_meta.get((mint, _pa_fin)) or self._verified_lp_meta.get((mint, "")) or {})
+                _rh_meta_fin["_rug_hunter_mode"] = _rh_mode_fin
+                if (pair_data or {}).get("_rug_hunter_creator_profile"):
+                    _rh_meta_fin["_rug_hunter_creator_profile"] = pair_data["_rug_hunter_creator_profile"]
+                if (pair_data or {}).get("_rug_hunter_watch"):
+                    _rh_meta_fin["_rug_hunter_watch"] = pair_data["_rug_hunter_watch"]
+                self._verified_lp_meta[(mint, _pa_fin)] = _rh_meta_fin
+                self._verified_lp_meta[(mint, "")] = _rh_meta_fin
+            else:
+                _pass_sig = f"ROCKET-XGB {conf:.0f}%"
             self._set_sig(mint, _pass_sig)
             if not hasattr(self, "_global_scan_cache"):
                 self._global_scan_cache = {}
@@ -3000,7 +3171,7 @@ class Analyzer:
                 float(self._last_top10 or 0.0),
                 float(self._last_dev or 0.0),
             )
-            print(f"🔎 [ANALYZER-PASS] {symbol} ({mint[:8]}): ML Score {conf:.1f}%, первичный аудит пройден ➔ финальные гейты (FCR/Jupiter/Rug).")
+            print(f"🔎 [ANALYZER-PASS] {symbol} ({mint[:8]}): ML Score {conf:.1f}% [{_pass_sig}], первичный аудит пройден ➔ финальные гейты (FCR/Jupiter/Rug).")
             return True
 
         is_vip = self.check_hyper_rocket_momentum(pair_data) and getattr(config, "VIP_ENTRIES_ENABLED", False)

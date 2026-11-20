@@ -18,6 +18,14 @@ class MatureExitManager:
         if not current_price or current_price <= 0:
             return None
 
+        # 🎯 Выделенный сверхбыстрый выход для стратегии RUG-HUNTER (не трогает основную стратегию!)
+        try:
+            import rug_hunter as _rh_em
+            if _rh_em.is_rug_hunter_position(position):
+                return _rh_em.evaluate_rug_hunter_exit(position, current_price)
+        except Exception:
+            pass
+
         pnl_pct = (current_price - position.entry_price_usd) / position.entry_price_usd
 
         if not hasattr(position, 'max_price_usd') or position.max_price_usd <= 0:

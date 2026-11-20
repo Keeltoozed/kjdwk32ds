@@ -47,6 +47,7 @@ class VirtualPosition(BaseModel):
     tp5_done: bool = False
     is_lp_locked_80: bool = False
     is_unlocked_pool: bool = False
+    is_rug_hunter: bool = False  # Стратегия «Охотник на раги» (отдельный выход, риск-бюджет и статистика)
     stagnant_graces: int = 0 # грейсы живого флета
     first_zero_ts: float = 0.0 # когда цена впервые стала 0 (Solana Stale Price)
     # --- трекинг просадки раннеров (чтобы видеть, какой dip они пережили) ---
@@ -521,12 +522,23 @@ class PaperTracker:
                     f"ликвидность пула ${_eff_init_liq:,.0f} < ${_grad_min_liq_fw:,.0f}!"
                 )
                 return False
+            _is_rh_tr = False
+            _rh_mode_tr = ""
+            try:
+                import rug_hunter as _rh_fw
+                _rh_mode_tr = str((pair_data.get("_rug_hunter_mode") if isinstance(pair_data, dict) else "") or "").upper().strip()
+                _is_rh_tr = bool(_rh_mode_tr) or _rh_fw.is_rug_hunter_source(source)
+                if _is_rh_tr and not _rh_fw.has_rug_hunter_slot(self):
+                    print(f"⏳ [FIREWALL-RH-SLOTS] {symbol} ({mint_str[:8]}): заняты все слоты Rug-Hunter ({_rh_fw.count_open_rug_hunter_positions(self)}/{getattr(config, 'RUG_HUNTER_MAX_SLOTS', 2)}) — оставляем слоты под чистые ракеты.")
+                    return False
+            except Exception:
+                _is_rh_tr = False
             if isinstance(pair_data, dict):
                 if config.is_pumpswap_liq_fdv_trap(pair_data):
                     print(f"🛑 [FIREWALL-RUG-BLOCK] {symbol} ({mint_str[:8]}): PumpSwap CreatePool liq/fdv 0-social trap!")
                     return False
                 _ps_rpc_unv = bool(pair_data.get("_pumpswap_rpc_unverified")) and config.is_launchpad_mint(mint_str)
-                _unl_runner_pre = bool(pair_data.get("_unlocked_runner_ok"))
+                _unl_runner_pre = bool(pair_data.get("_unlocked_runner_ok")) or (_is_rh_tr and _rh_mode_tr == "UNLOCKED-LP")
                 if not _allow_unl_tr and pair_data.get("_pumpswap_checked") and not _lp_preverified and not _ps_rpc_unv and not _unl_runner_pre:
                     print(f"🛑 [FIREWALL-RUG-BLOCK] {symbol} ({mint_str[:8]}): PumpSwap pool failed on-chain CreatePool check!")
                     return False
@@ -536,7 +548,7 @@ class PaperTracker:
             # Строгий LP-Firewall:
             # 1) Нативный Pump.fun токен (оканчивается на 'pump') на pumpfun / каноническом pumpswap защищён протоколом.
             # 2) Любой кастомный не-'pump' токен (.bonk, .bags, или кастомный DEX-пул) ИЛИ .pump на стороннем DEX / non-canonical CreatePool
-            #    ДОЛЖЕН иметь подтверждённый _lp_verified (если не включен ALLOW_UNLOCKED_LP_POOLS).
+            #    ДОЛЖЕН иметь подтверждённый _lp_verified (если не включен ALLOW_UNLOCKED_LP_POOLS или не квалифицирован RUG-HUNTER:UNLOCKED-LP).
             _ps_canon_flag = bool(isinstance(pair_data, dict) and pair_data.get("_pumpswap_canonical"))
             _ps_rpc_unv_flag = bool(isinstance(pair_data, dict) and pair_data.get("_pumpswap_rpc_unverified")) and config.is_launchpad_mint(mint_str) and not config.is_pumpswap_liq_fdv_trap(pair_data)
             _is_native_pump_dex = (
@@ -548,7 +560,8 @@ class PaperTracker:
                     )
                 )
             )
-            if not _is_native_pump_dex and not _lp_preverified and not _is_vip_or_copy:
+            _rh_unlocked_allowed_tr = bool(_is_rh_tr and _rh_mode_tr == "UNLOCKED-LP" and getattr(config, "RUG_HUNTER_ENABLED", False) and getattr(config, "RUG_HUNTER_UNLOCKED_LP_ENABLED", False))
+            if not _is_native_pump_dex and not _lp_preverified and not _is_vip_or_copy and not _rh_unlocked_allowed_tr:
                 _ca_tr = float((pair_data or {}).get("pairCreatedAt") or 0)
                 _age_tr = ((time.time() * 1000.0 - _ca_tr) / 60000.0) if _ca_tr > 0 else 0.2
                 _v5_tr = float(((pair_data or {}).get("volume") or {}).get("m5", 0) or 0)
@@ -712,6 +725,7 @@ class PaperTracker:
         _pd_open = pair_data if isinstance(pair_data, dict) else {}
         _pos_lp_locked = bool(_pd_open.get("_lp_verified"))
         _pos_unlocked = config.is_position_unlocked_lp(mint_str, _pd_open, _pos_lp_locked)
+        _pos_rh = bool(_pd_open.get("_rug_hunter_mode")) or ("RUG-HUNTER" in str(source or "").upper())
 
         self.positions[mint] = VirtualPosition(
             symbol=symbol,
@@ -729,6 +743,7 @@ class PaperTracker:
             is_mature=is_mature,
             is_lp_locked_80=_pos_lp_locked,
             is_unlocked_pool=_pos_unlocked,
+            is_rug_hunter=_pos_rh,
             source=source,
             chain=chain,
             pair_address=pair_address,

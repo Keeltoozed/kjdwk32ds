@@ -695,8 +695,23 @@ async def _evaluate_and_buy_inner(mint: str, td: dict, analyzer, tracker, source
             pair_data=td,
         )
         if not _ps_j_ok:
-            print(f"🚫 [JUP-PUMPSWAP] {mint[:8]}: {_ps_j_why} — отмена!")
-            return False
+            _rh_ps_j_ok = False
+            if "createpool-unburned-lp" in str(_ps_j_why or "").lower() and isinstance(td, dict):
+                try:
+                    import rug_hunter as _rh_jp
+                    _rh_ps_j_ok, _ = _rh_jp.qualify_unlocked_lp_hunter(
+                        mint=mint, pair_data=td, age_min=_age_j,
+                        liq_usd=_liq_j, fdv_usd=_fdv_j1, vol5_usd=_vol5_j,
+                        buys5=_b5_j, sells5=_s5_j, m5=_m5_j, m1=_m1_j, h1=_h1_j,
+                    )
+                except Exception:
+                    _rh_ps_j_ok = False
+            if _rh_ps_j_ok:
+                td["_rug_hunter_mode"] = "UNLOCKED-LP"
+                print(f"🎯 [{source_tag}-RH-PS] {_sym_tmp} ({mint[:8]}): незалоченный PumpSwap CreatePool допущен в RUG-HUNTER:UNLOCKED-LP.")
+            else:
+                print(f"🚫 [JUP-PUMPSWAP] {mint[:8]}: {_ps_j_why} — отмена!")
+                return False
     _is_native_pump_jup = (
         (_ps_j_canon and _dex_j_low == "pumpswap")
         or (mint.lower().endswith("pump") and _dex_j_low in ("pump", "pumpfun"))
@@ -753,22 +768,43 @@ async def _evaluate_and_buy_inner(mint: str, td: dict, analyzer, tracker, source
             if not _lp_ok:
                 _b5_j = int((((td or {}).get("txns") or {}).get("m5") or {}).get("buys", 0) or 0)
                 _s5_j = int((((td or {}).get("txns") or {}).get("m5") or {}).get("sells", 0) or 0)
-                _is_unl_safe_j = config.is_safe_unlocked_custom_runner(
-                    liq_usd=_liq_j,
-                    age_min=_age_j,
-                    vol5_usd=_vol5_j,
-                    buys5=_b5_j,
-                    sells5=_s5_j,
-                    has_socials=bool(len(((td or {}).get("info") or {}).get("socials", []) or [])),
-                    is_trap=config.is_pumpswap_liq_fdv_trap(td or {}),
-                )
-                if _is_unl_safe_j:
-                    print(f"🔓 [{source_tag}-UNLOCKED-LP-ALLOWED] {_sym_tmp} ({mint[:8]}): свежий DEX-раннер (age {_age_j:.1f}м, liq ${_liq_j:,.0f}, vol5 ${_vol5_j:,.0f}) — лок LP не требуется (режим 0d2b1ae).")
-                    _lp_ok = True
-                    _lp_verified_jup = True
-                else:
-                    print(f"🚫 [{source_tag}-UNLOCKED-LP] {_sym_tmp} ({mint[:8]}): незалоченный/несожжённый LP на {_dex_j_low or 'DEX'} (liq ${_liq_j:,.0f}, age {_age_j:.1f}m) — риск Remove LP!")
-                    return False
+                _rh_j_pass = False
+                if getattr(config, "RUG_HUNTER_ENABLED", False) and getattr(config, "RUG_HUNTER_UNLOCKED_LP_ENABLED", False) and isinstance(td, dict):
+                    try:
+                        import rug_hunter as _rh_jl
+                        _rc_cr_j = str((_rc_d or {}).get("creator") or "").strip()
+                        _rh_prof_j = await _rh_jl.profile_creator_rug_timing(_rc_cr_j, mint)
+                        _rh_j_pass, _ = _rh_jl.qualify_unlocked_lp_hunter(
+                            mint=mint, pair_data=td, age_min=_age_j,
+                            liq_usd=_liq_j, fdv_usd=_fdv_j1, vol5_usd=_vol5_j,
+                            buys5=_b5_j, sells5=_s5_j, m5=_m5_j, m1=_m1_j, h1=_h1_j,
+                            creator_profile=_rh_prof_j,
+                        )
+                        if _rh_j_pass:
+                            td["_rug_hunter_mode"] = "UNLOCKED-LP"
+                            td["_rug_hunter_creator_profile"] = _rh_prof_j
+                            td["_unlocked_runner_ok"] = True
+                            _lp_ok = True
+                            print(f"🎯 [{source_tag}-RUG-HUNTER:UNLOCKED-LP] {_sym_tmp} ({mint[:8]}): квалифицирован ({_rh_prof_j.get('reason')})!")
+                    except Exception:
+                        _rh_j_pass = False
+                if not _rh_j_pass:
+                    _is_unl_safe_j = config.is_safe_unlocked_custom_runner(
+                        liq_usd=_liq_j,
+                        age_min=_age_j,
+                        vol5_usd=_vol5_j,
+                        buys5=_b5_j,
+                        sells5=_s5_j,
+                        has_socials=bool(len(((td or {}).get("info") or {}).get("socials", []) or [])),
+                        is_trap=config.is_pumpswap_liq_fdv_trap(td or {}),
+                    )
+                    if _is_unl_safe_j:
+                        print(f"🔓 [{source_tag}-UNLOCKED-LP-ALLOWED] {_sym_tmp} ({mint[:8]}): свежий DEX-раннер (age {_age_j:.1f}м, liq ${_liq_j:,.0f}, vol5 ${_vol5_j:,.0f}) — лок LP не требуется (режим 0d2b1ae).")
+                        _lp_ok = True
+                        _lp_verified_jup = True
+                    else:
+                        print(f"🚫 [{source_tag}-UNLOCKED-LP] {_sym_tmp} ({mint[:8]}): незалоченный/несожжённый LP на {_dex_j_low or 'DEX'} (liq ${_liq_j:,.0f}, age {_age_j:.1f}m) — риск Remove LP!")
+                        return False
         except Exception as _lp_ex:
             if getattr(config, "ALLOW_UNLOCKED_LP_POOLS", True) and _liq_j >= float(getattr(config, "MIN_GRADUATED_LIQ_USD", 3000.0)):
                 print(f"🔓 [{source_tag}-RC-ERR-SKIP] {_sym_tmp} ({mint[:8]}): ошибка RugCheck ({_lp_ex}) — разрешаем быстрый вход (режим 0d2b1ae).")
@@ -1017,8 +1053,12 @@ async def _evaluate_and_buy_inner(mint: str, td: dict, analyzer, tracker, source
         _is_ok_rw, _rw_reason = _rw_res_j
         if not _is_ok_rw:
             _rw_l = str(_rw_reason).lower()
+            _rw_hard_auth = any(k in _rw_l for k in ("mint_authority_enabled", "freeze_authority_enabled", "honeypot"))
             _rw_rpc_err = any(e in _rw_l for e in ("429", "403", "timeout", "error", "none", "rpc", "http", "retry"))
-            if not _rw_rpc_err:
+            _is_rh_j_rw = bool((td or {}).get("_rug_hunter_mode")) or ("RUG-HUNTER" in str(_sig or "").upper())
+            if _is_rh_j_rw and not _rw_hard_auth:
+                print(f"🎯 [{source_tag}-RH-WALLET-PASS] {_sym_tmp} ({mint[:8]}): {_rw_reason} — контракт чист, ведём в RUG-HUNTER.")
+            elif not _rw_rpc_err:
                 print(f"🚫 [{source_tag}-RUG-WALLET] {_sym_tmp} ({mint[:8]}): {_rw_reason} — вход заблокирован.")
                 return False
     elif isinstance(_rw_res_j, Exception):
@@ -1044,10 +1084,11 @@ async def _evaluate_and_buy_inner(mint: str, td: dict, analyzer, tracker, source
                 print(f"🚫 [{source_tag}-FCR-RED-H1] {_sym_tmp} ({mint[:8]}): FCR WARN на падающем h1 {_h1_j:+.1f}% — отмена входа!")
                 return False
             _is_dist_fcr_j = config.is_distributed_safe_runner(_liq_j, _age_j, _vm5_j, _b5_j, _s5_j, is_lp_safe=True)
-            if _fcr_wn_j >= 5 and not _is_dist_fcr_j:
+            _is_rh_j_fcr = bool((td or {}).get("_rug_hunter_mode")) or ("RUG-HUNTER" in str(_sig or "").upper())
+            if _fcr_wn_j >= 5 and not _is_dist_fcr_j and not _is_rh_j_fcr:
                 print(f"🚫 [{source_tag}-FCR-FARM] {_sym_tmp} ({mint[:8]}): ферма из {_fcr_wn_j} кошельков одного источника — отмена входа!")
                 return False
-            if _fcr_wn_j >= 3 and _m5_j > 120.0 and not _is_dist_fcr_j:
+            if _fcr_wn_j >= 3 and _m5_j > 120.0 and not _is_dist_fcr_j and not _is_rh_j_fcr:
                 print(f"🚫 [{source_tag}-FCR-INSIDER] {_sym_tmp} ({mint[:8]}): инсайдерская сеть {_fcr_wn_j} кошельков на m5 {_m5_j:+.1f}% — отмена входа!")
                 return False
 
@@ -1115,12 +1156,28 @@ async def _evaluate_and_buy_inner(mint: str, td: dict, analyzer, tracker, source
         if (td or {}).get("dexId"):
             _of_feat_j.setdefault("dex", str((td or {}).get("dexId") or "").lower())
 
+        _sig_fin_j = analyzer.get_signal(mint)
+        _rh_mode_j = str((td or {}).get("_rug_hunter_mode") or "").strip()
+        if _rh_mode_j and "RUG-HUNTER" not in str(_sig_fin_j or "").upper():
+            import rug_hunter as _rh_js
+            _sig_fin_j = _rh_js.format_rug_hunter_source(_rh_mode_j, _mint_ml_conf, (td or {}).get("_rug_hunter_creator_profile"))
+        _is_rh_buy_j = bool(_rh_mode_j) or ("RUG-HUNTER" in str(_sig_fin_j or "").upper())
+        if _is_rh_buy_j:
+            import rug_hunter as _rh_jb
+            if not _rh_jb.has_rug_hunter_slot(tracker):
+                print(f"⏳ [{source_tag}-RH-SLOTS] {_sym_tmp}: лимит слотов Rug-Hunter заполнен — скип.")
+                return False
+            size = max(1.5, size * float(getattr(config, "RUG_HUNTER_SIZE_MULT", 0.65)))
+            _src_final_j = _sig_fin_j
+        else:
+            _src_final_j = f"{source_tag}:{_sig_fin_j}" + ("+SMART" if _of_feat_j.get("smart_tape_n") else "")
+
         if not tracker.add_position(
             _sym_tmp, mint, price, min(size, 100.0),
             is_mature=True,
             ml_features={**analyzer.pack_features(td or {}), **_fcr_compact_j, **_of_feat_j},
             ml_confidence=_mint_ml_conf,
-            source=f"{source_tag}:{analyzer.get_signal(mint)}" + ("+SMART" if _of_feat_j.get("smart_tape_n") else ""),
+            source=_src_final_j,
             pair_address=((td or {}).get("pairAddress", "") or ""),
             stop_under_wick=_wick_stop_price,
             wick_stop_loss_pct=_wick_pct,
@@ -1345,9 +1402,20 @@ async def jup_loop(analyzer, tracker):
                         )
                         _dex_cand = str(td.get("dexId") or "").lower()
                         if "meteora" in _dex_cand and _dex_cand != "meteoradbc" and not td.get("_lp_verified", False):
-                            skipped_flat += 1
-                            processed[m] = _now_t + 3600
-                            continue
+                            _rh_met_j_ok = (
+                                bool(getattr(config, "RUG_HUNTER_ENABLED", False))
+                                and bool(getattr(config, "RUG_HUNTER_UNLOCKED_LP_ENABLED", False))
+                                and 1.0 <= _ag <= float(getattr(config, "RUG_HUNTER_UNLOCKED_MAX_AGE_MIN", 10.0))
+                                and _lq_cand >= float(getattr(config, "RUG_HUNTER_MIN_LIQ_USD", 8000.0))
+                                and _v5_cand >= float(getattr(config, "RUG_HUNTER_MIN_VOL5_USD", 6000.0))
+                                and _s5_cand >= 10
+                                and _b5_cand >= max(35, int(_s5_cand * 1.15))
+                                and _m5 >= 6.0
+                            )
+                            if not _rh_met_j_ok:
+                                skipped_flat += 1
+                                processed[m] = _now_t + 3600
+                                continue
                         _is_bull_dip_cand = (
                             _m5 >= -18.0
                             and _v5_cand >= 20000.0

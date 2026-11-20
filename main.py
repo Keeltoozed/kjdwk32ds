@@ -125,9 +125,16 @@ async def position_security_auditor_loop(analyzer, tracker):
                                 # МГНОВЕННЫЙ выход: ликва просела больше чем на LIQ_DRAIN_EXIT_PCT от пика — не ждём обнуления!
                                 # Для сожжённых/залоченных пулов (каноничный PumpSwap / Raydium LP lock>=80%) дев физически не может вывести LP,
                                 # а просадка USD-ликвидности на 30% в AMM (xy=k) — это обычное движение цены, которое режет штатный Stop-Loss (-10%), а не паник-сейл в -54%!
-                                _is_locked_amm = bool(getattr(position, "is_lp_locked_80", False)) or not bool(getattr(position, "is_unlocked_pool", False))
-                                _eff_drain_exit = 0.68 if _is_locked_amm else _cfg_drain_exit
-                                _eff_drain_fast = 0.60 if _is_locked_amm else _cfg_drain_fast
+                                _is_rh_pos_aud = False
+                                try:
+                                    import rug_hunter as _rh_aud
+                                    _is_rh_pos_aud = _rh_aud.is_rug_hunter_position(position)
+                                except Exception:
+                                    _is_rh_pos_aud = False
+                                _is_locked_amm = (not _is_rh_pos_aud) and (bool(getattr(position, "is_lp_locked_80", False)) or not bool(getattr(position, "is_unlocked_pool", False)))
+                                _rh_liq_thr = float(getattr(config, "RUG_HUNTER_LIQ_DRAIN_PCT", 0.15))
+                                _eff_drain_exit = _rh_liq_thr if _is_rh_pos_aud else (0.68 if _is_locked_amm else _cfg_drain_exit)
+                                _eff_drain_fast = _rh_liq_thr if _is_rh_pos_aud else (0.60 if _is_locked_amm else _cfg_drain_fast)
                                 _emergency_exit = _is_zero_liq or _crit_drained or (_liq_crash_pct >= _eff_drain_exit and _peak_liq >= 3000.0)
                                 # Экстренный случай: за один тик ликва обвалилась — паник-сейл сразу
                                 _fast_drain = _liq_crash_pct >= _eff_drain_fast and _peak_liq >= 3000.0
@@ -200,6 +207,22 @@ async def position_security_auditor_loop(analyzer, tracker):
                                     position._zero_liq_streak = 0
                                     position._fast_drain_streak = 0
                                     position._liq_drop_streak = 0
+
+                            # 2.5 🎯 Лайв-монитор рагера и многокошелькового слива для позиций RUG-HUNTER (каждые 1.5с):
+                            try:
+                                import rug_hunter as _rh_live
+                                if _rh_live.is_rug_hunter_position(position):
+                                    _rh_last_t = float(getattr(position, "_rh_live_chk_ts", 0.0) or 0.0)
+                                    if (now_ts - _rh_last_t) >= 1.5:
+                                        position._rh_live_chk_ts = now_ts
+                                        _rh_exit_now, _rh_exit_why = await _rh_live.check_live_rugger_activity(position, _td_sol)
+                                        if _rh_exit_now:
+                                            _px_rh = float(getattr(position, "current_price_usd", 0.0) or 0.0)
+                                            print(f"🚨 [RUG-HUNTER-LIVE] {position.symbol} ({mint[:8]}): {_rh_exit_why} — экстренный выход!")
+                                            tracker.close_position(mint, _px_rh, _rh_exit_why)
+                                            continue
+                            except Exception:
+                                pass
 
                             # 3. Мониторинг кошельков (сиビル, флипперы, аномальная активность после входа)
                             _wm_chk = getattr(position, "last_wallet_mon_chk", 0.0)
@@ -506,7 +529,16 @@ async def position_manager_loop(analyzer, tracker):
                     bool(getattr(position, "is_lp_locked_80", False)),
                 )
                 position.is_unlocked_pool = _pos_unl_tp
-                _tp1_sol_thr, _tp1_sell, _tp2, _tp2_sell, _tp3, _tp3_sell, _tp4, _tp4_sell, _tp5, _tp5_sell = config.get_sol_tp_ladder(_pos_unl_tp)
+                _is_rh_tp = False
+                try:
+                    import rug_hunter as _rh_tp_mod
+                    _is_rh_tp = _rh_tp_mod.is_rug_hunter_position(position)
+                except Exception:
+                    _is_rh_tp = False
+                if _is_rh_tp:
+                    _tp1_sol_thr, _tp1_sell, _tp2, _tp2_sell, _tp3, _tp3_sell, _tp4, _tp4_sell, _tp5, _tp5_sell = _rh_tp_mod.get_rug_hunter_tp_ladder()
+                else:
+                    _tp1_sol_thr, _tp1_sell, _tp2, _tp2_sell, _tp3, _tp3_sell, _tp4, _tp4_sell, _tp5, _tp5_sell = config.get_sol_tp_ladder(_pos_unl_tp)
                 _min_tp_ticket = float(getattr(config, "PARTIAL_TP_MIN_TICKET_USD", 0.50))
                 _pos_val = float(getattr(position, "original_amount_usd", 0.0) or getattr(position, "amount_usd", 0.0) or 0.0)
                 _allow_partial_tp = getattr(config, "PARTIAL_TP_ENABLED", True) and (_pos_val >= _min_tp_ticket)
@@ -1396,8 +1428,25 @@ async def scanner_loop(analyzer, tracker):
 
                         _c_dex = str(_c_pre.get("dexId", "")).lower()
                         if "meteora" in _c_dex and _c_dex != "meteoradbc" and not _c_pre.get("_lp_verified", False):
-                            processed_mints[mint] = _now_r + 3600
-                            continue
+                            _c_tx_m = (_c_pre.get("txns") or {}).get("m5", {}) or {}
+                            _c_b5_m = int(_c_tx_m.get("buys", 0) or 0)
+                            _c_s5_m = int(_c_tx_m.get("sells", 0) or 0)
+                            _c_v5_m = float((_c_pre.get("volume") or {}).get("m5", 0) or 0)
+                            _c_l_m = float((_c_pre.get("liquidity") or {}).get("usd", 0) or 0)
+                            _c_m5_m = float(((_c_pre.get("priceChange") or {}).get("m5", 0) or 0))
+                            _rh_met_sc_ok = (
+                                bool(getattr(config, "RUG_HUNTER_ENABLED", False))
+                                and bool(getattr(config, "RUG_HUNTER_UNLOCKED_LP_ENABLED", False))
+                                and 1.0 <= _age_r <= float(getattr(config, "RUG_HUNTER_UNLOCKED_MAX_AGE_MIN", 10.0))
+                                and _c_l_m >= float(getattr(config, "RUG_HUNTER_MIN_LIQ_USD", 8000.0))
+                                and _c_v5_m >= float(getattr(config, "RUG_HUNTER_MIN_VOL5_USD", 6000.0))
+                                and _c_s5_m >= 10
+                                and _c_b5_m >= max(35, int(_c_s5_m * 1.15))
+                                and _c_m5_m >= 6.0
+                            )
+                            if not _rh_met_sc_ok:
+                                processed_mints[mint] = _now_r + 3600
+                                continue
                         if not getattr(config, "ALLOW_UNGRADUATED_PUMPFUN", False) and config.is_unmigrated_curve_token(mint, _c_pre):
                             # КРИТИЧНО: если токен уже в _graduated_set (пришёл из subscribeMigration), НЕ выкидываем его!
                             # DexScreener часто отстаёт на 1-3 мин и показывает старый dexId='pumpfun', тогда как
@@ -2243,14 +2292,23 @@ async def scanner_loop(analyzer, tracker):
                                             print(f"🚫 [SCANNER PRE-FLIGHT GOPLUS] {actual_symbol} ({mint[:8]}): {_g_why} — вход заблокирован!")
                                             continue
 
+                                    _rh_mode_sc = str(pair_data.get("_rug_hunter_mode") or "").upper().strip()
+                                    _is_rh_sc_pf = bool(_rh_mode_sc) or ("RUG-HUNTER" in str(analyzer.get_signal(mint) or "").upper())
+                                    _is_rh_unl_sc = bool(_is_rh_sc_pf and _rh_mode_sc == "UNLOCKED-LP" and getattr(config, "RUG_HUNTER_ENABLED", False) and getattr(config, "RUG_HUNTER_UNLOCKED_LP_ENABLED", False))
+                                    if _is_rh_sc_pf:
+                                        import rug_hunter as _rh_pf_sl
+                                        if not _rh_pf_sl.has_rug_hunter_slot(tracker):
+                                            print(f"⏳ [SCANNER-RH-SLOTS] {actual_symbol} ({mint[:8]}): лимит слотов Rug-Hunter заполнен — отмена!")
+                                            continue
+
                                     # PRE-FLIGHT PUMPSWAP ON-CHAIN GUARD: защита от permissionless CreatePool дрейнов (включая .pump/.bonk/.BAGS)
                                     if _dex_lower_sc == "pumpswap" and isinstance(_r_ps, tuple):
                                         _ps_m_ok, _ps_m_canon, _ps_m_why = _r_ps
-                                        if not _ps_m_ok or config.is_pumpswap_liq_fdv_trap(pair_data):
+                                        if (not _ps_m_ok and not (_is_rh_unl_sc and "createpool-unburned-lp" in str(_ps_m_why or "").lower())) or config.is_pumpswap_liq_fdv_trap(pair_data):
                                             print(f"🚫 [SCANNER PRE-FLIGHT PUMPSWAP] {actual_symbol} ({mint[:8]}): {_ps_m_why} — вход заблокирован!")
                                             continue
                                         _ps_rpc_safe_m = bool(pair_data.get("_pumpswap_rpc_unverified")) and mint.lower().endswith("pump")
-                                        if not _ps_m_canon and not bool(pair_data.get("_pumpswap_lp_burned")) and not _ps_rpc_safe_m:
+                                        if not _ps_m_canon and not bool(pair_data.get("_pumpswap_lp_burned")) and not _ps_rpc_safe_m and not _is_rh_unl_sc:
                                             _ca_ps = float(pair_data.get("pairCreatedAt") or 0)
                                             _age_ps = ((time.time() * 1000.0 - _ca_ps) / 60000.0) if _ca_ps > 0 else 0.1
                                             _fdv_ps = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
@@ -2271,7 +2329,7 @@ async def scanner_loop(analyzer, tracker):
                                     # PRE-FLIGHT GUARD ДЛЯ ВСЕХ НЕЗАЛОЧЕННЫХ ПУЛОВ (Meteora DYN2, PumpSwap CreatePool, кастомный Raydium без сожжённого LP)
                                     _is_native_pump_sc = mint.lower().endswith("pump") and _dex_lower_sc in ("", "pumpfun", "pump", "pumpswap")
                                     _is_lp_safe_sc = bool(pair_data.get("_lp_verified")) or bool(pair_data.get("_pumpswap_canonical")) or bool(pair_data.get("_pumpswap_lp_burned"))
-                                    if not _is_native_pump_sc and not _is_lp_safe_sc:
+                                    if not _is_native_pump_sc and not _is_lp_safe_sc and not _is_rh_unl_sc:
                                         _ca_sc = float(pair_data.get("pairCreatedAt") or 0)
                                         _age_sc = ((time.time() * 1000.0 - _ca_sc) / 60000.0) if _ca_sc > 0 else 0.1
                                         _fdv_sc = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
@@ -2300,9 +2358,12 @@ async def scanner_loop(analyzer, tracker):
                                         _rw_safe, _rw_why = _r_rw
                                         if not _rw_safe:
                                             _why_low = str(_rw_why or "").lower()
+                                            _has_hard_auth_rug = any(k in _why_low for k in ("mint_authority_enabled", "freeze_authority_enabled", "honeypot"))
                                             _only_rpc_errors = all(k in _why_low for k in ("no-mint-account", "no-holder-data")) or "rpc" in _why_low or "timeout" in _why_low
-                                            if _only_rpc_errors and not any(k in _why_low for k in ("mint_authority_enabled", "freeze_authority_enabled", "top1_pct_high", "sybil", "fresh bot")):
+                                            if _only_rpc_errors and not _has_hard_auth_rug and not any(k in _why_low for k in ("top1_pct_high", "sybil", "fresh bot")):
                                                 print(f"⚠️ [SCANNER PRE-FLIGHT RUG-WALLET] {actual_symbol} ({mint[:8]}): RPC 429/timeout ({_rw_why}) — вход разрешён (fail-open).")
+                                            elif _is_rh_sc_pf and not _has_hard_auth_rug:
+                                                print(f"🎯 [SCANNER-RH-WALLET-PASS] {actual_symbol} ({mint[:8]}): {_rw_why} — контракт чист, ведём в режиме RUG-HUNTER с лайв-монитором.")
                                             else:
                                                 print(f"🚫 [SCANNER PRE-FLIGHT RUG-WALLET] {actual_symbol} ({mint[:8]}): {_rw_why} — вход заблокирован аудитом кошельков!")
                                                 continue
@@ -2334,10 +2395,10 @@ async def scanner_loop(analyzer, tracker):
                                             _is_dist_fcr_sc = config.is_distributed_safe_runner(
                                                 liq_usd, _age_m, _vol5_live, _b5_live, _s5_live, is_lp_safe=True
                                             )
-                                            if _fcr_w_n >= 5 and not _is_dist_fcr_sc:
+                                            if _fcr_w_n >= 5 and not _is_dist_fcr_sc and not _is_rh_sc_pf:
                                                 print(f"🚫 [SCANNER FCR-FARM-BLOCK] {actual_symbol} ({mint[:8]}): ферма из {_fcr_w_n} кошельков одного источника (кейс GTA6 -14%) — отмена входа!")
                                                 continue
-                                            if _fcr_w_n >= 3 and _fcr_m5 > 120.0 and not _is_dist_fcr_sc:
+                                            if _fcr_w_n >= 3 and _fcr_m5 > 120.0 and not _is_dist_fcr_sc and not _is_rh_sc_pf:
                                                 print(f"🚫 [SCANNER FCR-INSIDER-BLOCK] {actual_symbol} ({mint[:8]}): инсайдерская сеть {_fcr_w_n} кошельков на свече m5 {_fcr_m5:+.1f}% — отмена входа (кейс CHUD -50%)!")
                                                 continue
                                             print(f"⚠️ [SCANNER PRE-FLIGHT FCR] {actual_symbol} ({mint[:8]}): {_r_fcr.get('report', '')}")
@@ -2383,10 +2444,22 @@ async def scanner_loop(analyzer, tracker):
                                     if _of_meta.get("onchain_source"):
                                         _of_feat["onchain_source"] = _of_meta["onchain_source"]
 
+                                _sig_sc_fin = analyzer.get_signal(mint)
+                                _rh_mode_buy = str(pair_data.get("_rug_hunter_mode") or "").strip()
+                                if _rh_mode_buy and "RUG-HUNTER" not in str(_sig_sc_fin or "").upper():
+                                    import rug_hunter as _rh_sb
+                                    _sig_sc_fin = _rh_sb.format_rug_hunter_source(_rh_mode_buy, _final_sc_conf, pair_data.get("_rug_hunter_creator_profile"))
+                                _is_rh_buy_sc = bool(_rh_mode_buy) or ("RUG-HUNTER" in str(_sig_sc_fin or "").upper())
+                                if _is_rh_buy_sc:
+                                    position_size = max(1.5, position_size * float(getattr(config, "RUG_HUNTER_SIZE_MULT", 0.65)))
+                                    _src_sc_final = _sig_sc_fin
+                                else:
+                                    _src_sc_final = f"SCANNER:{_sig_sc_fin}"
+
                                 _bought = tracker.add_position(actual_symbol, mint, entry_price, position_size, is_mature=True,
                                                      ml_features={**analyzer.pack_features(pair_data), **_fcr_feat, **_of_feat},
                                                      ml_confidence=_final_sc_conf,
-                                                     source=f"SCANNER:{analyzer.get_signal(mint)}",
+                                                     source=_src_sc_final,
                                                      pair_address=pair_data.get("pairAddress", ""),
                                                      stop_under_wick=_wick_stop_price,
                                                      wick_stop_loss_pct=_wick_pct,
@@ -3855,13 +3928,20 @@ def _render_tab1_content():
                         _fcr_v = str((row.get('ml_features') or {}).get('fcr_verdict') or '') if isinstance(row.get('ml_features'), dict) else ''
                         _fcr_badge = f"<div style='margin-top: 6px; font-size: 0.78em;'><span style='color:#888;'>🔍 FCR: </span><b style='color:#00C851;'>{_fcr_v}</b></div>" if _fcr_v else ""
 
+                        _src_open_s = str(row.get('source', '') or '').strip()
+                        _is_rh_open = 'RUG-HUNTER' in _src_open_s.upper()
+                        _src_open_badge = (
+                            f"<span style='background:#FF8F00; color:#111; padding:2px 7px; border-radius:4px; font-weight:bold;'>{_src_open_s}</span>"
+                            if _is_rh_open else
+                            f"🔖 {_src_open_s if _src_open_s else '—'}"
+                        )
                         card_html = (
                             f"<div style='background-color: #1E1E1E; padding: 15px; border-radius: 8px; border-left: 5px solid {color}; margin-bottom: 10px; font-family: sans-serif;'>"
                             f"<div style='display: flex; justify-content: space-between; align-items: center;'>"
                             f"<h3 style='margin:0; color: #FFF;'>{row['symbol'] if str(row['symbol']).strip() else row['mint'][:6] + '...'}</h3>"
                             f"{_right}"
                             f"</div>"
-                            f"<div style='margin-top: 6px; font-size: 0.75em; color: #888;'>🔖 {row.get('source', '') if str(row.get('source', '')).strip() else '—'} {chain_badge(row.get('chain', 'solana'), True)}</div>"
+                            f"<div style='margin-top: 6px; font-size: 0.75em; color: #888;'>{_src_open_badge} {chain_badge(row.get('chain', 'solana'), True)}</div>"
                             f"<div style='margin-top: 6px; font-size: 0.85em; color: #DDD;'>{_size_html}</div>"
                             f"{_updated_badge}"
                             f"{_fcr_badge}"
@@ -3902,13 +3982,42 @@ def _render_tab1_content():
                         st.warning(f"⚠️ { _bad_n} бит. сделок исключено из тотала (фантом единиц цены, см. логи Suspicious).")
                     closed_df = _clean
                     st.markdown(f"""
-                    <div style='background-color: #2D2D2D; padding: 20px; border-radius: 10px; text-align: center; margin-bottom: 15px;'>
+                    <div style='background-color: #2D2D2D; padding: 20px; border-radius: 10px; text-align: center; margin-bottom: 10px;'>
                         <div style='color: #888; font-size: 1.1em; text-transform: uppercase;'>Общий PnL</div>
                         <h1 style='margin: 0; color: {"#00C851" if total_pnl >= 0 else "#FF4444"};'>
                             {"+" if total_pnl >= 0 else ""}${total_pnl:.2f}
                         </h1>
                     </div>
                     """, unsafe_allow_html=True)
+
+                    # Раздельная статистика: Основная стратегия vs 🎯 Rug-Hunter
+                    try:
+                        _src_col = closed_df['source'].fillna('').astype(str).str.upper() if 'source' in closed_df.columns else pd.Series([''] * len(closed_df), index=closed_df.index)
+                        _rh_mask = _src_col.str.contains('RUG-HUNTER', na=False)
+                        _main_df = closed_df[~_rh_mask]
+                        _rh_df = closed_df[_rh_mask]
+                        _m_pnl = float(_main_df['pnl_usd'].sum()) if not _main_df.empty else 0.0
+                        _m_n = len(_main_df)
+                        _m_wr = (float((_main_df['pnl_usd'] > 0).sum()) / _m_n * 100.0) if _m_n > 0 else 0.0
+                        _rh_pnl = float(_rh_df['pnl_usd'].sum()) if not _rh_df.empty else 0.0
+                        _rh_n = len(_rh_df)
+                        _rh_wr = (float((_rh_df['pnl_usd'] > 0).sum()) / _rh_n * 100.0) if _rh_n > 0 else 0.0
+                        st.markdown(f"""
+                        <div style='display: flex; gap: 8px; margin-bottom: 14px;'>
+                            <div style='flex: 1; background: #222; border-radius: 8px; padding: 10px; border-top: 3px solid #00C851; text-align: center;'>
+                                <div style='font-size: 0.75em; color: #AAA;'>🛡️ Основная (чистые)</div>
+                                <div style='font-size: 1.1em; font-weight: bold; color: {"#00C851" if _m_pnl >= 0 else "#FF4444"};'>{"+" if _m_pnl >= 0 else ""}${_m_pnl:.2f}</div>
+                                <div style='font-size: 0.72em; color: #777;'>{_m_n} сд. | WR {_m_wr:.0f}%</div>
+                            </div>
+                            <div style='flex: 1; background: #222; border-radius: 8px; padding: 10px; border-top: 3px solid #FF8F00; text-align: center;'>
+                                <div style='font-size: 0.75em; color: #FFB300;'>🎯 Rug-Hunter</div>
+                                <div style='font-size: 1.1em; font-weight: bold; color: {"#00C851" if _rh_pnl >= 0 else "#FF4444"};'>{"+" if _rh_pnl >= 0 else ""}${_rh_pnl:.2f}</div>
+                                <div style='font-size: 0.72em; color: #777;'>{_rh_n} сд. | WR {_rh_wr:.0f}%</div>
+                            </div>
+                        </div>
+                        """, unsafe_allow_html=True)
+                    except Exception:
+                        pass
                     
                     if closed_df.empty:
                         st.info("История пуста (все сделки отфильтрованы как битые).")
@@ -3958,12 +4067,19 @@ def _render_tab1_content():
                             c_color = "#00C851" if p_usd >= 0 else "#FF4444"
                             c_sign = "+" if p_usd > 0 else ""
 
+                            _src_cl_s = str(row.get('source', '') or '').strip()
+                            _is_rh_cl = 'RUG-HUNTER' in _src_cl_s.upper()
+                            _src_cl_html = (
+                                f"<span style='background:#FF8F00; color:#111; padding:1px 6px; border-radius:4px; font-weight:bold;'>{_src_cl_s}</span>"
+                                if _is_rh_cl else
+                                f"🔖 {_src_cl_s if _src_cl_s else '—'}"
+                            )
                             closed_card_html = (
                                 f"<div style='background-color: #1A1A1A; padding: 10px 15px; border-radius: 6px; border-right: 4px solid {c_color}; margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center;'>"
                                 f"<div>"
                                 f"<div style='color: #FFF; font-weight: bold;'>{row['symbol'] if str(row['symbol']).strip() else row.name[:6] + '...'} <span style='font-size: 0.7em; color: #888;'>{chain_badge(row.get('chain', 'solana'))}</span></div>"
                                 f"<div style='color: #666; font-size: 0.75em;'>{row.get('exit_reason', 'Closed')} {row.get('held', '')}</div>"
-                                f"<div style='color: #555; font-size: 0.7em;'>🔖 {row.get('source', '') if str(row.get('source', '')).strip() else '—'}</div>"
+                                f"<div style='color: #555; font-size: 0.7em; margin-top: 2px;'>{_src_cl_html}</div>"
                                 f"</div>"
                                 f"<div style='text-align: right; color: {c_color}; font-weight: bold;'>"
                                 f"{c_sign}${p_usd:.2f} <br> <span style='font-size: 0.8em;'>({c_sign}{p_pct:.2f}%)</span>"

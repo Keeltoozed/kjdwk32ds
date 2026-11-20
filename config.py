@@ -535,6 +535,8 @@ def evaluate_entry_momentum(
     # Когда кабал-ферма крутит 1000-2500 ботовых сделок за 5м (v/l >= 2.0x) в первые 20м, а цена еле ползёт (m5 < +38%, h1 < +60%, <14% на 1x оборота пула) —
     # это накрутка объёма/лесенки перед 1-секундным Jito Sell-All (104-183 кошелька в 1 блок).
     # Условие h1 < 60% гарантирует, что живые пробои на консолидации (MI h1=+109%, m5=+10.4%) НЕ режутся!
+    # Если включён RUG_HUNTER_CABAL_SURF_ENABLED и токен ещё в раннем окне (<=8м, живой спрос) — переводим в ветку RUG-HUNTER:CABAL-SURF с жёстким ранним выходом!
+    _rh_cabal_flagged = False
     if (
         not is_curve
         and age_min <= 20.0
@@ -544,10 +546,25 @@ def evaluate_entry_momentum(
         and h1 < 60.0
         and (m5 / max(vel_ratio, 0.1)) < 14.0
     ):
-        return (
-            False,
-            f"cabal-staircase-churn tx5={tot_tx} v/l={vel_ratio:.1f}x m5={m5:+.1f}% h1={h1:+.1f}% eff={m5/max(vel_ratio, 0.1):.1f} (<14% per 1x liq)",
+        _rh_cabal_ok = (
+            bool(globals().get("RUG_HUNTER_ENABLED", False))
+            and bool(globals().get("RUG_HUNTER_CABAL_SURF_ENABLED", False))
+            and age_min <= float(globals().get("RUG_HUNTER_CABAL_MAX_AGE_MIN", 8.0))
+            and liq_usd >= float(globals().get("RUG_HUNTER_MIN_LIQ_USD", 8000.0))
+            and vol5_usd >= float(globals().get("RUG_HUNTER_MIN_VOL5_USD", 6000.0))
+            and sells5 >= 8
+            and buys5 >= max(35, int(sells5 * 1.15))
+            and m5 >= 8.0
+            and m1 >= -1.0
+            and (fdv_usd <= 0.0 or fdv_usd <= float(globals().get("RUG_HUNTER_CABAL_MAX_FDV_USD", 180000.0)))
         )
+        if _rh_cabal_ok:
+            _rh_cabal_flagged = True
+        else:
+            return (
+                False,
+                f"cabal-staircase-churn tx5={tot_tx} v/l={vel_ratio:.1f}x m5={m5:+.1f}% h1={h1:+.1f}% eff={m5/max(vel_ratio, 0.1):.1f} (<14% per 1x liq)",
+            )
 
     # 0.5 МЯГКИЙ ОТСЕВ МЁРТВЫХ ПУСТЫШЕК (не блокируем свежие ракеты вроде NADJA/CSI с объёмом $350-$650):
     _min_tx_gate = 6 if age_min <= 2.5 else (8 if age_min <= 5.0 else int(globals().get("MIN_TXNS_M5", 10)))
@@ -867,6 +884,9 @@ def evaluate_entry_momentum(
 
     if age_min >= 45.0 and h6 is not None and float(h6 or 0.0) < min_h6:
         return False, f"h6-downtrend {float(h6 or 0.0):+.1f}% < {min_h6:+.1f}% (coin is bleeding)"
+
+    if _rh_cabal_flagged:
+        return True, "ok-rug-hunter-cabal"
 
     return True, "ok"
 
@@ -1342,3 +1362,64 @@ FAST_STOP_LOSS_PCT = -20.0               # Жесткий стоп -20% (пер�
 EARLY_MOMENTUM_CUT_SEC = 60.0            # Проверка импульса через 60 сек (не выбивает VICE на 11-й секунде!)
 EARLY_MOMENTUM_MIN_PEAK_PCT = 3.0        # Если за 60-150 сек пик был меньше +3%
 EARLY_MOMENTUM_MAX_LOSS_PCT = -12.0      # Срез при подтверждённом уходе <= -12% без импульса
+
+# ============================================================================
+# 🎯 СТРАТЕГИЯ «ОХОТНИК НА РАГИ» (RUG-HUNTER) — ОТДЕЛЬНАЯ МАРКИРОВКА И РИСК-БЮДЖЕТ
+# ============================================================================
+# Все сделки этой стратегии явно подписываются в source как «🎯 RUG-HUNTER:UNLOCKED-LP»
+# или «🎯 RUG-HUNTER:CABAL-SURF» — чтобы отдельно оценивать её PnL и Winrate на дашборде!
+RUG_HUNTER_ENABLED = True                 # Включить стратегию охоты на ранние фазы незалоченных пулов и кабалов
+RUG_HUNTER_UNLOCKED_LP_ENABLED = True     # Режим A: ранний вход в незалоченные пулы (без honeypot/freeze/instant-rugger)
+RUG_HUNTER_CABAL_SURF_ENABLED = True      # Режим B: ранний сёрф залоченных пулов с кабал/инсайдер-сеткой (<=8м)
+RUG_HUNTER_MAX_SLOTS = 2                  # Макс. 2 одновременных слота под Rug-Hunter (2 слота всегда свободны под чистые ракеты)
+RUG_HUNTER_SIZE_MULT = 0.65               # Уменьшенный риск-сайз (65% от обычного ордера)
+RUG_HUNTER_UNLOCKED_MIN_AGE_MIN = 1.0     # Минимум 1.0м жизни (отсекает 0-60с мгновенные раги)
+RUG_HUNTER_UNLOCKED_MAX_AGE_MIN = 10.0    # Максимум 10.0м для входа (не заходим в позднюю фазу перед выводом LP)
+RUG_HUNTER_CABAL_MAX_AGE_MIN = 8.0        # Максимум 8.0м для кабал-сёрфа (кабалы сливают на 10–18м)
+RUG_HUNTER_MIN_LIQ_USD = 8000.0           # Минимум $8k реальной ликвидности
+RUG_HUNTER_MIN_VOL5_USD = 6000.0          # Минимум $6k объёма за 5м
+RUG_HUNTER_MAX_FDV_USD = 250000.0         # Потолок FDV для незалоченных пулов
+RUG_HUNTER_CABAL_MAX_FDV_USD = 180000.0   # Потолок FDV для кабал-сёрфа
+RUG_HUNTER_TP1_PCT = 0.25                 # TP1 +25%: фиксируем 60% позиции сразу
+RUG_HUNTER_TP1_SELL_FRAC = 0.60
+RUG_HUNTER_TP2_PCT = 0.55                 # TP2 +55%: полный выход 100% до рага!
+RUG_HUNTER_TP2_SELL_FRAC = 1.00
+RUG_HUNTER_BREAKEVEN_PCT = 0.12           # Пик >= +12% -> пол +2.5% (в минус уйти нельзя)
+RUG_HUNTER_BREAKEVEN_FLOOR = 0.025
+RUG_HUNTER_TRAIL_ACT_PCT = 0.18           # С +18% включается плотный трейл -8% от ATH
+RUG_HUNTER_TRAIL_DROP_PCT = 0.08
+RUG_HUNTER_SL_PCT = -0.10                 # Жёсткий Stop-Loss -10%
+RUG_HUNTER_EMERG_PCT = -0.14              # Экстренный кап -14%
+RUG_HUNTER_MAX_HOLD_MIN = 5.0             # Базовый тайм-кэп 5м (сокращается/корректируется по истории дева)
+RUG_HUNTER_LIQ_DRAIN_PCT = 0.15           # Мгновенный выход при падении LP >= 15%
+
+
+# ============================================================================
+# 🎯 СТРАТЕГИЯ «ОХОТНИК НА РАГИ» (RUG-HUNTER) — ОТДЕЛЬНАЯ МАРКИРОВКА И РИСК-БЮДЖЕТ
+# ============================================================================
+# Все сделки этой стратегии явно подписываются в source как «🎯 RUG-HUNTER:UNLOCKED-LP»
+# или «🎯 RUG-HUNTER:CABAL-SURF» — чтобы отдельно оценивать её PnL и Winrate на дашборде!
+RUG_HUNTER_ENABLED = True                 # Включить стратегию охоты на ранние фазы незалоченных пулов и кабалов
+RUG_HUNTER_UNLOCKED_LP_ENABLED = True     # Режим A: ранний вход в незалоченные пулы (без honeypot/freeze/instant-rugger)
+RUG_HUNTER_CABAL_SURF_ENABLED = True      # Режим B: ранний сёрф залоченных пулов с кабал/инсайдер-сеткой (<=8м)
+RUG_HUNTER_MAX_SLOTS = 2                  # Макс. 2 одновременных слота под Rug-Hunter (2 слота всегда свободны под чистые ракеты)
+RUG_HUNTER_SIZE_MULT = 0.65               # Уменьшенный риск-сайз (65% от обычного ордера)
+RUG_HUNTER_UNLOCKED_MIN_AGE_MIN = 1.0     # Минимум 1.0м жизни (отсекает 0-60с мгновенные раги)
+RUG_HUNTER_UNLOCKED_MAX_AGE_MIN = 10.0    # Максимум 10.0м для входа (не заходим в позднюю фазу перед выводом LP)
+RUG_HUNTER_CABAL_MAX_AGE_MIN = 8.0        # Максимум 8.0м для кабал-сёрфа (кабалы сливают на 10–18м)
+RUG_HUNTER_MIN_LIQ_USD = 8000.0           # Минимум $8k реальной ликвидности
+RUG_HUNTER_MIN_VOL5_USD = 6000.0          # Минимум $6k объёма за 5м
+RUG_HUNTER_MAX_FDV_USD = 250000.0         # Потолок FDV для незалоченных пулов
+RUG_HUNTER_CABAL_MAX_FDV_USD = 180000.0   # Потолок FDV для кабал-сёрфа
+RUG_HUNTER_TP1_PCT = 0.25                 # TP1 +25%: фиксируем 60% позиции сразу
+RUG_HUNTER_TP1_SELL_FRAC = 0.60
+RUG_HUNTER_TP2_PCT = 0.55                 # TP2 +55%: полный выход 100% до рага!
+RUG_HUNTER_TP2_SELL_FRAC = 1.00
+RUG_HUNTER_BREAKEVEN_PCT = 0.12           # Пик >= +12% -> пол +2.5% (в минус уйти нельзя)
+RUG_HUNTER_BREAKEVEN_FLOOR = 0.025
+RUG_HUNTER_TRAIL_ACT_PCT = 0.18           # С +18% включается плотный трейл -8% от ATH
+RUG_HUNTER_TRAIL_DROP_PCT = 0.08
+RUG_HUNTER_SL_PCT = -0.10                 # Жёсткий Stop-Loss -10%
+RUG_HUNTER_EMERG_PCT = -0.14              # Экстренный кап -14%
+RUG_HUNTER_MAX_HOLD_MIN = 5.0             # Базовый тайм-кэп 5м (сокращается/корректируется по истории дева)
+RUG_HUNTER_LIQ_DRAIN_PCT = 0.15           # Мгновенный выход при падении LP >= 15%
