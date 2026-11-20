@@ -1729,7 +1729,8 @@ class Analyzer:
             # Проверка 0ms репутации создателя (bad_creators.json + серийный завод рагов VICECITY)
             try:
                 from birth_tracker import birth_tracker as _bt_cr
-                _cr_ok, _cr_why = _bt_cr.check_creator_risk(mint)
+                _is_rh_bt_en = bool(getattr(config, "RUG_HUNTER_ENABLED", True))
+                _cr_ok, _cr_why = _bt_cr.check_creator_risk(mint, is_rug_hunter=_is_rh_bt_en)
                 if not _cr_ok:
                     return self._deny(mint, f"bad-creator ({_cr_why})", f"🚫 [CREATOR-BLACKLIST] {mint[:8]}: {_cr_why} — блок в 0мс!")
             except Exception:
@@ -2594,7 +2595,8 @@ class Analyzer:
                         try:
                             from birth_tracker import birth_tracker as _bt_rc_c
                             _bt_rc_c.record_creator(mint, _rc_creator)
-                            _cr_ok_rc, _cr_why_rc = _bt_rc_c.check_creator_risk(mint, creator=_rc_creator)
+                            _is_rh_an_c = bool((pair_data or {}).get("_rug_hunter_mode") or getattr(config, "RUG_HUNTER_ENABLED", True))
+                            _cr_ok_rc, _cr_why_rc = _bt_rc_c.check_creator_risk(mint, creator=_rc_creator, is_rug_hunter=_is_rh_an_c)
                             if not _cr_ok_rc:
                                 return self._deny(mint, f"bad-creator ({_cr_why_rc})", f"🚫 [CREATOR-BLACKLIST] {symbol} ({mint[:8]}): {_cr_why_rc} — серийный рагер!")
                         except Exception:

@@ -2696,8 +2696,11 @@ class GrokJevEngine:
                 if isinstance(_of_res_j, tuple) and len(_of_res_j) == 4:
                     _of_ok, _of_px, _of_why, _of_meta = _of_res_j
                     if not _of_ok:
-                        print(f"🚫 [JEV-PREFLIGHT-BLOCKED] {symbol} ({address[:8]}): {_of_why} — блок входа!")
-                        return False, f"fills-flush-wait {_of_why}"
+                        if _is_rh_jev_fin and "serial-rugger" in str(_of_why):
+                            print(f"ℹ️ [JEV-RH-SERIAL-ALLOW] {symbol} ({address[:8]}): серийный дев допущен под наблюдение Rug-Hunter (тайм-кэп + ончейн дрейн)")
+                        else:
+                            print(f"🚫 [JEV-PREFLIGHT-BLOCKED] {symbol} ({address[:8]}): {_of_why} — блок входа!")
+                            return False, f"fills-flush-wait {_of_why}"
                     if _of_px and _of_px > 0:
                         price = _of_px
                         wick_price = price * (1.0 + wick_pct)

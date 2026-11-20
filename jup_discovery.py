@@ -1424,19 +1424,21 @@ async def jup_loop(analyzer, tracker):
                         )
                         _dex_cand = str(td.get("dexId") or "").lower()
                         if "meteora" in _dex_cand and _dex_cand != "meteoradbc" and not td.get("_lp_verified", False):
+                            _rh_s5_req = int(getattr(config, "RUG_HUNTER_EARLY_MIN_SELLS", 2)) if _ag < 2.0 else 8
+                            _rh_b5_req = max(int(getattr(config, "RUG_HUNTER_EARLY_MIN_BUYS", 12)) if _ag < 2.0 else 25, int(_s5_cand * 1.15))
                             _rh_met_j_ok = (
                                 bool(getattr(config, "RUG_HUNTER_ENABLED", False))
                                 and bool(getattr(config, "RUG_HUNTER_UNLOCKED_LP_ENABLED", False))
-                                and float(getattr(config, "RUG_HUNTER_UNLOCKED_MIN_AGE_MIN", 0.8)) <= _ag <= float(getattr(config, "RUG_HUNTER_UNLOCKED_MAX_AGE_MIN", 10.0))
+                                and float(getattr(config, "RUG_HUNTER_UNLOCKED_MIN_AGE_MIN", 0.25)) <= _ag <= float(getattr(config, "RUG_HUNTER_UNLOCKED_MAX_AGE_MIN", 3.5))
                                 and _lq_cand >= float(getattr(config, "RUG_HUNTER_MIN_LIQ_USD", 7500.0))
-                                and _v5_cand >= float(getattr(config, "RUG_HUNTER_MIN_VOL5_USD", 2000.0))
-                                and _s5_cand >= 10
-                                and _b5_cand >= max(35, int(_s5_cand * 1.15))
-                                and _m5 >= 6.0
+                                and _v5_cand >= float(getattr(config, "RUG_HUNTER_MIN_VOL5_USD", 1800.0))
+                                and _s5_cand >= _rh_s5_req
+                                and _b5_cand >= _rh_b5_req
+                                and _m5 >= 5.0
                             )
                             if not _rh_met_j_ok:
                                 skipped_flat += 1
-                                processed[m] = _now_t + 3600
+                                processed[m] = (_now_t + 6) if _ag <= 2.5 else (_now_t + 600)
                                 continue
                         _is_bull_dip_cand = (
                             _m5 >= -18.0

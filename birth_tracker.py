@@ -13,7 +13,8 @@ class BirthTracker:
         self.graduated = {}   # mint -> timestamp миграции (приоритет сканера!)
         self.waiting_room = {}  # mint -> {"ts": float, "pool": str, "creator": str, "init_dev_pct": float|None}
         self.mint_creators = {}       # mint -> creator_wallet
-        self.creator_launches = {}    # creator_wallet -> [ts, ...] (последний час)
+        self.creator_mints = {}        # creator_wallet -> {mint: timestamp} (защита от ложного спама при повторном сканировании одного токена)
+        self.creator_launches = {}    # creator_wallet -> [ts, ...] (последний час, backward-compat)
         self.bad_creators = self._load_bad_creators()
         self.lock = threading.Lock()
 
@@ -42,22 +43,30 @@ class BirthTracker:
             return
         now = time.time()
         with self.lock:
-            is_new_mint = bool(m and m not in self.mint_creators)
-            if is_new_mint:
+            if m:
                 self.mint_creators[m] = c
                 if len(self.mint_creators) > 5000:
                     self.mint_creators.clear()
-            hist = self.creator_launches.setdefault(c, [])
-            if is_new_mint or not hist or (now - hist[-1]) >= 2.0:
-                hist.append(now)
+            mints_map = self.creator_mints.setdefault(c, {})
+            # Учитываем реальные уникальные токены (mint), а не повторные опросы одной и той же монеты
+            if m:
+                if m not in mints_map:
+                    mints_map[m] = now
+            else:
+                mints_map[f"gen_{int(now)}"] = now
+
             # Храним запуски только за последний час
-            hist[:] = [t for t in hist if (now - t) <= 3600.0]
-            if len(self.creator_launches) > 3000:
-                self.creator_launches = {
-                    k: [t for t in v if (now - t) <= 3600.0]
-                    for k, v in self.creator_launches.items()
-                    if v and (now - max(v)) <= 3600.0
+            for _k in list(mints_map.keys()):
+                if (now - mints_map[_k]) > 3600.0:
+                    del mints_map[_k]
+
+            self.creator_launches[c] = list(mints_map.values())
+            if len(self.creator_mints) > 3000:
+                self.creator_mints = {
+                    k: v for k, v in self.creator_mints.items()
+                    if v and any((now - t) <= 3600.0 for t in v.values())
                 }
+                self.creator_launches = {k: list(v.values()) for k, v in self.creator_mints.items()}
 
     def record_bad_creator(self, creator_or_mint: str, reason: str = ""):
         key = str(creator_or_mint or "").strip()
@@ -71,7 +80,7 @@ class BirthTracker:
             self._save_bad_creators_unlocked()
             print(f"☠️ [BAD-CREATOR] Занесён в чёрный список дев {creator[:8]}... ({reason or 'rug'})")
 
-    def check_creator_risk(self, mint: str, creator: str = "") -> tuple:
+    def check_creator_risk(self, mint: str, creator: str = "", is_rug_hunter: bool = False) -> tuple:
         """0ms проверка репутации создателя токена (bad_creators.json + серийный спам-завод)."""
         now = time.time()
         with self.lock:
@@ -80,9 +89,16 @@ class BirthTracker:
                 return True, ""
             if c in self.bad_creators:
                 return False, f"blacklisted-rugger-creator {c[:8]}"
-            launches = [t for t in (self.creator_launches.get(c) or []) if (now - t) <= 3600.0]
-            if len(launches) >= 3:
-                return False, f"serial-rugger-factory ({len(launches)} launches in 1h by {c[:8]})"
+            if not is_rug_hunter:
+                mints_map = self.creator_mints.get(c)
+                if mints_map is not None:
+                    distinct_mints = [m_k for m_k, t_val in mints_map.items() if (now - t_val) <= 3600.0]
+                    num_launches = len(distinct_mints)
+                else:
+                    launches = [t for t in (self.creator_launches.get(c) or []) if (now - t) <= 3600.0]
+                    num_launches = len(launches)
+                if num_launches >= 3:
+                    return False, f"serial-rugger-factory ({num_launches} distinct launches in 1h by {c[:8]})"
         return True, ""
 
     def add_token(self, mint: str, creator: str = ""):

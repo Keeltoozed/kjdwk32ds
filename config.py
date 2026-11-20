@@ -301,6 +301,12 @@ def is_safe_unlocked_custom_runner(
     if is_trap:
         return False
 
+    # Допуск для проверенных кандидатов стратегии Rug-Hunter (SEEDED-LP / UNLOCKED-LP / CABAL-SURF):
+    # Они уже прошли полный аудит rug_hunter.qualify_unlocked_lp_hunter (liq>=$7.5k, age>=0.8m,
+    # buys>=20, buys>=sells*1.15, dev balance & dump monitor) и защищены тайм-кэпом 5м и автовыходом при сливе LP
+    if bool((pair_data or {}).get("_rug_hunter_mode") or kwargs.get("is_rug_hunter")):
+        return True
+
     # ЖЁСТКИЙ ЗАПРЕТ незалоченных пулов при ALLOW_UNLOCKED_LP_POOLS = False:
     # Не позволяем кастомным незалоченным пулам (Meteora DYN2, PumpSwap CreatePool без burn,
     # кастомный Raydium с LP lock 0%) обходить запрет и выносить ликвидность в $0 (AudaCity, MUFFINS, CLIVE, VICECITY).
@@ -1384,11 +1390,14 @@ RUG_HUNTER_SEEDED_LP_ENABLED = True       # Режим A2: ранний сёрф
 RUG_HUNTER_CABAL_SURF_ENABLED = True      # Режим B: ранний сёрф залоченных пулов с кабал/инсайдер-сеткой (<=8м)
 RUG_HUNTER_MAX_SLOTS = 2                  # Макс. 2 одновременных слота под Rug-Hunter (2 слота всегда свободны под чистые ракеты)
 RUG_HUNTER_SIZE_MULT = 0.65               # Уменьшенный риск-сайз (65% от обычного ордера)
-RUG_HUNTER_UNLOCKED_MIN_AGE_MIN = 0.8     # Минимум 0.8м (48с) жизни (отсекает 0-45с мгновенные раги, ловит ранний старт)
-RUG_HUNTER_UNLOCKED_MAX_AGE_MIN = 10.0    # Максимум 10.0м для входа (не заходим в позднюю фазу перед выводом LP)
-RUG_HUNTER_CABAL_MAX_AGE_MIN = 8.0        # Максимум 8.0м для кабал-сёрфа (кабалы сливают на 10–18м)
-RUG_HUNTER_MIN_LIQ_USD = 7500.0           # Минимум $7.5k реальной ликвидности (едино с MIN_GRADUATED_LIQ_USD)
-RUG_HUNTER_MIN_VOL5_USD = 2000.0          # Минимум $2k объёма за 5м (ловит ранние 1-3м пулы вроде DOLLAR/JENSEN/HUANG/RIEMANN)
+RUG_HUNTER_UNLOCKED_MIN_AGE_MIN = 0.25     # Минимум 0.25м (15с): вход на самом старте, когда только полетит ракета
+RUG_HUNTER_UNLOCKED_MAX_AGE_MIN = 3.5      # Максимум 3.5м: защита от поздних ловушек и вывода ликвидности (кейсы BILLION/ICEWIZ на 6-7м)
+RUG_HUNTER_CABAL_MAX_AGE_MIN = 6.0         # Максимум 6.0м для кабал-сёрфа
+RUG_HUNTER_MIN_LIQ_USD = 7500.0            # Минимум $7.5k реальной ликвидности (едино с MIN_GRADUATED_LIQ_USD)
+RUG_HUNTER_MIN_VOL5_USD = 1800.0           # Минимум $1.8k объёма за 5м (ловит ультра-ранний старт на первых секундах)
+RUG_HUNTER_EARLY_AGE_THRESHOLD = 2.0       # Порог ультра-ранней фазы (до 2.0м)
+RUG_HUNTER_EARLY_MIN_SELLS = 2             # Достаточно 2 продаж для подтверждения sellable на старте
+RUG_HUNTER_EARLY_MIN_BUYS = 12             # Достаточно 12 покупок для раннего импульса (вместо 35)
 RUG_HUNTER_STAGE1_MIN_ML = 5.0            # Смягчённый порог Stage-1 ML для ранних высокоимпульсных Rug-Hunter (кейс RIEMANN 5.8% -> +1240%)
 RUG_HUNTER_MAX_FDV_USD = 250000.0         # Потолок FDV для незалоченных пулов
 RUG_HUNTER_CABAL_MAX_FDV_USD = 180000.0   # Потолок FDV для кабал-сёрфа

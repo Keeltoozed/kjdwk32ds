@@ -1434,18 +1434,20 @@ async def scanner_loop(analyzer, tracker):
                             _c_v5_m = float((_c_pre.get("volume") or {}).get("m5", 0) or 0)
                             _c_l_m = float((_c_pre.get("liquidity") or {}).get("usd", 0) or 0)
                             _c_m5_m = float(((_c_pre.get("priceChange") or {}).get("m5", 0) or 0))
+                            _rh_s5_sc_req = int(getattr(config, "RUG_HUNTER_EARLY_MIN_SELLS", 2)) if _age_r < 2.0 else 8
+                            _rh_b5_sc_req = max(int(getattr(config, "RUG_HUNTER_EARLY_MIN_BUYS", 12)) if _age_r < 2.0 else 25, int(_c_s5_m * 1.15))
                             _rh_met_sc_ok = (
                                 bool(getattr(config, "RUG_HUNTER_ENABLED", False))
                                 and bool(getattr(config, "RUG_HUNTER_UNLOCKED_LP_ENABLED", False))
-                                and float(getattr(config, "RUG_HUNTER_UNLOCKED_MIN_AGE_MIN", 0.8)) <= _age_r <= float(getattr(config, "RUG_HUNTER_UNLOCKED_MAX_AGE_MIN", 10.0))
+                                and float(getattr(config, "RUG_HUNTER_UNLOCKED_MIN_AGE_MIN", 0.25)) <= _age_r <= float(getattr(config, "RUG_HUNTER_UNLOCKED_MAX_AGE_MIN", 3.5))
                                 and _c_l_m >= float(getattr(config, "RUG_HUNTER_MIN_LIQ_USD", 7500.0))
-                                and _c_v5_m >= float(getattr(config, "RUG_HUNTER_MIN_VOL5_USD", 2000.0))
-                                and _c_s5_m >= 10
-                                and _c_b5_m >= max(35, int(_c_s5_m * 1.15))
-                                and _c_m5_m >= 6.0
+                                and _c_v5_m >= float(getattr(config, "RUG_HUNTER_MIN_VOL5_USD", 1800.0))
+                                and _c_s5_m >= _rh_s5_sc_req
+                                and _c_b5_m >= _rh_b5_sc_req
+                                and _c_m5_m >= 5.0
                             )
                             if not _rh_met_sc_ok:
-                                processed_mints[mint] = _now_r + 3600
+                                processed_mints[mint] = (_now_r + 6) if _age_r <= 2.5 else (_now_r + 600)
                                 continue
                         if not getattr(config, "ALLOW_UNGRADUATED_PUMPFUN", False) and config.is_unmigrated_curve_token(mint, _c_pre):
                             # КРИТИЧНО: если токен уже в _graduated_set (пришёл из subscribeMigration), НЕ выкидываем его!
@@ -1814,7 +1816,12 @@ async def scanner_loop(analyzer, tracker):
                                     continue
                                 _dex_id = str((pair_data.get("dexId") or "")).lower()
                                 _allow_unl_sc = bool(getattr(config, "ALLOW_UNLOCKED_LP_POOLS", True))
-                                if "meteora" in _dex_id and _dex_id != "meteoradbc" and not pair_data.get("_lp_verified", False):
+                                _sig_cur_sc = str(analyzer.get_signal(mint) or getattr(analyzer, "last_signal", "") or "").upper()
+                                _is_rh_cand_sc = bool(
+                                    pair_data.get("_rug_hunter_mode")
+                                    or ("RUG-HUNTER" in _sig_cur_sc)
+                                )
+                                if not _is_rh_cand_sc and "meteora" in _dex_id and _dex_id != "meteoradbc" and not pair_data.get("_lp_verified", False):
                                     print(f"🚫 [SCANNER-METEORA-UNBURNED] {actual_symbol} ({mint[:8]}): пул Meteora без сожжённого/залоченного LP — риск Remove LP (кейсы USPR/BUFO/SPACE), отмена!")
                                     continue
                                 _is_unl_sc_pool = config.is_position_unlocked_lp(mint, pair_data, bool(pair_data.get("_lp_verified")))
@@ -2278,8 +2285,13 @@ async def scanner_loop(analyzer, tracker):
                                     if isinstance(_r_of, tuple) and len(_r_of) == 4:
                                         _of_ok, _of_px, _of_why, _of_meta = _r_of
                                         if not _of_ok:
-                                            print(f"🚫 [SCANNER ONCHAIN/FLOW] {actual_symbol} ({mint[:8]}): {_of_why} — вход заблокирован!")
-                                            continue
+                                            _rh_mode_tmp = str(pair_data.get("_rug_hunter_mode") or "").upper().strip()
+                                            _is_rh_cand_tmp = bool(_rh_mode_tmp or ("RUG-HUNTER" in str(analyzer.get_signal(mint) or "").upper()))
+                                            if _is_rh_cand_tmp and "serial-rugger" in str(_of_why):
+                                                print(f"ℹ️ [SCANNER-RH-SERIAL-ALLOW] {actual_symbol} ({mint[:8]}): серийный дев допущен под Rug-Hunter (ончейн-тайминг)")
+                                            else:
+                                                print(f"🚫 [SCANNER ONCHAIN/FLOW] {actual_symbol} ({mint[:8]}): {_of_why} — вход заблокирован!")
+                                                continue
                                         if _of_px and _of_px > 0:
                                             entry_price = _of_px
                                             if _wick_stop_price and _wick_pct:

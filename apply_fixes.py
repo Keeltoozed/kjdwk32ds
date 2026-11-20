@@ -53,7 +53,8 @@ def verify_on_render() -> None:
     print(
         f"   • RUG-HUNTER STRATEGY         = {getattr(config, 'RUG_HUNTER_ENABLED', False)} "
         f"(UNLOCKED={getattr(config, 'RUG_HUNTER_UNLOCKED_LP_ENABLED', False)} | SEEDED={getattr(config, 'RUG_HUNTER_SEEDED_LP_ENABLED', True)} | CABAL={getattr(config, 'RUG_HUNTER_CABAL_SURF_ENABLED', False)} | "
-        f"MIN_LIQ=${getattr(config, 'RUG_HUNTER_MIN_LIQ_USD', 7500.0):,.0f} | MIN_V5=${getattr(config, 'RUG_HUNTER_MIN_VOL5_USD', 2000.0):,.0f} | "
+        f"MIN_LIQ=${getattr(config, 'RUG_HUNTER_MIN_LIQ_USD', 7500.0):,.0f} | MIN_V5=${getattr(config, 'RUG_HUNTER_MIN_VOL5_USD', 1800.0):,.0f} | "
+        f"AGE={getattr(config, 'RUG_HUNTER_UNLOCKED_MIN_AGE_MIN', 0.25):.2f}m-{getattr(config, 'RUG_HUNTER_UNLOCKED_MAX_AGE_MIN', 3.5):.1f}m | "
         f"TP={getattr(config, 'RUG_HUNTER_TP1_PCT', 0.25)*100:+.0f}%/{getattr(config, 'RUG_HUNTER_TP2_PCT', 0.55)*100:+.0f}% | "
         f"SL={getattr(config, 'RUG_HUNTER_SL_PCT', -0.10)*100:.0f}% | MAX={getattr(config, 'RUG_HUNTER_MAX_HOLD_MIN', 5.0):.0f}m | SLOTS={getattr(config, 'RUG_HUNTER_MAX_SLOTS', 2)})",
         flush=True,

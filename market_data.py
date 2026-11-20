@@ -1404,7 +1404,12 @@ async def verify_entry_onchain_and_orderflow(
 
     try:
         from birth_tracker import birth_tracker as _bt_pf
-        _cr_ok, _cr_why = _bt_pf.check_creator_risk(mint)
+        import config as _cfg_md
+        _is_rh_md_c = bool(
+            (pair_data or {}).get("_rug_hunter_mode")
+            or getattr(_cfg_md, "RUG_HUNTER_ENABLED", True)
+        )
+        _cr_ok, _cr_why = _bt_pf.check_creator_risk(mint, is_rug_hunter=_is_rh_md_c)
         if not _cr_ok:
             return False, live_price, f"creator-blacklist ({_cr_why})", meta
     except Exception:

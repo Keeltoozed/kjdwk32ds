@@ -253,24 +253,23 @@ def qualify_unlocked_lp_hunter(
     if isinstance(creator_profile, dict) and not creator_profile.get("ok", True):
         return False, str(creator_profile.get("reason") or "instant-rugger")
 
-    # Жёсткие пороги раннего живого входа:
-    min_age = float(getattr(config, "RUG_HUNTER_UNLOCKED_MIN_AGE_MIN", 0.8))
-    max_age = float(getattr(config, "RUG_HUNTER_UNLOCKED_MAX_AGE_MIN", 10.0))
+    # Жёсткие пороги раннего живого входа на самом старте:
+    min_age = float(getattr(config, "RUG_HUNTER_UNLOCKED_MIN_AGE_MIN", 0.25))
+    max_age = float(getattr(config, "RUG_HUNTER_UNLOCKED_MAX_AGE_MIN", 3.5))
     if age_min < min_age:
-        return False, f"rh-too-young {age_min:.1f}m < {min_age:.1f}m"
+        return False, f"rh-too-young {age_min:.2f}m < {min_age:.2f}m"
     if age_min > max_age:
         return False, f"rh-too-late {age_min:.1f}m > {max_age:.1f}m"
 
     min_liq = float(getattr(config, "RUG_HUNTER_MIN_LIQ_USD", 7500.0))
-    min_vol5 = float(getattr(config, "RUG_HUNTER_MIN_VOL5_USD", 2000.0))
+    min_vol5 = float(getattr(config, "RUG_HUNTER_MIN_VOL5_USD", 1800.0))
     if liq_usd < min_liq:
         return False, f"rh-low-liq ${liq_usd:,.0f} < ${min_liq:,.0f}"
     if vol5_usd < min_vol5:
         return False, f"rh-low-vol5 ${vol5_usd:,.0f} < ${min_vol5:,.0f}"
 
     # Посеянные slow-cook пулы (liq/fdv 0.95..2.25 — кейсы ZCAT +426%, HUANG +676%, RUDY +578%, 仙猫 +532%, DOLLAR +439%):
-    # разрешаем ТОЛЬКО если включён RUG_HUNTER_SEEDED_LP_ENABLED и есть реальная двухсторонняя торговля (>=35b/12s),
-    # но по-прежнему отсекаем сломанный FDV (liq > 2.25 * fdv)!
+    # разрешаем ТОЛЬКО если включён RUG_HUNTER_SEEDED_LP_ENABLED, но отсекаем сломанный FDV (liq > 2.25 * fdv)!
     is_seeded_ratio = bool(fdv_usd > 0 and liq_usd >= (fdv_usd * 0.95))
     if fdv_usd > 0 and liq_usd > (fdv_usd * 2.25):
         return False, f"rh-extreme-liq-fdv liq=${liq_usd:,.0f} > 2.25x fdv=${fdv_usd:,.0f}"
@@ -279,26 +278,39 @@ def qualify_unlocked_lp_hunter(
     if fdv_usd > float(getattr(config, "RUG_HUNTER_MAX_FDV_USD", 250000.0)):
         return False, f"rh-fdv-too-high ${fdv_usd:,.0f}"
 
-    # Доказанная двухсторонняя торговля (не honeypot и не микро-боты):
-    min_sells_req = 12 if is_seeded_ratio else 10
+    # Адаптивные требования к покупкам/продажам:
+    # На самом старте (age < 2.0м, "когда только полетит") требуем sells5 >= 2 и buys5 >= 12;
+    # для пулов старше 2.0м требуем sells5 >= 8 и buys5 >= 25.
+    early_age_th = float(getattr(config, "RUG_HUNTER_EARLY_AGE_THRESHOLD", 2.0))
+    if age_min < early_age_th:
+        min_sells_req = int(getattr(config, "RUG_HUNTER_EARLY_MIN_SELLS", 2))
+        min_buys_req = int(getattr(config, "RUG_HUNTER_EARLY_MIN_BUYS", 12))
+    else:
+        min_sells_req = 8 if not is_seeded_ratio else 10
+        min_buys_req = max(25, int(sells5 * 1.15))
+
     if sells5 < min_sells_req:
         return False, f"rh-too-few-sells {sells5} < {min_sells_req}"
-    if buys5 < max(35, int(sells5 * 1.15)):
+    if buys5 < min_buys_req:
         return False, f"rh-weak-buyers {buys5}b/{sells5}s"
+    if sells5 > 0 and buys5 < int(sells5 * 1.15):
+        return False, f"rh-sellers-dominate {buys5}b/{sells5}s"
+
     avg_tx = vol5_usd / max(1, buys5 + sells5)
-    if avg_tx < 12.0:
-        return False, f"rh-micro-wash avg ${avg_tx:.1f} < $12"
-    _max_vl_rh = 18.0 if avg_tx >= 40.0 else 10.0
+    if avg_tx < 10.0:
+        return False, f"rh-micro-wash avg ${avg_tx:.1f} < $10"
+    _max_vl_rh = 22.0 if avg_tx >= 35.0 else 14.0
     if liq_usd > 0 and (vol5_usd / liq_usd) > _max_vl_rh:
         return False, f"rh-extreme-wash v/l {vol5_usd/liq_usd:.1f}x > {_max_vl_rh:.0f}x"
 
-    # Импульс: уже разгоняется, но ещё не перегретая вершина (для ультра-горячего старта <=5м допускаем m5 до +185% — кейс RIEMANN +165%)
-    max_m5_rh = 185.0 if (age_min <= 5.0 and vol5_usd >= 15000.0 and buys5 >= 150) else 160.0
-    if m5 < 6.0 or m5 > max_m5_rh:
-        return False, f"rh-m5-out-of-range {m5:+.1f}%"
-    if m1 < -2.0 or m1 > 22.0:
+    # Импульс: на самом старте m1 может быть до +45% (ранний взлёт), m5 от +5%
+    max_m1_rh = 45.0 if age_min <= early_age_th else 25.0
+    if m1 < -2.5 or m1 > max_m1_rh:
         return False, f"rh-m1-out-of-range {m1:+.1f}%"
-    if h1 > 260.0 and not (age_min <= 5.0 and 0 < fdv_usd <= 65000.0):
+    max_m5_rh = 190.0 if (age_min <= 5.0 and vol5_usd >= 10000.0) else 160.0
+    if m5 < 5.0 or m5 > max_m5_rh:
+        return False, f"rh-m5-out-of-range {m5:+.1f}%"
+    if h1 > 280.0 and not (age_min <= 5.0 and 0 < fdv_usd <= 65000.0):
         return False, f"rh-h1-late {h1:+.0f}%"
 
     # Концентрация холдеров (если известна): отсекаем явных 50%+ монополистов
@@ -517,11 +529,15 @@ def evaluate_rug_hunter_exit(position, current_price: float) -> Optional[str]:
 
 async def check_live_rugger_activity(position, live_pd: Optional[dict] = None) -> Tuple[bool, str]:
     """
-    Лайв-монитор рагера и многокошелькового слива (вызывается из position_security_auditor_loop каждые ~1.5с):
-      1. Всплеск продаж (multi-wallet dump wave): delta_sells >= 8 и >= 2x delta_buys между тиками.
-      2. Слив баланса дева / топ-3 холдеров ончейн (>= 15% от снимка входа, проверка каждые 4с через RPC getMultipleAccounts).
+    Лайв-монитор рагера и координированного слива (вызывается из position_security_auditor_loop каждые ~1.5с):
+      1. Всплеск продаж (multi-wallet dump wave): delta_sells >= 12 и >= 2.5x delta_buys между тиками.
+      2. Слив баланса создателя (дева) ончейн: проверяем ТОЛЬКО дева (не обычных трейдеров!),
+         требуем подтверждения на 2 тиках и выдерживаем 30-секундный грейс-период после входа.
     """
     now = time.time()
+    et = float(getattr(position, "entry_time", now) or now)
+    minutes_held = max(0.0, (now - et) / 60.0)
+
     # 1. Детектор волны продаж кабала по приращению сделок m5
     if isinstance(live_pd, dict) and live_pd:
         tx5 = (live_pd.get("txns") or {}).get("m5") or {}
@@ -537,48 +553,56 @@ async def check_live_rugger_activity(position, live_pd: Optional[dict] = None) -
             entry_px = float(getattr(position, "entry_price_usd", 0.0) or 0.0)
             cur_px = float(getattr(position, "current_price_usd", 0.0) or 0.0)
             pnl_now = ((cur_px - entry_px) / entry_px) if (entry_px > 0 and cur_px > 0) else 0.0
-            # Координированная волна продаж (>=8 продаж за 1-2с с перевесом продавцов >=2x)
-            if ds >= 8 and ds >= max(4, int(db * 2.0)):
+            # Координированная волна продаж (>=12 продаж за 1-2с с перевесом продавцов >=2.5x)
+            if ds >= 12 and ds >= max(6, int(db * 2.5)):
                 return True, f"🎯 RH Cabal Sell-Wave (+{ds}s/+{db}b за тик, PnL {pnl_now*100:+.1f}%)"
-            # Разворот потока в минус, когда мы уже в плюсе >= +5%
-            if pnl_now >= 0.05 and s5 >= 15 and s5 > int(b5 * 1.15) and ds >= 4 and ds > db:
+            # Разворот потока в минус, когда мы уже в хорошем плюсе >= +8%
+            if pnl_now >= 0.08 and s5 >= 20 and s5 > int(b5 * 1.25) and ds >= 6 and ds > db:
                 return True, f"🎯 RH Flow Flip Exit ({b5}b/{s5}s, +{ds}s, PnL {pnl_now*100:+.1f}%)"
 
-    # 2. Прямой ончейн-мониторинг балансов дева / топ-3 кошельков каждые 4с
-    pd_pos = getattr(position, "pair_data", None) or {}
-    watch = pd_pos.get("_rug_hunter_watch") if isinstance(pd_pos, dict) else None
-    last_rpc = float(getattr(position, "_rh_last_wallet_rpc", 0.0) or 0.0)
-    if isinstance(watch, dict) and watch and (now - last_rpc) >= 4.0:
-        position._rh_last_wallet_rpc = now
-        addrs = list(watch.keys())[:4]
-        try:
-            res = await asyncio.wait_for(
-                _rpc_post("getMultipleAccounts", [addrs, {"encoding": "jsonParsed"}], timeout=2.0),
-                timeout=2.2,
-            )
-            vals = (res.get("value") or []) if isinstance(res, dict) else []
-            dumped_wallets = []
-            for addr, acc in zip(addrs, vals):
-                meta = watch.get(addr) or {}
-                init_amt = float(meta.get("init_amt", 0.0) or 0.0)
-                if init_amt <= 0:
-                    continue
-                cur_amt = 0.0
-                if isinstance(acc, dict):
-                    parsed = ((acc.get("data") or {}).get("parsed") or {}).get("info") or {}
-                    cur_amt = float(((parsed.get("tokenAmount") or {}).get("uiAmount")) or 0.0)
-                sold_frac = (init_amt - cur_amt) / init_amt
-                if sold_frac >= 0.15:
-                    dumped_wallets.append((meta.get("label", "top"), addr[:6], sold_frac * 100.0))
-            if dumped_wallets:
-                # Если слил дев — выходим сразу при 1 кошельке; если топ-холдеры — при 1 крупном >=35% или >=2 кошельках сразу (кабал-слив!)
-                has_dev_dump = any(w[0] == "dev" for w in dumped_wallets)
-                has_big_dump = any(w[2] >= 35.0 for w in dumped_wallets)
-                if has_dev_dump or has_big_dump or len(dumped_wallets) >= 2:
-                    desc = ", ".join(f"{w[0]}:{w[1]}(-{w[2]:.0f}%)" for w in dumped_wallets[:3])
-                    return True, f"🎯 RH On-Chain Rugger Dump ({desc})"
-        except Exception:
-            pass
+    # 2. Прямой ончейн-мониторинг баланса ДЕВА (создателя):
+    # ВАЖНО:
+    # 1) Даём сделке минимум 30 секунд (minutes_held >= 0.5) на разбег — никогда не выходим на 0-й секунде!
+    # 2) Проверяем ТОЛЬКО дева (label == 'dev'), а не случайных трейдеров/топ-холдеров!
+    # 3) Требуем реальный парсинг SPL token account и сброс >= 50% баланса дева с подтверждением на 2 тиках!
+    if minutes_held >= 0.5:
+        pd_pos = getattr(position, "pair_data", None) or {}
+        watch = pd_pos.get("_rug_hunter_watch") if isinstance(pd_pos, dict) else None
+        last_rpc = float(getattr(position, "_rh_last_wallet_rpc", 0.0) or 0.0)
+        if isinstance(watch, dict) and watch and (now - last_rpc) >= 4.0:
+            position._rh_last_wallet_rpc = now
+            dev_addrs = [a for a, m in watch.items() if m.get("label") == "dev"][:2]
+            if dev_addrs:
+                try:
+                    res = await asyncio.wait_for(
+                        _rpc_post("getMultipleAccounts", [dev_addrs, {"encoding": "jsonParsed"}], timeout=2.0),
+                        timeout=2.2,
+                    )
+                    vals = (res.get("value") or []) if isinstance(res, dict) else []
+                    for addr, acc in zip(dev_addrs, vals):
+                        meta = watch.get(addr) or {}
+                        init_amt = float(meta.get("init_amt", 0.0) or 0.0)
+                        if init_amt <= 0:
+                            continue
+                        if not isinstance(acc, dict) or not acc:
+                            continue
+                        data_obj = acc.get("data")
+                        if not isinstance(data_obj, dict):
+                            continue
+                        parsed = (data_obj.get("parsed") or {}).get("info")
+                        if not isinstance(parsed, dict) or "tokenAmount" not in parsed:
+                            continue
+                        cur_amt = float(((parsed.get("tokenAmount") or {}).get("uiAmount")) or 0.0)
+                        sold_frac = (init_amt - cur_amt) / init_amt
+                        if sold_frac >= 0.50:
+                            st_n = int(getattr(position, "_rh_dev_dump_n", 0) or 0) + 1
+                            position._rh_dev_dump_n = st_n
+                            if st_n >= 2:
+                                return True, f"🎯 RH Dev On-Chain Dump ({addr[:6]} sold {sold_frac*100:.0f}% of dev stack)"
+                        else:
+                            position._rh_dev_dump_n = 0
+                except Exception:
+                    pass
 
     return False, ""
 
