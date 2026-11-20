@@ -1851,6 +1851,12 @@ class Analyzer:
                 "meteora-unlocked-pool",
                 f"🚫 [METEORA-BLOCK] {symbol} ({mint[:8]}): пул Meteora {_dex_pre_early} без сожжённого/залоченного LP — риск мгновенного вывода SOL девом (кейсы BUFO/SPACE/PUNCHAO), блок входа!"
             )
+        if config.is_pumpswap_liq_fdv_trap(pair_data):
+            return self._deny(
+                mint,
+                "pumpswap-liq-fdv-trap",
+                f"🚫 [PUMPSWAP-TRAP] {symbol} ({mint[:8]}): посеянный незалоченный пул (liq/fdv аномалия) — риск 100% дрейна LP!"
+            )
         _is_known_grad = False
         try:
             from birth_tracker import birth_tracker as _bt_kg
@@ -3681,10 +3687,20 @@ class Analyzer:
                 print(f"🚫 [WICK-DUMP] {symbol} ({address[:8]}): слив от хая текущей свечи на -{c0_wick_drop:.1f}% — раздача в стакан.")
                 return False
 
-            # Г2) Спайк с откатом (Spike Reversal / кейс Mao -28%): свеча сделала резкий взлёт >= 15% и уже откатила сверху вниз на >= 8%
+            # Г2) Спайк с откатом (Spike Reversal / кейс Mao -28%):
+            # На сильном пробойном раннере (RUDY: m5>=20%, b>1.15s, vol5>=$15k, liq>=$12k) нормальный верхний фитиль -10%..-14%
+            # на всё ещё зелёной свече (c0_pct > +2.5%) — НЕ раздача, а живая волатильность!
+            # Блокируем реальный слив спайка (потеря тела c0_pct <= +2.5%/+3% или глубокий откат >= 12%/16%).
             c0_spike_pct = ((c0_high - c0_open) / c0_open * 100.0) if c0_open > 0 else 0.0
-            if c0_spike_pct >= 15.0 and c0_wick_drop >= 8.0:
-                print(f"🚫 [SPIKE-REVERSAL] {symbol} ({address[:8]}): спайк +{c0_spike_pct:.1f}% уже откатил на -{c0_wick_drop:.1f}% от пика — раздача на хае.")
+            _vol5_1m = float((pair_data.get("volume") or {}).get("m5", 0) or 0)
+            _liq_1m = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
+            _strong_runner_1m = (is_strong_trend and _vol5_1m >= 15000.0 and _liq_1m >= 12000.0)
+            if _strong_runner_1m:
+                _is_spike_rev = (c0_spike_pct >= 20.0 and (c0_wick_drop >= 16.0 or (c0_wick_drop >= 10.0 and c0_pct <= 2.5)))
+            else:
+                _is_spike_rev = (c0_spike_pct >= 15.0 and (c0_wick_drop >= 12.0 or (c0_wick_drop >= 8.0 and c0_pct <= 3.0)))
+            if _is_spike_rev:
+                print(f"🚫 [SPIKE-REVERSAL] {symbol} ({address[:8]}): спайк +{c0_spike_pct:.1f}% уже откатил на -{c0_wick_drop:.1f}% от пика (тело {c0_pct:+.1f}%) — раздача на хае.")
                 return False
         except Exception:
             pass

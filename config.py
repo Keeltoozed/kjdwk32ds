@@ -535,9 +535,20 @@ def evaluate_entry_momentum(
         return False, f"low-liq-turnover v/l {vel_ratio:.2f}x < 0.10x on liq ${liq_usd:,.0f}"
 
     # 1. ЖЁСТКИЙ ОТСЕВ ЕЛЕ ПОЛЗУЩИХ ТОКЕНОВ (убираем +2%..+5% флет, который скатывается в 0 — кейсы Makenzi +4.98%, CC +2.85%, EDDIE, PUSSY):
-    # Исключения: бычий откат на огромном спросе (GTE7 +496%: m5 -14%, vol5 $118k, 1147b/899s) или мега-объём >= $18k с 100+ покупками (FREEDOM +8.1%, GENTLEMEN +7.3%).
+    # Исключения: бычий откат на огромном спросе (GTE7 +496%: m5 -14%, vol5 $118k, 1147b/899s),
+    # свежий выпускник PumpSwap/DEX (<=8м, liq>=$10k, vol5>=$8k, 45+ покупок >=1.25x продаж, m1>=+0.5% — вход до +80% прострела),
+    # или мега-объём >= $18k с 100+ покупками (FREEDOM +8.1%, GENTLEMEN +7.3%).
     _is_heavy_vol_launch = (vol5_usd >= 18000.0 and buys5 >= max(100, int(sells5 * 1.15)) and vel_ratio >= 1.20)
-    _m5_min_req = 6.0 if _is_heavy_vol_launch else 8.0
+    _is_fresh_mig_early_launch = (
+        not is_curve
+        and age_min <= 8.0
+        and liq_usd >= 10000.0
+        and vol5_usd >= 8000.0
+        and buys5 >= max(45, int(sells5 * 1.25))
+        and m1 >= 0.5
+        and h1 >= 0.0
+    )
+    _m5_min_req = 5.0 if _is_fresh_mig_early_launch else (6.0 if _is_heavy_vol_launch else 8.0)
     _is_bullish_pullback_dip = (
         -18.0 <= m5 < _m5_min_req
         and h1 >= 15.0
@@ -669,9 +680,9 @@ def evaluate_entry_momentum(
     )
     _is_fresh_grad_ignition = (
         not is_curve
-        and age_min <= 6.0
+        and age_min <= 8.0
         and liq_usd >= 7500.0
-        and m5 >= 8.0
+        and (m5 >= 8.0 or (_is_fresh_mig_early_launch and m5 >= 5.0))
         and m1 >= -2.0
         and vol5_usd >= 2500.0
         and buys5 >= max(25, int(sells5 * 1.40))

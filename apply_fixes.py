@@ -73,7 +73,11 @@ def verify_on_render() -> None:
         _has_tr_fw = "FIREWALL-CURVE-THIN-LIQ" in _tr_src
         _has_gt_fast = "get_pool_trades_cached" in _md_src and "max_wait" in _md_src and "get_pool_trades_cached" in _fcr_src
         _has_cabal_guard = "check_rugcheck_report_insiders" in _gp_src and "atomized-cabal-farm" in _an_src
-        _has_onchain_mig = "ONCHAIN-MIGRATION" in _mn_src and "39azUYFWPz3VHgKCf3VChUwbpURdCHRxjWVowf5jUJjg" in _mn_src
+        _has_onchain_mig = (
+            "async def onchain_migration_feeder_loop" in _mn_src
+            and '"onchain_migration_feeder"' in _mn_src
+            and "39azUYFWPz3VHgKCf3VChUwbpURdCHRxjWVowf5jUJjg" in _mn_src
+        )
         print(
             f"   • GATES ACTIVE                = analyzer.fast-gates:{'OK' if _has_an_gate else 'MISSING'} | tracker.firewall:{'OK' if _has_tr_fw else 'MISSING'} | gt.fail-fast:{'OK' if _has_gt_fast else 'MISSING'} | cabal.l7a:{'OK' if _has_cabal_guard else 'MISSING'} | onchain.mig-rpc:{'OK' if _has_onchain_mig else 'MISSING'}",
             flush=True,

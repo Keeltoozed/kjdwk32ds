@@ -1065,6 +1065,118 @@ async def birth_wss_loop(analyzer, tracker):
             # Не спамим при 502, фоновый поллер подхватывает новые токены
             await asyncio.sleep(15)
 
+async def onchain_migration_feeder_loop(analyzer=None):
+    """Выделенный супервизируемый ончейн-монитор миграций Pump.fun -> PumpSwap (Solana RPC).
+    Работает независимо от мёртвого PumpPortal WSS (и без второго сокета!) и от 429 GeckoTerminal:
+    каждые 8с опрашивает getSignaturesForAddress(39azUYFWPz3VHgKCf3VChUwbpURdCHRxjWVowf5jUJjg)
+    и мгновенно кладёт все свежие .pump выпускники в birth_tracker.add_graduated() (приоритет #0)."""
+    import aiohttp as _aio_mig
+    from http_client import get_session as _mig_get_session
+
+    _MIG_AUTH = "39azUYFWPz3VHgKCf3VChUwbpURdCHRxjWVowf5jUJjg"
+    _WSOL_MINT = "So11111111111111111111111111111111111111112"
+    _seen_mig_sigs = set()
+    _mig_first_run = True
+    _rpc_sem = asyncio.Semaphore(4)
+    print("🛰️ [ONCHAIN-MIG-POLLER] Запущен прямой ончейн-монитор миграций Pump.fun -> PumpSwap (Solana RPC, 8с)!", flush=True)
+
+    async def _rpc_call_mig(method: str, params: list, timeout: float = 5.0):
+        _urls = ["https://solana-rpc.publicnode.com", "https://api.mainnet-beta.solana.com"]
+        _h_url = getattr(config, "HELIUS_RPC_URL", "") or ""
+        if _h_url and "api.mainnet-beta" not in _h_url:
+            _urls.append(_h_url)
+        sess = await _mig_get_session()
+        payload = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
+        for _u in _urls:
+            try:
+                async with sess.post(_u, json=payload, timeout=_aio_mig.ClientTimeout(total=timeout)) as resp:
+                    if resp.status == 200:
+                        js = await resp.json(content_type=None)
+                        if isinstance(js, dict) and js.get("result") is not None:
+                            return js["result"]
+            except Exception:
+                continue
+        return None
+
+    async def _extract_mig_mints(sig_str: str, bt_ts: int):
+        async with _rpc_sem:
+            tx = await _rpc_call_mig(
+                "getTransaction",
+                [sig_str, {"encoding": "jsonParsed", "maxSupportedTransactionVersion": 0}],
+                timeout=4.5,
+            )
+        if not isinstance(tx, dict):
+            return []
+        meta = tx.get("meta") or {}
+        found = []
+        seen_m = set()
+        for bal in (meta.get("postTokenBalances") or []) + (meta.get("preTokenBalances") or []):
+            m_addr = str(bal.get("mint") or "").strip()
+            if not m_addr or m_addr == _WSOL_MINT or m_addr in seen_m:
+                continue
+            if m_addr.endswith("pump") and 32 <= len(m_addr) <= 44:
+                seen_m.add(m_addr)
+                found.append((m_addr, bt_ts))
+        return found
+
+    while True:
+        try:
+            _now_f = time.time()
+            _lim = 25 if _mig_first_run else 12
+            _sigs = await _rpc_call_mig("getSignaturesForAddress", [_MIG_AUTH, {"limit": _lim}], timeout=5.0)
+            if isinstance(_sigs, list) and _sigs:
+                _new_sigs = []
+                _max_bt_age = 1500.0 if _mig_first_run else 600.0
+                for _s in _sigs:
+                    if not isinstance(_s, dict) or _s.get("err") is not None:
+                        continue
+                    _sg = str(_s.get("signature") or "")
+                    _bt = int(_s.get("blockTime") or 0)
+                    if not _sg or _sg in _seen_mig_sigs:
+                        continue
+                    _seen_mig_sigs.add(_sg)
+                    if _bt > 0 and (_now_f - _bt) > _max_bt_age:
+                        continue
+                    _new_sigs.append((_sg, _bt))
+                _mig_first_run = False
+                if len(_seen_mig_sigs) > 600:
+                    _seen_mig_sigs.clear()
+                    for _s in _sigs:
+                        if isinstance(_s, dict) and _s.get("signature"):
+                            _seen_mig_sigs.add(str(_s["signature"]))
+
+                if _new_sigs:
+                    _batch_lim = 18 if len(_new_sigs) > 10 else len(_new_sigs)
+                    _tx_res = await asyncio.gather(
+                        *[_extract_mig_mints(sg, bt) for sg, bt in _new_sigs[:_batch_lim]],
+                        return_exceptions=True,
+                    )
+                    _added_mints = []
+                    _added_set = set()
+                    for _r_item in _tx_res:
+                        if not isinstance(_r_item, list):
+                            continue
+                        for _mm, _bt_m in _r_item:
+                            if _mm in _added_set:
+                                continue
+                            _added_set.add(_mm)
+                            _added_mints.append(_mm)
+                            birth_tracker.add_token(_mm)
+                            birth_tracker.add_graduated(_mm)
+                            _age_sec = max(0.0, _now_f - _bt_m) if _bt_m > 0 else 0.0
+                            print(f"🏁 [ONCHAIN-MIGRATION] {_mm[:8]}..pump (мигрировал {_age_sec:.0f}с назад) → в приоритет сканера!", flush=True)
+                    if _added_mints:
+                        if analyzer is not None:
+                            _cur_d = list(getattr(analyzer, "_cached_discovery_mints", None) or [])
+                            _merged = list(dict.fromkeys(_added_mints + _cur_d))
+                            analyzer._cached_discovery_mints = _merged[:250]
+                            analyzer._cached_discovery_time = _now_f
+                        print(f"🛰️ [ONCHAIN-MIG-POLLER] Поймано {len(_added_mints)} свежих миграций Pump.fun → PumpSwap напрямую из блокчейна Solana!", flush=True)
+        except Exception as _me:
+            print(f"⚠️ [ONCHAIN-MIG-POLLER] Ошибка опроса RPC: {_me}", flush=True)
+        await asyncio.sleep(8)
+
+
 async def discovery_feeder_loop(analyzer):
     """Фоновый агрегатор источников (Jupiter 5m/1h/6h, GeckoTerminal, DexScreener search/boosts).
     Обновляет кэш кандидатов analyzer._cached_discovery_mints каждые 15 сек.
@@ -3425,6 +3537,7 @@ async def async_main():
         _supervised(lambda: position_manager_loop(analyzer, tracker), "position_manager_loop"),
         _supervised(lambda: position_security_auditor_loop(analyzer, tracker), "position_security_auditor_loop"),
         _supervised(lambda: scanner_loop(analyzer, tracker), "scanner_loop"),
+        _supervised(lambda: onchain_migration_feeder_loop(analyzer), "onchain_migration_feeder"),
         _supervised(lambda: discovery_feeder_loop(analyzer), "discovery_feeder_loop"),
         _supervised(lambda: copy_trader.listen(), "copy_trader"),
         _supervised(lambda: fomo_signal_loop(analyzer, tracker), "fomo_signal_loop"),

@@ -480,6 +480,7 @@ class ShadowTracker:
         """
         self._last_rugged_mints = set()
         self._last_honeypot_mints = set()
+        self._last_scam_pool_mints = set()
         self._last_batch_ok = False
         if not mints:
             return {}
@@ -531,6 +532,19 @@ class ShadowTracker:
                     if m and not m.endswith("pump") and buys_count >= 5 and sells_count == 0:
                         self._last_honeypot_mints.add(m)
                         continue
+                    # Незалоченные кастомные скам-пулы (не-launchpad на Meteora или seeded-LP PumpSwap):
+                    # помечаем, чтобы не рисовались фейковыми «💎 Ракета летит» до того как дев выдернет LP в $0!
+                    _is_lp_mint_sh = m.endswith(("pump", "bonk", "moon", "bags"))
+                    if m and not _is_lp_mint_sh:
+                        _sh_info = pair.get("info") or {}
+                        _sh_has_soc = bool((_sh_info.get("socials") or []) or (_sh_info.get("websites") or []))
+                        if ("meteora" in dex_id and dex_id != "meteoradbc") or (
+                            dex_id == "pumpswap"
+                            and liq >= 3000.0
+                            and fdv > 0.0
+                            and (liq >= fdv * 0.72 or (not _sh_has_soc and liq >= fdv * 0.50))
+                        ):
+                            self._last_scam_pool_mints.add(m)
                     if not m or p <= 0 or liq < 1500.0 or sells_count < min_sells:
                         continue
                     if liq > max_liq.get(m, -1.0):
@@ -686,6 +700,7 @@ class ShadowTracker:
                     cur_prices = await self._fetch_prices_batch(batch_mints)
                     rugged_set = set(getattr(self, "_last_rugged_mints", set()))
                     honeypot_set = set(getattr(self, "_last_honeypot_mints", set()))
+                    scam_pool_set = set(getattr(self, "_last_scam_pool_mints", set()))
                     batch_ok = bool(getattr(self, "_last_batch_ok", False))
                     
                     for upd in updates:
@@ -708,7 +723,7 @@ class ShadowTracker:
                             elapsed_m = float(upd.get("elapsed_min", 0.0) or 0.0)
                             is_honeypot = (m.lower() in honeypot_set)
                             is_lp_rugged = (not is_honeypot) and ((m.lower() in rugged_set) or (batch_ok and p_now <= 0 and not no_baseline and elapsed_m >= 5.0))
-                            is_hard_scam_blk = self._is_hard_scam_reason(upd.get("reason", ""))
+                            is_hard_scam_blk = self._is_hard_scam_reason(upd.get("reason", "")) or (m.lower() in scam_pool_set)
 
                             # Если токен дал новый пик цены — фиксируем новый ATH и точную минуту
                             if p_now > old_ath:
