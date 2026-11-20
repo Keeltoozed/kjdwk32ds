@@ -536,7 +536,7 @@ async def position_manager_loop(analyzer, tracker):
                 except Exception:
                     _is_rh_tp = False
                 if _is_rh_tp:
-                    _tp1_sol_thr, _tp1_sell, _tp2, _tp2_sell, _tp3, _tp3_sell, _tp4, _tp4_sell, _tp5, _tp5_sell = _rh_tp_mod.get_rug_hunter_tp_ladder()
+                    _tp1_sol_thr, _tp1_sell, _tp2, _tp2_sell, _tp3, _tp3_sell, _tp4, _tp4_sell, _tp5, _tp5_sell = _rh_tp_mod.get_rug_hunter_tp_ladder(_pos_unl_tp)
                 else:
                     _tp1_sol_thr, _tp1_sell, _tp2, _tp2_sell, _tp3, _tp3_sell, _tp4, _tp4_sell, _tp5, _tp5_sell = config.get_sol_tp_ladder(_pos_unl_tp)
                 _min_tp_ticket = float(getattr(config, "PARTIAL_TP_MIN_TICKET_USD", 0.50))

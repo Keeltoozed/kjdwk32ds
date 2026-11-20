@@ -1025,13 +1025,26 @@ BREAKEVEN_PCT = 0.25       # Breakeven Shield: пик >= +25% -> пол +3% (п�
 
 def get_sol_tp_ladder(is_unlocked: bool) -> tuple:
     """Return (tp1_t, tp1_f, tp2_t, tp2_f, tp3_t, tp3_f, tp4_t, tp4_f, tp5_t, tp5_f).
-    Tiered Moonbag Runner Ladder for catching multipliers:
-    TP1 +35% (sell 35% -> Risk-Free Moonbag + deposit protection)
-    TP2 +110% (sell 30% -> 2.1x multiplier)
-    TP3 +250% (sell 15% -> 3.5x multiplier)
-    TP4 +500% (sell 10% -> 6.0x multiplier)
-    TP5 +1000% (sell 100% of remaining -> 11.0x jackpot)
+    For UNLOCKED pools (high LP rug risk):
+      TP1 +35% (sell 50% -> principal 100% safe)
+      TP2 +80% / ~2x (sell 100% -> FULL EXIT before dev removes LP!)
+    For LOCKED / CURVE pools:
+      TP1 +35% (sell 35% -> Risk-Free Moonbag + deposit protection)
+      TP2 +110% (sell 30% -> 2.1x multiplier)
+      TP3 +250% (sell 15% -> 3.5x multiplier)
+      TP4 +500% (sell 10% -> 6.0x multiplier)
+      TP5 +1000% (sell 100% of remaining -> 11.0x jackpot)
     """
+    if is_unlocked:
+        return (
+            float(globals().get("RUG_HUNTER_UNLOCKED_TP1_PCT", 0.35)),
+            float(globals().get("RUG_HUNTER_UNLOCKED_TP1_SELL_FRAC", 0.50)),
+            float(globals().get("RUG_HUNTER_UNLOCKED_TP2_PCT", 0.80)),
+            float(globals().get("RUG_HUNTER_UNLOCKED_TP2_SELL_FRAC", 1.00)),
+            2.50, 0.0,
+            5.00, 0.0,
+            10.00, 0.0,
+        )
     return (
         float(globals().get("TP1_TRIGGER_PCT", 0.35)),
         float(globals().get("TP1_SELL_FRAC", 0.35)),
@@ -1425,3 +1438,15 @@ RUG_HUNTER_SL_PCT = -0.10                 # Жёсткий Stop-Loss -10%
 RUG_HUNTER_EMERG_PCT = -0.14              # Экстренный кап -14%
 RUG_HUNTER_MAX_HOLD_MIN = 5.0             # Базовый тайм-кэп 5м (для плюсовых позиций расширяется до 15м)
 RUG_HUNTER_LIQ_DRAIN_PCT = 0.15           # Мгновенный выход при падении LP >= 15%
+
+# === СТРОГИЕ ВЫХОДЫ ДЛЯ НЕЗАЛОЧЕННЫХ ПУЛОВ RUG-HUNTER (UNLOCKED-LP) ===
+# На незалоченном пуле дев держит RemoveLiquidity и дрейнит пул на 2.5-3.5м (кейс GTA на 3.0м!).
+# Принцип: СХВАТИЛ 2x И ВЫШЕЛ ДО ДРЕЙНА (никаких бесконечных мунбэгов на незалоченных пулах!).
+RUG_HUNTER_UNLOCKED_TP1_PCT = 0.35        # TP1 +35%: фиксируем 50% объема (депозит полностью в сейфе!)
+RUG_HUNTER_UNLOCKED_TP1_SELL_FRAC = 0.50
+RUG_HUNTER_UNLOCKED_TP2_PCT = 0.80        # TP2 +80%..+100% (2x): продаём 100% остатка (ПОЛНЫЙ ВЫХОД В КЭШ!)
+RUG_HUNTER_UNLOCKED_TP2_SELL_FRAC = 1.00
+RUG_HUNTER_UNLOCKED_MAX_HOLD_MIN = 2.0    # Жесткий потолок 2.0м при pnl >= +8%: забираем профит до дрейна!
+RUG_HUNTER_UNLOCKED_SAFETY_MIN = 2.5      # Абсолютный лимит 2.5м: выход при любом раскладе до RemoveLiquidity
+RUG_HUNTER_UNLOCKED_STALL_SEC = 25.0      # 25с без нового ATH после пика >= +30% и откат 8% -> эвакуация до рага
+RUG_HUNTER_UNLOCKED_TRAIL_DROP_PCT = 0.12 # Плотный трейл 12% от ATH для незалоченных пулов

@@ -213,15 +213,23 @@ class MatureExitManager:
         # - Breakeven Shield (+16% пик -> стоп в безубыток/плюс, в минус уйти НЕЛЬЗЯ)
         # - Crash Guard (-18%..-50% за 1м)
 
-        # Для незалоченных кастомных пулов: мгновенно забираем прибыль при застое (от 1 мин после пика +8% и отката 18%+),
-        # не дожидаясь пока дев выдернет LP (кейс SCHRODING, где бот сидел 4 минуты до вывода пула в $0)!
-        if not _is_mb and _is_unlocked:
-            if minutes_held >= 1.0 and _peak_age_min >= 0.75 and max_pnl_pct >= 0.08 and pnl_pct <= max_pnl_pct * 0.82:
-                return f"⚡ Unlocked Fast Profit Exit ({pnl_pct*100:+.1f}%, застой {_peak_age_min*60:.0f}с после пика +{max_pnl_pct*100:.1f}%)"
-            elif minutes_held >= 1.5 and max_pnl_pct < 0.03 and pnl_pct < 0.01:
-                return f"⚡ Unlocked Fast Stale Scratch ({pnl_pct*100:+.1f}%, 90с без взлёта на незалоченном пуле — сброс перед риском LP rug)"
-            elif minutes_held >= 2.0 and pnl_pct < 0.02:
-                return f"⚡ Unlocked Stale Exit ({pnl_pct*100:+.1f}%, 2м без импульса на незалоченном пуле — защита от LP rug)"
+        # Для незалоченных кастомных пулов: мгновенно забираем прибыль при застое и ограничиваем время 2 минутами,
+        # не дожидаясь пока дев выдернет LP (кейс GTA, где дев вывел пул ровно на 3.0 минуте)!
+        # ВАЖНО: применяется ВСЕГДА (даже после TP1 / Moonbag), так как на незалоченном пуле мунбэг нельзя держать бесконечно!
+        if _is_unlocked:
+            if minutes_held >= 2.0 and pnl_pct >= 0.08:
+                return f"⚡ Unlocked Profit Harvest (+{pnl_pct*100:+.1f}%, 2м лимит на незалоченном пуле — выход до LP rug)"
+            if minutes_held >= 2.5:
+                return f"⚡ Unlocked Safety Time-Cap ({pnl_pct*100:+.1f}%, 2.5м лимит безопасности — выход до LP rug)"
+            if max_pnl_pct >= 0.30 and _peak_age_min >= 0.50 and (position.max_price_usd - current_price) / max(position.max_price_usd, 1e-9) >= 0.10:
+                return f"⚡ Unlocked Stall Exit (+{pnl_pct*100:+.1f}%, застой {_peak_age_min*60:.0f}с после пика +{max_pnl_pct*100:.1f}%)"
+            if not _is_mb:
+                if minutes_held >= 1.0 and _peak_age_min >= 0.75 and max_pnl_pct >= 0.08 and pnl_pct <= max_pnl_pct * 0.82:
+                    return f"⚡ Unlocked Fast Profit Exit ({pnl_pct*100:+.1f}%, застой {_peak_age_min*60:.0f}с после пика +{max_pnl_pct*100:.1f}%)"
+                elif minutes_held >= 1.5 and max_pnl_pct < 0.03 and pnl_pct < 0.01:
+                    return f"⚡ Unlocked Fast Stale Scratch ({pnl_pct*100:+.1f}%, 90с без взлёта на незалоченном пуле — сброс перед риском LP rug)"
+                elif minutes_held >= 2.0 and pnl_pct < 0.02:
+                    return f"⚡ Unlocked Stale Exit ({pnl_pct*100:+.1f}%, 2м без импульса на незалоченном пуле — защита от LP rug)"
 
         # Б. СРЕЗ МЁРТВЫХ ФЛЕТОВ ПОСЛЕ КОНСОЛИДАЦИИ (НЕ рубим +0.0% на 35-й секунде!):
         # Даём сделке минимум 3.0 минуты (180с) на раскачку и обновление живых котировок;
