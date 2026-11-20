@@ -1656,7 +1656,27 @@ async def scanner_loop(analyzer, tracker):
                         if is_good is False:
                             _sig = str(analyzer.get_signal(mint) or "")
                             _sig_l = _sig.lower()
-                            _is_terminal = any(k in _sig_l for k in (
+                            _last_p = getattr(analyzer, "_last_analyzed_pair", {}).get(mint) or {}
+                            _age_m = 999.0
+                            if _last_p.get("pairCreatedAt"):
+                                try:
+                                    _age_m = max(0.0, (time.time() * 1000.0 - float(_last_p["pairCreatedAt"])) / 60000.0)
+                                except Exception:
+                                    pass
+                            elif mint in _graduated_set:
+                                try:
+                                    _age_m = max(0.0, float(birth_tracker.graduated_age(mint)) / 60.0)
+                                except Exception:
+                                    pass
+
+                            _is_young_unl = (_age_m <= 3.5) and any(k in _sig_l for k in (
+                                "unlocked-lp", "meteora-unlocked-pool", "meteora-unlocked-waiting",
+                                "liq-fdv-trap", "pumpswap-trap-waiting", "rh-too-young", "rh-low-vol5",
+                                "rh-too-few-sells", "rh-sells-excess", "rh-low-buys", "unlocked-custom-lp",
+                                "waiting"
+                            ))
+
+                            _is_terminal = (not _is_young_unl) and any(k in _sig_l for k in (
                                 "rugcheck", "scam", "unlocked-lp", "meteora-unlocked-pool", "bundle", "honeypot", 
                                 "freeze", "mimic", "dead-token", "мёртвый токен", "sybil", 
                                 "delegation", "zombie", "bad-creator", "post-mig-dumped", "liq-fdv-trap",
@@ -1669,6 +1689,14 @@ async def scanner_loop(analyzer, tracker):
                                     birth_tracker.remove_graduated(mint)
                                 except Exception:
                                     pass
+                            elif _is_young_unl:
+                                # Молодой незалоченный пул (age <= 3.5m) только стартует: быстрая перепроверка через 5с
+                                processed_mints[mint] = time.time() - _cd + 5
+                                if mint in _graduated_set:
+                                    try:
+                                        birth_tracker.add_graduated(mint)
+                                    except Exception:
+                                        pass
                             elif "pump-curve-too-early" in _sig_l:
                                 processed_mints[mint] = time.time() + 45        # Пустой ранний кёрв ($2,037): не долбим каждые 10с
                             elif "ungraduated" in _sig_l or "bonding curve" in _sig_l or "curve" in _sig_l:

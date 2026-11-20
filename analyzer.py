@@ -1921,6 +1921,12 @@ class Analyzer:
                 pair_data["_rug_hunter_mode"] = _rh_m_mode
                 print(f"🎯 [RUG-HUNTER-CAND] {symbol} ({mint[:8]}): ранний незалоченный пул Meteora допущен в аудит RUG-HUNTER:{_rh_m_mode}.")
             else:
+                if _age_min_pre <= 3.5:
+                    return self._deny(
+                        mint,
+                        f"meteora-unlocked-waiting:{_rh_met_early_why}",
+                        f"⏳ [METEORA-WAIT] {symbol} ({mint[:8]}): ранний пул Meteora {_age_min_pre:.1f}м ({_rh_met_early_why}) — ждём наполнения объёма/сделок."
+                    )
                 return self._deny(
                     mint,
                     "meteora-unlocked-pool",
@@ -1952,6 +1958,12 @@ class Analyzer:
                 pair_data["_rug_hunter_mode"] = _rh_tr_mode
                 print(f"🎯 [RUG-HUNTER-CAND] {symbol} ({mint[:8]}): посеянный slow-cook пул допущен в аудит RUG-HUNTER:{_rh_tr_mode}.")
             else:
+                if _age_min_pre <= 3.5:
+                    return self._deny(
+                        mint,
+                        f"pumpswap-trap-waiting:{_rh_trap_why}",
+                        f"⏳ [PUMPSWAP-WAIT] {symbol} ({mint[:8]}): посеянный пул {_age_min_pre:.1f}м ({_rh_trap_why}) — ждём подтверждения активности."
+                    )
                 return self._deny(
                     mint,
                     "pumpswap-liq-fdv-trap",
@@ -2749,6 +2761,12 @@ class Analyzer:
 
                         if not _rh_unl_pass:
                             if "meteora" in _dex_low_main and _dex_low_main != "meteoradbc" and not has_verified_locked_lp:
+                                if _age_main <= 3.5:
+                                    return self._deny(
+                                        mint,
+                                        f"meteora-unlocked-waiting:{_rh_unl_why}",
+                                        f"⏳ [METEORA-WAIT] {symbol} ({mint[:8]}): незалоченный пул Meteora {_age_main:.1f}м ({_rh_unl_why}) — повторная проверка через 5с."
+                                    )
                                 return self._deny(
                                     mint,
                                     "meteora-unlocked-pool",

@@ -400,22 +400,32 @@ def snapshot_rugger_wallets(rc_data: Optional[dict], pool_accounts: Optional[set
 
 
 def get_rug_hunter_tp_ladder() -> tuple:
-    """Ускоренная лесенка фиксации прибыли для Rug-Hunter: TP1 +25% (60%), TP2 +55% (100%)."""
+    """Мунбэг-лесенка для ловли иксов (+35% / +110% / +250% / +500% / +1000%):
+       TP1 +35% (35% объема: гарантированный возврат депозита, вход в безриск)
+       TP2 +110% (30% объема: фиксация 2.1x)
+       TP3 +250% (15% объема: фиксация 3.5x)
+       TP4 +500% (10% объема: фиксация 6.0x)
+       TP5 +1000% (100% остатка мунбэга: 11x джекпот)
+    """
     return (
-        float(getattr(config, "RUG_HUNTER_TP1_PCT", 0.25)),
-        float(getattr(config, "RUG_HUNTER_TP1_SELL_FRAC", 0.60)),
-        float(getattr(config, "RUG_HUNTER_TP2_PCT", 0.55)),
-        float(getattr(config, "RUG_HUNTER_TP2_SELL_FRAC", 1.00)),
-        5.00, 0.0,
-        5.00, 0.0,
-        10.00, 0.0,
+        float(getattr(config, "RUG_HUNTER_TP1_PCT", 0.35)),
+        float(getattr(config, "RUG_HUNTER_TP1_SELL_FRAC", 0.35)),
+        float(getattr(config, "RUG_HUNTER_TP2_PCT", 1.10)),
+        float(getattr(config, "RUG_HUNTER_TP2_SELL_FRAC", 0.30)),
+        float(getattr(config, "RUG_HUNTER_TP3_PCT", 2.50)),
+        float(getattr(config, "RUG_HUNTER_TP3_SELL_FRAC", 0.15)),
+        float(getattr(config, "RUG_HUNTER_TP4_PCT", 5.00)),
+        float(getattr(config, "RUG_HUNTER_TP4_SELL_FRAC", 0.10)),
+        float(getattr(config, "RUG_HUNTER_TP5_PCT", 10.00)),
+        float(getattr(config, "RUG_HUNTER_TP5_SELL_FRAC", 1.00)),
     )
 
 
 def evaluate_rug_hunter_exit(position, current_price: float) -> Optional[str]:
     """
-    Специализированный сверхбыстрый менеджер выходов для позиций RUG-HUNTER.
-    Цель: забрать +20%..+55% быстро и выскочить ДО того, как рагер снимет LP или кабал сольёт стек.
+    Специализированный менеджер выходов для сбора иксов:
+    Позволяет ракете бежать до 2x-10x через мунбэг-трейлинг,
+    но мгновенно выдёргивает позицию при реальном сливе LP (LP-Drain -15%) или дев-дампе.
     """
     entry_px = float(getattr(position, "entry_price_usd", 0.0) or 0.0)
     if entry_px <= 0 or not current_price or current_price <= 0:
@@ -435,9 +445,7 @@ def evaluate_rug_hunter_exit(position, current_price: float) -> Optional[str]:
     drop_from_peak = (position.max_price_usd - current_price) / position.max_price_usd if position.max_price_usd > 0 else 0.0
 
     et = float(getattr(position, "entry_time", now_ts) or now_ts)
-    pt = float(getattr(position, "peak_time", et) or et)
     minutes_held = max(0.0, (now_ts - et) / 60.0)
-    peak_age_min = max(0.0, (now_ts - pt) / 60.0)
 
     pd = getattr(position, "pair_data", None) or getattr(position, "last_pair_data", None) or {}
     rh_mode = str((pd.get("_rug_hunter_mode") if isinstance(pd, dict) else "") or "").upper()
@@ -445,7 +453,7 @@ def evaluate_rug_hunter_exit(position, current_price: float) -> Optional[str]:
         src_u = str(getattr(position, "source", "") or "").upper()
         rh_mode = "CABAL-SURF" if "CABAL" in src_u else ("SEEDED-LP" if "SEEDED" in src_u else "UNLOCKED-LP")
 
-    # 1. Мгновенный срез при просадке ликвидности пула >= 15% (в 3 раза чувствительнее обычной стратегии!)
+    # 1. Мгновенный срез при просадке ликвидности пула >= 15% (вывод LP рагером)
     if isinstance(pd, dict) and pd:
         liq_obj = pd.get("liquidity") or {}
         if isinstance(liq_obj, dict) and ("usd" in liq_obj or "quote" in liq_obj):
@@ -465,10 +473,10 @@ def evaluate_rug_hunter_exit(position, current_price: float) -> Optional[str]:
             else:
                 position._rh_liq_streak = 0
 
-        # Мгновенный выход при развороте 1м свечи <= -5% в плюсе или <= -7% вообще:
+        # Мгновенный выход при развороте 1м свечи <= -7% (защита от мгновенного краш-дампа)
         pc = pd.get("priceChange") or {}
         m1_val = float(pc.get("m1", 0) or 0)
-        if minutes_held >= 0.35 and m1_val <= -5.0 and (pnl_pct >= 0.05 or m1_val <= -7.5):
+        if minutes_held >= 0.5 and m1_val <= -7.5 and (pnl_pct >= 0.05 or m1_val <= -10.0):
             return f"🎯 RH 1m-Dump Escape (m1 {m1_val:+.1f}%, PnL {pnl_pct*100:+.1f}%)"
 
     # 2. Жёсткий Stop-Loss (-10%) и Emergency Cap (-14%)
@@ -485,44 +493,31 @@ def evaluate_rug_hunter_exit(position, current_price: float) -> Optional[str]:
     else:
         position.sl_confirm_n = 0
 
-    # 3. Полный выход на TP2 (+55%) — не сидим в раге ради 10x!
-    tp2_thr = float(getattr(config, "RUG_HUNTER_TP2_PCT", 0.55))
-    if pnl_pct >= tp2_thr:
-        return f"🎯 RH Target Hit TP2 (+{pnl_pct*100:.1f}% >= +{tp2_thr*100:.0f}% — выход до рага!)"
-
-    # 4. Жёсткий Trailing Stop (-8% от ATH после пика +18%) и Floor Lock
-    trail_act = float(getattr(config, "RUG_HUNTER_TRAIL_ACT_PCT", 0.18))
-    trail_drop = float(getattr(config, "RUG_HUNTER_TRAIL_DROP_PCT", 0.08))
+    # 3. Мунбэг-трейлинг стоп для ловли иксов:
+    # Активируется после первого взятия прибыли (+35%), защищает накопленный профит с нормальным люфтом 22% от ATH
+    trail_act = float(getattr(config, "RUG_HUNTER_TRAIL_ACT_PCT", 0.35))
+    trail_drop = float(getattr(config, "RUG_HUNTER_TRAIL_DROP_PCT", 0.22))
     if max_pnl_pct >= trail_act and drop_from_peak >= trail_drop:
-        return f"🎯 RH Profit Trail (+{pnl_pct*100:+.1f}%, откат {drop_from_peak*100:.1f}% от пика +{max_pnl_pct*100:.1f}%)"
+        return f"🎯 RH Moonbag Trail (+{pnl_pct*100:+.1f}%, откат {drop_from_peak*100:.1f}% от пика +{max_pnl_pct*100:.1f}%)"
 
-    # 5. Мгновенный Breakeven Shield (пик >= +12% -> пол +2.5%, уходить в минус запрещено!)
-    be_act = float(getattr(config, "RUG_HUNTER_BREAKEVEN_PCT", 0.12))
-    be_floor = float(getattr(config, "RUG_HUNTER_BREAKEVEN_FLOOR", 0.025))
+    # 4. Breakeven Shield (пик >= +25% -> пол +5.0%, гарантия выхода без убытка)
+    be_act = float(getattr(config, "RUG_HUNTER_BREAKEVEN_PCT", 0.25))
+    be_floor = float(getattr(config, "RUG_HUNTER_BREAKEVEN_FLOOR", 0.05))
     if max_pnl_pct >= be_act and pnl_pct <= be_floor:
         return f"🎯 RH Breakeven Lock (+{pnl_pct*100:+.1f}% после пика +{max_pnl_pct*100:.1f}%)"
 
-    # 6. Застой после профита или быстрый срез флета (в раге нельзя пересиживать!)
-    if minutes_held >= 1.5 and max_pnl_pct >= 0.08 and peak_age_min >= 0.75 and pnl_pct >= 0.04:
-        return f"🎯 RH Peak Stall Harvest (+{pnl_pct*100:.1f}%, {peak_age_min*60:.0f}с без нового ATH)"
-    if minutes_held >= 2.0 and max_pnl_pct < 0.04 and pnl_pct < 0.01:
-        return f"🎯 RH No-Pump Scratch ({pnl_pct*100:+.1f}%, 2м без взлёта — сброс до рага)"
+    # 5. Сброс зависшего флета без пампа (только если вообще нет движения за 3 минуты)
+    if minutes_held >= 3.0 and max_pnl_pct < 0.04 and pnl_pct < 0.01:
+        return f"🎯 RH No-Pump Scratch ({pnl_pct*100:+.1f}%, 3м без взлёта — сброс до рага)"
 
-    # 7. Динамический жёсткий тайм-кэп (по истории дева или базовые 5.0м; для растущего SEEDED-LP до 7.0м)
-    base_max_hold = float(getattr(config, "RUG_HUNTER_MAX_HOLD_MIN", 5.0))
-    if rh_mode == "SEEDED-LP" and pnl_pct >= 0.05:
-        base_max_hold = max(base_max_hold, 7.0)
-    prof_cap = 0.0
-    if isinstance(pd, dict):
-        cp = pd.get("_rug_hunter_creator_profile")
-        if isinstance(cp, dict):
-            prof_cap = float(cp.get("recommended_max_hold_min", 0.0) or 0.0)
-    eff_max_hold = prof_cap if prof_cap > 0 else base_max_hold
-    # Если уже есть профит >= +6% и прошло 3.5м без TP2 — фиксируем до дампа!
-    if minutes_held >= min(3.5, eff_max_hold * 0.75) and pnl_pct >= 0.06 and peak_age_min >= 0.5:
-        return f"🎯 RH Early Harvest (+{pnl_pct*100:.1f}%, {minutes_held:.1f}м — фиксация до рага)"
-    if minutes_held >= eff_max_hold:
-        return f"🎯 RH Time-Cap Exit ({pnl_pct*100:+.1f}%, лимит {eff_max_hold:.1f}м для {rh_mode})"
+    # 6. Динамический тайм-кэп:
+    # Если монета сильная и летит (pnl >= +15%), даём ракете бежать до 15.0 минут!
+    # Если около нуля — закрываем через 5.0 минут.
+    base_max_hold = 15.0 if pnl_pct >= 0.15 else float(getattr(config, "RUG_HUNTER_MAX_HOLD_MIN", 5.0))
+    if minutes_held >= base_max_hold:
+        return f"🎯 RH Time-Cap Exit ({pnl_pct*100:+.1f}%, лимит {base_max_hold:.1f}м для {rh_mode})"
+
+    return None
 
     return None
 

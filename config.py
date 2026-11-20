@@ -967,23 +967,23 @@ VIP_KOL_WALLETS = {
 TIME_EXIT_MINUTES = 40
 TIME_EXIT_PROFIT_REQ = 0.015
 
-# === СИСТЕМА ВЫХОДА (РАННИЙ TP1 +70% + SLOW-COOK ЗАЩИТА ОТ CABAL RUG) ===
+# === СИСТЕМА ВЫХОДА: МУНБЭГ-ЛЕСЕНКА ДЛЯ ЛОВЛИ ИКСОВ (2x - 11x) ===
 PARTIAL_TP_ENABLED = True
 PARTIAL_TP_MIN_TICKET_USD = 0.50
-TP1_TRIGGER_PCT = 0.55               # На +55% фиксируем 50% позиции (забираем профит ДО 1-блоковых дампов вроде FIONA +68% -> -96%)
-TP1_SELL_FRAC = 0.50                 # 50% позиции фиксируем на +55%, оставшиеся 50% — Moonbag на 3x-10x!
-TP2_TRIGGER_PCT = 1.60               # Следующий тейк на +160% (фиксируем половину мунбэга)
-TP2_SELL_FRAC = 0.50                 # 50% остатка продаём на +180%, остальное тащим по Trailing Stop
-TP3_TRIGGER_PCT = 5.00
-TP3_SELL_FRAC = 0.00
-TP4_TRIGGER_PCT = 5.00
-TP4_SELL_FRAC = 0.00
-TP5_TRIGGER_PCT = 10.00
-TP5_SELL_FRAC = 0.00
-MOONBAG_TRIGGER_PCT = 0.70           # Мунбэг активируется на +70%
-MOONBAG_SELL_FRAC = 0.50
-SLOW_COOK_PROFIT_EXIT_MIN = 12.0     # Если за 12м монета не пробила TP1 (+70%) и в плюсе >= +5% — фиксируем профит (защита от slow-cook рага FIONA на 16-й мин!)
-SLOW_COOK_HARD_EXIT_MIN = 15.0       # Если за 15м монета так и не дошла до TP1 — выходим, не сидим в тикающей бомбе кабала
+TP1_TRIGGER_PCT = 0.35               # Tier 1 (+35%): фиксируем 35% позиции -> 100% Risk-Free Moonbag + возврат тела
+TP1_SELL_FRAC = 0.35                 # Продаём 35%
+TP2_TRIGGER_PCT = 1.10               # Tier 2 (+110% / 2.1x): фиксируем 30% позиции (иксы!)
+TP2_SELL_FRAC = 0.30                 # Продаём 30%
+TP3_TRIGGER_PCT = 2.50               # Tier 3 (+250% / 3.5x): фиксируем 15% позиции
+TP3_SELL_FRAC = 0.15                 # Продаём 15%
+TP4_TRIGGER_PCT = 5.00               # Tier 4 (+500% / 6.0x): фиксируем 10% позиции
+TP4_SELL_FRAC = 0.10                 # Продаём 10%
+TP5_TRIGGER_PCT = 10.00              # Tier 5 (+1000% / 11.0x): фиксируем всё остальное
+TP5_SELL_FRAC = 1.00                 # 100% остатка позиции
+MOONBAG_TRIGGER_PCT = 0.35           # Мунбэг активируется уже с +35% (после первого тейка)
+MOONBAG_SELL_FRAC = 0.35
+SLOW_COOK_PROFIT_EXIT_MIN = 12.0     # 12м таймер: работает только для застрявших во флете слабых монет (< +20%) без TP1
+SLOW_COOK_HARD_EXIT_MIN = 15.0       # 15м тайм-аут
 
 # Трейлинг для мунбэга (защищает отката: если дошло до +75%, не даёт слить в 0)
 MOONBAG_TRAIL_ACTIVATION_PCT = 0.40  # Трейлинг включается при пике от +40%
@@ -1025,18 +1025,24 @@ BREAKEVEN_PCT = 0.25       # Breakeven Shield: пик >= +25% -> пол +3% (п�
 
 def get_sol_tp_ladder(is_unlocked: bool) -> tuple:
     """Return (tp1_t, tp1_f, tp2_t, tp2_f, tp3_t, tp3_f, tp4_t, tp4_f, tp5_t, tp5_f).
-    TP1 +110% (50% позиции -> Risk-Free Moonbag), TP2 +250% (50% остатка)."""
+    Tiered Moonbag Runner Ladder for catching multipliers:
+    TP1 +35% (sell 35% -> Risk-Free Moonbag + deposit protection)
+    TP2 +110% (sell 30% -> 2.1x multiplier)
+    TP3 +250% (sell 15% -> 3.5x multiplier)
+    TP4 +500% (sell 10% -> 6.0x multiplier)
+    TP5 +1000% (sell 100% of remaining -> 11.0x jackpot)
+    """
     return (
-        float(globals().get("TP1_TRIGGER_PCT", 1.10)),
-        float(globals().get("TP1_SELL_FRAC", 0.50)),
-        float(globals().get("TP2_TRIGGER_PCT", 2.50)),
-        float(globals().get("TP2_SELL_FRAC", 0.50)),
-        float(globals().get("TP3_TRIGGER_PCT", 5.00)),
-        float(globals().get("TP3_SELL_FRAC", 0.00)),
+        float(globals().get("TP1_TRIGGER_PCT", 0.35)),
+        float(globals().get("TP1_SELL_FRAC", 0.35)),
+        float(globals().get("TP2_TRIGGER_PCT", 1.10)),
+        float(globals().get("TP2_SELL_FRAC", 0.30)),
+        float(globals().get("TP3_TRIGGER_PCT", 2.50)),
+        float(globals().get("TP3_SELL_FRAC", 0.15)),
         float(globals().get("TP4_TRIGGER_PCT", 5.00)),
-        float(globals().get("TP4_SELL_FRAC", 0.00)),
+        float(globals().get("TP4_SELL_FRAC", 0.10)),
         float(globals().get("TP5_TRIGGER_PCT", 10.00)),
-        float(globals().get("TP5_SELL_FRAC", 0.00)),
+        float(globals().get("TP5_SELL_FRAC", 1.00)),
     )
 
 # === ЗАЩИТА ОТ СНОСА ЛИКВИДНОСТИ И СТАГНАЦИИ ПОСЛЕ ЗАПУСКА ===
@@ -1390,9 +1396,9 @@ RUG_HUNTER_SEEDED_LP_ENABLED = True       # Режим A2: ранний сёрф
 RUG_HUNTER_CABAL_SURF_ENABLED = True      # Режим B: ранний сёрф залоченных пулов с кабал/инсайдер-сеткой (<=8м)
 RUG_HUNTER_MAX_SLOTS = 2                  # Макс. 2 одновременных слота под Rug-Hunter (2 слота всегда свободны под чистые ракеты)
 RUG_HUNTER_SIZE_MULT = 0.65               # Уменьшенный риск-сайз (65% от обычного ордера)
-RUG_HUNTER_UNLOCKED_MIN_AGE_MIN = 0.25     # Минимум 0.25м (15с): вход на самом старте, когда только полетит ракета
-RUG_HUNTER_UNLOCKED_MAX_AGE_MIN = 3.5      # Максимум 3.5м: защита от поздних ловушек и вывода ликвидности (кейсы BILLION/ICEWIZ на 6-7м)
-RUG_HUNTER_CABAL_MAX_AGE_MIN = 6.0         # Максимум 6.0м для кабал-сёрфа
+RUG_HUNTER_UNLOCKED_MIN_AGE_MIN = 0.20     # Минимум 0.20м (12с): вход на самом старте разгона первой свечи
+RUG_HUNTER_UNLOCKED_MAX_AGE_MIN = 3.0      # Максимум 3.0м: 100% защита от поздних ловушек и вывода ликвидности (кейсы BILLION/ICEWIZ/ONODA на 4-7м)
+RUG_HUNTER_CABAL_MAX_AGE_MIN = 5.0         # Максимум 5.0м для кабал-сёрфа
 RUG_HUNTER_MIN_LIQ_USD = 7500.0            # Минимум $7.5k реальной ликвидности (едино с MIN_GRADUATED_LIQ_USD)
 RUG_HUNTER_MIN_VOL5_USD = 1800.0           # Минимум $1.8k объёма за 5м (ловит ультра-ранний старт на первых секундах)
 RUG_HUNTER_EARLY_AGE_THRESHOLD = 2.0       # Порог ультра-ранней фазы (до 2.0м)
@@ -1401,15 +1407,21 @@ RUG_HUNTER_EARLY_MIN_BUYS = 12             # Достаточно 12 покуп�
 RUG_HUNTER_STAGE1_MIN_ML = 5.0            # Смягчённый порог Stage-1 ML для ранних высокоимпульсных Rug-Hunter (кейс RIEMANN 5.8% -> +1240%)
 RUG_HUNTER_MAX_FDV_USD = 250000.0         # Потолок FDV для незалоченных пулов
 RUG_HUNTER_CABAL_MAX_FDV_USD = 180000.0   # Потолок FDV для кабал-сёрфа
-RUG_HUNTER_TP1_PCT = 0.25                 # TP1 +25%: фиксируем 60% позиции сразу
-RUG_HUNTER_TP1_SELL_FRAC = 0.60
-RUG_HUNTER_TP2_PCT = 0.55                 # TP2 +55%: полный выход 100% до рага!
-RUG_HUNTER_TP2_SELL_FRAC = 1.00
-RUG_HUNTER_BREAKEVEN_PCT = 0.12           # Пик >= +12% -> пол +2.5% (в минус уйти нельзя)
-RUG_HUNTER_BREAKEVEN_FLOOR = 0.025
-RUG_HUNTER_TRAIL_ACT_PCT = 0.18           # С +18% включается плотный трейл -8% от ATH
-RUG_HUNTER_TRAIL_DROP_PCT = 0.08
+RUG_HUNTER_TP1_PCT = 0.35                 # TP1 +35%: фиксируем 35% объема (возврат тела депозита, house money!)
+RUG_HUNTER_TP1_SELL_FRAC = 0.35
+RUG_HUNTER_TP2_PCT = 1.10                 # TP2 +110% (2.1x): фиксируем 30% объема (сбор первых иксов!)
+RUG_HUNTER_TP2_SELL_FRAC = 0.30
+RUG_HUNTER_TP3_PCT = 2.50                 # TP3 +250% (3.5x): фиксируем 15% объема
+RUG_HUNTER_TP3_SELL_FRAC = 0.15
+RUG_HUNTER_TP4_PCT = 5.00                 # TP4 +500% (6.0x): фиксируем 10% объема
+RUG_HUNTER_TP4_SELL_FRAC = 0.10
+RUG_HUNTER_TP5_PCT = 10.00                # TP5 +1000% (11x): полный джекпот!
+RUG_HUNTER_TP5_SELL_FRAC = 1.00
+RUG_HUNTER_BREAKEVEN_PCT = 0.25           # Включаем Breakeven только после пика >= +25%
+RUG_HUNTER_BREAKEVEN_FLOOR = 0.05         # Пол +5% (не закрываемся в микро-плюс из-за шума)
+RUG_HUNTER_TRAIL_ACT_PCT = 0.35           # Трейлинг-стоп активируется после +35% (не душим на старте!)
+RUG_HUNTER_TRAIL_DROP_PCT = 0.22          # Трейл -22% от ATH (даёт ракете дышать и собирать 2x-10x)
 RUG_HUNTER_SL_PCT = -0.10                 # Жёсткий Stop-Loss -10%
 RUG_HUNTER_EMERG_PCT = -0.14              # Экстренный кап -14%
-RUG_HUNTER_MAX_HOLD_MIN = 5.0             # Базовый тайм-кэп 5м (сокращается/корректируется по истории дева)
+RUG_HUNTER_MAX_HOLD_MIN = 5.0             # Базовый тайм-кэп 5м (для плюсовых позиций расширяется до 15м)
 RUG_HUNTER_LIQ_DRAIN_PCT = 0.15           # Мгновенный выход при падении LP >= 15%

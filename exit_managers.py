@@ -258,13 +258,14 @@ class MatureExitManager:
         # - После TP1 (+110%, 50% продано -> Risk-Free Moonbag) даём мунбэгу широкий трейлинг 28-32% для полёта в 5x-10x!
         _has_tp1 = bool(_is_mb or getattr(position, "tp1_done", False))
         # Защита от slow-cook cabal рагов (кейс FIONA: 15м лесенкой +15%..+68% -> 1-блоковый сброс -96.3% на 16-й мин!):
-        # Если монета не пробила TP1 (+70%) за 12 минут, это не взрывная ракета — забираем профит / выходим до дампа.
+        # Если монета не пробила TP1 (+35%) за 12 минут, это не взрывная ракета — забираем профит / выходим до дампа.
+        # ВАЖНО: не режем монету, если она прямо сейчас обновляет локальные хаи (_peak_age_min < 2.5m) или активно идёт к TP1!
         _sc_prof_m = float(getattr(config, "SLOW_COOK_PROFIT_EXIT_MIN", 12.0) or 12.0)
         _sc_hard_m = float(getattr(config, "SLOW_COOK_HARD_EXIT_MIN", 15.0) or 15.0)
         if not _has_tp1 and _sc_prof_m > 0 and minutes_held >= _sc_prof_m:
-            if pnl_pct >= 0.05:
+            if pnl_pct >= 0.05 and _peak_age_min >= 2.5 and pnl_pct < 0.35:
                 return f"⏱️ Slow-Cook Profit Harvest (+{pnl_pct*100:.1f}%, {minutes_held:.0f}м без пробоя TP1 — фиксация до кабал-дампа)"
-            if _sc_hard_m > 0 and minutes_held >= _sc_hard_m:
+            if _sc_hard_m > 0 and minutes_held >= _sc_hard_m and pnl_pct < 0.20:
                 return f"⏱️ Slow-Cook Timeout Exit ({pnl_pct*100:+.1f}%, {minutes_held:.0f}м без ракеты — защита от slow-cook рага)"
         if max_pnl_pct >= 3.00 and _peak_age_min >= 12.0:
             return f"Parabolic Harvest (+{pnl_pct*100:.0f}% locked, пик был +{max_pnl_pct*100:.0f}%, {_peak_age_min:.0f}m без нового максимума)"

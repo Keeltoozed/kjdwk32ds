@@ -1519,7 +1519,20 @@ async def jup_loop(analyzer, tracker):
                                 return
 
                             _sig_j = str(analyzer.get_signal(mint) or "").lower()
-                            _is_term_j = any(k in _sig_j for k in (
+                            _last_p_j = getattr(analyzer, "_last_analyzed_pair", {}).get(mint) or {}
+                            _age_j = 999.0
+                            if _last_p_j.get("pairCreatedAt"):
+                                try:
+                                    _age_j = max(0.0, (_t.time() * 1000.0 - float(_last_p_j["pairCreatedAt"])) / 60000.0)
+                                except Exception:
+                                    pass
+                            _is_young_unl_j = (_age_j <= 3.5) and any(k in _sig_j for k in (
+                                "unlocked-lp", "meteora-unlocked-pool", "meteora-unlocked-waiting",
+                                "liq-fdv-trap", "pumpswap-trap-waiting", "rh-too-young", "rh-low-vol5",
+                                "rh-too-few-sells", "rh-sells-excess", "rh-low-buys", "unlocked-custom-lp",
+                                "waiting"
+                            ))
+                            _is_term_j = (not _is_young_unl_j) and any(k in _sig_j for k in (
                                 "rugcheck", "scam", "unlocked-lp", "meteora-unlocked-pool", "bundle", "honeypot", 
                                 "freeze", "mimic", "dead-token", "мёртвый токен", "sybil", 
                                 "delegation", "zombie", "bad-creator", "post-mig-dumped", "liq-fdv-trap",
@@ -1527,13 +1540,16 @@ async def jup_loop(analyzer, tracker):
                                 "wash-trap", "anon-wash-churn", "mcap-too-large", "price-split"
                             ))
                             if ok is False:
-                                processed[mint] = _t.time() + (3600 if _is_term_j else 0)
-                                if _is_term_j:
-                                    try:
-                                        from birth_tracker import birth_tracker as _bt_j
-                                        _bt_j.remove_graduated(mint)
-                                    except Exception:
-                                        pass
+                                if _is_young_unl_j:
+                                    processed[mint] = _t.time() - 18 + 5
+                                else:
+                                    processed[mint] = _t.time() + (3600 if _is_term_j else 0)
+                                    if _is_term_j:
+                                        try:
+                                            from birth_tracker import birth_tracker as _bt_j
+                                            _bt_j.remove_graduated(mint)
+                                        except Exception:
+                                            pass
                             else:
                                 processed[mint] = _t.time()
                             _j_sc = float(getattr(analyzer, "rocket_scores", {}).get(mint, getattr(analyzer, "last_score", 0.0)) or 0.0)
