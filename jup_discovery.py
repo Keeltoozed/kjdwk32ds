@@ -684,8 +684,26 @@ async def _evaluate_and_buy_inner(mint: str, td: dict, analyzer, tracker, source
         pass
     _dex_j_low = str((td or {}).get("dexId", "")).lower()
     if config.is_pumpswap_liq_fdv_trap(td):
-        print(f"🚫 [JUP-PUMPSWAP-TRAP] {mint[:8]}: custom CreatePool liq/fdv trap — отмена!")
-        return False
+        _rh_jt_ok = False
+        _rh_jt_why = ""
+        if isinstance(td, dict):
+            try:
+                import rug_hunter as _rh_jt
+                _rh_jt_ok, _rh_jt_why = _rh_jt.qualify_unlocked_lp_hunter(
+                    mint=mint, pair_data=td, age_min=_age_j,
+                    liq_usd=_liq_j, fdv_usd=_fdv_j1, vol5_usd=_vol5_j,
+                    buys5=_b5_j, sells5=_s5_j, m5=_m5_j, m1=_m1_j, h1=_h1_j,
+                )
+            except Exception:
+                _rh_jt_ok = False
+        if _rh_jt_ok:
+            import rug_hunter as _rh_jtm
+            _rh_jt_mode = _rh_jtm.mode_from_qualify_reason(_rh_jt_why, td.get("_rug_hunter_mode", ""))
+            td["_rug_hunter_mode"] = _rh_jt_mode
+            print(f"🎯 [{source_tag}-RH-SEEDED] {_sym_tmp} ({mint[:8]}): посеянный пул допущен в RUG-HUNTER:{_rh_jt_mode}.")
+        else:
+            print(f"🚫 [JUP-PUMPSWAP-TRAP] {mint[:8]}: custom CreatePool liq/fdv trap — отмена!")
+            return False
     _ps_j_canon = False
     if _dex_j_low == "pumpswap":
         import goplus as _gp_j
@@ -696,10 +714,11 @@ async def _evaluate_and_buy_inner(mint: str, td: dict, analyzer, tracker, source
         )
         if not _ps_j_ok:
             _rh_ps_j_ok = False
+            _rh_ps_j_why = ""
             if "createpool-unburned-lp" in str(_ps_j_why or "").lower() and isinstance(td, dict):
                 try:
                     import rug_hunter as _rh_jp
-                    _rh_ps_j_ok, _ = _rh_jp.qualify_unlocked_lp_hunter(
+                    _rh_ps_j_ok, _rh_ps_j_why = _rh_jp.qualify_unlocked_lp_hunter(
                         mint=mint, pair_data=td, age_min=_age_j,
                         liq_usd=_liq_j, fdv_usd=_fdv_j1, vol5_usd=_vol5_j,
                         buys5=_b5_j, sells5=_s5_j, m5=_m5_j, m1=_m1_j, h1=_h1_j,
@@ -707,8 +726,10 @@ async def _evaluate_and_buy_inner(mint: str, td: dict, analyzer, tracker, source
                 except Exception:
                     _rh_ps_j_ok = False
             if _rh_ps_j_ok:
-                td["_rug_hunter_mode"] = "UNLOCKED-LP"
-                print(f"🎯 [{source_tag}-RH-PS] {_sym_tmp} ({mint[:8]}): незалоченный PumpSwap CreatePool допущен в RUG-HUNTER:UNLOCKED-LP.")
+                import rug_hunter as _rh_jpm
+                _rh_ps_j_mode = _rh_jpm.mode_from_qualify_reason(_rh_ps_j_why, td.get("_rug_hunter_mode", ""))
+                td["_rug_hunter_mode"] = _rh_ps_j_mode
+                print(f"🎯 [{source_tag}-RH-PS] {_sym_tmp} ({mint[:8]}): незалоченный PumpSwap CreatePool допущен в RUG-HUNTER:{_rh_ps_j_mode}.")
             else:
                 print(f"🚫 [JUP-PUMPSWAP] {mint[:8]}: {_ps_j_why} — отмена!")
                 return False
@@ -774,18 +795,19 @@ async def _evaluate_and_buy_inner(mint: str, td: dict, analyzer, tracker, source
                         import rug_hunter as _rh_jl
                         _rc_cr_j = str((_rc_d or {}).get("creator") or "").strip()
                         _rh_prof_j = await _rh_jl.profile_creator_rug_timing(_rc_cr_j, mint)
-                        _rh_j_pass, _ = _rh_jl.qualify_unlocked_lp_hunter(
+                        _rh_j_pass, _rh_j_why = _rh_jl.qualify_unlocked_lp_hunter(
                             mint=mint, pair_data=td, age_min=_age_j,
                             liq_usd=_liq_j, fdv_usd=_fdv_j1, vol5_usd=_vol5_j,
                             buys5=_b5_j, sells5=_s5_j, m5=_m5_j, m1=_m1_j, h1=_h1_j,
                             creator_profile=_rh_prof_j,
                         )
                         if _rh_j_pass:
-                            td["_rug_hunter_mode"] = "UNLOCKED-LP"
+                            _rh_jl_mode = _rh_jl.mode_from_qualify_reason(_rh_j_why, td.get("_rug_hunter_mode", ""))
+                            td["_rug_hunter_mode"] = _rh_jl_mode
                             td["_rug_hunter_creator_profile"] = _rh_prof_j
                             td["_unlocked_runner_ok"] = True
                             _lp_ok = True
-                            print(f"🎯 [{source_tag}-RUG-HUNTER:UNLOCKED-LP] {_sym_tmp} ({mint[:8]}): квалифицирован ({_rh_prof_j.get('reason')})!")
+                            print(f"🎯 [{source_tag}-RUG-HUNTER:{_rh_jl_mode}] {_sym_tmp} ({mint[:8]}): квалифицирован ({_rh_prof_j.get('reason')})!")
                     except Exception:
                         _rh_j_pass = False
                 if not _rh_j_pass:
@@ -1405,9 +1427,9 @@ async def jup_loop(analyzer, tracker):
                             _rh_met_j_ok = (
                                 bool(getattr(config, "RUG_HUNTER_ENABLED", False))
                                 and bool(getattr(config, "RUG_HUNTER_UNLOCKED_LP_ENABLED", False))
-                                and 1.0 <= _ag <= float(getattr(config, "RUG_HUNTER_UNLOCKED_MAX_AGE_MIN", 10.0))
-                                and _lq_cand >= float(getattr(config, "RUG_HUNTER_MIN_LIQ_USD", 8000.0))
-                                and _v5_cand >= float(getattr(config, "RUG_HUNTER_MIN_VOL5_USD", 6000.0))
+                                and float(getattr(config, "RUG_HUNTER_UNLOCKED_MIN_AGE_MIN", 0.8)) <= _ag <= float(getattr(config, "RUG_HUNTER_UNLOCKED_MAX_AGE_MIN", 10.0))
+                                and _lq_cand >= float(getattr(config, "RUG_HUNTER_MIN_LIQ_USD", 7500.0))
+                                and _v5_cand >= float(getattr(config, "RUG_HUNTER_MIN_VOL5_USD", 2000.0))
                                 and _s5_cand >= 10
                                 and _b5_cand >= max(35, int(_s5_cand * 1.15))
                                 and _m5 >= 6.0

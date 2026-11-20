@@ -1437,9 +1437,9 @@ async def scanner_loop(analyzer, tracker):
                             _rh_met_sc_ok = (
                                 bool(getattr(config, "RUG_HUNTER_ENABLED", False))
                                 and bool(getattr(config, "RUG_HUNTER_UNLOCKED_LP_ENABLED", False))
-                                and 1.0 <= _age_r <= float(getattr(config, "RUG_HUNTER_UNLOCKED_MAX_AGE_MIN", 10.0))
-                                and _c_l_m >= float(getattr(config, "RUG_HUNTER_MIN_LIQ_USD", 8000.0))
-                                and _c_v5_m >= float(getattr(config, "RUG_HUNTER_MIN_VOL5_USD", 6000.0))
+                                and float(getattr(config, "RUG_HUNTER_UNLOCKED_MIN_AGE_MIN", 0.8)) <= _age_r <= float(getattr(config, "RUG_HUNTER_UNLOCKED_MAX_AGE_MIN", 10.0))
+                                and _c_l_m >= float(getattr(config, "RUG_HUNTER_MIN_LIQ_USD", 7500.0))
+                                and _c_v5_m >= float(getattr(config, "RUG_HUNTER_MIN_VOL5_USD", 2000.0))
                                 and _c_s5_m >= 10
                                 and _c_b5_m >= max(35, int(_c_s5_m * 1.15))
                                 and _c_m5_m >= 6.0
@@ -2294,7 +2294,7 @@ async def scanner_loop(analyzer, tracker):
 
                                     _rh_mode_sc = str(pair_data.get("_rug_hunter_mode") or "").upper().strip()
                                     _is_rh_sc_pf = bool(_rh_mode_sc) or ("RUG-HUNTER" in str(analyzer.get_signal(mint) or "").upper())
-                                    _is_rh_unl_sc = bool(_is_rh_sc_pf and _rh_mode_sc == "UNLOCKED-LP" and getattr(config, "RUG_HUNTER_ENABLED", False) and getattr(config, "RUG_HUNTER_UNLOCKED_LP_ENABLED", False))
+                                    _is_rh_unl_sc = bool(_is_rh_sc_pf and _rh_mode_sc in ("UNLOCKED-LP", "SEEDED-LP") and getattr(config, "RUG_HUNTER_ENABLED", False) and getattr(config, "RUG_HUNTER_UNLOCKED_LP_ENABLED", False))
                                     if _is_rh_sc_pf:
                                         import rug_hunter as _rh_pf_sl
                                         if not _rh_pf_sl.has_rug_hunter_slot(tracker):
@@ -2304,7 +2304,8 @@ async def scanner_loop(analyzer, tracker):
                                     # PRE-FLIGHT PUMPSWAP ON-CHAIN GUARD: защита от permissionless CreatePool дрейнов (включая .pump/.bonk/.BAGS)
                                     if _dex_lower_sc == "pumpswap" and isinstance(_r_ps, tuple):
                                         _ps_m_ok, _ps_m_canon, _ps_m_why = _r_ps
-                                        if (not _ps_m_ok and not (_is_rh_unl_sc and "createpool-unburned-lp" in str(_ps_m_why or "").lower())) or config.is_pumpswap_liq_fdv_trap(pair_data):
+                                        _is_rh_seeded_sc = bool(_is_rh_unl_sc and getattr(config, "RUG_HUNTER_SEEDED_LP_ENABLED", True))
+                                        if (not _ps_m_ok and not (_is_rh_unl_sc and "createpool-unburned-lp" in str(_ps_m_why or "").lower())) or (config.is_pumpswap_liq_fdv_trap(pair_data) and not _is_rh_seeded_sc):
                                             print(f"🚫 [SCANNER PRE-FLIGHT PUMPSWAP] {actual_symbol} ({mint[:8]}): {_ps_m_why} — вход заблокирован!")
                                             continue
                                         _ps_rpc_safe_m = bool(pair_data.get("_pumpswap_rpc_unverified")) and mint.lower().endswith("pump")

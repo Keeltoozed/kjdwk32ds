@@ -453,10 +453,48 @@ class GrokJevEngine:
                 age_min = 0.1 if is_pump else 0.2
 
         _min_grad_liq = float(getattr(_c, "MIN_GRADUATED_LIQ_USD", 2500.0))
+        _tx5_pre_g = (pair_data.get("txns") or {}).get("m5", {}) or {}
+        _pc_pre_g = pair_data.get("priceChange") or {}
+        _v5_pre_g = float((pair_data.get("volume") or {}).get("m5", 0) or 0)
+        _b5_pre_g = int(_tx5_pre_g.get("buys", 0) or 0)
+        _s5_pre_g = int(_tx5_pre_g.get("sells", 0) or 0)
+        _m5_pre_g = float(_pc_pre_g.get("m5", 0) or 0)
+        _m1_pre_g = float(_pc_pre_g.get("m1", 0) or 0)
+        _h1_pre_g = float(_pc_pre_g.get("h1", 0) or 0)
         if _c.is_pumpswap_liq_fdv_trap(pair_data):
-            return False, "permissionless-liq-fdv-trap (seeded pool with >=70% liq/fdv and 0 socials, drain risk)"
+            _rh_hg_ok = False
+            _rh_hg_why = ""
+            try:
+                import rug_hunter as _rh_hg1
+                _rh_hg_ok, _rh_hg_why = _rh_hg1.qualify_unlocked_lp_hunter(
+                    mint=mint, pair_data=pair_data, age_min=age_min,
+                    liq_usd=raw_liq, fdv_usd=fdv_mc, vol5_usd=_v5_pre_g,
+                    buys5=_b5_pre_g, sells5=_s5_pre_g, m5=_m5_pre_g, m1=_m1_pre_g, h1=_h1_pre_g,
+                )
+            except Exception:
+                _rh_hg_ok = False
+            if _rh_hg_ok:
+                import rug_hunter as _rh_hg1m
+                pair_data["_rug_hunter_mode"] = _rh_hg1m.mode_from_qualify_reason(_rh_hg_why, pair_data.get("_rug_hunter_mode", ""))
+            else:
+                return False, "permissionless-liq-fdv-trap (seeded pool with >=70% liq/fdv and 0 socials, drain risk)"
         if "meteora" in dex_id and dex_id != "meteoradbc" and not bool(pair_data.get("_lp_verified")):
-            return False, "meteora-unlocked-pool (Meteora pools allow dev LP withdrawal, scam-trap cases: USPR/BUFO/SPACE/AXIOMCOIN)"
+            _rh_met_g_ok = False
+            _rh_met_g_why = ""
+            try:
+                import rug_hunter as _rh_hg2
+                _rh_met_g_ok, _rh_met_g_why = _rh_hg2.qualify_unlocked_lp_hunter(
+                    mint=mint, pair_data=pair_data, age_min=age_min,
+                    liq_usd=raw_liq, fdv_usd=fdv_mc, vol5_usd=_v5_pre_g,
+                    buys5=_b5_pre_g, sells5=_s5_pre_g, m5=_m5_pre_g, m1=_m1_pre_g, h1=_h1_pre_g,
+                )
+            except Exception:
+                _rh_met_g_ok = False
+            if _rh_met_g_ok:
+                import rug_hunter as _rh_hg2m
+                pair_data["_rug_hunter_mode"] = _rh_hg2m.mode_from_qualify_reason(_rh_met_g_why, pair_data.get("_rug_hunter_mode", ""))
+            else:
+                return False, "meteora-unlocked-pool (Meteora pools allow dev LP withdrawal, scam-trap cases: USPR/BUFO/SPACE/AXIOMCOIN)"
         if dex_id in ("pump", "pumpfun") and not getattr(_c, "ALLOW_UNGRADUATED_PUMPFUN", False):
             return False, "raw-pump-curve (wait for graduation to PumpSwap/Raydium with locked LP)"
         min_liq = max(1000.0, float(getattr(_c, "CURVE_MIN_LIQ_USD", 0.0) or 0.0)) if (dex_id in ("pump", "pumpfun", "meteoradbc") and getattr(_c, "ALLOW_UNGRADUATED_PUMPFUN", False)) else _min_grad_liq
@@ -482,26 +520,41 @@ class GrokJevEngine:
         _m5_hg_val = float(_m5_hg_raw or 0.0) if _m5_hg_raw is not None else 0.0
         _is_unlocked_hg = _c.is_position_unlocked_lp(mint, pair_data, bool(pair_data.get("_lp_verified")))
         if _is_unlocked_hg:
-            _info_hg = pair_data.get("info") or {}
-            _has_soc_hg = bool((_info_hg.get("socials") or []) or (_info_hg.get("websites") or []))
-            _u_min_age = float(getattr(_c, "UNLOCKED_CUSTOM_NO_SOC_MIN_AGE_MIN", 1.9)) if not _has_soc_hg else float(getattr(_c, "UNLOCKED_CUSTOM_MIN_AGE_MIN", 1.9))
-            if age_min < _u_min_age:
-                try:
-                    from birth_tracker import birth_tracker as _bt_uc
-                    _bt_uc.add_to_waiting_room(mint, str(pair_data.get("pairAddress") or ""))
-                except Exception:
-                    pass
-                return False, f"unlocked-custom-quarantine {age_min:.2f}m < {_u_min_age:.2f}m (wait for LP stability, soc={int(_has_soc_hg)})"
-            if raw_liq >= 18000.0 and (vol_m5 < (raw_liq * 0.50) or b5 < 20 or (s5 > 0 and b5 < s5)):
-                return False, f"seeded-unlocked-lp-bait liq ${raw_liq:,.0f} vol5 ${vol_m5:,.0f} ({b5}b/{s5}s) — drain-trap risk"
             if fdv_mc > 0.0 and raw_liq > (fdv_mc * 2.25):
                 return False, f"synthetic-unlocked-lp-bait liq ${raw_liq:,.0f} vs fdv ${fdv_mc:,.0f} > 2.25x — impossible AMM ratio"
-            if _m5_hg_val < 4.0 and vol_m5 < (raw_liq * 2.0):
-                return False, f"flat-unlocked-lp-trap m5 {_m5_hg_val:+.1f}% vol5 ${vol_m5:,.0f} — no real breakout"
-            if not _has_soc_hg and (b5 < 35 or vol_m5 < 6500.0 or s5 < 8):
-                return False, f"unlocked-0-socials-weak-activity ({b5}b/{s5}s vol5 ${vol_m5:,.0f} < $6500) — drain-trap risk"
-            if raw_liq >= 12000.0 and not _has_soc_hg and (fdv_mc <= 0.0 or raw_liq >= (fdv_mc * 0.65)) and (vol_m5 < (raw_liq * 0.45) or b5 < 25):
-                return False, f"permissionless-seeded-lp-fdv-trap liq ${raw_liq:,.0f} fdv ${fdv_mc:,.0f} vol5 ${vol_m5:,.0f} 0-socials"
+            _rh_unl_hg_ok = str(pair_data.get("_rug_hunter_mode") or "").upper() in ("UNLOCKED-LP", "SEEDED-LP")
+            if not _rh_unl_hg_ok:
+                try:
+                    import rug_hunter as _rh_hg3
+                    _rh_u3_ok, _rh_u3_why = _rh_hg3.qualify_unlocked_lp_hunter(
+                        mint=mint, pair_data=pair_data, age_min=age_min,
+                        liq_usd=raw_liq, fdv_usd=fdv_mc, vol5_usd=vol_m5,
+                        buys5=b5, sells5=s5, m5=_m5_hg_val, m1=_m1_pre_g, h1=_h1_pre_g,
+                    )
+                    if _rh_u3_ok:
+                        pair_data["_rug_hunter_mode"] = _rh_hg3.mode_from_qualify_reason(_rh_u3_why, pair_data.get("_rug_hunter_mode", ""))
+                        _rh_unl_hg_ok = True
+                except Exception:
+                    _rh_unl_hg_ok = False
+            if not _rh_unl_hg_ok:
+                _info_hg = pair_data.get("info") or {}
+                _has_soc_hg = bool((_info_hg.get("socials") or []) or (_info_hg.get("websites") or []))
+                _u_min_age = float(getattr(_c, "UNLOCKED_CUSTOM_NO_SOC_MIN_AGE_MIN", 1.9)) if not _has_soc_hg else float(getattr(_c, "UNLOCKED_CUSTOM_MIN_AGE_MIN", 1.9))
+                if age_min < _u_min_age:
+                    try:
+                        from birth_tracker import birth_tracker as _bt_uc
+                        _bt_uc.add_to_waiting_room(mint, str(pair_data.get("pairAddress") or ""))
+                    except Exception:
+                        pass
+                    return False, f"unlocked-custom-quarantine {age_min:.2f}m < {_u_min_age:.2f}m (wait for LP stability, soc={int(_has_soc_hg)})"
+                if raw_liq >= 18000.0 and (vol_m5 < (raw_liq * 0.50) or b5 < 20 or (s5 > 0 and b5 < s5)):
+                    return False, f"seeded-unlocked-lp-bait liq ${raw_liq:,.0f} vol5 ${vol_m5:,.0f} ({b5}b/{s5}s) — drain-trap risk"
+                if _m5_hg_val < 4.0 and vol_m5 < (raw_liq * 2.0):
+                    return False, f"flat-unlocked-lp-trap m5 {_m5_hg_val:+.1f}% vol5 ${vol_m5:,.0f} — no real breakout"
+                if not _has_soc_hg and (b5 < 35 or vol_m5 < 6500.0 or s5 < 8):
+                    return False, f"unlocked-0-socials-weak-activity ({b5}b/{s5}s vol5 ${vol_m5:,.0f} < $6500) — drain-trap risk"
+                if raw_liq >= 12000.0 and not _has_soc_hg and (fdv_mc <= 0.0 or raw_liq >= (fdv_mc * 0.65)) and (vol_m5 < (raw_liq * 0.45) or b5 < 25):
+                    return False, f"permissionless-seeded-lp-fdv-trap liq ${raw_liq:,.0f} fdv ${fdv_mc:,.0f} vol5 ${vol_m5:,.0f} 0-socials"
 
         # 3. Живой импульс ракеты (LIVE ROCKET MOMENTUM)
         pc = pair_data.get("priceChange", {}) or {}
@@ -551,7 +604,10 @@ class GrokJevEngine:
                 return False, f"pump-curve-stalled-age {age_min:.1f}m > 6.0m"
             _sol_min_age_g = 0.8
         else:
-            _sol_min_age_g = 0.8 if (vol_m5 >= 20000.0 and b5 >= int(s5 * 1.30) and m5 >= 10.0) else 1.5
+            if str(pair_data.get("_rug_hunter_mode") or "").upper() in ("UNLOCKED-LP", "SEEDED-LP"):
+                _sol_min_age_g = float(getattr(_c, "RUG_HUNTER_UNLOCKED_MIN_AGE_MIN", 0.8))
+            else:
+                _sol_min_age_g = 0.8 if (vol_m5 >= 20000.0 and b5 >= int(s5 * 1.30) and m5 >= 10.0) else 1.5
         if age_min < _sol_min_age_g:
             try:
                 from birth_tracker import birth_tracker as _bt_mig
@@ -682,6 +738,8 @@ class GrokJevEngine:
             _mom_why_g.startswith(("mcap-too-large", "too-old", "h6-exhausted", "m1-falling-knife", "no-rocket-ignition", "no-momentum", "slow-mature-pool"))
         ):
             return False, _mom_why_g
+        if _mom_why_g == "ok-rug-hunter-cabal" and not pair_data.get("_rug_hunter_mode"):
+            pair_data["_rug_hunter_mode"] = "CABAL-SURF"
 
         if _is_curve_g:
             _max_m5_allowed = 300.0 if (m1 >= 2.0 and s5 < 80 and b5 >= max(30, int(s5 * 1.80))) else 165.0
@@ -1648,7 +1706,34 @@ class GrokJevEngine:
                     pair_data=pair_data,
                 )
                 if not _ps_jev_ok:
-                    return False, f"pumpswap-scam-pool ({_ps_jev_why})", _h_stats
+                    _rh_ps_g_ok = False
+                    _rh_ps_g_why = ""
+                    if "createpool-unburned-lp" in str(_ps_jev_why or "").lower():
+                        try:
+                            import rug_hunter as _rh_psg
+                            _ca_psg = float(pair_data.get("pairCreatedAt") or 0)
+                            _age_psg = ((time.time() * 1000.0 - _ca_psg) / 60000.0) if _ca_psg > 0 else 0.2
+                            _tx_psg = (pair_data.get("txns") or {}).get("m5") or {}
+                            _pc_psg = pair_data.get("priceChange") or {}
+                            _rh_ps_g_ok, _rh_ps_g_why = _rh_psg.qualify_unlocked_lp_hunter(
+                                mint=address, pair_data=pair_data, age_min=_age_psg,
+                                liq_usd=raw_liq, fdv_usd=fdv,
+                                vol5_usd=float((pair_data.get("volume") or {}).get("m5", 0) or 0),
+                                buys5=int(_tx_psg.get("buys", 0) or 0),
+                                sells5=int(_tx_psg.get("sells", 0) or 0),
+                                m5=float(_pc_psg.get("m5", 0) or 0),
+                                m1=float(_pc_psg.get("m1", 0) or 0),
+                                h1=float(_pc_psg.get("h1", 0) or 0),
+                            )
+                        except Exception:
+                            _rh_ps_g_ok = False
+                    if _rh_ps_g_ok:
+                        import rug_hunter as _rh_psgm
+                        _rh_psg_mode = _rh_psgm.mode_from_qualify_reason(_rh_ps_g_why, pair_data.get("_rug_hunter_mode", ""))
+                        pair_data["_rug_hunter_mode"] = _rh_psg_mode
+                        print(f"🎯 [GROK-JEV-RH-PS] {symbol} ({address[:8]}): незалоченный PumpSwap CreatePool ({_ps_jev_why}) переведён в RUG-HUNTER:{_rh_psg_mode}.")
+                    else:
+                        return False, f"pumpswap-scam-pool ({_ps_jev_why})", _h_stats
             is_canonical_pump = (
                 (_ps_jev_canon and _dex_low_jev == "pumpswap")
                 or (address.lower().endswith("pump") and _dex_low_jev in ("pump", "pumpfun"))
@@ -1721,17 +1806,10 @@ class GrokJevEngine:
                         allow_pump_amm_lock=_allow_ps_lock_jev,
                     )
 
-                    if not getattr(_c, "ALLOW_UNLOCKED_LP_POOLS", True):
-                        # .pump токен на пуле Meteora без сожжённого LP — неофициальный скам-пул мимо PumpSwap (кейс SURVIVE -96%)
-                        if address.endswith("pump") and "meteora" in _dex_rc_low and not has_verified_locked_lp:
-                            return False, "pump-token-unlocked-meteora (.pump токен на пуле Meteora без сожжённого LP — кейс SURVIVE)", _h_stats
-
-                        # Любой токен на AMM Meteora без подтверждённого сожжённого/залоченного LP блокируется (но не сырая кривая meteoradbc BAGS)
-                        if "meteora" in _dex_rc_low and _dex_rc_low != "meteoradbc" and not has_verified_locked_lp:
-                            return False, "meteora-unlocked-lp (токен на пуле Meteora без подтверждённого сожжённого LP — риск Remove LP девом)", _h_stats
-
-                    # По режиму Commit 0d2b1ae: свежие DEX-раннеры (Raydium, Meteora, PumpSwap) допускаются без лока LP
+                    # Проверка незалоченных/посеянных пулов: для RUG-HUNTER:UNLOCKED-LP/SEEDED-LP профилируем создателя
+                    # и пропускаем ранние живые пулы (без mint/freeze/creator-rug-history/instant-rugger)!
                     _is_unlocked_safe = False
+                    _rh_jev_unl_ok = False
                     if not is_canonical_pump and not has_verified_locked_lp:
                         _eff_l_rc = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
                         _vm5_rc = float((pair_data.get("volume") or {}).get("m5", 0) or 0)
@@ -1740,30 +1818,62 @@ class GrokJevEngine:
                         _tx_rc = (pair_data.get("txns") or {}).get("m5") or {}
                         _b5_rc = int(_tx_rc.get("buys", 0) or 0)
                         _s5_rc = int(_tx_rc.get("sells", 0) or 0)
+                        _pc_rc = pair_data.get("priceChange") or {}
+                        _m5_rc = _pc_rc.get("m5")
+                        _m1_rc = float(_pc_rc.get("m1", 0) or 0)
+                        _h1_rc = float(_pc_rc.get("h1", 0) or 0)
                         _is_trap_rc = _c.is_pumpswap_liq_fdv_trap(pair_data)
-                        
-                        _m5_rc = ((pair_data.get("priceChange") or {}).get("m5"))
-                        _is_unlocked_safe = _c.is_safe_unlocked_custom_runner(
-                            liq_usd=_eff_l_rc,
-                            age_min=_age_rc,
-                            vol5_usd=_vm5_rc,
-                            buys5=_b5_rc,
-                            sells5=_s5_rc,
-                            has_socials=has_socials,
-                            is_trap=_is_trap_rc,
-                            fdv_usd=fdv,
-                            m5_pct=(float(_m5_rc) if _m5_rc is not None else None),
-                            pair_data=pair_data,
-                        )
-                        if _is_unlocked_safe:
-                            print(f"🔓 [GROK-JEV-UNLOCKED-LP] {symbol} ({address[:8]}): свежий DEX-раннер (age {_age_rc:.1f}м, liq ${_eff_l_rc:,.0f}, vol5 ${_vm5_rc:,.0f}) — лок LP не требуется (быстрый возврат тела +16%/+30%).")
-                        elif not getattr(_c, "ALLOW_UNLOCKED_LP_POOLS", True):
-                            _req_soc_min = float(getattr(_c, "REQUIRE_SOCIALS_MIN_AGE_MIN", 25.0))
-                            if getattr(_c, "REQUIRE_SOCIALS_ENABLED", False) and not is_raw_pump_curve and not has_socials and not _is_launchpad_aud and not bool(pair_data.get("_socials_unknown", False)) and _smart_n_chk < 2 and _age_rc > _req_soc_min:
-                                return False, "no-socials-amm-scam (0 соцсетей на кастомном DEX-пуле без подтверждённого лока LP)", _h_stats
-                            return False, f"unlocked-custom-lp (liq ${_eff_l_rc:.0f}, age {_age_rc:.1f}m, vol ${_vm5_rc:.0f}, soc={int(bool(has_socials))})", _h_stats
-                        else:
-                            return False, f"liq/fdv-bait-or-weak-unlocked-pool (liq ${_eff_l_rc:.0f}, fdv ${fdv:.0f}, vol5 ${_vm5_rc:.0f})", _h_stats
+
+                        if getattr(_c, "RUG_HUNTER_ENABLED", False) and getattr(_c, "RUG_HUNTER_UNLOCKED_LP_ENABLED", False) and not (address.endswith("pump") and "meteora" in _dex_rc_low):
+                            try:
+                                import rug_hunter as _rh_g_lp
+                                _rc_cr_g = str(rc_data.get("creator") or "").strip()
+                                _rh_prof_g = await _rh_g_lp.profile_creator_rug_timing(_rc_cr_g, address)
+                                _rh_jev_unl_ok, _rh_g_why = _rh_g_lp.qualify_unlocked_lp_hunter(
+                                    mint=address, pair_data=pair_data, age_min=_age_rc,
+                                    liq_usd=_eff_l_rc, fdv_usd=fdv, vol5_usd=_vm5_rc,
+                                    buys5=_b5_rc, sells5=_s5_rc,
+                                    m5=float(_m5_rc or 0.0), m1=_m1_rc, h1=_h1_rc,
+                                    creator_profile=_rh_prof_g,
+                                )
+                                if _rh_jev_unl_ok:
+                                    _is_unlocked_safe = True
+                                    _rh_g_mode = _rh_g_lp.mode_from_qualify_reason(_rh_g_why, pair_data.get("_rug_hunter_mode", ""))
+                                    pair_data["_rug_hunter_mode"] = _rh_g_mode
+                                    pair_data["_rug_hunter_creator_profile"] = _rh_prof_g
+                                    print(f"🎯 [GROK-JEV-RH:{_rh_g_mode}] {symbol} ({address[:8]}): {_dex_rc_low} age {_age_rc:.1f}м, liq ${_eff_l_rc:,.0f}, vol5 ${_vm5_rc:,.0f}, {_b5_rc}b/{_s5_rc}s ({_rh_prof_g.get('reason')}) — квалифицирован!")
+                            except Exception:
+                                _rh_jev_unl_ok = False
+
+                        if not _rh_jev_unl_ok:
+                            if not getattr(_c, "ALLOW_UNLOCKED_LP_POOLS", True):
+                                # .pump токен на пуле Meteora без сожжённого LP — неофициальный скам-пул мимо PumpSwap (кейс SURVIVE -96%)
+                                if address.endswith("pump") and "meteora" in _dex_rc_low and not has_verified_locked_lp:
+                                    return False, "pump-token-unlocked-meteora (.pump токен на пуле Meteora без сожжённого LP — кейс SURVIVE)", _h_stats
+                                # Любой токен на AMM Meteora без подтверждённого сожжённого/залоченного LP блокируется (но не сырая кривая meteoradbc BAGS)
+                                if "meteora" in _dex_rc_low and _dex_rc_low != "meteoradbc" and not has_verified_locked_lp:
+                                    return False, "meteora-unlocked-lp (токен на пуле Meteora без подтверждённого сожжённого LP — риск Remove LP девом)", _h_stats
+                            _is_unlocked_safe = _c.is_safe_unlocked_custom_runner(
+                                liq_usd=_eff_l_rc,
+                                age_min=_age_rc,
+                                vol5_usd=_vm5_rc,
+                                buys5=_b5_rc,
+                                sells5=_s5_rc,
+                                has_socials=has_socials,
+                                is_trap=_is_trap_rc,
+                                fdv_usd=fdv,
+                                m5_pct=(float(_m5_rc) if _m5_rc is not None else None),
+                                pair_data=pair_data,
+                            )
+                            if _is_unlocked_safe:
+                                print(f"🔓 [GROK-JEV-UNLOCKED-LP] {symbol} ({address[:8]}): свежий DEX-раннер (age {_age_rc:.1f}м, liq ${_eff_l_rc:,.0f}, vol5 ${_vm5_rc:,.0f}) — лок LP не требуется (быстрый возврат тела +16%/+30%).")
+                            elif not getattr(_c, "ALLOW_UNLOCKED_LP_POOLS", True):
+                                _req_soc_min = float(getattr(_c, "REQUIRE_SOCIALS_MIN_AGE_MIN", 25.0))
+                                if getattr(_c, "REQUIRE_SOCIALS_ENABLED", False) and not is_raw_pump_curve and not has_socials and not _is_launchpad_aud and not bool(pair_data.get("_socials_unknown", False)) and _smart_n_chk < 2 and _age_rc > _req_soc_min:
+                                    return False, "no-socials-amm-scam (0 соцсетей на кастомном DEX-пуле без подтверждённого лока LP)", _h_stats
+                                return False, f"unlocked-custom-lp (liq ${_eff_l_rc:.0f}, age {_age_rc:.1f}m, vol ${_vm5_rc:.0f}, soc={int(bool(has_socials))})", _h_stats
+                            else:
+                                return False, f"liq/fdv-bait-or-weak-unlocked-pool (liq ${_eff_l_rc:.0f}, fdv ${fdv:.0f}, vol5 ${_vm5_rc:.0f})", _h_stats
                     if isinstance(pair_data, dict):
                         pair_data["_unlocked_runner_ok"] = bool(_is_unlocked_safe)
                         pair_data["_lp_verified"] = bool(is_canonical_pump or has_verified_locked_lp or pair_data.get("_pumpswap_lp_burned"))
@@ -1887,11 +1997,39 @@ class GrokJevEngine:
                         top1_pct=largest_whale, top10_pct=top_10_sum, dev_pct=dev_pct,
                         is_lp_safe=(is_canonical_pump or has_verified_locked_lp or _is_unlocked_safe or getattr(_c, "ALLOW_UNLOCKED_LP_POOLS", False)),
                     )
+                    _is_rh_unl_g = str(pair_data.get("_rug_hunter_mode") or "").upper() in ("UNLOCKED-LP", "SEEDED-LP")
                     if _is_unlocked_safe and not getattr(_c, "ALLOW_UNLOCKED_LP_POOLS", True):
-                        if dev_pct > 10.0:
-                            return False, f"unlocked-dev-too-high {dev_pct:.1f}% > 10%", _h_stats
-                        if top_10_sum > 35.0:
-                            return False, f"unlocked-top10-too-high {top_10_sum:.1f}% > 35%", _h_stats
+                        _rh_g_dev_lim = 25.0 if _is_rh_unl_g else 10.0
+                        _rh_g_t10_lim = 55.0 if _is_rh_unl_g else 35.0
+                        if dev_pct > _rh_g_dev_lim:
+                            return False, f"unlocked-dev-too-high {dev_pct:.1f}% > {_rh_g_dev_lim:.0f}%", _h_stats
+                        if top_10_sum > _rh_g_t10_lim:
+                            return False, f"unlocked-top10-too-high {top_10_sum:.1f}% > {_rh_g_t10_lim:.0f}%", _h_stats
+
+                    _is_lp_safe_g_cb = bool(is_canonical_pump or has_verified_locked_lp or pair_data.get("_pumpswap_lp_burned"))
+                    def _try_rh_cabal_g(tag_name: str) -> bool:
+                        if not _is_lp_safe_g_cb:
+                            return False
+                        try:
+                            import rug_hunter as _rh_cbg
+                            _pc_cbg = pair_data.get("priceChange") or {}
+                            _cb_ok_g, _ = _rh_cbg.qualify_cabal_surf_hunter(
+                                mint=address, pair_data=pair_data, age_min=_age_aud,
+                                liq_usd=_liq_aud, fdv_usd=fdv, vol5_usd=vol_m5,
+                                buys5=_b5_syb, sells5=_s5_syb,
+                                m5=float(_pc_cbg.get("m5", 0) or 0),
+                                m1=float(_pc_cbg.get("m1", 0) or 0),
+                                h1=float(_pc_cbg.get("h1", 0) or 0),
+                                reason_tag=tag_name,
+                            )
+                            if _cb_ok_g:
+                                pair_data["_rug_hunter_mode"] = "CABAL-SURF"
+                                print(f"🎯 [GROK-JEV-RH:CABAL-SURF] {symbol} ({address[:8]}): ранний кабал ({tag_name}, age {_age_aud:.1f}м) — вход с автовыходом до дампа!")
+                                return True
+                        except Exception:
+                            pass
+                        return False
+
                     # Jito-бандл (Сивил-атака дева: 4+ кошельков с одинаковым %; сохраняем строгий блок для <3м и без массовой дистрибуции)
                     bundle_suspects = [round(pct, 1) for (amt, pct, owner) in top_10 if pct >= 2.5]
                     if len(bundle_suspects) >= 4 and not (_dist_runner_g and _age_aud >= 3.0):
@@ -1899,17 +2037,19 @@ class GrokJevEngine:
                         counts = Counter(bundle_suspects)
                         most_common_pct, count = counts.most_common(1)[0]
                         if count >= 4 and most_common_pct >= 2.5 and (most_common_pct * count) >= 12.0:
-                            return False, f"jito-bundle sybil attack ({count} wallets with ~{most_common_pct:.1f}%)", _h_stats
+                            if not _try_rh_cabal_g("jito-bundle-sybil"):
+                                return False, f"jito-bundle sybil attack ({count} wallets with ~{most_common_pct:.1f}%)", _h_stats
 
                     # Детектор распылённой сибил-лесенки: не блокируем здоровый высокооборотный ритейл (OTHERM $102k vol5, 543b/354s)
                     _is_viral_retail_g = (vol_m5 >= 15000.0 and _b5_syb >= 80 and _b5_syb >= _s5_syb and _liq_aud >= 15000.0)
                     if 0.0 < pool_pct_sum <= 38.0 and len(top_10) >= 8 and not (_is_viral_retail_g or _dist_runner_g):
                         if top_10_sum < 6.0 and largest_whale < 0.70:
-                            return (
-                                False,
-                                f"atomized-sybil-supply (pool={pool_pct_sum:.1f}%, but top10={top_10_sum:.1f}% / top1={largest_whale:.2f}% — 120+ wallet staircase split)",
-                                _h_stats,
-                            )
+                            if not _try_rh_cabal_g("atomized-sybil-supply"):
+                                return (
+                                    False,
+                                    f"atomized-sybil-supply (pool={pool_pct_sum:.1f}%, but top10={top_10_sum:.1f}% / top1={largest_whale:.2f}% — 120+ wallet staircase split)",
+                                    _h_stats,
+                                )
                     # Детектор анонимной кабал-фермы (кейсы WIFGTA6 top1=2.23%/top10=13.55% -> -75%, BERNIE top1=1.36%/top10=10.24% -> -95%):
                     if (
                         0.0 < pool_pct_sum <= 45.0
@@ -1921,11 +2061,12 @@ class GrokJevEngine:
                         and largest_whale < 2.5
                         and not _dist_runner_g
                     ):
-                        return (
-                            False,
-                            f"atomized-cabal-farm (0 socials, age {_age_aud:.1f}m, {_b5_syb+_s5_syb}tx/${vol_m5:,.0f}, top1={largest_whale:.2f}%/top10={top_10_sum:.1f}%)",
-                            _h_stats,
-                        )
+                        if not _try_rh_cabal_g("atomized-cabal-farm"):
+                            return (
+                                False,
+                                f"atomized-cabal-farm (0 socials, age {_age_aud:.1f}m, {_b5_syb+_s5_syb}tx/${vol_m5:,.0f}, top1={largest_whale:.2f}%/top10={top_10_sum:.1f}%)",
+                                _h_stats,
+                            )
 
                     # Детектор равномерной сибил-нарезки стека дева (кейс BALLFIN: top20=43%), не режем уже распределённые ликвидные ракеты
                     if len(top_10) >= 8 and top_10_sum >= 18.0 and not _dist_runner_g:
@@ -1947,7 +2088,7 @@ class GrokJevEngine:
                         _h_stats["dev_pct"] = dev_pct
                         _h_stats["top1_pct"] = largest_whale
 
-                    max_dev_limit = float(getattr(_c, "AUDITOR_MAX_DEV_PCT", 15.0))
+                    max_dev_limit = 25.0 if _is_rh_unl_g else float(getattr(_c, "AUDITOR_MAX_DEV_PCT", 15.0))
                     if dev_pct and dev_pct > max_dev_limit:
                         return False, f"dev still loaded {dev_pct:.1f}% > {max_dev_limit:.0f}% (dump hazard: dev holds supply)", _h_stats
                     try:
@@ -1969,6 +2110,8 @@ class GrokJevEngine:
                     if not _l7a_ok_g:
                         if _dist_runner_g:
                             print(f"⚠️ [AUDITOR-L7a-WARN] {symbol} ({address[:8]}): {_l7a_why_g} — допущен как распределённый ликвидный раннер.")
+                        elif _try_rh_cabal_g("L7a-insiders"):
+                            pass
                         else:
                             return False, f"auditor-layer7a {_l7a_why_g}", _h_stats
 
@@ -1988,13 +2131,23 @@ class GrokJevEngine:
                     if not _l7_ok:
                         if _dist_runner_g:
                             print(f"⚠️ [AUDITOR-L7-WARN] {symbol} ({address[:8]}): {_l7_why} — допущен как распределённый ликвидный раннер (top1={largest_whale:.1f}%, top10={top_10_sum:.1f}%).")
+                        elif _try_rh_cabal_g("L7b-insider-graph"):
+                            pass
                         else:
                             return False, f"auditor-layer7 {_l7_why}", _h_stats
                     if not _l9_ok:
                         if _dist_runner_g:
                             print(f"⚠️ [AUDITOR-L9-WARN] {symbol} ({address[:8]}): {_l9_why} — допущен как распределённый ликвидный раннер (vol5=${vol_m5:,.0f}).")
+                        elif _try_rh_cabal_g("L9-staircase-farm"):
+                            pass
                         else:
                             return False, f"auditor-layer9/10 {_l9_why}", _h_stats
+                    if isinstance(pair_data, dict) and pair_data.get("_rug_hunter_mode"):
+                        try:
+                            import rug_hunter as _rh_snap_g
+                            pair_data["_rug_hunter_watch"] = _rh_snap_g.snapshot_rugger_wallets(rc_data, pool_accounts)
+                        except Exception:
+                            pass
                 else:
                     # Фоллбэк: RugCheck API вернул 400/404/429/500 -> проверяем GoPlus holder stats + Layer 8/9/10
                     (_l8_fb_ok, _l8_fb_why), (_l9_fb_ok, _l9_fb_why) = await asyncio.gather(
@@ -2069,10 +2222,11 @@ class GrokJevEngine:
                         if _fcr_h1_g < -15.0:
                             print(f"🚫 [FCR-RED-H1] {symbol} ({address[:8]}): FCR WARN на падающем h1 {_fcr_h1_g:+.1f}% (кейсы DACI/CASHPARROT) — отмена входа!")
                             return False, f"fcr-warn-red-h1 ({_fcr_h1_g:+.1f}%)", _h_stats
-                        if _fcr_w_n_g >= 5 and not locals().get("_dist_runner_g", False):
+                        _is_rh_fcr_g = bool(pair_data.get("_rug_hunter_mode"))
+                        if _fcr_w_n_g >= 5 and not locals().get("_dist_runner_g", False) and not _is_rh_fcr_g:
                             print(f"🚫 [FCR-FARM-BLOCK] {symbol} ({address[:8]}): ферма из {_fcr_w_n_g} кошельков одного источника — отмена входа!")
                             return False, f"fcr-wallet-farm ({_fcr_w_n_g} wallets)", _h_stats
-                        if _fcr_w_n_g >= 3 and _fcr_m5_g > 120.0:
+                        if _fcr_w_n_g >= 3 and _fcr_m5_g > 120.0 and not _is_rh_fcr_g:
                             print(f"🚫 [FCR-INSIDER-BLOCK] {symbol} ({address[:8]}): инсайдерская сеть {_fcr_w_n_g} кошельков на свече m5 {_fcr_m5_g:+.1f}% — отмена входа (кейс CHUD -50%)!")
                             return False, f"fcr-insider-cluster ({_fcr_w_n_g} wallets, m5 {_fcr_m5_g:+.0f}%)", _h_stats
                         print(f"⚠️ [FCR-WARN] {symbol} ({address[:8]}): {_fcr.get('report', '')}")
@@ -2272,11 +2426,25 @@ class GrokJevEngine:
             or (_age_s1 <= 5.0 and _m5_s1 >= 2.5 and _b5_s1 >= max(8, int(_s5_s1 * 1.15)) and _vm5_s1 >= 1500.0)
         )
 
-        if getattr(_c, "ROCKET_XGB_ENABLED", True) and not _is_momentum_rocket and (rkt_s1 + 0.05) < s1_thresh:
+        _rh_s1_min_j = float(getattr(_c, "RUG_HUNTER_STAGE1_MIN_ML", 5.0))
+        _is_rh_s1_jev = False
+        if getattr(_c, "RUG_HUNTER_ENABLED", False) and (rkt_s1 + 0.05) >= _rh_s1_min_j and _age_s1 <= 10.0:
+            try:
+                import rug_hunter as _rh_js1
+                _is_rh_s1_ok, _ = _rh_js1.qualify_unlocked_lp_hunter(
+                    mint=address, pair_data=pair, age_min=_age_s1,
+                    liq_usd=_liq_s1, fdv_usd=_fdv_s1, vol5_usd=_vm5_s1,
+                    buys5=_b5_s1, sells5=_s5_s1, m5=_m5_s1, m1=_m1_s1, h1=_h1_s1,
+                )
+                _is_rh_s1_jev = bool(_is_rh_s1_ok)
+            except Exception:
+                _is_rh_s1_jev = False
+
+        if getattr(_c, "ROCKET_XGB_ENABLED", True) and not _is_momentum_rocket and not _is_rh_s1_jev and (rkt_s1 + 0.05) < s1_thresh:
             print(f"🚫 [GROK-JEV-ML-S1] {symbol} ({address[:8]}): Rocket XGB score {rkt_s1:.1f}% < {s1_thresh:.0f}% — отсев дампа в 0мс.")
             return False, f"rocket-xgb-s1-reject {rkt_s1:.1f}% < {s1_thresh:.0f}%"
-        elif _is_momentum_rocket and (rkt_s1 + 0.05) < s1_thresh:
-            print(f"⚡ [GROK-JEV-ML-S1] {symbol} ({address[:8]}): Моментум-байпас для ракеты (m5 +{_m5_s1:.1f}%, vol5 ${_vm5_s1:,.0f}, {_b5_s1}b/{_s5_s1}s) при скоре {rkt_s1:.1f}% — допуск в Hard Gate!")
+        elif (_is_momentum_rocket or _is_rh_s1_jev) and (rkt_s1 + 0.05) < s1_thresh:
+            print(f"⚡ [GROK-JEV-ML-S1] {symbol} ({address[:8]}): {'🎯 Rug-Hunter' if _is_rh_s1_jev else 'Моментум'}-байпас (m5 +{_m5_s1:.1f}%, vol5 ${_vm5_s1:,.0f}, {_b5_s1}b/{_s5_s1}s) при скоре {rkt_s1:.1f}% — допуск в Hard Gate!")
 
         # 2. HARD GATE ПЕРВЫМ ("if it fails here, JEV and Jupiter never see it")
         # Мгновенный математический отсев (0 сетевых запросов!) — отсекает 95% пустых/стоячих монет ДО вызовов Jupiter/RugCheck/GoPlus
@@ -2310,6 +2478,9 @@ class GrokJevEngine:
                             pair["liquidity"] = _fresh.get("liquidity")
                         price = _fp
                     else:
+                        for _fk0 in ("_rug_hunter_mode", "_rug_hunter_creator_profile", "_rug_hunter_watch"):
+                            if _fk0 in pair and _fk0 not in _fresh:
+                                _fresh[_fk0] = pair[_fk0]
                         pair, price = _fresh, _fp
                     _hard2_ok, _hard2_why = self.hard_gate(address, pair, chain, None)
                     if not _hard2_ok:
@@ -2422,7 +2593,7 @@ class GrokJevEngine:
                 pair["liquidity"] = _fin.get("liquidity")
             price = _fpx
         else:
-            for _fk in ("_lp_verified", "_unlocked_runner_ok", "_pumpswap_checked", "_pumpswap_canonical", "_pumpswap_lp_burned", "_pumpswap_rpc_unverified"):
+            for _fk in ("_lp_verified", "_unlocked_runner_ok", "_pumpswap_checked", "_pumpswap_canonical", "_pumpswap_lp_burned", "_pumpswap_rpc_unverified", "_rug_hunter_mode", "_rug_hunter_creator_profile", "_rug_hunter_watch"):
                 if _fk in pair and _fk not in _fin:
                     _fin[_fk] = pair[_fk]
             pair, price = _fin, _fpx
@@ -2445,6 +2616,10 @@ class GrokJevEngine:
         _fin_b5 = int(((pair.get("txns") or {}).get("m5") or {}).get("buys", 0) or 0)
         _fin_s5 = int(((pair.get("txns") or {}).get("m5") or {}).get("sells", 0) or 0)
         _is_unlocked_custom_fin = _c.is_position_unlocked_lp(address, pair, bool(pair.get("_lp_verified")))
+        _rh_mode_jev_fin = str(pair.get("_rug_hunter_mode") or "").strip()
+        _is_rh_jev_fin = bool(_rh_mode_jev_fin)
+        if _is_rh_jev_fin and (rkt_s1 + 0.05) >= float(getattr(_c, "RUG_HUNTER_STAGE1_MIN_ML", 5.0)):
+            rkt_final = max(rkt_final, rkt_s1)
         _is_mom_rocket_fin = (
             not _is_unlocked_custom_fin
             and _fin_m5 >= 2.0
@@ -2452,19 +2627,23 @@ class GrokJevEngine:
             and _fin_b5 >= max(10, int(_fin_s5 * float(getattr(_c, "MIN_BUY_SELL_RATIO", 1.25))))
             and (rkt_final + 0.05) >= 2.5
         )
-        if getattr(_c, "ROCKET_XGB_ENABLED", True) and not _is_mom_rocket_fin and (rkt_final + 0.05) < final_thresh:
+        if getattr(_c, "ROCKET_XGB_ENABLED", True) and not _is_mom_rocket_fin and not _is_rh_jev_fin and (rkt_final + 0.05) < final_thresh:
             print(f"🚫 [GROK-JEV-ML-VETO] {symbol} ({address[:8]}): Rocket XGB final score {rkt_final:.1f}% < {final_thresh:.0f}% — VETO! (Блокировка дампа)")
             return False, f"rocket-xgb-final-veto {rkt_final:.1f}% < {final_thresh:.0f}%"
         _custom_xgb_min = float(getattr(_c, "ROCKET_XGB_UNLOCKED_CUSTOM_MIN", 35.0))
-        if getattr(_c, "ROCKET_XGB_ENABLED", True) and _is_unlocked_custom_fin and (rkt_final + 0.05) < _custom_xgb_min:
+        if getattr(_c, "ROCKET_XGB_ENABLED", True) and _is_unlocked_custom_fin and not _is_rh_jev_fin and (rkt_final + 0.05) < _custom_xgb_min:
             print(f"🚫 [GROK-JEV-ML-UNLOCKED] {symbol} ({address[:8]}): unlocked AMM Rocket XGB {rkt_final:.1f}% < {_custom_xgb_min:.0f}% — VETO! (отсев слабых/клонированных пулов уровня GTA6/SCHRODING)")
             return False, f"rocket-xgb-unlocked-veto {rkt_final:.1f}% < {_custom_xgb_min:.0f}%"
 
-        print(f"🚀 [GROK-JEV-ML-PASS] {symbol} ({address[:8]}): Rocket XGB score {rkt_final:.1f}% (thresh {final_thresh:.0f}%) — ОДОБРЕНО!")
+        print(f"🚀 [GROK-JEV-ML-PASS] {symbol} ({address[:8]}): Rocket XGB score {rkt_final:.1f}% (thresh {final_thresh:.0f}%){' [🎯 RUG-HUNTER:' + _rh_mode_jev_fin + ']' if _is_rh_jev_fin else ''} — ОДОБРЕНО!")
 
         # 6. CHIEF / GROK TRADES: Исполнение ордера
         if len(tracker.get_open_positions()) >= getattr(_c, "MAX_CONCURRENT_POSITIONS", 10):
             return False, "max-positions-reached"
+        if _is_rh_jev_fin:
+            import rug_hunter as _rh_slot_g
+            if not _rh_slot_g.has_rug_hunter_slot(tracker):
+                return False, "rug-hunter-slots-full"
 
         # Расчет размера билета (Dynamic Sizing / Compounding)
         _base_t = float(getattr(_c, "TRADE_AMOUNT_USD", getattr(_c, "BASE_TRADE_AMOUNT_USD", 2.0)) or 2.0)
@@ -2485,6 +2664,8 @@ class GrokJevEngine:
         _pool_frac = float(getattr(_c, "MAX_POOL_LIQ_FRAC", 0.02) or 0.02)
         if _fliq > 0:
             ticket_size = min(ticket_size, max(_base_t, round(_fliq * _pool_frac, 2)))
+        if _is_rh_jev_fin:
+            ticket_size = max(1.5, round(ticket_size * float(getattr(_c, "RUG_HUNTER_SIZE_MULT", 0.65)), 2))
 
         # PRE-FLIGHT SELL CHECK & ON-CHAIN/ORDER-FLOW/JUPITER SYNC (параллельно):
         _of_feat_j = {}
@@ -2532,13 +2713,22 @@ class GrokJevEngine:
                 pass
 
         _fcr_feat = (_h_stats or {}).get("fcr_features", {}) if isinstance(_h_stats, dict) else {}
+        if _is_rh_jev_fin:
+            import rug_hunter as _rh_lbl_g
+            _jev_source_label = _rh_lbl_g.format_rug_hunter_source(
+                _rh_mode_jev_fin,
+                rkt_final,
+                pair.get("_rug_hunter_creator_profile"),
+            )
+        else:
+            _jev_source_label = "GROK-JEV"
         _added_jev = tracker.add_position(
             symbol=symbol,
             mint=address,
             entry_price=price,
             amount_usd=ticket_size,
             is_mature=True,
-            source="GROK-JEV",
+            source=_jev_source_label,
             chain=chain,
             pair_address=pair.get("pairAddress", ""),
             stop_under_wick=wick_price,

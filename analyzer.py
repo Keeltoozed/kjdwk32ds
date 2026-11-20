@@ -1896,11 +1896,12 @@ class Analyzer:
             )
         if "meteora" in _dex_pre_early and _dex_pre_early != "meteoradbc" and not pair_data.get("_lp_verified"):
             _rh_met_early_ok = False
+            _rh_met_early_why = ""
             try:
                 import rug_hunter as _rh_e
                 _tx_me = (pair_data.get("txns") or {}).get("m5") or {}
                 _pc_me = pair_data.get("priceChange") or {}
-                _rh_met_early_ok, _ = _rh_e.qualify_unlocked_lp_hunter(
+                _rh_met_early_ok, _rh_met_early_why = _rh_e.qualify_unlocked_lp_hunter(
                     mint=mint, pair_data=pair_data, age_min=_age_min_pre,
                     liq_usd=float((pair_data.get("liquidity") or {}).get("usd", 0) or 0),
                     fdv_usd=float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0),
@@ -1914,8 +1915,10 @@ class Analyzer:
             except Exception:
                 _rh_met_early_ok = False
             if _rh_met_early_ok:
-                pair_data["_rug_hunter_mode"] = "UNLOCKED-LP"
-                print(f"🎯 [RUG-HUNTER-CAND] {symbol} ({mint[:8]}): ранний незалоченный пул Meteora допущен в аудит RUG-HUNTER:UNLOCKED-LP.")
+                import rug_hunter as _rh_em
+                _rh_m_mode = _rh_em.mode_from_qualify_reason(_rh_met_early_why, pair_data.get("_rug_hunter_mode", ""))
+                pair_data["_rug_hunter_mode"] = _rh_m_mode
+                print(f"🎯 [RUG-HUNTER-CAND] {symbol} ({mint[:8]}): ранний незалоченный пул Meteora допущен в аудит RUG-HUNTER:{_rh_m_mode}.")
             else:
                 return self._deny(
                     mint,
@@ -1923,11 +1926,36 @@ class Analyzer:
                     f"🚫 [METEORA-BLOCK] {symbol} ({mint[:8]}): пул Meteora {_dex_pre_early} без сожжённого/залоченного LP — риск мгновенного вывода SOL девом (кейсы BUFO/SPACE/PUNCHAO), блок входа!"
                 )
         if config.is_pumpswap_liq_fdv_trap(pair_data):
-            return self._deny(
-                mint,
-                "pumpswap-liq-fdv-trap",
-                f"🚫 [PUMPSWAP-TRAP] {symbol} ({mint[:8]}): посеянный незалоченный пул (liq/fdv аномалия) — риск 100% дрейна LP!"
-            )
+            _rh_trap_ok = False
+            _rh_trap_why = ""
+            try:
+                import rug_hunter as _rh_tr
+                _tx_tr = (pair_data.get("txns") or {}).get("m5") or {}
+                _pc_tr = pair_data.get("priceChange") or {}
+                _rh_trap_ok, _rh_trap_why = _rh_tr.qualify_unlocked_lp_hunter(
+                    mint=mint, pair_data=pair_data, age_min=_age_min_pre,
+                    liq_usd=float((pair_data.get("liquidity") or {}).get("usd", 0) or 0),
+                    fdv_usd=float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0),
+                    vol5_usd=float((pair_data.get("volume") or {}).get("m5", 0) or 0),
+                    buys5=int(_tx_tr.get("buys", 0) or 0),
+                    sells5=int(_tx_tr.get("sells", 0) or 0),
+                    m5=float(_pc_tr.get("m5", 0) or 0),
+                    m1=float(_pc_tr.get("m1", 0) or 0),
+                    h1=float(_pc_tr.get("h1", 0) or 0),
+                )
+            except Exception:
+                _rh_trap_ok = False
+            if _rh_trap_ok:
+                import rug_hunter as _rh_trm
+                _rh_tr_mode = _rh_trm.mode_from_qualify_reason(_rh_trap_why, pair_data.get("_rug_hunter_mode", ""))
+                pair_data["_rug_hunter_mode"] = _rh_tr_mode
+                print(f"🎯 [RUG-HUNTER-CAND] {symbol} ({mint[:8]}): посеянный slow-cook пул допущен в аудит RUG-HUNTER:{_rh_tr_mode}.")
+            else:
+                return self._deny(
+                    mint,
+                    "pumpswap-liq-fdv-trap",
+                    f"🚫 [PUMPSWAP-TRAP] {symbol} ({mint[:8]}): посеянный незалоченный пул (liq/fdv аномалия) — риск 100% дрейна LP!"
+                )
         _is_known_grad = False
         try:
             from birth_tracker import birth_tracker as _bt_kg
@@ -2402,7 +2430,21 @@ class Analyzer:
                 and _b5_pre >= int(_s5_pre * 1.05)
                 and _age_min_pre <= 30.0
             )
-            if (conf + 0.05) < threshold and not _is_momentum_rocket_a and not _is_hyper_momentum:
+            # 🎯 Rug-Hunter Stage-1 байпас (кейс RIEMANN 5.8% -> +1240%): только для ранних квалифицированных Rug-Hunter пулов при ML >= 5.0%
+            _rh_s1_min_a = float(getattr(config, "RUG_HUNTER_STAGE1_MIN_ML", 5.0))
+            _is_rh_stage1_cand = False
+            if getattr(config, "RUG_HUNTER_ENABLED", False) and not is_pump_curve and (conf + 0.05) >= _rh_s1_min_a and _age_min_pre <= 10.0:
+                try:
+                    import rug_hunter as _rh_s1a
+                    _rh_s1_ok, _ = _rh_s1a.qualify_unlocked_lp_hunter(
+                        mint=mint, pair_data=pair_data, age_min=_age_min_pre,
+                        liq_usd=raw_liq, fdv_usd=fdv_val, vol5_usd=_vm5_pre,
+                        buys5=_b5_pre, sells5=_s5_pre, m5=_m5, m1=_m1, h1=_h1,
+                    )
+                    _is_rh_stage1_cand = bool(_rh_s1_ok)
+                except Exception:
+                    _is_rh_stage1_cand = False
+            if (conf + 0.05) < threshold and not _is_momentum_rocket_a and not _is_hyper_momentum and not _is_rh_stage1_cand:
                 self._deny(mint, f"rocket-xgb {conf:.0f}%", f"· [ROCKET-XGB] {symbol} ({mint[:8]}): уверенность модели {conf:.1f}% < {threshold:.0f}% — отсеян до тяжелых проверок (0ms).")
                 try:
                     from shadow_tracker import shadow_tracker
@@ -2437,7 +2479,8 @@ class Analyzer:
             if _eff_pool_liq < _min_liq:
                 return self._deny(mint, f"low-liq ${_eff_pool_liq:.0f}<{_min_liq:.0f}", f"🚫 [ANTI-RUG] {symbol} ({mint[:8]}): Реальная ликвидность DEX ${_eff_pool_liq:,.0f} < ${_min_liq:,.0f} — риск дампа/проскальзывания.")
 
-            if config.is_pumpswap_liq_fdv_trap(pair_data):
+            _is_rh_trap_ok_s2 = str((pair_data or {}).get("_rug_hunter_mode") or "").upper() in ("UNLOCKED-LP", "SEEDED-LP")
+            if config.is_pumpswap_liq_fdv_trap(pair_data) and not _is_rh_trap_ok_s2:
                 return self._deny(mint, "pumpswap-liq-fdv-trap", f"🚫 [PUMPSWAP-TRAP] {symbol} ({mint[:8]}): фейковый custom CreatePool (liq/fdv >= 85%, 0 соцсетей) — риск 100% дрейна LP!")
 
             # Защита от анонимных wash-bot накруток на DEX (кейсы Belief/BUZZ: 0 соцсетей, liq <$25k, vol5/liq > 2.2x при слабом перевесе покупателей)
@@ -2478,10 +2521,11 @@ class Analyzer:
                 )
                 if not _ps_a_ok:
                     _rh_ps_ok = False
+                    _rh_ps_why = ""
                     if "createpool-unburned-lp" in str(_ps_a_why or "").lower():
                         try:
                             import rug_hunter as _rh_ps
-                            _rh_ps_ok, _ = _rh_ps.qualify_unlocked_lp_hunter(
+                            _rh_ps_ok, _rh_ps_why = _rh_ps.qualify_unlocked_lp_hunter(
                                 mint=mint, pair_data=pair_data, age_min=_age_min_pre,
                                 liq_usd=raw_liq, fdv_usd=fdv_val, vol5_usd=_vm5_pre,
                                 buys5=_b5_pre, sells5=_s5_pre, m5=_m5, m1=_m1, h1=_h1,
@@ -2489,8 +2533,10 @@ class Analyzer:
                         except Exception:
                             _rh_ps_ok = False
                     if _rh_ps_ok:
-                        pair_data["_rug_hunter_mode"] = "UNLOCKED-LP"
-                        print(f"🎯 [RUG-HUNTER-PS] {symbol} ({mint[:8]}): незалоченный PumpSwap CreatePool ({_ps_a_why}) переведён в аудит RUG-HUNTER:UNLOCKED-LP.")
+                        import rug_hunter as _rh_psm
+                        _rh_ps_mode = _rh_psm.mode_from_qualify_reason(_rh_ps_why, pair_data.get("_rug_hunter_mode", ""))
+                        pair_data["_rug_hunter_mode"] = _rh_ps_mode
+                        print(f"🎯 [RUG-HUNTER-PS] {symbol} ({mint[:8]}): незалоченный PumpSwap CreatePool ({_ps_a_why}) переведён в аудит RUG-HUNTER:{_rh_ps_mode}.")
                     else:
                         return self._deny(mint, f"pumpswap-scam-pool ({_ps_a_why})", f"🚫 [PUMPSWAP-ONCHAIN] {symbol} ({mint[:8]}): {_ps_a_why}")
             _is_canonical_pump = (
@@ -2622,9 +2668,10 @@ class Analyzer:
                                     creator_profile=_rh_creator_prof_a,
                                 )
                                 if _rh_unlocked_rc_ok:
-                                    pair_data["_rug_hunter_mode"] = "UNLOCKED-LP"
+                                    _rh_rc_mode = _rh_rc.mode_from_qualify_reason(_rh_rc_why, pair_data.get("_rug_hunter_mode", ""))
+                                    pair_data["_rug_hunter_mode"] = _rh_rc_mode
                                     pair_data["_rug_hunter_creator_profile"] = _rh_creator_prof_a
-                                    print(f"🎯 [RUG-HUNTER-RC] {symbol} ({mint[:8]}): RugCheck={_rc_score:.0f} только из-за LP Unlocked (контракт {_rc_no_lp_score:.0f}, {_rh_creator_prof_a.get('reason')}) — допуск в RUG-HUNTER:UNLOCKED-LP!")
+                                    print(f"🎯 [RUG-HUNTER-RC] {symbol} ({mint[:8]}): RugCheck={_rc_score:.0f} только из-за LP Unlocked (контракт {_rc_no_lp_score:.0f}, {_rh_creator_prof_a.get('reason')}) — допуск в RUG-HUNTER:{_rh_rc_mode}!")
                             except Exception:
                                 _rh_unlocked_rc_ok = False
                         if not _rh_unlocked_rc_ok:
@@ -2691,9 +2738,10 @@ class Analyzer:
                                 )
                                 if _rh_unl_pass:
                                     _is_unlocked_runner_ok = True
-                                    pair_data["_rug_hunter_mode"] = "UNLOCKED-LP"
+                                    _rh_lp_mode = _rh_lp.mode_from_qualify_reason(_rh_unl_why, pair_data.get("_rug_hunter_mode", ""))
+                                    pair_data["_rug_hunter_mode"] = _rh_lp_mode
                                     pair_data["_rug_hunter_creator_profile"] = _rh_creator_prof_a
-                                    print(f"🎯 [RUG-HUNTER:UNLOCKED-LP] {symbol} ({mint[:8]}): {_dex_low_main} age {_age_main:.1f}м, liq ${_liq_main:,.0f}, vol5 ${_v5_main:,.0f}, {_b5_main}b/{_s5_main}s ({_rh_creator_prof_a.get('reason')}) — квалифицирован!")
+                                    print(f"🎯 [RUG-HUNTER:{_rh_lp_mode}] {symbol} ({mint[:8]}): {_dex_low_main} age {_age_main:.1f}м, liq ${_liq_main:,.0f}, vol5 ${_v5_main:,.0f}, {_b5_main}b/{_s5_main}s ({_rh_creator_prof_a.get('reason')}) — квалифицирован!")
                             except Exception:
                                 _rh_unl_pass = False
 
@@ -2787,7 +2835,7 @@ class Analyzer:
                             # Не блокируем подтверждённый безопасный PumpSwap/Raydium пул (_is_lp_really_safe=True)
                             # из-за стороннего Meteora DLMM арбитраж-пула (кейс RUDY $30k->$250k +730% с $2.8k DLMM сайд-пулом)!
                             _is_meteora_pool = ("meteora" in _m_type and _m_type != "meteoradbc" and (_is_target_mkt or dex_id_low == "meteora" or (not _is_lp_really_safe and _m_quote_usd >= 2000.0)))
-                            _is_rh_unlocked_m = bool(isinstance(pair_data, dict) and pair_data.get("_rug_hunter_mode") == "UNLOCKED-LP")
+                            _is_rh_unlocked_m = bool(isinstance(pair_data, dict) and str(pair_data.get("_rug_hunter_mode") or "").upper() in ("UNLOCKED-LP", "SEEDED-LP"))
                             if not getattr(config, "ALLOW_UNLOCKED_LP_POOLS", True) and not _is_rh_unlocked_m:
                                 if _is_meteora_pool and _m_lp_safe < 80.0:
                                     return self._deny(mint, "meteora-unlocked-lp", f"🚫 [METEORA-RUG] {symbol} ({mint[:8]}): незаблокированный пул Meteora {_m_type} (lock/burn {_m_lp_safe:.0f}% < 80%) — риск вывода SOL девом (кейсы AXIOMCOIN/MULT/PUNCHAO)!")
@@ -2800,7 +2848,7 @@ class Analyzer:
                                 if _mkt.get(_m_field):
                                     pool_accounts.add(_mkt[_m_field])
 
-                    _is_rh_unlocked_m2 = bool(isinstance(pair_data, dict) and pair_data.get("_rug_hunter_mode") == "UNLOCKED-LP")
+                    _is_rh_unlocked_m2 = bool(isinstance(pair_data, dict) and str(pair_data.get("_rug_hunter_mode") or "").upper() in ("UNLOCKED-LP", "SEEDED-LP"))
                     if not getattr(config, "ALLOW_UNLOCKED_LP_POOLS", True) and not _is_rh_unlocked_m2 and dex_id_low == "meteora":
                         _met_locked = any("meteora" in str(m.get("marketType", "")).lower() and (float((m.get("lp") or {}).get("lpLockedPct", 0) or 0) >= 80.0 or float((m.get("lp") or {}).get("lpBurnedPct", 0) or 0) >= 80.0) for m in (rc_data.get("markets") or []))
                         if not _met_locked:
@@ -2846,7 +2894,7 @@ class Analyzer:
                         top1_pct=largest_whale_pct_pre, top10_pct=top_10_sum_pct, dev_pct=dev_holding_pct,
                         is_lp_safe=_is_lp_really_safe,
                     )
-                    _is_rh_unlocked_h = bool(isinstance(pair_data, dict) and pair_data.get("_rug_hunter_mode") == "UNLOCKED-LP")
+                    _is_rh_unlocked_h = bool(isinstance(pair_data, dict) and str(pair_data.get("_rug_hunter_mode") or "").upper() in ("UNLOCKED-LP", "SEEDED-LP"))
                     if _is_unlocked_runner_ok and not getattr(config, "ALLOW_UNLOCKED_LP_POOLS", True):
                         _rh_dev_lim = 25.0 if _is_rh_unlocked_h else 10.0
                         _rh_t10_lim = 55.0 if _is_rh_unlocked_h else 35.0
@@ -3131,7 +3179,7 @@ class Analyzer:
             # rocket_xgb_v3 обучена на чистых dev=0% пулах и искусственно обнуляет Stage-2 скор при dev 5-20%.
             # Сохраняем Stage-1 скор и не блокируем уже отобранного кандидата Rug-Hunter на Stage-2!
             _rh_mode_s2 = str((pair_data or {}).get("_rug_hunter_mode") or "").strip()
-            if _rh_mode_s2 and _s1_score >= float(getattr(config, "ROCKET_XGB_STAGE1_THRESHOLD", 7.0)):
+            if _rh_mode_s2 and (_s1_score + 0.05) >= float(getattr(config, "RUG_HUNTER_STAGE1_MIN_ML", 5.0)):
                 conf = max(conf, _s1_score)
                 self.last_score = conf
                 self.rocket_scores[mint] = conf

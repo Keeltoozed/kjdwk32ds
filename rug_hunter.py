@@ -46,6 +46,18 @@ def is_rug_hunter_source(source: str) -> bool:
     return "RUG-HUNTER" in str(source or "").upper()
 
 
+def is_unlocked_or_seeded_mode(mode: str) -> bool:
+    """True если режим относится к незалоченным или посеянным slow-cook пулам."""
+    return str(mode or "").upper().strip() in ("UNLOCKED-LP", "SEEDED-LP")
+
+
+def mode_from_qualify_reason(why: str, existing_mode: str = "") -> str:
+    """Возвращает 'SEEDED-LP' для посеянных пулов (не понижая его обратно до 'UNLOCKED-LP')."""
+    if "seeded" in str(why or "").lower() or str(existing_mode or "").upper().strip() == "SEEDED-LP":
+        return "SEEDED-LP"
+    return "UNLOCKED-LP"
+
+
 def is_rug_hunter_position(position) -> bool:
     """True если VirtualPosition относится к стратегии Rug-Hunter."""
     if position is None:
@@ -242,39 +254,47 @@ def qualify_unlocked_lp_hunter(
         return False, str(creator_profile.get("reason") or "instant-rugger")
 
     # Жёсткие пороги раннего живого входа:
-    min_age = float(getattr(config, "RUG_HUNTER_UNLOCKED_MIN_AGE_MIN", 1.0))
+    min_age = float(getattr(config, "RUG_HUNTER_UNLOCKED_MIN_AGE_MIN", 0.8))
     max_age = float(getattr(config, "RUG_HUNTER_UNLOCKED_MAX_AGE_MIN", 10.0))
     if age_min < min_age:
         return False, f"rh-too-young {age_min:.1f}m < {min_age:.1f}m"
     if age_min > max_age:
         return False, f"rh-too-late {age_min:.1f}m > {max_age:.1f}m"
 
-    min_liq = float(getattr(config, "RUG_HUNTER_MIN_LIQ_USD", 8000.0))
-    min_vol5 = float(getattr(config, "RUG_HUNTER_MIN_VOL5_USD", 6000.0))
+    min_liq = float(getattr(config, "RUG_HUNTER_MIN_LIQ_USD", 7500.0))
+    min_vol5 = float(getattr(config, "RUG_HUNTER_MIN_VOL5_USD", 2000.0))
     if liq_usd < min_liq:
         return False, f"rh-low-liq ${liq_usd:,.0f} < ${min_liq:,.0f}"
     if vol5_usd < min_vol5:
         return False, f"rh-low-vol5 ${vol5_usd:,.0f} < ${min_vol5:,.0f}"
 
-    # Отсекаем синтетический 100%-посеянный пул без цены/объёма (liq >= 95% FDV)
-    if fdv_usd > 0 and liq_usd >= (fdv_usd * 0.95):
+    # Посеянные slow-cook пулы (liq/fdv 0.95..2.25 — кейсы ZCAT +426%, HUANG +676%, RUDY +578%, 仙猫 +532%, DOLLAR +439%):
+    # разрешаем ТОЛЬКО если включён RUG_HUNTER_SEEDED_LP_ENABLED и есть реальная двухсторонняя торговля (>=35b/12s),
+    # но по-прежнему отсекаем сломанный FDV (liq > 2.25 * fdv)!
+    is_seeded_ratio = bool(fdv_usd > 0 and liq_usd >= (fdv_usd * 0.95))
+    if fdv_usd > 0 and liq_usd > (fdv_usd * 2.25):
+        return False, f"rh-extreme-liq-fdv liq=${liq_usd:,.0f} > 2.25x fdv=${fdv_usd:,.0f}"
+    if is_seeded_ratio and not bool(getattr(config, "RUG_HUNTER_SEEDED_LP_ENABLED", True)):
         return False, f"rh-synthetic-liq-fdv liq=${liq_usd:,.0f} fdv=${fdv_usd:,.0f}"
     if fdv_usd > float(getattr(config, "RUG_HUNTER_MAX_FDV_USD", 250000.0)):
         return False, f"rh-fdv-too-high ${fdv_usd:,.0f}"
 
     # Доказанная двухсторонняя торговля (не honeypot и не микро-боты):
-    if sells5 < 10:
-        return False, f"rh-too-few-sells {sells5} < 10"
+    min_sells_req = 12 if is_seeded_ratio else 10
+    if sells5 < min_sells_req:
+        return False, f"rh-too-few-sells {sells5} < {min_sells_req}"
     if buys5 < max(35, int(sells5 * 1.15)):
         return False, f"rh-weak-buyers {buys5}b/{sells5}s"
     avg_tx = vol5_usd / max(1, buys5 + sells5)
     if avg_tx < 12.0:
         return False, f"rh-micro-wash avg ${avg_tx:.1f} < $12"
-    if liq_usd > 0 and (vol5_usd / liq_usd) > 10.0:
-        return False, f"rh-extreme-wash v/l {vol5_usd/liq_usd:.1f}x > 10x"
+    _max_vl_rh = 18.0 if avg_tx >= 40.0 else 10.0
+    if liq_usd > 0 and (vol5_usd / liq_usd) > _max_vl_rh:
+        return False, f"rh-extreme-wash v/l {vol5_usd/liq_usd:.1f}x > {_max_vl_rh:.0f}x"
 
-    # Импульс: уже разгоняется, но ещё не перегретая вершина
-    if m5 < 6.0 or m5 > 160.0:
+    # Импульс: уже разгоняется, но ещё не перегретая вершина (для ультра-горячего старта <=5м допускаем m5 до +185% — кейс RIEMANN +165%)
+    max_m5_rh = 185.0 if (age_min <= 5.0 and vol5_usd >= 15000.0 and buys5 >= 150) else 160.0
+    if m5 < 6.0 or m5 > max_m5_rh:
         return False, f"rh-m5-out-of-range {m5:+.1f}%"
     if m1 < -2.0 or m1 > 22.0:
         return False, f"rh-m1-out-of-range {m1:+.1f}%"
@@ -287,7 +307,7 @@ def qualify_unlocked_lp_hunter(
     if top10_pct > 55.0:
         return False, f"rh-top10-too-high {top10_pct:.1f}% > 55%"
 
-    return True, "rh-unlocked-lp-qualified"
+    return True, ("rh-seeded-lp-qualified" if is_seeded_ratio else "rh-unlocked-lp-qualified")
 
 
 def qualify_cabal_surf_hunter(
@@ -317,8 +337,8 @@ def qualify_cabal_surf_hunter(
     if age_min > max_age:
         return False, f"rh-cabal-too-late {age_min:.1f}m > {max_age:.1f}m"
 
-    min_liq = float(getattr(config, "RUG_HUNTER_MIN_LIQ_USD", 8000.0))
-    min_vol5 = float(getattr(config, "RUG_HUNTER_MIN_VOL5_USD", 6000.0))
+    min_liq = float(getattr(config, "RUG_HUNTER_MIN_LIQ_USD", 7500.0))
+    min_vol5 = float(getattr(config, "RUG_HUNTER_MIN_VOL5_USD", 2000.0))
     if liq_usd < min_liq:
         return False, f"rh-cabal-low-liq ${liq_usd:,.0f}"
     if vol5_usd < min_vol5:
@@ -411,7 +431,7 @@ def evaluate_rug_hunter_exit(position, current_price: float) -> Optional[str]:
     rh_mode = str((pd.get("_rug_hunter_mode") if isinstance(pd, dict) else "") or "").upper()
     if not rh_mode:
         src_u = str(getattr(position, "source", "") or "").upper()
-        rh_mode = "CABAL-SURF" if "CABAL" in src_u else "UNLOCKED-LP"
+        rh_mode = "CABAL-SURF" if "CABAL" in src_u else ("SEEDED-LP" if "SEEDED" in src_u else "UNLOCKED-LP")
 
     # 1. Мгновенный срез при просадке ликвидности пула >= 15% (в 3 раза чувствительнее обычной стратегии!)
     if isinstance(pd, dict) and pd:
@@ -476,8 +496,10 @@ def evaluate_rug_hunter_exit(position, current_price: float) -> Optional[str]:
     if minutes_held >= 2.0 and max_pnl_pct < 0.04 and pnl_pct < 0.01:
         return f"🎯 RH No-Pump Scratch ({pnl_pct*100:+.1f}%, 2м без взлёта — сброс до рага)"
 
-    # 7. Динамический жёсткий тайм-кэп (по истории дева или базовые 5.0м)
+    # 7. Динамический жёсткий тайм-кэп (по истории дева или базовые 5.0м; для растущего SEEDED-LP до 7.0м)
     base_max_hold = float(getattr(config, "RUG_HUNTER_MAX_HOLD_MIN", 5.0))
+    if rh_mode == "SEEDED-LP" and pnl_pct >= 0.05:
+        base_max_hold = max(base_max_hold, 7.0)
     prof_cap = 0.0
     if isinstance(pd, dict):
         cp = pd.get("_rug_hunter_creator_profile")

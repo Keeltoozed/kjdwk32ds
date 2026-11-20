@@ -436,6 +436,13 @@ class TrailingExitManager:
         self.min_profit = min_profit
 
     def evaluate_exit(self, position, current_price):
+        try:
+            import rug_hunter as _rh_tr_em
+            if _rh_tr_em.is_rug_hunter_position(position):
+                return _rh_tr_em.evaluate_rug_hunter_exit(position, current_price)
+        except Exception:
+            pass
+
         entry = position.entry_price_usd
         pnl = (current_price - entry) / entry
         max_pnl = (position.max_price_usd - entry) / entry
