@@ -771,8 +771,14 @@ class Analyzer:
             if _curve_live_cands and not _is_grad_chk and _dust_liq < 100.0 and _dust_v24 < 500.0:
                 _ignore_dust_amm = True
         if real_pairs:
-            # Для .pump минта предпочитаем канонический пул PumpSwap/Raydium/Orca (liq >= $5k) вместо стороннего незалоченного Meteora DLMM
-            if str(mint or "").strip().lower().endswith("pump"):
+            # Предпочитаем канонический пул PumpSwap/Raydium/Orca (liq >= $5k) вместо стороннего незалоченного Meteora DLMM
+            # (работает и для .pump минтов, и для не-vanity выпускников Pump.fun вроде Raja 7ycjv7Rn..hcMr!)
+            _has_canon_ps = any(
+                str(p.get("dexId") or "").lower() == "pumpswap"
+                and float(((p.get("liquidity") or {}).get("usd", 0) or 0)) >= 5000.0
+                for p in real_pairs
+            )
+            if str(mint or "").strip().lower().endswith("pump") or _has_canon_ps:
                 _non_met = [
                     p for p in real_pairs
                     if "meteora" not in str(p.get("dexId") or "").lower()
@@ -938,6 +944,7 @@ class Analyzer:
             _jup_cache_pf = {}
             _gt_cache_pf = {}
         _mono_pf = time.monotonic()
+        _jup_fb_mints = []
         for res in results:
             if not isinstance(res, tuple) or len(res) != 3:
                 continue
@@ -961,9 +968,34 @@ class Analyzer:
                     elif _gh and (_mono_pf - _gh[0]) < 90.0 and isinstance(_gh[1], dict):
                         self._prefetch_cache[m] = (ts, dict(_gh[1]))
                         got += 1
-                    elif ok_st:
-                        # Короткий TTL (5с) для пустых ответов, чтобы свежие миграции быстро перепроверялись
-                        self._prefetch_cache[m] = (ts - ttl + 5.0, None)
+                    else:
+                        if not ok_st:
+                            _jup_fb_mints.append(m)
+                        else:
+                            # Короткий TTL (5с) для пустых ответов, чтобы свежие миграции быстро перепроверялись
+                            self._prefetch_cache[m] = (ts - ttl + 5.0, None)
+
+        # Jupiter v2 batch fallback при 429/таймауте DexScreener (до 30 минтов за 1 запрос):
+        # гарантирует, что на Render с общим IP сканер не встаёт с 0/29 при 429 от DexScreener!
+        if _jup_fb_mints:
+            try:
+                import market_data as _md_jfb
+                for _ji in range(0, len(_jup_fb_mints), 30):
+                    _jch = _jup_fb_mints[_ji:_ji + 30]
+                    _jst, _jdata = await fetch_json(
+                        "https://lite-api.jup.ag/tokens/v2/search?query=" + ",".join(_jch),
+                        timeout=6, retries=0,
+                    )
+                    if _jst == 200 and isinstance(_jdata, list):
+                        _now_jfb = time.time()
+                        for _jt in _jdata:
+                            _norm = _md_jfb.normalize_jup_token(_jt)
+                            _jm = ((_norm.get("baseToken") or {}).get("address") or "") if isinstance(_norm, dict) else ""
+                            if _jm and float(_norm.get("priceUsd", 0) or 0) > 0:
+                                self._prefetch_cache[_jm] = (_now_jfb, _norm)
+                                got += 1
+            except Exception:
+                pass
         if len(self._prefetch_cache) > 3000:
             cutoff = time.time() - 120
             self._prefetch_cache = {k: v for k, v in self._prefetch_cache.items() if v[0] >= cutoff}
@@ -2184,11 +2216,22 @@ class Analyzer:
                 f"🚫 [M1-FILTER] {symbol} ({mint[:8]}): 1м свеча {_m1:+.1f}% вне коридора [{_min_m1_floor:+.1f}%, +{_max_m1_cfg:.0f}%].",
             )
 
-        # 4. Anti-FOMO: Защита от перегретых вершин (без байпаса age <= 4m — блокирует DATITTY +866%, BNC +771%, GMGM +755%)
-        _max_entry_h1 = config.get_max_entry_h1_pct(_age_min_pre, _vm5_pre, _b5_pre, _s5_pre, _raw_liq_chk, _m5)
+        # 4. Anti-FOMO: Защита от перегретых вершин (с учётом свежего выхода с кривой <=8м при FDV<=$65k; блокирует поздние топы DATITTY +866%, BNC +771%)
+        _max_entry_h1 = config.get_max_entry_h1_pct(
+            _age_min_pre, _vm5_pre, _b5_pre, _s5_pre, _raw_liq_chk, _m5,
+            fdv_usd=_fdv_chk_pre, is_curve=_is_curve_pre_a,
+        )
+        _is_fresh_curve_climb_a = (
+            not _is_curve_pre_a
+            and _age_min_pre <= 5.0
+            and 0.0 < _fdv_chk_pre <= 55000.0
+            and _raw_liq_chk >= 7500.0
+            and _vm5_pre >= 5000.0
+            and _b5_pre >= max(25, int(_s5_pre * 1.15))
+        )
         if _is_curve_pre_a:
             _max_entry_m5 = 300.0 if (_m1 >= 2.0 and _s5_pre < 80 and _b5_pre >= max(30, int(_s5_pre * 1.80))) else 165.0
-        elif _age_min_pre <= 4.0 and _vm5_pre >= 30000.0 and _raw_liq_chk >= 12000.0 and _b5_pre >= max(80, int(_s5_pre * 1.15)) and _m1 >= 2.0:
+        elif _is_fresh_curve_climb_a or (_age_min_pre <= 4.0 and _vm5_pre >= 30000.0 and _raw_liq_chk >= 12000.0 and _b5_pre >= max(80, int(_s5_pre * 1.15)) and _m1 >= 2.0):
             _max_entry_m5 = 450.0
         elif _age_min_pre <= 5.0 and _vm5_pre >= 20000.0 and _raw_liq_chk >= 12000.0 and _b5_pre >= max(30, int(_s5_pre * 1.15)):
             _max_entry_m5 = 300.0

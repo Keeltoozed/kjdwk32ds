@@ -120,10 +120,17 @@ def get_max_entry_h1_pct(
     sells_m5: int = 0,
     liq_usd: float = 0.0,
     m5_pct: float = 1.5,
+    fdv_usd: float = 0.0,
+    is_curve: bool = False,
 ) -> float:
     """Return dynamic max h1% entry cap: allow genuine fresh launches while rejecting vertical tops (DATITTY/BNC/RUGPULL +426%)."""
     _m5_ok = True if m5_pct is None else (float(m5_pct) >= 1.0)
     _flow_ok = vol_m5 >= 2500.0 and buys_m5 >= int(sells_m5 * 1.05) and _m5_ok
+    # Свежий выпускник Pump.fun/DEX (<=8м) ещё у пола миграции (FDV <= $65k):
+    # рост с бондинг-кривой $5k -> $35k даёт h1 +350%..+700% ДО начала пампа на PumpSwap!
+    # Не убиваем его как «поздний хай», пока FDV <= $65k (скамы вроде APPAD отсекаются RugCheck/L7a/cabal-churn).
+    if not is_curve and age_min <= 8.0 and 0.0 < float(fdv_usd or 0.0) <= 65000.0 and _flow_ok and liq_usd >= 7500.0:
+        return 750.0
     if age_min <= 15.0:
         if _flow_ok and liq_usd >= 15000.0:
             return 380.0
@@ -635,19 +642,29 @@ def evaluate_entry_momentum(
     if age_min >= 45.0 and h6 is not None and float(h6 or 0.0) > MAX_ENTRY_H6_PCT:
         return False, f"h6-exhausted {float(h6 or 0.0):+.1f}% > +{MAX_ENTRY_H6_PCT:.0f}% at {age_min:.0f}m (spent top)"
 
-    _max_h1_allowed = get_max_entry_h1_pct(age_min, vol5_usd, buys5, sells5, liq_usd, m5)
+    _max_h1_allowed = get_max_entry_h1_pct(
+        age_min, vol5_usd, buys5, sells5, liq_usd, m5, fdv_usd=fdv_usd, is_curve=is_curve
+    )
     if h1 > _max_h1_allowed:
         return False, f"h1-exhausted {h1:+.0f}% > +{_max_h1_allowed:.0f}% (buying late parabolic top, dump risk)"
 
     # Потолок m5 для свежих запусков и кривых:
     # На сырой кривой Pump.fun базовый потолок +165% (отсекает дистрибуционные хаи AFTERGTA6 +205% m1=0 140s, PPV +279% m1=0 186s).
     # Если сырая кривая активно ускоряется (m1 >= 2%, sells < 80, b/s >= 1.8x — кейс VICESTREAM +280%) — допускаем до +300%.
-    # На свежей высокообъёмной миграции (GTASZN +216%, TDC +399% vol5 $80k) — до +450% (синхронно с h1 <= +450%).
+    # На свежей высокообъёмной миграции (GTASZN +216%, TDC +399% vol5 $80k) и быстром выходе с кривой (age<=5m, FDV<=$55k) — до +450%.
     _is_active_curve_blast = bool(
         is_curve
         and m1 >= 2.0
         and sells5 < 80
         and buys5 >= max(30, int(sells5 * 1.80))
+    )
+    _is_fresh_curve_grad_climb = bool(
+        not is_curve
+        and age_min <= 5.0
+        and 0.0 < fdv_usd <= 55000.0
+        and liq_usd >= 7500.0
+        and vol5_usd >= 5000.0
+        and buys5 >= max(25, int(sells5 * 1.15))
     )
     _is_mega_mig_blast = bool(
         not is_curve
@@ -673,7 +690,7 @@ def evaluate_entry_momentum(
     )
     if is_curve:
         _max_m5_dyn = 300.0 if _is_active_curve_blast else 165.0
-    elif _is_mega_mig_blast:
+    elif _is_mega_mig_blast or _is_fresh_curve_grad_climb:
         _max_m5_dyn = 450.0
     elif _is_fresh_grad_blast:
         _max_m5_dyn = 300.0
@@ -694,13 +711,14 @@ def evaluate_entry_momentum(
 
     # Защита от 1м отскока дохлой кошки внутри 5м слива (кейсы Makenzi m5=+4.98%, m1=+13.74% -> -26.4%; CC m5=+2.85%, m1=+17.86% -> -26.1%):
     # если 1м свеча значительно выше 5м изменения (значит предшествующие 4 минуты токен летел вниз), не покупаем вершину отскока!
-    # Исключение (кейс CORNER +122%: 1162b/964s, m5=+7.6%, m1=+11.7%, liq=$13.5k): мощный органический пробой на высоком объёме.
+    # Исключение (кейсы CORNER +122%, RUDY +30% пробой базы): мощный органический пробой на глубоком пуле и перевесе покупателей.
     _is_organic_v_breakout = (
         not is_curve
-        and m5 >= 5.0
-        and buys5 >= max(80, int(sells5 * 1.10))
-        and vol5_usd >= 10000.0
         and liq_usd >= 10000.0
+        and (
+            (m5 >= 5.0 and buys5 >= max(80, int(sells5 * 1.10)) and vol5_usd >= 10000.0)
+            or (m5 >= 6.0 and buys5 >= max(50, int(sells5 * 1.25)) and vol5_usd >= 6000.0)
+        )
     )
     if m1 > 4.0 and m5 < 15.0 and m1 > (m5 + 3.0) and not _is_organic_v_breakout:
         return False, f"dead-cat-1m-spike m1 {m1:+.1f}% >> m5 {m5:+.1f}% (4m dump before 1m bounce)"

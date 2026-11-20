@@ -20,6 +20,8 @@ LITE_BASE = "https://lite-api.jup.ag/tokens/v2"
 _cache = []
 _cache_time = 0.0
 _jup_poll_cycle = 0
+_ds_boost_cache = []
+_ds_boost_cache_time = 0.0
 CACHE_TTL = 22
 SKIP_SYMBOLS = {
     "SOL", "WSOL", "USDC", "USDT", "USDG", "EURC", "CBBTC", "WBTC", "WETH", "JLP", "PYTH", "JUP", "NEAR",
@@ -176,7 +178,9 @@ async def fetch_jup_tokens() -> list:
                     continue
                 if age_m > 45.0 and pc5 < 4.0 and vol5 < 15000.0:
                     continue
-                _max_pc1h = config.get_max_entry_h1_pct(age_m, vol5, b5, s5, liq, None)
+                _max_pc1h = config.get_max_entry_h1_pct(
+                    age_m, vol5, b5, s5, liq, None, fdv_usd=fdv_j, is_curve=(not is_grad)
+                )
                 # ВАЖНО: для свежих выпускников Pump.fun (<=90м, кейс RUDY +4821% в Jupiter при +245% на PumpSwap!)
                 # Jupiter считает stats1h от старта бондинг-кривой $4k, а не от миграции! Не отсекаем их по Jupiter pc1h — проверит DexScreener в Analyzer.
                 _is_recent_lp_grad = bool((config.is_launchpad_mint(m) or t.get("graduatedAt")) and age_m <= 90.0)
@@ -221,21 +225,43 @@ async def fetch_jup_tokens() -> list:
         if s6h == 200:
             _add_jup_list(d6h, "trending_6h", min_pc5=1.8)
 
-        # 2. Прямой DexScreener Rocket Radar (300 RPM, 0 нагрузки на GT):
-        # Ловит живые выпускники PumpSwap / Meteora / Raydium / Bonk, а также свежие бусты и профили!
+        # 2. Прямой DexScreener Rocket Radar (щадим общий IP Render — не долбим 60-RPM бусты каждые 22с):
+        # Бусты/профили (60 RPM) кэшируем на 90с; поисковые запросы сокращены до 5 непересекающихся (0 дублей).
         try:
+            global _ds_boost_cache, _ds_boost_cache_time
+            _now_ds_r = time.time()
+            if (_now_ds_r - _ds_boost_cache_time) >= 90.0:
+                _boost_urls = (
+                    "https://api.dexscreener.com/token-boosts/latest/v1",
+                    "https://api.dexscreener.com/token-boosts/top/v1",
+                    "https://api.dexscreener.com/token-profiles/latest/v1",
+                )
+                _b_res = await asyncio.gather(
+                    *[fetch_json(u, timeout=6, retries=0) for u in _boost_urls],
+                    return_exceptions=True,
+                )
+                _new_boosts = []
+                for _br in _b_res:
+                    if isinstance(_br, tuple) and len(_br) == 2 and _br[0] == 200 and isinstance(_br[1], list):
+                        for item_b in _br[1]:
+                            if isinstance(item_b, dict) and str(item_b.get("chainId") or "").lower() == "solana":
+                                addr_b = str(item_b.get("tokenAddress") or "").strip()
+                                if addr_b and not addr_b.startswith("0x") and 32 <= len(addr_b) <= 44:
+                                    _new_boosts.append(addr_b)
+                if _new_boosts:
+                    _ds_boost_cache = list(dict.fromkeys(_new_boosts))
+                _ds_boost_cache_time = _now_ds_r
+            for addr_b in _ds_boost_cache:
+                if addr_b not in seen:
+                    seen.add(addr_b)
+                    ranked.append((3.0, 5000.0, "", addr_b, "dex_boost"))
+
             ds_queries = (
-                "https://api.dexscreener.com/token-boosts/latest/v1",
-                "https://api.dexscreener.com/token-boosts/top/v1",
-                "https://api.dexscreener.com/token-profiles/latest/v1",
                 "https://api.dexscreener.com/latest/dex/search?q=pumpswap",
-                "https://api.dexscreener.com/latest/dex/search?q=SOL%20pump",
-                "https://api.dexscreener.com/latest/dex/search?q=pumpswap%20SOL",
                 "https://api.dexscreener.com/latest/dex/search?q=pump%20USDC",
                 "https://api.dexscreener.com/latest/dex/search?q=bonk%20SOL",
                 "https://api.dexscreener.com/latest/dex/search?q=bags%20SOL",
                 "https://api.dexscreener.com/latest/dex/search?q=raydium%20SOL",
-                "https://api.dexscreener.com/latest/dex/search?q=orca%20SOL",
             )
             ds_results = await asyncio.gather(
                 *[fetch_json(u, timeout=6, retries=0) for u in ds_queries],
@@ -246,19 +272,7 @@ async def fetch_jup_tokens() -> list:
                 if not isinstance(res, tuple) or len(res) != 2:
                     continue
                 st_q, d_q = res
-                if st_q != 200:
-                    continue
-                # Обработка списков бустов/профилей:
-                if isinstance(d_q, list):
-                    for item_b in d_q:
-                        if not isinstance(item_b, dict) or str(item_b.get("chainId") or "").lower() != "solana":
-                            continue
-                        addr_b = str(item_b.get("tokenAddress") or "").strip()
-                        if addr_b and not addr_b.startswith("0x") and 32 <= len(addr_b) <= 44 and addr_b not in seen:
-                            seen.add(addr_b)
-                            ranked.append((3.0, 5000.0, "", addr_b, "dex_boost"))
-                    continue
-                if not isinstance(d_q, dict):
+                if st_q != 200 or not isinstance(d_q, dict):
                     continue
                 for p in (d_q.get("pairs") or []):
                     if not isinstance(p, dict) or str(p.get("chainId") or "").lower() != "solana":
@@ -268,7 +282,8 @@ async def fetch_jup_tokens() -> list:
                     sym_p = str(bt.get("symbol") or "").upper().strip()
                     if not addr or addr.startswith("0x") or len(addr) < 32 or len(addr) > 44 or addr in seen or sym_p in SKIP_SYMBOLS:
                         continue
-                    if not allow_raw_curve and config.is_unmigrated_curve_token(addr, p):
+                    _is_curve_p = config.is_unmigrated_curve_token(addr, p)
+                    if not allow_raw_curve and _is_curve_p:
                         continue
                     liq_p = float((p.get("liquidity") or {}).get("usd", 0) or 0)
                     if liq_p < float(getattr(config, "MIN_GRADUATED_LIQ_USD", 2500.0)):
@@ -286,7 +301,7 @@ async def fetch_jup_tokens() -> list:
                     _is_ds_super_brk = config.is_established_breakout_runner(
                         age_min=age_p, liq_usd=liq_p, vol5_usd=vol5_p, m5_pct=m5_p,
                         buys5=b5_p, sells5=s5_p, fdv_usd=fdv_p,
-                        is_curve=config.is_unmigrated_curve_token(addr, p),
+                        is_curve=_is_curve_p,
                     )
                     if age_p > _max_disc_age and not _is_ds_super_brk:
                         continue
@@ -301,10 +316,11 @@ async def fetch_jup_tokens() -> list:
                     _min_m5_ds = 2.0 if age_p <= 5.0 else 2.5
                     if m5_p < _min_m5_ds:
                         continue
-                    fdv_p = float(p.get("fdv") or p.get("marketCap") or 0)
                     if fdv_p > _max_disc_fdv:
                         continue
-                    _max_h1_ds = config.get_max_entry_h1_pct(age_p, vol5_p, b5_p, s5_p, liq_p, m5_p)
+                    _max_h1_ds = config.get_max_entry_h1_pct(
+                        age_p, vol5_p, b5_p, s5_p, liq_p, m5_p, fdv_usd=fdv_p, is_curve=_is_curve_p
+                    )
                     if h1_p > _max_h1_ds:
                         continue
                     seen.add(addr)
@@ -628,12 +644,13 @@ async def _evaluate_and_buy_inner(mint: str, td: dict, analyzer, tracker, source
         print(f"🚫 [{source_tag}-M1-SPIKE] {_sym_tmp} ({mint[:8]}): m1 +{_m1_j:.1f}% > +{_eff_max_m1_j:.1f}% — вершина свечи, отмена входа.")
         return False
     _h1_j = float(_pc_j.get("h1", 0) or 0)
-    _max_h1_j = config.get_max_entry_h1_pct(_age_j, _vol5_j, _b5_j, _s5_j, _liq_j, _m5_j)
+    _fdv_j1 = float((td or {}).get("fdv", 0) or (td or {}).get("marketCap", 0) or 0)
+    _is_curve_j1 = config.is_unmigrated_curve_token(mint, td or {})
+    _max_h1_j = config.get_max_entry_h1_pct(_age_j, _vol5_j, _b5_j, _s5_j, _liq_j, _m5_j, fdv_usd=_fdv_j1, is_curve=_is_curve_j1)
     if _h1_j > _max_h1_j:
         print(f"🚫 [{source_tag}-H1-EXHAUSTED] {_sym_tmp} ({mint[:8]}): h1 {_h1_j:+.0f}% > +{_max_h1_j:.0f}% — памп уже отработал, вход = вершина.")
         return False
     _h6_j_raw = _pc_j.get("h6")
-    _fdv_j1 = float((td or {}).get("fdv", 0) or (td or {}).get("marketCap", 0) or 0)
     _mom_j_ok, _mom_j_why = config.evaluate_entry_momentum(
         m5=_m5_j, m1=_m1_j, h1=_h1_j,
         h6=(float(_h6_j_raw) if _h6_j_raw is not None else None),
@@ -642,6 +659,7 @@ async def _evaluate_and_buy_inner(mint: str, td: dict, analyzer, tracker, source
         min_h1=float(getattr(config, "JEV_MIN_H1_PCT", -15.0)),
         min_h6=float(getattr(config, "JEV_MIN_H6_PCT", -25.0)),
         fdv_usd=_fdv_j1,
+        is_curve=_is_curve_j1,
     )
     _min_m1_j = float(getattr(config, "JEV_MIN_M1_ENTRY_FLOOR_PCT", -3.5))
     if _age_j <= 15.0 and (_b5_j >= _s5_j or _m5_j >= 0.5):
@@ -913,7 +931,11 @@ async def _evaluate_and_buy_inner(mint: str, td: dict, analyzer, tracker, source
             print(f"🚫 [{source_tag}-SELL-PRESSURE] {_sym_tmp}: продавцов {_s5_j}/{_tot_tx_j} ({_sell_ratio_j*100:.0f}%) при v/l {_vl_ratio_j:.1f}x — сброс китов, отмена!")
             return False
 
-    _eff_max_h1_j = config.get_max_entry_h1_pct(_age_j, _vm5_j, _b5_j, _s5_j, _liq_j, _m5_j)
+    _fdv_j2 = float((td or {}).get("fdv", 0) or (td or {}).get("marketCap", 0) or 0)
+    _is_curve_j2 = config.is_unmigrated_curve_token(mint, td or {})
+    _eff_max_h1_j = config.get_max_entry_h1_pct(
+        _age_j, _vm5_j, _b5_j, _s5_j, _liq_j, _m5_j, fdv_usd=_fdv_j2, is_curve=_is_curve_j2
+    )
     if _h1_j > _eff_max_h1_j:
         print(f"🚫 [{source_tag}-FOMO-H1] {_sym_tmp}: h1 +{_h1_j:.0f}% > +{_eff_max_h1_j:.0f}% — перегретый часовой памп, отмена!")
         return False
@@ -1281,7 +1303,7 @@ async def jup_loop(analyzer, tracker):
                             skipped_ancient += 1
                             processed[m] = _now_t + 180
                             continue
-                        if _ag >= 20.0 and _h6_cand is not None and float(_h6_cand or 0) > float(getattr(config, "MAX_ENTRY_H6_PCT", 500.0)):
+                        if _ag >= 45.0 and _h6_cand is not None and float(_h6_cand or 0) > float(getattr(config, "MAX_ENTRY_H6_PCT", 500.0)):
                             skipped_ancient += 1
                             processed[m] = _now_t + 180
                             continue
@@ -1332,8 +1354,33 @@ async def jup_loop(analyzer, tracker):
                             and _b5_cand >= max(50, int(_s5_cand * 1.15))
                             and _lq_cand >= 10000.0
                         )
+                        _is_accum_cand = (
+                            _m5 >= 3.0
+                            and _v5_cand >= 5000.0
+                            and _b5_cand >= max(60, int(_s5_cand * 1.50))
+                            and _lq_cand >= 7500.0
+                        )
+                        _is_early_grad_cand = (
+                            _ag <= 10.0
+                            and _m5 >= 3.5
+                            and _v5_cand >= 3500.0
+                            and _b5_cand >= max(25, int(_s5_cand * 1.20))
+                            and _lq_cand >= 7500.0
+                        )
+                        _is_clean_flow_cand = (
+                            _m5 >= 5.0
+                            and _v5_cand >= 5000.0
+                            and _b5_cand >= max(30, int(_s5_cand * 1.15))
+                            and _lq_cand >= 7500.0
+                        )
                         _min_m5_cand = 2.0 if _ag <= 3.0 else 6.0
-                        if (_m5 < _min_m5_cand and not _is_bull_dip_cand) or _m1_cand < -3.0:
+                        if (
+                            _m5 < _min_m5_cand
+                            and not _is_bull_dip_cand
+                            and not _is_accum_cand
+                            and not _is_early_grad_cand
+                            and not _is_clean_flow_cand
+                        ) or _m1_cand < -3.0:
                             skipped_flat += 1
                             processed[m] = _now_t
                             continue

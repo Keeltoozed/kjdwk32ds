@@ -1074,7 +1074,16 @@ async def onchain_migration_feeder_loop(analyzer=None):
     from http_client import get_session as _mig_get_session
 
     _MIG_AUTH = "39azUYFWPz3VHgKCf3VChUwbpURdCHRxjWVowf5jUJjg"
-    _WSOL_MINT = "So11111111111111111111111111111111111111112"
+    _SKIP_MIG_MINTS = {
+        "So11111111111111111111111111111111111111112",   # WSOL
+        "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",  # USDC
+        "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB",  # USDT
+        "USD1ttGY1N17NEEHLmELoaybftRBUSErhqYiQzvEmuB",  # USD1
+        "he1iusmfkpAdwvxLNGV8Y1iSbj4rUy6yMhEA3fotn9A",  # hSOL
+        "mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So",  # mSOL
+        "J1toso1uCk3RLmjorhTtrVwY9HJ7X8V9yYac6Y7kGCPn",  # JitoSOL
+        "bSo13r4TkiE4KumL71LsHTPpL2euBYLFx6h9HP3piy1",  # bSOL
+    }
     _seen_mig_sigs = set()
     _mig_first_run = True
     _rpc_sem = asyncio.Semaphore(4)
@@ -1108,13 +1117,23 @@ async def onchain_migration_feeder_loop(analyzer=None):
         if not isinstance(tx, dict):
             return []
         meta = tx.get("meta") or {}
+        logs = meta.get("logMessages") or []
+        if logs and not any(("Instruction: Migrate" in l or "Instruction: CreatePool" in l) for l in logs):
+            return []
+        pre_bals = meta.get("preTokenBalances") or []
+        post_bals = meta.get("postTokenBalances") or []
+        pre_mints = {str(b.get("mint") or "").strip() for b in pre_bals if b.get("mint")}
         found = []
         seen_m = set()
-        for bal in (meta.get("postTokenBalances") or []) + (meta.get("preTokenBalances") or []):
+        for bal in post_bals + pre_bals:
             m_addr = str(bal.get("mint") or "").strip()
-            if not m_addr or m_addr == _WSOL_MINT or m_addr in seen_m:
+            if not m_addr or m_addr in _SKIP_MIG_MINTS or m_addr in seen_m or not (32 <= len(m_addr) <= 44):
                 continue
-            if m_addr.endswith("pump") and 32 <= len(m_addr) <= 44:
+            ui_amt = float(((bal.get("uiTokenAmount") or {}).get("uiAmount") or 0.0))
+            decs = int(((bal.get("uiTokenAmount") or {}).get("decimals") or 0))
+            # Ловим И .pump-минты, И не-vanity выпускники Pump.fun (кейс Raja 7ycjv7Rn..hcMr: 6 знаков, ~200M токенов в пуле, уже был в preTokenBalances)
+            is_pump_base = m_addr.endswith("pump") or (m_addr in pre_mints and decs == 6 and ui_amt >= 1_000_000.0)
+            if is_pump_base:
                 seen_m.add(m_addr)
                 found.append((m_addr, bt_ts))
         return found
@@ -1164,7 +1183,7 @@ async def onchain_migration_feeder_loop(analyzer=None):
                             birth_tracker.add_token(_mm)
                             birth_tracker.add_graduated(_mm)
                             _age_sec = max(0.0, _now_f - _bt_m) if _bt_m > 0 else 0.0
-                            print(f"🏁 [ONCHAIN-MIGRATION] {_mm[:8]}..pump (мигрировал {_age_sec:.0f}с назад) → в приоритет сканера!", flush=True)
+                            print(f"🏁 [ONCHAIN-MIGRATION] {_mm[:8]}..{_mm[-4:]} (мигрировал {_age_sec:.0f}с назад) → в приоритет сканера!", flush=True)
                     if _added_mints:
                         if analyzer is not None:
                             _cur_d = list(getattr(analyzer, "_cached_discovery_mints", None) or [])
@@ -1874,14 +1893,16 @@ async def scanner_loop(analyzer, tracker):
                                     if not (not _is_curve_live and liq_usd >= 10000.0 and _b5_sc >= max(40, int(_s5_sc * 1.20)) and _vol5_live >= 12000.0 and _m5_live >= 25.0 and _m1_live <= 28.0):
                                         print(f"🚫 [SCANNER-M1-SPIKE] {actual_symbol} ({mint[:8]}): живой m1 +{_m1_live:.1f}% > +{_max_m1_cfg_live:.1f}% — вершина 1м свечи (кейс MAGA), отмена!")
                                         continue
+                                _fdv_sc_live = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
                                 _max_m5_cfg = (300.0 if (_m1_live >= 2.0 and _s5_live < 80 and _b5_live >= max(30, int(_s5_live * 1.80))) else 165.0) if _is_curve_live else float(getattr(config, "MAX_ENTRY_M5_PCT", 175.0))
                                 if _m5_live > _max_m5_cfg:
                                     _b5_sc = int((pair_data.get("txns") or {}).get("m5", {}).get("buys", 0) or 0)
                                     _s5_sc = int((pair_data.get("txns") or {}).get("m5", {}).get("sells", 0) or 0)
+                                    _is_fresh_climb_live = (not _is_curve_live and _age_m <= 5.0 and 0.0 < _fdv_sc_live <= 55000.0 and liq_usd >= 7500.0 and _vol5_live >= 5000.0 and _b5_sc >= max(25, int(_s5_sc * 1.15)) and _m5_live <= 450.0)
                                     _is_mega_mig_live = (not _is_curve_live and _age_m <= 4.0 and _vol5_live >= 30000.0 and liq_usd >= 12000.0 and _b5_sc >= max(80, int(_s5_sc * 1.15)) and _m1_live >= 2.0 and _m5_live <= 450.0)
                                     _is_fresh_grad_live = (not _is_curve_live and _age_m <= 5.0 and _vol5_live >= 20000.0 and liq_usd >= 12000.0 and _b5_sc >= max(30, int(_s5_sc * 1.15)) and _m5_live <= 300.0)
                                     _is_breakout = (not _is_curve_live and _vol5_live >= 15000.0 and liq_usd >= 12000.0 and _b5_sc >= int(_s5_sc * 1.2) and _m5_live <= 240.0)
-                                    if not (_is_mega_mig_live or _is_fresh_grad_live or _is_breakout):
+                                    if not (_is_fresh_climb_live or _is_mega_mig_live or _is_fresh_grad_live or _is_breakout):
                                         print(f"🚫 [SCANNER-FOMO-M5] {actual_symbol} ({mint[:8]}): живой m5 +{_m5_live:.1f}% > +{_max_m5_cfg:.0f}% — вершина свечи, отмена!")
                                         continue
                                 _info_sc_d = pair_data.get("info") or {}
@@ -1900,7 +1921,10 @@ async def scanner_loop(analyzer, tracker):
                                     if not _is_stealth_sc:
                                         print(f"🚫 [SCANNER-NO-SOC] {actual_symbol} ({mint[:8]}): 0 соцсетей без органики — отмена!")
                                         continue
-                                _max_h1_live = config.get_max_entry_h1_pct(_age_m, _vol5_live, _b5_sc, _s5_sc, liq_usd, _m5_live)
+                                _max_h1_live = config.get_max_entry_h1_pct(
+                                    _age_m, _vol5_live, _b5_sc, _s5_sc, liq_usd, _m5_live,
+                                    fdv_usd=_fdv_sc_live, is_curve=_is_curve_live,
+                                )
                                 if _h1_live > _max_h1_live:
                                     print(f"🚫 [SCANNER-LIVE-EXHAUSTED] {actual_symbol} ({mint[:8]}): живой h1 {_h1_live:+.0f}% > +{_max_h1_live:.0f}% — перегретая вершина, отмена!")
                                     continue

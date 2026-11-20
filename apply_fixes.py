@@ -77,14 +77,19 @@ def verify_on_render() -> None:
             "async def onchain_migration_feeder_loop" in _mn_src
             and '"onchain_migration_feeder"' in _mn_src
             and "39azUYFWPz3VHgKCf3VChUwbpURdCHRxjWVowf5jUJjg" in _mn_src
+            and "is_pump_base" in _mn_src
         )
         _has_ps_usdc = (
             "_CANONICAL_QUOTES" in _gp_src
             and "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v" in _gp_src
             and hasattr(config, "is_established_breakout_runner")
         )
+        _has_fresh_h1_jupfb = (
+            "lite-api.jup.ag/tokens/v2/search?query=" in _an_src
+            and float(config.get_max_entry_h1_pct(1.0, 10000.0, 50, 20, 12000.0, 35.0, fdv_usd=35000.0, is_curve=False)) >= 700.0
+        )
         print(
-            f"   • GATES ACTIVE                = analyzer.fast-gates:{'OK' if _has_an_gate else 'MISSING'} | tracker.firewall:{'OK' if _has_tr_fw else 'MISSING'} | gt.fail-fast:{'OK' if _has_gt_fast else 'MISSING'} | cabal.l7a:{'OK' if _has_cabal_guard else 'MISSING'} | onchain.mig-rpc:{'OK' if _has_onchain_mig else 'MISSING'} | ps.usdc-canon:{'OK' if _has_ps_usdc else 'MISSING'}",
+            f"   • GATES ACTIVE                = analyzer.fast-gates:{'OK' if _has_an_gate else 'MISSING'} | tracker.firewall:{'OK' if _has_tr_fw else 'MISSING'} | gt.fail-fast:{'OK' if _has_gt_fast else 'MISSING'} | cabal.l7a:{'OK' if _has_cabal_guard else 'MISSING'} | onchain.mig-rpc:{'OK' if _has_onchain_mig else 'MISSING'} | ps.usdc-canon:{'OK' if _has_ps_usdc else 'MISSING'} | fresh-h1+jup-pf:{'OK' if _has_fresh_h1_jupfb else 'MISSING'}",
             flush=True,
         )
     except Exception as _ve:

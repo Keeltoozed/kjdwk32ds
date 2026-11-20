@@ -649,8 +649,11 @@ class GrokJevEngine:
             else:
                 print(f"💎 [JEV-ORGANIC-STEALTH] {symbol} ({mint[:8]}): 0 соцсетей, но доказан чистый органический поток (${vol_m5:,.0f}, {b5}b/{s5}s, v/l {_vol_liq_ratio_g:.2f}) — пропуск.")
 
-        # 2.5. Exhaustion Guard: блокируем перегретые поздние пампы (без байпаса age <= 4m — кейсы DATITTY +866%, BNC +771%)
-        _max_h1_allowed = _c.get_max_entry_h1_pct(age_min, vol_m5, b5, s5, eff_liq, m5)
+        # 2.5. Exhaustion Guard: блокируем перегретые поздние пампы (учитывая свежий выход с кривой <=8м при FDV<=$65k)
+        _is_curve_g = _c.is_unmigrated_curve_token(mint, pair_data)
+        _max_h1_allowed = _c.get_max_entry_h1_pct(
+            age_min, vol_m5, b5, s5, eff_liq, m5, fdv_usd=fdv_mc, is_curve=_is_curve_g
+        )
         if _links_cnt_g == 0 and not _soc_unk_g and not _is_organic_stealth and not (is_pump or age_min <= 10.0) and (h1 > 160.0 or m5 > 110.0):
             return False, f"exhaustion-no-soc-top h1 {h1:+.0f}%, m5 {m5:+.0f}% (0 socials pump-and-dump top)"
         if h1 > _max_h1_allowed:
@@ -663,7 +666,6 @@ class GrokJevEngine:
         _h6_val_g = float(_h6_raw_g) if _h6_raw_g is not None else None
         _min_h1_g = float(getattr(_c, "JEV_MIN_H1_PCT", -12.0))
         _min_h6_g = float(getattr(_c, "JEV_MIN_H6_PCT", -20.0))
-        _is_curve_g = _c.is_unmigrated_curve_token(mint, pair_data)
         _tx_h1_g = (pair_data.get("txns") or {}).get("h1") or {}
         _bh1_g = int(_tx_h1_g.get("buys", 0) or 0)
         _sh1_g = int(_tx_h1_g.get("sells", 0) or 0)
@@ -1030,13 +1032,14 @@ class GrokJevEngine:
         _base_m1_g = float(getattr(_c, "JEV_MAX_M1_ENTRY_PCT", 22.0))
         _max_m1 = max(_base_m1_g, 25.0) if (not _is_curve_fl and b5 >= max(50, int(s5 * 1.35)) and vol5 >= 25000.0 and m5 >= 25.0) else _base_m1_g
         _cfg_m5 = 165.0 if _is_curve_fl else float(getattr(_c, "MAX_ENTRY_M5_PCT", 175.0))
+        _is_fresh_climb_fl = (not _is_curve_fl and _age_m <= 5.0 and 0.0 < _fdv_flush <= 55000.0 and _liq_usd >= 7500.0 and vol5 >= 5000.0 and b5 >= max(25, int(s5 * 1.15)) and m5 <= 450.0)
         _is_fresh_grad_fl = (not _is_curve_fl and _age_m <= 5.0 and vol5 >= 20000.0 and _liq_usd >= 12000.0 and b5 >= max(30, int(s5 * 1.15)) and m5 <= 300.0)
         _is_fomo_bypass = (not _is_curve_fl and b5 >= int(s5 * 1.2) and vol5 >= 15000.0 and _liq_usd >= 12000.0 and m5 <= 240.0)
-        if m5 > _cfg_m5 and not (_is_fresh_grad_fl or _is_fomo_bypass):
+        if m5 > _cfg_m5 and not (_is_fresh_climb_fl or _is_fresh_grad_fl or _is_fomo_bypass):
             return False, -0.14, 0.0, f"fomo-spike (m5 {m5:+.1f}% > +{_cfg_m5:.0f}%) — buying local top, wait for reset"
         if m1 > _max_m1 and not _m1_is_phantom:
             return False, -0.14, 0.0, f"m1-spike (m1 {m1:+.1f}% > +{_max_m1:.1f}%) — vertical push, wait for consolidation"
-        _max_h1_flush = _c.get_max_entry_h1_pct(_age_m, vol5, b5, s5, _liq_usd, m5)
+        _max_h1_flush = _c.get_max_entry_h1_pct(_age_m, vol5, b5, s5, _liq_usd, m5, fdv_usd=_fdv_flush, is_curve=_is_curve_fl)
         if _h1 > _max_h1_flush:
             return False, -0.14, 0.0, f"h1-exhaustion (h1 {_h1:+.1f}% > +{_max_h1_flush:.0f}% at {_age_m:.0f}m) — pump already exhausted"
         if _liq_usd > 0 and _liq_usd < _min_liq:

@@ -539,9 +539,14 @@ class PaperTracker:
             #    ДОЛЖЕН иметь подтверждённый _lp_verified (если не включен ALLOW_UNLOCKED_LP_POOLS).
             _ps_canon_flag = bool(isinstance(pair_data, dict) and pair_data.get("_pumpswap_canonical"))
             _ps_rpc_unv_flag = bool(isinstance(pair_data, dict) and pair_data.get("_pumpswap_rpc_unverified")) and config.is_launchpad_mint(mint_str) and not config.is_pumpswap_liq_fdv_trap(pair_data)
-            _is_native_pump_dex = mint_str.lower().endswith("pump") and (
-                _pd_dex in ("", "pumpfun", "pump")
-                or (_pd_dex == "pumpswap" and (not isinstance(pair_data, dict) or not pair_data.get("_pumpswap_checked") or _ps_canon_flag or _ps_rpc_unv_flag))
+            _is_native_pump_dex = (
+                (_pd_dex == "pumpswap" and _ps_canon_flag)
+                or (
+                    mint_str.lower().endswith("pump") and (
+                        _pd_dex in ("", "pumpfun", "pump")
+                        or (_pd_dex == "pumpswap" and (not isinstance(pair_data, dict) or not pair_data.get("_pumpswap_checked") or _ps_canon_flag or _ps_rpc_unv_flag))
+                    )
+                )
             )
             if not _is_native_pump_dex and not _lp_preverified and not _is_vip_or_copy:
                 _ca_tr = float((pair_data or {}).get("pairCreatedAt") or 0)
