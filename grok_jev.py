@@ -565,10 +565,8 @@ class GrokJevEngine:
         max_age = float(getattr(_c, "JEV_MAX_AGE_MIN", getattr(_c, "SOLANA_MAX_AGE_MIN", 240.0)))
         _max_scan_age_g = float(getattr(_c, "SOLANA_MAX_AGE_MIN", 240.0))
         _max_mcap_g = float(getattr(_c, "JEV_MAX_MCAP_USD", 1500000.0))
-        if vol_m5 >= 15000.0 and b5 >= int(s5 * 1.05):
+        if vol_m5 >= 10000.0 and b5 >= int(s5 * 1.05):
             _max_mcap_g = max(_max_mcap_g, 2500000.0)
-            max_age = max(max_age, 360.0)
-            _max_scan_age_g = max(_max_scan_age_g, 360.0)
         if fdv_mc > _max_mcap_g:
             return False, f"mcap-too-large ${fdv_mc:,.0f} > ${_max_mcap_g:,.0f}"
         _is_jev_breakout = (

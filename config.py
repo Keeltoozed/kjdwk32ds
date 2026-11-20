@@ -483,13 +483,18 @@ def is_established_breakout_runner(
         return False
     if age_min <= 0.0 or age_min > ESTABLISHED_BREAKOUT_MAX_AGE_MIN:
         return False
-    if liq_usd < 12000.0 or vol5_usd < 12000.0 or m5_pct < 12.0:
+    if liq_usd < 12000.0 or vol5_usd < 10000.0:
         return False
     if fdv_usd > 0.0 and fdv_usd > 2500000.0:
         return False
-    if buys5 < max(45, int(sells5 * 1.20)):
+    if buys5 < max(40, int(sells5 * 1.20)):
         return False
-    return True
+    if m5_pct >= 10.0:
+        return True
+    # Сильный высокообъёмный тренд (кейс LOOSY: liq $105k, vol5 $34k, 672b/321s, m5 +7.2%)
+    if m5_pct >= 5.0 and vol5_usd >= 18000.0 and buys5 >= max(80, int(sells5 * 1.25)):
+        return True
+    return False
 
 
 def evaluate_entry_momentum(
@@ -585,7 +590,14 @@ def evaluate_entry_momentum(
         and h1 >= 15.0
         and m1 >= 0.0
     )
-    _m5_min_req = 4.0 if _is_high_conviction_accum else (5.0 if _is_fresh_mig_early_launch else (6.0 if _is_heavy_vol_launch else 8.0))
+    _is_clean_grad_flow = (
+        not is_curve
+        and liq_usd >= 7500.0
+        and vol5_usd >= 5000.0
+        and buys5 >= max(30, int(sells5 * 1.15))
+        and m1 >= -1.0
+    )
+    _m5_min_req = 4.0 if _is_high_conviction_accum else (5.0 if (_is_fresh_mig_early_launch or _is_clean_grad_flow) else (6.0 if _is_heavy_vol_launch else 8.0))
     _is_bullish_pullback_dip = (
         -18.0 <= m5 < _m5_min_req
         and h1 >= 15.0
@@ -706,7 +718,7 @@ def evaluate_entry_momentum(
         and h1 >= -50.0
         and _h1_flow_not_bleeding
     )
-    if h1 < -3.0 and not _is_strong_v_reversal and (age_min >= 8.0 or vol5_usd < 20000.0):
+    if h1 < -12.0 and not _is_strong_v_reversal and (age_min >= 8.0 or vol5_usd < 20000.0):
         return False, f"bleeding-h1-downtrend h1 {h1:+.1f}% at age {age_min:.1f}m vol5 ${vol5_usd:,.0f}"
 
     # 1. Реальный взрывной старт ультра-свежего токена (<=3м): ADPAID (+105%: 16b/4s, m5 +29.8%), WANTED (+55%: 37b/13s, m5 +26%), TDC (+399%)
@@ -780,9 +792,20 @@ def evaluate_entry_momentum(
         and buys5 >= max(25, int(sells5 * 1.25))
         and liq_usd >= 7500.0
     )
+    _is_clean_grad_ignition = (
+        not is_curve
+        and age_min <= SOLANA_MAX_AGE_MIN
+        and liq_usd >= 7500.0
+        and vol5_usd >= 5000.0
+        and m5 >= 5.0
+        and m1 >= -1.5
+        and h1 >= -12.0
+        and buys5 >= max(30, int(sells5 * 1.20))
+    )
     is_mature_breakout = (
         _is_established_brk
         or _is_sharp_mid_breakout
+        or _is_clean_grad_ignition
         or (_is_high_conviction_accum and age_min <= SOLANA_MAX_AGE_MIN and m5 >= 4.0)
         or (
             age_min <= _mature_max_age
@@ -918,8 +941,8 @@ MOONBAG_MAX_HOLD_MIN = 55.0          # Даём ракетам до 55 мину�
 PUMP_XGB_ENABLED = False
 RAY_XGB_ENABLED = False
 ROCKET_XGB_ENABLED = True
-ROCKET_XGB_STAGE1_THRESHOLD = 10.0   # Порог 10% (пропускает ранние кривые ADPAID 10.4% +105%, HOGE 15% +158%, GRANDPUMP 25% +214%)
-ROCKET_XGB_FINAL_THRESHOLD = 12.0     # Финальный порог 12%
+ROCKET_XGB_STAGE1_THRESHOLD = 7.0    # Сбалансированный порог 7% (пускает чистые ракеты вроде ZEN 8.5% +134%, HOGE 9.9%, отсекает мусор <7%; все 8 слоёв анти-рага на 100%)
+ROCKET_XGB_FINAL_THRESHOLD = 8.0      # Финальный порог 8% после прохождения всех ончейн-аудитов безопасности
 ROCKET_XGB_THRESHOLD = 10.0
 ROCKET_XGB_UNLOCKED_CUSTOM_MIN = 14.0  # Для проверенных высокооборотных DEX-раннеров
 JEV_MAX_AGE_MIN = 240.0              # Пробои и консолидации до 240м (4ч): позволяет ловить мощные вторые волны и раннеры

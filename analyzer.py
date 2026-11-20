@@ -676,9 +676,9 @@ class Analyzer:
                             continue
                         _max_age_lt = float(getattr(config, "SOLANA_MAX_AGE_MIN", 240.0))
                         _max_fdv_lt = float(getattr(config, "JEV_MAX_MCAP_USD", 1500000.0))
-                        if _vol5_lt >= 15000.0:
+                        if _vol5_lt >= 10000.0 and _liq_lt >= 12000.0 and _m5_lt >= 5.0:
                             _max_fdv_lt = max(_max_fdv_lt, 2500000.0)
-                            _max_age_lt = max(_max_age_lt, 360.0)
+                            _max_age_lt = max(_max_age_lt, float(getattr(config, "ESTABLISHED_BREAKOUT_MAX_AGE_MIN", 4320.0)))
                         if _age_lt > _max_age_lt or _fdv_lt > _max_fdv_lt:
                             continue
                         _addr_lt = str((_p_lt.get("baseToken") or {}).get("address") or "").strip()
@@ -1542,7 +1542,10 @@ class Analyzer:
                 _avg_w = (_vm5_w / _tot_w) if _tot_w > 0 else 0.0
                 _cat_w = pair_data.get("pairCreatedAt") or 0
                 _age_w = ((time.time() * 1000 - _cat_w) / 60000.0) if _cat_w else 30.0
-                if _age_w > 360.0 and not (_age_w <= 1440.0 and _vm5_w >= 15000.0 and _m5_w >= 10.0 and _b5_w >= _s5_w * 1.25):
+                if _age_w > 360.0 and not config.is_established_breakout_runner(
+                    age_min=_age_w, liq_usd=liq, vol5_usd=_vm5_w, m5_pct=_m5_w,
+                    buys5=_b5_w, sells5=_s5_w, fdv_usd=float(pair_data.get("fdv", 0) or 0),
+                ):
                     return False, f"Старый стоячий токен ({_age_w/60:.1f}ч > 6ч без прорывного объёма)"
                 if _vm5_w < 3500.0 or _tot_w < 20:
                     return False, f"Вялый стакан без объёма (vol5 ${_vm5_w:,.0f} < $3,500, txns {_tot_w})"
@@ -2092,9 +2095,10 @@ class Analyzer:
             _v2l_mat = (_vm5_pre / max(_raw_liq_chk, 1.0)) if _raw_liq_chk > 0 else 0.0
             _is_mature_breakout = (
                 (_m5 >= 2.0 and _vm5_pre >= 10000.0 and _b5_pre >= int(_s5_pre * 1.30) and _tot_tx5_pre >= 25)
+                or (_m5 >= 5.0 and _vm5_pre >= 5000.0 and _b5_pre >= max(30, int(_s5_pre * 1.20)))
                 or (_m5 >= 20.0 and _v2l_mat >= 0.35 and _vm5_pre >= 3000.0 and _b5_pre >= max(25, int(_s5_pre * 1.25)))
             )
-            if not _is_mature_breakout and (_vm5_pre < 8000.0 or _v2l_mat < 0.25 or _m5 < 1.0):
+            if not _is_mature_breakout and (_vm5_pre < 3000.0 or (_v2l_mat < 0.12 and _vm5_pre < 10000.0) or _m5 < 1.0):
                 return self._deny(
                     mint,
                     f"slow-mature-pool v5=${_vm5_pre:.0f} v/l={_v2l_mat:.2f}x",

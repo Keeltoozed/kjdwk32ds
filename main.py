@@ -1829,11 +1829,26 @@ async def scanner_loop(analyzer, tracker):
                                     sells_h1=_s_h1_live if (_b_h1_live or _s_h1_live) else None,
                                 )
                                 _min_sc_m1 = float(getattr(config, "JEV_MIN_M1_ENTRY_FLOOR_PCT", 0.0))
-                                if not _mom_live_ok or _m1_live < _min_sc_m1:
+                                _px_held_audit = bool(_scan_px_sc <= 0 or entry_price >= _scan_px_sc * 0.95)
+                                _hard_mom_block = any(
+                                    k in str(_mom_live_why or "").lower()
+                                    for k in ("cabal-staircase", "fake-bump", "h1-exhausted", "h6-exhausted", "m1-vertical-top", "m5-parabolic-top", "mcap-too-large", "too-old", "bleeding-h1")
+                                )
+                                # Если монета уже прошла ANALYZER-PASS и 8 слоёв аудита, цена за время проверки удержалась (>= -5%),
+                                # покупатели не проигрывают (b5 >= s5) и 1м свеча не падает — не отменяем вход из-за мелкого сдвига 5м окна DexScreener (кейс PASSTHEHAT ML 59.8%!)
+                                _is_minor_m5_wiggle = (
+                                    not _hard_mom_block
+                                    and _px_held_audit
+                                    and _m5_live >= -8.0
+                                    and _m1_live >= -2.5
+                                    and _b5_live >= max(20, _s5_live)
+                                    and _vol5_live >= 4000.0
+                                )
+                                if (not _mom_live_ok and not _is_minor_m5_wiggle) or _m1_live < _min_sc_m1:
                                     print(f"🚫 [SCANNER-LIVE-REVERSAL] {actual_symbol} ({mint[:8]}): на живом графике импульс сломан ({_mom_live_why}, m5 {_m5_live:+.1f}%, m1 {_m1_live:+.1f}% < {_min_sc_m1:+.1f}%) — отмена покупки!")
                                     continue
                                 _is_live_m1_blast = (_m1_live >= 1.5 and _b5_live >= max(8, _s5_live) and _vol5_live >= 1500.0)
-                                _m5_live_floor = 0.0 if _is_live_m1_blast else 0.8
+                                _m5_live_floor = -8.0 if _is_minor_m5_wiggle else (0.0 if _is_live_m1_blast else 0.8)
                                 if _m5_live < _m5_live_floor:
                                     print(f"🚫 [SCANNER-LIVE-FALLING] {actual_symbol} ({mint[:8]}): живой m5 {_m5_live:+.1f}% < +{_m5_live_floor:.1f}% — падающий нож перед входом, отмена покупки!")
                                     continue
