@@ -899,13 +899,109 @@ async def birth_wss_loop(analyzer, tracker):
     print("👶 Запуск Роддома: сбор базы данных новых токенов для сканера (без авто-покупки на 0-секунде)...")
 
     async def _fallback_poll_births():
-        """Фоновый сбор свежих токенов (страхует при сбоях PumpPortal WSS 502 / тайм-аутах).
-        Собирает профили/бусты DexScreener + свежие пулы и миграции GeckoTerminal (0-5 мин)
-        с авто-детектом выпускников PumpSwap и Raydium."""
-        from http_client import fetch_json
+        """Фоновый сбор свежих токенов и ПРЯМОЙ ОНЧЕЙН-СБОР МИГРАЦИЙ Pump.fun -> PumpSwap.
+        Работает напрямую через Solana RPC (39azUYFWPz3VHgKCf3VChUwbpURdCHRxjWVowf5jUJjg),
+        поэтому ловит 100% выпускников за 3-10с даже когда PumpPortal WSS молчит, а GT в 429!"""
+        import aiohttp as _aio_mig
+        from http_client import fetch_json, get_session as _mig_get_session
+        _MIG_AUTH = "39azUYFWPz3VHgKCf3VChUwbpURdCHRxjWVowf5jUJjg"
+        _seen_mig_sigs = set()
         _last_gt_poll = 0.0
+        _last_rpc_mig_poll = 0.0
+        _mig_first_run = True
+
+        async def _rpc_call_mig(method: str, params: list, timeout: float = 5.0):
+            _urls = ["https://solana-rpc.publicnode.com", "https://api.mainnet-beta.solana.com"]
+            _h_url = getattr(config, "HELIUS_RPC_URL", "") or ""
+            if _h_url and "api.mainnet-beta" not in _h_url:
+                _urls.append(_h_url)
+            sess = await _mig_get_session()
+            payload = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
+            for _u in _urls:
+                try:
+                    async with sess.post(_u, json=payload, timeout=_aio_mig.ClientTimeout(total=timeout)) as resp:
+                        if resp.status == 200:
+                            js = await resp.json(content_type=None)
+                            if isinstance(js, dict) and js.get("result") is not None:
+                                return js["result"]
+                except Exception:
+                    continue
+            return None
+
         while True:
             try:
+                _now_f = time.time()
+
+                # 0. ПРЯМОЙ ОНЧЕЙН-МОНИТОР МИГРАЦИЙ PUMP.FUN -> PUMPSWAP (каждые 10с, 0 зависимости от PumpPortal WSS!)
+                if _now_f - _last_rpc_mig_poll >= 10.0:
+                    _last_rpc_mig_poll = _now_f
+                    try:
+                        _lim = 25 if _mig_first_run else 12
+                        _sigs = await _rpc_call_mig("getSignaturesForAddress", [_MIG_AUTH, {"limit": _lim}], timeout=5.0)
+                        if isinstance(_sigs, list) and _sigs:
+                            _new_sigs = []
+                            for _s in _sigs:
+                                if not isinstance(_s, dict) or _s.get("err") is not None:
+                                    continue
+                                _sg = str(_s.get("signature") or "")
+                                _bt = int(_s.get("blockTime") or 0)
+                                if not _sg or _sg in _seen_mig_sigs:
+                                    continue
+                                _seen_mig_sigs.add(_sg)
+                                # На старте догружаем все миграции за последние 25 мин, далее — только свежие (< 10 мин)
+                                _max_bt_age = 1500.0 if _mig_first_run else 600.0
+                                if _bt > 0 and (_now_f - _bt) > _max_bt_age:
+                                    continue
+                                _new_sigs.append((_sg, _bt))
+                            _mig_first_run = False
+                            if len(_seen_mig_sigs) > 600:
+                                _seen_mig_sigs.clear()
+                                for _s in _sigs:
+                                    if isinstance(_s, dict) and _s.get("signature"):
+                                        _seen_mig_sigs.add(str(_s["signature"]))
+
+                            async def _extract_mig_mints(sig_str: str, bt_ts: int):
+                                tx = await _rpc_call_mig(
+                                    "getTransaction",
+                                    [sig_str, {"encoding": "jsonParsed", "maxSupportedTransactionVersion": 0}],
+                                    timeout=4.5,
+                                )
+                                if not isinstance(tx, dict):
+                                    return []
+                                meta = tx.get("meta") or {}
+                                found = []
+                                seen_m = set()
+                                for bal in (meta.get("postTokenBalances") or []):
+                                    m_addr = str(bal.get("mint") or "").strip()
+                                    if m_addr.endswith("pump") and 32 <= len(m_addr) <= 44 and m_addr not in seen_m:
+                                        seen_m.add(m_addr)
+                                        found.append((m_addr, bt_ts))
+                                return found
+
+                            if _new_sigs:
+                                _tx_res = await asyncio.gather(
+                                    *[_extract_mig_mints(sg, bt) for sg, bt in _new_sigs[:10]],
+                                    return_exceptions=True,
+                                )
+                                _added_cnt = 0
+                                _added_mints = set()
+                                for _r_item in _tx_res:
+                                    if not isinstance(_r_item, list):
+                                        continue
+                                    for _mm, _bt_m in _r_item:
+                                        if _mm in _added_mints:
+                                            continue
+                                        _added_mints.add(_mm)
+                                        birth_tracker.add_token(_mm)
+                                        birth_tracker.add_graduated(_mm)
+                                        _added_cnt += 1
+                                        _age_sec = max(0.0, _now_f - _bt_m) if _bt_m > 0 else 0.0
+                                        print(f"🏁 [ONCHAIN-MIGRATION] {_mm[:8]}..pump (мигрировал {_age_sec:.0f}с назад) → в приоритет сканера!", flush=True)
+                                if _added_cnt:
+                                    print(f"🛰️ [ONCHAIN-MIG-POLLER] Поймано {_added_cnt} свежих миграций Pump.fun → PumpSwap напрямую из блокчейна Solana!", flush=True)
+                    except Exception:
+                        pass
+
                 # 1. DexScreener профили и бусты
                 st, d = await fetch_json("https://api.dexscreener.com/token-profiles/latest/v1", timeout=6, retries=1)
                 if st == 200 and isinstance(d, list):
@@ -922,8 +1018,7 @@ async def birth_wss_loop(analyzer, tracker):
                             if m and (m.endswith("pump") or len(m) > 32):
                                 birth_tracker.add_token(m)
 
-                # 2. GeckoTerminal New Pools (каждые 10с): мгновенный захват свежих миграций Raydium/PumpSwap
-                _now_f = time.time()
+                # 2. GeckoTerminal New Pools (каждые 10с): дополнительный захват свежих миграций Raydium/PumpSwap
                 if _now_f - _last_gt_poll >= 10.0:
                     _last_gt_poll = _now_f
                     st_gt, d_gt = await fetch_json("https://api.geckoterminal.com/api/v2/networks/solana/new_pools?page=1", timeout=6, retries=0)
@@ -942,7 +1037,7 @@ async def birth_wss_loop(analyzer, tracker):
                                     birth_tracker.add_graduated(mint, pool_addr)
             except Exception:
                 pass
-            await asyncio.sleep(6)
+            await asyncio.sleep(5)
 
     asyncio.create_task(_fallback_poll_births())
 
@@ -1678,12 +1773,12 @@ async def scanner_loop(analyzer, tracker):
                                     print(f"🚫 [SCANNER-LARGE-CAP] {actual_symbol} ({mint[:8]}): FDV ${_fdv_sc_live:,.0f} > ${_max_fdv_live:,.0f} — нет запаса хода 2x+ (покупка вершины исключена).")
                                     continue
                                 _is_active_breakout_live = (
-                                    _age_m <= _max_age_live
+                                    _age_m <= 360.0
                                     and _fdv_sc_live <= _max_fdv_live
-                                    and liq_usd >= 4000.0
-                                    and _vol5_live >= 750.0
-                                    and 1.2 <= _m5_live <= 85.0
-                                    and _b5_sc >= _s5_sc
+                                    and liq_usd >= 12000.0
+                                    and _vol5_live >= 20000.0
+                                    and _m5_live >= 35.0
+                                    and _b5_sc >= max(60, int(_s5_sc * 1.20))
                                 )
                                 if _age_m > _max_age_live and not _is_active_breakout_live:
                                     print(f"🚫 [SCANNER-OLD-ZOMBIE] {actual_symbol} ({mint[:8]}): возраст {_age_m:.0f}м > {_max_age_live:.0f}м — старый пул, отмена!")

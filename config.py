@@ -492,20 +492,22 @@ def evaluate_entry_momentum(
     if tot_tx >= 10 and (vol5_usd / max(1, tot_tx)) < 4.0:
         return False, f"fake-bump-wash-bot avg ${vol5_usd/max(1, tot_tx):.2f} < $4.00 across {tot_tx} txns"
 
-    # 0.1 АНТИ-КАБАЛ STAIRCASE WASH-CHURN ФИЛЬТР (кейсы 3B -100%, BERNIE -95%, WIFGTA6 -75%, AI -98%, CI -68%):
-    # Когда кабал-ферма крутит 1000-2500 ботовых сделок за 5м (v/l >= 2.0x) в первые 20м, а цена еле ползёт (<+38%, <14% на 1x оборота пула) —
-    # это накрутка объёма/лесенки перед 1-секундным Jito Sell-All (104-183 кошелька в 1 блок). Живые ракеты дают eff 32-100% (ANT 33.7, FIVEM 43.7).
+    # 0.1 АНТИ-КАБАЛ STAIRCASE WASH-CHURN ФИЛЬТР (кейсы 3B -100%, BERNIE -95%, WIFGTA6 -75%, CI -68%):
+    # Когда кабал-ферма крутит 1000-2500 ботовых сделок за 5м (v/l >= 2.0x) в первые 20м, а цена еле ползёт (m5 < +38%, h1 < +60%, <14% на 1x оборота пула) —
+    # это накрутка объёма/лесенки перед 1-секундным Jito Sell-All (104-183 кошелька в 1 блок).
+    # Условие h1 < 60% гарантирует, что живые пробои на консолидации (MI h1=+109%, m5=+10.4%) НЕ режутся!
     if (
         not is_curve
         and age_min <= 20.0
         and tot_tx >= 1000
         and vel_ratio >= 2.0
         and 0.0 <= m5 < 38.0
+        and h1 < 60.0
         and (m5 / max(vel_ratio, 0.1)) < 14.0
     ):
         return (
             False,
-            f"cabal-staircase-churn tx5={tot_tx} v/l={vel_ratio:.1f}x m5={m5:+.1f}% eff={m5/max(vel_ratio, 0.1):.1f} (<14% per 1x liq)",
+            f"cabal-staircase-churn tx5={tot_tx} v/l={vel_ratio:.1f}x m5={m5:+.1f}% h1={h1:+.1f}% eff={m5/max(vel_ratio, 0.1):.1f} (<14% per 1x liq)",
         )
 
     # 0.5 МЯГКИЙ ОТСЕВ МЁРТВЫХ ПУСТЫШЕК (не блокируем свежие ракеты вроде NADJA/CSI с объёмом $350-$650):
