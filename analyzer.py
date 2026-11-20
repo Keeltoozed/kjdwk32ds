@@ -2671,7 +2671,7 @@ class Analyzer:
                             if any(k in str(rk.get("name", "")).lower() for k in _lp_unlock_terms_main)
                         )
                         _rc_no_lp_score = max(0.0, _rc_score - _rc_lp_only_pen)
-                        if _rc_lp_only_pen > 0 and _rc_no_lp_score < 1000.0 and getattr(config, "RUG_HUNTER_ENABLED", False) and getattr(config, "RUG_HUNTER_UNLOCKED_LP_ENABLED", False):
+                        if _rc_lp_only_pen > 0 and _rc_no_lp_score < 2600.0 and getattr(config, "RUG_HUNTER_ENABLED", False) and getattr(config, "RUG_HUNTER_UNLOCKED_LP_ENABLED", False):
                             try:
                                 import rug_hunter as _rh_rc
                                 _rh_creator_prof_a = await _rh_rc.profile_creator_rug_timing(_rc_creator, mint)
@@ -4791,10 +4791,11 @@ class Analyzer:
             return False
 
         _dex_low = (pair_data.get("dexId") or "").lower()
-        if "meteora" in _dex_low and _dex_low != "meteoradbc" and not pair_data.get("_lp_verified", False):
+        _is_rh_ok_ray = str(pair_data.get("_rug_hunter_mode") or "").upper() in ("UNLOCKED-LP", "SEEDED-LP", "CABAL-SURF")
+        if "meteora" in _dex_low and _dex_low != "meteoradbc" and not pair_data.get("_lp_verified", False) and not _is_rh_ok_ray:
             return self._deny(mint, "fake-meteora-pool", f"🚫 [FAKE-METEORA] {mint[:8]}: пул Meteora без сожжённого LP — риск Remove LP (кейсы USPR/BUFO/SPACE)!")
 
-        if config.is_permissionless_liq_fdv_trap(pair_data):
+        if config.is_permissionless_liq_fdv_trap(pair_data) and not _is_rh_ok_ray:
             return self._deny(mint, "permissionless-liq-fdv-trap", f"🚫 [LIQ-FDV-TRAP] {mint[:8]}: пул с высокой посеянной ликвидностью и 0 соцсетей — риск сноса LP!")
 
         _is_migrated_pump = mint.endswith("pump") and _dex_low in ("pumpswap", "raydium")

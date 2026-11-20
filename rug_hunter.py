@@ -268,7 +268,7 @@ def qualify_unlocked_lp_hunter(
     if vol5_usd < min_vol5:
         return False, f"rh-low-vol5 ${vol5_usd:,.0f} < ${min_vol5:,.0f}"
 
-    # Посеянные slow-cook пулы (liq/fdv 0.95..2.25 — кейсы ZCAT +426%, HUANG +676%, RUDY +578%, 仙猫 +532%, DOLLAR +439%):
+    # Посеянные slow-cook пулы (liq/fdv 0.95..2.25 — кейсы ZCAT +426%, HUANG +676%, RUDY +578%, 仙猫 +532%, DOLLAR +439%, USDC +1403%):
     # разрешаем ТОЛЬКО если включён RUG_HUNTER_SEEDED_LP_ENABLED, но отсекаем сломанный FDV (liq > 2.25 * fdv)!
     is_seeded_ratio = bool(fdv_usd > 0 and liq_usd >= (fdv_usd * 0.95))
     if fdv_usd > 0 and liq_usd > (fdv_usd * 2.25):
@@ -278,21 +278,32 @@ def qualify_unlocked_lp_hunter(
     if fdv_usd > float(getattr(config, "RUG_HUNTER_MAX_FDV_USD", 250000.0)):
         return False, f"rh-fdv-too-high ${fdv_usd:,.0f}"
 
+    # Дополнительная защита посеянных пулов от мгновенных 60с фейк-дрейнов (кейс 愛: 12 покупок дева):
+    # Требуем живой объём от $2,500
+    if is_seeded_ratio and vol5_usd < 2500.0:
+        return False, f"rh-seeded-low-vol5 ${vol5_usd:,.0f} < $2,500"
+
     # Адаптивные требования к покупкам/продажам:
-    # На самом старте (age < 2.0м, "когда только полетит") требуем sells5 >= 2 и buys5 >= 12;
-    # для пулов старше 2.0м требуем sells5 >= 8 и buys5 >= 25.
+    # 1. Для обычных ранних незалоченных пулов (age < 2.0м): sells5 >= 2, buys5 >= 16;
+    # 2. Для посеянных пулов (is_seeded_ratio): требуем подтверждённый интерес сообщества:
+    #    buys5 >= 20 (если vol5 >= $3,500) или buys5 >= 25, sells5 >= 3.
+    #    Это 100% отсекает фейк-ловушки вроде 愛 (всего 12 покупок),
+    #    но легко пропускает реальные ракеты вроде USDC (271b), BWA (127b), RASONQUE (120b), MIHAO (342b), UPS (146b)!
     early_age_th = float(getattr(config, "RUG_HUNTER_EARLY_AGE_THRESHOLD", 2.0))
-    if age_min < early_age_th:
+    if is_seeded_ratio:
+        min_sells_req = 3
+        min_buys_req = 20 if vol5_usd >= 3500.0 else 25
+    elif age_min < early_age_th:
         min_sells_req = int(getattr(config, "RUG_HUNTER_EARLY_MIN_SELLS", 2))
-        min_buys_req = int(getattr(config, "RUG_HUNTER_EARLY_MIN_BUYS", 12))
+        min_buys_req = max(16, int(getattr(config, "RUG_HUNTER_EARLY_MIN_BUYS", 12)))
     else:
-        min_sells_req = 8 if not is_seeded_ratio else 10
+        min_sells_req = 8
         min_buys_req = max(25, int(sells5 * 1.15))
 
     if sells5 < min_sells_req:
         return False, f"rh-too-few-sells {sells5} < {min_sells_req}"
     if buys5 < min_buys_req:
-        return False, f"rh-weak-buyers {buys5}b/{sells5}s"
+        return False, f"rh-weak-buyers {buys5}b/{sells5}s (<{min_buys_req}b)"
     if sells5 > 0 and buys5 < int(sells5 * 1.15):
         return False, f"rh-sellers-dominate {buys5}b/{sells5}s"
 

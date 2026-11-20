@@ -1405,12 +1405,12 @@ EARLY_MOMENTUM_MAX_LOSS_PCT = -12.0      # Срез при подтверждё�
 # «🎯 RUG-HUNTER:SEEDED-LP» или «🎯 RUG-HUNTER:CABAL-SURF» — чтобы отдельно оценивать PnL и Winrate!
 RUG_HUNTER_ENABLED = True                 # Включить стратегию охоты на ранние фазы незалоченных пулов и кабалов
 RUG_HUNTER_UNLOCKED_LP_ENABLED = True     # Режим A: ранний вход в незалоченные пулы (без honeypot/freeze/instant-rugger)
-RUG_HUNTER_SEEDED_LP_ENABLED = False      # Режим A2: ОТКЛЮЧЕН (99% посеянных custom-пулов liq/fdv >= 0.95 вроде 愛 — это мгновенный 60с дрейн LP)
+RUG_HUNTER_SEEDED_LP_ENABLED = True       # Режим A2: включён с защитой от фейк-пулов (buys5 >= 20, sells5 >= 3, vol5 >= $2.5k — ловит USDC +1400%, GTA, SURVIVE; отсекает фейк-ловушки вроде 愛)
 RUG_HUNTER_CABAL_SURF_ENABLED = True      # Режим B: ранний сёрф залоченных пулов с кабал/инсайдер-сеткой (<=8м)
 RUG_HUNTER_MAX_SLOTS = 2                  # Макс. 2 одновременных слота под Rug-Hunter (2 слота всегда свободны под чистые ракеты)
 RUG_HUNTER_SIZE_MULT = 0.65               # Уменьшенный риск-сайз (65% от обычного ордера)
 RUG_HUNTER_UNLOCKED_MIN_AGE_MIN = 0.20     # Минимум 0.20м (12с): вход на самом старте разгона первой свечи
-RUG_HUNTER_UNLOCKED_MAX_AGE_MIN = 3.0      # Максимум 3.0м: 100% защита от поздних ловушек и вывода ликвидности (кейсы BILLION/ICEWIZ/ONODA на 4-7м)
+RUG_HUNTER_UNLOCKED_MAX_AGE_MIN = 3.5      # Максимум 3.5м: 100% защита от поздних ловушек и вывода ликвидности (кейсы BILLION/ICEWIZ/ONODA на 4-7м)
 RUG_HUNTER_CABAL_MAX_AGE_MIN = 5.0         # Максимум 5.0м для кабал-сёрфа
 RUG_HUNTER_MIN_LIQ_USD = 7500.0            # Минимум $7.5k реальной ликвидности (едино с MIN_GRADUATED_LIQ_USD)
 RUG_HUNTER_MIN_VOL5_USD = 1800.0           # Минимум $1.8k объёма за 5м (ловит ультра-ранний старт на первых секундах)
