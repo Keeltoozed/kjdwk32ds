@@ -1201,6 +1201,52 @@ async def check_spl_holder_delegations(mint: str, holder_token_accounts: list = 
         return True, ""
 
 
+def check_rugcheck_report_insiders(rc_data: dict, mint: str = "") -> tuple:
+    """
+    0ms Layer 7a Auditor: проверяет graphInsidersDetected и insiderNetworks прямо из уже загруженного
+    отчёта RugCheck /report (0 дополнительных HTTP-запросов, не зависит от 429/таймаутов /insiders/graph!).
+    Блокирует кабал-рой трансферных хабов (кейсы 3B: 102 инсайдера / 10 сетей -> -100%,
+    BERNIE: 120 / 10 -> -95%, AI: 860 / 10 -> -98%, RUGPULL: 19 / 3 сети 25% -> -24%).
+    Настоящие органические ракеты (HNYDRIP +765%, ANTCAP +198%, VINTEL +188%, ZEN +134%) имеют 0 инсайдеров.
+    """
+    if not isinstance(rc_data, dict):
+        return True, ""
+    try:
+        graph_ins = int(rc_data.get("graphInsidersDetected") or 0)
+        nets = rc_data.get("insiderNetworks") or []
+        tok_meta = rc_data.get("token") or {}
+        raw_sup = float(tok_meta.get("supply") or 0.0)
+        if raw_sup <= 0:
+            raw_sup = 1_000_000_000_000_000.0
+        elif raw_sup < 1e12 and str(mint or "").endswith("pump"):
+            raw_sup = raw_sup * 1e6
+
+        if graph_ins >= 25:
+            return False, f"rc-report-insider-swarm: graphInsidersDetected={graph_ins} ({len(nets)} networks)"
+
+        if isinstance(nets, list) and nets:
+            sig_nets = 0
+            tot_accts = 0
+            tot_pct = 0.0
+            for net in nets:
+                if not isinstance(net, dict):
+                    continue
+                accts = int(net.get("activeAccounts") or 0)
+                tok_amt = float(net.get("tokenAmount") or 0.0)
+                pct = (tok_amt / raw_sup) * 100.0 if raw_sup > 0 else 0.0
+                if accts >= 8 and 8.0 <= pct <= 100.0:
+                    return False, f"rc-report-collector-hub: {accts} linked accounts moved {pct:.1f}% supply"
+                if accts >= 4 and pct >= 0.5:
+                    sig_nets += 1
+                    tot_accts += accts
+                    tot_pct += min(pct, 100.0)
+            if sig_nets >= 3 and tot_accts >= 15 and tot_pct >= 8.0:
+                return False, f"rc-report-insider-nets: {sig_nets} transfer networks ({tot_accts} accounts, {min(tot_pct, 100.0):.1f}% supply)"
+        return True, ""
+    except Exception:
+        return True, ""
+
+
 async def check_rugcheck_insider_graph(mint: str, total_supply_raw: float = 0.0, pool_accounts: set = None) -> tuple:
     """
     Layer 7 Auditor: Проверяет реальный ончейн-граф связанных кошельков через RugCheck /insiders/graph.

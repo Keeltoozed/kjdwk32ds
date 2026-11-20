@@ -63,11 +63,16 @@ def verify_on_render() -> None:
             _tr_src = _f.read()
         with open(os.path.join(_base_dir, "market_data.py"), encoding="utf-8") as _f:
             _md_src = _f.read()
-        _has_an_gate = "curve-thin-liq" in _an_src and "try_claim_buy_flight" in _an_src
+        with open(os.path.join(_base_dir, "goplus.py"), encoding="utf-8") as _f:
+            _gp_src = _f.read()
+        with open(os.path.join(_base_dir, "first_candle_rug_guard.py"), encoding="utf-8") as _f:
+            _fcr_src = _f.read()
+        _has_an_gate = "curve-thin-liq" in _an_src and "try_claim_buy_flight" in _an_src and "bad-word-scam" in _an_src
         _has_tr_fw = "FIREWALL-CURVE-THIN-LIQ" in _tr_src
-        _has_gt_fast = "get_pool_trades_cached" in _md_src and "max_wait" in _md_src
+        _has_gt_fast = "get_pool_trades_cached" in _md_src and "max_wait" in _md_src and "get_pool_trades_cached" in _fcr_src
+        _has_cabal_guard = "check_rugcheck_report_insiders" in _gp_src and "atomized-cabal-farm" in _an_src
         print(
-            f"   • GATES ACTIVE                = analyzer.fast-gates:{'OK' if _has_an_gate else 'MISSING'} | tracker.firewall:{'OK' if _has_tr_fw else 'MISSING'} | gt.fail-fast:{'OK' if _has_gt_fast else 'MISSING'}",
+            f"   • GATES ACTIVE                = analyzer.fast-gates:{'OK' if _has_an_gate else 'MISSING'} | tracker.firewall:{'OK' if _has_tr_fw else 'MISSING'} | gt.fail-fast:{'OK' if _has_gt_fast else 'MISSING'} | cabal.l7a:{'OK' if _has_cabal_guard else 'MISSING'}",
             flush=True,
         )
     except Exception as _ve:

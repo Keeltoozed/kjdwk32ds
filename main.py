@@ -1480,8 +1480,8 @@ async def scanner_loop(analyzer, tracker):
                                 if entry_price < _scan_px_sc * 0.92:
                                     print(f"🚫 [SCANNER-FINAL-RECHECK] {mint[:8]}: обвал цены на {(entry_price/_scan_px_sc - 1)*100:+.1f}% за время аудита — отмена входа!")
                                     continue
-                                if entry_price > _scan_px_sc * 1.45:
-                                    print(f"🚫 [SCANNER-FINAL-RECHECK] {mint[:8]}: цена улетела на {(entry_price/_scan_px_sc - 1)*100:+.1f}% за время аудита — не догоняем вертикальный хай!")
+                                if entry_price > _scan_px_sc * 1.18:
+                                    print(f"🚫 [SCANNER-FINAL-RECHECK] {mint[:8]}: цена улетела на {(entry_price/_scan_px_sc - 1)*100:+.1f}% за время аудита (>+18%, кейс CI +29% -> -23%) — не догоняем хай!")
                                     continue
                             if (not pair_data or entry_price <= 0) and _last_an_p:
                                 pair_data = dict(_last_an_p)

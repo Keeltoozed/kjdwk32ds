@@ -1905,6 +1905,22 @@ class GrokJevEngine:
                                 f"atomized-sybil-supply (pool={pool_pct_sum:.1f}%, but top10={top_10_sum:.1f}% / top1={largest_whale:.2f}% — 120+ wallet staircase split)",
                                 _h_stats,
                             )
+                    # Детектор анонимной кабал-фермы (кейсы WIFGTA6 top1=2.23%/top10=13.55% -> -75%, BERNIE top1=1.36%/top10=10.24% -> -95%):
+                    if (
+                        0.0 < pool_pct_sum <= 45.0
+                        and len(top_10) >= 8
+                        and _age_aud <= 15.0
+                        and not has_socials
+                        and ((_b5_syb + _s5_syb) >= 600 or vol_m5 >= 25000.0)
+                        and top_10_sum < 15.0
+                        and largest_whale < 2.5
+                        and not _dist_runner_g
+                    ):
+                        return (
+                            False,
+                            f"atomized-cabal-farm (0 socials, age {_age_aud:.1f}m, {_b5_syb+_s5_syb}tx/${vol_m5:,.0f}, top1={largest_whale:.2f}%/top10={top_10_sum:.1f}%)",
+                            _h_stats,
+                        )
 
                     # Детектор равномерной сибил-нарезки стека дева (кейс BALLFIN: top20=43%), не режем уже распределённые ликвидные ракеты
                     if len(top_10) >= 8 and top_10_sum >= 18.0 and not _dist_runner_g:
@@ -1942,6 +1958,14 @@ class GrokJevEngine:
                     max_top10 = float(getattr(_c, "AUDITOR_MAX_TOP10_PCT", 55.0))
                     if top_10_sum > max_top10:
                         return False, f"top 10 concentration {top_10_sum:.1f}% > {max_top10:.0f}%", _h_stats
+
+                    # Layer 7a (0ms из уже загруженного /report: graphInsidersDetected + insiderNetworks!)
+                    _l7a_ok_g, _l7a_why_g = _gp.check_rugcheck_report_insiders(rc_data, mint=address)
+                    if not _l7a_ok_g:
+                        if _dist_runner_g:
+                            print(f"⚠️ [AUDITOR-L7a-WARN] {symbol} ({address[:8]}): {_l7a_why_g} — допущен как распределённый ликвидный раннер.")
+                        else:
+                            return False, f"auditor-layer7a {_l7a_why_g}", _h_stats
 
                     # Layer 7 (insiders/graph) + Layer 8 (SPL Delegations) + Layer 9/10 (Staircase & Sybil Farm) параллельно!
                     _holder_tok_accs = [str(h.get("address") or "") for h in holders[:20] if h.get("address") and str(h.get("address")) not in pool_accounts]

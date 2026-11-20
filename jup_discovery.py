@@ -163,8 +163,9 @@ async def fetch_jup_tokens() -> list:
                 b5 = int(st5.get("numBuys") or 0)
                 s5 = int(st5.get("numSells") or 0)
                 age_m = _parse_jup_age_min(t)
-                # Жесткий фокус на свежих 2x-10x ракетах <= 90м (никаких 3-12ч топов BILL):
-                if age_m > _max_disc_age:
+                # Жесткий фокус на свежих 2x-10x ракетах <= _max_disc_age (плюс супер-пробои 240-360м как HNYDRIP +765%):
+                _is_jup_super_brk = (age_m <= 360.0 and vol5 >= 15000.0 and b5 >= int(s5 * 1.20) and pc5 >= 4.0)
+                if age_m > _max_disc_age and not _is_jup_super_brk:
                     continue
                 if age_m > 45.0 and pc5 < 4.0 and vol5 < 15000.0:
                     continue
@@ -262,23 +263,24 @@ async def fetch_jup_tokens() -> list:
                         continue
                     ca_p = float(p.get("pairCreatedAt") or 0)
                     age_p = ((now_ms_ds - ca_p) / 60000.0) if ca_p > 0 else 1.5
-                    if age_p > _max_disc_age:
-                        continue
                     vol5_p = float((p.get("volume") or {}).get("m5", 0) or 0)
-                    _min_v5_ds = 700.0 if age_p <= 2.5 else (850.0 if age_p <= 5.0 else float(getattr(config, "MIN_VOLUME_M5", 1000.0)))
-                    if vol5_p < _min_v5_ds:
-                        continue
                     tx5_p = (p.get("txns") or {}).get("m5") or {}
                     b5_p = int(tx5_p.get("buys", 0) or 0)
                     s5_p = int(tx5_p.get("sells", 0) or 0)
+                    pc_p = p.get("priceChange") or {}
+                    m5_p = float(pc_p.get("m5", 0) or 0)
+                    h1_p = float(pc_p.get("h1", 0) or 0)
+                    _is_ds_super_brk = (age_p <= 360.0 and vol5_p >= 15000.0 and b5_p >= int(s5_p * 1.20) and m5_p >= 4.0)
+                    if age_p > _max_disc_age and not _is_ds_super_brk:
+                        continue
+                    _min_v5_ds = 700.0 if age_p <= 2.5 else (850.0 if age_p <= 5.0 else float(getattr(config, "MIN_VOLUME_M5", 1000.0)))
+                    if vol5_p < _min_v5_ds:
+                        continue
                     _min_tx_ds = 7 if age_p <= 2.5 else (8 if age_p <= 5.0 else int(getattr(config, "MIN_TXNS_M5", 10)))
                     _min_bs_ds = 1.05 if age_p <= 5.0 else 1.02
                     _is_clean_fresh_buyer = (age_p <= 3.0 and b5_p >= 4 and s5_p <= 1)
                     if not _is_clean_fresh_buyer and ((b5_p + s5_p) < _min_tx_ds or (s5_p > 0 and (b5_p / s5_p) < _min_bs_ds)):
                         continue
-                    pc_p = p.get("priceChange") or {}
-                    m5_p = float(pc_p.get("m5", 0) or 0)
-                    h1_p = float(pc_p.get("h1", 0) or 0)
                     _min_m5_ds = 2.0 if age_p <= 5.0 else 2.5
                     if m5_p < _min_m5_ds:
                         continue
@@ -983,9 +985,32 @@ async def _evaluate_and_buy_inner(mint: str, td: dict, analyzer, tracker, source
     elif isinstance(_rw_res_j, Exception):
         print(f"⚠️ [{source_tag}-RUG-WALLET] {_sym_tmp} ({mint[:8]}): audit err {type(_rw_res_j).__name__}: {_rw_res_j}")
 
-    if isinstance(_fcr_res_j, dict) and _fcr_res_j.get("verdict") == "BLOCK":
-        print(f"🚫 [{source_tag}-FCR] {_sym_tmp} ({mint[:8]}): {_fcr_res_j.get('report', '')} — вход заблокирован (мгновенный раг)!")
-        return False
+    _fcr_compact_j = {}
+    if isinstance(_fcr_res_j, dict):
+        try:
+            from first_candle_rug_guard import compact_summary as _fcr_cs_j
+            _fcr_compact_j = _fcr_cs_j(_fcr_res_j) or {}
+        except Exception:
+            _fcr_compact_j = {}
+        if _fcr_res_j.get("verdict") == "BLOCK":
+            print(f"🚫 [{source_tag}-FCR] {_sym_tmp} ({mint[:8]}): {_fcr_res_j.get('report', '')} — вход заблокирован (мгновенный раг)!")
+            return False
+        if _fcr_res_j.get("verdict") == "WARN":
+            _fcr_sc_j = float(_fcr_compact_j.get("fcr_score", 0.0) or _fcr_res_j.get("score", 0.0) or 0.0)
+            _fcr_wn_j = int(_fcr_compact_j.get("fcr_cluster_wallets", 0) or 0)
+            if _fcr_sc_j >= 0.55:
+                print(f"🚫 [{source_tag}-FCR-HIGH] {_sym_tmp} ({mint[:8]}): FCR score {_fcr_sc_j:.2f} >= 0.55 — отмена входа!")
+                return False
+            if _h1_j < -15.0:
+                print(f"🚫 [{source_tag}-FCR-RED-H1] {_sym_tmp} ({mint[:8]}): FCR WARN на падающем h1 {_h1_j:+.1f}% — отмена входа!")
+                return False
+            _is_dist_fcr_j = config.is_distributed_safe_runner(_liq_j, _age_j, _vm5_j, _b5_j, _s5_j, is_lp_safe=True)
+            if _fcr_wn_j >= 5 and not _is_dist_fcr_j:
+                print(f"🚫 [{source_tag}-FCR-FARM] {_sym_tmp} ({mint[:8]}): ферма из {_fcr_wn_j} кошельков одного источника — отмена входа!")
+                return False
+            if _fcr_wn_j >= 3 and _m5_j > 120.0 and not _is_dist_fcr_j:
+                print(f"🚫 [{source_tag}-FCR-INSIDER] {_sym_tmp} ({mint[:8]}): инсайдерская сеть {_fcr_wn_j} кошельков на m5 {_m5_j:+.1f}% — отмена входа!")
+                return False
 
     if isinstance(_sell_res_j, tuple):
         _j_ok, _j_why = _sell_res_j
@@ -1054,7 +1079,7 @@ async def _evaluate_and_buy_inner(mint: str, td: dict, analyzer, tracker, source
         if not tracker.add_position(
             _sym_tmp, mint, price, min(size, 100.0),
             is_mature=True,
-            ml_features={**analyzer.pack_features(td or {}), **_of_feat_j},
+            ml_features={**analyzer.pack_features(td or {}), **_fcr_compact_j, **_of_feat_j},
             ml_confidence=_mint_ml_conf,
             source=f"{source_tag}:{analyzer.get_signal(mint)}" + ("+SMART" if _of_feat_j.get("smart_tape_n") else ""),
             pair_address=((td or {}).get("pairAddress", "") or ""),
@@ -1252,9 +1277,10 @@ async def jup_loop(analyzer, tracker):
                             processed[m] = _now_t + 120
                             continue
 
-                        # Режем старые токены > SOLANA_MAX_AGE_MIN:
+                        # Режем старые токены > SOLANA_MAX_AGE_MIN (кроме супер-пробоев 240-360м как HNYDRIP +765%):
                         _max_age_cand = float(getattr(config, "SOLANA_MAX_AGE_MIN", 75.0))
-                        if _ag > _max_age_cand:
+                        _is_super_brk_cand = (_ag <= 360.0 and _v5_cand >= 15000.0 and _b5_cand >= int(_s5_cand * 1.20) and _m5 >= 4.0)
+                        if _ag > _max_age_cand and not _is_super_brk_cand:
                             skipped_ancient += 1
                             processed[m] = _now_t + 600
                             continue

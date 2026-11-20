@@ -1753,6 +1753,13 @@ class Analyzer:
         if _liq_drop_peak <= -45.0:
             return self._deny(mint, f"post-peak-liq-drain {_liq_drop_peak:.0f}%", f"🚫 [LIQ-DRAIN] {symbol} ({mint[:8]}): ликвидность пула уже сдулась на {_liq_drop_peak:.1f}% от пика — снайперы/дев выводят SOL.")
         
+        # 0ms фильтр очевидных скам-названий (синхронно с grok_jev.py — блокирует токены с именем RUGPULL/RUGGED/HONEYPOT!)
+        _bad_name_words = ("rugpull", "rugged", "rug pull", "honeypot", "drainer", "pump and dump", "scam", "presale", "airdrop")
+        _sym_low_bw = symbol.lower()
+        _name_low_bw = name.lower()
+        if any(w in _sym_low_bw for w in _bad_name_words) or any(w in _name_low_bw for w in _bad_name_words) or _sym_low_bw in ("rug", "test"):
+            return self._deny(mint, f"bad-word-scam ({symbol[:16]})", f"🚫 [BAD-WORD-SCAM] {symbol} ({mint[:8]}): запрещённое скам-название ({name} / {symbol}) — мгновенный блок.")
+
         corporate_scam_keywords = ["AAPL", "S&P", "SP500", "MSFT", "TSLA", "TESLA", "TESLAA", "SPACEX", "STARLINK", "XAI", "NEURALINK", "PAYPAL",
                                   "NVDA", "NVIDIA", "GOOG", "AMZN", "META", "NFLX", "ANTHROPIC", "OPENAI", "PERPLEXITY"]
         if any(keyword in symbol for keyword in corporate_scam_keywords) or any(keyword in name for keyword in corporate_scam_keywords):
@@ -2687,6 +2694,25 @@ class Analyzer:
                                 f"atomized-sybil-supply pool={pool_pct_sum:.0f}% top10={top_10_sum_pct:.1f}%",
                                 f"🚫 [ATOMIZED-SYBIL] {symbol} ({mint[:8]}): в пуле всего {pool_pct_sum:.1f}% эмиссии ({100.0 - pool_pct_sum:.1f}% снаружи), но топ-1={largest_whale_pct_pre:.2f}%, топ-10={top_10_sum_pct:.1f}% — эмиссия спрятана на 100+ микро-кошельках дева (кейс CARDANO)!",
                             )
+                    # Детектор анонимной кабал-фермы (кейсы BERNIE top1=1.36%/top10=10.24% -> -95%, WIFGTA6 top1=2.23%/top10=13.55% -> -75%):
+                    # 0 соцсетей + свежий пул <=15м + дикий оборот 600+ сделок или $25k+ при искусственно раздробленных холдерах (top10 < 15%, top1 < 2.5%)
+                    _info_atom_a = (pair_data or {}).get("info") or {}
+                    _links_atom_a = len(_info_atom_a.get("socials") or []) + len(_info_atom_a.get("websites") or [])
+                    if (
+                        0 < pool_pct_sum <= 45.0
+                        and len(top_10) >= 8
+                        and _age_min_pre <= 15.0
+                        and _links_atom_a == 0
+                        and ((_b5_pre + _s5_pre) >= 600 or _vm5_pre >= 25000.0)
+                        and top_10_sum_pct < 15.0
+                        and largest_whale_pct_pre < 2.5
+                        and not _dist_runner_a
+                    ):
+                        return self._deny(
+                            mint,
+                            f"atomized-cabal-farm top1={largest_whale_pct_pre:.1f}% top10={top_10_sum_pct:.1f}%",
+                            f"🚫 [ATOMIZED-CABAL-FARM] {symbol} ({mint[:8]}): 0 соцсетей, возраст {_age_min_pre:.1f}м, {_b5_pre+_s5_pre}tx/${_vm5_pre:,.0f}, но top1={largest_whale_pct_pre:.2f}%, top10={top_10_sum_pct:.1f}% — раздробленная кабал-ферма (кейсы BERNIE/WIFGTA6)!",
+                        )
 
                     # Детектор равномерной сибил-нарезки стека дева (кейс BALLFIN: top20=43%), пропускаем уже распределённые ликвидные ракеты
                     if len(top_10) >= 8 and top_10_sum_pct >= 18.0 and not _dist_runner_a:
@@ -2736,10 +2762,17 @@ class Analyzer:
                     if top_10_sum_pct > max_allowed_top10:
                         return self._deny(mint, f"top10-hold {top_10_sum_pct:.1f}%", f"🚫 [АНТИСКАМ] Топ-10 держат {top_10_sum_pct:.1f}% > {max_allowed_top10:.0f}% у {mint[:8]} → Блок.")
 
-                    # Layer 7 (RugCheck insiders/graph) + Layer 8 (SPL Holder Delegations) + Layer 9/10 (Staircase & Sybil Farm)
+                    # Layer 7a (0ms из уже загруженного /report: graphInsidersDetected + insiderNetworks, не зависит от 429/таймаутов!)
+                    # + Layer 7b (/insiders/graph) + Layer 8 (SPL Holder Delegations) + Layer 9/10 (Staircase & Sybil Farm)
                     try:
                         import asyncio as _aio_aud
                         import goplus as _gp_aud
+                        _l7a_ok, _l7a_why = _gp_aud.check_rugcheck_report_insiders(rc_data, mint=mint)
+                        if not _l7a_ok:
+                            if _dist_runner_a:
+                                print(f"⚠️ [АНТИСКАМ-L7a-WARN] {symbol} ({mint[:8]}): {_l7a_why} — допущен как распределённый ликвидный раннер.")
+                            else:
+                                return self._deny(mint, "insider-report-swarm", f"🚫 [АНТИСКАМ-L7a] {symbol} ({mint[:8]}): {_l7a_why} → Кабал-рой инсайдеров!")
                         _tok_meta = rc_data.get("token") or {}
                         _raw_s = float(_tok_meta.get("supply") or 0.0)
                         _dec_s = int(_tok_meta.get("decimals") or 6)

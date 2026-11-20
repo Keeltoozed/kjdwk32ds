@@ -120,16 +120,18 @@ def get_max_entry_h1_pct(
     liq_usd: float = 0.0,
     m5_pct: float = 1.5,
 ) -> float:
-    """Return dynamic max h1% entry cap: allow genuine fresh launches while rejecting +700%..+900% vertical tops (DATITTY/BNC/GMGM)."""
+    """Return dynamic max h1% entry cap: allow genuine fresh launches while rejecting vertical tops (DATITTY/BNC/RUGPULL +426%)."""
     _m5_ok = True if m5_pct is None else (float(m5_pct) >= 1.0)
     _flow_ok = vol_m5 >= 2500.0 and buys_m5 >= int(sells_m5 * 1.05) and _m5_ok
     if age_min <= 15.0:
-        return 450.0 if _flow_ok else 300.0
+        if _flow_ok and liq_usd >= 15000.0:
+            return 380.0
+        return 280.0 if _flow_ok else 220.0
     if age_min <= 30.0:
-        return 350.0 if _flow_ok else 220.0
+        return 320.0 if _flow_ok else 220.0
     if age_min <= 60.0:
-        return 300.0 if _flow_ok else 180.0
-    return 250.0 if _flow_ok else 150.0
+        return 280.0 if _flow_ok else 180.0
+    return 240.0 if _flow_ok else 150.0
 
 
 LAUNCHPAD_MINT_SUFFIXES = ("pump", "moon", "bonk", "bags")
@@ -490,6 +492,22 @@ def evaluate_entry_momentum(
     if tot_tx >= 10 and (vol5_usd / max(1, tot_tx)) < 4.0:
         return False, f"fake-bump-wash-bot avg ${vol5_usd/max(1, tot_tx):.2f} < $4.00 across {tot_tx} txns"
 
+    # 0.1 АНТИ-КАБАЛ STAIRCASE WASH-CHURN ФИЛЬТР (кейсы 3B -100%, BERNIE -95%, WIFGTA6 -75%, AI -98%, CI -68%):
+    # Когда кабал-ферма крутит 1000-2500 ботовых сделок за 5м (v/l >= 2.0x) в первые 20м, а цена еле ползёт (<+38%, <14% на 1x оборота пула) —
+    # это накрутка объёма/лесенки перед 1-секундным Jito Sell-All (104-183 кошелька в 1 блок). Живые ракеты дают eff 32-100% (ANT 33.7, FIVEM 43.7).
+    if (
+        not is_curve
+        and age_min <= 20.0
+        and tot_tx >= 1000
+        and vel_ratio >= 2.0
+        and 0.0 <= m5 < 38.0
+        and (m5 / max(vel_ratio, 0.1)) < 14.0
+    ):
+        return (
+            False,
+            f"cabal-staircase-churn tx5={tot_tx} v/l={vel_ratio:.1f}x m5={m5:+.1f}% eff={m5/max(vel_ratio, 0.1):.1f} (<14% per 1x liq)",
+        )
+
     # 0.5 МЯГКИЙ ОТСЕВ МЁРТВЫХ ПУСТЫШЕК (не блокируем свежие ракеты вроде NADJA/CSI с объёмом $350-$650):
     _min_tx_gate = 6 if age_min <= 2.5 else (8 if age_min <= 5.0 else int(globals().get("MIN_TXNS_M5", 10)))
     if age_min <= 2.5 and buys5 >= 5:
@@ -583,6 +601,7 @@ def evaluate_entry_momentum(
     )
     _is_dex_migration_surge = bool(
         not is_curve
+        and age_min <= 10.0
         and vol5_usd >= 15000.0
         and buys5 >= max(15, int(sells5 * 1.10))
         and liq_usd >= 12000.0
@@ -595,6 +614,9 @@ def evaluate_entry_momentum(
         _max_m5_dyn = 300.0
     elif _is_dex_migration_surge:
         _max_m5_dyn = 240.0
+    elif not is_curve and age_min > 10.0 and m1 <= 1.0:
+        # Зрелый токен (>10м) со вставшей 1м свечой (m1<=1%): не покупаем выжатую 5м свечу >+120% (кейс ANTCAP m5=+166% m1=0 -> стоп -29% перед +198%)
+        _max_m5_dyn = min(float(globals().get("MAX_ENTRY_M5_PCT", 175.0)), 120.0)
     else:
         _max_m5_dyn = float(globals().get("MAX_ENTRY_M5_PCT", 175.0))
     _max_m1_dyn = float(globals().get("MAX_ENTRY_M1_PCT", 22.0))
@@ -693,8 +715,9 @@ def evaluate_entry_momentum(
     # Для старых токенов (> 120м) требуем взрывной пробой m5 >= 35% и vol5 >= $20k (отсекает вялый STM 230м -11.9%, пропускает Buncoin 234м +310%):
     _mature_min_m5 = 35.0 if age_min > 120.0 else (10.0 if (liq_usd >= 20000.0 and buys5 >= max(100, int(sells5 * 1.25)) and vol5_usd >= 10000.0) else 15.0)
     _mature_min_vol5 = 20000.0 if age_min > 120.0 else 8000.0
+    _mature_max_age = 360.0 if (vol5_usd >= 20000.0 and buys5 >= max(60, int(sells5 * 1.20)) and m5 >= 35.0 and liq_usd >= 12000.0) else SOLANA_MAX_AGE_MIN
     is_mature_breakout = (
-        age_min <= SOLANA_MAX_AGE_MIN
+        age_min <= _mature_max_age
         and (fdv_usd <= 0.0 or fdv_usd <= float(globals().get("JEV_MAX_MCAP_USD", 1500000.0)))
         and m5 >= _mature_min_m5
         and m1 >= -2.0
@@ -1150,7 +1173,7 @@ FCR_SELL_DOMINANCE = 0.85              # sells/buys за 5м для сигнал
 FCR_MIN_SELL_COUNT = 120               # Абсолютный минимум продаж, чтобы сигнал был значимым
 FCR_TRUSTED_FUNDERS = []              # Адреса-источники, которым доверяем (свои кошельки, биржи) — их кластеры игнорируются
 FCR_MAX_DURATION_SEC = 10.0 if HELIUS_API_KEY else 5.0  # Без приватного Helius не держим вход 13с на публичных RPC (иначе покупаем опоздавший дамп)
-FCR_CANONICAL_PUMPSWAP_DURATION_SEC = 4.5  # Бюджет FCR (4.5с) для каноничного PumpSwap: успевает проверить funding-кластеры кабала (FIONA), но не задерживает вход на 10-14с
+FCR_CANONICAL_PUMPSWAP_DURATION_SEC = 6.0  # Бюджет FCR (6.0с) для каноничного PumpSwap: с кэшированной лентой /trades успевает за 1.5-2.5с + хватает на трейс кластеров без таймаутов cohort=0
 FCR_GRAPH_MIN_PCT = 0.05              # Узел сети RugCheck с долей < 0.05% — пыль, не участник фермы
 FCR_GRAPH_MAX_WALLETS = 15           # Сеть крупнее — это граф переводов толпы, а не ферма (вес режется)
 FCR_SIG_PAGE_LIMIT = 200              # Сколько подписей тянуть за раз (лёгкий payload для публичного RPC)

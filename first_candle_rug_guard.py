@@ -481,7 +481,7 @@ async def _holders_from_rpc(mint: str) -> List[dict]:
 
 
 async def _early_buyers_from_trades(pair_address: str) -> List[dict]:
-    """Ранние покупатели пула из ленты сделок GeckoTerminal."""
+    """Ранние покупатели пула из кэшированной ленты сделок GeckoTerminal (общий кэш с Order-Flow/L9, fail-fast max_wait=1.5с)."""
     if not pair_address:
         return []
     clean = str(pair_address).replace("solana_", "").strip()
@@ -489,10 +489,9 @@ async def _early_buyers_from_trades(pair_address: str) -> List[dict]:
         return []
     try:
         import market_data
-        resp = await market_data._gt_get(f"/networks/solana/pools/{clean}/trades", retries=0, timeout=5)
+        trades = await market_data.get_pool_trades_cached(clean, max_wait=1.5, ttl=10.0)
     except Exception:
         return []
-    trades = (resp or {}).get("data") if isinstance(resp, dict) else None
     if not isinstance(trades, list) or not trades:
         return []
 
@@ -537,10 +536,17 @@ async def build_cohort(mint: str, pair_data: Optional[dict] = None) -> List[dict
     n_holders = int(_cfg("FCR_HOLDER_COUNT", 6))
     n_buyers = int(_cfg("FCR_BUYER_COUNT", 4))
 
-    # RugCheck (топ-холдеры) и лента сделок пула (ранние покупатели) идут ПАРАЛЛЕЛЬНО
+    # RugCheck (топ-холдеры) и лента сделок пула (ранние покупатели) идут ПАРАЛЛЕЛЬНО с жёсткими лимитами,
+    # чтобы 429/тормоза GeckoTerminal никогда не убивали build_cohort() и не обнуляли cohort_size=0!
+    async def _bounded_holders():
+        return await asyncio.wait_for(_holders_from_rugcheck(mint), timeout=2.5)
+
+    async def _bounded_buyers():
+        return await asyncio.wait_for(_early_buyers_from_trades(str(pair_data.get("pairAddress") or "")), timeout=1.6)
+
     holders_res, buyers = await asyncio.gather(
-        _holders_from_rugcheck(mint),
-        _early_buyers_from_trades(str(pair_data.get("pairAddress") or "")),
+        _bounded_holders(),
+        _bounded_buyers(),
         return_exceptions=True,
     )
     if isinstance(holders_res, Exception):
@@ -843,7 +849,7 @@ async def _insider_graph_clusters(mint: str, report: dict = None) -> List[dict]:
         from http_client import fetch_json
         st, data = await fetch_json(
             f"https://api.rugcheck.xyz/v1/tokens/{mint}/insiders/graph",
-            timeout=6, retries=1)
+            timeout=1.4, retries=0)
     except Exception:
         st, data = 0, None
 
@@ -945,6 +951,49 @@ async def _insider_graph_clusters(mint: str, report: dict = None) -> List[dict]:
                 "decimals": decimals,
             })
 
+    if not clusters and isinstance(report, dict):
+        # 0ms фоллбэк: если /insiders/graph отдал 429/пусто/таймаут, извлекаем сводные insiderNetworks прямо из /report!
+        _rep_ins = int(report.get("graphInsidersDetected") or 0)
+        _rep_nets = report.get("insiderNetworks") or []
+        if _rep_ins >= 25 or (isinstance(_rep_nets, list) and _rep_nets):
+            _rn_accts = 0
+            _rn_pct = 0.0
+            _rn_cnt = 0
+            for _rn in (_rep_nets if isinstance(_rep_nets, list) else []):
+                if not isinstance(_rn, dict):
+                    continue
+                _a = int(_rn.get("activeAccounts") or 0)
+                _p = (float(_rn.get("tokenAmount") or 0.0) / supply) * 100.0 if supply > 0 else 0.0
+                if _a >= 4 and _p >= 0.5:
+                    _rn_cnt += 1
+                    _rn_accts += _a
+                    _rn_pct += min(_p, 100.0)
+            if _rep_ins >= 25 or (_rn_cnt >= 3 and _rn_accts >= 15 and _rn_pct >= 8.0) or any(
+                isinstance(_rn, dict) and int(_rn.get("activeAccounts") or 0) >= 8 and ((float(_rn.get("tokenAmount") or 0.0) / supply) * 100.0 >= 8.0)
+                for _rn in (_rep_nets if isinstance(_rep_nets, list) else [])
+            ):
+                _eff_w = max(8, min(15, _rn_accts or _rep_ins))
+                clusters.append({
+                    "source": "rugcheck_graph",
+                    "funder": "rc-report-insider-swarm",
+                    "funder_label": f"graph:report-insiders({_rep_ins}/{_rn_cnt}nets)",
+                    "wallets": [f"insider_{i}" for i in range(_eff_w)],
+                    "wallet_count": _eff_w,
+                    "total_pct": round(min(max(_rn_pct, 12.0), 100.0), 3),
+                    "max_pct": 0.0,
+                    "total_amount_sol": 0.0,
+                    "funding_spread_sec": 0,
+                    "funding_burst": True,
+                    "equal_funding_ratio": 0.0,
+                    "launch_prep_count": 0,
+                    "launch_prep_ratio": 0.0,
+                    "fresh_wallet_count": 0,
+                    "fresh_ratio": 0.0,
+                    "min_funding_sol": 0.0,
+                    "has_creator": False,
+                    "decimals": decimals,
+                })
+
     clusters.sort(key=lambda c: (c["wallet_count"], c["total_pct"]), reverse=True)
     _GRAPH_CACHE[mint] = (now, clusters)
     return clusters
@@ -1030,7 +1079,7 @@ async def analyze_funding_clusters(mint: str, cohort: List[dict], deadline: Opti
     # 0+1) Параллельно: граф инсайдеров RugCheck + трейс финансирования когорты в пределах остатка бюджета
     priority = {w["wallet"]: float(w.get("pct", 0.0) or 0.0) for w in wallets}
     _rem0 = (deadline - time.monotonic()) if deadline is not None else 5.0
-    _g_to = max(0.4, min(1.5, _rem0 - 1.5))
+    _g_to = max(1.8, min(2.4, _rem0 - 0.8))
     async def _safe_graph():
         try:
             return await asyncio.wait_for(_insider_graph_clusters(mint), timeout=_g_to)

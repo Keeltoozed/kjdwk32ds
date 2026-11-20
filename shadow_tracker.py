@@ -51,9 +51,14 @@ class ShadowTracker:
         r = str(reason or "").lower()
         return any(k in r for k in (
             "unburned-lp", "unlocked-custom-lp", "pumpswap-scam-pool",
-            "pumpswap-liq-fdv-trap", "no-socials-amm-scam", "bad-word-scam",
-            "mimic-corp-scam", "mimic-scam", "honeypot", "freeze", "rug",
-            "wash-spike", "wash-bump",
+            "pumpswap-liq-fdv-trap", "permissionless-liq-fdv-trap", "phantom-liq-trap",
+            "meteora-unlocked-pool", "meteora-unlocked-lp", "raydium-unlocked-lp",
+            "no-socials-amm-scam", "bad-word-scam", "bad-creator",
+            "mimic-corp-scam", "mimic-scam", "copycat", "clone-scam",
+            "rugcheck-score", "rc-danger", "honeypot", "freeze", "rug",
+            "insider", "sybil", "staircase", "delegation", "atomized-cabal-farm",
+            "cabal-staircase-churn", "fake-bump-wash-bot", "wash-spike", "wash-bump",
+            "ungraduated-pump-curve", "non-sol-quote",
         ))
 
     def _sb_warn(self, msg: str) -> None:
@@ -474,6 +479,7 @@ class ShadowTracker:
         чтобы опустошённые пулы ($0.82 ликвы как LILEDGE) и 0-sell ханиподы не считались «ракетами».
         """
         self._last_rugged_mints = set()
+        self._last_honeypot_mints = set()
         self._last_batch_ok = False
         if not mints:
             return {}
@@ -518,9 +524,14 @@ class ShadowTracker:
                         continue
                     tx24 = ((pair.get("txns") or {}).get("h24") or {})
                     tx_m5 = ((pair.get("txns") or {}).get("m5") or {})
+                    buys_count = int(tx24.get("buys", 0) or 0) + int(tx_m5.get("buys", 0) or 0)
                     sells_count = int(tx24.get("sells", 0) or 0) + int(tx_m5.get("sells", 0) or 0)
                     min_sells = 1 if (dex_id in ("pump", "pumpfun", "pumpswap") or m.endswith("pump")) else 3
-                    if not m or p <= 0 or liq < 1500.0 or (sells_count < min_sells and liq < 20000.0):
+                    # 0-sell ханипот (FluxBeam CRCLX/FIONA/COPX: $900k фейк-LP, 300b/0s) — НИКОГДА не пропускаем даже при liq >= $20k!
+                    if m and not m.endswith("pump") and buys_count >= 5 and sells_count == 0:
+                        self._last_honeypot_mints.add(m)
+                        continue
+                    if not m or p <= 0 or liq < 1500.0 or sells_count < min_sells:
                         continue
                     if liq > max_liq.get(m, -1.0):
                         max_liq[m] = liq
@@ -674,6 +685,7 @@ class ShadowTracker:
                     batch_mints = mints_to_check[i:i+30]
                     cur_prices = await self._fetch_prices_batch(batch_mints)
                     rugged_set = set(getattr(self, "_last_rugged_mints", set()))
+                    honeypot_set = set(getattr(self, "_last_honeypot_mints", set()))
                     batch_ok = bool(getattr(self, "_last_batch_ok", False))
                     
                     for upd in updates:
@@ -694,7 +706,9 @@ class ShadowTracker:
                             old_ath = float(upd.get("old_ath", 0) or 0.0)
                             old_time = float(upd.get("old_time_to_ath", 0.0) or 0.0)
                             elapsed_m = float(upd.get("elapsed_min", 0.0) or 0.0)
-                            is_lp_rugged = (m.lower() in rugged_set) or (batch_ok and p_now <= 0 and not no_baseline and elapsed_m >= 5.0)
+                            is_honeypot = (m.lower() in honeypot_set)
+                            is_lp_rugged = (not is_honeypot) and ((m.lower() in rugged_set) or (batch_ok and p_now <= 0 and not no_baseline and elapsed_m >= 5.0))
+                            is_hard_scam_blk = self._is_hard_scam_reason(upd.get("reason", ""))
 
                             # Если токен дал новый пик цены — фиксируем новый ATH и точную минуту
                             if p_now > old_ath:
@@ -703,11 +717,13 @@ class ShadowTracker:
                             else:
                                 new_ath = old_ath if old_ath > 0 else p_now
                                 time_to_ath = old_time
-                            if new_ath > 0 and not is_lp_rugged:
+                            if new_ath > 0 and not is_lp_rugged and not is_honeypot:
                                 self.record_observation(m, new_ath, 0.0)
 
                             ath_pnl = ((new_ath - p_entry) / p_entry * 100.0) if (p_entry >= 1e-7 and new_ath > 0) else 0.0
-                            if p_now > 0 and p_entry >= 1e-7:
+                            if is_honeypot:
+                                cur_pnl = -100.0
+                            elif p_now > 0 and p_entry >= 1e-7:
                                 cur_pnl = ((p_now - p_entry) / p_entry * 100.0)
                             elif is_lp_rugged:
                                 # Пул ликвидности опустошён (< $1,000) или полностью удалён после 5+ минут -> реальный LP Rug (-100%), а не упущенная ракета!
@@ -720,15 +736,20 @@ class ShadowTracker:
                             is_rocket = bool(
                                 ath_pnl >= 50.0
                                 and not is_lp_rugged
+                                and not is_honeypot
                                 and cur_pnl > -85.0
-                                and not self._is_hard_scam_reason(upd.get("reason", ""))
+                                and not is_hard_scam_blk
                             )
 
                             # Категоризация исхода монеты:
-                            if no_baseline and not is_lp_rugged:
+                            if is_honeypot:
+                                outcome = f"🍯 Ханипот / 0 продаж (фиктивный пик +{ath_pnl:.0f}%, фильтр спас!)"
+                            elif no_baseline and not is_lp_rugged:
                                 outcome = "❓ Нет цены (DexScreener не отдаёт пул с liq >= $1.5k) — исход неизвестен"
                             elif is_lp_rugged:
                                 outcome = f"☠️ LP Rug / Ликва вынута (пик +{ath_pnl:.0f}% -> $0, фильтр спас!)"
+                            elif is_hard_scam_blk and ath_pnl >= 50.0:
+                                outcome = f"🛡️ Скам/ловушка отсеяна (фиктивный пик +{ath_pnl:.0f}%, сейчас {cur_pnl:+.0f}%)"
                             elif ath_pnl >= 50.0 and cur_pnl <= 0.0:
                                 outcome = f"🚀 Ракета +{ath_pnl:.0f}% на {time_to_ath:.0f}м -> Слив в 0 ({cur_pnl:.0f}%)"
                             elif ath_pnl >= 50.0 and cur_pnl > 0.0:
