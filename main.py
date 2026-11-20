@@ -1411,9 +1411,15 @@ async def scanner_loop(analyzer, tracker):
 
                         _max_sc_age = float(getattr(config, "SOLANA_MAX_AGE_MIN", 240.0))
                         _max_sc_fdv = float(getattr(config, "JEV_MAX_MCAP_USD", 1500000.0))
-                        if _c_vol5 >= 15000.0:
+                        _is_est_brk_sc = config.is_established_breakout_runner(
+                            age_min=_c_age_m, liq_usd=_c_liq, vol5_usd=_c_vol5, m5_pct=_c_m5,
+                            buys5=_c_b5, sells5=_c_s5, fdv_usd=_c_fdv,
+                            is_curve=config.is_unmigrated_curve_token(mint, _c_pre),
+                        )
+                        if _c_vol5 >= 15000.0 or _is_est_brk_sc:
                             _max_sc_fdv = max(_max_sc_fdv, 2500000.0)
-                            _max_sc_age = max(_max_sc_age, 360.0)
+                        if _is_est_brk_sc:
+                            _max_sc_age = max(_max_sc_age, float(getattr(config, "ESTABLISHED_BREAKOUT_MAX_AGE_MIN", 4320.0)))
 
                         # Свежая миграция (только что вышедшая на DEX в пределах раннего окна):
                         _is_fresh_grad = ((mint in _graduated_set) or (_c_age_m <= 20.0 and (config.is_launchpad_mint(mint) or _c_dex == "pumpswap"))) and (_c_age_m <= 25.0) and (_c_fdv <= _max_sc_fdv)
@@ -1441,9 +1447,10 @@ async def scanner_loop(analyzer, tracker):
                             processed_mints[mint] = _now_r - _cd_r + 20
                             continue
 
-                        # Отсекаем флет и еле ползущие токены (m5 < 6%): пропускаем свежие миграции до 2.5м и бычьи откаты с мощным спросом (GTE7 +496%)
+                        # Отсекаем флет и еле ползущие токены (m5 < 6%): пропускаем свежие миграции, бычьи откаты (GTE7) и сильную аккумуляцию (PASSTHEHAT 445b/100s)
                         _is_bull_dip_sc = (_c_m5 >= -18.0 and _c_vol5 >= 20000.0 and _c_b5 >= max(50, int(_c_s5 * 1.15)) and _c_liq >= 10000.0)
-                        if _c_m5 < 6.0 and _c_age_m > 2.5 and not _is_fresh_grad and not _is_bull_dip_sc:
+                        _is_accum_sc = (_c_m5 >= 4.0 and _c_vol5 >= 10000.0 and _c_b5 >= max(60, int(_c_s5 * 1.60)) and _c_liq >= 10000.0)
+                        if _c_m5 < 6.0 and _c_age_m > 2.5 and not _is_fresh_grad and not _is_bull_dip_sc and not _is_accum_sc:
                             processed_mints[mint] = _now_r - _cd_r + 20
                             continue
 
@@ -1884,13 +1891,9 @@ async def scanner_loop(analyzer, tracker):
                                 if _fdv_sc_live > _max_fdv_live:
                                     print(f"🚫 [SCANNER-LARGE-CAP] {actual_symbol} ({mint[:8]}): FDV ${_fdv_sc_live:,.0f} > ${_max_fdv_live:,.0f} — нет запаса хода 2x+ (покупка вершины исключена).")
                                     continue
-                                _is_active_breakout_live = (
-                                    _age_m <= 360.0
-                                    and _fdv_sc_live <= _max_fdv_live
-                                    and liq_usd >= 12000.0
-                                    and _vol5_live >= 20000.0
-                                    and _m5_live >= 35.0
-                                    and _b5_sc >= max(60, int(_s5_sc * 1.20))
+                                _is_active_breakout_live = config.is_established_breakout_runner(
+                                    age_min=_age_m, liq_usd=liq_usd, vol5_usd=_vol5_live, m5_pct=_m5_live,
+                                    buys5=_b5_sc, sells5=_s5_sc, fdv_usd=_fdv_sc_live, is_curve=_is_curve_live,
                                 )
                                 if _age_m > _max_age_live and not _is_active_breakout_live:
                                     print(f"🚫 [SCANNER-OLD-ZOMBIE] {actual_symbol} ({mint[:8]}): возраст {_age_m:.0f}м > {_max_age_live:.0f}м — старый пул, отмена!")

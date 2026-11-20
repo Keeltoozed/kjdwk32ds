@@ -592,7 +592,11 @@ class GrokJevEngine:
             except Exception:
                 pass
             return False, f"age-out-of-bounds {age_min:.1f}m < {min_age:.1f}m (wait for maturation)"
-        if age_min > max_age:
+        _is_est_brk_g = _c.is_established_breakout_runner(
+            age_min=age_min, liq_usd=eff_liq, vol5_usd=vol_m5, m5_pct=m5,
+            buys5=b5, sells5=s5, fdv_usd=fdv_mc, is_curve=is_raw_curve,
+        )
+        if age_min > max_age and not _is_est_brk_g:
             return False, f"age-out-of-bounds {age_min:.1f}m > {max_age:.1f}m (old token without fresh breakout)"
 
         # Защита от микро bump-ботов в m5 (LAURA $1.60, HODL $3.10, IPHONEDUO $5.00)
@@ -1323,7 +1327,7 @@ class GrokJevEngine:
                     liq_g = float(g.get("liquidity", 0) or 0)
                     age_g = float(g.get("age_m", 999) or 999)
                     fdv_g = float(g.get("fdv", 0) or g.get("market_cap", 0) or 0)
-                    _max_a_g = float(getattr(_c, "SOLANA_MAX_AGE_MIN", 240.0))
+                    _max_a_g = float(getattr(_c, "ESTABLISHED_BREAKOUT_MAX_AGE_MIN", 4320.0))
                     _max_f_g = float(getattr(_c, "JEV_MAX_MCAP_USD", 1500000.0))
                     _min_l_g = float(getattr(_c, "MIN_GRADUATED_LIQ_USD", 2500.0))
                     if m and 32 <= len(m) <= 44 and not m.startswith("0x") and liq_g >= _min_l_g and age_g <= _max_a_g and fdv_g <= _max_f_g and m not in seen:
@@ -2241,9 +2245,16 @@ class GrokJevEngine:
         _age_s1 = ((time.time() * 1000.0 - _ca_s1) / 60000.0) if _ca_s1 > 0 else 0.2
         _age_cap_s1 = float(getattr(_c, "SOLANA_MAX_AGE_MIN", 240.0))
         _mcap_cap_s1 = float(getattr(_c, "JEV_MAX_MCAP_USD", 1500000.0))
-        if _vm5_s1 >= 15000.0 and _b5_s1 >= int(_s5_s1 * 1.05):
+        _liq_s1 = float((pair.get("liquidity") or {}).get("usd", 0) or 0)
+        _is_est_s1 = _c.is_established_breakout_runner(
+            age_min=_age_s1, liq_usd=_liq_s1, vol5_usd=_vm5_s1, m5_pct=_m5_s1,
+            buys5=_b5_s1, sells5=_s5_s1, fdv_usd=_fdv_s1,
+            is_curve=_c.is_unmigrated_curve_token(address, pair),
+        )
+        if (_vm5_s1 >= 15000.0 and _b5_s1 >= int(_s5_s1 * 1.05)) or _is_est_s1:
             _mcap_cap_s1 = max(_mcap_cap_s1, 2500000.0)
-            _age_cap_s1 = max(_age_cap_s1, 360.0)
+        if _is_est_s1:
+            _age_cap_s1 = max(_age_cap_s1, float(getattr(_c, "ESTABLISHED_BREAKOUT_MAX_AGE_MIN", 4320.0)))
         _s1_fresh_ok = (
             _age_s1 <= _age_cap_s1
             and _fdv_s1 <= _mcap_cap_s1
@@ -2662,10 +2673,20 @@ async def grok_bot_jev_loop(tracker, analyzer=None):
                     if _ca_c:
                         _max_loop_age = float(getattr(_c, "SOLANA_MAX_AGE_MIN", 240.0))
                         _v5_c = float((_td_c.get("volume") or {}).get("m5", 0) or 0)
-                        if _v5_c >= 15000.0:
-                            _max_loop_age = max(_max_loop_age, 360.0)
+                        _m5_loop_c = float((_td_c.get("priceChange") or {}).get("m5", 0) or 0)
+                        _lq_loop_c = float((_td_c.get("liquidity") or {}).get("usd", 0) or 0)
+                        _fdv_loop_c = float(_td_c.get("fdv", 0) or _td_c.get("marketCap", 0) or 0)
+                        _tx_loop_c = (_td_c.get("txns") or {}).get("m5") or {}
+                        _b5_loop_c = int(_tx_loop_c.get("buys", 0) or 0)
+                        _s5_loop_c = int(_tx_loop_c.get("sells", 0) or 0)
+                        if _c.is_established_breakout_runner(
+                            age_min=_age_val_c, liq_usd=_lq_loop_c, vol5_usd=_v5_c, m5_pct=_m5_loop_c,
+                            buys5=_b5_loop_c, sells5=_s5_loop_c, fdv_usd=_fdv_loop_c,
+                            is_curve=_c.is_unmigrated_curve_token(address, _td_c),
+                        ):
+                            _max_loop_age = max(_max_loop_age, float(getattr(_c, "ESTABLISHED_BREAKOUT_MAX_AGE_MIN", 4320.0)))
                         if _age_val_c > _max_loop_age:
-                            evaluated_cooldown[(address, chain)] = now + 86400.0
+                            evaluated_cooldown[(address, chain)] = now + 600.0
                             continue
                     _fdv_c = float(_td_c.get("fdv", 0) or _td_c.get("marketCap", 0) or 0)
                     _max_loop_mcap = float(getattr(_c, "JEV_MAX_MCAP_USD", 1500000.0))

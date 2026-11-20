@@ -85,6 +85,7 @@ ALLOWED_SOL_QUOTE_ADDRS = frozenset({
     "epjfwdd5aufqssqem2qn1xzybapc8g4weggkzwytdt1v",  # USDC
     "es9vmfrzacermjfrf4h2fyd4kconky11mcce8benwnyb",  # USDT
     "usd1ttgy1n17szxhfd31eyqso32682556356108733",   # USD1
+    "usd1ttgy1n17neehlmeloaybftrbuserhqyiqzvemub",  # USD1 canonical
 })
 ALLOWED_SOL_QUOTE_SYMBOLS = frozenset({
     "SOL", "WSOL", "USDC", "USDT", "USD1", "USDS", "PYUSD",
@@ -461,8 +462,34 @@ is_pumpswap_liq_fdv_trap = is_permissionless_liq_fdv_trap
 
 # Глобальные лимиты раннеров (доступны всем функциям выше по файлу)
 JEV_MAX_MCAP_USD = 5000000.0       # Верхняя граница $5M FDV: открывает доступ к мощным раннерам
-SOLANA_MAX_AGE_MIN = 240.0         # До 240 минут (4 часа): захватывает консолидации и мощные вторые волны
+SOLANA_MAX_AGE_MIN = 240.0         # Базовый потолок 240 минут (4 часа) для обычных монет
 JEV_MAX_AGE_MIN = 240.0            # До 240 минут
+ESTABLISHED_BREAKOUT_MAX_AGE_MIN = 4320.0  # До 72 часов: пробои проверенных монет с сожжённым LP (нулевой риск дев-рага!)
+
+
+def is_established_breakout_runner(
+    age_min: float,
+    liq_usd: float,
+    vol5_usd: float,
+    m5_pct: float,
+    buys5: int,
+    sells5: int,
+    fdv_usd: float = 0.0,
+    is_curve: bool = False,
+) -> bool:
+    """Единая проверка пробоя проверенного зрелого раннера (4ч–72ч: HNYDRIP +765%, GIGAPIG +161%, LOOSY +72%, ENU +70%).
+    У таких монет LP сожжён и дев давно вышел — минимальный риск 1-секундного Jito-рага."""
+    if is_curve:
+        return False
+    if age_min <= 0.0 or age_min > ESTABLISHED_BREAKOUT_MAX_AGE_MIN:
+        return False
+    if liq_usd < 12000.0 or vol5_usd < 12000.0 or m5_pct < 12.0:
+        return False
+    if fdv_usd > 0.0 and fdv_usd > 2500000.0:
+        return False
+    if buys5 < max(45, int(sells5 * 1.20)):
+        return False
+    return True
 
 
 def evaluate_entry_momentum(
@@ -537,6 +564,7 @@ def evaluate_entry_momentum(
     # 1. ЖЁСТКИЙ ОТСЕВ ЕЛЕ ПОЛЗУЩИХ ТОКЕНОВ (убираем +2%..+5% флет, который скатывается в 0 — кейсы Makenzi +4.98%, CC +2.85%, EDDIE, PUSSY):
     # Исключения: бычий откат на огромном спросе (GTE7 +496%: m5 -14%, vol5 $118k, 1147b/899s),
     # свежий выпускник PumpSwap/DEX (<=8м, liq>=$10k, vol5>=$8k, 45+ покупок >=1.25x продаж, m1>=+0.5% — вход до +80% прострела),
+    # мощная органическая аккумуляция (PASSTHEHAT 445b/100s: liq>=$10k, vol5>=$10k, b>=1.60s, avg>=$12, h1>=+15%),
     # или мега-объём >= $18k с 100+ покупками (FREEDOM +8.1%, GENTLEMEN +7.3%).
     _is_heavy_vol_launch = (vol5_usd >= 18000.0 and buys5 >= max(100, int(sells5 * 1.15)) and vel_ratio >= 1.20)
     _is_fresh_mig_early_launch = (
@@ -548,7 +576,16 @@ def evaluate_entry_momentum(
         and m1 >= 0.5
         and h1 >= 0.0
     )
-    _m5_min_req = 5.0 if _is_fresh_mig_early_launch else (6.0 if _is_heavy_vol_launch else 8.0)
+    _is_high_conviction_accum = (
+        not is_curve
+        and liq_usd >= 10000.0
+        and vol5_usd >= 10000.0
+        and buys5 >= max(60, int(sells5 * 1.60))
+        and (vol5_usd / max(1, tot_tx)) >= 12.0
+        and h1 >= 15.0
+        and m1 >= 0.0
+    )
+    _m5_min_req = 4.0 if _is_high_conviction_accum else (5.0 if _is_fresh_mig_early_launch else (6.0 if _is_heavy_vol_launch else 8.0))
     _is_bullish_pullback_dip = (
         -18.0 <= m5 < _m5_min_req
         and h1 >= 15.0
@@ -576,9 +613,12 @@ def evaluate_entry_momentum(
     if fdv_usd > 0.0 and fdv_usd > _max_fdv_allowed:
         return False, f"mcap-too-large ${fdv_usd:,.0f} > ${_max_fdv_allowed:,.0f} (limited 2x+ upside)"
     _sol_max_age = float(globals().get("SOLANA_MAX_AGE_MIN", 240.0))
+    _is_established_brk = is_established_breakout_runner(
+        age_min=age_min, liq_usd=liq_usd, vol5_usd=vol5_usd, m5_pct=m5,
+        buys5=buys5, sells5=sells5, fdv_usd=fdv_usd, is_curve=is_curve,
+    )
     if age_min > _sol_max_age:
-        _is_super_breakout = (vol5_usd >= 15000.0 and buys5 >= int(sells5 * 1.20) and m5 >= 4.0 and age_min <= 360.0)
-        if not _is_super_breakout:
+        if not _is_established_brk:
             return False, f"too-old age {age_min:.0f}m > {_sol_max_age:.0f}m (stale runner)"
     if age_min >= 45.0 and h6 is not None and float(h6 or 0.0) > MAX_ENTRY_H6_PCT:
         return False, f"h6-exhausted {float(h6 or 0.0):+.1f}% > +{MAX_ENTRY_H6_PCT:.0f}% at {age_min:.0f}m (spent top)"
@@ -724,21 +764,37 @@ def evaluate_entry_momentum(
         )
     )
 
-    # 1.2 Сильная вторая волна зрелого раннера (25м..240м): CDOG (+95%), AudaCity ERD (+53%), DCTYCAT (+97%), Buncoin (+310%)
-    # Для старых токенов (> 120м) требуем взрывной пробой m5 >= 35% и vol5 >= $20k (отсекает вялый STM 230м -11.9%, пропускает Buncoin 234м +310%):
-    _mature_min_m5 = 35.0 if age_min > 120.0 else (10.0 if (liq_usd >= 20000.0 and buys5 >= max(100, int(sells5 * 1.25)) and vol5_usd >= 10000.0) else 15.0)
-    _mature_min_vol5 = 20000.0 if age_min > 120.0 else 8000.0
-    _mature_max_age = 360.0 if (vol5_usd >= 20000.0 and buys5 >= max(60, int(sells5 * 1.20)) and m5 >= 35.0 and liq_usd >= 12000.0) else SOLANA_MAX_AGE_MIN
-    is_mature_breakout = (
-        age_min <= _mature_max_age
-        and (fdv_usd <= 0.0 or fdv_usd <= float(globals().get("JEV_MAX_MCAP_USD", 1500000.0)))
-        and m5 >= _mature_min_m5
+    # 1.2 Сильная вторая волна зрелого раннера (25м..72ч): CDOG (+95%), AudaCity ERD (+53%), DCTYCAT (+97%), Buncoin (+310%),
+    # VINTEL (+188%), APOCRYCOIN (+56%), HNYDRIP (+765%), GIGAPIG (+161%), LOOSY (+72%), ENU (+70%), PASSTHEHAT (+61%)
+    _mature_min_m5 = 12.0 if _is_established_brk else (35.0 if age_min > 120.0 else (10.0 if (liq_usd >= 20000.0 and buys5 >= max(100, int(sells5 * 1.25)) and vol5_usd >= 10000.0) else 15.0))
+    _mature_min_vol5 = 12000.0 if _is_established_brk else (20000.0 if age_min > 120.0 else 8000.0)
+    _mature_max_age = ESTABLISHED_BREAKOUT_MAX_AGE_MIN if _is_established_brk else SOLANA_MAX_AGE_MIN
+    _is_sharp_mid_breakout = (
+        not is_curve
+        and 25.0 < age_min <= 120.0
+        and m5 >= 25.0
         and m1 >= -2.0
-        and h1 >= -15.0
-        and buys5 >= max(40, int(sells5 * 1.20))
-        and vol5_usd >= _mature_min_vol5
-        and (vel_ratio >= 0.25 or vol5_usd >= 12000.0)
-        and liq_usd >= 6000.0
+        and h1 >= -10.0
+        and vol5_usd >= 3500.0
+        and vel_ratio >= 0.35
+        and buys5 >= max(25, int(sells5 * 1.25))
+        and liq_usd >= 7500.0
+    )
+    is_mature_breakout = (
+        _is_established_brk
+        or _is_sharp_mid_breakout
+        or (_is_high_conviction_accum and age_min <= SOLANA_MAX_AGE_MIN and m5 >= 4.0)
+        or (
+            age_min <= _mature_max_age
+            and (fdv_usd <= 0.0 or fdv_usd <= float(globals().get("JEV_MAX_MCAP_USD", 1500000.0)))
+            and m5 >= _mature_min_m5
+            and m1 >= -2.0
+            and h1 >= -15.0
+            and buys5 >= max(40, int(sells5 * 1.20))
+            and vol5_usd >= _mature_min_vol5
+            and (vel_ratio >= 0.25 or vol5_usd >= 12000.0)
+            and liq_usd >= 6000.0
+        )
     )
 
     # 1.2b Пробуждение сырой кривой Pump.fun (25м..45м, кейс SHERRICK +42.7%: 40b/15s, vol5 $4.5k, m1 +5%):

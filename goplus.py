@@ -1834,15 +1834,21 @@ async def verify_pumpswap_pool_onchain(
         _PUMPSWAP_POOL_CACHE[cache_key] = (now - ttl + 20.0, res)
         return res
 
-    _wsol = "So11111111111111111111111111111111111111112"
+    _CANONICAL_QUOTES = {
+        "So11111111111111111111111111111111111111112",    # WSOL
+        "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",  # USDC (Pump.fun теперь мигрирует и в USDC, кейс RUDY +730%!)
+        "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB",  # USDT
+        "USD1ttGY1N17NEEHLmELoaybftRBUSErhqYiQzvEmuB",   # USD1
+        "USD1ttGY1N17szXhfd31eYqSo32682556356108733",    # USD1 alt
+    }
     has_mint = (token_0 == mint or token_1 == mint)
-    has_wsol = (token_0 == _wsol or token_1 == _wsol)
+    has_valid_quote = (token_0 in _CANONICAL_QUOTES or token_1 in _CANONICAL_QUOTES)
     is_pump_mint = str(mint or "").strip().lower().endswith("pump")
 
     is_canonical = (
         pool_idx == 0
         and has_mint
-        and has_wsol
+        and has_valid_quote
         and pool_creator in (pool_auth, _PUMP_MIG_AUTH)
     )
     if is_canonical:

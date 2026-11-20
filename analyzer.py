@@ -771,7 +771,17 @@ class Analyzer:
             if _curve_live_cands and not _is_grad_chk and _dust_liq < 100.0 and _dust_v24 < 500.0:
                 _ignore_dust_amm = True
         if real_pairs:
-            best_pair = sorted(real_pairs, key=lambda p: float(((p.get("liquidity") or {}).get("usd", 0) or 0)), reverse=True)[0]
+            # Для .pump минта предпочитаем канонический пул PumpSwap/Raydium/Orca (liq >= $5k) вместо стороннего незалоченного Meteora DLMM
+            if str(mint or "").strip().lower().endswith("pump"):
+                _non_met = [
+                    p for p in real_pairs
+                    if "meteora" not in str(p.get("dexId") or "").lower()
+                    and float(((p.get("liquidity") or {}).get("usd", 0) or 0)) >= 5000.0
+                ]
+                _pool_candidates = _non_met if _non_met else real_pairs
+            else:
+                _pool_candidates = real_pairs
+            best_pair = sorted(_pool_candidates, key=lambda p: float(((p.get("liquidity") or {}).get("usd", 0) or 0)), reverse=True)[0]
         elif amm_pairs and not _ignore_dust_amm:
             best_pair = sorted(amm_pairs, key=lambda p: float(((p.get("liquidity") or {}).get("usd", 0) or 0)), reverse=True)[0]
         else:
@@ -1995,7 +2005,12 @@ class Analyzer:
                 )
 
         _max_age_min = float(getattr(config, "SOLANA_MAX_AGE_MIN", 240.0))
-        _is_breakout_age = (_age_min_pre <= 360.0 and _vm5_pre >= 15000.0 and _b5_pre >= int(_s5_pre * 1.20) and _m5 >= 4.0)
+        _raw_liq_age_chk = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
+        _is_breakout_age = config.is_established_breakout_runner(
+            age_min=_age_min_pre, liq_usd=_raw_liq_age_chk, vol5_usd=_vm5_pre,
+            m5_pct=_m5, buys5=_b5_pre, sells5=_s5_pre, fdv_usd=_fdv_chk_pre,
+            is_curve=config.is_unmigrated_curve_token(mint, pair_data),
+        )
         if _age_min_pre > _max_age_min and not _is_breakout_age:
             return self._deny(
                 mint,
@@ -2074,8 +2089,11 @@ class Analyzer:
                 f"🚫 [LOW-TXNS] {symbol} ({mint[:8]}): 5м сделок {_tot_tx5_pre} < {_min_tx_pre_a} — нет спроса.",
             )
         if _age_min_pre >= 20.0:
-            _is_mature_breakout = (_m5 >= 2.0 and _vm5_pre >= 10000.0 and _b5_pre >= int(_s5_pre * 1.30) and _tot_tx5_pre >= 25)
             _v2l_mat = (_vm5_pre / max(_raw_liq_chk, 1.0)) if _raw_liq_chk > 0 else 0.0
+            _is_mature_breakout = (
+                (_m5 >= 2.0 and _vm5_pre >= 10000.0 and _b5_pre >= int(_s5_pre * 1.30) and _tot_tx5_pre >= 25)
+                or (_m5 >= 20.0 and _v2l_mat >= 0.35 and _vm5_pre >= 3000.0 and _b5_pre >= max(25, int(_s5_pre * 1.25)))
+            )
             if not _is_mature_breakout and (_vm5_pre < 8000.0 or _v2l_mat < 0.25 or _m5 < 1.0):
                 return self._deny(
                     mint,
@@ -2621,7 +2639,9 @@ class Analyzer:
                             _m_lp_safe = max(_m_lp_locked, _m_lp_burned)
                             _m_quote_usd = float(_m_lp.get("quoteUSD", 0) or 0)
                             _is_target_mkt = bool(_target_pair_rc and _m_pub == _target_pair_rc)
-                            _is_meteora_pool = ("meteora" in _m_type and _m_type != "meteoradbc" and (_is_target_mkt or dex_id_low == "meteora" or (not _is_canonical_pump and _m_quote_usd >= 2000.0)))
+                            # Не блокируем подтверждённый безопасный PumpSwap/Raydium пул (_is_lp_really_safe=True)
+                            # из-за стороннего Meteora DLMM арбитраж-пула (кейс RUDY $30k->$250k +730% с $2.8k DLMM сайд-пулом)!
+                            _is_meteora_pool = ("meteora" in _m_type and _m_type != "meteoradbc" and (_is_target_mkt or dex_id_low == "meteora" or (not _is_lp_really_safe and _m_quote_usd >= 2000.0)))
                             if not getattr(config, "ALLOW_UNLOCKED_LP_POOLS", True):
                                 if _is_meteora_pool and _m_lp_safe < 80.0:
                                     return self._deny(mint, "meteora-unlocked-lp", f"🚫 [METEORA-RUG] {symbol} ({mint[:8]}): незаблокированный пул Meteora {_m_type} (lock/burn {_m_lp_safe:.0f}% < 80%) — риск вывода SOL девом (кейсы AXIOMCOIN/MULT/PUNCHAO)!")
@@ -3059,11 +3079,19 @@ class Analyzer:
                     return False
             _dex_lower = str(pair_data.get("dexId", "")).lower()
             _is_pump_curve = _dex_lower in ("pump", "pumpfun")
-            # Защита от зомби: отсекаем только реально стоячие старые монеты без импульса
-            if not _is_pump_curve and _age_min_pre > float(getattr(config, "SOLANA_MAX_AGE_MIN", 45.0)):
-                return self._deny(mint, "too-old-slow", f"🚫 [ZOMBIE] {mint[:8]}: возраст {_age_min_pre:.0f}м > {float(getattr(config, 'SOLANA_MAX_AGE_MIN', 45.0)):.0f}м")
-            _max_age = float(getattr(config, "SOLANA_MAX_AGE_MIN", 45.0))
-            if _age_min_pre > _max_age:
+            # Защита от зомби: отсекаем только реально стоячие старые монеты без импульса (пропуская подтверждённые пробои 4ч-72ч)
+            _cur_liq_z = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
+            _fdv_z = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
+            _b5_z = int(_txm5_pre.get("buys", 0) or 0)
+            _s5_z = int(_txm5_pre.get("sells", 0) or 0)
+            _is_est_z = config.is_established_breakout_runner(
+                age_min=_age_min_pre, liq_usd=_cur_liq_z, vol5_usd=_vm5_pre,
+                m5_pct=_m5, buys5=_b5_z, sells5=_s5_z, fdv_usd=_fdv_z, is_curve=_is_pump_curve,
+            )
+            _max_age = float(getattr(config, "SOLANA_MAX_AGE_MIN", 240.0))
+            if not _is_pump_curve and _age_min_pre > _max_age and not _is_est_z:
+                return self._deny(mint, "too-old-slow", f"🚫 [ZOMBIE] {mint[:8]}: возраст {_age_min_pre:.0f}м > {_max_age:.0f}м")
+            if _age_min_pre > _max_age and not _is_est_z:
                 return self._deny(mint, "zombie-age", f"🚫 [ZOMBIE-AGE] {mint[:8]}: возраст {_age_min_pre:.0f}м > {_max_age:.0f}м — старый токен.")
             if _age_min_pre > 1440.0 and _m5 < 5.0:
                 return self._deny(mint, "zombie-ancient", f"🚫 [ZOMBIE-ANCIENT] {mint[:8]}: возраст {_age_min_pre:.0f}м (>24ч), m5 {_m5:+.1f}% < +5% — старый токен без пробоя.")
@@ -3661,7 +3689,7 @@ class Analyzer:
                 c1 = ohlcv[1]
                 c1_open, c1_high, c1_low, c1_close = float(c1[1] or 0), float(c1[2] or 0), float(c1[3] or 0), float(c1[4] or 0)
                 c1_pct = ((c1_close - c1_open) / c1_open * 100.0) if c1_open > 0 else 0.0
-                if c1_pct <= -6.0 and c0_pct < 2.0:
+                if (c1_pct <= -10.0 and c0_pct < 2.0) or (c1_pct <= -6.0 and c0_pct < 0.0):
                     print(f"🚫 [1M-CRASH] {symbol} ({address[:8]}): прошлая 1м свеча слилась на {c1_pct:+.1f}% без откупа (сейчас {c0_pct:+.1f}%) — обвал в процессе.")
                     return False
                 if ((c1_pct <= -3.0 and c0_pct <= -2.5) or (c1_pct + c0_pct <= -6.0)) and eff_close <= c1_close:

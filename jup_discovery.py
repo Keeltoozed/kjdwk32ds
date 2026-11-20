@@ -19,7 +19,8 @@ LITE_BASE = "https://lite-api.jup.ag/tokens/v2"
 
 _cache = []
 _cache_time = 0.0
-CACHE_TTL = 10
+_jup_poll_cycle = 0
+CACHE_TTL = 22
 SKIP_SYMBOLS = {
     "SOL", "WSOL", "USDC", "USDT", "USDG", "EURC", "CBBTC", "WBTC", "WETH", "JLP", "PYTH", "JUP", "NEAR",
     "ZEC", "WNEAR", "CARDS", "PUMP", "HYPE", "ZEREBRO", "TTWO", "SPCX", "SPYX", "TSLAX", "NVDAX", "GROKIUS",
@@ -99,33 +100,39 @@ async def fetch_jup_tokens() -> list:
         headers = _headers()
         allow_raw_curve = bool(getattr(config, "ALLOW_UNGRADUATED_PUMPFUN", False))
 
-        # 1. Jupiter Tokens API v2 (5 главных срезов, чередуем pro/lite + stagger 0.22s без 429 на recent):
-        _jup_sem = asyncio.Semaphore(2)
+        global _jup_poll_cycle
+        _jup_poll_cycle += 1
+        # 1. Jupiter Tokens API v2: строго по 1 запросу со stagger 0.40s (4-5 запросов за цикл, 0 ошибок 429!)
+        _jup_sem = asyncio.Semaphore(1)
 
-        async def _jup_get(subpath: str, prefer_lite: bool = False):
+        async def _jup_get(subpath: str):
             async with _jup_sem:
-                primary = f"{LITE_BASE}/{subpath}" if prefer_lite else f"{BASE}/{subpath}"
-                primary_h = None if prefer_lite else headers
-                fallback = f"{BASE}/{subpath}" if prefer_lite else f"{LITE_BASE}/{subpath}"
-                fallback_h = headers if prefer_lite else None
-                st, data = await fetch_json(primary, headers=primary_h, timeout=8, retries=0)
+                st, data = await fetch_json(f"{BASE}/{subpath}", headers=headers, timeout=8, retries=0)
+                if st == 429:
+                    await asyncio.sleep(0.8)
+                    return st, []
                 if st != 200 or not isinstance(data, list):
-                    await asyncio.sleep(0.25)
-                    st_l, data_l = await fetch_json(fallback, headers=fallback_h, timeout=8, retries=0)
+                    await asyncio.sleep(0.45)
+                    st_l, data_l = await fetch_json(f"{LITE_BASE}/{subpath}", headers=None, timeout=8, retries=0)
                     if st_l == 200 and isinstance(data_l, list):
+                        await asyncio.sleep(0.40)
                         return st_l, data_l
-                await asyncio.sleep(0.22)
+                await asyncio.sleep(0.40)
                 return st, data
 
-        (s1, d1), (s_org, d_org), (s3, d3), (s2, d2), (s1h, d1h), (s_tr1h, d_tr1h), (s_org1h, d_org1h) = await asyncio.gather(
-            _jup_get("toptrending/5m?limit=100", prefer_lite=False),
-            _jup_get("toporganicscore/5m?limit=100", prefer_lite=True),
-            _jup_get("toptraded/5m?limit=100", prefer_lite=False),
-            _jup_get("recent", prefer_lite=False),
-            _jup_get("toptrending/1h?limit=100", prefer_lite=False),
-            _jup_get("toptraded/1h?limit=100", prefer_lite=False),
-            _jup_get("toporganicscore/1h?limit=100", prefer_lite=True),
-        )
+        # На чётных циклах добавляем 1h тренды, на нечётных — 5m + recent (не превышаем лимит Jupiter API!)
+        s1, d1 = await _jup_get("toptrending/5m?limit=100")
+        s_org, d_org = await _jup_get("toporganicscore/5m?limit=100")
+        s3, d3 = await _jup_get("toptraded/5m?limit=100")
+        s2, d2 = await _jup_get("recent")
+        if _jup_poll_cycle % 2 == 0:
+            s1h, d1h = await _jup_get("toptrending/1h?limit=100")
+            s_tr1h, d_tr1h = 0, []
+            s_org1h, d_org1h = 0, []
+        else:
+            s1h, d1h = 0, []
+            s_tr1h, d_tr1h = 0, []
+            s_org1h, d_org1h = 0, []
         s6h, d6h = 0, []
 
         ranked = []
@@ -163,14 +170,20 @@ async def fetch_jup_tokens() -> list:
                 b5 = int(st5.get("numBuys") or 0)
                 s5 = int(st5.get("numSells") or 0)
                 age_m = _parse_jup_age_min(t)
-                # Жесткий фокус на свежих 2x-10x ракетах <= _max_disc_age (плюс супер-пробои 240-360м как HNYDRIP +765%):
-                _is_jup_super_brk = (age_m <= 360.0 and vol5 >= 15000.0 and b5 >= int(s5 * 1.20) and pc5 >= 4.0)
+                # Жесткий фокус на свежих 2x-10x ракетах <= _max_disc_age + проверенные пробои 4ч-72ч (HNYDRIP/GIGAPIG/LOOSY/ENU):
+                _is_jup_super_brk = config.is_established_breakout_runner(
+                    age_min=age_m, liq_usd=liq, vol5_usd=vol5, m5_pct=pc5,
+                    buys5=b5, sells5=s5, fdv_usd=fdv_j, is_curve=(not is_grad),
+                )
                 if age_m > _max_disc_age and not _is_jup_super_brk:
                     continue
                 if age_m > 45.0 and pc5 < 4.0 and vol5 < 15000.0:
                     continue
                 _max_pc1h = config.get_max_entry_h1_pct(age_m, vol5, b5, s5, liq, None)
-                if pc1h > _max_pc1h or (pc1h < -15.0 and pc5 < 15.0):
+                # ВАЖНО: для свежих выпускников Pump.fun (<=90м, кейс RUDY +4821% в Jupiter при +245% на PumpSwap!)
+                # Jupiter считает stats1h от старта бондинг-кривой $4k, а не от миграции! Не отсекаем их по Jupiter pc1h — проверит DexScreener в Analyzer.
+                _is_recent_lp_grad = bool((config.is_launchpad_mint(m) or t.get("graduatedAt")) and age_m <= 90.0)
+                if (pc1h > _max_pc1h and not _is_recent_lp_grad) or (pc1h < -15.0 and pc5 < 15.0):
                     continue
                 _cfg_v5_req = float(getattr(config, "MIN_VOLUME_M5", 600.0))
                 _min_v5_req = min(_cfg_v5_req, 800.0) if age_m <= 15.0 else _cfg_v5_req
@@ -221,6 +234,7 @@ async def fetch_jup_tokens() -> list:
                 "https://api.dexscreener.com/latest/dex/search?q=pumpswap",
                 "https://api.dexscreener.com/latest/dex/search?q=SOL%20pump",
                 "https://api.dexscreener.com/latest/dex/search?q=pumpswap%20SOL",
+                "https://api.dexscreener.com/latest/dex/search?q=pump%20USDC",
                 "https://api.dexscreener.com/latest/dex/search?q=bonk%20SOL",
                 "https://api.dexscreener.com/latest/dex/search?q=raydium%20SOL",
                 "https://api.dexscreener.com/latest/dex/search?q=orca%20SOL",
@@ -1277,9 +1291,14 @@ async def jup_loop(analyzer, tracker):
                             processed[m] = _now_t + 120
                             continue
 
-                        # Режем старые токены > SOLANA_MAX_AGE_MIN (кроме супер-пробоев 240-360м как HNYDRIP +765%):
-                        _max_age_cand = float(getattr(config, "SOLANA_MAX_AGE_MIN", 75.0))
-                        _is_super_brk_cand = (_ag <= 360.0 and _v5_cand >= 15000.0 and _b5_cand >= int(_s5_cand * 1.20) and _m5 >= 4.0)
+                        # Режем старые токены > SOLANA_MAX_AGE_MIN (кроме проверенных пробоев 4ч-72ч HNYDRIP/GIGAPIG/LOOSY):
+                        _max_age_cand = float(getattr(config, "SOLANA_MAX_AGE_MIN", 240.0))
+                        _fdv_cand_age = float(td.get("fdv", 0) or td.get("marketCap", 0) or 0)
+                        _is_super_brk_cand = config.is_established_breakout_runner(
+                            age_min=_ag, liq_usd=_lq_cand, vol5_usd=_v5_cand, m5_pct=_m5,
+                            buys5=_b5_cand, sells5=_s5_cand, fdv_usd=_fdv_cand_age,
+                            is_curve=config.is_unmigrated_curve_token(m, td),
+                        )
                         if _ag > _max_age_cand and not _is_super_brk_cand:
                             skipped_ancient += 1
                             processed[m] = _now_t + 600
