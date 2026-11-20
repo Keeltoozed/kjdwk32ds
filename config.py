@@ -578,7 +578,7 @@ def evaluate_entry_momentum(
     )
     _is_high_conviction_accum = (
         not is_curve
-        and liq_usd >= 10000.0
+        and liq_usd >= 7500.0
         and vol5_usd >= 10000.0
         and buys5 >= max(60, int(sells5 * 1.60))
         and (vol5_usd / max(1, tot_tx)) >= 12.0

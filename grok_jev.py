@@ -594,7 +594,7 @@ class GrokJevEngine:
             return False, f"age-out-of-bounds {age_min:.1f}m < {min_age:.1f}m (wait for maturation)"
         _is_est_brk_g = _c.is_established_breakout_runner(
             age_min=age_min, liq_usd=eff_liq, vol5_usd=vol_m5, m5_pct=m5,
-            buys5=b5, sells5=s5, fdv_usd=fdv_mc, is_curve=is_raw_curve,
+            buys5=b5, sells5=s5, fdv_usd=fdv_mc, is_curve=_c.is_unmigrated_curve_token(mint, pair_data),
         )
         if age_min > max_age and not _is_est_brk_g:
             return False, f"age-out-of-bounds {age_min:.1f}m > {max_age:.1f}m (old token without fresh breakout)"

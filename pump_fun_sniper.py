@@ -740,9 +740,11 @@ class PumpFunSniper:
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * 1.5, 60.0)
             except Exception as e:
-                print(f"❌ PumpPortal WSS Ошибка ({e}). Переподключение через {backoff:.0f}с...")
+                _max_bo = 60.0 if (getattr(config, "SNIPER_ENTRIES_ENABLED", False) or getattr(config, "ALLOW_UNGRADUATED_PUMPFUN", False)) else 300.0
+                if backoff <= 10.0 or _max_bo <= 60.0:
+                    print(f"ℹ️ PumpPortal WSS недоступен ({e}) — работает прямой ончейн-монитор Solana RPC. Повтор через {backoff:.0f}с...")
                 await asyncio.sleep(backoff)
-                backoff = min(backoff * 1.5, 60.0)
+                backoff = min(backoff * 2.0, _max_bo)
 
 
 # === DUMMY HTTP SERVER FOR RENDER ===
