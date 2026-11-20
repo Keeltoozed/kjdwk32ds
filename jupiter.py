@@ -30,16 +30,16 @@ def _jup_headers(host: str) -> dict:
 
 class JupiterAPI:
     @staticmethod
-    async def get_prices(mints: list, pair_hints: dict = None) -> dict:
+    async def get_prices(mints: list, pair_hints: dict = None, priority: bool = True) -> dict:
         """
-        Балк-запрос цен: Jupiter Lite первым (своя квота), GeckoTerminal как fallback.
+        Балк-запрос цен: DexScreener/Jupiter Lite первым (своя квота, priority=True), GeckoTerminal как fallback.
         Значительно ускоряет цикл трекинга позиций, избавляя от последовательных HTTP-запросов.
         """
         if not mints:
             return {}
         import market_data
         try:
-            return await market_data.get_bulk_prices(mints, pair_hints=pair_hints)
+            return await market_data.get_bulk_prices(mints, pair_hints=pair_hints, priority=priority)
         except Exception:
             pass
         addresses = ",".join(mints)

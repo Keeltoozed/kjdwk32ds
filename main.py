@@ -311,7 +311,7 @@ async def position_manager_loop(analyzer, tracker):
             bulk_prices = {}
             if mints_to_fetch:
                 try:
-                    bulk_prices = await asyncio.wait_for(JupiterAPI.get_prices(mints_to_fetch, pair_hints=pair_hints), timeout=2.5)
+                    bulk_prices = await asyncio.wait_for(JupiterAPI.get_prices(mints_to_fetch, pair_hints=pair_hints, priority=True), timeout=2.0)
                 except Exception:
                     bulk_prices = {}
             
@@ -336,7 +336,7 @@ async def position_manager_loop(analyzer, tracker):
                         # Добор только если нет цены и с жестким таймаутом 1.5с (не вешаем Stop-Loss луп!)
                         try:
                             import market_data as _md
-                            _td0 = await asyncio.wait_for(_md.get_token_data(mint, max_cache_age=5.0), timeout=1.5)
+                            _td0 = await asyncio.wait_for(_md.get_token_data(mint, max_cache_age=5.0, priority=True), timeout=1.5)
                             api_price = float((_td0.get("priceUsd", 0) or 0)) if _td0 else 0.0
                         except Exception:
                             pass
@@ -491,7 +491,7 @@ async def position_manager_loop(analyzer, tracker):
                         if _cached_td and isinstance(_cached_td[1], dict) and (time.monotonic() - _cached_td[0]) < 8.0:
                             _live_pd = _cached_td[1]
                         else:
-                            _live_pd = await asyncio.wait_for(_md.get_token_data(mint, max_cache_age=4.0), timeout=0.8)
+                            _live_pd = await asyncio.wait_for(_md.get_token_data(mint, max_cache_age=4.0, priority=True), timeout=0.8)
                         if isinstance(_live_pd, dict) and _live_pd:
                             position.pair_data = _live_pd
                             position.last_pair_data = _live_pd
@@ -536,6 +536,10 @@ async def position_manager_loop(analyzer, tracker):
                 except Exception:
                     _is_rh_tp = False
                 if _is_rh_tp:
+                    _rh_src_u = str(getattr(position, "source", "") or "").upper()
+                    if "UNLOCKED" in _rh_src_u or "SEEDED" in _rh_src_u:
+                        _pos_unl_tp = True
+                        position.is_unlocked_pool = True
                     _tp1_sol_thr, _tp1_sell, _tp2, _tp2_sell, _tp3, _tp3_sell, _tp4, _tp4_sell, _tp5, _tp5_sell = _rh_tp_mod.get_rug_hunter_tp_ladder(_pos_unl_tp)
                 else:
                     _tp1_sol_thr, _tp1_sell, _tp2, _tp2_sell, _tp3, _tp3_sell, _tp4, _tp4_sell, _tp5, _tp5_sell = config.get_sol_tp_ladder(_pos_unl_tp)
@@ -689,7 +693,7 @@ async def position_manager_loop(analyzer, tracker):
                     if _px_to_close > 0:
                         try:
                             import market_data as _md_rug
-                            _pd_rug = await asyncio.wait_for(_md_rug.get_token_data(mint, max_cache_age=2.0), timeout=1.5)
+                            _pd_rug = await asyncio.wait_for(_md_rug.get_token_data(mint, max_cache_age=2.0, priority=True), timeout=1.2)
                             _liq_rug = float((((_pd_rug or {}).get("liquidity") or {}).get("usd", 0) or 0)) if (_pd_rug and (_pd_rug.get("liquidity") or {}).get("usd") is not None) else -1.0
                             _dex_rug = str((_pd_rug or {}).get("dexId") or "").lower()
                             if _dex_rug in ("pump", "pumpfun", "moonshot", "meteoradbc"):

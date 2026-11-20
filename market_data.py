@@ -368,7 +368,7 @@ async def _jup_token_data(mint: str) -> dict:
         return {}
 
 
-async def get_token_data(mint: str, max_cache_age: float = TD_TTL) -> dict:
+async def get_token_data(mint: str, max_cache_age: float = TD_TTL, priority: bool = False) -> dict:
     """DexScreener -> Jupiter Tokens API v2 -> GeckoTerminal fallback."""
     import time as _t
     now = _t.monotonic()
@@ -384,7 +384,7 @@ async def get_token_data(mint: str, max_cache_age: float = TD_TTL) -> dict:
         if not (_is_grad_md and str(cached_d.get("dexId", "")).lower() in ("pump", "pumpfun")):
             return cached_d
     # 1. DexScreener первым: 300 зап/мин, самый надёжный, даёт m5/h1/h24 + соцсети.
-    ds = await _ds_token_data(mint)
+    ds = await _ds_token_data(mint, priority=priority)
     if ds and float(ds.get("priceUsd", 0) or 0) > 0:
         # Если токен ТОЛЬКО ЧТО мигрировал (subscribeMigration), а DS ещё отдаёт старый кёрв "pump"
         # или отдаёт liq=0 в первые 5 минут после миграции — проваливаемся в Jupiter v2 / GeckoTerminal!
@@ -479,11 +479,11 @@ def _is_allowed_sol_quote(p: dict, mint: str, min_ps_liq: float = 4000.0) -> boo
     return False
 
 
-async def _ds_token_data(mint: str) -> dict:
+async def _ds_token_data(mint: str, priority: bool = False) -> dict:
     import config
     from http_client import fetch_json
     url = f"{config.DEXSCREENER_SEARCH}{mint}"
-    status, data = await fetch_json(url, timeout=8, retries=2)
+    status, data = await fetch_json(url, timeout=(3.5 if priority else 8), retries=(0 if priority else 2), priority=priority)
     if status == 200 and data:
         try:
             pairs = data.get("pairs") or []
@@ -589,7 +589,7 @@ async def get_price(mint: str) -> float:
     return prices.get(mint, 0.0)
 
 
-async def _jup_v3_bulk_prices(mints: list) -> dict:
+async def _jup_v3_bulk_prices(mints: list, priority: bool = True) -> dict:
     """Сверхбыстрые ончейн-цены через Jupiter Price API v3 (задержка ~150мс, уровень блока Solana).
     Один запрос на пачку до 50 токенов, своя квота (до 600 зап/мин)."""
     from http_client import fetch_json
@@ -611,7 +611,7 @@ async def _jup_v3_bulk_prices(mints: list) -> dict:
             url = f"{j_host}/price/v3?ids={ids_q}"
             req_hdrs = headers if use_key else {"Accept": "application/json"}
             try:
-                status, data = await fetch_json(url, headers=req_hdrs, timeout=1.1, retries=0)
+                status, data = await fetch_json(url, headers=req_hdrs, timeout=1.1, retries=0, priority=priority)
                 if status == 200 and isinstance(data, dict):
                     for m in chunk:
                         entry = data.get(m)
@@ -627,30 +627,30 @@ async def _jup_v3_bulk_prices(mints: list) -> dict:
     return out
 
 
-async def get_bulk_prices(mints: list, pair_hints: dict = None) -> dict:
+async def get_bulk_prices(mints: list, pair_hints: dict = None, priority: bool = True) -> dict:
     """Сверхбыстрые балк-цены для мемкоинов (задержка < 0.2с).
-    Приоритет: Jupiter Price API v3 (живые ончейн котировки уровня блока Solana 400мс без CDN-кэша).
-    Если токен не найден на Jupiter — мгновенный фоллбэк на DexScreener / GeckoTerminal."""
+    Приоритет: DexScreener bulk latest/dex/tokens с priority=True (высший приоритет исполнения без очередей).
+    Если токен не найден на DexScreener — Jupiter Price API v3 и GeckoTerminal."""
     out = {}
     if not mints:
         return out
     ms = [m for m in dict.fromkeys(mints) if m]
 
-    # 1. Приоритет №1: Сверхбыстрые ончейн-цены Jupiter Price v3 (живой Solana блок, без 15-секундного CDN-кэша)
+    # 1. Приоритет №1: Сверхбыстрый DexScreener bulk tokens (150-250мс) с priority=True (100% покрытие DEX)
     try:
-        jup_prices = await asyncio.wait_for(_jup_v3_bulk_prices(ms), timeout=1.2)
-        if isinstance(jup_prices, dict) and jup_prices:
-            out.update({k: v for k, v in jup_prices.items() if v and v > 0})
+        ds_out = await asyncio.wait_for(_ds_bulk_prices(ms, pair_hints=pair_hints, priority=priority), timeout=2.0)
+        if isinstance(ds_out, dict):
+            out.update({k: v for k, v in ds_out.items() if v and v > 0})
     except Exception:
         pass
 
     missing = [m for m in ms if m not in out or out[m] <= 0]
     if missing:
-        # 2. Фоллбэк на DexScreener bulk latest/dex/tokens (с таймаутом 2.5с)
+        # 2. Добираем через Jupiter Price v3 (для выпускников / пулов Jupiter)
         try:
-            ds_out = await asyncio.wait_for(_ds_bulk_prices(missing, pair_hints=pair_hints), timeout=2.5)
-            if isinstance(ds_out, dict):
-                out.update({k: v for k, v in ds_out.items() if v and v > 0})
+            jup_prices = await asyncio.wait_for(_jup_v3_bulk_prices(missing, priority=priority), timeout=1.2)
+            if isinstance(jup_prices, dict) and jup_prices:
+                out.update({k: v for k, v in jup_prices.items() if v and v > 0})
         except Exception:
             pass
 
@@ -660,7 +660,7 @@ async def get_bulk_prices(mints: list, pair_hints: dict = None) -> dict:
         try:
             from http_client import fetch_json
             url = f"https://api.geckoterminal.com/api/v2/simple/networks/solana/token_price/{','.join(missing[:30])}"
-            status, data = await fetch_json(url, timeout=0.9, retries=0)
+            status, data = await fetch_json(url, timeout=0.9, retries=0, priority=priority)
             if status == 200 and isinstance(data, dict):
                 prices = data.get("data", {}).get("attributes", {}).get("token_prices", {})
                 out.update({k: float(v) for k, v in prices.items() if float(v or 0) > 0})
@@ -678,7 +678,7 @@ async def get_bulk_prices(mints: list, pair_hints: dict = None) -> dict:
     return out
 
 
-async def _ds_bulk_prices(mints: list, pair_hints: dict = None) -> dict:
+async def _ds_bulk_prices(mints: list, pair_hints: dict = None, priority: bool = True) -> dict:
     """Балк-цены через DexScreener (работает и для Solana).
     Если передан pair_hints (mint -> pair_address), приоритет отдаётся ТОЧНОМУ пулу входа,
     чтобы переключение между побочными пулами не давало ложных -20% стопов.
@@ -695,7 +695,7 @@ async def _ds_bulk_prices(mints: list, pair_hints: dict = None) -> dict:
             continue
         pairs = []
         try:
-            status, data = await fetch_json(f"https://api.dexscreener.com/latest/dex/tokens/{','.join(chunk)}", timeout=2.0, retries=0)
+            status, data = await fetch_json(f"https://api.dexscreener.com/latest/dex/tokens/{','.join(chunk)}", timeout=2.0, retries=0, priority=priority)
             if status == 200 and isinstance(data, dict):
                 pairs = data.get("pairs") or []
         except Exception:

@@ -139,10 +139,11 @@ def _stagger_for(host: str) -> float:
     return DEFAULT_STAGGER
 
 
-async def _reserve_slot(url: str) -> float:
+async def _reserve_slot(url: str, priority: bool = False) -> float:
     """Резервирует слот старта: возвращает сколько секунд ждать.
-    Бронь (метка времени) ставится под gap-локом, само ожидание — снаружи,
-    поэтому 3 слота DS идут со стаггером 0.2с, а не строго по одному."""
+    При priority=True не задерживает жизненно важный трекинг Stop-Loss."""
+    if priority:
+        return 0.0
     host = _host_of(url)
     rpm = _limit_for(host)
     stagger = _stagger_for(host)
@@ -246,11 +247,13 @@ _OPTIONAL_PROXY = os.getenv("PROXY_URL") or os.getenv("HTTPS_PROXY") or os.geten
 
 
 async def fetch_json(url: str, params=None, headers=None, timeout: int = 12,
-                     retries: int = 1, method: str = "GET", json_payload=None, json_data=None):
+                     retries: int = 1, method: str = "GET", json_payload=None, json_data=None,
+                     priority: bool = False):
     """GET/POST JSON через ГЛОБАЛЬНЫЙ семафор + троттлинг + backoff на 429/5xx.
 
     Возвращает (status, data). data={} при неудаче. Никогда не кидает исключение.
-    12 токенов встают в очередь семафора и идут по 3 (DS) / по 1 (GT).
+    При priority=True (мониторинг цен открытых позиций) исполняется немедленно без
+    ожидания в очереди фоновых сканеров.
     """
     if json_payload is None and json_data is not None:
         json_payload = json_data
@@ -266,10 +269,13 @@ async def fetch_json(url: str, params=None, headers=None, timeout: int = 12,
     sem = _sem_for(host)
     last_status, last_err = 0, "?"
     for attempt in range(retries + 1):
-        wait = await _reserve_slot(url)
-        if wait > 0:
-            await asyncio.sleep(wait)
-        async with sem:
+        if not priority:
+            wait = await _reserve_slot(url, priority=False)
+            if wait > 0:
+                await asyncio.sleep(wait)
+
+        async def _execute_attempt():
+            nonlocal last_status, last_err
             try:
                 # Если задан прокси — пробуем на 1-й попытке. При ошибке автоматически идём напрямую (fail-open)
                 cur_proxy = _OPTIONAL_PROXY if (attempt == 0 and _OPTIONAL_PROXY) else None
@@ -289,18 +295,25 @@ async def fetch_json(url: str, params=None, headers=None, timeout: int = 12,
                         return r.status, {}
                     last_err = f"HTTP {r.status}"
                     if r.status == 429:
-                        # 429 не долбим повторами впритык: умеренный штраф
                         _note_429(host, penalty=3.0)
             except asyncio.TimeoutError:
                 last_err = "timeout"
             except Exception as e:
                 last_err = f"{type(e).__name__}"
+            return None
+
+        if priority:
+            res = await _execute_attempt()
+            if res is not None:
+                return res
+        else:
+            async with sem:
+                res = await _execute_attempt()
+                if res is not None:
+                    return res
+
         if attempt < retries:
-            if "429" in str(last_err):
-                await asyncio.sleep(0.5 + 0.5 * attempt)
-            else:
-                await asyncio.sleep(0.5 + 0.5 * attempt)
+            await asyncio.sleep(0.3 + 0.3 * attempt)
     if last_status != 429:
-        if last_status != 429:
-            print(f"🔌 API fail {host}{urlparse(url).path[:50]}: {last_err} (status {last_status})")
+        print(f"🔌 API fail {host}{urlparse(url).path[:50]}: {last_err} (status {last_status})")
     return last_status, {}

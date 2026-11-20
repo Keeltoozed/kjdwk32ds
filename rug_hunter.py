@@ -461,7 +461,7 @@ def evaluate_rug_hunter_exit(position, current_price: float) -> Optional[str]:
         src_u = str(getattr(position, "source", "") or "").upper()
         rh_mode = "CABAL-SURF" if "CABAL" in src_u else ("SEEDED-LP" if "SEEDED" in src_u else "UNLOCKED-LP")
 
-    is_unlocked_rh = (rh_mode == "UNLOCKED-LP") or bool(getattr(position, "is_unlocked_pool", False))
+    is_unlocked_rh = is_unlocked_or_seeded_mode(rh_mode) or bool(getattr(position, "is_unlocked_pool", False))
 
     # 1. Мгновенный срез при просадке ликвидности пула (вывод LP рагером)
     if isinstance(pd, dict) and pd:

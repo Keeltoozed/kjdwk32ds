@@ -906,9 +906,9 @@ def evaluate_entry_momentum(
 
     return True, "ok"
 
-STREAK_COOLDOWN_ENABLED = True
-STREAK_MAX_CONSECUTIVE_LOSSES = 3
-STREAK_COOLDOWN_MINUTES = 15.0
+STREAK_COOLDOWN_ENABLED = False  # Отключено: на $2 ставках серия мелких скретчей не должна замораживать торговлю ракетами на 15-30 мин!
+STREAK_MAX_CONSECUTIVE_LOSSES = 5
+STREAK_COOLDOWN_MINUTES = 3.0
 
 ROLLING_BREAKER_ENABLED = False
 ROLLING_BREAKER_WINDOW = 8
@@ -1405,7 +1405,7 @@ EARLY_MOMENTUM_MAX_LOSS_PCT = -12.0      # Срез при подтверждё�
 # «🎯 RUG-HUNTER:SEEDED-LP» или «🎯 RUG-HUNTER:CABAL-SURF» — чтобы отдельно оценивать PnL и Winrate!
 RUG_HUNTER_ENABLED = True                 # Включить стратегию охоты на ранние фазы незалоченных пулов и кабалов
 RUG_HUNTER_UNLOCKED_LP_ENABLED = True     # Режим A: ранний вход в незалоченные пулы (без honeypot/freeze/instant-rugger)
-RUG_HUNTER_SEEDED_LP_ENABLED = True       # Режим A2: ранний сёрф посеянных slow-cook пулов (0.95 <= liq/fdv <= 2.25) с живыми продажами >= 12
+RUG_HUNTER_SEEDED_LP_ENABLED = False      # Режим A2: ОТКЛЮЧЕН (99% посеянных custom-пулов liq/fdv >= 0.95 вроде 愛 — это мгновенный 60с дрейн LP)
 RUG_HUNTER_CABAL_SURF_ENABLED = True      # Режим B: ранний сёрф залоченных пулов с кабал/инсайдер-сеткой (<=8м)
 RUG_HUNTER_MAX_SLOTS = 2                  # Макс. 2 одновременных слота под Rug-Hunter (2 слота всегда свободны под чистые ракеты)
 RUG_HUNTER_SIZE_MULT = 0.65               # Уменьшенный риск-сайз (65% от обычного ордера)
