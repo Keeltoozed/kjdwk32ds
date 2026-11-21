@@ -1179,7 +1179,13 @@ async def _evaluate_and_buy_inner(mint: str, td: dict, analyzer, tracker, source
             _of_feat_j.setdefault("dex", str((td or {}).get("dexId") or "").lower())
 
         _sig_fin_j = analyzer.get_signal(mint)
+        _ca_j_pre = float((td or {}).get("pairCreatedAt") or 0)
+        _age_j_pre = ((time.time() * 1000.0 - _ca_j_pre) / 60000.0) if _ca_j_pre > 0 else 0.0
         _rh_mode_j = str((td or {}).get("_rug_hunter_mode") or "").strip()
+        if _rh_mode_j and _age_j_pre > 2.2:
+            _rh_mode_j = ""
+            if isinstance(td, dict):
+                td.pop("_rug_hunter_mode", None)
         if _rh_mode_j and "RUG-HUNTER" not in str(_sig_fin_j or "").upper():
             import rug_hunter as _rh_js
             _sig_fin_j = _rh_js.format_rug_hunter_source(_rh_mode_j, _mint_ml_conf, (td or {}).get("_rug_hunter_creator_profile"))

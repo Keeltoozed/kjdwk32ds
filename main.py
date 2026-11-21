@@ -2354,7 +2354,12 @@ async def scanner_loop(analyzer, tracker):
                                             print(f"🚫 [SCANNER PRE-FLIGHT GOPLUS] {actual_symbol} ({mint[:8]}): {_g_why} — вход заблокирован!")
                                             continue
 
+                                    _ca_sc_pre = float(pair_data.get("pairCreatedAt") or 0)
+                                    _age_sc_pre = ((time.time() * 1000.0 - _ca_sc_pre) / 60000.0) if _ca_sc_pre > 0 else 0.0
                                     _rh_mode_sc = str(pair_data.get("_rug_hunter_mode") or "").upper().strip()
+                                    if _rh_mode_sc and _age_sc_pre > 2.2:
+                                        _rh_mode_sc = ""
+                                        pair_data.pop("_rug_hunter_mode", None)
                                     _is_rh_sc_pf = bool(_rh_mode_sc) or ("RUG-HUNTER" in str(analyzer.get_signal(mint) or "").upper())
                                     _is_rh_unl_sc = bool(_is_rh_sc_pf and _rh_mode_sc in ("UNLOCKED-LP", "SEEDED-LP") and getattr(config, "RUG_HUNTER_ENABLED", False) and getattr(config, "RUG_HUNTER_UNLOCKED_LP_ENABLED", False))
                                     if _is_rh_sc_pf:

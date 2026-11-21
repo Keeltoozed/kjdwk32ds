@@ -264,6 +264,14 @@ class GrokJevEngine:
             _orig_mint, _orig_liq, _orig_ca, _orig_ts = _prev_r
             if (time.time() - _orig_ts) < 86400.0 and _orig_liq >= 60000.0 and _raw_liq_cc < (_orig_liq * 0.25):
                 if _orig_ca > 0 and _ca_cc > _orig_ca:
+                    # НЕ блокировать, если новый пул имеет сильный органический приток покупателей!
+                    # (кейсы DCTY +3,185%, PATRICK +249% — повторный запуск или перенос пула часто становится ракетой)
+                    _tx_cc = pair_data.get("txns", {}).get("m5", {}) if isinstance(pair_data, dict) else {}
+                    _b5_cc = int(_tx_cc.get("buys", 0) or 0)
+                    _s5_cc = int(_tx_cc.get("sells", 0) or 0)
+                    _v5_cc = float(pair_data.get("volume", {}).get("m5", 0) or pair_data.get("volume", {}).get("h24", 0) or 0)
+                    if _b5_cc >= 25 and _b5_cc >= int(_s5_cc * 1.15) and _v5_cc >= 2000.0:
+                        return True, f"copycat-organic-flow ({_b5_cc}b/{_s5_cc}s, vol5 ${_v5_cc:,.0f})"
                     return False, f"copycat-of-runner {symbol} (clone of {_orig_mint[:6]} liq ${_orig_liq:,.0f})"
         if _raw_liq_cc >= 60000.0 and (_h24_cc >= 200.0 or _fdv_cc >= 250000.0):
             if (not _prev_r) or _raw_liq_cc > _prev_r[1]:
@@ -2618,8 +2626,23 @@ class GrokJevEngine:
         _is_unlocked_custom_fin = _c.is_position_unlocked_lp(address, pair, bool(pair.get("_lp_verified")))
         _rh_mode_jev_fin = str(pair.get("_rug_hunter_mode") or "").strip()
         _is_rh_jev_fin = bool(_rh_mode_jev_fin)
-        if _is_rh_jev_fin and (rkt_s1 + 0.05) >= float(getattr(_c, "RUG_HUNTER_STAGE1_MIN_ML", 5.0)):
+
+        # Защита от фантомных входов: Rug-Hunter работает ТОЛЬКО на ранних пулах (<=2.2м)!
+        # Если пул старше 2.2м (кейс HORSE 6м, CATME 16м) — сбрасываем метку Rug-Hunter!
+        if _is_rh_jev_fin and _fin_age_m > 2.2:
+            _is_rh_jev_fin = False
+            _rh_mode_jev_fin = ""
+            pair.pop("_rug_hunter_mode", None)
+
+        if _is_rh_jev_fin and (rkt_s1 + 0.05) >= float(getattr(_c, "RUG_HUNTER_STAGE1_MIN_ML", 3.5)):
             rkt_final = max(rkt_final, rkt_s1)
+
+        # Защита от 1-минутных ловушек SEEDED-LP (кейс BFC 49% -> раг): требуем ML-скор >= 55%
+        if "SEEDED" in _rh_mode_jev_fin.upper():
+            _seeded_min_g = float(getattr(_c, "RUG_HUNTER_SEEDED_MIN_ML", 55.0))
+            if rkt_final < _seeded_min_g:
+                print(f"🚫 [GROK-JEV-SEEDED-TRAP] {symbol} ({address[:8]}): SEEDED-LP ML {rkt_final:.1f}% < {_seeded_min_g:.0f}% — VETO!")
+                return False, f"seeded-low-conf {rkt_final:.0f}% < {_seeded_min_g:.0f}%"
         _is_mom_rocket_fin = (
             not _is_unlocked_custom_fin
             and _fin_m5 >= 2.0

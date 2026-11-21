@@ -1003,12 +1003,18 @@ class Analyzer:
 
     def _apply_verified_lp_meta(self, mint: str, pair_dict: dict) -> dict:
         if isinstance(pair_dict, dict):
+            _ca = float(pair_dict.get("pairCreatedAt") or 0)
+            _cur_age_p = ((time.time() * 1000.0 - _ca) / 60000.0) if _ca > 0 else 0.0
             _meta_map = getattr(self, "_verified_lp_meta", None)
             if isinstance(_meta_map, dict):
                 _pa = str(pair_dict.get("pairAddress") or "").strip()
                 _meta = _meta_map.get((mint, _pa)) or _meta_map.get((mint, ""))
                 if isinstance(_meta, dict):
                     for _mk, _mv in _meta.items():
+                        # Защита от фантомных входов: НЕ натягивать _rug_hunter_mode на старые пулы (>2.2м)!
+                        # Иначе токен в возрасте 6м/16м покупается как RUG-HUNTER и сбрасывается через 2с (кейсы HORSE, CATME)
+                        if _mk in ("_rug_hunter_mode", "_rug_hunter_creator_profile") and _cur_age_p > 2.2:
+                            continue
                         if _mk not in pair_dict:
                             pair_dict[_mk] = _mv
             _last_p = getattr(self, "_last_analyzed_pair", {}).get(mint)
@@ -1018,6 +1024,8 @@ class Analyzer:
                     "_pumpswap_canonical", "_pumpswap_lp_burned", "_pumpswap_rpc_unverified",
                     "_rug_hunter_mode", "_rug_hunter_creator_profile", "_rug_hunter_watch",
                 ):
+                    if _fk in ("_rug_hunter_mode", "_rug_hunter_creator_profile") and _cur_age_p > 2.2:
+                        continue
                     if _fk in _last_p and _fk not in pair_dict:
                         pair_dict[_fk] = _last_p[_fk]
         return pair_dict
@@ -2652,7 +2660,7 @@ class Analyzer:
                         "low liquidity", "single holder", "high holder concentration", "top 10 holders", "high ownership"
                     )
                     _lp_unlock_terms_main = (
-                        "large amount of lp unlocked", "lp provider", "single lp provider", "lp not locked", "unlocked lp"
+                        "large amount of lp unlocked", "lp provider", "single lp provider", "lp not locked", "unlocked lp", "high liquidity risk", "liquidity risk", "unlocked"
                     )
                     _allowed_lp_terms_main = (
                         (*_holder_terms_main, *_lp_unlock_terms_main)
@@ -2682,7 +2690,7 @@ class Analyzer:
                             if any(k in str(rk.get("name", "")).lower() for k in _lp_unlock_terms_main)
                         )
                         _rc_no_lp_score = max(0.0, _rc_score - _rc_lp_only_pen)
-                        if _rc_lp_only_pen > 0 and _rc_no_lp_score < 2600.0 and getattr(config, "RUG_HUNTER_ENABLED", False) and getattr(config, "RUG_HUNTER_UNLOCKED_LP_ENABLED", False):
+                        if _rc_lp_only_pen > 0 and _rc_no_lp_score < 3200.0 and getattr(config, "RUG_HUNTER_ENABLED", False) and getattr(config, "RUG_HUNTER_UNLOCKED_LP_ENABLED", False):
                             try:
                                 import rug_hunter as _rh_rc
                                 _rh_creator_prof_a = await _rh_rc.profile_creator_rug_timing(_rc_creator, mint)

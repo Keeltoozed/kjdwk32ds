@@ -643,7 +643,15 @@ def evaluate_entry_momentum(
         and m1 >= -1.0
         and h1 >= 0.0
     )
-    _m5_min_req = 3.0 if _is_high_conviction_accum else (3.5 if _is_fresh_mig_early_launch else (5.0 if _is_clean_grad_flow else (6.0 if (_is_heavy_vol_launch or _is_rh_early_seed_flow) else 8.0)))
+    _is_strong_buyer_surge = (
+        not is_curve
+        and age_min <= 8.0
+        and liq_usd >= 7500.0
+        and vol5_usd >= 1500.0
+        and buys5 >= max(18, int(sells5 * 1.25))
+        and m1 >= -1.0
+    )
+    _m5_min_req = 3.0 if (_is_high_conviction_accum or _is_strong_buyer_surge) else (3.5 if _is_fresh_mig_early_launch else (5.0 if _is_clean_grad_flow else (6.0 if (_is_heavy_vol_launch or _is_rh_early_seed_flow) else 8.0)))
     _is_bullish_pullback_dip = (
         -18.0 <= m5 < _m5_min_req
         and h1 >= 15.0
@@ -1416,7 +1424,8 @@ RUG_HUNTER_CABAL_SURF_ENABLED = True      # Режим B: ранний сёрф 
 RUG_HUNTER_MAX_SLOTS = 2                  # Макс. 2 одновременных слота под Rug-Hunter (2 слота всегда свободны под чистые ракеты)
 RUG_HUNTER_SIZE_MULT = 0.65               # Уменьшенный риск-сайз (65% от обычного ордера)
 RUG_HUNTER_UNLOCKED_MIN_AGE_MIN = 0.15     # Минимум 0.15м (9с): вход на самом старте разгона первой свечи
-RUG_HUNTER_UNLOCKED_MAX_AGE_MIN = 1.80     # Максимум 1.80м: НЕ входим позже 1.8м (девы дрейнят незалоченные пулы на 3.0-4.0м!)
+RUG_HUNTER_UNLOCKED_MAX_AGE_MIN = 3.20     # Максимум 3.20м: вход на первых свечах жизни пула (учитывает 60-90с задержку индексации DexScreener/Gecko)
+RUG_HUNTER_ROCKET_MAX_POOL_AGE_MIN = 8.0   # Максимальный возраст пула для летящих ракет (PnL >= +15%): даём ракете бежать до 8м, собирая TP1 (+35%), TP2 (+80%) и трейлинг!
 RUG_HUNTER_CABAL_MAX_AGE_MIN = 4.5         # Максимум 4.5м для кабал-сёрфа
 RUG_HUNTER_MIN_LIQ_USD = 7500.0            # Минимум $7.5k реальной ликвидности (едино с MIN_GRADUATED_LIQ_USD)
 RUG_HUNTER_MIN_VOL5_USD = 350.0            # Минимум $350 объёма за 5м на ультра-старте (ловит ракеты на 15-30 секундах, кейсы NICKEH30, USELESS, SHELF)
@@ -1424,7 +1433,7 @@ RUG_HUNTER_EARLY_AGE_THRESHOLD = 1.8       # Порог ультра-ранне�
 RUG_HUNTER_EARLY_MIN_SELLS = 1             # Достаточно 1 продажи для подтверждения sellable на старте (на 0.5м допускается 0 при сильных покупках)
 RUG_HUNTER_EARLY_MIN_BUYS = 6              # Достаточно 6 покупок на ультра-старте (вместо 25), если есть перевес покупателей
 RUG_HUNTER_STAGE1_MIN_ML = 3.5             # Смягчённый порог Stage-1 ML для ранних ракет (unblock кейса DOOM +940% conf=4.9%)
-RUG_HUNTER_SEEDED_MIN_ML = 55.0            # Минимальный ML-скор для посеянных пулов (SEEDED-LP): блокирует фейк-раги вроде 愛 (42%) и пропускает SURVIVE (84%), GTA (66%)
+RUG_HUNTER_SEEDED_MIN_ML = 55.0            # Минимальный ML-скор для посеянных пулов (SEEDED-LP): блокирует BFC (49%) и 愛 (42%), пропускает CHAD (86%), BITINU (62%), MEME (76%)
 RUG_HUNTER_SEEDED_MIN_BUYS = 16            # Реальные покупатели для посеянных пулов
 RUG_HUNTER_SEEDED_MIN_SELLS = 2            # Минимум 2 продажи для подтверждения ликвидности
 RUG_HUNTER_SEEDED_MIN_VOL5 = 2500.0        # Органический объём для посеянных пулов
@@ -1458,6 +1467,7 @@ RUG_HUNTER_UNLOCKED_TP2_PCT = 0.80        # TP2 +80%..+100% (2x): продаём
 RUG_HUNTER_UNLOCKED_TP2_SELL_FRAC = 1.00
 RUG_HUNTER_UNLOCKED_MAX_HOLD_MIN = 2.2    # Потолок 2.2м удержания при pnl >= +8%: забираем профит до дрейна!
 RUG_HUNTER_UNLOCKED_SAFETY_MIN = 2.5      # Лимит 2.5м удержания: выход до начала типичного 3.5м окна вывода LP
-RUG_HUNTER_UNLOCKED_MAX_POOL_AGE_MIN = 3.2 # Жесткий потолок общего возраста пула (3.2м): выход ДО 4м дрейна (кейсы SHARE 4м, LAZARUS 8м)!
+RUG_HUNTER_UNLOCKED_MAX_POOL_AGE_MIN = 3.2 # Жесткий потолок общего возраста пула (3.2м) для застрявших/слабых позиций (PnL < +15%)
+RUG_HUNTER_ROCKET_MAX_POOL_AGE_MIN = 6.0   # Расширенный потолок (6.0м) для растущих ракет (PnL >= +15%): даёт собрать 2x-5x до TP/трейла!
 RUG_HUNTER_UNLOCKED_STALL_SEC = 25.0      # 25с без нового ATH после пика >= +30% и откат 8% -> эвакуация до рага
 RUG_HUNTER_UNLOCKED_TRAIL_DROP_PCT = 0.12 # Плотный трейл 12% от ATH для незалоченных пулов

@@ -262,6 +262,9 @@ def qualify_unlocked_lp_hunter(
         return False, f"rh-too-late {age_min:.1f}m > {max_age:.1f}m"
 
     min_liq = float(getattr(config, "RUG_HUNTER_MIN_LIQ_USD", 7500.0))
+    # Fallback: если DexScreener не успел заполнить volume.m5 для свежего пула (<5м), берём volume.h24/h1:
+    if vol5_usd <= 0 and age_min <= 5.0 and isinstance(pair_data, dict):
+        vol5_usd = float((pair_data.get("volume") or {}).get("h24", 0) or (pair_data.get("volume") or {}).get("h1", 0) or 0.0)
     # Динамический порог объёма: на ультра-раннем старте (15-40с) достаточно $350-$600:
     if age_min <= 0.6:
         min_vol5 = float(getattr(config, "RUG_HUNTER_MIN_VOL5_USD", 350.0))
@@ -361,7 +364,8 @@ def qualify_unlocked_lp_hunter(
     _h1_val = pair_data.get("priceChange", {}).get("h1", 0) if isinstance(pair_data, dict) else 0
     _h1_val = float(_h1_val or 0)
     if _h1_val > 0 and abs(_h1_val - m5) < 0.5 and m5 >= 18.0 and age_min >= 1.2 and m1 is not None and m1 == 0:
-        return False, f"rh-dead-pump-peak m5={m5:.1f}%==h1={_h1_val:.1f}% первая свеча уже отыграна"
+        if not (buys5 >= max(18, int(sells5 * 1.3)) and vol5_usd >= 2500.0):
+            return False, f"rh-dead-pump-peak m5={m5:.1f}%==h1={_h1_val:.1f}% первая свеча уже отыграна"
 
     # Концентрация холдеров (если известна): отсекаем явных 50%+ монополистов
     if dev_pct > 25.0:
@@ -563,13 +567,18 @@ def evaluate_rug_hunter_exit(position, current_price: float) -> Optional[str]:
         if pnl_pct >= _unl_tp2_val:
             return f"🎯 RH Full Harvest (+{pnl_pct*100:.1f}%, цель +{_unl_tp2_val*100:.0f}% достигнута — 100% выход в кэш!)"
 
-        # Б. Жесткий потолок общего возраста пула (Pre-Rug Evac):
-        # Девы выводят LP на 3.5-8.0м (SHARE 4м, LAZARUS 8м). На 3.2м возраста пула — 100% эвакуация в кэш!
+        # Б. Потолок общего возраста пула (Pre-Rug Evac):
+        # 1) Для слабых/застрявших позиций (PnL < +15%): строгая эвакуация на 3.2м до раг-окна дева (SHARE 4м, LAZARUS 8м)!
+        # 2) Для растущих ракет (PnL >= +15%): НЕ душим ракету на старте! Даём ей лететь до TP1 (+35%), TP2 (+80%)
+        #    или трейлинг-стопа с расширенным потолком до 8.0м (кейсы CHAD +30%, BITINU +25%, RAWDOG +22%, DESPAIR +21%)!
         _pd_c_ms = (pd.get("pairCreatedAt") or 0) if isinstance(pd, dict) else 0
         pool_age_min = ((now_ts * 1000.0 - _pd_c_ms) / 60000.0) if _pd_c_ms > 0 else (minutes_held + 0.3)
-        _max_pool_age = float(getattr(config, "RUG_HUNTER_UNLOCKED_MAX_POOL_AGE_MIN", 3.2))
-        if pool_age_min >= _max_pool_age:
-            return f"🎯 RH Pre-Rug Evac (+{pnl_pct*100:+.1f}%, возраст пула {pool_age_min:.1f}м >= {_max_pool_age:.1f}м — эвакуация до рага дева!)"
+        _base_max_age = float(getattr(config, "RUG_HUNTER_UNLOCKED_MAX_POOL_AGE_MIN", 3.2))
+        _rocket_max_age = float(getattr(config, "RUG_HUNTER_ROCKET_MAX_POOL_AGE_MIN", 8.0))
+        _effective_max_pool_age = _rocket_max_age if pnl_pct >= 0.15 else _base_max_age
+        if pool_age_min >= _effective_max_pool_age:
+            _evac_msg = f"фиксация прибыли на ракете (+{pnl_pct*100:+.1f}%)" if pnl_pct >= 0.15 else "эвакуация до рага дева!"
+            return f"🎯 RH Pre-Rug Evac (+{pnl_pct*100:+.1f}%, возраст пула {pool_age_min:.1f}м >= {_effective_max_pool_age:.1f}м — {_evac_msg})"
 
         # В. Застой без взлёта (Stagnation Evac): если за 1.8м в позиции монета не набрала даже +15%:
         # Реальная ракета взлетает в первые 60-90 секунд (PUMPAPI, BAS, DRILL, GTA).
