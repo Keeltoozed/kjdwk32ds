@@ -2454,9 +2454,12 @@ class Analyzer:
                         liq_usd=raw_liq, fdv_usd=fdv_val, vol5_usd=_vm5_pre,
                         buys5=_b5_pre, sells5=_s5_pre, m5=_m5, m1=_m1, h1=_h1,
                     )
-                    # Для SEEDED-LP (посеянные пулы) строго требуем ML-скор >= 55% (блокируем 1-мин раги вроде 愛 42%!):
+                    # Для SEEDED-LP (посеянные пулы) требуем ML-скор:
+                    # < 0.8м: >= 45% (ловим ранние ракеты — ML ещё не раскачан)
+                    # >= 0.8м: >= 55% (блокируем 1-мин раги вроде 愛 42%!)
                     _is_seeded_s1 = bool(fdv_val > 0 and raw_liq >= (fdv_val * 0.95))
-                    if _is_seeded_s1 and conf < float(getattr(config, "RUG_HUNTER_SEEDED_MIN_ML", 55.0)):
+                    _seeded_ml_thr = 45.0 if _age_min_pre < 0.8 else float(getattr(config, "RUG_HUNTER_SEEDED_MIN_ML", 55.0))
+                    if _is_seeded_s1 and conf < _seeded_ml_thr:
                         _is_rh_stage1_cand = False
                     else:
                         _is_rh_stage1_cand = bool(_rh_s1_ok)
@@ -3212,9 +3215,13 @@ class Analyzer:
                 return self._deny(mint, f"rocket-xgb-s2 {conf:.0f}%", f"🚫 [ROCKET-XGB-S2] {symbol} ({mint[:8]}): скор с учётом холдеров {conf:.1f}% < {_final_thr:.0f}% — отсев.")
 
             _rh_mode_fin = str((pair_data or {}).get("_rug_hunter_mode") or "").strip()
-            # Защита от 1-минутных ловушек SEEDED-LP: требуем уверенность ML >= 55% (блокирует кейс 愛 42%):
-            if "SEEDED" in _rh_mode_fin.upper() and conf < float(getattr(config, "RUG_HUNTER_SEEDED_MIN_ML", 55.0)):
-                return self._deny(mint, f"seeded-low-conf {conf:.0f}%<55%", f"🚫 [SEEDED-LP-TRAP] {symbol} ({mint[:8]}): посеянный пул со слабым ML {conf:.1f}% < 55.0% — риск 1-мин рага (кейс 愛).")
+            # Защита от 1-минутных ловушек SEEDED-LP:
+            # < 0.8м возраст → 45% порог (ранние ракеты), >= 0.8м → 55% (блокирует 愛 42%):
+            if "SEEDED" in _rh_mode_fin.upper():
+                _age_fin = float((pair_data or {}).get("_age_min", 1.0) or 1.0)
+                _seeded_ml_fin = 45.0 if _age_fin < 0.8 else float(getattr(config, "RUG_HUNTER_SEEDED_MIN_ML", 55.0))
+                if conf < _seeded_ml_fin:
+                    return self._deny(mint, f"seeded-low-conf {conf:.0f}%<{_seeded_ml_fin:.0f}%", f"🚫 [SEEDED-LP-TRAP] {symbol} ({mint[:8]}): посеянный пул со слабым ML {conf:.1f}% < {_seeded_ml_fin:.0f}% — риск рага (кейс 愛).")
             if _rh_mode_fin:
                 import rug_hunter as _rh_sig
                 _pass_sig = _rh_sig.format_rug_hunter_source(

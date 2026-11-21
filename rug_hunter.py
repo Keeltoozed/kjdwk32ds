@@ -281,9 +281,21 @@ def qualify_unlocked_lp_hunter(
         return False, f"rh-synthetic-liq-fdv liq=${liq_usd:,.0f} fdv=${fdv_usd:,.0f}"
     # Специфический барьер для SEEDED-LP: отсекаем 1-минутные фейк-пулы (кейс 愛):
     if is_seeded_ratio:
-        _min_seeded_vol = float(getattr(config, "RUG_HUNTER_SEEDED_MIN_VOL5", 2500.0))
-        _min_seeded_buys = int(getattr(config, "RUG_HUNTER_SEEDED_MIN_BUYS", 16))
-        _min_seeded_sells = int(getattr(config, "RUG_HUNTER_SEEDED_MIN_SELLS", 2))
+        # Адаптивные пороги SEEDED-LP в зависимости от возраста:
+        # Молодые (< 0.8м): меньше требований — ловим ранний старт (кейсы USDC +1403%, ZCAT +426%)
+        # Зрелые (>= 0.8м): больше требований — ждём подтверждения импульса
+        if age_min < 0.8:
+            _min_seeded_vol = max(600.0, float(getattr(config, "RUG_HUNTER_SEEDED_MIN_VOL5", 2500.0)) * 0.25)
+            _min_seeded_buys = max(8, int(getattr(config, "RUG_HUNTER_SEEDED_MIN_BUYS", 16)) // 2)
+            _min_seeded_sells = 1
+        elif age_min < 1.5:
+            _min_seeded_vol = max(1200.0, float(getattr(config, "RUG_HUNTER_SEEDED_MIN_VOL5", 2500.0)) * 0.5)
+            _min_seeded_buys = max(10, int(getattr(config, "RUG_HUNTER_SEEDED_MIN_BUYS", 16)) * 2 // 3)
+            _min_seeded_sells = int(getattr(config, "RUG_HUNTER_SEEDED_MIN_SELLS", 2))
+        else:
+            _min_seeded_vol = float(getattr(config, "RUG_HUNTER_SEEDED_MIN_VOL5", 2500.0))
+            _min_seeded_buys = int(getattr(config, "RUG_HUNTER_SEEDED_MIN_BUYS", 16))
+            _min_seeded_sells = int(getattr(config, "RUG_HUNTER_SEEDED_MIN_SELLS", 2))
         if vol5_usd < _min_seeded_vol:
             return False, f"rh-seeded-low-vol5 ${vol5_usd:,.0f} < ${_min_seeded_vol:,.0f}"
         if buys5 < _min_seeded_buys:
@@ -526,15 +538,18 @@ def evaluate_rug_hunter_exit(position, current_price: float) -> Optional[str]:
 
     # 3. СПЕЦИФИЧЕСКИЕ ВЫХОДЫ ДЛЯ НЕЗАЛОЧЕННЫХ ПУЛОВ (UNLOCKED-LP):
     # Предотвращают попадание под RemoveLiquidity дева на 2.5-3.5м (кейсы VI, ALTRUISTS, RINGS, GTA)!
-    if is_unlocked_rh:
+    is_seeded_rh = "SEEDED" in rh_mode  # SEEDED-LP: pump.fun bonding curve — нет риска LP-дрейна, долго растут
+
+    if is_unlocked_rh and not is_seeded_rh:
+        # ======= UNLOCKED-LP: настоящие незалоченные пулы — дев ВЫВЕДЕТ LP на 2.5-3.5м =======
+
         # А. Полный сбор профита на 2x (+80%..+110%):
-        # На незалоченном пуле ДЕВ ВЫВЕДЕТ LP, поэтому на 2x забираем 100% В КЭШ (никаких мунбэгов под нож дева, кейс GTA +110%)!
         _unl_tp2_val = float(getattr(config, "RUG_HUNTER_UNLOCKED_TP2_PCT", 0.80))
         if pnl_pct >= _unl_tp2_val:
             return f"🎯 RH Unlocked 2x Full Harvest (+{pnl_pct*100:.1f}%, цель +{_unl_tp2_val*100:.0f}% достигнута — 100% выход в кэш!)"
 
         # Б. Жесткий потолок общего возраста пула (Pre-Rug Evac):
-        # Девы выводят LP на 2.5-3.5м. Если общему возрасту пула стукнуло 2.0м — выходим на 100% В КЭШ!
+        # Девы выводят LP на 2.5-3.5м. Если общему возрасту пула стукнуло 2.0м — выходим 100%!
         _pd_c_ms = (pd.get("pairCreatedAt") or 0) if isinstance(pd, dict) else 0
         pool_age_min = ((now_ts * 1000.0 - _pd_c_ms) / 60000.0) if _pd_c_ms > 0 else (minutes_held + 0.3)
         _max_pool_age = float(getattr(config, "RUG_HUNTER_UNLOCKED_MAX_POOL_AGE_MIN", 2.0))
@@ -549,27 +564,54 @@ def evaluate_rug_hunter_exit(position, current_price: float) -> Optional[str]:
         if minutes_held >= _unl_safety_max:
             return f"🎯 RH Unlocked Safety Time-Cap ({pnl_pct*100:+.1f}%, {_unl_safety_max:.1f}м лимит безопасности — выход до LP-рага)"
 
-        # Б. Застой после пампа: если монета сделала пик >= +30% и 25 секунд не обновляет хай при откате >= 8%:
-        # На незалоченном пуле это сигнал, что покупатели кончились, и дев сейчас нажмет RemoveLiquidity!
+        # Г. Застой после пампа: монета сделала пик >= +30% и >= 25с не обновляет хай при откате >= 8%:
         peak_ts = float(getattr(position, "peak_time", now_ts) or now_ts)
         peak_age_sec = max(0.0, now_ts - peak_ts)
         _unl_stall_s = float(getattr(config, "RUG_HUNTER_UNLOCKED_STALL_SEC", 25.0))
         if max_pnl_pct >= 0.30 and peak_age_sec >= _unl_stall_s and drop_from_peak >= 0.08:
             return f"🎯 RH Unlocked Stall Evac (+{pnl_pct*100:+.1f}%, застой {peak_age_sec:.0f}с после пика +{max_pnl_pct*100:.1f}% — эвакуация до рага)"
 
-        # В. Плотный трейлинг-стоп 12% от пика (вместо широкого 22%):
+        # Д. Плотный трейлинг-стоп 12% от пика:
         _unl_trail_drop = float(getattr(config, "RUG_HUNTER_UNLOCKED_TRAIL_DROP_PCT", 0.12))
         if max_pnl_pct >= 0.30 and drop_from_peak >= _unl_trail_drop:
             return f"🎯 RH Unlocked Tight Trail (+{pnl_pct*100:+.1f}%, откат {drop_from_peak*100:.1f}% от пика +{max_pnl_pct*100:.1f}%)"
 
+    elif is_seeded_rh:
+        # ======= SEEDED-LP: pump.fun bonding curve — ДОЛГО растут, нет LP-дрейна от дева! =======
+        # Не используем Pre-Rug Evac и короткие Safety-лимиты — позволяем расти 10-15 минут
+
+        # А. Полный сбор иксов на +80%+:
+        _seed_tp2 = float(getattr(config, "RUG_HUNTER_UNLOCKED_TP2_PCT", 0.80))
+        if pnl_pct >= _seed_tp2:
+            return f"🎯 RH Seeded Full Harvest (+{pnl_pct*100:.1f}%, цель +{_seed_tp2*100:.0f}% — 100% выход!)"
+
+        # Б. Мунбэг-трейлинг при откате от пика (активируется с +35%, стоп при откате 20%):
+        seed_trail_act = float(getattr(config, "RUG_HUNTER_TRAIL_ACT_PCT", 0.35))
+        seed_trail_drop = float(getattr(config, "RUG_HUNTER_TRAIL_DROP_PCT", 0.22))
+        if max_pnl_pct >= seed_trail_act and drop_from_peak >= seed_trail_drop:
+            return f"🎯 RH Seeded Trail (+{pnl_pct*100:+.1f}%, откат {drop_from_peak*100:.1f}% от пика +{max_pnl_pct*100:.1f}%)"
+
+        # В. Застой без движения (> 3 минут в нуле — сбрасываем, ракета не взлетела):
+        peak_ts = float(getattr(position, "peak_time", now_ts) or now_ts)
+        peak_age_sec = max(0.0, now_ts - peak_ts)
+        _seed_stall_s = float(getattr(config, "RUG_HUNTER_UNLOCKED_STALL_SEC", 25.0))
+        if max_pnl_pct >= 0.25 and peak_age_sec >= _seed_stall_s and drop_from_peak >= 0.12:
+            return f"🎯 RH Seeded Stall Evac (+{pnl_pct*100:+.1f}%, застой {peak_age_sec:.0f}с после пика +{max_pnl_pct*100:.1f}%)"
+
+        # Г. Тайм-кэп: максимум 12 минут (достаточно для огромных иксов, защита от зависания):
+        _seed_max_hold = float(getattr(config, "RUG_HUNTER_MAX_HOLD_MIN", 5.0))
+        seed_hold_cap = max(_seed_max_hold, 12.0) if pnl_pct >= 0.10 else max(_seed_max_hold, 5.0)
+        if minutes_held >= seed_hold_cap:
+            return f"🎯 RH Seeded Time-Cap ({pnl_pct*100:+.1f}%, лимит {seed_hold_cap:.0f}м)"
+
     else:
-        # 4. Мунбэг-трейлинг стоп для SEEDED / CABAL / LOCKED:
+        # ======= CABAL / LOCKED: залоченные пулы — самая широкая свобода =======
         trail_act = float(getattr(config, "RUG_HUNTER_TRAIL_ACT_PCT", 0.35))
         trail_drop = float(getattr(config, "RUG_HUNTER_TRAIL_DROP_PCT", 0.22))
         if max_pnl_pct >= trail_act and drop_from_peak >= trail_drop:
             return f"🎯 RH Moonbag Trail (+{pnl_pct*100:+.1f}%, откат {drop_from_peak*100:.1f}% от пика +{max_pnl_pct*100:.1f}%)"
 
-        # Тайм-кэп для защищённых/залоченных пулов (до 15 минут):
+        # Тайм-кэп для залоченных пулов (до 15 минут):
         base_max_hold = 15.0 if pnl_pct >= 0.15 else float(getattr(config, "RUG_HUNTER_MAX_HOLD_MIN", 5.0))
         if minutes_held >= base_max_hold:
             return f"🎯 RH Time-Cap Exit ({pnl_pct*100:+.1f}%, лимит {base_max_hold:.1f}м для {rh_mode})"
