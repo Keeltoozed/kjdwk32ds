@@ -302,6 +302,12 @@ def qualify_unlocked_lp_hunter(
             return False, f"rh-seeded-few-buys {buys5} < {_min_seeded_buys}"
         if sells5 < _min_seeded_sells:
             return False, f"rh-seeded-few-sells {sells5} < {_min_seeded_sells}"
+        # LAZARUS-guard: высокая liq ($80k+) при малом числе байеров (< 100) = whale wash/trap!
+        # Настоящие pump.fun bonding curve имеют liq $10k-$40k и 150+ органических байеров.
+        # LAZARUS: liq=$81k, buys=82, avg_tx=$368 → полный вывод ликвидности через 8 минут!
+        avg_tx_seeded = vol5_usd / max(1, buys5 + sells5)
+        if liq_usd > 50000.0 and buys5 < 120 and avg_tx_seeded > 150.0:
+            return False, f"rh-seeded-whale-wash liq=${liq_usd:,.0f} buys={buys5} avg_tx=${avg_tx_seeded:.0f}"
     if fdv_usd > float(getattr(config, "RUG_HUNTER_MAX_FDV_USD", 250000.0)):
         return False, f"rh-fdv-too-high ${fdv_usd:,.0f}"
 
@@ -348,6 +354,15 @@ def qualify_unlocked_lp_hunter(
             return False, f"rh-m5-out-of-range {m5:+.1f}%"
     if h1 > 280.0 and not (age_min <= 5.0 and 0 < fdv_usd <= 65000.0):
         return False, f"rh-h1-late {h1:+.0f}%"
+
+    # DEAD-PUMP FILTER: если m5 == h1 == h6 (все свечи одинаковые) и m5 >= 20%
+    # → монета существует меньше 5 минут и ВСЕ свечи = первая m5 = памп уже случился!
+    # Кейсы $PBP(-21%), KIT(-22%), モカ(-14%), AINT(-5%): бот вошёл на пике первой свечи.
+    # Настоящий второй-импульс имеет h1 > m5 (цена продолжает расти после первых 5м).
+    _h1_val = pair_data.get("priceChange", {}).get("h1", 0) if isinstance(pair_data, dict) else 0
+    _h1_val = float(_h1_val or 0)
+    if _h1_val > 0 and abs(_h1_val - m5) < 0.5 and m5 >= 18.0 and age_min >= 1.2 and m1 is not None and m1 == 0:
+        return False, f"rh-dead-pump-peak m5={m5:.1f}%==h1={_h1_val:.1f}% первая свеча уже отыграна"
 
     # Концентрация холдеров (если известна): отсекаем явных 50%+ монополистов
     if dev_pct > 25.0:
@@ -616,10 +631,20 @@ def evaluate_rug_hunter_exit(position, current_price: float) -> Optional[str]:
         if minutes_held >= base_max_hold:
             return f"🎯 RH Time-Cap Exit ({pnl_pct*100:+.1f}%, лимит {base_max_hold:.1f}м для {rh_mode})"
 
-    # 5. Breakeven Shield (пик >= +25% -> пол +5.0%, гарантия выхода без убытка)
+    # 5. Breakeven Shield — многоуровневая защита прибыли:
+    # Пик >= +35% → пол +10% (нельзя отдать всё обратно)
+    # Пик >= +25% → пол +3% (базовая защита)
+    # Пик >= +15% → пол -2% (минимальная защита — не уходим в большой минус)
     be_act = float(getattr(config, "RUG_HUNTER_BREAKEVEN_PCT", 0.25))
-    be_floor = float(getattr(config, "RUG_HUNTER_BREAKEVEN_FLOOR", 0.05))
-    if max_pnl_pct >= be_act and pnl_pct <= be_floor:
+    if max_pnl_pct >= 0.35:
+        be_floor = 0.10
+    elif max_pnl_pct >= be_act:
+        be_floor = 0.03
+    elif max_pnl_pct >= 0.15:
+        be_floor = -0.02
+    else:
+        be_floor = -99.0  # нет защиты
+    if be_floor > -99.0 and pnl_pct <= be_floor:
         return f"🎯 RH Breakeven Lock (+{pnl_pct*100:+.1f}% после пика +{max_pnl_pct*100:.1f}%)"
 
     # 6. Сброс зависшего флета без пампа (только если вообще нет движения за 2.5-3 минуты)
