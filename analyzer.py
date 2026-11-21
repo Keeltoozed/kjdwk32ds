@@ -1005,6 +1005,9 @@ class Analyzer:
         if isinstance(pair_dict, dict):
             _ca = float(pair_dict.get("pairCreatedAt") or 0)
             _cur_age_p = ((time.time() * 1000.0 - _ca) / 60000.0) if _ca > 0 else 0.0
+            # Порог читаем один раз здесь — доступен в обоих блоках ниже
+            import config as _acfg
+            _rh_meta_max_age = float(getattr(_acfg, "RUG_HUNTER_UNLOCKED_MAX_AGE_MIN", 3.20)) + 0.5
             _meta_map = getattr(self, "_verified_lp_meta", None)
             if isinstance(_meta_map, dict):
                 _pa = str(pair_dict.get("pairAddress") or "").strip()
@@ -1013,8 +1016,6 @@ class Analyzer:
                     for _mk, _mv in _meta.items():
                         # Защита от фантомных входов: НЕ натягивать _rug_hunter_mode на старые пулы!
                         # Иначе токен в возрасте 6м/16м покупается как RUG-HUNTER и сбрасывается через 2с (кейсы HORSE, CATME)
-                        import config as _acfg
-                        _rh_meta_max_age = float(getattr(_acfg, "RUG_HUNTER_UNLOCKED_MAX_AGE_MIN", 3.20)) + 0.5
                         if _mk in ("_rug_hunter_mode", "_rug_hunter_creator_profile") and _cur_age_p > _rh_meta_max_age:
                             continue
                         if _mk not in pair_dict:
