@@ -548,13 +548,17 @@ async def position_manager_loop(analyzer, tracker):
                 _allow_partial_tp = getattr(config, "PARTIAL_TP_ENABLED", True) and (_pos_val >= _min_tp_ticket)
                 _is_small_pos = _pos_val < _min_tp_ticket
                 if _allow_partial_tp and not _is_small_pos and not _suppress_eval_peak:
+                    # Для незалоченных пулов при PnL >= +80% (2x) фиксируем 100% В КЭШ (кейс GTA: не держим мунбэг под 3м раг дева!):
+                    if _pos_unl_tp and pnl_pct >= float(getattr(config, "RUG_HUNTER_UNLOCKED_TP2_PCT", 0.80)):
+                        tracker.close_position(mint, current_price, f"🎯 RH Unlocked 2x Full Harvest (+{pnl_pct*100:.1f}%)")
+                        continue
                     if pnl_pct >= _tp1_sol_thr and not getattr(position, "tp1_done", False) and float(getattr(position, "amount_usd", 0.0) or 0.0) > 0.05:
                         tracker.partial_close_position(mint, current_price, _tp1_sell, f"Take Profit +{_tp1_sol_thr*100:.0f}% (Tier-1 {int(_tp1_sell*100)}%, Principal Shield / Moonbag)")
                         position.tp1_done = True
                         position.is_moonbag = True
                         position.last_tp_ts = time.time()
                     if pnl_pct >= _tp2 and not getattr(position, "tp2_done", False) and float(getattr(position, "amount_usd", 0.0) or 0.0) > 0.05:
-                        if _tp2_sell >= 0.99:
+                        if _tp2_sell >= 0.99 or _pos_unl_tp:
                             tracker.close_position(mint, current_price, f"Moonbag TP2 +{_tp2*100:.0f}% (Target +{pnl_pct*100:.1f}%)")
                             continue
                         else:
@@ -1404,9 +1408,16 @@ async def scanner_loop(analyzer, tracker):
                     print(f"⚠️ prefetch err: {type(_pfe).__name__}")
                 
                 # ⚡ Сортировка по импульсу и фильтрация мертвых/старых токенов
-                _SKIP_ZOMBIE_SYMBOLS = {
-                    "RAY", "MSOL", "BSOL", "JITOSOL", "WBTC", "BTC", "WETH", "ETH",
-                    "USDC", "USDT", "USDH", "DAI", "SOL", "WSOL", "ORE", "NEET", "GYAT"
+                _REAL_NATIVE_MINTS = {
+                    "So11111111111111111111111111111111111111112",   # WSOL
+                    "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",  # USDC
+                    "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB",  # USDT
+                    "USDH1SM1ojcxNC3Pec8NyUfqjf9qQyrZyZjBaP8Gh4",   # USDH
+                    "mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So",   # MSOL
+                    "bSo13r4TkiE4KumL71LsHTPpL2euBYLFx6h9HP3piy1",   # BSOL
+                    "J1toso1uCk3RLmjorhTtrVwY9HJ7X8V9yYac6Y7kGCPn",  # JitoSOL
+                    "3NZ9JMVBmGAqocybic2c7LQCJScmgsAZ6vQqTDzcqmJh",  # WBTC
+                    "7vfCXTUXx5WJV5JADk17DUJ4ksgau7utNKj4b963voxs",  # WETH
                 }
                 _ranked_mints = []
                 _now_r = time.time()
@@ -1414,6 +1425,9 @@ async def scanner_loop(analyzer, tracker):
                 _fresh_cd_r = int(getattr(config, "SOLANA_FRESH_RESCAN_COOLDOWN", 8))
                 for mint in mints_to_scan:
                     if not mint or mint in tracker.positions:
+                        continue
+                    if mint in _REAL_NATIVE_MINTS:
+                        processed_mints[mint] = _now_r + 86400
                         continue
                     _c_pre = getattr(analyzer, "_prefetch_cache", {}).get(mint, (0, {}))[1]
                     _ca_r = (_c_pre.get("pairCreatedAt") or 0) if isinstance(_c_pre, dict) else 0
@@ -1426,7 +1440,8 @@ async def scanner_loop(analyzer, tracker):
                     if _c_pre and isinstance(_c_pre, dict):
                         _base = _c_pre.get("baseToken", {}) or {}
                         _sym = str(_base.get("symbol", "")).upper().strip()
-                        if _sym in _SKIP_ZOMBIE_SYMBOLS:
+                        # Блокируем зомби-тикеры ТОЛЬКО если токен старый (>60м). Молодые мемы (кейс USDC +1403%) пропускаем!
+                        if _age_r > 60.0 and _sym in ("SOL", "WSOL", "USDC", "USDT", "ETH", "BTC", "RAY"):
                             processed_mints[mint] = _now_r + 86400
                             continue
 
@@ -1438,20 +1453,22 @@ async def scanner_loop(analyzer, tracker):
                             _c_v5_m = float((_c_pre.get("volume") or {}).get("m5", 0) or 0)
                             _c_l_m = float((_c_pre.get("liquidity") or {}).get("usd", 0) or 0)
                             _c_m5_m = float(((_c_pre.get("priceChange") or {}).get("m5", 0) or 0))
-                            _rh_s5_sc_req = int(getattr(config, "RUG_HUNTER_EARLY_MIN_SELLS", 2)) if _age_r < 2.0 else 8
-                            _rh_b5_sc_req = max(int(getattr(config, "RUG_HUNTER_EARLY_MIN_BUYS", 12)) if _age_r < 2.0 else 25, int(_c_s5_m * 1.15))
+                            _rh_s5_sc_req = int(getattr(config, "RUG_HUNTER_EARLY_MIN_SELLS", 1)) if _age_r < 1.8 else 6
+                            _rh_b5_sc_req = max(int(getattr(config, "RUG_HUNTER_EARLY_MIN_BUYS", 6)) if _age_r < 1.8 else 18, int(_c_s5_m * 1.10))
+                            _rh_min_vol_sc = float(getattr(config, "RUG_HUNTER_MIN_VOL5_USD", 350.0)) if _age_r <= 0.8 else 800.0
+                            _rh_min_m5_sc = -2.0 if _age_r <= 1.2 else 3.5
                             _rh_met_sc_ok = (
                                 bool(getattr(config, "RUG_HUNTER_ENABLED", False))
                                 and bool(getattr(config, "RUG_HUNTER_UNLOCKED_LP_ENABLED", False))
-                                and float(getattr(config, "RUG_HUNTER_UNLOCKED_MIN_AGE_MIN", 0.25)) <= _age_r <= float(getattr(config, "RUG_HUNTER_UNLOCKED_MAX_AGE_MIN", 3.5))
+                                and float(getattr(config, "RUG_HUNTER_UNLOCKED_MIN_AGE_MIN", 0.15)) <= _age_r <= float(getattr(config, "RUG_HUNTER_UNLOCKED_MAX_AGE_MIN", 1.80))
                                 and _c_l_m >= float(getattr(config, "RUG_HUNTER_MIN_LIQ_USD", 7500.0))
-                                and _c_v5_m >= float(getattr(config, "RUG_HUNTER_MIN_VOL5_USD", 1800.0))
+                                and _c_v5_m >= _rh_min_vol_sc
                                 and _c_s5_m >= _rh_s5_sc_req
                                 and _c_b5_m >= _rh_b5_sc_req
-                                and _c_m5_m >= 5.0
+                                and _c_m5_m >= _rh_min_m5_sc
                             )
                             if not _rh_met_sc_ok:
-                                processed_mints[mint] = (_now_r + 6) if _age_r <= 2.5 else (_now_r + 600)
+                                processed_mints[mint] = (_now_r + 5) if _age_r <= 2.0 else (_now_r + 600)
                                 continue
                         if not getattr(config, "ALLOW_UNGRADUATED_PUMPFUN", False) and config.is_unmigrated_curve_token(mint, _c_pre):
                             # КРИТИЧНО: если токен уже в _graduated_set (пришёл из subscribeMigration), НЕ выкидываем его!
@@ -1548,7 +1565,8 @@ async def scanner_loop(analyzer, tracker):
                         _eff_m5_vel = max(_c_m5, 8.0) if _is_bull_dip_sc else _c_m5
                         _rkt_vel = _eff_m5_vel * _vol_log * _bs_ratio * _fresh_sc_mult
 
-                        _score_rank = (1000.0 if _is_fresh_grad else 0.0) + _rkt_vel
+                        _is_ultra_early_rkt = (_c_age_m <= 1.8 and _c_liq >= 5000.0 and _c_vol5 >= 350.0 and _c_b5 >= max(5, int(_c_s5 * 1.05)))
+                        _score_rank = (2500.0 if _is_ultra_early_rkt else (1000.0 if _is_fresh_grad else 0.0)) + _rkt_vel
                         _ranked_mints.append((_score_rank, mint))
                     else:
                         # Если данных в префетче нет: пускаем только свежие миграции, ручной вотчлист или молодой токен из роддома

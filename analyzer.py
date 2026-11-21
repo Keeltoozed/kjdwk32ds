@@ -2443,18 +2443,23 @@ class Analyzer:
                 and _b5_pre >= int(_s5_pre * 1.05)
                 and _age_min_pre <= 30.0
             )
-            # 🎯 Rug-Hunter Stage-1 байпас (кейс RIEMANN 5.8% -> +1240%): только для ранних квалифицированных Rug-Hunter пулов при ML >= 5.0%
-            _rh_s1_min_a = float(getattr(config, "RUG_HUNTER_STAGE1_MIN_ML", 5.0))
+            # 🎯 Rug-Hunter Stage-1 байпас (кейс RIEMANN 5.8% -> +1240%, DOOM 4.9% -> +940%): для ранних квалифицированных Rug-Hunter пулов при ML >= 3.5%
+            _rh_s1_min_a = float(getattr(config, "RUG_HUNTER_STAGE1_MIN_ML", 3.5))
             _is_rh_stage1_cand = False
             if getattr(config, "RUG_HUNTER_ENABLED", False) and not is_pump_curve and (conf + 0.05) >= _rh_s1_min_a and _age_min_pre <= 10.0:
                 try:
                     import rug_hunter as _rh_s1a
-                    _rh_s1_ok, _ = _rh_s1a.qualify_unlocked_lp_hunter(
+                    _rh_s1_ok, _rh_s1_why = _rh_s1a.qualify_unlocked_lp_hunter(
                         mint=mint, pair_data=pair_data, age_min=_age_min_pre,
                         liq_usd=raw_liq, fdv_usd=fdv_val, vol5_usd=_vm5_pre,
                         buys5=_b5_pre, sells5=_s5_pre, m5=_m5, m1=_m1, h1=_h1,
                     )
-                    _is_rh_stage1_cand = bool(_rh_s1_ok)
+                    # Для SEEDED-LP (посеянные пулы) строго требуем ML-скор >= 55% (блокируем 1-мин раги вроде 愛 42%!):
+                    _is_seeded_s1 = bool(fdv_val > 0 and raw_liq >= (fdv_val * 0.95))
+                    if _is_seeded_s1 and conf < float(getattr(config, "RUG_HUNTER_SEEDED_MIN_ML", 55.0)):
+                        _is_rh_stage1_cand = False
+                    else:
+                        _is_rh_stage1_cand = bool(_rh_s1_ok)
                 except Exception:
                     _is_rh_stage1_cand = False
             if (conf + 0.05) < threshold and not _is_momentum_rocket_a and not _is_hyper_momentum and not _is_rh_stage1_cand:
@@ -3199,7 +3204,7 @@ class Analyzer:
             # rocket_xgb_v3 обучена на чистых dev=0% пулах и искусственно обнуляет Stage-2 скор при dev 5-20%.
             # Сохраняем Stage-1 скор и не блокируем уже отобранного кандидата Rug-Hunter на Stage-2!
             _rh_mode_s2 = str((pair_data or {}).get("_rug_hunter_mode") or "").strip()
-            if _rh_mode_s2 and (_s1_score + 0.05) >= float(getattr(config, "RUG_HUNTER_STAGE1_MIN_ML", 5.0)):
+            if _rh_mode_s2 and (_s1_score + 0.05) >= float(getattr(config, "RUG_HUNTER_STAGE1_MIN_ML", 3.5)):
                 conf = max(conf, _s1_score)
                 self.last_score = conf
                 self.rocket_scores[mint] = conf
@@ -3207,6 +3212,9 @@ class Analyzer:
                 return self._deny(mint, f"rocket-xgb-s2 {conf:.0f}%", f"🚫 [ROCKET-XGB-S2] {symbol} ({mint[:8]}): скор с учётом холдеров {conf:.1f}% < {_final_thr:.0f}% — отсев.")
 
             _rh_mode_fin = str((pair_data or {}).get("_rug_hunter_mode") or "").strip()
+            # Защита от 1-минутных ловушек SEEDED-LP: требуем уверенность ML >= 55% (блокирует кейс 愛 42%):
+            if "SEEDED" in _rh_mode_fin.upper() and conf < float(getattr(config, "RUG_HUNTER_SEEDED_MIN_ML", 55.0)):
+                return self._deny(mint, f"seeded-low-conf {conf:.0f}%<55%", f"🚫 [SEEDED-LP-TRAP] {symbol} ({mint[:8]}): посеянный пул со слабым ML {conf:.1f}% < 55.0% — риск 1-мин рага (кейс 愛).")
             if _rh_mode_fin:
                 import rug_hunter as _rh_sig
                 _pass_sig = _rh_sig.format_rug_hunter_source(

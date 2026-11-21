@@ -456,7 +456,10 @@ def is_permissionless_liq_fdv_trap(pair_data: Optional[dict]) -> bool:
     _txns = pair_data.get("txns", {}).get("m5", {}) if isinstance(pair_data.get("txns"), dict) else {}
     _b5 = int(_txns.get("buys", 0) or 0)
     _s5 = int(_txns.get("sells", 0) or 0)
-    if _b5 >= 25 and _b5 >= _s5 * 1.5:
+    _ca_tr = float((pair_data or {}).get("pairCreatedAt") or 0)
+    _age_tr = ((time.time() * 1000.0 - _ca_tr) / 60000.0) if _ca_tr > 0 else 0.2
+    # На раннем старте (<=2м) достаточно 8 покупок и перевеса покупателей, либо 25 покупок для зрелых монет:
+    if (_age_tr <= 2.0 and _b5 >= 8 and (_s5 == 0 or _b5 >= _s5 * 1.15)) or (_b5 >= 25 and _b5 >= _s5 * 1.5):
         return False
 
     # 1. Liq/FDV >= 70% with Liq >= $18k and 0 socials on custom pools (AXIOMCOIN: $43.5k liq / $53.9k fdv = 80.6%)
@@ -586,7 +589,11 @@ def evaluate_entry_momentum(
     if vol5_usd < _min_vol_gate:
         return False, f"no-demand-vol5 ${vol5_usd:,.0f} < ${_min_vol_gate:,.0f} (dead micro-pool)"
     if liq_usd >= 1500.0 and vel_ratio < 0.08 and vol5_usd < 2000.0:
-        return False, f"dead-turnover v/l {vel_ratio:.2f}x < 0.08x (vol5 ${vol5_usd:,.0f} on liq ${liq_usd:,.0f})"
+        # Для свежих пулов (<=5.0м) не душим старт: от 6 покупок и объём от $350 подтверждают старт ракеты (кейсы BWA +710%, AMC +318%)!
+        if age_min <= 5.0 and buys5 >= 6 and vol5_usd >= 350.0 and (sells5 == 0 or buys5 >= sells5 * 1.10):
+            pass
+        else:
+            return False, f"dead-turnover v/l {vel_ratio:.2f}x < 0.08x (vol5 ${vol5_usd:,.0f} on liq ${liq_usd:,.0f})"
 
     # 0.6 ДИНАМИЧЕСКИЙ ПОРОГ ОБОРОТА (мягкий для крупных кап):
     if fdv_usd >= 250000.0:
@@ -1413,11 +1420,15 @@ RUG_HUNTER_UNLOCKED_MIN_AGE_MIN = 0.15     # Минимум 0.15м (9с): вхо
 RUG_HUNTER_UNLOCKED_MAX_AGE_MIN = 1.80     # Максимум 1.80м: НЕ входим позже 1.8м (девы дрейнят незалоченные пулы на 3.0-4.0м!)
 RUG_HUNTER_CABAL_MAX_AGE_MIN = 4.5         # Максимум 4.5м для кабал-сёрфа
 RUG_HUNTER_MIN_LIQ_USD = 7500.0            # Минимум $7.5k реальной ликвидности (едино с MIN_GRADUATED_LIQ_USD)
-RUG_HUNTER_MIN_VOL5_USD = 1000.0           # Минимум $1.0k объёма за 5м (ловит ультра-ранний старт на 20-40 секундах)
+RUG_HUNTER_MIN_VOL5_USD = 350.0            # Минимум $350 объёма за 5м на ультра-старте (ловит ракеты на 15-30 секундах, кейсы NICKEH30, USELESS, SHELF)
 RUG_HUNTER_EARLY_AGE_THRESHOLD = 1.8       # Порог ультра-ранней фазы (до 1.8м)
-RUG_HUNTER_EARLY_MIN_SELLS = 1             # Достаточно 1 продажи для подтверждения sellable на старте
-RUG_HUNTER_EARLY_MIN_BUYS = 8              # Достаточно 8 покупок на старте (вместо 25), если есть перевес покупателей
-RUG_HUNTER_STAGE1_MIN_ML = 5.0            # Смягчённый порог Stage-1 ML для ранних высокоимпульсных Rug-Hunter (кейс RIEMANN 5.8% -> +1240%)
+RUG_HUNTER_EARLY_MIN_SELLS = 1             # Достаточно 1 продажи для подтверждения sellable на старте (на 0.5м допускается 0 при сильных покупках)
+RUG_HUNTER_EARLY_MIN_BUYS = 6              # Достаточно 6 покупок на ультра-старте (вместо 25), если есть перевес покупателей
+RUG_HUNTER_STAGE1_MIN_ML = 3.5             # Смягчённый порог Stage-1 ML для ранних ракет (unblock кейса DOOM +940% conf=4.9%)
+RUG_HUNTER_SEEDED_MIN_ML = 55.0            # Минимальный ML-скор для посеянных пулов (SEEDED-LP): блокирует фейк-раги вроде 愛 (42%) и пропускает SURVIVE (84%), GTA (66%)
+RUG_HUNTER_SEEDED_MIN_BUYS = 16            # Реальные покупатели для посеянных пулов
+RUG_HUNTER_SEEDED_MIN_SELLS = 2            # Минимум 2 продажи для подтверждения ликвидности
+RUG_HUNTER_SEEDED_MIN_VOL5 = 2500.0        # Органический объём для посеянных пулов
 RUG_HUNTER_MAX_FDV_USD = 250000.0         # Потолок FDV для незалоченных пулов
 RUG_HUNTER_CABAL_MAX_FDV_USD = 180000.0   # Потолок FDV для кабал-сёрфа
 RUG_HUNTER_TP1_PCT = 0.35                 # TP1 +35%: фиксируем 35% объема (возврат тела депозита, house money!)
@@ -1448,6 +1459,6 @@ RUG_HUNTER_UNLOCKED_TP2_PCT = 0.80        # TP2 +80%..+100% (2x): продаём
 RUG_HUNTER_UNLOCKED_TP2_SELL_FRAC = 1.00
 RUG_HUNTER_UNLOCKED_MAX_HOLD_MIN = 1.6    # Жесткий потолок 1.6м удержания при pnl >= +8%: забираем профит до дрейна!
 RUG_HUNTER_UNLOCKED_SAFETY_MIN = 1.8      # Абсолютный лимит 1.8м удержания: выход до начала типичного 3м окна вывода LP
-RUG_HUNTER_UNLOCKED_MAX_POOL_AGE_MIN = 2.2 # Жесткий потолок общего возраста пула: если пул старше 2.2м — 100% эвакуация до рага!
+RUG_HUNTER_UNLOCKED_MAX_POOL_AGE_MIN = 2.0 # Жесткий потолок общего возраста пула: если пул старше 2.0м — 100% эвакуация до рага!
 RUG_HUNTER_UNLOCKED_STALL_SEC = 25.0      # 25с без нового ATH после пика >= +30% и откат 8% -> эвакуация до рага
 RUG_HUNTER_UNLOCKED_TRAIL_DROP_PCT = 0.12 # Плотный трейл 12% от ATH для незалоченных пулов

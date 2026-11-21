@@ -254,16 +254,21 @@ def qualify_unlocked_lp_hunter(
         return False, str(creator_profile.get("reason") or "instant-rugger")
 
     # Жёсткие пороги раннего живого входа на самом старте:
-    min_age = float(getattr(config, "RUG_HUNTER_UNLOCKED_MIN_AGE_MIN", 0.25))
-    max_age = float(getattr(config, "RUG_HUNTER_UNLOCKED_MAX_AGE_MIN", 3.5))
+    min_age = float(getattr(config, "RUG_HUNTER_UNLOCKED_MIN_AGE_MIN", 0.15))
+    max_age = float(getattr(config, "RUG_HUNTER_UNLOCKED_MAX_AGE_MIN", 1.80))
     if age_min < min_age:
         return False, f"rh-too-young {age_min:.2f}m < {min_age:.2f}m"
     if age_min > max_age:
         return False, f"rh-too-late {age_min:.1f}m > {max_age:.1f}m"
 
     min_liq = float(getattr(config, "RUG_HUNTER_MIN_LIQ_USD", 7500.0))
-    # Минимальный живой объём для раннего ультра-старта (первые 20-50 секунд):
-    min_vol5 = float(getattr(config, "RUG_HUNTER_MIN_VOL5_USD", 1000.0))
+    # Динамический порог объёма: на ультра-раннем старте (15-40с) достаточно $350-$600:
+    if age_min <= 0.6:
+        min_vol5 = float(getattr(config, "RUG_HUNTER_MIN_VOL5_USD", 350.0))
+    elif age_min <= 1.2:
+        min_vol5 = max(500.0, float(getattr(config, "RUG_HUNTER_MIN_VOL5_USD", 350.0)))
+    else:
+        min_vol5 = max(800.0, float(getattr(config, "RUG_HUNTER_MIN_VOL5_USD", 350.0)))
     if vol5_usd < min_vol5:
         return False, f"rh-low-vol5 ${vol5_usd:,.0f} < ${min_vol5:,.0f}"
 
@@ -274,42 +279,61 @@ def qualify_unlocked_lp_hunter(
         return False, f"rh-extreme-liq-fdv liq=${liq_usd:,.0f} > 2.25x fdv=${fdv_usd:,.0f}"
     if is_seeded_ratio and not bool(getattr(config, "RUG_HUNTER_SEEDED_LP_ENABLED", True)):
         return False, f"rh-synthetic-liq-fdv liq=${liq_usd:,.0f} fdv=${fdv_usd:,.0f}"
+    # Специфический барьер для SEEDED-LP: отсекаем 1-минутные фейк-пулы (кейс 愛):
+    if is_seeded_ratio:
+        _min_seeded_vol = float(getattr(config, "RUG_HUNTER_SEEDED_MIN_VOL5", 2500.0))
+        _min_seeded_buys = int(getattr(config, "RUG_HUNTER_SEEDED_MIN_BUYS", 16))
+        _min_seeded_sells = int(getattr(config, "RUG_HUNTER_SEEDED_MIN_SELLS", 2))
+        if vol5_usd < _min_seeded_vol:
+            return False, f"rh-seeded-low-vol5 ${vol5_usd:,.0f} < ${_min_seeded_vol:,.0f}"
+        if buys5 < _min_seeded_buys:
+            return False, f"rh-seeded-few-buys {buys5} < {_min_seeded_buys}"
+        if sells5 < _min_seeded_sells:
+            return False, f"rh-seeded-few-sells {sells5} < {_min_seeded_sells}"
     if fdv_usd > float(getattr(config, "RUG_HUNTER_MAX_FDV_USD", 250000.0)):
         return False, f"rh-fdv-too-high ${fdv_usd:,.0f}"
 
     # Адаптивные требования к покупкам/продажам:
     # На ультра-раннем старте (age <= 1.8м) ловим импульс в самом начале:
-    # требуем минимум 8 покупок (при vol >= $1000) и минимум 1 продажу (sellable).
-    # Для пулов старше 1.8м незалоченные пулы отсекаются жестким фильтром max_age (1.8м)!
     early_age_th = float(getattr(config, "RUG_HUNTER_EARLY_AGE_THRESHOLD", 1.8))
-    if age_min <= early_age_th:
+    if age_min <= 0.6:
+        min_sells_req = 0 if buys5 >= 8 else 1
+        min_buys_req = int(getattr(config, "RUG_HUNTER_EARLY_MIN_BUYS", 6))
+    elif age_min <= early_age_th:
         min_sells_req = int(getattr(config, "RUG_HUNTER_EARLY_MIN_SELLS", 1))
-        min_buys_req = int(getattr(config, "RUG_HUNTER_EARLY_MIN_BUYS", 8))
+        min_buys_req = max(8, int(getattr(config, "RUG_HUNTER_EARLY_MIN_BUYS", 6)))
     else:
-        min_sells_req = 4
-        min_buys_req = max(18, int(sells5 * 1.15))
+        min_sells_req = 3
+        min_buys_req = max(14, int(sells5 * 1.15))
 
     if sells5 < min_sells_req:
         return False, f"rh-too-few-sells {sells5} < {min_sells_req}"
     if buys5 < min_buys_req:
         return False, f"rh-weak-buyers {buys5}b/{sells5}s (<{min_buys_req}b)"
-    if sells5 > 0 and buys5 < int(sells5 * 1.20) and (buys5 - sells5) < 4:
+    if sells5 > 0 and buys5 < int(sells5 * 1.15) and (buys5 - sells5) < 3:
         return False, f"rh-sellers-dominate {buys5}b/{sells5}s"
 
     avg_tx = vol5_usd / max(1, buys5 + sells5)
-    if avg_tx < 10.0:
-        return False, f"rh-micro-wash avg ${avg_tx:.1f} < $10"
+    if avg_tx < 8.0:
+        return False, f"rh-micro-wash avg ${avg_tx:.1f} < $8"
     _max_vl_rh = 22.0 if avg_tx >= 35.0 else 14.0
     if liq_usd > 0 and (vol5_usd / liq_usd) > _max_vl_rh:
         return False, f"rh-extreme-wash v/l {vol5_usd/liq_usd:.1f}x > {_max_vl_rh:.0f}x"
 
-    # Импульс: на самом старте m1 может быть до +45% (ранний взлёт), m5 от +5%
-    max_m1_rh = 45.0 if age_min <= early_age_th else 25.0
-    if m1 < -2.5 or m1 > max_m1_rh:
+    # Импульс: на самом старте m1 может быть до +75% (мощная зеленая свеча), m5 на первых 70с не успевает сформироваться
+    max_m1_rh = 75.0 if age_min <= early_age_th else 35.0
+    if m1 < -3.5 or m1 > max_m1_rh:
         return False, f"rh-m1-out-of-range {m1:+.1f}%"
     max_m5_rh = 190.0 if (age_min <= 5.0 and vol5_usd >= 10000.0) else 160.0
-    if m5 < 5.0 or m5 > max_m5_rh:
-        return False, f"rh-m5-out-of-range {m5:+.1f}%"
+    # На ультра-раннем старте (<=1.2м) 5-минутная свеча ещё не существует — достаточно m5 >= -2.0% и m1 >= 0%
+    if age_min <= 1.2:
+        if m5 < -2.0 or m5 > max_m5_rh:
+            return False, f"rh-m5-out-of-range {m5:+.1f}%"
+        if m1 < 0.0 and buys5 < 10:
+            return False, f"rh-early-m1-negative {m1:+.1f}%"
+    else:
+        if m5 < 3.5 or m5 > max_m5_rh:
+            return False, f"rh-m5-out-of-range {m5:+.1f}%"
     if h1 > 280.0 and not (age_min <= 5.0 and 0 < fdv_usd <= 65000.0):
         return False, f"rh-h1-late {h1:+.0f}%"
 
@@ -501,17 +525,23 @@ def evaluate_rug_hunter_exit(position, current_price: float) -> Optional[str]:
         position.sl_confirm_n = 0
 
     # 3. СПЕЦИФИЧЕСКИЕ ВЫХОДЫ ДЛЯ НЕЗАЛОЧЕННЫХ ПУЛОВ (UNLOCKED-LP):
-    # Предотвращают попадание под RemoveLiquidity дева на 3.0-4.0м (кейсы VI, ALTRUISTS, RINGS)!
+    # Предотвращают попадание под RemoveLiquidity дева на 2.5-3.5м (кейсы VI, ALTRUISTS, RINGS, GTA)!
     if is_unlocked_rh:
-        # А. Жесткий потолок общего возраста пула (Pre-Rug Evac):
-        # Девы выводят LP на 3.0-4.5м. Если общему возрасту пула стукнуло 2.2м — выходим на 100% В КЭШ!
+        # А. Полный сбор профита на 2x (+80%..+110%):
+        # На незалоченном пуле ДЕВ ВЫВЕДЕТ LP, поэтому на 2x забираем 100% В КЭШ (никаких мунбэгов под нож дева, кейс GTA +110%)!
+        _unl_tp2_val = float(getattr(config, "RUG_HUNTER_UNLOCKED_TP2_PCT", 0.80))
+        if pnl_pct >= _unl_tp2_val:
+            return f"🎯 RH Unlocked 2x Full Harvest (+{pnl_pct*100:.1f}%, цель +{_unl_tp2_val*100:.0f}% достигнута — 100% выход в кэш!)"
+
+        # Б. Жесткий потолок общего возраста пула (Pre-Rug Evac):
+        # Девы выводят LP на 2.5-3.5м. Если общему возрасту пула стукнуло 2.0м — выходим на 100% В КЭШ!
         _pd_c_ms = (pd.get("pairCreatedAt") or 0) if isinstance(pd, dict) else 0
         pool_age_min = ((now_ts * 1000.0 - _pd_c_ms) / 60000.0) if _pd_c_ms > 0 else (minutes_held + 0.3)
-        _max_pool_age = float(getattr(config, "RUG_HUNTER_UNLOCKED_MAX_POOL_AGE_MIN", 2.2))
+        _max_pool_age = float(getattr(config, "RUG_HUNTER_UNLOCKED_MAX_POOL_AGE_MIN", 2.0))
         if pool_age_min >= _max_pool_age:
             return f"🎯 RH Unlocked Pre-Rug Evac (+{pnl_pct*100:+.1f}%, возраст пула {pool_age_min:.1f}м >= {_max_pool_age:.1f}м — эвакуация до 3м раг-окна!)"
 
-        # Б. Жесткий потолок удержания незалоченного пула:
+        # В. Жесткий потолок удержания незалоченного пула:
         _unl_hold_max = float(getattr(config, "RUG_HUNTER_UNLOCKED_MAX_HOLD_MIN", 1.6))
         if minutes_held >= _unl_hold_max and pnl_pct >= 0.08:
             return f"🎯 RH Unlocked Profit Evac (+{pnl_pct*100:+.1f}%, {_unl_hold_max:.1f}м лимит — фиксация до LP-дрейна!)"
