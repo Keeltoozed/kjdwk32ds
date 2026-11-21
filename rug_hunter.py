@@ -262,9 +262,8 @@ def qualify_unlocked_lp_hunter(
         return False, f"rh-too-late {age_min:.1f}m > {max_age:.1f}m"
 
     min_liq = float(getattr(config, "RUG_HUNTER_MIN_LIQ_USD", 7500.0))
-    min_vol5 = float(getattr(config, "RUG_HUNTER_MIN_VOL5_USD", 1800.0))
-    if liq_usd < min_liq:
-        return False, f"rh-low-liq ${liq_usd:,.0f} < ${min_liq:,.0f}"
+    # Минимальный живой объём для раннего ультра-старта (первые 20-50 секунд):
+    min_vol5 = float(getattr(config, "RUG_HUNTER_MIN_VOL5_USD", 1000.0))
     if vol5_usd < min_vol5:
         return False, f"rh-low-vol5 ${vol5_usd:,.0f} < ${min_vol5:,.0f}"
 
@@ -278,33 +277,23 @@ def qualify_unlocked_lp_hunter(
     if fdv_usd > float(getattr(config, "RUG_HUNTER_MAX_FDV_USD", 250000.0)):
         return False, f"rh-fdv-too-high ${fdv_usd:,.0f}"
 
-    # Дополнительная защита посеянных пулов от мгновенных 60с фейк-дрейнов (кейс 愛: 12 покупок дева):
-    # Требуем живой объём от $2,500
-    if is_seeded_ratio and vol5_usd < 2500.0:
-        return False, f"rh-seeded-low-vol5 ${vol5_usd:,.0f} < $2,500"
-
     # Адаптивные требования к покупкам/продажам:
-    # 1. Для обычных ранних незалоченных пулов (age < 2.0м): sells5 >= 2, buys5 >= 16;
-    # 2. Для посеянных пулов (is_seeded_ratio): требуем подтверждённый интерес сообщества:
-    #    buys5 >= 20 (если vol5 >= $3,500) или buys5 >= 25, sells5 >= 3.
-    #    Это 100% отсекает фейк-ловушки вроде 愛 (всего 12 покупок),
-    #    но легко пропускает реальные ракеты вроде USDC (271b), BWA (127b), RASONQUE (120b), MIHAO (342b), UPS (146b)!
-    early_age_th = float(getattr(config, "RUG_HUNTER_EARLY_AGE_THRESHOLD", 2.0))
-    if is_seeded_ratio:
-        min_sells_req = 3
-        min_buys_req = 20 if vol5_usd >= 3500.0 else 25
-    elif age_min < early_age_th:
-        min_sells_req = int(getattr(config, "RUG_HUNTER_EARLY_MIN_SELLS", 2))
-        min_buys_req = max(16, int(getattr(config, "RUG_HUNTER_EARLY_MIN_BUYS", 12)))
+    # На ультра-раннем старте (age <= 1.8м) ловим импульс в самом начале:
+    # требуем минимум 8 покупок (при vol >= $1000) и минимум 1 продажу (sellable).
+    # Для пулов старше 1.8м незалоченные пулы отсекаются жестким фильтром max_age (1.8м)!
+    early_age_th = float(getattr(config, "RUG_HUNTER_EARLY_AGE_THRESHOLD", 1.8))
+    if age_min <= early_age_th:
+        min_sells_req = int(getattr(config, "RUG_HUNTER_EARLY_MIN_SELLS", 1))
+        min_buys_req = int(getattr(config, "RUG_HUNTER_EARLY_MIN_BUYS", 8))
     else:
-        min_sells_req = 8
-        min_buys_req = max(25, int(sells5 * 1.15))
+        min_sells_req = 4
+        min_buys_req = max(18, int(sells5 * 1.15))
 
     if sells5 < min_sells_req:
         return False, f"rh-too-few-sells {sells5} < {min_sells_req}"
     if buys5 < min_buys_req:
         return False, f"rh-weak-buyers {buys5}b/{sells5}s (<{min_buys_req}b)"
-    if sells5 > 0 and buys5 < int(sells5 * 1.15):
+    if sells5 > 0 and buys5 < int(sells5 * 1.20) and (buys5 - sells5) < 4:
         return False, f"rh-sellers-dominate {buys5}b/{sells5}s"
 
     avg_tx = vol5_usd / max(1, buys5 + sells5)
@@ -485,8 +474,8 @@ def evaluate_rug_hunter_exit(position, current_price: float) -> Optional[str]:
                 peak_l = cur_l
             if peak_l >= 1000.0 and (cur_l <= 250.0 or cur_l < peak_l * 0.20):
                 return f"Absolute Liquidity Loss [RH] (Liq ${cur_l:.0f} from ${peak_l:.0f})"
-            # Для незалоченных пулов: если пул просел хотя бы на 10% — выходим МГНОВЕННО, не дожидаясь нуля!
-            _drain_thr = 0.10 if is_unlocked_rh else float(getattr(config, "RUG_HUNTER_LIQ_DRAIN_PCT", 0.15))
+            # Реальный дрейн LP рагером — это падение на >=40% (не ловим ложные 10% колебания от нормальных продаж):
+            _drain_thr = float(getattr(config, "RUG_HUNTER_LIQ_DRAIN_PCT", 0.40))
             if peak_l >= 2000.0 and cur_l <= peak_l * (1.0 - _drain_thr):
                 return f"🎯 RH Early LP-Drain Alert (-{(1.0 - cur_l/peak_l)*100:.0f}% LP, ${cur_l:.0f}/${peak_l:.0f}, PnL {pnl_pct*100:+.1f}%)"
 
@@ -512,14 +501,21 @@ def evaluate_rug_hunter_exit(position, current_price: float) -> Optional[str]:
         position.sl_confirm_n = 0
 
     # 3. СПЕЦИФИЧЕСКИЕ ВЫХОДЫ ДЛЯ НЕЗАЛОЧЕННЫХ ПУЛОВ (UNLOCKED-LP):
-    # Предотвращают попадание под RemoveLiquidity дева на 2.5-3.5м!
+    # Предотвращают попадание под RemoveLiquidity дева на 3.0-4.0м (кейсы VI, ALTRUISTS, RINGS)!
     if is_unlocked_rh:
-        # А. Жесткий потолок удержания незалоченного пула:
-        # Если монета в уверенном плюсе (>= +8%) и держится 2.0м — забираем профит и выходим ДО того, как дев дернет пул!
-        _unl_hold_max = float(getattr(config, "RUG_HUNTER_UNLOCKED_MAX_HOLD_MIN", 2.0))
+        # А. Жесткий потолок общего возраста пула (Pre-Rug Evac):
+        # Девы выводят LP на 3.0-4.5м. Если общему возрасту пула стукнуло 2.2м — выходим на 100% В КЭШ!
+        _pd_c_ms = (pd.get("pairCreatedAt") or 0) if isinstance(pd, dict) else 0
+        pool_age_min = ((now_ts * 1000.0 - _pd_c_ms) / 60000.0) if _pd_c_ms > 0 else (minutes_held + 0.3)
+        _max_pool_age = float(getattr(config, "RUG_HUNTER_UNLOCKED_MAX_POOL_AGE_MIN", 2.2))
+        if pool_age_min >= _max_pool_age:
+            return f"🎯 RH Unlocked Pre-Rug Evac (+{pnl_pct*100:+.1f}%, возраст пула {pool_age_min:.1f}м >= {_max_pool_age:.1f}м — эвакуация до 3м раг-окна!)"
+
+        # Б. Жесткий потолок удержания незалоченного пула:
+        _unl_hold_max = float(getattr(config, "RUG_HUNTER_UNLOCKED_MAX_HOLD_MIN", 1.6))
         if minutes_held >= _unl_hold_max and pnl_pct >= 0.08:
             return f"🎯 RH Unlocked Profit Evac (+{pnl_pct*100:+.1f}%, {_unl_hold_max:.1f}м лимит — фиксация до LP-дрейна!)"
-        _unl_safety_max = float(getattr(config, "RUG_HUNTER_UNLOCKED_SAFETY_MIN", 2.5))
+        _unl_safety_max = float(getattr(config, "RUG_HUNTER_UNLOCKED_SAFETY_MIN", 1.8))
         if minutes_held >= _unl_safety_max:
             return f"🎯 RH Unlocked Safety Time-Cap ({pnl_pct*100:+.1f}%, {_unl_safety_max:.1f}м лимит безопасности — выход до LP-рага)"
 

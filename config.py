@@ -1409,14 +1409,14 @@ RUG_HUNTER_SEEDED_LP_ENABLED = True       # Режим A2: включён с з�
 RUG_HUNTER_CABAL_SURF_ENABLED = True      # Режим B: ранний сёрф залоченных пулов с кабал/инсайдер-сеткой (<=8м)
 RUG_HUNTER_MAX_SLOTS = 2                  # Макс. 2 одновременных слота под Rug-Hunter (2 слота всегда свободны под чистые ракеты)
 RUG_HUNTER_SIZE_MULT = 0.65               # Уменьшенный риск-сайз (65% от обычного ордера)
-RUG_HUNTER_UNLOCKED_MIN_AGE_MIN = 0.20     # Минимум 0.20м (12с): вход на самом старте разгона первой свечи
-RUG_HUNTER_UNLOCKED_MAX_AGE_MIN = 3.5      # Максимум 3.5м: 100% защита от поздних ловушек и вывода ликвидности (кейсы BILLION/ICEWIZ/ONODA на 4-7м)
-RUG_HUNTER_CABAL_MAX_AGE_MIN = 5.0         # Максимум 5.0м для кабал-сёрфа
+RUG_HUNTER_UNLOCKED_MIN_AGE_MIN = 0.15     # Минимум 0.15м (9с): вход на самом старте разгона первой свечи
+RUG_HUNTER_UNLOCKED_MAX_AGE_MIN = 1.80     # Максимум 1.80м: НЕ входим позже 1.8м (девы дрейнят незалоченные пулы на 3.0-4.0м!)
+RUG_HUNTER_CABAL_MAX_AGE_MIN = 4.5         # Максимум 4.5м для кабал-сёрфа
 RUG_HUNTER_MIN_LIQ_USD = 7500.0            # Минимум $7.5k реальной ликвидности (едино с MIN_GRADUATED_LIQ_USD)
-RUG_HUNTER_MIN_VOL5_USD = 1800.0           # Минимум $1.8k объёма за 5м (ловит ультра-ранний старт на первых секундах)
-RUG_HUNTER_EARLY_AGE_THRESHOLD = 2.0       # Порог ультра-ранней фазы (до 2.0м)
-RUG_HUNTER_EARLY_MIN_SELLS = 2             # Достаточно 2 продаж для подтверждения sellable на старте
-RUG_HUNTER_EARLY_MIN_BUYS = 12             # Достаточно 12 покупок для раннего импульса (вместо 35)
+RUG_HUNTER_MIN_VOL5_USD = 1000.0           # Минимум $1.0k объёма за 5м (ловит ультра-ранний старт на 20-40 секундах)
+RUG_HUNTER_EARLY_AGE_THRESHOLD = 1.8       # Порог ультра-ранней фазы (до 1.8м)
+RUG_HUNTER_EARLY_MIN_SELLS = 1             # Достаточно 1 продажи для подтверждения sellable на старте
+RUG_HUNTER_EARLY_MIN_BUYS = 8              # Достаточно 8 покупок на старте (вместо 25), если есть перевес покупателей
 RUG_HUNTER_STAGE1_MIN_ML = 5.0            # Смягчённый порог Stage-1 ML для ранних высокоимпульсных Rug-Hunter (кейс RIEMANN 5.8% -> +1240%)
 RUG_HUNTER_MAX_FDV_USD = 250000.0         # Потолок FDV для незалоченных пулов
 RUG_HUNTER_CABAL_MAX_FDV_USD = 180000.0   # Потолок FDV для кабал-сёрфа
@@ -1437,16 +1437,17 @@ RUG_HUNTER_TRAIL_DROP_PCT = 0.22          # Трейл -22% от ATH (даёт �
 RUG_HUNTER_SL_PCT = -0.10                 # Жёсткий Stop-Loss -10%
 RUG_HUNTER_EMERG_PCT = -0.14              # Экстренный кап -14%
 RUG_HUNTER_MAX_HOLD_MIN = 5.0             # Базовый тайм-кэп 5м (для плюсовых позиций расширяется до 15м)
-RUG_HUNTER_LIQ_DRAIN_PCT = 0.15           # Мгновенный выход при падении LP >= 15%
+RUG_HUNTER_LIQ_DRAIN_PCT = 0.40           # Мгновенный выход при реальном падении LP >= 40% (защита от ложных сбросов при нормальных продажах)
 
 # === СТРОГИЕ ВЫХОДЫ ДЛЯ НЕЗАЛОЧЕННЫХ ПУЛОВ RUG-HUNTER (UNLOCKED-LP) ===
-# На незалоченном пуле дев держит RemoveLiquidity и дрейнит пул на 2.5-3.5м (кейс GTA на 3.0м!).
-# Принцип: СХВАТИЛ 2x И ВЫШЕЛ ДО ДРЕЙНА (никаких бесконечных мунбэгов на незалоченных пулах!).
+# На незалоченном пуле дев держит RemoveLiquidity и дрейнит пул на 3.0-4.0м (кейсы VI, ALTRUISTS, RINGS).
+# Принцип: СХВАТИЛ ПЕРВУЮ ВОЛНУ И ВЫШЕЛ ДО 2.2 МИНУТ ОБЩЕГО ВОЗРАСТА ПУЛА!
 RUG_HUNTER_UNLOCKED_TP1_PCT = 0.35        # TP1 +35%: фиксируем 50% объема (депозит полностью в сейфе!)
 RUG_HUNTER_UNLOCKED_TP1_SELL_FRAC = 0.50
 RUG_HUNTER_UNLOCKED_TP2_PCT = 0.80        # TP2 +80%..+100% (2x): продаём 100% остатка (ПОЛНЫЙ ВЫХОД В КЭШ!)
 RUG_HUNTER_UNLOCKED_TP2_SELL_FRAC = 1.00
-RUG_HUNTER_UNLOCKED_MAX_HOLD_MIN = 2.0    # Жесткий потолок 2.0м при pnl >= +8%: забираем профит до дрейна!
-RUG_HUNTER_UNLOCKED_SAFETY_MIN = 2.5      # Абсолютный лимит 2.5м: выход при любом раскладе до RemoveLiquidity
+RUG_HUNTER_UNLOCKED_MAX_HOLD_MIN = 1.6    # Жесткий потолок 1.6м удержания при pnl >= +8%: забираем профит до дрейна!
+RUG_HUNTER_UNLOCKED_SAFETY_MIN = 1.8      # Абсолютный лимит 1.8м удержания: выход до начала типичного 3м окна вывода LP
+RUG_HUNTER_UNLOCKED_MAX_POOL_AGE_MIN = 2.2 # Жесткий потолок общего возраста пула: если пул старше 2.2м — 100% эвакуация до рага!
 RUG_HUNTER_UNLOCKED_STALL_SEC = 25.0      # 25с без нового ATH после пика >= +30% и откат 8% -> эвакуация до рага
 RUG_HUNTER_UNLOCKED_TRAIL_DROP_PCT = 0.12 # Плотный трейл 12% от ATH для незалоченных пулов

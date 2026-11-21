@@ -245,7 +245,11 @@ def normalize_jup_token(t: dict) -> dict:
         if price <= 0:
             return {}
         try:
-            liq = float(t.get("liquidity", 0) or 0)
+            # Jupiter Tokens API v2 отдаёт ликвидность пула по одной стороне (quote/SOL).
+            # Умножаем на 2.0, чтобы нормализовать к стандарту DexScreener (full pool reserves),
+            # исключая ложный 50% сброс ликвидности при переключении источников.
+            _raw_j_liq = float(t.get("liquidity", 0) or 0)
+            liq = _raw_j_liq * 2.0 if _raw_j_liq > 0 else 0.0
         except Exception:
             liq = 0.0
         try:

@@ -3218,14 +3218,14 @@ class Analyzer:
                 if not hasattr(self, "_verified_lp_meta"):
                     self._verified_lp_meta = {}
                 _pa_fin = str((pair_data or {}).get("pairAddress") or "").strip()
-                _rh_meta_fin = dict(self._verified_lp_meta.get((mint, _pa_fin)) or self._verified_lp_meta.get((mint, "")) or {})
+                _rh_meta_fin = dict(self._verified_lp_meta.get((mint, _pa_fin)) or {})
                 _rh_meta_fin["_rug_hunter_mode"] = _rh_mode_fin
                 if (pair_data or {}).get("_rug_hunter_creator_profile"):
                     _rh_meta_fin["_rug_hunter_creator_profile"] = pair_data["_rug_hunter_creator_profile"]
                 if (pair_data or {}).get("_rug_hunter_watch"):
                     _rh_meta_fin["_rug_hunter_watch"] = pair_data["_rug_hunter_watch"]
-                self._verified_lp_meta[(mint, _pa_fin)] = _rh_meta_fin
-                self._verified_lp_meta[(mint, "")] = _rh_meta_fin
+                if _pa_fin:
+                    self._verified_lp_meta[(mint, _pa_fin)] = _rh_meta_fin
             else:
                 _pass_sig = f"ROCKET-XGB {conf:.0f}%"
             self._set_sig(mint, _pass_sig)
@@ -4791,7 +4791,14 @@ class Analyzer:
             return False
 
         _dex_low = (pair_data.get("dexId") or "").lower()
-        _is_rh_ok_ray = str(pair_data.get("_rug_hunter_mode") or "").upper() in ("UNLOCKED-LP", "SEEDED-LP", "CABAL-SURF")
+        _c_ms = pair_data.get("pairCreatedAt") or 0
+        import time as _t
+        _age_min = ((_t.time() * 1000 - _c_ms) / 60000.0) if _c_ms else 0.2
+        _max_unl_age = float(getattr(config, "RUG_HUNTER_UNLOCKED_MAX_AGE_MIN", 1.80))
+        _is_rh_ok_ray = (
+            str(pair_data.get("_rug_hunter_mode") or "").upper() in ("UNLOCKED-LP", "SEEDED-LP", "CABAL-SURF")
+            and (_age_min <= _max_unl_age)
+        )
         if "meteora" in _dex_low and _dex_low != "meteoradbc" and not pair_data.get("_lp_verified", False) and not _is_rh_ok_ray:
             return self._deny(mint, "fake-meteora-pool", f"🚫 [FAKE-METEORA] {mint[:8]}: пул Meteora без сожжённого LP — риск Remove LP (кейсы USPR/BUFO/SPACE)!")
 
@@ -4799,10 +4806,6 @@ class Analyzer:
             return self._deny(mint, "permissionless-liq-fdv-trap", f"🚫 [LIQ-FDV-TRAP] {mint[:8]}: пул с высокой посеянной ликвидностью и 0 соцсетей — риск сноса LP!")
 
         _is_migrated_pump = mint.endswith("pump") and _dex_low in ("pumpswap", "raydium")
-
-        _c_ms = pair_data.get("pairCreatedAt") or 0
-        import time as _t
-        _age_min = ((_t.time() * 1000 - _c_ms) / 60000.0) if _c_ms else 0.2
 
         # === ЗАЩИТА ОТ ДАМПА МИГРАЦИИ PUMP.FUN ===
         if _is_migrated_pump:
