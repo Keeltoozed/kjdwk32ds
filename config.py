@@ -425,15 +425,23 @@ def is_permissionless_liq_fdv_trap(pair_data: Optional[dict]) -> bool:
     # Нативные pump.fun bonding curves безопасны (ликва в контракте), но пулы с гигантской посеянной ликвой (>= $25k) без соцсетей — скам (кейс MORAPL $93k liq / 0 soc)
     if dex in ("pump", "pumpfun"):
         return False
-        
+
+    # Органический старт с живыми покупателями: если пул молодой (<=2.5м) и уже есть покупатели (>=6b),
+    # это живой импульс ракеты (кейсы USDC +1403%, DCTY +441%, TRADER +203%, NEX AI +224%, MEDTECH +367%, SHELF +668%)!
+    # Проверяем В ПЕРВУЮ ОЧЕРЕДЬ, чтобы не душить CPMM-пулы, где liq/fdv математически равен 1.5x-2.0x!
+    _txns = pair_data.get("txns", {}).get("m5", {}) if isinstance(pair_data.get("txns"), dict) else {}
+    _b5 = int(_txns.get("buys", 0) or 0)
+    _s5 = int(_txns.get("sells", 0) or 0)
+    _ca_tr = float((pair_data or {}).get("pairCreatedAt") or 0)
+    _age_tr = ((time.time() * 1000.0 - _ca_tr) / 60000.0) if _ca_tr > 0 else 0.2
+    if (_age_tr <= 2.5 and _b5 >= 6 and (_s5 == 0 or _b5 >= _s5 * 1.05)) or (_b5 >= 18 and _b5 >= _s5 * 1.25):
+        return False
+
     liq_usd = float((pair_data.get("liquidity") or {}).get("usd") or 0.0)
     fdv_usd = float(pair_data.get("fdv") or pair_data.get("marketCap") or 0.0)
 
-    # ЖЁСТКИЙ ТРАП (проверяется ДО порога $18k, т.к. посеянный CreatePool часто на $5k-$18k, как AudaCity $15.7k liq / $10.4k FDV):
-    # 1) pump-минт на AMM с ликвой >= 75% FDV — посеянный CreatePool (BALVOTE).
-    # 2) Любой AMM пул с ликвой >= 110% FDV — физически невозможно без искусственного залива LP (AudaCity $18.5k->$15.7k liq / $14.5k->$10.4k FDV).
-    # Соцсети или боты-покупатели НЕ оправдывают такую аномалию!
-    if liq_usd >= 3000.0 and fdv_usd > 0:
+    # ЖЁСТКИЙ ТРАП (для неактивных или старых пулов без органики):
+    if liq_usd >= 3000.0 and fdv_usd > 0 and _b5 < 6:
         if mint.endswith("pump") and liq_usd >= fdv_usd * 0.75:
             return True
         if liq_usd >= fdv_usd * 1.10:
@@ -451,16 +459,6 @@ def is_permissionless_liq_fdv_trap(pair_data: Optional[dict]) -> bool:
         or (isinstance(websites, list) and len(websites) > 0)
     )
     if has_socials:
-        return False
-
-    # Органический старт с живыми покупателями (кейс $FWOG: 37b/0s -> ракета +184%):
-    _txns = pair_data.get("txns", {}).get("m5", {}) if isinstance(pair_data.get("txns"), dict) else {}
-    _b5 = int(_txns.get("buys", 0) or 0)
-    _s5 = int(_txns.get("sells", 0) or 0)
-    _ca_tr = float((pair_data or {}).get("pairCreatedAt") or 0)
-    _age_tr = ((time.time() * 1000.0 - _ca_tr) / 60000.0) if _ca_tr > 0 else 0.2
-    # На раннем старте (<=2м) достаточно 8 покупок и перевеса покупателей, либо 25 покупок для зрелых монет:
-    if (_age_tr <= 2.0 and _b5 >= 8 and (_s5 == 0 or _b5 >= _s5 * 1.15)) or (_b5 >= 25 and _b5 >= _s5 * 1.5):
         return False
 
     # 1. Liq/FDV >= 70% with Liq >= $18k and 0 socials on custom pools (AXIOMCOIN: $43.5k liq / $53.9k fdv = 80.6%)
@@ -590,8 +588,8 @@ def evaluate_entry_momentum(
     if vol5_usd < _min_vol_gate:
         return False, f"no-demand-vol5 ${vol5_usd:,.0f} < ${_min_vol_gate:,.0f} (dead micro-pool)"
     if liq_usd >= 1500.0 and vel_ratio < 0.08 and vol5_usd < 2000.0:
-        # Для свежих пулов (<=5.0м) не душим старт: от 6 покупок и объём от $350 подтверждают старт ракеты (кейсы BWA +710%, AMC +318%)!
-        if age_min <= 5.0 and buys5 >= 6 and vol5_usd >= 350.0 and (sells5 == 0 or buys5 >= sells5 * 1.10):
+        # Для свежих пулов (<=3.5м) не душим старт: от 5 покупок и объём от $250 подтверждают старт ракеты (кейсы BWA +710%, AMC +318%, SHELF +668%)!
+        if (age_min <= 3.5 and buys5 >= 5 and vol5_usd >= 250.0 and (sells5 == 0 or buys5 >= sells5 * 1.05)) or (age_min <= 5.0 and buys5 >= 6 and vol5_usd >= 350.0 and (sells5 == 0 or buys5 >= sells5 * 1.10)):
             pass
         else:
             return False, f"dead-turnover v/l {vel_ratio:.2f}x < 0.08x (vol5 ${vol5_usd:,.0f} on liq ${liq_usd:,.0f})"
@@ -1458,8 +1456,8 @@ RUG_HUNTER_UNLOCKED_TP1_PCT = 0.35        # TP1 +35%: фиксируем 50% о�
 RUG_HUNTER_UNLOCKED_TP1_SELL_FRAC = 0.50
 RUG_HUNTER_UNLOCKED_TP2_PCT = 0.80        # TP2 +80%..+100% (2x): продаём 100% остатка (ПОЛНЫЙ ВЫХОД В КЭШ!)
 RUG_HUNTER_UNLOCKED_TP2_SELL_FRAC = 1.00
-RUG_HUNTER_UNLOCKED_MAX_HOLD_MIN = 1.6    # Жесткий потолок 1.6м удержания при pnl >= +8%: забираем профит до дрейна!
-RUG_HUNTER_UNLOCKED_SAFETY_MIN = 1.8      # Абсолютный лимит 1.8м удержания: выход до начала типичного 3м окна вывода LP
-RUG_HUNTER_UNLOCKED_MAX_POOL_AGE_MIN = 2.0 # Жесткий потолок общего возраста пула: если пул старше 2.0м — 100% эвакуация до рага!
+RUG_HUNTER_UNLOCKED_MAX_HOLD_MIN = 2.2    # Потолок 2.2м удержания при pnl >= +8%: забираем профит до дрейна!
+RUG_HUNTER_UNLOCKED_SAFETY_MIN = 2.5      # Лимит 2.5м удержания: выход до начала типичного 3.5м окна вывода LP
+RUG_HUNTER_UNLOCKED_MAX_POOL_AGE_MIN = 3.2 # Жесткий потолок общего возраста пула (3.2м): выход ДО 4м дрейна (кейсы SHARE 4м, LAZARUS 8м)!
 RUG_HUNTER_UNLOCKED_STALL_SEC = 25.0      # 25с без нового ATH после пика >= +30% и откат 8% -> эвакуация до рага
 RUG_HUNTER_UNLOCKED_TRAIL_DROP_PCT = 0.12 # Плотный трейл 12% от ATH для незалоченных пулов

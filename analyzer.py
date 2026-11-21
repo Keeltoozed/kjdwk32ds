@@ -1816,15 +1816,18 @@ class Analyzer:
             if not self._brand_whitelisted(mint):
                 _lq_cp = float((pair_data.get("liquidity", {}) or {}).get("usd", 0) or 0)
                 _dex_cp = str(pair_data.get("dexId", "") or "").lower()
-                # Пропускаем только вирусные мигрировавшие .pump раннеры с высокой ликвидностью и сильным спросом (кейс TESLA +307%, liq $15.7k, 404b/305s)
+                # Пропускаем вирусные раннеры и ранние ракеты с живым спросом (кейсы ANTHROPIC +459%, GOOGLE AI +319%, TESLA +307%)
                 _is_viral_pump_corp = (
-                    mint.lower().endswith("pump")
-                    and _dex_cp not in ("", "pump", "pumpfun")
-                    and _lq_cp >= 12000.0
-                    and _vm5_pre >= 8000.0
-                    and _b5_pre >= 100
-                    and _b5_pre >= int(_s5_pre * 1.15)
-                    and _m5 >= 10.0
+                    (_lq_cp >= 6000.0 and _vm5_pre >= 1500.0 and _b5_pre >= 15 and (_s5_pre == 0 or _b5_pre >= int(_s5_pre * 1.05)) and _age_min_pre <= 4.0)
+                    or (
+                        mint.lower().endswith("pump")
+                        and _dex_cp not in ("", "pump", "pumpfun")
+                        and _lq_cp >= 10000.0
+                        and _vm5_pre >= 5000.0
+                        and _b5_pre >= 50
+                        and _b5_pre >= int(_s5_pre * 1.15)
+                        and _m5 >= 10.0
+                    )
                 )
                 if _is_viral_pump_corp:
                     print(f"🔥 [CORP-VIRAL-PUMP] {symbol} ({mint[:8]}): подтверждённый мигрировавший .pump раннер (liq ${_lq_cp:,.0f}, vol5 ${_vm5_pre:,.0f}, {_b5_pre}b/{_s5_pre}s) — пропуск.")
