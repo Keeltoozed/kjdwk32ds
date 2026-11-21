@@ -2357,7 +2357,8 @@ async def scanner_loop(analyzer, tracker):
                                     _ca_sc_pre = float(pair_data.get("pairCreatedAt") or 0)
                                     _age_sc_pre = ((time.time() * 1000.0 - _ca_sc_pre) / 60000.0) if _ca_sc_pre > 0 else 0.0
                                     _rh_mode_sc = str(pair_data.get("_rug_hunter_mode") or "").upper().strip()
-                                    if _rh_mode_sc and _age_sc_pre > 2.2:
+                                    _rh_sc_max_age = float(getattr(config, "RUG_HUNTER_UNLOCKED_MAX_AGE_MIN", 3.20)) + 0.5
+                                    if _rh_mode_sc and _age_sc_pre > _rh_sc_max_age:
                                         _rh_mode_sc = ""
                                         pair_data.pop("_rug_hunter_mode", None)
                                     _is_rh_sc_pf = bool(_rh_mode_sc) or ("RUG-HUNTER" in str(analyzer.get_signal(mint) or "").upper())

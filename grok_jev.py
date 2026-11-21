@@ -2627,9 +2627,10 @@ class GrokJevEngine:
         _rh_mode_jev_fin = str(pair.get("_rug_hunter_mode") or "").strip()
         _is_rh_jev_fin = bool(_rh_mode_jev_fin)
 
-        # Защита от фантомных входов: Rug-Hunter работает ТОЛЬКО на ранних пулах (<=2.2м)!
-        # Если пул старше 2.2м (кейс HORSE 6м, CATME 16м) — сбрасываем метку Rug-Hunter!
-        if _is_rh_jev_fin and _fin_age_m > 2.2:
+        # Защита от фантомных входов: Rug-Hunter работает ТОЛЬКО на ранних пулах (<=MAX_AGE)!
+        # Если пул старше порога из конфига (кейс HORSE 6м, CATME 16м) — сбрасываем метку Rug-Hunter!
+        _rh_fin_max_age = float(getattr(_c, "RUG_HUNTER_UNLOCKED_MAX_AGE_MIN", 3.20)) + 0.5  # +0.5м запас на анализ
+        if _is_rh_jev_fin and _fin_age_m > _rh_fin_max_age:
             _is_rh_jev_fin = False
             _rh_mode_jev_fin = ""
             pair.pop("_rug_hunter_mode", None)

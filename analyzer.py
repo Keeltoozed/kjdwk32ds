@@ -1011,9 +1011,11 @@ class Analyzer:
                 _meta = _meta_map.get((mint, _pa)) or _meta_map.get((mint, ""))
                 if isinstance(_meta, dict):
                     for _mk, _mv in _meta.items():
-                        # Защита от фантомных входов: НЕ натягивать _rug_hunter_mode на старые пулы (>2.2м)!
+                        # Защита от фантомных входов: НЕ натягивать _rug_hunter_mode на старые пулы!
                         # Иначе токен в возрасте 6м/16м покупается как RUG-HUNTER и сбрасывается через 2с (кейсы HORSE, CATME)
-                        if _mk in ("_rug_hunter_mode", "_rug_hunter_creator_profile") and _cur_age_p > 2.2:
+                        import config as _acfg
+                        _rh_meta_max_age = float(getattr(_acfg, "RUG_HUNTER_UNLOCKED_MAX_AGE_MIN", 3.20)) + 0.5
+                        if _mk in ("_rug_hunter_mode", "_rug_hunter_creator_profile") and _cur_age_p > _rh_meta_max_age:
                             continue
                         if _mk not in pair_dict:
                             pair_dict[_mk] = _mv
@@ -1024,7 +1026,7 @@ class Analyzer:
                     "_pumpswap_canonical", "_pumpswap_lp_burned", "_pumpswap_rpc_unverified",
                     "_rug_hunter_mode", "_rug_hunter_creator_profile", "_rug_hunter_watch",
                 ):
-                    if _fk in ("_rug_hunter_mode", "_rug_hunter_creator_profile") and _cur_age_p > 2.2:
+                    if _fk in ("_rug_hunter_mode", "_rug_hunter_creator_profile") and _cur_age_p > _rh_meta_max_age:
                         continue
                     if _fk in _last_p and _fk not in pair_dict:
                         pair_dict[_fk] = _last_p[_fk]
