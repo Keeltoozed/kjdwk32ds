@@ -548,17 +548,13 @@ async def position_manager_loop(analyzer, tracker):
                 _allow_partial_tp = getattr(config, "PARTIAL_TP_ENABLED", True) and (_pos_val >= _min_tp_ticket)
                 _is_small_pos = _pos_val < _min_tp_ticket
                 if _allow_partial_tp and not _is_small_pos and not _suppress_eval_peak:
-                    # Для незалоченных пулов при PnL >= +80% (2x) фиксируем 100% В КЭШ (кейс GTA: не держим мунбэг под 3м раг дева!):
-                    if _pos_unl_tp and pnl_pct >= float(getattr(config, "RUG_HUNTER_UNLOCKED_TP2_PCT", 0.80)):
-                        tracker.close_position(mint, current_price, f"🎯 RH Unlocked 2x Full Harvest (+{pnl_pct*100:.1f}%)")
-                        continue
                     if pnl_pct >= _tp1_sol_thr and not getattr(position, "tp1_done", False) and float(getattr(position, "amount_usd", 0.0) or 0.0) > 0.05:
                         tracker.partial_close_position(mint, current_price, _tp1_sell, f"Take Profit +{_tp1_sol_thr*100:.0f}% (Tier-1 {int(_tp1_sell*100)}%, Principal Shield / Moonbag)")
                         position.tp1_done = True
                         position.is_moonbag = True
                         position.last_tp_ts = time.time()
                     if pnl_pct >= _tp2 and not getattr(position, "tp2_done", False) and float(getattr(position, "amount_usd", 0.0) or 0.0) > 0.05:
-                        if _tp2_sell >= 0.99 or _pos_unl_tp:
+                        if _tp2_sell >= 0.99:
                             tracker.close_position(mint, current_price, f"Moonbag TP2 +{_tp2*100:.0f}% (Target +{pnl_pct*100:.1f}%)")
                             continue
                         else:

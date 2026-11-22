@@ -462,19 +462,23 @@ def snapshot_rugger_wallets(rc_data: Optional[dict], pool_accounts: Optional[set
 
 def get_rug_hunter_tp_ladder(is_unlocked: bool = True) -> tuple:
     """Мунбэг-лесенка для стратегии Rug Hunter:
-    - Для UNLOCKED-LP: быстрый сбор икса (+35% фикс 50%, +80% полный выход 100% до рага).
-      На незалоченном пуле дев снимет LP на 2.5-3.5м, поэтому на +80%..+100% выходим ПОЛНОСТЬЮ!
+    - Для UNLOCKED-LP: TP1 +35% (40%), TP2 +90% (30%), TP3 +250% (15%), TP4 +500% (10%), TP5 +1000% (100% остатка).
+      На незалоченном пуле фиксируем тело депозита на TP1, гарантируем профит на TP2,
+      а лунная сумка (30%) летит до реальных иксов (3.5x-11x) под защитой трейлинг-стопа!
     - Для SEEDED / CABAL / LOCKED: полная 5-уровневая лесенка до 11x.
     """
     if is_unlocked:
         return (
             float(getattr(config, "RUG_HUNTER_UNLOCKED_TP1_PCT", 0.35)),
-            float(getattr(config, "RUG_HUNTER_UNLOCKED_TP1_SELL_FRAC", 0.50)),
-            float(getattr(config, "RUG_HUNTER_UNLOCKED_TP2_PCT", 0.80)),
-            float(getattr(config, "RUG_HUNTER_UNLOCKED_TP2_SELL_FRAC", 1.00)),  # 100% ВЫХОД НА 2x ДО РАГА!
-            2.50, 0.0,
-            5.00, 0.0,
-            10.00, 0.0,
+            float(getattr(config, "RUG_HUNTER_UNLOCKED_TP1_SELL_FRAC", 0.40)),
+            float(getattr(config, "RUG_HUNTER_UNLOCKED_TP2_PCT", 0.90)),
+            float(getattr(config, "RUG_HUNTER_UNLOCKED_TP2_SELL_FRAC", 0.30)),
+            float(getattr(config, "RUG_HUNTER_UNLOCKED_TP3_PCT", 2.50)),
+            float(getattr(config, "RUG_HUNTER_UNLOCKED_TP3_SELL_FRAC", 0.15)),
+            float(getattr(config, "RUG_HUNTER_UNLOCKED_TP4_PCT", 5.00)),
+            float(getattr(config, "RUG_HUNTER_UNLOCKED_TP4_SELL_FRAC", 0.10)),
+            float(getattr(config, "RUG_HUNTER_UNLOCKED_TP5_PCT", 10.00)),
+            float(getattr(config, "RUG_HUNTER_UNLOCKED_TP5_SELL_FRAC", 1.00)),
         )
     return (
         float(getattr(config, "RUG_HUNTER_TP1_PCT", 0.35)),
@@ -568,47 +572,44 @@ def evaluate_rug_hunter_exit(position, current_price: float) -> Optional[str]:
     is_unlocked_or_seeded = is_unlocked_rh or ("SEEDED" in rh_mode)
 
     if is_unlocked_or_seeded:
-        # А. Полный сбор профита на 2x (+80%..+100%):
-        # На незалоченном пуле ДЕВ ВЫВЕДЕТ LP, поэтому на 2x забираем 100% В КЭШ (кейс PUMPAPI +103.5% -> +70.8% кэш)!
-        _unl_tp2_val = float(getattr(config, "RUG_HUNTER_UNLOCKED_TP2_PCT", 0.80))
-        if pnl_pct >= _unl_tp2_val:
-            return f"🎯 RH Full Harvest (+{pnl_pct*100:.1f}%, цель +{_unl_tp2_val*100:.0f}% достигнута — 100% выход в кэш!)"
+        # А. Полный сбор профита на супер-ракете (11x / +1000%):
+        if pnl_pct >= 10.0:
+            return f"🎯 RH Full Harvest (+{pnl_pct*100:.1f}%, цель 11x достигнута — 100% выход в кэш!)"
 
         # Б. Потолок общего возраста пула (Pre-Rug Evac):
-        # 1) Для слабых/застрявших позиций (PnL < +15%): строгая эвакуация на 3.2м до раг-окна дева (SHARE 4м, LAZARUS 8м)!
-        # 2) Для растущих ракет (PnL >= +15%): НЕ душим ракету на старте! Даём ей лететь до TP1 (+35%), TP2 (+80%)
-        #    или трейлинг-стопа с расширенным потолком до 8.0м (кейсы CHAD +30%, BITINU +25%, RAWDOG +22%, DESPAIR +21%)!
+        # 1) Для слабых/застрявших позиций (PnL < +8%): эвакуация на 4.5м до раг-окна дева
+        # 2) Для растущих ракет (PnL >= +8% или max_pnl >= +12%): НЕ душим ракету! Даём ей лететь до 12м,
+        #    собирая TP1 (+35%), TP2 (+90%), TP3 (+250%), TP4 (+500%) или трейлинг!
+        # ВАЖНО: не эвакуировать молодые позиции (< 1.5м в рынке), даём им время на разгон!
         _pd_c_ms = (pd.get("pairCreatedAt") or 0) if isinstance(pd, dict) else 0
         pool_age_min = ((now_ts * 1000.0 - _pd_c_ms) / 60000.0) if _pd_c_ms > 0 else (minutes_held + 0.3)
-        _base_max_age = float(getattr(config, "RUG_HUNTER_UNLOCKED_MAX_POOL_AGE_MIN", 3.2))
-        _rocket_max_age = float(getattr(config, "RUG_HUNTER_ROCKET_MAX_POOL_AGE_MIN", 8.0))
-        _effective_max_pool_age = _rocket_max_age if pnl_pct >= 0.15 else _base_max_age
-        if pool_age_min >= _effective_max_pool_age:
-            _evac_msg = f"фиксация прибыли на ракете (+{pnl_pct*100:+.1f}%)" if pnl_pct >= 0.15 else "эвакуация до рага дева!"
+        _base_max_age = float(getattr(config, "RUG_HUNTER_UNLOCKED_MAX_POOL_AGE_MIN", 4.5))
+        _rocket_max_age = float(getattr(config, "RUG_HUNTER_ROCKET_MAX_POOL_AGE_MIN", 12.0))
+        _is_rocket_trending = bool(pnl_pct >= 0.08 or max_pnl_pct >= 0.12)
+        _effective_max_pool_age = _rocket_max_age if _is_rocket_trending else _base_max_age
+        if minutes_held >= 1.5 and pool_age_min >= _effective_max_pool_age:
+            _evac_msg = f"фиксация прибыли на ракете (+{pnl_pct*100:+.1f}%)" if _is_rocket_trending else "эвакуация до рага дева!"
             return f"🎯 RH Pre-Rug Evac (+{pnl_pct*100:+.1f}%, возраст пула {pool_age_min:.1f}м >= {_effective_max_pool_age:.1f}м — {_evac_msg})"
 
-        # В. Застой без взлёта (Stagnation Evac): если за 1.8м в позиции монета не набрала даже +15%:
-        # Реальная ракета взлетает в первые 60-90 секунд (PUMPAPI, BAS, DRILL, GTA).
-        # Если импульса нет — сбрасываем в ~0% / -2% до того, как дев нажмёт RemoveLiquidity!
-        if minutes_held >= 1.8 and max_pnl_pct < 0.15:
-            return f"🎯 RH Stagnation Evac ({pnl_pct*100:+.1f}%, 1.8м без импульса — выход до рага дева)"
+        # В. Застой без взлёта (Stagnation Evac): только если за 2.5м в позиции монета вообще не дала импульса:
+        if minutes_held >= 2.5 and max_pnl_pct < 0.05 and pnl_pct <= 0.01:
+            return f"🎯 RH Stagnation Evac ({pnl_pct*100:+.1f}%, 2.5м без импульса — сброс до рага)"
 
-        # Г. Застой после пампа (Stall Evac): монета сделала пик >= +25% и >= 25с не обновляет хай при откате >= 8%:
-        # Сигнал окончания покупательского импульса (кейс DRILL +57.8% -> фиксация +33.1%)!
+        # Г. Застой после пампа (Stall Evac): монета сделала пик >= +30% и >= 60с не обновляет хай при откате >= 18%:
         peak_ts = float(getattr(position, "peak_time", now_ts) or now_ts)
         peak_age_sec = max(0.0, now_ts - peak_ts)
-        _unl_stall_s = float(getattr(config, "RUG_HUNTER_UNLOCKED_STALL_SEC", 25.0))
-        if max_pnl_pct >= 0.25 and peak_age_sec >= _unl_stall_s and drop_from_peak >= 0.08:
+        _unl_stall_s = float(getattr(config, "RUG_HUNTER_UNLOCKED_STALL_SEC", 60.0))
+        if max_pnl_pct >= 0.30 and peak_age_sec >= _unl_stall_s and drop_from_peak >= 0.18 and pnl_pct < 0.20:
             return f"🎯 RH Stall Evac (+{pnl_pct*100:+.1f}%, застой {peak_age_sec:.0f}с после пика +{max_pnl_pct*100:.1f}%)"
 
-        # Д. Плотный трейлинг-стоп 12% от пика (кейс BAS +51.3% -> фиксация +19.6%):
-        _unl_trail_drop = float(getattr(config, "RUG_HUNTER_UNLOCKED_TRAIL_DROP_PCT", 0.12))
-        if max_pnl_pct >= 0.30 and drop_from_peak >= _unl_trail_drop:
+        # Д. Трейлинг-стоп для незалоченных пулов: 22% от пика (даёт ракете дышать на откатах):
+        _unl_trail_drop = float(getattr(config, "RUG_HUNTER_UNLOCKED_TRAIL_DROP_PCT", 0.22))
+        if max_pnl_pct >= 0.35 and drop_from_peak >= _unl_trail_drop:
             return f"🎯 RH Tight Trail (+{pnl_pct*100:+.1f}%, откат {drop_from_peak*100:.1f}% от пика +{max_pnl_pct*100:.1f}%)"
 
-        # Е. Абсолютный лимит удержания безопасности (2.5м):
-        _unl_safety_max = float(getattr(config, "RUG_HUNTER_UNLOCKED_SAFETY_MIN", 2.5))
-        if minutes_held >= _unl_safety_max:
+        # Е. Абсолютный лимит удержания безопасности (только для зависших/убыточных позиций):
+        _unl_safety_max = float(getattr(config, "RUG_HUNTER_UNLOCKED_SAFETY_MIN", 4.0))
+        if minutes_held >= _unl_safety_max and pnl_pct < 0.08:
             return f"🎯 RH Safety Time-Cap ({pnl_pct*100:+.1f}%, {_unl_safety_max:.1f}м лимит — выход до LP-рага)"
 
     else:

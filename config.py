@@ -1052,12 +1052,15 @@ def get_sol_tp_ladder(is_unlocked: bool) -> tuple:
     if is_unlocked:
         return (
             float(globals().get("RUG_HUNTER_UNLOCKED_TP1_PCT", 0.35)),
-            float(globals().get("RUG_HUNTER_UNLOCKED_TP1_SELL_FRAC", 0.50)),
-            float(globals().get("RUG_HUNTER_UNLOCKED_TP2_PCT", 0.80)),
-            float(globals().get("RUG_HUNTER_UNLOCKED_TP2_SELL_FRAC", 1.00)),
-            2.50, 0.0,
-            5.00, 0.0,
-            10.00, 0.0,
+            float(globals().get("RUG_HUNTER_UNLOCKED_TP1_SELL_FRAC", 0.40)),
+            float(globals().get("RUG_HUNTER_UNLOCKED_TP2_PCT", 0.90)),
+            float(globals().get("RUG_HUNTER_UNLOCKED_TP2_SELL_FRAC", 0.30)),
+            float(globals().get("RUG_HUNTER_UNLOCKED_TP3_PCT", 2.50)),
+            float(globals().get("RUG_HUNTER_UNLOCKED_TP3_SELL_FRAC", 0.15)),
+            float(globals().get("RUG_HUNTER_UNLOCKED_TP4_PCT", 5.00)),
+            float(globals().get("RUG_HUNTER_UNLOCKED_TP4_SELL_FRAC", 0.10)),
+            float(globals().get("RUG_HUNTER_UNLOCKED_TP5_PCT", 10.00)),
+            float(globals().get("RUG_HUNTER_UNLOCKED_TP5_SELL_FRAC", 1.00)),
         )
     return (
         float(globals().get("TP1_TRIGGER_PCT", 0.35)),
@@ -1425,7 +1428,7 @@ RUG_HUNTER_MAX_SLOTS = 2                  # Макс. 2 одновременны
 RUG_HUNTER_SIZE_MULT = 0.65               # Уменьшенный риск-сайз (65% от обычного ордера)
 RUG_HUNTER_UNLOCKED_MIN_AGE_MIN = 0.15     # Минимум 0.15м (9с): вход на самом старте разгона первой свечи
 RUG_HUNTER_UNLOCKED_MAX_AGE_MIN = 2.0      # Максимум 2.0м: только первая свеча! (было 3.20м — данные CSV показывают: 2-3м = 49% плохих входов, <2м = 53% ракет)
-RUG_HUNTER_ROCKET_MAX_POOL_AGE_MIN = 8.0   # Максимальный возраст пула для летящих ракет (PnL >= +15%): даём ракете бежать до 8м, собирая TP1 (+35%), TP2 (+80%) и трейлинг!
+RUG_HUNTER_ROCKET_MAX_POOL_AGE_MIN = 12.0  # Максимальный возраст пула для летящих ракет (PnL >= +8%): даём ракете бежать до 12м, собирая TP1 (+35%), TP2 (+90%), TP3 (+250%) и трейлинг!
 RUG_HUNTER_CABAL_MAX_AGE_MIN = 4.5         # Максимум 4.5м для кабал-сёрфа
 RUG_HUNTER_MIN_LIQ_USD = 7500.0            # Минимум $7.5k реальной ликвидности (едино с MIN_GRADUATED_LIQ_USD)
 RUG_HUNTER_MIN_VOL5_USD = 350.0            # Минимум $350 объёма за 5м на ультра-старте (ловит ракеты на 15-30 секундах, кейсы NICKEH30, USELESS, SHELF)
@@ -1458,16 +1461,22 @@ RUG_HUNTER_EMERG_PCT = -0.14              # Экстренный кап -14%
 RUG_HUNTER_MAX_HOLD_MIN = 5.0             # Базовый тайм-кэп 5м (для плюсовых позиций расширяется до 15м)
 RUG_HUNTER_LIQ_DRAIN_PCT = 0.40           # Мгновенный выход при реальном падении LP >= 40% (защита от ложных сбросов при нормальных продажах)
 
-# === СТРОГИЕ ВЫХОДЫ ДЛЯ НЕЗАЛОЧЕННЫХ ПУЛОВ RUG-HUNTER (UNLOCKED-LP) ===
-# На незалоченном пуле дев держит RemoveLiquidity и дрейнит пул на 3.0-4.0м (кейсы VI, ALTRUISTS, RINGS).
-# Принцип: СХВАТИЛ ПЕРВУЮ ВОЛНУ И ВЫШЕЛ ДО 2.2 МИНУТ ОБЩЕГО ВОЗРАСТА ПУЛА!
-RUG_HUNTER_UNLOCKED_TP1_PCT = 0.35        # TP1 +35%: фиксируем 50% объема (депозит полностью в сейфе!)
-RUG_HUNTER_UNLOCKED_TP1_SELL_FRAC = 0.50
-RUG_HUNTER_UNLOCKED_TP2_PCT = 0.80        # TP2 +80%..+100% (2x): продаём 100% остатка (ПОЛНЫЙ ВЫХОД В КЭШ!)
-RUG_HUNTER_UNLOCKED_TP2_SELL_FRAC = 1.00
-RUG_HUNTER_UNLOCKED_MAX_HOLD_MIN = 2.2    # Потолок 2.2м удержания при pnl >= +8%: забираем профит до дрейна!
-RUG_HUNTER_UNLOCKED_SAFETY_MIN = 2.5      # Лимит 2.5м удержания: выход до начала типичного 3.5м окна вывода LP
-RUG_HUNTER_UNLOCKED_MAX_POOL_AGE_MIN = 3.2 # Жесткий потолок общего возраста пула (3.2м) для застрявших/слабых позиций (PnL < +15%)
-RUG_HUNTER_ROCKET_MAX_POOL_AGE_MIN = 6.0   # Расширенный потолок (6.0м) для растущих ракет (PnL >= +15%): даёт собрать 2x-5x до TP/трейла!
-RUG_HUNTER_UNLOCKED_STALL_SEC = 25.0      # 25с без нового ATH после пика >= +30% и откат 8% -> эвакуация до рага
-RUG_HUNTER_UNLOCKED_TRAIL_DROP_PCT = 0.12 # Плотный трейл 12% от ATH для незалоченных пулов
+# === ВЫХОДЫ ДЛЯ НЕЗАЛОЧЕННЫХ ПУЛОВ RUG-HUNTER (UNLOCKED-LP) ===
+# Принцип: TP1 (+35%) возвращает тело депозита (без риска), TP2 (+90%) фиксирует гарантированный профит,
+# а лунная сумка (30%) летит до TP3 (+250%), TP4 (+500%), TP5 (+1000%) или трейлинг-стопа!
+RUG_HUNTER_UNLOCKED_TP1_PCT = 0.35        # TP1 +35%: фиксируем 40% объема (депозит полностью в сейфе!)
+RUG_HUNTER_UNLOCKED_TP1_SELL_FRAC = 0.40
+RUG_HUNTER_UNLOCKED_TP2_PCT = 0.90        # TP2 +90% (2x): фиксируем 30% объема (гарантированный профит!)
+RUG_HUNTER_UNLOCKED_TP2_SELL_FRAC = 0.30
+RUG_HUNTER_UNLOCKED_TP3_PCT = 2.50        # TP3 +250% (3.5x): фиксируем 15% объема
+RUG_HUNTER_UNLOCKED_TP3_SELL_FRAC = 0.15
+RUG_HUNTER_UNLOCKED_TP4_PCT = 5.00        # TP4 +500% (6x): фиксируем 10% объема
+RUG_HUNTER_UNLOCKED_TP4_SELL_FRAC = 0.10
+RUG_HUNTER_UNLOCKED_TP5_PCT = 10.00       # TP5 +1000% (11x): 100% оставшегося объема
+RUG_HUNTER_UNLOCKED_TP5_SELL_FRAC = 1.00
+RUG_HUNTER_UNLOCKED_MAX_HOLD_MIN = 12.0   # Потолок удержания для растущих монет (до 12м для ракет)
+RUG_HUNTER_UNLOCKED_SAFETY_MIN = 4.0      # Лимит 4.0м удержания только для нулевых/минусовых позиций
+RUG_HUNTER_UNLOCKED_MAX_POOL_AGE_MIN = 4.5 # Потолок возраста пула (4.5м) для слабых позиций (PnL < +8%)
+RUG_HUNTER_ROCKET_MAX_POOL_AGE_MIN = 12.0 # Расширенный потолок (12.0м) для растущих ракет (PnL >= +8%): даёт собрать 3x-10x!
+RUG_HUNTER_UNLOCKED_STALL_SEC = 60.0      # 60с без нового ATH после пика >= +30% и откат 18% -> эвакуация
+RUG_HUNTER_UNLOCKED_TRAIL_DROP_PCT = 0.22 # Трейл 22% от ATH для незалоченных пулов (даёт дышать на откатах)
