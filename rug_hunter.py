@@ -323,8 +323,8 @@ def qualify_unlocked_lp_hunter(
         min_sells_req = int(getattr(config, "RUG_HUNTER_EARLY_MIN_SELLS", 1))
         min_buys_req = max(8, int(getattr(config, "RUG_HUNTER_EARLY_MIN_BUYS", 6)))
     else:
-        min_sells_req = 3
-        min_buys_req = max(14, int(sells5 * 1.15))
+        min_sells_req = 4
+        min_buys_req = max(18, int(sells5 * 1.25))
 
     if sells5 < min_sells_req:
         return False, f"rh-too-few-sells {sells5} < {min_sells_req}"
@@ -351,8 +351,15 @@ def qualify_unlocked_lp_hunter(
             return False, f"rh-m5-out-of-range {m5:+.1f}%"
         if m1 < 0.0 and buys5 < 10:
             return False, f"rh-early-m1-negative {m1:+.1f}%"
+    elif age_min <= early_age_th:
+        # 1.2м–1.8м: требуем реальный импульс m5 >= 5% ИЛИ мощный буй-поток (>=30 буев)
+        # (анализ 69 сделок: 49% плохих входов пришли в 2-3м с m5 3.5-7%)
+        if m5 < 5.0 or m5 > max_m5_rh:
+            if not (buys5 >= 30 and buys5 >= sells5 * 1.5 and vol5_usd >= 1500.0):
+                return False, f"rh-m5-weak-ignition {m5:+.1f}% < +5% (buys={buys5})"
     else:
-        if m5 < 3.5 or m5 > max_m5_rh:
+        # > 1.8м (только если MAX_AGE > 1.8): требуем сильный импульс m5 >= 8%
+        if m5 < 8.0 or m5 > max_m5_rh:
             return False, f"rh-m5-out-of-range {m5:+.1f}%"
     if h1 > 280.0 and not (age_min <= 5.0 and 0 < fdv_usd <= 65000.0):
         return False, f"rh-h1-late {h1:+.0f}%"
