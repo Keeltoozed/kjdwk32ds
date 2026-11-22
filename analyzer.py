@@ -2495,7 +2495,7 @@ class Analyzer:
                     # < 0.8м: >= 45% (ловим ранние ракеты — ML ещё не раскачан)
                     # >= 0.8м: >= 55% (блокируем 1-мин раги вроде 愛 42%!)
                     _is_seeded_s1 = bool(fdv_val > 0 and raw_liq >= (fdv_val * 0.95))
-                    _seeded_ml_thr = 45.0 if _age_min_pre < 0.8 else float(getattr(config, "RUG_HUNTER_SEEDED_MIN_ML", 55.0))
+                    _seeded_ml_thr = 25.0 if _age_min_pre < 1.0 else float(getattr(config, "RUG_HUNTER_SEEDED_MIN_ML", 30.0))
                     if _is_seeded_s1 and conf < _seeded_ml_thr:
                         _is_rh_stage1_cand = False
                     else:
@@ -2939,7 +2939,7 @@ class Analyzer:
                     _is_rh_unlocked_h = bool(isinstance(pair_data, dict) and str(pair_data.get("_rug_hunter_mode") or "").upper() in ("UNLOCKED-LP", "SEEDED-LP"))
                     if _is_unlocked_runner_ok and not getattr(config, "ALLOW_UNLOCKED_LP_POOLS", True):
                         _rh_dev_lim = 25.0 if _is_rh_unlocked_h else 10.0
-                        _rh_t10_lim = 55.0 if _is_rh_unlocked_h else 35.0
+                        _rh_t10_lim = 88.0 if _is_rh_unlocked_h else 55.0
                         if dev_holding_pct > _rh_dev_lim:
                             return self._deny(mint, f"unlocked-dev-too-high {dev_holding_pct:.1f}%", f"🚫 [DEV-CONCENTRATION] {symbol} ({mint[:8]}): дев держит {dev_holding_pct:.1f}% > {_rh_dev_lim:.0f}% на незалоченном пуле!")
                         if top_10_sum_pct > _rh_t10_lim:
@@ -3237,7 +3237,7 @@ class Analyzer:
             # < 0.8м возраст → 45% порог (ранние ракеты), >= 0.8м → 55% (блокирует 愛 42%):
             if "SEEDED" in _rh_mode_fin.upper():
                 _age_fin = float((pair_data or {}).get("_age_min", 1.0) or 1.0)
-                _seeded_ml_fin = 45.0 if _age_fin < 0.8 else float(getattr(config, "RUG_HUNTER_SEEDED_MIN_ML", 55.0))
+                _seeded_ml_fin = 25.0 if _age_fin < 1.0 else float(getattr(config, "RUG_HUNTER_SEEDED_MIN_ML", 30.0))
                 if conf < _seeded_ml_fin:
                     return self._deny(mint, f"seeded-low-conf {conf:.0f}%<{_seeded_ml_fin:.0f}%", f"🚫 [SEEDED-LP-TRAP] {symbol} ({mint[:8]}): посеянный пул со слабым ML {conf:.1f}% < {_seeded_ml_fin:.0f}% — риск рага (кейс 愛).")
             if _rh_mode_fin:

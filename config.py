@@ -655,7 +655,8 @@ def evaluate_entry_momentum(
         and buys5 >= max(18, int(sells5 * 1.25))
         and m1 >= -1.0
     )
-    _m5_min_req = 3.0 if (_is_high_conviction_accum or _is_strong_buyer_surge) else (3.5 if _is_fresh_mig_early_launch else (5.0 if _is_clean_grad_flow else (6.0 if (_is_heavy_vol_launch or _is_rh_early_seed_flow) else 8.0)))
+    _is_early_m5_runner = bool(age_min <= 3.5 and (buys5 >= max(8, int(sells5 * 1.05)) or sells5 == 0) and vol5_usd >= 600.0)
+    _m5_min_req = 1.5 if _is_early_m5_runner else (3.0 if (_is_high_conviction_accum or _is_strong_buyer_surge) else (3.5 if _is_fresh_mig_early_launch else (5.0 if _is_clean_grad_flow else (6.0 if (_is_heavy_vol_launch or _is_rh_early_seed_flow) else 8.0))))
     _is_bullish_pullback_dip = (
         -18.0 <= m5 < _m5_min_req
         and h1 >= 15.0
@@ -809,8 +810,17 @@ def evaluate_entry_momentum(
         and buys5 >= max(25, int(sells5 * 1.20))
         and (vel_ratio >= 0.07 or vol5_usd >= 2000.0)
     )
+    _is_early_ignited_rocket = (
+        age_min <= 3.5
+        and m5 >= 2.0
+        and m1 >= -2.0
+        and (buys5 >= max(8, int(sells5 * 1.05)) or (sells5 == 0 and buys5 >= 6))
+        and vol5_usd >= 600.0
+        and liq_usd >= 6000.0
+    )
     is_ultra_fresh_launch = (
-        _is_explosive_micro_start
+        _is_early_ignited_rocket
+        or _is_explosive_micro_start
         or _is_fresh_grad_ignition
         or (
             age_min <= 5.0
@@ -1013,7 +1023,7 @@ MOONBAG_MAX_HOLD_MIN = 55.0          # Даём ракетам до 55 мину�
 PUMP_XGB_ENABLED = False
 RAY_XGB_ENABLED = False
 ROCKET_XGB_ENABLED = True
-ROCKET_XGB_STAGE1_THRESHOLD = 7.0    # Сбалансированный порог 7% (пускает чистые ракеты вроде ZEN 8.5% +134%, HOGE 9.9%, отсекает мусор <7%; все 8 слоёв анти-рага на 100%)
+ROCKET_XGB_STAGE1_THRESHOLD = 4.5    # Смягчённый порог 4.5% (пускает ракеты JOLLYGUY 5.8%, HOGE 5.2%, MEMSYNC 5.9%, DOOM 4.9%; все 8 слоёв ончейн-аудита остаются на 100%)
 ROCKET_XGB_FINAL_THRESHOLD = 8.0      # Финальный порог 8% после прохождения всех ончейн-аудитов безопасности
 ROCKET_XGB_THRESHOLD = 10.0
 ROCKET_XGB_UNLOCKED_CUSTOM_MIN = 14.0  # Для проверенных высокооборотных DEX-раннеров
@@ -1441,11 +1451,11 @@ RUG_HUNTER_EARLY_AGE_THRESHOLD = 2.2       # Порог ультра-ранне�
 RUG_HUNTER_EARLY_MIN_SELLS = 1             # Достаточно 1 продажи для подтверждения sellable на старте (на 0.5м допускается 0 при сильных покупках)
 RUG_HUNTER_EARLY_MIN_BUYS = 6              # Достаточно 6 покупок на ультра-старте (вместо 25), если есть перевес покупателей
 RUG_HUNTER_STAGE1_MIN_ML = 3.5             # Смягчённый порог Stage-1 ML для ранних ракет (unblock кейса DOOM +940% conf=4.9%)
-RUG_HUNTER_SEEDED_MIN_ML = 58.0            # Смягчённый порог ML для SEEDED-LP: 58% (пропускает ракеты XMAS 71%, JEE 69%, PEPE 62%, MINECAT 83%; защита от китов GOLDFISH через rh-seeded-whale-trap)
+RUG_HUNTER_SEEDED_MIN_ML = 30.0            # Смягчённый порог ML для SEEDED-LP: 30% (пропускает ракеты HENKI 36%, ELVES 34%, DOOM 49%, XMAS 71%, JEE 69%; защита от китов через rh-seeded-whale-trap)
 RUG_HUNTER_SEEDED_MIN_BUYS = 15            # Реальные покупатели для посеянных пулов (15b)
-RUG_HUNTER_SEEDED_MIN_SELLS = 2            # Минимум 2 продажи для подтверждения ликвидности
-RUG_HUNTER_SEEDED_MIN_VOL5 = 2000.0        # Органический объём для посеянных пулов ($2,000)
-RUG_HUNTER_MAX_FDV_USD = 250000.0         # Потолок FDV для незалоченных пулов
+RUG_HUNTER_SEEDED_MIN_SELLS = 1            # Достаточно 1 продажи для подтверждения ликвидности
+RUG_HUNTER_SEEDED_MIN_VOL5 = 1500.0        # Органический объём для посеянных пулов ($1,500)
+RUG_HUNTER_MAX_FDV_USD = 500000.0          # Потолок FDV $500k (пропускает ROCKSTAR $487k)
 RUG_HUNTER_CABAL_MAX_FDV_USD = 180000.0   # Потолок FDV для кабал-сёрфа
 RUG_HUNTER_TP1_PCT = 0.35                 # TP1 +35%: фиксируем 35% объема (возврат тела депозита, house money!)
 RUG_HUNTER_TP1_SELL_FRAC = 0.35

@@ -1981,7 +1981,7 @@ class GrokJevEngine:
                     _is_rh_unl_g = str(pair_data.get("_rug_hunter_mode") or "").upper() in ("UNLOCKED-LP", "SEEDED-LP")
                     if _is_unlocked_safe and not getattr(_c, "ALLOW_UNLOCKED_LP_POOLS", True):
                         _rh_g_dev_lim = 25.0 if _is_rh_unl_g else 10.0
-                        _rh_g_t10_lim = 55.0 if _is_rh_unl_g else 35.0
+                        _rh_g_t10_lim = 88.0 if _is_rh_unl_g else 55.0
                         if dev_pct > _rh_g_dev_lim:
                             return False, f"unlocked-dev-too-high {dev_pct:.1f}% > {_rh_g_dev_lim:.0f}%", _h_stats
                         if top_10_sum > _rh_g_t10_lim:
@@ -2364,7 +2364,7 @@ class GrokJevEngine:
         # Отсекает 90% мусора и заведомых дампов в 0мс (DARTHLON 6%, BALLS 4%, DAISUKE 2%)
         # без лишних сетевых вызовов Jupiter, RugCheck и LLM.
         rkt_s1 = self.score_rocket_xgb(address, pair)
-        s1_thresh = float(getattr(_c, "ROCKET_XGB_STAGE1_THRESHOLD", 10.0))
+        s1_thresh = float(getattr(_c, "ROCKET_XGB_STAGE1_THRESHOLD", 4.5))
         if str(pair.get("dexId") or "").lower() in ("pump", "pumpfun", "meteoradbc"):
             s1_thresh = min(s1_thresh, 10.0)
         _txs_s1 = (pair.get("txns") or {}).get("m5") or {}

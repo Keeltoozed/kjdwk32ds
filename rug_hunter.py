@@ -318,7 +318,7 @@ def qualify_unlocked_lp_hunter(
         if liq_usd >= 20000.0:
             if buys5 < 45 or vol5_usd < 5000.0 or avg_tx_seeded > 110.0:
                 return False, f"rh-seeded-whale-trap liq=${liq_usd:,.0f} buys={buys5} vol5=${vol5_usd:,.0f}"
-    if fdv_usd > float(getattr(config, "RUG_HUNTER_MAX_FDV_USD", 250000.0)):
+    if fdv_usd > float(getattr(config, "RUG_HUNTER_MAX_FDV_USD", 500000.0)):
         return False, f"rh-fdv-too-high ${fdv_usd:,.0f}"
 
     # Адаптивные требования к покупкам/продажам:
@@ -385,8 +385,8 @@ def qualify_unlocked_lp_hunter(
     # Концентрация холдеров (если известна): отсекаем явных 50%+ монополистов
     if dev_pct > 25.0:
         return False, f"rh-dev-too-high {dev_pct:.1f}% > 25%"
-    if top10_pct > 55.0:
-        return False, f"rh-top10-too-high {top10_pct:.1f}% > 55%"
+    if top10_pct > 88.0:
+        return False, f"rh-top10-too-high {top10_pct:.1f}% > 88%"
 
     return True, ("rh-seeded-lp-qualified" if is_seeded_ratio else "rh-unlocked-lp-qualified")
 
