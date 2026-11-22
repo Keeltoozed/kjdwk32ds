@@ -1785,6 +1785,29 @@ class Analyzer:
         _b = int(_tx_h1.get("buys", 0) or 0)
         _s = int(_tx_h1.get("sells", 0) or 0)
 
+        _created_pre = pair_data.get("pairCreatedAt") or 0
+        if _created_pre:
+            _age_min_pre = (time.time() * 1000 - _created_pre) / 60000.0
+            if _age_min_pre > 50000.0 and mint.endswith("pump"):
+                try:
+                    from birth_tracker import birth_tracker as _bt_check
+                    _bt_a = _bt_check.get_age(mint)
+                    if _bt_a is not None and _bt_a < 120.0:
+                        _age_min_pre = float(_bt_a)
+                except Exception:
+                    pass
+        else:
+            _bt_age = None
+            try:
+                from birth_tracker import birth_tracker as _bt_check
+                _bt_age = _bt_check.get_age(mint)
+            except Exception:
+                pass
+            if _bt_age is not None:
+                _age_min_pre = float(_bt_age)
+            else:
+                _age_min_pre = 0.2
+
         base_token = pair_data.get("baseToken", {})
         name = base_token.get("name", "").upper()
         symbol = base_token.get("symbol", "").upper()
@@ -2792,32 +2815,11 @@ class Analyzer:
                                 _rh_unl_pass = False
 
                         if not _rh_unl_pass:
-                            if config.is_safe_unlocked_custom_runner(
-                                liq_usd=_liq_main,
-                                age_min=_age_main,
-                                vol5_usd=_v5_main,
-                                buys5=_b5_main,
-                                sells5=_s5_main,
-                                has_socials=_has_soc_main,
-                                is_trap=_is_trap_main,
-                                fdv_usd=_fdv_main,
-                                m5_pct=_m5_main,
-                                pair_data=pair_data,
-                            ):
-                                _is_unlocked_runner_ok = True
-                                print(f"🔓 [UNLOCKED-LP-ALLOWED] {symbol} ({mint[:8]}): свежий DEX-раннер (age {_age_main:.1f}м, liq ${_liq_main:,.0f}, fdv ${_fdv_main:,.0f}, vol5 ${_v5_main:,.0f}, {_b5_main}b/{_s5_main}s) — лок LP не требуется (режим 0d2b1ae).")
-                            elif not getattr(config, "ALLOW_UNLOCKED_LP_POOLS", True):
-                                return self._deny(
-                                    mint,
-                                    "unlocked-custom-lp",
-                                    f"🚫 [АНТИСКАМ-LP] {symbol} ({mint[:8]}): LP на {_dex_low_main or 'DEX'} не сожжён/не залочен (риск Remove LP)."
-                                )
-                            else:
-                                return self._deny(
-                                    mint,
-                                    f"low-liq ${_liq_main:.0f}",
-                                    f"🚫 [ANTI-RUG] {symbol} ({mint[:8]}): слабый/подозрительный пул (liq ${_liq_main:,.0f}, fdv ${_fdv_main:,.0f}, vol5 ${_v5_main:,.0f}, {_b5_main}b/{_s5_main}s)."
-                                )
+                            return self._deny(
+                                mint,
+                                "unlocked-lp-blocked",
+                                f"🚫 [АНТИСКАМ-LP] {symbol} ({mint[:8]}): незалоченный пул на {_dex_low_main or 'DEX'} не прошёл фильтр Rug-Hunter — вход в основную стратегию строго запрещён (риск вывода LP)!"
+                            )
                     if isinstance(pair_data, dict):
                         _lp_ok_m = _is_lp_really_safe
                         pair_data["_lp_verified"] = _lp_ok_m
@@ -3127,22 +3129,26 @@ class Analyzer:
                                 _is_trap_rc_u = config.is_pumpswap_liq_fdv_trap(pair_data)
                                 _info_rc_u = (pair_data or {}).get("info") or {}
                                 _has_soc_rc_u = bool((_info_rc_u.get("socials") or []) or (_info_rc_u.get("websites") or []))
-                                if not config.is_safe_unlocked_custom_runner(
-                                    liq_usd=_liq_rc_u,
-                                    age_min=_age_rc_u,
-                                    vol5_usd=_v5_rc_u,
-                                    buys5=_b5_rc_u,
-                                    sells5=_s5_rc_u,
-                                    has_socials=_has_soc_rc_u,
-                                    is_trap=_is_trap_rc_u,
-                                    fdv_usd=_fdv_rc_u,
-                                    m5_pct=_m5_rc_u,
-                                    pair_data=pair_data,
-                                ):
+                                _rh_unl_pass = False
+                                if getattr(config, "RUG_HUNTER_ENABLED", False):
+                                    try:
+                                        import rug_hunter as _rh_lp
+                                        _rh_unl_pass, _rh_unl_why = _rh_lp.qualify_unlocked_lp_hunter(
+                                            mint=mint, pair_data=pair_data, age_min=_age_rc_u,
+                                            liq_usd=_liq_rc_u, fdv_usd=_fdv_rc_u, vol5_usd=_v5_rc_u,
+                                            buys5=_b5_rc_u, sells5=_s5_rc_u,
+                                            m5=float(_m5_rc_u or 0.0),
+                                        )
+                                        if _rh_unl_pass:
+                                            _rh_lp_mode = _rh_lp.mode_from_qualify_reason(_rh_unl_why, pair_data.get("_rug_hunter_mode", ""))
+                                            pair_data["_rug_hunter_mode"] = _rh_lp_mode
+                                    except Exception:
+                                        _rh_unl_pass = False
+                                if not _rh_unl_pass:
                                     return self._deny(
                                         mint,
                                         "unlocked-rc-unindexed-trap",
-                                        f"🚫 [ANTI-RUG] {symbol} ({mint[:8]}): RugCheck HTTP {_rc_st} + слабый/подозрительный незалоченный пул (liq ${_liq_rc_u:,.0f}, fdv ${_fdv_rc_u:,.0f}, vol5 ${_v5_rc_u:,.0f})."
+                                        f"🚫 [АНТИСКАМ-LP] {symbol} ({mint[:8]}): незалоченный пул без отчёта RugCheck не прошёл Rug-Hunter — вход в основную стратегию строго запрещён!"
                                     )
                             pair_data["_lp_verified"] = _is_safe_lp_rc_unidx
                             pair_data["_unlocked_runner_ok"] = (not _is_safe_lp_rc_unidx)

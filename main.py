@@ -1873,31 +1873,9 @@ async def scanner_loop(analyzer, tracker):
                                     print(f"🚫 [SCANNER-METEORA-UNBURNED] {actual_symbol} ({mint[:8]}): пул Meteora без сожжённого/залоченного LP — риск Remove LP (кейсы USPR/BUFO/SPACE), отмена!")
                                     continue
                                 _is_unl_sc_pool = config.is_position_unlocked_lp(mint, pair_data, bool(pair_data.get("_lp_verified")))
-                                if _is_unl_sc_pool:
-                                    _ca_sc = float(pair_data.get("pairCreatedAt") or 0)
-                                    _age_sc_unl = ((time.time() * 1000.0 - _ca_sc) / 60000.0) if _ca_sc > 0 else 0.1
-                                    _tx5_sc_u = (pair_data.get("txns") or {}).get("m5") or {}
-                                    _b5_sc_u = int(_tx5_sc_u.get("buys", 0) or 0)
-                                    _s5_sc_u = int(_tx5_sc_u.get("sells", 0) or 0)
-                                    _vol5_sc_u = float(((pair_data.get("volume") or {}).get("m5", 0) or 0))
-                                    _fdv_sc_u = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
-                                    _m5_sc_u = ((pair_data.get("priceChange") or {}).get("m5"))
-                                    _sc_xgb_sc = float(getattr(analyzer, "rocket_scores", {}).get(mint, getattr(analyzer, "last_score", 0.0)) or 0.0)
-                                    _min_unl_xgb = float(getattr(config, "ROCKET_XGB_UNLOCKED_CUSTOM_MIN", 35.0))
-                                    if _sc_xgb_sc < _min_unl_xgb:
-                                        print(f"🚫 [SCANNER-UNLOCKED-XGB] {actual_symbol} ({mint[:8]}): незалоченный кастомный пул XGB {_sc_xgb_sc:.1f}% < {_min_unl_xgb:.0f}% — отмена (риск мгновенного слива пула)!")
-                                        continue
-                                    if not config.is_safe_unlocked_custom_runner(
-                                        liq_usd=liq_usd,
-                                        age_min=_age_sc_unl,
-                                        vol5_usd=_vol5_sc_u,
-                                        buys5=_b5_sc_u,
-                                        sells5=_s5_sc_u,
-                                        fdv_usd=_fdv_sc_u,
-                                        m5_pct=(float(_m5_sc_u) if _m5_sc_u is not None else None),
-                                    ):
-                                        print(f"🚫 [SCANNER-UNLOCKED-GATE] {actual_symbol} ({mint[:8]}): незалоченный пул не прошёл проверку liq/fdv/оборота (age {_age_sc_unl:.2f}м, liq ${liq_usd:,.0f}, fdv ${_fdv_sc_u:,.0f}, vol5 ${_vol5_sc_u:,.0f}, {_b5_sc_u}b/{_s5_sc_u}s) — отмена!")
-                                        continue
+                                if _is_unl_sc_pool and not _is_rh_cand_sc:
+                                    print(f"🚫 [SCANNER-UNLOCKED-BLOCKED] {actual_symbol} ({mint[:8]}): незалоченный пул без Rug-Hunter — вход в основную стратегию строго запрещён!")
+                                    continue
                                 if not config.is_allowed_solana_quote(pair_data):
                                     _bad_q_sc = str((pair_data.get("quoteToken") or {}).get("symbol") or "?")
                                     print(f"🚫 [SCANNER-BAD-QUOTE] {actual_symbol} ({mint[:8]}): пара к {_bad_q_sc} (не SOL/стейблкоин, кейсы JETSKI/FOILED) — отмена!")
@@ -2377,25 +2355,14 @@ async def scanner_loop(analyzer, tracker):
                                             continue
                                         _ps_rpc_safe_m = bool(pair_data.get("_pumpswap_rpc_unverified")) and mint.lower().endswith("pump")
                                         if not _ps_m_canon and not bool(pair_data.get("_pumpswap_lp_burned")) and not _ps_rpc_safe_m and not _is_rh_unl_sc:
-                                            _ca_ps = float(pair_data.get("pairCreatedAt") or 0)
-                                            _age_ps = ((time.time() * 1000.0 - _ca_ps) / 60000.0) if _ca_ps > 0 else 0.1
-                                            _fdv_ps = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
-                                            _m5_ps = _pc.get("m5")
-                                            if not config.is_safe_unlocked_custom_runner(
-                                                liq_usd=liq_usd,
-                                                age_min=_age_ps,
-                                                vol5_usd=float(((pair_data.get("volume") or {}).get("m5", 0) or 0)),
-                                                buys5=int(_tx5.get("buys", 0) or 0),
-                                                sells5=int(_tx5.get("sells", 0) or 0),
-                                                fdv_usd=_fdv_ps,
-                                                m5_pct=(float(_m5_ps) if _m5_ps is not None else None),
-                                                pair_data=pair_data,
-                                            ):
-                                                print(f"🚫 [SCANNER PRE-FLIGHT PUMPSWAP-CREATEPOOL] {actual_symbol} ({mint[:8]}): кастомный незалоченный пул ({_ps_m_why}) не прошёл фильтр liq/fdv/оборота — блок!")
-                                                continue
+                                            print(f"🚫 [SCANNER PRE-FLIGHT PUMPSWAP-CREATEPOOL] {actual_symbol} ({mint[:8]}): кастомный незалоченный пул без Rug-Hunter — вход в основную стратегию строго запрещён!")
+                                            continue
 
                                     # PRE-FLIGHT GUARD ДЛЯ ВСЕХ НЕЗАЛОЧЕННЫХ ПУЛОВ (Meteora DYN2, PumpSwap CreatePool, кастомный Raydium без сожжённого LP)
-                                    _is_native_pump_sc = mint.lower().endswith("pump") and _dex_lower_sc in ("", "pumpfun", "pump", "pumpswap")
+                                    _is_native_pump_sc = mint.lower().endswith("pump") and (
+                                        _dex_lower_sc in ("", "pumpfun", "pump")
+                                        or (_dex_lower_sc == "pumpswap" and (bool(pair_data.get("_pumpswap_canonical")) or bool(pair_data.get("_pumpswap_lp_burned"))))
+                                    )
                                     _is_lp_safe_sc = bool(pair_data.get("_lp_verified")) or bool(pair_data.get("_pumpswap_canonical")) or bool(pair_data.get("_pumpswap_lp_burned"))
                                     
                                     # СТРОГАЯ ЗАЩИТА: незалоченный пул БЕЗ активного режима Rug-Hunter КАТЕГОРИЧЕСКИ ЗАПРЕЩЁН к покупке в SCANNER!
@@ -2403,27 +2370,6 @@ async def scanner_loop(analyzer, tracker):
                                     if not _is_native_pump_sc and not _is_lp_safe_sc and not _is_rh_unl_sc:
                                         print(f"🚫 [SCANNER PRE-FLIGHT LP-SAFETY] {actual_symbol} ({mint[:8]}): незалоченный пул {_dex_lower_sc} без активного режима Rug-Hunter — вход в основную стратегию строго запрещён!")
                                         continue
-                                    if not _is_native_pump_sc and not _is_lp_safe_sc and not _is_rh_unl_sc:
-                                        _ca_sc = float(pair_data.get("pairCreatedAt") or 0)
-                                        _age_sc = ((time.time() * 1000.0 - _ca_sc) / 60000.0) if _ca_sc > 0 else 0.1
-                                        _fdv_sc = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
-                                        _m5_sc = _pc.get("m5")
-                                        _info_sc = pair_data.get("info") or {}
-                                        _has_soc_sc = bool((_info_sc.get("socials") or []) or (_info_sc.get("websites") or []))
-                                        if not config.is_safe_unlocked_custom_runner(
-                                            liq_usd=liq_usd,
-                                            age_min=_age_sc,
-                                            vol5_usd=float(((pair_data.get("volume") or {}).get("m5", 0) or 0)),
-                                            buys5=int(_tx5.get("buys", 0) or 0),
-                                            sells5=int(_tx5.get("sells", 0) or 0),
-                                            has_socials=_has_soc_sc,
-                                            is_trap=config.is_pumpswap_liq_fdv_trap(pair_data),
-                                            fdv_usd=_fdv_sc,
-                                            m5_pct=(float(_m5_sc) if _m5_sc is not None else None),
-                                            pair_data=pair_data,
-                                        ):
-                                            print(f"🚫 [SCANNER PRE-FLIGHT UNLOCKED-POOL] {actual_symbol} ({mint[:8]}): незалоченный пул {_dex_lower_sc} (age {_age_sc:.1f}м, liq ${liq_usd:,.0f}, soc={_has_soc_sc}) не прошёл аудит анти-рага — блок!")
-                                            continue
 
                                     # PRE-FLIGHT RUG WALLET AUDIT: анализ кошельков дева, authorities, холдеров, бандлов
                                     if isinstance(_r_rw, Exception):

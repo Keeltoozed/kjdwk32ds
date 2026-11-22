@@ -811,28 +811,11 @@ async def _evaluate_and_buy_inner(mint: str, td: dict, analyzer, tracker, source
                     except Exception:
                         _rh_j_pass = False
                 if not _rh_j_pass:
-                    _is_unl_safe_j = config.is_safe_unlocked_custom_runner(
-                        liq_usd=_liq_j,
-                        age_min=_age_j,
-                        vol5_usd=_vol5_j,
-                        buys5=_b5_j,
-                        sells5=_s5_j,
-                        has_socials=bool(len(((td or {}).get("info") or {}).get("socials", []) or [])),
-                        is_trap=config.is_pumpswap_liq_fdv_trap(td or {}),
-                    )
-                    if _is_unl_safe_j:
-                        print(f"🔓 [{source_tag}-UNLOCKED-LP-ALLOWED] {_sym_tmp} ({mint[:8]}): свежий DEX-раннер (age {_age_j:.1f}м, liq ${_liq_j:,.0f}, vol5 ${_vol5_j:,.0f}) — лок LP не требуется (режим 0d2b1ae).")
-                        _lp_ok = True
-                        _lp_verified_jup = True
-                    else:
-                        print(f"🚫 [{source_tag}-UNLOCKED-LP] {_sym_tmp} ({mint[:8]}): незалоченный/несожжённый LP на {_dex_j_low or 'DEX'} (liq ${_liq_j:,.0f}, age {_age_j:.1f}m) — риск Remove LP!")
-                        return False
+                    print(f"🚫 [{source_tag}-UNLOCKED-LP] {_sym_tmp} ({mint[:8]}): незалоченный пул на {_dex_j_low or 'DEX'} не прошёл Rug-Hunter — вход в основную стратегию строго запрещён!")
+                    return False
         except Exception as _lp_ex:
-            if getattr(config, "ALLOW_UNLOCKED_LP_POOLS", True) and _liq_j >= float(getattr(config, "MIN_GRADUATED_LIQ_USD", 3000.0)):
-                print(f"🔓 [{source_tag}-RC-ERR-SKIP] {_sym_tmp} ({mint[:8]}): ошибка RugCheck ({_lp_ex}) — разрешаем быстрый вход (режим 0d2b1ae).")
-            else:
-                print(f"⏳ [{source_tag}-RC-ERR] {_sym_tmp} ({mint[:8]}): ошибка проверки RugCheck ({_lp_ex}) — пропуск цикла.")
-                return False
+            print(f"⏳ [{source_tag}-RC-ERR] {_sym_tmp} ({mint[:8]}): ошибка проверки RugCheck ({_lp_ex}) — пропуск цикла.")
+            return False
     if isinstance(td, dict) and _lp_verified_jup:
         td["_lp_verified"] = True
 

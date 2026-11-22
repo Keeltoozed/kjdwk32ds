@@ -1432,19 +1432,19 @@ RUG_HUNTER_CABAL_SURF_ENABLED = True      # Режим B: ранний сёрф 
 RUG_HUNTER_MAX_SLOTS = 2                  # Макс. 2 одновременных слота под Rug-Hunter (2 слота всегда свободны под чистые ракеты)
 RUG_HUNTER_SIZE_MULT = 0.65               # Уменьшенный риск-сайз (65% от обычного ордера)
 RUG_HUNTER_UNLOCKED_MIN_AGE_MIN = 0.15     # Минимум 0.15м (9с): вход на самом старте разгона первой свечи
-RUG_HUNTER_UNLOCKED_MAX_AGE_MIN = 2.0      # Максимум 2.0м: только первая свеча! (было 3.20м — данные CSV показывают: 2-3м = 49% плохих входов, <2м = 53% ракет)
+RUG_HUNTER_UNLOCKED_MAX_AGE_MIN = 3.20      # Максимум 3.20м: даём DexScreener время проиндексировать ранние ракеты (было 2.0м — 2.0м блокировало 60%+ ракет)
 RUG_HUNTER_ROCKET_MAX_POOL_AGE_MIN = 12.0  # Максимальный возраст пула для летящих ракет (PnL >= +8%): даём ракете бежать до 12м, собирая TP1 (+35%), TP2 (+90%), TP3 (+250%) и трейлинг!
 RUG_HUNTER_CABAL_MAX_AGE_MIN = 4.5         # Максимум 4.5м для кабал-сёрфа
 RUG_HUNTER_MIN_LIQ_USD = 7500.0            # Минимум $7.5k реальной ликвидности (едино с MIN_GRADUATED_LIQ_USD)
 RUG_HUNTER_MIN_VOL5_USD = 350.0            # Минимум $350 объёма за 5м на ультра-старте (ловит ракеты на 15-30 секундах, кейсы NICKEH30, USELESS, SHELF)
-RUG_HUNTER_EARLY_AGE_THRESHOLD = 1.8       # Порог ультра-ранней фазы (до 1.8м)
+RUG_HUNTER_EARLY_AGE_THRESHOLD = 2.2       # Порог ультра-ранней фазы (до 2.2м)
 RUG_HUNTER_EARLY_MIN_SELLS = 1             # Достаточно 1 продажи для подтверждения sellable на старте (на 0.5м допускается 0 при сильных покупках)
 RUG_HUNTER_EARLY_MIN_BUYS = 6              # Достаточно 6 покупок на ультра-старте (вместо 25), если есть перевес покупателей
 RUG_HUNTER_STAGE1_MIN_ML = 3.5             # Смягчённый порог Stage-1 ML для ранних ракет (unblock кейса DOOM +940% conf=4.9%)
-RUG_HUNTER_SEEDED_MIN_ML = 75.0            # Минимальный ML-скор для посеянных пулов (SEEDED-LP): поднято с 65% до 75% (GOLDFISH 71% был раг на $31k)
-RUG_HUNTER_SEEDED_MIN_BUYS = 20            # Реальные покупатели для посеянных пулов (поднято с 16 до 20 — больше органики)
-RUG_HUNTER_SEEDED_MIN_SELLS = 3            # Минимум 3 продажи для подтверждения ликвидности (поднято с 2)
-RUG_HUNTER_SEEDED_MIN_VOL5 = 3500.0        # Органический объём для посеянных пулов (поднято с $2500 до $3500)
+RUG_HUNTER_SEEDED_MIN_ML = 58.0            # Смягчённый порог ML для SEEDED-LP: 58% (пропускает ракеты XMAS 71%, JEE 69%, PEPE 62%, MINECAT 83%; защита от китов GOLDFISH через rh-seeded-whale-trap)
+RUG_HUNTER_SEEDED_MIN_BUYS = 15            # Реальные покупатели для посеянных пулов (15b)
+RUG_HUNTER_SEEDED_MIN_SELLS = 2            # Минимум 2 продажи для подтверждения ликвидности
+RUG_HUNTER_SEEDED_MIN_VOL5 = 2000.0        # Органический объём для посеянных пулов ($2,000)
 RUG_HUNTER_MAX_FDV_USD = 250000.0         # Потолок FDV для незалоченных пулов
 RUG_HUNTER_CABAL_MAX_FDV_USD = 180000.0   # Потолок FDV для кабал-сёрфа
 RUG_HUNTER_TP1_PCT = 0.35                 # TP1 +35%: фиксируем 35% объема (возврат тела депозита, house money!)

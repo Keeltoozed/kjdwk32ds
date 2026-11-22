@@ -1854,34 +1854,7 @@ class GrokJevEngine:
                                 _rh_jev_unl_ok = False
 
                         if not _rh_jev_unl_ok:
-                            if not getattr(_c, "ALLOW_UNLOCKED_LP_POOLS", True):
-                                # .pump токен на пуле Meteora без сожжённого LP — неофициальный скам-пул мимо PumpSwap (кейс SURVIVE -96%)
-                                if address.endswith("pump") and "meteora" in _dex_rc_low and not has_verified_locked_lp:
-                                    return False, "pump-token-unlocked-meteora (.pump токен на пуле Meteora без сожжённого LP — кейс SURVIVE)", _h_stats
-                                # Любой токен на AMM Meteora без подтверждённого сожжённого/залоченного LP блокируется (но не сырая кривая meteoradbc BAGS)
-                                if "meteora" in _dex_rc_low and _dex_rc_low != "meteoradbc" and not has_verified_locked_lp:
-                                    return False, "meteora-unlocked-lp (токен на пуле Meteora без подтверждённого сожжённого LP — риск Remove LP девом)", _h_stats
-                            _is_unlocked_safe = _c.is_safe_unlocked_custom_runner(
-                                liq_usd=_eff_l_rc,
-                                age_min=_age_rc,
-                                vol5_usd=_vm5_rc,
-                                buys5=_b5_rc,
-                                sells5=_s5_rc,
-                                has_socials=has_socials,
-                                is_trap=_is_trap_rc,
-                                fdv_usd=fdv,
-                                m5_pct=(float(_m5_rc) if _m5_rc is not None else None),
-                                pair_data=pair_data,
-                            )
-                            if _is_unlocked_safe:
-                                print(f"🔓 [GROK-JEV-UNLOCKED-LP] {symbol} ({address[:8]}): свежий DEX-раннер (age {_age_rc:.1f}м, liq ${_eff_l_rc:,.0f}, vol5 ${_vm5_rc:,.0f}) — лок LP не требуется (быстрый возврат тела +16%/+30%).")
-                            elif not getattr(_c, "ALLOW_UNLOCKED_LP_POOLS", True):
-                                _req_soc_min = float(getattr(_c, "REQUIRE_SOCIALS_MIN_AGE_MIN", 25.0))
-                                if getattr(_c, "REQUIRE_SOCIALS_ENABLED", False) and not is_raw_pump_curve and not has_socials and not _is_launchpad_aud and not bool(pair_data.get("_socials_unknown", False)) and _smart_n_chk < 2 and _age_rc > _req_soc_min:
-                                    return False, "no-socials-amm-scam (0 соцсетей на кастомном DEX-пуле без подтверждённого лока LP)", _h_stats
-                                return False, f"unlocked-custom-lp (liq ${_eff_l_rc:.0f}, age {_age_rc:.1f}m, vol ${_vm5_rc:.0f}, soc={int(bool(has_socials))})", _h_stats
-                            else:
-                                return False, f"liq/fdv-bait-or-weak-unlocked-pool (liq ${_eff_l_rc:.0f}, fdv ${fdv:.0f}, vol5 ${_vm5_rc:.0f})", _h_stats
+                            return False, f"unlocked-lp-blocked (незалоченный пул на {_dex_rc_low or 'DEX'} не прошёл Rug-Hunter — вход в GROK-JEV строго запрещён)", _h_stats
                     if isinstance(pair_data, dict):
                         pair_data["_unlocked_runner_ok"] = bool(_is_unlocked_safe)
                         pair_data["_lp_verified"] = bool(is_canonical_pump or has_verified_locked_lp or pair_data.get("_pumpswap_lp_burned"))
@@ -2639,9 +2612,9 @@ class GrokJevEngine:
         if _is_rh_jev_fin and (rkt_s1 + 0.05) >= float(getattr(_c, "RUG_HUNTER_STAGE1_MIN_ML", 3.5)):
             rkt_final = max(rkt_final, rkt_s1)
 
-        # Защита от ловушек SEEDED-LP (кейс BFC 49%, GOLDFISH 71% -> раг): требуем ML-скор >= 75%
+        # Защита от ловушек SEEDED-LP: требуем ML-скор >= RUG_HUNTER_SEEDED_MIN_ML (58%)
         if "SEEDED" in _rh_mode_jev_fin.upper():
-            _seeded_min_g = float(getattr(_c, "RUG_HUNTER_SEEDED_MIN_ML", 75.0))
+            _seeded_min_g = float(getattr(_c, "RUG_HUNTER_SEEDED_MIN_ML", 58.0))
             if rkt_final < _seeded_min_g:
                 print(f"🚫 [GROK-JEV-SEEDED-TRAP] {symbol} ({address[:8]}): SEEDED-LP ML {rkt_final:.1f}% < {_seeded_min_g:.0f}% — VETO!")
                 return False, f"seeded-low-conf {rkt_final:.0f}% < {_seeded_min_g:.0f}%"

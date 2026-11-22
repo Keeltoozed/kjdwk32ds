@@ -186,22 +186,26 @@ async def profile_creator_rug_timing(creator: str, mint: str = "") -> dict:
             durations_min = [max(0.2, (s[1] - s[0]) / 60.0) for s in past_sessions]
             avg_dur = sum(durations_min) / len(durations_min)
             min_dur = min(durations_min)
-            # Если создатель серийно проводит прошлые сессии за < 15.0 минут или имеет короткие раги < 4 мин — БЛОК!
-            # (кейс Cyberleek: прошлые токены жили в среднем 7.3м -> классический серийный рагер, унёсший -$3.02 на 0м)
-            if avg_dur < 15.0 or min_dur < 4.0 or (len(durations_min) >= 3 and sum(1 for d in durations_min if d < 8.0) >= 2):
+            # Серийный спаммер: запускает кучу токенов подряд (>= 3 запусков за последние 24ч) — БЛОК!
+            recent_sessions_24h = [s for s in past_sessions if (now - s[1]) < 86400]
+            if len(recent_sessions_24h) >= 3:
                 prof["ok"] = False
-                prof["kind"] = "serial_rugger"
+                prof["kind"] = "serial_spammer"
                 prof["avg_rug_min"] = round(avg_dur, 1)
-                prof["reason"] = f"serial-rugger-history (avg {avg_dur:.1f}m, min {min_dur:.1f}m across {len(past_sessions)} sessions)"
+                prof["reason"] = f"serial-deployer-spam ({len(recent_sessions_24h)} launches in 24h)"
+            elif len(past_sessions) >= 3 and avg_dur < 0.8:
+                # Автоматизированный мгновенный бот-скрипт (< 50 секунд на запуск) — БЛОК!
+                prof["ok"] = False
+                prof["kind"] = "instant_bot"
+                prof["avg_rug_min"] = round(avg_dur, 1)
+                prof["reason"] = f"instant-bot-history (avg {avg_dur:.1f}m across {len(past_sessions)} sessions)"
             else:
                 base_cap = float(getattr(config, "RUG_HUNTER_MAX_HOLD_MIN", 5.0))
-                # Выходим максимум через 35% от его типичного времени жизни (но не дольше 8 мин!)
-                dyn_cap = max(3.5, min(8.0, avg_dur * 0.35))
                 prof["ok"] = True
-                prof["kind"] = "delayed_rugger"
+                prof["kind"] = "delayed_rugger" if avg_dur >= 5.0 else "repeat_deployer"
                 prof["avg_rug_min"] = round(avg_dur, 1)
-                prof["recommended_max_hold_min"] = round(max(base_cap, dyn_cap), 1)
-                prof["reason"] = f"delayed-rugger-history (avg ~{avg_dur:.0f}m, safe window {prof['recommended_max_hold_min']:.1f}m)"
+                prof["recommended_max_hold_min"] = base_cap
+                prof["reason"] = f"normal-deployer-history ({len(past_sessions)} past sessions, avg {avg_dur:.1f}m)"
 
         _CREATOR_PROFILE_CACHE[c] = (now, prof)
         if len(_CREATOR_PROFILE_CACHE) > 1500:
@@ -258,7 +262,7 @@ def qualify_unlocked_lp_hunter(
 
     # Жёсткие пороги раннего живого входа на самом старте:
     min_age = float(getattr(config, "RUG_HUNTER_UNLOCKED_MIN_AGE_MIN", 0.15))
-    max_age = float(getattr(config, "RUG_HUNTER_UNLOCKED_MAX_AGE_MIN", 1.80))
+    max_age = float(getattr(config, "RUG_HUNTER_UNLOCKED_MAX_AGE_MIN", 3.20))
     if age_min < min_age:
         return False, f"rh-too-young {age_min:.2f}m < {min_age:.2f}m"
     if age_min > max_age:
@@ -291,16 +295,16 @@ def qualify_unlocked_lp_hunter(
         # Молодые (< 0.8м): меньше требований — ловим ранний старт (кейсы USDC +1403%, ZCAT +426%)
         # Зрелые (>= 0.8м): больше требований — ждём подтверждения импульса
         if age_min < 0.8:
-            _min_seeded_vol = max(600.0, float(getattr(config, "RUG_HUNTER_SEEDED_MIN_VOL5", 2500.0)) * 0.25)
-            _min_seeded_buys = max(8, int(getattr(config, "RUG_HUNTER_SEEDED_MIN_BUYS", 16)) // 2)
+            _min_seeded_vol = max(600.0, float(getattr(config, "RUG_HUNTER_SEEDED_MIN_VOL5", 2000.0)) * 0.25)
+            _min_seeded_buys = max(8, int(getattr(config, "RUG_HUNTER_SEEDED_MIN_BUYS", 15)) // 2)
             _min_seeded_sells = 1
         elif age_min < 1.5:
-            _min_seeded_vol = max(1200.0, float(getattr(config, "RUG_HUNTER_SEEDED_MIN_VOL5", 2500.0)) * 0.5)
-            _min_seeded_buys = max(10, int(getattr(config, "RUG_HUNTER_SEEDED_MIN_BUYS", 16)) * 2 // 3)
+            _min_seeded_vol = max(1000.0, float(getattr(config, "RUG_HUNTER_SEEDED_MIN_VOL5", 2000.0)) * 0.5)
+            _min_seeded_buys = max(10, int(getattr(config, "RUG_HUNTER_SEEDED_MIN_BUYS", 15)) * 2 // 3)
             _min_seeded_sells = int(getattr(config, "RUG_HUNTER_SEEDED_MIN_SELLS", 2))
         else:
-            _min_seeded_vol = float(getattr(config, "RUG_HUNTER_SEEDED_MIN_VOL5", 2500.0))
-            _min_seeded_buys = int(getattr(config, "RUG_HUNTER_SEEDED_MIN_BUYS", 16))
+            _min_seeded_vol = float(getattr(config, "RUG_HUNTER_SEEDED_MIN_VOL5", 2000.0))
+            _min_seeded_buys = int(getattr(config, "RUG_HUNTER_SEEDED_MIN_BUYS", 15))
             _min_seeded_sells = int(getattr(config, "RUG_HUNTER_SEEDED_MIN_SELLS", 2))
         if vol5_usd < _min_seeded_vol:
             return False, f"rh-seeded-low-vol5 ${vol5_usd:,.0f} < ${_min_seeded_vol:,.0f}"
@@ -318,8 +322,8 @@ def qualify_unlocked_lp_hunter(
         return False, f"rh-fdv-too-high ${fdv_usd:,.0f}"
 
     # Адаптивные требования к покупкам/продажам:
-    # На ультра-раннем старте (age <= 1.8м) ловим импульс в самом начале:
-    early_age_th = float(getattr(config, "RUG_HUNTER_EARLY_AGE_THRESHOLD", 1.8))
+    # На ультра-раннем старте (age <= 2.2м) ловим импульс в самом начале:
+    early_age_th = float(getattr(config, "RUG_HUNTER_EARLY_AGE_THRESHOLD", 2.2))
     if age_min <= 0.6:
         min_sells_req = 0 if buys5 >= 8 else 1
         min_buys_req = int(getattr(config, "RUG_HUNTER_EARLY_MIN_BUYS", 6))
