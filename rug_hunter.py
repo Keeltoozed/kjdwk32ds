@@ -186,13 +186,14 @@ async def profile_creator_rug_timing(creator: str, mint: str = "") -> dict:
             durations_min = [max(0.2, (s[1] - s[0]) / 60.0) for s in past_sessions]
             avg_dur = sum(durations_min) / len(durations_min)
             min_dur = min(durations_min)
-            # Если создатель серийно проводит прошлые сессии за < 2.8 минуты (мгновенный 1-2 мин рагер) — БЛОК!
-            if avg_dur < 2.8 or (len(durations_min) >= 3 and sum(1 for d in durations_min if d < 2.5) >= 2):
+            # Если создатель серийно проводит прошлые сессии за < 15.0 минут или имеет короткие раги < 4 мин — БЛОК!
+            # (кейс Cyberleek: прошлые токены жили в среднем 7.3м -> классический серийный рагер, унёсший -$3.02 на 0м)
+            if avg_dur < 15.0 or min_dur < 4.0 or (len(durations_min) >= 3 and sum(1 for d in durations_min if d < 8.0) >= 2):
                 prof["ok"] = False
-                prof["kind"] = "instant_rugger"
+                prof["kind"] = "serial_rugger"
                 prof["avg_rug_min"] = round(avg_dur, 1)
-                prof["reason"] = f"instant-rugger-history (avg {avg_dur:.1f}m, min {min_dur:.1f}m across {len(past_sessions)} sessions)"
-            elif avg_dur >= 10.0:
+                prof["reason"] = f"serial-rugger-history (avg {avg_dur:.1f}m, min {min_dur:.1f}m across {len(past_sessions)} sessions)"
+            else:
                 base_cap = float(getattr(config, "RUG_HUNTER_MAX_HOLD_MIN", 5.0))
                 # Выходим максимум через 35% от его типичного времени жизни (но не дольше 8 мин!)
                 dyn_cap = max(3.5, min(8.0, avg_dur * 0.35))
@@ -201,12 +202,6 @@ async def profile_creator_rug_timing(creator: str, mint: str = "") -> dict:
                 prof["avg_rug_min"] = round(avg_dur, 1)
                 prof["recommended_max_hold_min"] = round(max(base_cap, dyn_cap), 1)
                 prof["reason"] = f"delayed-rugger-history (avg ~{avg_dur:.0f}m, safe window {prof['recommended_max_hold_min']:.1f}m)"
-            else:
-                prof["ok"] = True
-                prof["kind"] = "short_session_dev"
-                prof["avg_rug_min"] = round(avg_dur, 1)
-                prof["recommended_max_hold_min"] = round(max(2.5, min(4.0, avg_dur * 0.45)), 1)
-                prof["reason"] = f"short-session-dev (avg {avg_dur:.1f}m, cap {prof['recommended_max_hold_min']:.1f}m)"
 
         _CREATOR_PROFILE_CACHE[c] = (now, prof)
         if len(_CREATOR_PROFILE_CACHE) > 1500:
@@ -249,7 +244,15 @@ def qualify_unlocked_lp_hunter(
     if mint_low.endswith("pump") and dex_low == "pumpswap" and (pair_data or {}).get("_pumpswap_canonical") is False:
         return False, "fake-pump-createpool-clone"
 
-    # История создателя: мгновенных рагеров (<2.8м) отсекаем навсегда
+    # Meteora DLMM пулы (динамические бины ликвидности):
+    # Дев держит 100% контроль над бинами ликвидности и может забрать quote SOL мгновенно в 1 клик.
+    # В незалоченных пулах Meteora DLMM сжигание LP отсутствует — это 99% моментальный скам (кейс Cyberleek -$3.02).
+    _labels = [str(l).upper() for l in ((pair_data or {}).get("labels") or [])]
+    if "meteora" in dex_low or "DLMM" in _labels:
+        if not bool((pair_data or {}).get("_lp_verified")):
+            return False, "meteora-dlmm-unburned-pool"
+
+    # История создателя: серийных (<15м) и мгновенных рагеров отсекаем навсегда
     if isinstance(creator_profile, dict) and not creator_profile.get("ok", True):
         return False, str(creator_profile.get("reason") or "instant-rugger")
 

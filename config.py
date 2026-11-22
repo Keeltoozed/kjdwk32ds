@@ -302,6 +302,17 @@ def is_safe_unlocked_custom_runner(
     if is_trap:
         return False
 
+    # СТРОГИЙ БЛОК Meteora DLMM / незалоченных пулов Meteora:
+    # В незалоченных пулах Meteora дев в любой момент забирает quote SOL в 1 клик (кейс Cyberleek -$3.02).
+    # Никакой режим (включая Rug-Hunter) не должен входить в незалоченную Meteora DLMM!
+    if isinstance(pair_data, dict):
+        _dex_u = str(pair_data.get("dexId") or "").lower()
+        _labels_u = [str(l).upper() for l in (pair_data.get("labels") or [])]
+        if ("meteora" in _dex_u or "DLMM" in _labels_u) and _dex_u != "meteoradbc" and not bool(pair_data.get("_lp_verified")):
+            return False
+        if is_pumpswap_liq_fdv_trap(pair_data):
+            return False
+
     # Допуск для проверенных кандидатов стратегии Rug-Hunter (SEEDED-LP / UNLOCKED-LP / CABAL-SURF):
     # Они уже прошли полный аудит rug_hunter.qualify_unlocked_lp_hunter (liq>=$7.5k, age>=0.8m,
     # buys>=20, buys>=sells*1.15, dev balance & dump monitor) и защищены тайм-кэпом 5м и автовыходом при сливе LP
@@ -313,13 +324,6 @@ def is_safe_unlocked_custom_runner(
     # кастомный Raydium с LP lock 0%) обходить запрет и выносить ликвидность в $0 (AudaCity, MUFFINS, CLIVE, VICECITY).
     if not bool(globals().get("ALLOW_UNLOCKED_LP_POOLS", False)):
         return False
-
-    if isinstance(pair_data, dict):
-        _dex_u = str(pair_data.get("dexId") or "").lower()
-        if "meteora" in _dex_u and _dex_u != "meteoradbc" and not bool(pair_data.get("_lp_verified")):
-            return False
-        if is_pumpswap_liq_fdv_trap(pair_data):
-            return False
 
     liq_val = float(liq_usd or 0.0)
     fdv_val = float(fdv_usd or 0.0)

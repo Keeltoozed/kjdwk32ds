@@ -1016,7 +1016,7 @@ class Analyzer:
                     for _mk, _mv in _meta.items():
                         # Защита от фантомных входов: НЕ натягивать _rug_hunter_mode на старые пулы!
                         # Иначе токен в возрасте 6м/16м покупается как RUG-HUNTER и сбрасывается через 2с (кейсы HORSE, CATME)
-                        if _mk in ("_rug_hunter_mode", "_rug_hunter_creator_profile") and _cur_age_p > _rh_meta_max_age:
+                        if _mk in ("_rug_hunter_mode", "_rug_hunter_creator_profile", "_unlocked_runner_ok") and _cur_age_p > _rh_meta_max_age:
                             continue
                         if _mk not in pair_dict:
                             pair_dict[_mk] = _mv
@@ -1027,7 +1027,7 @@ class Analyzer:
                     "_pumpswap_canonical", "_pumpswap_lp_burned", "_pumpswap_rpc_unverified",
                     "_rug_hunter_mode", "_rug_hunter_creator_profile", "_rug_hunter_watch",
                 ):
-                    if _fk in ("_rug_hunter_mode", "_rug_hunter_creator_profile") and _cur_age_p > _rh_meta_max_age:
+                    if _fk in ("_rug_hunter_mode", "_rug_hunter_creator_profile", "_unlocked_runner_ok") and _cur_age_p > _rh_meta_max_age:
                         continue
                     if _fk in _last_p and _fk not in pair_dict:
                         pair_dict[_fk] = _last_p[_fk]
@@ -2758,6 +2758,16 @@ class Analyzer:
                         _info_main = (pair_data or {}).get("info") or {}
                         _has_soc_main = bool((_info_main.get("socials") or []) or (_info_main.get("websites") or []))
 
+                        # 0) Пул Meteora без сожжённого/залоченного LP: СТРОЖАЙШИЙ БАН!
+                        # В Meteora DLMM дев в любой момент отзывает ликвидность за 1 транзакцию (кейс Cyberleek -$3.02).
+                        _is_meteora_unburned = bool("meteora" in _dex_low_main and _dex_low_main != "meteoradbc" and not has_verified_locked_lp)
+                        if _is_meteora_unburned:
+                            return self._deny(
+                                mint,
+                                "meteora-unlocked-pool",
+                                f"🚫 [METEORA-RUG-BLOCK] {symbol} ({mint[:8]}): незалоченный пул Meteora — риск вывода SOL девом (кейсы USPR/BUFO/SPACE/Cyberleek)!"
+                            )
+
                         # 1) Сначала проверяем RUG-HUNTER:UNLOCKED-LP (если включён):
                         _rh_unl_pass = False
                         if getattr(config, "RUG_HUNTER_ENABLED", False) and getattr(config, "RUG_HUNTER_UNLOCKED_LP_ENABLED", False):
@@ -2782,18 +2792,6 @@ class Analyzer:
                                 _rh_unl_pass = False
 
                         if not _rh_unl_pass:
-                            if "meteora" in _dex_low_main and _dex_low_main != "meteoradbc" and not has_verified_locked_lp:
-                                if _age_main <= 3.5:
-                                    return self._deny(
-                                        mint,
-                                        f"meteora-unlocked-waiting:{_rh_unl_why}",
-                                        f"⏳ [METEORA-WAIT] {symbol} ({mint[:8]}): незалоченный пул Meteora {_age_main:.1f}м ({_rh_unl_why}) — повторная проверка через 5с."
-                                    )
-                                return self._deny(
-                                    mint,
-                                    "meteora-unlocked-pool",
-                                    f"🚫 [METEORA-RUG-BLOCK] {symbol} ({mint[:8]}): незалоченный пул Meteora — риск вывода SOL девом (кейсы USPR/BUFO/SPACE)!"
-                                )
                             if config.is_safe_unlocked_custom_runner(
                                 liq_usd=_liq_main,
                                 age_min=_age_main,

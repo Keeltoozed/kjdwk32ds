@@ -2357,6 +2357,7 @@ async def scanner_loop(analyzer, tracker):
                                     if _rh_mode_sc and _age_sc_pre > _rh_sc_max_age:
                                         _rh_mode_sc = ""
                                         pair_data.pop("_rug_hunter_mode", None)
+                                        pair_data.pop("_unlocked_runner_ok", None)
                                     _is_rh_sc_pf = bool(_rh_mode_sc) or ("RUG-HUNTER" in str(analyzer.get_signal(mint) or "").upper())
                                     _is_rh_unl_sc = bool(_is_rh_sc_pf and _rh_mode_sc in ("UNLOCKED-LP", "SEEDED-LP") and getattr(config, "RUG_HUNTER_ENABLED", False) and getattr(config, "RUG_HUNTER_UNLOCKED_LP_ENABLED", False))
                                     if _is_rh_sc_pf:
@@ -2394,6 +2395,12 @@ async def scanner_loop(analyzer, tracker):
                                     # PRE-FLIGHT GUARD ДЛЯ ВСЕХ НЕЗАЛОЧЕННЫХ ПУЛОВ (Meteora DYN2, PumpSwap CreatePool, кастомный Raydium без сожжённого LP)
                                     _is_native_pump_sc = mint.lower().endswith("pump") and _dex_lower_sc in ("", "pumpfun", "pump", "pumpswap")
                                     _is_lp_safe_sc = bool(pair_data.get("_lp_verified")) or bool(pair_data.get("_pumpswap_canonical")) or bool(pair_data.get("_pumpswap_lp_burned"))
+                                    
+                                    # СТРОГАЯ ЗАЩИТА: незалоченный пул БЕЗ активного режима Rug-Hunter КАТЕГОРИЧЕСКИ ЗАПРЕЩЁН к покупке в SCANNER!
+                                    # Исключает утечку незалоченных пулов в регулярный $3 ордер без защитных эвакуаций (кейс Cyberleek -$3.02).
+                                    if not _is_native_pump_sc and not _is_lp_safe_sc and not _is_rh_unl_sc:
+                                        print(f"🚫 [SCANNER PRE-FLIGHT LP-SAFETY] {actual_symbol} ({mint[:8]}): незалоченный пул {_dex_lower_sc} без активного режима Rug-Hunter — вход в основную стратегию строго запрещён!")
+                                        continue
                                     if not _is_native_pump_sc and not _is_lp_safe_sc and not _is_rh_unl_sc:
                                         _ca_sc = float(pair_data.get("pairCreatedAt") or 0)
                                         _age_sc = ((time.time() * 1000.0 - _ca_sc) / 60000.0) if _ca_sc > 0 else 0.1
@@ -2515,6 +2522,12 @@ async def scanner_loop(analyzer, tracker):
                                     import rug_hunter as _rh_sb
                                     _sig_sc_fin = _rh_sb.format_rug_hunter_source(_rh_mode_buy, _final_sc_conf, pair_data.get("_rug_hunter_creator_profile"))
                                 _is_rh_buy_sc = bool(_rh_mode_buy) or ("RUG-HUNTER" in str(_sig_sc_fin or "").upper())
+
+                                # Финальный предохранитель: незалоченный пул НЕ МОЖЕТ быть куплен как обычный SCANNER!
+                                if not _is_native_pump_sc and not _is_lp_safe_sc and not _is_rh_buy_sc:
+                                    print(f"🚫 [SCANNER-SAFETY] {actual_symbol} ({mint[:8]}): попытка купить незалоченный пул как обычный SCANNER — вход заблокирован!")
+                                    continue
+
                                 if _is_rh_buy_sc:
                                     position_size = max(1.5, position_size * float(getattr(config, "RUG_HUNTER_SIZE_MULT", 0.65)))
                                     _src_sc_final = _sig_sc_fin

@@ -2634,6 +2634,7 @@ class GrokJevEngine:
             _is_rh_jev_fin = False
             _rh_mode_jev_fin = ""
             pair.pop("_rug_hunter_mode", None)
+            pair.pop("_unlocked_runner_ok", None)
 
         if _is_rh_jev_fin and (rkt_s1 + 0.05) >= float(getattr(_c, "RUG_HUNTER_STAGE1_MIN_ML", 3.5)):
             rkt_final = max(rkt_final, rkt_s1)
@@ -2644,6 +2645,11 @@ class GrokJevEngine:
             if rkt_final < _seeded_min_g:
                 print(f"🚫 [GROK-JEV-SEEDED-TRAP] {symbol} ({address[:8]}): SEEDED-LP ML {rkt_final:.1f}% < {_seeded_min_g:.0f}% — VETO!")
                 return False, f"seeded-low-conf {rkt_final:.0f}% < {_seeded_min_g:.0f}%"
+
+        # Финальный предохранитель: незалоченный пул НЕ МОЖЕТ быть куплен как обычный SCANNER/JEV без активного Rug-Hunter!
+        if _is_unlocked_custom_fin and not _is_rh_jev_fin:
+            print(f"🚫 [GROK-JEV-LP-SAFETY] {symbol} ({address[:8]}): незалоченный пул без активного режима Rug-Hunter — вход строго запрещён!")
+            return False, "unlocked-lp-without-rug-hunter-forbidden"
         _is_mom_rocket_fin = (
             not _is_unlocked_custom_fin
             and _fin_m5 >= 2.0

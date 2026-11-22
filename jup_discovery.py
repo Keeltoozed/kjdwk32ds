@@ -1182,14 +1182,25 @@ async def _evaluate_and_buy_inner(mint: str, td: dict, analyzer, tracker, source
         _ca_j_pre = float((td or {}).get("pairCreatedAt") or 0)
         _age_j_pre = ((time.time() * 1000.0 - _ca_j_pre) / 60000.0) if _ca_j_pre > 0 else 0.0
         _rh_mode_j = str((td or {}).get("_rug_hunter_mode") or "").strip()
-        if _rh_mode_j and _age_j_pre > 2.2:
+        _rh_j_max_age = float(getattr(config, "RUG_HUNTER_UNLOCKED_MAX_AGE_MIN", 3.20)) + 0.5
+        if _rh_mode_j and _age_j_pre > _rh_j_max_age:
             _rh_mode_j = ""
             if isinstance(td, dict):
                 td.pop("_rug_hunter_mode", None)
+                td.pop("_unlocked_runner_ok", None)
         if _rh_mode_j and "RUG-HUNTER" not in str(_sig_fin_j or "").upper():
             import rug_hunter as _rh_js
             _sig_fin_j = _rh_js.format_rug_hunter_source(_rh_mode_j, _mint_ml_conf, (td or {}).get("_rug_hunter_creator_profile"))
         _is_rh_buy_j = bool(_rh_mode_j) or ("RUG-HUNTER" in str(_sig_fin_j or "").upper())
+
+        # Финальный предохранитель: незалоченный пул НЕ МОЖЕТ быть куплен без активного Rug-Hunter!
+        _dex_low_j = str((td or {}).get("dexId") or "").strip().lower()
+        _is_native_pump_j = mint.lower().endswith("pump") and _dex_low_j in ("", "pumpfun", "pump", "pumpswap")
+        _is_lp_safe_j = bool((td or {}).get("_lp_verified")) or bool((td or {}).get("_pumpswap_canonical")) or bool((td or {}).get("_pumpswap_lp_burned"))
+        if not _is_native_pump_j and not _is_lp_safe_j and not _is_rh_buy_j:
+            print(f"🚫 [JUP-SAFETY] {_sym_tmp} ({mint[:8]}): незалоченный пул {_dex_low_j} без активного режима Rug-Hunter — вход запрещён!")
+            return False
+
         if _is_rh_buy_j:
             import rug_hunter as _rh_jb
             if not _rh_jb.has_rug_hunter_slot(tracker):
