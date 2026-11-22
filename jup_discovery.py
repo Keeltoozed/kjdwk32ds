@@ -811,7 +811,7 @@ async def _evaluate_and_buy_inner(mint: str, td: dict, analyzer, tracker, source
                     except Exception:
                         _rh_j_pass = False
                 if not _rh_j_pass:
-                    print(f"🚫 [{source_tag}-UNLOCKED-LP] {_sym_tmp} ({mint[:8]}): незалоченный пул на {_dex_j_low or 'DEX'} не прошёл Rug-Hunter — вход в основную стратегию строго запрещён!")
+                    print(f"🚫 [{source_tag}-UNLOCKED-LP] {_sym_tmp} ({mint[:8]}): незалоченный пул на {_dex_j_low or 'DEX'} не прошёл Rug-Hunter ({_rh_j_why}) — вход в основную стратегию строго запрещён!")
                     return False
         except Exception as _lp_ex:
             print(f"⏳ [{source_tag}-RC-ERR] {_sym_tmp} ({mint[:8]}): ошибка проверки RugCheck ({_lp_ex}) — пропуск цикла.")
@@ -1427,22 +1427,24 @@ async def jup_loop(analyzer, tracker):
                         )
                         _dex_cand = str(td.get("dexId") or "").lower()
                         if "meteora" in _dex_cand and _dex_cand != "meteoradbc" and not td.get("_lp_verified", False):
-                            _rh_s5_req = int(getattr(config, "RUG_HUNTER_EARLY_MIN_SELLS", 2)) if _ag < 2.0 else 8
-                            _rh_b5_req = max(int(getattr(config, "RUG_HUNTER_EARLY_MIN_BUYS", 12)) if _ag < 2.0 else 25, int(_s5_cand * 1.15))
+                            _min_g_lq = float(getattr(config, "MIN_GRADUATED_LIQ_USD", 4800.0))
+                            _rh_s5_req = 0 if _b5_cand >= 8 else int(getattr(config, "RUG_HUNTER_EARLY_MIN_SELLS", 1))
+                            _rh_b5_req = max(int(getattr(config, "RUG_HUNTER_EARLY_MIN_BUYS", 6)), int(_s5_cand * 1.05))
                             _rh_met_j_ok = (
                                 bool(getattr(config, "RUG_HUNTER_ENABLED", False))
                                 and bool(getattr(config, "RUG_HUNTER_UNLOCKED_LP_ENABLED", False))
-                                and float(getattr(config, "RUG_HUNTER_UNLOCKED_MIN_AGE_MIN", 0.25)) <= _ag <= float(getattr(config, "RUG_HUNTER_UNLOCKED_MAX_AGE_MIN", 3.5))
-                                and _lq_cand >= float(getattr(config, "RUG_HUNTER_MIN_LIQ_USD", 7500.0))
-                                and _v5_cand >= float(getattr(config, "RUG_HUNTER_MIN_VOL5_USD", 1800.0))
+                                and float(getattr(config, "RUG_HUNTER_UNLOCKED_MIN_AGE_MIN", 0.15)) <= _ag <= float(getattr(config, "RUG_HUNTER_UNLOCKED_MAX_AGE_MIN", 3.5))
+                                and _lq_cand >= float(getattr(config, "RUG_HUNTER_MIN_LIQ_USD", _min_g_lq))
+                                and _v5_cand >= float(getattr(config, "RUG_HUNTER_MIN_VOL5_USD", 350.0))
                                 and _s5_cand >= _rh_s5_req
                                 and _b5_cand >= _rh_b5_req
-                                and _m5 >= 5.0
+                                and _m5 >= 2.0
                             )
                             if not _rh_met_j_ok:
                                 skipped_flat += 1
                                 processed[m] = (_now_t + 6) if _ag <= 2.5 else (_now_t + 600)
                                 continue
+                        _min_g_lq2 = float(getattr(config, "MIN_GRADUATED_LIQ_USD", 4800.0))
                         _is_bull_dip_cand = (
                             _m5 >= -18.0
                             and _v5_cand >= 20000.0
@@ -1453,20 +1455,20 @@ async def jup_loop(analyzer, tracker):
                             _m5 >= 3.0
                             and _v5_cand >= 5000.0
                             and _b5_cand >= max(60, int(_s5_cand * 1.50))
-                            and _lq_cand >= 7500.0
+                            and _lq_cand >= _min_g_lq2
                         )
                         _is_early_grad_cand = (
                             _ag <= 10.0
                             and _m5 >= 3.5
                             and _v5_cand >= 3500.0
                             and _b5_cand >= max(25, int(_s5_cand * 1.20))
-                            and _lq_cand >= 7500.0
+                            and _lq_cand >= _min_g_lq2
                         )
                         _is_clean_flow_cand = (
                             _m5 >= 5.0
                             and _v5_cand >= 5000.0
                             and _b5_cand >= max(30, int(_s5_cand * 1.15))
-                            and _lq_cand >= 7500.0
+                            and _lq_cand >= _min_g_lq2
                         )
                         _min_m5_cand = 2.0 if _ag <= 3.0 else 6.0
                         if (

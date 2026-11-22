@@ -613,9 +613,10 @@ class GrokJevEngine:
             _sol_min_age_g = 0.8
         else:
             if str(pair_data.get("_rug_hunter_mode") or "").upper() in ("UNLOCKED-LP", "SEEDED-LP"):
-                _sol_min_age_g = float(getattr(_c, "RUG_HUNTER_UNLOCKED_MIN_AGE_MIN", 0.8))
+                _sol_min_age_g = float(getattr(_c, "RUG_HUNTER_UNLOCKED_MIN_AGE_MIN", 0.15))
             else:
-                _sol_min_age_g = 0.8 if (vol_m5 >= 20000.0 and b5 >= int(s5 * 1.30) and m5 >= 10.0) else 1.5
+                _is_fresh_mig_ign = (vol_m5 >= 600.0 and (b5 >= max(8, int(s5 * 1.05)) or (s5 == 0 and b5 >= 6)) and m5 >= 2.0)
+                _sol_min_age_g = 0.15 if _is_fresh_mig_ign else (0.8 if (vol_m5 >= 20000.0 and b5 >= int(s5 * 1.30) and m5 >= 10.0) else 1.5)
         if age_min < _sol_min_age_g:
             try:
                 from birth_tracker import birth_tracker as _bt_mig
@@ -1098,7 +1099,7 @@ class GrokJevEngine:
         _base_m1_g = float(getattr(_c, "JEV_MAX_M1_ENTRY_PCT", 22.0))
         _max_m1 = max(_base_m1_g, 25.0) if (not _is_curve_fl and b5 >= max(50, int(s5 * 1.35)) and vol5 >= 25000.0 and m5 >= 25.0) else _base_m1_g
         _cfg_m5 = 165.0 if _is_curve_fl else float(getattr(_c, "MAX_ENTRY_M5_PCT", 175.0))
-        _is_fresh_climb_fl = (not _is_curve_fl and _age_m <= 5.0 and 0.0 < _fdv_flush <= 55000.0 and _liq_usd >= 7500.0 and vol5 >= 5000.0 and b5 >= max(25, int(s5 * 1.15)) and m5 <= 450.0)
+        _is_fresh_climb_fl = (not _is_curve_fl and _age_m <= 5.0 and 0.0 < _fdv_flush <= 55000.0 and _liq_usd >= float(getattr(_c, "MIN_GRADUATED_LIQ_USD", 4800.0)) and vol5 >= 5000.0 and b5 >= max(25, int(s5 * 1.15)) and m5 <= 450.0)
         _is_fresh_grad_fl = (not _is_curve_fl and _age_m <= 5.0 and vol5 >= 20000.0 and _liq_usd >= 12000.0 and b5 >= max(30, int(s5 * 1.15)) and m5 <= 300.0)
         _is_fomo_bypass = (not _is_curve_fl and b5 >= int(s5 * 1.2) and vol5 >= 15000.0 and _liq_usd >= 12000.0 and m5 <= 240.0)
         if m5 > _cfg_m5 and not (_is_fresh_climb_fl or _is_fresh_grad_fl or _is_fomo_bypass):

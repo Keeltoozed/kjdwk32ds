@@ -127,15 +127,15 @@ def get_max_entry_h1_pct(
     """Return dynamic max h1% entry cap: allow genuine fresh launches while rejecting vertical tops (DATITTY/BNC/RUGPULL +426%)."""
     _m5_ok = True if m5_pct is None else (float(m5_pct) >= 1.0)
     _flow_ok = vol_m5 >= 2500.0 and buys_m5 >= int(sells_m5 * 1.05) and _m5_ok
-    # Свежий выпускник Pump.fun/DEX (<=8м) ещё у пола миграции (FDV <= $65k):
-    # рост с бондинг-кривой $5k -> $35k даёт h1 +350%..+700% ДО начала пампа на PumpSwap!
-    # Не убиваем его как «поздний хай», пока FDV <= $65k (скамы вроде APPAD отсекаются RugCheck/L7a/cabal-churn).
-    if not is_curve and age_min <= 8.0 and 0.0 < float(fdv_usd or 0.0) <= 65000.0 and _flow_ok and liq_usd >= 7500.0:
-        return 750.0
+    # Свежий выпускник Pump.fun/DEX (<=8м) ещё у пола миграции (FDV <= $120k):
+    # рост с бондинг-кривой $5k -> $35k-$60k даёт h1 +350%..+1200% ДО начала пампа на PumpSwap!
+    # Не убиваем его как «поздний хай», пока FDV <= $120k (скамы вроде APPAD отсекаются RugCheck/L7a/cabal-churn).
+    if not is_curve and age_min <= 8.0 and 0.0 < float(fdv_usd or 0.0) <= 120000.0 and _flow_ok and liq_usd >= 4500.0:
+        return 1600.0
     if age_min <= 15.0:
-        if _flow_ok and liq_usd >= 15000.0:
-            return 380.0
-        return 280.0 if _flow_ok else 220.0
+        if _flow_ok and liq_usd >= 12000.0:
+            return 500.0
+        return 380.0 if _flow_ok else 250.0
     if age_min <= 30.0:
         return 320.0 if _flow_ok else 220.0
     if age_min <= 60.0:
@@ -612,10 +612,11 @@ def evaluate_entry_momentum(
     # мощная органическая аккумуляция (PASSTHEHAT 445b/100s: liq>=$10k, vol5>=$10k, b>=1.60s, avg>=$12, h1>=+15%),
     # или мега-объём >= $18k с 100+ покупками (FREEDOM +8.1%, GENTLEMEN +7.3%).
     _is_heavy_vol_launch = (vol5_usd >= 18000.0 and buys5 >= max(100, int(sells5 * 1.15)) and vel_ratio >= 1.20)
+    _min_grad_liq_th = float(globals().get("MIN_GRADUATED_LIQ_USD", 4800.0))
     _is_fresh_mig_early_launch = (
         not is_curve
         and age_min <= 10.0
-        and liq_usd >= 7500.0
+        and liq_usd >= _min_grad_liq_th
         and vol5_usd >= 3500.0
         and buys5 >= max(25, int(sells5 * 1.20))
         and m1 >= -1.0
@@ -623,7 +624,7 @@ def evaluate_entry_momentum(
     )
     _is_high_conviction_accum = (
         not is_curve
-        and liq_usd >= 7500.0
+        and liq_usd >= _min_grad_liq_th
         and vol5_usd >= 5000.0
         and buys5 >= max(60, int(sells5 * 1.50))
         and (vol5_usd / max(1, tot_tx)) >= 10.0
@@ -632,7 +633,7 @@ def evaluate_entry_momentum(
     )
     _is_clean_grad_flow = (
         not is_curve
-        and liq_usd >= 7500.0
+        and liq_usd >= _min_grad_liq_th
         and vol5_usd >= 5000.0
         and buys5 >= max(30, int(sells5 * 1.15))
         and m1 >= -1.0
@@ -640,7 +641,7 @@ def evaluate_entry_momentum(
     _is_rh_early_seed_flow = (
         not is_curve
         and age_min <= 5.0
-        and liq_usd >= 7500.0
+        and liq_usd >= _min_grad_liq_th
         and vol5_usd >= 2000.0
         and sells5 >= 10
         and buys5 >= max(35, int(sells5 * 1.20))
@@ -650,7 +651,7 @@ def evaluate_entry_momentum(
     _is_strong_buyer_surge = (
         not is_curve
         and age_min <= 8.0
-        and liq_usd >= 7500.0
+        and liq_usd >= _min_grad_liq_th
         and vol5_usd >= 1500.0
         and buys5 >= max(18, int(sells5 * 1.25))
         and m1 >= -1.0
@@ -714,7 +715,7 @@ def evaluate_entry_momentum(
         not is_curve
         and age_min <= 5.0
         and 0.0 < fdv_usd <= 55000.0
-        and liq_usd >= 7500.0
+        and liq_usd >= _min_grad_liq_th
         and vol5_usd >= 5000.0
         and buys5 >= max(25, int(sells5 * 1.15))
     )
@@ -803,7 +804,7 @@ def evaluate_entry_momentum(
     _is_fresh_grad_ignition = (
         not is_curve
         and age_min <= 10.0
-        and liq_usd >= 7500.0
+        and liq_usd >= _min_grad_liq_th
         and (m5 >= 8.0 or (_is_fresh_mig_early_launch and m5 >= 3.5) or (age_min <= 5.0 and m5 >= 6.0 and buys5 >= max(35, int(sells5 * 1.15)) and sells5 >= 10))
         and m1 >= -2.0
         and vol5_usd >= (2000.0 if (age_min <= 5.0 and buys5 >= 35 and sells5 >= 10) else 2500.0)
@@ -816,7 +817,7 @@ def evaluate_entry_momentum(
         and m1 >= -2.0
         and (buys5 >= max(8, int(sells5 * 1.05)) or (sells5 == 0 and buys5 >= 6))
         and vol5_usd >= 600.0
-        and liq_usd >= 6000.0
+        and liq_usd >= 4500.0
     )
     is_ultra_fresh_launch = (
         _is_early_ignited_rocket
@@ -869,12 +870,12 @@ def evaluate_entry_momentum(
         and vol5_usd >= 3500.0
         and vel_ratio >= 0.35
         and buys5 >= max(25, int(sells5 * 1.25))
-        and liq_usd >= 7500.0
+        and liq_usd >= _min_grad_liq_th
     )
     _is_clean_grad_ignition = (
         not is_curve
         and age_min <= SOLANA_MAX_AGE_MIN
-        and liq_usd >= 7500.0
+        and liq_usd >= _min_grad_liq_th
         and vol5_usd >= 5000.0
         and m5 >= 5.0
         and m1 >= -1.5
@@ -960,7 +961,7 @@ SHADOW_WATCH_LIMIT = 400                  # Сколько последних з
 PUMP_MIGRATION_MCAP_SOL = 410.0           # FDV миграции pump.fun
 PUMP_DUMP_FLOOR_SOL = 50.0                # Порог post-mig-dumped (~50 SOL, разрешает быстрые реклеймы)
 JEV_MAX_TICKET_USD = 0.0
-MIN_GRADUATED_LIQ_USD = 7500.0            # Минимум $7.5k ликвидности на DEX (отсекает слитые микро-пулы и высокое проскальзывание на стопах)
+MIN_GRADUATED_LIQ_USD = 4800.0            # Минимум $4.8k ликвидности на DEX (~70 SOL при SOL $70; отсекает слитые микро-пулы и пускает стандартные миграции 80 SOL)
 AUDITOR_STAIRCASE_ENABLED = True          # ВКЛЮЧЕНО: Layer 9/10 детектор лесенки-ботофермы и газовой пыли (защита от slow-cook cabal рагов типа FIONA -96.3%)
 AUDITOR_MAX_DEV_PCT = 8.0                 # Макс 8% у дева (защита от моментальных дампов разработчика в GROK-JEV)
 AUDITOR_MAX_WHALE_PCT = 14.0              # Макс 14% в одном кошельке (защита от 1-клик слива кита как FOMOCOIN/$CHOPS)
@@ -1445,7 +1446,7 @@ RUG_HUNTER_UNLOCKED_MIN_AGE_MIN = 0.15     # Минимум 0.15м (9с): вхо
 RUG_HUNTER_UNLOCKED_MAX_AGE_MIN = 3.20      # Максимум 3.20м: даём DexScreener время проиндексировать ранние ракеты (было 2.0м — 2.0м блокировало 60%+ ракет)
 RUG_HUNTER_ROCKET_MAX_POOL_AGE_MIN = 12.0  # Максимальный возраст пула для летящих ракет (PnL >= +8%): даём ракете бежать до 12м, собирая TP1 (+35%), TP2 (+90%), TP3 (+250%) и трейлинг!
 RUG_HUNTER_CABAL_MAX_AGE_MIN = 4.5         # Максимум 4.5м для кабал-сёрфа
-RUG_HUNTER_MIN_LIQ_USD = 7500.0            # Минимум $7.5k реальной ликвидности (едино с MIN_GRADUATED_LIQ_USD)
+RUG_HUNTER_MIN_LIQ_USD = 4800.0            # Минимум $4.8k реальной ликвидности (~70 SOL при SOL $70; едино с MIN_GRADUATED_LIQ_USD)
 RUG_HUNTER_MIN_VOL5_USD = 350.0            # Минимум $350 объёма за 5м на ультра-старте (ловит ракеты на 15-30 секундах, кейсы NICKEH30, USELESS, SHELF)
 RUG_HUNTER_EARLY_AGE_THRESHOLD = 2.2       # Порог ультра-ранней фазы (до 2.2м)
 RUG_HUNTER_EARLY_MIN_SELLS = 1             # Достаточно 1 продажи для подтверждения sellable на старте (на 0.5м допускается 0 при сильных покупках)

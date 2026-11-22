@@ -1451,15 +1451,16 @@ async def scanner_loop(analyzer, tracker):
                             _c_v5_m = float((_c_pre.get("volume") or {}).get("m5", 0) or 0)
                             _c_l_m = float((_c_pre.get("liquidity") or {}).get("usd", 0) or 0)
                             _c_m5_m = float(((_c_pre.get("priceChange") or {}).get("m5", 0) or 0))
-                            _rh_s5_sc_req = int(getattr(config, "RUG_HUNTER_EARLY_MIN_SELLS", 1)) if _age_r < 1.8 else 6
-                            _rh_b5_sc_req = max(int(getattr(config, "RUG_HUNTER_EARLY_MIN_BUYS", 6)) if _age_r < 1.8 else 18, int(_c_s5_m * 1.10))
-                            _rh_min_vol_sc = float(getattr(config, "RUG_HUNTER_MIN_VOL5_USD", 350.0)) if _age_r <= 0.8 else 800.0
-                            _rh_min_m5_sc = -2.0 if _age_r <= 1.2 else 3.5
+                            _min_g_lq_sc = float(getattr(config, "MIN_GRADUATED_LIQ_USD", 4800.0))
+                            _rh_s5_sc_req = 0 if _c_b5_m >= 8 else (int(getattr(config, "RUG_HUNTER_EARLY_MIN_SELLS", 1)) if _age_r < 1.8 else 4)
+                            _rh_b5_sc_req = max(int(getattr(config, "RUG_HUNTER_EARLY_MIN_BUYS", 6)) if _age_r < 1.8 else 15, int(_c_s5_m * 1.05))
+                            _rh_min_vol_sc = float(getattr(config, "RUG_HUNTER_MIN_VOL5_USD", 350.0)) if _age_r <= 0.8 else 600.0
+                            _rh_min_m5_sc = -2.0 if _age_r <= 1.2 else 2.0
                             _rh_met_sc_ok = (
                                 bool(getattr(config, "RUG_HUNTER_ENABLED", False))
                                 and bool(getattr(config, "RUG_HUNTER_UNLOCKED_LP_ENABLED", False))
                                 and float(getattr(config, "RUG_HUNTER_UNLOCKED_MIN_AGE_MIN", 0.15)) <= _age_r <= float(getattr(config, "RUG_HUNTER_UNLOCKED_MAX_AGE_MIN", 3.20))
-                                and _c_l_m >= float(getattr(config, "RUG_HUNTER_MIN_LIQ_USD", 7500.0))
+                                and _c_l_m >= float(getattr(config, "RUG_HUNTER_MIN_LIQ_USD", _min_g_lq_sc))
                                 and _c_v5_m >= _rh_min_vol_sc
                                 and _c_s5_m >= _rh_s5_sc_req
                                 and _c_b5_m >= _rh_b5_sc_req
@@ -1548,8 +1549,8 @@ async def scanner_loop(analyzer, tracker):
 
                         # Отсекаем флет и еле ползущие токены (m5 < 5%): пропускаем свежие миграции (<=10м), бычьи откаты (GTE7) и сильную аккумуляцию (PASSTHEHAT 402b/88s)
                         _is_bull_dip_sc = (_c_m5 >= -18.0 and _c_vol5 >= 20000.0 and _c_b5 >= max(50, int(_c_s5 * 1.15)) and _c_liq >= 10000.0)
-                        _is_accum_sc = (_c_m5 >= 3.0 and _c_vol5 >= 5000.0 and _c_b5 >= max(60, int(_c_s5 * 1.50)) and _c_liq >= 7500.0)
-                        _is_early_launch_sc = (_c_age_m <= 10.0 and _c_m5 >= 3.5 and _c_vol5 >= 3500.0 and _c_b5 >= max(25, int(_c_s5 * 1.20)) and _c_liq >= 7500.0)
+                        _is_accum_sc = (_c_m5 >= 3.0 and _c_vol5 >= 5000.0 and _c_b5 >= max(60, int(_c_s5 * 1.50)) and _c_liq >= _min_g_lq_sc)
+                        _is_early_launch_sc = (_c_age_m <= 10.0 and _c_m5 >= 3.5 and _c_vol5 >= 3500.0 and _c_b5 >= max(25, int(_c_s5 * 1.20)) and _c_liq >= _min_g_lq_sc)
                         if _c_m5 < 5.0 and _c_age_m > 2.5 and not _is_fresh_grad and not _is_bull_dip_sc and not _is_accum_sc and not _is_early_launch_sc:
                             processed_mints[mint] = _now_r - _cd_r + 20
                             continue

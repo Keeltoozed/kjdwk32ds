@@ -2332,7 +2332,7 @@ class Analyzer:
             not _is_curve_pre_a
             and _age_min_pre <= 5.0
             and 0.0 < _fdv_chk_pre <= 55000.0
-            and _raw_liq_chk >= 7500.0
+            and _raw_liq_chk >= float(getattr(config, "MIN_GRADUATED_LIQ_USD", 4800.0))
             and _vm5_pre >= 5000.0
             and _b5_pre >= max(25, int(_s5_pre * 1.15))
         )
@@ -3325,7 +3325,12 @@ class Analyzer:
                 _b5_rc = int(_tx5_rc.get("buys", 0) or 0)
                 _s5_rc = int(_tx5_rc.get("sells", 0) or 0)
                 if mint.endswith("pump") and _age_min_pre < 1.5:
-                    _has_launch_mom = (_vm5_check >= 20000.0 and _m5_check >= 10.0 and _b5_rc >= 40 and _b5_rc >= int(_s5_rc * 1.30))
+                    _is_rh_cand_m = bool(pair_data.get("_rug_hunter_mode"))
+                    _has_launch_mom = (
+                        _is_rh_cand_m
+                        or (_vm5_check >= 600.0 and _m5_check >= 2.0 and (_b5_rc >= max(8, int(_s5_rc * 1.05)) or (_s5_rc == 0 and _b5_rc >= 6)))
+                        or (_vm5_check >= 20000.0 and _m5_check >= 10.0 and _b5_rc >= 40)
+                    )
                     if not _has_launch_mom:
                         try:
                             from birth_tracker import birth_tracker as _bt_mig_a

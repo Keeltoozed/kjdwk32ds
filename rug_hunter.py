@@ -248,14 +248,6 @@ def qualify_unlocked_lp_hunter(
     if mint_low.endswith("pump") and dex_low == "pumpswap" and (pair_data or {}).get("_pumpswap_canonical") is False:
         return False, "fake-pump-createpool-clone"
 
-    # Meteora DLMM пулы (динамические бины ликвидности):
-    # Дев держит 100% контроль над бинами ликвидности и может забрать quote SOL мгновенно в 1 клик.
-    # В незалоченных пулах Meteora DLMM сжигание LP отсутствует — это 99% моментальный скам (кейс Cyberleek -$3.02).
-    _labels = [str(l).upper() for l in ((pair_data or {}).get("labels") or [])]
-    if "meteora" in dex_low or "DLMM" in _labels:
-        if not bool((pair_data or {}).get("_lp_verified")):
-            return False, "meteora-dlmm-unburned-pool"
-
     # История создателя: серийных (<15м) и мгновенных рагеров отсекаем навсегда
     if isinstance(creator_profile, dict) and not creator_profile.get("ok", True):
         return False, str(creator_profile.get("reason") or "instant-rugger")
@@ -268,7 +260,7 @@ def qualify_unlocked_lp_hunter(
     if age_min > max_age:
         return False, f"rh-too-late {age_min:.1f}m > {max_age:.1f}m"
 
-    min_liq = float(getattr(config, "RUG_HUNTER_MIN_LIQ_USD", 7500.0))
+    min_liq = float(getattr(config, "RUG_HUNTER_MIN_LIQ_USD", 4800.0))
     # Fallback: если DexScreener не успел заполнить volume.m5 для свежего пула (<5м), берём volume.h24/h1:
     if vol5_usd <= 0 and age_min <= 5.0 and isinstance(pair_data, dict):
         vol5_usd = float((pair_data.get("volume") or {}).get("h24", 0) or (pair_data.get("volume") or {}).get("h1", 0) or 0.0)
@@ -324,15 +316,12 @@ def qualify_unlocked_lp_hunter(
     # Адаптивные требования к покупкам/продажам:
     # На ультра-раннем старте (age <= 2.2м) ловим импульс в самом начале:
     early_age_th = float(getattr(config, "RUG_HUNTER_EARLY_AGE_THRESHOLD", 2.2))
-    if age_min <= 0.6:
-        min_sells_req = 0 if buys5 >= 8 else 1
-        min_buys_req = int(getattr(config, "RUG_HUNTER_EARLY_MIN_BUYS", 6))
-    elif age_min <= early_age_th:
-        min_sells_req = int(getattr(config, "RUG_HUNTER_EARLY_MIN_SELLS", 1))
-        min_buys_req = max(8, int(getattr(config, "RUG_HUNTER_EARLY_MIN_BUYS", 6)))
+    if age_min <= early_age_th:
+        min_sells_req = 0 if buys5 >= 8 else int(getattr(config, "RUG_HUNTER_EARLY_MIN_SELLS", 1))
+        min_buys_req = max(6, int(getattr(config, "RUG_HUNTER_EARLY_MIN_BUYS", 6)))
     else:
-        min_sells_req = 4
-        min_buys_req = max(18, int(sells5 * 1.25))
+        min_sells_req = 3
+        min_buys_req = max(15, int(sells5 * 1.15))
 
     if sells5 < min_sells_req:
         return False, f"rh-too-few-sells {sells5} < {min_sells_req}"
@@ -420,7 +409,7 @@ def qualify_cabal_surf_hunter(
     if age_min > max_age:
         return False, f"rh-cabal-too-late {age_min:.1f}m > {max_age:.1f}m"
 
-    min_liq = float(getattr(config, "RUG_HUNTER_MIN_LIQ_USD", 7500.0))
+    min_liq = float(getattr(config, "RUG_HUNTER_MIN_LIQ_USD", 4800.0))
     min_vol5 = float(getattr(config, "RUG_HUNTER_MIN_VOL5_USD", 2000.0))
     if liq_usd < min_liq:
         return False, f"rh-cabal-low-liq ${liq_usd:,.0f}"
