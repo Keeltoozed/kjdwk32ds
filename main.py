@@ -482,10 +482,11 @@ async def position_manager_loop(analyzer, tracker):
                     _pnl_str = f"{pnl_pct*100:+.1f}%" if position.entry_price_usd > 0 else "0%"
                     print(f"🛡️ [TRACK] {position.symbol} ({mint[:8]}): цена ${current_price:.8f} ({_pnl_str}) | пик: ${position.max_price_usd:.8f} | держим {minutes_held:.1f}м", flush=True)
 
-                # Периодически обновляем живую ликвидность пула и сделки (каждые 8 сек или при просадке <= -4% каждые 2.5 сек)
+                # Периодически обновляем живую ликвидность пула и сделки (для позиций Rug-Hunter каждые 2.0с для моментального среза рага дева; для остальных 8с или при просадке 2.5с)
                 _last_pd_ts = float(getattr(position, "last_pair_data_ts", 0.0) or 0.0)
                 _now_t = time.time()
-                _refresh_interval = 2.5 if pnl_pct <= -0.04 else 8.0
+                _is_pos_rh_track = getattr(position, "is_rug_hunter", False) or bool((getattr(position, "pair_data", None) or {}).get("_rug_hunter_mode"))
+                _refresh_interval = 2.0 if (_is_pos_rh_track or pnl_pct <= -0.04) else 8.0
                 if (_now_t - _last_pd_ts) >= _refresh_interval:
                     try:
                         import market_data as _md
@@ -495,6 +496,8 @@ async def position_manager_loop(analyzer, tracker):
                         else:
                             _live_pd = await asyncio.wait_for(_md.get_token_data(mint, max_cache_age=4.0, priority=True), timeout=0.8)
                         if isinstance(_live_pd, dict) and _live_pd:
+                            if _is_pos_rh_track:
+                                _live_pd["_rug_hunter_mode"] = getattr(position, "rug_hunter_mode", None) or (position.pair_data or {}).get("_rug_hunter_mode") or "UNLOCKED-LP"
                             position.pair_data = _live_pd
                             position.last_pair_data = _live_pd
                             position.last_pair_data_ts = _now_t

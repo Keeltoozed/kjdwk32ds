@@ -1024,7 +1024,7 @@ MOONBAG_MAX_HOLD_MIN = 55.0          # Даём ракетам до 55 мину�
 PUMP_XGB_ENABLED = False
 RAY_XGB_ENABLED = False
 ROCKET_XGB_ENABLED = True
-ROCKET_XGB_STAGE1_THRESHOLD = 4.5    # Смягчённый порог 4.5% (пускает ракеты JOLLYGUY 5.8%, HOGE 5.2%, MEMSYNC 5.9%, DOOM 4.9%; все 8 слоёв ончейн-аудита остаются на 100%)
+ROCKET_XGB_STAGE1_THRESHOLD = 7.0    # Качественный порог 7.0% для основного сканера (отсекает шлак, поднимает винрейт; для RH используется отдельный RUG_HUNTER_STAGE1_MIN_ML=3.5)
 ROCKET_XGB_FINAL_THRESHOLD = 8.0      # Финальный порог 8% после прохождения всех ончейн-аудитов безопасности
 ROCKET_XGB_THRESHOLD = 10.0
 ROCKET_XGB_UNLOCKED_CUSTOM_MIN = 14.0  # Для проверенных высокооборотных DEX-раннеров
@@ -1448,11 +1448,12 @@ RUG_HUNTER_ROCKET_MAX_POOL_AGE_MIN = 12.0  # Максимальный возра
 RUG_HUNTER_CABAL_MAX_AGE_MIN = 4.5         # Максимум 4.5м для кабал-сёрфа
 RUG_HUNTER_MIN_LIQ_USD = 4800.0            # Минимум $4.8k реальной ликвидности (~70 SOL при SOL $70; едино с MIN_GRADUATED_LIQ_USD)
 RUG_HUNTER_MIN_VOL5_USD = 350.0            # Минимум $350 объёма за 5м на ультра-старте (ловит ракеты на 15-30 секундах, кейсы NICKEH30, USELESS, SHELF)
-RUG_HUNTER_EARLY_AGE_THRESHOLD = 2.2       # Порог ультра-ранней фазы (до 2.2м)
+RUG_HUNTER_EARLY_AGE_THRESHOLD = 3.8       # Порог ультра-ранней фазы (до 3.8м: учитывает задержку индексации DexScreener 2.5-3.5м)
 RUG_HUNTER_EARLY_MIN_SELLS = 1             # Достаточно 1 продажи для подтверждения sellable на старте (на 0.5м допускается 0 при сильных покупках)
 RUG_HUNTER_EARLY_MIN_BUYS = 6              # Достаточно 6 покупок на ультра-старте (вместо 25), если есть перевес покупателей
 RUG_HUNTER_STAGE1_MIN_ML = 3.5             # Смягчённый порог Stage-1 ML для ранних ракет (unblock кейса DOOM +940% conf=4.9%)
-RUG_HUNTER_SEEDED_MIN_ML = 30.0            # Смягчённый порог ML для SEEDED-LP: 30% (пропускает ракеты HENKI 36%, ELVES 34%, DOOM 49%, XMAS 71%, JEE 69%; защита от китов через rh-seeded-whale-trap)
+RUG_HUNTER_SEEDED_MIN_ML = 30.0            # Смягчённый порог ML для обычных SEEDED-LP: 30% (пропускает ракеты HENKI 36%, ELVES 34%, DOOM 49%, XMAS 71%, JEE 69%)
+RUG_HUNTER_HIGH_LIQ_MIN_ML = 60.0          # Повышенный порог ML 60% для китовых пулов liq >= $15k (защита от ловушки Wojak $27k liq 51% ML)
 RUG_HUNTER_SEEDED_MIN_BUYS = 15            # Реальные покупатели для посеянных пулов (15b)
 RUG_HUNTER_SEEDED_MIN_SELLS = 1            # Достаточно 1 продажи для подтверждения ликвидности
 RUG_HUNTER_SEEDED_MIN_VOL5 = 1500.0        # Органический объём для посеянных пулов ($1,500)
@@ -1474,7 +1475,7 @@ RUG_HUNTER_TRAIL_ACT_PCT = 0.35           # Трейлинг-стоп актив
 RUG_HUNTER_TRAIL_DROP_PCT = 0.22          # Трейл -22% от ATH (даёт ракете дышать и собирать 2x-10x)
 RUG_HUNTER_SL_PCT = -0.10                 # Жёсткий Stop-Loss -10%
 RUG_HUNTER_EMERG_PCT = -0.14              # Экстренный кап -14%
-RUG_HUNTER_MAX_HOLD_MIN = 5.0             # Базовый тайм-кэп 5м (для плюсовых позиций расширяется до 15м)
+RUG_HUNTER_MAX_HOLD_MIN = 3.5             # Базовый тайм-кэп 3.5м для обычных незалоченных пулов (для ракет TP1+ расширяется до 12м)
 RUG_HUNTER_LIQ_DRAIN_PCT = 0.40           # Мгновенный выход при реальном падении LP >= 40% (защита от ложных сбросов при нормальных продажах)
 
 # === ВЫХОДЫ ДЛЯ НЕЗАЛОЧЕННЫХ ПУЛОВ RUG-HUNTER (UNLOCKED-LP) ===
@@ -1491,8 +1492,8 @@ RUG_HUNTER_UNLOCKED_TP4_SELL_FRAC = 0.10
 RUG_HUNTER_UNLOCKED_TP5_PCT = 10.00       # TP5 +1000% (11x): 100% оставшегося объема
 RUG_HUNTER_UNLOCKED_TP5_SELL_FRAC = 1.00
 RUG_HUNTER_UNLOCKED_MAX_HOLD_MIN = 12.0   # Потолок удержания для растущих монет (до 12м для ракет)
-RUG_HUNTER_UNLOCKED_SAFETY_MIN = 4.0      # Лимит 4.0м удержания только для нулевых/минусовых позиций
-RUG_HUNTER_UNLOCKED_MAX_POOL_AGE_MIN = 4.5 # Потолок возраста пула (4.5м) для слабых позиций (PnL < +8%)
-RUG_HUNTER_ROCKET_MAX_POOL_AGE_MIN = 12.0 # Расширенный потолок (12.0м) для растущих ракет (PnL >= +8%): даёт собрать 3x-10x!
+RUG_HUNTER_UNLOCKED_SAFETY_MIN = 3.5      # Лимит 3.5м удержания для позиций без взятия TP1 (защита от зависаний на 6-9м)
+RUG_HUNTER_UNLOCKED_MAX_POOL_AGE_MIN = 3.8 # Потолок возраста пула (3.8м) для слабых позиций (не достигших TP1 +35%)
+RUG_HUNTER_ROCKET_MAX_POOL_AGE_MIN = 12.0 # Расширенный потолок (12.0м) для растущих ракет (TP1+): даёт собрать 3x-10x!
 RUG_HUNTER_UNLOCKED_STALL_SEC = 60.0      # 60с без нового ATH после пика >= +30% и откат 18% -> эвакуация
 RUG_HUNTER_UNLOCKED_TRAIL_DROP_PCT = 0.22 # Трейл 22% от ATH для незалоченных пулов (даёт дышать на откатах)

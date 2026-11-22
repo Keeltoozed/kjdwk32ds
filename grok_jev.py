@@ -2365,7 +2365,8 @@ class GrokJevEngine:
         # Отсекает 90% мусора и заведомых дампов в 0мс (DARTHLON 6%, BALLS 4%, DAISUKE 2%)
         # без лишних сетевых вызовов Jupiter, RugCheck и LLM.
         rkt_s1 = self.score_rocket_xgb(address, pair)
-        s1_thresh = float(getattr(_c, "ROCKET_XGB_STAGE1_THRESHOLD", 4.5))
+        _is_rh_cand_s1 = bool((pair.get("_rug_hunter_mode") if isinstance(pair, dict) else None))
+        s1_thresh = float(getattr(_c, "RUG_HUNTER_STAGE1_MIN_ML", 3.5)) if _is_rh_cand_s1 else float(getattr(_c, "ROCKET_XGB_STAGE1_THRESHOLD", 7.0))
         if str(pair.get("dexId") or "").lower() in ("pump", "pumpfun", "meteoradbc"):
             s1_thresh = min(s1_thresh, 10.0)
         _txs_s1 = (pair.get("txns") or {}).get("m5") or {}
@@ -2613,11 +2614,13 @@ class GrokJevEngine:
         if _is_rh_jev_fin and (rkt_s1 + 0.05) >= float(getattr(_c, "RUG_HUNTER_STAGE1_MIN_ML", 3.5)):
             rkt_final = max(rkt_final, rkt_s1)
 
-        # Защита от ловушек SEEDED-LP: требуем ML-скор >= RUG_HUNTER_SEEDED_MIN_ML (58%)
+        # Защита от ловушек SEEDED-LP: требуем ML-скор >= RUG_HUNTER_SEEDED_MIN_ML (30%), а для китовых >= $15k -> 60% (кейс Wojak)
         if "SEEDED" in _rh_mode_jev_fin.upper():
-            _seeded_min_g = float(getattr(_c, "RUG_HUNTER_SEEDED_MIN_ML", 58.0))
+            _raw_liq_g = float((pair.get("liquidity") or {}).get("usd", 0) or 0)
+            _is_high_l = bool(_raw_liq_g >= 15000.0 or pair.get("_rh_high_liq_seeded"))
+            _seeded_min_g = float(getattr(_c, "RUG_HUNTER_HIGH_LIQ_MIN_ML", 60.0)) if _is_high_l else float(getattr(_c, "RUG_HUNTER_SEEDED_MIN_ML", 30.0))
             if rkt_final < _seeded_min_g:
-                print(f"🚫 [GROK-JEV-SEEDED-TRAP] {symbol} ({address[:8]}): SEEDED-LP ML {rkt_final:.1f}% < {_seeded_min_g:.0f}% — VETO!")
+                print(f"🚫 [GROK-JEV-SEEDED-TRAP] {symbol} ({address[:8]}): SEEDED-LP (liq ${_raw_liq_g:,.0f}) ML {rkt_final:.1f}% < {_seeded_min_g:.0f}% — VETO!")
                 return False, f"seeded-low-conf {rkt_final:.0f}% < {_seeded_min_g:.0f}%"
 
         # Финальный предохранитель: незалоченный пул НЕ МОЖЕТ быть куплен как обычный SCANNER/JEV без активного Rug-Hunter!
