@@ -1206,7 +1206,10 @@ async def _evaluate_and_buy_inner(mint: str, td: dict, analyzer, tracker, source
             if not _rh_jb.has_rug_hunter_slot(tracker):
                 print(f"⏳ [{source_tag}-RH-SLOTS] {_sym_tmp}: лимит слотов Rug-Hunter заполнен — скип.")
                 return False
-            size = max(1.5, size * float(getattr(config, "RUG_HUNTER_SIZE_MULT", 0.65)))
+            _rh_mult_j = float(getattr(config, "RUG_HUNTER_SIZE_MULT", 0.65))
+            if "SEEDED" in str(_rh_mode_j or "").upper():
+                _rh_mult_j = min(_rh_mult_j, float(getattr(config, "RUG_HUNTER_SEEDED_SIZE_MULT", 0.40)))
+            size = max(1.0, size * _rh_mult_j)
             _src_final_j = _sig_fin_j
         else:
             _src_final_j = f"{source_tag}:{_sig_fin_j}" + ("+SMART" if _of_feat_j.get("smart_tape_n") else "")

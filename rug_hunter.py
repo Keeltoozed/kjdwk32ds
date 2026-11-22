@@ -308,11 +308,12 @@ def qualify_unlocked_lp_hunter(
             return False, f"rh-seeded-few-buys {buys5} < {_min_seeded_buys}"
         if sells5 < _min_seeded_sells:
             return False, f"rh-seeded-few-sells {sells5} < {_min_seeded_sells}"
-        # LAZARUS / SHARE guard: фейковая огромная ликва ($25k+) при малом числе покупателей (<100)
-        # и неестественно крупном среднем чеке ($120+) — китовый wash-трап дева (кейсы LAZARUS $81k liq, SHARE $33k liq)
+        # GOLDFISH / LAZARUS / SHARE guard: фейковая огромная ликва ($20k+) при малом числе РЕАЛЬНЫХ покупателей (<45)
+        # или неестественно крупном чеке — китовый раг дева (кейсы GOLDFISH $31k liq, LAZARUS $81k, SHARE $33k)
         avg_tx_seeded = vol5_usd / max(1, buys5 + sells5)
-        if liq_usd >= 25000.0 and buys5 < 100 and avg_tx_seeded > 120.0:
-            return False, f"rh-seeded-whale-wash liq=${liq_usd:,.0f} buys={buys5} avg_tx=${avg_tx_seeded:.0f}"
+        if liq_usd >= 20000.0:
+            if buys5 < 45 or vol5_usd < 5000.0 or avg_tx_seeded > 110.0:
+                return False, f"rh-seeded-whale-trap liq=${liq_usd:,.0f} buys={buys5} vol5=${vol5_usd:,.0f}"
     if fdv_usd > float(getattr(config, "RUG_HUNTER_MAX_FDV_USD", 250000.0)):
         return False, f"rh-fdv-too-high ${fdv_usd:,.0f}"
 
@@ -605,10 +606,19 @@ def evaluate_rug_hunter_exit(position, current_price: float) -> Optional[str]:
         if max_pnl_pct >= 0.30 and peak_age_sec >= _unl_stall_s and drop_from_peak >= 0.18 and pnl_pct < 0.20:
             return f"🎯 RH Stall Evac (+{pnl_pct*100:+.1f}%, застой {peak_age_sec:.0f}с после пика +{max_pnl_pct*100:.1f}%)"
 
-        # Д. Трейлинг-стоп для незалоченных пулов: 22% от пика (даёт ракете дышать на откатах):
-        _unl_trail_drop = float(getattr(config, "RUG_HUNTER_UNLOCKED_TRAIL_DROP_PCT", 0.22))
-        if max_pnl_pct >= 0.35 and drop_from_peak >= _unl_trail_drop:
-            return f"🎯 RH Tight Trail (+{pnl_pct*100:+.1f}%, откат {drop_from_peak*100:.1f}% от пика +{max_pnl_pct*100:.1f}%)"
+        # Д. Трейлинг-стоп для незалоченных пулов:
+        # Для обычных позиций до фиксации прибыли: 22% откат от пика >= +35%.
+        # ДЛЯ ЛЕТЯЩИХ РАКЕТ И МУНБЭГОВ (tp1_done/tp2_done=True или пик >= +85%):
+        # ДАЁМ РАКЕТЕ ДЫШАТЬ! Откат 35% от пика с гарантированным полом не ниже +30%!
+        # Это предотвращает преждевременный сброс ракет на первых кочках (кейсы XMAS +116%, MINECAT +105%)
+        # и даёт ракете дойти до TP3 (+250%), TP4 (+500%), TP5 (+1000%)!
+        _is_moonbag_ride = bool(getattr(position, "is_moonbag", False) or getattr(position, "tp1_done", False) or max_pnl_pct >= 0.85)
+        _unl_trail_drop = 0.35 if _is_moonbag_ride else float(getattr(config, "RUG_HUNTER_UNLOCKED_TRAIL_DROP_PCT", 0.22))
+        _trail_act_pct = 0.80 if _is_moonbag_ride else 0.35
+        if max_pnl_pct >= _trail_act_pct and drop_from_peak >= _unl_trail_drop:
+            if _is_moonbag_ride and pnl_pct < 0.30:
+                return f"🎯 RH Moonbag Trail Floor (+{pnl_pct*100:+.1f}%, защита прибыли после пика +{max_pnl_pct*100:.1f}%)"
+            return f"🎯 RH {'Moonbag' if _is_moonbag_ride else 'Tight'} Trail (+{pnl_pct*100:+.1f}%, откат {drop_from_peak*100:.1f}% от пика +{max_pnl_pct*100:.1f}%)"
 
         # Е. Абсолютный лимит удержания безопасности (только для зависших/убыточных позиций):
         _unl_safety_max = float(getattr(config, "RUG_HUNTER_UNLOCKED_SAFETY_MIN", 4.0))

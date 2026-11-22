@@ -1427,6 +1427,7 @@ EARLY_MOMENTUM_MAX_LOSS_PCT = -12.0      # Срез при подтверждё�
 RUG_HUNTER_ENABLED = True                 # Включить стратегию охоты на ранние фазы незалоченных пулов и кабалов
 RUG_HUNTER_UNLOCKED_LP_ENABLED = True     # Режим A: ранний вход в незалоченные пулы (без honeypot/freeze/instant-rugger)
 RUG_HUNTER_SEEDED_LP_ENABLED = True       # Режим A2: включён с защитой от фейк-пулов (buys5 >= 20, sells5 >= 3, vol5 >= $2.5k — ловит USDC +1400%, GTA, SURVIVE; отсекает фейк-ловушки вроде 愛)
+RUG_HUNTER_SEEDED_SIZE_MULT = 0.40        # Доп. уменьшение размера SEEDED-LP: 40% от RH размера (итого ~26% от базового ордера). Лимит потерь при дрейне: ~$0.80 вместо $1.97
 RUG_HUNTER_CABAL_SURF_ENABLED = True      # Режим B: ранний сёрф залоченных пулов с кабал/инсайдер-сеткой (<=8м)
 RUG_HUNTER_MAX_SLOTS = 2                  # Макс. 2 одновременных слота под Rug-Hunter (2 слота всегда свободны под чистые ракеты)
 RUG_HUNTER_SIZE_MULT = 0.65               # Уменьшенный риск-сайз (65% от обычного ордера)
@@ -1440,10 +1441,10 @@ RUG_HUNTER_EARLY_AGE_THRESHOLD = 1.8       # Порог ультра-ранне�
 RUG_HUNTER_EARLY_MIN_SELLS = 1             # Достаточно 1 продажи для подтверждения sellable на старте (на 0.5м допускается 0 при сильных покупках)
 RUG_HUNTER_EARLY_MIN_BUYS = 6              # Достаточно 6 покупок на ультра-старте (вместо 25), если есть перевес покупателей
 RUG_HUNTER_STAGE1_MIN_ML = 3.5             # Смягчённый порог Stage-1 ML для ранних ракет (unblock кейса DOOM +940% conf=4.9%)
-RUG_HUNTER_SEEDED_MIN_ML = 65.0            # Минимальный ML-скор для посеянных пулов (SEEDED-LP): было 55%, поднято до 65% (анализ 69 сделок: conf не отделяет плохие от хороших ниже 65%)
-RUG_HUNTER_SEEDED_MIN_BUYS = 16            # Реальные покупатели для посеянных пулов
-RUG_HUNTER_SEEDED_MIN_SELLS = 2            # Минимум 2 продажи для подтверждения ликвидности
-RUG_HUNTER_SEEDED_MIN_VOL5 = 2500.0        # Органический объём для посеянных пулов
+RUG_HUNTER_SEEDED_MIN_ML = 75.0            # Минимальный ML-скор для посеянных пулов (SEEDED-LP): поднято с 65% до 75% (GOLDFISH 71% был раг на $31k)
+RUG_HUNTER_SEEDED_MIN_BUYS = 20            # Реальные покупатели для посеянных пулов (поднято с 16 до 20 — больше органики)
+RUG_HUNTER_SEEDED_MIN_SELLS = 3            # Минимум 3 продажи для подтверждения ликвидности (поднято с 2)
+RUG_HUNTER_SEEDED_MIN_VOL5 = 3500.0        # Органический объём для посеянных пулов (поднято с $2500 до $3500)
 RUG_HUNTER_MAX_FDV_USD = 250000.0         # Потолок FDV для незалоченных пулов
 RUG_HUNTER_CABAL_MAX_FDV_USD = 180000.0   # Потолок FDV для кабал-сёрфа
 RUG_HUNTER_TP1_PCT = 0.35                 # TP1 +35%: фиксируем 35% объема (возврат тела депозита, house money!)

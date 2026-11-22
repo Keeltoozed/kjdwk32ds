@@ -172,7 +172,9 @@ async def position_security_auditor_loop(analyzer, tracker):
                                         continue
                                     _zl_cnt = int(getattr(position, "_zero_liq_streak", 0) or 0) + 1
                                     position._zero_liq_streak = _zl_cnt
-                                    if _zl_cnt < 2:
+                                    # Катастрофический дрейн: если ликва рухнула до <= $50 при пике >= $2500 или просадка >= 90% — выход СРАЗУ на 1 тике!
+                                    _is_catastrophic_drain = (_sol_liq <= 50.0 and _peak_liq >= 2500.0) or _liq_crash_pct >= 0.90
+                                    if _zl_cnt < 2 and not _is_catastrophic_drain:
                                         continue
                                     # Физическое обнуление пула девом (LP <= $200 или 0, подтверждено 2 тика / ончейн) — выход МГНОВЕННО
                                     _px_now = 0.0 if (_is_zero_liq or _crit_drained or _sol_liq <= 250.0) else float(getattr(position, "current_price_usd", 0.0) or 0.0)
@@ -2529,7 +2531,10 @@ async def scanner_loop(analyzer, tracker):
                                     continue
 
                                 if _is_rh_buy_sc:
-                                    position_size = max(1.5, position_size * float(getattr(config, "RUG_HUNTER_SIZE_MULT", 0.65)))
+                                    _rh_mult = float(getattr(config, "RUG_HUNTER_SIZE_MULT", 0.65))
+                                    if "SEEDED" in str(_rh_mode_buy or "").upper():
+                                        _rh_mult = min(_rh_mult, float(getattr(config, "RUG_HUNTER_SEEDED_SIZE_MULT", 0.40)))
+                                    position_size = max(1.0, position_size * _rh_mult)
                                     _src_sc_final = _sig_sc_fin
                                 else:
                                     _src_sc_final = f"SCANNER:{_sig_sc_fin}"

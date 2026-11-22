@@ -2639,9 +2639,9 @@ class GrokJevEngine:
         if _is_rh_jev_fin and (rkt_s1 + 0.05) >= float(getattr(_c, "RUG_HUNTER_STAGE1_MIN_ML", 3.5)):
             rkt_final = max(rkt_final, rkt_s1)
 
-        # Защита от 1-минутных ловушек SEEDED-LP (кейс BFC 49% -> раг): требуем ML-скор >= 55%
+        # Защита от ловушек SEEDED-LP (кейс BFC 49%, GOLDFISH 71% -> раг): требуем ML-скор >= 75%
         if "SEEDED" in _rh_mode_jev_fin.upper():
-            _seeded_min_g = float(getattr(_c, "RUG_HUNTER_SEEDED_MIN_ML", 55.0))
+            _seeded_min_g = float(getattr(_c, "RUG_HUNTER_SEEDED_MIN_ML", 75.0))
             if rkt_final < _seeded_min_g:
                 print(f"🚫 [GROK-JEV-SEEDED-TRAP] {symbol} ({address[:8]}): SEEDED-LP ML {rkt_final:.1f}% < {_seeded_min_g:.0f}% — VETO!")
                 return False, f"seeded-low-conf {rkt_final:.0f}% < {_seeded_min_g:.0f}%"
