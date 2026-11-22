@@ -1165,7 +1165,7 @@ async def _evaluate_and_buy_inner(mint: str, td: dict, analyzer, tracker, source
         _ca_j_pre = float((td or {}).get("pairCreatedAt") or 0)
         _age_j_pre = ((time.time() * 1000.0 - _ca_j_pre) / 60000.0) if _ca_j_pre > 0 else 0.0
         _rh_mode_j = str((td or {}).get("_rug_hunter_mode") or "").strip()
-        _rh_j_max_age = float(getattr(config, "RUG_HUNTER_UNLOCKED_MAX_AGE_MIN", 3.20)) + 0.5
+        _rh_j_max_age = float(getattr(config, "RUG_HUNTER_UNLOCKED_MAX_AGE_MIN", 5.0)) + 1.0
         if _rh_mode_j and _age_j_pre > _rh_j_max_age:
             _rh_mode_j = ""
             if isinstance(td, dict):
@@ -1433,7 +1433,7 @@ async def jup_loop(analyzer, tracker):
                             _rh_met_j_ok = (
                                 bool(getattr(config, "RUG_HUNTER_ENABLED", False))
                                 and bool(getattr(config, "RUG_HUNTER_UNLOCKED_LP_ENABLED", False))
-                                and float(getattr(config, "RUG_HUNTER_UNLOCKED_MIN_AGE_MIN", 0.15)) <= _ag <= float(getattr(config, "RUG_HUNTER_UNLOCKED_MAX_AGE_MIN", 3.5))
+                                and float(getattr(config, "RUG_HUNTER_UNLOCKED_MIN_AGE_MIN", 0.15)) <= _ag <= float(getattr(config, "RUG_HUNTER_UNLOCKED_MAX_AGE_MIN", 5.0))
                                 and _lq_cand >= float(getattr(config, "RUG_HUNTER_MIN_LIQ_USD", _min_g_lq))
                                 and _v5_cand >= float(getattr(config, "RUG_HUNTER_MIN_VOL5_USD", 350.0))
                                 and _s5_cand >= _rh_s5_req

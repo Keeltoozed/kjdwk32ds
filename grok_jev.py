@@ -270,7 +270,7 @@ class GrokJevEngine:
                     _b5_cc = int(_tx_cc.get("buys", 0) or 0)
                     _s5_cc = int(_tx_cc.get("sells", 0) or 0)
                     _v5_cc = float(pair_data.get("volume", {}).get("m5", 0) or pair_data.get("volume", {}).get("h24", 0) or 0)
-                    if _b5_cc >= 25 and _b5_cc >= int(_s5_cc * 1.15) and _v5_cc >= 2000.0:
+                    if (_b5_cc >= 10 and (_s5_cc == 0 or _b5_cc >= int(_s5_cc * 1.05)) and _v5_cc >= 500.0) or bool(pair_data.get("_rug_hunter_mode")):
                         return True, f"copycat-organic-flow ({_b5_cc}b/{_s5_cc}s, vol5 ${_v5_cc:,.0f})"
                     return False, f"copycat-of-runner {symbol} (clone of {_orig_mint[:6]} liq ${_orig_liq:,.0f})"
         if _raw_liq_cc >= 60000.0 and (_h24_cc >= 200.0 or _fdv_cc >= 250000.0):

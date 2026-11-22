@@ -1007,7 +1007,7 @@ class Analyzer:
             _cur_age_p = ((time.time() * 1000.0 - _ca) / 60000.0) if _ca > 0 else 0.0
             # Порог читаем один раз здесь — доступен в обоих блоках ниже
             import config as _acfg
-            _rh_meta_max_age = float(getattr(_acfg, "RUG_HUNTER_UNLOCKED_MAX_AGE_MIN", 3.20)) + 0.5
+            _rh_meta_max_age = float(getattr(_acfg, "RUG_HUNTER_UNLOCKED_MAX_AGE_MIN", 5.0)) + 1.0
             _meta_map = getattr(self, "_verified_lp_meta", None)
             if isinstance(_meta_map, dict):
                 _pa = str(pair_dict.get("pairAddress") or "").strip()
@@ -4832,7 +4832,7 @@ class Analyzer:
         _c_ms = pair_data.get("pairCreatedAt") or 0
         import time as _t
         _age_min = ((_t.time() * 1000 - _c_ms) / 60000.0) if _c_ms else 0.2
-        _max_unl_age = float(getattr(config, "RUG_HUNTER_UNLOCKED_MAX_AGE_MIN", 1.80))
+        _max_unl_age = float(getattr(config, "RUG_HUNTER_UNLOCKED_MAX_AGE_MIN", 5.0))
         _is_rh_ok_ray = (
             str(pair_data.get("_rug_hunter_mode") or "").upper() in ("UNLOCKED-LP", "SEEDED-LP", "CABAL-SURF")
             and (_age_min <= _max_unl_age)

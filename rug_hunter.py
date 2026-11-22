@@ -254,7 +254,7 @@ def qualify_unlocked_lp_hunter(
 
     # Жёсткие пороги раннего живого входа на самом старте:
     min_age = float(getattr(config, "RUG_HUNTER_UNLOCKED_MIN_AGE_MIN", 0.15))
-    max_age = float(getattr(config, "RUG_HUNTER_UNLOCKED_MAX_AGE_MIN", 3.20))
+    max_age = float(getattr(config, "RUG_HUNTER_UNLOCKED_MAX_AGE_MIN", 5.0))
     if age_min < min_age:
         return False, f"rh-too-young {age_min:.2f}m < {min_age:.2f}m"
     if age_min > max_age:

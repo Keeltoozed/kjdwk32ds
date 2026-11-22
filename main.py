@@ -1459,7 +1459,7 @@ async def scanner_loop(analyzer, tracker):
                             _rh_met_sc_ok = (
                                 bool(getattr(config, "RUG_HUNTER_ENABLED", False))
                                 and bool(getattr(config, "RUG_HUNTER_UNLOCKED_LP_ENABLED", False))
-                                and float(getattr(config, "RUG_HUNTER_UNLOCKED_MIN_AGE_MIN", 0.15)) <= _age_r <= float(getattr(config, "RUG_HUNTER_UNLOCKED_MAX_AGE_MIN", 3.20))
+                                and float(getattr(config, "RUG_HUNTER_UNLOCKED_MIN_AGE_MIN", 0.15)) <= _age_r <= float(getattr(config, "RUG_HUNTER_UNLOCKED_MAX_AGE_MIN", 5.0))
                                 and _c_l_m >= float(getattr(config, "RUG_HUNTER_MIN_LIQ_USD", _min_g_lq_sc))
                                 and _c_v5_m >= _rh_min_vol_sc
                                 and _c_s5_m >= _rh_s5_sc_req
@@ -2334,7 +2334,7 @@ async def scanner_loop(analyzer, tracker):
                                     _ca_sc_pre = float(pair_data.get("pairCreatedAt") or 0)
                                     _age_sc_pre = ((time.time() * 1000.0 - _ca_sc_pre) / 60000.0) if _ca_sc_pre > 0 else 0.0
                                     _rh_mode_sc = str(pair_data.get("_rug_hunter_mode") or "").upper().strip()
-                                    _rh_sc_max_age = float(getattr(config, "RUG_HUNTER_UNLOCKED_MAX_AGE_MIN", 3.20)) + 0.5
+                                    _rh_sc_max_age = float(getattr(config, "RUG_HUNTER_UNLOCKED_MAX_AGE_MIN", 5.0)) + 1.0
                                     if _rh_mode_sc and _age_sc_pre > _rh_sc_max_age:
                                         _rh_mode_sc = ""
                                         pair_data.pop("_rug_hunter_mode", None)
