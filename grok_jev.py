@@ -2407,7 +2407,7 @@ class GrokJevEngine:
             or (_age_s1 <= 5.0 and _m5_s1 >= 2.5 and _b5_s1 >= max(8, int(_s5_s1 * 1.15)) and _vm5_s1 >= 1500.0)
         )
 
-        _rh_s1_min_j = float(getattr(_c, "RUG_HUNTER_STAGE1_MIN_ML", 5.0))
+        _rh_s1_min_j = float(getattr(_c, "RUG_HUNTER_STAGE1_MIN_ML", 3.5))
         _is_rh_s1_jev = False
         if getattr(_c, "RUG_HUNTER_ENABLED", False) and (rkt_s1 + 0.05) >= _rh_s1_min_j and _age_s1 <= 10.0:
             try:

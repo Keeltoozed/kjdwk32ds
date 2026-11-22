@@ -360,15 +360,17 @@ def qualify_unlocked_lp_hunter(
         if m1 < 0.0 and buys5 < 10:
             return False, f"rh-early-m1-negative {m1:+.1f}%"
     elif age_min <= early_age_th:
-        # 1.2м–1.8м: требуем реальный импульс m5 >= 5% ИЛИ мощный буй-поток (>=30 буев)
-        # (анализ 69 сделок: 49% плохих входов пришли в 2-3м с m5 3.5-7%)
-        if m5 < 5.0 or m5 > max_m5_rh:
-            if not (buys5 >= 30 and buys5 >= sells5 * 1.5 and vol5_usd >= 1500.0):
-                return False, f"rh-m5-weak-ignition {m5:+.1f}% < +5% (buys={buys5})"
+        # 1.2м–2.2м: требуем импульс m5 >= 2% ИЛИ мощный буй-поток (>=20 буев)
+        # Снижено с 5% → 2%: ракеты CSV 19 (GREEN CAT +398%, NEX AI +168%) имели m5 2-6% в 1.2-2.2м
+        if m5 < 2.0 or m5 > max_m5_rh:
+            if not (buys5 >= 20 and buys5 >= sells5 * 1.4 and vol5_usd >= 1200.0):
+                return False, f"rh-m5-weak-ignition {m5:+.1f}% < +2% (buys={buys5})"
     else:
-        # > 1.8м (только если MAX_AGE > 1.8): требуем сильный импульс m5 >= 8%
-        if m5 < 8.0 or m5 > max_m5_rh:
-            return False, f"rh-m5-out-of-range {m5:+.1f}%"
+        # > 2.2м (только если MAX_AGE > 2.2): требуем реальный импульс m5 >= 4%
+        # Снижено с 8% → 4%: ракеты в зоне 2.2-3.2м имеют m5 4-8% на старте
+        if m5 < 4.0 or m5 > max_m5_rh:
+            if not (buys5 >= 15 and buys5 >= sells5 * 1.2 and vol5_usd >= 1000.0):
+                return False, f"rh-m5-out-of-range {m5:+.1f}% (buys={buys5})"
     if h1 > 280.0 and not (age_min <= 5.0 and 0 < fdv_usd <= 65000.0):
         return False, f"rh-h1-late {h1:+.0f}%"
 

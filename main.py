@@ -1458,7 +1458,7 @@ async def scanner_loop(analyzer, tracker):
                             _rh_met_sc_ok = (
                                 bool(getattr(config, "RUG_HUNTER_ENABLED", False))
                                 and bool(getattr(config, "RUG_HUNTER_UNLOCKED_LP_ENABLED", False))
-                                and float(getattr(config, "RUG_HUNTER_UNLOCKED_MIN_AGE_MIN", 0.15)) <= _age_r <= float(getattr(config, "RUG_HUNTER_UNLOCKED_MAX_AGE_MIN", 1.80))
+                                and float(getattr(config, "RUG_HUNTER_UNLOCKED_MIN_AGE_MIN", 0.15)) <= _age_r <= float(getattr(config, "RUG_HUNTER_UNLOCKED_MAX_AGE_MIN", 3.20))
                                 and _c_l_m >= float(getattr(config, "RUG_HUNTER_MIN_LIQ_USD", 7500.0))
                                 and _c_v5_m >= _rh_min_vol_sc
                                 and _c_s5_m >= _rh_s5_sc_req
