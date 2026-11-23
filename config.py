@@ -1024,10 +1024,11 @@ MOONBAG_MAX_HOLD_MIN = 55.0          # Даём ракетам до 55 мину�
 PUMP_XGB_ENABLED = False
 RAY_XGB_ENABLED = False
 ROCKET_XGB_ENABLED = True
-ROCKET_XGB_STAGE1_THRESHOLD = 7.0    # Качественный порог 7.0% для основного сканера (отсекает шлак, поднимает винрейт; для RH используется отдельный RUG_HUNTER_STAGE1_MIN_ML=3.5)
-ROCKET_XGB_FINAL_THRESHOLD = 8.0      # Финальный порог 8% после прохождения всех ончейн-аудитов безопасности
-ROCKET_XGB_THRESHOLD = 10.0
-ROCKET_XGB_UNLOCKED_CUSTOM_MIN = 14.0  # Для проверенных высокооборотных DEX-раннеров
+ROCKET_XGB_STAGE1_THRESHOLD = 20.0   # PATCH: было 7.0. По сделкам 21-23.11: все 7 входов со скором <20% закрылись в минус (сумма ~-$4.6, больше всей чистой прибыли). Для RH отдельный RUG_HUNTER_STAGE1_MIN_ML
+ROCKET_XGB_FINAL_THRESHOLD = 20.0     # PATCH: было 8.0 (единый пол со Stage-1, иначе слабые сигналы проходят на финале)
+ROCKET_XGB_THRESHOLD = 20.0           # PATCH: было 10.0
+MOMENTUM_BYPASS_MIN_ML = 14.0         # PATCH: нижний пол ML для «моментум-байпаса» (раньше 1.5% на S1 и 2.5% на финале)
+ROCKET_XGB_UNLOCKED_CUSTOM_MIN = 25.0  # PATCH: было 14.0 (должен быть >= Stage-1/Final)
 JEV_MAX_AGE_MIN = 240.0              # Пробои и консолидации до 240м (4ч): позволяет ловить мощные вторые волны и раннеры
 
 STALL_TIMER_SEC = 420.0   # 7 минут на консолидацию до среза по стагнации
@@ -1393,7 +1394,7 @@ WALLET_DEV_WALLET_ADDR = ""               # Кошелек дева (запол�
 
 # 1. Отключаем самостоятельные покупки GROK-JEV в обход пайплайна ROCKET-XGB
 GROK_JEV_STANDALONE_BUY = False          # GROK-JEV работает только как фильтр/бустер поверх ROCKET-XGB
-GROK_JEV_MIN_XGB_SCORE = 4.0             # Минимальный скор ROCKET-XGB для входа по сигналу GROK-JEV (мягкий порог)
+GROK_JEV_MIN_XGB_SCORE = 20.0             # Минимальный скор ROCKET-XGB для входа по сигналу GROK-JEV (мягкий порог)
 ROCKET_XGB_STAGE1_MIN_SCORE = 4.0       # Снижено до 4.0% (пропускает ракеты вроде GTAVI 12.7% -> +248%)
 
 # 2. Мягкие гейты на вход — не отсекаем свежие ракеты (единые для SCANNER, JUP и GROK-JEV)
@@ -1444,7 +1445,7 @@ RUG_HUNTER_MAX_SLOTS = 2                  # Макс. 2 одновременны
 RUG_HUNTER_SIZE_MULT = 0.65               # Уменьшенный риск-сайз (65% от обычного ордера)
 RUG_HUNTER_UNLOCKED_MIN_AGE_MIN = 0.15     # Минимум 0.15м (9с): вход на самом старте разгона первой свечи
 RUG_HUNTER_UNLOCKED_MAX_AGE_MIN = 5.0       # Максимум 5.0м: даём DexScreener (индексация 2-4м) полный простор для входа в ракеты (было 3.2м — 3.2м отсекало 80%+ токенов по rh-too-late)
-RUG_HUNTER_ROCKET_MAX_POOL_AGE_MIN = 12.0  # Максимальный возраст пула для летящих ракет (PnL >= +8%): даём ракете бежать до 12м, собирая TP1 (+35%), TP2 (+90%), TP3 (+250%) и трейлинг!
+RUG_HUNTER_ROCKET_MAX_POOL_AGE_MIN = 8.0  # PATCH: было 12.0 (2 из 4 удержаний дольше 8м пула = раг, см. разбор). Максимальный возраст пула для летящих ракет (PnL >= +8%): даём ракете бежать до 12м, собирая TP1 (+35%), TP2 (+90%), TP3 (+250%) и трейлинг!
 RUG_HUNTER_CABAL_MAX_AGE_MIN = 4.5         # Максимум 4.5м для кабал-сёрфа
 RUG_HUNTER_MIN_LIQ_USD = 4800.0            # Минимум $4.8k реальной ликвидности (~70 SOL при SOL $70; едино с MIN_GRADUATED_LIQ_USD)
 RUG_HUNTER_MIN_VOL5_USD = 350.0            # Минимум $350 объёма за 5м на ультра-старте (ловит ракеты на 15-30 секундах, кейсы NICKEH30, USELESS, SHELF)
@@ -1494,6 +1495,6 @@ RUG_HUNTER_UNLOCKED_TP5_SELL_FRAC = 1.00
 RUG_HUNTER_UNLOCKED_MAX_HOLD_MIN = 12.0   # Потолок удержания для растущих монет (до 12м для ракет)
 RUG_HUNTER_UNLOCKED_SAFETY_MIN = 3.5      # Лимит 3.5м удержания для позиций без взятия TP1 (защита от зависаний на 6-9м)
 RUG_HUNTER_UNLOCKED_MAX_POOL_AGE_MIN = 3.8 # Потолок возраста пула (3.8м) для слабых позиций (не достигших TP1 +35%)
-RUG_HUNTER_ROCKET_MAX_POOL_AGE_MIN = 12.0 # Расширенный потолок (12.0м) для растущих ракет (TP1+): даёт собрать 3x-10x!
+RUG_HUNTER_ROCKET_MAX_POOL_AGE_MIN = 8.0 # PATCH: было 12.0. Расширенный потолок (12.0м) для растущих ракет (TP1+): даёт собрать 3x-10x!
 RUG_HUNTER_UNLOCKED_STALL_SEC = 60.0      # 60с без нового ATH после пика >= +30% и откат 18% -> эвакуация
 RUG_HUNTER_UNLOCKED_TRAIL_DROP_PCT = 0.22 # Трейл 22% от ATH для незалоченных пулов (даёт дышать на откатах)

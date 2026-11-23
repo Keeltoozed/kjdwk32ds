@@ -2401,7 +2401,7 @@ class GrokJevEngine:
             and _h1_s1 >= float(getattr(_c, "JEV_MIN_H1_PCT", -25.0))
         )
         _is_unlocked_s1 = _c.is_position_unlocked_lp(address, pair, bool(pair.get("_lp_verified")))
-        _is_momentum_rocket = not _is_unlocked_s1 and _s1_fresh_ok and (rkt_s1 + 0.05) >= max(1.5, s1_thresh - 6.0) and _m1_s1 >= 0.0 and (
+        _is_momentum_rocket = not _is_unlocked_s1 and _s1_fresh_ok and (rkt_s1 + 0.05) >= max(float(getattr(_c, "MOMENTUM_BYPASS_MIN_ML", 14.0)), s1_thresh - 6.0) and _m1_s1 >= 0.0 and (
             (_m5_s1 >= 10.0 and _b5_s1 >= int(_s5_s1 * 1.20) and _vm5_s1 >= 4000.0)
             or (_vm5_s1 >= 8000.0 and _b5_s1 >= int(_s5_s1 * 1.15) and _m5_s1 >= 4.0)
             or (_m5_s1 >= 6.0 and _vm5_s1 >= 4000.0 and _b5_s1 >= max(12, int(_s5_s1 * 1.15)))
@@ -2632,7 +2632,7 @@ class GrokJevEngine:
             and _fin_m5 >= 2.0
             and _fin_v5 >= 3500.0
             and _fin_b5 >= max(10, int(_fin_s5 * float(getattr(_c, "MIN_BUY_SELL_RATIO", 1.25))))
-            and (rkt_final + 0.05) >= 2.5
+            and (rkt_final + 0.05) >= float(getattr(_c, "MOMENTUM_BYPASS_MIN_ML", 14.0))
         )
         if getattr(_c, "ROCKET_XGB_ENABLED", True) and not _is_mom_rocket_fin and not _is_rh_jev_fin and (rkt_final + 0.05) < final_thresh:
             print(f"🚫 [GROK-JEV-ML-VETO] {symbol} ({address[:8]}): Rocket XGB final score {rkt_final:.1f}% < {final_thresh:.0f}% — VETO! (Блокировка дампа)")
