@@ -1453,7 +1453,7 @@ RUG_HUNTER_EARLY_AGE_THRESHOLD = 3.8       # Порог ультра-ранне�
 RUG_HUNTER_EARLY_MIN_SELLS = 1             # Достаточно 1 продажи для подтверждения sellable на старте (на 0.5м допускается 0 при сильных покупках)
 RUG_HUNTER_EARLY_MIN_BUYS = 6              # Достаточно 6 покупок на ультра-старте (вместо 25), если есть перевес покупателей
 RUG_HUNTER_STAGE1_MIN_ML = 3.5             # Смягчённый порог Stage-1 ML для ранних ракет (unblock кейса DOOM +940% conf=4.9%)
-RUG_HUNTER_SEEDED_MIN_ML = 30.0            # Смягчённый порог ML для обычных SEEDED-LP: 30% (пропускает ракеты HENKI 36%, ELVES 34%, DOOM 49%, XMAS 71%, JEE 69%)
+RUG_HUNTER_SEEDED_MIN_ML = 36.5            # Смягчённый порог ML для обычных SEEDED-LP: 30% (пропускает ракеты HENKI 36%, ELVES 34%, DOOM 49%, XMAS 71%, JEE 69%)
 RUG_HUNTER_HIGH_LIQ_MIN_ML = 60.0          # Повышенный порог ML 60% для китовых пулов liq >= $15k (защита от ловушки Wojak $27k liq 51% ML)
 RUG_HUNTER_SEEDED_MIN_BUYS = 15            # Реальные покупатели для посеянных пулов (15b)
 RUG_HUNTER_SEEDED_MIN_SELLS = 1            # Достаточно 1 продажи для подтверждения ликвидности
@@ -1496,5 +1496,7 @@ RUG_HUNTER_UNLOCKED_MAX_HOLD_MIN = 12.0   # Потолок удержания д
 RUG_HUNTER_UNLOCKED_SAFETY_MIN = 3.5      # Лимит 3.5м удержания для позиций без взятия TP1 (защита от зависаний на 6-9м)
 RUG_HUNTER_UNLOCKED_MAX_POOL_AGE_MIN = 3.8 # Потолок возраста пула (3.8м) для слабых позиций (не достигших TP1 +35%)
 RUG_HUNTER_ROCKET_MAX_POOL_AGE_MIN = 8.0 # PATCH: было 12.0. Расширенный потолок (12.0м) для растущих ракет (TP1+): даёт собрать 3x-10x!
+RUG_HUNTER_STOP_GRACE_SEC = 12.0           # FIX: grace для price-стопов RH (сек); ликвидность и sell-wave работают всегда
+RUG_HUNTER_GRACE_HARD_STOP_PCT = 0.45      # FIX: даже в grace режем при -45%
 RUG_HUNTER_UNLOCKED_STALL_SEC = 60.0      # 60с без нового ATH после пика >= +30% и откат 18% -> эвакуация
 RUG_HUNTER_UNLOCKED_TRAIL_DROP_PCT = 0.22 # Трейл 22% от ATH для незалоченных пулов (даёт дышать на откатах)
