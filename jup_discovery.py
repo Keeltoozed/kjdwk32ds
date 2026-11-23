@@ -1072,8 +1072,13 @@ async def _evaluate_and_buy_inner(mint: str, td: dict, analyzer, tracker, source
     _fcr_compact_j = {}
     if isinstance(_fcr_res_j, dict):
         try:
-            from first_candle_rug_guard import compact_summary as _fcr_cs_j
+            from first_candle_rug_guard import compact_summary as _fcr_cs_j, check_pro_fcr_gate as _pro_fcr_j
             _fcr_compact_j = _fcr_cs_j(_fcr_res_j) or {}
+            _is_rh_j_pro = bool((td or {}).get("_rug_hunter_mode")) or ("RUG-HUNTER" in str(_sig or "").upper())
+            _pro_ok_j, _pro_why_j = _pro_fcr_j(_fcr_compact_j, age_min=_age_j, is_rug_hunter=_is_rh_j_pro)
+            if not _pro_ok_j:
+                print(f"🚫 [{source_tag}-PRO-FCR-GATE] {_sym_tmp} ({mint[:8]}): {_pro_why_j} — отсеян бандл/китовый слив!")
+                return False
         except Exception:
             _fcr_compact_j = {}
         if _fcr_res_j.get("verdict") == "BLOCK":

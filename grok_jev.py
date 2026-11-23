@@ -2183,12 +2183,18 @@ class GrokJevEngine:
             _fcr_feat = {}
             if getattr(_c, "FCR_ENABLED", True):
                 try:
-                    from first_candle_rug_guard import pre_entry_rug_check, compact_summary
+                    from first_candle_rug_guard import pre_entry_rug_check, compact_summary, check_pro_fcr_gate
                     _fcr = await pre_entry_rug_check(address, pair_data=pair_data, symbol=symbol)
                     _fcr_compact = compact_summary(_fcr)
                     if _fcr.get("verdict") == "BLOCK":
                         print(f"🚫 [FCR-BLOCK] {symbol} ({address[:8]}): {_fcr.get('report', '')}")
                         return False, "fcr-first-candle-rug: " + "; ".join(_fcr.get("reasons", [])[:3]), _h_stats
+                    _ca_fcr_g = float(pair_data.get("pairCreatedAt") or 0)
+                    _age_fcr_g = ((time.time() * 1000.0 - _ca_fcr_g) / 60000.0) if _ca_fcr_g > 0 else 0.0
+                    _pro_g_ok, _pro_g_why = check_pro_fcr_gate(_fcr_compact, age_min=_age_fcr_g, is_rug_hunter=bool(pair_data.get("_rug_hunter_mode")))
+                    if not _pro_g_ok:
+                        print(f"🚫 [GROK-JEV-PRO-FCR] {symbol} ({address[:8]}): {_pro_g_why} — VETO!")
+                        return False, _pro_g_why, _h_stats
                     _fcr_score_g = float((_fcr_compact or {}).get("fcr_score", 0.0) or _fcr.get("score", 0.0) or 0.0)
                     _fcr_rsn_g = str((_fcr_compact or {}).get("fcr_reasons", "") or "").lower()
                     if _c.is_unmigrated_curve_token(address, pair_data) and "дистрибуция" in _fcr_rsn_g:

@@ -2396,10 +2396,14 @@ async def scanner_loop(analyzer, tracker):
                                     if isinstance(_r_fcr, Exception):
                                         print(f"⚠️ [SCANNER PRE-FLIGHT FCR] {actual_symbol} ({mint[:8]}): error {type(_r_fcr).__name__} — вход разрешён (fail-open).")
                                     elif isinstance(_r_fcr, dict):
-                                        from first_candle_rug_guard import compact_summary
+                                        from first_candle_rug_guard import compact_summary, check_pro_fcr_gate
                                         _fcr_compact = compact_summary(_r_fcr)
                                         if _r_fcr.get("verdict") == "BLOCK":
                                             print(f"🚫 [SCANNER PRE-FLIGHT FCR] {actual_symbol} ({mint[:8]}): {_r_fcr.get('report', '')} — вход заблокирован первоочередно по мгновенному рагу!")
+                                            continue
+                                        _pro_fcr_ok, _pro_fcr_why = check_pro_fcr_gate(_fcr_compact, age_min=_age_sc_pre, is_rug_hunter=_is_rh_sc_pf)
+                                        if not _pro_fcr_ok:
+                                            print(f"🚫 [SCANNER PRO-FCR-GATE] {actual_symbol} ({mint[:8]}): {_pro_fcr_why} — отсеян бандл/китовый слив!")
                                             continue
                                         _fcr_score_sc = float((_fcr_compact or {}).get("fcr_score", 0.0) or _r_fcr.get("score", 0.0) or 0.0)
                                         _fcr_rsn_sc = str((_fcr_compact or {}).get("fcr_reasons", "") or "").lower()

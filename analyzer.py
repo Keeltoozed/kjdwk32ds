@@ -1721,14 +1721,15 @@ class Analyzer:
             if mint in self._global_scan_cache:
                 _c_ts, _c_res, _c_sig, _c_score, _c_top10, _c_dev = self._global_scan_cache[mint]
                 _sig_l = str(_c_sig or "").lower()
-                _is_term = any(k in _sig_l for k in (
+                _is_waiting_unl = any(w in _sig_l for w in ("waiting", "rh-too-young", "rh-low-vol5", "rh-too-few-sells", "rh-weak-buyers"))
+                _is_term = (not _is_waiting_unl) and any(k in _sig_l for k in (
                     "rugcheck", "scam", "unlocked-lp", "bundle", "honeypot", 
                     "freeze", "mimic", "dead-token", "мёртвый токен", "sybil", 
                     "delegation", "zombie", "creator",
                     "deadcat", "dead-cat", "ghost-pool", "wash-spike", 
                     "wash-trap", "mcap-too-large", "price-split"
                 ))
-                _ttl = 1800.0 if _is_term else 12.0
+                _ttl = 4.0 if _is_waiting_unl else (1800.0 if _is_term else 12.0)
                 if (now - _c_ts) < _ttl:
                     self.last_signal = _c_sig
                     self.last_score = _c_score
@@ -2600,6 +2601,8 @@ class Analyzer:
                         pair_data["_rug_hunter_mode"] = _rh_ps_mode
                         print(f"🎯 [RUG-HUNTER-PS] {symbol} ({mint[:8]}): незалоченный PumpSwap CreatePool ({_ps_a_why}) переведён в аудит RUG-HUNTER:{_rh_ps_mode}.")
                     else:
+                        if _age_min_pre <= 5.0 and _rh_ps_why and any(w in _rh_ps_why for w in ("rh-too-young", "rh-low-vol5", "rh-seeded-low-vol5", "rh-seeded-few", "rh-too-few-sells", "rh-weak-buyers", "rh-m5")):
+                            return self._deny(mint, f"pumpswap-trap-waiting:{_rh_ps_why}", f"⏳ [PUMPSWAP-RH-WAIT] {symbol} ({mint[:8]}): ранний PumpSwap CreatePool ({_rh_ps_why}) — ждём импульса.")
                         return self._deny(mint, f"pumpswap-scam-pool ({_ps_a_why})", f"🚫 [PUMPSWAP-ONCHAIN] {symbol} ({mint[:8]}): {_ps_a_why}")
             _is_canonical_pump = (
                 (_ps_a_canon and dex_id_low == "pumpswap")
@@ -2713,6 +2716,7 @@ class Analyzer:
                     # проверяем историю времени жизни прошлых пулов дева и раннюю квалификацию!
                     _rh_unlocked_rc_ok = False
                     _rh_creator_prof_a = None
+                    _rh_rc_why = ""
                     if _rc_score >= 2000:
                         _rc_lp_only_pen = sum(
                             float(rk.get("score", 0) or 0)
@@ -2738,6 +2742,8 @@ class Analyzer:
                             except Exception:
                                 _rh_unlocked_rc_ok = False
                         if not _rh_unlocked_rc_ok:
+                            if _rc_lp_only_pen > 0 and _rc_no_lp_score < 2000.0 and _age_min_pre <= 5.0:
+                                return self._deny(mint, f"unlocked-lp-waiting:{_rh_rc_why or 'rc-lp-unlocked'}", f"⏳ [RUG-HUNTER-WAIT] {symbol} ({mint[:8]}): контракт чист ({_rc_no_lp_score:.0f}), LP Unlocked но пока не квалифицирован ({_rh_rc_why}) — ждём импульса.")
                             return self._deny(mint, f"rugcheck-score {_rc_score:.0f}", f"🚫 [АНТИСКАМ] RugCheck Score {_rc_score:.0f} >= 2000 у {mint[:8]} → СКАМ")
 
                     # Жёсткий фильтр критических опасностей смарт-контракта RugCheck
@@ -2785,18 +2791,9 @@ class Analyzer:
                         _info_main = (pair_data or {}).get("info") or {}
                         _has_soc_main = bool((_info_main.get("socials") or []) or (_info_main.get("websites") or []))
 
-                        # 0) Пул Meteora без сожжённого/залоченного LP: СТРОЖАЙШИЙ БАН!
-                        # В Meteora DLMM дев в любой момент отзывает ликвидность за 1 транзакцию (кейс Cyberleek -$3.02).
-                        _is_meteora_unburned = bool("meteora" in _dex_low_main and _dex_low_main != "meteoradbc" and not has_verified_locked_lp)
-                        if _is_meteora_unburned:
-                            return self._deny(
-                                mint,
-                                "meteora-unlocked-pool",
-                                f"🚫 [METEORA-RUG-BLOCK] {symbol} ({mint[:8]}): незалоченный пул Meteora — риск вывода SOL девом (кейсы USPR/BUFO/SPACE/Cyberleek)!"
-                            )
-
-                        # 1) Сначала проверяем RUG-HUNTER:UNLOCKED-LP (если включён):
+                        # 1) Сначала проверяем RUG-HUNTER:UNLOCKED-LP (если включён — для Raydium, Meteora и PumpSwap CreatePool):
                         _rh_unl_pass = False
+                        _rh_unl_why = "disabled"
                         if getattr(config, "RUG_HUNTER_ENABLED", False) and getattr(config, "RUG_HUNTER_UNLOCKED_LP_ENABLED", False):
                             try:
                                 import rug_hunter as _rh_lp
@@ -2819,10 +2816,16 @@ class Analyzer:
                                 _rh_unl_pass = False
 
                         if not _rh_unl_pass:
+                            if _age_main <= 5.0:
+                                return self._deny(
+                                    mint,
+                                    f"unlocked-lp-waiting:{_rh_unl_why}",
+                                    f"⏳ [RUG-HUNTER-WAIT] {symbol} ({mint[:8]}): незалоченный пул на {_dex_low_main or 'DEX'} ({_rh_unl_why}) — ждём созревания."
+                                )
                             return self._deny(
                                 mint,
                                 "unlocked-lp-blocked",
-                                f"🚫 [АНТИСКАМ-LP] {symbol} ({mint[:8]}): незалоченный пул на {_dex_low_main or 'DEX'} не прошёл фильтр Rug-Hunter — вход в основную стратегию строго запрещён (риск вывода LP)!"
+                                f"🚫 [АНТИСКАМ-LP] {symbol} ({mint[:8]}): незалоченный пул на {_dex_low_main or 'DEX'} не прошёл фильтр Rug-Hunter ({_rh_unl_why}) — вход в основную стратегию строго запрещён!"
                             )
                     if isinstance(pair_data, dict):
                         _lp_ok_m = _is_lp_really_safe

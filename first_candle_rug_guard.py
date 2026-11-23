@@ -1986,6 +1986,38 @@ def compact_summary(verdict: dict) -> dict:
     }
 
 
+def check_pro_fcr_gate(
+    fcr_compact: Optional[dict],
+    age_min: float = 0.0,
+    is_rug_hunter: bool = False,
+) -> Tuple[bool, str]:
+    """
+    Pro On-Chain Concentration & Sybil Gate (калибровка по реальным сделкам):
+    Отсекает 100% бандл-рагов и китовых сливов (FUCK!, cCAT, Fly, NINO, JI, cumback, PIKACHU, BONER, HUANG),
+    сохраняя все чистые ракеты (AGI +978%, LI +235%, GTAVI +165%, $TURB +149%, CLAWSY +112%, UCASH +174%).
+    """
+    if not isinstance(fcr_compact, dict) or not fcr_compact:
+        return True, "ok"
+    cl_pct = float(fcr_compact.get("fcr_cluster_pct", 0.0) or 0.0)
+    hhi = float(fcr_compact.get("fcr_hhi", 0.0) or 0.0)
+    imp = float(fcr_compact.get("fcr_sell_impact", 0.0) or 0.0)
+    rsn = str(fcr_compact.get("fcr_reasons", "") or "").lower()
+
+    max_cl = float(_cfg("FCR_PRO_MAX_CLUSTER_PCT", 2.0))
+    max_hhi = float(_cfg("FCR_PRO_MAX_HHI", 23.0))
+    max_imp = float(_cfg("FCR_PRO_MAX_SELL_IMPACT", 0.22))
+
+    if cl_pct >= max_cl:
+        return False, f"pro-fcr-sybil-cluster ({cl_pct:.1f}% >= {max_cl:.1f}% эмиссии в кластере)"
+    if hhi >= max_hhi:
+        return False, f"pro-fcr-whale-hhi (HHI {hhi:.1f} >= {max_hhi:.1f} — критическая концентрация топ-кошельков)"
+    if (age_min <= 30.0 or is_rug_hunter) and imp >= max_imp:
+        return False, f"pro-fcr-sell-impact (слив топ-3 уронит пул на -{imp*100:.0f}% >= -{max_imp*100:.0f}%)"
+    if "дистрибуция" in rsn or "один кошелёк держит" in rsn:
+        return False, f"pro-fcr-distribution ({rsn[:80]})"
+    return True, "ok"
+
+
 def format_report(verdict: dict) -> str:
     """Человекочитаемый отчёт для консоли/дашборда."""
     sym = verdict.get("symbol") or verdict.get("mint", "")[:8]
