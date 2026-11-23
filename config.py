@@ -1456,9 +1456,13 @@ RUG_HUNTER_EARLY_MIN_BUYS = 6              # Достаточно 6 покупо
 RUG_HUNTER_STAGE1_MIN_ML = 3.5             # Смягчённый порог Stage-1 ML для ранних ракет (unblock кейса DOOM +940% conf=4.9%)
 RUG_HUNTER_SEEDED_MIN_ML = 30.0            # Смягчённый порог ML для обычных SEEDED-LP: 30% (пропускает ракеты HENKI 36%, ELVES 34%, DOOM 49%, XMAS 71%, JEE 69%)
 RUG_HUNTER_HIGH_LIQ_MIN_ML = 45.0          # Порог ML 45% для пулов liq >= $15k (пропускает EWJ +426% 51.9%, CRIMELESS +523% 56.4%, GORP +275% 53.3%)
-RUG_HUNTER_SEEDED_MIN_BUYS = 15            # Реальные покупатели для посеянных пулов (15b)
+RUG_HUNTER_SEEDED_MIN_BUYS = 45            # Минимум 45 покупок для посеянных пулов (отсекает мёртвые приманки вроде NEX Ai 28b)
 RUG_HUNTER_SEEDED_MIN_SELLS = 1            # Достаточно 1 продажи для подтверждения ликвидности
-RUG_HUNTER_SEEDED_MIN_VOL5 = 1200.0        # Органический объём для посеянных пулов ($1,200)
+RUG_HUNTER_SEEDED_MIN_VOL5 = 3500.0        # Минимальный объём для посеянных пулов ($3,500)
+RUG_HUNTER_SEEDED_MIN_TURNOVER = 0.25      # Оборот 5м >= 25% от ликвидности пула (отсекает NEX Ai 5% и Democat 6.8% оборота)
+RUG_HUNTER_SEEDED_MIN_M5_PCT = 10.0        # Минимальный импульс m5 +10% для посеянных пулов (отсекает стоячие приманки +3%)
+RUG_HUNTER_SEEDED_MAX_POOL_AGE_MIN = 3.8   # Жёсткий потолок возраста пула (3.8м) для SEEDED-LP до таймера RemoveLiquidity на 4.5-6.7м
+RUG_HUNTER_SEEDED_MAX_HOLD_MIN = 2.6       # Жёсткий потолок удержания (2.6м) для SEEDED-LP (выход до 5-минутного рага NEX Ai/PUMPE)
 RUG_HUNTER_MAX_FDV_USD = 500000.0          # Потолок FDV $500k (пропускает ROCKSTAR $487k)
 RUG_HUNTER_CABAL_MAX_FDV_USD = 180000.0   # Потолок FDV для кабал-сёрфа
 RUG_HUNTER_TP1_PCT = 0.28                 # TP1 +28%: быстрый сбор 40% объема (фиксация профита и перевод остатка в безубыточный Moonbag!)

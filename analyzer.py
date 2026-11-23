@@ -1959,7 +1959,7 @@ class Analyzer:
                 pair_data["_rug_hunter_mode"] = _rh_m_mode
                 print(f"🎯 [RUG-HUNTER-CAND] {symbol} ({mint[:8]}): ранний незалоченный пул Meteora допущен в аудит RUG-HUNTER:{_rh_m_mode}.")
             else:
-                if _age_min_pre <= 3.5:
+                if _age_min_pre <= 5.0:
                     return self._deny(
                         mint,
                         f"meteora-unlocked-waiting:{_rh_met_early_why}",
@@ -1996,7 +1996,7 @@ class Analyzer:
                 pair_data["_rug_hunter_mode"] = _rh_tr_mode
                 print(f"🎯 [RUG-HUNTER-CAND] {symbol} ({mint[:8]}): посеянный slow-cook пул допущен в аудит RUG-HUNTER:{_rh_tr_mode}.")
             else:
-                if _age_min_pre <= 3.5:
+                if _age_min_pre <= 5.0:
                     return self._deny(
                         mint,
                         f"pumpswap-trap-waiting:{_rh_trap_why}",
@@ -2601,8 +2601,8 @@ class Analyzer:
                         pair_data["_rug_hunter_mode"] = _rh_ps_mode
                         print(f"🎯 [RUG-HUNTER-PS] {symbol} ({mint[:8]}): незалоченный PumpSwap CreatePool ({_ps_a_why}) переведён в аудит RUG-HUNTER:{_rh_ps_mode}.")
                     else:
-                        if _age_min_pre <= 5.0 and _rh_ps_why and any(w in _rh_ps_why for w in ("rh-too-young", "rh-low-vol5", "rh-seeded-low-vol5", "rh-seeded-few", "rh-too-few-sells", "rh-weak-buyers", "rh-m5")):
-                            return self._deny(mint, f"pumpswap-trap-waiting:{_rh_ps_why}", f"⏳ [PUMPSWAP-RH-WAIT] {symbol} ({mint[:8]}): ранний PumpSwap CreatePool ({_rh_ps_why}) — ждём импульса.")
+                        if "createpool-unburned-lp" in str(_ps_a_why or "").lower() and _age_min_pre <= 5.0 and "instant-rugger" not in str(_rh_ps_why or "") and "fake-pump" not in str(_rh_ps_why or ""):
+                            return self._deny(mint, f"pumpswap-trap-waiting:{_rh_ps_why or _ps_a_why}", f"⏳ [PUMPSWAP-RH-WAIT] {symbol} ({mint[:8]}): ранний PumpSwap CreatePool ({_rh_ps_why or _ps_a_why}) — ждём импульса.")
                         return self._deny(mint, f"pumpswap-scam-pool ({_ps_a_why})", f"🚫 [PUMPSWAP-ONCHAIN] {symbol} ({mint[:8]}): {_ps_a_why}")
             _is_canonical_pump = (
                 (_ps_a_canon and dex_id_low == "pumpswap")

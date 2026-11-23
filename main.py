@@ -1693,8 +1693,8 @@ async def scanner_loop(analyzer, tracker):
                                 except Exception:
                                     pass
 
-                            _is_young_unl = (_age_m <= 3.5) and any(k in _sig_l for k in (
-                                "unlocked-lp", "meteora-unlocked-pool", "meteora-unlocked-waiting",
+                            _is_young_unl = (_age_m <= 5.0) and any(k in _sig_l for k in (
+                                "unlocked-lp", "unlocked-lp-waiting", "meteora-unlocked-pool", "meteora-unlocked-waiting",
                                 "liq-fdv-trap", "pumpswap-trap-waiting", "rh-too-young", "rh-low-vol5",
                                 "rh-too-few-sells", "rh-sells-excess", "rh-low-buys", "unlocked-custom-lp",
                                 "waiting"

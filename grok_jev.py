@@ -1742,6 +1742,8 @@ class GrokJevEngine:
                         pair_data["_rug_hunter_mode"] = _rh_psg_mode
                         print(f"🎯 [GROK-JEV-RH-PS] {symbol} ({address[:8]}): незалоченный PumpSwap CreatePool ({_ps_jev_why}) переведён в RUG-HUNTER:{_rh_psg_mode}.")
                     else:
+                        if "createpool-unburned-lp" in str(_ps_jev_why or "").lower() and _age_psg <= 5.0 and "instant-rugger" not in str(_rh_ps_g_why or "") and "fake-pump" not in str(_rh_ps_g_why or ""):
+                            return False, f"pumpswap-trap-waiting:{_rh_ps_g_why or _ps_jev_why}", _h_stats
                         return False, f"pumpswap-scam-pool ({_ps_jev_why})", _h_stats
             is_canonical_pump = (
                 (_ps_jev_canon and _dex_low_jev == "pumpswap")

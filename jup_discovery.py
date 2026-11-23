@@ -1536,8 +1536,8 @@ async def jup_loop(analyzer, tracker):
                                     _age_j = max(0.0, (_t.time() * 1000.0 - float(_last_p_j["pairCreatedAt"])) / 60000.0)
                                 except Exception:
                                     pass
-                            _is_young_unl_j = (_age_j <= 3.5) and any(k in _sig_j for k in (
-                                "unlocked-lp", "meteora-unlocked-pool", "meteora-unlocked-waiting",
+                            _is_young_unl_j = (_age_j <= 5.0) and any(k in _sig_j for k in (
+                                "unlocked-lp", "unlocked-lp-waiting", "meteora-unlocked-pool", "meteora-unlocked-waiting",
                                 "liq-fdv-trap", "pumpswap-trap-waiting", "rh-too-young", "rh-low-vol5",
                                 "rh-too-few-sells", "rh-sells-excess", "rh-low-buys", "unlocked-custom-lp",
                                 "waiting"
