@@ -1424,8 +1424,6 @@ async def scanner_loop(analyzer, tracker):
                 _now_r = time.time()
                 _base_cd_r = int(getattr(config, "SOLANA_RESCAN_COOLDOWN", 30))
                 _fresh_cd_r = int(getattr(config, "SOLANA_FRESH_RESCAN_COOLDOWN", 8))
-                # FIX: переменная раньше задавалась только внутри ветки meteora, а использовалась ниже для всех токенов -> UnboundLocalError
-                _min_g_lq_sc = float(getattr(config, "MIN_GRADUATED_LIQ_USD", 4800.0))
                 for mint in mints_to_scan:
                     if not mint or mint in tracker.positions:
                         continue

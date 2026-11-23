@@ -558,23 +558,6 @@ def evaluate_rug_hunter_exit(position, current_price: float) -> Optional[str]:
     # 2. Жёсткий Stop-Loss (-10%) и Emergency Cap (-14%)
     sl = -abs(float(getattr(config, "RUG_HUNTER_SL_PCT", -0.10)))
     emerg = -abs(float(getattr(config, "RUG_HUNTER_EMERG_PCT", -0.14)))
-
-    # FIX: grace-период. В первые секунды цена на пуле $14k шумит (спред/импакт нашей же покупки),
-    # стопы по цене срабатывали за 1-16с (HODLGEN -12% за 1с -> потом +72%, PUCK -43% за 9с -> потом +106%).
-    # В grace цена-стоп НЕ работает, пока ликвидность цела; настоящий раг ловит блок 1 (LP-loss) и Cabal Sell-Wave.
-    _grace_sec = float(getattr(config, "RUG_HUNTER_STOP_GRACE_SEC", 12.0))
-    _grace_hard = -abs(float(getattr(config, "RUG_HUNTER_GRACE_HARD_STOP_PCT", 0.45)))
-    _liq_ok = True
-    if isinstance(pd, dict) and pd:
-        _lo = pd.get("liquidity") or {}
-        if isinstance(_lo, dict) and "usd" in _lo:
-            _cl = float(_lo.get("usd", 0) or 0)
-            _pl = float(getattr(position, "peak_liquidity_usd", 0.0) or getattr(position, "initial_liquidity_usd", 0.0) or 0.0)
-            if _pl > 0 and _cl < _pl * 0.75:
-                _liq_ok = False
-    if (minutes_held * 60.0) < _grace_sec and _liq_ok and pnl_pct > _grace_hard:
-        return None
-
     if pnl_pct <= emerg:
         if minutes_held >= 0.25 or pnl_pct <= -0.25:
             return f"🎯 RH Emergency Stop ({pnl_pct*100:.1f}%)"
@@ -672,7 +655,7 @@ def evaluate_rug_hunter_exit(position, current_price: float) -> Optional[str]:
         be_floor = 0.03
     elif max_pnl_pct >= 0.15:
         be_floor = 0.01
-    elif is_unlocked_or_seeded and max_pnl_pct >= float(getattr(config, "RUG_HUNTER_BE_ZERO_ACT_PCT", 0.15)):
+    elif is_unlocked_or_seeded and max_pnl_pct >= 0.10:
         be_floor = 0.00
     else:
         be_floor = -99.0  # нет защиты
