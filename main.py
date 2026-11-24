@@ -1453,6 +1453,7 @@ async def scanner_loop(analyzer, tracker):
                             continue
 
                         _c_dex = str(_c_pre.get("dexId", "")).lower()
+                        _min_g_lq_sc = float(getattr(config, "MIN_GRADUATED_LIQ_USD", 4800.0))
                         if "meteora" in _c_dex and _c_dex != "meteoradbc" and not _c_pre.get("_lp_verified", False):
                             _c_tx_m = (_c_pre.get("txns") or {}).get("m5", {}) or {}
                             _c_b5_m = int(_c_tx_m.get("buys", 0) or 0)
@@ -1460,7 +1461,6 @@ async def scanner_loop(analyzer, tracker):
                             _c_v5_m = float((_c_pre.get("volume") or {}).get("m5", 0) or 0)
                             _c_l_m = float((_c_pre.get("liquidity") or {}).get("usd", 0) or 0)
                             _c_m5_m = float(((_c_pre.get("priceChange") or {}).get("m5", 0) or 0))
-                            _min_g_lq_sc = float(getattr(config, "MIN_GRADUATED_LIQ_USD", 4800.0))
                             _rh_s5_sc_req = 0 if _c_b5_m >= 8 else (int(getattr(config, "RUG_HUNTER_EARLY_MIN_SELLS", 1)) if _age_r < 1.8 else 4)
                             _rh_b5_sc_req = max(int(getattr(config, "RUG_HUNTER_EARLY_MIN_BUYS", 6)) if _age_r < 1.8 else 15, int(_c_s5_m * 1.05))
                             _rh_min_vol_sc = float(getattr(config, "RUG_HUNTER_MIN_VOL5_USD", 350.0)) if _age_r <= 0.8 else 600.0
