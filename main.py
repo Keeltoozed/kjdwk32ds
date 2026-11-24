@@ -597,8 +597,9 @@ async def position_manager_loop(analyzer, tracker):
                 _cg_min_hold_min = float(getattr(config, "CRASH_GUARD_MIN_HOLD_SEC", 20.0) or 20.0) / 60.0
                 _is_mb_cg = bool(getattr(position, "is_moonbag", False) or getattr(position, "tp1_done", False))
                 _crash_mult = 0.70 if _is_unl_cg else (0.55 if (_is_mb_cg and pnl_pct >= 0.40) else 0.62)
+                _cg_min_pnl = 0.0 if _is_unl_cg else 0.08
                 if minutes_held >= _cg_min_hold_min and prev_ts > 0 and (time.time() - prev_ts) < 60 and _ref_crash_px > 0 \
-                        and current_price <= _ref_crash_px * _crash_mult and max_pnl_pct >= 0.15 and pnl_pct > -0.20:
+                        and current_price <= _ref_crash_px * _crash_mult and max_pnl_pct >= _cg_min_pnl:
                     if _anchor_px <= 0:
                         position._crash_anchor_px = _ref_crash_px
                     _cg_n = int(getattr(position, "crash_confirm_n", 0) or 0) + 1

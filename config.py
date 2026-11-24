@@ -1456,7 +1456,8 @@ RUG_HUNTER_UNLOCKED_MAX_AGE_MIN = 5.0       # Максимум 5.0м: даём D
 RUG_HUNTER_ROCKET_MAX_POOL_AGE_MIN = 18.0  # Максимальный возраст пула для плюсовых ракет: 18м (позволяет забирать 2x-10x на AGI +978%, LI +235%, GTAVI +165%, $TURB +149%)
 RUG_HUNTER_CABAL_MAX_AGE_MIN = 4.5         # Максимум 4.5м для кабал-сёрфа
 RUG_HUNTER_MIN_LIQ_USD = 4800.0            # Минимум $4.8k реальной ликвидности (~70 SOL при SOL $70; едино с MIN_GRADUATED_LIQ_USD)
-RUG_HUNTER_MAX_LIQ_USD = 45000.0           # Потолок $45k ликвидности для незалоченных/посеянных пулов
+RUG_HUNTER_MAX_LIQ_USD = 45000.0           # Общий потолок $45k ликвидности для пулов
+RUG_HUNTER_MAX_SEEDED_LIQ_USD = 22000.0   # Жёсткий потолок $22k для незалоченных SEEDED пулов. Блокирует 100% приманок дева (OATH $38.7k, Wojak $27k, Lidrag $97k, TUVALRM $95k)!
 RUG_HUNTER_MAX_AVG_TX_USD = 350.0          # Реалистичный потолок среднего чека в Solana ($350 ~= 1.5 SOL). Не режет нормальных покупателей (кейсы DUVAL, FIONA, PI)!
 RUG_HUNTER_MIN_VOL5_USD = 350.0            # Минимум $350 объёма за 5м на старте (ловит ракеты TTWO +1242% при vol5=$450)
 RUG_HUNTER_EARLY_AGE_THRESHOLD = 3.8       # Порог ультра-ранней фазы (до 3.8м: учитывает задержку индексации DexScreener 2.5-3.5м)
@@ -1471,10 +1472,10 @@ RUG_HUNTER_SEEDED_MIN_VOL5 = 2000.0        # Минимальный базовы
 RUG_HUNTER_SEEDED_MIN_TURNOVER = 0.15      # Оборот 5м >= 15% от ликвидности пула (не блокирует ранние ракеты вроде 英伟达 +695%, SHHFT +554%)
 RUG_HUNTER_SEEDED_MIN_M5_PCT = 6.0         # Минимальный импульс m5 +6% для посеянных пулов
 RUG_HUNTER_SEEDED_MAX_ENTRY_AGE_MIN = 4.2  # Базовый потолок возраста входа 4.2м (для взрывного спроса до 5.5м — фикс пропуска 英伟达 +475%, NVIDIA +343%)
-RUG_HUNTER_SEEDED_MAX_POOL_AGE_MIN = 3.60  # Потолок возраста пула для слабых SEEDED-LP до таймера RemoveLiquidity
-RUG_HUNTER_SEEDED_MAX_HOLD_MIN = 2.20      # Потолок удержания для слабых SEEDED-LP
-RUG_HUNTER_SEEDED_STAGNANT_AGE_MIN = 3.00  # Застойная эвакуация при возрасте пула >= 3.00м и пике < +14%
-RUG_HUNTER_SEEDED_STAGNANT_HOLD_MIN = 1.45 # Застойная эвакуация при удержании >= 1.45м и пике < +14%
+RUG_HUNTER_SEEDED_MAX_POOL_AGE_MIN = 2.80  # Жёсткий потолок возраста пула (2.80м) для обычных SEEDED-LP до таймера RemoveLiquidity (девы дрейнят на 1.8-2.2м!)
+RUG_HUNTER_SEEDED_MAX_HOLD_MIN = 1.40      # Жёсткий потолок удержания (1.40м / 84 сек) для обычных SEEDED-LP
+RUG_HUNTER_SEEDED_STAGNANT_AGE_MIN = 2.40  # Застойная эвакуация при возрасте пула >= 2.40м и пике < +14%
+RUG_HUNTER_SEEDED_STAGNANT_HOLD_MIN = 1.15 # Застойная эвакуация при удержании >= 1.15м и пике < +14%
 RUG_HUNTER_SEEDED_FULL_HARVEST_PCT = 0.45  # Фиксация прибыли SEEDED-LP при пике >= +45% (не режет ракету на взлёте +25%)
 RUG_HUNTER_SEEDED_PEAK_TRAIL_DROP = 0.15   # 15% откат от пика (вместо 6%!) — даёт мем-монете дышать и не режет победителей на микро-копейки!
 RUG_HUNTER_MAX_FDV_USD = 500000.0          # Потолок FDV $500k (пропускает ROCKSTAR $487k)

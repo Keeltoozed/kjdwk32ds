@@ -288,6 +288,25 @@ def qualify_unlocked_lp_hunter(
     # Специфический барьер для SEEDED-LP: отсекаем фейковые/малооборотные пулы-приманки (кейсы NEX Ai, PUMPE, Democat):
     _is_high_vel_seeded = False
     if is_seeded_ratio:
+        # Защита от высоколиквидных приманок дева (High-Liq Seeded Dev Traps):
+        # Девы создают пулы с $25k-$100k ликвидности (150-400 SOL), крутят 25-40 wash-trades и через 1.5-2.5м снимают LP (RemoveLiquidity)!
+        # Блокирует 100% приманок: OATH ($38.7k), Lidrag ($97k), Wojak ($27k с 36 buys), TUVALRM ($95k).
+        _max_seeded_liq = float(getattr(config, "RUG_HUNTER_MAX_SEEDED_LIQ_USD", 22000.0))
+        if liq_usd > _max_seeded_liq:
+            _is_community_demand = bool(
+                liq_usd <= 30000.0
+                and buys5 >= 75
+                and (sells5 == 0 or buys5 >= int(sells5 * 1.4))
+            )
+            _is_hyper_breakout = bool(
+                vol5_usd >= 18000.0
+                and buys5 >= 75
+                and (vol5_usd / max(liq_usd, 1.0)) >= 0.40
+                and (sells5 == 0 or buys5 >= int(sells5 * 1.2))
+            )
+            if not (_is_community_demand or _is_hyper_breakout):
+                return False, f"rh-seeded-highliq-trap liq=${liq_usd:,.0f} > ${_max_seeded_liq:,.0f} (приманка дева без подтверждённого спроса: buys={buys5}<75 или vol=${vol5_usd:,.0f}<$18k)"
+
         _seeded_max_entry_age = float(getattr(config, "RUG_HUNTER_SEEDED_MAX_ENTRY_AGE_MIN", 4.2))
         _is_seeded_hyper_breakout = bool(
             (vol5_usd >= 10000.0 and buys5 >= 50)
@@ -662,14 +681,20 @@ def evaluate_rug_hunter_exit(position, current_price: float) -> Optional[str]:
         _v5_exit = float(((pd.get("volume") or {}).get("m5", 0) or 0) if isinstance(pd, dict) else 0.0)
         _buyers_alive = bool(_b5_exit == 0 or _b5_exit >= int(_s5_exit * 0.90))
 
-        # Признак живого взрывного пробоя (Breakout Runner):
+        # Признак живого взрывного пробоя (Breakout Runner / Active Accumulation Surge):
         # Если в пуле идёт мощная волна покупателей или монета уже сделала TP1/мунбэг — даём ей лететь и собирать иксы!
+        # Не срезает ранние ракеты в фазе набора базы (кейс 英伟达 +695% при b=211 s=30)!
+        _is_orderflow_breakout = bool(
+            (_b5_exit >= 50 and (_s5_exit == 0 or _b5_exit >= int(_s5_exit * 1.3)))
+            or (_b5_exit >= 35 and (_s5_exit == 0 or _b5_exit >= int(_s5_exit * 1.8)))
+            or (_v5_exit >= 8000.0 and _b5_exit >= 40)
+        )
         _is_breakout_runner = bool(
             getattr(position, "tp1_done", False)
             or getattr(position, "is_moonbag", False)
-            or max_pnl_pct >= 0.30
-            or (minutes_held >= 0.5 and pnl_pct >= 0.12 and _b5_exit >= 45 and (_s5_exit == 0 or _b5_exit >= _s5_exit * 1.1))
-            or (_v5_exit >= 12000.0 and _b5_exit >= 50)
+            or max_pnl_pct >= 0.25
+            or (minutes_held >= 0.5 and pnl_pct >= 0.08 and _b5_exit >= 35 and (_s5_exit == 0 or _b5_exit >= _s5_exit * 1.1))
+            or _is_orderflow_breakout
         )
 
         # Г0. Специализированные выходы для СЛАБЫХ SEEDED-LP (не пробившихся в раннеры):
@@ -682,15 +707,18 @@ def evaluate_rug_hunter_exit(position, current_price: float) -> Optional[str]:
             if 0.18 <= max_pnl_pct < _harvest_act and (drop_from_peak >= _harvest_drop or pnl_pct <= max(0.08, max_pnl_pct - _harvest_drop)):
                 return f"🎯 RH Seeded Profit Lock ({pnl_pct*100:+.1f}% после пика +{max_pnl_pct*100:.1f}%, hold {minutes_held:.1f}м — 100% фиксация до рага!)"
 
-            _stag_age = float(getattr(config, "RUG_HUNTER_SEEDED_STAGNANT_AGE_MIN", 3.00))
-            _stag_hold = float(getattr(config, "RUG_HUNTER_SEEDED_STAGNANT_HOLD_MIN", 1.45))
+            _stag_age = float(getattr(config, "RUG_HUNTER_SEEDED_STAGNANT_AGE_MIN", 2.40))
+            _stag_hold = float(getattr(config, "RUG_HUNTER_SEEDED_STAGNANT_HOLD_MIN", 1.15))
+            # Не эвакуируем как застой, если в монету активно вливаются покупатели (кейс 英伟达):
+            _is_still_buying = bool(_b5_exit >= 30 and (_s5_exit == 0 or _b5_exit >= int(_s5_exit * 1.25)))
             if minutes_held >= 0.8 and (pool_age_min >= _stag_age or minutes_held >= _stag_hold) and max_pnl_pct < 0.14 and pnl_pct < 0.10:
-                return f"🎯 RH Seeded Stagnant Evac ({pnl_pct*100:+.1f}%, hold {minutes_held:.1f}м / age {pool_age_min:.1f}м — ранний выход из слабого пула до RemoveLiquidity!)"
+                if not _is_still_buying or pnl_pct <= -0.03:
+                    return f"🎯 RH Seeded Stagnant Evac ({pnl_pct*100:+.1f}%, hold {minutes_held:.1f}м / age {pool_age_min:.1f}м — ранний выход из слабого пула до RemoveLiquidity!)"
 
-            _seeded_max_pool_age = float(getattr(config, "RUG_HUNTER_SEEDED_MAX_POOL_AGE_MIN", 3.60))
-            _seeded_max_hold = float(getattr(config, "RUG_HUNTER_SEEDED_MAX_HOLD_MIN", 2.20))
+            _seeded_max_pool_age = float(getattr(config, "RUG_HUNTER_SEEDED_MAX_POOL_AGE_MIN", 2.80))
+            _seeded_max_hold = float(getattr(config, "RUG_HUNTER_SEEDED_MAX_HOLD_MIN", 1.40))
             if minutes_held >= 0.8 and (pool_age_min >= _seeded_max_pool_age or minutes_held >= _seeded_max_hold):
-                if pnl_pct < 0.30 or drop_from_peak >= 0.08 or pool_age_min >= 3.80 or minutes_held >= 2.40:
+                if pnl_pct < 0.30 or drop_from_peak >= 0.08 or pool_age_min >= 3.20 or minutes_held >= 1.60:
                     return f"🎯 RH Seeded Pre-Rug Evac ({pnl_pct*100:+.1f}%, hold {minutes_held:.1f}м / age {pool_age_min:.1f}м — жёсткий выход до таймера RemoveLiquidity!)"
 
         # Г. Потолок общего возраста пула (Pro Pre-Rug Evac + Profit-Lock Runner):
