@@ -556,7 +556,8 @@ async def position_manager_loop(analyzer, tracker):
                         or "SEEDED" in str((_pd_tmp.get("_rug_hunter_mode") if isinstance(_pd_tmp, dict) else "") or "").upper()
                     )
                 )
-                _allow_partial_tp = getattr(config, "PARTIAL_TP_ENABLED", True) and (_pos_val >= _min_tp_ticket) and (not _is_seeded_pos_tp)
+                _allow_seeded_tp = bool(_is_seeded_pos_tp and (max_pnl_pct >= 0.28 or getattr(position, "tp1_done", False)))
+                _allow_partial_tp = getattr(config, "PARTIAL_TP_ENABLED", True) and (_pos_val >= _min_tp_ticket) and ((not _is_seeded_pos_tp) or _allow_seeded_tp)
                 _is_small_pos = _pos_val < _min_tp_ticket
                 if _allow_partial_tp and not _is_small_pos and not _suppress_eval_peak:
                     if pnl_pct >= _tp1_sol_thr and not getattr(position, "tp1_done", False) and float(getattr(position, "amount_usd", 0.0) or 0.0) > 0.05:
@@ -2495,10 +2496,15 @@ async def scanner_loop(analyzer, tracker):
                                     continue
 
                                 if _is_rh_buy_sc:
-                                    _rh_mult = float(getattr(config, "RUG_HUNTER_SIZE_MULT", 0.65))
+                                    _rh_mult = float(getattr(config, "RUG_HUNTER_SIZE_MULT", 0.75))
                                     if "SEEDED" in str(_rh_mode_buy or "").upper():
-                                        _rh_mult = min(_rh_mult, float(getattr(config, "RUG_HUNTER_SEEDED_SIZE_MULT", 0.40)))
-                                    position_size = max(1.0, position_size * _rh_mult)
+                                        _rh_mult = min(_rh_mult, float(getattr(config, "RUG_HUNTER_SEEDED_SIZE_MULT", 0.70)))
+                                    # Для сильного притока покупателей (объём от $10k или от 50 покупок) даём рабочий сайз билета
+                                    _v5_buy = float((pair_data.get("volume") or {}).get("m5", 0) or 0)
+                                    _b5_buy = int(((pair_data.get("txns") or {}).get("m5") or {}).get("buys", 0) or 0)
+                                    if _v5_buy >= 10000.0 or _b5_buy >= 50:
+                                        _rh_mult = max(_rh_mult, 0.85)
+                                    position_size = max(1.5, position_size * _rh_mult)
                                     _src_sc_final = _sig_sc_fin
                                 else:
                                     _src_sc_final = f"SCANNER:{_sig_sc_fin}"
