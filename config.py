@@ -1453,12 +1453,12 @@ RUG_HUNTER_MAX_SLOTS = 2                  # Макс. 2 одновременны
 RUG_HUNTER_SIZE_MULT = 1.00               # Рабочий риск-сайз 100% от базового билета ($2.0-$2.5)
 RUG_HUNTER_UNLOCKED_MIN_AGE_MIN = 0.15     # Минимум 0.15м (9с): вход на самом старте разгона первой свечи
 RUG_HUNTER_UNLOCKED_MAX_AGE_MIN = 5.0       # Максимум 5.0м: даём DexScreener (индексация 2-4м) полный простор для входа в ракеты
-RUG_HUNTER_ROCKET_MAX_POOL_AGE_MIN = 12.0  # Для позиций без взятого TP2 (+55%): эвакуация до 12.0м (до окна позднего RemoveLiquidity 13-20м)
-RUG_HUNTER_MOONBAG_MAX_POOL_AGE_MIN = 38.0 # После фиксации TP2 (+55%, депозит+профит уже в кэше): мунбэг едет до 38м (ловит FIONA +2545% на 32.5м и DUVAL +1067% на 31.1м)!
+RUG_HUNTER_ROCKET_MAX_POOL_AGE_MIN = 8.0   # Без мега-объёма ($20k+) незалоченный пул закрываем не позже 8.0м (исключает 16м раги вроде MOLE)!
+RUG_HUNTER_MOONBAG_MAX_POOL_AGE_MIN = 38.0 # ТОЛЬКО для активных мега-ракет (TP2 взят + vol5 >= $20k + свежий ATH <85с): сёрф до 38м (FIONA, HOLDERS, DUVAL)!
 RUG_HUNTER_CABAL_MAX_AGE_MIN = 4.5         # Максимум 4.5м для кабал-сёрфа
 RUG_HUNTER_MIN_LIQ_USD = 4800.0            # Минимум $4.8k реальной ликвидности (~70 SOL при SOL $70; едино с MIN_GRADUATED_LIQ_USD)
 RUG_HUNTER_MAX_LIQ_USD = 25000.0           # Общий жёсткий потолок $25k ликвидности для незалоченных пулов (выше $25k — серийные RemoveLiquidity-ловушки)
-RUG_HUNTER_MAX_SEEDED_LIQ_USD = 17200.0   # Строгий потолок $17.2k для незалоченных SEEDED пулов: все $7k-$16.9k ракеты (FIONA, HOLDERS, DUVAL, ATTENTION) проходят, а $18.5k-$41k сливы (CASHCOW, HELIA, SUPERMOON, Democat, Huang, OATH) отсечены!
+RUG_HUNTER_MAX_SEEDED_LIQ_USD = 16200.0   # Строгий потолок $16.2k для SEEDED-LP: пропускает FIONA ($10k), HOLDERS ($8.6k), DUVAL ($7k), CHIBI ($15.8k), отсекает MOLE ($17.2k) и $18.5k+ сливы!
 RUG_HUNTER_MAX_AVG_TX_USD = 350.0          # Реалистичный потолок среднего чека в Solana ($350 ~= 1.5 SOL). Не режет нормальных покупателей (кейсы DUVAL, FIONA, PI)!
 RUG_HUNTER_MIN_VOL5_USD = 350.0            # Минимум $350 объёма за 5м на старте (ловит ракеты TTWO +1242% при vol5=$450)
 RUG_HUNTER_EARLY_AGE_THRESHOLD = 3.8       # Порог ультра-ранней фазы (до 3.8м: учитывает задержку индексации DexScreener 2.5-3.5м)
@@ -1473,23 +1473,23 @@ RUG_HUNTER_SEEDED_MIN_VOL5 = 2000.0        # Минимальный базовы
 RUG_HUNTER_SEEDED_MIN_TURNOVER = 0.15      # Оборот 5м >= 15% от ликвидности пула (не блокирует ранние ракеты вроде 英伟达 +695%, SHHFT +554%)
 RUG_HUNTER_SEEDED_MIN_M5_PCT = 6.0         # Минимальный импульс m5 +6% для посеянных пулов
 RUG_HUNTER_SEEDED_MAX_ENTRY_AGE_MIN = 4.2  # Базовый потолок возраста входа 4.2м (для взрывного спроса до 5.5м — фикс пропуска 英伟达 +475%, NVIDIA +343%)
-RUG_HUNTER_SEEDED_MAX_POOL_AGE_MIN = 5.50  # Потолок возраста пула (5.50м) для не-пробойных SEEDED-LP (<$16.5k) — даёт дождаться 2-й волны пампа (+55%..+200%)
-RUG_HUNTER_SEEDED_MAX_HOLD_MIN = 4.00      # Потолок удержания (4.00м) для не-пробойных SEEDED-LP (<$16.5k) до TP1 +25%
-RUG_HUNTER_SEEDED_STAGNANT_AGE_MIN = 3.50  # Застойная эвакуация только после 3.50м возраста пула и без роста
-RUG_HUNTER_SEEDED_STAGNANT_HOLD_MIN = 2.20 # Застойная эвакуация только после 2.20м удержания (не режем монеты на 50-й секунде за +4%!)
-RUG_HUNTER_SEEDED_FULL_HARVEST_PCT = 1.20  # Полный трейл-сбор SEEDED-LP только после +120% (не закрываем +45%..+85% ракеты в потолок!)
-RUG_HUNTER_SEEDED_PEAK_TRAIL_DROP = 0.22   # 22% откат от пика (вместо 15%) — даёт мем-монете дышать и добираться до 2x-10x!
+RUG_HUNTER_SEEDED_MAX_POOL_AGE_MIN = 4.80  # Потолок возраста пула (4.80м) для позиций БЕЗ взятого TP1 (+20%) — забираем любой плюс до RemoveLiquidity!
+RUG_HUNTER_SEEDED_MAX_HOLD_MIN = 3.20      # Потолок удержания (3.20м) для позиций БЕЗ взятого TP1 (+20%)
+RUG_HUNTER_SEEDED_STAGNANT_AGE_MIN = 3.20  # Застойная эвакуация после 3.20м возраста пула и без роста
+RUG_HUNTER_SEEDED_STAGNANT_HOLD_MIN = 2.00 # Застойная эвакуация после 2.00м удержания
+RUG_HUNTER_SEEDED_FULL_HARVEST_PCT = 1.20  # Полный трейл-сбор SEEDED-LP после +120%
+RUG_HUNTER_SEEDED_PEAK_TRAIL_DROP = 0.20   # 20% откат от пика для незащищённых SEEDED-LP
 RUG_HUNTER_MAX_FDV_USD = 500000.0          # Потолок FDV $500k (пропускает ROCKSTAR $487k)
 RUG_HUNTER_CABAL_MAX_FDV_USD = 180000.0   # Потолок FDV для кабал-сёрфа
-RUG_HUNTER_TP1_PCT = 0.25                 # TP1 +25%: забираем 45% (быстрый де-риск, остаток 55%)
-RUG_HUNTER_TP1_SELL_FRAC = 0.45
-RUG_HUNTER_TP2_PCT = 0.55                 # TP2 +55%: забираем 45% от остатка (~25% базы -> 70% уже в кэше ДО слива MB/Trenchors/OPENTOWORK!)
-RUG_HUNTER_TP2_SELL_FRAC = 0.45
-RUG_HUNTER_TP3_PCT = 1.15                 # TP3 +115% (2.15x): забираем 45% от остатка (остаток ~16.6% — сделка в гарантированном плюсе даже при 1-блок раге в $0!)
-RUG_HUNTER_TP3_SELL_FRAC = 0.45
-RUG_HUNTER_TP4_PCT = 2.40                 # TP4 +240% (3.4x): забираем 50% от остатка (фиксируем MIHAO +259%, RANSEM +249%, BTC +318% до LP-дрейна!)
+RUG_HUNTER_TP1_PCT = 0.20                 # TP1 +20%: забираем 50% (мгновенная фиксация профита на волнах уровня Partying +16%..+22%!)
+RUG_HUNTER_TP1_SELL_FRAC = 0.50
+RUG_HUNTER_TP2_PCT = 0.48                 # TP2 +48%: забираем 65% от остатка (82.5% уже в кэше -> ДАЖЕ 1-БЛОК РАГ В $0 ДАЁТ ГАРАНТИРОВАННЫЙ +7.2% ЧИСТЫЙ ПЛЮС, фикс MOLE -4.34%!)
+RUG_HUNTER_TP2_SELL_FRAC = 0.65
+RUG_HUNTER_TP3_PCT = 1.10                 # TP3 +110% (2.1x): забираем 50% от остатка (остаток 8.75%)
+RUG_HUNTER_TP3_SELL_FRAC = 0.50
+RUG_HUNTER_TP4_PCT = 2.40                 # TP4 +240% (3.4x): забираем 50% от остатка (остаток 4.4%)
 RUG_HUNTER_TP4_SELL_FRAC = 0.50
-RUG_HUNTER_TP5_PCT = 6.50                 # TP5 +650% (7.5x): 100% джекпот (ловит DUVAL +1067%, FIONA +2545%)!
+RUG_HUNTER_TP5_PCT = 6.00                 # TP5 +600% (7.0x): 100% остатка на мега-ракетах (FIONA, HOLDERS, DUVAL)!
 RUG_HUNTER_TP5_SELL_FRAC = 1.00
 RUG_HUNTER_BREAKEVEN_PCT = 0.22           # Включаем Breakeven после пика >= +22% (не душим 1-минутную волатильность ракет вроде WHITE +78.8%)
 RUG_HUNTER_BREAKEVEN_FLOOR = 0.04         # Пол +4%
@@ -1507,20 +1507,21 @@ FCR_PRO_MAX_SELL_IMPACT = 0.22            # Блок при ударной пр�
 
 # === ВЫХОДЫ ДЛЯ НЕЗАЛОЧЕННЫХ ПУЛОВ RUG-HUNTER (UNLOCKED-LP) ===
 # Принцип Pro: слабые монеты (<+3%) сбрасываем до 4.2м, а плюсовые переводим в безубыток (+1.5%..+10%) и даём ехать до 2x-10x!
-RUG_HUNTER_UNLOCKED_TP1_PCT = 0.25        # TP1 +25%: забираем 45% (остаток 55%)
-RUG_HUNTER_UNLOCKED_TP1_SELL_FRAC = 0.45
-RUG_HUNTER_UNLOCKED_TP2_PCT = 0.55        # TP2 +55% (1.55x): забираем 45% от остатка (~70% позиции в кэше до RemoveLiquidity на +56%..+79%!)
-RUG_HUNTER_UNLOCKED_TP2_SELL_FRAC = 0.45
-RUG_HUNTER_UNLOCKED_TP3_PCT = 1.15        # TP3 +115% (2.15x): забираем 45% от остатка (гарантированный чистый плюс даже при 1-блок LP-раге в $0!)
-RUG_HUNTER_UNLOCKED_TP3_SELL_FRAC = 0.45
-RUG_HUNTER_UNLOCKED_TP4_PCT = 2.40        # TP4 +240% (3.4x): забираем 50% от остатка (сбор иксов на BTC +318%, MIHAO +259%, RANSEM +249% до слива!)
+RUG_HUNTER_UNLOCKED_TP1_PCT = 0.20        # TP1 +20%: забираем 50% (остаток 50%)
+RUG_HUNTER_UNLOCKED_TP1_SELL_FRAC = 0.50
+RUG_HUNTER_UNLOCKED_TP2_PCT = 0.48        # TP2 +48% (1.48x): забираем 65% от остатка (82.5% в кэше -> математически невозможно уйти в минус при 1-блок раге, фикс MOLE!)
+RUG_HUNTER_UNLOCKED_TP2_SELL_FRAC = 0.65
+RUG_HUNTER_UNLOCKED_TP3_PCT = 1.10        # TP3 +110% (2.1x): забираем 50% от остатка (остаток 8.75%)
+RUG_HUNTER_UNLOCKED_TP3_SELL_FRAC = 0.50
+RUG_HUNTER_UNLOCKED_TP4_PCT = 2.40        # TP4 +240% (3.4x): забираем 50% от остатка (остаток 4.4%)
 RUG_HUNTER_UNLOCKED_TP4_SELL_FRAC = 0.50
-RUG_HUNTER_UNLOCKED_TP5_PCT = 6.50        # TP5 +650% (7.5x): 100% остатка на мега-ракетах (DUVAL +1067%, FIONA +2545%)
+RUG_HUNTER_UNLOCKED_TP5_PCT = 6.00        # TP5 +600% (7.0x): 100% остатка на мега-ракетах
 RUG_HUNTER_UNLOCKED_TP5_SELL_FRAC = 1.00
-RUG_HUNTER_UNLOCKED_MAX_HOLD_MIN = 18.0   # Потолок удержания для растущих монет
-RUG_HUNTER_UNLOCKED_SAFETY_MIN = 3.8      # Лимит 3.8м удержания ТОЛЬКО для слабых/минусовых позиций (<+3%)
-RUG_HUNTER_UNLOCKED_MAX_POOL_AGE_MIN = 4.2 # Потолок возраста пула (4.2м) ТОЛЬКО для застрявших позиций (PnL < +3%); плюсовые переводятся в Profit-Lock!
-RUG_HUNTER_ROCKET_MAX_POOL_AGE_MIN = 12.0 # До взятия TP2 (+55%) ограничиваем незалоченный пул 12.0м (до позднего RemoveLiquidity)!
-RUG_HUNTER_MOONBAG_MAX_POOL_AGE_MIN = 38.0 # После взятия TP2 (+55%) безрисковый мунбэг летит до 38.0м (FIONA 32.5м, DUVAL 31.1м)!
+RUG_HUNTER_UNLOCKED_MAX_HOLD_MIN = 8.0    # Базовый потолок удержания для незалоченных пулов без мега-объёма
+RUG_HUNTER_UNLOCKED_SAFETY_MIN = 3.2      # Лимит 3.2м удержания для слабых позиций без TP1
+RUG_HUNTER_UNLOCKED_MAX_POOL_AGE_MIN = 4.2 # Потолок возраста пула (4.2м) для застрявших позиций
+RUG_HUNTER_ROCKET_MAX_POOL_AGE_MIN = 8.0  # Ограничиваем обычные SEEDED/UNLOCKED пулы 8.0м (не держим 16м до RemoveLiquidity дева, кейс MOLE)!
+RUG_HUNTER_MOONBAG_MAX_POOL_AGE_MIN = 38.0 # ТОЛЬКО при активном объёме >= $20k и обновлении ATH (<85с) мунбэг едет до 38.0м (FIONA, HOLDERS, DUVAL)!
+RUG_HUNTER_PEAK_STALL_SEC = 85.0          # Если в плюсе >= 85с нет нового ATH (полка дева перед RemoveLiquidity) — 100% фиксация прибыли!
 RUG_HUNTER_UNLOCKED_STALL_SEC = 150.0     # 150с (2.5м) консолидации без нового ATH после пика >= +35% и откате >= 25% -> эвакуация
 RUG_HUNTER_UNLOCKED_TRAIL_DROP_PCT = 0.22 # Трейл 22% от ATH для незалоченных пулов (даёт дышать на откатах)
