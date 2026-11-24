@@ -150,7 +150,7 @@ def _dex_id_from_pool(item: dict) -> str:
     try:
         dex = item.get("relationships", {}).get("dex", {}).get("data", {}).get("id", "")
         dex = str(dex).lower().strip()
-        if "pumpswap" in dex or "pump-swap" in dex or "pump_swap" in dex:
+        if any(k in dex for k in ("pumpswap", "pump-swap", "pump_swap", "pump-fun-amm", "pump_fun_amm", "pump-amm", "pump_amm")):
             return "pumpswap"
         if dex in ("pump", "pump-fun", "pumpfun", "pump.fun"):
             return "pump"
@@ -287,15 +287,17 @@ def normalize_jup_token(t: dict) -> dict:
             else (str(grad_pool_raw) if grad_pool_raw else str(first_pool_obj.get("id", "") or ""))
         )
         created_ts_raw = t.get("graduatedAt") or first_pool_obj.get("createdAt") or t.get("createdAt")
-        _pool_dex_hint = str(first_pool_obj.get("dex") or t.get("launchpad") or "").lower()
+        grad_pool_dex = str((grad_pool_raw.get("dex") if isinstance(grad_pool_raw, dict) else "") or "").lower()
+        _pool_dex_hint = f"{first_pool_obj.get('dex') or ''} {grad_pool_dex} {t.get('launchpad') or ''}".lower()
         if not graduated:
             dex_out = "pump"
-        elif mint.endswith("pump") or "pump" in _pool_dex_hint:
+        elif mint.endswith("pump") or any(k in _pool_dex_hint for k in ("pumpswap", "pump-swap", "pump_swap", "pump-fun-amm", "pump_fun_amm", "pump-amm", "pump_amm", "pump")):
             dex_out = "pumpswap"
         elif "meteora" in _pool_dex_hint:
             dex_out = "meteora"
         else:
             dex_out = "raydium"
+        _dex_unverified = (dex_out == "raydium") and ("raydium" not in _pool_dex_hint)
         out = {
             "chainId": "solana",
             "dexId": dex_out,
@@ -322,6 +324,7 @@ def normalize_jup_token(t: dict) -> dict:
             "audit": t.get("audit", {}) or {},
             "_source": "jupiter",
             "_socials_unknown": False,
+            "_dex_unverified": _dex_unverified,
             "_vol1h": bv1,
         }
         import time as _t

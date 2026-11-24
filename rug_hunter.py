@@ -288,6 +288,14 @@ def qualify_unlocked_lp_hunter(
     # Специфический барьер для SEEDED-LP: отсекаем фейковые/малооборотные пулы-приманки (кейсы NEX Ai, PUMPE, Democat):
     _is_high_vel_seeded = False
     if is_seeded_ratio:
+        _seeded_max_entry_age = float(getattr(config, "RUG_HUNTER_SEEDED_MAX_ENTRY_AGE_MIN", 2.5))
+        _is_seeded_hyper_breakout = bool(
+            vol5_usd >= 60000.0
+            and (vol5_usd / max(liq_usd, 1.0)) >= 2.5
+            and (liq_usd / max(fdv_usd, 1.0)) <= 1.50
+        )
+        if age_min > _seeded_max_entry_age and not _is_seeded_hyper_breakout:
+            return False, f"rh-seeded-too-late {age_min:.1f}m > {_seeded_max_entry_age:.1f}m"
         _min_seeded_vol_base = float(getattr(config, "RUG_HUNTER_SEEDED_MIN_VOL5", 3500.0))
         _min_seeded_turn = float(getattr(config, "RUG_HUNTER_SEEDED_MIN_TURNOVER", 0.25))
         _min_seeded_buys_cfg = int(getattr(config, "RUG_HUNTER_SEEDED_MIN_BUYS", 45))
@@ -323,6 +331,8 @@ def qualify_unlocked_lp_hunter(
         if liq_usd >= 20000.0:
             if buys5 < 22 or sells5 < 3 or avg_tx_seeded > _max_seeded_avg or vol5_usd < 1500.0:
                 return False, f"rh-seeded-whale-trap liq=${liq_usd:,.0f} buys={buys5} sells={sells5} avg=${avg_tx_seeded:.0f}"
+            if age_min >= 1.1 and not (vol5_usd >= (liq_usd * 0.40) or (vol5_usd >= (liq_usd * 0.30) and m5 >= 15.0)):
+                return False, f"rh-seeded-highliq-slow-turn vol5=${vol5_usd:,.0f} (<0.40x liq=${liq_usd:,.0f}, m5={m5:+.1f}%)"
         if liq_usd >= 15000.0 and isinstance(pair_data, dict):
             pair_data["_rh_high_liq_seeded"] = True
     if fdv_usd > float(getattr(config, "RUG_HUNTER_MAX_FDV_USD", 500000.0)):
@@ -626,15 +636,25 @@ def evaluate_rug_hunter_exit(position, current_price: float) -> Optional[str]:
         _pd_c_ms = (pd.get("pairCreatedAt") or 0) if isinstance(pd, dict) else 0
         pool_age_min = ((now_ts * 1000.0 - _pd_c_ms) / 60000.0) if _pd_c_ms > 0 else (minutes_held + 0.3)
 
-        # Г0. Жёсткая превентивная эвакуация для SEEDED-LP ДО таймера RemoveLiquidity (4.5м-6.7м, кейсы NEX Ai / PUMPE):
-        if is_seeded_mode and minutes_held >= 1.2:
-            _seeded_max_pool_age = float(getattr(config, "RUG_HUNTER_SEEDED_MAX_POOL_AGE_MIN", 3.8))
-            _seeded_max_hold = float(getattr(config, "RUG_HUNTER_SEEDED_MAX_HOLD_MIN", 2.6))
-            if pool_age_min >= _seeded_max_pool_age or minutes_held >= _seeded_max_hold:
-                if pnl_pct < 0.35 or drop_from_peak >= 0.12:
+        # Г0. Специализированные выходы для SEEDED-LP (100% фиксация пика + превентивная эвакуация до RemoveLiquidity):
+        if is_seeded_mode:
+            _harvest_act = float(getattr(config, "RUG_HUNTER_SEEDED_FULL_HARVEST_PCT", 0.25))
+            _harvest_drop = float(getattr(config, "RUG_HUNTER_SEEDED_PEAK_TRAIL_DROP", 0.06))
+            if pnl_pct >= 0.85 or (max_pnl_pct >= _harvest_act and (drop_from_peak >= _harvest_drop or pnl_pct <= max(0.19, max_pnl_pct - _harvest_drop))):
+                return f"🎯 RH Seeded Full Profit Harvest ({pnl_pct*100:+.1f}% после пика +{max_pnl_pct*100:.1f}%, hold {minutes_held:.1f}м / age {pool_age_min:.1f}м — 100% фиксация прибыли до LP-дрейна!)"
+            if 0.15 <= max_pnl_pct < _harvest_act and (drop_from_peak >= _harvest_drop or pnl_pct <= max(0.08, max_pnl_pct - _harvest_drop)):
+                return f"🎯 RH Seeded Profit Lock ({pnl_pct*100:+.1f}% после пика +{max_pnl_pct*100:.1f}%, hold {minutes_held:.1f}м — 100% фиксация до рага!)"
+
+            _stag_age = float(getattr(config, "RUG_HUNTER_SEEDED_STAGNANT_AGE_MIN", 2.95))
+            _stag_hold = float(getattr(config, "RUG_HUNTER_SEEDED_STAGNANT_HOLD_MIN", 1.40))
+            if minutes_held >= 0.8 and (pool_age_min >= _stag_age or minutes_held >= _stag_hold) and max_pnl_pct < 0.14 and pnl_pct < 0.10:
+                return f"🎯 RH Seeded Stagnant Evac ({pnl_pct*100:+.1f}%, hold {minutes_held:.1f}м / age {pool_age_min:.1f}м — ранний выход из слабого пула до RemoveLiquidity!)"
+
+            _seeded_max_pool_age = float(getattr(config, "RUG_HUNTER_SEEDED_MAX_POOL_AGE_MIN", 3.45))
+            _seeded_max_hold = float(getattr(config, "RUG_HUNTER_SEEDED_MAX_HOLD_MIN", 2.00))
+            if minutes_held >= 0.8 and (pool_age_min >= _seeded_max_pool_age or minutes_held >= _seeded_max_hold):
+                if pnl_pct < 0.30 or drop_from_peak >= 0.05 or pool_age_min >= 3.70 or minutes_held >= 2.25:
                     return f"🎯 RH Seeded Pre-Rug Evac ({pnl_pct*100:+.1f}%, hold {minutes_held:.1f}м / age {pool_age_min:.1f}м — жёсткий выход до таймера RemoveLiquidity!)"
-                if pool_age_min >= 4.5 or minutes_held >= 3.4:
-                    return f"🎯 RH Seeded Full Profit Harvest (+{pnl_pct*100:.1f}%, hold {minutes_held:.1f}м / age {pool_age_min:.1f}м — 100% фиксация прибыли до LP-дрейна!)"
 
         # Г. Потолок общего возраста пула для органических UNLOCKED-LP (Pro Pre-Rug Evac + Profit-Lock Runner):
         # 1) Для слабых/застрявших позиций (PnL < +3%): эвакуация на 4.2м до раг-окна дева!
@@ -698,7 +718,9 @@ def evaluate_rug_hunter_exit(position, current_price: float) -> Optional[str]:
     be_act = float(getattr(config, "RUG_HUNTER_BREAKEVEN_PCT", 0.22))
     _pd_be_ms = (pd.get("pairCreatedAt") or 0) if isinstance(pd, dict) else 0
     _be_pool_age = ((now_ts * 1000.0 - _pd_be_ms) / 60000.0) if _pd_be_ms > 0 else (minutes_held + 0.3)
-    if max_pnl_pct >= 0.28:
+    if not is_seeded_mode and bool(getattr(position, "tp1_done", False)):
+        be_floor = 0.01
+    elif max_pnl_pct >= 0.28:
         be_floor = 0.10
     elif max_pnl_pct >= be_act:
         be_floor = 0.04

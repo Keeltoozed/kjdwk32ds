@@ -222,6 +222,7 @@ def verify_rugcheck_lp_markets(
     mint: str = "",
     log_unlocked: bool = True,
     allow_pump_amm_lock: bool = True,
+    fdv_usd: float = 0.0,
 ) -> bool:
     """Return True only when RugCheck reports genuinely burned or non-phantom locked LP.
 
@@ -232,6 +233,8 @@ def verify_rugcheck_lp_markets(
     has_verified = False
     target_matched = False
     target_safe = False
+    is_seeded_pool = bool(fdv_usd > 0.0 and raw_liq >= (fdv_usd * 0.85))
+    is_pump_suffix = str(mint or "").strip().lower().endswith("pump")
     for mkt in (markets or []):
         if not isinstance(mkt, dict):
             continue
@@ -255,11 +258,15 @@ def verify_rugcheck_lp_markets(
         has_real_lock = lp_locked_pct >= 85.0 and (
             not is_phantom_amm or (lp_tot_supply > 0.0 and lp_cur_supply > 0.0)
         )
-        safe_lp = (lp_burned_pct >= 85.0) or (
-            "meteora" not in mkt_type
-            and not (is_native_pump_amm and not allow_pump_amm_lock)
-            and has_real_lock
-        )
+        pump_amm_lock_allowed = bool(allow_pump_amm_lock and is_pump_suffix)
+        if is_seeded_pool:
+            safe_lp = bool(lp_burned_pct >= 85.0 and not is_native_pump_amm)
+        else:
+            safe_lp = (lp_burned_pct >= 85.0) or (
+                "meteora" not in mkt_type
+                and not (is_native_pump_amm and not pump_amm_lock_allowed)
+                and has_real_lock
+            )
         real_liquidity = (mkt_quote_usd >= 5000.0) or (
             bool(target_pair) and mkt_pubkey == target_pair and mkt_quote_usd <= 0.0 and raw_liq >= 12000.0
         )
@@ -1454,18 +1461,23 @@ RUG_HUNTER_EARLY_AGE_THRESHOLD = 3.8       # Порог ультра-ранне�
 RUG_HUNTER_EARLY_MIN_SELLS = 1             # Достаточно 1 продажи для подтверждения sellable на старте (на 0.5м допускается 0 при сильных покупках)
 RUG_HUNTER_EARLY_MIN_BUYS = 6              # Достаточно 6 покупок на ультра-старте (вместо 25), если есть перевес покупателей
 RUG_HUNTER_STAGE1_MIN_ML = 3.5             # Смягчённый порог Stage-1 ML для ранних ракет (unblock кейса DOOM +940% conf=4.9%)
-RUG_HUNTER_SEEDED_MIN_ML = 30.0            # Смягчённый порог ML для обычных SEEDED-LP: 30% (пропускает ракеты HENKI 36%, ELVES 34%, DOOM 49%, XMAS 71%, JEE 69%)
+RUG_HUNTER_SEEDED_MIN_ML = 38.0            # Порог ML 38% для обычных SEEDED-LP (отсекает слабые раги neko 36.5%, Cilembu 34.8%)
 RUG_HUNTER_HIGH_LIQ_MIN_ML = 45.0          # Порог ML 45% для пулов liq >= $15k (пропускает EWJ +426% 51.9%, CRIMELESS +523% 56.4%, GORP +275% 53.3%)
 RUG_HUNTER_SEEDED_MIN_BUYS = 45            # Минимум 45 покупок для посеянных пулов (отсекает мёртвые приманки вроде NEX Ai 28b)
 RUG_HUNTER_SEEDED_MIN_SELLS = 1            # Достаточно 1 продажи для подтверждения ликвидности
 RUG_HUNTER_SEEDED_MIN_VOL5 = 3500.0        # Минимальный объём для посеянных пулов ($3,500)
 RUG_HUNTER_SEEDED_MIN_TURNOVER = 0.25      # Оборот 5м >= 25% от ликвидности пула (отсекает NEX Ai 5% и Democat 6.8% оборота)
 RUG_HUNTER_SEEDED_MIN_M5_PCT = 10.0        # Минимальный импульс m5 +10% для посеянных пулов (отсекает стоячие приманки +3%)
-RUG_HUNTER_SEEDED_MAX_POOL_AGE_MIN = 3.8   # Жёсткий потолок возраста пула (3.8м) для SEEDED-LP до таймера RemoveLiquidity на 4.5-6.7м
-RUG_HUNTER_SEEDED_MAX_HOLD_MIN = 2.6       # Жёсткий потолок удержания (2.6м) для SEEDED-LP (выход до 5-минутного рага NEX Ai/PUMPE)
+RUG_HUNTER_SEEDED_MAX_ENTRY_AGE_MIN = 2.5  # Поздние входы (>2.5м) в SEEDED-LP запрещены (защита от 1м до эвакуации / окна рага)
+RUG_HUNTER_SEEDED_MAX_POOL_AGE_MIN = 3.45  # Жёсткий потолок возраста пула (3.45м) для SEEDED-LP до таймера RemoveLiquidity (фикс рагов на 3.75-3.82м!)
+RUG_HUNTER_SEEDED_MAX_HOLD_MIN = 2.00      # Жёсткий потолок удержания (2.00м) для SEEDED-LP (фикс рагов на 2.27-2.28м удержания!)
+RUG_HUNTER_SEEDED_STAGNANT_AGE_MIN = 2.95  # Застойная эвакуация при возрасте пула >= 2.95м и пике < +14%
+RUG_HUNTER_SEEDED_STAGNANT_HOLD_MIN = 1.40 # Застойная эвакуация при удержании >= 1.40м и пике < +14%
+RUG_HUNTER_SEEDED_FULL_HARVEST_PCT = 0.25  # Полная 100% фиксация SEEDED-LP от пика >= +25%
+RUG_HUNTER_SEEDED_PEAK_TRAIL_DROP = 0.06   # 6% откат от пика >= +25% на SEEDED-LP -> 100% выход до LP-дрейна
 RUG_HUNTER_MAX_FDV_USD = 500000.0          # Потолок FDV $500k (пропускает ROCKSTAR $487k)
 RUG_HUNTER_CABAL_MAX_FDV_USD = 180000.0   # Потолок FDV для кабал-сёрфа
-RUG_HUNTER_TP1_PCT = 0.28                 # TP1 +28%: быстрый сбор 40% объема (фиксация профита и перевод остатка в безубыточный Moonbag!)
+RUG_HUNTER_TP1_PCT = 0.25                 # TP1 +25%: быстрый сбор 40% объема (фиксация профита и перевод остатка в безубыточный Moonbag!)
 RUG_HUNTER_TP1_SELL_FRAC = 0.40
 RUG_HUNTER_TP2_PCT = 0.85                 # TP2 +85% (1.85x): фиксируем 30% объема (сбор первых иксов!)
 RUG_HUNTER_TP2_SELL_FRAC = 0.30
@@ -1491,7 +1503,7 @@ FCR_PRO_MAX_SELL_IMPACT = 0.22            # Блок при ударной пр�
 
 # === ВЫХОДЫ ДЛЯ НЕЗАЛОЧЕННЫХ ПУЛОВ RUG-HUNTER (UNLOCKED-LP) ===
 # Принцип Pro: слабые монеты (<+3%) сбрасываем до 4.2м, а плюсовые переводим в безубыток (+1.5%..+10%) и даём ехать до 2x-10x!
-RUG_HUNTER_UNLOCKED_TP1_PCT = 0.28        # TP1 +28%: фиксируем 40% объема (быстрый де-риск + безубыток на остаток!)
+RUG_HUNTER_UNLOCKED_TP1_PCT = 0.25        # TP1 +25%: фиксируем 40% объема (быстрый де-риск + безубыток на остаток!)
 RUG_HUNTER_UNLOCKED_TP1_SELL_FRAC = 0.40
 RUG_HUNTER_UNLOCKED_TP2_PCT = 0.85        # TP2 +85% (1.85x): фиксируем 30% объема (гарантированный профит!)
 RUG_HUNTER_UNLOCKED_TP2_SELL_FRAC = 0.30

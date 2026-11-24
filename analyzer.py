@@ -1141,7 +1141,7 @@ class Analyzer:
             pair_addr_gt = str(best.get("id") or "").replace("solana_", "").strip()
             dex_rel = str((((best.get("relationships") or {}).get("dex") or {}).get("data") or {}).get("id") or "").lower()
             res_usd = float(a.get("reserve_in_usd") or 0)
-            if "pumpswap" in dex_rel:
+            if any(k in dex_rel for k in ("pumpswap", "pump-swap", "pump_swap", "pump-fun-amm", "pump_fun_amm", "pump-amm", "pump_amm")):
                 real_dex = "pumpswap"
             elif "raydium" in dex_rel:
                 real_dex = "raydium"
@@ -2760,22 +2760,50 @@ class Analyzer:
 
                     # Проверка пулов и блокировки LP
                     _target_pair_rc = str((pair_data or {}).get("pairAddress") or "").strip()
-                    _ps_rpc_unv_main = bool((pair_data or {}).get("_pumpswap_rpc_unverified")) and config.is_launchpad_mint(mint) and not config.is_pumpswap_liq_fdv_trap(pair_data or {})
-                    _allow_ps_lock_main = bool((pair_data or {}).get("_pumpswap_canonical")) or _ps_rpc_unv_main or (_dex_low_main != "pumpswap")
-                    has_verified_locked_lp = config.verify_rugcheck_lp_markets(
-                        rc_data.get("markets") or [],
+                    _rc_markets_a = [m for m in (rc_data.get("markets") or []) if isinstance(m, dict)]
+                    _rc_matched_mk = next((m for m in _rc_markets_a if _target_pair_rc and str(m.get("pubkey") or "").strip() == _target_pair_rc), None)
+                    if _rc_matched_mk is None and _dex_low_main == "raydium" and _rc_markets_a:
+                        if not any("raydium" in str(m.get("marketType") or "").lower() for m in _rc_markets_a):
+                            _rc_matched_mk = max(_rc_markets_a, key=lambda m: float(((m.get("lp") or {}).get("quoteUSD") or 0) or 0))
+                    if _rc_matched_mk is not None:
+                        _rc_mk_type = str(_rc_matched_mk.get("marketType") or "").lower()
+                        if _rc_mk_type in ("pump_fun", "pump_fun_amm"):
+                            _dex_low_main = "pumpswap"
+                            dex_id_low = "pumpswap"
+                            if isinstance(pair_data, dict):
+                                pair_data["dexId"] = "pumpswap"
+                        elif "meteora" in _rc_mk_type and _rc_mk_type != "meteoradbc":
+                            _dex_low_main = "meteora"
+                            dex_id_low = "meteora"
+                            if isinstance(pair_data, dict):
+                                pair_data["dexId"] = "meteora"
+                    if mint.lower().endswith("pump") and _dex_low_main == "pumpswap" and not bool((pair_data or {}).get("_pumpswap_checked")):
+                        try:
+                            _ps_rc_ok, _ps_rc_canon, _ = await _gp_rc.verify_pumpswap_pool_onchain(
+                                mint, pair_address=_target_pair_rc, pair_data=pair_data,
+                            )
+                            if _ps_rc_canon:
+                                _is_canonical_pump = True
+                        except Exception:
+                            pass
+                    _is_seeded_ratio_main = bool(fdv_val > 0 and raw_liq >= (fdv_val * 0.85))
+                    _ps_rpc_unv_main = bool((pair_data or {}).get("_pumpswap_rpc_unverified")) and config.is_launchpad_mint(mint) and not config.is_pumpswap_liq_fdv_trap(pair_data or {}) and not _is_seeded_ratio_main
+                    _allow_ps_lock_main = bool((pair_data or {}).get("_pumpswap_canonical")) or _ps_rpc_unv_main
+                    has_verified_locked_lp = (not _is_seeded_ratio_main) and config.verify_rugcheck_lp_markets(
+                        _rc_markets_a,
                         target_pair=_target_pair_rc,
                         raw_liq=raw_liq,
                         symbol=symbol,
                         mint=mint,
                         log_unlocked=True,
                         allow_pump_amm_lock=_allow_ps_lock_main,
+                        fdv_usd=fdv_val,
                     )
 
                     # Проверка блокировки LP (основная стратегия требует сожжённый/залоченный LP;
                     # стратегия RUG-HUNTER:UNLOCKED-LP допускает квалифицированные ранние незалоченные пулы!)
                     _is_unlocked_runner_ok = False
-                    _is_lp_really_safe = bool(_is_canonical_pump or has_verified_locked_lp or (isinstance(pair_data, dict) and pair_data.get("_pumpswap_lp_burned")))
+                    _is_lp_really_safe = bool((not _is_seeded_ratio_main) and (_is_canonical_pump or has_verified_locked_lp or (isinstance(pair_data, dict) and pair_data.get("_pumpswap_lp_burned"))))
                     if not _is_lp_really_safe:
                         _ca_main = float((pair_data or {}).get("pairCreatedAt") or 0)
                         _age_main = ((time.time() * 1000.0 - _ca_main) / 60000.0) if _ca_main > 0 else 0.2

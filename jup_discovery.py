@@ -770,17 +770,41 @@ async def _evaluate_and_buy_inner(mint: str, td: dict, analyzer, tracker, source
                 return False
 
             _target_pair_j = str((td or {}).get("pairAddress", "") or "").strip()
-            _ps_rpc_unv_jup = bool((td or {}).get("_pumpswap_rpc_unverified")) and config.is_launchpad_mint(mint) and not config.is_pumpswap_liq_fdv_trap(td or {})
-            _allow_ps_lock_j = bool((td or {}).get("_pumpswap_canonical")) or _ps_rpc_unv_jup or (_dex_j_low != "pumpswap")
-            _lp_ok = config.verify_rugcheck_lp_markets(
-                _rc_d.get("markets") or [],
+            _rc_markets_j = [m for m in (_rc_d.get("markets") or []) if isinstance(m, dict)] if _rc_d else []
+            _rc_matched_j = next((m for m in _rc_markets_j if _target_pair_j and str(m.get("pubkey") or "").strip() == _target_pair_j), None)
+            if _rc_matched_j is None and _dex_j_low == "raydium" and _rc_markets_j:
+                if not any("raydium" in str(m.get("marketType") or "").lower() for m in _rc_markets_j):
+                    _rc_matched_j = max(_rc_markets_j, key=lambda m: float(((m.get("lp") or {}).get("quoteUSD") or 0) or 0))
+            if _rc_matched_j is not None:
+                _rc_mk_t_j = str(_rc_matched_j.get("marketType") or "").lower()
+                if _rc_mk_t_j in ("pump_fun", "pump_fun_amm"):
+                    _dex_j_low = "pumpswap"
+                    if isinstance(td, dict):
+                        td["dexId"] = "pumpswap"
+                elif "meteora" in _rc_mk_t_j and _rc_mk_t_j != "meteoradbc":
+                    _dex_j_low = "meteora"
+                    if isinstance(td, dict):
+                        td["dexId"] = "meteora"
+            if mint.lower().endswith("pump") and _dex_j_low == "pumpswap" and not bool((td or {}).get("_pumpswap_checked")):
+                try:
+                    await _gp_jup.verify_pumpswap_pool_onchain(
+                        mint, pair_address=_target_pair_j, pair_data=td,
+                    )
+                except Exception:
+                    pass
+            _is_seeded_j = bool(_fdv_j1 > 0.0 and _liq_j >= (_fdv_j1 * 0.85))
+            _ps_rpc_unv_jup = bool((td or {}).get("_pumpswap_rpc_unverified")) and config.is_launchpad_mint(mint) and not config.is_pumpswap_liq_fdv_trap(td or {}) and not _is_seeded_j
+            _allow_ps_lock_j = bool((td or {}).get("_pumpswap_canonical")) or _ps_rpc_unv_jup
+            _lp_ok = (not _is_seeded_j) and (config.verify_rugcheck_lp_markets(
+                _rc_markets_j,
                 target_pair=_target_pair_j,
                 raw_liq=_liq_j,
                 symbol=_sym_tmp,
                 mint=mint,
                 log_unlocked=True,
                 allow_pump_amm_lock=_allow_ps_lock_j,
-            ) if _rc_d else False
+                fdv_usd=_fdv_j1,
+            ) if _rc_d else False)
             _lp_verified_jup = bool(_lp_ok)
             if not _allow_unl_lp_j and mint.endswith("pump") and ("meteora" in _dex_j_low or _dex_j_low == "meteoradbc"):
                 print(f"🚫 [{source_tag}-FAKE-METEORA] {_sym_tmp} ({mint[:8]}): .pump токен на пуле Meteora — неофициальный скам-пул мимо PumpSwap (кейсы MULT/SURVIVE -98%)!")
@@ -1183,8 +1207,10 @@ async def _evaluate_and_buy_inner(mint: str, td: dict, analyzer, tracker, source
 
         # Финальный предохранитель: незалоченный пул НЕ МОЖЕТ быть куплен без активного Rug-Hunter!
         _dex_low_j = str((td or {}).get("dexId") or "").strip().lower()
-        _is_native_pump_j = mint.lower().endswith("pump") and _dex_low_j in ("", "pumpfun", "pump", "pumpswap")
-        _is_lp_safe_j = bool((td or {}).get("_lp_verified")) or bool((td or {}).get("_pumpswap_canonical")) or bool((td or {}).get("_pumpswap_lp_burned"))
+        _fdv_j_saf = float((td or {}).get("fdv", 0) or (td or {}).get("marketCap", 0) or 0)
+        _is_seeded_j_saf = bool(_fdv_j_saf > 0 and _j_liq >= (_fdv_j_saf * 0.85))
+        _is_native_pump_j = (not _is_seeded_j_saf) and mint.lower().endswith("pump") and _dex_low_j in ("", "pumpfun", "pump", "pumpswap")
+        _is_lp_safe_j = (not _is_seeded_j_saf) and (bool((td or {}).get("_lp_verified")) or bool((td or {}).get("_pumpswap_canonical")) or bool((td or {}).get("_pumpswap_lp_burned")))
         if not _is_native_pump_j and not _is_lp_safe_j and not _is_rh_buy_j:
             print(f"🚫 [JUP-SAFETY] {_sym_tmp} ({mint[:8]}): незалоченный пул {_dex_low_j} без активного режима Rug-Hunter — вход запрещён!")
             return False

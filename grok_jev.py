@@ -1805,22 +1805,51 @@ class GrokJevEngine:
                     # при временной недоступности RPC для .pump-минта (без traps) разрешаем проверку lock=100 по RugCheck
                     target_pair = str(pair_data.get("pairAddress") or "").strip()
                     _dex_rc_low = str(pair_data.get("dexId") or "").lower()
-                    _ps_rpc_unv_j = bool(pair_data.get("_pumpswap_rpc_unverified")) and _c.is_launchpad_mint(address) and not _c.is_pumpswap_liq_fdv_trap(pair_data)
-                    _allow_ps_lock_jev = bool(pair_data.get("_pumpswap_canonical")) or _ps_rpc_unv_j or (_dex_rc_low != "pumpswap")
-                    has_verified_locked_lp = _c.verify_rugcheck_lp_markets(
-                        rc_data.get("markets") or [],
+                    _rc_markets_g = [m for m in (rc_data.get("markets") or []) if isinstance(m, dict)]
+                    _rc_matched_g = next((m for m in _rc_markets_g if target_pair and str(m.get("pubkey") or "").strip() == target_pair), None)
+                    if _rc_matched_g is None and _dex_rc_low == "raydium" and _rc_markets_g:
+                        if not any("raydium" in str(m.get("marketType") or "").lower() for m in _rc_markets_g):
+                            _rc_matched_g = max(_rc_markets_g, key=lambda m: float(((m.get("lp") or {}).get("quoteUSD") or 0) or 0))
+                    if _rc_matched_g is not None:
+                        _rc_mk_t_g = str(_rc_matched_g.get("marketType") or "").lower()
+                        if _rc_mk_t_g in ("pump_fun", "pump_fun_amm"):
+                            _dex_rc_low = "pumpswap"
+                            _dex_low_jev = "pumpswap"
+                            pair_data["dexId"] = "pumpswap"
+                        elif "meteora" in _rc_mk_t_g and _rc_mk_t_g != "meteoradbc":
+                            _dex_rc_low = "meteora"
+                            _dex_low_jev = "meteora"
+                            pair_data["dexId"] = "meteora"
+                    if address.lower().endswith("pump") and _dex_rc_low == "pumpswap" and not bool(pair_data.get("_pumpswap_checked")):
+                        try:
+                            import goplus as _gp_jev_rc
+                            _, _ps_rc_canon_g, _ = await _gp_jev_rc.verify_pumpswap_pool_onchain(
+                                address, pair_address=target_pair, pair_data=pair_data,
+                            )
+                            if _ps_rc_canon_g:
+                                is_canonical_pump = True
+                        except Exception:
+                            pass
+                    _is_seeded_jev = bool(fdv > 0.0 and raw_liq >= (fdv * 0.85))
+                    _ps_rpc_unv_j = bool(pair_data.get("_pumpswap_rpc_unverified")) and _c.is_launchpad_mint(address) and not _c.is_pumpswap_liq_fdv_trap(pair_data) and not _is_seeded_jev
+                    _allow_ps_lock_jev = bool(pair_data.get("_pumpswap_canonical")) or _ps_rpc_unv_j
+                    has_verified_locked_lp = (not _is_seeded_jev) and _c.verify_rugcheck_lp_markets(
+                        _rc_markets_g,
                         target_pair=target_pair,
                         raw_liq=raw_liq,
                         symbol=symbol,
                         mint=address,
                         log_unlocked=True,
                         allow_pump_amm_lock=_allow_ps_lock_jev,
+                        fdv_usd=fdv,
                     )
 
                     # Проверка незалоченных/посеянных пулов: для RUG-HUNTER:UNLOCKED-LP/SEEDED-LP профилируем создателя
                     # и пропускаем ранние живые пулы (без mint/freeze/creator-rug-history/instant-rugger)!
                     _is_unlocked_safe = False
                     _rh_jev_unl_ok = False
+                    if _is_seeded_jev:
+                        is_canonical_pump = False
                     if not is_canonical_pump and not has_verified_locked_lp:
                         _eff_l_rc = float((pair_data.get("liquidity") or {}).get("usd", 0) or 0)
                         _vm5_rc = float((pair_data.get("volume") or {}).get("m5", 0) or 0)

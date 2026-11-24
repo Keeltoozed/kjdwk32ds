@@ -550,7 +550,13 @@ async def position_manager_loop(analyzer, tracker):
                     _tp1_sol_thr, _tp1_sell, _tp2, _tp2_sell, _tp3, _tp3_sell, _tp4, _tp4_sell, _tp5, _tp5_sell = config.get_sol_tp_ladder(_pos_unl_tp)
                 _min_tp_ticket = float(getattr(config, "PARTIAL_TP_MIN_TICKET_USD", 0.50))
                 _pos_val = float(getattr(position, "original_amount_usd", 0.0) or getattr(position, "amount_usd", 0.0) or 0.0)
-                _allow_partial_tp = getattr(config, "PARTIAL_TP_ENABLED", True) and (_pos_val >= _min_tp_ticket)
+                _is_seeded_pos_tp = bool(
+                    _is_rh_tp and (
+                        "SEEDED" in str(getattr(position, "source", "") or "").upper()
+                        or "SEEDED" in str((_pd_tmp.get("_rug_hunter_mode") if isinstance(_pd_tmp, dict) else "") or "").upper()
+                    )
+                )
+                _allow_partial_tp = getattr(config, "PARTIAL_TP_ENABLED", True) and (_pos_val >= _min_tp_ticket) and (not _is_seeded_pos_tp)
                 _is_small_pos = _pos_val < _min_tp_ticket
                 if _allow_partial_tp and not _is_small_pos and not _suppress_eval_peak:
                     if pnl_pct >= _tp1_sol_thr and not getattr(position, "tp1_done", False) and float(getattr(position, "amount_usd", 0.0) or 0.0) > 0.05:
@@ -2363,11 +2369,15 @@ async def scanner_loop(analyzer, tracker):
                                             continue
 
                                     # PRE-FLIGHT GUARD ДЛЯ ВСЕХ НЕЗАЛОЧЕННЫХ ПУЛОВ (Meteora DYN2, PumpSwap CreatePool, кастомный Raydium без сожжённого LP)
-                                    _is_native_pump_sc = mint.lower().endswith("pump") and (
+                                    _fdv_sc_pf = float(pair_data.get("fdv", 0) or pair_data.get("marketCap", 0) or 0)
+                                    _is_seeded_sc_pf = bool(_fdv_sc_pf > 0 and liq_usd >= (_fdv_sc_pf * 0.85))
+                                    _is_native_pump_sc = (not _is_seeded_sc_pf) and mint.lower().endswith("pump") and (
                                         _dex_lower_sc in ("", "pumpfun", "pump")
                                         or (_dex_lower_sc == "pumpswap" and (bool(pair_data.get("_pumpswap_canonical")) or bool(pair_data.get("_pumpswap_lp_burned"))))
                                     )
-                                    _is_lp_safe_sc = bool(pair_data.get("_lp_verified")) or bool(pair_data.get("_pumpswap_canonical")) or bool(pair_data.get("_pumpswap_lp_burned"))
+                                    _is_lp_safe_sc = (not _is_seeded_sc_pf) and (
+                                        bool(pair_data.get("_lp_verified")) or bool(pair_data.get("_pumpswap_canonical")) or bool(pair_data.get("_pumpswap_lp_burned"))
+                                    )
                                     
                                     # СТРОГАЯ ЗАЩИТА: незалоченный пул БЕЗ активного режима Rug-Hunter КАТЕГОРИЧЕСКИ ЗАПРЕЩЁН к покупке в SCANNER!
                                     # Исключает утечку незалоченных пулов в регулярный $3 ордер без защитных эвакуаций (кейс Cyberleek -$3.02).
