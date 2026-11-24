@@ -288,24 +288,12 @@ def qualify_unlocked_lp_hunter(
     # Специфический барьер для SEEDED-LP: отсекаем фейковые/малооборотные пулы-приманки (кейсы NEX Ai, PUMPE, Democat):
     _is_high_vel_seeded = False
     if is_seeded_ratio:
-        # Защита от высоколиквидных приманок дева (High-Liq Seeded Dev Traps):
-        # Девы создают пулы с $25k-$100k ликвидности (150-400 SOL), крутят 25-40 wash-trades и через 1.5-2.5м снимают LP (RemoveLiquidity)!
-        # Блокирует 100% приманок: OATH ($38.7k), Lidrag ($97k), Wojak ($27k с 36 buys), TUVALRM ($95k).
-        _max_seeded_liq = float(getattr(config, "RUG_HUNTER_MAX_SEEDED_LIQ_USD", 22000.0))
+        # Жёсткий потолок ликвидности для незалоченного SEEDED-LP ($17.2k: пропускает FIONA/HOLDERS/DUVAL/ATTENTION, отсекает 0/4 в $18.5k-$20k и -551% выше $20k).
+        _max_seeded_liq = float(getattr(config, "RUG_HUNTER_MAX_SEEDED_LIQ_USD", 17200.0))
         if liq_usd > _max_seeded_liq:
-            _is_community_demand = bool(
-                liq_usd <= 30000.0
-                and buys5 >= 75
-                and (sells5 == 0 or buys5 >= int(sells5 * 1.4))
-            )
-            _is_hyper_breakout = bool(
-                vol5_usd >= 18000.0
-                and buys5 >= 75
-                and (vol5_usd / max(liq_usd, 1.0)) >= 0.40
-                and (sells5 == 0 or buys5 >= int(sells5 * 1.2))
-            )
-            if not (_is_community_demand or _is_hyper_breakout):
-                return False, f"rh-seeded-highliq-trap liq=${liq_usd:,.0f} > ${_max_seeded_liq:,.0f} (приманка дева без подтверждённого спроса: buys={buys5}<75 или vol=${vol5_usd:,.0f}<$18k)"
+            return False, f"rh-seeded-highliq-trap liq=${liq_usd:,.0f} > ${_max_seeded_liq:,.0f} (жёсткий потолок ликвидности для незалоченного SEEDED-LP)"
+        if liq_usd >= 14500.0 and vol5_usd < 6000.0:
+            return False, f"rh-seeded-midliq-lowvol liq=${liq_usd:,.0f}, vol5=${vol5_usd:,.0f} < $6,000 (приманка со слабым оборотом)"
 
         _seeded_max_entry_age = float(getattr(config, "RUG_HUNTER_SEEDED_MAX_ENTRY_AGE_MIN", 4.2))
         _is_seeded_hyper_breakout = bool(
@@ -430,7 +418,12 @@ def qualify_unlocked_lp_hunter(
     max_m1_rh = 75.0 if age_min <= early_age_th else 35.0
     if m1 < -3.5 or m1 > max_m1_rh:
         return False, f"rh-m1-out-of-range {m1:+.1f}%"
-    max_m5_rh = 260.0 if (age_min <= 4.0 and (fdv_usd <= 65000.0 or vol5_usd >= 5000.0)) else 175.0
+    if age_min <= 3.8 and fdv_usd <= 35000.0 and vol5_usd >= 4500.0 and buys5 >= 35:
+        max_m5_rh = 360.0  # Ранний пробой микрокапа с низкой базой (кейсы HOLDERS +1713% при m5 +264.7% buys=41, DUVAL +1067% при m5 +328%)
+    elif age_min <= 4.0 and (fdv_usd <= 65000.0 or vol5_usd >= 5000.0):
+        max_m5_rh = 260.0
+    else:
+        max_m5_rh = 175.0
     # На ультра-раннем старте (<=1.2м) 5-минутная свеча ещё не существует — достаточно m5 >= -2.0% и m1 >= 0%
     if age_min <= 1.2:
         if m5 < -2.0 or m5 > max_m5_rh:
@@ -438,9 +431,9 @@ def qualify_unlocked_lp_hunter(
         if m1 < 0.0 and buys5 < 10:
             return False, f"rh-early-m1-negative {m1:+.1f}%"
     elif age_min <= early_age_th:
-        # 1.2м–2.2м: требуем импульс m5 >= 2% ИЛИ мощный буй-поток (>=20 буев)
-        # Снижено с 5% → 2%: ракеты CSV 19 (GREEN CAT +398%, NEX AI +168%) имели m5 2-6% в 1.2-2.2м
-        if m5 < 2.0 or m5 > max_m5_rh:
+        if m5 > max_m5_rh:
+            return False, f"rh-m5-overextended {m5:+.1f}% > +{max_m5_rh:.0f}%"
+        if m5 < 2.0:
             if not (buys5 >= 20 and buys5 >= sells5 * 1.4 and vol5_usd >= 1200.0):
                 return False, f"rh-m5-weak-ignition {m5:+.1f}% < +2% (buys={buys5})"
     else:
@@ -449,7 +442,7 @@ def qualify_unlocked_lp_hunter(
         if m5 < 4.0 or m5 > max_m5_rh:
             if not (buys5 >= 15 and buys5 >= sells5 * 1.2 and vol5_usd >= 1000.0):
                 return False, f"rh-m5-out-of-range {m5:+.1f}% (buys={buys5})"
-    if h1 > 280.0 and not (age_min <= 5.0 and 0 < fdv_usd <= 65000.0):
+    if h1 > 280.0 and not (age_min <= 5.0 and fdv_usd <= 65000.0):
         return False, f"rh-h1-late {h1:+.0f}%"
 
     # DEAD-PUMP FILTER: срабатывает только после 4.2м при реальном падении m1 < -1% (не блокирует свежие DCTY +510% при REST m1==0!)
@@ -630,11 +623,11 @@ def evaluate_rug_hunter_exit(position, current_price: float) -> Optional[str]:
             if peak_l >= 2000.0 and cur_l <= peak_l * (1.0 - _drain_thr):
                 return f"🎯 RH Early LP-Drain Alert (-{(1.0 - cur_l/peak_l)*100:.0f}% LP, ${cur_l:.0f}/${peak_l:.0f}, PnL {pnl_pct*100:+.1f}%)"
 
-        # Мгновенный выход при развороте 1м свечи (на незалоченном пуле уже при -5% фиксируем)
+        # Мгновенный выход ТОЛЬКО при тяжёлом 1м дампе (не режем +6%..+12% на обычной -5% откатной свече!)
         pc = pd.get("priceChange") or {}
         m1_val = float(pc.get("m1", 0) or 0)
-        _m1_cut = -5.0 if is_unlocked_rh else -7.5
-        if minutes_held >= 0.5 and m1_val <= _m1_cut and (pnl_pct >= 0.05 or m1_val <= -10.0):
+        _m1_cut = -12.0 if is_unlocked_rh else -14.0
+        if minutes_held >= 0.75 and m1_val <= _m1_cut and (pnl_pct >= 0.35 or m1_val <= -15.0):
             return f"🎯 RH 1m-Dump Escape (m1 {m1_val:+.1f}%, PnL {pnl_pct*100:+.1f}%)"
 
     # 2. Жёсткий Stop-Loss (-10%) и Emergency Cap (-12%)
@@ -662,10 +655,10 @@ def evaluate_rug_hunter_exit(position, current_price: float) -> Optional[str]:
         if pnl_pct >= 10.0:
             return f"🎯 RH Full Harvest (+{pnl_pct*100:.1f}%, цель 11x достигнута — 100% выход в кэш!)"
 
-        # Б. Ранний срез слабости: незалоченный пул должен пампить сразу!
-        # Если за 1.5м монета ушла в минус <= -5.0% — не ждём -10% или -12%!
-        if minutes_held >= 1.5 and pnl_pct <= -0.05:
-            return f"🎯 RH Early Bleed Escape ({pnl_pct*100:+.1f}%, 1.5м слабости в незалоченном пуле)"
+        # Б. Ранний срез мёртвой слабости: даём ранним откатам первые 2.5м до TP (кейс WORTHLESS -7.9% на 1.5м -> +200.7%),
+        # но если к 2.5м токен даже не касался +3% и упал <= -7.5% — режем до SL -10%!
+        if minutes_held >= 2.5 and max_pnl_pct < 0.03 and pnl_pct <= -0.075:
+            return f"🎯 RH Early Bleed Escape ({pnl_pct*100:+.1f}%, 2.5м слабости в незалоченном пуле)"
 
         # В. Сброс нуля/флета: если за 2.5м нет даже +1% профита (кейсы ER-100, Wojak):
         if minutes_held >= 2.5 and pnl_pct <= 0.005 and max_pnl_pct < 0.08:
@@ -681,80 +674,97 @@ def evaluate_rug_hunter_exit(position, current_price: float) -> Optional[str]:
         _v5_exit = float(((pd.get("volume") or {}).get("m5", 0) or 0) if isinstance(pd, dict) else 0.0)
         _buyers_alive = bool(_b5_exit == 0 or _b5_exit >= int(_s5_exit * 0.90))
 
-        # Признак живого взрывного пробоя (Breakout Runner / Active Accumulation Surge):
-        # Если в пуле идёт мощная волна покупателей или монета уже сделала TP1/мунбэг — даём ей лететь и собирать иксы!
-        # Не срезает ранние ракеты в фазе набора базы (кейс 英伟达 +695% при b=211 s=30)!
+        # Признак живого взрывного пробоя (Breakout Runner):
+        # ТОЛЬКО при реальном росте цены (TP1/moonbag, пик >= +25% или текущий PnL >= +10% с живым оборотом >= $6k)!
+        # НЕ продлеваем жизнь пула по голому 5м-счётчику buys_m5 (защита от ловушек Democat/Huang/JIMMY).
         _is_orderflow_breakout = bool(
-            (_b5_exit >= 50 and (_s5_exit == 0 or _b5_exit >= int(_s5_exit * 1.3)))
-            or (_b5_exit >= 35 and (_s5_exit == 0 or _b5_exit >= int(_s5_exit * 1.8)))
-            or (_v5_exit >= 8000.0 and _b5_exit >= 40)
+            minutes_held >= 0.5
+            and pnl_pct >= 0.10
+            and _v5_exit >= 6000.0
+            and _b5_exit >= 35
+            and (_s5_exit == 0 or _b5_exit >= int(_s5_exit * 1.15))
         )
         _is_breakout_runner = bool(
             getattr(position, "tp1_done", False)
             or getattr(position, "is_moonbag", False)
             or max_pnl_pct >= 0.25
-            or (minutes_held >= 0.5 and pnl_pct >= 0.08 and _b5_exit >= 35 and (_s5_exit == 0 or _b5_exit >= _s5_exit * 1.1))
             or _is_orderflow_breakout
         )
 
-        # Г0. Специализированные выходы для СЛАБЫХ SEEDED-LP (не пробившихся в раннеры):
-        # Для слабых пулов фиксируем профит и эвакуируемся до RemoveLiquidity дева!
+        # Г0. Специализированные выходы для СЛАБЫХ SEEDED-LP (<$16.5k, не пробившихся в раннеры):
+        # Не душим монету на первых минутах за +4%..+11% (кейсы MEMEPLOYED +111%, outsider +85%, MB +77%, Unemployed +59%) —
+        # даём доехать до TP1 +25% / мунбэга, а эвакуируем ТОЛЬКО реально мёртвый застой без спроса и роста!
         if is_seeded_mode and not _is_breakout_runner:
-            _harvest_act = float(getattr(config, "RUG_HUNTER_SEEDED_FULL_HARVEST_PCT", 0.45))
-            _harvest_drop = float(getattr(config, "RUG_HUNTER_SEEDED_PEAK_TRAIL_DROP", 0.15))
-            if pnl_pct >= 0.85 or (max_pnl_pct >= _harvest_act and (drop_from_peak >= _harvest_drop or pnl_pct <= max(0.19, max_pnl_pct - _harvest_drop))):
-                return f"🎯 RH Seeded Full Profit Harvest ({pnl_pct*100:+.1f}% после пика +{max_pnl_pct*100:.1f}%, hold {minutes_held:.1f}м / age {pool_age_min:.1f}м — 100% фиксация прибыли до LP-дрейна!)"
-            if 0.18 <= max_pnl_pct < _harvest_act and (drop_from_peak >= _harvest_drop or pnl_pct <= max(0.08, max_pnl_pct - _harvest_drop)):
-                return f"🎯 RH Seeded Profit Lock ({pnl_pct*100:+.1f}% после пика +{max_pnl_pct*100:.1f}%, hold {minutes_held:.1f}м — 100% фиксация до рага!)"
+            _harvest_act = float(getattr(config, "RUG_HUNTER_SEEDED_FULL_HARVEST_PCT", 1.20))
+            _harvest_drop = float(getattr(config, "RUG_HUNTER_SEEDED_PEAK_TRAIL_DROP", 0.22))
+            if max_pnl_pct >= _harvest_act and (drop_from_peak >= _harvest_drop or pnl_pct <= max(0.35, max_pnl_pct - _harvest_drop)):
+                return f"🎯 RH Seeded Full Profit Harvest ({pnl_pct*100:+.1f}% после пика +{max_pnl_pct*100:.1f}%, hold {minutes_held:.1f}м / age {pool_age_min:.1f}м — фиксация супер-профита!)"
+            if 0.35 <= max_pnl_pct < _harvest_act and (drop_from_peak >= _harvest_drop or pnl_pct <= max(0.12, max_pnl_pct - _harvest_drop)):
+                return f"🎯 RH Seeded Profit Lock ({pnl_pct*100:+.1f}% после пика +{max_pnl_pct*100:.1f}%, hold {minutes_held:.1f}м — защита ощутимого профита)"
 
-            _stag_age = float(getattr(config, "RUG_HUNTER_SEEDED_STAGNANT_AGE_MIN", 2.40))
-            _stag_hold = float(getattr(config, "RUG_HUNTER_SEEDED_STAGNANT_HOLD_MIN", 1.15))
-            # Не эвакуируем как застой, если в монету активно вливаются покупатели (кейс 英伟达):
-            _is_still_buying = bool(_b5_exit >= 30 and (_s5_exit == 0 or _b5_exit >= int(_s5_exit * 1.25)))
-            if minutes_held >= 0.8 and (pool_age_min >= _stag_age or minutes_held >= _stag_hold) and max_pnl_pct < 0.14 and pnl_pct < 0.10:
-                if not _is_still_buying or pnl_pct <= -0.03:
-                    return f"🎯 RH Seeded Stagnant Evac ({pnl_pct*100:+.1f}%, hold {minutes_held:.1f}м / age {pool_age_min:.1f}м — ранний выход из слабого пула до RemoveLiquidity!)"
+            _stag_age = float(getattr(config, "RUG_HUNTER_SEEDED_STAGNANT_AGE_MIN", 3.50))
+            _stag_hold = float(getattr(config, "RUG_HUNTER_SEEDED_STAGNANT_HOLD_MIN", 2.20))
+            # Не эвакуируем как застой, если монета уже в плюсе >= +3% (идет ко 2-й волне) ИЛИ покупатели давят просадку:
+            _has_strong_dip_bid = bool(_v5_exit >= 6000.0 and _b5_exit >= 50 and pnl_pct > -0.09)
+            _is_still_buying = bool(
+                (pnl_pct > -0.03 or _has_strong_dip_bid)
+                and _v5_exit >= 4000.0
+                and _b5_exit >= 30
+                and (_s5_exit == 0 or _b5_exit >= int(_s5_exit * 1.25))
+            )
+            if minutes_held >= _stag_hold and pool_age_min >= _stag_age and max_pnl_pct < 0.10 and pnl_pct < 0.03:
+                if not _is_still_buying:
+                    return f"🎯 RH Seeded Stagnant Evac ({pnl_pct*100:+.1f}%, hold {minutes_held:.1f}м / age {pool_age_min:.1f}м — ранний выход из мёртвого флета до RemoveLiquidity!)"
 
-            _seeded_max_pool_age = float(getattr(config, "RUG_HUNTER_SEEDED_MAX_POOL_AGE_MIN", 2.80))
-            _seeded_max_hold = float(getattr(config, "RUG_HUNTER_SEEDED_MAX_HOLD_MIN", 1.40))
-            if minutes_held >= 0.8 and (pool_age_min >= _seeded_max_pool_age or minutes_held >= _seeded_max_hold):
-                if pnl_pct < 0.30 or drop_from_peak >= 0.08 or pool_age_min >= 3.20 or minutes_held >= 1.60:
-                    return f"🎯 RH Seeded Pre-Rug Evac ({pnl_pct*100:+.1f}%, hold {minutes_held:.1f}м / age {pool_age_min:.1f}м — жёсткий выход до таймера RemoveLiquidity!)"
+            _seeded_max_pool_age = float(getattr(config, "RUG_HUNTER_SEEDED_MAX_POOL_AGE_MIN", 5.50))
+            _seeded_max_hold = float(getattr(config, "RUG_HUNTER_SEEDED_MAX_HOLD_MIN", 4.00))
+            if minutes_held >= 1.5 and (pool_age_min >= _seeded_max_pool_age or minutes_held >= _seeded_max_hold):
+                if pnl_pct < 0.15 and (not _buyers_alive or drop_from_peak >= 0.12 or minutes_held >= _seeded_max_hold):
+                    return f"🎯 RH Seeded Pre-Rug Evac ({pnl_pct*100:+.1f}%, hold {minutes_held:.1f}м / age {pool_age_min:.1f}м — эвакуация до позднего дрейна)"
 
-        # Г. Потолок общего возраста пула (Pro Pre-Rug Evac + Profit-Lock Runner):
-        # 1) Для слабых/застрявших позиций (PnL < +3%): эвакуация на 4.2м до раг-окна дева!
-        # 2) Для ПЛЮСОВЫХ пробившихся монет (PnL >= +3% или _is_breakout_runner): даём лететь до 18м (2x-10x ракеты FIONA, DUVAL, YARL, GTAVI, DCTY, ZMOLLY)!
+        # Г. Потолок общего возраста пула (Pro Pre-Rug Evac + Risk-Free Moonbag Runway):
+        # 1) Слабые (<+3%): эвакуация на 4.2м.
+        # 2) Растущие без TP2 (<+55%): эвакуация на 12.0м до позднего RemoveLiquidity.
+        # 3) После фиксации TP2 (+55%, ~70% позиции уже в кэше с профитом): мунбэг едет до 38.0м (FIONA +2545% на 32.5м, DUVAL +1067% на 31.1м)!
         _base_max_age = float(getattr(config, "RUG_HUNTER_UNLOCKED_MAX_POOL_AGE_MIN", 4.2))
-        _rocket_max_age = float(getattr(config, "RUG_HUNTER_ROCKET_MAX_POOL_AGE_MIN", 18.0))
+        _rocket_max_age = float(getattr(config, "RUG_HUNTER_ROCKET_MAX_POOL_AGE_MIN", 12.0))
+        _moonbag_max_age = float(getattr(config, "RUG_HUNTER_MOONBAG_MAX_POOL_AGE_MIN", 38.0))
+        _is_tp2_secured = bool(getattr(position, "tp2_done", False) or max_pnl_pct >= 0.85)
         _is_rocket_trending = bool(
             _is_breakout_runner
             or getattr(position, "tp1_done", False)
             or max_pnl_pct >= 0.25
             or (pnl_pct >= 0.03 and _buyers_alive)
         )
-        _effective_max_pool_age = _rocket_max_age if _is_rocket_trending else _base_max_age
+        _effective_max_pool_age = _moonbag_max_age if _is_tp2_secured else (_rocket_max_age if _is_rocket_trending else _base_max_age)
         if minutes_held >= 1.5 and pool_age_min >= _effective_max_pool_age:
             _evac_msg = f"фиксация прибыли на ракете (+{pnl_pct*100:+.1f}%)" if _is_rocket_trending else "эвакуация застоя до рага дева!"
             return f"🎯 RH Pre-Rug Evac (+{pnl_pct*100:+.1f}%, возраст пула {pool_age_min:.1f}м >= {_effective_max_pool_age:.1f}м — {_evac_msg})"
 
-        # Д. Застой после пампа (Stall Evac): монета сделала пик >= +30% и >= 75с не обновляет хай при откате >= 18%:
+        # Д. Застой после пампа (Stall Evac): монета сделала пик >= +35% и >= 150с не обновляет хай при глубоком откате >= 25%:
         peak_ts = float(getattr(position, "peak_time", now_ts) or now_ts)
         peak_age_sec = max(0.0, now_ts - peak_ts)
-        _unl_stall_s = float(getattr(config, "RUG_HUNTER_UNLOCKED_STALL_SEC", 75.0))
-        if max_pnl_pct >= 0.30 and peak_age_sec >= _unl_stall_s and drop_from_peak >= 0.18 and pnl_pct < 0.20:
+        _unl_stall_s = float(getattr(config, "RUG_HUNTER_UNLOCKED_STALL_SEC", 150.0))
+        if max_pnl_pct >= 0.35 and peak_age_sec >= _unl_stall_s and drop_from_peak >= 0.25 and pnl_pct < 0.18:
             return f"🎯 RH Stall Evac (+{pnl_pct*100:+.1f}%, застой {peak_age_sec:.0f}с после пика +{max_pnl_pct*100:.1f}%)"
 
-        # Е. Трейлинг-стоп для незалоченных пулов:
-        # Для обычных позиций до фиксации прибыли: 22% откат от пика >= +32%.
-        # ДЛЯ ЛЕТЯЩИХ РАКЕТ И МУНБЭГОВ (tp1_done/tp2_done=True или пик >= +85%):
-        # ДАЁМ РАКЕТЕ ДЫШАТЬ! Откат 35% от пика с гарантированным полом не ниже +30%!
-        _is_moonbag_ride = bool(getattr(position, "is_moonbag", False) or getattr(position, "tp1_done", False) or max_pnl_pct >= 0.85)
-        _unl_trail_drop = 0.35 if _is_moonbag_ride else float(getattr(config, "RUG_HUNTER_UNLOCKED_TRAIL_DROP_PCT", 0.22))
-        _trail_act_pct = 0.80 if _is_moonbag_ride else 0.32
-        if max_pnl_pct >= _trail_act_pct and drop_from_peak >= _unl_trail_drop:
-            if _is_moonbag_ride and pnl_pct < 0.30:
-                return f"🎯 RH Moonbag Trail Floor (+{pnl_pct*100:+.1f}%, защита прибыли после пика +{max_pnl_pct*100:.1f}%)"
-            return f"🎯 RH {'Moonbag' if _is_moonbag_ride else 'Tight'} Trail (+{pnl_pct*100:+.1f}%, откат {drop_from_peak*100:.1f}% от пика +{max_pnl_pct*100:.1f}%)"
+        # Е. Ступенчатый трейлинг-стоп для незалоченных пулов (без «слепой зоны» +25%..+80%!):
+        # - До +48% при tp1_done=True не душим мунбэг (даём спокойно откатиться к +3%..+10% перед 2-й волной).
+        # - От +48%..+84% (зона MB +77%, Trenchors +79%, SOLGORITHM +60%): трейл 24% от пика фиксирует остаток в жирный плюс до слива!
+        # - От +85%..+199%: трейл 28%; от +200%+: трейл 30% для сёрфа 3x-25x ракет!
+        _tp1_already = bool(getattr(position, "tp1_done", False) or getattr(position, "is_moonbag", False))
+        if max_pnl_pct >= 2.00:
+            _active_trail_drop = 0.30
+        elif max_pnl_pct >= 0.85:
+            _active_trail_drop = 0.28
+        elif max_pnl_pct >= 0.48:
+            _active_trail_drop = 0.24
+        elif (not _tp1_already) and max_pnl_pct >= 0.32:
+            _active_trail_drop = float(getattr(config, "RUG_HUNTER_UNLOCKED_TRAIL_DROP_PCT", 0.22))
+        else:
+            _active_trail_drop = 99.0
+        if _active_trail_drop < 1.0 and drop_from_peak >= _active_trail_drop:
+            return f"🎯 RH {'Moonbag' if _tp1_already else 'Tight'} Trail (+{pnl_pct*100:+.1f}%, откат {drop_from_peak*100:.1f}% от пика +{max_pnl_pct*100:.1f}%)"
 
         # Ж. Абсолютный лимит удержания безопасности (сбрасываем ТОЛЬКО застрявшие позиции PnL < +3% после 3.8м):
         _unl_safety_max = float(getattr(config, "RUG_HUNTER_UNLOCKED_SAFETY_MIN", 3.8))
@@ -777,23 +787,25 @@ def evaluate_rug_hunter_exit(position, current_price: float) -> Optional[str]:
     # - Пик >= +28% (TP1 зона) → пол +10% (железная фиксация прибыли)
     # - Пик >= +22% → пол +4% (базовая защита без преждевременного выбивания на 1-й минуте, фикс WHITE +78.8%)
     # - После 3.8м возраста пула (зрелая зона риска рага): если пик был >= +15% → пол +4%, если пик >= +6% → пол +1.5%
-    be_act = float(getattr(config, "RUG_HUNTER_BREAKEVEN_PCT", 0.22))
-    _pd_be_ms = (pd.get("pairCreatedAt") or 0) if isinstance(pd, dict) else 0
-    _be_pool_age = ((now_ts * 1000.0 - _pd_be_ms) / 60000.0) if _pd_be_ms > 0 else (minutes_held + 0.3)
-    if not is_seeded_mode and bool(getattr(position, "tp1_done", False)):
-        be_floor = 0.01
-    elif max_pnl_pct >= 0.28:
-        be_floor = 0.10
-    elif max_pnl_pct >= be_act:
-        be_floor = 0.04
-    elif is_unlocked_or_seeded and (_be_pool_age >= 3.8 or minutes_held >= 2.2) and max_pnl_pct >= 0.14:
-        be_floor = 0.04
-    elif is_unlocked_or_seeded and (_be_pool_age >= 3.8 or minutes_held >= 2.2) and max_pnl_pct >= 0.06:
+    # 5. Ступенчатый Profit Ratchet (фиксирует завоёванные уровни +50%/+85%/+200% до слива, но не душит ранний мунбэг после TP1):
+    if max_pnl_pct >= 2.00:
+        be_floor = 0.90
+    elif max_pnl_pct >= 0.85:
+        be_floor = 0.38
+    elif max_pnl_pct >= 0.50:
+        be_floor = 0.18
+    elif bool(getattr(position, "tp1_done", False)):
+        be_floor = 0.015  # На +25%..+49% мунбэг спокойно переживает глубокие ретесты до +1.5% ради выхода на 2-ю волну!
+    elif max_pnl_pct >= 0.35:
+        be_floor = 0.08
+    elif max_pnl_pct >= 0.24:
+        be_floor = 0.02
+    elif is_unlocked_or_seeded and minutes_held >= 3.0 and max_pnl_pct >= 0.16:
         be_floor = 0.015
     else:
-        be_floor = -99.0  # на первых 2 минутах при пике < +22% не душим волатильность ракеты!
+        be_floor = -99.0
     if be_floor > -99.0 and pnl_pct <= be_floor:
-        return f"🎯 RH Breakeven Lock (+{pnl_pct*100:+.1f}% после пика +{max_pnl_pct*100:.1f}%)"
+        return f"🎯 RH Breakeven Lock ({pnl_pct*100:+.1f}% после пика +{max_pnl_pct*100:.1f}%)"
 
     # 6. Сброс зависшего флета без пампа (только если вообще нет движения за 2.5-3 минуты)
     _scratch_m = 2.0 if is_unlocked_rh else 3.0
@@ -816,7 +828,7 @@ async def check_live_rugger_activity(position, live_pd: Optional[dict] = None) -
     et = float(getattr(position, "entry_time", now) or now)
     minutes_held = max(0.0, (now - et) / 60.0)
 
-    # 1. Детектор волны продаж кабала по приращению сделок m5
+    # 1. Детектор волны продаж кабала по приращению сделок m5 + подтверждению падения цены
     if isinstance(live_pd, dict) and live_pd:
         tx5 = (live_pd.get("txns") or {}).get("m5") or {}
         b5 = int(tx5.get("buys", 0) or 0)
@@ -825,17 +837,36 @@ async def check_live_rugger_activity(position, live_pd: Optional[dict] = None) -
         prev_s5 = getattr(position, "_rh_prev_s5", None)
         position._rh_prev_b5 = b5
         position._rh_prev_s5 = s5
+        entry_px = float(getattr(position, "entry_price_usd", 0.0) or 0.0)
+        cur_px = float(getattr(position, "current_price_usd", 0.0) or 0.0)
+        eff_px = float(live_pd.get("priceUsd") or 0.0) or cur_px
+        prev_px = getattr(position, "_rh_prev_px", None)
+        if eff_px > 0:
+            position._rh_prev_px = eff_px
         if prev_b5 is not None and prev_s5 is not None:
             db = max(0, b5 - int(prev_b5))
             ds = max(0, s5 - int(prev_s5))
-            entry_px = float(getattr(position, "entry_price_usd", 0.0) or 0.0)
-            cur_px = float(getattr(position, "current_price_usd", 0.0) or 0.0)
-            pnl_now = ((cur_px - entry_px) / entry_px) if (entry_px > 0 and cur_px > 0) else 0.0
-            # Координированная волна продаж (>=12 продаж за 1-2с с перевесом продавцов >=2.5x)
-            if ds >= 12 and ds >= max(6, int(db * 2.5)):
+            pnl_now = ((eff_px - entry_px) / entry_px) if (entry_px > 0 and eff_px > 0) else 0.0
+            max_px = float(getattr(position, "max_price_usd", 0.0) or 0.0)
+            max_pnl = ((max_px - entry_px) / entry_px) if (entry_px > 0 and max_px > 0) else pnl_now
+            minutes_held = max(0.0, (now - et) / 60.0)
+            _drop_prev = bool(prev_px and eff_px > 0 and eff_px <= float(prev_px) * 0.96)
+            _drop_peak = bool(eff_px > 0 and max_pnl > pnl_now and pnl_now <= (max_pnl - 0.06))
+            _price_dropping = bool(_drop_prev or _drop_peak)
+            _flash_crash_sell = bool(ds >= 25 and prev_px and eff_px > 0 and eff_px <= float(prev_px) * 0.90)
+
+            # Координированная волна продаж: защита от ложных скачков 5м-кэша DS (кейс MOOB 34с +17s/+0b).
+            # Требуем >=45с в сделке, подтверждённую просадку цены и 2 тика подряд (или >=25s + обвал >= -10% за тик).
+            if minutes_held >= 0.75 and ds >= 12 and ds >= max(6, int(db * 2.5)) and _price_dropping:
+                _streak = int(getattr(position, "_rh_cabal_streak", 0) or 0) + 1
+            else:
+                _streak = 0
+            position._rh_cabal_streak = _streak
+
+            if (_streak >= 2) or (_flash_crash_sell and ds >= max(6, int(db * 2.5))):
                 return True, f"🎯 RH Cabal Sell-Wave (+{ds}s/+{db}b за тик, PnL {pnl_now*100:+.1f}%)"
-            # Разворот потока в минус, когда мы уже в хорошем плюсе >= +8%
-            if pnl_now >= 0.08 and s5 >= 20 and s5 > int(b5 * 1.25) and ds >= 6 and ds > db:
+            # Разворот потока в минус при откате цены — только на ощутимом профите >= +20% и явном перевесе продавцов >= 1.45x (не режем +8%..+15%!)
+            if minutes_held >= 1.2 and pnl_now >= 0.20 and _price_dropping and s5 >= 25 and s5 > int(b5 * 1.45) and ds >= 8 and ds > db:
                 return True, f"🎯 RH Flow Flip Exit ({b5}b/{s5}s, +{ds}s, PnL {pnl_now*100:+.1f}%)"
 
     # 2. Прямой ончейн-мониторинг баланса ДЕВА (создателя):

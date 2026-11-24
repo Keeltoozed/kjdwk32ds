@@ -132,7 +132,7 @@ async def position_security_auditor_loop(analyzer, tracker):
                                 except Exception:
                                     _is_rh_pos_aud = False
                                 _is_locked_amm = (not _is_rh_pos_aud) and (bool(getattr(position, "is_lp_locked_80", False)) or not bool(getattr(position, "is_unlocked_pool", False)))
-                                _rh_liq_thr = float(getattr(config, "RUG_HUNTER_LIQ_DRAIN_PCT", 0.15))
+                                _rh_liq_thr = float(getattr(config, "RUG_HUNTER_LIQ_DRAIN_PCT", 0.40))
                                 _eff_drain_exit = _rh_liq_thr if _is_rh_pos_aud else (0.68 if _is_locked_amm else _cfg_drain_exit)
                                 _eff_drain_fast = _rh_liq_thr if _is_rh_pos_aud else (0.60 if _is_locked_amm else _cfg_drain_fast)
                                 _emergency_exit = _is_zero_liq or _crit_drained or (_liq_crash_pct >= _eff_drain_exit and _peak_liq >= 3000.0)
@@ -195,7 +195,7 @@ async def position_security_auditor_loop(analyzer, tracker):
                                         print(f"🚨 [LIQ-LOSS] {position.symbol} ({mint[:8]}): {_msg} (подтверждено 2 тика) — выход!")
                                         tracker.close_position(mint, _px_now, f"{_tag} (Liq dropped to ${_sol_liq:.0f} from ${_peak_liq:.0f})")
                                         continue
-                                elif _has_liq_data and _liq_crash_pct >= 0.25 and _peak_liq >= 3000.0:
+                                elif _has_liq_data and _liq_crash_pct >= (0.35 if (_is_rh_pos_aud or _is_locked_amm) else 0.25) and _peak_liq >= 3000.0:
                                     position._fast_drain_streak = 0
                                     # Умеренный дроп 25%+: требуем 3 тика устойчивого подтверждения (не режем на рыночных шумах и кэше DexScreener)
                                     _drop_cnt = getattr(position, "_liq_drop_streak", 0) + 1
@@ -556,7 +556,7 @@ async def position_manager_loop(analyzer, tracker):
                         or "SEEDED" in str((_pd_tmp.get("_rug_hunter_mode") if isinstance(_pd_tmp, dict) else "") or "").upper()
                     )
                 )
-                _allow_seeded_tp = bool(_is_seeded_pos_tp and (max_pnl_pct >= 0.28 or getattr(position, "tp1_done", False)))
+                _allow_seeded_tp = bool(_is_seeded_pos_tp and (max_pnl_pct >= _tp1_sol_thr or getattr(position, "tp1_done", False)))
                 _allow_partial_tp = getattr(config, "PARTIAL_TP_ENABLED", True) and (_pos_val >= _min_tp_ticket) and ((not _is_seeded_pos_tp) or _allow_seeded_tp)
                 _is_small_pos = _pos_val < _min_tp_ticket
                 if _allow_partial_tp and not _is_small_pos and not _suppress_eval_peak:
@@ -1827,7 +1827,7 @@ async def scanner_loop(analyzer, tracker):
                             if isinstance(_tc_res_pre, Exception):
                                 _tc_res_pre = None
                             if isinstance(_last_an_p, dict):
-                                for _fk in ("_lp_verified", "_unlocked_runner_ok", "_pumpswap_checked", "_pumpswap_canonical", "_pumpswap_lp_burned", "_pumpswap_rpc_unverified"):
+                                for _fk in ("_lp_verified", "_unlocked_runner_ok", "_pumpswap_checked", "_pumpswap_canonical", "_pumpswap_lp_burned", "_pumpswap_rpc_unverified", "_rug_hunter_mode", "_rug_hunter_creator_profile"):
                                     if _fk in _last_an_p and _fk not in pair_data:
                                         pair_data[_fk] = _last_an_p[_fk]
                             entry_price = float(pair_data.get("priceUsd", 0) or 0) if pair_data else 0.0
@@ -2497,15 +2497,17 @@ async def scanner_loop(analyzer, tracker):
                                     continue
 
                                 if _is_rh_buy_sc:
-                                    _rh_mult = float(getattr(config, "RUG_HUNTER_SIZE_MULT", 0.75))
+                                    _rh_mult = float(getattr(config, "RUG_HUNTER_SIZE_MULT", 1.00))
                                     if "SEEDED" in str(_rh_mode_buy or "").upper():
-                                        _rh_mult = min(_rh_mult, float(getattr(config, "RUG_HUNTER_SEEDED_SIZE_MULT", 0.70)))
-                                    # Для сильного притока покупателей (объём от $10k или от 50 покупок) даём рабочий сайз билета
+                                        _rh_mult = min(_rh_mult, float(getattr(config, "RUG_HUNTER_SEEDED_SIZE_MULT", 0.90)))
+                                    # Для сильного притока покупателей на безопасном пуле даём рабочий сайз $2.0-$2.5 вместо $1.5 копеек
                                     _v5_buy = float((pair_data.get("volume") or {}).get("m5", 0) or 0)
                                     _b5_buy = int(((pair_data.get("txns") or {}).get("m5") or {}).get("buys", 0) or 0)
-                                    if _v5_buy >= 10000.0 or _b5_buy >= 50:
-                                        _rh_mult = max(_rh_mult, 0.85)
-                                    position_size = max(1.5, position_size * _rh_mult)
+                                    if _v5_buy >= 12000.0 or _b5_buy >= 120:
+                                        _rh_mult = max(_rh_mult, 1.25)
+                                    elif _v5_buy >= 8000.0 or _b5_buy >= 50:
+                                        _rh_mult = max(_rh_mult, 1.00)
+                                    position_size = max(2.0, position_size * _rh_mult)
                                     _src_sc_final = _sig_sc_fin
                                 else:
                                     _src_sc_final = f"SCANNER:{_sig_sc_fin}"
