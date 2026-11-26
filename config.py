@@ -76,7 +76,7 @@ REQUIRE_SOCIALS_ENABLED = False            # Не требовать соцсе�
 MAX_ENTRY_H1_PCT = 180.0       # Было 1500.0: отсекает вертикальный вынос и хаи (фикс Y +944%)
 MAX_ENTRY_H6_PCT = 350.0       # Было 500.0: не входим в отработавшие топы
 MAX_ENTRY_M5_PCT = 175.0        # Потолок m5 +175% (для сырой кривой +165%: отсекает PPV +279% / AFTERGTA6 +205%, пропускает DCTC +132%)
-MAX_ENTRY_M1_PCT = 22.0         # Потолок 1м свечи +22% (отсекает покупку вертикального хая типа MAGA m1 +37.5%; все ракеты <= +9.4%)
+MAX_ENTRY_M1_PCT = 26.0         # Потолок 1м свечи +26% (пропускает чистый пробой RUNNER +168% m1=+23.1%, отсекает верхушки вроде MAGA m1=+37.5%)
 # MAX_ENTRY_M5_SPIKE_PCT убран — не блокируем вход по m5, пусть ракеты летят
 REQUIRE_SOCIALS_MIN_AGE_MIN = 9999.0  # Соцсети не обязательны (отключено)
 
@@ -665,7 +665,10 @@ def evaluate_entry_momentum(
         and buys5 >= max(18, int(sells5 * 1.25))
         and m1 >= -1.0
     )
-    _is_early_m5_runner = bool(age_min <= 3.5 and (buys5 >= max(8, int(sells5 * 1.05)) or sells5 == 0) and vol5_usd >= 600.0)
+    _is_early_m5_runner = bool(
+        (age_min <= 3.5 and (buys5 >= max(8, int(sells5 * 1.05)) or sells5 == 0) and vol5_usd >= 600.0)
+        or (not is_curve and liq_usd >= 7500.0 and vol5_usd >= 5000.0 and buys5 >= max(45, int(sells5 * 1.30)) and m1 >= 5.0)
+    )
     _m5_min_req = 1.5 if _is_early_m5_runner else (3.0 if (_is_high_conviction_accum or _is_strong_buyer_surge) else (3.5 if _is_fresh_mig_early_launch else (5.0 if _is_clean_grad_flow else (6.0 if (_is_heavy_vol_launch or _is_rh_early_seed_flow) else 8.0))))
     _is_bullish_pullback_dip = (
         -18.0 <= m5 < _m5_min_req
@@ -728,11 +731,18 @@ def evaluate_entry_momentum(
         and vol5_usd >= 5000.0
         and buys5 >= max(25, int(sells5 * 1.15))
     )
+    _is_fresh_pump_grad_blast = bool(
+        not is_curve
+        and age_min <= 8.0
+        and vol5_usd >= 10000.0
+        and liq_usd >= 8500.0
+        and buys5 >= max(30, int(sells5 * 1.15))
+    )
     _is_mega_mig_blast = bool(
         not is_curve
         and age_min <= 4.0
         and vol5_usd >= 30000.0
-        and liq_usd >= 12000.0
+        and liq_usd >= 8500.0
         and buys5 >= max(80, int(sells5 * 1.15))
         and m1 >= 2.0
     )
@@ -740,7 +750,7 @@ def evaluate_entry_momentum(
         not is_curve
         and age_min <= 5.0
         and vol5_usd >= 20000.0
-        and liq_usd >= 12000.0
+        and liq_usd >= 8500.0
         and buys5 >= max(30, int(sells5 * 1.15))
     )
     _is_dex_migration_surge = bool(
@@ -748,10 +758,12 @@ def evaluate_entry_momentum(
         and age_min <= 10.0
         and vol5_usd >= 15000.0
         and buys5 >= max(15, int(sells5 * 1.10))
-        and liq_usd >= 12000.0
+        and liq_usd >= 8500.0
     )
     if is_curve:
         _max_m5_dyn = 300.0 if _is_active_curve_blast else 165.0
+    elif _is_fresh_pump_grad_blast:
+        _max_m5_dyn = 600.0
     elif _is_mega_mig_blast or _is_fresh_curve_grad_climb:
         _max_m5_dyn = 450.0
     elif _is_fresh_grad_blast:
@@ -763,8 +775,8 @@ def evaluate_entry_momentum(
         _max_m5_dyn = min(float(globals().get("MAX_ENTRY_M5_PCT", 175.0)), 120.0)
     else:
         _max_m5_dyn = float(globals().get("MAX_ENTRY_M5_PCT", 175.0))
-    _max_m1_dyn = float(globals().get("MAX_ENTRY_M1_PCT", 22.0))
-    if not is_curve and liq_usd >= 10000.0 and buys5 >= max(40, int(sells5 * 1.20)) and vol5_usd >= 12000.0 and m5 >= 25.0:
+    _max_m1_dyn = float(globals().get("MAX_ENTRY_M1_PCT", 26.0))
+    if not is_curve and liq_usd >= 7500.0 and buys5 >= max(35, int(sells5 * 1.20)) and vol5_usd >= 8000.0 and m5 >= 20.0:
         _max_m1_dyn = max(_max_m1_dyn, 28.0)
     if m1 > _max_m1_dyn:
         return False, f"m1-vertical-top {m1:+.1f}% > +{_max_m1_dyn:.0f}% (buying candle top, wait for reset)"
@@ -773,13 +785,14 @@ def evaluate_entry_momentum(
 
     # Защита от 1м отскока дохлой кошки внутри 5м слива (кейсы Makenzi m5=+4.98%, m1=+13.74% -> -26.4%; CC m5=+2.85%, m1=+17.86% -> -26.1%):
     # если 1м свеча значительно выше 5м изменения (значит предшествующие 4 минуты токен летел вниз), не покупаем вершину отскока!
-    # Исключение (кейсы CORNER +122%, RUDY +30% пробой базы): мощный органический пробой на глубоком пуле и перевесе покупателей.
+    # Исключение (кейсы CORNER +122%, RUDY +30%, 300TRILLY +123% пробой базы): мощный органический пробой на глубоком пуле и перевесе покупателей.
     _is_organic_v_breakout = (
         not is_curve
-        and liq_usd >= 10000.0
+        and liq_usd >= 7500.0
         and (
             (m5 >= 5.0 and buys5 >= max(80, int(sells5 * 1.10)) and vol5_usd >= 10000.0)
             or (m5 >= 6.0 and buys5 >= max(50, int(sells5 * 1.25)) and vol5_usd >= 6000.0)
+            or (m5 >= 2.0 and buys5 >= max(45, int(sells5 * 1.30)) and vol5_usd >= 5000.0)
         )
     )
     if m1 > 4.0 and m5 < 15.0 and m1 > (m5 + 3.0) and not _is_organic_v_breakout:
@@ -814,7 +827,7 @@ def evaluate_entry_momentum(
         not is_curve
         and age_min <= 10.0
         and liq_usd >= _min_grad_liq_th
-        and (m5 >= 8.0 or (_is_fresh_mig_early_launch and m5 >= 3.5) or (age_min <= 5.0 and m5 >= 6.0 and buys5 >= max(35, int(sells5 * 1.15)) and sells5 >= 10))
+        and (m5 >= 8.0 or (_is_fresh_mig_early_launch and m5 >= 3.5) or (_is_organic_v_breakout and m1 >= 5.0) or (age_min <= 5.0 and m5 >= 6.0 and buys5 >= max(35, int(sells5 * 1.15)) and sells5 >= 10))
         and m1 >= -2.0
         and vol5_usd >= (2000.0 if (age_min <= 5.0 and buys5 >= 35 and sells5 >= 10) else 2500.0)
         and buys5 >= max(25, int(sells5 * 1.20))
@@ -1458,7 +1471,7 @@ RUG_HUNTER_MOONBAG_MAX_POOL_AGE_MIN = 38.0 # ТОЛЬКО для активны�
 RUG_HUNTER_CABAL_MAX_AGE_MIN = 4.5         # Максимум 4.5м для кабал-сёрфа
 RUG_HUNTER_MIN_LIQ_USD = 4800.0            # Минимум $4.8k реальной ликвидности (~70 SOL при SOL $70; едино с MIN_GRADUATED_LIQ_USD)
 RUG_HUNTER_MAX_LIQ_USD = 25000.0           # Общий жёсткий потолок $25k ликвидности для незалоченных пулов (выше $25k — серийные RemoveLiquidity-ловушки)
-RUG_HUNTER_MAX_SEEDED_LIQ_USD = 16200.0   # Строгий потолок $16.2k для SEEDED-LP: пропускает FIONA ($10k), HOLDERS ($8.6k), DUVAL ($7k), CHIBI ($15.8k), отсекает MOLE ($17.2k) и $18.5k+ сливы!
+RUG_HUNTER_MAX_SEEDED_LIQ_USD = 17000.0   # Строгий потолок $17.0k для SEEDED-LP (при liq>=$16k нужен vol5>=$12k): пропускает b (+73.6%, $16.8k/$222k), Twitch ($16.3k/$28.7k), FIONA, HOLDERS, DUVAL, CHIBI, отсекает MOLE ($17.2k) и $18.5k+ сливы!
 RUG_HUNTER_MAX_AVG_TX_USD = 350.0          # Реалистичный потолок среднего чека в Solana ($350 ~= 1.5 SOL). Не режет нормальных покупателей (кейсы DUVAL, FIONA, PI)!
 RUG_HUNTER_MIN_VOL5_USD = 350.0            # Минимум $350 объёма за 5м на старте (ловит ракеты TTWO +1242% при vol5=$450)
 RUG_HUNTER_EARLY_AGE_THRESHOLD = 3.8       # Порог ультра-ранней фазы (до 3.8м: учитывает задержку индексации DexScreener 2.5-3.5м)
@@ -1469,14 +1482,14 @@ RUG_HUNTER_SEEDED_MIN_ML = 35.0            # Порог ML 35% для SEEDED-LP
 RUG_HUNTER_HIGH_LIQ_MIN_ML = 40.0          # Порог ML 40% для пулов liq >= $15k
 RUG_HUNTER_SEEDED_MIN_BUYS = 35            # Минимум 35 покупок для посеянных пулов
 RUG_HUNTER_SEEDED_MIN_SELLS = 1            # Достаточно 1 продажи для подтверждения ликвидности
-RUG_HUNTER_SEEDED_MIN_VOL5 = 2000.0        # Минимальный базовый объём для посеянных пулов ($2,000)
-RUG_HUNTER_SEEDED_MIN_TURNOVER = 0.15      # Оборот 5м >= 15% от ликвидности пула (не блокирует ранние ракеты вроде 英伟达 +695%, SHHFT +554%)
-RUG_HUNTER_SEEDED_MIN_M5_PCT = 6.0         # Минимальный импульс m5 +6% для посеянных пулов
+RUG_HUNTER_SEEDED_MIN_VOL5 = 4000.0        # Минимум $4,000 объёма для SEEDED-LP (18/18 ракет +20%..+74% имели >=$4,222; отсекает RANSEM $1.7k, trillions $2.7k, CATE $1.9k)
+RUG_HUNTER_SEEDED_MIN_TURNOVER = 0.15      # Оборот 5м >= 15% от ликвидности пула
+RUG_HUNTER_SEEDED_MIN_M5_PCT = 12.0        # Минимум m5 +12% для SEEDED-LP >=0.85м (18/18 ракет имели >=+12.5%; отсекает DEADFRESH +6.5%, TIKTOK +8.7%, Partying +11.4%, MOLE +8.2%)
 RUG_HUNTER_SEEDED_MAX_ENTRY_AGE_MIN = 4.2  # Базовый потолок возраста входа 4.2м (для взрывного спроса до 5.5м — фикс пропуска 英伟达 +475%, NVIDIA +343%)
 RUG_HUNTER_SEEDED_MAX_POOL_AGE_MIN = 4.80  # Потолок возраста пула (4.80м) для позиций БЕЗ взятого TP1 (+20%) — забираем любой плюс до RemoveLiquidity!
 RUG_HUNTER_SEEDED_MAX_HOLD_MIN = 3.20      # Потолок удержания (3.20м) для позиций БЕЗ взятого TP1 (+20%)
-RUG_HUNTER_SEEDED_STAGNANT_AGE_MIN = 3.20  # Застойная эвакуация после 3.20м возраста пула и без роста
-RUG_HUNTER_SEEDED_STAGNANT_HOLD_MIN = 2.00 # Застойная эвакуация после 2.00м удержания
+RUG_HUNTER_SEEDED_STAGNANT_AGE_MIN = 2.80  # Застойная эвакуация с 2.80м возраста пула без импульса (фикс PLUME -100.8% на 1.78м)
+RUG_HUNTER_SEEDED_STAGNANT_HOLD_MIN = 1.35 # Застойная эвакуация с 1.35м удержания мёртвых пулов до рага!
 RUG_HUNTER_SEEDED_FULL_HARVEST_PCT = 1.20  # Полный трейл-сбор SEEDED-LP после +120%
 RUG_HUNTER_SEEDED_PEAK_TRAIL_DROP = 0.20   # 20% откат от пика для незащищённых SEEDED-LP
 RUG_HUNTER_MAX_FDV_USD = 500000.0          # Потолок FDV $500k (пропускает ROCKSTAR $487k)

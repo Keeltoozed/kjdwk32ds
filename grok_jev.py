@@ -752,15 +752,17 @@ class GrokJevEngine:
 
         if _is_curve_g:
             _max_m5_allowed = 300.0 if (m1 >= 2.0 and s5 < 80 and b5 >= max(30, int(s5 * 1.80))) else 165.0
-        elif age_min <= 4.0 and vol_m5 >= 30000.0 and eff_liq >= 12000.0 and b5 >= max(80, int(s5 * 1.15)) and m1 >= 2.0:
+        elif age_min <= 8.0 and vol_m5 >= 10000.0 and eff_liq >= 8500.0 and b5 >= max(30, int(s5 * 1.15)):
+            _max_m5_allowed = 600.0
+        elif age_min <= 4.0 and vol_m5 >= 30000.0 and eff_liq >= 8500.0 and b5 >= max(80, int(sells5 * 1.15 if "sells5" in locals() else s5 * 1.15)) and m1 >= 2.0:
             _max_m5_allowed = 450.0
-        elif age_min <= 5.0 and vol_m5 >= 20000.0 and eff_liq >= 12000.0 and b5 >= max(30, int(s5 * 1.15)):
+        elif age_min <= 5.0 and vol_m5 >= 20000.0 and eff_liq >= 8500.0 and b5 >= max(30, int(s5 * 1.15)):
             _max_m5_allowed = 300.0
         else:
             _max_m5_allowed = float(getattr(_c, "MAX_ENTRY_M5_PCT", 175.0))
         if m5 > _max_m5_allowed:
             _fresh_grad_m5_cap = 165.0 if _is_curve_g else max(_max_m5_allowed, 240.0)
-            _is_strong_buyer_breakout_g = (not _is_curve_g and m5 <= _fresh_grad_m5_cap and b5 >= int(s5 * 1.2) and vol_m5 >= 15000.0 and eff_liq >= 12000.0)
+            _is_strong_buyer_breakout_g = (not _is_curve_g and m5 <= _fresh_grad_m5_cap and b5 >= int(s5 * 1.2) and vol_m5 >= 12000.0 and eff_liq >= 8500.0)
             _is_cooling_pullback = (not _is_curve_g and -4.5 <= m1 <= -0.5 and m5 <= _fresh_grad_m5_cap and b5 >= s5 * 1.1)
             if not (_is_strong_buyer_breakout_g or _is_cooling_pullback):
                 return False, f"fomo-vertical-m5 m5 {m5:+.1f}% > +{_max_m5_allowed:.0f}% (buying top of vertical pump without cooling pullback, m1={m1:+.1f}%)"

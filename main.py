@@ -663,7 +663,7 @@ async def position_manager_loop(analyzer, tracker):
                     if "Absolute Liquidity Loss" in mature_exit_reason:
                         # При абсолютной потере ликвидности (пул $0) — цена продажи 0.0 (списание):
                         _px_to_close = 0.0
-                    elif minutes_held < 2.5 and pnl_pct <= -0.10 and any(k in mature_exit_reason for k in ("Emergency Cap", "Stop Loss", "Quick Scratch", "Early Momentum")):
+                    elif minutes_held < 2.5 and pnl_pct <= -0.10 and any(k in mature_exit_reason for k in ("Emergency Cap", "Emergency Stop", "Stop Loss", "Quick Scratch", "Early Momentum")):
                         try:
                             _live_em_px = None
                             _pos_mf = getattr(position, "ml_features", None) or {}
@@ -687,9 +687,15 @@ async def position_manager_loop(analyzer, tracker):
                                 _live_em_px = await JupiterAPI.get_price(mint)
                             if _live_em_px and _live_em_px > 0 and position.entry_price_usd > 0:
                                 _live_em_pnl = (_live_em_px - position.entry_price_usd) / position.entry_price_usd
-                                # Порог спасения от ложного тика DexScreener синхронизирован с реальным SL (фикс GME: тик -40.8%, живой ончейн -11.5% при SL -20%):
+                                # Порог спасения от ложного тика DexScreener синхронизирован с реальным SL (фикс GME, TROLL +97% ATH, Taffy +42% ATH):
+                                _is_rh_em = bool(getattr(position, "is_rug_hunter", False) or "RUG-HUNTER" in str(getattr(position, "source", "") or "").upper())
                                 _is_unl_em = bool(getattr(position, "is_unlocked_pool", False))
-                                _sl_em = -abs(float(getattr(config, "STOP_LOSS_UNLOCKED_PCT", -0.15))) if _is_unl_em else -abs(float(getattr(config, "STOP_LOSS_PCT", -0.20)))
+                                if _is_rh_em:
+                                    _sl_em = -abs(float(getattr(config, "RUG_HUNTER_SL_PCT", -0.10)))
+                                elif _is_unl_em:
+                                    _sl_em = -abs(float(getattr(config, "STOP_LOSS_UNLOCKED_PCT", -0.15)))
+                                else:
+                                    _sl_em = -abs(float(getattr(config, "STOP_LOSS_PCT", -0.20)))
                                 _rescue_thr = -0.10 if any(k in mature_exit_reason for k in ("Quick Scratch", "Early Momentum")) else (_sl_em * 0.85)
                                 if _live_em_pnl > _rescue_thr:
                                     print(f"🛡️ [EARLY-EXIT-RESCUED] {position.symbol} ({mint[:8]}): ложный тик {pnl_pct*100:+.1f}%, живой ончейн/Jupiter ${_live_em_px:.8f} ({_live_em_pnl*100:+.1f}% > {_rescue_thr*100:+.1f}%) — позиция спасена!")

@@ -2011,7 +2011,7 @@ def check_pro_fcr_gate(
         return False, f"pro-fcr-sybil-cluster ({cl_pct:.1f}% >= {max_cl:.1f}% эмиссии в кластере)"
     if hhi >= max_hhi:
         return False, f"pro-fcr-whale-hhi (HHI {hhi:.1f} >= {max_hhi:.1f} — критическая концентрация топ-кошельков)"
-    if (age_min <= 30.0 or is_rug_hunter) and imp >= max_imp:
+    if imp >= 0.28 or ((age_min <= 30.0 or is_rug_hunter) and imp >= max_imp):
         return False, f"pro-fcr-sell-impact (слив топ-3 уронит пул на -{imp*100:.0f}% >= -{max_imp*100:.0f}%)"
     if "дистрибуция" in rsn or "один кошелёк держит" in rsn:
         return False, f"pro-fcr-distribution ({rsn[:80]})"

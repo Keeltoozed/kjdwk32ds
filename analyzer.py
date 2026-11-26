@@ -3366,11 +3366,18 @@ class Analyzer:
                 _s5_rc = int(_tx5_rc.get("sells", 0) or 0)
                 if mint.endswith("pump") and _age_min_pre < 1.5:
                     _is_rh_cand_m = bool(pair_data.get("_rug_hunter_mode"))
-                    _has_launch_mom = (
-                        _is_rh_cand_m
-                        or (_vm5_check >= 600.0 and _m5_check >= 2.0 and (_b5_rc >= max(8, int(_s5_rc * 1.05)) or (_s5_rc == 0 and _b5_rc >= 6)))
-                        or (_vm5_check >= 20000.0 and _m5_check >= 10.0 and _b5_rc >= 40)
-                    )
+                    # Защита от мгновенного дампа снайперов кривой в первые 70с после миграции (кейс BTC 5RhTig..pump age=0.32м -> -51.4% за 12с!):
+                    if _age_min_pre < 1.2:
+                        _has_launch_mom = (
+                            _is_rh_cand_m
+                            or (_age_min_pre >= 0.75 and _vm5_check >= 25000.0 and _m5_check >= 15.0 and _b5_rc >= max(60, int(_s5_rc * 1.50)))
+                        )
+                    else:
+                        _has_launch_mom = (
+                            _is_rh_cand_m
+                            or (_vm5_check >= 4000.0 and _m5_check >= 5.0 and _b5_rc >= max(20, int(_s5_rc * 1.15)))
+                            or (_vm5_check >= 20000.0 and _m5_check >= 10.0 and _b5_rc >= 40)
+                        )
                     if not _has_launch_mom:
                         try:
                             from birth_tracker import birth_tracker as _bt_mig_a
